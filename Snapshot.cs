@@ -24,9 +24,20 @@ namespace TerraBlind
 		public float PosY;
 		public float VelX;
 		public float VelY;
+		public float Width;
+		public float Height;
 		public string Direction = "right";
 		public bool OnGround;
 		public bool InLiquid;
+	}
+
+	public sealed class CameraSnapshot
+	{
+		public float ScreenPosX;
+		public float ScreenPosY;
+		public int ScreenWidth;
+		public int ScreenHeight;
+		public float Zoom;
 	}
 
 	public sealed class EquipmentSnapshot
@@ -34,6 +45,11 @@ namespace TerraBlind
 		public int SelectedSlot;
 		public HotbarSlot HeldItem = new HotbarSlot();
 		public HotbarSlot[] Hotbar = new HotbarSlot[10];
+		public HotbarSlot[] Inventory = new HotbarSlot[40];
+		public HotbarSlot[] Coins = new HotbarSlot[4];
+		public HotbarSlot[] Ammo = new HotbarSlot[4];
+		public bool InventoryOpen;
+		public bool ChestOpen;
 	}
 
 	public sealed class Snapshot
@@ -41,6 +57,7 @@ namespace TerraBlind
 		public long Tick;
 		public PlayerSnapshot Player = new PlayerSnapshot();
 		public EquipmentSnapshot Equipment = new EquipmentSnapshot();
+		public CameraSnapshot Camera = new CameraSnapshot();
 		public BuffEntry[] Buffs = new BuffEntry[0];
 	}
 }

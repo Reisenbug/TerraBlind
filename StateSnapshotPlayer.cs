@@ -23,11 +23,21 @@ namespace TerraBlind
 					PosY = Player.position.Y,
 					VelX = Player.velocity.X,
 					VelY = Player.velocity.Y,
+					Width = Player.width,
+					Height = Player.height,
 					Direction = Player.direction >= 0 ? "right" : "left",
 					OnGround = Player.velocity.Y == 0f,
 					InLiquid = Player.wet,
 				},
 				Equipment = BuildEquipment(),
+				Camera = new CameraSnapshot
+				{
+					ScreenPosX = Main.screenPosition.X,
+					ScreenPosY = Main.screenPosition.Y,
+					ScreenWidth = Main.screenWidth,
+					ScreenHeight = Main.screenHeight,
+					Zoom = Main.GameZoomTarget,
+				},
 				Buffs = BuildBuffs(),
 			};
 
@@ -40,10 +50,24 @@ namespace TerraBlind
 			{
 				SelectedSlot = Player.selectedItem,
 				HeldItem = ItemToSlot(Player.HeldItem),
+				InventoryOpen = Main.playerInventory,
+				ChestOpen = Player.chest != -1,
 			};
 			for (int i = 0; i < 10; i++)
 			{
 				eq.Hotbar[i] = ItemToSlot(Player.inventory[i]);
+			}
+			for (int i = 0; i < 40; i++)
+			{
+				eq.Inventory[i] = ItemToSlot(Player.inventory[i + 10]);
+			}
+			for (int i = 0; i < 4; i++)
+			{
+				eq.Coins[i] = ItemToSlot(Player.inventory[i + 50]);
+			}
+			for (int i = 0; i < 4; i++)
+			{
+				eq.Ammo[i] = ItemToSlot(Player.inventory[i + 54]);
 			}
 			return eq;
 		}
@@ -74,10 +98,14 @@ namespace TerraBlind
 				try
 				{
 					name = Lang.GetBuffName(type) ?? "";
+					if (string.IsNullOrEmpty(name) || name.StartsWith("Mods.") || name.Contains("BuffName."))
+					{
+						name = BuffID.Search.GetName(type) ?? ("Buff" + type);
+					}
 				}
 				catch
 				{
-					name = "";
+					name = "Buff" + type;
 				}
 				list.Add(new BuffEntry
 				{

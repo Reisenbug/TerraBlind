@@ -24,6 +24,8 @@ namespace TerraBlind
 			sb.Append("\"max_mana\":").Append(s.Player.MaxMana).Append(',');
 			sb.Append("\"pos\":{\"x\":").Append(F(s.Player.PosX)).Append(",\"y\":").Append(F(s.Player.PosY)).Append("},");
 			sb.Append("\"vel\":{\"x\":").Append(F(s.Player.VelX)).Append(",\"y\":").Append(F(s.Player.VelY)).Append("},");
+			sb.Append("\"width\":").Append(F(s.Player.Width)).Append(',');
+			sb.Append("\"height\":").Append(F(s.Player.Height)).Append(',');
 			sb.Append("\"direction\":\"").Append(EscapeStr(s.Player.Direction)).Append("\",");
 			sb.Append("\"on_ground\":").Append(B(s.Player.OnGround)).Append(',');
 			sb.Append("\"in_liquid\":").Append(B(s.Player.InLiquid));
@@ -31,6 +33,8 @@ namespace TerraBlind
 
 			sb.Append("\"equipment\":{");
 			sb.Append("\"selected_slot\":").Append(s.Equipment.SelectedSlot).Append(',');
+			sb.Append("\"inventory_open\":").Append(B(s.Equipment.InventoryOpen)).Append(',');
+			sb.Append("\"chest_open\":").Append(B(s.Equipment.ChestOpen)).Append(',');
 			sb.Append("\"held_item\":");
 			AppendSlot(sb, s.Equipment.HeldItem);
 			sb.Append(',');
@@ -40,7 +44,34 @@ namespace TerraBlind
 				if (i > 0) sb.Append(',');
 				AppendSlot(sb, s.Equipment.Hotbar[i]);
 			}
+			sb.Append("],");
+			sb.Append("\"inventory\":[");
+			for (int i = 0; i < s.Equipment.Inventory.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				AppendSlot(sb, s.Equipment.Inventory[i]);
+			}
+			sb.Append("],");
+			sb.Append("\"coins\":[");
+			for (int i = 0; i < s.Equipment.Coins.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				AppendSlot(sb, s.Equipment.Coins[i]);
+			}
+			sb.Append("],");
+			sb.Append("\"ammo\":[");
+			for (int i = 0; i < s.Equipment.Ammo.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				AppendSlot(sb, s.Equipment.Ammo[i]);
+			}
 			sb.Append(']');
+			sb.Append("},");
+
+			sb.Append("\"camera\":{");
+			sb.Append("\"screen_pos\":{\"x\":").Append(F(s.Camera.ScreenPosX)).Append(",\"y\":").Append(F(s.Camera.ScreenPosY)).Append("},");
+			sb.Append("\"screen_size\":{\"w\":").Append(s.Camera.ScreenWidth).Append(",\"h\":").Append(s.Camera.ScreenHeight).Append("},");
+			sb.Append("\"zoom\":").Append(F(s.Camera.Zoom));
 			sb.Append("},");
 
 			sb.Append("\"buffs\":[");
