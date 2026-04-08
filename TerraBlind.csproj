@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\tModLoader.targets" />
+
+	<PropertyGroup>
+		<AssemblyName>TerraBlind</AssemblyName>
+		<LangVersion>latest</LangVersion>
+	</PropertyGroup>
+
+</Project>

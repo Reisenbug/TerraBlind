@@ -1,0 +1,1 @@
+Exposes Terraria game state (player, inventory, buffs) over local HTTP for an external Python agent.
