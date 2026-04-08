@@ -84,6 +84,40 @@ namespace TerraBlind
 				sb.Append(",\"time_left\":").Append(F(b.TimeLeft));
 				sb.Append('}');
 			}
+			sb.Append("],");
+
+			sb.Append("\"enemies\":[");
+			for (int i = 0; i < s.Enemies.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var e = s.Enemies[i];
+				sb.Append("{\"who\":").Append(e.WhoAmI);
+				sb.Append(",\"type\":").Append(e.Type);
+				sb.Append(",\"name\":\"").Append(EscapeStr(e.Name)).Append("\"");
+				sb.Append(",\"pos\":{\"x\":").Append(F(e.PosX)).Append(",\"y\":").Append(F(e.PosY)).Append("}");
+				sb.Append(",\"vel\":{\"x\":").Append(F(e.VelX)).Append(",\"y\":").Append(F(e.VelY)).Append("}");
+				sb.Append(",\"w\":").Append(F(e.Width));
+				sb.Append(",\"h\":").Append(F(e.Height));
+				sb.Append(",\"hp\":").Append(e.Hp);
+				sb.Append(",\"max_hp\":").Append(e.MaxHp);
+				sb.Append(",\"boss\":").Append(B(e.Boss));
+				sb.Append('}');
+			}
+			sb.Append("],");
+
+			sb.Append("\"town_npcs\":[");
+			for (int i = 0; i < s.TownNpcs.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var n = s.TownNpcs[i];
+				sb.Append("{\"who\":").Append(n.WhoAmI);
+				sb.Append(",\"type\":").Append(n.Type);
+				sb.Append(",\"name\":\"").Append(EscapeStr(n.Name)).Append("\"");
+				sb.Append(",\"display_name\":\"").Append(EscapeStr(n.DisplayName)).Append("\"");
+				sb.Append(",\"pos\":{\"x\":").Append(F(n.PosX)).Append(",\"y\":").Append(F(n.PosY)).Append("}");
+				sb.Append(",\"homeless\":").Append(B(n.Homeless));
+				sb.Append('}');
+			}
 			sb.Append(']');
 
 			sb.Append('}');

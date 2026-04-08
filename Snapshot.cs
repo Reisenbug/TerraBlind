@@ -52,6 +52,33 @@ namespace TerraBlind
 		public bool ChestOpen;
 	}
 
+	public sealed class EnemyEntry
+	{
+		public int WhoAmI;
+		public int Type;
+		public string Name = "";
+		public float PosX;
+		public float PosY;
+		public float VelX;
+		public float VelY;
+		public float Width;
+		public float Height;
+		public int Hp;
+		public int MaxHp;
+		public bool Boss;
+	}
+
+	public sealed class TownNpcEntry
+	{
+		public int WhoAmI;
+		public int Type;
+		public string Name = "";
+		public string DisplayName = "";
+		public float PosX;
+		public float PosY;
+		public bool Homeless;
+	}
+
 	public sealed class Snapshot
 	{
 		public long Tick;
@@ -59,5 +86,7 @@ namespace TerraBlind
 		public EquipmentSnapshot Equipment = new EquipmentSnapshot();
 		public CameraSnapshot Camera = new CameraSnapshot();
 		public BuffEntry[] Buffs = new BuffEntry[0];
+		public EnemyEntry[] Enemies = new EnemyEntry[0];
+		public TownNpcEntry[] TownNpcs = new TownNpcEntry[0];
 	}
 }

@@ -39,6 +39,8 @@ namespace TerraBlind
 					Zoom = Main.GameZoomTarget,
 				},
 				Buffs = BuildBuffs(),
+				Enemies = BuildEnemies(),
+				TownNpcs = BuildTownNpcs(),
 			};
 
 			HttpServerSystem.LatestSnapshot = snap;
@@ -84,6 +86,68 @@ namespace TerraBlind
 				Name = item.Name ?? "",
 				Stack = item.stack,
 			};
+		}
+
+		private const float EnemyHalfWidthTiles = 60f;
+		private const float EnemyHalfHeightTiles = 36f;
+		private const float TileSize = 16f;
+
+		private EnemyEntry[] BuildEnemies()
+		{
+			var list = new System.Collections.Generic.List<EnemyEntry>();
+			float pcx = Player.position.X + Player.width / 2f;
+			float pcy = Player.position.Y + Player.height / 2f;
+			float halfW = EnemyHalfWidthTiles * TileSize;
+			float halfH = EnemyHalfHeightTiles * TileSize;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				NPC npc = Main.npc[i];
+				if (npc == null || !npc.active) continue;
+				if (npc.townNPC || npc.friendly) continue;
+				if (npc.lifeMax <= 5 && npc.damage == 0) continue;
+				float ncx = npc.position.X + npc.width / 2f;
+				float ncy = npc.position.Y + npc.height / 2f;
+				if (System.Math.Abs(ncx - pcx) > halfW) continue;
+				if (System.Math.Abs(ncy - pcy) > halfH) continue;
+				list.Add(new EnemyEntry
+				{
+					WhoAmI = npc.whoAmI,
+					Type = npc.type,
+					Name = npc.TypeName ?? "",
+					PosX = npc.position.X,
+					PosY = npc.position.Y,
+					VelX = npc.velocity.X,
+					VelY = npc.velocity.Y,
+					Width = npc.width,
+					Height = npc.height,
+					Hp = npc.life,
+					MaxHp = npc.lifeMax,
+					Boss = npc.boss,
+				});
+			}
+			return list.ToArray();
+		}
+
+		private TownNpcEntry[] BuildTownNpcs()
+		{
+			var list = new System.Collections.Generic.List<TownNpcEntry>();
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				NPC npc = Main.npc[i];
+				if (npc == null || !npc.active) continue;
+				if (!npc.townNPC) continue;
+				list.Add(new TownNpcEntry
+				{
+					WhoAmI = npc.whoAmI,
+					Type = npc.type,
+					Name = npc.GivenOrTypeName ?? "",
+					DisplayName = npc.TypeName ?? "",
+					PosX = npc.position.X,
+					PosY = npc.position.Y,
+					Homeless = npc.homeless,
+				});
+			}
+			return list.ToArray();
 		}
 
 		private BuffEntry[] BuildBuffs()
