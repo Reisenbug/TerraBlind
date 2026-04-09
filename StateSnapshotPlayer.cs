@@ -85,6 +85,12 @@ namespace TerraBlind
 				Id = item.type,
 				Name = item.Name ?? "",
 				Stack = item.stack,
+				Damage = item.damage,
+				Pick = item.pick,
+				Axe = item.axe,
+				Hammer = item.hammer,
+				CreateTile = item.createTile,
+				Consumable = item.consumable,
 			};
 		}
 

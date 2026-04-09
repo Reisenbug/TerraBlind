@@ -128,12 +128,18 @@ namespace TerraBlind
 		{
 			if (slot == null)
 			{
-				sb.Append("{\"id\":0,\"name\":\"\",\"stack\":0}");
+				sb.Append("{\"id\":0,\"name\":\"\",\"stack\":0,\"damage\":0,\"pick\":0,\"axe\":0,\"hammer\":0,\"create_tile\":-1,\"consumable\":false}");
 				return;
 			}
 			sb.Append("{\"id\":").Append(slot.Id);
 			sb.Append(",\"name\":\"").Append(EscapeStr(slot.Name)).Append("\"");
 			sb.Append(",\"stack\":").Append(slot.Stack);
+			sb.Append(",\"damage\":").Append(slot.Damage);
+			sb.Append(",\"pick\":").Append(slot.Pick);
+			sb.Append(",\"axe\":").Append(slot.Axe);
+			sb.Append(",\"hammer\":").Append(slot.Hammer);
+			sb.Append(",\"create_tile\":").Append(slot.CreateTile);
+			sb.Append(",\"consumable\":").Append(B(slot.Consumable));
 			sb.Append('}');
 		}
 
