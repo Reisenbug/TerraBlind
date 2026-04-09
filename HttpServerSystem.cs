@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -12,6 +13,8 @@ namespace TerraBlind
 	{
 		public static volatile Snapshot LatestSnapshot;
 
+		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
+
 		private const string Prefix = "http://127.0.0.1:17878/";
 		private HttpListener _listener;
 		private Thread _thread;
@@ -20,11 +23,22 @@ namespace TerraBlind
 
 		public override void PostUpdateEverything()
 		{
-			if (_announced || !_running) return;
-			if (Main.netMode == 2) { _announced = true; return; }
+			if (!_announced && _running)
+			{
+				if (Main.netMode == 2) { _announced = true; return; }
+				if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
+				Main.NewText("[TerraBlind] HTTP server listening on " + Prefix, Color.LightGreen);
+				_announced = true;
+			}
+
 			if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
-			Main.NewText("[TerraBlind] HTTP server listening on " + Prefix, Color.LightGreen);
-			_announced = true;
+			while (_swapQueue.TryDequeue(out var swap))
+			{
+				int src = swap.src, dst = swap.dst;
+				if (src < 0 || src > 57 || dst < 0 || dst > 57 || src == dst) continue;
+				var inv = Main.LocalPlayer.inventory;
+				(inv[src], inv[dst]) = (inv[dst], inv[src]);
+			}
 		}
 
 		public override void Load()
@@ -97,6 +111,20 @@ namespace TerraBlind
 			if (path == "/state")
 			{
 				body = StateSerializer.ToJson(LatestSnapshot);
+			}
+			else if (path == "/swap")
+			{
+				var qs = ctx.Request.QueryString;
+				if (int.TryParse(qs["src"], out int src) && int.TryParse(qs["dst"], out int dst))
+				{
+					_swapQueue.Enqueue((src, dst));
+					body = "{\"ok\":true,\"src\":" + src + ",\"dst\":" + dst + "}";
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"GET /swap?src=15&dst=0\"}";
+					status = 400;
+				}
 			}
 			else if (path == "/health")
 			{

@@ -5,6 +5,18 @@ namespace TerraBlind
 		public int Id;
 		public string Name = "";
 		public int Stack;
+		public int Damage;
+		public int Pick;
+		public int Axe;
+		public int Hammer;
+		public int CreateTile = -1;
+		public bool Consumable;
+	}
+
+	public sealed class SlotPosition
+	{
+		public int X;
+		public int Y;
 	}
 
 	public sealed class BuffEntry
@@ -48,6 +60,7 @@ namespace TerraBlind
 		public HotbarSlot[] Inventory = new HotbarSlot[40];
 		public HotbarSlot[] Coins = new HotbarSlot[4];
 		public HotbarSlot[] Ammo = new HotbarSlot[4];
+		public SlotPosition[] SlotPositions = new SlotPosition[58];
 		public bool InventoryOpen;
 		public bool ChestOpen;
 	}
