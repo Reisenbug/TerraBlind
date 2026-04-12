@@ -275,18 +275,25 @@ namespace TerraBlind
 			if (TileID.Sets.Platforms[type]) return null;
 			switch (type)
 			{
+				case TileID.Containers2: return "chest";
 				case TileID.WorkBenches: return "workbench";
 				case TileID.Anvils: return "anvil";
+				case TileID.MythrilAnvil: return "anvil";
 				case TileID.Furnaces: return "furnace";
 				case TileID.Hellforge: return "furnace";
+				case TileID.AdamantiteForge: return "furnace";
 				case TileID.Pots: return "pot";
 				case TileID.Signs: return "sign";
 				case TileID.Beds: return "bed";
 				case TileID.Bottles: return "alchemy";
+				case TileID.AlchemyTable: return "alchemy";
 				case TileID.CookingPots: return "cooking_pot";
 				case TileID.Sawmill: return "sawmill";
 				case TileID.TinkerersWorkbench: return "tinkerer";
 				case TileID.DemonAltar: return "altar";
+				case TileID.Loom: return "loom";
+				case TileID.Solidifier: return "solidifier";
+				case TileID.HeavyWorkBench: return "workbench";
 			}
 			return null;
 		}
