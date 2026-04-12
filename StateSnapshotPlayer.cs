@@ -41,6 +41,9 @@ namespace TerraBlind
 				Buffs = BuildBuffs(),
 				Enemies = BuildEnemies(),
 				TownNpcs = BuildTownNpcs(),
+				Tiles = BuildTiles(),
+				Objects = BuildObjects(),
+				DroppedItems = BuildDroppedItems(),
 			};
 
 			HttpServerSystem.LatestSnapshot = snap;
@@ -54,6 +57,7 @@ namespace TerraBlind
 				HeldItem = ItemToSlot(Player.HeldItem),
 				InventoryOpen = Main.playerInventory,
 				ChestOpen = Player.chest != -1,
+				SmartCursor = Main.SmartCursorWanted,
 			};
 			for (int i = 0; i < 10; i++)
 			{
@@ -151,6 +155,165 @@ namespace TerraBlind
 					PosX = npc.position.X,
 					PosY = npc.position.Y,
 					Homeless = npc.homeless,
+				});
+			}
+			return list.ToArray();
+		}
+
+		private const int TileWindowWidth = 120;
+		private const int TileWindowHeight = 80;
+
+		private TileWindowSnapshot BuildTiles()
+		{
+			int pcx = (int)((Player.position.X + Player.width / 2f) / 16f);
+			int pcy = (int)((Player.position.Y + Player.height / 2f) / 16f);
+			int ox = pcx - TileWindowWidth / 2;
+			int oy = pcy - TileWindowHeight / 2;
+
+			var rows = new TileRun[TileWindowHeight][];
+			var runBuf = new System.Collections.Generic.List<TileRun>(32);
+
+			for (int ry = 0; ry < TileWindowHeight; ry++)
+			{
+				runBuf.Clear();
+				int wy = oy + ry;
+				TileRun cur = default;
+				bool has = false;
+				for (int rx = 0; rx < TileWindowWidth; rx++)
+				{
+					int wx = ox + rx;
+					ushort type = 0;
+					byte sflags = 0;
+					if (wx >= 0 && wx < Main.maxTilesX && wy >= 0 && wy < Main.maxTilesY)
+					{
+						Tile t = Main.tile[wx, wy];
+						if (t.HasTile)
+						{
+							type = t.TileType;
+							sflags |= 1;
+							if (Main.tileSolid[type]) sflags |= 2;
+						}
+						if (t.LiquidAmount > 0)
+						{
+							if (t.LiquidType == LiquidID.Water) sflags |= 4;
+							else if (t.LiquidType == LiquidID.Lava) sflags |= 8;
+							else if (t.LiquidType == LiquidID.Honey) sflags |= 16;
+							else if (t.LiquidType == LiquidID.Shimmer) sflags |= 32;
+						}
+					}
+					if (!has)
+					{
+						cur = new TileRun { Type = type, SFlags = sflags, Count = 1 };
+						has = true;
+					}
+					else if (cur.Type == type && cur.SFlags == sflags && cur.Count < ushort.MaxValue)
+					{
+						cur.Count++;
+					}
+					else
+					{
+						runBuf.Add(cur);
+						cur = new TileRun { Type = type, SFlags = sflags, Count = 1 };
+					}
+				}
+				if (has) runBuf.Add(cur);
+				rows[ry] = runBuf.ToArray();
+			}
+
+			return new TileWindowSnapshot
+			{
+				OriginTileX = ox,
+				OriginTileY = oy,
+				Width = TileWindowWidth,
+				Height = TileWindowHeight,
+				Rows = rows,
+			};
+		}
+
+		private WorldObjectEntry[] BuildObjects()
+		{
+			var list = new System.Collections.Generic.List<WorldObjectEntry>();
+			int pcx = (int)((Player.position.X + Player.width / 2f) / 16f);
+			int pcy = (int)((Player.position.Y + Player.height / 2f) / 16f);
+			int ox = pcx - TileWindowWidth / 2;
+			int oy = pcy - TileWindowHeight / 2;
+			int ex = ox + TileWindowWidth;
+			int ey = oy + TileWindowHeight;
+
+			for (int wy = oy; wy < ey; wy++)
+			{
+				if (wy < 0 || wy >= Main.maxTilesY) continue;
+				for (int wx = ox; wx < ex; wx++)
+				{
+					if (wx < 0 || wx >= Main.maxTilesX) continue;
+					Tile t = Main.tile[wx, wy];
+					if (!t.HasTile) continue;
+					if (t.TileFrameX != 0 || t.TileFrameY != 0) continue;
+					ushort type = t.TileType;
+					string cat = ClassifyTile(type);
+					if (cat == null) continue;
+					list.Add(new WorldObjectEntry
+					{
+						TileX = wx,
+						TileY = wy,
+						Type = type,
+						Name = cat,
+						PosX = wx * 16f,
+						PosY = wy * 16f,
+					});
+				}
+			}
+			return list.ToArray();
+		}
+
+		private static string ClassifyTile(ushort type)
+		{
+			if (TileID.Sets.BasicChest[type]) return "chest";
+			if (TileID.Sets.BasicDresser[type]) return "dresser";
+			if (TileID.Sets.IsATreeTrunk[type]) return "tree";
+			if (TileID.Sets.Torch[type]) return "torch";
+			if (TileID.Sets.Platforms[type]) return null;
+			switch (type)
+			{
+				case TileID.WorkBenches: return "workbench";
+				case TileID.Anvils: return "anvil";
+				case TileID.Furnaces: return "furnace";
+				case TileID.Hellforge: return "furnace";
+				case TileID.Pots: return "pot";
+				case TileID.Signs: return "sign";
+				case TileID.Beds: return "bed";
+				case TileID.Bottles: return "alchemy";
+				case TileID.CookingPots: return "cooking_pot";
+				case TileID.Sawmill: return "sawmill";
+				case TileID.TinkerersWorkbench: return "tinkerer";
+				case TileID.DemonAltar: return "altar";
+			}
+			return null;
+		}
+
+		private DroppedItemEntry[] BuildDroppedItems()
+		{
+			var list = new System.Collections.Generic.List<DroppedItemEntry>();
+			float pcx = Player.position.X + Player.width / 2f;
+			float pcy = Player.position.Y + Player.height / 2f;
+			float halfW = TileWindowWidth / 2f * 16f;
+			float halfH = TileWindowHeight / 2f * 16f;
+			for (int i = 0; i < Main.maxItems; i++)
+			{
+				Item item = Main.item[i];
+				if (item == null || !item.active || item.IsAir) continue;
+				float ix = item.position.X + item.width / 2f;
+				float iy = item.position.Y + item.height / 2f;
+				if (System.Math.Abs(ix - pcx) > halfW) continue;
+				if (System.Math.Abs(iy - pcy) > halfH) continue;
+				list.Add(new DroppedItemEntry
+				{
+					WhoAmI = i,
+					Type = item.type,
+					Name = item.Name ?? "",
+					Stack = item.stack,
+					PosX = item.position.X,
+					PosY = item.position.Y,
 				});
 			}
 			return list.ToArray();
