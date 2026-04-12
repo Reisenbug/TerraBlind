@@ -14,6 +14,7 @@ namespace TerraBlind
 		public static volatile Snapshot LatestSnapshot;
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
+		private static volatile bool _lootAllRequested;
 
 		private const string Prefix = "http://127.0.0.1:17878/";
 		private HttpListener _listener;
@@ -38,6 +39,12 @@ namespace TerraBlind
 				if (src < 0 || src > 57 || dst < 0 || dst > 57 || src == dst) continue;
 				var inv = Main.LocalPlayer.inventory;
 				(inv[src], inv[dst]) = (inv[dst], inv[src]);
+			}
+			if (_lootAllRequested)
+			{
+				_lootAllRequested = false;
+				if (Main.LocalPlayer.chest != -1)
+					Terraria.UI.ChestUI.LootAll();
 			}
 		}
 
@@ -125,6 +132,11 @@ namespace TerraBlind
 					body = "{\"error\":\"bad_params\",\"usage\":\"GET /swap?src=15&dst=0\"}";
 					status = 400;
 				}
+			}
+			else if (path == "/loot_all")
+			{
+				_lootAllRequested = true;
+				body = "{\"ok\":true}";
 			}
 			else if (path == "/health")
 			{

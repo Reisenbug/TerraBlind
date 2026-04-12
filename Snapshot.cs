@@ -63,6 +63,7 @@ namespace TerraBlind
 		public SlotPosition[] SlotPositions = new SlotPosition[58];
 		public bool InventoryOpen;
 		public bool ChestOpen;
+		public bool SmartCursor;
 	}
 
 	public sealed class EnemyEntry
@@ -92,6 +93,43 @@ namespace TerraBlind
 		public bool Homeless;
 	}
 
+	// SFlags bits: 0=active, 1=solid, 2=water, 3=lava, 4=honey, 5=shimmer
+	public struct TileRun
+	{
+		public ushort Type;
+		public byte SFlags;
+		public ushort Count;
+	}
+
+	public sealed class TileWindowSnapshot
+	{
+		public int OriginTileX;
+		public int OriginTileY;
+		public int Width;
+		public int Height;
+		public TileRun[][] Rows;
+	}
+
+	public sealed class WorldObjectEntry
+	{
+		public int TileX;
+		public int TileY;
+		public int Type;
+		public string Name = "";
+		public float PosX;
+		public float PosY;
+	}
+
+	public sealed class DroppedItemEntry
+	{
+		public int WhoAmI;
+		public int Type;
+		public string Name = "";
+		public int Stack;
+		public float PosX;
+		public float PosY;
+	}
+
 	public sealed class Snapshot
 	{
 		public long Tick;
@@ -101,5 +139,8 @@ namespace TerraBlind
 		public BuffEntry[] Buffs = new BuffEntry[0];
 		public EnemyEntry[] Enemies = new EnemyEntry[0];
 		public TownNpcEntry[] TownNpcs = new TownNpcEntry[0];
+		public TileWindowSnapshot Tiles = null;
+		public WorldObjectEntry[] Objects = new WorldObjectEntry[0];
+		public DroppedItemEntry[] DroppedItems = new DroppedItemEntry[0];
 	}
 }

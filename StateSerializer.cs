@@ -35,6 +35,7 @@ namespace TerraBlind
 			sb.Append("\"selected_slot\":").Append(s.Equipment.SelectedSlot).Append(',');
 			sb.Append("\"inventory_open\":").Append(B(s.Equipment.InventoryOpen)).Append(',');
 			sb.Append("\"chest_open\":").Append(B(s.Equipment.ChestOpen)).Append(',');
+			sb.Append("\"smart_cursor\":").Append(B(s.Equipment.SmartCursor)).Append(',');
 			sb.Append("\"held_item\":");
 			AppendSlot(sb, s.Equipment.HeldItem);
 			sb.Append(',');
@@ -116,6 +117,56 @@ namespace TerraBlind
 				sb.Append(",\"display_name\":\"").Append(EscapeStr(n.DisplayName)).Append("\"");
 				sb.Append(",\"pos\":{\"x\":").Append(F(n.PosX)).Append(",\"y\":").Append(F(n.PosY)).Append("}");
 				sb.Append(",\"homeless\":").Append(B(n.Homeless));
+				sb.Append('}');
+			}
+			sb.Append("],");
+
+			if (s.Tiles != null)
+			{
+				var tw = s.Tiles;
+				sb.Append("\"tiles\":{");
+				sb.Append("\"origin\":{\"x\":").Append(tw.OriginTileX).Append(",\"y\":").Append(tw.OriginTileY).Append("},");
+				sb.Append("\"w\":").Append(tw.Width).Append(",\"h\":").Append(tw.Height).Append(',');
+				sb.Append("\"rows\":[");
+				for (int r = 0; r < tw.Rows.Length; r++)
+				{
+					if (r > 0) sb.Append(',');
+					sb.Append('[');
+					var row = tw.Rows[r];
+					for (int c = 0; c < row.Length; c++)
+					{
+						if (c > 0) sb.Append(',');
+						sb.Append('[').Append(row[c].Type).Append(',').Append(row[c].SFlags).Append(',').Append(row[c].Count).Append(']');
+					}
+					sb.Append(']');
+				}
+				sb.Append("]},");
+			}
+
+			sb.Append("\"objects\":[");
+			for (int i = 0; i < s.Objects.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var o = s.Objects[i];
+				sb.Append("{\"tx\":").Append(o.TileX);
+				sb.Append(",\"ty\":").Append(o.TileY);
+				sb.Append(",\"type\":").Append(o.Type);
+				sb.Append(",\"name\":\"").Append(EscapeStr(o.Name)).Append("\"");
+				sb.Append(",\"pos\":{\"x\":").Append(F(o.PosX)).Append(",\"y\":").Append(F(o.PosY)).Append("}");
+				sb.Append('}');
+			}
+			sb.Append("],");
+
+			sb.Append("\"dropped_items\":[");
+			for (int i = 0; i < s.DroppedItems.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var d = s.DroppedItems[i];
+				sb.Append("{\"who\":").Append(d.WhoAmI);
+				sb.Append(",\"type\":").Append(d.Type);
+				sb.Append(",\"name\":\"").Append(EscapeStr(d.Name)).Append("\"");
+				sb.Append(",\"stack\":").Append(d.Stack);
+				sb.Append(",\"pos\":{\"x\":").Append(F(d.PosX)).Append(",\"y\":").Append(F(d.PosY)).Append("}");
 				sb.Append('}');
 			}
 			sb.Append(']');
