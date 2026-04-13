@@ -78,6 +78,7 @@ namespace TerraBlind
 			var mv = s.Movement;
 			sb.Append("\"movement\":{");
 			sb.Append("\"jump_speed\":").Append(F(mv.JumpSpeed)).Append(',');
+			sb.Append("\"jump_height\":").Append(mv.JumpHeight).Append(',');
 			sb.Append("\"gravity\":").Append(F(mv.Gravity)).Append(',');
 			sb.Append("\"max_run_speed\":").Append(F(mv.MaxRunSpeed)).Append(',');
 			sb.Append("\"acc_run_speed\":").Append(F(mv.AccRunSpeed)).Append(',');

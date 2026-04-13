@@ -338,6 +338,7 @@ namespace TerraBlind
 			return new MovementSnapshot
 			{
 				JumpSpeed = Player.jumpSpeed,
+				JumpHeight = Player.jumpHeight,
 				Gravity = Player.gravity,
 				MaxRunSpeed = Player.maxRunSpeed,
 				AccRunSpeed = Player.accRunSpeed,
