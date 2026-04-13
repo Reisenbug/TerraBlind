@@ -130,12 +130,26 @@ namespace TerraBlind
 		public float PosY;
 	}
 
+	public sealed class MovementSnapshot
+	{
+		public float JumpSpeed;
+		public float Gravity;
+		public float MaxRunSpeed;
+		public float AccRunSpeed;
+		public int WingTimeMax;
+		public bool NoFallDmg;
+		public bool LavaImmune;
+		public int LavaTime;
+		public int ExtraJumps;
+	}
+
 	public sealed class Snapshot
 	{
 		public long Tick;
 		public PlayerSnapshot Player = new PlayerSnapshot();
 		public EquipmentSnapshot Equipment = new EquipmentSnapshot();
 		public CameraSnapshot Camera = new CameraSnapshot();
+		public MovementSnapshot Movement = new MovementSnapshot();
 		public BuffEntry[] Buffs = new BuffEntry[0];
 		public EnemyEntry[] Enemies = new EnemyEntry[0];
 		public TownNpcEntry[] TownNpcs = new TownNpcEntry[0];

@@ -38,6 +38,7 @@ namespace TerraBlind
 					ScreenHeight = Main.screenHeight,
 					Zoom = Main.GameZoomTarget,
 				},
+				Movement = BuildMovement(),
 				Buffs = BuildBuffs(),
 				Enemies = BuildEnemies(),
 				TownNpcs = BuildTownNpcs(),
@@ -324,6 +325,27 @@ namespace TerraBlind
 				});
 			}
 			return list.ToArray();
+		}
+
+		private MovementSnapshot BuildMovement()
+		{
+			int extraJumps = 0;
+			foreach (var jh in Player.ExtraJumps)
+			{
+				if (jh.Enabled) extraJumps++;
+			}
+			return new MovementSnapshot
+			{
+				JumpSpeed = Player.jumpSpeed,
+				Gravity = Player.gravity,
+				MaxRunSpeed = Player.maxRunSpeed,
+				AccRunSpeed = Player.accRunSpeed,
+				WingTimeMax = Player.wingTimeMax,
+				NoFallDmg = Player.noFallDmg,
+				LavaImmune = Player.lavaImmune,
+				LavaTime = Player.lavaMax,
+				ExtraJumps = extraJumps,
+			};
 		}
 
 		private BuffEntry[] BuildBuffs()

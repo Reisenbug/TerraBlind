@@ -75,6 +75,19 @@ namespace TerraBlind
 			sb.Append("\"zoom\":").Append(F(s.Camera.Zoom));
 			sb.Append("},");
 
+			var mv = s.Movement;
+			sb.Append("\"movement\":{");
+			sb.Append("\"jump_speed\":").Append(F(mv.JumpSpeed)).Append(',');
+			sb.Append("\"gravity\":").Append(F(mv.Gravity)).Append(',');
+			sb.Append("\"max_run_speed\":").Append(F(mv.MaxRunSpeed)).Append(',');
+			sb.Append("\"acc_run_speed\":").Append(F(mv.AccRunSpeed)).Append(',');
+			sb.Append("\"wing_time_max\":").Append(mv.WingTimeMax).Append(',');
+			sb.Append("\"no_fall_dmg\":").Append(B(mv.NoFallDmg)).Append(',');
+			sb.Append("\"lava_immune\":").Append(B(mv.LavaImmune)).Append(',');
+			sb.Append("\"lava_time\":").Append(mv.LavaTime).Append(',');
+			sb.Append("\"extra_jumps\":").Append(mv.ExtraJumps);
+			sb.Append("},");
+
 			sb.Append("\"buffs\":[");
 			for (int i = 0; i < s.Buffs.Length; i++)
 			{
