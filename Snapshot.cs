@@ -133,6 +133,7 @@ namespace TerraBlind
 	public sealed class MovementSnapshot
 	{
 		public float JumpSpeed;
+		public int JumpHeight;
 		public float Gravity;
 		public float MaxRunSpeed;
 		public float AccRunSpeed;
