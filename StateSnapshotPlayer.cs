@@ -193,6 +193,7 @@ namespace TerraBlind
 							type = t.TileType;
 							sflags |= 1;
 							if (Main.tileSolid[type]) sflags |= 2;
+								if (Main.tileSolidTop[type]) sflags |= 64;
 						}
 						if (t.LiquidAmount > 0)
 						{
