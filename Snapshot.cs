@@ -93,7 +93,7 @@ namespace TerraBlind
 		public bool Homeless;
 	}
 
-	// SFlags bits: 0=active, 1=solid, 2=water, 3=lava, 4=honey, 5=shimmer
+	// SFlags bits: 0=active, 1=solid, 2=water, 3=lava, 4=honey, 5=shimmer, 6=solidTop(platform)
 	public struct TileRun
 	{
 		public ushort Type;
