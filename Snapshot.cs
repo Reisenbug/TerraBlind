@@ -41,6 +41,7 @@ namespace TerraBlind
 		public string Direction = "right";
 		public bool OnGround;
 		public bool InLiquid;
+		public string Biome = "forest";
 	}
 
 	public sealed class CameraSnapshot

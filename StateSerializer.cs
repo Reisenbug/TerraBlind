@@ -28,7 +28,8 @@ namespace TerraBlind
 			sb.Append("\"height\":").Append(F(s.Player.Height)).Append(',');
 			sb.Append("\"direction\":\"").Append(EscapeStr(s.Player.Direction)).Append("\",");
 			sb.Append("\"on_ground\":").Append(B(s.Player.OnGround)).Append(',');
-			sb.Append("\"in_liquid\":").Append(B(s.Player.InLiquid));
+			sb.Append("\"in_liquid\":").Append(B(s.Player.InLiquid)).Append(',');
+			sb.Append("\"biome\":\"").Append(EscapeStr(s.Player.Biome)).Append("\"");
 			sb.Append("},");
 
 			sb.Append("\"equipment\":{");
