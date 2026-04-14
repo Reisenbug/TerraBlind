@@ -15,6 +15,7 @@ namespace TerraBlind
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static volatile bool _lootAllRequested;
+		private static volatile bool _quickHealRequested;
 
 		private const string Prefix = "http://127.0.0.1:17878/";
 		private HttpListener _listener;
@@ -45,6 +46,11 @@ namespace TerraBlind
 				_lootAllRequested = false;
 				if (Main.LocalPlayer.chest != -1)
 					Terraria.UI.ChestUI.LootAll();
+			}
+			if (_quickHealRequested)
+			{
+				_quickHealRequested = false;
+				Main.LocalPlayer.QuickHeal();
 			}
 		}
 
@@ -136,6 +142,11 @@ namespace TerraBlind
 			else if (path == "/loot_all")
 			{
 				_lootAllRequested = true;
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/quick_heal")
+			{
+				_quickHealRequested = true;
 				body = "{\"ok\":true}";
 			}
 			else if (path == "/health")

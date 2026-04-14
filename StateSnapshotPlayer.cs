@@ -28,6 +28,7 @@ namespace TerraBlind
 					Direction = Player.direction >= 0 ? "right" : "left",
 					OnGround = Player.velocity.Y == 0f,
 					InLiquid = Player.wet,
+					Biome = DetectBiome(),
 				},
 				Equipment = BuildEquipment(),
 				Camera = new CameraSnapshot
@@ -48,6 +49,23 @@ namespace TerraBlind
 			};
 
 			HttpServerSystem.LatestSnapshot = snap;
+		}
+
+		private string DetectBiome()
+		{
+			if (Player.ZoneJungle) return "jungle";
+			if (Player.ZoneDungeon) return "dungeon";
+			if (Player.ZoneCorrupt) return "corruption";
+			if (Player.ZoneCrimson) return "crimson";
+			if (Player.ZoneHallow) return "hallow";
+			if (Player.ZoneSnow) return "snow";
+			if (Player.ZoneDesert) return "desert";
+			if (Player.ZoneBeach) return "ocean";
+			if (Player.ZoneUnderworldHeight) return "underworld";
+			if (Player.ZoneRockLayerHeight) return "cavern";
+			if (Player.ZoneDirtLayerHeight) return "underground";
+			if (Player.ZoneSkyHeight) return "sky";
+			return "forest";
 		}
 
 		private EquipmentSnapshot BuildEquipment()
