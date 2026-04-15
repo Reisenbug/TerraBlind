@@ -6,8 +6,8 @@ namespace TerraBlind
 {
 	public class StateSnapshotPlayer : ModPlayer
 	{
-		private const int ControlTimeoutTicks = 30;
-		private const int JumpHoldFrames = 36;
+		private const int ControlTimeoutTicks = 60;
+		private const int JumpHoldFrames = 15;
 		private int _jumpFramesLeft;
 
 		public override void SetControls()
