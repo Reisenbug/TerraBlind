@@ -41,11 +41,6 @@ namespace TerraBlind
 			if (ci.UseItem) Player.controlUseItem = true;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
-			if (ci.SmartCursor)
-			{
-				Player.controlSmart = true;
-				ci.SmartCursor = false;
-			}
 		}
 
 		public override void PostUpdate()
