@@ -9,9 +9,18 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
+	public class ControlInput
+	{
+		public bool Left, Right, Up, Down, Jump, UseItem;
+		public int SelectedSlot = -1;
+		public bool SmartCursor;
+		public long Tick;
+	}
+
 	public class HttpServerSystem : ModSystem
 	{
 		public static volatile Snapshot LatestSnapshot;
+		public static volatile ControlInput PendingControl;
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static volatile bool _lootAllRequested;
@@ -148,6 +157,27 @@ namespace TerraBlind
 			{
 				_quickHealRequested = true;
 				body = "{\"ok\":true}";
+			}
+			else if (path == "/control")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var ci = new ControlInput();
+				ci.SelectedSlot = -1;
+				var rb = reqBody.Replace(" ", "");
+				if (rb.Contains("\"left\":true")) ci.Left = true;
+				if (rb.Contains("\"right\":true")) ci.Right = true;
+				if (rb.Contains("\"up\":true")) ci.Up = true;
+				if (rb.Contains("\"down\":true")) ci.Down = true;
+				if (rb.Contains("\"jump\":true")) ci.Jump = true;
+				if (rb.Contains("\"use_item\":true")) ci.UseItem = true;
+				if (rb.Contains("\"smart_cursor\":true")) ci.SmartCursor = true;
+				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"selected_slot\"\\s*:\\s*(\\d+)");
+				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
+				ci.Tick = (long)Main.GameUpdateCount;
+				PendingControl = ci;
+				body = "{\"ok\":true,\"got\":\"" + reqBody.Replace("\"","\\\"") + "\"}";
 			}
 			else if (path == "/health")
 			{
