@@ -23,11 +23,19 @@ if (ci.Left) Player.controlLeft = true;
 			if (ci.Right) Player.controlRight = true;
 			if (ci.Up) Player.controlUp = true;
 			if (ci.Down) Player.controlDown = true;
-			if (ci.Jump) Player.controlJump = true;
+			if (ci.Jump)
+			{
+				Player.controlJump = true;
+				ci.Jump = false;
+			}
 			if (ci.UseItem) Player.controlUseItem = true;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
-			if (ci.SmartCursor) Player.controlSmart = true;
+			if (ci.SmartCursor)
+			{
+				Player.controlSmart = true;
+				ci.SmartCursor = false;
+			}
 		}
 
 		public override void PostUpdate()
