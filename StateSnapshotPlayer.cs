@@ -32,6 +32,14 @@ namespace TerraBlind
 			if (ci.Right) Player.controlRight = true;
 			if (ci.Up) Player.controlUp = true;
 			if (ci.Down) Player.controlDown = true;
+			bool walking = (ci.Left || ci.Right) && !ci.Down;
+			bool onGround = Player.velocity.Y == 0f;
+			bool blocked = onGround && System.Math.Abs(Player.velocity.X) < 0.1f;
+			if (walking && blocked && _jumpFramesLeft <= 0)
+			{
+				_jumpFramesLeft = JumpHoldFrames;
+				Player.controlJump = true;
+			}
 			if (ci.Jump)
 			{
 				_jumpFramesLeft = JumpHoldFrames;
