@@ -177,7 +177,7 @@ namespace TerraBlind
 				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
 				ci.Tick = (long)Main.GameUpdateCount;
 				PendingControl = ci;
-				body = "{\"ok\":true,\"got\":\"" + reqBody.Replace("\"","\\\"") + "\"}";
+				body = "{\"ok\":true}";
 			}
 			else if (path == "/health")
 			{

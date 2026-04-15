@@ -19,8 +19,7 @@ namespace TerraBlind
 				HttpServerSystem.PendingControl = null;
 				return;
 			}
-			Main.NewText($"[ctrl] L={ci.Left} R={ci.Right} J={ci.Jump} U={ci.UseItem} age={age}", Microsoft.Xna.Framework.Color.Yellow);
-			if (ci.Left) Player.controlLeft = true;
+if (ci.Left) Player.controlLeft = true;
 			if (ci.Right) Player.controlRight = true;
 			if (ci.Up) Player.controlUp = true;
 			if (ci.Down) Player.controlDown = true;
