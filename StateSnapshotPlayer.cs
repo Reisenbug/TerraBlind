@@ -7,11 +7,20 @@ namespace TerraBlind
 	public class StateSnapshotPlayer : ModPlayer
 	{
 		private const int ControlTimeoutTicks = 30;
+		private const int JumpHoldFrames = 36;
+		private int _jumpFramesLeft;
 
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
 			var ci = HttpServerSystem.PendingControl;
+
+			if (_jumpFramesLeft > 0)
+			{
+				Player.controlJump = true;
+				_jumpFramesLeft--;
+			}
+
 			if (ci == null) return;
 			long age = (long)Main.GameUpdateCount - ci.Tick;
 			if (age > ControlTimeoutTicks)
@@ -19,12 +28,13 @@ namespace TerraBlind
 				HttpServerSystem.PendingControl = null;
 				return;
 			}
-if (ci.Left) Player.controlLeft = true;
+			if (ci.Left) Player.controlLeft = true;
 			if (ci.Right) Player.controlRight = true;
 			if (ci.Up) Player.controlUp = true;
 			if (ci.Down) Player.controlDown = true;
 			if (ci.Jump)
 			{
+				_jumpFramesLeft = JumpHoldFrames;
 				Player.controlJump = true;
 				ci.Jump = false;
 			}
