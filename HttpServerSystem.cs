@@ -13,7 +13,6 @@ namespace TerraBlind
 	{
 		public bool Left, Right, Up, Down, Jump, UseItem;
 		public int SelectedSlot = -1;
-		public bool SmartCursor;
 		public long Tick;
 	}
 
@@ -172,7 +171,6 @@ namespace TerraBlind
 				if (rb.Contains("\"down\":true")) ci.Down = true;
 				if (rb.Contains("\"jump\":true")) ci.Jump = true;
 				if (rb.Contains("\"use_item\":true")) ci.UseItem = true;
-				if (rb.Contains("\"smart_cursor\":true")) ci.SmartCursor = true;
 				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"selected_slot\"\\s*:\\s*(\\d+)");
 				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
 				ci.Tick = (long)Main.GameUpdateCount;
