@@ -221,7 +221,6 @@ namespace TerraBlind
 				var dyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"dy\"\\s*:\\s*(-?\\d+)");
 				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\"\\s*:\\s*(\\d+)");
 				var durMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"duration_frames\"\\s*:\\s*(\\d+)");
-				bool smart = rb.Contains("\"smart_cursor\":true");
 				if (dxMatch.Success && dyMatch.Success && slotMatch.Success && durMatch.Success)
 				{
 					PlaceCoordinator.Start(new PlaceRequest
@@ -229,7 +228,6 @@ namespace TerraBlind
 						Dx = int.Parse(dxMatch.Groups[1].Value),
 						Dy = int.Parse(dyMatch.Groups[1].Value),
 						Slot = int.Parse(slotMatch.Groups[1].Value),
-						SmartCursor = smart,
 						RemainingFrames = int.Parse(durMatch.Groups[1].Value),
 					});
 					body = "{\"ok\":true}";

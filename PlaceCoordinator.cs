@@ -8,7 +8,6 @@ namespace TerraBlind
 		public int Dx;
 		public int Dy;
 		public int Slot;
-		public bool SmartCursor;
 		public int RemainingFrames;
 	}
 
@@ -45,7 +44,6 @@ namespace TerraBlind
 			float worldY = tileY * 16f + 8f;
 			Main.mouseX = (int)(worldX - Main.screenPosition.X);
 			Main.mouseY = (int)(worldY - Main.screenPosition.Y);
-			Main.SmartCursorWanted = r.SmartCursor;
 
 			if (r.Slot >= 0 && r.Slot <= 9)
 				p.selectedItem = r.Slot;
