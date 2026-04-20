@@ -13,6 +13,7 @@ namespace TerraBlind
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
+			PlaceCoordinator.ApplyControls();
 			var ci = HttpServerSystem.PendingControl;
 
 			if (_jumpFramesLeft > 0)
@@ -164,7 +165,26 @@ namespace TerraBlind
 				Hammer = item.hammer,
 				CreateTile = item.createTile,
 				Consumable = item.consumable,
+				Category = ClassifyItem(item),
 			};
+		}
+
+		private static string ClassifyItem(Item item)
+		{
+			if (item.pick > 0) return "pickaxe";
+			if (item.axe > 0) return "axe";
+			if (item.hammer > 0) return "hammer";
+			if (item.createTile >= 0)
+			{
+				if (TileID.Sets.Platforms[item.createTile]) return "platform";
+				if (TileID.Sets.Torch[item.createTile]) return "torch";
+				return "block";
+			}
+			if (item.createWall >= 0) return "wall";
+			if (item.ammo != AmmoID.None) return "ammo";
+			if (item.damage > 0) return "weapon";
+			if (item.consumable) return "consumable";
+			return "misc";
 		}
 
 		private const float EnemyHalfWidthTiles = 60f;

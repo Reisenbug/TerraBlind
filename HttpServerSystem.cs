@@ -22,6 +22,7 @@ namespace TerraBlind
 		public static volatile ControlInput PendingControl;
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
+		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
 		private static volatile bool _lootAllRequested;
 		private static volatile bool _quickHealRequested;
 
@@ -48,6 +49,18 @@ namespace TerraBlind
 				if (src < 0 || src > 57 || dst < 0 || dst > 57 || src == dst) continue;
 				var inv = Main.LocalPlayer.inventory;
 				(inv[src], inv[dst]) = (inv[dst], inv[src]);
+			}
+			while (_interactQueue.TryDequeue(out var tile))
+			{
+				if (Main.LocalPlayer.chest != -1) continue;
+				int idx = Chest.FindChest(tile.tx, tile.ty);
+				if (idx == -1) continue;
+				if (Chest.UsingChest(idx) != -1) continue;
+				Main.LocalPlayer.chest = idx;
+				Main.LocalPlayer.chestX = tile.tx;
+				Main.LocalPlayer.chestY = tile.ty;
+				Main.playerInventory = true;
+				Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuOpen);
 			}
 			if (_lootAllRequested)
 			{
@@ -175,6 +188,61 @@ namespace TerraBlind
 				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
 				ci.Tick = (long)Main.GameUpdateCount;
 				PendingControl = ci;
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/interact")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var txMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"tile_x\"\\s*:\\s*(-?\\d+)");
+				var tyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"tile_y\"\\s*:\\s*(-?\\d+)");
+				if (txMatch.Success && tyMatch.Success)
+				{
+					int tx = int.Parse(txMatch.Groups[1].Value);
+					int ty = int.Parse(tyMatch.Groups[1].Value);
+					_interactQueue.Enqueue((tx, ty));
+					body = "{\"ok\":true,\"tile_x\":" + tx + ",\"tile_y\":" + ty + "}";
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /interact {\\\"tile_x\\\":N,\\\"tile_y\\\":N}\"}";
+					status = 400;
+				}
+			}
+			else if (path == "/place")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var dxMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"dx\"\\s*:\\s*(-?\\d+)");
+				var dyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"dy\"\\s*:\\s*(-?\\d+)");
+				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\"\\s*:\\s*(\\d+)");
+				var durMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"duration_frames\"\\s*:\\s*(\\d+)");
+				bool smart = rb.Contains("\"smart_cursor\":true");
+				if (dxMatch.Success && dyMatch.Success && slotMatch.Success && durMatch.Success)
+				{
+					PlaceCoordinator.Start(new PlaceRequest
+					{
+						Dx = int.Parse(dxMatch.Groups[1].Value),
+						Dy = int.Parse(dyMatch.Groups[1].Value),
+						Slot = int.Parse(slotMatch.Groups[1].Value),
+						SmartCursor = smart,
+						RemainingFrames = int.Parse(durMatch.Groups[1].Value),
+					});
+					body = "{\"ok\":true}";
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /place {dx,dy,slot,duration_frames,smart_cursor?}\"}";
+					status = 400;
+				}
+			}
+			else if (path == "/place_stop")
+			{
+				PlaceCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
 			else if (path == "/health")
