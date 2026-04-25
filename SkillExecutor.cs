@@ -133,13 +133,33 @@ namespace TerraBlind
             {
                 if (!DirectionRight) p.controlRight = true;
                 else p.controlLeft = true;
-                _phaseTick++;
-                if (_phaseTick >= _walkBackFrames)
+
+                int headY = (int)(p.position.Y / 16f);
+                int pcx = (int)((p.position.X + p.width / 2f) / 16f);
+                bool overhead = false;
+                for (int dy = 1; dy <= 15; dy++)
+                {
+                    var t = Terraria.Main.tile[pcx, headY - dy];
+                    if (t != null && t.HasTile && Main.tileSolid[t.TileType] && t.TileType != 189 && t.TileType != 196)
+                    {
+                        overhead = true;
+                        break;
+                    }
+                }
+                if (!overhead)
+                {
+                    _phaseTick++;
+                    if (_phaseTick >= 10)
+                    {
+                        _phaseTick = 0;
+                        _currentPlaceDy = -1;
+                        _cyclesDone = 0;
+                        State = SkillState.CavePlace;
+                    }
+                }
+                else
                 {
                     _phaseTick = 0;
-                    _currentPlaceDy = -1;
-                    _cyclesDone = 0;
-                    State = SkillState.CavePlace;
                 }
                 return;
             }
