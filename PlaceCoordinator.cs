@@ -1,3 +1,4 @@
+using System;
 using Terraria;
 using Terraria.ModLoader;
 
@@ -35,8 +36,8 @@ namespace TerraBlind
 			if (r.RemainingFrames <= 0) { Active = null; return; }
 
 			var p = Main.LocalPlayer;
-			int pcx = (int)((p.position.X + p.width / 2f) / 16f);
-			int feetY = (int)((p.position.Y + p.height) / 16f);
+			int pcx = (int)Math.Round((p.position.X + p.width / 2f) / 16f);
+			int feetY = (int)Math.Ceiling((p.position.Y + p.height) / 16f);
 			int tileX = pcx + r.Dx;
 			int tileY = feetY + r.Dy;
 

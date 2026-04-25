@@ -243,6 +243,52 @@ namespace TerraBlind
 				PlaceCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/skill")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var nameMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"name\"\\s*:\\s*\"([^\"]+)\"");
+				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
+				if (nameMatch.Success)
+				{
+					string skillName = nameMatch.Groups[1].Value;
+					bool dirRight = !dirMatch.Success || dirMatch.Groups[1].Value != "left";
+					if (skillName == "pillar_jump")
+					{
+						var riseMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"rise_tiles\"\\s*:\\s*(\\d+)");
+						int riseTiles = riseMatch.Success ? int.Parse(riseMatch.Groups[1].Value) : 8;
+						SkillExecutor.StartPillarJump(dirRight, riseTiles);
+						body = "{\"ok\":true,\"skill\":\"pillar_jump\",\"rise_tiles\":" + riseTiles + "}";
+					}
+					else if (skillName == "cave_bypass")
+					{
+						var riseMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"rise_tiles\"\\s*:\\s*(\\d+)");
+						var walkMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"walk_back\"\\s*:\\s*(\\d+)");
+						int riseTiles = riseMatch.Success ? int.Parse(riseMatch.Groups[1].Value) : 5;
+						int walkBack = walkMatch.Success ? int.Parse(walkMatch.Groups[1].Value) : 2;
+						bool caveOnLeft = dirMatch.Success && dirMatch.Groups[1].Value == "left";
+						SkillExecutor.StartCaveBypass(caveOnLeft, walkBack, riseTiles);
+						body = "{\"ok\":true,\"skill\":\"cave_bypass\"}";
+					}
+					else if (skillName == "stop")
+					{
+						SkillExecutor.Stop();
+						body = "{\"ok\":true,\"skill\":\"stop\"}";
+					}
+					else
+					{
+						body = "{\"error\":\"unknown_skill\",\"name\":\"" + skillName + "\"}";
+						status = 400;
+					}
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\"}";
+					status = 400;
+				}
+			}
 			else if (path == "/health")
 			{
 				body = "{\"ok\":true}";

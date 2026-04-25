@@ -13,8 +13,22 @@ namespace TerraBlind
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
+			if (SkillExecutor.IsActive)
+			{
+				SkillExecutor.ApplyControls();
+				PlaceCoordinator.ApplyControls();
+				return;
+			}
+			bool placeActive = PlaceCoordinator.IsActive;
 			PlaceCoordinator.ApplyControls();
 			var ci = HttpServerSystem.PendingControl;
+
+			int jflBefore = _jumpFramesLeft;
+			bool ciJumpIn = ci != null && ci.Jump;
+			bool ciLeftIn = ci != null && ci.Left;
+			bool ciRightIn = ci != null && ci.Right;
+			bool ciDownIn = ci != null && ci.Down;
+			long ciAge = ci != null ? (long)Main.GameUpdateCount - ci.Tick : -1;
 
 			if (_jumpFramesLeft > 0)
 			{
@@ -27,10 +41,18 @@ namespace TerraBlind
 				_jumpFramesLeft = 0;
 			}
 
-			if (ci == null) return;
-			long age = (long)Main.GameUpdateCount - ci.Tick;
-			if (age > ControlTimeoutTicks)
+			bool jumpFromAuto = false, jumpFromCi = false;
+			bool walking = false, blocked = false;
+
+			if (ci == null)
 			{
+				if (placeActive || jflBefore != 0)
+					DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=null place={placeActive} cJ={Player.controlJump}");
+				return;
+			}
+			if (ciAge > ControlTimeoutTicks)
+			{
+				DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=EXPIRED age={ciAge} place={placeActive}");
 				HttpServerSystem.PendingControl = null;
 				return;
 			}
@@ -38,23 +60,34 @@ namespace TerraBlind
 			if (ci.Right) Player.controlRight = true;
 			if (ci.Up) Player.controlUp = true;
 			if (ci.Down) Player.controlDown = true;
-			bool walking = (ci.Left || ci.Right) && !ci.Down;
+			walking = (ci.Left || ci.Right) && !ci.Down;
 			bool onGround = Player.velocity.Y == 0f;
-			bool blocked = onGround && System.Math.Abs(Player.velocity.X) < 0.1f;
+			blocked = onGround && System.Math.Abs(Player.velocity.X) < 0.1f;
 			if (walking && blocked && _jumpFramesLeft == 0)
 			{
 				_jumpFramesLeft = JumpHoldFrames;
 				Player.controlJump = true;
+				jumpFromAuto = true;
 			}
 			if (ci.Jump && _jumpFramesLeft == 0)
 			{
 				_jumpFramesLeft = JumpHoldFrames;
 				Player.controlJump = true;
 				ci.Jump = false;
+				jumpFromCi = true;
 			}
 			if (ci.UseItem) Player.controlUseItem = true;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
+
+			if (placeActive || ciJumpIn || jumpFromAuto || jumpFromCi || jflBefore != 0)
+			{
+				DiagLog.JumpTrace(
+					$"jfl={jflBefore}->{_jumpFramesLeft} ciJ={ciJumpIn} ciL={ciLeftIn} ciR={ciRightIn} ciD={ciDownIn} " +
+					$"age={ciAge} walk={walking} blk={blocked} vy={Player.velocity.Y:F2} vx={Player.velocity.X:F2} " +
+					$"place={placeActive} autoJ={jumpFromAuto} ciJfire={jumpFromCi} cJ={Player.controlJump} cUI={Player.controlUseItem}"
+				);
+			}
 		}
 
 		public override void PostUpdate()
