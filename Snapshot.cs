@@ -11,6 +11,7 @@ namespace TerraBlind
 		public int Hammer;
 		public int CreateTile = -1;
 		public bool Consumable;
+		public string Category = "misc";
 	}
 
 	public sealed class SlotPosition
