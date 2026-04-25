@@ -167,12 +167,31 @@ namespace TerraBlind
             if (State == SkillState.CavePlace)
             {
                 if (platformSlot < 0) { Stop(); return; }
-                _phaseTick++;
-                if (_phaseTick == 1)
+                if (p.controlUseTile || Main.SmartCursorWanted)
+                    p.controlUseTile = false;
+
+                int feetY = (int)System.Math.Ceiling((p.position.Y + p.height) / 16f);
+                int pcx2 = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
+                int tileX = pcx2 + _placeDx;
+                int tileY = feetY + _currentPlaceDy;
+                var tile = Main.tile[tileX, tileY];
+                bool alreadyPlaced = tile != null && tile.HasTile;
+
+                if (alreadyPlaced)
                 {
-                    PlaceCoordinator.Start(new PlaceRequest { Dx = _placeDx, Dy = _currentPlaceDy, Slot = platformSlot, RemainingFrames = 8 });
+                    _phaseTick = 30;
                 }
-                if (_phaseTick >= 30)
+                else
+                {
+                    _phaseTick++;
+                    if (_phaseTick == 1)
+                    {
+                        PlaceCoordinator.Start(new PlaceRequest { Dx = _placeDx, Dy = _currentPlaceDy, Slot = platformSlot, RemainingFrames = 8 });
+                    }
+                }
+
+                bool placed = Main.tile[tileX, tileY] != null && Main.tile[tileX, tileY].HasTile;
+                if (_phaseTick >= 30 || placed)
                 {
                     _phaseTick = 0;
                     _cyclesDone++;
