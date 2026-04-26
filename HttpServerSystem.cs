@@ -301,17 +301,19 @@ namespace TerraBlind
 					var rb = m.Value.Replace(" ", "");
 					var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
 					var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
+					var slotm = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\":(\\d+)");
 					frames.Add(new ReplayFrame
 					{
-						Left    = rb.Contains("\"left\":true"),
-						Right   = rb.Contains("\"right\":true"),
-						Up      = rb.Contains("\"up\":true"),
-						Down    = rb.Contains("\"down\":true"),
-						Jump    = rb.Contains("\"jump\":true"),
-						UseItem = rb.Contains("\"use_item\":true"),
-						Grapple = rb.Contains("\"grapple\":true"),
-						Mx      = mxm.Success ? float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
-						My      = mym.Success ? float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
+						Left         = rb.Contains("\"left\":true"),
+						Right        = rb.Contains("\"right\":true"),
+						Up           = rb.Contains("\"up\":true"),
+						Down         = rb.Contains("\"down\":true"),
+						Jump         = rb.Contains("\"jump\":true"),
+						UseItem      = rb.Contains("\"use_item\":true"),
+						Grapple      = rb.Contains("\"grapple\":true"),
+						SelectedSlot = slotm.Success ? int.Parse(slotm.Groups[1].Value) : -1,
+						Mx           = mxm.Success ? float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
+						My           = mym.Success ? float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
 					});
 				}
 				ReplaySystem.Load(frames);
