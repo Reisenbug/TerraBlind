@@ -53,8 +53,12 @@ namespace TerraBlind
             if (frame.UseItem) p.controlUseItem = true;
             if (frame.Grapple) p.controlHook = true;
             if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
-            Main.mouseX = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
-            Main.mouseY = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
+            int mx = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
+            int my = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
+            Main.mouseX = mx;
+            Main.mouseY = my;
+            if (_frames.Count % 30 == 0)
+                Main.NewText($"[Replay] mouse=({mx},{my}) tile=({frame.Mx:F1},{frame.My:F1}) px={p.position.X:F0} sp={Main.screenPosition.X:F0}");
         }
     }
 }

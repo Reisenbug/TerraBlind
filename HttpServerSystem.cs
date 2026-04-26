@@ -299,8 +299,8 @@ namespace TerraBlind
 				foreach (System.Text.RegularExpressions.Match m in frameMatches)
 				{
 					var rb = m.Value.Replace(" ", "");
-					var mxm = System.Text.RegularExpressions.Regex.Match(m.Value, "\"mx\":(-?[0-9.]+)");
-					var mym = System.Text.RegularExpressions.Regex.Match(m.Value, "\"my\":(-?[0-9.]+)");
+					var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
+					var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
 					frames.Add(new ReplayFrame
 					{
 						Left    = rb.Contains("\"left\":true"),
