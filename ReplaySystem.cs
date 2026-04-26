@@ -31,9 +31,7 @@ namespace TerraBlind
             lock (_lock) { _frames.Clear(); }
         }
 
-        private static int _jumpFrames = 0;
-
-        public static void ApplyControls()
+            public static void ApplyControls()
         {
             ReplayFrame frame;
             lock (_lock)
@@ -47,9 +45,7 @@ namespace TerraBlind
             if (frame.Right) p.controlRight = true;
             if (frame.Up) p.controlUp = true;
             if (frame.Down) p.controlDown = true;
-            if (frame.Jump && _jumpFrames == 0) _jumpFrames = 15;
-            if (_jumpFrames > 0) { p.controlJump = true; _jumpFrames--; if (_jumpFrames == 0) _jumpFrames = -1; }
-            else if (_jumpFrames == -1) { _jumpFrames = 0; }
+            if (frame.Jump) p.controlJump = true;
             if (frame.UseItem) p.controlUseItem = true;
             if (frame.Grapple) p.controlHook = true;
             if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
