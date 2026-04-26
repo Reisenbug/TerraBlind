@@ -51,7 +51,7 @@ namespace TerraBlind
             if (_jumpFrames > 0) { p.controlJump = true; _jumpFrames--; if (_jumpFrames == 0) _jumpFrames = -1; }
             else if (_jumpFrames == -1) { _jumpFrames = 0; }
             if (frame.UseItem) p.controlUseItem = true;
-            if (frame.Grapple) p.controlGrapple = true;
+            if (frame.Grapple) p.controlHook = true;
             if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
             Main.mouseX = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
             Main.mouseY = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
