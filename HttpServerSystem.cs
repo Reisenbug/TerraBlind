@@ -302,6 +302,7 @@ namespace TerraBlind
 					var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
 					var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
 					var slotm = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\":(\\d+)");
+					var scm = System.Text.RegularExpressions.Regex.Match(rb, "\"sc\":([01])");
 					frames.Add(new ReplayFrame
 					{
 						Left         = rb.Contains("\"left\":true"),
@@ -314,7 +315,8 @@ namespace TerraBlind
 						UseAlt       = rb.Contains("\"use_alt\":true"),
 						UseTile      = rb.Contains("\"use_tile\":true"),
 						Mount        = rb.Contains("\"mount\":true"),
-						SelectedSlot = slotm.Success ? int.Parse(slotm.Groups[1].Value) : -1,
+						SelectedSlot  = slotm.Success ? int.Parse(slotm.Groups[1].Value) : -1,
+						SmartCursor   = scm.Success   ? int.Parse(scm.Groups[1].Value)   : -1,
 						Mx           = mxm.Success ? float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
 						My           = mym.Success ? float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
 					});
