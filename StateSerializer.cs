@@ -16,6 +16,7 @@ namespace TerraBlind
 
 			sb.Append('{');
 			sb.Append("\"tick\":").Append(s.Tick).Append(',');
+			sb.Append("\"walk_to_edge_done\":").Append(B(s.WalkToEdgeDone)).Append(',');
 
 			sb.Append("\"player\":{");
 			sb.Append("\"hp\":").Append(s.Player.Hp).Append(',');

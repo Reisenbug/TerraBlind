@@ -149,6 +149,7 @@ namespace TerraBlind
 	public sealed class Snapshot
 	{
 		public long Tick;
+		public bool WalkToEdgeDone;
 		public PlayerSnapshot Player = new PlayerSnapshot();
 		public EquipmentSnapshot Equipment = new EquipmentSnapshot();
 		public CameraSnapshot Camera = new CameraSnapshot();

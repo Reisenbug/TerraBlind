@@ -243,6 +243,24 @@ namespace TerraBlind
 				PlaceCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/walk_to_edge")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
+				var extraMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"extra_tiles\"\\s*:\\s*([0-9.]+)");
+				bool dirRight = !dirMatch.Success || dirMatch.Groups[1].Value != "left";
+				float extraTiles = extraMatch.Success ? float.Parse(extraMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 2f;
+				WalkCoordinator.Start(dirRight, extraTiles);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/walk_to_edge_stop")
+			{
+				WalkCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/skill")
 			{
 				string reqBody;

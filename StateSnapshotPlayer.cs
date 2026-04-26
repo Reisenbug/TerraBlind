@@ -24,6 +24,12 @@ namespace TerraBlind
 				ReplaySystem.ApplyControls();
 				return;
 			}
+			if (WalkCoordinator.IsActive)
+			{
+				WalkCoordinator.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
 			bool placeActive = PlaceCoordinator.IsActive;
 			PlaceCoordinator.ApplyControls();
 			var ci = HttpServerSystem.PendingControl;
@@ -132,6 +138,7 @@ namespace TerraBlind
 					ScreenHeight = Main.screenHeight,
 					Zoom = Main.GameZoomTarget,
 				},
+				WalkToEdgeDone = WalkCoordinator.Done,
 				Movement = BuildMovement(),
 				Buffs = BuildBuffs(),
 				Enemies = BuildEnemies(),
