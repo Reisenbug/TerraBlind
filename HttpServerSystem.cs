@@ -299,6 +299,8 @@ namespace TerraBlind
 				foreach (System.Text.RegularExpressions.Match m in frameMatches)
 				{
 					var rb = m.Value.Replace(" ", "");
+					var mxm = System.Text.RegularExpressions.Regex.Match(m.Value, "\"mx\":(-?[0-9.]+)");
+					var mym = System.Text.RegularExpressions.Regex.Match(m.Value, "\"my\":(-?[0-9.]+)");
 					frames.Add(new ReplayFrame
 					{
 						Left    = rb.Contains("\"left\":true"),
@@ -308,6 +310,8 @@ namespace TerraBlind
 						Jump    = rb.Contains("\"jump\":true"),
 						UseItem = rb.Contains("\"use_item\":true"),
 						Grapple = rb.Contains("\"grapple\":true"),
+						Mx      = mxm.Success ? float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
+						My      = mym.Success ? float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
 					});
 				}
 				ReplaySystem.Load(frames);

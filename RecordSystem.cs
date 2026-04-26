@@ -48,7 +48,9 @@ namespace TerraBlind
                 if (p.controlJump || jumpOverride) sb.Append("\"jump\":true,");
                 if (p.controlUseItem) sb.Append("\"use_item\":true,");
                 if (p.controlGrapple) sb.Append("\"grapple\":true,");
-                if (sb.Length > 1) sb.Length--;
+                float relX = (Main.mouseX + Main.screenPosition.X - p.position.X - p.width / 2f) / 16f;
+                float relY = (Main.mouseY + Main.screenPosition.Y - p.position.Y - p.height / 2f) / 16f;
+                sb.Append($"\"mx\":{relX:F1},\"my\":{relY:F1}");
                 sb.Append("}");
                 _frames.Add(sb.ToString());
             }
