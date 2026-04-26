@@ -289,6 +289,44 @@ namespace TerraBlind
 					status = 400;
 				}
 			}
+			else if (path == "/replay")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var frames = new System.Collections.Generic.List<ReplayFrame>();
+				var frameMatches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\{[^}]+\\}");
+				foreach (System.Text.RegularExpressions.Match m in frameMatches)
+				{
+					var rb = m.Value.Replace(" ", "");
+					frames.Add(new ReplayFrame
+					{
+						Left    = rb.Contains("\"left\":true"),
+						Right   = rb.Contains("\"right\":true"),
+						Up      = rb.Contains("\"up\":true"),
+						Down    = rb.Contains("\"down\":true"),
+						Jump    = rb.Contains("\"jump\":true"),
+						UseItem = rb.Contains("\"use_item\":true"),
+					});
+				}
+				ReplaySystem.Load(frames);
+				body = "{\"ok\":true,\"frames\":" + frames.Count + "}";
+			}
+			else if (path == "/replay_stop")
+			{
+				ReplaySystem.Stop();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/record_start")
+			{
+				RecordSystem.Start();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/record_stop")
+			{
+				string recorded = RecordSystem.Stop();
+				body = recorded;
+			}
 			else if (path == "/health")
 			{
 				body = "{\"ok\":true}";

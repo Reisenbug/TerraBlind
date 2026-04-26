@@ -19,6 +19,11 @@ namespace TerraBlind
 				PlaceCoordinator.ApplyControls();
 				return;
 			}
+			if (ReplaySystem.IsActive)
+			{
+				ReplaySystem.ApplyControls();
+				return;
+			}
 			bool placeActive = PlaceCoordinator.IsActive;
 			PlaceCoordinator.ApplyControls();
 			var ci = HttpServerSystem.PendingControl;
@@ -48,12 +53,14 @@ namespace TerraBlind
 			{
 				if (placeActive || jflBefore != 0)
 					DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=null place={placeActive} cJ={Player.controlJump}");
+				RecordSystem.CaptureFrame(Player);
 				return;
 			}
 			if (ciAge > ControlTimeoutTicks)
 			{
 				DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=EXPIRED age={ciAge} place={placeActive}");
 				HttpServerSystem.PendingControl = null;
+				RecordSystem.CaptureFrame(Player);
 				return;
 			}
 			if (ci.Left) Player.controlLeft = true;
@@ -88,6 +95,7 @@ namespace TerraBlind
 					$"place={placeActive} autoJ={jumpFromAuto} ciJfire={jumpFromCi} cJ={Player.controlJump} cUI={Player.controlUseItem}"
 				);
 			}
+			RecordSystem.CaptureFrame(Player);
 		}
 
 		public override void PostUpdate()
