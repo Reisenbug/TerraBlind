@@ -57,8 +57,6 @@ namespace TerraBlind
             int my = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
             Main.mouseX = mx;
             Main.mouseY = my;
-            if (_frames.Count % 30 == 0)
-                Main.NewText($"[Replay] mouse=({mx},{my}) tile=({frame.Mx:F1},{frame.My:F1}) px={p.position.X:F0} sp={Main.screenPosition.X:F0}");
         }
     }
 }
