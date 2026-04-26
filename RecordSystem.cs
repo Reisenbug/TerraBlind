@@ -35,7 +35,7 @@ namespace TerraBlind
             }
         }
 
-        public static void CaptureFrame(Player p)
+        public static void CaptureFrame(Player p, bool jumpOverride = false)
         {
             lock (_lock)
             {
@@ -45,8 +45,9 @@ namespace TerraBlind
                 if (p.controlRight) sb.Append("\"right\":true,");
                 if (p.controlUp) sb.Append("\"up\":true,");
                 if (p.controlDown) sb.Append("\"down\":true,");
-                if (p.controlJump) sb.Append("\"jump\":true,");
+                if (p.controlJump || jumpOverride) sb.Append("\"jump\":true,");
                 if (p.controlUseItem) sb.Append("\"use_item\":true,");
+                if (p.controlGrapple) sb.Append("\"grapple\":true,");
                 if (sb.Length > 1) sb.Length--;
                 sb.Append("}");
                 _frames.Add(sb.ToString());

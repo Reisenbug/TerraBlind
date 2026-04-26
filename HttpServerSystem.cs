@@ -295,7 +295,7 @@ namespace TerraBlind
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
 				var frames = new System.Collections.Generic.List<ReplayFrame>();
-				var frameMatches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\{[^}]+\\}");
+				var frameMatches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\{[^}]*\\}");
 				foreach (System.Text.RegularExpressions.Match m in frameMatches)
 				{
 					var rb = m.Value.Replace(" ", "");
@@ -307,6 +307,7 @@ namespace TerraBlind
 						Down    = rb.Contains("\"down\":true"),
 						Jump    = rb.Contains("\"jump\":true"),
 						UseItem = rb.Contains("\"use_item\":true"),
+						Grapple = rb.Contains("\"grapple\":true"),
 					});
 				}
 				ReplaySystem.Load(frames);
