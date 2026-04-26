@@ -198,8 +198,8 @@ namespace TerraBlind
             if (State == SkillState.CavePlace)
             {
                 if (platformSlot < 0) { Stop(); return; }
-                if (p.controlUseTile || Main.SmartCursorWanted)
-                    p.controlUseTile = false;
+                Player.SmartCursorSettings.SmartBlocksEnabled = false;
+                if (p.controlUseTile) p.controlUseTile = false;
 
                 int feetY = (int)System.Math.Ceiling((p.position.Y + p.height) / 16f);
                 int pcx2 = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
