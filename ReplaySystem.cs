@@ -8,6 +8,7 @@ namespace TerraBlind
     {
         public bool Left, Right, Up, Down, Jump, UseItem, Grapple;
         public int SelectedSlot = -1;
+        public float Mx, My;
     }
 
     public class ReplaySystem : ModSystem
@@ -52,6 +53,8 @@ namespace TerraBlind
             if (frame.UseItem) p.controlUseItem = true;
             if (frame.Grapple) p.controlGrapple = true;
             if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
+            Main.mouseX = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
+            Main.mouseY = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
         }
     }
 }
