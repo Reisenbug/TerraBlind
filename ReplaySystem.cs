@@ -6,7 +6,7 @@ namespace TerraBlind
 {
     public class ReplayFrame
     {
-        public bool Left, Right, Up, Down, Jump, UseItem, Grapple;
+        public bool Left, Right, Up, Down, Jump, UseItem, Grapple, UseAlt, UseTile, Mount;
         public int SelectedSlot = -1;
         public float Mx, My;
     }
@@ -48,6 +48,9 @@ namespace TerraBlind
             if (frame.Jump) p.controlJump = true;
             if (frame.UseItem) p.controlUseItem = true;
             if (frame.Grapple) p.controlHook = true;
+            if (frame.UseAlt) p.altFunctionUse = 2;
+            if (frame.UseTile) p.controlUseTile = true;
+            if (frame.Mount) p.controlMount = true;
             if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
             int mx = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
             int my = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);
