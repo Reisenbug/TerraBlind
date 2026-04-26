@@ -48,6 +48,7 @@ namespace TerraBlind
                 if (p.controlJump || jumpOverride) sb.Append("\"jump\":true,");
                 if (p.controlUseItem) sb.Append("\"use_item\":true,");
                 if (p.controlHook) sb.Append("\"grapple\":true,");
+                sb.Append($"\"slot\":{p.selectedItem},");
                 float relX = (Main.mouseX + Main.screenPosition.X - p.position.X - p.width / 2f) / 16f;
                 float relY = (Main.mouseY + Main.screenPosition.Y - p.position.Y - p.height / 2f) / 16f;
                 sb.Append($"\"mx\":{relX:F1},\"my\":{relY:F1}");
