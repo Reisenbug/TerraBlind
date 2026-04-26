@@ -302,8 +302,10 @@ namespace TerraBlind
 					var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
 					var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
 					var slotm = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\":(\\d+)");
-					var scm = System.Text.RegularExpressions.Regex.Match(rb, "\"sc\":([01])");
-					frames.Add(new ReplayFrame
+					var scm   = System.Text.RegularExpressions.Regex.Match(rb, "\"sc\":([01])");
+					var reprm = System.Text.RegularExpressions.Regex.Match(rb, "\"repeat\":(\\d+)");
+					int repeat = reprm.Success ? int.Parse(reprm.Groups[1].Value) : 1;
+					var frame = new ReplayFrame
 					{
 						Left         = rb.Contains("\"left\":true"),
 						Right        = rb.Contains("\"right\":true"),
@@ -315,11 +317,12 @@ namespace TerraBlind
 						UseAlt       = rb.Contains("\"use_alt\":true"),
 						UseTile      = rb.Contains("\"use_tile\":true"),
 						Mount        = rb.Contains("\"mount\":true"),
-						SelectedSlot  = slotm.Success ? int.Parse(slotm.Groups[1].Value) : -1,
-						SmartCursor   = scm.Success   ? int.Parse(scm.Groups[1].Value)   : -1,
+						SelectedSlot = slotm.Success ? int.Parse(slotm.Groups[1].Value) : -1,
+						SmartCursor  = scm.Success   ? int.Parse(scm.Groups[1].Value)   : -1,
 						Mx           = mxm.Success ? float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
 						My           = mym.Success ? float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f,
-					});
+					};
+					for (int r = 0; r < repeat; r++) frames.Add(frame);
 				}
 				ReplaySystem.Load(frames);
 				body = "{\"ok\":true,\"frames\":" + frames.Count + "}";
