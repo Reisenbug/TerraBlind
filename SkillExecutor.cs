@@ -3,7 +3,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, CaveWalkBack, CavePlace, CaveJump }
+    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, CaveWalkBack, CaveSettle, CavePlace, CaveJump, CaveJump2 }
 
     public class SkillExecutor : ModSystem
     {
@@ -20,6 +20,9 @@ namespace TerraBlind
         private static int _walkBackFrames;
         private static int _currentPlaceDy;
         private static int _placeDx;
+        private static float _targetX;
+        private static bool _targetXSet;
+        private static SkillState _settleNext;
 
         private const int JumpHoldFrames = 15;
         private const int RestFrames = 10;
@@ -51,6 +54,8 @@ namespace TerraBlind
             _cyclesDone = 0;
             _phaseTick = 0;
             _placeStarted = false;
+            _targetX = 0f;
+            _targetXSet = false;
             State = SkillState.CaveWalkBack;
         }
 
@@ -131,9 +136,6 @@ namespace TerraBlind
 
             if (State == SkillState.CaveWalkBack)
             {
-                if (!DirectionRight) p.controlRight = true;
-                else p.controlLeft = true;
-
                 int headY = (int)(p.position.Y / 16f);
                 int pcx = (int)((p.position.X + p.width / 2f) / 16f);
                 bool overhead = false;
@@ -146,20 +148,49 @@ namespace TerraBlind
                         break;
                     }
                 }
-                if (!overhead)
+
+                if (overhead)
                 {
-                    _phaseTick++;
-                    if (_phaseTick >= 10)
-                    {
-                        _phaseTick = 0;
-                        _currentPlaceDy = -1;
-                        _cyclesDone = 0;
-                        State = SkillState.CavePlace;
-                    }
+                    _targetXSet = false;
+                    if (!DirectionRight) p.controlRight = true;
+                    else p.controlLeft = true;
                 }
                 else
                 {
+                    if (!_targetXSet)
+                    {
+                        float extra = DirectionRight ? -16f : 16f;
+                        _targetX = p.position.X + extra;
+                        _targetXSet = true;
+                    }
+                    bool reached = DirectionRight ? p.position.X <= _targetX : p.position.X >= _targetX;
+                    if (!reached)
+                    {
+                        if (!DirectionRight) p.controlRight = true;
+                        else p.controlLeft = true;
+                    }
+                    else
+                    {
+                        _phaseTick = 0;
+                        _settleNext = SkillState.CavePlace;
+                        State = SkillState.CaveSettle;
+                    }
+                }
+                return;
+            }
+
+            if (State == SkillState.CaveSettle)
+            {
+                _phaseTick++;
+                if (_phaseTick >= 30)
+                {
                     _phaseTick = 0;
+                    if (_settleNext == SkillState.CavePlace)
+                    {
+                        _currentPlaceDy = -1;
+                        _cyclesDone = 0;
+                    }
+                    State = _settleNext;
                 }
                 return;
             }
@@ -174,8 +205,7 @@ namespace TerraBlind
                 int pcx2 = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
                 int tileX = pcx2 + _placeDx;
                 int tileY = feetY + _currentPlaceDy;
-                var tile = Main.tile[tileX, tileY];
-                bool alreadyPlaced = tile != null && tile.HasTile;
+                bool alreadyPlaced = Main.tile[tileX, tileY] != null && Main.tile[tileX, tileY].HasTile;
 
                 if (alreadyPlaced)
                 {
@@ -185,9 +215,7 @@ namespace TerraBlind
                 {
                     _phaseTick++;
                     if (_phaseTick == 1)
-                    {
                         PlaceCoordinator.Start(new PlaceRequest { Dx = _placeDx, Dy = _currentPlaceDy, Slot = platformSlot, RemainingFrames = 8 });
-                    }
                 }
 
                 bool placed = Main.tile[tileX, tileY] != null && Main.tile[tileX, tileY].HasTile;
@@ -199,6 +227,7 @@ namespace TerraBlind
                     if (_cyclesDone >= _targetRiseTiles)
                     {
                         _jumpFramesLeft = 0;
+                        _phaseTick = 0;
                         State = SkillState.CaveJump;
                     }
                 }
@@ -210,10 +239,34 @@ namespace TerraBlind
                 if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
                 if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
                 else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
-                if (!DirectionRight) p.controlLeft = true;
-                else p.controlRight = true;
+                _phaseTick++;
+                int pcxJ = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
+                int platformTileX = (int)System.Math.Round((_targetX + p.width / 2f) / 16f) + _placeDx;
+                bool reachedPlatform = DirectionRight ? pcxJ >= platformTileX : pcxJ <= platformTileX;
+                if (!reachedPlatform)
+                {
+                    if (!DirectionRight) p.controlLeft = true;
+                    else p.controlRight = true;
+                }
+                bool onGround = p.velocity.Y == 0f && _phaseTick > JumpHoldFrames;
+                if (onGround)
+                {
+                    _phaseTick = 0;
+                    _jumpFramesLeft = 0;
+                    _settleNext = SkillState.CaveJump2;
+                    State = SkillState.CaveSettle;
+                }
+                return;
+            }
+
+            if (State == SkillState.CaveJump2)
+            {
+                if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
+                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
+                else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
                 _phaseTick++;
                 if (_phaseTick >= LaunchFrames) Stop();
+                return;
             }
         }
     }
