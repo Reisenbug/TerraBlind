@@ -53,14 +53,15 @@ namespace TerraBlind
 			{
 				if (placeActive || jflBefore != 0)
 					DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=null place={placeActive} cJ={Player.controlJump}");
-				RecordSystem.CaptureFrame(Player);
+				bool jumpActive = jflBefore > 0 || Player.controlJump;
+				RecordSystem.CaptureFrame(Player, jumpActive);
 				return;
 			}
 			if (ciAge > ControlTimeoutTicks)
 			{
 				DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=EXPIRED age={ciAge} place={placeActive}");
 				HttpServerSystem.PendingControl = null;
-				RecordSystem.CaptureFrame(Player);
+				RecordSystem.CaptureFrame(Player, jflBefore > 0);
 				return;
 			}
 			if (ci.Left) Player.controlLeft = true;
@@ -95,7 +96,7 @@ namespace TerraBlind
 					$"place={placeActive} autoJ={jumpFromAuto} ciJfire={jumpFromCi} cJ={Player.controlJump} cUI={Player.controlUseItem}"
 				);
 			}
-			RecordSystem.CaptureFrame(Player);
+			RecordSystem.CaptureFrame(Player, jflBefore > 0 || jumpFromCi);
 		}
 
 		public override void PostUpdate()
