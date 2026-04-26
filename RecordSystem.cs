@@ -52,6 +52,8 @@ namespace TerraBlind
                 float relY = (Main.mouseY + Main.screenPosition.Y - p.position.Y - p.height / 2f) / 16f;
                 sb.Append($"\"mx\":{relX:F1},\"my\":{relY:F1}");
                 sb.Append("}");
+                if (_frames.Count % 30 == 0)
+                    Main.NewText($"[Rec] raw=({Main.mouseX},{Main.mouseY}) rel=({relX:F1},{relY:F1})");
                 _frames.Add(sb.ToString());
             }
         }
