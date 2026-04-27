@@ -82,6 +82,8 @@ namespace TerraBlind
 		public int Hp;
 		public int MaxHp;
 		public bool Boss;
+		public float ScreenX;
+		public float ScreenY;
 	}
 
 	public sealed class TownNpcEntry

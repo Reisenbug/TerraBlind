@@ -271,6 +271,8 @@ namespace TerraBlind
 					Hp = npc.life,
 					MaxHp = npc.lifeMax,
 					Boss = npc.boss,
+					ScreenX = (ncx - Main.screenPosition.X) * Main.GameZoomTarget,
+					ScreenY = (ncy - Main.screenPosition.Y) * Main.GameZoomTarget,
 				});
 			}
 			return list.ToArray();

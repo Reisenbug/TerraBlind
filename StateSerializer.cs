@@ -118,6 +118,8 @@ namespace TerraBlind
 				sb.Append(",\"hp\":").Append(e.Hp);
 				sb.Append(",\"max_hp\":").Append(e.MaxHp);
 				sb.Append(",\"boss\":").Append(B(e.Boss));
+				sb.Append(",\"sx\":").Append(F(e.ScreenX));
+				sb.Append(",\"sy\":").Append(F(e.ScreenY));
 				sb.Append('}');
 			}
 			sb.Append("],");
