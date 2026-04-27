@@ -93,6 +93,7 @@ namespace TerraBlind
 			}
 			if (ci.UseItem) Player.controlUseItem = true;
 			if (ci.UseTile) Player.controlUseTile = true;
+			if (ci.SmartCursor >= 0) Main.SmartCursorWanted_Mouse = ci.SmartCursor == 1;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
 			if (!float.IsNaN(ci.Mx) && !float.IsNaN(ci.My))

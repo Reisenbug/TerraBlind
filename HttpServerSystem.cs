@@ -13,6 +13,7 @@ namespace TerraBlind
 	{
 		public bool Left, Right, Up, Down, Jump, UseItem, UseTile;
 		public int SelectedSlot = -1;
+		public int SmartCursor = -1;
 		public long Tick;
 		public float Mx = float.NaN;
 		public float My = float.NaN;
@@ -209,6 +210,8 @@ namespace TerraBlind
 				var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
 				if (mxm.Success) ci.Mx = float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
 				if (mym.Success) ci.My = float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+				var scm2 = System.Text.RegularExpressions.Regex.Match(rb, "\"sc\":(\\d+)");
+				if (scm2.Success) ci.SmartCursor = int.Parse(scm2.Groups[1].Value);
 				ci.Tick = (long)Main.GameUpdateCount;
 				PendingControl = ci;
 				body = "{\"ok\":true}";
