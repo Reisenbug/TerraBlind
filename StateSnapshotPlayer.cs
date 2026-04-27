@@ -107,6 +107,7 @@ namespace TerraBlind
 					$"place={placeActive} autoJ={jumpFromAuto} ciJfire={jumpFromCi} cJ={Player.controlJump} cUI={Player.controlUseItem}"
 				);
 			}
+			FightCoordinator.Tick(Player);
 			RecordSystem.CaptureFrame(Player, jflBefore > 0 || jumpFromCi);
 		}
 
