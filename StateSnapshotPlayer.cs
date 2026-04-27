@@ -92,6 +92,7 @@ namespace TerraBlind
 				jumpFromCi = true;
 			}
 			if (ci.UseItem) Player.controlUseItem = true;
+			if (ci.UseTile) Player.controlUseTile = true;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
 			if (!float.IsNaN(ci.Mx) && !float.IsNaN(ci.My))
