@@ -401,8 +401,8 @@ namespace TerraBlind
 					if (TileID.Sets.IsATreeTrunk[type])
 					{
 						if (addedTreeX.Contains(wx)) continue;
-						Tile below = (wy + 1 < Main.maxTilesY) ? Main.tile[wx, wy + 1] : null;
-						bool isRoot = below == null || !below.HasTile || !TileID.Sets.IsATreeTrunk[below.TileType];
+						bool isRoot = wy + 1 >= Main.maxTilesY;
+						if (!isRoot) { Tile below = Main.tile[wx, wy + 1]; isRoot = !below.HasTile || !TileID.Sets.IsATreeTrunk[below.TileType]; }
 						if (!isRoot) continue;
 						addedTreeX.Add(wx);
 						int objHeight = 0;
@@ -437,7 +437,6 @@ namespace TerraBlind
 						Name = cat,
 						PosX = wx * 16f,
 						PosY = wy * 16f,
-						Height = objHeight,
 					});
 				}
 			}
