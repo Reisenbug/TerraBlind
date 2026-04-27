@@ -401,18 +401,18 @@ namespace TerraBlind
 					if (TileID.Sets.IsATreeTrunk[type])
 					{
 						if (addedTreeX.Contains(wx)) continue;
-						bool isRoot = wy + 1 >= Main.maxTilesY;
-						if (!isRoot) { Tile below = Main.tile[wx, wy + 1]; isRoot = !below.HasTile || !TileID.Sets.IsATreeTrunk[below.TileType]; }
-						if (!isRoot) continue;
+						bool isTop = wy - 1 < 0;
+						if (!isTop) { Tile above = Main.tile[wx, wy - 1]; isTop = !above.HasTile || !TileID.Sets.IsATreeTrunk[above.TileType]; }
+						if (!isTop) continue;
 						addedTreeX.Add(wx);
 						int objHeight = 0;
 						for (int dy = 0; dy < 60; dy++)
 						{
-							int sy = wy - dy;
+							int sy = wy + dy;
 							if (sy < 0 || sy >= Main.maxTilesY) break;
 							Tile st = Main.tile[wx, sy];
 							if (st.HasTile && TileID.Sets.IsATreeTrunk[st.TileType]) objHeight++;
-							else if (dy > 0) break;
+							else break;
 						}
 						list.Add(new WorldObjectEntry
 						{
