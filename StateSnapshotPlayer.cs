@@ -55,6 +55,7 @@ namespace TerraBlind
 			bool jumpFromAuto = false, jumpFromCi = false;
 			bool walking = false, blocked = false;
 
+			FightCoordinator.Tick(Player);
 			if (ci == null)
 			{
 				if (placeActive || jflBefore != 0)
@@ -107,7 +108,6 @@ namespace TerraBlind
 					$"place={placeActive} autoJ={jumpFromAuto} ciJfire={jumpFromCi} cJ={Player.controlJump} cUI={Player.controlUseItem}"
 				);
 			}
-			FightCoordinator.Tick(Player);
 			RecordSystem.CaptureFrame(Player, jflBefore > 0 || jumpFromCi);
 		}
 
