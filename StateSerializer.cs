@@ -171,6 +171,7 @@ namespace TerraBlind
 				sb.Append(",\"type\":").Append(o.Type);
 				sb.Append(",\"name\":\"").Append(EscapeStr(o.Name)).Append("\"");
 				sb.Append(",\"pos\":{\"x\":").Append(F(o.PosX)).Append(",\"y\":").Append(F(o.PosY)).Append("}");
+				if (o.Height > 0) sb.Append(",\"height\":").Append(o.Height);
 				sb.Append('}');
 			}
 			sb.Append("],");

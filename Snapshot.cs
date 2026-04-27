@@ -122,6 +122,7 @@ namespace TerraBlind
 		public string Name = "";
 		public float PosX;
 		public float PosY;
+		public int Height;
 	}
 
 	public sealed class DroppedItemEntry

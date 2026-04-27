@@ -400,6 +400,18 @@ namespace TerraBlind
 					ushort type = t.TileType;
 					string cat = ClassifyTile(type);
 					if (cat == null) continue;
+					int objHeight = 0;
+					if (cat == "tree")
+					{
+						for (int dy = 0; dy < 40; dy++)
+						{
+							int sy = wy - dy;
+							if (sy < 0 || sy >= Main.maxTilesY) break;
+							Tile st = Main.tile[wx, sy];
+							if (st.HasTile && TileID.Sets.IsATreeTrunk[st.TileType]) objHeight++;
+							else if (dy > 0) break;
+						}
+					}
 					list.Add(new WorldObjectEntry
 					{
 						TileX = wx,
@@ -408,6 +420,7 @@ namespace TerraBlind
 						Name = cat,
 						PosX = wx * 16f,
 						PosY = wy * 16f,
+						Height = objHeight,
 					});
 				}
 			}
