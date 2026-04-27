@@ -11,7 +11,7 @@ namespace TerraBlind
 {
 	public class ControlInput
 	{
-		public bool Left, Right, Up, Down, Jump, UseItem;
+		public bool Left, Right, Up, Down, Jump, UseItem, UseTile;
 		public int SelectedSlot = -1;
 		public long Tick;
 		public float Mx = float.NaN;
@@ -202,6 +202,7 @@ namespace TerraBlind
 				if (rb.Contains("\"down\":true")) ci.Down = true;
 				if (rb.Contains("\"jump\":true")) ci.Jump = true;
 				if (rb.Contains("\"use_item\":true")) ci.UseItem = true;
+				if (rb.Contains("\"use_tile\":true")) ci.UseTile = true;
 				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"selected_slot\"\\s*:\\s*(\\d+)");
 				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
 				var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
