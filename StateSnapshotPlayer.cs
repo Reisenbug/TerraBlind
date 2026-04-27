@@ -388,6 +388,7 @@ namespace TerraBlind
 			int ex = ox + TileWindowWidth;
 			int ey = oy + TileWindowHeight;
 
+			var addedTreeX = new System.Collections.Generic.HashSet<int>();
 			for (int wy = oy; wy < ey; wy++)
 			{
 				if (wy < 0 || wy >= Main.maxTilesY) continue;
@@ -396,14 +397,16 @@ namespace TerraBlind
 					if (wx < 0 || wx >= Main.maxTilesX) continue;
 					Tile t = Main.tile[wx, wy];
 					if (!t.HasTile) continue;
-					if (t.TileFrameX != 0 || t.TileFrameY != 0) continue;
 					ushort type = t.TileType;
-					string cat = ClassifyTile(type);
-					if (cat == null) continue;
-					int objHeight = 0;
-					if (cat == "tree")
+					if (TileID.Sets.IsATreeTrunk[type])
 					{
-						for (int dy = 0; dy < 40; dy++)
+						if (addedTreeX.Contains(wx)) continue;
+						Tile below = (wy + 1 < Main.maxTilesY) ? Main.tile[wx, wy + 1] : null;
+						bool isRoot = below == null || !below.HasTile || !TileID.Sets.IsATreeTrunk[below.TileType];
+						if (!isRoot) continue;
+						addedTreeX.Add(wx);
+						int objHeight = 0;
+						for (int dy = 0; dy < 60; dy++)
 						{
 							int sy = wy - dy;
 							if (sy < 0 || sy >= Main.maxTilesY) break;
@@ -411,7 +414,21 @@ namespace TerraBlind
 							if (st.HasTile && TileID.Sets.IsATreeTrunk[st.TileType]) objHeight++;
 							else if (dy > 0) break;
 						}
+						list.Add(new WorldObjectEntry
+						{
+							TileX = wx,
+							TileY = wy,
+							Type = type,
+							Name = "tree",
+							PosX = wx * 16f,
+							PosY = wy * 16f,
+							Height = objHeight,
+						});
+						continue;
 					}
+					if (t.TileFrameX != 0 || t.TileFrameY != 0) continue;
+					string cat = ClassifyTile(type);
+					if (cat == null) continue;
 					list.Add(new WorldObjectEntry
 					{
 						TileX = wx,
