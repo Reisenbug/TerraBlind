@@ -162,6 +162,22 @@ namespace TerraBlind
 					status = 400;
 				}
 			}
+			else if (path == "/fight")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				if (rb.Contains("\"active\":false"))
+					FightCoordinator.Stop();
+				else
+				{
+					var distm = System.Text.RegularExpressions.Regex.Match(rb, "\"max_dist\":([0-9.]+)");
+					float maxDist = distm.Success ? float.Parse(distm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 20f;
+					FightCoordinator.Start(maxDist);
+				}
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/loot_all")
 			{
 				_lootAllRequested = true;
