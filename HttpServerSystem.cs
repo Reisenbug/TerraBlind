@@ -14,6 +14,8 @@ namespace TerraBlind
 		public bool Left, Right, Up, Down, Jump, UseItem;
 		public int SelectedSlot = -1;
 		public long Tick;
+		public float Mx = float.NaN;
+		public float My = float.NaN;
 	}
 
 	public class HttpServerSystem : ModSystem
@@ -186,6 +188,10 @@ namespace TerraBlind
 				if (rb.Contains("\"use_item\":true")) ci.UseItem = true;
 				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"selected_slot\"\\s*:\\s*(\\d+)");
 				if (slotMatch.Success) ci.SelectedSlot = int.Parse(slotMatch.Groups[1].Value);
+				var mxm = System.Text.RegularExpressions.Regex.Match(rb, "\"mx\":(-?[0-9.]+)");
+				var mym = System.Text.RegularExpressions.Regex.Match(rb, "\"my\":(-?[0-9.]+)");
+				if (mxm.Success) ci.Mx = float.Parse(mxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+				if (mym.Success) ci.My = float.Parse(mym.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
 				ci.Tick = (long)Main.GameUpdateCount;
 				PendingControl = ci;
 				body = "{\"ok\":true}";

@@ -93,6 +93,11 @@ namespace TerraBlind
 			if (ci.UseItem) Player.controlUseItem = true;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
 				Player.selectedItem = ci.SelectedSlot;
+			if (!float.IsNaN(ci.Mx) && !float.IsNaN(ci.My))
+			{
+				Main.mouseX = (int)(Player.position.X + Player.width / 2f + ci.Mx * 16f - Main.screenPosition.X);
+				Main.mouseY = (int)(Player.position.Y + Player.height / 2f + ci.My * 16f - Main.screenPosition.Y);
+			}
 
 			if (placeActive || ciJumpIn || jumpFromAuto || jumpFromCi || jflBefore != 0)
 			{
