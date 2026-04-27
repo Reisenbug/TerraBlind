@@ -33,10 +33,9 @@ namespace TerraBlind
                 _active = false;
                 return;
             }
-            _framesLeft--;
-
             NPC target = FindNearest(p);
-            if (target == null) return;
+            if (target == null) { _framesLeft--; return; }
+            _framesLeft = TimeoutFrames;
 
             int weaponSlot = FindWeaponSlot(p);
             if (weaponSlot < 0) return;
