@@ -386,6 +386,57 @@ namespace TerraBlind
 				string recorded = RecordSystem.Stop();
 				body = recorded;
 			}
+			else if (path == "/craft")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var idMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"item_id\":(\\d+)");
+				var nameMatch = System.Text.RegularExpressions.Regex.Match(reqBody, "\"item_name\"\\s*:\\s*\"([^\"]+)\"");
+				var amtMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"amount\":(\\d+)");
+				int amount = amtMatch.Success ? int.Parse(amtMatch.Groups[1].Value) : 1;
+				int targetId = -1;
+				if (idMatch.Success)
+					targetId = int.Parse(idMatch.Groups[1].Value);
+				else if (nameMatch.Success)
+				{
+					string targetName = nameMatch.Groups[1].Value.ToLowerInvariant();
+					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
+					{
+						var r = Main.recipe[Main.availableRecipe[ri]];
+						if ((r.createItem.Name ?? "").ToLowerInvariant() == targetName)
+						{
+							targetId = r.createItem.type;
+							break;
+						}
+					}
+				}
+				if (targetId < 0)
+				{
+					var sb2 = new System.Text.StringBuilder();
+					sb2.Append("{\"error\":\"item_not_found\",\"name_matched\":").Append(nameMatch.Success.ToString().ToLower());
+					sb2.Append(",\"available_count\":").Append(Main.numAvailableRecipes);
+					sb2.Append(",\"raw_name\":\"").Append(nameMatch.Success ? nameMatch.Groups[1].Value : "").Append("\"");
+					sb2.Append(",\"available_names\":[");
+					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
+					{
+						if (ri > 0) sb2.Append(',');
+						sb2.Append('"').Append(Main.recipe[Main.availableRecipe[ri]].createItem.Name ?? "").Append('"');
+					}
+					sb2.Append("]}");
+					body = sb2.ToString();
+					status = 400;
+				}
+				else
+				{
+					int crafted = CraftCoordinator.Craft(targetId, amount);
+					if (crafted > 0)
+						body = "{\"ok\":true,\"crafted\":" + crafted + "}";
+					else
+						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
+				}
+			}
 			else if (path == "/health")
 			{
 				body = "{\"ok\":true}";
