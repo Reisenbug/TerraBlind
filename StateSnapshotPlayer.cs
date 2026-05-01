@@ -154,6 +154,9 @@ namespace TerraBlind
 				Tiles = BuildTiles(),
 				Objects = BuildObjects(),
 				DroppedItems = BuildDroppedItems(),
+				NearbyStations = BuildNearbyStations(),
+				AvailableRecipes = BuildAvailableRecipes(),
+				DetectedTiles = BuildDetectedTiles(),
 			};
 
 			HttpServerSystem.LatestSnapshot = snap;
@@ -524,6 +527,98 @@ namespace TerraBlind
 				LavaTime = Player.lavaMax,
 				ExtraJumps = extraJumps,
 			};
+		}
+
+		private static readonly System.Collections.Generic.Dictionary<int, string> _watchTiles = new System.Collections.Generic.Dictionary<int, string>
+		{
+			{ 396, "sandstone" },
+			{ 397, "hardened_sand" },
+		};
+		private const int _watchWall = 220;
+
+		private DetectedTileEntry[] BuildDetectedTiles()
+		{
+			int pcx = (int)((Player.position.X + Player.width / 2f) / 16f);
+			int pcy = (int)((Player.position.Y + Player.height / 2f) / 16f);
+			int ox = pcx - TileWindowWidth / 2;
+			int oy = pcy - TileWindowHeight / 2;
+			var found = new System.Collections.Generic.Dictionary<string, DetectedTileEntry>();
+			for (int ry = 0; ry < TileWindowHeight; ry++)
+			{
+				int wy = oy + ry;
+				if (wy < 0 || wy >= Main.maxTilesY) continue;
+				for (int rx = 0; rx < TileWindowWidth; rx++)
+				{
+					int wx = ox + rx;
+					if (wx < 0 || wx >= Main.maxTilesX) continue;
+					Tile t = Main.tile[wx, wy];
+					string name = null;
+					if (t.HasTile && _watchTiles.TryGetValue(t.TileType, out string tname))
+						name = tname;
+					else if (t.WallType == _watchWall)
+						name = "sandstone_wall";
+					if (name == null) continue;
+					if (found.ContainsKey(name)) continue;
+					found[name] = new DetectedTileEntry
+					{
+						Name = name,
+						TileX = wx,
+						TileY = wy,
+						RelX = wx - pcx,
+						RelY = wy - pcy,
+					};
+				}
+			}
+			var arr = new DetectedTileEntry[found.Count];
+			found.Values.CopyTo(arr, 0);
+			return arr;
+		}
+
+		private AvailableRecipeEntry[] BuildAvailableRecipes()
+		{
+			var list = new System.Collections.Generic.List<AvailableRecipeEntry>();
+			for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
+			{
+				var r = Main.recipe[Main.availableRecipe[ri]];
+				var ings = new System.Collections.Generic.List<IngredientEntry>();
+				foreach (var req in r.requiredItem)
+				{
+					if (req.IsAir) continue;
+					ings.Add(new IngredientEntry { Name = req.Name ?? "", Count = req.stack });
+				}
+				list.Add(new AvailableRecipeEntry
+				{
+					ItemId = r.createItem.type,
+					ItemName = r.createItem.Name ?? "",
+					ResultStack = r.createItem.stack,
+					Ingredients = ings.ToArray(),
+				});
+			}
+			return list.ToArray();
+		}
+
+		private string[] BuildNearbyStations()
+		{
+			var found = new System.Collections.Generic.HashSet<string>();
+			int pcx = (int)((Player.position.X + Player.width / 2f) / 16f);
+			int pcy = (int)((Player.position.Y + Player.height / 2f) / 16f);
+			int radius = 35;
+			for (int wy = pcy - radius; wy <= pcy + radius; wy++)
+			{
+				if (wy < 0 || wy >= Main.maxTilesY) continue;
+				for (int wx = pcx - radius; wx <= pcx + radius; wx++)
+				{
+					if (wx < 0 || wx >= Main.maxTilesX) continue;
+					Tile t = Main.tile[wx, wy];
+					if (!t.HasTile) continue;
+					string cat = ClassifyTile(t.TileType);
+					if (cat != null && cat != "chest" && cat != "pot" && cat != "sign" && cat != "bed" && cat != "torch" && cat != "dresser")
+						found.Add(cat);
+				}
+			}
+			var arr = new string[found.Count];
+			found.CopyTo(arr);
+			return arr;
 		}
 
 		private BuffEntry[] BuildBuffs()

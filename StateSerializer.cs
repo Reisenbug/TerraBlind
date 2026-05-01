@@ -176,6 +176,47 @@ namespace TerraBlind
 			}
 			sb.Append("],");
 
+			sb.Append("\"detected_tiles\":[");
+			for (int i = 0; i < s.DetectedTiles.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var dt = s.DetectedTiles[i];
+				sb.Append("{\"name\":\"").Append(EscapeStr(dt.Name)).Append("\"");
+				sb.Append(",\"tx\":").Append(dt.TileX);
+				sb.Append(",\"ty\":").Append(dt.TileY);
+				sb.Append(",\"rel_x\":").Append(dt.RelX);
+				sb.Append(",\"rel_y\":").Append(dt.RelY);
+				sb.Append('}');
+			}
+			sb.Append("],");
+
+			sb.Append("\"available_recipes\":[");
+			for (int i = 0; i < s.AvailableRecipes.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var r = s.AvailableRecipes[i];
+				sb.Append("{\"item_id\":").Append(r.ItemId);
+				sb.Append(",\"item_name\":\"").Append(EscapeStr(r.ItemName)).Append("\"");
+				sb.Append(",\"result_stack\":").Append(r.ResultStack);
+				sb.Append(",\"ingredients\":[");
+				for (int j = 0; j < r.Ingredients.Length; j++)
+				{
+					if (j > 0) sb.Append(',');
+					sb.Append("{\"name\":\"").Append(EscapeStr(r.Ingredients[j].Name)).Append("\"");
+					sb.Append(",\"count\":").Append(r.Ingredients[j].Count).Append('}');
+				}
+				sb.Append("]}");
+			}
+			sb.Append("],");
+
+			sb.Append("\"nearby_stations\":[");
+			for (int i = 0; i < s.NearbyStations.Length; i++)
+			{
+				if (i > 0) sb.Append(',');
+				sb.Append('"').Append(EscapeStr(s.NearbyStations[i])).Append('"');
+			}
+			sb.Append("],");
+
 			sb.Append("\"dropped_items\":[");
 			for (int i = 0; i < s.DroppedItems.Length; i++)
 			{

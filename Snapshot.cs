@@ -149,6 +149,15 @@ namespace TerraBlind
 		public int ExtraJumps;
 	}
 
+	public sealed class DetectedTileEntry
+	{
+		public string Name = "";
+		public int TileX;
+		public int TileY;
+		public int RelX;
+		public int RelY;
+	}
+
 	public sealed class Snapshot
 	{
 		public long Tick;
@@ -163,5 +172,22 @@ namespace TerraBlind
 		public TileWindowSnapshot Tiles = null;
 		public WorldObjectEntry[] Objects = new WorldObjectEntry[0];
 		public DroppedItemEntry[] DroppedItems = new DroppedItemEntry[0];
+		public string[] NearbyStations = new string[0];
+		public AvailableRecipeEntry[] AvailableRecipes = new AvailableRecipeEntry[0];
+		public DetectedTileEntry[] DetectedTiles = new DetectedTileEntry[0];
+	}
+
+	public sealed class AvailableRecipeEntry
+	{
+		public int ItemId;
+		public string ItemName = "";
+		public int ResultStack;
+		public IngredientEntry[] Ingredients = new IngredientEntry[0];
+	}
+
+	public sealed class IngredientEntry
+	{
+		public string Name = "";
+		public int Count;
 	}
 }
