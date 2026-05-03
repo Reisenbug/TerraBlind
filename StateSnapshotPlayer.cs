@@ -312,7 +312,7 @@ namespace TerraBlind
 		}
 
 		private const int TileWindowWidth = 120;
-		private const int TileWindowHeight = 80;
+		private const int TileWindowHeight = 70;
 
 		private TileWindowSnapshot BuildTiles()
 		{
