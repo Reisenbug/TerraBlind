@@ -287,6 +287,24 @@ namespace TerraBlind
 				WalkCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/jump")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
+				var txMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"target_x\"\\s*:\\s*([0-9.]+)");
+				bool dirRight = !dirMatch.Success || dirMatch.Groups[1].Value != "left";
+				float targetX = txMatch.Success ? float.Parse(txMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f;
+				JumpCoordinator.Start(dirRight, targetX);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/jump_stop")
+			{
+				JumpCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/skill")
 			{
 				string reqBody;
@@ -436,6 +454,58 @@ namespace TerraBlind
 					else
 						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
 				}
+			}
+			else if (path == "/path_vis")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var nodes = new System.Collections.Generic.List<(int wx, int wy)>();
+				var matches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				foreach (System.Text.RegularExpressions.Match m in matches)
+					nodes.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)));
+				PathVisSystem.SetPath(nodes);
+				body = "{\"ok\":true,\"nodes\":" + nodes.Count + "}";
+			}
+			else if (path == "/path_vis_blocks")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var pillar = new System.Collections.Generic.List<(int wx, int wy)>();
+				var bridge = new System.Collections.Generic.List<(int wx, int wy)>();
+				var matches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				bool inBridge = false;
+				int bridgeIdx = reqBody.IndexOf("\"bridge\"");
+				foreach (System.Text.RegularExpressions.Match m in matches)
+				{
+					if (!inBridge && bridgeIdx >= 0 && m.Index > bridgeIdx) inBridge = true;
+					int wx = int.Parse(m.Groups[1].Value), wy = int.Parse(m.Groups[2].Value);
+					if (inBridge) bridge.Add((wx, wy));
+					else pillar.Add((wx, wy));
+				}
+				PathVisSystem.SetBlocks(pillar, bridge);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/debug_labels")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var parsed = System.Text.Json.JsonDocument.Parse(reqBody);
+				var labels = new System.Collections.Generic.List<(int wx, int wy, string text, Microsoft.Xna.Framework.Color color)>();
+				foreach (var item in parsed.RootElement.EnumerateArray())
+				{
+					int wx = item.GetProperty("wx").GetInt32();
+					int wy = item.GetProperty("wy").GetInt32();
+					string text = item.GetProperty("text").GetString() ?? "";
+					int r = item.TryGetProperty("r", out var rp) ? rp.GetInt32() : 255;
+					int g = item.TryGetProperty("g", out var gp) ? gp.GetInt32() : 255;
+					int b = item.TryGetProperty("b", out var bp) ? bp.GetInt32() : 255;
+					labels.Add((wx, wy, text, new Microsoft.Xna.Framework.Color(r, g, b)));
+				}
+				PathVisSystem.SetLabels(labels);
+				body = "{\"ok\":true,\"labels\":" + labels.Count + "}";
 			}
 			else if (path == "/health")
 			{
