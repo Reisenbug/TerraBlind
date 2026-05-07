@@ -109,6 +109,21 @@ namespace TerraBlind
 			LatestSnapshot = null;
 		}
 
+		private static System.Collections.Generic.HashSet<(int, int)> ParseExcludedGoals(string rb)
+		{
+			var result = new System.Collections.Generic.HashSet<(int, int)>();
+			var pairs = System.Text.RegularExpressions.Regex.Matches(rb, "\\[(-?\\d+),(-?\\d+)\\]");
+			bool inExcluded = false;
+			int excludedIdx = rb.IndexOf("\"excluded_goals\"");
+			if (excludedIdx < 0) return result;
+			foreach (System.Text.RegularExpressions.Match p in pairs)
+			{
+				if (p.Index > excludedIdx)
+					result.Add((int.Parse(p.Groups[1].Value), int.Parse(p.Groups[2].Value)));
+			}
+			return result;
+		}
+
 		private void Loop()
 		{
 			while (_running && _listener != null)
@@ -524,8 +539,12 @@ namespace TerraBlind
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
-				NavCoordinator.Start(navSign);
-				body = "{\"ok\":true}";
+				var excluded = ParseExcludedGoals(rb);
+				var goal = NavCoordinator.Start(navSign, excluded);
+				if (goal.HasValue)
+					body = "{\"ok\":true,\"goal\":[" + goal.Value.Item1 + "," + goal.Value.Item2 + "]}";
+				else
+					body = "{\"ok\":false,\"goal\":null}";
 			}
 			else if (path == "/nav_stop")
 			{
@@ -553,7 +572,8 @@ namespace TerraBlind
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int planSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
-				body = PathPlanner.Plan(planSign);
+				var excluded = ParseExcludedGoals(rb);
+				body = PathPlanner.Plan(planSign, excluded);
 				var planNodes = NavCoordinator.ParsePathPublic(body);
 				PathVisSystem.SetPlanPath(planNodes, PathPlanner.GetEnvelopeCache());
 			}
@@ -627,6 +647,100 @@ namespace TerraBlind
 				}
 				PathVisSystem.SetLabels(labels);
 				body = "{\"ok\":true,\"labels\":" + labels.Count + "}";
+			}
+			else if (path == "/freeze")
+			{
+				bool ok = FreezeSystem.Freeze();
+				body = "{\"ok\":" + (ok ? "true" : "false") + ",\"frozen\":true}";
+			}
+			else if (path == "/unfreeze")
+			{
+				bool ok = FreezeSystem.Unfreeze();
+				body = "{\"ok\":" + (ok ? "true" : "false") + ",\"frozen\":false}";
+			}
+			else if (path == "/inspect")
+			{
+				var p = Main.LocalPlayer;
+				int pcx = p != null ? (int)((p.position.X + p.width / 2f) / 16f) : 0;
+				int feetY = p != null ? (int)((p.position.Y + p.height) / 16f) : 0;
+				float vx = p?.velocity.X ?? 0f;
+				float vy = p?.velocity.Y ?? 0f;
+				var recent = DiagLog.FlushWindow(60);
+				var sb = new System.Text.StringBuilder();
+				sb.Append("{\"tick\":").Append(Main.GameUpdateCount);
+				sb.Append(",\"frozen\":").Append(FreezeSystem.IsFrozen ? "true" : "false");
+				sb.Append(",\"nav_state\":\"").Append(NavCoordinator.State).Append("\"");
+				sb.Append(",\"px\":").Append(pcx).Append(",\"py\":").Append(feetY);
+				sb.Append(",\"vx\":").Append(vx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb.Append(",\"vy\":").Append(vy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb.Append(",\"recent_events\":[");
+				for (int i = 0; i < recent.Count; i++)
+				{
+					if (i > 0) sb.Append(',');
+					sb.Append(recent[i]);
+				}
+				sb.Append("]}");
+				body = sb.ToString();
+			}
+			else if (path == "/step_node")
+			{
+				bool ok = FreezeSystem.StepFrame();
+				body = "{\"ok\":" + (ok ? "true" : "false") + "}";
+			}
+			else if (path == "/continue")
+			{
+				FreezeSystem.Unfreeze();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/breakpoint_set")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var idM = System.Text.RegularExpressions.Regex.Match(rb, "\"id\":\"([^\"]+)\"");
+				var onM = System.Text.RegularExpressions.Regex.Match(rb, "\"on\":\"([^\"]+)\"");
+				if (idM.Success && onM.Success)
+				{
+					var bp = new Breakpoint { Id = idM.Groups[1].Value, On = onM.Groups[1].Value };
+					var valM = System.Text.RegularExpressions.Regex.Match(rb, "\"value\":\"([^\"]+)\"");
+					if (valM.Success) bp.Value = valM.Groups[1].Value;
+					var xM = System.Text.RegularExpressions.Regex.Match(rb, "\"x\":\\[(-?\\d+),(-?\\d+)\\]");
+					var yM = System.Text.RegularExpressions.Regex.Match(rb, "\"y\":\\[(-?\\d+),(-?\\d+)\\]");
+					if (xM.Success) { bp.X0 = int.Parse(xM.Groups[1].Value); bp.X1 = int.Parse(xM.Groups[2].Value); }
+					if (yM.Success) { bp.Y0 = int.Parse(yM.Groups[1].Value); bp.Y1 = int.Parse(yM.Groups[2].Value); }
+					var fieldM = System.Text.RegularExpressions.Regex.Match(rb, "\"field\":\"([^\"]+)\"");
+					var thrM = System.Text.RegularExpressions.Regex.Match(rb, "\"threshold\":([\\d.]+)");
+					var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\":(\\d+)");
+					if (fieldM.Success) bp.Field = fieldM.Groups[1].Value;
+					if (thrM.Success) bp.Threshold = float.Parse(thrM.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+					if (nM.Success) bp.N = int.Parse(nM.Groups[1].Value);
+					BreakpointSystem.Set(bp);
+					body = "{\"ok\":true,\"id\":\"" + bp.Id + "\"}";
+				}
+				else body = "{\"error\":\"missing id or on\"}";
+			}
+			else if (path == "/breakpoint_clear")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var idM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"id\"\\s*:\\s*\"([^\"]+)\"");
+				if (idM.Success) { BreakpointSystem.Clear(idM.Groups[1].Value); body = "{\"ok\":true}"; }
+				else body = "{\"error\":\"missing id\"}";
+			}
+			else if (path == "/breakpoints")
+			{
+				var bps = BreakpointSystem.GetAll();
+				var sb = new System.Text.StringBuilder();
+				sb.Append("{\"breakpoints\":[");
+				for (int i = 0; i < bps.Count; i++)
+				{
+					if (i > 0) sb.Append(',');
+					sb.Append("{\"id\":\"").Append(bps[i].Id).Append("\",\"on\":\"").Append(bps[i].On).Append("\"}");
+				}
+				sb.Append("]}");
+				body = sb.ToString();
 			}
 			else if (path == "/health")
 			{

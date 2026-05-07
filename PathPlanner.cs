@@ -108,7 +108,7 @@ namespace TerraBlind
             return (8 - dtg) * 2;
         }
 
-        public static string Plan(int sign)
+        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
@@ -116,6 +116,10 @@ namespace TerraBlind
             int pcx = (int)((p.position.X + p.width / 2f) / 16f);
             int feetY = (int)((p.position.Y + p.height) / 16f);
             while (Solid(pcx, feetY) && feetY > 0) feetY--;
+
+            var excludedArr = new System.Text.StringBuilder();
+            if (excludedGoals != null) { foreach (var eg in excludedGoals) excludedArr.Append($"[{eg.Item1},{eg.Item2}],"); }
+            DiagLog.WriteEvent($"{{\"e\":\"plan_start\",\"tick\":{Main.GameUpdateCount},\"sign\":{sign},\"px\":{pcx},\"py\":{feetY},\"excluded_goals\":[{excludedArr.ToString().TrimEnd(',')}]}}");
 
             var envelope = BuildEnvelope(p, 50);
             _envelopeCache = envelope;
@@ -129,6 +133,8 @@ namespace TerraBlind
             int startWx = sign > 0 ? xMax : xMin;
             int endWx   = sign > 0 ? xMin : xMax;
             var goalLog = new System.Text.StringBuilder();
+            var rejectedGoals = new System.Text.StringBuilder();
+            int candidatesChecked = 0;
             for (int wx = startWx; sign > 0 ? wx >= endWx : wx <= endWx; wx -= sign)
             {
                 if (sign * (wx - pcx) <= 0) continue;
@@ -136,8 +142,12 @@ namespace TerraBlind
                 {
                     if (Standable(wx, wy))
                     {
-                        bool ok = CanProgress(wx, wy, sign, 3);
+                        bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
+                        bool ok = !excluded && CanProgress(wx, wy, sign, 3);
                         goalLog.Append($" ({wx},{wy})={ok}");
+                        candidatesChecked++;
+                        if (!ok)
+                            rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"{(excluded ? "excluded" : "no_progress")}\"}},");
                         if (ok) { goalX = wx; goalY = wy; }
                         break;
                     }
@@ -148,6 +158,7 @@ namespace TerraBlind
             if (goalX == -1)
             {
                 DiagLog.Write("[plan] no goal found");
+                DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_goal\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[{rejectedGoals.ToString().TrimEnd(',')}]}}");
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] goal=({goalX},{goalY}) start=({pcx},{feetY})");
@@ -298,6 +309,7 @@ namespace TerraBlind
             if (best == start || bestFwd < GoalRange / 2)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
+                DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");
@@ -327,8 +339,20 @@ namespace TerraBlind
                   .Append(",\"wy\":").Append(path[i].wy)
                   .Append(",\"action\":\"").Append(path[i].action).Append("\"}");
             }
-            sb.Append("],\"cost\":").Append(cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
+            sb.Append("],\"goal\":[").Append(wx).Append(',').Append(wy).Append("]");
+            sb.Append(",\"cost\":").Append(cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
             DiagLog.Write($"[plan] path len={path.Count} cost={cost:0.#}");
+
+            var evSb = new StringBuilder();
+            evSb.Append($"{{\"e\":\"plan_done\",\"tick\":{Main.GameUpdateCount},\"goal\":[{wx},{wy}],\"path_len\":{path.Count},\"cost\":{cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)},\"envelope_len\":{(_envelopeCache != null ? _envelopeCache.Length : 0)},\"path\":[");
+            for (int i = 0; i < path.Count; i++)
+            {
+                if (i > 0) evSb.Append(',');
+                evSb.Append($"{{\"wx\":{path[i].wx},\"wy\":{path[i].wy},\"action\":\"{path[i].action}\"}}");
+            }
+            evSb.Append("]}");
+            DiagLog.WriteEvent(evSb.ToString());
+
             return sb.ToString();
         }
     }

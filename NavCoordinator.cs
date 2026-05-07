@@ -24,11 +24,13 @@ namespace TerraBlind
         public static string FailReason = "";
 
         private static int _sign;
+        private static System.Collections.Generic.HashSet<(int, int)> _excludedGoals;
         private static List<NavNode> _path = new List<NavNode>();
         private static int _pathIdx;
         private static NavNode _target;
         private static int _segStartY;
         private static float _prevVY;
+        private static uint _nodeEnterTick;
 
         private static int _stallCheckTick;
         private static int _lastStallPcx;
@@ -40,11 +42,12 @@ namespace TerraBlind
         private const int StallLimit = 4;
         private const int PillarThresh = 5;
 
-        public static void Start(int sign)
+        public static (int, int)? Start(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
         {
             lock (_lock)
             {
                 _sign = sign;
+                _excludedGoals = excludedGoals;
                 State = NavState.Idle;
                 _path.Clear();
                 _pathIdx = 0;
@@ -53,6 +56,7 @@ namespace TerraBlind
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
+                return null;
             }
         }
 
@@ -104,17 +108,54 @@ namespace TerraBlind
 
         private static bool Standable(int wx, int wy) => !PathPlanner.SolidPublic(wx, wy) && PathPlanner.SolidPublic(wx, wy + 1);
 
+        private static void EmitNodeEnter(int idx, NavNode node, int pcx, int feetY, float vx, float vy)
+        {
+            int expEndWx = idx + 1 < _path.Count ? _path[idx + 1].Wx : node.Wx;
+            int expEndWy = idx + 1 < _path.Count ? _path[idx + 1].Wy : node.Wy;
+            DiagLog.WriteEvent(
+                $"{{\"e\":\"node_enter\",\"tick\":{Main.GameUpdateCount},\"node_idx\":{idx}" +
+                $",\"action\":\"{node.Action}\"" +
+                $",\"exp_start_wx\":{node.Wx},\"exp_start_wy\":{node.Wy}" +
+                $",\"exp_end_wx\":{expEndWx},\"exp_end_wy\":{expEndWy}" +
+                $",\"actual_px\":{pcx},\"actual_py\":{feetY}" +
+                $",\"vx\":{vx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}" +
+                $",\"vy\":{vy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}}}");
+            _nodeEnterTick = Main.GameUpdateCount;
+        }
+
+        private static void EmitNodeExit(int idx, string action, string status, int expWx, int expWy, int actualWx, int actualWy)
+        {
+            DiagLog.WriteEvent(
+                $"{{\"e\":\"node_exit\",\"tick\":{Main.GameUpdateCount},\"node_idx\":{idx}" +
+                $",\"action\":\"{action}\",\"status\":\"{status}\"" +
+                $",\"exp_end_wx\":{expWx},\"exp_end_wy\":{expWy}" +
+                $",\"actual_end_wx\":{actualWx},\"actual_end_wy\":{actualWy}" +
+                $",\"delta_x\":{actualWx - expWx},\"delta_y\":{actualWy - expWy}" +
+                $",\"duration_ticks\":{(int)(Main.GameUpdateCount - _nodeEnterTick)}}}");
+        }
+
+        private static void EmitNavFailed(string reason, int lastIdx, string lastAction, int pcx, int feetY, int stallCount = -1)
+        {
+            DiagLog.WriteEvent(
+                $"{{\"e\":\"nav_failed\",\"tick\":{Main.GameUpdateCount}" +
+                $",\"reason\":\"{reason}\"" +
+                $",\"last_node_idx\":{lastIdx},\"last_action\":\"{lastAction}\"" +
+                $",\"px\":{pcx},\"py\":{feetY},\"stall_count\":{stallCount}}}");
+            BreakpointSystem.CheckNavFailed();
+        }
+
         private static void Replan(Player p)
         {
             int pcx = Pcx(p);
             int feetY = FeetY(p);
             DiagLog.Write($"[nav] Replan at ({pcx},{feetY}) state={State}");
-            string json = PathPlanner.Plan(_sign);
+            string json = PathPlanner.Plan(_sign, _excludedGoals);
             var newPath = ParsePath(json);
             if (newPath == null || newPath.Count == 0)
             {
                 State = NavState.Failed;
                 FailReason = $"replan empty at ({pcx},{feetY})";
+                EmitNavFailed("replan_empty", _pathIdx, _target.Action ?? "", pcx, feetY);
                 DiagLog.Write($"[nav] Replan FAILED");
                 return;
             }
@@ -124,6 +165,7 @@ namespace TerraBlind
             {
                 State = NavState.Failed;
                 FailReason = $"replan no progress fwd={fwd} at ({pcx},{feetY})";
+                EmitNavFailed("replan_no_progress", _pathIdx, _target.Action ?? "", pcx, feetY);
                 DiagLog.Write($"[nav] Replan no-progress FAILED fwd={fwd}");
                 return;
             }
@@ -173,6 +215,7 @@ namespace TerraBlind
                         _stallCount++;
                         if (_stallCount >= StallLimit)
                         {
+                            EmitNavFailed("stall", _pathIdx, _target.Action ?? "", pcx, feetY, _stallCount);
                             Replan(p);
                             return;
                         }
@@ -193,11 +236,16 @@ namespace TerraBlind
                     _prevVY = p.velocity.Y;
 
                     DiagLog.Write($"[nav] node[{_pathIdx}] ({_target.Wx},{_target.Wy}) {_target.Action} from ({pcx},{feetY})");
+                    EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
+                    BreakpointSystem.CheckNodeAction(_target.Action);
+                    BreakpointSystem.CheckPosition(pcx, feetY);
+
                     if (_target.Action == "jump")
                     {
                         if (p.velocity.Y > 1f)
                         {
                             DiagLog.Write($"[nav] jump aborted vy={p.velocity.Y:0.#} feetY={feetY} → replan");
+                            EmitNavFailed("jump_abort", _pathIdx, "jump", pcx, feetY);
                             Replan(p);
                             return;
                         }
@@ -243,6 +291,7 @@ namespace TerraBlind
                 {
                     if (feetY > _segStartY + DeviateY)
                     {
+                        EmitNavFailed("deviate", _pathIdx, "move", pcx, feetY);
                         Replan(p);
                         return;
                     }
@@ -250,6 +299,7 @@ namespace TerraBlind
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
                     if (dist <= ArriveX)
                     {
+                        EmitNodeExit(_pathIdx, "move", "done", _target.Wx, _target.Wy, pcx, feetY);
                         _pathIdx++;
                         AdvanceMoveNodes(p, pcx, feetY);
                         return;
@@ -270,6 +320,7 @@ namespace TerraBlind
                     _prevVY = p.velocity.Y;
                     if (landed && dist <= ArriveX * 2)
                     {
+                        EmitNodeExit(_pathIdx, "fall", "done", _target.Wx, _target.Wy, pcx, feetY);
                         _pathIdx++;
                         State = NavState.Idle;
                     }
@@ -281,6 +332,8 @@ namespace TerraBlind
                     if (JumpCoordinator.Done)
                     {
                         DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) expected ({_target.Wx},{_target.Wy})");
+                        EmitNodeExit(_pathIdx, "jump", "done", _target.Wx, _target.Wy, pcx, feetY);
+                        BreakpointSystem.CheckDelta("actual_end_x", pcx - _target.Wx);
                         _pathIdx++;
                         State = NavState.Idle;
                     }
@@ -293,6 +346,7 @@ namespace TerraBlind
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
                     if (dist <= ArriveX)
                     {
+                        EmitNodeExit(_pathIdx, "bridge", "done", _target.Wx, _target.Wy, pcx, feetY);
                         ReplaySystem.Stop();
                         _pathIdx++;
                         State = NavState.Idle;
@@ -303,12 +357,19 @@ namespace TerraBlind
                     {
                         ReplaySystem.Stop();
                         DiagLog.Write($"[nav] bridge blocked at ({pcx},{feetY}) ahead=({aheadX},{feetY}) → replan");
+                        EmitNavFailed("bridge_blocked", _pathIdx, "bridge", pcx, feetY);
                         Replan(p);
                         return;
                     }
                     Player.SmartCursorSettings.SmartBlocksEnabled = false;
                     int platformSlot = FindPlatformSlot(p);
-                    if (platformSlot < 0) { State = NavState.Failed; FailReason = "no platform"; return; }
+                    if (platformSlot < 0)
+                    {
+                        EmitNavFailed("no_platform", _pathIdx, "bridge", pcx, feetY);
+                        State = NavState.Failed;
+                        FailReason = "no platform";
+                        return;
+                    }
                     if (!ReplaySystem.IsActive)
                     {
                         bool right = _sign > 0;
@@ -329,6 +390,7 @@ namespace TerraBlind
                 {
                     if (!SkillExecutor.IsActive)
                     {
+                        EmitNodeExit(_pathIdx, "pillar", "done", _target.Wx, _target.Wy, pcx, feetY);
                         _pathIdx++;
                         State = NavState.Idle;
                     }
@@ -348,6 +410,7 @@ namespace TerraBlind
                     _target = n;
                     _segStartY = feetY;
                     _prevVY = p.velocity.Y;
+                    EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
                     State = NavState.Fall;
                     return;
                 }
@@ -358,6 +421,7 @@ namespace TerraBlind
                 int streakEndY = GetStreakEndY(_pathIdx);
                 if (feetY - streakEndY > PillarThresh) { State = NavState.Idle; return; }
                 _target = n;
+                EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
                 State = NavState.Move;
                 return;
             }
