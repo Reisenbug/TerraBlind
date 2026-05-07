@@ -211,7 +211,7 @@ namespace TerraBlind
                         minDtg = Math.Min(minDtg, DistToGround(nx, cy));
                         int bridgeLandY = -1;
                         for (int dy = -7; dy <= 8; dy++) { if (Standable(nx, cy + dy)) { bridgeLandY = cy + dy; break; } }
-                        if (bridgeLandY >= 0)
+                        if (bridgeLandY >= 0 && !Solid(nx, bridgeLandY - 1) && !Solid(nx, bridgeLandY - 2))
                         {
                             float cost = 4f + col * 2f + BridgePenalty(minDtg);
                             float ng = curG + cost;
@@ -235,7 +235,7 @@ namespace TerraBlind
                 var (wx, wy) = kv.Key;
                 int fwd = sign * (wx - pcx);
                 if (fwd <= 0) continue;
-                if (!Standable(wx, wy) && !bridgeNodes.Contains((wx, wy))) continue;
+                if (!Standable(wx, wy)) continue;
                 if (fwd > bestFwd) { bestFwd = fwd; best = (wx, wy); }
             }
             if (best == start)
