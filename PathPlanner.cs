@@ -34,7 +34,7 @@ namespace TerraBlind
             return maxDepth;
         }
 
-        private static int[] BuildEnvelope(Player p, int maxCols)
+        private static int[] BuildEnvelope(Player p, int maxDropTiles = 20)
         {
             float js = Player.jumpSpeed;
             float grav = p.gravity > 0f ? p.gravity : 0.4f;
@@ -47,8 +47,8 @@ namespace TerraBlind
             float peakT = phase1Ticks + phase2Ticks;
             float peakRisePx = holdSpeed * phase1Ticks + holdSpeed * phase2Ticks - 0.5f * grav * phase2Ticks * phase2Ticks;
 
-            var env = new int[maxCols];
-            for (int col = 0; col < maxCols; col++)
+            var envList = new System.Collections.Generic.List<int>();
+            for (int col = 0; ; col++)
             {
                 float t = col * 16f / Math.Max(vx, 0.01f);
                 float risePx;
@@ -64,9 +64,11 @@ namespace TerraBlind
                     float dt = t - peakT;
                     risePx = peakRisePx - 0.5f * grav * dt * dt;
                 }
-                env[col] = (int)(-risePx / 16f);
+                int dy = (int)(-risePx / 16f);
+                envList.Add(dy);
+                if (dy >= maxDropTiles) break;
             }
-            return env;
+            return envList.ToArray();
         }
 
         private static float BridgePenalty(int dtg)
@@ -84,8 +86,7 @@ namespace TerraBlind
             int feetY = (int)((p.position.Y + p.height) / 16f);
             while (Solid(pcx, feetY) && feetY > 0) feetY--;
 
-            int maxJumpCols = 9;
-            var envelope = BuildEnvelope(p, maxJumpCols + 1);
+            var envelope = BuildEnvelope(p, 20);
             _envelopeCache = envelope;
 
             int xMin = pcx - GoalRange;
@@ -178,9 +179,9 @@ namespace TerraBlind
                                 if (Solid(bx, arcY) || Solid(bx, arcY - 1)) { blocked = true; break; }
                             }
                             if (blocked) break;
-                            for (int ny = cy + arcDy; ny < Math.Min(cy + arcDy + 4, yMax + 1); ny++)
+                            int ny = cy + arcDy;
+                            if (ny >= yMin && ny <= yMax && Standable(nx, ny))
                             {
-                                if (Standable(nx, ny))
                                 {
                                     int rise = cy - ny;
                                     float riseBonus = Math.Max(0, rise - 1) * 2f;
@@ -193,8 +194,31 @@ namespace TerraBlind
                                         float h = Math.Abs(goalX - nx) + Math.Abs(goalY - ny);
                                         heap.Enqueue((nx, ny), ng + h);
                                     }
-                                    break;
                                 }
+                            }
+                        }
+                    }
+                }
+
+                if (Standable(cx, cy) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2))
+                {
+                    int wallX = cx + sign;
+                    if (wallX >= xMin && wallX <= xMax && Solid(wallX, cy))
+                    {
+                        int topY = cy;
+                        while (topY > yMin && Solid(wallX, topY - 1)) topY--;
+                        int rise = cy - topY;
+                        DiagLog.Write($"[plan] pillar check ({cx},{cy}) wallX={wallX} topY={topY} rise={rise} cxTopSolid={Solid(cx,topY)} cxTopM1Solid={Solid(cx,topY-1)}");
+                        if (rise > 0 && rise <= 7 && !Solid(cx, topY) && !Solid(cx, topY - 1))
+                        {
+                            float cost = 3f + rise;
+                            float ng = curG + cost;
+                            if (ng < g.GetValueOrDefault((cx, topY), float.MaxValue))
+                            {
+                                g[(cx, topY)] = ng;
+                                prev[(cx, topY)] = ((cx, cy), "pillar");
+                                float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
+                                heap.Enqueue((cx, topY), ng + h);
                             }
                         }
                     }
@@ -207,21 +231,19 @@ namespace TerraBlind
                     {
                         int nx = cx + sign * col;
                         if (nx < xMin || nx > xMax) break;
-                        if (Solid(nx, cy)) break;
+                        if (Solid(nx, cy) || Solid(nx, cy - 1) || Solid(nx, cy - 2)) break;
                         minDtg = Math.Min(minDtg, DistToGround(nx, cy));
-                        int bridgeLandY = -1;
-                        for (int dy = -7; dy <= 8; dy++) { if (Standable(nx, cy + dy)) { bridgeLandY = cy + dy; break; } }
-                        if (bridgeLandY >= 0 && !Solid(nx, bridgeLandY - 1) && !Solid(nx, bridgeLandY - 2))
+                        if (!Solid(nx, cy + 1) || Standable(nx, cy))
                         {
                             float cost = 4f + col * 2f + BridgePenalty(minDtg);
                             float ng = curG + cost;
-                            if (ng < g.GetValueOrDefault((nx, bridgeLandY), float.MaxValue))
+                            if (ng < g.GetValueOrDefault((nx, cy), float.MaxValue))
                             {
-                                g[(nx, bridgeLandY)] = ng;
-                                bridgeNodes.Add((nx, bridgeLandY));
-                                prev[(nx, bridgeLandY)] = ((cx, cy), "bridge");
-                                float h = Math.Abs(goalX - nx) + Math.Abs(goalY - bridgeLandY);
-                                heap.Enqueue((nx, bridgeLandY), ng + h);
+                                g[(nx, cy)] = ng;
+                                bridgeNodes.Add((nx, cy));
+                                prev[(nx, cy)] = ((cx, cy), "bridge");
+                                float h = Math.Abs(goalX - nx) + Math.Abs(goalY - cy);
+                                heap.Enqueue((nx, cy), ng + h);
                             }
                         }
                     }
