@@ -342,10 +342,6 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "bridge")
                     {
-                        var stopFrame = new ReplayFrame { SmartCursor = 0 };
-                        var stopFrames = new System.Collections.Generic.List<ReplayFrame>();
-                        for (int i = 0; i < 10; i++) stopFrames.Add(stopFrame);
-                        ReplaySystem.Load(stopFrames);
                         State = NavState.Bridge;
                     }
                     else if (_target.Action == "pillar")
@@ -427,6 +423,8 @@ namespace TerraBlind
 
                 if (State == NavState.Bridge)
                 {
+                    if (Math.Abs(p.velocity.X) > 0.1f && !ReplaySystem.IsActive)
+                        return;
                     if (p.velocity.Y > 0f)
                     {
                         ReplaySystem.Stop();
