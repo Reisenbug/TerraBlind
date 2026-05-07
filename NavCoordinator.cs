@@ -64,6 +64,7 @@ namespace TerraBlind
                 State = NavState.Idle;
                 _path.Clear();
                 JumpCoordinator.Stop();
+                ReplaySystem.Stop();
             }
         }
 
@@ -115,6 +116,15 @@ namespace TerraBlind
                 State = NavState.Failed;
                 FailReason = $"replan empty at ({pcx},{feetY})";
                 DiagLog.Write($"[nav] Replan FAILED");
+                return;
+            }
+            var last = newPath[newPath.Count - 1];
+            int fwd = _sign * (last.Wx - pcx);
+            if (fwd <= 3)
+            {
+                State = NavState.Failed;
+                FailReason = $"replan no progress fwd={fwd} at ({pcx},{feetY})";
+                DiagLog.Write($"[nav] Replan no-progress FAILED fwd={fwd}");
                 return;
             }
             DiagLog.Write($"[nav] Replan ok len={newPath.Count}");
@@ -202,6 +212,13 @@ namespace TerraBlind
                     {
                         State = NavState.Bridge;
                     }
+                    else if (_target.Action == "pillar")
+                    {
+                        int rise = feetY - _target.Wy;
+                        DiagLog.Write($"[nav] pillar rise={rise} from ({pcx},{feetY}) to ({_target.Wx},{_target.Wy})");
+                        State = NavState.Pillar;
+                        SkillExecutor.StartPillarJump(_sign > 0, rise);
+                    }
                     else if (_target.Action == "fall")
                     {
                         State = NavState.Fall;
@@ -248,7 +265,8 @@ namespace TerraBlind
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
                     if (_sign > 0) p.controlRight = true;
                     else p.controlLeft = true;
-                    bool landed = _prevVY > 0f && p.velocity.Y == 0f;
+                    bool onGround = p.velocity.Y == 0f;
+                    bool landed = (_prevVY > 0f && onGround) || (onGround && dist <= ArriveX * 2);
                     _prevVY = p.velocity.Y;
                     if (landed && dist <= ArriveX * 2)
                     {
@@ -275,26 +293,45 @@ namespace TerraBlind
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
                     if (dist <= ArriveX)
                     {
+                        ReplaySystem.Stop();
                         _pathIdx++;
                         State = NavState.Idle;
                         return;
                     }
+                    int aheadX = pcx + _sign;
+                    if (PathPlanner.SolidPublic(aheadX, feetY) || PathPlanner.SolidPublic(aheadX, feetY - 1) || PathPlanner.SolidPublic(aheadX, feetY - 2))
+                    {
+                        ReplaySystem.Stop();
+                        DiagLog.Write($"[nav] bridge blocked at ({pcx},{feetY}) ahead=({aheadX},{feetY}) → replan");
+                        Replan(p);
+                        return;
+                    }
+                    Player.SmartCursorSettings.SmartBlocksEnabled = false;
                     int platformSlot = FindPlatformSlot(p);
                     if (platformSlot < 0) { State = NavState.Failed; FailReason = "no platform"; return; }
-                    if (!PlaceCoordinator.IsActive)
+                    if (!ReplaySystem.IsActive)
                     {
-                        int dx = _sign > 0 ? 1 : -2;
-                        PlaceCoordinator.Start(new PlaceRequest { Dx = dx, Dy = 1, Slot = platformSlot, RemainingFrames = 12 });
+                        bool right = _sign > 0;
+                        float mx0 = right ? 1.2f : -1.2f;
+                        float mx1 = right ? 0.8f : -0.8f;
+                        var frames = new System.Collections.Generic.List<ReplayFrame>();
+                        frames.Add(new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx0, My = 1.7f });
+                        var moveFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, Mx = mx1, My = 1.7f };
+                        for (int i = 0; i < 15; i++) frames.Add(moveFrame);
+                        var holdFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx1, My = 1.7f };
+                        for (int i = 0; i < 10; i++) frames.Add(holdFrame);
+                        ReplaySystem.Load(frames);
                     }
-                    if (_sign > 0) p.controlRight = true;
-                    else p.controlLeft = true;
                     return;
                 }
 
                 if (State == NavState.Pillar)
                 {
                     if (!SkillExecutor.IsActive)
-                        State = NavState.Move;
+                    {
+                        _pathIdx++;
+                        State = NavState.Idle;
+                    }
                     return;
                 }
             }
@@ -306,6 +343,14 @@ namespace TerraBlind
             {
                 var n = _path[_pathIdx];
                 if (n.Action != "move" && n.Action != "fall") { State = NavState.Idle; return; }
+                if (n.Action == "fall")
+                {
+                    _target = n;
+                    _segStartY = feetY;
+                    _prevVY = p.velocity.Y;
+                    State = NavState.Fall;
+                    return;
+                }
                 float targetCX = n.Wx * 16f + 8f;
                 float centerX = p.position.X + p.width / 2f;
                 float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
