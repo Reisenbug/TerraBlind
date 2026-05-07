@@ -18,6 +18,7 @@ namespace TerraBlind
 			if (NavCoordinator.IsActive)
 			{
 				NavCoordinator.ApplyControls();
+				ReplaySystem.ApplyControls();
 				PlaceCoordinator.ApplyControls();
 				JumpCoordinator.ApplyControls();
 				SkillExecutor.ApplyControls();

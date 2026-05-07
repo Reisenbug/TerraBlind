@@ -97,9 +97,15 @@ namespace TerraBlind
                 else if (action == "bridge")
                 {
                     int bx0 = prevWx >= 0 ? prevWx : (lp != null ? (int)((lp.position.X + lp.width / 2f) / 16f) : wx);
+                    int by0 = prevWx >= 0 ? prevWy : wy;
                     int js = wx > bx0 ? 1 : -1;
-                    for (int bx = bx0 + js; js > 0 ? bx < wx : bx > wx; bx += js)
-                        DrawTile(spriteBatch, bx, wy, new Color(180, 0, 255, 60));
+                    int adx = System.Math.Abs(wx - bx0);
+                    for (int col = 1; col < adx; col++)
+                    {
+                        int bx = bx0 + js * col;
+                        int by = adx > 0 ? by0 + (wy - by0) * col / adx : wy;
+                        DrawTile(spriteBatch, bx, by, new Color(180, 0, 255, 60));
+                    }
                 }
 
                 Color c;
