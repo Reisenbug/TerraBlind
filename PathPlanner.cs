@@ -124,6 +124,14 @@ namespace TerraBlind
             int pcx = (int)((p.position.X + p.width / 2f) / 16f);
             int feetY = (int)((p.position.Y + p.height) / 16f);
             while (Solid(pcx, feetY) && feetY > 0) feetY--;
+            if (!Standable(pcx, feetY))
+            {
+                for (int dy = 1; dy <= 3; dy++)
+                {
+                    if (Standable(pcx, feetY + dy)) { feetY += dy; break; }
+                    if (Standable(pcx, feetY - dy)) { feetY -= dy; break; }
+                }
+            }
 
             var excludedArr = new System.Text.StringBuilder();
             if (excludedGoals != null) { foreach (var eg in excludedGoals) excludedArr.Append($"[{eg.Item1},{eg.Item2}],"); }
@@ -194,13 +202,14 @@ namespace TerraBlind
 
                 float curG = g.TryGetValue((cx, cy), out var cg) ? cg : float.MaxValue;
 
-                foreach (var (dx, dy) in new[] { (1,0),(-1,0),(0,1),(0,-1) })
+                foreach (var (dx, dy) in new[] { (1,0),(-1,0),(0,1),(0,-1),(1,-1),(-1,-1) })
                 {
                     int nx = cx + dx, ny = cy + dy;
                     if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) continue;
                     if (Solid(nx, ny)) continue;
                     if (dy == -1 && dx == 0) continue;
-                    if (dy == -1 && !Solid(nx, ny + 1)) continue;
+                    if (dy == -1 && !Solid(nx, ny + 1) && !Platform(nx, ny + 1)) continue;
+                    if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float cost = dy == 1 ? 0.5f : 1f + dtg;
                     float ng = curG + cost;
