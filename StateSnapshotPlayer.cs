@@ -8,11 +8,21 @@ namespace TerraBlind
 	{
 		private const int ControlTimeoutTicks = 60;
 		private const int JumpHoldFrames = 15;
+		private const int AutoJumpCooldownFrames = 10;
 		private int _jumpFramesLeft;
+		private int _autoJumpCooldown;
 
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
+			if (NavCoordinator.IsActive)
+			{
+				NavCoordinator.ApplyControls();
+				PlaceCoordinator.ApplyControls();
+				JumpCoordinator.ApplyControls();
+				SkillExecutor.ApplyControls();
+				return;
+			}
 			if (SkillExecutor.IsActive)
 			{
 				SkillExecutor.ApplyControls();
@@ -22,6 +32,11 @@ namespace TerraBlind
 			if (ReplaySystem.IsActive)
 			{
 				ReplaySystem.ApplyControls();
+				return;
+			}
+			if (JumpCoordinator.IsActive)
+			{
+				JumpCoordinator.ApplyControls();
 				return;
 			}
 			if (WalkCoordinator.IsActive)
@@ -78,7 +93,8 @@ namespace TerraBlind
 			walking = (ci.Left || ci.Right) && !ci.Down;
 			bool onGround = Player.velocity.Y == 0f;
 			blocked = onGround && System.Math.Abs(Player.velocity.X) < 0.1f;
-			if (walking && blocked && _jumpFramesLeft == 0)
+			if (_autoJumpCooldown > 0) _autoJumpCooldown--;
+			if (walking && blocked && _jumpFramesLeft == 0 && _autoJumpCooldown == 0)
 			{
 				_jumpFramesLeft = JumpHoldFrames;
 				Player.controlJump = true;

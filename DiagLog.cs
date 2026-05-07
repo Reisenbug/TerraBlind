@@ -29,6 +29,13 @@ namespace TerraBlind
 			}
 		}
 
+		public static void Write(string msg)
+		{
+			string p = Path;
+			if (string.IsNullOrEmpty(p)) return;
+			try { lock (_lock) { File.AppendAllText(p, $"{Main.GameUpdateCount} {msg}\n"); } } catch { }
+		}
+
 		public static void JumpTrace(string msg)
 		{
 			string p = Path;
