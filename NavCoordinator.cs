@@ -30,7 +30,6 @@ namespace TerraBlind
         private static float _prevVY;
         private static uint _nodeEnterTick;
 
-        private static int _stallCheckTick;
         private static int _lastStallPcx;
         private static int _stallCount;
 
@@ -42,7 +41,6 @@ namespace TerraBlind
 
         private const int ArriveX = 8;
         private const int StallFrames = 60;
-        private const int StallLimit = 4;
         private const int PillarThresh = 5;
 
         public static void Start(int sign)
@@ -55,7 +53,6 @@ namespace TerraBlind
                 _path.Clear();
                 _pathIdx = 0;
                 _stallCount = 0;
-                _stallCheckTick = 0;
                 _restartCooldown = 0;
                 FailReason = "";
                 _started = true;
@@ -291,23 +288,22 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                _stallCheckTick++;
-                if (_stallCheckTick >= StallFrames)
+                if (State != NavState.Idle && pcx == _lastStallPcx)
                 {
-                    _stallCheckTick = 0;
-                    if (State != NavState.Idle && _lastStallPcx == pcx)
+                    _stallCount++;
+                    if (_stallCount >= StallFrames)
                     {
-                        _stallCount++;
-                        if (_stallCount >= StallLimit)
-                        {
-                            EmitNavFailed("stall", _pathIdx, _target.Action ?? "", pcx, feetY, _stallCount);
-                            Replan(p);
-                            return;
-                        }
+                        EmitNavFailed("stall", _pathIdx, _target.Action ?? "", pcx, feetY, _stallCount);
+                        _stallCount = 0;
+                        Replan(p);
+                        return;
                     }
-                    else _stallCount = 0;
-                    _lastStallPcx = pcx;
                 }
+                else
+                {
+                    _stallCount = 0;
+                }
+                _lastStallPcx = pcx;
 
                 if (State == NavState.Idle)
                 {
