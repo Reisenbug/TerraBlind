@@ -415,16 +415,17 @@ namespace TerraBlind
 
                 if (State == NavState.Jump)
                 {
-                    if (JumpCoordinator.Done)
+                    if (_prevVY > 0f && p.velocity.Y == 0f)
                     {
                         int expWx = JumpCoordinator.PredictedLandWx >= 0 ? JumpCoordinator.PredictedLandWx : _target.Wx;
                         int expWy = JumpCoordinator.PredictedLandWy >= 0 ? JumpCoordinator.PredictedLandWy : _target.Wy;
                         DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) predicted ({expWx},{expWy}) astar ({_target.Wx},{_target.Wy})");
                         EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
-                        BreakpointSystem.CheckDelta("actual_end_x", pcx - _target.Wx);
+                        JumpCoordinator.Stop();
                         _pathIdx++;
                         State = NavState.Idle;
                     }
+                    _prevVY = p.velocity.Y;
                     return;
                 }
 
@@ -526,6 +527,16 @@ namespace TerraBlind
             while (_pathIdx < _path.Count)
             {
                 var n = _path[_pathIdx];
+                if (n.Action == "jump")
+                {
+                    _target = n;
+                    EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
+                    float launchX = p.position.X + p.width / 2f;
+                    float targetX = n.Wx * 16f + 8f + (_sign > 0 ? 16f : -16f);
+                    JumpCoordinator.Start(_sign > 0, launchX, targetX);
+                    State = NavState.Jump;
+                    return;
+                }
                 if (n.Action != "move" && n.Action != "fall") { State = NavState.Idle; return; }
                 if (n.Action == "fall")
                 {
