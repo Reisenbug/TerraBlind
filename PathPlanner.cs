@@ -220,7 +220,7 @@ namespace TerraBlind
                 {
                     foreach (int js in new[] { sign })
                     {
-                        for (int col = 1; col < envelope.Length; col++)
+                        for (int col = 2; col < envelope.Length; col++)
                         {
                             int nx = cx + js * col;
                             if (nx < xMin || nx > xMax) break;

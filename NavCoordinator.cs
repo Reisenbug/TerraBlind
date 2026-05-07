@@ -333,11 +333,18 @@ namespace TerraBlind
                             Replan(p);
                             return;
                         }
+                        bool overshoot = _sign > 0 ? pcx > _target.Wx : pcx < _target.Wx;
+                        if (overshoot)
+                        {
+                            DiagLog.Write($"[nav] jump overshoot pcx={pcx} target={_target.Wx} → replan");
+                            EmitNavFailed("jump_overshoot", _pathIdx, "jump", pcx, feetY);
+                            Replan(p);
+                            return;
+                        }
                         var jp = Main.LocalPlayer;
                         float launchX = jp.position.X + jp.width / 2f;
-                        bool dirRight = _target.Wx > pcx;
-                        float targetX = _target.Wx * 16f + 8f + (dirRight ? 16f : -16f);
-                        JumpCoordinator.Start(dirRight, launchX, targetX);
+                        float targetX = _target.Wx * 16f + 8f + (_sign > 0 ? 16f : -16f);
+                        JumpCoordinator.Start(_sign > 0, launchX, targetX);
                         State = NavState.Jump;
                     }
                     else if (_target.Action == "bridge")
