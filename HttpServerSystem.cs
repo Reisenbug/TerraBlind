@@ -294,16 +294,77 @@ namespace TerraBlind
 					reqBody = sr.ReadToEnd();
 				var rb = reqBody.Replace(" ", "");
 				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
-				var txMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"target_x\"\\s*:\\s*([0-9.]+)");
+				var lxMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"launch_x\"\\s*:\\s*(-?[0-9.]+)");
+				var txMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"target_x\"\\s*:\\s*(-?[0-9.]+)");
 				bool dirRight = !dirMatch.Success || dirMatch.Groups[1].Value != "left";
-				float targetX = txMatch.Success ? float.Parse(txMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f;
-				JumpCoordinator.Start(dirRight, targetX);
+				float launchX = lxMatch.Success ? float.Parse(lxMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f;
+				float targetX = txMatch.Success ? float.Parse(txMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : launchX;
+				JumpCoordinator.Start(dirRight, launchX, targetX);
 				body = "{\"ok\":true}";
 			}
 			else if (path == "/jump_stop")
 			{
 				JumpCoordinator.Stop();
 				body = "{\"ok\":true}";
+			}
+			else if (path == "/jump_done")
+			{
+				body = JumpCoordinator.Done ? "{\"done\":true}" : "{\"done\":false}";
+			}
+			else if (path == "/jump_envelope")
+			{
+				var p = Main.LocalPlayer;
+				if (p == null || !p.active)
+				{
+					body = "{\"error\":\"no_player\"}";
+					status = 503;
+				}
+				else
+				{
+					float js = Player.jumpSpeed;
+					float grav = p.gravity > 0f ? p.gravity : 0.4f;
+					int jh = Player.jumpHeight;
+					float vx = Math.Max(p.maxRunSpeed, p.accRunSpeed);
+					float maxFall = p.maxFallSpeed;
+					int tileSize = 16;
+
+					float holdSpeed = js - grav;
+					float phase1Ticks = jh + 1;
+					float phase2Ticks = holdSpeed / grav;
+					float peakT = phase1Ticks + phase2Ticks;
+					float peakRisePx = holdSpeed * phase1Ticks + holdSpeed * phase2Ticks - 0.5f * grav * phase2Ticks * phase2Ticks;
+
+					int maxCols = 32;
+					var sb2 = new StringBuilder();
+					sb2.Append("{\"envelope\":[");
+					for (int col = 0; col < maxCols; col++)
+					{
+						if (col > 0) sb2.Append(',');
+						float t = col * tileSize / Math.Max(vx, 0.01f);
+						float risePx;
+						if (t <= phase1Ticks)
+							risePx = holdSpeed * t;
+						else if (t <= peakT)
+						{
+							float dt = t - phase1Ticks;
+							risePx = holdSpeed * phase1Ticks + holdSpeed * dt - 0.5f * grav * dt * dt;
+						}
+						else
+						{
+							float dt = t - peakT;
+							risePx = peakRisePx - 0.5f * grav * dt * dt;
+						}
+						int dy = (int)(-risePx / tileSize);
+						sb2.Append(dy);
+					}
+					sb2.Append("],");
+					sb2.Append("\"vx\":").Append(vx.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Append(',');
+					sb2.Append("\"jump_speed\":").Append(js.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Append(',');
+					sb2.Append("\"jump_height\":").Append(jh).Append(',');
+					sb2.Append("\"gravity\":").Append(grav.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+					sb2.Append('}');
+					body = sb2.ToString();
+				}
 			}
 			else if (path == "/skill")
 			{
@@ -455,6 +516,47 @@ namespace TerraBlind
 						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
 				}
 			}
+			else if (path == "/nav_start")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
+				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
+				NavCoordinator.Start(navSign);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/nav_stop")
+			{
+				NavCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/nav_done")
+			{
+				if (NavCoordinator.Done)
+					body = "{\"done\":true,\"status\":\"done\"}";
+				else if (!NavCoordinator.IsActive && !NavCoordinator.Done)
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + NavCoordinator.FailReason + "\"}";
+				else
+					body = "{\"done\":false,\"status\":\"running\"}";
+			}
+			else if (path == "/nav_path")
+			{
+				body = NavCoordinator.GetPathJson();
+			}
+			else if (path == "/plan_path")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
+				int planSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
+				body = PathPlanner.Plan(planSign);
+				var planNodes = NavCoordinator.ParsePathPublic(body);
+				PathVisSystem.SetPlanPath(planNodes, PathPlanner.GetEnvelopeCache());
+			}
 			else if (path == "/path_vis")
 			{
 				string reqBody;
@@ -486,6 +588,25 @@ namespace TerraBlind
 				}
 				PathVisSystem.SetBlocks(pillar, bridge);
 				body = "{\"ok\":true}";
+			}
+			else if (path == "/path_vis_tiles")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var parsed = System.Text.Json.JsonDocument.Parse(reqBody);
+				var tiles = new System.Collections.Generic.List<(int wx, int wy, Microsoft.Xna.Framework.Color color)>();
+				foreach (var item in parsed.RootElement.EnumerateArray())
+				{
+					int wx = item.GetProperty("wx").GetInt32();
+					int wy = item.GetProperty("wy").GetInt32();
+					int r = item.TryGetProperty("r", out var rp) ? rp.GetInt32() : 255;
+					int g = item.TryGetProperty("g", out var gp) ? gp.GetInt32() : 255;
+					int b = item.TryGetProperty("b", out var bp) ? bp.GetInt32() : 255;
+					tiles.Add((wx, wy, new Microsoft.Xna.Framework.Color(r, g, b)));
+				}
+				PathVisSystem.SetTiles(tiles);
+				body = "{\"ok\":true,\"tiles\":" + tiles.Count + "}";
 			}
 			else if (path == "/debug_labels")
 			{
