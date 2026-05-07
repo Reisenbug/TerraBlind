@@ -539,12 +539,8 @@ namespace TerraBlind
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
-				var excluded = ParseExcludedGoals(rb);
-				var goal = NavCoordinator.Start(navSign, excluded);
-				if (goal.HasValue)
-					body = "{\"ok\":true,\"goal\":[" + goal.Value.Item1 + "," + goal.Value.Item2 + "]}";
-				else
-					body = "{\"ok\":false,\"goal\":null}";
+				NavCoordinator.Start(navSign);
+				body = "{\"ok\":true}";
 			}
 			else if (path == "/nav_stop")
 			{
@@ -572,8 +568,7 @@ namespace TerraBlind
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int planSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
-				var excluded = ParseExcludedGoals(rb);
-				body = PathPlanner.Plan(planSign, excluded);
+				body = PathPlanner.Plan(planSign);
 				var planNodes = NavCoordinator.ParsePathPublic(body);
 				PathVisSystem.SetPlanPath(planNodes, PathPlanner.GetEnvelopeCache());
 			}

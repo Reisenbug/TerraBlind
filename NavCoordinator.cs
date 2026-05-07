@@ -24,7 +24,6 @@ namespace TerraBlind
         public static string FailReason = "";
 
         private static int _sign;
-        private static System.Collections.Generic.HashSet<(int, int)> _excludedGoals;
         private static List<NavNode> _path = new List<NavNode>();
         private static int _pathIdx;
         private static NavNode _target;
@@ -36,28 +35,52 @@ namespace TerraBlind
         private static int _lastStallPcx;
         private static int _stallCount;
 
+        private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
+        private static (int, int) _lastGoal;
+        private const int BlacklistTTL = 60 * 60;
+        private const int BlacklistMax = 20;
+        private static int _restartCooldown = 0;
+
         private const int ArriveX = 8;
         private const int DeviateY = 10;
         private const int StallFrames = 60;
         private const int StallLimit = 4;
         private const int PillarThresh = 5;
 
-        public static (int, int)? Start(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
+        public static void Start(int sign)
         {
             lock (_lock)
             {
                 _sign = sign;
-                _excludedGoals = excludedGoals;
+                _blacklist.Clear();
                 State = NavState.Idle;
                 _path.Clear();
                 _pathIdx = 0;
                 _stallCount = 0;
                 _stallCheckTick = 0;
+                _restartCooldown = 0;
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
-                return null;
             }
+        }
+
+        private static HashSet<(int, int)> BlacklistSet()
+        {
+            var s = new HashSet<(int, int)>();
+            long now = Main.GameUpdateCount;
+            foreach (var kv in _blacklist)
+                if (kv.Value > now) s.Add(kv.Key);
+            return s;
+        }
+
+        private static void PurgeBlacklist()
+        {
+            long now = Main.GameUpdateCount;
+            var expired = new List<(int, int)>();
+            foreach (var kv in _blacklist)
+                if (kv.Value <= now) expired.Add(kv.Key);
+            foreach (var k in expired) _blacklist.Remove(k);
         }
 
         public static void Stop()
@@ -99,6 +122,15 @@ namespace TerraBlind
         }
 
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
+
+        private static bool BlocksStanding(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
+            var t = Main.tile[wx, wy];
+            if (t == null || !t.HasTile) return false;
+            return Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType];
+        }
+
         private static int FeetY(Player p)
         {
             int fy = (int)((p.position.Y + p.height) / 16f);
@@ -148,32 +180,58 @@ namespace TerraBlind
         {
             int pcx = Pcx(p);
             int feetY = FeetY(p);
-            DiagLog.Write($"[nav] Replan at ({pcx},{feetY}) state={State}");
-            string json = PathPlanner.Plan(_sign, _excludedGoals);
+            PurgeBlacklist();
+            DiagLog.Write($"[nav] Replan at ({pcx},{feetY}) state={State} blacklist={_blacklist.Count}");
+            string json = PathPlanner.Plan(_sign, BlacklistSet());
             var newPath = ParsePath(json);
             if (newPath == null || newPath.Count == 0)
             {
-                State = NavState.Failed;
-                FailReason = $"replan empty at ({pcx},{feetY})";
+                BlacklistGoal();
+                if (_blacklist.Count >= BlacklistMax)
+                {
+                    State = NavState.Failed;
+                    FailReason = $"blacklist full at ({pcx},{feetY})";
+                    EmitNavFailed("blacklist_full", _pathIdx, _target.Action ?? "", pcx, feetY);
+                    DiagLog.Write($"[nav] blacklist full, stopping");
+                    return;
+                }
                 EmitNavFailed("replan_empty", _pathIdx, _target.Action ?? "", pcx, feetY);
-                DiagLog.Write($"[nav] Replan FAILED");
+                DiagLog.Write($"[nav] Replan empty, will retry");
+                _restartCooldown = 30;
+                State = NavState.Idle;
+                _path.Clear();
+                _pathIdx = 0;
                 return;
             }
             var last = newPath[newPath.Count - 1];
             int fwd = _sign * (last.Wx - pcx);
             if (fwd <= 3)
             {
-                State = NavState.Failed;
-                FailReason = $"replan no progress fwd={fwd} at ({pcx},{feetY})";
+                BlacklistGoal();
                 EmitNavFailed("replan_no_progress", _pathIdx, _target.Action ?? "", pcx, feetY);
-                DiagLog.Write($"[nav] Replan no-progress FAILED fwd={fwd}");
+                DiagLog.Write($"[nav] Replan no-progress fwd={fwd}, retrying");
+                _restartCooldown = 30;
+                State = NavState.Idle;
+                _path.Clear();
+                _pathIdx = 0;
                 return;
             }
-            DiagLog.Write($"[nav] Replan ok len={newPath.Count}");
+            var newGoal = (last.Wx, last.Wy);
+            _lastGoal = newGoal;
+            DiagLog.Write($"[nav] Replan ok len={newPath.Count} goal={newGoal}");
             _path = newPath;
             _pathIdx = 0;
             _stallCount = 0;
             State = NavState.Idle;
+        }
+
+        private static void BlacklistGoal()
+        {
+            if (_lastGoal != default)
+            {
+                _blacklist[_lastGoal] = Main.GameUpdateCount + BlacklistTTL;
+                DiagLog.Write($"[nav] blacklisted {_lastGoal}");
+            }
         }
 
         public static List<NavNode> ParsePathPublic(string json) => ParsePath(json);
@@ -197,7 +255,13 @@ namespace TerraBlind
             lock (_lock)
             {
                 if (!_started) return;
-                if (State == NavState.Done || State == NavState.Failed) return;
+                if (State == NavState.Failed) return;
+
+                if (_restartCooldown > 0)
+                {
+                    _restartCooldown--;
+                    return;
+                }
 
                 var p = Main.LocalPlayer;
                 if (p == null || !p.active) return;
@@ -258,6 +322,7 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "bridge")
                     {
+                        Player.SmartCursorSettings.SmartBlocksEnabled = false;
                         State = NavState.Bridge;
                     }
                     else if (_target.Action == "pillar")
@@ -344,8 +409,17 @@ namespace TerraBlind
                 {
                     float targetCX = _target.Wx * 16f + 8f;
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
-                    if (dist <= ArriveX)
+                    if (dist <= ArriveX && p.velocity.Y == 0f)
                     {
+                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
+                        if (feetY > _target.Wy + DeviateY)
+                        {
+                            ReplaySystem.Stop();
+                            DiagLog.Write($"[nav] bridge landed too low feetY={feetY} expected={_target.Wy} → replan");
+                            EmitNavFailed("bridge_deviate", _pathIdx, "bridge", pcx, feetY);
+                            Replan(p);
+                            return;
+                        }
                         EmitNodeExit(_pathIdx, "bridge", "done", _target.Wx, _target.Wy, pcx, feetY);
                         ReplaySystem.Stop();
                         _pathIdx++;
@@ -355,16 +429,17 @@ namespace TerraBlind
                     int aheadX = pcx + _sign;
                     if (PathPlanner.SolidPublic(aheadX, feetY) || PathPlanner.SolidPublic(aheadX, feetY - 1) || PathPlanner.SolidPublic(aheadX, feetY - 2))
                     {
+                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
                         ReplaySystem.Stop();
                         DiagLog.Write($"[nav] bridge blocked at ({pcx},{feetY}) ahead=({aheadX},{feetY}) → replan");
                         EmitNavFailed("bridge_blocked", _pathIdx, "bridge", pcx, feetY);
                         Replan(p);
                         return;
                     }
-                    Player.SmartCursorSettings.SmartBlocksEnabled = false;
                     int platformSlot = FindPlatformSlot(p);
                     if (platformSlot < 0)
                     {
+                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
                         EmitNavFailed("no_platform", _pathIdx, "bridge", pcx, feetY);
                         State = NavState.Failed;
                         FailReason = "no platform";
@@ -373,14 +448,12 @@ namespace TerraBlind
                     if (!ReplaySystem.IsActive)
                     {
                         bool right = _sign > 0;
-                        float mx0 = right ? 1.2f : -1.2f;
-                        float mx1 = right ? 0.8f : -0.8f;
+                        float mx = right ? 0.4f : -0.4f;
                         var frames = new System.Collections.Generic.List<ReplayFrame>();
-                        frames.Add(new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx0, My = 1.7f });
-                        var moveFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, Mx = mx1, My = 1.7f };
-                        for (int i = 0; i < 15; i++) frames.Add(moveFrame);
-                        var holdFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx1, My = 1.7f };
-                        for (int i = 0; i < 10; i++) frames.Add(holdFrame);
+                        var moveFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, Mx = mx, My = 1.7f };
+                        for (int i = 0; i < 30; i++) frames.Add(moveFrame);
+                        var holdFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx, My = 1.7f };
+                        for (int i = 0; i < 5; i++) frames.Add(holdFrame);
                         ReplaySystem.Load(frames);
                     }
                     return;
