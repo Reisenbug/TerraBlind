@@ -322,7 +322,6 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "bridge")
                     {
-                        Player.SmartCursorSettings.SmartBlocksEnabled = false;
                         State = NavState.Bridge;
                     }
                     else if (_target.Action == "pillar")
@@ -411,7 +410,6 @@ namespace TerraBlind
                     float dist = _sign > 0 ? targetCX - centerX : centerX - targetCX;
                     if (dist <= ArriveX && p.velocity.Y == 0f)
                     {
-                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
                         if (feetY > _target.Wy + DeviateY)
                         {
                             ReplaySystem.Stop();
@@ -429,7 +427,6 @@ namespace TerraBlind
                     int aheadX = pcx + _sign;
                     if (PathPlanner.SolidPublic(aheadX, feetY) || PathPlanner.SolidPublic(aheadX, feetY - 1) || PathPlanner.SolidPublic(aheadX, feetY - 2))
                     {
-                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
                         ReplaySystem.Stop();
                         DiagLog.Write($"[nav] bridge blocked at ({pcx},{feetY}) ahead=({aheadX},{feetY}) → replan");
                         EmitNavFailed("bridge_blocked", _pathIdx, "bridge", pcx, feetY);
@@ -439,7 +436,6 @@ namespace TerraBlind
                     int platformSlot = FindPlatformSlot(p);
                     if (platformSlot < 0)
                     {
-                        Player.SmartCursorSettings.SmartBlocksEnabled = true;
                         EmitNavFailed("no_platform", _pathIdx, "bridge", pcx, feetY);
                         State = NavState.Failed;
                         FailReason = "no platform";
@@ -449,11 +445,22 @@ namespace TerraBlind
                     {
                         bool right = _sign > 0;
                         float mx = right ? 0.4f : -0.4f;
+                        bool groundAhead = PathPlanner.SolidPublic(pcx + _sign, feetY + 1);
                         var frames = new System.Collections.Generic.List<ReplayFrame>();
-                        var moveFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, Mx = mx, My = 1.7f };
-                        for (int i = 0; i < 30; i++) frames.Add(moveFrame);
-                        var holdFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, Mx = mx, My = 1.7f };
-                        for (int i = 0; i < 5; i++) frames.Add(holdFrame);
+                        if (groundAhead)
+                        {
+                            var moveFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = 1.7f };
+                            for (int i = 0; i < 30; i++) frames.Add(moveFrame);
+                            var holdFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = 1.7f };
+                            for (int i = 0; i < 5; i++) frames.Add(holdFrame);
+                        }
+                        else
+                        {
+                            var placeFrame = new ReplayFrame { UseItem = true, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = 1.7f };
+                            for (int i = 0; i < 8; i++) frames.Add(placeFrame);
+                            var stepFrame = new ReplayFrame { Right = right, Left = !right, UseItem = true, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = 1.7f };
+                            for (int i = 0; i < 4; i++) frames.Add(stepFrame);
+                        }
                         ReplaySystem.Load(frames);
                     }
                     return;
