@@ -71,6 +71,37 @@ namespace TerraBlind
             return envList.ToArray();
         }
 
+        private static bool CanProgress(int gx, int gy, int sign, int K)
+        {
+            var visited = new HashSet<(int, int)>();
+            var queue = new Queue<(int x, int y, int steps)>();
+            queue.Enqueue((gx, gy, 0));
+            visited.Add((gx, gy));
+            while (queue.Count > 0)
+            {
+                var (cx, cy, steps) = queue.Dequeue();
+                if (sign * (cx - gx) >= K) return true;
+                if (steps >= K + 2) continue;
+                int nx = cx + sign;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int ny = cy + dy;
+                    if (Standable(nx, ny) && !visited.Contains((nx, ny)))
+                    {
+                        visited.Add((nx, ny));
+                        queue.Enqueue((nx, ny, steps + 1));
+                        break;
+                    }
+                }
+                if (!Solid(cx, cy + 1) && !visited.Contains((cx, cy + 1)))
+                {
+                    visited.Add((cx, cy + 1));
+                    queue.Enqueue((cx, cy + 1, steps + 1));
+                }
+            }
+            return false;
+        }
+
         private static float BridgePenalty(int dtg)
         {
             if (dtg >= 8) return 0;
@@ -97,6 +128,7 @@ namespace TerraBlind
             int goalX = -1, goalY = -1;
             int startWx = sign > 0 ? xMax : xMin;
             int endWx   = sign > 0 ? xMin : xMax;
+            var goalLog = new System.Text.StringBuilder();
             for (int wx = startWx; sign > 0 ? wx >= endWx : wx <= endWx; wx -= sign)
             {
                 if (sign * (wx - pcx) <= 0) continue;
@@ -104,12 +136,15 @@ namespace TerraBlind
                 {
                     if (Standable(wx, wy))
                     {
-                        if (goalX < 0) { goalX = wx; goalY = wy; }
+                        bool ok = CanProgress(wx, wy, sign, 3);
+                        goalLog.Append($" ({wx},{wy})={ok}");
+                        if (ok) { goalX = wx; goalY = wy; }
                         break;
                     }
                 }
                 if (goalX >= 0) break;
             }
+            DiagLog.Write($"[plan] goal scan:{goalLog} → chosen=({goalX},{goalY})");
             if (goalX == -1)
             {
                 DiagLog.Write("[plan] no goal found");
@@ -208,17 +243,17 @@ namespace TerraBlind
                         int topY = cy;
                         while (topY > yMin && Solid(wallX, topY - 1)) topY--;
                         int rise = cy - topY;
-                        DiagLog.Write($"[plan] pillar check ({cx},{cy}) wallX={wallX} topY={topY} rise={rise} cxTopSolid={Solid(cx,topY)} cxTopM1Solid={Solid(cx,topY-1)}");
-                        if (rise > 0 && rise <= 7 && !Solid(cx, topY) && !Solid(cx, topY - 1))
+                        if (rise > 0 && !Solid(cx, topY) && !Solid(cx, topY - 1))
                         {
-                            float cost = 3f + rise;
-                            float ng = curG + cost;
-                            if (ng < g.GetValueOrDefault((cx, topY), float.MaxValue))
+                            float cost = curG + 3f + rise;
+                            if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
                             {
-                                g[(cx, topY)] = ng;
+                                g[(cx, topY)] = cost;
+                                bridgeNodes.Add((cx, topY));
                                 prev[(cx, topY)] = ((cx, cy), "pillar");
                                 float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
-                                heap.Enqueue((cx, topY), ng + h);
+                                heap.Enqueue((cx, topY), cost + h);
+                                DiagLog.Write($"[plan] pillar ({cx},{cy})→({cx},{topY}) rise={rise}");
                             }
                         }
                     }
@@ -260,9 +295,9 @@ namespace TerraBlind
                 if (!Standable(wx, wy)) continue;
                 if (fwd > bestFwd) { bestFwd = fwd; best = (wx, wy); }
             }
-            if (best == start)
+            if (best == start || bestFwd < GoalRange / 2)
             {
-                DiagLog.Write($"[plan] no forward standable visited={visited.Count}");
+                DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");

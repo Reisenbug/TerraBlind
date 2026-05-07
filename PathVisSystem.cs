@@ -107,6 +107,11 @@ namespace TerraBlind
                         DrawTile(spriteBatch, bx, by, new Color(180, 0, 255, 60));
                     }
                 }
+                else if (action == "pillar" && prevWy > wy)
+                {
+                    for (int py = wy; py <= prevWy; py++)
+                        DrawTile(spriteBatch, wx, py, new Color(255, 50, 50, 100));
+                }
 
                 Color c;
                 if (i < curIdx)
@@ -117,6 +122,8 @@ namespace TerraBlind
                     c = new Color(180, 0, 255, 120);
                 else if (action == "fall")
                     c = new Color(0, 180, 255, 120);
+                else if (action == "pillar")
+                    c = new Color(255, 50, 50, 160);
                 else
                     c = new Color(100, 220, 255, 80);
 
