@@ -1,3 +1,4 @@
+using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ModLoader;
 
@@ -18,8 +19,47 @@ namespace TerraBlind
         private static float _jumpStartX = 0f;
         private static float _jumpStartY = 0f;
 
+        public static int PredictedLandWx = -1;
+        public static int PredictedLandWy = -1;
+
         public static bool IsActive { get { lock (_lock) { return _active; } } }
         public static bool Done { get { lock (_lock) { return _done; } } }
+
+        private static void SimulateLanding(Player p, int holdFrames)
+        {
+            Vector2 pos = p.position;
+            float vx = p.velocity.X;
+            float vy = -Player.jumpSpeed;
+            int w = p.width;
+            int h = p.height;
+            float grav = p.gravity > 0f ? p.gravity : 0.4f;
+            float maxFall = p.maxFallSpeed > 0f ? p.maxFallSpeed : 10f;
+
+            for (int frame = 0; frame < 300; frame++)
+            {
+                float prevVY = vy;
+                if (frame < holdFrames) vy = -Player.jumpSpeed;
+                else vy = System.Math.Min(vy + grav, maxFall);
+
+                var vel = new Vector2(vx, vy);
+                var result = Terraria.Collision.TileCollision(pos, vel, w, h, false, false, 1);
+                pos.X += result.X;
+                pos.Y += result.Y;
+
+                bool landed = frame > holdFrames && prevVY > 0f && result.Y == 0f && vy > 0f;
+                if (landed)
+                {
+                    PredictedLandWx = (int)((pos.X + w / 2f) / 16);
+                    PredictedLandWy = (int)((pos.Y + h) / 16);
+                    DiagLog.Write($"[jump] predict land wx={PredictedLandWx} wy={PredictedLandWy} frame={frame}");
+                    return;
+                }
+                if (System.Math.Abs(result.Y - vy) > 0.01f) vy = 0f;
+                if (System.Math.Abs(result.X - vx) > 0.01f) vx = 0f;
+            }
+            PredictedLandWx = -1;
+            PredictedLandWy = -1;
+        }
 
         public static void Start(bool dirRight, float launchX, float targetX)
         {
@@ -65,6 +105,7 @@ namespace TerraBlind
                         _airFrames = 0;
                         _jumpStartX = p.position.X + p.width / 2f;
                         _jumpStartY = p.position.Y + p.height;
+                        SimulateLanding(p, Player.jumpHeight);
                         DiagLog.Write($"[jump] takeoff cx={_jumpStartX:0.#} cy={_jumpStartY:0.#} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} targetX={_targetX:0.#}");
                         p.controlJump = true;
                     }

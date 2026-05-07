@@ -231,7 +231,10 @@ namespace TerraBlind
                                 {
                                     int rise = cy - ny;
                                     float riseBonus = Math.Max(0, rise - 1) * 2f;
-                                    float cost = Math.Max(4f + col - riseBonus, 1f);
+                                    int maxCol = envelope.Length - 1;
+                                    float efficiency = maxCol > 0 ? (float)col / maxCol : 1f;
+                                    float jumpOverhead = 4f * (1f - efficiency);
+                                    float cost = Math.Max(col + jumpOverhead - riseBonus, 1f);
                                     float ng = curG + cost;
                                     if (ng < g.GetValueOrDefault((nx, ny), float.MaxValue))
                                     {
