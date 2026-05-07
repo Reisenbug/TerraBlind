@@ -71,9 +71,13 @@ namespace TerraBlind
             var envelope = NavCoordinator.IsActive ? PathPlanner.GetEnvelopeCache() : _planEnvelope;
 
             var lp = Main.LocalPlayer;
-            int prevWx = lp != null ? (int)((lp.position.X + lp.width / 2f) / 16f) : -1;
-            int prevWy = lp != null ? (int)((lp.position.Y + lp.height) / 16f) : -1;
-            if (prevWy > 0) DrawTile(spriteBatch, prevWx, prevWy, new Color(255, 255, 255, 160));
+            if (lp != null)
+            {
+                int lpx = (int)((lp.position.X + lp.width / 2f) / 16f);
+                int lpy = (int)((lp.position.Y + lp.height) / 16f);
+                DrawTile(spriteBatch, lpx, lpy, new Color(255, 255, 255, 160));
+            }
+            int prevWx = -1, prevWy = -1;
             for (int i = 0; i < path.Count; i++)
             {
                 int wx = path[i].Wx, wy = path[i].Wy;
@@ -83,17 +87,18 @@ namespace TerraBlind
                 {
                     int js = wx > prevWx ? 1 : -1;
                     int adx = System.Math.Abs(wx - prevWx);
-                    for (int col = 0; col <= System.Math.Min(adx, envelope.Length - 1); col++)
+                    for (int col = 1; col <= System.Math.Min(adx, envelope.Length - 1); col++)
                     {
                         int bx = prevWx + js * col;
                         int by = prevWy + envelope[col];
                         DrawTile(spriteBatch, bx, by, new Color(100, 255, 100, 80));
                     }
                 }
-                else if (action == "bridge" && prevWx >= 0)
+                else if (action == "bridge")
                 {
-                    int js = wx > prevWx ? 1 : -1;
-                    for (int bx = prevWx + js; bx != wx; bx += js)
+                    int bx0 = prevWx >= 0 ? prevWx : (lp != null ? (int)((lp.position.X + lp.width / 2f) / 16f) : wx);
+                    int js = wx > bx0 ? 1 : -1;
+                    for (int bx = bx0 + js; js > 0 ? bx < wx : bx > wx; bx += js)
                         DrawTile(spriteBatch, bx, wy, new Color(180, 0, 255, 60));
                 }
 
