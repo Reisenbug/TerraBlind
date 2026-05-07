@@ -136,7 +136,7 @@ namespace TerraBlind
             return fy;
         }
 
-        private static bool Standable(int wx, int wy) => !PathPlanner.SolidPublic(wx, wy) && PathPlanner.SolidPublic(wx, wy + 1);
+        private static bool Standable(int wx, int wy) => !PathPlanner.SolidPublic(wx, wy) && !PathPlanner.PlatformPublic(wx, wy) && (PathPlanner.SolidPublic(wx, wy + 1) || PathPlanner.PlatformPublic(wx, wy + 1));
 
         private static void EmitNodeEnter(int idx, NavNode node, int pcx, int feetY, float vx, float vy)
         {

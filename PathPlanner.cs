@@ -14,6 +14,7 @@ namespace TerraBlind
         public static int[] GetEnvelopeCache() => _envelopeCache;
 
         public static bool SolidPublic(int wx, int wy) => Solid(wx, wy);
+        public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
 
         private static bool Solid(int wx, int wy)
         {
@@ -22,9 +23,16 @@ namespace TerraBlind
             return t != null && t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
         }
 
+        private static bool Platform(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            return t != null && t.HasTile && Main.tileSolidTop[t.TileType];
+        }
+
         private static bool Standable(int wx, int wy)
         {
-            return !Solid(wx, wy) && Solid(wx, wy + 1);
+            return !Solid(wx, wy) && !Platform(wx, wy) && (Solid(wx, wy + 1) || Platform(wx, wy + 1));
         }
 
         private static int DistToGround(int wx, int wy, int maxDepth = 20)
