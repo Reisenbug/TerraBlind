@@ -324,7 +324,7 @@ namespace TerraBlind
 			}
 			else if (path == "/jump_done")
 			{
-				body = JumpCoordinator.Done ? "{\"done\":true}" : "{\"done\":false}";
+				body = !JumpCoordinator.IsActive ? "{\"done\":true}" : "{\"done\":false}";
 			}
 			else if (path == "/jump_envelope")
 			{
