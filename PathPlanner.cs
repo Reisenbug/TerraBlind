@@ -86,13 +86,13 @@ namespace TerraBlind
             int feetY = (int)((p.position.Y + p.height) / 16f);
             while (Solid(pcx, feetY) && feetY > 0) feetY--;
 
-            var envelope = BuildEnvelope(p, 20);
+            var envelope = BuildEnvelope(p, 50);
             _envelopeCache = envelope;
 
             int xMin = pcx - GoalRange;
             int xMax = pcx + GoalRange;
             int yMin = feetY - 20;
-            int yMax = feetY + 15;
+            int yMax = feetY + 50;
 
             int goalX = -1, goalY = -1;
             int startWx = sign > 0 ? xMax : xMin;
