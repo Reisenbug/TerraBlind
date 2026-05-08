@@ -15,7 +15,8 @@ namespace TerraBlind
         private static int _cyclesDone;
         private static int _phaseTick;
         private static bool _placeStarted;
-        private static int _targetRiseTiles;
+        private static int _targetWy;
+        private static int _caveRiseTiles;
         private static int _stalledCycles;
         private static int _cycleStartFeetY;
 
@@ -83,7 +84,7 @@ namespace TerraBlind
         public static void StartPillarJump(bool dirRight, int targetWy)
         {
             DirectionRight = dirRight;
-            _targetRiseTiles = targetWy;
+            _targetWy = targetWy;
             _jumpFramesLeft = 0;
             _cycleTick = 0;
             _cyclesDone = 0;
@@ -98,7 +99,7 @@ namespace TerraBlind
         {
             DirectionRight = !caveOnLeft;
             _walkBackFrames = walkBack * 10;
-            _targetRiseTiles = riseTiles;
+            _caveRiseTiles = riseTiles;
             _placeDx = caveOnLeft ? -2 : 1;
             _currentPlaceDy = -1;
             _jumpFramesLeft = 0;
@@ -153,12 +154,12 @@ namespace TerraBlind
                 }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
-                var targetTile = Main.tile[pcxNow, _targetRiseTiles];
+                var targetTile = Main.tile[pcxNow, _targetWy];
                 bool platformReached = targetTile != null && targetTile.HasTile &&
                     (Main.tileSolid[targetTile.TileType] || Main.tileSolidTop[targetTile.TileType]);
                 if (platformReached)
                 {
-                    DiagLog.Write($"[pillar] platform placed at ({pcxNow},{_targetRiseTiles}) feetY={feetYNow}");
+                    DiagLog.Write($"[pillar] platform placed at ({pcxNow},{_targetWy}) feetY={feetYNow}");
                     ReplaySystem.Stop();
                     _phaseTick = 0;
                     State = SkillState.PillarWait;
@@ -181,7 +182,7 @@ namespace TerraBlind
                     }
                     _cycleStartFeetY = feetYNow;
                     _cyclesDone++;
-                    DiagLog.Write($"[pillar] cycle={_cyclesDone} feetY={feetYNow} targetWy={_targetRiseTiles}");
+                    DiagLog.Write($"[pillar] cycle={_cyclesDone} feetY={feetYNow} targetWy={_targetWy}");
                     var frames = new System.Collections.Generic.List<ReplayFrame>();
                     foreach (var (jump, use, mx, my) in PillarCycleFrames)
                         frames.Add(new ReplayFrame { Jump = jump, UseItem = use, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = my });
@@ -286,7 +287,7 @@ namespace TerraBlind
                     _phaseTick = 0;
                     _cyclesDone++;
                     _currentPlaceDy--;
-                    if (_cyclesDone >= _targetRiseTiles)
+                    if (_cyclesDone >= _caveRiseTiles)
                     {
                         _jumpFramesLeft = 0;
                         _phaseTick = 0;
