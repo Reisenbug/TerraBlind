@@ -31,6 +31,45 @@ namespace TerraBlind
         public static bool SolidPublic(int wx, int wy) => Solid(wx, wy);
         public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
 
+        public static string DebugJumpEdgesVerbose(Player p, int cx, int cy, int sign)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[");
+            float startPx = cx * 16f - (p.width / 2f) + 8f;
+            float startPy = cy * 16f - p.height;
+            int xMin = cx - 80, xMax = cx + 80, yMin = cy - 50, yMax = cy + 50;
+            var seen = new HashSet<(int,int)>();
+            bool first = true;
+            foreach (int hold in HoldFrameOptions)
+            {
+                var startState = new PhysicsSimulator.State { Px = startPx, Py = startPy, Vx = sign * p.maxRunSpeed, Vy = 0f, Grounded = true, JumpFramesLeft = hold };
+                var result = PhysicsSimulator.SimulateJump(startState, sign, hold);
+                if (!first) sb.Append(','); first = false;
+                sb.Append($"{{\"hold\":{hold},\"landed\":{(result.Landed?"true":"false")},\"lx\":{result.Cx},\"ly\":{result.Cy}");
+                if (result.Landed)
+                {
+                    bool inBounds = result.Cx >= xMin && result.Cx <= xMax && result.Cy >= yMin && result.Cy <= yMax;
+                    bool minCol = sign * (result.Cx - cx) >= JumpMinCol;
+                    bool standable = Standable(result.Cx, result.Cy);
+                    bool dup = seen.Contains((result.Cx, result.Cy));
+                    sb.Append($",\"inBounds\":{(inBounds?"true":"false")},\"minCol\":{(minCol?"true":"false")},\"standable\":{(standable?"true":"false")},\"dup\":{(dup?"true":"false")}");
+                    seen.Add((result.Cx, result.Cy));
+                }
+                sb.Append("}");
+            }
+            sb.Append("]");
+            return sb.ToString();
+        }
+
+        public static List<(int lx, int ly, int hold)> DebugJumpEdges(Player p, int cx, int cy, int sign)
+        {
+            var result = new List<(int, int, int)>();
+            var edges = BuildJumpEdges(p, cx, cy, sign, cx - 80, cx + 80, cy - 50, cy + 50);
+            foreach (var (lx, ly, frames, hold) in edges)
+                result.Add((lx, ly, hold));
+            return result;
+        }
+
         private static bool Solid(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
@@ -125,7 +164,7 @@ namespace TerraBlind
                 };
                 var result = PhysicsSimulator.SimulateJump(startState, sign, hold);
                 if (!result.Landed) continue;
-                int lx = result.Cx, ly = result.Cy;
+                int lx = result.Cx, ly = result.Cy - 1;
                 if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;
@@ -272,6 +311,7 @@ namespace TerraBlind
                         if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
                         {
                             int rise = cy - topY;
+                            if (rise <= 7) continue;
                             // check full vertical clearance from launch point: rise + 2 tiles above cy
                             bool blocked = false;
                             for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)

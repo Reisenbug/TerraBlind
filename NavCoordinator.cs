@@ -478,6 +478,13 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "pillar")
                     {
+                        bool atX = Math.Abs(pcx - _target.Wx) <= 1;
+                        if (!atX)
+                        {
+                            if (_sign > 0) p.controlRight = true;
+                            else p.controlLeft = true;
+                            return;
+                        }
                         int rise = feetY - _target.Wy;
                         DiagLog.Write($"[nav] pillar rise={rise} from ({pcx},{feetY}) to ({_target.Wx},{_target.Wy})");
                         State = NavState.Pillar;

@@ -63,7 +63,6 @@ namespace TerraBlind
             float nx = s.Px + result.X;
             float ny = s.Py + result.Y;
 
-            if (System.Math.Abs(result.X - vx) > 0.01f) vx = 0f;
             bool hitFloor = vy > 0f && System.Math.Abs(result.Y - vy) > 0.01f;
             if (hitFloor) vy = 0f;
 
