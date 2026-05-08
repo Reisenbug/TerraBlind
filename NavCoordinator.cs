@@ -218,7 +218,7 @@ namespace TerraBlind
             }
             var last = newPath[newPath.Count - 1];
             int fwd = _sign * (last.Wx - pcx);
-            if (fwd <= 3)
+            if (fwd <= 0)
             {
                 BlacklistGoal();
                 EmitNavFailed("replan_no_progress", _pathIdx, _target.Action ?? "", pcx, feetY);

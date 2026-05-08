@@ -14,7 +14,7 @@ namespace TerraBlind
         private const int AStarScanDown = 50;   // yMax = feetY + AStarScanDown; how deep A* can expand
         private const int MaxBridge = 25;       // max bridge length per segment (tiles)
         private const int BridgeDtgThresh = 8;  // bridge penalty-free if ground is this many tiles below
-        private const int CanProgressK = 1;     // goal validity: at least K tiles ahead must be reachable
+        private const int CanProgressK = 0;     // goal validity: 0 = any standable tile is valid goal
         private const int JumpMinCol = 2;       // minimum horizontal tiles per jump, filters trivial hops
         private const float JumpOverheadMax = 4f;    // extra cost for short jumps; full-range jump = 0, min jump = JumpOverheadMax
         private const float BridgeCostBase = 4f;     // fixed cost to start a bridge
@@ -171,18 +171,17 @@ namespace TerraBlind
             for (int wx = xMin; wx <= xMax; wx++)
             {
                 if (sign * (wx - pcx) < MinGoalDist) continue;
-                for (int wy = 50; wy <= yMax; wy++)
+                for (int wy = Math.Max(50, feetY - AStarScanUp); wy <= yMax; wy++)
                 {
                     if (!Standable(wx, wy)) continue;
                     bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
                     if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
                     bool ok = CanProgress(wx, wy, sign, CanProgressK);
                     if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
-                    // score: prefer far and high; fwd distance weighted 1, height gain weighted 2
                     int fwd = sign * (wx - pcx);
                     int rise = feetY - wy;
-                    int score = fwd + rise * 2;
-                    int bestScore = goalX < 0 ? int.MinValue : sign * (goalX - pcx) + (feetY - goalY) * 2;
+                    int score = fwd + Math.Max(0, rise) * 2;
+                    int bestScore = goalX < 0 ? int.MinValue : sign * (goalX - pcx) + Math.Max(0, feetY - goalY) * 2;
                     if (score > bestScore) { goalX = wx; goalY = wy; }
                     break;
                 }
