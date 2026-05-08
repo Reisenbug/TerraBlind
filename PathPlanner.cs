@@ -7,21 +7,26 @@ namespace TerraBlind
 {
     public static class PathPlanner
     {
-        private const int GoalRange = 40;
-        private const int MaxBridge = 25;
+        private const int GoalRangeFwd = 60;    // max forward search distance for goal (tiles)
+        private const int GoalRangeBack = 20;   // max backward search distance for A* expansion (tiles)
+        private const int MinGoalDist = 5;      // minimum distance from player to goal, prevents staying in place
+        private const int AStarScanUp = 50;     // yMin = feetY - AStarScanUp; how high A* can expand
+        private const int AStarScanDown = 50;   // yMax = feetY + AStarScanDown; how deep A* can expand
+        private const int MaxBridge = 25;       // max bridge length per segment (tiles)
+        private const int BridgeDtgThresh = 8;  // bridge penalty-free if ground is this many tiles below
+        private const int CanProgressK = 1;     // goal validity: at least K tiles ahead must be reachable
+        private const int JumpMinCol = 2;       // minimum horizontal tiles per jump, filters trivial hops
+        private const float JumpOverheadMax = 4f;    // extra cost for short jumps; full-range jump = 0, min jump = JumpOverheadMax
+        private const float BridgeCostBase = 4f;     // fixed cost to start a bridge
+        private const float BridgeCostPerCol = 2f;   // cost per tile extended in a bridge
+        private const float FallCost = 0.5f;         // cost per fall tile, cheaper than move to encourage natural drops
+        private const float MoveCostBase = 1f;       // base cost per move tile, plus distance-to-ground penalty
 
         private static int[] _envelopeCache;
         public static int[] GetEnvelopeCache() => _envelopeCache;
 
         public static bool SolidPublic(int wx, int wy) => Solid(wx, wy);
         public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
-
-        private static bool IsSkyline(int wx, int wy)
-        {
-            for (int dy = 1; dy <= 30; dy++)
-                if (Solid(wx, wy - dy) || Platform(wx, wy - dy)) return false;
-            return true;
-        }
 
         private static bool Solid(int wx, int wy)
         {
@@ -119,8 +124,8 @@ namespace TerraBlind
 
         private static float BridgePenalty(int dtg)
         {
-            if (dtg >= 8) return 0;
-            return (8 - dtg) * 2;
+            if (dtg >= BridgeDtgThresh) return 0;
+            return (BridgeDtgThresh - dtg) * 2;
         }
 
         public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
@@ -147,29 +152,26 @@ namespace TerraBlind
             var envelope = BuildEnvelope(p, 50);
             _envelopeCache = envelope;
 
-            int xMin = pcx - GoalRange;
-            int xMax = pcx + GoalRange;
-            int yMin = feetY - 20;
-            int yMax = feetY + 15;
+            int xMin = sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd;
+            int xMax = sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack;
+            int yMin = feetY - AStarScanUp;
+            int yMax = feetY + AStarScanDown;
 
             int goalX = -1, goalY = -1;
             var rejectedGoals = new System.Text.StringBuilder();
-            int startWx = sign > 0 ? xMax : xMin;
-            int endWx   = sign > 0 ? xMin : xMax;
-            for (int wx = startWx; sign > 0 ? wx >= endWx : wx <= endWx; wx -= sign)
+            for (int wx = xMin; wx <= xMax; wx++)
             {
-                if (sign * (wx - pcx) <= 0) continue;
+                if (sign * (wx - pcx) < MinGoalDist) continue;
                 for (int wy = yMin; wy <= yMax; wy++)
                 {
-                    if (!Standable(wx, wy) || !IsSkyline(wx, wy)) continue;
+                    if (!Standable(wx, wy)) continue;
                     bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
                     if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
-                    bool ok = CanProgress(wx, wy, sign, 3);
+                    bool ok = CanProgress(wx, wy, sign, CanProgressK);
                     if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
-                    goalX = wx; goalY = wy;
+                    if (goalX < 0 || wy < goalY) { goalX = wx; goalY = wy; }
                     break;
                 }
-                if (goalX >= 0) break;
             }
             DiagLog.Write($"[plan] goal=({goalX},{goalY})");
             if (goalX == -1)
@@ -212,7 +214,7 @@ namespace TerraBlind
                     if (dy == -1 && !Solid(nx, ny + 1) && !Platform(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
-                    float cost = dy == 1 ? 0.5f : 1f + dtg;
+                    float cost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float ng = curG + cost;
                     if (ng < g.GetValueOrDefault((nx, ny), float.MaxValue))
                     {
@@ -230,7 +232,7 @@ namespace TerraBlind
                 {
                     foreach (int js in new[] { sign })
                     {
-                        for (int col = 2; col < envelope.Length; col++)
+                        for (int col = JumpMinCol; col < envelope.Length; col++)
                         {
                             int nx = cx + js * col;
                             if (nx < xMin || nx > xMax) break;
@@ -251,7 +253,7 @@ namespace TerraBlind
                                     float riseBonus = Math.Max(0, rise - 1) * 2f;
                                     int maxCol = envelope.Length - 1;
                                     float efficiency = maxCol > 0 ? (float)col / maxCol : 1f;
-                                    float jumpOverhead = 4f * (1f - efficiency);
+                                    float jumpOverhead = JumpOverheadMax * (1f - efficiency);
                                     float cost = Math.Max(col + jumpOverhead - riseBonus, 1f);
                                     float ng = curG + cost;
                                     if (ng < g.GetValueOrDefault((nx, ny), float.MaxValue))
@@ -302,7 +304,7 @@ namespace TerraBlind
                         minDtg = Math.Min(minDtg, DistToGround(nx, cy));
                         if (!Solid(nx, cy + 1) || Standable(nx, cy))
                         {
-                            float cost = 4f + col * 2f + BridgePenalty(minDtg);
+                            float cost = BridgeCostBase + col * BridgeCostPerCol + BridgePenalty(minDtg);
                             float ng = curG + cost;
                             if (ng < g.GetValueOrDefault((nx, cy), float.MaxValue))
                             {
@@ -327,7 +329,7 @@ namespace TerraBlind
                 if (!Standable(wx, wy)) continue;
                 if (fwd > bestFwd) { bestFwd = fwd; best = (wx, wy); }
             }
-            if (best == start || bestFwd < GoalRange / 2)
+            if (best == start || bestFwd < GoalRangeFwd / 2)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
