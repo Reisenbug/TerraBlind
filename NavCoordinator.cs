@@ -41,7 +41,7 @@ namespace TerraBlind
 
         private const int ArriveX = 8;
         private const int StallFrames = 60;
-        private const int PillarThresh = 5;
+        private const int PillarThresh = 8; // slightly above max jump height (7 tiles)
 
         public static void Start(int sign)
         {

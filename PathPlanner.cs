@@ -169,7 +169,11 @@ namespace TerraBlind
                     if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
                     bool ok = CanProgress(wx, wy, sign, CanProgressK);
                     if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
-                    if (goalX < 0 || wy < goalY) { goalX = wx; goalY = wy; }
+                    int distWx = Math.Abs(wx - pcx);
+                    int distGoal = goalX < 0 ? int.MaxValue : Math.Abs(goalX - pcx);
+                    bool higher = wy < goalY;
+                    bool closerOrSameHeight = distWx <= distGoal || wy <= goalY;
+                    if (goalX < 0 || (higher && closerOrSameHeight)) { goalX = wx; goalY = wy; }
                     break;
                 }
             }
@@ -271,14 +275,12 @@ namespace TerraBlind
 
                 if (Standable(cx, cy) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2))
                 {
-                    int wallX = cx + sign;
-                    if (wallX >= xMin && wallX <= xMax && Solid(wallX, cy))
+                    for (int topY = cy - 1; topY >= yMin; topY--)
                     {
-                        int topY = cy;
-                        while (topY > yMin && Solid(wallX, topY - 1)) topY--;
-                        int rise = cy - topY;
-                        if (rise > 0 && !Solid(cx, topY) && !Solid(cx, topY - 1))
+                        if (Solid(cx, topY)) break;
+                        if (Standable(cx, topY))
                         {
+                            int rise = cy - topY;
                             float cost = curG + 3f + rise;
                             if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
                             {
@@ -287,8 +289,8 @@ namespace TerraBlind
                                 prev[(cx, topY)] = ((cx, cy), "pillar");
                                 float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
                                 heap.Enqueue((cx, topY), cost + h);
-                                DiagLog.Write($"[plan] pillar ({cx},{cy})→({cx},{topY}) rise={rise}");
                             }
+                            break;
                         }
                     }
                 }
@@ -321,15 +323,16 @@ namespace TerraBlind
 
             (int, int) best = start;
             int bestFwd = 0;
+            int bestWy = int.MaxValue;
             foreach (var kv in g)
             {
                 var (wx, wy) = kv.Key;
                 int fwd = sign * (wx - pcx);
                 if (fwd <= 0) continue;
                 if (!Standable(wx, wy)) continue;
-                if (fwd > bestFwd) { bestFwd = fwd; best = (wx, wy); }
+                if (wy < bestWy || (wy == bestWy && fwd > bestFwd)) { bestFwd = fwd; bestWy = wy; best = (wx, wy); }
             }
-            if (best == start || bestFwd < GoalRangeFwd / 2)
+            if (best == start || bestFwd < MinGoalDist)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
