@@ -565,6 +565,78 @@ namespace TerraBlind
 				NavCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/sim_jump")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				float simPx = float.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"px\":(-?[\\d.]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+				float simPy = float.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"py\":(-?[\\d.]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+				float simVx = float.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"vx\":(-?[\\d.]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+				int simHold = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"hold\":(\\d+)").Groups[1].Value);
+				int simSign = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
+				var simVyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"vy\":(-?[\\d.]+)");
+				float simVy = simVyMatch.Success ? float.Parse(simVyMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0f;
+				var simGroundedMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"grounded\":(true|false)");
+				bool simGrounded = !simGroundedMatch.Success || simGroundedMatch.Groups[1].Value == "true";
+				var simStart = new PhysicsSimulator.State { Px = simPx, Py = simPy, Vx = simVx, Vy = simVy, Grounded = simGrounded, JumpFramesLeft = simHold };
+				var simResult = PhysicsSimulator.SimulateJump(simStart, simSign, simHold);
+				var sb2 = new System.Text.StringBuilder();
+				sb2.Append("{\"landed\":").Append(simResult.Landed ? "true" : "false");
+				sb2.Append(",\"cx\":").Append(simResult.Cx).Append(",\"cy\":").Append(simResult.Cy);
+				sb2.Append(",\"end_px\":").Append(simResult.EndState.Px.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"end_py\":").Append(simResult.EndState.Py.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"end_vx\":").Append(simResult.EndState.Vx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"end_vy\":").Append(simResult.EndState.Vy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"end_grounded\":").Append(simResult.EndState.Grounded ? "true" : "false");
+				sb2.Append(",\"frames\":[");
+				var s2 = simStart;
+				for (int fi = 0; fi < simResult.Frames.Count; fi++)
+				{
+					if (fi > 0) sb2.Append(',');
+					var inp = simResult.Frames[fi];
+					var ns = PhysicsSimulator.Step(s2, inp);
+					int fcx = (int)((ns.Px + PhysicsSimulator.PlayerW / 2f) / 16);
+					int fcy = (int)((ns.Py + PhysicsSimulator.PlayerH) / 16);
+					sb2.Append($"{{\"f\":{fi},\"px\":{ns.Px.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)},\"py\":{ns.Py.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)},\"vx\":{ns.Vx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)},\"vy\":{ns.Vy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)},\"cx\":{fcx},\"cy\":{fcy},\"g\":{(ns.Grounded ? 1 : 0)}}}");
+					s2 = ns;
+				}
+				sb2.Append("]}");
+				body = sb2.ToString();
+			}
+			else if (path == "/debug_jump_edges")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				int dbgCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)").Groups[1].Value);
+				int dbgCy = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cy\":(-?\\d+)").Groups[1].Value);
+				int dbgSign = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
+				var p2 = Main.LocalPlayer;
+				var edges = PathPlanner.DebugJumpEdges(p2, dbgCx, dbgCy, dbgSign);
+				var sb3 = new System.Text.StringBuilder();
+				sb3.Append("[");
+				for (int ei = 0; ei < edges.Count; ei++)
+				{
+					if (ei > 0) sb3.Append(',');
+					sb3.Append($"{{\"lx\":{edges[ei].lx},\"ly\":{edges[ei].ly},\"hold\":{edges[ei].hold}}}");
+				}
+				sb3.Append("]");
+				body = sb3.ToString();
+			}
+			else if (path == "/debug_jump_edges_verbose")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				int dbgCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)").Groups[1].Value);
+				int dbgCy = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cy\":(-?\\d+)").Groups[1].Value);
+				int dbgSign = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
+				body = PathPlanner.DebugJumpEdgesVerbose(Main.LocalPlayer, dbgCx, dbgCy, dbgSign);
+			}
 			else if (path == "/nav_done")
 			{
 				if (NavCoordinator.Done)
