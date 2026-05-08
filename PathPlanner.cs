@@ -193,10 +193,7 @@ namespace TerraBlind
                 var result = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!result.Landed) continue;
                 int lx = (int)((result.EndState.Px + p.width / 2f) / 16f);
-                int lyBase = (int)((result.EndState.Py + p.height) / 16f);
-                int ly = lyBase;
-                for (int scan = lyBase - 1; scan <= lyBase + 1; scan++)
-                    if (Standable(lx, scan)) { ly = scan; break; }
+                int ly = (int)((result.EndState.Py + p.height) / 16f) - 1;
                 if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;

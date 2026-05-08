@@ -21,7 +21,7 @@ namespace TerraBlind
                 return new Params
                 {
                     AccRun      = 0.08f,
-                    MaxRun      = p.maxRunSpeed > 0f ? p.maxRunSpeed : MaxRunSpeed,
+                    MaxRun      = p.wet ? 1.5f : (p.maxRunSpeed > 0f ? p.maxRunSpeed : MaxRunSpeed),
                     RunSlowdown = 0.2f,
                     Gravity     = grav,
                     MaxFall     = 10f,
@@ -124,7 +124,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH) / 16),
+                        Cy       = (int)((s.Py + PlayerH) / 16) - 1,
                     };
                 }
             }
@@ -153,7 +153,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH) / 16),
+                        Cy       = (int)((s.Py + PlayerH) / 16) - 1,
                     };
                 }
             }
