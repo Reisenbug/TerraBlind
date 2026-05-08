@@ -513,7 +513,7 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "pillar")
                     {
-                        bool atX = Math.Abs(pcx - _target.Wx) <= 1;
+                        bool atX = pcx == _target.Wx;
                         if (!atX)
                         {
                             if (_sign > 0) p.controlRight = true;
@@ -566,7 +566,11 @@ namespace TerraBlind
 
                     int feetLeft = (int)(p.position.X / 16);
                     int feetRight = (int)((p.position.X + p.width - 1) / 16);
-                    bool arrived = feetLeft <= _target.Wx && _target.Wx <= feetRight;
+                    bool arrived;
+                    if (_target.Action == "pillar")
+                        arrived = pcx == _target.Wx;
+                    else
+                        arrived = feetLeft <= _target.Wx && _target.Wx <= feetRight;
                     if (arrived)
                     {
                         EmitNodeExit(_pathIdx, "move", "done", _target.Wx, _target.Wy, pcx, feetY);
