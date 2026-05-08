@@ -65,10 +65,10 @@ namespace TerraBlind
 
         private static int[] BuildEnvelope(Player p, int maxDropTiles = 20)
         {
-            float js = Player.jumpSpeed;
-            float grav = p.gravity > 0f ? p.gravity : 0.4f;
-            int jh = Player.jumpHeight;
-            float vx = Math.Max(p.maxRunSpeed, p.accRunSpeed);
+            float js = p.wet ? 5.01f : Player.jumpSpeed;
+            float grav = p.wet ? 0.4f : (p.gravity > 0f ? p.gravity : 0.4f);
+            int jh = p.wet ? 15 : Player.jumpHeight;
+            float vx = p.wet ? 3.0f : Math.Max(p.maxRunSpeed, p.accRunSpeed);
 
             float holdSpeed = js - grav;
             float phase1Ticks = jh + 1;
