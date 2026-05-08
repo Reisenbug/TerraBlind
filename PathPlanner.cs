@@ -22,7 +22,7 @@ namespace TerraBlind
         private const float FallCost = 0.5f;         // cost per fall tile, cheaper than move to encourage natural drops
         private const float MoveCostBase = 1f;       // base cost per move tile, plus distance-to-ground penalty
 
-        private static readonly int[] HoldFrameOptions = { 8, 12, 15 };
+        public static readonly int[] HoldFrameOptions = { 8, 12, 15 };
 
         // kept for envelope visualization only
         private static int[] _envelopeCache;
@@ -142,6 +142,30 @@ namespace TerraBlind
             return (BridgeDtgThresh - dtg) * 2;
         }
 
+        private static bool ArcClipsWall(List<PhysicsSimulator.ControlInput> frames,
+            float startPx, float startPy, float startVx, int playerW, int playerH, int holdFrames)
+        {
+            var s = new PhysicsSimulator.State
+            {
+                Px = startPx, Py = startPy,
+                Vx = startVx, Vy = 0f,
+                Grounded = true,
+                JumpFramesLeft = holdFrames,
+            };
+            for (int f = 0; f < frames.Count; f++)
+            {
+                s = PhysicsSimulator.Step(s, frames[f]);
+                int tileX0 = (int)(s.Px / 16);
+                int tileX1 = (int)((s.Px + playerW - 1) / 16);
+                int tileY0 = (int)(s.Py / 16);
+                int tileY1 = (int)((s.Py + playerH - 1) / 16);
+                for (int tx = tileX0; tx <= tileX1; tx++)
+                    for (int ty = tileY0; ty <= tileY1; ty++)
+                        if (Solid(tx, ty)) return true;
+            }
+            return false;
+        }
+
         // returns list of (landCx, landCy, frames, holdFrames) for all valid jump outcomes from this tile
         private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold)>
             BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax)
@@ -169,6 +193,11 @@ namespace TerraBlind
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;
                 if (seen.Contains((lx, ly))) continue;
+                if (ArcClipsWall(result.Frames, startPx, startPy, sign * p.maxRunSpeed, p.width, p.height, hold))
+                {
+                    DiagLog.Write($"[plan] jump edge wallclip src=({cx},{cy}) target=({lx},{ly}) hold={hold}");
+                    continue;
+                }
                 seen.Add((lx, ly));
                 results.Add((lx, ly, result.Frames, hold));
             }
