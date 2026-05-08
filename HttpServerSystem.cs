@@ -542,6 +542,24 @@ namespace TerraBlind
 				NavCoordinator.Start(navSign);
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/nav_set_path")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var signMatch = System.Text.RegularExpressions.Regex.Match(reqBody.Replace(" ", ""), "\"sign\"\\s*:\\s*(-?1)");
+				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
+				var nodes = NavCoordinator.ParsePathPublic(reqBody);
+				if (nodes != null && nodes.Count > 0)
+				{
+					NavCoordinator.SetPath(navSign, nodes);
+					body = $"{{\"ok\":true,\"nodes\":{nodes.Count}}}";
+				}
+				else
+				{
+					body = "{\"ok\":false,\"error\":\"no nodes parsed\"}";
+				}
+			}
 			else if (path == "/nav_stop")
 			{
 				NavCoordinator.Stop();
@@ -736,6 +754,50 @@ namespace TerraBlind
 				}
 				sb.Append("]}");
 				body = sb.ToString();
+			}
+			else if (path == "/sim_test")
+			{
+				var p = Main.LocalPlayer;
+				if (p == null || !p.active) { body = "{\"error\":\"no_player\"}"; status = 503; }
+				else
+				{
+					string reqBody;
+					using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+						reqBody = sr.ReadToEnd();
+					var rb = reqBody.Replace(" ", "");
+					var holdM = System.Text.RegularExpressions.Regex.Match(rb, "\"hold_frames\":(\\d+)");
+					var dirM  = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\":(-?1)");
+					int holdFrames = holdM.Success ? int.Parse(holdM.Groups[1].Value) : 15;
+					int dir = dirM.Success ? int.Parse(dirM.Groups[1].Value) : 1;
+					var start = new PhysicsSimulator.State
+					{
+						Px = p.position.X, Py = p.position.Y,
+						Vx = p.velocity.X, Vy = p.velocity.Y,
+						Grounded = p.velocity.Y == 0f,
+						JumpFramesLeft = holdFrames,
+					};
+					var result = PhysicsSimulator.SimulateJump(start, dir, holdFrames);
+					var sb2 = new System.Text.StringBuilder();
+					sb2.Append("{\"landed\":").Append(result.Landed ? "true" : "false");
+					sb2.Append(",\"cx\":").Append(result.Cx).Append(",\"cy\":").Append(result.Cy);
+					sb2.Append(",\"frames\":[");
+					for (int i = 0; i < result.Frames.Count; i++)
+					{
+						if (i > 0) sb2.Append(',');
+						sb2.Append(result.Frames[i].Jump ? "1" : "0");
+					}
+					sb2.Append("]}");
+					body = sb2.ToString();
+				}
+			}
+			else if (path == "/physics_record_start")
+			{
+				PhysicsRecorder.Start();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/physics_record_stop")
+			{
+				body = PhysicsRecorder.Stop();
 			}
 			else if (path == "/health")
 			{

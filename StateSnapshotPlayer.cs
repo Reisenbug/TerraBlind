@@ -177,6 +177,7 @@ namespace TerraBlind
 			};
 
 			HttpServerSystem.LatestSnapshot = snap;
+			PhysicsRecorder.Capture(Player, Player.controlJump);
 		}
 
 		private string DetectBiome()

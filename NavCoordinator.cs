@@ -9,8 +9,10 @@ namespace TerraBlind
 
     public struct NavNode
     {
-        public int Wx, Wy;
+        public int Wx, Wy;         // landing tile (jump) / target tile (move/fall/bridge/pillar)
+        public int SourceWx, SourceWy; // jump only: tile where simulation started
         public string Action;
+        public System.Collections.Generic.List<PhysicsSimulator.ControlInput> Frames;
     }
 
     public class NavCoordinator : ModSystem
@@ -33,6 +35,8 @@ namespace TerraBlind
         private static int _lastStallPcx;
         private static int _lastStallFeetY;
         private static int _stallCount;
+        private static bool _jumpReplayLoaded;
+        private static bool _fixedPath;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -56,9 +60,31 @@ namespace TerraBlind
                 _stallCount = 0;
                 _lastStallFeetY = 0;
                 _restartCooldown = 0;
+                _jumpReplayLoaded = false;
+                _fixedPath = false;
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
+            }
+        }
+
+        public static void SetPath(int sign, List<NavNode> nodes)
+        {
+            lock (_lock)
+            {
+                _sign = sign;
+                _blacklist.Clear();
+                State = NavState.Idle;
+                _path = nodes;
+                _pathIdx = 0;
+                _stallCount = 0;
+                _lastStallFeetY = 0;
+                _restartCooldown = 0;
+                _jumpReplayLoaded = false;
+                _fixedPath = true;
+                FailReason = "";
+                _started = true;
+                DiagLog.Write($"[nav] SetPath sign={sign} nodes={nodes.Count}");
             }
         }
 
@@ -191,6 +217,7 @@ namespace TerraBlind
 
         private static void Replan(Player p)
         {
+            if (_fixedPath) { State = NavState.Done; DiagLog.Write("[nav] SetPath done"); return; }
             int pcx = Pcx(p);
             int feetY = FeetY(p);
             PurgeBlacklist();
@@ -235,6 +262,7 @@ namespace TerraBlind
             _path = newPath;
             _pathIdx = 0;
             _stallCount = 0;
+            _jumpReplayLoaded = false;
             State = NavState.Idle;
         }
 
@@ -259,14 +287,59 @@ namespace TerraBlind
         {
             var result = new List<NavNode>();
             if (string.IsNullOrEmpty(json)) return result;
-            var matches = System.Text.RegularExpressions.Regex.Matches(
-                json, "\"wx\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"wy\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"action\"\\s*:\\s*\"([^\"]+)\"");
-            foreach (System.Text.RegularExpressions.Match m in matches)
-                result.Add(new NavNode {
-                    Wx = int.Parse(m.Groups[1].Value),
-                    Wy = int.Parse(m.Groups[2].Value),
-                    Action = m.Groups[3].Value
-                });
+            var headerRe = new System.Text.RegularExpressions.Regex(
+                "\"wx\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"wy\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"action\"\\s*:\\s*\"([^\"]+)\"");
+            var sourceRe = new System.Text.RegularExpressions.Regex(
+                "\"swx\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"swy\"\\s*:\\s*(-?\\d+)");
+            var frameRe = new System.Text.RegularExpressions.Regex(
+                "\\{\"j\"\\s*:\\s*([01])\\s*,\\s*\"r\"\\s*:\\s*([01])\\s*,\\s*\"l\"\\s*:\\s*([01])\\s*\\}");
+
+            // find each top-level node by scanning for "wx": after the path array starts
+            int pathStart = json.IndexOf("\"path\":[");
+            if (pathStart < 0) return result;
+            int i = json.IndexOf('[', pathStart) + 1;
+            while (i < json.Length)
+            {
+                // skip whitespace/commas
+                while (i < json.Length && (json[i] == ',' || json[i] == ' ' || json[i] == '\n' || json[i] == '\r')) i++;
+                if (i >= json.Length || json[i] != '{') break;
+                // find matching closing brace (depth-aware)
+                int depth = 0, start = i;
+                while (i < json.Length)
+                {
+                    if (json[i] == '{') depth++;
+                    else if (json[i] == '}') { depth--; if (depth == 0) { i++; break; } }
+                    i++;
+                }
+                string nodeJson = json.Substring(start, i - start);
+                var hm = headerRe.Match(nodeJson);
+                if (!hm.Success) continue;
+                var node = new NavNode
+                {
+                    Wx = int.Parse(hm.Groups[1].Value),
+                    Wy = int.Parse(hm.Groups[2].Value),
+                    Action = hm.Groups[3].Value,
+                };
+                if (node.Action == "jump")
+                {
+                    var sm = sourceRe.Match(nodeJson);
+                    if (sm.Success)
+                    {
+                        node.SourceWx = int.Parse(sm.Groups[1].Value);
+                        node.SourceWy = int.Parse(sm.Groups[2].Value);
+                    }
+                    var frames = new List<PhysicsSimulator.ControlInput>();
+                    foreach (System.Text.RegularExpressions.Match fm in frameRe.Matches(nodeJson))
+                        frames.Add(new PhysicsSimulator.ControlInput
+                        {
+                            Jump  = fm.Groups[1].Value == "1",
+                            Right = fm.Groups[2].Value == "1",
+                            Left  = fm.Groups[3].Value == "1",
+                        });
+                    node.Frames = frames.Count > 0 ? frames : null;
+                }
+                result.Add(node);
+            }
             return result;
         }
 
@@ -290,7 +363,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.Jump && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -334,18 +407,66 @@ namespace TerraBlind
                             Replan(p);
                             return;
                         }
-                        bool overshoot = _sign > 0 ? pcx > _target.Wx : pcx < _target.Wx;
-                        if (overshoot)
+                        if (_target.Frames != null && _target.Frames.Count > 0)
                         {
-                            DiagLog.Write($"[nav] jump overshoot pcx={pcx} target={_target.Wx} → replan");
-                            EmitNavFailed("jump_overshoot", _pathIdx, "jump", pcx, feetY);
-                            Replan(p);
-                            return;
+                            // re-simulate from actual current state, skip precision alignment
+                            var startState = new PhysicsSimulator.State
+                            {
+                                Px = p.position.X,
+                                Py = p.position.Y,
+                                Vx = p.velocity.X,
+                                Vy = 0f,
+                                Grounded = true,
+                                JumpFramesLeft = _target.Frames.Count,
+                            };
+                            int holdFrames = 0;
+                            foreach (var fi in _target.Frames) { if (fi.Jump) holdFrames++; else break; }
+                            var sim = PhysicsSimulator.SimulateJump(startState, _sign, holdFrames);
+                            List<ReplayFrame> replayFrames;
+                            if (sim.Landed)
+                            {
+                                replayFrames = new List<ReplayFrame>();
+                                foreach (var fi in sim.Frames)
+                                    replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                                DiagLog.Write($"[nav] jump resim landed=({sim.Cx},{sim.Cy}) target=({_target.Wx},{_target.Wy}) frames={replayFrames.Count}");
+                            }
+                            else
+                            {
+                                replayFrames = new List<ReplayFrame>();
+                                foreach (var fi in _target.Frames)
+                                    replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                                DiagLog.Write($"[nav] jump resim failed, using planned frames={replayFrames.Count}");
+                            }
+                            _jumpReplayLoaded = true;
+                            ReplaySystem.Load(replayFrames);
+                            DiagLog.Write($"[nav] jump replay start frames={replayFrames.Count} src=({_target.SourceWx},{_target.SourceWy}) target=({_target.Wx},{_target.Wy})");
                         }
-                        var jp = Main.LocalPlayer;
-                        float launchX = jp.position.X + jp.width / 2f;
-                        float targetX = _target.Wx * 16f + 8f + (_sign > 0 ? 16f : -16f);
-                        JumpCoordinator.Start(_sign > 0, launchX, targetX);
+                        else
+                        {
+                            // no planned frames: resim from current state with default hold
+                            var startState = new PhysicsSimulator.State
+                            {
+                                Px = p.position.X, Py = p.position.Y,
+                                Vx = p.velocity.X, Vy = 0f,
+                                Grounded = true, JumpFramesLeft = Player.jumpHeight,
+                            };
+                            var sim = PhysicsSimulator.SimulateJump(startState, _sign, Player.jumpHeight);
+                            var replayFrames = new List<ReplayFrame>();
+                            var srcFrames = sim.Landed ? sim.Frames : new List<PhysicsSimulator.ControlInput>();
+                            foreach (var fi in srcFrames)
+                                replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                            DiagLog.Write($"[nav] jump resim(noframes) landed={sim.Landed} cx={sim.Cx} target={_target.Wx} frames={replayFrames.Count}");
+                            if (replayFrames.Count > 0)
+                            {
+                                _jumpReplayLoaded = true;
+                                ReplaySystem.Load(replayFrames);
+                            }
+                            else
+                            {
+                                Replan(p);
+                                return;
+                            }
+                        }
                         State = NavState.Jump;
                     }
                     else if (_target.Action == "bridge")
@@ -357,7 +478,7 @@ namespace TerraBlind
                         int rise = feetY - _target.Wy;
                         DiagLog.Write($"[nav] pillar rise={rise} from ({pcx},{feetY}) to ({_target.Wx},{_target.Wy})");
                         State = NavState.Pillar;
-                        SkillExecutor.StartPillarJump(_sign > 0, rise);
+                        SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                     }
                     else if (_target.Action == "fall")
                     {
@@ -368,8 +489,9 @@ namespace TerraBlind
                         int streakEndY = GetStreakEndY(_pathIdx);
                         if (feetY - streakEndY > PillarThresh)
                         {
+                            DiagLog.Write($"[nav] forced pillar feetY={feetY} streakEndY={streakEndY} rise={feetY - streakEndY}");
                             State = NavState.Pillar;
-                            SkillExecutor.StartPillarJump(_sign > 0, feetY - streakEndY);
+                            SkillExecutor.StartPillarJump(_sign > 0, streakEndY);
                         }
                         else
                         {
@@ -381,6 +503,22 @@ namespace TerraBlind
 
                 if (State == NavState.Move)
                 {
+                    // if next node is a replay jump, hand off early when within 16px of source tile
+                    int nextIdx = _pathIdx + 1;
+                    if (nextIdx < _path.Count && _path[nextIdx].Action == "jump" && _path[nextIdx].Frames != null)
+                    {
+                        float launchX = _path[nextIdx].SourceWx * 16f + 8f;
+                        float distToLaunch = _sign > 0 ? launchX - centerX : centerX - launchX;
+                        if (distToLaunch <= 16f)
+                        {
+                            DiagLog.Write($"[nav] move→jump handoff cx={centerX:0.##} launchX={launchX:0.##} diff={centerX - launchX:0.##}");
+                            EmitNodeExit(_pathIdx, "move", "done", _target.Wx, _target.Wy, pcx, feetY);
+                            _pathIdx++;
+                            State = NavState.Idle;
+                            return;
+                        }
+                    }
+
                     int feetLeft = (int)(p.position.X / 16);
                     int feetRight = (int)((p.position.X + p.width - 1) / 16);
                     bool arrived = feetLeft <= _target.Wx && _target.Wx <= feetRight;
@@ -416,15 +554,49 @@ namespace TerraBlind
 
                 if (State == NavState.Jump)
                 {
-                    if (_prevVY > 0f && p.velocity.Y == 0f)
+                    if (_target.Frames != null)
                     {
-                        int expWx = JumpCoordinator.PredictedLandWx >= 0 ? JumpCoordinator.PredictedLandWx : _target.Wx;
-                        int expWy = JumpCoordinator.PredictedLandWy >= 0 ? JumpCoordinator.PredictedLandWy : _target.Wy;
-                        DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) predicted ({expWx},{expWy}) astar ({_target.Wx},{_target.Wy})");
-                        EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
-                        JumpCoordinator.Stop();
-                        _pathIdx++;
-                        State = NavState.Idle;
+                        // phase 1: JumpCoordinator doing precision alignment
+                        if (JumpCoordinator.IsActive) { _prevVY = p.velocity.Y; return; }
+
+                        // phase 2: alignment done, load replay once
+                        if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
+                        {
+                            _jumpReplayLoaded = true;
+                            var replayFrames = new List<ReplayFrame>();
+                            foreach (var fi in _target.Frames)
+                                replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                            ReplaySystem.Load(replayFrames);
+                            float alignedCx = p.position.X + p.width / 2f;
+                            float srcX = _target.SourceWx * 16f + 8f;
+                            DiagLog.Write($"[nav] jump replay start frames={replayFrames.Count} src=({_target.SourceWx},{_target.SourceWy}) target=({_target.Wx},{_target.Wy}) align_diff={alignedCx - srcX:0.##}");
+                            _prevVY = p.velocity.Y;
+                            return;
+                        }
+
+                        // phase 3: replay done, wait for landing
+                        if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y == 0f)
+                        {
+                            int landedCx = (int)((p.position.X + p.width / 2f) / 16);
+                            DiagLog.Write($"[nav] jump replay landed px={p.position.X:0.##} cx={landedCx} target_cx={_target.Wx} delta={landedCx - _target.Wx}");
+                            EmitNodeExit(_pathIdx, "jump", "done", _target.Wx, _target.Wy, pcx, feetY);
+                            _jumpReplayLoaded = false;
+                            _pathIdx++;
+                            State = NavState.Idle;
+                        }
+                    }
+                    else
+                    {
+                        if (_prevVY > 0f && p.velocity.Y == 0f)
+                        {
+                            int expWx = JumpCoordinator.PredictedLandWx >= 0 ? JumpCoordinator.PredictedLandWx : _target.Wx;
+                            int expWy = JumpCoordinator.PredictedLandWy >= 0 ? JumpCoordinator.PredictedLandWy : _target.Wy;
+                            DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) predicted ({expWx},{expWy}) astar ({_target.Wx},{_target.Wy})");
+                            EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
+                            JumpCoordinator.Stop();
+                            _pathIdx++;
+                            State = NavState.Idle;
+                        }
                     }
                     _prevVY = p.velocity.Y;
                     return;
@@ -532,9 +704,31 @@ namespace TerraBlind
                 {
                     _target = n;
                     EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
-                    float launchX = p.position.X + p.width / 2f;
-                    float targetX = n.Wx * 16f + 8f + (_sign > 0 ? 16f : -16f);
-                    JumpCoordinator.Start(_sign > 0, launchX, targetX);
+                    if (n.Frames != null && n.Frames.Count > 0)
+                    {
+                        var startState = new PhysicsSimulator.State
+                        {
+                            Px = p.position.X, Py = p.position.Y,
+                            Vx = p.velocity.X, Vy = 0f,
+                            Grounded = true, JumpFramesLeft = n.Frames.Count,
+                        };
+                        int holdFrames = 0;
+                        foreach (var fi in n.Frames) { if (fi.Jump) holdFrames++; else break; }
+                        var sim = PhysicsSimulator.SimulateJump(startState, _sign, holdFrames);
+                        var replayFrames = new List<ReplayFrame>();
+                        var srcFrames = sim.Landed ? sim.Frames : n.Frames;
+                        foreach (var fi in srcFrames)
+                            replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                        DiagLog.Write($"[nav] jump resim(adv) landed={sim.Landed} frames={replayFrames.Count}");
+                        _jumpReplayLoaded = true;
+                        ReplaySystem.Load(replayFrames);
+                    }
+                    else
+                    {
+                        float launchX = p.position.X + p.width / 2f;
+                        float targetX = n.Wx * 16f + 8f + (_sign > 0 ? 16f : -16f);
+                        JumpCoordinator.Start(_sign > 0, launchX, targetX);
+                    }
                     State = NavState.Jump;
                     return;
                 }
@@ -552,7 +746,7 @@ namespace TerraBlind
                 bool passed = fLeft <= n.Wx && n.Wx <= fRight;
                 if (passed) { _pathIdx++; continue; }
                 int streakEndY = GetStreakEndY(_pathIdx);
-                if (feetY - streakEndY > PillarThresh) { State = NavState.Idle; return; }
+                if (feetY - streakEndY > PillarThresh) { DiagLog.Write($"[nav] AdvanceMove forced pillar feetY={feetY} streakEndY={streakEndY} rise={feetY - streakEndY}"); State = NavState.Idle; return; }
                 _target = n;
                 EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
                 State = NavState.Move;

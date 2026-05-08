@@ -13,6 +13,7 @@ namespace TerraBlind
         private static float _targetX = 0f;
         private static bool _jumped = false;
         private static int _jumpFramesLeft = 0;
+        private static bool _replayMode = false;
 
         public static int PredictedLandWx = -1;
         public static int PredictedLandWy = -1;
@@ -55,6 +56,21 @@ namespace TerraBlind
             PredictedLandWy = -1;
         }
 
+        // Start for replay-driven jump: only need precision alignment, no SimulateLanding
+        public static void StartReplay(bool dirRight, float launchX)
+        {
+            lock (_lock)
+            {
+                _dirRight = dirRight;
+                _launchX = launchX;
+                _targetX = launchX;
+                _jumped = false;
+                _jumpFramesLeft = 0;
+                _replayMode = true;
+                _active = true;
+            }
+        }
+
         public static void Start(bool dirRight, float launchX, float targetX)
         {
             lock (_lock)
@@ -64,6 +80,7 @@ namespace TerraBlind
                 _targetX = targetX;
                 _jumped = false;
                 _jumpFramesLeft = 0;
+                _replayMode = false;
                 _active = true;
             }
         }
@@ -81,28 +98,54 @@ namespace TerraBlind
                 var p = Main.LocalPlayer;
                 if (p == null || !p.active) return;
 
+                float centerX = p.position.X + p.width / 2f;
+                float targetVx = _dirRight ? p.maxRunSpeed : -p.maxRunSpeed;
+
                 if (!_jumped)
                 {
-                    if (_dirRight) p.controlRight = true;
-                    else p.controlLeft = true;
-
-                    float centerX = p.position.X + p.width / 2f;
                     float dist = _dirRight ? _launchX - centerX : centerX - _launchX;
-                    if (dist <= 8f)
+
+                    if (dist > 16f)
+                    {
+                        // phase 1: coarse approach
+                        if (_dirRight) p.controlRight = true;
+                        else p.controlLeft = true;
+                        return;
+                    }
+
+                    // phase 1.5: fire when centerX passes through launchX window at near-maxRunSpeed
+                    float vxDiff = p.velocity.X - targetVx;
+                    bool vxOk = System.Math.Abs(vxDiff) < 0.5f;  // must be moving in right direction near full speed
+                    bool posOk = System.Math.Abs(centerX - _launchX) <= 4f;
+
+                    if (posOk && vxOk)
                     {
                         _jumped = true;
+                        if (_replayMode)
+                        {
+                            DiagLog.Write($"[jump] takeoff replay cx={centerX:0.##} vx={p.velocity.X:0.##} launchX={_launchX:0.##} diff={centerX-_launchX:0.##}");
+                            _active = false;
+                            return;
+                        }
                         _jumpFramesLeft = Player.jumpHeight + 2;
                         SimulateLanding(p, Player.jumpHeight);
-                        DiagLog.Write($"[jump] takeoff cx={centerX:0.#} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} targetX={_targetX:0.#}");
+                        DiagLog.Write($"[jump] takeoff cx={centerX:0.##} vx={p.velocity.X:0.##} launchX={_launchX:0.##} diff={centerX-_launchX:0.##}");
                         p.controlJump = true;
+                        return;
                     }
+
+                    // approach launchX
+                    bool needRight = centerX < _launchX;
+                    if (needRight) p.controlRight = true;
+                    else p.controlLeft = true;
                     return;
                 }
 
+                // phase 2: in-air (non-replay mode only)
                 if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
 
-                float cx = p.position.X + p.width / 2f;
-                bool pastTarget = _dirRight ? cx >= _targetX - 48f : cx <= _targetX + 48f;
+                float cx2 = p.position.X + p.width / 2f;
+                bool pastTarget = _dirRight ? cx2 >= _targetX - 48f : cx2 <= _targetX + 48f;
                 if (!pastTarget)
                 {
                     if (_dirRight) p.controlRight = true;

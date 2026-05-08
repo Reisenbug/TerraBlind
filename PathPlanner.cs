@@ -22,6 +22,9 @@ namespace TerraBlind
         private const float FallCost = 0.5f;         // cost per fall tile, cheaper than move to encourage natural drops
         private const float MoveCostBase = 1f;       // base cost per move tile, plus distance-to-ground penalty
 
+        private static readonly int[] HoldFrameOptions = { 8, 12, 15 };
+
+        // kept for envelope visualization only
         private static int[] _envelopeCache;
         public static int[] GetEnvelopeCache() => _envelopeCache;
 
@@ -63,43 +66,6 @@ namespace TerraBlind
             return maxDepth;
         }
 
-        private static int[] BuildEnvelope(Player p, int maxDropTiles = 20)
-        {
-            float js = p.wet ? 5.01f : Player.jumpSpeed;
-            float grav = p.wet ? 0.4f : (p.gravity > 0f ? p.gravity : 0.4f);
-            int jh = p.wet ? 15 : Player.jumpHeight;
-            float vx = p.wet ? 3.0f : Math.Max(p.maxRunSpeed, p.accRunSpeed);
-
-            float holdSpeed = js - grav;
-            float phase1Ticks = jh + 1;
-            float phase2Ticks = holdSpeed / grav;
-            float peakT = phase1Ticks + phase2Ticks;
-            float peakRisePx = holdSpeed * phase1Ticks + holdSpeed * phase2Ticks - 0.5f * grav * phase2Ticks * phase2Ticks;
-
-            var envList = new System.Collections.Generic.List<int>();
-            for (int col = 0; ; col++)
-            {
-                float t = col * 16f / Math.Max(vx, 0.01f);
-                float risePx;
-                if (t <= phase1Ticks)
-                    risePx = holdSpeed * t;
-                else if (t <= peakT)
-                {
-                    float dt = t - phase1Ticks;
-                    risePx = holdSpeed * phase1Ticks + holdSpeed * dt - 0.5f * grav * dt * dt;
-                }
-                else
-                {
-                    float dt = t - peakT;
-                    risePx = peakRisePx - 0.5f * grav * dt * dt;
-                }
-                int dy = (int)(-risePx / 16f);
-                envList.Add(dy);
-                if (dy >= maxDropTiles) break;
-            }
-            return envList.ToArray();
-        }
-
         private static bool CanProgress(int gx, int gy, int sign, int K)
         {
             var visited = new HashSet<(int, int)>();
@@ -137,6 +103,39 @@ namespace TerraBlind
             return (BridgeDtgThresh - dtg) * 2;
         }
 
+        // returns list of (landCx, landCy, frames, holdFrames) for all valid jump outcomes from this tile
+        private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold)>
+            BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax)
+        {
+            var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int)>();
+            var seen = new HashSet<(int, int)>();
+
+            float startPx = cx * 16f - (p.width / 2f) + 8f;
+            float startPy = cy * 16f - p.height;
+
+            foreach (int hold in HoldFrameOptions)
+            {
+                var startState = new PhysicsSimulator.State
+                {
+                    Px = startPx, Py = startPy,
+                    Vx = sign * p.maxRunSpeed,
+                    Vy = 0f,
+                    Grounded = true,
+                    JumpFramesLeft = hold,
+                };
+                var result = PhysicsSimulator.SimulateJump(startState, sign, hold);
+                if (!result.Landed) continue;
+                int lx = result.Cx, ly = result.Cy;
+                if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
+                if (sign * (lx - cx) < JumpMinCol) continue;
+                if (!Standable(lx, ly)) continue;
+                if (seen.Contains((lx, ly))) continue;
+                seen.Add((lx, ly));
+                results.Add((lx, ly, result.Frames, hold));
+            }
+            return results;
+        }
+
         public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
         {
             var p = Main.LocalPlayer;
@@ -158,8 +157,8 @@ namespace TerraBlind
             if (excludedGoals != null) { foreach (var eg in excludedGoals) excludedArr.Append($"[{eg.Item1},{eg.Item2}],"); }
             DiagLog.WriteEvent($"{{\"e\":\"plan_start\",\"tick\":{Main.GameUpdateCount},\"sign\":{sign},\"px\":{pcx},\"py\":{feetY},\"excluded_goals\":[{excludedArr.ToString().TrimEnd(',')}]}}");
 
-            var envelope = BuildEnvelope(p, 50);
-            _envelopeCache = envelope;
+            // build envelope cache for visualization only
+            _envelopeCache = BuildEnvelopeVis(p);
 
             int xMin = sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd;
             int xMax = sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack;
@@ -196,14 +195,14 @@ namespace TerraBlind
             DiagLog.Write($"[plan] goal=({goalX},{goalY}) start=({pcx},{feetY})");
 
             var g = new Dictionary<(int, int), float>();
-            var prev = new Dictionary<(int, int), ((int, int), string)>();
+            var prev = new Dictionary<(int, int), ((int, int), string, List<PhysicsSimulator.ControlInput>)>();
             var visited = new HashSet<(int, int)>();
             var bridgeNodes = new HashSet<(int, int)>();
             var heap = new PriorityQueue<(int wx, int wy), float>();
 
-            var start = (pcx, feetY);
-            g[start] = 0f;
-            prev[start] = ((-1, -1), "");
+            var startNode = (pcx, feetY);
+            g[startNode] = 0f;
+            prev[startNode] = ((-1, -1), "", null);
             heap.Enqueue((pcx, feetY), Math.Abs(goalX - pcx) + Math.Abs(goalY - feetY));
 
             while (heap.Count > 0)
@@ -214,7 +213,7 @@ namespace TerraBlind
                 visited.Add((cx, cy));
 
                 if (cx == goalX && cy == goalY)
-                    return BuildResult(prev, g, goalX, goalY, start);
+                    return BuildResult(prev, g, goalX, goalY, startNode);
 
                 float curG = g.TryGetValue((cx, cy), out var cg) ? cg : float.MaxValue;
 
@@ -233,7 +232,7 @@ namespace TerraBlind
                     {
                         g[(nx, ny)] = ng;
                         string action = dy == 1 ? "fall" : "move";
-                        prev[(nx, ny)] = ((cx, cy), action);
+                        prev[(nx, ny)] = ((cx, cy), action, null);
                         float h = Math.Abs(goalX - nx) + Math.Abs(goalY - ny);
                         heap.Enqueue((nx, ny), ng + h);
                     }
@@ -243,41 +242,23 @@ namespace TerraBlind
                     && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
                 if (canJump)
                 {
-                    foreach (int js in new[] { sign })
+                    var jumpEdges = BuildJumpEdges(p, cx, cy, sign, xMin, xMax, yMin, yMax);
+                    foreach (var (lx, ly, frames, hold) in jumpEdges)
                     {
-                        for (int col = JumpMinCol; col < envelope.Length; col++)
+                        int rise = cy - ly;
+                        float riseBonus = Math.Max(0, rise - 1) * 2f;
+                        int col = Math.Abs(lx - cx);
+                        int maxHold = HoldFrameOptions[HoldFrameOptions.Length - 1];
+                        float efficiency = maxHold > 0 ? (float)hold / maxHold : 1f;
+                        float jumpOverhead = JumpOverheadMax * (1f - efficiency);
+                        float cost = Math.Max(col + jumpOverhead - riseBonus, 1f);
+                        float ng = curG + cost;
+                        if (ng < g.GetValueOrDefault((lx, ly), float.MaxValue))
                         {
-                            int nx = cx + js * col;
-                            if (nx < xMin || nx > xMax) break;
-                            int arcDy = envelope[col];
-                            bool blocked = false;
-                            for (int i = 1; i < col; i++)
-                            {
-                                int arcY = cy + envelope[i];
-                                int bx = cx + js * i;
-                                if (Solid(bx, arcY) || Solid(bx, arcY - 1)) { blocked = true; break; }
-                            }
-                            if (blocked) continue;
-                            int ny = cy + arcDy;
-                            if (ny >= yMin && ny <= yMax && Standable(nx, ny))
-                            {
-                                {
-                                    int rise = cy - ny;
-                                    float riseBonus = Math.Max(0, rise - 1) * 2f;
-                                    int maxCol = envelope.Length - 1;
-                                    float efficiency = maxCol > 0 ? (float)col / maxCol : 1f;
-                                    float jumpOverhead = JumpOverheadMax * (1f - efficiency);
-                                    float cost = Math.Max(col + jumpOverhead - riseBonus, 1f);
-                                    float ng = curG + cost;
-                                    if (ng < g.GetValueOrDefault((nx, ny), float.MaxValue))
-                                    {
-                                        g[(nx, ny)] = ng;
-                                        prev[(nx, ny)] = ((cx, cy), "jump");
-                                        float h = Math.Abs(goalX - nx) + Math.Abs(goalY - ny);
-                                        heap.Enqueue((nx, ny), ng + h);
-                                    }
-                                }
-                            }
+                            g[(lx, ly)] = ng;
+                            prev[(lx, ly)] = ((cx, cy), "jump", frames);
+                            float h = Math.Abs(goalX - lx) + Math.Abs(goalY - ly);
+                            heap.Enqueue((lx, ly), ng + h);
                         }
                     }
                 }
@@ -291,16 +272,20 @@ namespace TerraBlind
                         if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
                         {
                             int rise = cy - topY;
+                            // check full vertical clearance from launch point: rise + 2 tiles above cy
+                            bool blocked = false;
+                            for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
+                                if (Solid(cx, checkY)) { blocked = true; break; }
+                            if (blocked) continue;
                             float cost = curG + 3f + rise;
                             if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
                             {
                                 g[(cx, topY)] = cost;
                                 bridgeNodes.Add((cx, topY));
-                                prev[(cx, topY)] = ((cx, cy), "pillar");
+                                prev[(cx, topY)] = ((cx, cy), "pillar", null);
                                 float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
                                 heap.Enqueue((cx, topY), cost + h);
                             }
-                            // don't break — keep scanning upward for higher landing spots
                         }
                     }
                 }
@@ -322,7 +307,7 @@ namespace TerraBlind
                             {
                                 g[(nx, cy)] = ng;
                                 bridgeNodes.Add((nx, cy));
-                                prev[(nx, cy)] = ((cx, cy), "bridge");
+                                prev[(nx, cy)] = ((cx, cy), "bridge", null);
                                 float h = Math.Abs(goalX - nx) + Math.Abs(goalY - cy);
                                 heap.Enqueue((nx, cy), ng + h);
                             }
@@ -331,7 +316,7 @@ namespace TerraBlind
                 }
             }
 
-            (int, int) best = start;
+            (int, int) best = startNode;
             int bestFwd = 0;
             int bestWy = int.MaxValue;
             foreach (var kv in g)
@@ -342,26 +327,27 @@ namespace TerraBlind
                 if (!Standable(wx, wy)) continue;
                 if (wy < bestWy || (wy == bestWy && fwd > bestFwd)) { bestFwd = fwd; bestWy = wy; best = (wx, wy); }
             }
-            if (best == start || bestFwd <= 0)
+            if (best == startNode || bestFwd <= 0)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");
-            return BuildResult(prev, g, best.Item1, best.Item2, start);
+            return BuildResult(prev, g, best.Item1, best.Item2, startNode);
         }
 
         private static string BuildResult(
-            Dictionary<(int, int), ((int, int), string)> prev,
+            Dictionary<(int, int), ((int, int), string, List<PhysicsSimulator.ControlInput>)> prev,
             Dictionary<(int, int), float> g,
             int wx, int wy, (int, int) start)
         {
-            var path = new List<(int wx, int wy, string action)>();
+            // path entry: (landWx, landWy, sourceWx, sourceWy, action, frames)
+            var path = new List<(int wx, int wy, int swx, int swy, string action, List<PhysicsSimulator.ControlInput> frames)>();
             var pos = (wx, wy);
             while (prev.TryGetValue(pos, out var entry) && entry.Item1 != (-1, -1))
             {
-                path.Add((pos.Item1, pos.Item2, entry.Item2));
+                path.Add((pos.Item1, pos.Item2, entry.Item1.Item1, entry.Item1.Item2, entry.Item2, entry.Item3));
                 pos = entry.Item1;
             }
             path.Reverse();
@@ -373,7 +359,25 @@ namespace TerraBlind
                 if (i > 0) sb.Append(',');
                 sb.Append("{\"wx\":").Append(path[i].wx)
                   .Append(",\"wy\":").Append(path[i].wy)
-                  .Append(",\"action\":\"").Append(path[i].action).Append("\"}");
+                  .Append(",\"action\":\"").Append(path[i].action).Append("\"");
+                if (path[i].action == "jump" && path[i].frames != null)
+                {
+                    sb.Append(",\"swx\":").Append(path[i].swx)
+                      .Append(",\"swy\":").Append(path[i].swy);
+                    sb.Append(",\"frames\":[");
+                    var frames = path[i].frames;
+                    for (int fi = 0; fi < frames.Count; fi++)
+                    {
+                        if (fi > 0) sb.Append(',');
+                        var f = frames[fi];
+                        sb.Append("{\"j\":").Append(f.Jump ? "1" : "0")
+                          .Append(",\"r\":").Append(f.Right ? "1" : "0")
+                          .Append(",\"l\":").Append(f.Left ? "1" : "0")
+                          .Append("}");
+                    }
+                    sb.Append("]");
+                }
+                sb.Append("}");
             }
             sb.Append("],\"goal\":[").Append(wx).Append(',').Append(wy).Append("]");
             sb.Append(",\"cost\":").Append(cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
@@ -390,6 +394,44 @@ namespace TerraBlind
             DiagLog.WriteEvent(evSb.ToString());
 
             return sb.ToString();
+        }
+
+        // envelope for visualization only, not used for edge generation
+        private static int[] BuildEnvelopeVis(Player p)
+        {
+            float js = p.wet ? 5.01f : Player.jumpSpeed;
+            float grav = p.wet ? 0.4f : (p.gravity > 0f ? p.gravity : 0.4f);
+            int jh = p.wet ? 15 : Player.jumpHeight;
+            float vx = p.wet ? 3.0f : Math.Max(p.maxRunSpeed, p.accRunSpeed);
+
+            float holdSpeed = js - grav;
+            float phase1Ticks = jh + 1;
+            float phase2Ticks = holdSpeed / grav;
+            float peakT = phase1Ticks + phase2Ticks;
+            float peakRisePx = holdSpeed * phase1Ticks + holdSpeed * phase2Ticks - 0.5f * grav * phase2Ticks * phase2Ticks;
+
+            var envList = new List<int>();
+            for (int col = 0; ; col++)
+            {
+                float t = col * 16f / Math.Max(vx, 0.01f);
+                float risePx;
+                if (t <= phase1Ticks)
+                    risePx = holdSpeed * t;
+                else if (t <= peakT)
+                {
+                    float dt = t - phase1Ticks;
+                    risePx = holdSpeed * phase1Ticks + holdSpeed * dt - 0.5f * grav * dt * dt;
+                }
+                else
+                {
+                    float dt = t - peakT;
+                    risePx = peakRisePx - 0.5f * grav * dt * dt;
+                }
+                int dy = (int)(-risePx / 16f);
+                envList.Add(dy);
+                if (dy >= 50) break;
+            }
+            return envList.ToArray();
         }
     }
 }

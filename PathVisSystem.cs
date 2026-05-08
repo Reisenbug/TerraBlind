@@ -83,7 +83,24 @@ namespace TerraBlind
                 int wx = path[i].Wx, wy = path[i].Wy;
                 string action = path[i].Action;
 
-                if (action == "jump" && prevWx >= 0 && envelope != null)
+                if (action == "jump" && path[i].Frames != null && path[i].Frames.Count > 0)
+                {
+                    int swx = path[i].SourceWx, swy = path[i].SourceWy;
+                    var s = new PhysicsSimulator.State
+                    {
+                        Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,
+                        Py = swy * 16f - PhysicsSimulator.PlayerH,
+                        Vx = wx > swx ? PhysicsSimulator.MaxRunSpeed : -PhysicsSimulator.MaxRunSpeed,
+                        Vy = 0f, Grounded = true,
+                        JumpFramesLeft = path[i].Frames.Count,
+                    };
+                    foreach (var fi in path[i].Frames)
+                    {
+                        s = PhysicsSimulator.Step(s, fi);
+                        DrawDot(spriteBatch, s.Px + PhysicsSimulator.PlayerW / 2f, s.Py + PhysicsSimulator.PlayerH, new Color(100, 255, 100, 160));
+                    }
+                }
+                else if (action == "jump" && prevWx >= 0 && envelope != null)
                 {
                     int js = wx > prevWx ? 1 : -1;
                     int adx = System.Math.Abs(wx - prevWx);
@@ -152,6 +169,15 @@ namespace TerraBlind
             if (sx < -16 || sx > Main.screenWidth + 16) return;
             if (sy < -16 || sy > Main.screenHeight + 16) return;
             sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), c);
+        }
+
+        private void DrawDot(SpriteBatch sb, float px, float py, Color c)
+        {
+            float sx = px - Main.screenPosition.X;
+            float sy = py - Main.screenPosition.Y;
+            if (sx < -4 || sx > Main.screenWidth + 4) return;
+            if (sy < -4 || sy > Main.screenHeight + 4) return;
+            sb.Draw(_pixel, new Rectangle((int)sx - 2, (int)sy - 2, 4, 4), c);
         }
     }
 }

@@ -23,18 +23,65 @@ namespace TerraBlind
         private static float _targetX;
         private static bool _targetXSet;
         private static SkillState _settleNext;
+        private static int _prevFeetY;
 
-        private const int JumpHoldFrames = 15;
-        private const int RestFrames = 10;
         private const int WaitFrames = 10;
+        private const int JumpHoldFrames = 15;
         private const int LaunchFrames = 20;
+
+        // pillar_jump_2_height.json fully expanded (43 frames)
+        private static readonly (bool jump, bool use, float mx, float my)[] PillarCycleFrames = {
+            (true,  false, -0.1f, 1.7f),
+            (true,  false, -0.1f, 1.7f),
+            (true,  true,  -0.1f, 1.6f),
+            (true,  true,  -0.1f, 1.7f),
+            (true,  true,  -0.1f, 1.7f),
+            (true,  true,  -0.1f, 1.9f),
+            (true,  true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.6f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+            (false, true,  -0.1f, 1.7f),
+        };
 
         public static bool IsActive => State != SkillState.Idle;
 
-        public static void StartPillarJump(bool dirRight, int riseTiles)
+        public static void StartPillarJump(bool dirRight, int targetWy)
         {
             DirectionRight = dirRight;
-            _targetRiseTiles = riseTiles;
+            _targetRiseTiles = targetWy;
             _jumpFramesLeft = 0;
             _cycleTick = 0;
             _cyclesDone = 0;
@@ -65,6 +112,8 @@ namespace TerraBlind
             PlaceCoordinator.Stop();
         }
 
+        private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
+
         private static int FindPlatformSlot(Player p)
         {
             for (int i = 0; i < 10; i++)
@@ -91,47 +140,37 @@ namespace TerraBlind
             if (State == SkillState.PillarBuild)
             {
                 if (platformSlot < 0) { Stop(); return; }
-                Main.SmartCursorWanted_Mouse = false;
-                if (!_placeStarted)
+                int headTileY = (int)(p.position.Y / 16f);
+                if (Main.tile[Pcx(p), headTileY - 1] is { HasTile: true } ht && Main.tileSolid[ht.TileType])
                 {
-                    PlaceCoordinator.Start(new PlaceRequest { Dx = 0, Dy = 0, Slot = platformSlot, RemainingFrames = 600 });
-                    _placeStarted = true;
+                    DiagLog.Write($"[pillar] head blocked at ({Pcx(p)},{headTileY - 1}), stopping");
+                    Stop();
+                    return;
                 }
-                int cycleLen = JumpHoldFrames + RestFrames;
-                if ((_cycleTick % cycleLen) < JumpHoldFrames)
+                int feetYNow = (int)((p.position.Y + p.height) / 16f);
+                if (feetYNow <= _targetRiseTiles)
                 {
-                    if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
-                }
-                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
-                else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
-                _cycleTick++;
-                if (_cycleTick >= cycleLen) { _cycleTick = 0; _cyclesDone++; }
-                if (_cyclesDone >= _targetRiseTiles)
-                {
-                    PlaceCoordinator.Stop();
+                    DiagLog.Write($"[pillar] reached feetY={feetYNow} targetWy={_targetRiseTiles}");
+                    ReplaySystem.Stop();
                     _phaseTick = 0;
-                    _jumpFramesLeft = 0;
                     State = SkillState.PillarWait;
+                    return;
+                }
+                if (!ReplaySystem.IsActive)
+                {
+                    _cyclesDone++;
+                    DiagLog.Write($"[pillar] cycle={_cyclesDone} feetY={feetYNow} targetWy={_targetRiseTiles}");
+                    var frames = new System.Collections.Generic.List<ReplayFrame>();
+                    foreach (var (jump, use, mx, my) in PillarCycleFrames)
+                        frames.Add(new ReplayFrame { Jump = jump, UseItem = use, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = my });
+                    ReplaySystem.Load(frames);
                 }
                 return;
             }
 
             if (State == SkillState.PillarWait)
             {
-                _phaseTick++;
-                if (_phaseTick >= WaitFrames) { _phaseTick = 0; State = SkillState.PillarLaunch; }
-                return;
-            }
-
-            if (State == SkillState.PillarLaunch)
-            {
-                if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
-                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
-                else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
-                if (DirectionRight) p.controlRight = true;
-                else p.controlLeft = true;
-                _phaseTick++;
-                if (_phaseTick >= LaunchFrames) Stop();
+                if (p.velocity.Y == 0f) Stop();
                 return;
             }
 
