@@ -169,6 +169,7 @@ namespace TerraBlind
         // re-simulate jump from current player state, pick hold that lands closest to targetWx
         private static (List<ReplayFrame> frames, int simCx, int simCy, int hold) ResimJump(Player p, int sign, int targetWx, int fallbackHold)
         {
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
             var startState = new PhysicsSimulator.State
             {
                 Px = p.position.X, Py = p.position.Y,
@@ -181,7 +182,7 @@ namespace TerraBlind
             foreach (int hold in PathPlanner.HoldFrameOptions)
             {
                 startState.JumpFramesLeft = hold;
-                var sim = PhysicsSimulator.SimulateJump(startState, sign, hold);
+                var sim = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!sim.Landed) continue;
                 int dist = Math.Abs(sim.Cx - targetWx);
                 if (dist < bestDist) { bestDist = dist; best = sim; bestHold = hold; }

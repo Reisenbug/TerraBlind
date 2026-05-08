@@ -39,11 +39,12 @@ namespace TerraBlind
             float startPy = cy * 16f - p.height;
             int xMin = cx - 80, xMax = cx + 80, yMin = cy - 50, yMax = cy + 50;
             var seen = new HashSet<(int,int)>();
+            var ph2 = PhysicsSimulator.Params.FromPlayer(p);
             bool first = true;
             foreach (int hold in HoldFrameOptions)
             {
-                var startState = new PhysicsSimulator.State { Px = startPx, Py = startPy, Vx = sign * p.maxRunSpeed, Vy = 0f, Grounded = true, JumpFramesLeft = hold };
-                var result = PhysicsSimulator.SimulateJump(startState, sign, hold);
+                var startState = new PhysicsSimulator.State { Px = startPx, Py = startPy, Vx = sign * ph2.MaxRun, Vy = 0f, Grounded = true, JumpFramesLeft = hold };
+                var result = PhysicsSimulator.SimulateJump(startState, sign, hold, ph2);
                 if (!first) sb.Append(','); first = false;
                 sb.Append($"{{\"hold\":{hold},\"landed\":{(result.Landed?"true":"false")},\"lx\":{result.Cx},\"ly\":{result.Cy}");
                 if (result.Landed)
@@ -143,7 +144,8 @@ namespace TerraBlind
         }
 
         private static bool ArcClipsWall(List<PhysicsSimulator.ControlInput> frames,
-            float startPx, float startPy, float startVx, int playerW, int playerH, int holdFrames)
+            float startPx, float startPy, float startVx, int playerW, int playerH, int holdFrames,
+            PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State
             {
@@ -154,7 +156,7 @@ namespace TerraBlind
             };
             for (int f = 0; f < frames.Count; f++)
             {
-                s = PhysicsSimulator.Step(s, frames[f]);
+                s = PhysicsSimulator.Step(s, frames[f], ph);
                 int tileX0 = (int)(s.Px / 16);
                 int tileX1 = (int)((s.Px + playerW - 1) / 16);
                 int tileY0 = (int)(s.Py / 16);
@@ -172,28 +174,34 @@ namespace TerraBlind
         {
             var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int)>();
             var seen = new HashSet<(int, int)>();
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
 
             float startPx = cx * 16f - (p.width / 2f) + 8f;
             float startPy = cy * 16f - p.height;
+            float startVx = sign * ph.MaxRun;
 
             foreach (int hold in HoldFrameOptions)
             {
                 var startState = new PhysicsSimulator.State
                 {
                     Px = startPx, Py = startPy,
-                    Vx = sign * p.maxRunSpeed,
+                    Vx = startVx,
                     Vy = 0f,
                     Grounded = true,
                     JumpFramesLeft = hold,
                 };
-                var result = PhysicsSimulator.SimulateJump(startState, sign, hold);
+                var result = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!result.Landed) continue;
-                int lx = result.Cx, ly = result.Cy - 1;
+                int lx = (int)((result.EndState.Px + p.width / 2f) / 16f);
+                int lyBase = (int)((result.EndState.Py + p.height) / 16f);
+                int ly = lyBase;
+                for (int scan = lyBase - 1; scan <= lyBase + 1; scan++)
+                    if (Standable(lx, scan)) { ly = scan; break; }
                 if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;
                 if (seen.Contains((lx, ly))) continue;
-                if (ArcClipsWall(result.Frames, startPx, startPy, sign * p.maxRunSpeed, p.width, p.height, hold))
+                if (ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph))
                 {
                     DiagLog.Write($"[plan] jump edge wallclip src=({cx},{cy}) target=({lx},{ly}) hold={hold}");
                     continue;
@@ -468,10 +476,11 @@ namespace TerraBlind
         // envelope for visualization only, not used for edge generation
         private static int[] BuildEnvelopeVis(Player p)
         {
-            float js = p.wet ? 5.01f : Player.jumpSpeed;
-            float grav = p.wet ? 0.4f : (p.gravity > 0f ? p.gravity : 0.4f);
-            int jh = p.wet ? 15 : Player.jumpHeight;
-            float vx = p.wet ? 3.0f : Math.Max(p.maxRunSpeed, p.accRunSpeed);
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            float js = Player.jumpSpeed;
+            float grav = ph.Gravity;
+            int jh = Player.jumpHeight;
+            float vx = ph.MaxRun;
 
             float holdSpeed = js - grav;
             float phase1Ticks = jh + 1;
