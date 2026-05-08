@@ -162,18 +162,19 @@ namespace TerraBlind
             for (int wx = xMin; wx <= xMax; wx++)
             {
                 if (sign * (wx - pcx) < MinGoalDist) continue;
-                for (int wy = yMin; wy <= yMax; wy++)
+                for (int wy = 50; wy <= yMax; wy++)
                 {
                     if (!Standable(wx, wy)) continue;
                     bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
                     if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
                     bool ok = CanProgress(wx, wy, sign, CanProgressK);
                     if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
-                    int distWx = Math.Abs(wx - pcx);
-                    int distGoal = goalX < 0 ? int.MaxValue : Math.Abs(goalX - pcx);
-                    bool higher = wy < goalY;
-                    bool closerOrSameHeight = distWx <= distGoal || wy <= goalY;
-                    if (goalX < 0 || (higher && closerOrSameHeight)) { goalX = wx; goalY = wy; }
+                    // score: prefer far and high; fwd distance weighted 1, height gain weighted 2
+                    int fwd = sign * (wx - pcx);
+                    int rise = feetY - wy;
+                    int score = fwd + rise * 2;
+                    int bestScore = goalX < 0 ? int.MinValue : sign * (goalX - pcx) + (feetY - goalY) * 2;
+                    if (score > bestScore) { goalX = wx; goalY = wy; }
                     break;
                 }
             }
@@ -248,7 +249,7 @@ namespace TerraBlind
                                 int bx = cx + js * i;
                                 if (Solid(bx, arcY) || Solid(bx, arcY - 1)) { blocked = true; break; }
                             }
-                            if (blocked) break;
+                            if (blocked) continue;
                             int ny = cy + arcDy;
                             if (ny >= yMin && ny <= yMax && Standable(nx, ny))
                             {
@@ -278,7 +279,7 @@ namespace TerraBlind
                     for (int topY = cy - 1; topY >= yMin; topY--)
                     {
                         if (Solid(cx, topY)) break;
-                        if (Standable(cx, topY))
+                        if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2))
                         {
                             int rise = cy - topY;
                             float cost = curG + 3f + rise;
@@ -290,7 +291,7 @@ namespace TerraBlind
                                 float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
                                 heap.Enqueue((cx, topY), cost + h);
                             }
-                            break;
+                            // don't break — keep scanning upward for higher landing spots
                         }
                     }
                 }
@@ -332,7 +333,7 @@ namespace TerraBlind
                 if (!Standable(wx, wy)) continue;
                 if (wy < bestWy || (wy == bestWy && fwd > bestFwd)) { bestFwd = fwd; bestWy = wy; best = (wx, wy); }
             }
-            if (best == start || bestFwd < MinGoalDist)
+            if (best == start || bestFwd <= 0)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
