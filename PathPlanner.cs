@@ -16,6 +16,13 @@ namespace TerraBlind
         public static bool SolidPublic(int wx, int wy) => Solid(wx, wy);
         public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
 
+        private static bool IsSkyline(int wx, int wy)
+        {
+            for (int dy = 1; dy <= 30; dy++)
+                if (Solid(wx, wy - dy) || Platform(wx, wy - dy)) return false;
+            return true;
+        }
+
         private static bool Solid(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
@@ -143,34 +150,28 @@ namespace TerraBlind
             int xMin = pcx - GoalRange;
             int xMax = pcx + GoalRange;
             int yMin = feetY - 20;
-            int yMax = feetY + 50;
+            int yMax = feetY + 15;
 
             int goalX = -1, goalY = -1;
+            var rejectedGoals = new System.Text.StringBuilder();
             int startWx = sign > 0 ? xMax : xMin;
             int endWx   = sign > 0 ? xMin : xMax;
-            var goalLog = new System.Text.StringBuilder();
-            var rejectedGoals = new System.Text.StringBuilder();
-            int candidatesChecked = 0;
             for (int wx = startWx; sign > 0 ? wx >= endWx : wx <= endWx; wx -= sign)
             {
                 if (sign * (wx - pcx) <= 0) continue;
                 for (int wy = yMin; wy <= yMax; wy++)
                 {
-                    if (Standable(wx, wy))
-                    {
-                        bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
-                        bool ok = !excluded && CanProgress(wx, wy, sign, 3);
-                        goalLog.Append($" ({wx},{wy})={ok}");
-                        candidatesChecked++;
-                        if (!ok)
-                            rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"{(excluded ? "excluded" : "no_progress")}\"}},");
-                        if (ok) { goalX = wx; goalY = wy; }
-                        break;
-                    }
+                    if (!Standable(wx, wy) || !IsSkyline(wx, wy)) continue;
+                    bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
+                    if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
+                    bool ok = CanProgress(wx, wy, sign, 3);
+                    if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
+                    goalX = wx; goalY = wy;
+                    break;
                 }
                 if (goalX >= 0) break;
             }
-            DiagLog.Write($"[plan] goal scan:{goalLog} → chosen=({goalX},{goalY})");
+            DiagLog.Write($"[plan] goal=({goalX},{goalY})");
             if (goalX == -1)
             {
                 DiagLog.Write("[plan] no goal found");
