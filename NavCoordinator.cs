@@ -37,6 +37,7 @@ namespace TerraBlind
         private static int _stallCount;
         private static bool _jumpReplayLoaded;
         private static bool _fixedPath;
+        private static int _pillarSettleTick;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -62,6 +63,7 @@ namespace TerraBlind
                 _restartCooldown = 0;
                 _jumpReplayLoaded = false;
                 _fixedPath = false;
+                _pillarSettleTick = 0;
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
@@ -82,6 +84,7 @@ namespace TerraBlind
                 _restartCooldown = 0;
                 _jumpReplayLoaded = false;
                 _fixedPath = true;
+                _pillarSettleTick = 0;
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] SetPath sign={sign} nodes={nodes.Count}");
@@ -684,10 +687,13 @@ namespace TerraBlind
 
                 if (State == NavState.Pillar)
                 {
-                    if (!SkillExecutor.IsActive)
+                    if (SkillExecutor.IsActive) { _pillarSettleTick = 0; return; }
+                    _pillarSettleTick++;
+                    if (_pillarSettleTick >= 6)
                     {
                         EmitNodeExit(_pathIdx, "pillar", "done", _target.Wx, _target.Wy, pcx, feetY);
                         _pathIdx++;
+                        _pillarSettleTick = 0;
                         State = NavState.Idle;
                     }
                     return;

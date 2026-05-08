@@ -16,6 +16,8 @@ namespace TerraBlind
         private static int _phaseTick;
         private static bool _placeStarted;
         private static int _targetRiseTiles;
+        private static int _stalledCycles;
+        private static int _cycleStartFeetY;
 
         private static int _walkBackFrames;
         private static int _currentPlaceDy;
@@ -87,6 +89,8 @@ namespace TerraBlind
             _cyclesDone = 0;
             _phaseTick = 0;
             _placeStarted = false;
+            _stalledCycles = 0;
+            _cycleStartFeetY = 0;
             State = SkillState.PillarBuild;
         }
 
@@ -148,9 +152,13 @@ namespace TerraBlind
                     return;
                 }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
-                if (feetYNow <= _targetRiseTiles)
+                int pcxNow = Pcx(p);
+                var targetTile = Main.tile[pcxNow, _targetRiseTiles];
+                bool platformReached = targetTile != null && targetTile.HasTile &&
+                    (Main.tileSolid[targetTile.TileType] || Main.tileSolidTop[targetTile.TileType]);
+                if (platformReached)
                 {
-                    DiagLog.Write($"[pillar] reached feetY={feetYNow} targetWy={_targetRiseTiles}");
+                    DiagLog.Write($"[pillar] platform placed at ({pcxNow},{_targetRiseTiles}) feetY={feetYNow}");
                     ReplaySystem.Stop();
                     _phaseTick = 0;
                     State = SkillState.PillarWait;
@@ -158,6 +166,20 @@ namespace TerraBlind
                 }
                 if (!ReplaySystem.IsActive)
                 {
+                    if (_cyclesDone > 0)
+                    {
+                        if (feetYNow >= _cycleStartFeetY)
+                        {
+                            _stalledCycles++;
+                            DiagLog.Write($"[pillar] stall cycle={_cyclesDone} feetY={feetYNow} prev={_cycleStartFeetY} stalls={_stalledCycles}");
+                            if (_stalledCycles >= 2) { Stop(); return; }
+                        }
+                        else
+                        {
+                            _stalledCycles = 0;
+                        }
+                    }
+                    _cycleStartFeetY = feetYNow;
                     _cyclesDone++;
                     DiagLog.Write($"[pillar] cycle={_cyclesDone} feetY={feetYNow} targetWy={_targetRiseTiles}");
                     var frames = new System.Collections.Generic.List<ReplayFrame>();
