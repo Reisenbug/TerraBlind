@@ -91,6 +91,7 @@ namespace TerraBlind
             if (State == SkillState.PillarBuild)
             {
                 if (platformSlot < 0) { Stop(); return; }
+                Main.SmartCursorWanted_Mouse = false;
                 if (!_placeStarted)
                 {
                     PlaceCoordinator.Start(new PlaceRequest { Dx = 0, Dy = 0, Slot = platformSlot, RemainingFrames = 600 });

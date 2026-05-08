@@ -42,6 +42,15 @@ namespace TerraBlind
             return t != null && t.HasTile && Main.tileSolidTop[t.TileType];
         }
 
+        // tile exists but cannot be placed on/through (tree trunks, vines, etc.)
+        private static bool Occupied(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            if (t == null || !t.HasTile) return false;
+            return !Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+        }
+
         private static bool Standable(int wx, int wy)
         {
             return !Solid(wx, wy) && !Platform(wx, wy) && (Solid(wx, wy + 1) || Platform(wx, wy + 1));
@@ -279,7 +288,8 @@ namespace TerraBlind
                     for (int topY = cy - 1; topY >= yMin; topY--)
                     {
                         if (Solid(cx, topY)) break;
-                        if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2))
+                        if (Occupied(cx, topY)) continue;
+                        if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
                         {
                             int rise = cy - topY;
                             float cost = curG + 3f + rise;

@@ -31,6 +31,7 @@ namespace TerraBlind
         private static uint _nodeEnterTick;
 
         private static int _lastStallPcx;
+        private static int _lastStallFeetY;
         private static int _stallCount;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
@@ -53,6 +54,7 @@ namespace TerraBlind
                 _path.Clear();
                 _pathIdx = 0;
                 _stallCount = 0;
+                _lastStallFeetY = 0;
                 _restartCooldown = 0;
                 FailReason = "";
                 _started = true;
@@ -288,7 +290,9 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                if (State != NavState.Idle && pcx == _lastStallPcx)
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && pcx == _lastStallPcx;
+                bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
+                if (stalledX || stalledY)
                 {
                     _stallCount++;
                     if (_stallCount >= StallFrames)
@@ -304,6 +308,7 @@ namespace TerraBlind
                     _stallCount = 0;
                 }
                 _lastStallPcx = pcx;
+                _lastStallFeetY = feetY;
 
                 if (State == NavState.Idle)
                 {
