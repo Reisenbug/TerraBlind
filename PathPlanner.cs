@@ -71,22 +71,11 @@ namespace TerraBlind
             return result;
         }
 
-        private static bool IsBlock(int wx, int wy)
+        private static bool Solid(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
             var t = Main.tile[wx, wy];
-            if (t == null || !t.HasTile) return false;
-            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
-            return (int)t.Slope == 0 && !t.IsHalfBlock;
-        }
-
-        private static bool IsHalfBrick(int wx, int wy)
-        {
-            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
-            var t = Main.tile[wx, wy];
-            if (t == null || !t.HasTile) return false;
-            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
-            return (int)t.Slope != 0 || t.IsHalfBlock;
+            return t != null && t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
         }
 
         private static bool Platform(int wx, int wy)
@@ -95,10 +84,6 @@ namespace TerraBlind
             var t = Main.tile[wx, wy];
             return t != null && t.HasTile && Main.tileSolidTop[t.TileType];
         }
-
-        private static bool IsFloor(int wx, int wy) => IsBlock(wx, wy) || Platform(wx, wy) || IsHalfBrick(wx, wy);
-
-        private static bool Solid(int wx, int wy) => IsBlock(wx, wy);
 
         // tile exists but cannot be placed on/through (tree trunks, vines, etc.)
         private static bool Occupied(int wx, int wy)
@@ -110,18 +95,16 @@ namespace TerraBlind
         }
 
         private static bool Standable(int wx, int wy)
-            => !IsBlock(wx, wy) && !Platform(wx, wy) && !IsHalfBrick(wx, wy) && IsFloor(wx, wy + 1);
+        {
+            return !Solid(wx, wy) && !Platform(wx, wy) && (Solid(wx, wy + 1) || Platform(wx, wy + 1));
+        }
 
         private static int DistToGround(int wx, int wy, int maxDepth = 20)
         {
             for (int d = 0; d < maxDepth; d++)
-                if (IsFloor(wx, wy + d)) return d;
+                if (Solid(wx, wy + d)) return d;
             return maxDepth;
         }
-
-        public static bool IsBlockPublic(int wx, int wy) => IsBlock(wx, wy);
-        public static bool IsFloorPublic(int wx, int wy) => IsFloor(wx, wy);
-        public static bool IsHalfBrickPublic(int wx, int wy) => IsHalfBrick(wx, wy);
 
         private static bool CanProgress(int gx, int gy, int sign, int K)
         {
@@ -145,7 +128,7 @@ namespace TerraBlind
                         break;
                     }
                 }
-                if (!IsFloor(cx, cy + 1) && !visited.Contains((cx, cy + 1)))
+                if (!Solid(cx, cy + 1) && !visited.Contains((cx, cy + 1)))
                 {
                     visited.Add((cx, cy + 1));
                     queue.Enqueue((cx, cy + 1, steps + 1));
@@ -177,10 +160,10 @@ namespace TerraBlind
                 int tileX0 = (int)(s.Px / 16);
                 int tileX1 = (int)((s.Px + playerW - 1) / 16);
                 int tileY0 = (int)(s.Py / 16);
-                int tileY1 = (int)((s.Py + playerH - 1) / 16) - 1;
+                int tileY1 = (int)((s.Py + playerH - 1) / 16);
                 for (int tx = tileX0; tx <= tileX1; tx++)
                     for (int ty = tileY0; ty <= tileY1; ty++)
-                        if (IsBlock(tx, ty)) return true;
+                        if (Solid(tx, ty)) return true;
             }
             return false;
         }
@@ -209,13 +192,17 @@ namespace TerraBlind
                 };
                 var result = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!result.Landed) continue;
-                int lx = result.Cx;
-                int ly = result.Cy;
+                int lx = (int)((result.EndState.Px + p.width / 2f) / 16f);
+                int ly = (int)((result.EndState.Py + p.height) / 16f) - 1;
                 if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;
                 if (seen.Contains((lx, ly))) continue;
-                if (ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph)) continue;
+                if (ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph))
+                {
+                    DiagLog.Write($"[plan] jump edge wallclip src=({cx},{cy}) target=({lx},{ly}) hold={hold}");
+                    continue;
+                }
                 seen.Add((lx, ly));
                 results.Add((lx, ly, result.Frames, hold));
             }
@@ -229,9 +216,7 @@ namespace TerraBlind
 
             int pcx = (int)((p.position.X + p.width / 2f) / 16f);
             int feetY = (int)((p.position.Y + p.height) / 16f);
-            while (IsBlock(pcx, feetY) && feetY > 0) feetY--;
-            if (!IsFloor(pcx, feetY) && IsFloor(pcx, feetY + 1)) feetY++;
-            if (IsHalfBrick(pcx, feetY)) feetY--;
+            while (Solid(pcx, feetY) && feetY > 0) feetY--;
             if (!Standable(pcx, feetY))
             {
                 for (int dy = 1; dy <= 3; dy++)
@@ -309,11 +294,10 @@ namespace TerraBlind
                 {
                     int nx = cx + dx, ny = cy + dy;
                     if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) continue;
-                    if (IsBlock(nx, ny)) continue;
+                    if (Solid(nx, ny)) continue;
                     if (dy == -1 && dx == 0) continue;
-                    if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
+                    if (dy == -1 && !Solid(nx, ny + 1) && !Platform(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
-                    if (dy == -1 && dx != 0 && IsBlock(nx, cy)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float cost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float ng = curG + cost;
@@ -328,7 +312,7 @@ namespace TerraBlind
                 }
 
                 bool canJump = (Standable(cx, cy) || bridgeNodes.Contains((cx, cy)))
-                    && !IsBlock(cx, cy - 1) && !IsBlock(cx, cy - 2);
+                    && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
                 if (canJump)
                 {
                     var jumpEdges = BuildJumpEdges(p, cx, cy, sign, xMin, xMax, yMin, yMax);
@@ -352,19 +336,20 @@ namespace TerraBlind
                     }
                 }
 
-                if (Standable(cx, cy) && !IsBlock(cx, cy - 1) && !IsBlock(cx, cy - 2))
+                if (Standable(cx, cy) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2))
                 {
                     for (int topY = cy - 1; topY >= yMin; topY--)
                     {
-                        if (IsBlock(cx, topY)) break;
+                        if (Solid(cx, topY)) break;
                         if (Occupied(cx, topY)) continue;
-                        if (!IsBlock(cx, topY - 1) && !IsBlock(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
+                        if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
                         {
                             int rise = cy - topY;
                             if (rise <= 7) continue;
+                            // check full vertical clearance from launch point: rise + 2 tiles above cy
                             bool blocked = false;
                             for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
-                                if (IsBlock(cx, checkY)) { blocked = true; break; }
+                                if (Solid(cx, checkY)) { blocked = true; break; }
                             if (blocked) continue;
                             float cost = curG + 3f + rise;
                             if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
@@ -379,16 +364,16 @@ namespace TerraBlind
                     }
                 }
 
-                if (Standable(cx, cy) && !IsBlock(cx, cy + 1))
+                if (Standable(cx, cy))
                 {
                     int minDtg = 20;
                     for (int col = 1; col <= MaxBridge; col++)
                     {
                         int nx = cx + sign * col;
                         if (nx < xMin || nx > xMax) break;
-                        if (IsBlock(nx, cy) || IsBlock(nx, cy - 1) || IsBlock(nx, cy - 2) || IsBlock(nx, cy + 1)) break;
+                        if (Solid(nx, cy) || Solid(nx, cy - 1) || Solid(nx, cy - 2)) break;
                         minDtg = Math.Min(minDtg, DistToGround(nx, cy));
-                        if (!IsFloor(nx, cy + 1) || Standable(nx, cy))
+                        if (!Solid(nx, cy + 1) || Standable(nx, cy))
                         {
                             float cost = BridgeCostBase + col * BridgeCostPerCol + BridgePenalty(minDtg);
                             float ng = curG + cost;
