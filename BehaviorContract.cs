@@ -20,7 +20,7 @@ namespace TerraBlind
         {
             ["move"]        = new ExitTolerance { Dx = 4, Dy = 6 },
             ["jump"]        = new ExitTolerance { Dx = 3, Dy = 2 },
-            ["fall"]        = new ExitTolerance { Dx = 2, Dy = 3 },
+            ["fall"]        = new ExitTolerance { Dx = 8, Dy = 8 },
             ["bridge"]      = new ExitTolerance { Dx = 3, Dy = 2 },
             ["bridge_fall"] = new ExitTolerance { Dx = 3, Dy = 3 },
             ["pillar"]      = new ExitTolerance { Dx = 2, Dy = 4 },
@@ -31,7 +31,7 @@ namespace TerraBlind
             ["jump"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
             ["pillar"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
             ["bridge"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
-            ["fall"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
+            ["fall"]   = new PreCondition { RequireGrounded = false, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["move"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
         };
 
