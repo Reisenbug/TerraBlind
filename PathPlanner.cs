@@ -172,14 +172,14 @@ namespace TerraBlind
             };
             for (int f = 0; f < frames.Count; f++)
             {
+                float prevVy = s.Vy;
                 s = PhysicsSimulator.Step(s, frames[f], ph);
+                if (prevVy >= 0f) continue;
                 int tileX0 = (int)(s.Px / 16);
                 int tileX1 = (int)((s.Px + playerW - 1) / 16);
                 int tileY0 = (int)(s.Py / 16);
-                int tileY1 = (int)((s.Py + playerH - 1) / 16);
                 for (int tx = tileX0; tx <= tileX1; tx++)
-                    for (int ty = tileY0; ty <= tileY1; ty++)
-                        if (IsBlock(tx, ty)) return true;
+                    if (IsBlock(tx, tileY0)) return true;
             }
             return false;
         }
