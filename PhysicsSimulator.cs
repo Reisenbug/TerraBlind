@@ -124,7 +124,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH) / 16) - 1,
+                        Cy       = (int)((s.Py + PlayerH / 2f) / 16),
                     };
                 }
             }
@@ -153,7 +153,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH) / 16) - 1,
+                        Cy       = (int)((s.Py + PlayerH / 2f) / 16),
                     };
                 }
             }

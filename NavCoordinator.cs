@@ -154,17 +154,17 @@ namespace TerraBlind
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
             var t = Main.tile[wx, wy];
             if (t == null || !t.HasTile) return false;
-            return Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType];
+            return PathPlanner.IsFloorPublic(wx, wy);
         }
 
         private static int FeetY(Player p)
         {
             int fy = (int)((p.position.Y + p.height) / 16f);
-            while (fy > 0 && PathPlanner.SolidPublic(Pcx(p), fy)) fy--;
+            while (fy > 0 && PathPlanner.IsBlockPublic(Pcx(p), fy)) fy--;
             return fy;
         }
 
-        private static bool Standable(int wx, int wy) => !PathPlanner.SolidPublic(wx, wy) && !PathPlanner.PlatformPublic(wx, wy) && (PathPlanner.SolidPublic(wx, wy + 1) || PathPlanner.PlatformPublic(wx, wy + 1));
+        private static bool Standable(int wx, int wy) => !PathPlanner.IsBlockPublic(wx, wy) && !PathPlanner.PlatformPublic(wx, wy) && !PathPlanner.IsHalfBrickPublic(wx, wy) && PathPlanner.IsFloorPublic(wx, wy + 1);
 
         // re-simulate jump from current player state, pick hold that lands closest to targetWx
         private static (List<ReplayFrame> frames, int simCx, int simCy, int hold) ResimJump(Player p, int sign, int targetWx, int fallbackHold)
@@ -531,12 +531,11 @@ namespace TerraBlind
                     }
                     else
                     {
-                        int streakEndY = GetStreakEndY(_pathIdx);
-                        if (feetY - streakEndY > PillarThresh)
+                        if (feetY - _target.Wy > PillarThresh)
                         {
-                            DiagLog.Write($"[nav] forced pillar feetY={feetY} streakEndY={streakEndY} rise={feetY - streakEndY}");
+                            DiagLog.Write($"[nav] forced pillar feetY={feetY} targetWy={_target.Wy} rise={feetY - _target.Wy}");
                             State = NavState.Pillar;
-                            SkillExecutor.StartPillarJump(_sign > 0, streakEndY);
+                            SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         }
                         else
                         {
@@ -673,7 +672,7 @@ namespace TerraBlind
                         return;
                     }
                     int aheadX = pcx + _sign;
-                    if (PathPlanner.SolidPublic(aheadX, feetY) || PathPlanner.SolidPublic(aheadX, feetY - 1) || PathPlanner.SolidPublic(aheadX, feetY - 2))
+if (PathPlanner.IsBlockPublic(aheadX, feetY) || PathPlanner.IsBlockPublic(aheadX, feetY - 1) || PathPlanner.IsBlockPublic(aheadX, feetY - 2))
                     {
                         ReplaySystem.Stop();
                         DiagLog.Write($"[nav] bridge blocked at ({pcx},{feetY}) ahead=({aheadX},{feetY}) → replan");
@@ -782,8 +781,7 @@ namespace TerraBlind
                 int fRight = (int)((p.position.X + p.width - 1) / 16);
                 bool passed = fLeft <= n.Wx && n.Wx <= fRight;
                 if (passed) { _pathIdx++; continue; }
-                int streakEndY = GetStreakEndY(_pathIdx);
-                if (feetY - streakEndY > PillarThresh) { DiagLog.Write($"[nav] AdvanceMove forced pillar feetY={feetY} streakEndY={streakEndY} rise={feetY - streakEndY}"); State = NavState.Idle; return; }
+                if (feetY - n.Wy > PillarThresh) { DiagLog.Write($"[nav] AdvanceMove forced pillar feetY={feetY} targetWy={n.Wy} rise={feetY - n.Wy}"); State = NavState.Idle; return; }
                 _target = n;
                 EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
                 State = NavState.Move;
