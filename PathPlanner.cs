@@ -30,6 +30,9 @@ namespace TerraBlind
 
         public static bool SolidPublic(int wx, int wy) => Solid(wx, wy);
         public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
+        public static bool IsBlockPublic(int wx, int wy) => IsBlock(wx, wy);
+        public static bool IsFloorPublic(int wx, int wy) => IsFloor(wx, wy);
+        public static bool IsHalfBrickPublic(int wx, int wy) => IsHalfBrick(wx, wy);
 
         public static string DebugJumpEdgesVerbose(Player p, int cx, int cy, int sign)
         {
@@ -71,11 +74,22 @@ namespace TerraBlind
             return result;
         }
 
-        private static bool Solid(int wx, int wy)
+        private static bool IsBlock(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
             var t = Main.tile[wx, wy];
-            return t != null && t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+            if (t == null || !t.HasTile) return false;
+            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
+            return (int)t.Slope == 0 && !t.IsHalfBlock;
+        }
+
+        private static bool IsHalfBrick(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            if (t == null || !t.HasTile) return false;
+            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
+            return (int)t.Slope != 0 || t.IsHalfBlock;
         }
 
         private static bool Platform(int wx, int wy)
@@ -84,6 +98,10 @@ namespace TerraBlind
             var t = Main.tile[wx, wy];
             return t != null && t.HasTile && Main.tileSolidTop[t.TileType];
         }
+
+        private static bool IsFloor(int wx, int wy) => IsBlock(wx, wy) || Platform(wx, wy) || IsHalfBrick(wx, wy);
+
+        private static bool Solid(int wx, int wy) => IsBlock(wx, wy);
 
         // tile exists but cannot be placed on/through (tree trunks, vines, etc.)
         private static bool Occupied(int wx, int wy)
@@ -95,14 +113,12 @@ namespace TerraBlind
         }
 
         private static bool Standable(int wx, int wy)
-        {
-            return !Solid(wx, wy) && !Platform(wx, wy) && (Solid(wx, wy + 1) || Platform(wx, wy + 1));
-        }
+            => !IsBlock(wx, wy) && !Platform(wx, wy) && !IsHalfBrick(wx, wy) && IsFloor(wx, wy + 1);
 
         private static int DistToGround(int wx, int wy, int maxDepth = 20)
         {
             for (int d = 0; d < maxDepth; d++)
-                if (Solid(wx, wy + d)) return d;
+                if (IsFloor(wx, wy + d)) return d;
             return maxDepth;
         }
 
@@ -128,7 +144,7 @@ namespace TerraBlind
                         break;
                     }
                 }
-                if (!Solid(cx, cy + 1) && !visited.Contains((cx, cy + 1)))
+                if (!IsFloor(cx, cy + 1) && !visited.Contains((cx, cy + 1)))
                 {
                     visited.Add((cx, cy + 1));
                     queue.Enqueue((cx, cy + 1, steps + 1));
@@ -163,7 +179,7 @@ namespace TerraBlind
                 int tileY1 = (int)((s.Py + playerH - 1) / 16);
                 for (int tx = tileX0; tx <= tileX1; tx++)
                     for (int ty = tileY0; ty <= tileY1; ty++)
-                        if (Solid(tx, ty)) return true;
+                        if (IsBlock(tx, ty)) return true;
             }
             return false;
         }
@@ -216,7 +232,9 @@ namespace TerraBlind
 
             int pcx = (int)((p.position.X + p.width / 2f) / 16f);
             int feetY = (int)((p.position.Y + p.height) / 16f);
-            while (Solid(pcx, feetY) && feetY > 0) feetY--;
+            while (IsBlock(pcx, feetY) && feetY > 0) feetY--;
+            if (!IsFloor(pcx, feetY) && IsFloor(pcx, feetY + 1)) feetY++;
+            if (IsHalfBrick(pcx, feetY)) feetY--;
             if (!Standable(pcx, feetY))
             {
                 for (int dy = 1; dy <= 3; dy++)
@@ -296,7 +314,7 @@ namespace TerraBlind
                     if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) continue;
                     if (Solid(nx, ny)) continue;
                     if (dy == -1 && dx == 0) continue;
-                    if (dy == -1 && !Solid(nx, ny + 1) && !Platform(nx, ny + 1)) continue;
+                    if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float cost = dy == 1 ? FallCost : MoveCostBase + dtg;
@@ -373,7 +391,7 @@ namespace TerraBlind
                         if (nx < xMin || nx > xMax) break;
                         if (Solid(nx, cy) || Solid(nx, cy - 1) || Solid(nx, cy - 2)) break;
                         minDtg = Math.Min(minDtg, DistToGround(nx, cy));
-                        if (!Solid(nx, cy + 1) || Standable(nx, cy))
+                        if (!IsFloor(nx, cy + 1) || Standable(nx, cy))
                         {
                             float cost = BridgeCostBase + col * BridgeCostPerCol + BridgePenalty(minDtg);
                             float ng = curG + cost;
