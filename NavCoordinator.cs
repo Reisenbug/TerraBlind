@@ -40,7 +40,6 @@ namespace TerraBlind
         private static int _pillarSettleTick;
         private static int _invariantCheckCooldown;
         private static int _pillarAlignTick;
-        private static bool _pillarAlignNudging;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -527,7 +526,6 @@ namespace TerraBlind
                     {
                         State = NavState.PillarAlign;
                         _pillarAlignTick = 0;
-                        _pillarAlignNudging = false;
                     }
                     else if (_target.Action == "fall")
                     {
@@ -540,7 +538,6 @@ namespace TerraBlind
                             DiagLog.Write($"[nav] forced pillar feetY={feetY} targetWy={_target.Wy} rise={feetY - _target.Wy}");
                             State = NavState.PillarAlign;
                             _pillarAlignTick = 0;
-                            _pillarAlignNudging = false;
                         }
                         else
                         {
@@ -752,39 +749,32 @@ namespace TerraBlind
                 if (State == NavState.PillarAlign)
                 {
                     _pillarAlignTick++;
-                    if (_pillarAlignTick > 90)
+                    if (_pillarAlignTick > 120)
                     {
                         DiagLog.Write($"[nav] pillar align timeout pcx={pcx} target={_target.Wx} → replan");
                         EmitNavFailed("pillar_align_timeout", _pathIdx, "pillar", pcx, feetY);
                         Replan(p);
                         return;
                     }
-                    bool vxNearZero = Math.Abs(p.velocity.X) < 0.3f;
-                    if (!vxNearZero)
-                    {
-                        // coast to stop, no input
-                        return;
-                    }
-                    if (pcx == _target.Wx)
+                    float vx = p.velocity.X;
+                    float targetCenterX = _target.Wx * 16f + 8f;
+                    bool arrived = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(vx) < 0.3f;
+                    if (arrived)
                     {
                         int rise = feetY - _target.Wy;
-                        DiagLog.Write($"[nav] pillar align done pcx={pcx} rise={rise}");
+                        DiagLog.Write($"[nav] pillar align done pcx={pcx} cx={centerX:0.#} target={targetCenterX:0.#} rise={rise}");
                         State = NavState.Pillar;
                         _invariantCheckCooldown = 10;
                         SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         return;
                     }
-                    // nudge: one frame of input then wait for vx to settle
-                    if (!_pillarAlignNudging)
-                    {
-                        if (pcx < _target.Wx) p.controlRight = true;
-                        else p.controlLeft = true;
-                        _pillarAlignNudging = true;
-                    }
-                    else
-                    {
-                        _pillarAlignNudging = false;
-                    }
+                    float stopDist = vx != 0f ? (vx * vx / 0.4f) * Math.Sign(vx) : 0f;
+                    float predictedStopX = centerX + stopDist;
+                    float diff = targetCenterX - predictedStopX;
+                    if (Math.Abs(diff) <= 8f)
+                        return; // coast, predicted stop is close enough
+                    if (diff > 0) p.controlRight = true;
+                    else p.controlLeft = true;
                     return;
                 }
 
