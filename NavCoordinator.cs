@@ -5,7 +5,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum NavState { Idle, Move, Fall, Jump, Bridge, BridgeFall, Pillar, Done, Failed }
+    public enum NavState { Idle, Move, Fall, Jump, Bridge, BridgeFall, PillarAlign, Pillar, Done, Failed }
 
     public struct NavNode
     {
@@ -39,6 +39,8 @@ namespace TerraBlind
         private static bool _fixedPath;
         private static int _pillarSettleTick;
         private static int _invariantCheckCooldown;
+        private static int _pillarAlignTick;
+        private static bool _pillarAlignNudging;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -425,7 +427,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.Jump && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -523,18 +525,9 @@ namespace TerraBlind
                     }
                     else if (_target.Action == "pillar")
                     {
-                        bool atX = pcx == _target.Wx;
-                        if (!atX)
-                        {
-                            if (_sign > 0) p.controlRight = true;
-                            else p.controlLeft = true;
-                            return;
-                        }
-                        int rise = feetY - _target.Wy;
-                        DiagLog.Write($"[nav] pillar rise={rise} from ({pcx},{feetY}) to ({_target.Wx},{_target.Wy})");
-                        State = NavState.Pillar;
-                        _invariantCheckCooldown = 10;
-                        SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
+                        State = NavState.PillarAlign;
+                        _pillarAlignTick = 0;
+                        _pillarAlignNudging = false;
                     }
                     else if (_target.Action == "fall")
                     {
@@ -545,9 +538,9 @@ namespace TerraBlind
                         if (feetY - _target.Wy > PillarThresh)
                         {
                             DiagLog.Write($"[nav] forced pillar feetY={feetY} targetWy={_target.Wy} rise={feetY - _target.Wy}");
-                            State = NavState.Pillar;
-                            _invariantCheckCooldown = 10;
-                            SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
+                            State = NavState.PillarAlign;
+                            _pillarAlignTick = 0;
+                            _pillarAlignNudging = false;
                         }
                         else
                         {
@@ -752,6 +745,45 @@ namespace TerraBlind
                         EmitNavFailed("bridge_deviate", _pathIdx, "bridge_fall", pcx, feetY);
                         ReplaySystem.Stop();
                         Replan(p);
+                    }
+                    return;
+                }
+
+                if (State == NavState.PillarAlign)
+                {
+                    _pillarAlignTick++;
+                    if (_pillarAlignTick > 90)
+                    {
+                        DiagLog.Write($"[nav] pillar align timeout pcx={pcx} target={_target.Wx} → replan");
+                        EmitNavFailed("pillar_align_timeout", _pathIdx, "pillar", pcx, feetY);
+                        Replan(p);
+                        return;
+                    }
+                    bool vxNearZero = Math.Abs(p.velocity.X) < 0.3f;
+                    if (!vxNearZero)
+                    {
+                        // coast to stop, no input
+                        return;
+                    }
+                    if (pcx == _target.Wx)
+                    {
+                        int rise = feetY - _target.Wy;
+                        DiagLog.Write($"[nav] pillar align done pcx={pcx} rise={rise}");
+                        State = NavState.Pillar;
+                        _invariantCheckCooldown = 10;
+                        SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
+                        return;
+                    }
+                    // nudge: one frame of input then wait for vx to settle
+                    if (!_pillarAlignNudging)
+                    {
+                        if (pcx < _target.Wx) p.controlRight = true;
+                        else p.controlLeft = true;
+                        _pillarAlignNudging = true;
+                    }
+                    else
+                    {
+                        _pillarAlignNudging = false;
                     }
                     return;
                 }
