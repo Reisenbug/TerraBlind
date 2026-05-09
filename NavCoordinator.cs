@@ -38,6 +38,7 @@ namespace TerraBlind
         private static bool _jumpReplayLoaded;
         private static bool _fixedPath;
         private static int _pillarSettleTick;
+        private static int _invariantCheckCooldown;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -255,6 +256,15 @@ namespace TerraBlind
                 $",\"vx_bucket\":{BehaviorContract.VxBucket(vx)}" +
                 $",\"grounded\":{(grounded ? "true" : "false")}" +
                 $",\"dist_to_launch_px\":{distToLaunchPx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}}}");
+        }
+
+        private static void EmitInvariantViolation(int idx, string action, string axis, int expected, int actual, int pcx, int feetY)
+        {
+            DiagLog.WriteEvent(
+                $"{{\"e\":\"runtime_invariant_violation\",\"tick\":{Main.GameUpdateCount}" +
+                $",\"node_idx\":{idx},\"action\":\"{action}\",\"axis\":\"{axis}\"" +
+                $",\"expected\":{expected},\"actual\":{actual},\"delta\":{actual - expected}" +
+                $",\"px\":{pcx},\"py\":{feetY},\"action_taken\":\"replan\"}}");
         }
 
         private static void EmitNavFailed(string reason, int lastIdx, string lastAction, int pcx, int feetY, int stallCount = -1)
@@ -523,6 +533,7 @@ namespace TerraBlind
                         int rise = feetY - _target.Wy;
                         DiagLog.Write($"[nav] pillar rise={rise} from ({pcx},{feetY}) to ({_target.Wx},{_target.Wy})");
                         State = NavState.Pillar;
+                        _invariantCheckCooldown = 10;
                         SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                     }
                     else if (_target.Action == "fall")
@@ -535,11 +546,13 @@ namespace TerraBlind
                         {
                             DiagLog.Write($"[nav] forced pillar feetY={feetY} targetWy={_target.Wy} rise={feetY - _target.Wy}");
                             State = NavState.Pillar;
+                            _invariantCheckCooldown = 10;
                             SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         }
                         else
                         {
                             State = NavState.Move;
+                            _invariantCheckCooldown = 10;
                         }
                     }
                     return;
@@ -576,6 +589,18 @@ namespace TerraBlind
                         _pathIdx++;
                         AdvanceMoveNodes(p, pcx, feetY);
                         return;
+                    }
+                    _invariantCheckCooldown--;
+                    if (_invariantCheckCooldown <= 0)
+                    {
+                        _invariantCheckCooldown = BehaviorContract.RuntimeInvariant["move"].CheckEveryNFrames;
+                        int dyInv = feetY - _target.Wy;
+                        if (Math.Abs(dyInv) > BehaviorContract.RuntimeInvariant["move"].MaxDyDuringExec)
+                        {
+                            EmitInvariantViolation(_pathIdx, "move", "y", _target.Wy, feetY, pcx, feetY);
+                            Replan(p);
+                            return;
+                        }
                     }
                     if (_sign > 0) p.controlRight = true;
                     else p.controlLeft = true;
@@ -734,6 +759,18 @@ namespace TerraBlind
                 if (State == NavState.Pillar)
                 {
                     if (SkillExecutor.IsActive) { _pillarSettleTick = 0; return; }
+                    _invariantCheckCooldown--;
+                    if (_invariantCheckCooldown <= 0)
+                    {
+                        _invariantCheckCooldown = BehaviorContract.RuntimeInvariant["pillar"].CheckEveryNFrames;
+                        int dxInv = Math.Abs(pcx - _target.Wx);
+                        if (dxInv > BehaviorContract.RuntimeInvariant["pillar"].MaxDxDuringExec)
+                        {
+                            EmitInvariantViolation(_pathIdx, "pillar", "x", _target.Wx, pcx, pcx, feetY);
+                            Replan(p);
+                            return;
+                        }
+                    }
                     _pillarSettleTick++;
                     if (_pillarSettleTick >= 6)
                     {
