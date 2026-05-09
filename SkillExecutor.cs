@@ -27,6 +27,7 @@ namespace TerraBlind
         private static bool _targetXSet;
         private static SkillState _settleNext;
         private static int _prevFeetY;
+        private static float _pillarWaitPrevVY;
 
         private const int WaitFrames = 10;
         private const int JumpHoldFrames = 15;
@@ -154,19 +155,16 @@ namespace TerraBlind
                 }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
-                var targetTile = Main.tile[pcxNow, _targetWy];
-                bool platformReached = targetTile != null && targetTile.HasTile &&
-                    (Main.tileSolid[targetTile.TileType] || Main.tileSolidTop[targetTile.TileType]);
-                if (platformReached)
-                {
-                    DiagLog.Write($"[pillar] platform placed at ({pcxNow},{_targetWy}) feetY={feetYNow}");
-                    ReplaySystem.Stop();
-                    _phaseTick = 0;
-                    State = SkillState.PillarWait;
-                    return;
-                }
                 if (!ReplaySystem.IsActive)
                 {
+                    if (_cyclesDone > 0 && feetYNow <= _targetWy)
+                    {
+                        DiagLog.Write($"[pillar] reached target feetY={feetYNow} targetWy={_targetWy} cycles={_cyclesDone}");
+                        _phaseTick = 0;
+                        _pillarWaitPrevVY = 0f;
+                        State = SkillState.PillarWait;
+                        return;
+                    }
                     if (_cyclesDone > 0)
                     {
                         if (feetYNow >= _cycleStartFeetY)
@@ -193,7 +191,8 @@ namespace TerraBlind
 
             if (State == SkillState.PillarWait)
             {
-                if (p.velocity.Y == 0f) Stop();
+                if (_pillarWaitPrevVY > 0f && p.velocity.Y == 0f) Stop();
+                _pillarWaitPrevVY = p.velocity.Y;
                 return;
             }
 

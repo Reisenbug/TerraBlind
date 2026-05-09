@@ -281,6 +281,14 @@ namespace TerraBlind
         private static void Replan(Player p)
         {
             if (_fixedPath) { State = NavState.Done; DiagLog.Write("[nav] SetPath done"); return; }
+            if (p.velocity.Y != 0f)
+            {
+                _restartCooldown = 6;
+                State = NavState.Idle;
+                _path.Clear();
+                _pathIdx = 0;
+                return;
+            }
             int pcx = Pcx(p);
             int feetY = FeetY(p);
             PurgeBlacklist();
