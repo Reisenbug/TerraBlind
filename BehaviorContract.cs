@@ -35,6 +35,19 @@ namespace TerraBlind
             ["move"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
         };
 
+        public struct Invariant
+        {
+            public int MaxDxDuringExec;
+            public int MaxDyDuringExec;
+            public int CheckEveryNFrames;
+        }
+
+        public static readonly Dictionary<string, Invariant> RuntimeInvariant = new()
+        {
+            ["move"]   = new Invariant { MaxDxDuringExec = -1, MaxDyDuringExec = 4, CheckEveryNFrames = 10 },
+            ["pillar"] = new Invariant { MaxDxDuringExec = 2,  MaxDyDuringExec = -1, CheckEveryNFrames = 10 },
+        };
+
         public static bool Deviated(string action, int dx, int dy)
         {
             if (!ExitTol.TryGetValue(action, out var tol)) return false;
