@@ -8,7 +8,7 @@ namespace TerraBlind
     public static class PathPlanner
     {
         private const int GoalRangeFwd = 60;    // max forward search distance for goal (tiles)
-        private const int GoalRangeBack = 20;   // max backward search distance for A* expansion (tiles)
+        private const int GoalRangeBack = 60;   // max backward search distance for A* expansion (tiles)
         private const int MinGoalDist = 5;      // minimum distance from player to goal, prevents staying in place
         private const int AStarScanUp = 50;     // yMin = feetY - AStarScanUp; how high A* can expand
         private const int AStarScanDown = 50;   // yMax = feetY + AStarScanDown; how deep A* can expand
@@ -186,7 +186,7 @@ namespace TerraBlind
 
         // returns list of (landCx, landCy, frames, holdFrames) for all valid jump outcomes from this tile
         private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold)>
-            BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax)
+            BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax, float? overrideVx = null)
         {
             var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int)>();
             var seen = new HashSet<(int, int)>();
@@ -194,7 +194,7 @@ namespace TerraBlind
 
             float startPx = cx * 16f - (p.width / 2f) + 8f;
             float startPy = cy * 16f - p.height;
-            float startVx = sign * ph.MaxRun;
+            float startVx = overrideVx ?? sign * ph.MaxRun;
 
             foreach (int hold in HoldFrameOptions)
             {
@@ -333,7 +333,9 @@ namespace TerraBlind
                     && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
                 if (canJump)
                 {
-                    var jumpEdges = BuildJumpEdges(p, cx, cy, sign, xMin, xMax, yMin, yMax);
+                    bool fromPillar = prev.TryGetValue((cx, cy), out var prevEntry) && prevEntry.Item2 == "pillar";
+                    float? jumpStartVx = fromPillar ? 0f : (float?)null;
+                    var jumpEdges = BuildJumpEdges(p, cx, cy, sign, xMin, xMax, yMin, yMax, jumpStartVx);
                     foreach (var (lx, ly, frames, hold) in jumpEdges)
                     {
                         int rise = cy - ly;
