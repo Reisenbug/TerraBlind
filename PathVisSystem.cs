@@ -86,11 +86,14 @@ namespace TerraBlind
                 if (action == "jump" && path[i].Frames != null && path[i].Frames.Count > 0)
                 {
                     int swx = path[i].SourceWx, swy = path[i].SourceWy;
+                    int jsign = wx > swx ? 1 : -1;
+                    bool prevIsPillar = i > 0 && path[i - 1].Action == "pillar";
+                    float arcVx = prevIsPillar ? 0f : jsign * PhysicsSimulator.MaxRunSpeed;
                     var s = new PhysicsSimulator.State
                     {
                         Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,
                         Py = swy * 16f - PhysicsSimulator.PlayerH,
-                        Vx = wx > swx ? PhysicsSimulator.MaxRunSpeed : -PhysicsSimulator.MaxRunSpeed,
+                        Vx = arcVx,
                         Vy = 0f, Grounded = true,
                         JumpFramesLeft = path[i].Frames.Count,
                     };
