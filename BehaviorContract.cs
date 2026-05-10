@@ -29,7 +29,7 @@ namespace TerraBlind
         public static readonly Dictionary<string, PreCondition> PreCond = new()
         {
             ["jump"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
-            ["pillar"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
+            ["pillar"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["bridge"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["fall"]   = new PreCondition { RequireGrounded = false, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["move"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
