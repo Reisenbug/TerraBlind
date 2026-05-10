@@ -230,6 +230,9 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
 
+            if (p.maxRunSpeed > PhysicsSimulator.MaxRunSpeed + 0.01f)
+                DiagLog.Write($"[plan] WARN buff detected maxRunSpeed={p.maxRunSpeed:0.##} planner not validated for non-default speed");
+
             int pcx = (int)((p.position.X + p.width / 2f) / 16f);
             int feetY = (int)((p.position.Y + p.height) / 16f);
             while (IsBlock(pcx, feetY) && feetY > 0) feetY--;
