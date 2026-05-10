@@ -169,13 +169,13 @@ namespace TerraBlind
         private static bool Standable(int wx, int wy) => !PathPlanner.IsBlockPublic(wx, wy) && !PathPlanner.PlatformPublic(wx, wy) && !PathPlanner.IsHalfBrickPublic(wx, wy) && PathPlanner.IsFloorPublic(wx, wy + 1);
 
         // re-simulate jump from current player state, pick hold that lands closest to targetWx
-        private static (List<ReplayFrame> frames, int simCx, int simCy, int hold) ResimJump(Player p, int sign, int targetWx, int fallbackHold)
+        private static (List<ReplayFrame> frames, int simCx, int simCy, int hold) ResimJump(Player p, int sign, int targetWx, int fallbackHold, float? startVx = null)
         {
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var startState = new PhysicsSimulator.State
             {
                 Px = p.position.X, Py = p.position.Y,
-                Vx = p.velocity.X, Vy = 0f,
+                Vx = startVx ?? p.velocity.X, Vy = 0f,
                 Grounded = true,
             };
             PhysicsSimulator.SimResult best = default;
@@ -514,7 +514,7 @@ namespace TerraBlind
                             if (_target.Frames != null)
                                 foreach (var fi in _target.Frames) { if (fi.Jump) fallbackHold++; else break; }
                             if (fallbackHold == 0) fallbackHold = 15;
-                            var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, _sign, _target.Wx, fallbackHold);
+                            var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, _sign, _target.Wx, fallbackHold, startVx: p.velocity.X);
                             DiagLog.Write($"[nav] jump resim vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy}) frames={replayFrames.Count}");
                             if (replayFrames.Count == 0)
                             {
@@ -558,12 +558,14 @@ namespace TerraBlind
 
                 if (State == NavState.Move)
                 {
+                    int moveSign = _target.Wx >= pcx ? 1 : -1;
+
                     // if next node is a replay jump, hand off early when within 16px of source tile
                     int nextIdx = _pathIdx + 1;
                     if (nextIdx < _path.Count && _path[nextIdx].Action == "jump" && _path[nextIdx].Frames != null)
                     {
                         float launchX = _path[nextIdx].SourceWx * 16f + 8f;
-                        float distToLaunch = _sign > 0 ? launchX - centerX : centerX - launchX;
+                        float distToLaunch = moveSign > 0 ? launchX - centerX : centerX - launchX;
                         if (distToLaunch <= 16f)
                         {
                             DiagLog.Write($"[nav] move→jump handoff cx={centerX:0.##} launchX={launchX:0.##} diff={centerX - launchX:0.##}");
@@ -600,7 +602,7 @@ namespace TerraBlind
                             return;
                         }
                     }
-                    if (_sign > 0) p.controlRight = true;
+                    if (moveSign > 0) p.controlRight = true;
                     else p.controlLeft = true;
                     return;
                 }
@@ -804,10 +806,19 @@ namespace TerraBlind
                     _pillarSettleTick++;
                     if (_pillarSettleTick >= 6)
                     {
-                        EmitNodeExit(_pathIdx, "pillar", "done", _target.Wx, _target.Wy, pcx, feetY);
-                        _pathIdx++;
                         _pillarSettleTick = 0;
-                        State = NavState.Idle;
+                        if (feetY <= _target.Wy + 1)
+                        {
+                            EmitNodeExit(_pathIdx, "pillar", "done", _target.Wx, _target.Wy, pcx, feetY);
+                            _pathIdx++;
+                            State = NavState.Idle;
+                        }
+                        else
+                        {
+                            DiagLog.Write($"[nav] pillar height fail feetY={feetY} targetWy={_target.Wy} delta={feetY - _target.Wy} → replan");
+                            EmitNavFailed("pillar_height_fail", _pathIdx, "pillar", pcx, feetY);
+                            Replan(p);
+                        }
                     }
                     return;
                 }

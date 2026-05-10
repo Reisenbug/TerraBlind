@@ -56,7 +56,6 @@ namespace TerraBlind
             PredictedLandWy = -1;
         }
 
-        // Start for replay-driven jump: only need precision alignment, no SimulateLanding
         public static void StartReplay(bool dirRight, float launchX)
         {
             lock (_lock)
@@ -107,15 +106,13 @@ namespace TerraBlind
 
                     if (dist > 16f)
                     {
-                        // phase 1: coarse approach
                         if (_dirRight) p.controlRight = true;
                         else p.controlLeft = true;
                         return;
                     }
 
-                    // phase 1.5: fire when centerX passes through launchX window at near-maxRunSpeed
                     float vxDiff = p.velocity.X - targetVx;
-                    bool vxOk = System.Math.Abs(vxDiff) < 0.5f;  // must be moving in right direction near full speed
+                    bool vxOk = System.Math.Abs(vxDiff) < 0.5f;
                     bool posOk = System.Math.Abs(centerX - _launchX) <= 4f;
 
                     if (posOk && vxOk)
@@ -134,14 +131,12 @@ namespace TerraBlind
                         return;
                     }
 
-                    // approach launchX
                     bool needRight = centerX < _launchX;
                     if (needRight) p.controlRight = true;
                     else p.controlLeft = true;
                     return;
                 }
 
-                // phase 2: in-air (non-replay mode only)
                 if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
 
                 float cx2 = p.position.X + p.width / 2f;
