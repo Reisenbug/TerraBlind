@@ -159,9 +159,11 @@ namespace TerraBlind
                 {
                     if (_cyclesDone > 0 && feetYNow <= _targetWy)
                     {
+                        float vyAtEntry = p.velocity.Y;
                         DiagLog.Write($"[pillar] reached target feetY={feetYNow} targetWy={_targetWy} cycles={_cyclesDone}");
+                        DiagLog.Write($"[pillar_wait_enter] tick={Main.GameUpdateCount} cyclesDone={_cyclesDone} feetY={feetYNow} targetWy={_targetWy} vy={vyAtEntry} prevVY={_pillarWaitPrevVY}");
                         _phaseTick = 0;
-                        _pillarWaitPrevVY = 0f;
+                        _pillarWaitPrevVY = p.velocity.Y;
                         State = SkillState.PillarWait;
                         return;
                     }
@@ -191,8 +193,17 @@ namespace TerraBlind
 
             if (State == SkillState.PillarWait)
             {
-                if (_pillarWaitPrevVY > 0f && p.velocity.Y == 0f) Stop();
-                _pillarWaitPrevVY = p.velocity.Y;
+                float vy = p.velocity.Y;
+                int feetYNow = (int)((p.position.Y + p.height) / 16f);
+                bool grounded = vy == 0f && _pillarWaitPrevVY >= 0f;
+                bool atTarget = feetYNow <= _targetWy + 1;
+                DiagLog.Write($"[pillar_wait_tick] tick={Main.GameUpdateCount} vy={vy} prevVY={_pillarWaitPrevVY} grounded={grounded} atTarget={atTarget}");
+                if (grounded && atTarget)
+                {
+                    DiagLog.Write($"[pillar_wait_exit] tick={Main.GameUpdateCount} reason=grounded_at_target vy={vy} prevVY={_pillarWaitPrevVY} feetY={feetYNow} targetWy={_targetWy}");
+                    Stop();
+                }
+                _pillarWaitPrevVY = vy;
                 return;
             }
 
