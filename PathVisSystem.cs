@@ -97,9 +97,10 @@ namespace TerraBlind
                         Vy = 0f, Grounded = true,
                         JumpFramesLeft = path[i].Frames.Count,
                     };
+                    var ph = lp != null ? PhysicsSimulator.Params.FromPlayer(lp) : PhysicsSimulator.Params.Default;
                     foreach (var fi in path[i].Frames)
                     {
-                        s = PhysicsSimulator.Step(s, fi);
+                        s = PhysicsSimulator.Step(s, fi, ph);
                         DrawDot(spriteBatch, s.Px + PhysicsSimulator.PlayerW / 2f, s.Py + PhysicsSimulator.PlayerH, new Color(100, 255, 100, 160));
                     }
                 }

@@ -187,7 +187,7 @@ namespace TerraBlind
                 var sim = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!sim.Landed) continue;
                 int dist = Math.Abs(sim.Cx - targetWx);
-                if (dist < bestDist) { bestDist = dist; best = sim; bestHold = hold; }
+                if (dist < bestDist || (dist == bestDist && hold > bestHold)) { bestDist = dist; best = sim; bestHold = hold; }
             }
             var frames = new List<ReplayFrame>();
             if (best.Frames != null)
