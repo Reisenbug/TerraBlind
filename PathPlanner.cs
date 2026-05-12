@@ -295,6 +295,7 @@ namespace TerraBlind
             var bridgeNodes = new HashSet<(int, int)>();
             var heap = new PriorityQueue<(int wx, int wy), float>();
             var verifyData = new Dictionary<(int, int), (int hold, float startVx, int wallFrames, int ceilFrames)>();
+            var pillarVerifyData = new Dictionary<(int, int), (bool leftClear, bool rightClear, bool centerOnlyClear)>();
 
             var startNode = (pcx, feetY);
             g[startNode] = 0f;
@@ -309,7 +310,7 @@ namespace TerraBlind
                 visited.Add((cx, cy));
 
                 if (cx == goalX && cy == goalY)
-                    return BuildResult(prev, g, goalX, goalY, startNode, verifyData);
+                    return BuildResult(prev, g, goalX, goalY, startNode, verifyData, pillarVerifyData);
 
                 float curG = g.TryGetValue((cx, cy), out var cg) ? cg : float.MaxValue;
 
@@ -372,17 +373,38 @@ namespace TerraBlind
                         {
                             int rise = cy - topY;
                             if (rise <= 7) continue;
-                            // check full vertical clearance from launch point: rise + 2 tiles above cy
-                            bool blocked = false;
+                            // center-only clearance (old #5 logic): single column cx
+                            bool centerBlocked = false;
                             for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
-                                if (Solid(cx, checkY)) { blocked = true; break; }
-                            if (blocked) continue;
+                                if (Solid(cx, checkY)) { centerBlocked = true; break; }
+                            bool centerOnlyClear = !centerBlocked;
+                            // left clearance: columns (cx-1, cx) — matches SkillExecutor Left occupancy
+                            bool leftBlocked = false;
+                            if (cx - 1 >= xMin)
+                            {
+                                for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
+                                    if (Solid(cx - 1, checkY) || Solid(cx, checkY)) { leftBlocked = true; break; }
+                            }
+                            else leftBlocked = true;
+                            bool leftClear = !leftBlocked;
+                            // right clearance: columns (cx, cx+1) — for diagnostics only
+                            bool rightBlocked = false;
+                            if (cx + 1 <= xMax)
+                            {
+                                for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
+                                    if (Solid(cx, checkY) || Solid(cx + 1, checkY)) { rightBlocked = true; break; }
+                            }
+                            else rightBlocked = true;
+                            bool rightClear = !rightBlocked;
+                            // only generate edge if left is clear (SkillExecutor is fixed Left)
+                            if (!leftClear) continue;
                             float cost = curG + 3f + rise;
                             if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
                             {
                                 g[(cx, topY)] = cost;
                                 bridgeNodes.Add((cx, topY));
                                 prev[(cx, topY)] = ((cx, cy), "pillar", null);
+                                pillarVerifyData[(cx, topY)] = (leftClear, rightClear, centerOnlyClear);
                                 float h = Math.Abs(goalX - cx) + Math.Abs(goalY - topY);
                                 heap.Enqueue((cx, topY), cost + h);
                             }
@@ -434,14 +456,15 @@ namespace TerraBlind
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");
-            return BuildResult(prev, g, best.Item1, best.Item2, startNode, verifyData);
+            return BuildResult(prev, g, best.Item1, best.Item2, startNode, verifyData, pillarVerifyData);
         }
 
         private static string BuildResult(
             Dictionary<(int, int), ((int, int), string, List<PhysicsSimulator.ControlInput>)> prev,
             Dictionary<(int, int), float> g,
             int wx, int wy, (int, int) start,
-            Dictionary<(int, int), (int hold, float startVx, int wallFrames, int ceilFrames)> verifyData = null)
+            Dictionary<(int, int), (int hold, float startVx, int wallFrames, int ceilFrames)> verifyData = null,
+            Dictionary<(int, int), (bool leftClear, bool rightClear, bool centerOnlyClear)> pillarVerifyData = null)
         {
             // path entry: (landWx, landWy, sourceWx, sourceWy, action, frames)
             var path = new List<(int wx, int wy, int swx, int swy, string action, List<PhysicsSimulator.ControlInput> frames)>();
@@ -461,6 +484,11 @@ namespace TerraBlind
                 sb.Append("{\"wx\":").Append(path[i].wx)
                   .Append(",\"wy\":").Append(path[i].wy)
                   .Append(",\"action\":\"").Append(path[i].action).Append("\"");
+                if (path[i].action == "pillar")
+                {
+                    sb.Append(",\"swx\":").Append(path[i].swx)
+                      .Append(",\"swy\":").Append(path[i].swy);
+                }
                 if (path[i].action == "jump" && path[i].frames != null)
                 {
                     sb.Append(",\"swx\":").Append(path[i].swx)
@@ -483,12 +511,14 @@ namespace TerraBlind
             sb.Append("],\"goal\":[").Append(wx).Append(',').Append(wy).Append("]");
             sb.Append(",\"cost\":").Append(cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
             DiagLog.Write($"[plan] path len={path.Count} cost={cost:0.#}");
-            if (verifyData != null)
+            foreach (var node in path)
             {
-                foreach (var node in path)
+                if (node.action == "jump" && verifyData != null && verifyData.TryGetValue((node.wx, node.wy), out var vd))
+                    DiagLog.Write($"[verify] edge_emit type=jump from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) hold={vd.hold} startVx={vd.startVx:0.##} wall_frames={vd.wallFrames} ceil_frames={vd.ceilFrames} tick={Main.GameUpdateCount}");
+                if (node.action == "pillar" && pillarVerifyData != null && pillarVerifyData.TryGetValue((node.wx, node.wy), out var pv))
                 {
-                    if (node.action == "jump" && verifyData.TryGetValue((node.wx, node.wy), out var vd))
-                        DiagLog.Write($"[verify] edge_emit type=jump from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) hold={vd.hold} startVx={vd.startVx:0.##} wall_frames={vd.wallFrames} ceil_frames={vd.ceilFrames} tick={Main.GameUpdateCount}");
+                    int rise = node.swy - node.wy;
+                    DiagLog.Write($"[verify] edge_emit type=pillar from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) rise={rise} side=Left left_clear={pv.leftClear} right_clear={pv.rightClear} center_only_clear={pv.centerOnlyClear} tick={Main.GameUpdateCount}");
                 }
             }
 

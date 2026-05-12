@@ -43,6 +43,8 @@ namespace TerraBlind
         private static int _actualWallFrames;
         private static int _actualCeilFrames;
         private static float _prevJumpVx;
+        private static bool _pillarCollideX;
+        private static float _prevPillarVx;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -410,7 +412,7 @@ namespace TerraBlind
                     Wy = int.Parse(hm.Groups[2].Value),
                     Action = hm.Groups[3].Value,
                 };
-                if (node.Action == "jump")
+                if (node.Action == "jump" || node.Action == "pillar")
                 {
                     var sm = sourceRe.Match(nodeJson);
                     if (sm.Success)
@@ -804,6 +806,8 @@ namespace TerraBlind
                         DiagLog.Write($"[nav] pillar align done pcx={pcx} cx={centerX:0.#} target={targetCenterX:0.#} rise={rise}");
                         State = NavState.Pillar;
                         _invariantCheckCooldown = 10;
+                        _pillarCollideX = false;
+                        _prevPillarVx = p.velocity.X;
                         SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         return;
                     }
@@ -819,7 +823,13 @@ namespace TerraBlind
 
                 if (State == NavState.Pillar)
                 {
-                    if (SkillExecutor.IsActive) { _pillarSettleTick = 0; return; }
+                    if (SkillExecutor.IsActive)
+                    {
+                        if (Math.Abs(p.velocity.X) < Math.Abs(_prevPillarVx) - 0.05f) _pillarCollideX = true;
+                        _prevPillarVx = p.velocity.X;
+                        _pillarSettleTick = 0;
+                        return;
+                    }
                     _invariantCheckCooldown--;
                     if (_invariantCheckCooldown <= 0)
                     {
@@ -836,7 +846,10 @@ namespace TerraBlind
                     if (_pillarSettleTick >= 6)
                     {
                         _pillarSettleTick = 0;
-                        if (feetY <= _target.Wy + 1)
+                        bool reachedHeight = feetY <= _target.Wy + 1;
+                        DiagLog.Write($"[verify] edge_actual type=pillar from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({pcx},{feetY}) pillar_collide_x={_pillarCollideX} reached_height={reachedHeight} tick={Main.GameUpdateCount}");
+                        _pillarCollideX = false;
+                        if (reachedHeight)
                         {
                             EmitNodeExit(_pathIdx, "pillar", "done", _target.Wx, _target.Wy, pcx, feetY);
                             _pathIdx++;

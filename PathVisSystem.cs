@@ -131,7 +131,10 @@ namespace TerraBlind
                 else if (action == "pillar" && prevWy > wy)
                 {
                     for (int py = wy; py <= prevWy; py++)
-                        DrawTile(spriteBatch, wx, py, new Color(255, 50, 50, 100));
+                    {
+                        DrawTile(spriteBatch, wx - 1, py, new Color(255, 50, 50, 100));
+                        DrawTile(spriteBatch, wx,     py, new Color(255, 50, 50, 100));
+                    }
                 }
 
                 Color c;
