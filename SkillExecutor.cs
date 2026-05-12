@@ -167,8 +167,8 @@ namespace TerraBlind
                 int leftCol = (int)(p.position.X / 16f);
                 int rightCol = (int)((p.position.X + p.width - 1) / 16f);
                 int headTileY = (int)(p.position.Y / 16f);
-                bool leftHeadBlocked = Main.tile[leftCol, headTileY - 1] is { HasTile: true } lh && Main.tileSolid[lh.TileType];
-                bool rightHeadBlocked = Main.tile[rightCol, headTileY - 1] is { HasTile: true } rh && Main.tileSolid[rh.TileType];
+                bool leftHeadBlocked = Main.tile[leftCol, headTileY - 1] is { HasTile: true } lh && Main.tileSolid[lh.TileType] && !Main.tileSolidTop[lh.TileType];
+                bool rightHeadBlocked = Main.tile[rightCol, headTileY - 1] is { HasTile: true } rh && Main.tileSolid[rh.TileType] && !Main.tileSolidTop[rh.TileType];
                 if (leftHeadBlocked || rightHeadBlocked)
                 {
                     DiagLog.Write($"[pillar] head blocked at leftCol={leftCol} rightCol={rightCol} headY={headTileY - 1}, stopping");
