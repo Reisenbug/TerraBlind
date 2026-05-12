@@ -40,6 +40,9 @@ namespace TerraBlind
         private static int _pillarSettleTick;
         private static int _invariantCheckCooldown;
         private static int _pillarAlignTick;
+        private static int _actualWallFrames;
+        private static int _actualCeilFrames;
+        private static float _prevJumpVx;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -167,6 +170,22 @@ namespace TerraBlind
         }
 
         private static bool Standable(int wx, int wy) => !PathPlanner.IsBlockPublic(wx, wy) && !PathPlanner.PlatformPublic(wx, wy) && !PathPlanner.IsHalfBrickPublic(wx, wy) && PathPlanner.IsFloorPublic(wx, wy + 1);
+
+        // Returns pixel offset (-4, 0, or +4) to shift pillar align target away from side walls.
+        // Checks columns cx-1 and cx+1 over the rise range; if only one side is blocked, shift away.
+        private static float PillarXOffset(int cx, int feetY, int rise)
+        {
+            bool leftBlocked = false, rightBlocked = false;
+            int checkTop = Math.Max(feetY - rise - 1, 0);
+            for (int cy = feetY - 1; cy >= checkTop; cy--)
+            {
+                if (PathPlanner.IsBlockPublic(cx - 1, cy)) leftBlocked = true;
+                if (PathPlanner.IsBlockPublic(cx + 1, cy)) rightBlocked = true;
+            }
+            if (leftBlocked && !rightBlocked) return 4f;
+            if (rightBlocked && !leftBlocked) return -4f;
+            return 0f;
+        }
 
         // re-simulate jump from current player state, pick hold that lands closest to targetWx
         private static (List<ReplayFrame> frames, int simCx, int simCy, int hold) ResimJump(Player p, int sign, int targetWx, int fallbackHold, float? startVx = null)
@@ -653,6 +672,8 @@ namespace TerraBlind
                         {
                             int landedCx = (int)((p.position.X + p.width / 2f) / 16);
                             DiagLog.Write($"[nav] jump replay landed px={p.position.X:0.##} cx={landedCx} target_cx={_target.Wx} delta={landedCx - _target.Wx}");
+                            DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({landedCx},{feetY}) wall_frames={_actualWallFrames} ceil_frames={_actualCeilFrames} tick={Main.GameUpdateCount}");
+                            _actualWallFrames = 0; _actualCeilFrames = 0;
                             EmitNodeExit(_pathIdx, "jump", "done", _target.Wx, _target.Wy, pcx, feetY);
                             _jumpReplayLoaded = false;
                             _pathIdx++;
@@ -666,12 +687,20 @@ namespace TerraBlind
                             int expWx = JumpCoordinator.PredictedLandWx >= 0 ? JumpCoordinator.PredictedLandWx : _target.Wx;
                             int expWy = JumpCoordinator.PredictedLandWy >= 0 ? JumpCoordinator.PredictedLandWy : _target.Wy;
                             DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) predicted ({expWx},{expWy}) astar ({_target.Wx},{_target.Wy})");
+                            DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({pcx},{feetY}) wall_frames={_actualWallFrames} ceil_frames={_actualCeilFrames} tick={Main.GameUpdateCount}");
+                            _actualWallFrames = 0; _actualCeilFrames = 0;
                             EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
                             JumpCoordinator.Stop();
                             _pathIdx++;
                             State = NavState.Idle;
                         }
                     }
+                    if (_prevVY < 0f)
+                    {
+                        if (Math.Abs(p.velocity.X) < Math.Abs(_prevJumpVx) - 0.05f) _actualWallFrames++;
+                        if (p.velocity.Y >= 0f) _actualCeilFrames++;
+                    }
+                    _prevJumpVx = p.velocity.X;
                     _prevVY = p.velocity.Y;
                     return;
                 }
@@ -767,7 +796,7 @@ namespace TerraBlind
                         return;
                     }
                     float vx = p.velocity.X;
-                    float targetCenterX = _target.Wx * 16f + 8f;
+                    float targetCenterX = _target.Wx * 16f + 8f + PillarXOffset(_target.Wx, feetY, feetY - _target.Wy);
                     bool arrived = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(vx) < 0.3f;
                     if (arrived)
                     {

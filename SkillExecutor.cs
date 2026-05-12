@@ -146,15 +146,35 @@ namespace TerraBlind
             if (State == SkillState.PillarBuild)
             {
                 if (platformSlot < 0) { Stop(); return; }
-                int headTileY = (int)(p.position.Y / 16f);
-                if (Main.tile[Pcx(p), headTileY - 1] is { HasTile: true } ht && Main.tileSolid[ht.TileType])
+                int feetYNow = (int)((p.position.Y + p.height) / 16f);
+                int pcxNow = Pcx(p);
+                // simulate hold=15 vx=0 jump; if end_py > start_py the path is blocked
+                var nudgeState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 };
+                var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
+                var nudgeSim = PhysicsSimulator.SimulateJump(nudgeState, 0, 15, nudgePh);
+                bool jumpBlocked = p.position.Y - nudgeSim.MinPy < 10f; // normal unobstructed rise = 93.46px; <10 = blocked
+                if (jumpBlocked)
                 {
-                    DiagLog.Write($"[pillar] head blocked at ({Pcx(p)},{headTileY - 1}), stopping");
+                    float shift = 4f;
+                    var simL = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = p.position.X - shift, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, nudgePh);
+                    var simR = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = p.position.X + shift, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, nudgePh);
+                    bool clearLeft = p.position.Y - simL.MinPy >= 10f;
+                    bool clearRight = p.position.Y - simR.MinPy >= 10f;
+                    DiagLog.Write($"[pillar_nudge] blocked px={p.position.X:0.##} clearLeft={clearLeft} clearRight={clearRight}");
+                    if (clearLeft && !clearRight) p.controlLeft = true;
+                    else if (clearRight && !clearLeft) p.controlRight = true;
+                }
+                int leftCol = (int)(p.position.X / 16f);
+                int rightCol = (int)((p.position.X + p.width - 1) / 16f);
+                int headTileY = (int)(p.position.Y / 16f);
+                bool leftHeadBlocked = Main.tile[leftCol, headTileY - 1] is { HasTile: true } lh && Main.tileSolid[lh.TileType];
+                bool rightHeadBlocked = Main.tile[rightCol, headTileY - 1] is { HasTile: true } rh && Main.tileSolid[rh.TileType];
+                if (leftHeadBlocked || rightHeadBlocked)
+                {
+                    DiagLog.Write($"[pillar] head blocked at leftCol={leftCol} rightCol={rightCol} headY={headTileY - 1}, stopping");
                     Stop();
                     return;
                 }
-                int feetYNow = (int)((p.position.Y + p.height) / 16f);
-                int pcxNow = Pcx(p);
                 if (!ReplaySystem.IsActive)
                 {
                     if (_cyclesDone > 0 && feetYNow <= _targetWy)

@@ -69,7 +69,7 @@ namespace TerraBlind
         {
             var result = new List<(int, int, int)>();
             var edges = BuildJumpEdges(p, cx, cy, sign, cx - 80, cx + 80, cy - 50, cy + 50);
-            foreach (var (lx, ly, frames, hold) in edges)
+            foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames) in edges)
                 result.Add((lx, ly, hold));
             return result;
         }
@@ -185,10 +185,10 @@ namespace TerraBlind
         }
 
         // returns list of (landCx, landCy, frames, holdFrames) for all valid jump outcomes from this tile
-        private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold)>
+        private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold, bool arcClips, int wallFrames, int ceilFrames)>
             BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax, float? overrideVx = null)
         {
-            var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int)>();
+            var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int, bool, int, int)>();
             var seen = new HashSet<(int, int)>();
             var ph = PhysicsSimulator.Params.FromPlayer(p);
 
@@ -214,13 +214,14 @@ namespace TerraBlind
                 if (sign * (lx - cx) < JumpMinCol) continue;
                 if (!Standable(lx, ly)) continue;
                 if (seen.Contains((lx, ly))) continue;
-                if (ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph))
+                bool arcClips = ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph);
+                if (arcClips)
                 {
                     DiagLog.Write($"[plan] jump edge wallclip src=({cx},{cy}) target=({lx},{ly}) hold={hold}");
                     continue;
                 }
                 seen.Add((lx, ly));
-                results.Add((lx, ly, result.Frames, hold));
+                results.Add((lx, ly, result.Frames, hold, arcClips, result.WallContactFrames, result.CeilingContactFrames));
             }
             return results;
         }
@@ -293,6 +294,7 @@ namespace TerraBlind
             var visited = new HashSet<(int, int)>();
             var bridgeNodes = new HashSet<(int, int)>();
             var heap = new PriorityQueue<(int wx, int wy), float>();
+            var verifyData = new Dictionary<(int, int), (int hold, float startVx, int wallFrames, int ceilFrames)>();
 
             var startNode = (pcx, feetY);
             g[startNode] = 0f;
@@ -307,7 +309,7 @@ namespace TerraBlind
                 visited.Add((cx, cy));
 
                 if (cx == goalX && cy == goalY)
-                    return BuildResult(prev, g, goalX, goalY, startNode);
+                    return BuildResult(prev, g, goalX, goalY, startNode, verifyData);
 
                 float curG = g.TryGetValue((cx, cy), out var cg) ? cg : float.MaxValue;
 
@@ -339,7 +341,7 @@ namespace TerraBlind
                     bool fromPillar = prev.TryGetValue((cx, cy), out var prevEntry) && prevEntry.Item2 == "pillar";
                     float? jumpStartVx = fromPillar ? 0f : (float?)null;
                     var jumpEdges = BuildJumpEdges(p, cx, cy, sign, xMin, xMax, yMin, yMax, jumpStartVx);
-                    foreach (var (lx, ly, frames, hold) in jumpEdges)
+                    foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames) in jumpEdges)
                     {
                         int rise = cy - ly;
                         float riseBonus = Math.Max(0, rise - 1) * 2f;
@@ -353,6 +355,7 @@ namespace TerraBlind
                         {
                             g[(lx, ly)] = ng;
                             prev[(lx, ly)] = ((cx, cy), "jump", frames);
+                            verifyData[(lx, ly)] = (hold, startVx: jumpStartVx ?? sign * PhysicsSimulator.MaxRunSpeed, wallFrames, ceilFrames);
                             float h = Math.Abs(goalX - lx) + Math.Abs(goalY - ly);
                             heap.Enqueue((lx, ly), ng + h);
                         }
@@ -431,13 +434,14 @@ namespace TerraBlind
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");
-            return BuildResult(prev, g, best.Item1, best.Item2, startNode);
+            return BuildResult(prev, g, best.Item1, best.Item2, startNode, verifyData);
         }
 
         private static string BuildResult(
             Dictionary<(int, int), ((int, int), string, List<PhysicsSimulator.ControlInput>)> prev,
             Dictionary<(int, int), float> g,
-            int wx, int wy, (int, int) start)
+            int wx, int wy, (int, int) start,
+            Dictionary<(int, int), (int hold, float startVx, int wallFrames, int ceilFrames)> verifyData = null)
         {
             // path entry: (landWx, landWy, sourceWx, sourceWy, action, frames)
             var path = new List<(int wx, int wy, int swx, int swy, string action, List<PhysicsSimulator.ControlInput> frames)>();
@@ -479,6 +483,14 @@ namespace TerraBlind
             sb.Append("],\"goal\":[").Append(wx).Append(',').Append(wy).Append("]");
             sb.Append(",\"cost\":").Append(cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
             DiagLog.Write($"[plan] path len={path.Count} cost={cost:0.#}");
+            if (verifyData != null)
+            {
+                foreach (var node in path)
+                {
+                    if (node.action == "jump" && verifyData.TryGetValue((node.wx, node.wy), out var vd))
+                        DiagLog.Write($"[verify] edge_emit type=jump from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) hold={vd.hold} startVx={vd.startVx:0.##} wall_frames={vd.wallFrames} ceil_frames={vd.ceilFrames} tick={Main.GameUpdateCount}");
+                }
+            }
 
             var evSb = new StringBuilder();
             evSb.Append($"{{\"e\":\"plan_done\",\"tick\":{Main.GameUpdateCount},\"goal\":[{wx},{wy}],\"path_len\":{path.Count},\"cost\":{cost.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)},\"envelope_len\":{(_envelopeCache != null ? _envelopeCache.Length : 0)},\"path\":[");

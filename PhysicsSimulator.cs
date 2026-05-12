@@ -55,6 +55,9 @@ namespace TerraBlind
             public bool Landed;
             public bool Failed;
             public int Cx, Cy;
+            public float MinPy;
+            public int WallContactFrames;    // frames where vx was clipped during ascent (vy<0)
+            public int CeilingContactFrames; // frames where vy was clipped during ascent (vy<0)
         }
 
         public static State Step(State s, ControlInput input, Params ph)
@@ -96,6 +99,34 @@ namespace TerraBlind
             };
         }
 
+        public static State Step(State s, ControlInput input, Params ph, out bool vxClipped, out bool vyClipped)
+        {
+            float vx = s.Vx;
+            float vy = s.Vy;
+            int jfl = s.JumpFramesLeft;
+
+            if (input.Right)       vx = System.Math.Min(vx + ph.AccRun, ph.MaxRun);
+            else if (input.Left)   vx = System.Math.Max(vx - ph.AccRun, -ph.MaxRun);
+            else if (s.Grounded)   vx = vx > 0 ? System.Math.Max(vx - ph.RunSlowdown, 0) : System.Math.Min(vx + ph.RunSlowdown, 0);
+
+            if (input.Jump && jfl > 0) { vy = ph.HoldVY; jfl--; }
+            else { if (!input.Jump) jfl = 0; vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall); }
+
+            var pos = new Vector2(s.Px, s.Py);
+            var vel = new Vector2(vx, vy);
+            var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, false, false, 1);
+            float nx = s.Px + result.X;
+            float ny = s.Py + result.Y;
+
+            vxClipped = System.Math.Abs(result.X - vx) > 0.01f;
+            vyClipped = System.Math.Abs(result.Y - vy) > 0.01f;
+
+            bool hitFloor = vy > 0f && vyClipped;
+            if (hitFloor) vy = 0f;
+
+            return new State { Px = nx, Py = ny, Vx = vx, Vy = vy, Grounded = hitFloor, JumpFramesLeft = jfl };
+        }
+
         // overload for callers that don't need water-aware params
         public static State Step(State s, ControlInput input) => Step(s, input, Params.Default);
 
@@ -104,6 +135,8 @@ namespace TerraBlind
             var frames = new List<ControlInput>();
             var s = start;
             s.JumpFramesLeft = holdFrames;
+            float minPy = start.Py;
+            int wallContactFrames = 0, ceilingContactFrames = 0;
 
             for (int f = 0; f < maxFrames; f++)
             {
@@ -113,7 +146,14 @@ namespace TerraBlind
                     Left  = dirSign < 0,
                     Jump  = f < holdFrames,
                 };
-                s = Step(s, input, ph);
+                float preVy = s.Vy;
+                s = Step(s, input, ph, out bool vxClipped, out bool vyClipped);
+                if (s.Py < minPy) minPy = s.Py;
+                if (preVy < 0f)
+                {
+                    if (vxClipped) wallContactFrames++;
+                    if (vyClipped) ceilingContactFrames++;
+                }
                 frames.Add(input);
 
                 if (f > holdFrames && s.Grounded)
@@ -125,10 +165,13 @@ namespace TerraBlind
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
                         Cy       = (int)((s.Py + PlayerH / 2f) / 16),
+                        MinPy    = minPy,
+                        WallContactFrames    = wallContactFrames,
+                        CeilingContactFrames = ceilingContactFrames,
                     };
                 }
             }
-            return new SimResult { EndState = s, Frames = frames, Failed = true };
+            return new SimResult { EndState = s, Frames = frames, Failed = true, MinPy = minPy, WallContactFrames = wallContactFrames, CeilingContactFrames = ceilingContactFrames };
         }
 
         public static SimResult SimulateJump(State start, int dirSign, int holdFrames, int maxFrames = 120)

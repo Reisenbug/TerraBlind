@@ -590,6 +590,7 @@ namespace TerraBlind
 				sb2.Append(",\"end_vx\":").Append(simResult.EndState.Vx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
 				sb2.Append(",\"end_vy\":").Append(simResult.EndState.Vy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
 				sb2.Append(",\"end_grounded\":").Append(simResult.EndState.Grounded ? "true" : "false");
+				sb2.Append(",\"min_py\":").Append(simResult.MinPy.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
 				sb2.Append(",\"frames\":[");
 				var s2 = simStart;
 				for (int fi = 0; fi < simResult.Frames.Count; fi++)
