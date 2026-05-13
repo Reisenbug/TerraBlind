@@ -213,19 +213,19 @@ namespace TerraBlind
                 int dist = Math.Abs(sim.Cx - targetWx);
                 if (dist < bestDist || (dist == bestDist && hold > bestHold)) { bestDist = dist; best = sim; bestHold = hold; }
             }
-            if (best.Frames != null && p.wet)
-            {
-                var sb = new System.Text.StringBuilder();
-                var dbgState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = startVx ?? p.velocity.X, Vy = 0f, Grounded = true, JumpFramesLeft = bestHold };
-                var ph2 = PhysicsSimulator.Params.FromPlayer(p);
-                for (int fi = 0; fi < best.Frames.Count; fi++)
-                {
-                    dbgState = PhysicsSimulator.Step(dbgState, best.Frames[fi], ph2);
-                    if (fi < 5 || fi % 10 == 0 || fi == best.Frames.Count - 1)
-                        sb.Append($" f{fi}:vx={dbgState.Vx:0.##},r={( best.Frames[fi].Right?1:0)}");
-                }
-                DiagLog.Write($"[jump] wet resim frames={best.Frames.Count}{sb}");
-            }
+            // if (best.Frames != null && p.wet)
+            // {
+            //     var sb = new System.Text.StringBuilder();
+            //     var dbgState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = startVx ?? p.velocity.X, Vy = 0f, Grounded = true, JumpFramesLeft = bestHold };
+            //     var ph2 = PhysicsSimulator.Params.FromPlayer(p);
+            //     for (int fi = 0; fi < best.Frames.Count; fi++)
+            //     {
+            //         dbgState = PhysicsSimulator.Step(dbgState, best.Frames[fi], ph2);
+            //         if (fi < 5 || fi % 10 == 0 || fi == best.Frames.Count - 1)
+            //             sb.Append($" f{fi}:vx={dbgState.Vx:0.##},r={( best.Frames[fi].Right?1:0)}");
+            //     }
+            //     DiagLog.Write($"[jump] wet resim frames={best.Frames.Count}{sb}");
+            // }
             var frames = new List<ReplayFrame>();
             if (best.Frames != null)
                 foreach (var fi in best.Frames)
@@ -469,7 +469,7 @@ namespace TerraBlind
                 if (p == null || !p.active) return;
 
                 if (Main.GameUpdateCount % 60 == 0)
-                    DiagLog.Write($"[nav] tick maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##} vx={p.velocity.X:0.##}");
+                    // DiagLog.Write($"[nav] tick maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##} vx={p.velocity.X:0.##}");
 
                 int pcx = Pcx(p);
                 int feetY = FeetY(p);
@@ -500,7 +500,7 @@ namespace TerraBlind
                     if (_lastPlanMaxRun < 0f)
                     {
                         _lastPlanMaxRun = curMaxRun;
-                        DiagLog.Write($"[nav] maxrun init maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##}");
+                        // DiagLog.Write($"[nav] maxrun init maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##}");
                     }
                     else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f)
                     {
@@ -697,8 +697,8 @@ namespace TerraBlind
                         if (JumpCoordinator.IsActive) { _prevVY = p.velocity.Y; return; }
 
                         // phase 2: alignment done, load replay once
-                        if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
-                            DiagLog.Write($"[nav] jump phase2 trigger vy={p.velocity.Y} loaded={_jumpReplayLoaded} replayActive={ReplaySystem.IsActive}");
+                        // if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
+                        //     DiagLog.Write($"[nav] jump phase2 trigger vy={p.velocity.Y} loaded={_jumpReplayLoaded} replayActive={ReplaySystem.IsActive}");
                         if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
                         {
                             _jumpReplayLoaded = true;
@@ -751,7 +751,7 @@ namespace TerraBlind
                         if (Math.Abs(p.velocity.X) < Math.Abs(_prevJumpVx) - 0.05f) _actualWallFrames++;
                         if (p.velocity.Y >= 0f) _actualCeilFrames++;
                     }
-                    DiagLog.Write($"[jump_vx] tick={Main.GameUpdateCount} vx={p.velocity.X:0.###} vy={p.velocity.Y:0.###} replayActive={ReplaySystem.IsActive}");
+                    // DiagLog.Write($"[jump_vx] tick={Main.GameUpdateCount} vx={p.velocity.X:0.###} vy={p.velocity.Y:0.###} replayActive={ReplaySystem.IsActive}");
                     _prevJumpVx = p.velocity.X;
                     _prevVY = p.velocity.Y;
                     return;
