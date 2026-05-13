@@ -468,9 +468,6 @@ namespace TerraBlind
                 var p = Main.LocalPlayer;
                 if (p == null || !p.active) return;
 
-                if (Main.GameUpdateCount % 60 == 0)
-                    // DiagLog.Write($"[nav] tick maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##} vx={p.velocity.X:0.##}");
-
                 int pcx = Pcx(p);
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
