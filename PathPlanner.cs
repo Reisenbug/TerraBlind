@@ -400,6 +400,7 @@ namespace TerraBlind
                             bool rightClear = !rightBlocked;
                             // only generate edge if left is clear (SkillExecutor is fixed Left)
                             if (!leftClear) continue;
+                            if (excludedGoals != null && excludedGoals.Contains((cx, topY))) continue;
                             float cost = curG + 3f + rise;
                             if (cost < g.GetValueOrDefault((cx, topY), float.MaxValue))
                             {
