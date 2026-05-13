@@ -45,6 +45,7 @@ namespace TerraBlind
         private static float _prevJumpVx;
         private static bool _pillarCollideX;
         private static float _prevPillarVx;
+        private static int _pillarNudgeFrames;
         private static float _lastPlanMaxRun = -1f;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
@@ -499,18 +500,15 @@ namespace TerraBlind
                         _lastPlanMaxRun = curMaxRun;
                         // DiagLog.Write($"[nav] maxrun init maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##}");
                     }
-                    else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f)
+                    else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f && p.velocity.Y == 0f)
                     {
                         DiagLog.Write($"[nav] maxrun changed {_lastPlanMaxRun:0.##}→{curMaxRun:0.##} → replan");
                         _lastPlanMaxRun = curMaxRun;
                         _path.Clear();
                         _pathIdx = 0;
-                        if (p.velocity.Y == 0f)
-                        {
-                            State = NavState.Idle;
-                            JumpCoordinator.Stop();
-                            ReplaySystem.Stop();
-                        }
+                        State = NavState.Idle;
+                        JumpCoordinator.Stop();
+                        ReplaySystem.Stop();
                     }
                 }
 
@@ -672,7 +670,7 @@ namespace TerraBlind
                     if (_sign > 0) p.controlRight = true;
                     else p.controlLeft = true;
                     bool onGround = p.velocity.Y == 0f;
-                    bool landed = (_prevVY > 0f && onGround) || (onGround && _pathIdx == 0);
+                    bool landed = (_prevVY >= 0f && onGround) || (onGround && _pathIdx == 0);
                     _prevVY = p.velocity.Y;
                     if (landed)
                     {
@@ -855,6 +853,7 @@ namespace TerraBlind
                         _invariantCheckCooldown = 10;
                         _pillarCollideX = false;
                         _prevPillarVx = p.velocity.X;
+                        _pillarNudgeFrames = 0;
                         SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         return;
                     }
@@ -875,6 +874,17 @@ namespace TerraBlind
                         if (Math.Abs(p.velocity.X) < Math.Abs(_prevPillarVx) - 0.05f) _pillarCollideX = true;
                         _prevPillarVx = p.velocity.X;
                         _pillarSettleTick = 0;
+                        float pillarLeft = (_target.Wx - 1) * 16f;
+                        float pillarRight = (_target.Wx + 1) * 16f;
+                        float playerLeft = p.position.X;
+                        float playerRight = p.position.X + p.width;
+                        if (_pillarNudgeFrames == 0)
+                        {
+                            if (playerLeft < pillarLeft) _pillarNudgeFrames = 3;
+                            else if (playerRight > pillarRight) _pillarNudgeFrames = -3;
+                        }
+                        if (_pillarNudgeFrames > 0) { p.controlRight = true; _pillarNudgeFrames--; }
+                        else if (_pillarNudgeFrames < 0) { p.controlLeft = true; _pillarNudgeFrames++; }
                         return;
                     }
                     _invariantCheckCooldown--;
@@ -904,7 +914,8 @@ namespace TerraBlind
                         }
                         else
                         {
-                            DiagLog.Write($"[nav] pillar height fail feetY={feetY} targetWy={_target.Wy} delta={feetY - _target.Wy} → replan");
+                            DiagLog.Write($"[nav] pillar height fail feetY={feetY} targetWy={_target.Wy} delta={feetY - _target.Wy} → blacklist+replan");
+                            BlacklistNode(_target.Wx, _target.Wy);
                             EmitNavFailed("pillar_height_fail", _pathIdx, "pillar", pcx, feetY);
                             Replan(p);
                         }
