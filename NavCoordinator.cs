@@ -45,6 +45,7 @@ namespace TerraBlind
         private static float _prevJumpVx;
         private static bool _pillarCollideX;
         private static float _prevPillarVx;
+        private static float _lastPlanMaxRun = -1f;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -71,6 +72,7 @@ namespace TerraBlind
                 _jumpReplayLoaded = false;
                 _fixedPath = false;
                 _pillarSettleTick = 0;
+                _lastPlanMaxRun = -1f;
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
@@ -202,13 +204,27 @@ namespace TerraBlind
             PhysicsSimulator.SimResult best = default;
             int bestHold = fallbackHold;
             int bestDist = int.MaxValue;
-            foreach (int hold in PathPlanner.HoldFrameOptions)
+            var holdOptions = p.wet && !p.honeyWet && !p.merman ? PathPlanner.HoldFrameOptionsWet : PathPlanner.HoldFrameOptions;
+            foreach (int hold in holdOptions)
             {
                 startState.JumpFramesLeft = hold;
                 var sim = PhysicsSimulator.SimulateJump(startState, sign, hold, ph);
                 if (!sim.Landed) continue;
                 int dist = Math.Abs(sim.Cx - targetWx);
                 if (dist < bestDist || (dist == bestDist && hold > bestHold)) { bestDist = dist; best = sim; bestHold = hold; }
+            }
+            if (best.Frames != null && p.wet)
+            {
+                var sb = new System.Text.StringBuilder();
+                var dbgState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = startVx ?? p.velocity.X, Vy = 0f, Grounded = true, JumpFramesLeft = bestHold };
+                var ph2 = PhysicsSimulator.Params.FromPlayer(p);
+                for (int fi = 0; fi < best.Frames.Count; fi++)
+                {
+                    dbgState = PhysicsSimulator.Step(dbgState, best.Frames[fi], ph2);
+                    if (fi < 5 || fi % 10 == 0 || fi == best.Frames.Count - 1)
+                        sb.Append($" f{fi}:vx={dbgState.Vx:0.##},r={( best.Frames[fi].Right?1:0)}");
+                }
+                DiagLog.Write($"[jump] wet resim frames={best.Frames.Count}{sb}");
             }
             var frames = new List<ReplayFrame>();
             if (best.Frames != null)
@@ -314,6 +330,7 @@ namespace TerraBlind
             int feetY = FeetY(p);
             PurgeBlacklist();
             DiagLog.Write($"[nav] Replan at ({pcx},{feetY}) state={State} blacklist={_blacklist.Count}");
+            _lastPlanMaxRun = PhysicsSimulator.Params.FromPlayer(p).MaxRun;
             string json = PathPlanner.Plan(_sign, BlacklistSet());
             var newPath = ParsePath(json);
             if (newPath == null || newPath.Count == 0)
@@ -451,6 +468,9 @@ namespace TerraBlind
                 var p = Main.LocalPlayer;
                 if (p == null || !p.active) return;
 
+                if (Main.GameUpdateCount % 60 == 0)
+                    DiagLog.Write($"[nav] tick maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##} vx={p.velocity.X:0.##}");
+
                 int pcx = Pcx(p);
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
@@ -474,6 +494,28 @@ namespace TerraBlind
                 }
                 _lastStallPcx = pcx;
                 _lastStallFeetY = feetY;
+
+                {
+                    float curMaxRun = PhysicsSimulator.Params.FromPlayer(p).MaxRun;
+                    if (_lastPlanMaxRun < 0f)
+                    {
+                        _lastPlanMaxRun = curMaxRun;
+                        DiagLog.Write($"[nav] maxrun init maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##}");
+                    }
+                    else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f)
+                    {
+                        DiagLog.Write($"[nav] maxrun changed {_lastPlanMaxRun:0.##}→{curMaxRun:0.##} → replan");
+                        _lastPlanMaxRun = curMaxRun;
+                        _path.Clear();
+                        _pathIdx = 0;
+                        if (p.velocity.Y == 0f)
+                        {
+                            State = NavState.Idle;
+                            JumpCoordinator.Stop();
+                            ReplaySystem.Stop();
+                        }
+                    }
+                }
 
                 if (State == NavState.Idle)
                 {
@@ -656,6 +698,8 @@ namespace TerraBlind
 
                         // phase 2: alignment done, load replay once
                         if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
+                            DiagLog.Write($"[nav] jump phase2 trigger vy={p.velocity.Y} loaded={_jumpReplayLoaded} replayActive={ReplaySystem.IsActive}");
+                        if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
                         {
                             _jumpReplayLoaded = true;
                             var replayFrames = new List<ReplayFrame>();
@@ -670,6 +714,11 @@ namespace TerraBlind
                         }
 
                         // phase 3: replay done, wait for landing
+                        if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y != 0f)
+                        {
+                            if (_sign > 0) p.controlRight = true;
+                            else p.controlLeft = true;
+                        }
                         if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y == 0f)
                         {
                             int landedCx = (int)((p.position.X + p.width / 2f) / 16);
@@ -702,6 +751,7 @@ namespace TerraBlind
                         if (Math.Abs(p.velocity.X) < Math.Abs(_prevJumpVx) - 0.05f) _actualWallFrames++;
                         if (p.velocity.Y >= 0f) _actualCeilFrames++;
                     }
+                    DiagLog.Write($"[jump_vx] tick={Main.GameUpdateCount} vx={p.velocity.X:0.###} vy={p.velocity.Y:0.###} replayActive={ReplaySystem.IsActive}");
                     _prevJumpVx = p.velocity.X;
                     _prevVY = p.velocity.Y;
                     return;

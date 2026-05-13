@@ -23,6 +23,7 @@ namespace TerraBlind
         private const float MoveCostBase = 1f;       // base cost per move tile, plus distance-to-ground penalty
 
         public static readonly int[] HoldFrameOptions = { 8, 12, 15 };
+        public static readonly int[] HoldFrameOptionsWet = { 10, 16, 22, 30 };
 
         // kept for envelope visualization only
         private static int[] _envelopeCache;
@@ -196,7 +197,8 @@ namespace TerraBlind
             float startPy = cy * 16f - p.height;
             float startVx = overrideVx ?? sign * ph.MaxRun;
 
-            foreach (int hold in HoldFrameOptions)
+            var holdOptions = p.wet && !p.honeyWet && !p.merman ? HoldFrameOptionsWet : HoldFrameOptions;
+            foreach (int hold in holdOptions)
             {
                 var startState = new PhysicsSimulator.State
                 {

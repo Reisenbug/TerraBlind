@@ -16,15 +16,30 @@ namespace TerraBlind
 
             public static Params FromPlayer(Player p)
             {
-                float js = Player.jumpSpeed;
-                float grav = p.gravity > 0f ? p.gravity : 0.4f;
+                float grav, js, maxFall, maxRun;
+                float accRun = 0.08f;
+                if (p.wet && !p.honeyWet && !p.merman)
+                {
+                    grav    = 0.2f * 0.5f;
+                    js      = 6.01f * 0.5f;
+                    maxFall = 5f * 0.5f;
+                    maxRun  = 1.5f * p.moveSpeed;
+                    accRun  = 0.08f * 0.5f;
+                }
+                else
+                {
+                    grav    = p.gravity > 0f ? p.gravity : 0.4f;
+                    js      = Player.jumpSpeed;
+                    maxFall = 10f;
+                    maxRun  = 3f * p.moveSpeed;
+                }
                 return new Params
                 {
-                    AccRun      = 0.08f,
-                    MaxRun      = p.wet ? 1.5f : (p.maxRunSpeed > 0f ? p.maxRunSpeed : MaxRunSpeed),
+                    AccRun      = accRun,
+                    MaxRun      = maxRun,
                     RunSlowdown = 0.2f,
                     Gravity     = grav,
-                    MaxFall     = 10f,
+                    MaxFall     = maxFall,
                     HoldVY      = -(js - grav),
                 };
             }
