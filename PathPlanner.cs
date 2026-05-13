@@ -228,7 +228,28 @@ namespace TerraBlind
             return results;
         }
 
-        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null)
+        public static string PlanTo(int goalWx, int goalWy)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return "{\"error\":\"no_player\"}";
+            int sign = goalWx >= (int)((p.position.X + p.width / 2f) / 16f) ? 1 : -1;
+            int goalX = goalWx, goalY = goalWy;
+            if (!Standable(goalX, goalY))
+            {
+                int bestDx = 0, bestDy = 0, bestDist = int.MaxValue;
+                for (int dy = -20; dy <= 5; dy++)
+                    for (int dx = -3; dx <= 3; dx++)
+                    {
+                        if (!Standable(goalX + dx, goalY + dy)) continue;
+                        int dist = dx * dx + dy * dy;
+                        if (dist < bestDist) { bestDist = dist; bestDx = dx; bestDy = dy; }
+                    }
+                if (bestDist < int.MaxValue) { goalX += bestDx; goalY += bestDy; }
+            }
+            return Plan(sign, null, (goalX, goalY));
+        }
+
+        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null, (int, int)? fixedGoal = null)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
@@ -262,32 +283,44 @@ namespace TerraBlind
             int yMin = feetY - AStarScanUp;
             int yMax = feetY + AStarScanDown;
 
-            int goalX = -1, goalY = -1;
-            var rejectedGoals = new System.Text.StringBuilder();
-            for (int wx = xMin; wx <= xMax; wx++)
+            int goalX, goalY;
+            if (fixedGoal.HasValue)
             {
-                if (sign * (wx - pcx) < MinGoalDist) continue;
-                for (int wy = Math.Max(50, feetY - AStarScanUp); wy <= yMax; wy++)
-                {
-                    if (!Standable(wx, wy)) continue;
-                    bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
-                    if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
-                    bool ok = CanProgress(wx, wy, sign, CanProgressK);
-                    if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
-                    int fwd = sign * (wx - pcx);
-                    int rise = feetY - wy;
-                    int score = fwd + Math.Max(0, rise) * 2;
-                    int bestScore = goalX < 0 ? int.MinValue : sign * (goalX - pcx) + Math.Max(0, feetY - goalY) * 2;
-                    if (score > bestScore) { goalX = wx; goalY = wy; }
-                    break;
-                }
+                goalX = fixedGoal.Value.Item1;
+                goalY = fixedGoal.Value.Item2;
+                xMin = Math.Min(xMin, goalX - 5);
+                xMax = Math.Max(xMax, goalX + 5);
+                yMin = Math.Min(yMin, goalY - 5);
+                yMax = Math.Max(yMax, goalY + 5);
             }
-            DiagLog.Write($"[plan] goal=({goalX},{goalY})");
-            if (goalX == -1)
+            else
             {
-                DiagLog.Write("[plan] no goal found");
-                DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_goal\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[{rejectedGoals.ToString().TrimEnd(',')}]}}");
-                return "{\"path\":[],\"cost\":0}";
+                goalX = -1; goalY = -1;
+                var rejectedGoals = new System.Text.StringBuilder();
+                for (int wx = xMin; wx <= xMax; wx++)
+                {
+                    if (sign * (wx - pcx) < MinGoalDist) continue;
+                    for (int wy = Math.Max(50, feetY - AStarScanUp); wy <= yMax; wy++)
+                    {
+                        if (!Standable(wx, wy)) continue;
+                        bool excluded = excludedGoals != null && excludedGoals.Contains((wx, wy));
+                        if (excluded) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"excluded\"}},"); break; }
+                        bool ok = CanProgress(wx, wy, sign, CanProgressK);
+                        if (!ok) { rejectedGoals.Append($"{{\"wx\":{wx},\"wy\":{wy},\"reason\":\"no_progress\"}},"); break; }
+                        int fwd = sign * (wx - pcx);
+                        int rise = feetY - wy;
+                        int score = fwd + Math.Max(0, rise) * 2;
+                        int bestScore = goalX < 0 ? int.MinValue : sign * (goalX - pcx) + Math.Max(0, feetY - goalY) * 2;
+                        if (score > bestScore) { goalX = wx; goalY = wy; }
+                        break;
+                    }
+                }
+                if (goalX == -1)
+                {
+                    DiagLog.Write("[plan] no goal found");
+                    DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_goal\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[{rejectedGoals.ToString().TrimEnd(',')}]}}");
+                    return "{\"path\":[],\"cost\":0}";
+                }
             }
             DiagLog.Write($"[plan] goal=({goalX},{goalY}) start=({pcx},{feetY})");
 

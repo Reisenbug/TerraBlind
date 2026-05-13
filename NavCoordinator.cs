@@ -47,6 +47,8 @@ namespace TerraBlind
         private static float _prevPillarVx;
         private static int _pillarNudgeFrames;
         private static float _lastPlanMaxRun = -1f;
+        private static int _fixedGoalWx = -1;
+        private static int _fixedGoalWy = -1;
 
         private static readonly Dictionary<(int, int), long> _blacklist = new Dictionary<(int, int), long>();
         private static (int, int) _lastGoal;
@@ -63,6 +65,8 @@ namespace TerraBlind
             lock (_lock)
             {
                 _sign = sign;
+                _fixedGoalWx = -1;
+                _fixedGoalWy = -1;
                 _blacklist.Clear();
                 State = NavState.Idle;
                 _path.Clear();
@@ -77,6 +81,31 @@ namespace TerraBlind
                 FailReason = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
+            }
+        }
+
+        public static void StartTo(int goalWx, int goalWy)
+        {
+            lock (_lock)
+            {
+                var p = Main.LocalPlayer;
+                _sign = p != null && goalWx >= (int)((p.position.X + p.width / 2f) / 16f) ? 1 : -1;
+                _fixedGoalWx = goalWx;
+                _fixedGoalWy = goalWy;
+                _blacklist.Clear();
+                State = NavState.Idle;
+                _path.Clear();
+                _pathIdx = 0;
+                _stallCount = 0;
+                _lastStallFeetY = 0;
+                _restartCooldown = 0;
+                _jumpReplayLoaded = false;
+                _fixedPath = false;
+                _pillarSettleTick = 0;
+                _lastPlanMaxRun = -1f;
+                FailReason = "";
+                _started = true;
+                DiagLog.Write($"[nav] StartTo ({goalWx},{goalWy})");
             }
         }
 
@@ -332,7 +361,21 @@ namespace TerraBlind
             PurgeBlacklist();
             DiagLog.Write($"[nav] Replan at ({pcx},{feetY}) state={State} blacklist={_blacklist.Count}");
             _lastPlanMaxRun = PhysicsSimulator.Params.FromPlayer(p).MaxRun;
-            string json = PathPlanner.Plan(_sign, BlacklistSet());
+            string json;
+            if (_fixedGoalWx >= 0)
+            {
+                if (Math.Abs(pcx - _fixedGoalWx) <= 2 && Math.Abs(feetY - _fixedGoalWy) <= 2)
+                {
+                    DiagLog.Write($"[nav] reached fixed goal ({_fixedGoalWx},{_fixedGoalWy})");
+                    State = NavState.Done;
+                    return;
+                }
+                json = PathPlanner.PlanTo(_fixedGoalWx, _fixedGoalWy);
+            }
+            else
+            {
+                json = PathPlanner.Plan(_sign, BlacklistSet());
+            }
             var newPath = ParsePath(json);
             if (newPath == null || newPath.Count == 0)
             {
