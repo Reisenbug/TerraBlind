@@ -3,7 +3,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, CaveWalkBack, CaveSettle, CavePlace, CaveJump, CaveJump2 }
+    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, DigDown }
 
     public class SkillExecutor : ModSystem
     {
@@ -16,17 +16,9 @@ namespace TerraBlind
         private static int _phaseTick;
         private static bool _placeStarted;
         private static int _targetWy;
-        private static int _caveRiseTiles;
         private static int _stalledCycles;
         private static int _cycleStartFeetY;
 
-        private static int _walkBackFrames;
-        private static int _currentPlaceDy;
-        private static int _placeDx;
-        private static float _targetX;
-        private static bool _targetXSet;
-        private static SkillState _settleNext;
-        private static int _prevFeetY;
         private static float _pillarWaitPrevVY;
 
         private const int WaitFrames = 10;
@@ -96,20 +88,9 @@ namespace TerraBlind
             State = SkillState.PillarBuild;
         }
 
-        public static void StartCaveBypass(bool caveOnLeft, int walkBack, int riseTiles)
+        public static void StartDigDown()
         {
-            DirectionRight = !caveOnLeft;
-            _walkBackFrames = walkBack * 10;
-            _caveRiseTiles = riseTiles;
-            _placeDx = caveOnLeft ? -2 : 1;
-            _currentPlaceDy = -1;
-            _jumpFramesLeft = 0;
-            _cyclesDone = 0;
-            _phaseTick = 0;
-            _placeStarted = false;
-            _targetX = 0f;
-            _targetXSet = false;
-            State = SkillState.CaveWalkBack;
+            State = SkillState.DigDown;
         }
 
         public static void Stop()
@@ -131,6 +112,17 @@ namespace TerraBlind
                     if (td != null && item.createTile < td.Length && td[item.createTile])
                         return i;
                 }
+            }
+            return -1;
+        }
+
+        private static int FindPickaxeSlot(Player p)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var item = p.inventory[i];
+                if (item != null && !item.IsAir && item.pick > 0)
+                    return i;
             }
             return -1;
         }
@@ -227,139 +219,26 @@ namespace TerraBlind
                 return;
             }
 
-            if (State == SkillState.CaveWalkBack)
+            if (State == SkillState.DigDown)
             {
-                int headY = (int)(p.position.Y / 16f);
-                int pcx = (int)((p.position.X + p.width / 2f) / 16f);
-                bool overhead = false;
-                for (int dy = 1; dy <= 15; dy++)
-                {
-                    var t = Terraria.Main.tile[pcx, headY - dy];
-                    if (t != null && t.HasTile && Main.tileSolid[t.TileType] && t.TileType != 189 && t.TileType != 196)
-                    {
-                        overhead = true;
-                        break;
-                    }
-                }
-
-                if (overhead)
-                {
-                    _targetXSet = false;
-                    if (!DirectionRight) p.controlRight = true;
-                    else p.controlLeft = true;
-                }
+                int slot = FindPickaxeSlot(p);
+                if (slot < 0) { Stop(); return; }
+                int feetTileY = (int)((p.position.Y + p.height) / 16f);
+                int leftTileX  = (int)((p.position.X + p.width / 2f - 10f) / 16f);
+                int rightTileX = (int)((p.position.X + p.width / 2f + 10f) / 16f);
+                int targetX;
+                if (Main.tile[leftTileX, feetTileY].HasTile)
+                    targetX = leftTileX;
+                else if (Main.tile[rightTileX, feetTileY].HasTile)
+                    targetX = rightTileX;
                 else
-                {
-                    if (!_targetXSet)
-                    {
-                        float extra = DirectionRight ? -16f : 16f;
-                        _targetX = p.position.X + extra;
-                        _targetXSet = true;
-                    }
-                    bool reached = DirectionRight ? p.position.X <= _targetX : p.position.X >= _targetX;
-                    if (!reached)
-                    {
-                        if (!DirectionRight) p.controlRight = true;
-                        else p.controlLeft = true;
-                    }
-                    else
-                    {
-                        _phaseTick = 0;
-                        _settleNext = SkillState.CavePlace;
-                        State = SkillState.CaveSettle;
-                    }
-                }
-                return;
-            }
-
-            if (State == SkillState.CaveSettle)
-            {
-                _phaseTick++;
-                if (_phaseTick >= 30)
-                {
-                    _phaseTick = 0;
-                    if (_settleNext == SkillState.CavePlace)
-                    {
-                        _currentPlaceDy = -1;
-                        _cyclesDone = 0;
-                    }
-                    State = _settleNext;
-                }
-                return;
-            }
-
-            if (State == SkillState.CavePlace)
-            {
-                if (platformSlot < 0) { Stop(); return; }
-                Player.SmartCursorSettings.SmartBlocksEnabled = false;
-                if (p.controlUseTile) p.controlUseTile = false;
-
-                int feetY = (int)System.Math.Ceiling((p.position.Y + p.height) / 16f);
-                int pcx2 = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
-                int tileX = pcx2 + _placeDx;
-                int tileY = feetY + _currentPlaceDy;
-                bool alreadyPlaced = Main.tile[tileX, tileY] != null && Main.tile[tileX, tileY].HasTile;
-
-                if (alreadyPlaced)
-                {
-                    _phaseTick = 30;
-                }
-                else
-                {
-                    _phaseTick++;
-                    if (_phaseTick == 1)
-                        PlaceCoordinator.Start(new PlaceRequest { Dx = _placeDx, Dy = _currentPlaceDy, Slot = platformSlot, RemainingFrames = 8 });
-                }
-
-                bool placed = Main.tile[tileX, tileY] != null && Main.tile[tileX, tileY].HasTile;
-                if (_phaseTick >= 30 || placed)
-                {
-                    _phaseTick = 0;
-                    _cyclesDone++;
-                    _currentPlaceDy--;
-                    if (_cyclesDone >= _caveRiseTiles)
-                    {
-                        _jumpFramesLeft = 0;
-                        _phaseTick = 0;
-                        State = SkillState.CaveJump;
-                    }
-                }
-                return;
-            }
-
-            if (State == SkillState.CaveJump)
-            {
-                if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
-                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
-                else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
-                _phaseTick++;
-                int pcxJ = (int)System.Math.Round((p.position.X + p.width / 2f) / 16f);
-                int platformTileX = (int)System.Math.Round((_targetX + p.width / 2f) / 16f) + _placeDx;
-                bool reachedPlatform = DirectionRight ? pcxJ >= platformTileX : pcxJ <= platformTileX;
-                if (!reachedPlatform)
-                {
-                    if (!DirectionRight) p.controlLeft = true;
-                    else p.controlRight = true;
-                }
-                bool onGround = p.velocity.Y == 0f && _phaseTick > JumpHoldFrames;
-                if (onGround)
-                {
-                    _phaseTick = 0;
-                    _jumpFramesLeft = 0;
-                    _settleNext = SkillState.CaveJump2;
-                    State = SkillState.CaveSettle;
-                }
-                return;
-            }
-
-            if (State == SkillState.CaveJump2)
-            {
-                if (_jumpFramesLeft == 0) _jumpFramesLeft = JumpHoldFrames;
-                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; if (_jumpFramesLeft == 0) _jumpFramesLeft = -1; }
-                else if (_jumpFramesLeft == -1) { _jumpFramesLeft = 0; }
-                _phaseTick++;
-                if (_phaseTick >= LaunchFrames) Stop();
-                return;
+                    return;
+                Main.mouseX = (int)(targetX * 16f + 8f - Main.screenPosition.X);
+                Main.mouseY = (int)(feetTileY * 16f + 8f - Main.screenPosition.Y);
+                Main.SmartCursorWanted_Mouse = false;
+                p.selectedItem = slot;
+                if (p.itemTime == 0)
+                    p.controlUseItem = true;
             }
         }
     }

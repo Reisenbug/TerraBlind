@@ -284,6 +284,33 @@ namespace TerraBlind
 				PlaceCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/mine")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var tiles = new System.Collections.Generic.List<(int, int)>();
+				var pairMatches = System.Text.RegularExpressions.Regex.Matches(
+					reqBody.Replace(" ", ""),
+					"\\{\"wx\"\\s*:\\s*(-?\\d+),\"wy\"\\s*:\\s*(-?\\d+)\\}");
+				foreach (System.Text.RegularExpressions.Match m in pairMatches)
+					tiles.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)));
+				if (tiles.Count > 0)
+				{
+					MineCoordinator.Start(new MineRequest { Tiles = tiles });
+					body = "{\"ok\":true}";
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /mine {\\\"tiles\\\":[{\\\"wx\\\":N,\\\"wy\\\":N}]}\"}";
+					status = 400;
+				}
+			}
+			else if (path == "/mine_stop")
+			{
+				MineCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/walk_to_edge")
 			{
 				string reqBody;
@@ -400,15 +427,10 @@ namespace TerraBlind
 						SkillExecutor.StartPillarJump(dirRight, riseTiles);
 						body = "{\"ok\":true,\"skill\":\"pillar_jump\",\"rise_tiles\":" + riseTiles + "}";
 					}
-					else if (skillName == "cave_bypass")
+					else if (skillName == "dig_down")
 					{
-						var riseMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"rise_tiles\"\\s*:\\s*(\\d+)");
-						var walkMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"walk_back\"\\s*:\\s*(\\d+)");
-						int riseTiles = riseMatch.Success ? int.Parse(riseMatch.Groups[1].Value) : 5;
-						int walkBack = walkMatch.Success ? int.Parse(walkMatch.Groups[1].Value) : 2;
-						bool caveOnLeft = dirMatch.Success && dirMatch.Groups[1].Value == "left";
-						SkillExecutor.StartCaveBypass(caveOnLeft, walkBack, riseTiles);
-						body = "{\"ok\":true,\"skill\":\"cave_bypass\"}";
+						SkillExecutor.StartDigDown();
+						body = "{\"ok\":true,\"skill\":\"dig_down\"}";
 					}
 					else if (skillName == "stop")
 					{

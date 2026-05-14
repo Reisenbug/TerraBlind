@@ -24,6 +24,11 @@ namespace TerraBlind
 				SkillExecutor.ApplyControls();
 				return;
 			}
+			if (MineCoordinator.IsActive)
+			{
+				MineCoordinator.ApplyControls();
+				return;
+			}
 			if (SkillExecutor.IsActive)
 			{
 				SkillExecutor.ApplyControls();
