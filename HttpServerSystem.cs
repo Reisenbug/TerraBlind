@@ -432,6 +432,21 @@ namespace TerraBlind
 						SkillExecutor.StartDigDown();
 						body = "{\"ok\":true,\"skill\":\"dig_down\"}";
 					}
+					else if (skillName == "dig_left")
+					{
+						SkillExecutor.StartDigLeft();
+						body = "{\"ok\":true,\"skill\":\"dig_left\"}";
+					}
+					else if (skillName == "dig_right")
+					{
+						SkillExecutor.StartDigRight();
+						body = "{\"ok\":true,\"skill\":\"dig_right\"}";
+					}
+					else if (skillName == "dig_up")
+					{
+						SkillExecutor.StartDigUp();
+						body = "{\"ok\":true,\"skill\":\"dig_up\"}";
+					}
 					else if (skillName == "stop")
 					{
 						SkillExecutor.Stop();

@@ -3,7 +3,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, DigDown }
+    public enum SkillState { Idle, PillarBuild, PillarWait, PillarLaunch, DigDown, DigLeft, DigRight, DigUp }
 
     public class SkillExecutor : ModSystem
     {
@@ -88,10 +88,10 @@ namespace TerraBlind
             State = SkillState.PillarBuild;
         }
 
-        public static void StartDigDown()
-        {
-            State = SkillState.DigDown;
-        }
+        public static void StartDigDown()  { State = SkillState.DigDown; }
+        public static void StartDigLeft()  { State = SkillState.DigLeft; }
+        public static void StartDigRight() { State = SkillState.DigRight; }
+        public static void StartDigUp()    { State = SkillState.DigUp; }
 
         public static void Stop()
         {
@@ -233,13 +233,62 @@ namespace TerraBlind
                     targetX = rightTileX;
                 else
                     return;
-                Main.mouseX = (int)(targetX * 16f + 8f - Main.screenPosition.X);
-                Main.mouseY = (int)(feetTileY * 16f + 8f - Main.screenPosition.Y);
-                Main.SmartCursorWanted_Mouse = false;
+                SetMouse(p, targetX * 16f + 8f, feetTileY * 16f + 8f);
                 p.selectedItem = slot;
-                if (p.itemTime == 0)
-                    p.controlUseItem = true;
+                if (p.itemTime == 0) p.controlUseItem = true;
             }
+
+            if (State == SkillState.DigLeft || State == SkillState.DigRight)
+            {
+                int slot = FindPickaxeSlot(p);
+                if (slot < 0) { Stop(); return; }
+                int headTileY = (int)(p.position.Y / 16f);
+                int sideTileX = State == SkillState.DigLeft
+                    ? (int)((p.position.X - 1f) / 16f)
+                    : (int)((p.position.X + p.width + 1f) / 16f);
+                int bodyTiles = (int)System.Math.Ceiling(p.height / 16f);
+                int targetY = -1;
+                for (int dy = 0; dy < bodyTiles; dy++)
+                {
+                    if (Main.tile[sideTileX, headTileY + dy].HasTile)
+                    { targetY = headTileY + dy; break; }
+                }
+                if (targetY < 0) return;
+                SetMouse(p, sideTileX * 16f + 8f, targetY * 16f + 8f);
+                p.selectedItem = slot;
+                if (p.itemTime == 0) p.controlUseItem = true;
+            }
+
+            if (State == SkillState.DigUp)
+            {
+                int slot = FindPickaxeSlot(p);
+                if (slot < 0) { Stop(); return; }
+                int headTileY = (int)(p.position.Y / 16f);
+                int leftTileX  = (int)((p.position.X + p.width / 2f - 10f) / 16f);
+                int rightTileX = (int)((p.position.X + p.width / 2f + 10f) / 16f);
+                int targetRow = -1;
+                for (int dy = -1; dy >= -2; dy--)
+                {
+                    if (Main.tile[leftTileX, headTileY + dy].HasTile || Main.tile[rightTileX, headTileY + dy].HasTile)
+                    { targetRow = headTileY + dy; break; }
+                }
+                if (targetRow < 0) return;
+                int targetX;
+                if (Main.tile[leftTileX, targetRow].HasTile)
+                    targetX = leftTileX;
+                else
+                    targetX = rightTileX;
+                SetMouse(p, targetX * 16f + 8f, targetRow * 16f + 8f);
+                p.selectedItem = slot;
+                if (p.itemTime == 0) p.controlUseItem = true;
+            }
+        }
+
+        private static void SetMouse(Player p, float worldX, float worldY)
+        {
+            Main.mouseX = (int)(worldX - Main.screenPosition.X);
+            Main.mouseY = (int)(worldY - Main.screenPosition.Y);
+            Main.SmartCursorWanted_Mouse = false;
         }
     }
 }
