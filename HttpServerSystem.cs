@@ -164,6 +164,19 @@ namespace TerraBlind
 			{
 				body = StateSerializer.ToJson(LatestSnapshot);
 			}
+			else if (path == "/cursor")
+			{
+				var p = Main.LocalPlayer;
+				if (p != null && p.active)
+				{
+					float mx = (Main.mouseX + Main.screenPosition.X - p.position.X - p.width / 2f) / 16f;
+					float my = (Main.mouseY + Main.screenPosition.Y - p.position.Y - p.height / 2f) / 16f;
+					int tx = (int)((Main.mouseX + Main.screenPosition.X) / 16f);
+					int ty = (int)((Main.mouseY + Main.screenPosition.Y) / 16f);
+					body = $"{{\"mx\":{mx:F3},\"my\":{my:F3},\"tile_x\":{tx},\"tile_y\":{ty}}}";
+				}
+				else body = "{\"error\":\"no_player\"}";
+			}
 			else if (path == "/swap")
 			{
 				var qs = ctx.Request.QueryString;
