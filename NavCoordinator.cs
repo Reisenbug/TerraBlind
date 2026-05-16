@@ -5,7 +5,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum NavState { Idle, Move, Fall, Jump, Bridge, BridgeFall, PillarAlign, Pillar, Done, Failed }
+    public enum NavState { Idle, Move, Fall, Jump, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, Done, Failed }
 
     public struct NavNode
     {
@@ -399,11 +399,14 @@ namespace TerraBlind
             }
             var last = newPath[newPath.Count - 1];
             int fwd = _sign * (last.Wx - pcx);
-            if (fwd <= 0)
+            int down = last.Wy - feetY;
+            bool hasMine = newPath.Exists(n => n.Action.StartsWith("mine_"));
+            bool hasProgress = fwd > 0 || down > 0 || hasMine;
+            if (!hasProgress)
             {
                 BlacklistGoal();
                 EmitNavFailed("replan_no_progress", _pathIdx, _target.Action ?? "", pcx, feetY);
-                DiagLog.Write($"[nav] Replan no-progress fwd={fwd}, retrying");
+                DiagLog.Write($"[nav] Replan no-progress fwd={fwd} down={down}, retrying");
                 _restartCooldown = 30;
                 State = NavState.Idle;
                 _path.Clear();
@@ -537,7 +540,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.Mine && State != NavState.MineAlign && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -660,6 +663,18 @@ namespace TerraBlind
                     else if (_target.Action == "fall")
                     {
                         State = NavState.Fall;
+                    }
+                    else if (_target.Action.StartsWith("mine_"))
+                    {
+                        if (_target.Action == "mine_down")
+                        {
+                            State = NavState.MineAlign;
+                            _pillarAlignTick = 0;
+                        }
+                        else
+                        {
+                            State = NavState.Mine;
+                        }
                     }
                     else
                     {
@@ -983,6 +998,78 @@ namespace TerraBlind
                             EmitNavFailed("pillar_height_fail", _pathIdx, "pillar", pcx, feetY);
                             Replan(p);
                         }
+                    }
+                    return;
+                }
+
+                if (State == NavState.MineAlign)
+                {
+                    _pillarAlignTick++;
+                    if (_pillarAlignTick > 120)
+                    {
+                        DiagLog.Write($"[nav] mine align timeout → replan");
+                        Replan(p);
+                        return;
+                    }
+                    float targetCenterX = _target.Wx * 16f + 8f;
+                    bool aligned = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(p.velocity.X) < 0.3f;
+                    if (aligned)
+                    {
+                        State = NavState.Mine;
+                        return;
+                    }
+                    float diff = targetCenterX - centerX;
+                    float stopDist = p.velocity.X != 0f ? (p.velocity.X * p.velocity.X / 0.4f) * Math.Sign(p.velocity.X) : 0f;
+                    if (Math.Abs(targetCenterX - (centerX + stopDist)) <= 8f) return;
+                    if (diff > 0) p.controlRight = true;
+                    else p.controlLeft = true;
+                    return;
+                }
+
+                if (State == NavState.Mine)
+                {
+                    int slot = -1;
+                    for (int si = 0; si < 10; si++) { var it = p.inventory[si]; if (it != null && !it.IsAir && it.pick > 0) { slot = si; break; } }
+                    if (slot < 0) { State = NavState.Failed; FailReason = "no pickaxe"; return; }
+
+                    string mineAction = _target.Action;
+                    bool mineRight = mineAction == "mine_right";
+                    bool mineLeft  = mineAction == "mine_left";
+                    bool mineDown  = mineAction == "mine_down";
+
+                    Main.SmartCursorWanted_Mouse = true;
+                    p.selectedItem = slot;
+                    if (p.itemTime == 0) p.controlUseItem = true;
+
+                    float midY = p.position.Y + p.height / 2f;
+                    if (mineRight)
+                    {
+                        p.controlRight = true;
+                        Main.mouseX = (int)(centerX + 160f - Main.screenPosition.X);
+                        Main.mouseY = (int)(midY - Main.screenPosition.Y);
+                    }
+                    else if (mineLeft)
+                    {
+                        p.controlLeft = true;
+                        Main.mouseX = (int)(centerX - 160f - Main.screenPosition.X);
+                        Main.mouseY = (int)(midY - Main.screenPosition.Y);
+                    }
+                    else if (mineDown) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y + p.height + 160f - Main.screenPosition.Y); }
+
+                    bool done = false;
+                    if (mineDown)
+                        done = feetY >= _target.Wy && p.velocity.Y == 0f;
+                    else if (mineRight)
+                        done = pcx >= _target.Wx;
+                    else if (mineLeft)
+                        done = pcx <= _target.Wx;
+
+                    if (done)
+                    {
+                        Main.SmartCursorWanted_Mouse = false;
+                        EmitNodeExit(_pathIdx, mineAction, "done", _target.Wx, _target.Wy, pcx, feetY);
+                        _pathIdx++;
+                        State = NavState.Idle;
                     }
                     return;
                 }
