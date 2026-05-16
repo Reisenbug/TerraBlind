@@ -224,15 +224,12 @@ namespace TerraBlind
                 int slot = FindPickaxeSlot(p);
                 if (slot < 0) { Stop(); return; }
                 int feetTileY = (int)((p.position.Y + p.height) / 16f);
-                int leftTileX  = (int)((p.position.X + p.width / 2f - 10f) / 16f);
-                int rightTileX = (int)((p.position.X + p.width / 2f + 10f) / 16f);
-                int targetX;
-                if (Main.tile[leftTileX, feetTileY].HasTile)
-                    targetX = leftTileX;
-                else if (Main.tile[rightTileX, feetTileY].HasTile)
-                    targetX = rightTileX;
-                else
-                    return;
+                int leftTileX  = (int)(p.position.X / 16f);
+                int rightTileX = (int)((p.position.X + p.width - 1f) / 16f);
+                int targetX = -1;
+                for (int col = leftTileX; col <= rightTileX; col++)
+                    if (Main.tile[col, feetTileY].HasTile) { targetX = col; break; }
+                if (targetX < 0) return;
                 SetMouse(p, targetX * 16f + 8f, feetTileY * 16f + 8f);
                 p.selectedItem = slot;
                 if (p.itemTime == 0) p.controlUseItem = true;
@@ -264,8 +261,8 @@ namespace TerraBlind
                 int slot = FindPickaxeSlot(p);
                 if (slot < 0) { Stop(); return; }
                 int headTileY = (int)(p.position.Y / 16f);
-                int leftTileX  = (int)((p.position.X + p.width / 2f - 10f) / 16f);
-                int rightTileX = (int)((p.position.X + p.width / 2f + 10f) / 16f);
+                int leftTileX  = (int)(p.position.X / 16f);
+                int rightTileX = (int)((p.position.X + p.width - 1f) / 16f);
                 int targetRow = -1;
                 for (int dy = -1; dy >= -2; dy--)
                 {

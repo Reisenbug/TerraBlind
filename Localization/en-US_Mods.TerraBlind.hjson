@@ -1,1 +1,6 @@
-
+Items: {
+	NavWand: {
+		DisplayName: Nav Wand
+		Tooltip: ""
+	}
+}

@@ -56,8 +56,6 @@ namespace TerraBlind
                 lock (_lock) { path = new List<NavNode>(_planPath); }
                 curIdx = 0;
             }
-            if (path == null || path.Count == 0) return;
-
             var spriteBatch = Main.spriteBatch;
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
                      DepthStencilState.None, RasterizerState.CullNone, null, Main.GameViewMatrix.TransformationMatrix);
@@ -77,7 +75,20 @@ namespace TerraBlind
                 int lpy = (int)((lp.position.Y + lp.height) / 16f);
                 DrawTile(spriteBatch, lpx, lpy, new Color(255, 255, 255, 160));
             }
+
+            List<(int wx, int wy, Color color)> extraTiles;
+            lock (_lock) { extraTiles = new List<(int, int, Color)>(_tiles); }
+            foreach (var (tx, ty, tc) in extraTiles)
+                DrawTile(spriteBatch, tx, ty, tc);
+
+            if (path != null)
+                foreach (var node in path)
+                    if (node.MineTiles != null)
+                        foreach (var (mx, my) in node.MineTiles)
+                            DrawTile(spriteBatch, mx, my, new Color(255, 165, 0, 180));
+
             int prevWx = -1, prevWy = -1;
+            if (path != null)
             for (int i = 0; i < path.Count; i++)
             {
                 int wx = path[i].Wx, wy = path[i].Wy;
@@ -137,6 +148,13 @@ namespace TerraBlind
                     }
                 }
 
+                if (action.StartsWith("mine_") && path[i].MineTiles != null)
+                {
+                    var orange = new Color(255, 165, 0, 200);
+                    foreach (var (mtx, mty) in path[i].MineTiles)
+                        DrawTile(spriteBatch, mtx, mty, orange);
+                }
+
                 Color c;
                 if (i < curIdx)
                     c = new Color(60, 60, 60, 60);
@@ -148,6 +166,8 @@ namespace TerraBlind
                     c = new Color(0, 180, 255, 120);
                 else if (action == "pillar")
                     c = new Color(255, 50, 50, 160);
+                else if (action.StartsWith("mine_"))
+                    c = new Color(255, 165, 0, 160);
                 else
                     c = new Color(100, 220, 255, 80);
 
@@ -155,6 +175,7 @@ namespace TerraBlind
                 prevWx = wx; prevWy = wy;
             }
 
+            if (path == null || path.Count == 0) { spriteBatch.End(); return; }
             var last = path[path.Count - 1];
             float gsx = last.Wx * 16f - Main.screenPosition.X;
             float gsy = (last.Wy - 1) * 16f - Main.screenPosition.Y;
