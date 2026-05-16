@@ -13,6 +13,7 @@ namespace TerraBlind
         public int SourceWx, SourceWy; // jump only: tile where simulation started
         public string Action;
         public System.Collections.Generic.List<PhysicsSimulator.ControlInput> Frames;
+        public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // mine_* actions only
     }
 
     public class NavCoordinator : ModSystem
@@ -473,6 +474,26 @@ namespace TerraBlind
                     Wy = int.Parse(hm.Groups[2].Value),
                     Action = hm.Groups[3].Value,
                 };
+                if (node.Action.StartsWith("mine_"))
+                {
+                    var mtRe = new System.Text.RegularExpressions.Regex("\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+                    int mtStart = nodeJson.IndexOf("\"mine_tiles\"");
+                    if (mtStart >= 0)
+                    {
+                        int mtArrStart = nodeJson.IndexOf('[', mtStart);
+                        int mtDepth = 0, mtEnd = mtArrStart;
+                        for (int mi = mtArrStart; mi < nodeJson.Length; mi++)
+                        {
+                            if (nodeJson[mi] == '[') mtDepth++;
+                            else if (nodeJson[mi] == ']') { mtDepth--; if (mtDepth == 0) { mtEnd = mi + 1; break; } }
+                        }
+                        string mtSeg = nodeJson.Substring(mtArrStart, mtEnd - mtArrStart);
+                        var mtList = new List<(int, int)>();
+                        foreach (System.Text.RegularExpressions.Match mm in mtRe.Matches(mtSeg))
+                            mtList.Add((int.Parse(mm.Groups[1].Value), int.Parse(mm.Groups[2].Value)));
+                        node.MineTiles = mtList;
+                    }
+                }
                 if (node.Action == "jump" || node.Action == "pillar")
                 {
                     var sm = sourceRe.Match(nodeJson);
