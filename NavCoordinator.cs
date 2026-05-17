@@ -401,7 +401,7 @@ namespace TerraBlind
             int fwd = _sign * (last.Wx - pcx);
             int down = last.Wy - feetY;
             bool hasMine = newPath.Exists(n => n.Action.StartsWith("mine_"));
-            bool hasProgress = fwd > 0 || down > 0 || hasMine;
+            bool hasProgress = _fixedGoalWx >= 0 || fwd > 0 || down > 0 || hasMine;
             if (!hasProgress)
             {
                 BlacklistGoal();

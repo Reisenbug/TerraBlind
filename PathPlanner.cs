@@ -238,7 +238,7 @@ namespace TerraBlind
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
             int sign = goalWx >= (int)((p.position.X + p.width / 2f) / 16f) ? 1 : -1;
             var goalSet = new HashSet<(int, int)> { (goalWx, goalWy) };
-            return Plan(sign, null, goalSet);
+            return Plan(sign, null, goalSet, bidir: true);
         }
 
         private static float MinDistToGoal(HashSet<(int, int)> goalSet, int x, int y)
@@ -252,7 +252,7 @@ namespace TerraBlind
             return best;
         }
 
-        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null, HashSet<(int, int)> goalSet = null)
+        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null, HashSet<(int, int)> goalSet = null, bool bidir = false)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
@@ -281,8 +281,8 @@ namespace TerraBlind
             // build envelope cache for visualization only
             _envelopeCache = BuildEnvelopeVis(p);
 
-            int xMin = sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd;
-            int xMax = sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack;
+            int xMin = bidir ? pcx - GoalRangeFwd : (sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd);
+            int xMax = bidir ? pcx + GoalRangeFwd : (sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack);
             int yMin = feetY - AStarScanUp;
             int yMax = feetY + AStarScanDown;
 
@@ -403,8 +403,10 @@ namespace TerraBlind
                         continue;
                     }
 
+                    if (dy == 1 && dx == 0 && (IsFloor(cx, cy + 1) || IsFloor(cx + 1, cy + 1))) continue;
                     if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
+                    if (dy == 0 && dx != 0 && (Solid(nx, ny - 1) || Solid(nx, ny - 2) || Solid(nx + dx, ny - 1) || Solid(nx + dx, ny - 2))) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float moveCost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float moveng = curG + moveCost;
