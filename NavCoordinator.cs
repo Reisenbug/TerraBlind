@@ -675,6 +675,7 @@ namespace TerraBlind
                         {
                             State = NavState.Mine;
                         }
+                        _invariantCheckCooldown = 0;
                     }
                     else
                     {
@@ -1042,6 +1043,7 @@ namespace TerraBlind
                     if (p.itemTime == 0) p.controlUseItem = true;
 
                     float midY = p.position.Y + p.height / 2f;
+                    bool mineUp = mineAction == "mine_up";
                     if (mineRight)
                     {
                         p.controlRight = true;
@@ -1055,6 +1057,7 @@ namespace TerraBlind
                         Main.mouseY = (int)(midY - Main.screenPosition.Y);
                     }
                     else if (mineDown) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y + p.height + 160f - Main.screenPosition.Y); }
+                    else if (mineUp) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y - 160f - Main.screenPosition.Y); }
 
                     bool done = false;
                     if (mineDown)
@@ -1063,6 +1066,9 @@ namespace TerraBlind
                         done = pcx >= _target.Wx;
                     else if (mineLeft)
                         done = pcx <= _target.Wx;
+                    else if (mineUp)
+                        done = !PathPlanner.IsBlockPublic(pcx, feetY - 2) && !PathPlanner.IsBlockPublic(pcx, feetY - 3)
+                            && !PathPlanner.IsBlockPublic(pcx + 1, feetY - 2) && !PathPlanner.IsBlockPublic(pcx + 1, feetY - 3);
 
                     if (done)
                     {
