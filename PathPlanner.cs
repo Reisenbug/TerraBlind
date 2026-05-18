@@ -224,6 +224,15 @@ namespace TerraBlind
                 }
                 seen.Add((lx, ly));
                 results.Add((lx, ly, result.Frames, hold, arcClips, result.WallContactFrames, result.CeilingContactFrames));
+
+                // step-up: horizontal movement allows climbing 1 extra tile
+                if (lx != cx && Standable(lx, ly - 1) && !seen.Contains((lx, ly - 1))
+                    && !Solid(lx, ly - 2) && !Solid(lx, ly - 3)
+                    && !Solid(lx + (sign > 0 ? 1 : -1), ly - 2) && !Solid(lx + (sign > 0 ? 1 : -1), ly - 3))
+                {
+                    seen.Add((lx, ly - 1));
+                    results.Add((lx, ly - 1, result.Frames, hold, arcClips, result.WallContactFrames, result.CeilingContactFrames));
+                }
             }
             return results;
         }
@@ -477,7 +486,7 @@ namespace TerraBlind
                         if (!Solid(cx, topY - 1) && !Solid(cx, topY - 2) && !Occupied(cx, topY - 1) && !Occupied(cx, topY - 2))
                         {
                             int rise = cy - topY;
-                            if (rise <= 7) continue;
+                            if (rise <= 1) continue;
                             // center-only clearance (old #5 logic): single column cx
                             bool centerBlocked = false;
                             for (int checkY = cy - 1; checkY >= cy - rise - 2; checkY--)
