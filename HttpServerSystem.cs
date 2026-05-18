@@ -922,6 +922,52 @@ namespace TerraBlind
 			{
 				body = PhysicsRecorder.Stop();
 			}
+			else if (path == "/terrain")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				int cx = 0, cy = 0, rw = 40, rh = 20;
+				var mCx = System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)");
+				var mCy = System.Text.RegularExpressions.Regex.Match(rb, "\"cy\":(-?\\d+)");
+				var mW  = System.Text.RegularExpressions.Regex.Match(rb, "\"w\":(\\d+)");
+				var mH  = System.Text.RegularExpressions.Regex.Match(rb, "\"h\":(\\d+)");
+				if (mCx.Success) cx = int.Parse(mCx.Groups[1].Value);
+				if (mCy.Success) cy = int.Parse(mCy.Groups[1].Value);
+				if (mW.Success)  rw = int.Parse(mW.Groups[1].Value);
+				if (mH.Success)  rh = int.Parse(mH.Groups[1].Value);
+				var p2 = Main.LocalPlayer;
+				if (cx == 0 && cy == 0 && p2 != null)
+				{
+					cx = (int)((p2.position.X + p2.width / 2f) / 16f);
+					cy = (int)((p2.position.Y + p2.height) / 16f);
+				}
+				var sb2 = new System.Text.StringBuilder();
+				sb2.Append("{\"cx\":").Append(cx).Append(",\"cy\":").Append(cy)
+				   .Append(",\"w\":").Append(rw).Append(",\"h\":").Append(rh)
+				   .Append(",\"x0\":").Append(cx - rw / 2).Append(",\"y0\":").Append(cy - rh / 2)
+				   .Append(",\"rows\":[");
+				int x0 = cx - rw / 2, y0 = cy - rh / 2;
+				for (int row = 0; row < rh; row++)
+				{
+					if (row > 0) sb2.Append(',');
+					sb2.Append('"');
+					for (int col = 0; col < rw; col++)
+					{
+						int wx = x0 + col, wy = y0 + row;
+						if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) { sb2.Append('?'); continue; }
+						var t = Main.tile[wx, wy];
+						if (t == null || !t.HasTile) { sb2.Append('.'); continue; }
+						if (Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]) sb2.Append('#');
+						else if (Main.tileSolidTop[t.TileType]) sb2.Append('-');
+						else sb2.Append('+');
+					}
+					sb2.Append('"');
+				}
+				sb2.Append("]}");
+				body = sb2.ToString();
+			}
 			else if (path == "/health")
 			{
 				body = "{\"ok\":true}";

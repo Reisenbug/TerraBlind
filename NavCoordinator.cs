@@ -749,6 +749,7 @@ namespace TerraBlind
                 {
                     if (_sign > 0) p.controlRight = true;
                     else p.controlLeft = true;
+                    p.controlDown = true;
                     bool onGround = p.velocity.Y == 0f;
                     bool landed = (_prevVY >= 0f && onGround) || (onGround && _pathIdx == 0);
                     _prevVY = p.velocity.Y;
