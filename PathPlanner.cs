@@ -12,13 +12,12 @@ namespace TerraBlind
         private const int MinGoalDist = 5;      // minimum distance from player to goal, prevents staying in place
         private const int AStarScanUp = 50;     // yMin = feetY - AStarScanUp; how high A* can expand
         private const int AStarScanDown = 50;   // yMax = feetY + AStarScanDown; how deep A* can expand
-        private const int MaxBridge = 25;       // max bridge length per segment (tiles)
-        private const int BridgeDtgThresh = 8;  // bridge penalty-free if ground is this many tiles below
+        private const int BridgeDtgThresh = 12;
         private const int CanProgressK = 0;     // goal validity: 0 = any standable tile is valid goal
-        private const int JumpMinCol = 2;       // minimum horizontal tiles per jump, filters trivial hops
+        private const int JumpMinCol = 0;
         private const float JumpOverheadMax = 4f;    // extra cost for short jumps; full-range jump = 0, min jump = JumpOverheadMax
-        private const float BridgeCostBase = 4f;     // fixed cost to start a bridge
-        private const float BridgeCostPerCol = 2f;   // cost per tile extended in a bridge
+        private const float BridgeCostBase = 10f;
+        private const float BridgeCostPerCol = 4f;
         private const float FallCost = 0.5f;         // cost per fall tile, cheaper than move to encourage natural drops
         private const float MoveCostBase = 1f;       // base cost per move tile, plus distance-to-ground penalty
 
@@ -114,7 +113,7 @@ namespace TerraBlind
         }
 
         private static bool Standable(int wx, int wy)
-            => !IsBlock(wx, wy) && !Platform(wx, wy) && !IsHalfBrick(wx, wy) && IsFloor(wx, wy + 1);
+            => !IsBlock(wx, wy) && !Platform(wx, wy) && !IsHalfBrick(wx, wy) && !Occupied(wx, wy) && IsFloor(wx, wy + 1);
 
         private static int DistToGround(int wx, int wy, int maxDepth = 20)
         {
@@ -157,7 +156,7 @@ namespace TerraBlind
         private static float BridgePenalty(int dtg)
         {
             if (dtg >= BridgeDtgThresh) return 0;
-            return (BridgeDtgThresh - dtg) * 2;
+            return (BridgeDtgThresh - dtg) * 4;
         }
 
         private static bool ArcClipsWall(List<PhysicsSimulator.ControlInput> frames,
@@ -246,8 +245,35 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
             int sign = goalWx >= (int)((p.position.X + p.width / 2f) / 16f) ? 1 : -1;
-            var goalSet = new HashSet<(int, int, bool)> { (goalWx, goalWy, false) };
-            return Plan(sign, null, goalSet, bidir: true);
+            var goalSet = new HashSet<(int, int, bool)>();
+            if (Standable(goalWx, goalWy))
+            {
+                goalSet.Add((goalWx, goalWy, false));
+            }
+            else
+            {
+                var bfsQueue = new Queue<(int, int)>();
+                var bfsSeen = new HashSet<(int, int)>();
+                bfsQueue.Enqueue((goalWx, goalWy));
+                bfsSeen.Add((goalWx, goalWy));
+                while (bfsQueue.Count > 0)
+                {
+                    var (bx, by) = bfsQueue.Dequeue();
+                    if (Math.Abs(bx - goalWx) > 3 || Math.Abs(by - goalWy) > 3) continue;
+                    if (Standable(bx, by)) goalSet.Add((bx, by, false));
+                    foreach (var (ddx, ddy) in new[] { (1,0),(-1,0),(0,1),(0,-1) })
+                    {
+                        var nb = (bx + ddx, by + ddy);
+                        if (!bfsSeen.Contains(nb)) { bfsSeen.Add(nb); bfsQueue.Enqueue(nb); }
+                    }
+                }
+                if (goalSet.Count == 0)
+                {
+                    DiagLog.Write($"[plan] PlanTo goal unreachable ({goalWx},{goalWy}), no standable within r=8");
+                    goalSet.Add((goalWx, goalWy, false));
+                }
+            }
+            return Plan(sign, null, goalSet, bidir: true, noFallback: true);
         }
 
         private static float MinDistToGoal(HashSet<(int, int, bool)> goalSet, int x, int y)
@@ -261,7 +287,9 @@ namespace TerraBlind
             return best;
         }
 
-        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null, HashSet<(int, int, bool)> goalSet = null, bool bidir = false)
+        private const float HeuristicWeight = 1f;
+
+        public static string Plan(int sign, System.Collections.Generic.HashSet<(int, int)> excludedGoals = null, HashSet<(int, int, bool)> goalSet = null, bool bidir = false, bool noFallback = false)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return "{\"error\":\"no_player\"}";
@@ -351,12 +379,13 @@ namespace TerraBlind
             var mineTilesData = new Dictionary<(int, int, bool), List<(int, int)>>();
             var mineNodes = new HashSet<(int, int, bool)>();
             var mineDepth = new Dictionary<(int, int, bool), int>();
+            var pillarTopNodes = new HashSet<(int, int)>();
             int maxMineDepth = Math.Abs(goalX - pcx) + Math.Abs(goalY - feetY) + 8;
 
             var startNode = (pcx, feetY, false);
             g[startNode] = 0f;
             prev[startNode] = ((-1, -1, false), "", null);
-            heap.Enqueue((pcx, feetY, false), MinDistToGoal(goalSet, pcx, feetY));
+            heap.Enqueue((pcx, feetY, false), HeuristicWeight * MinDistToGoal(goalSet,pcx, feetY));
 
             while (heap.Count > 0)
             {
@@ -406,7 +435,7 @@ namespace TerraBlind
                                 mineTilesData[(nx, ny, false)] = mt;
                                 mineNodes.Add((nx, ny, false));
                                 mineDepth[(nx, ny, false)] = curMineDepth + 1;
-                                heap.Enqueue((nx, ny, false), ng + MinDistToGoal(goalSet, nx, ny));
+                                heap.Enqueue((nx, ny, false), ng + HeuristicWeight * MinDistToGoal(goalSet,nx, ny));
                             }
                         }
                         continue;
@@ -416,6 +445,7 @@ namespace TerraBlind
                     if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     if (dy == 0 && dx != 0 && (Solid(nx, ny - 1) || Solid(nx, ny - 2) || Solid(nx + dx, ny - 1) || Solid(nx + dx, ny - 2))) continue;
+                    if (dy == 0 && dx != 0 && !mineNodes.Contains((nx, ny, false)) && !bridgeNodes.Contains((nx, ny, false)) && !pillarTopNodes.Contains((nx, ny)) && !Standable(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float moveCost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float moveng = curG + moveCost;
@@ -424,7 +454,7 @@ namespace TerraBlind
                         g[(nx, ny, false)] = moveng;
                         string action = dy == 1 ? "fall" : "move";
                         prev[(nx, ny, false)] = ((cx, cy, hc), action, null);
-                        heap.Enqueue((nx, ny, false), moveng + MinDistToGoal(goalSet, nx, ny));
+                        heap.Enqueue((nx, ny, false), moveng + HeuristicWeight * MinDistToGoal(goalSet,nx, ny));
                     }
                 }
 
@@ -443,7 +473,7 @@ namespace TerraBlind
                             g[(cx, cy, true)] = ng;
                             prev[(cx, cy, true)] = ((cx, cy, hc), "mine_up", null);
                             mineTilesData[(cx, cy, true)] = mt;
-                            heap.Enqueue((cx, cy, true), ng + MinDistToGoal(goalSet, cx, cy));
+                            heap.Enqueue((cx, cy, true), ng + HeuristicWeight * MinDistToGoal(goalSet,cx, cy));
                         }
                     }
                 }
@@ -471,7 +501,7 @@ namespace TerraBlind
                             g[(lx, ly, false)] = ng;
                             prev[(lx, ly, false)] = ((cx, cy, hc), "jump", frames);
                             verifyData[(lx, ly, false)] = (hold, startVx: jumpStartVx ?? sign * PhysicsSimulator.MaxRunSpeed, wallFrames, ceilFrames);
-                            float h = MinDistToGoal(goalSet, lx, ly);
+                            float h = HeuristicWeight * MinDistToGoal(goalSet,lx, ly);
                             heap.Enqueue((lx, ly, false), ng + h);
                         }
                     }
@@ -517,20 +547,21 @@ namespace TerraBlind
                             if (cost < g.GetValueOrDefault((cx, topY, false), float.MaxValue))
                             {
                                 g[(cx, topY, false)] = cost;
+                                pillarTopNodes.Add((cx, topY));
                                 bridgeNodes.Add((cx, topY, false));
                                 prev[(cx, topY, false)] = ((cx, cy, hc), "pillar", null);
                                 pillarVerifyData[(cx, topY, false)] = (leftClear, rightClear, centerOnlyClear);
-                                float h = MinDistToGoal(goalSet, cx, topY);
+                                float h = HeuristicWeight * MinDistToGoal(goalSet,cx, topY);
                                 heap.Enqueue((cx, topY, false), cost + h);
                             }
                         }
                     }
                 }
 
-                if (Standable(cx, cy))
+                if (Standable(cx, cy) || pillarTopNodes.Contains((cx, cy)))
                 {
                     int minDtg = 20;
-                    for (int col = 1; col <= MaxBridge; col++)
+                    for (int col = 1; ; col++)
                     {
                         int nx = cx + sign * col;
                         if (nx < xMin || nx > xMax) break;
@@ -545,7 +576,7 @@ namespace TerraBlind
                                 g[(nx, cy, false)] = ng;
                                 bridgeNodes.Add((nx, cy, false));
                                 prev[(nx, cy, false)] = ((cx, cy, hc), "bridge", null);
-                                float h = MinDistToGoal(goalSet, nx, cy);
+                                float h = HeuristicWeight * MinDistToGoal(goalSet,nx, cy);
                                 heap.Enqueue((nx, cy, false), ng + h);
                             }
                         }
@@ -553,6 +584,11 @@ namespace TerraBlind
                 }
             }
 
+            if (noFallback)
+            {
+                DiagLog.Write($"[plan] no path to goal visited={visited.Count}");
+                return "{\"path\":[],\"cost\":0}";
+            }
             (int, int, bool) best = startNode;
             int bestFwd = 0;
             int bestWy = int.MaxValue;
