@@ -49,7 +49,8 @@ namespace TerraBlind
                 _pendingWy = my;
                 string json = PathPlanner.PlanTo(mx, my);
                 var path = NavCoordinator.ParsePathPublic(json);
-                DiagLog.Write($"[wand] target=({mx},{my}) path={path.Count}");
+                var actions = string.Join(",", path.ConvertAll(n => $"({n.Wx},{n.Wy}){n.Action}"));
+                DiagLog.Write($"[wand] target=({mx},{my}) path={path.Count} nodes=[{actions}]");
                 PathVisSystem.SetPlanPath(path, PathPlanner.GetEnvelopeCache());
             }
             return true;

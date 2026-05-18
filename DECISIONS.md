@@ -35,6 +35,88 @@
 
 ---
 
+## 2026-05-18 规划失败的所有已知条件
+
+以下任何一条成立，`PlanTo` 返回空路径（`path=[]`）。
+
+### 1. 搜索范围限制
+- 目标超出 A* 扫描范围：`|goalX-pcx| > GoalRangeFwd(60)` 或 `|goalY-feetY| > AStarScanUp/Down(50)`
+- `PlanTo` 用 `bidir=true`，xMin/xMax 各扩展60格，goalSet 额外扩展5格，但仍有上限
+
+### 2. 目标格不可命中
+- 目标格不是 Standable 且不在 bridgeNodes/mineNodes 路径上
+- 目标在 Occupied 格（树干、藤蔓等）：`Standable` 返回 false
+- 目标悬空（下方无 floor）且周围没有 pillar/bridge 能到达的节点
+
+### 3. HeuristicWeight=3 导致搜索偏向
+- weighted A* 优先展开 h 小的节点
+- 需要先横向移动再 pillar/bridge 的路径，横移过程中 h 增大，被推后展开
+- 若 visited 预算内未展开到正确路径，返回空路径
+// FRAGILE: HeuristicWeight>1 会导致需要"先绕路"的路径在有限搜索内找不到
+
+### 4. mine 边深度限制
+- `maxMineDepth = |goalX-pcx| + |goalY-feetY| + 8`
+- 若实际需要挖掘的格数超过此值，mine 边不再展开
+- 全实心区域且目标距离较远时容易触发
+
+### 5. jump 边过滤
+- `JumpMinCol=2`：水平距离<2格的 jump 不生成
+- `ArcClipsWall`：弧线碰到实心块（已知缺陷：只检查上升阶段头顶）
+- 头顶有实心且 `hc=false`：`canJump=false`，需要先 mine_up
+
+### 6. pillar 边限制
+- `rise <= 7`：低于7格的 pillar 不生成（由 jump 覆盖）
+- leftClear 检查：`cx-1` 和 `cx` 两列整段净空，有任何实心就不生成
+- pillar 只能同列（cx不变）上升，目标格若在 cx±1 列，需要额外 bridge/move
+
+### 7. move 边限制
+- 目标格必须 Standable，除非是 mineNode 或 bridgeNode
+- 头顶两列（ny-1, ny-2）有实心则不生成
+- 2格高缝隙（ny-1/ny-2 某列有实心）不可通过
+
+### 8. bridge 边限制
+- `MaxBridge=25`：单段 bridge 最长25格
+- 沿途头顶3格有实心则中断
+- cost 大幅提高后（base=10, perCol=4），仅在无其他选择时使用
+
+---
+
+## 2026-05-18 执行层各动作实现方式
+
+### 控制信号来源
+所有控制信号在 `StateSnapshotPlayer.cs` 的 `PreUpdate` hook 里每帧注入，优先级：MineCoordinator > SkillExecutor > NavCoordinator。
+
+### 各动作具体实现
+
+| 动作 | 状态 | 代码位置 | 实现方式 |
+|------|------|---------|---------|
+| move | `NavState.Move` | NavCoordinator.cs:706 | `p.controlRight/Left = true`，到达判定：`feetLeft <= target.Wx <= feetRight` |
+| fall | `NavState.Fall` | NavCoordinator.cs:748 | `p.controlRight/Left = true` + `p.controlDown = true`（穿平台），落地判定：`prevVY>=0 && onGround` |
+| jump | `NavState.Jump` | NavCoordinator.cs:767 | `ResimJump` 重新模拟，`ReplaySystem.Load(frames)` 回放，落地后 `vy==0` 完成 |
+| pillar | `NavState.PillarAlign → Pillar` | NavCoordinator.cs:914 | Align：移动到 `target.Wx*16+8` 中心；Pillar：`SkillExecutor.StartPillarJump`，回放 43帧固定序列循环直到 `feetY <= targetWy` |
+| bridge | `NavState.Bridge` | NavCoordinator.cs:834 | `ReplaySystem` 回放自构造帧（move+useItem+平台slot），到达 `targetCX` 后完成 |
+| mine_right | `NavState.Mine` | NavCoordinator.cs:1029 | `SmartCursorWanted_Mouse=true`，光标右方160px同高，`controlRight=true`，`itemTime==0`时`controlUseItem=true`，`pcx>=target.Wx`完成 |
+| mine_left | `NavState.Mine` | NavCoordinator.cs:1029 | 同上，光标左方160px，`controlLeft=true`，`pcx<=target.Wx`完成 |
+| mine_down | `NavState.MineAlign → Mine` | NavCoordinator.cs:1029 | Align同pillar；Mine：光标下方160px，`feetY>=target.Wy && vy==0`完成 |
+| mine_up | `NavState.Mine` | NavCoordinator.cs:1029 | 光标上方160px，done条件：头顶 `(pcx,feetY-2/3)` 和 `(pcx+1,feetY-2/3)` 全为air |
+
+### 关键 API
+```csharp
+p.controlRight/Left/Down = true;   // 方向键
+p.controlUseItem = true;            // 左键（需 itemTime==0 才有效）
+p.controlJump = true;               // 跳跃（需边缘触发）
+p.selectedItem = slot;              // 切换槽位
+Main.SmartCursorWanted_Mouse = true/false;  // 智能光标
+Main.mouseX/mouseY = ...;           // 鼠标屏幕坐标
+ReplaySystem.Load(frames);          // 加载帧序列回放
+SkillExecutor.StartPillarJump(dirRight, targetWy);  // 启动pillar
+```
+
+// ASSUMPTION: p.controlUseItem 仅在 itemTime==0 时触发新挥舞，持续 true 不会重复触发
+// FRAGILE: ReplaySystem 回放期间 NavCoordinator 不应再注入控制，否则冲突
+
+---
+
 ## 2026-05-18 A* 行为 cost / 触发条件 / 限制条件一览
 
 ### 搜索范围
