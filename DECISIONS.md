@@ -4,6 +4,84 @@
 
 ---
 
+## 2026-05-18 平台放置判定逻辑
+
+### 完整判定流程（源码：Player.cs）
+
+**第一关：目标格条件**（318112行）
+目标格必须满足以下之一才进入放置流程：
+- `!tile.active()`（air）
+- `PlaceThing_IsReplacableBlock(tile)`（318122行）：`tileCut[type]=true` 的格子（植物、藤蔓、石堆 type=185 等）或 `BreakableWhenPlacing[type]=true`——这类格子会被自动替换
+
+**第二关：邻居条件**（`BlockPlacementForAssortedThings`，319618行 else 分支）
+上下左右4格中至少一个满足：
+- `active() && (tileSolid[type] || IsBeam[type] || tileRope[type] || type==314)`
+- 或 `wall > 0`（背景墙）
+- 或目标格本身 `wall > 0`
+
+**第三关：平台专属兜底**（319700行）
+若第二关失败，平台额外检查 `[-1,1]×[-1,1]` 的3×3区域：
+```
+只要有任何 active() 的格子 → canPlace=true
+```
+这就是为什么藤蔓、type=185 石堆、植物等 `tileSolid=false` 的物体**附近**也能放平台——它们 `active()=true` 满足兜底条件。
+
+### 对规划层的意义
+`CanPlacePlatform(wx, wy)` 的判断：
+1. 目标格是 air 或 tileCut 物体
+2. 且 `[-1,1]×[-1,1]` 的9格内有任何 `active()` 格子（或背景墙）
+
+// ASSUMPTION: 此逻辑来自 1.4.5.4 原版，tModLoader 未修改
+
+---
+
+## 2026-05-18 A* 行为 cost / 触发条件 / 限制条件一览
+
+### 搜索范围
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| GoalRangeFwd | 60格 | A* 向前（sign方向）最远扩展 |
+| GoalRangeBack | 60格 | A* 向后最远扩展 |
+| AStarScanUp | 50格 | A* 向上最远扩展 |
+| AStarScanDown | 50格 | A* 向下最远扩展 |
+| HeuristicWeight | 3 | weighted A*，h×3，加速收敛，牺牲最优性 |
+| maxMineDepth | \|goalX-pcx\|+\|goalY-feetY\|+8 | mine 边最大串联深度，动态计算 |
+
+### 边 cost 公式
+| 边类型 | cost 公式 | 触发条件 | 限制条件 |
+|--------|-----------|---------|---------|
+| move | `1 + DistToGround(nx,ny)` | `Standable(cx,cy)`，目标格非solid | 头顶两列 ny-1/ny-2 净空；双列 fall 检查 |
+| fall | `0.5 × 格数` | `cx` 和 `cx+1` 两列脚下都无 floor | 逐格展开，A* 自动串联 |
+| jump | `max(col + overhead - riseBonus, 1)` | 头顶净空（或 hc=true），距离≥2格 | hold∈{8,12,15}；ArcClipsWall 过滤；JumpMinCol=2 |
+| pillar | `3 + rise × 6` | Standable，头顶净空（或 hc=true），rise>7 | leftClear 双列检查；rise≤7不生成 |
+| bridge | `4 + col × 2 + penalty` | Standable，沿途头顶3格净空 | MaxBridge=25格；BridgeDtgThresh=8格免penalty |
+| mine_right | `solidCount × 6 + 1` | canMineFrom，目标列非Standable，脚下有floor | mineDepth < maxMineDepth |
+| mine_left | `solidCount × 6 + 1` | 同上（检查 cx-2 列） | 同上 |
+| mine_down | `solidCount × 6 + 0.5` | canMineFrom，脚下无floor | 同上 |
+| mine_up | `solidCount × 6` | canMineFrom，hc=false，头顶有solid | 同上；dst.hc=true |
+
+**备注：**
+- `solidCount`：目标范围内实际为 solid 的格数（air 格不计 cost）
+- `riseBonus = max(0, rise-1) × 2`：jump 高度奖励
+- `overhead = JumpOverheadMax × (1 - hold/maxHold)`：短跳惩罚，hold=15时为0，hold=8时为4×(1-8/15)≈1.87
+- `BridgePenalty = max(0, 8-dtg) × 2`：桥接距地面近时的惩罚
+- `canMineFrom = (Standable || mineNode) && mineDepth < maxMineDepth`
+
+### 执行层限制（NavCoordinator）
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| StallFrames | 60帧 | pcx 连续不变60帧触发 replan |
+| PillarThresh | 8格 | move 节点 rise>8 时强制走 pillar |
+| ArriveX | 8px | bridge 到达判定距离 |
+| BlacklistTTL | 3600帧（60s） | 失败节点黑名单有效期 |
+| BlacklistMax | 20 | 黑名单满时 NavState=Failed |
+
+### PlanTo vs Plan 的区别
+- `Plan(sign)`：地表导航，有 fallback（heap耗尽→最远前进节点），单向扫描
+- `PlanTo(wx,wy)`：指哪去哪，noFallback=true（heap耗尽→空路径），bidir=true（双向扫描）
+
+---
+
 ## 2026-05-18 NavWand 调试日志机制
 
 ### 决策
