@@ -1,6 +1,147 @@
 # TerraBlind 决策记录
 
+---
+
+## 2026-05-20 jump 边规划-执行偏差的完整影响因素
+
+### 问题背景
+jump 边反复 deviated+replan，分析日志后整理出所有影响规划与执行一致性的因素。
+
+### 影响因素一览
+
+**规划层（BuildJumpEdges / PathPlanner）**
+
+| 因素 | 当前行为 | 潜在误差来源 |
+|------|---------|------------|
+| `inferredVx`（起点） | 读 `p.velocity.X` | 规划时静止，执行时已起跑，vx 不同 |
+| `inferredVx`（非起点） | 由 prevAction 推断：pillar/mine→0，jump→prevEndVx，其余→`sign*MaxRun` | 推断链有误差累积；`sign` 方向改变时 infer 为 0 |
+| `jumpVx`（反向跳） | `inferredVx * jsign < 0` 时置 0 | 执行时实际 vx 不为 0，轨迹不符 |
+| `PhysicsSimulator.Step` | 近似模型，已于 2026-05-20 对齐游戏逻辑 | StepUp 在降落阶段误触，产生极短弧线（见下方 bug） |
+| `ArcClipsWall` | 只检查上升阶段头顶，下降段漏检 | 产生穿墙规划 |
+| 节点签名无 vx | `(cx, cy, hc)` 不含 vx | 同一节点不同入口速度生成不同弧线，节点被共享导致弧线不对 |
+
+**执行层（NavCoordinator / ResimJump）**
+
+| 因素 | 当前行为 | 潜在误差来源 |
+|------|---------|------------|
+| ResimJump 起跳 vx | 读实际 `p.velocity.X` | 与规划时的 `inferredVx` 不同 |
+| ResimJump vx 与 sign 反向 | 生成反向弧线帧，无法到达目标 | 执行层没有拒绝/等待机制 |
+| replay path（node.Frames）| 直接回放规划帧，不检查实际 vx | 实际 vx 与规划假设不符时轨迹偏离 |
+| `align_diff` | 玩家中心与 src tile 中心可能有 2-3 格偏差 | 起点偏差叠加 vx 偏差，放大落点误差 |
+| deviated 阈值 | jump: `|dx|>3 OR |dy|>2` | dy 阈值 2 较严，±1 格的正常误差不触发，但 StepUp 误差会触发 |
+
+**物理参数（PhysicsSimulator.Params）**
+
+| 因素 | 当前行为 | 潜在误差来源 |
+|------|---------|------------|
+| maxRunSpeed | 从 `p.maxRunSpeed` 读取 | buff 下 3.63 vs 规划旧值 3.0，弧线水平跨度不同 |
+| accRunSpeed | 从 `p.accRunSpeed` 读取（2026-05-20 修复） | boot 加速区间，超速后弧线与普通 vx 不同 |
+| gravity | 从 `p.gravity` 读取 | 配件可减半，影响弧线高度和落点 |
+| StepUp | 2026-05-20 引入，降落段误触 | 降落阶段 `vy>=0` 时误判 1 格台阶为着地，产生极短弧线（已知 bug，待修） |
+
+### 当前已知 bug（2026-05-20）
+
+**StepUp 降落段误触**：`Step` 里条件 `vx != 0f && vy >= 0f` 在下降阶段满足，遇到 1 格台阶时 StepUp 抬高玩家并清零 vel.Y，TileCollision 随即判定 hitFloor=true，模拟提前终止。表现：hold=15 的跳跃只跨 2 格。
+
+// FRAGILE: StepUp 条件应限制为"接近地面时"，而非整个下降阶段。修法待定：可在 hitFloor 后额外校验脚底是否真的有 floor，或只在最后 N 帧启用 StepUp。
+
+### 根本矛盾
+规划层用**静态推断的 vx** 生成弧线，执行层用**运行时实际 vx** 起跳。两者在以下情况会不一致：
+1. 规划时静止，执行时已加速（起点 vx 推断问题）
+2. 上一跳向左落地，下一跳向右，规划用 0，执行用 -3（反向 vx 问题）
+3. buff 导致 maxRunSpeed 与规划假设不符（已部分修复）
+4. PhysicsSimulator 近似误差（2026-05-20 减小，StepUp bug 待修）
+
 记录关键设计决策、排除方案和已知局限。按时间倒序追加。
+
+---
+
+## 2026-05-19 A* 节点签名引入 vxBucket
+
+### 决策
+节点签名从 `(cx, cy, hc)` 扩展为 `(cx, cy, hc, vxBucket)`，vxBucket 为 int，范围 -2..+2。
+
+### 原因
+原签名不区分入口速度，导致两类 bug：
+1. 规划出全速才能到达的 jump 落点，但执行时静止起跳跳不到，触发 deviated+replan 死循环
+2. 漏掉 vx=0 时弧线更陡能跳上的目标（垂直高度更高但水平距离更短）
+
+### vxBucket 离散化方案
+5桶：`-2=NegFull, -1=NegHalf, 0=Zero, +1=PosHalf, +2=PosFull`
+
+归桶边界（零偏向）：
+- `|vx| < 0.75` → 0（Zero）
+- `0.75 ≤ |vx| < 2.25` → ±1（Half，带符号）
+- `|vx| ≥ 2.25` → ±2（Full，带符号）
+
+基于 MaxRun=3.0，Half=1.5，边界在 0.75 和 2.25。
+
+### 各边类型出口 vxBucket
+| 边类型 | 出口 vxBucket |
+|--------|--------------|
+| move 单格 | 入口 + accRun×5.5帧归桶 |
+| fall | 入口（空中无摩擦） |
+| jump | 入口（空中无摩擦） |
+| pillar | 0（落顶静止） |
+| bridge | ±1（始终 Half，不论入口和桥长）// ASSUMPTION: bridge 放砖走走停停，保守归 Half |
+| mine_* | 0（挖掘间歇导致速度归零） |
+
+### bridge 始终计为 Half 的理由
+bridge 执行时玩家边走边放砖，存在周期性停顿，速度难以精确推算。保守归 ±Half（bsign 决定符号）避免高估出口速度导致后续 jump 边选择错误落点。
+
+### 起点 vxBucket
+`Plan`/`PlanTo` 入口处读 `p.velocity.X` 归桶，不再默认全速。
+
+### jump 边生成
+每个节点按当前 vxBucket 的实际速度 `BucketVx(vxb)` 生成跳跃弧，同时生成正向和反向跳。原硬编码 `-sign * MaxRunSpeed` 的反向跳 bug 一并修复。
+
+### 节点数膨胀
+理论上限 5 vxBucket × 2 hc = 10×。实际估计 5-8×，因为 hc=true 极少，不同 vxBucket 的 jump 落点差异会引入新节点。P2.1 验收阈值：closed set size 不超过 8× 原值。
+
+// FRAGILE: vxBucket 推算基于单格加速模型，不考虑地面减速（runSlowdown=0.2）和空中 vx 保持。实际误差在1桶以内，可接受。
+
+---
+
+## 2026-05-19 规划层关键 predicate 设计决策
+
+### Occupied 格的处理
+`Occupied = HasTile && !Solid && !Platform`，包括树干、藤蔓、植物、火把等。
+
+游戏里玩家可以自由穿过 Occupied 格，不阻碍移动。规划层不应把 Occupied 当障碍。
+
+**当前规则：**
+- `Standable` **不**排除 Occupied——玩家可以站在有树干/藤蔓的格子上（只要下方有 floor）
+- pillar 边单独保留 `Occupied` 过滤——平台砖不能放在树干上（`if (Occupied(cx, topY)) continue`）
+- move/fall/jump 边不受 Occupied 影响
+
+// ASSUMPTION: Occupied 格在游戏里对玩家移动完全透明，不产生碰撞
+
+### 平台穿越（fall through platform）
+fall 边生成条件用 `IsBlock`（实心块），不用 `IsFloor`（包含平台）。
+
+玩家站在平台上可以按下穿越，执行层 Fall 状态已有 `p.controlDown = true`。
+规划层 fall 边从平台格生成，A* 可以规划"穿平台下落"的路径。
+
+// ASSUMPTION: 平台穿越在执行层依赖 controlDown，规划层只负责生成 fall 边
+
+### mine 边终点可以是实心格（mineNode）
+mine_down 的终点 `(cx, cy+1)` 在当前世界是实心格，但挖完后变成空气。
+A* 把这类节点加入 `mineNodes`，允许继续展开邻居边（包括 move/fall/mine）。
+
+**debug 提示：** 路径里出现"move 到实心格"时，查是否是 mineNode——不一定是 bug。
+
+### step-up 的已知限制
+`BuildJumpEdges` 额外生成 `(lx, ly-1)` 的 step-up 落点，但：
+- 起跳点离台阶太远时，模拟落点 `ly` 距台阶超过1格，step-up 实际不会发生
+- 紧贴右侧墙起跳时，ArcClipsWall 会误判台阶侧面为天花板，过滤掉本来可行的边
+- step-up 需要水平移动触发，原地跳（lx==cx）不生成 step-up 落点
+
+### visited=1 的 debug 方法
+`visited=1` 说明起点节点出队后邻居全被过滤，heap 立刻为空。
+排查顺序：
+1. 起点 `feetY` 是否调整正确（起点校正第265行）
+2. 起点周围格子是否全被 Standable/Solid/Occupied 过滤掉
+3. 起点是否在特殊地形（平台上方、树干内、悬空）
 
 ---
 

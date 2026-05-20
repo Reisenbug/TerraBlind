@@ -12,42 +12,49 @@ namespace TerraBlind
 
         public struct Params
         {
-            public float AccRun, MaxRun, RunSlowdown, Gravity, MaxFall, HoldVY;
+            public float AccRun, MaxRun, AccRunSpeed, RunSlowdown, Gravity, MaxFall, JumpSpeed;
+
+            public float HoldVY => -(JumpSpeed - Gravity);
 
             public static Params FromPlayer(Player p)
             {
-                float grav, js, maxFall, maxRun;
-                float accRun = 0.08f;
+                float grav, js, maxFall, maxRun, accRunSpeed;
+                float accRun = p.runAcceleration > 0f ? p.runAcceleration : 0.08f;
+                float slow   = p.runSlowdown   > 0f ? p.runSlowdown   : 0.2f;
                 if (p.wet && !p.honeyWet && !p.merman)
                 {
-                    grav    = 0.2f * 0.5f;
-                    js      = 6.01f * 0.5f;
-                    maxFall = 5f * 0.5f;
-                    maxRun  = 1.5f * p.moveSpeed;
-                    accRun  = 0.08f * 0.5f;
+                    grav       = 0.2f * 0.5f;
+                    js         = 6.01f * 0.5f;
+                    maxFall    = 5f * 0.5f;
+                    maxRun     = 1.5f * p.moveSpeed;
+                    accRunSpeed = maxRun;
+                    accRun     = 0.08f * 0.5f;
+                    slow       = 0.2f * 0.5f;
                 }
                 else
                 {
-                    grav    = p.gravity > 0f ? p.gravity : 0.4f;
-                    js      = Player.jumpSpeed;
-                    maxFall = 10f;
-                    maxRun  = 3f * p.moveSpeed;
+                    grav       = p.gravity > 0f ? p.gravity : 0.4f;
+                    js         = Player.jumpSpeed;
+                    maxFall    = p.maxFallSpeed > 0f ? p.maxFallSpeed : 10f;
+                    maxRun     = p.maxRunSpeed  > 0f ? p.maxRunSpeed  : 3f;
+                    accRunSpeed = p.accRunSpeed > maxRun ? p.accRunSpeed : maxRun;
                 }
                 return new Params
                 {
                     AccRun      = accRun,
                     MaxRun      = maxRun,
-                    RunSlowdown = 0.2f,
+                    AccRunSpeed = accRunSpeed,
+                    RunSlowdown = slow,
                     Gravity     = grav,
                     MaxFall     = maxFall,
-                    HoldVY      = -(js - grav),
+                    JumpSpeed   = js,
                 };
             }
 
             public static readonly Params Default = new Params
             {
-                AccRun = 0.08f, MaxRun = MaxRunSpeed, RunSlowdown = 0.2f,
-                Gravity = 0.4f, MaxFall = 10f, HoldVY = -4.61f,
+                AccRun = 0.08f, MaxRun = MaxRunSpeed, AccRunSpeed = MaxRunSpeed,
+                RunSlowdown = 0.2f, Gravity = 0.4f, MaxFall = 10f, JumpSpeed = 5.01f,
             };
         }
 
@@ -75,19 +82,52 @@ namespace TerraBlind
             public int CeilingContactFrames; // frames where vy was clipped during ascent (vy<0)
         }
 
-        public static State Step(State s, ControlInput input, Params ph)
+        public static State Step(State s, ControlInput input, Params ph, out bool vxClipped, out bool vyClipped)
         {
             float vx = s.Vx;
             float vy = s.Vy;
             int jfl = s.JumpFramesLeft;
 
-            if (input.Right)       vx = System.Math.Min(vx + ph.AccRun, ph.MaxRun);
-            else if (input.Left)   vx = System.Math.Max(vx - ph.AccRun, -ph.MaxRun);
-            else if (s.Grounded)   vx = vx > 0 ? System.Math.Max(vx - ph.RunSlowdown, 0) : System.Math.Min(vx + ph.RunSlowdown, 0);
+            if (input.Right)
+            {
+                if (vx < ph.MaxRun)
+                {
+                    if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
+                    vx += ph.AccRun;
+                    if (vx > ph.MaxRun) vx = ph.MaxRun;
+                }
+                else if (vx < ph.AccRunSpeed)
+                {
+                    if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
+                    vx += ph.AccRun;
+                    if (vx > ph.AccRunSpeed) vx = ph.AccRunSpeed;
+                }
+            }
+            else if (input.Left)
+            {
+                if (vx > -ph.MaxRun)
+                {
+                    if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
+                    vx -= ph.AccRun;
+                    if (vx < -ph.MaxRun) vx = -ph.MaxRun;
+                }
+                else if (vx > -ph.AccRunSpeed)
+                {
+                    if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
+                    vx -= ph.AccRun;
+                    if (vx < -ph.AccRunSpeed) vx = -ph.AccRunSpeed;
+                }
+            }
+            else if (s.Grounded)
+            {
+                if (vx > ph.RunSlowdown)       vx -= ph.RunSlowdown;
+                else if (vx < -ph.RunSlowdown)  vx += ph.RunSlowdown;
+                else                            vx  = 0f;
+            }
 
             if (input.Jump && jfl > 0)
             {
-                vy = ph.HoldVY;
+                vy = -(ph.JumpSpeed - ph.Gravity);
                 jfl--;
             }
             else
@@ -98,51 +138,35 @@ namespace TerraBlind
 
             var pos = new Vector2(s.Px, s.Py);
             var vel = new Vector2(vx, vy);
+            float stepSpeed = 0f, gfxOffY = 0f;
+            // StepUp only near ground: if not grounded and falling but no floor within 2px, skip
+            bool nearGround = s.Grounded || (vy > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, false, false, 1).Y < 2f);
+            if (vx != 0f && nearGround)
+                Terraria.Collision.StepUp(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
             var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, false, false, 1);
-            float nx = s.Px + result.X;
-            float ny = s.Py + result.Y;
 
-            bool hitFloor = vy > 0f && System.Math.Abs(result.Y - vy) > 0.01f;
+            if (vy < 0f && System.Math.Abs(result.Y - vel.Y) > 0.01f) jfl = 0;
+
+            float nx = pos.X + result.X;
+            float ny = pos.Y + result.Y;
+
+            vxClipped = System.Math.Abs(result.X - vel.X) > 0.01f;
+            vyClipped = System.Math.Abs(result.Y - vel.Y) > 0.01f;
+
+            bool hitFloor = vel.Y > 0f && vyClipped;
             if (hitFloor) vy = 0f;
+            else          vy = result.Y;
 
-            return new State
-            {
-                Px = nx, Py = ny,
-                Vx = vx, Vy = vy,
-                Grounded = hitFloor,
-                JumpFramesLeft = jfl,
-            };
-        }
-
-        public static State Step(State s, ControlInput input, Params ph, out bool vxClipped, out bool vyClipped)
-        {
-            float vx = s.Vx;
-            float vy = s.Vy;
-            int jfl = s.JumpFramesLeft;
-
-            if (input.Right)       vx = System.Math.Min(vx + ph.AccRun, ph.MaxRun);
-            else if (input.Left)   vx = System.Math.Max(vx - ph.AccRun, -ph.MaxRun);
-            else if (s.Grounded)   vx = vx > 0 ? System.Math.Max(vx - ph.RunSlowdown, 0) : System.Math.Min(vx + ph.RunSlowdown, 0);
-
-            if (input.Jump && jfl > 0) { vy = ph.HoldVY; jfl--; }
-            else { if (!input.Jump) jfl = 0; vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall); }
-
-            var pos = new Vector2(s.Px, s.Py);
-            var vel = new Vector2(vx, vy);
-            var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, false, false, 1);
-            float nx = s.Px + result.X;
-            float ny = s.Py + result.Y;
-
-            vxClipped = System.Math.Abs(result.X - vx) > 0.01f;
-            vyClipped = System.Math.Abs(result.Y - vy) > 0.01f;
-
-            bool hitFloor = vy > 0f && vyClipped;
-            if (hitFloor) vy = 0f;
+            vx = result.X;
 
             return new State { Px = nx, Py = ny, Vx = vx, Vy = vy, Grounded = hitFloor, JumpFramesLeft = jfl };
         }
 
-        // overload for callers that don't need water-aware params
+        public static State Step(State s, ControlInput input, Params ph)
+        {
+            return Step(s, input, ph, out _, out _);
+        }
+
         public static State Step(State s, ControlInput input) => Step(s, input, Params.Default);
 
         public static SimResult SimulateJump(State start, int dirSign, int holdFrames, Params ph, int maxFrames = 120)
@@ -179,7 +203,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH / 2f) / 16),
+                        Cy       = (int)((s.Py + PlayerH) / 16f) - 1,
                         MinPy    = minPy,
                         WallContactFrames    = wallContactFrames,
                         CeilingContactFrames = ceilingContactFrames,
@@ -211,7 +235,7 @@ namespace TerraBlind
                         Frames   = frames,
                         Landed   = true,
                         Cx       = (int)((s.Px + PlayerW / 2f) / 16),
-                        Cy       = (int)((s.Py + PlayerH / 2f) / 16),
+                        Cy       = (int)((s.Py + PlayerH) / 16f) - 1,
                     };
                 }
             }

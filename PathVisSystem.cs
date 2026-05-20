@@ -98,8 +98,7 @@ namespace TerraBlind
                 {
                     int swx = path[i].SourceWx, swy = path[i].SourceWy;
                     int jsign = wx > swx ? 1 : -1;
-                    bool prevIsPillar = i > 0 && path[i - 1].Action == "pillar";
-                    float arcVx = prevIsPillar ? 0f : jsign * PhysicsSimulator.MaxRunSpeed;
+                    float arcVx = path[i].StartVx.HasValue ? jsign * System.Math.Abs(path[i].StartVx.Value) : jsign * PhysicsSimulator.MaxRunSpeed;
                     var s = new PhysicsSimulator.State
                     {
                         Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,

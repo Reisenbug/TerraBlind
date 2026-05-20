@@ -5,15 +5,16 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum NavState { Idle, Move, Fall, Jump, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, Done, Failed }
+    public enum NavState { Idle, Move, Fall, Jump, JumpAlign, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, Done, Failed }
 
     public struct NavNode
     {
-        public int Wx, Wy;         // landing tile (jump) / target tile (move/fall/bridge/pillar)
-        public int SourceWx, SourceWy; // jump only: tile where simulation started
+        public int Wx, Wy;
+        public int SourceWx, SourceWy;
         public string Action;
         public System.Collections.Generic.List<PhysicsSimulator.ControlInput> Frames;
-        public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // mine_* actions only
+        public System.Collections.Generic.List<(int wx, int wy)> MineTiles;
+        public float? StartVx;
     }
 
     public class NavCoordinator : ModSystem
@@ -48,6 +49,8 @@ namespace TerraBlind
         private static float _prevPillarVx;
         private static int _pillarNudgeFrames;
         private static float _lastPlanMaxRun = -1f;
+        private static int _vxWaitFrames = 0;
+        private const int VxWaitMax = 20;
         private static int _fixedGoalWx = -1;
         private static int _fixedGoalWy = -1;
 
@@ -505,6 +508,9 @@ namespace TerraBlind
                         node.SourceWx = int.Parse(sm.Groups[1].Value);
                         node.SourceWy = int.Parse(sm.Groups[2].Value);
                     }
+                    var svxm = System.Text.RegularExpressions.Regex.Match(nodeJson, "\"start_vx\"\\s*:\\s*(-?[0-9.]+)");
+                    if (svxm.Success) node.StartVx = float.Parse(svxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    else node.StartVx = null;
                     var frames = new List<PhysicsSimulator.ControlInput>();
                     foreach (System.Text.RegularExpressions.Match fm in frameRe.Matches(nodeJson))
                         frames.Add(new PhysicsSimulator.ControlInput
@@ -540,7 +546,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.Mine && State != NavState.MineAlign && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.JumpAlign && State != NavState.Mine && State != NavState.MineAlign && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -625,6 +631,7 @@ namespace TerraBlind
                         }
                     }
 
+                    _vxWaitFrames = 0;
                     if (_target.Action == "jump")
                     {
                         if (p.velocity.Y > 1f)
@@ -634,12 +641,20 @@ namespace TerraBlind
                             Replan(p);
                             return;
                         }
+                        int jumpSign = _target.Wx >= pcx ? 1 : -1;
+                        if (p.velocity.X * jumpSign < -0.3f)
+                        {
+                            DiagLog.Write($"[nav] jump needs align vx={p.velocity.X:0.##} jumpSign={jumpSign} src=({_target.SourceWx},{_target.SourceWy}) → JumpAlign");
+                            _pillarAlignTick = 0;
+                            State = NavState.JumpAlign;
+                            return;
+                        }
                         {
                             int fallbackHold = 0;
                             if (_target.Frames != null)
                                 foreach (var fi in _target.Frames) { if (fi.Jump) fallbackHold++; else break; }
                             if (fallbackHold == 0) fallbackHold = 15;
-                            var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, _sign, _target.Wx, fallbackHold, startVx: p.velocity.X);
+                            var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign, _target.Wx, fallbackHold, startVx: p.velocity.X);
                             DiagLog.Write($"[nav] jump resim vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy}) frames={replayFrames.Count}");
                             if (replayFrames.Count == 0)
                             {
@@ -792,7 +807,8 @@ namespace TerraBlind
                         // phase 3: replay done, wait for landing
                         if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y != 0f)
                         {
-                            if (_sign > 0) p.controlRight = true;
+                            int jumpDir = _target.Wx >= _target.SourceWx ? 1 : -1;
+                            if (jumpDir > 0) p.controlRight = true;
                             else p.controlLeft = true;
                         }
                         if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y == 0f)
@@ -803,8 +819,17 @@ namespace TerraBlind
                             _actualWallFrames = 0; _actualCeilFrames = 0;
                             EmitNodeExit(_pathIdx, "jump", "done", _target.Wx, _target.Wy, pcx, feetY);
                             _jumpReplayLoaded = false;
-                            _pathIdx++;
-                            State = NavState.Idle;
+                            if (BehaviorContract.Deviated("jump", pcx - _target.Wx, feetY - _target.Wy))
+                            {
+                                DiagLog.Write($"[nav] jump deviated landing=({pcx},{feetY}) target=({_target.Wx},{_target.Wy}) → blacklist+replan");
+                                BlacklistNode(_target.Wx, _target.Wy);
+                                Replan(p);
+                            }
+                            else
+                            {
+                                _pathIdx++;
+                                State = NavState.Idle;
+                            }
                         }
                     }
                     else
@@ -818,8 +843,17 @@ namespace TerraBlind
                             _actualWallFrames = 0; _actualCeilFrames = 0;
                             EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
                             JumpCoordinator.Stop();
-                            _pathIdx++;
-                            State = NavState.Idle;
+                            if (BehaviorContract.Deviated("jump", pcx - expWx, feetY - expWy))
+                            {
+                                DiagLog.Write($"[nav] jump deviated landing=({pcx},{feetY}) target=({expWx},{expWy}) → blacklist+replan");
+                                BlacklistNode(expWx, expWy);
+                                Replan(p);
+                            }
+                            else
+                            {
+                                _pathIdx++;
+                                State = NavState.Idle;
+                            }
                         }
                     }
                     if (_prevVY < 0f)
@@ -830,6 +864,45 @@ namespace TerraBlind
                     // DiagLog.Write($"[jump_vx] tick={Main.GameUpdateCount} vx={p.velocity.X:0.###} vy={p.velocity.Y:0.###} replayActive={ReplaySystem.IsActive}");
                     _prevJumpVx = p.velocity.X;
                     _prevVY = p.velocity.Y;
+                    return;
+                }
+
+                if (State == NavState.JumpAlign)
+                {
+                    _pillarAlignTick++;
+                    if (_pillarAlignTick > 120)
+                    {
+                        DiagLog.Write($"[nav] JumpAlign timeout vx={p.velocity.X:0.##} → replan");
+                        EmitNavFailed("jump_align_timeout", _pathIdx, "jump", pcx, feetY);
+                        Replan(p);
+                        return;
+                    }
+                    int jumpSign = _target.Wx >= pcx ? 1 : -1;
+                    float targetCenterX = _target.SourceWx * 16f + 8f;
+                    bool aligned = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(p.velocity.X) < 0.3f;
+                    if (aligned)
+                    {
+                        DiagLog.Write($"[nav] JumpAlign done vx={p.velocity.X:0.##} cx={centerX:0.#} → dispatching jump");
+                        // dispatch jump from here with vx≈0
+                        int fallbackHold = 0;
+                        if (_target.Frames != null)
+                            foreach (var fi in _target.Frames) { if (fi.Jump) fallbackHold++; else break; }
+                        if (fallbackHold == 0) fallbackHold = 15;
+                        var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign, _target.Wx, fallbackHold, startVx: p.velocity.X);
+                        DiagLog.Write($"[nav] jump resim(align) vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy})");
+                        if (replayFrames.Count == 0) { Replan(p); return; }
+                        _jumpReplayLoaded = true;
+                        ReplaySystem.Load(replayFrames);
+                        State = NavState.Jump;
+                        return;
+                    }
+                    float vx = p.velocity.X;
+                    float stopDist = vx != 0f ? (vx * vx / (2f * 0.2f)) * Math.Sign(vx) : 0f;
+                    float predictedStopX = centerX + stopDist;
+                    float diff = targetCenterX - predictedStopX;
+                    if (Math.Abs(diff) <= 8f) return;
+                    if (diff > 0) p.controlRight = true;
+                    else p.controlLeft = true;
                     return;
                 }
 
@@ -1013,7 +1086,7 @@ namespace TerraBlind
                         Replan(p);
                         return;
                     }
-                    float targetCenterX = _target.Wx * 16f + 8f;
+                    float targetCenterX = _target.Wx * 16f + 10f;
                     bool aligned = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(p.velocity.X) < 0.3f;
                     if (aligned)
                     {
@@ -1097,7 +1170,8 @@ namespace TerraBlind
                         if (n.Frames != null)
                             foreach (var fi in n.Frames) { if (fi.Jump) fallbackHold++; else break; }
                         if (fallbackHold == 0) fallbackHold = 15;
-                        var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, _sign, n.Wx, fallbackHold);
+                        int jumpSign2 = n.Wx >= pcx ? 1 : -1;
+                        var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign2, n.Wx, fallbackHold);
                         DiagLog.Write($"[nav] jump resim(adv) vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({n.Wx},{n.Wy}) frames={replayFrames.Count}");
                         if (replayFrames.Count > 0) { _jumpReplayLoaded = true; ReplaySystem.Load(replayFrames); }
                         else { State = NavState.Idle; return; }
