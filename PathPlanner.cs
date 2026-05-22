@@ -516,7 +516,7 @@ namespace TerraBlind
                 {
                     var mt = new List<(int, int)>();
                     float mc = 0f;
-                    for (int col = cx; col <= cx + 1; col++)
+                    for (int col = cx - 1; col <= cx; col++)
                         for (int ddy = 1; ddy <= 2; ddy++)
                             if (Solid(col, cy - ddy)) { mt.Add((col, cy - ddy)); mc += MineCostPerTile; }
                     if (mt.Count > 0)
@@ -532,7 +532,7 @@ namespace TerraBlind
                     }
                 }
 
-                bool headClear = !Solid(cx, cy - 1) && !Solid(cx, cy - 2) && !Solid(cx + 1, cy - 1) && !Solid(cx + 1, cy - 2);
+                bool headClear = !Solid(cx - 1, cy - 1) && !Solid(cx - 1, cy - 2) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
                 bool canJump = (Standable(cx, cy) || bridgeNodes.Contains((cx, cy, hc)))
                     && (headClear || hc);
                 if (canJump)
