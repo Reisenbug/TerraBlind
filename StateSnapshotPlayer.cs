@@ -11,10 +11,52 @@ namespace TerraBlind
 		private const int AutoJumpCooldownFrames = 10;
 		private int _jumpFramesLeft;
 		private int _autoJumpCooldown;
+		private float _prevVy;
+		public static bool JumpPlaceEnabled = false;
+		private bool _jumpPlaceFired;
 
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
+
+			if (JumpPlaceEnabled)
+			{
+				bool atPeak = _prevVy < 0f && Player.velocity.Y >= 0f;
+				if (atPeak && !_jumpPlaceFired)
+				{
+					_jumpPlaceFired = true;
+					int slot = -1;
+					for (int i = 0; i < 10; i++)
+					{
+						var it = Player.inventory[i];
+						if (it != null && !it.IsAir && it.createTile >= 0 && Terraria.ID.TileID.Sets.Platforms[it.createTile])
+						{ slot = i; break; }
+					}
+					if (slot >= 0)
+					{
+						Player.selectedItem = slot;
+						Player.controlUseItem = true;
+						// place at feet+1 tile so player lands on it
+						int tileX = (int)((Player.position.X + Player.width / 2f) / 16f);
+						int tileY = (int)((Player.position.Y + Player.height) / 16f) + 1;
+						Main.mouseX = (int)(tileX * 16f + 8f - Main.screenPosition.X);
+						Main.mouseY = (int)(tileY * 16f + 8f - Main.screenPosition.Y);
+						PathVisSystem.SetTiles(new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>
+						{
+							(tileX, tileY, new Microsoft.Xna.Framework.Color(255, 220, 0, 200))
+						}, ttlFrames: 180);
+						Main.SmartCursorWanted_Mouse = false;
+						DiagLog.Write($"[jump_place] fired at peak vy_prev={_prevVy:0.##} vy={Player.velocity.Y:0.##} slot={slot} tile=({tileX},{tileY}) itemTime={Player.itemTime} itemAnimation={Player.itemAnimation}");
+					}
+				}
+				if (Player.velocity.Y == 0f && _jumpPlaceFired)
+				{
+					JumpPlaceEnabled = false;
+					_jumpPlaceFired = false;
+				}
+			}
+			_prevVy = Player.velocity.Y;
+
 			if (NavCoordinator.IsActive)
 			{
 				NavCoordinator.ApplyControls();

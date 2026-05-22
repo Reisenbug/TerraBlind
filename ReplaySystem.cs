@@ -17,6 +17,7 @@ namespace TerraBlind
         private static readonly object _lock = new object();
         private static Queue<ReplayFrame> _frames = new Queue<ReplayFrame>();
         public static bool IsActive { get { lock (_lock) { return _frames.Count > 0; } } }
+        public static int FramesRemaining { get { lock (_lock) { return _frames.Count; } } }
 
         public static void Load(List<ReplayFrame> frames)
         {

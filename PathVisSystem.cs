@@ -85,7 +85,12 @@ namespace TerraBlind
                 foreach (var node in path)
                     if (node.MineTiles != null)
                         foreach (var (mx, my) in node.MineTiles)
-                            DrawTile(spriteBatch, mx, my, new Color(255, 165, 0, 180));
+                        {
+                            var tc = (node.Action == "platform_walk" || node.Action == "jump_bridge")
+                                ? new Color(0, 255, 180, 180)
+                                : new Color(255, 165, 0, 180);
+                            DrawTile(spriteBatch, mx, my, tc);
+                        }
 
             int prevWx = -1, prevWy = -1;
             if (path != null)
@@ -161,6 +166,10 @@ namespace TerraBlind
                     c = new Color(255, 220, 0, 120);
                 else if (action == "bridge")
                     c = new Color(180, 0, 255, 120);
+                else if (action == "platform_walk")
+                    c = new Color(0, 255, 120, 160);
+                else if (action == "jump_bridge")
+                    c = new Color(100, 200, 255, 160);
                 else if (action == "fall")
                     c = new Color(0, 180, 255, 120);
                 else if (action == "pillar")

@@ -101,6 +101,56 @@ namespace TerraBlind
 
         private static bool IsFloor(int wx, int wy) => IsBlock(wx, wy) || Platform(wx, wy) || IsHalfBrick(wx, wy);
 
+        private static bool HasPlatformInInventory(Player p)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var it = p.inventory[i];
+                if (it != null && !it.IsAir && it.createTile >= 0 && Terraria.ID.TileID.Sets.Platforms[it.createTile])
+                    return true;
+            }
+            return false;
+        }
+
+        public static bool CanPlacePlatformAt(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            if (t != null && t.HasTile && !Main.tileCut[t.TileType]) return false;
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int nx = wx + dx, ny = wy + dy;
+                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                    var nb = Main.tile[nx, ny];
+                    if (nb == null) continue;
+                    if (nb.HasTile) return true;
+                    if (nb.WallType > 0) return true;
+                }
+            return false;
+        }
+
+        // CanPlacePlatformAt with simulated already-placed tiles
+        private static bool CanPlacePlatformAtWith(int wx, int wy, HashSet<(int, int)> placed)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            if (t != null && t.HasTile && !Main.tileCut[t.TileType]) return false;
+            if (placed.Contains((wx, wy))) return false; // already placed here
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int nx = wx + dx, ny = wy + dy;
+                    if (placed.Contains((nx, ny))) return true; // neighbor is a placed tile
+                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                    var nb = Main.tile[nx, ny];
+                    if (nb == null) continue;
+                    if (nb.HasTile) return true;
+                    if (nb.WallType > 0) return true;
+                }
+            return false;
+        }
+
         private static bool Solid(int wx, int wy) => IsBlock(wx, wy);
 
         // tile exists but cannot be placed on/through (tree trunks, vines, etc.)
@@ -213,6 +263,7 @@ namespace TerraBlind
                 int ly = (int)((result.EndState.Py + p.height) / 16f) - 1;
                 if (lx < xMin || lx > xMax || ly < yMin || ly > yMax) continue;
                 if (Math.Abs(lx - cx) < JumpMinCol) continue;
+                if (Math.Abs(lx - cx) <= 2 && Math.Abs(ly - cy) < 2) continue;
                 if (!Standable(lx, ly)) continue;
                 if (seen.Contains((lx, ly))) continue;
                 bool arcClips = ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph);
@@ -608,6 +659,88 @@ namespace TerraBlind
                         }
                     }
                 }
+
+                if ((Standable(cx, cy) || pillarTopNodes.Contains((cx, cy))) && HasPlatformInInventory(p))
+                {
+                    foreach (int bsign in new[] { sign, -sign })
+                    {
+                        var placeTiles = new List<(int, int)>();
+                        var placedSet = new HashSet<(int, int)>();
+                        for (int col = 1; ; col++)
+                        {
+                            int nx = cx + bsign * col;
+                            if (nx < xMin || nx > xMax) break;
+                            if (Solid(nx, cy) || Solid(nx, cy - 1) || Solid(nx, cy - 2)) break;
+                            int floorTile = nx; int floorY = cy + 1;
+                            bool needsFloor = !IsFloor(nx, cy + 1);
+                            if (needsFloor)
+                            {
+                                if (!CanPlacePlatformAtWith(floorTile, floorY, placedSet)) break;
+                                placeTiles.Add((floorTile, floorY));
+                                placedSet.Add((floorTile, floorY));
+                            }
+                            if (!needsFloor || Standable(nx, cy))
+                            {
+                                if (placeTiles.Count == 0) break; // no platform needed, regular move suffices
+                                float pwCost = col * MoveCostBase + placeTiles.Count * 3f;
+                                float pwNg = curG + pwCost;
+                                if (pwNg < g.GetValueOrDefault((nx, cy, false), float.MaxValue))
+                                {
+                                    g[(nx, cy, false)] = pwNg;
+                                    bridgeNodes.Add((nx, cy, false));
+                                    prev[(nx, cy, false)] = ((cx, cy, hc), "platform_walk", null);
+                                    mineTilesData[(nx, cy, false)] = new List<(int, int)>(placeTiles);
+                                    float h = HeuristicWeight * MinDistToGoal(goalSet, nx, cy);
+                                    heap.Enqueue((nx, cy, false), pwNg + h);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (canJump && HasPlatformInInventory(p))
+                {
+                    foreach (int jsign in new[] { sign, -sign })
+                    {
+                        float inferredVx2;
+                        if (cx == pcx && cy == feetY) inferredVx2 = startVx;
+                        else if (prev.TryGetValue((cx, cy, hc), out var pEntry2))
+                        {
+                            string pa2 = pEntry2.Item2;
+                            if (pa2 == "pillar" || pa2.StartsWith("mine_")) inferredVx2 = 0f;
+                            else if (pa2 == "jump" && verifyData.TryGetValue((cx, cy, false), out var pvd2)) inferredVx2 = pvd2.endVx;
+                            else inferredVx2 = jsign * ph.MaxRun;
+                        }
+                        else inferredVx2 = jsign * ph.MaxRun;
+                        float jumpVx2 = (inferredVx2 * jsign >= 0) ? jsign * Math.Abs(inferredVx2) : 0f;
+
+                        var jbEdges = BuildJumpEdges(p, cx, cy, jsign, xMin, xMax, yMin, yMax, jumpVx2);
+                        foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in jbEdges)
+                        {
+                            var placeTiles = new List<(int, int)>();
+                            for (int fi = hold; fi < frames.Count; fi++)
+                            {
+                                int ftx = (int)((frames[fi].Px + p.width / 2f) / 16f);
+                                int fty = (int)((frames[fi].Py + p.height) / 16f);
+                                if (CanPlacePlatformAt(ftx, fty) && !placeTiles.Contains((ftx, fty)))
+                                    placeTiles.Add((ftx, fty));
+                            }
+                            if (placeTiles.Count == 0) continue;
+                            float jbCost = Math.Max(Math.Abs(lx - cx) + (JumpOverheadMax * (1f - (float)hold / HoldFrameOptions[HoldFrameOptions.Length - 1])) - Math.Max(0, cy - ly - 1) * 2f, 1f) + placeTiles.Count * 2f;
+                            float jbNg = curG + jbCost;
+                            if (jbNg < g.GetValueOrDefault((lx, ly, false), float.MaxValue))
+                            {
+                                g[(lx, ly, false)] = jbNg;
+                                prev[(lx, ly, false)] = ((cx, cy, hc), "jump_bridge", frames);
+                                verifyData[(lx, ly, false)] = (hold, jumpVx2, endVx, wallFrames, ceilFrames);
+                                mineTilesData[(lx, ly, false)] = placeTiles;
+                                bridgeNodes.Add((lx, ly, false));
+                                heap.Enqueue((lx, ly, false), jbNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
+                            }
+                        }
+                    }
+                }
             }
 
             if (noFallback)
@@ -666,7 +799,7 @@ namespace TerraBlind
                     sb.Append(",\"swx\":").Append(path[i].swx)
                       .Append(",\"swy\":").Append(path[i].swy);
                 }
-                if (path[i].action == "jump" && path[i].frames != null)
+                if ((path[i].action == "jump" || path[i].action == "jump_bridge") && path[i].frames != null)
                 {
                     float jumpStartVx = verifyData != null && verifyData.TryGetValue((path[i].wx, path[i].wy, false), out var jvd) ? jvd.startVx : 0f;
                     sb.Append(",\"start_vx\":").Append(jumpStartVx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
@@ -692,6 +825,16 @@ namespace TerraBlind
                     {
                         if (mi > 0) sb.Append(',');
                         sb.Append('[').Append(mt[mi].Item1).Append(',').Append(mt[mi].Item2).Append(']');
+                    }
+                    sb.Append("]");
+                }
+                if ((path[i].action == "jump_bridge" || path[i].action == "platform_walk") && mineTilesData != null && mineTilesData.TryGetValue((path[i].wx, path[i].wy, false), out var jbpt))
+                {
+                    sb.Append(",\"place_tiles\":[");
+                    for (int mi = 0; mi < jbpt.Count; mi++)
+                    {
+                        if (mi > 0) sb.Append(',');
+                        sb.Append('[').Append(jbpt[mi].Item1).Append(',').Append(jbpt[mi].Item2).Append(']');
                     }
                     sb.Append("]");
                 }

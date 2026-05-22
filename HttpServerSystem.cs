@@ -230,6 +230,7 @@ namespace TerraBlind
 				if (rb.Contains("\"up\":true")) ci.Up = true;
 				if (rb.Contains("\"down\":true")) ci.Down = true;
 				if (rb.Contains("\"jump\":true")) ci.Jump = true;
+				if (rb.Contains("\"jump_place\":true")) { StateSnapshotPlayer.JumpPlaceEnabled = true; }
 				if (rb.Contains("\"use_item\":true")) ci.UseItem = true;
 				if (rb.Contains("\"use_tile\":true")) ci.UseTile = true;
 				var slotMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"selected_slot\"\\s*:\\s*(\\d+)");
@@ -655,6 +656,26 @@ namespace TerraBlind
 				}
 				sb2.Append("]}");
 				body = sb2.ToString();
+			}
+			else if (path == "/mark_placeable")
+			{
+				var p3 = Main.LocalPlayer;
+				if (p3 == null) { body = "{\"error\":\"no_player\"}"; }
+				else
+				{
+					int pcx = (int)((p3.position.X + p3.width / 2f) / 16f);
+					int pcy = (int)((p3.position.Y + p3.height) / 16f);
+					var tiles = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+					for (int dx = -3; dx <= 3; dx++)
+						for (int dy = -3; dy <= 3; dy++)
+						{
+							int tx = pcx + dx, ty = pcy + dy;
+							if (PathPlanner.CanPlacePlatformAt(tx, ty))
+								tiles.Add((tx, ty, new Microsoft.Xna.Framework.Color(0, 255, 180, 160)));
+						}
+					PathVisSystem.SetTiles(tiles, ttlFrames: 300);
+					body = $"{{\"ok\":true,\"count\":{tiles.Count}}}";
+				}
 			}
 			else if (path == "/debug_jump_edges")
 			{

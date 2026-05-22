@@ -68,6 +68,7 @@ namespace TerraBlind
         public struct ControlInput
         {
             public bool Left, Right, Jump;
+            public float Px, Py; // player position (top-left px) after this frame
         }
 
         public struct SimResult
@@ -187,6 +188,7 @@ namespace TerraBlind
                 };
                 float preVy = s.Vy;
                 s = Step(s, input, ph, out bool vxClipped, out bool vyClipped);
+                input.Px = s.Px; input.Py = s.Py;
                 if (s.Py < minPy) minPy = s.Py;
                 if (preVy < 0f)
                 {

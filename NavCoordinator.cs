@@ -5,7 +5,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum NavState { Idle, Move, Fall, Jump, JumpAlign, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, Done, Failed }
+    public enum NavState { Idle, Move, Fall, Jump, JumpAlign, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, PlatformWalk, Done, Failed }
 
     public struct NavNode
     {
@@ -51,6 +51,9 @@ namespace TerraBlind
         private static float _lastPlanMaxRun = -1f;
         private static int _vxWaitFrames = 0;
         private const int VxWaitMax = 20;
+        private static int _jumpPlaceFrameIdx = -1;  // frame index to place platform during jump
+        private static int _jumpPlaceTileX, _jumpPlaceTileY;
+        private static int _jumpReplayFrameCount;
         private static int _fixedGoalWx = -1;
         private static int _fixedGoalWy = -1;
 
@@ -480,6 +483,26 @@ namespace TerraBlind
                     Wy = int.Parse(hm.Groups[2].Value),
                     Action = hm.Groups[3].Value,
                 };
+                if (node.Action == "platform_walk" || node.Action == "jump_bridge")
+                {
+                    var ptRe2 = new System.Text.RegularExpressions.Regex("\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+                    int ptStart2 = nodeJson.IndexOf("\"place_tiles\"");
+                    if (ptStart2 >= 0)
+                    {
+                        int ptArrStart2 = nodeJson.IndexOf('[', ptStart2);
+                        int ptDepth2 = 0, ptEnd2 = ptArrStart2;
+                        for (int mi = ptArrStart2; mi < nodeJson.Length; mi++)
+                        {
+                            if (nodeJson[mi] == '[') ptDepth2++;
+                            else if (nodeJson[mi] == ']') { ptDepth2--; if (ptDepth2 == 0) { ptEnd2 = mi + 1; break; } }
+                        }
+                        string ptSeg2 = nodeJson.Substring(ptArrStart2, ptEnd2 - ptArrStart2);
+                        var ptList2 = new List<(int, int)>();
+                        foreach (System.Text.RegularExpressions.Match mm in ptRe2.Matches(ptSeg2))
+                            ptList2.Add((int.Parse(mm.Groups[1].Value), int.Parse(mm.Groups[2].Value)));
+                        node.MineTiles = ptList2;
+                    }
+                }
                 if (node.Action.StartsWith("mine_"))
                 {
                     var mtRe = new System.Text.RegularExpressions.Regex("\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
@@ -500,7 +523,7 @@ namespace TerraBlind
                         node.MineTiles = mtList;
                     }
                 }
-                if (node.Action == "jump" || node.Action == "pillar")
+                if (node.Action == "jump" || node.Action == "jump_bridge" || node.Action == "pillar")
                 {
                     var sm = sourceRe.Match(nodeJson);
                     if (sm.Success)
@@ -520,6 +543,26 @@ namespace TerraBlind
                             Left  = fm.Groups[3].Value == "1",
                         });
                     node.Frames = frames.Count > 0 ? frames : null;
+                }
+                if (node.Action == "jump_bridge")
+                {
+                    var ptRe = new System.Text.RegularExpressions.Regex("\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+                    int ptStart = nodeJson.IndexOf("\"place_tiles\"");
+                    if (ptStart >= 0)
+                    {
+                        int ptArrStart = nodeJson.IndexOf('[', ptStart);
+                        int ptDepth = 0, ptEnd = ptArrStart;
+                        for (int mi = ptArrStart; mi < nodeJson.Length; mi++)
+                        {
+                            if (nodeJson[mi] == '[') ptDepth++;
+                            else if (nodeJson[mi] == ']') { ptDepth--; if (ptDepth == 0) { ptEnd = mi + 1; break; } }
+                        }
+                        string ptSeg = nodeJson.Substring(ptArrStart, ptEnd - ptArrStart);
+                        var ptList = new List<(int, int)>();
+                        foreach (System.Text.RegularExpressions.Match mm in ptRe.Matches(ptSeg))
+                            ptList.Add((int.Parse(mm.Groups[1].Value), int.Parse(mm.Groups[2].Value)));
+                        node.MineTiles = ptList;
+                    }
                 }
                 result.Add(node);
             }
@@ -546,7 +589,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.JumpAlign && State != NavState.Mine && State != NavState.MineAlign && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.JumpAlign && State != NavState.Mine && State != NavState.MineAlign && State != NavState.PlatformWalk && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -632,7 +675,7 @@ namespace TerraBlind
                     }
 
                     _vxWaitFrames = 0;
-                    if (_target.Action == "jump")
+                    if (_target.Action == "jump" || _target.Action == "jump_bridge")
                     {
                         if (p.velocity.Y > 1f)
                         {
@@ -658,10 +701,14 @@ namespace TerraBlind
                             DiagLog.Write($"[nav] jump resim vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy}) frames={replayFrames.Count}");
                             if (replayFrames.Count == 0)
                             {
+                                DiagLog.Write($"[nav] jump resim failed, blacklisting ({_target.Wx},{_target.Wy})");
+                                BlacklistNode(_target.Wx, _target.Wy);
                                 Replan(p);
                                 return;
                             }
                             _jumpReplayLoaded = true;
+                            _jumpReplayFrameCount = replayFrames.Count;
+                            ComputeJumpPlaceFrame(_target, bestHold, p.width, p.height);
                             ReplaySystem.Load(replayFrames);
                         }
                         State = NavState.Jump;
@@ -669,6 +716,11 @@ namespace TerraBlind
                     else if (_target.Action == "bridge")
                     {
                         State = NavState.Bridge;
+                    }
+                    else if (_target.Action == "platform_walk")
+                    {
+                        State = NavState.PlatformWalk;
+                        _invariantCheckCooldown = 10;
                     }
                     else if (_target.Action == "pillar")
                     {
@@ -787,6 +839,30 @@ namespace TerraBlind
                         // phase 1: JumpCoordinator doing precision alignment
                         if (JumpCoordinator.IsActive) { _prevVY = p.velocity.Y; return; }
 
+                        // jump_bridge: place platform when player reaches each place tile
+                        if (ReplaySystem.IsActive && _target.Action == "jump_bridge" && _target.MineTiles != null)
+                        {
+                            int slot = FindPlatformSlot(p);
+                            if (slot >= 0 && p.itemTime == 0)
+                            {
+                                int curTileX = pcx;
+                                int curTileY = feetY;
+                                foreach (var (ptx, pty) in _target.MineTiles)
+                                {
+                                    if (Math.Abs(curTileX - ptx) <= 1 && Math.Abs(curTileY - pty) <= 1)
+                                    {
+                                        p.selectedItem = slot;
+                                        p.controlUseItem = true;
+                                        Main.SmartCursorWanted_Mouse = false;
+                                        Main.mouseX = (int)(ptx * 16f + 8f - Main.screenPosition.X);
+                                        Main.mouseY = (int)(pty * 16f + 8f - Main.screenPosition.Y);
+                                        DiagLog.Write($"[nav] jump_bridge place tile=({ptx},{pty}) player=({curTileX},{curTileY})");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
                         // phase 2: alignment done, load replay once
                         // if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
                         //     DiagLog.Write($"[nav] jump phase2 trigger vy={p.velocity.Y} loaded={_jumpReplayLoaded} replayActive={ReplaySystem.IsActive}");
@@ -794,8 +870,14 @@ namespace TerraBlind
                         {
                             _jumpReplayLoaded = true;
                             var replayFrames = new List<ReplayFrame>();
+                            int framePlanHold = 0;
                             foreach (var fi in _target.Frames)
+                            {
                                 replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
+                                if (fi.Jump) framePlanHold++;
+                            }
+                            _jumpReplayFrameCount = replayFrames.Count;
+                            ComputeJumpPlaceFrame(_target, framePlanHold, p.width, p.height);
                             ReplaySystem.Load(replayFrames);
                             float alignedCx = p.position.X + p.width / 2f;
                             float srcX = _target.SourceWx * 16f + 8f;
@@ -890,8 +972,10 @@ namespace TerraBlind
                         if (fallbackHold == 0) fallbackHold = 15;
                         var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign, _target.Wx, fallbackHold, startVx: p.velocity.X);
                         DiagLog.Write($"[nav] jump resim(align) vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy})");
-                        if (replayFrames.Count == 0) { Replan(p); return; }
+                        if (replayFrames.Count == 0) { DiagLog.Write($"[nav] jump resim(align) failed, blacklisting ({_target.Wx},{_target.Wy})"); BlacklistNode(_target.Wx, _target.Wy); Replan(p); return; }
                         _jumpReplayLoaded = true;
+                        _jumpReplayFrameCount = replayFrames.Count;
+                        ComputeJumpPlaceFrame(_target, bestHold, p.width, p.height);
                         ReplaySystem.Load(replayFrames);
                         State = NavState.Jump;
                         return;
@@ -902,6 +986,46 @@ namespace TerraBlind
                     float diff = targetCenterX - predictedStopX;
                     if (Math.Abs(diff) <= 8f) return;
                     if (diff > 0) p.controlRight = true;
+                    else p.controlLeft = true;
+                    return;
+                }
+
+                if (State == NavState.PlatformWalk)
+                {
+                    int pwSign = _target.Wx >= pcx ? 1 : -1;
+                    int feetLeft = (int)(p.position.X / 16);
+                    int feetRight = (int)((p.position.X + p.width - 1) / 16);
+                    bool arrived = feetLeft <= _target.Wx && _target.Wx <= feetRight;
+                    if (arrived)
+                    {
+                        EmitNodeExit(_pathIdx, "platform_walk", "done", _target.Wx, _target.Wy, pcx, feetY);
+                        _pathIdx++;
+                        State = NavState.Idle;
+                        return;
+                    }
+                    // place platform under feet if needed
+                    if (_target.MineTiles != null && p.itemTime == 0)
+                    {
+                        int slot = FindPlatformSlot(p);
+                        if (slot >= 0)
+                        {
+                            foreach (var (ptx, pty) in _target.MineTiles)
+                            {
+                                // place 1 tile ahead so player doesn't fall before placing
+                                if (ptx == pcx + pwSign && pty == feetY + 1)
+                                {
+                                    p.selectedItem = slot;
+                                    p.controlUseItem = true;
+                                    Main.SmartCursorWanted_Mouse = false;
+                                    Main.mouseX = (int)(ptx * 16f + 8f - Main.screenPosition.X);
+                                    Main.mouseY = (int)(pty * 16f + 8f - Main.screenPosition.Y);
+                                    DiagLog.Write($"[nav] platform_walk place ({ptx},{pty}) player=({pcx},{feetY})");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (pwSign > 0) p.controlRight = true;
                     else p.controlLeft = true;
                     return;
                 }
@@ -1225,6 +1349,29 @@ namespace TerraBlind
                 }
             }
             return -1;
+        }
+
+        // find frame index during descent where player x-center first reaches target landing tile
+        private static void ComputeJumpPlaceFrame(NavNode target, int holdFrames, int playerW, int playerH)
+        {
+            _jumpPlaceFrameIdx = -1;
+            var frames = target.Frames;
+            if (frames == null || frames.Count == 0) return;
+            int targetTileX = target.Wx;
+            int sign = target.Wx >= target.SourceWx ? 1 : -1;
+            for (int i = holdFrames; i < frames.Count; i++)
+            {
+                float cx = (frames[i].Px + playerW / 2f) / 16f;
+                int tileCx = (int)cx;
+                if (sign > 0 ? tileCx >= targetTileX : tileCx <= targetTileX)
+                {
+                    _jumpPlaceFrameIdx = i;
+                    _jumpPlaceTileX = targetTileX;
+                    _jumpPlaceTileY = target.Wy + 1;
+                    DiagLog.Write($"[nav] jump_place frame={i} tile=({_jumpPlaceTileX},{_jumpPlaceTileY}) total_frames={frames.Count}");
+                    return;
+                }
+            }
         }
     }
 }

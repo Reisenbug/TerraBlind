@@ -20,15 +20,18 @@ namespace TerraBlind
         {
             ["move"]        = new ExitTolerance { Dx = 4, Dy = 6 },
             ["jump"]        = new ExitTolerance { Dx = 3, Dy = 2 },
+            ["jump_bridge"] = new ExitTolerance { Dx = 3, Dy = 2 },
             ["fall"]        = new ExitTolerance { Dx = 8, Dy = 8 },
-            ["bridge"]      = new ExitTolerance { Dx = 3, Dy = 2 },
+            ["bridge"]         = new ExitTolerance { Dx = 3, Dy = 2 },
+            ["platform_walk"]  = new ExitTolerance { Dx = 4, Dy = 3 },
             ["bridge_fall"] = new ExitTolerance { Dx = 3, Dy = 3 },
             ["pillar"]      = new ExitTolerance { Dx = 2, Dy = 4 },
         };
 
         public static readonly Dictionary<string, PreCondition> PreCond = new()
         {
-            ["jump"]   = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
+            ["jump"]        = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
+            ["jump_bridge"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = 16, RequireVxBucket = -2 },
             ["pillar"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["bridge"] = new PreCondition { RequireGrounded = true, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },
             ["fall"]   = new PreCondition { RequireGrounded = false, MaxDistToLaunchPx = -1, RequireVxBucket = -2 },

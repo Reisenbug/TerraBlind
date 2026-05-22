@@ -14,7 +14,7 @@ jump 边反复 deviated+replan，分析日志后整理出所有影响规划与�
 | 因素 | 当前行为 | 潜在误差来源 |
 |------|---------|------------|
 | `inferredVx`（起点） | 读 `p.velocity.X` | 规划时静止，执行时已起跑，vx 不同 |
-| `inferredVx`（非起点） | 由 prevAction 推断：pillar/mine→0，jump→prevEndVx，其余→`sign*MaxRun` | 推断链有误差累积；`sign` 方向改变时 infer 为 0 |
+| `inferredVx`（非1起点） | 由 prevAction 推断：pillar/mine→0，jump→prevEndVx，其余→`sign*MaxRun` | 推断链有误差累积；`sign` 方向改变时 infer 为 0 |
 | `jumpVx`（反向跳） | `inferredVx * jsign < 0` 时置 0 | 执行时实际 vx 不为 0，轨迹不符 |
 | `PhysicsSimulator.Step` | 近似模型，已于 2026-05-20 对齐游戏逻辑 | StepUp 在降落阶段误触，产生极短弧线（见下方 bug） |
 | `ArcClipsWall` | 只检查上升阶段头顶，下降段漏检 | 产生穿墙规划 |
