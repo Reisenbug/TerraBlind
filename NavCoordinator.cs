@@ -696,8 +696,18 @@ namespace TerraBlind
                         _jumpHoldRemaining = 0;
                         _jumpAlignTick = 0;
                         _jumpReplayLoaded = false;
-                        DiagLog.Write($"[nav] jump enter realtime target=({_target.Wx},{_target.Wy}) sign={_jumpSign} vx={p.velocity.X:0.##}");
-                        State = NavState.Jump;
+                        DiagLog.Write($"[nav] jump enter realtime target=({_target.Wx},{_target.Wy}) sign={_jumpSign} vx={p.velocity.X:0.##} startVx={_target.StartVx:0.##}");
+                        // zero-speed jump: must align to SourceWx first
+                        if (_target.StartVx.HasValue && Math.Abs(_target.StartVx.Value) < 0.5f)
+                        {
+                            DiagLog.Write($"[nav] jump needs align (startVx≈0) → JumpAlign");
+                            _pillarAlignTick = 0;
+                            State = NavState.JumpAlign;
+                        }
+                        else
+                        {
+                            State = NavState.Jump;
+                        }
                     }
                     else if (_target.Action == "bridge")
                     {
@@ -857,10 +867,14 @@ namespace TerraBlind
                         int bestSimCx = -1, bestSimCy = -1;
                         foreach (int hold in holdOptions)
                         {
+                            // velocity is read before Player.Update accelerates, compensate one frame
+                            float simVx = p.velocity.X + _jumpSign * ph.AccRun;
+                            if (simVx > ph.AccRunSpeed) simVx = ph.AccRunSpeed;
+                            if (simVx < -ph.AccRunSpeed) simVx = -ph.AccRunSpeed;
                             var startState = new PhysicsSimulator.State
                             {
                                 Px = p.position.X, Py = p.position.Y,
-                                Vx = p.velocity.X, Vy = 0f,
+                                Vx = simVx, Vy = 0f,
                                 Grounded = true, JumpFramesLeft = hold,
                             };
                             var sim = PhysicsSimulator.SimulateJump(startState, _jumpSign, hold, ph);
@@ -887,8 +901,13 @@ namespace TerraBlind
 
                         if (bestHold == 0 || bestDist > 3)
                         {
-                            // no valid jump from here, keep moving toward target direction
-                            if (_jumpSign > 0) p.controlRight = true;
+                            // move to reduce simDist: if sim lands short, move toward target; if overshoots, move back
+                            int adjustSign;
+                            if (bestSimCx < 0)
+                                adjustSign = _jumpSign; // no valid sim, just move toward target
+                            else
+                                adjustSign = (bestSimCx < _target.Wx) ? 1 : -1;
+                            if (adjustSign > 0) p.controlRight = true;
                             else p.controlLeft = true;
                             _prevVY = p.velocity.Y;
                             return;
@@ -952,24 +971,15 @@ namespace TerraBlind
                     bool aligned = Math.Abs(centerX - targetCenterX) <= 8f && Math.Abs(p.velocity.X) < 0.3f;
                     if (aligned)
                     {
-                        DiagLog.Write($"[nav] JumpAlign done vx={p.velocity.X:0.##} cx={centerX:0.#} → dispatching jump");
-                        // dispatch jump from here with vx≈0
-                        int fallbackHold = 0;
-                        if (_target.Frames != null)
-                            foreach (var fi in _target.Frames) { if (fi.Jump) fallbackHold++; else break; }
-                        if (fallbackHold == 0) fallbackHold = 15;
-                        var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign, _target.Wx, fallbackHold, startVx: p.velocity.X);
-                        DiagLog.Write($"[nav] jump resim(align) vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy})");
-                        if (replayFrames.Count == 0) { DiagLog.Write($"[nav] jump resim(align) failed, blacklisting ({_target.Wx},{_target.Wy})"); BlacklistNode(_target.Wx, _target.Wy); Replan(p); return; }
-                        _jumpReplayLoaded = true;
-                        _jumpReplayFrameCount = replayFrames.Count;
-                        ComputeJumpPlaceFrame(_target, bestHold, p.width, p.height);
-                        ReplaySystem.Load(replayFrames);
+                        DiagLog.Write($"[nav] JumpAlign done vx={p.velocity.X:0.##} cx={centerX:0.#} → realtime jump");
+                        _jumpAirborne = false;
+                        _jumpHoldRemaining = 0;
+                        _jumpAlignTick = 0;
                         State = NavState.Jump;
                         return;
                     }
                     float vx = p.velocity.X;
-                    float stopDist = vx != 0f ? (vx * vx / (2f * 0.2f)) * Math.Sign(vx) : 0f;
+                    float stopDist = vx != 0f ? (vx * vx / 0.4f) * Math.Sign(vx) : 0f;
                     float predictedStopX = centerX + stopDist;
                     float diff = targetCenterX - predictedStopX;
                     if (Math.Abs(diff) <= 8f) return;
@@ -1282,7 +1292,15 @@ namespace TerraBlind
                     _jumpHoldRemaining = 0;
                     _jumpAlignTick = 0;
                     _jumpReplayLoaded = false;
-                    State = NavState.Jump;
+                    if (n.StartVx.HasValue && Math.Abs(n.StartVx.Value) < 0.5f)
+                    {
+                        _pillarAlignTick = 0;
+                        State = NavState.JumpAlign;
+                    }
+                    else
+                    {
+                        State = NavState.Jump;
+                    }
                     return;
                 }
                 if (n.Action != "move" && n.Action != "fall") { State = NavState.Idle; return; }
