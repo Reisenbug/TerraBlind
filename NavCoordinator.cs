@@ -54,6 +54,13 @@ namespace TerraBlind
         private static int _jumpPlaceFrameIdx = -1;  // frame index to place platform during jump
         private static int _jumpPlaceTileX, _jumpPlaceTileY;
         private static int _jumpReplayFrameCount;
+
+        // realtime jump control state
+        private static bool _jumpAirborne;
+        private static int _jumpHoldRemaining;
+        private static int _jumpSign;
+        private static int _jumpAlignTick;
+        private const int JumpAlignMax = 120;
         private static int _fixedGoalWx = -1;
         private static int _fixedGoalWy = -1;
 
@@ -684,33 +691,12 @@ namespace TerraBlind
                             Replan(p);
                             return;
                         }
-                        int jumpSign = _target.Wx >= pcx ? 1 : -1;
-                        if (p.velocity.X * jumpSign < -0.3f)
-                        {
-                            DiagLog.Write($"[nav] jump needs align vx={p.velocity.X:0.##} jumpSign={jumpSign} src=({_target.SourceWx},{_target.SourceWy}) → JumpAlign");
-                            _pillarAlignTick = 0;
-                            State = NavState.JumpAlign;
-                            return;
-                        }
-                        {
-                            int fallbackHold = 0;
-                            if (_target.Frames != null)
-                                foreach (var fi in _target.Frames) { if (fi.Jump) fallbackHold++; else break; }
-                            if (fallbackHold == 0) fallbackHold = 15;
-                            var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign, _target.Wx, fallbackHold, startVx: p.velocity.X);
-                            DiagLog.Write($"[nav] jump resim vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({_target.Wx},{_target.Wy}) frames={replayFrames.Count}");
-                            if (replayFrames.Count == 0)
-                            {
-                                DiagLog.Write($"[nav] jump resim failed, blacklisting ({_target.Wx},{_target.Wy})");
-                                BlacklistNode(_target.Wx, _target.Wy);
-                                Replan(p);
-                                return;
-                            }
-                            _jumpReplayLoaded = true;
-                            _jumpReplayFrameCount = replayFrames.Count;
-                            ComputeJumpPlaceFrame(_target, bestHold, p.width, p.height);
-                            ReplaySystem.Load(replayFrames);
-                        }
+                        _jumpSign = _target.Wx >= pcx ? 1 : -1;
+                        _jumpAirborne = false;
+                        _jumpHoldRemaining = 0;
+                        _jumpAlignTick = 0;
+                        _jumpReplayLoaded = false;
+                        DiagLog.Write($"[nav] jump enter realtime target=({_target.Wx},{_target.Wy}) sign={_jumpSign} vx={p.velocity.X:0.##}");
                         State = NavState.Jump;
                     }
                     else if (_target.Action == "bridge")
@@ -834,73 +820,105 @@ namespace TerraBlind
 
                 if (State == NavState.Jump)
                 {
-                    if (_target.Frames != null)
-                    {
-                        // phase 1: JumpCoordinator doing precision alignment
-                        if (JumpCoordinator.IsActive) { _prevVY = p.velocity.Y; return; }
+                    bool grounded = p.velocity.Y == 0f;
 
-                        // jump_bridge: place platform when player reaches each place tile
-                        if (ReplaySystem.IsActive && _target.Action == "jump_bridge" && _target.MineTiles != null)
+                    if (!_jumpAirborne)
+                    {
+                        // grounded phase: try to find a good moment to jump
+                        _jumpAlignTick++;
+                        if (_jumpAlignTick > JumpAlignMax)
                         {
-                            int slot = FindPlatformSlot(p);
-                            if (slot >= 0 && p.itemTime == 0)
-                            {
-                                int curTileX = pcx;
-                                int curTileY = feetY;
-                                foreach (var (ptx, pty) in _target.MineTiles)
-                                {
-                                    if (Math.Abs(curTileX - ptx) <= 1 && Math.Abs(curTileY - pty) <= 1)
-                                    {
-                                        p.selectedItem = slot;
-                                        p.controlUseItem = true;
-                                        Main.SmartCursorWanted_Mouse = false;
-                                        Main.mouseX = (int)(ptx * 16f + 8f - Main.screenPosition.X);
-                                        Main.mouseY = (int)(pty * 16f + 8f - Main.screenPosition.Y);
-                                        DiagLog.Write($"[nav] jump_bridge place tile=({ptx},{pty}) player=({curTileX},{curTileY})");
-                                        break;
-                                    }
-                                }
-                            }
+                            DiagLog.Write($"[nav] jump align timeout → replan");
+                            EmitNavFailed("jump_align_timeout", _pathIdx, "jump", pcx, feetY);
+                            Replan(p);
+                            return;
                         }
 
-                        // phase 2: alignment done, load replay once
-                        // if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
-                        //     DiagLog.Write($"[nav] jump phase2 trigger vy={p.velocity.Y} loaded={_jumpReplayLoaded} replayActive={ReplaySystem.IsActive}");
-                        if (!ReplaySystem.IsActive && p.velocity.Y == 0f && !_jumpReplayLoaded)
+                        if (!grounded)
                         {
-                            _jumpReplayLoaded = true;
-                            var replayFrames = new List<ReplayFrame>();
-                            int framePlanHold = 0;
-                            foreach (var fi in _target.Frames)
-                            {
-                                replayFrames.Add(new ReplayFrame { Jump = fi.Jump, Right = fi.Right, Left = fi.Left });
-                                if (fi.Jump) framePlanHold++;
-                            }
-                            _jumpReplayFrameCount = replayFrames.Count;
-                            ComputeJumpPlaceFrame(_target, framePlanHold, p.width, p.height);
-                            ReplaySystem.Load(replayFrames);
-                            float alignedCx = p.position.X + p.width / 2f;
-                            float srcX = _target.SourceWx * 16f + 8f;
-                            DiagLog.Write($"[nav] jump replay start frames={replayFrames.Count} src=({_target.SourceWx},{_target.SourceWy}) target=({_target.Wx},{_target.Wy}) align_diff={alignedCx - srcX:0.##}");
+                            // fell off edge while aligning, just hold direction
+                            if (_jumpSign > 0) p.controlRight = true;
+                            else p.controlLeft = true;
                             _prevVY = p.velocity.Y;
                             return;
                         }
 
-                        // phase 3: replay done, wait for landing
-                        if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y != 0f)
+                        // try each hold option, pick best landing
+                        var ph = PhysicsSimulator.Params.FromPlayer(p);
+                        // show target tile in green
+                        PathVisSystem.SetTiles(new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>
                         {
-                            int jumpDir = _target.Wx >= _target.SourceWx ? 1 : -1;
-                            if (jumpDir > 0) p.controlRight = true;
-                            else p.controlLeft = true;
+                            (_target.Wx, _target.Wy, new Microsoft.Xna.Framework.Color(0, 255, 80, 180))
+                        }, ttlFrames: 4);
+
+                        var holdOptions = p.wet && !p.honeyWet && !p.merman ? PathPlanner.HoldFrameOptionsWet : PathPlanner.HoldFrameOptions;
+                        int bestHold = 0;
+                        int bestDist = int.MaxValue;
+                        int bestSimCx = -1, bestSimCy = -1;
+                        foreach (int hold in holdOptions)
+                        {
+                            var startState = new PhysicsSimulator.State
+                            {
+                                Px = p.position.X, Py = p.position.Y,
+                                Vx = p.velocity.X, Vy = 0f,
+                                Grounded = true, JumpFramesLeft = hold,
+                            };
+                            var sim = PhysicsSimulator.SimulateJump(startState, _jumpSign, hold, ph);
+                            if (!sim.Landed) continue;
+                            int dist = Math.Abs(sim.Cx - _target.Wx);
+                            if (dist < bestDist || (dist == bestDist && hold > bestHold))
+                            {
+                                bestDist = dist;
+                                bestHold = hold;
+                                bestSimCx = sim.Cx; bestSimCy = sim.Cy;
+                            }
                         }
-                        if (!ReplaySystem.IsActive && _jumpReplayLoaded && p.velocity.Y == 0f)
+
+                        // show predicted landing in yellow, target in green
                         {
-                            int landedCx = (int)((p.position.X + p.width / 2f) / 16);
-                            DiagLog.Write($"[nav] jump replay landed px={p.position.X:0.##} cx={landedCx} target_cx={_target.Wx} delta={landedCx - _target.Wx}");
-                            DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({landedCx},{feetY}) wall_frames={_actualWallFrames} ceil_frames={_actualCeilFrames} tick={Main.GameUpdateCount}");
-                            _actualWallFrames = 0; _actualCeilFrames = 0;
-                            EmitNodeExit(_pathIdx, "jump", "done", _target.Wx, _target.Wy, pcx, feetY);
-                            _jumpReplayLoaded = false;
+                            var visTiles = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>
+                            {
+                                (_target.Wx, _target.Wy, new Microsoft.Xna.Framework.Color(0, 255, 80, 180)),
+                            };
+                            if (bestSimCx >= 0)
+                                visTiles.Add((bestSimCx, bestSimCy, new Microsoft.Xna.Framework.Color(255, 220, 0, 200)));
+                            PathVisSystem.SetTiles(visTiles, ttlFrames: 4);
+                        }
+
+                        if (bestHold == 0 || bestDist > 3)
+                        {
+                            // no valid jump from here, keep moving toward target direction
+                            if (_jumpSign > 0) p.controlRight = true;
+                            else p.controlLeft = true;
+                            _prevVY = p.velocity.Y;
+                            return;
+                        }
+
+                        // good to jump now
+                        DiagLog.Write($"[nav] jump fire vx={p.velocity.X:0.##} hold={bestHold} simDist={bestDist} target=({_target.Wx},{_target.Wy}) js={Player.jumpSpeed:0.###} grav={p.gravity:0.###} maxRun={p.maxRunSpeed:0.###}");
+                        _jumpAirborne = true;
+                        _jumpHoldRemaining = bestHold;
+                        p.controlJump = true;
+                        if (_jumpSign > 0) p.controlRight = true;
+                        else p.controlLeft = true;
+                        _jumpHoldRemaining--;
+                    }
+                    else
+                    {
+                        // airborne phase
+                        if (_jumpHoldRemaining > 0)
+                        {
+                            p.controlJump = true;
+                            _jumpHoldRemaining--;
+                        }
+                        if (_jumpSign > 0) p.controlRight = true;
+                        else p.controlLeft = true;
+
+                        // landing detection
+                        if (_prevVY > 0f && grounded)
+                        {
+                            DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({pcx},{feetY}) tick={Main.GameUpdateCount}");
+                            EmitNodeExit(_pathIdx, _target.Action, "done", _target.Wx, _target.Wy, pcx, feetY);
                             if (BehaviorContract.Deviated("jump", pcx - _target.Wx, feetY - _target.Wy))
                             {
                                 DiagLog.Write($"[nav] jump deviated landing=({pcx},{feetY}) target=({_target.Wx},{_target.Wy}) → blacklist+replan");
@@ -914,37 +932,7 @@ namespace TerraBlind
                             }
                         }
                     }
-                    else
-                    {
-                        if (_prevVY > 0f && p.velocity.Y == 0f)
-                        {
-                            int expWx = JumpCoordinator.PredictedLandWx >= 0 ? JumpCoordinator.PredictedLandWx : _target.Wx;
-                            int expWy = JumpCoordinator.PredictedLandWy >= 0 ? JumpCoordinator.PredictedLandWy : _target.Wy;
-                            DiagLog.Write($"[nav] jump landed ({pcx},{feetY}) predicted ({expWx},{expWy}) astar ({_target.Wx},{_target.Wy})");
-                            DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({pcx},{feetY}) wall_frames={_actualWallFrames} ceil_frames={_actualCeilFrames} tick={Main.GameUpdateCount}");
-                            _actualWallFrames = 0; _actualCeilFrames = 0;
-                            EmitNodeExit(_pathIdx, "jump", "done", expWx, expWy, pcx, feetY);
-                            JumpCoordinator.Stop();
-                            if (BehaviorContract.Deviated("jump", pcx - expWx, feetY - expWy))
-                            {
-                                DiagLog.Write($"[nav] jump deviated landing=({pcx},{feetY}) target=({expWx},{expWy}) → blacklist+replan");
-                                BlacklistNode(expWx, expWy);
-                                Replan(p);
-                            }
-                            else
-                            {
-                                _pathIdx++;
-                                State = NavState.Idle;
-                            }
-                        }
-                    }
-                    if (_prevVY < 0f)
-                    {
-                        if (Math.Abs(p.velocity.X) < Math.Abs(_prevJumpVx) - 0.05f) _actualWallFrames++;
-                        if (p.velocity.Y >= 0f) _actualCeilFrames++;
-                    }
-                    // DiagLog.Write($"[jump_vx] tick={Main.GameUpdateCount} vx={p.velocity.X:0.###} vy={p.velocity.Y:0.###} replayActive={ReplaySystem.IsActive}");
-                    _prevJumpVx = p.velocity.X;
+
                     _prevVY = p.velocity.Y;
                     return;
                 }
@@ -1285,21 +1273,15 @@ namespace TerraBlind
             while (_pathIdx < _path.Count)
             {
                 var n = _path[_pathIdx];
-                if (n.Action == "jump")
+                if (n.Action == "jump" || n.Action == "jump_bridge")
                 {
                     _target = n;
                     EmitNodeEnter(_pathIdx, _target, pcx, feetY, p.velocity.X, p.velocity.Y);
-                    {
-                        int fallbackHold = 0;
-                        if (n.Frames != null)
-                            foreach (var fi in n.Frames) { if (fi.Jump) fallbackHold++; else break; }
-                        if (fallbackHold == 0) fallbackHold = 15;
-                        int jumpSign2 = n.Wx >= pcx ? 1 : -1;
-                        var (replayFrames, simCx, simCy, bestHold) = ResimJump(p, jumpSign2, n.Wx, fallbackHold);
-                        DiagLog.Write($"[nav] jump resim(adv) vx={p.velocity.X:0.##} hold={bestHold} landed=({simCx},{simCy}) target=({n.Wx},{n.Wy}) frames={replayFrames.Count}");
-                        if (replayFrames.Count > 0) { _jumpReplayLoaded = true; ReplaySystem.Load(replayFrames); }
-                        else { State = NavState.Idle; return; }
-                    }
+                    _jumpSign = n.Wx >= pcx ? 1 : -1;
+                    _jumpAirborne = false;
+                    _jumpHoldRemaining = 0;
+                    _jumpAlignTick = 0;
+                    _jumpReplayLoaded = false;
                     State = NavState.Jump;
                     return;
                 }
