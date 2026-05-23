@@ -657,6 +657,35 @@ namespace TerraBlind
 				sb2.Append("]}");
 				body = sb2.ToString();
 			}
+			else if (path == "/exec_jump_to")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				int ejTargetCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"target_cx\":(-?\\d+)").Groups[1].Value);
+				int ejSign2 = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
+				body = JumpExecutor.FindAndExecute(ejTargetCx, ejSign2);
+			}
+			else if (path == "/exec_jump")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				int ejHold = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"hold\":(\\d+)").Groups[1].Value);
+				int ejSign = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
+				var ejMsM = System.Text.RegularExpressions.Regex.Match(rb, "\"move_start\":(\\d+)");
+				var ejMfM = System.Text.RegularExpressions.Regex.Match(rb, "\"move_frames\":(\\d+)");
+				int ejMoveStart  = ejMsM.Success ? int.Parse(ejMsM.Groups[1].Value) : 0;
+				int ejMoveFrames = ejMfM.Success ? int.Parse(ejMfM.Groups[1].Value) : ejHold;
+				JumpExecutor.Start(ejHold, ejSign, ejMoveStart, ejMoveFrames);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/exec_jump_result")
+			{
+				body = JumpExecutor.GetResult();
+			}
 			else if (path == "/mark_placeable")
 			{
 				var p3 = Main.LocalPlayer;
