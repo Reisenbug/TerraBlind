@@ -49,6 +49,7 @@ namespace TerraBlind
         private static float _prevPillarVx;
         private static int _pillarNudgeFrames;
         private static float _lastPlanMaxRun = -1f;
+        private static bool _lastWet = false;
         private static int _vxWaitFrames = 0;
         private const int VxWaitMax = 20;
         private static int _jumpPlaceFrameIdx = -1;  // frame index to place platform during jump
@@ -617,21 +618,33 @@ namespace TerraBlind
                 _lastStallFeetY = feetY;
 
                 {
-                    float curMaxRun = PhysicsSimulator.Params.FromPlayer(p).MaxRun;
+                    float curMaxRun = 3f * p.moveSpeed;
                     if (_lastPlanMaxRun < 0f)
                     {
                         _lastPlanMaxRun = curMaxRun;
-                        // DiagLog.Write($"[nav] maxrun init maxRunSpeed={p.maxRunSpeed:0.##} accRunSpeed={p.accRunSpeed:0.##}");
                     }
-                    else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f && p.velocity.Y == 0f)
+                    else if (Math.Abs(curMaxRun - _lastPlanMaxRun) > 0.05f && p.velocity.Y == 0f && !p.wet)
                     {
                         DiagLog.Write($"[nav] maxrun changed {_lastPlanMaxRun:0.##}→{curMaxRun:0.##} → replan");
                         _lastPlanMaxRun = curMaxRun;
                         _path.Clear();
                         _pathIdx = 0;
+                        Replan(p);
+                    }
+
+                    // PATCH: wet state change triggers replan; proper fix is per-node physics params
+                    bool curWet = p.wet && !p.honeyWet && !p.merman;
+                    if (curWet != _lastWet && p.velocity.Y == 0f)
+                    {
+                        _lastWet = curWet;
+                        _lastPlanMaxRun = curMaxRun;
+                        DiagLog.Write($"[nav] wet changed →{curWet} → replan");
+                        _path.Clear();
+                        _pathIdx = 0;
                         State = NavState.Idle;
                         JumpCoordinator.Stop();
                         ReplaySystem.Stop();
+                        Replan(p);
                     }
                 }
 
@@ -879,7 +892,7 @@ namespace TerraBlind
                             };
                             var sim = PhysicsSimulator.SimulateJump(startState, _jumpSign, hold, ph);
                             if (!sim.Landed) continue;
-                            int dist = Math.Abs(sim.Cx - _target.Wx);
+                            int dist = Math.Abs(sim.Cx - _target.Wx) + Math.Abs(sim.Cy - _target.Wy);
                             if (dist < bestDist || (dist == bestDist && hold > bestHold))
                             {
                                 bestDist = dist;
@@ -887,6 +900,8 @@ namespace TerraBlind
                                 bestSimCx = sim.Cx; bestSimCy = sim.Cy;
                             }
                         }
+
+                        int bestDistCx = bestSimCx >= 0 ? Math.Abs(bestSimCx - _target.Wx) : int.MaxValue;
 
                         // show predicted landing in yellow, target in green
                         {
@@ -899,7 +914,7 @@ namespace TerraBlind
                             PathVisSystem.SetTiles(visTiles, ttlFrames: 4);
                         }
 
-                        if (bestHold == 0 || bestDist > 3)
+                        if (bestHold == 0 || bestDistCx > 1)
                         {
                             // move to reduce simDist: if sim lands short, move toward target; if overshoots, move back
                             int adjustSign;
@@ -978,13 +993,14 @@ namespace TerraBlind
                         State = NavState.Jump;
                         return;
                     }
-                    float vx = p.velocity.X;
-                    float stopDist = vx != 0f ? (vx * vx / 0.4f) * Math.Sign(vx) : 0f;
-                    float predictedStopX = centerX + stopDist;
-                    float diff = targetCenterX - predictedStopX;
-                    if (Math.Abs(diff) <= 8f) return;
-                    if (diff > 0) p.controlRight = true;
-                    else p.controlLeft = true;
+                    {
+                        float runSlow = p.runSlowdown > 0f ? p.runSlowdown : 0.2f;
+                        float predictedStopX = PredictStopPx(centerX, p.velocity.X, runSlow);
+                        float diff = targetCenterX - predictedStopX;
+                        if (Math.Abs(diff) <= 4f) return;
+                        if (diff > 0) p.controlRight = true;
+                        else p.controlLeft = true;
+                    }
                     return;
                 }
 
@@ -1133,13 +1149,14 @@ namespace TerraBlind
                         SkillExecutor.StartPillarJump(_sign > 0, _target.Wy);
                         return;
                     }
-                    float stopDist = vx != 0f ? (vx * vx / 0.4f) * Math.Sign(vx) : 0f;
-                    float predictedStopX = centerX + stopDist;
-                    float diff = targetCenterX - predictedStopX;
-                    if (Math.Abs(diff) <= 8f)
-                        return; // coast, predicted stop is close enough
-                    if (diff > 0) p.controlRight = true;
-                    else p.controlLeft = true;
+                    {
+                        float runSlow = p.runSlowdown > 0f ? p.runSlowdown : 0.2f;
+                        float predictedStopX = PredictStopPx(centerX, p.velocity.X, runSlow);
+                        float diff = targetCenterX - predictedStopX;
+                        if (Math.Abs(diff) <= 4f) return;
+                        if (diff > 0) p.controlRight = true;
+                        else p.controlLeft = true;
+                    }
                     return;
                 }
 
@@ -1215,11 +1232,14 @@ namespace TerraBlind
                         State = NavState.Mine;
                         return;
                     }
-                    float diff = targetCenterX - centerX;
-                    float stopDist = p.velocity.X != 0f ? (p.velocity.X * p.velocity.X / 0.4f) * Math.Sign(p.velocity.X) : 0f;
-                    if (Math.Abs(targetCenterX - (centerX + stopDist)) <= 8f) return;
-                    if (diff > 0) p.controlRight = true;
-                    else p.controlLeft = true;
+                    {
+                        float runSlow = p.runSlowdown > 0f ? p.runSlowdown : 0.2f;
+                        float predictedStopX = PredictStopPx(centerX, p.velocity.X, runSlow);
+                        float diff = targetCenterX - predictedStopX;
+                        if (Math.Abs(diff) <= 4f) return;
+                        if (diff > 0) p.controlRight = true;
+                        else p.controlLeft = true;
+                    }
                     return;
                 }
 
@@ -1334,6 +1354,19 @@ namespace TerraBlind
                 wy = _path[i].Wy;
             }
             return wy;
+        }
+
+        // predict where player naturally stops given current px and vx (no input, ground friction only)
+        private static float PredictStopPx(float px, float vx, float runSlowdown)
+        {
+            for (int i = 0; i < 60; i++)
+            {
+                if (vx > runSlowdown)       vx -= runSlowdown;
+                else if (vx < -runSlowdown) vx += runSlowdown;
+                else                        { return px; }
+                px += vx;
+            }
+            return px;
         }
 
         private static int FindPlatformSlot(Player p)

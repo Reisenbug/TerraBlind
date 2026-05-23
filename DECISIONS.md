@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-23 Terraria 水平移动物理（源码确认）
+
+### 来源
+直接阅读 `Terraria.decompiled.cs` 反编译源码（1.4.5.4），`Player.HorizontalMovement` 区段。
+
+### 四种分支
+
+**1. 按方向键，|vx| < maxRunSpeed（正常加速）：**
+- 若反向有初速（|vx| > runSlowdown）：先 `vx += runSlowdown`（消耗反向），再 `vx += runAcceleration`
+- 否则直接 `vx += runAcceleration`（+0.08/帧）
+- 上限 clamp 到 maxRunSpeed=3.0
+
+**2. 按方向键，maxRunSpeed < |vx| < accRunSpeed（超速段）：**
+- 仅在空中且有加速配件（向日葵等）时触发
+- `vx += runAcceleration * 0.2f`（+0.016/帧，极慢）
+
+**3. 松手 + 在地面（vy==0）：**
+- `|vx| > runSlowdown(0.2)`：每帧减 0.2
+- `|vx| <= 0.2`：直接归零
+
+**4. 松手 + 在空中（vy!=0）：**
+- `|vx| > runSlowdown*0.5(0.1)`：每帧减 0.1
+- `|vx| <= 0.1`：直接归零
+
+### 关键结论
+- 空中松手减速是 **0.1/帧**，不是 0，也不是 0.2
+- PhysicsSimulator 现有代码空中松手未正确实现此减速（待修复）
+- 反向加速时同一帧先消耗 runSlowdown 再加 runAcceleration，净效果 +0.28/帧（地面）
+
+### 对跳跃精度的影响
+空中松手 vx 会缓慢衰减（0.1/帧），若 mf 结束后还有多帧飞行，模拟误以为 vx 恒定，实际落点会比模拟偏近。
+
+---
+
 ## 2026-05-22 人类玩家导航能力的五个前提（feat/realtime-jump-control 分支方向）
 
 ### 大前提：目标导向，不是路径跟踪
@@ -481,3 +515,17 @@ mine 边终点加入 `mineNodes`，`canMineFrom = Standable || mineNodes.Contain
 
 ### maxMineDepth 限制
 `maxMineDepth = |goalX-pcx| + |goalY-feetY| + 8`，防止 A* 在实心区域无限展开。动态计算而非固定值，避免截断深目标路径。
+
+---
+
+## 2026-05-23 PhysicsSimulator 空中松手 vx 衰减修复
+
+### 问题
+PhysicsSimulator.Step 松手分支只处理地面（`else if (s.Grounded)`），空中松手 vx 完全恒定。
+实际游戏空中松手每帧衰减 `runSlowdown * 0.5 = 0.1`，导致模拟落点系统性偏远。
+
+### 修复
+在 `else if (s.Grounded)` 后加 `else` 分支，空中松手每帧 `vx -= 0.1`（方向敏感，到 0 截断）。
+
+### 验证
+dx=1..7 向右跳精度测试，修复前系统性偏差 -1~-2，修复后全部 ±1 以内，dx=1..4,6 精确命中。

@@ -14,7 +14,7 @@ namespace TerraBlind
         {
             public float AccRun, MaxRun, AccRunSpeed, RunSlowdown, Gravity, MaxFall, JumpSpeed;
 
-            public float HoldVY => -(JumpSpeed - Gravity);
+            public float HoldVY => -JumpSpeed;
 
             public static Params FromPlayer(Player p)
             {
@@ -36,8 +36,9 @@ namespace TerraBlind
                     grav       = p.gravity > 0f ? p.gravity : 0.4f;
                     js         = Player.jumpSpeed;
                     maxFall    = p.maxFallSpeed > 0f ? p.maxFallSpeed : 10f;
-                    maxRun     = p.maxRunSpeed  > 0f ? p.maxRunSpeed  : 3f;
-                    accRunSpeed = p.accRunSpeed > maxRun ? p.accRunSpeed : maxRun;
+                    maxRun     = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
+                    float accRunRaw = p.accRunSpeed > 0f ? p.accRunSpeed : 3f;
+                    accRunSpeed = accRunRaw > maxRun ? accRunRaw : maxRun;
                 }
                 return new Params
                 {
@@ -125,10 +126,17 @@ namespace TerraBlind
                 else if (vx < -ph.RunSlowdown)  vx += ph.RunSlowdown;
                 else                            vx  = 0f;
             }
+            else
+            {
+                float airSlow = ph.RunSlowdown * 0.5f;
+                if (vx > airSlow)        vx -= airSlow;
+                else if (vx < -airSlow)  vx += airSlow;
+                else                     vx  = 0f;
+            }
 
             if (input.Jump && jfl > 0)
             {
-                vy = -(ph.JumpSpeed - ph.Gravity);
+                vy = -ph.JumpSpeed;
                 jfl--;
             }
             else

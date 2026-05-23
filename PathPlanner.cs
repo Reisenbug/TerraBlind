@@ -428,6 +428,7 @@ namespace TerraBlind
             var bridgeNodes = new HashSet<(int, int, bool)>();
             var heap = new PriorityQueue<(int wx, int wy, bool hc), float>();
             var verifyData = new Dictionary<(int, int, bool), (int hold, float startVx, float endVx, int wallFrames, int ceilFrames)>();
+            var nodeEndVx = new Dictionary<(int, int, bool), float>();
             var pillarVerifyData = new Dictionary<(int, int, bool), (bool leftClear, bool rightClear, bool centerOnlyClear)>();
             var mineTilesData = new Dictionary<(int, int, bool), List<(int, int)>>();
             var mineNodes = new HashSet<(int, int, bool)>();
@@ -509,6 +510,12 @@ namespace TerraBlind
                         string action = dy == 1 ? "fall" : "move";
                         prev[(nx, ny, false)] = ((cx, cy, hc), action, null);
                         heap.Enqueue((nx, ny, false), moveng + HeuristicWeight * MinDistToGoal(goalSet, nx, ny));
+                        if (dy == 0 && dx != 0)
+                        {
+                            float curEndVx = nodeEndVx.TryGetValue((cx, cy, hc), out var ev) ? ev : (cx == pcx && cy == feetY ? startVx : sign * ph.MaxRun);
+                            float nxEndVx = Math.Sign(dx) * Math.Min(Math.Abs(curEndVx) + ph.AccRun, ph.MaxRun);
+                            nodeEndVx[(nx, ny, false)] = nxEndVx;
+                        }
                     }
                 }
 
@@ -550,8 +557,10 @@ namespace TerraBlind
                             inferredVx = 0f;
                         else if (prevAction == "jump" && verifyData.TryGetValue((cx, cy, false), out var prevVd))
                             inferredVx = prevVd.endVx;
+                        else if (prevAction == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var moveEv))
+                            inferredVx = moveEv;
                         else
-                            inferredVx = sign * ph.MaxRun; // move/fall/bridge → Full
+                            inferredVx = sign * ph.MaxRun; // fall/bridge → Full
                     }
                     else
                     {
@@ -710,6 +719,7 @@ namespace TerraBlind
                             string pa2 = pEntry2.Item2;
                             if (pa2 == "pillar" || pa2.StartsWith("mine_")) inferredVx2 = 0f;
                             else if (pa2 == "jump" && verifyData.TryGetValue((cx, cy, false), out var pvd2)) inferredVx2 = pvd2.endVx;
+                            else if (pa2 == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var moveEv2)) inferredVx2 = moveEv2;
                             else inferredVx2 = jsign * ph.MaxRun;
                         }
                         else inferredVx2 = jsign * ph.MaxRun;
