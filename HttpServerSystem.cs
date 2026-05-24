@@ -686,6 +686,80 @@ namespace TerraBlind
 			{
 				body = JumpExecutor.GetResult();
 			}
+			else if (path == "/test_plat_up")
+			{
+				var pp = Main.LocalPlayer;
+				if (pp == null) { body = "{\"error\":\"no_player\"}"; }
+				else
+				{
+					int slot = NavCoordinator.FindPlatformSlot(pp);
+					if (slot < 0) { body = "{\"error\":\"no_platform_item\"}"; }
+					else
+					{
+						var frames = PlatformExecutor.BuildPlatUpFrames(pp, slot);
+						ReplaySystem.Load(frames);
+						body = $"{{\"ok\":true,\"slot\":{slot},\"total_frames\":{frames.Count}}}";
+					}
+				}
+			}
+			else if (path == "/test_plat_up_n")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\":(\\d+)");
+				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 2;
+				var pp = Main.LocalPlayer;
+				if (pp == null) { body = "{\"error\":\"no_player\"}"; }
+				else
+				{
+					int slot = NavCoordinator.FindPlatformSlot(pp);
+					if (slot < 0) { body = "{\"error\":\"no_platform_item\"}"; }
+					else
+					{
+						var seg = PlatformExecutor.BuildPlatUpFrames(pp, slot);
+						var all = new System.Collections.Generic.List<ReplayFrame>();
+						for (int i = 0; i < n; i++) all.AddRange(seg);
+						ReplaySystem.Load(all);
+						body = $"{{\"ok\":true,\"slot\":{slot},\"n\":{n},\"total_frames\":{all.Count}}}";
+					}
+				}
+			}
+			else if (path == "/test_plat_jump")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var signM = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)");
+				int sign = signM.Success ? int.Parse(signM.Groups[1].Value) : 1;
+				var pp = Main.LocalPlayer;
+				if (pp == null) { body = "{\"error\":\"no_player\"}"; }
+				else
+				{
+					int slot = NavCoordinator.FindPlatformSlot(pp);
+					if (slot < 0) { body = "{\"error\":\"no_platform_item\"}"; }
+					else
+					{
+						var frames = PlatformExecutor.BuildPlatJumpFrames(pp, slot, sign, out int placeTx, out int placeTy, out int landFrame);
+						ReplaySystem.Load(frames);
+						body = $"{{\"ok\":true,\"slot\":{slot},\"land_frame\":{landFrame},\"place_tx\":{placeTx},\"place_ty\":{placeTy},\"total_frames\":{frames.Count}}}";
+					}
+				}
+			}
+			else if (path == "/test_plat_jump_n")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\":(\\d+)");
+				var signM2 = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)");
+				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 2;
+				int sign2 = signM2.Success ? int.Parse(signM2.Groups[1].Value) : 1;
+				body = PlatJumpExecutor.StartN(n, sign2);
+			}
 			else if (path == "/mark_placeable")
 			{
 				var p3 = Main.LocalPlayer;

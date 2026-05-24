@@ -1378,7 +1378,7 @@ namespace TerraBlind
             return px;
         }
 
-        private static int FindPlatformSlot(Player p)
+        public static int FindPlatformSlot(Player p)
         {
             for (int i = 0; i < 10; i++)
             {
