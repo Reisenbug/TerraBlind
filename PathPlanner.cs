@@ -354,6 +354,23 @@ namespace TerraBlind
         private const float MineCostPerTile = 6f;
 
 
+        private static (int xMin, int xMax, int yMin, int yMax)? _windowOverride = null;
+
+        public static string PlanToWindowed(int goalWx, int goalWy, int radius)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return "{\"error\":\"no_player\"}";
+            int pcx = (int)((p.position.X + p.width / 2f) / 16f);
+            int pcy = (int)((p.position.Y + p.height) / 16f);
+            int xMin = Math.Min(pcx, goalWx) - radius;
+            int xMax = Math.Max(pcx, goalWx) + radius;
+            int yMin = Math.Min(pcy, goalWy) - radius;
+            int yMax = Math.Max(pcy, goalWy) + radius;
+            _windowOverride = (xMin, xMax, yMin, yMax);
+            try { return PlanTo(goalWx, goalWy); }
+            finally { _windowOverride = null; }
+        }
+
         public static string PlanTo(int goalWx, int goalWy)
         {
             var p = Main.LocalPlayer;
@@ -432,10 +449,19 @@ namespace TerraBlind
             // build envelope cache for visualization only
             _envelopeCache = BuildEnvelopeVis(p);
 
-            int xMin = bidir ? pcx - GoalRangeFwd : (sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd);
-            int xMax = bidir ? pcx + GoalRangeFwd : (sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack);
-            int yMin = feetY - AStarScanUp;
-            int yMax = feetY + AStarScanDown;
+            int xMin, xMax, yMin, yMax;
+            if (_windowOverride.HasValue)
+            {
+                var w = _windowOverride.Value;
+                xMin = w.xMin; xMax = w.xMax; yMin = w.yMin; yMax = w.yMax;
+            }
+            else
+            {
+                xMin = bidir ? pcx - GoalRangeFwd : (sign > 0 ? pcx - GoalRangeBack : pcx - GoalRangeFwd);
+                xMax = bidir ? pcx + GoalRangeFwd : (sign > 0 ? pcx + GoalRangeFwd : pcx + GoalRangeBack);
+                yMin = feetY - AStarScanUp;
+                yMax = feetY + AStarScanDown;
+            }
 
             int goalX, goalY;
             if (goalSet != null && goalSet.Count > 0)

@@ -657,6 +657,20 @@ namespace TerraBlind
 				sb2.Append("]}");
 				body = sb2.ToString();
 			}
+			else if (path == "/debug_segment_plan")
+			{
+				string reqBodyS;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBodyS = sr.ReadToEnd();
+				var rbS = reqBodyS.Replace(" ", "");
+				int gxS = int.Parse(System.Text.RegularExpressions.Regex.Match(rbS, "\"gx\":(-?\\d+)").Groups[1].Value);
+				int gyS = int.Parse(System.Text.RegularExpressions.Regex.Match(rbS, "\"gy\":(-?\\d+)").Groups[1].Value);
+				var mR = System.Text.RegularExpressions.Regex.Match(rbS, "\"radius\":(\\d+)");
+				int radiusS = mR.Success ? int.Parse(mR.Groups[1].Value) : 25;
+				body = PathPlanner.PlanToWindowed(gxS, gyS, radiusS);
+				var segNodes = NavCoordinator.ParsePathPublic(body);
+				PathVisSystem.SetPlanPath(segNodes, PathPlanner.GetEnvelopeCache());
+			}
 			else if (path == "/debug_waypoints")
 			{
 				string reqBodyW;
