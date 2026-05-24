@@ -496,6 +496,9 @@ namespace TerraBlind
             var mineNodes = new HashSet<(int, int, bool)>();
             var mineDepth = new Dictionary<(int, int, bool), int>();
             var pillarTopNodes = new HashSet<(int, int)>();
+            var plannedStandable = new HashSet<(int, int)>(); // tiles A* assumes will be placed/mined-clear (bridge/pillar/jump_x/jump_y landing/mine air)
+            bool IsStandableNode(int wx, int wy) => Standable(wx, wy) || plannedStandable.Contains((wx, wy));
+            void AddPlanned(int wx, int wy) => plannedStandable.Add((wx, wy));
             int maxMineDepth = Math.Abs(goalX - pcx) + Math.Abs(goalY - feetY) + 8;
             float startVx = p.velocity.X;
 
@@ -517,7 +520,7 @@ namespace TerraBlind
                 float curG = g.TryGetValue((cx, cy, hc), out var cg) ? cg : float.MaxValue;
 
                 int curMineDepth = mineDepth.TryGetValue((cx, cy, hc), out var md) ? md : 0;
-                bool canMineFrom = (Standable(cx, cy) || mineNodes.Contains((cx, cy, hc))) && curMineDepth < maxMineDepth;
+                bool canMineFrom = IsStandableNode(cx, cy) && curMineDepth < maxMineDepth;
                 foreach (var (dx, dy) in new[] { (1,0),(-1,0),(0,1),(0,-1),(1,-1),(-1,-1) })
                 {
                     int nx = cx + dx, ny = cy + dy;
@@ -551,6 +554,7 @@ namespace TerraBlind
                                 prev[(nx, ny, false)] = ((cx, cy, hc), mineAction, null);
                                 mineTilesData[(nx, ny, false)] = mt;
                                 mineNodes.Add((nx, ny, false));
+                                AddPlanned(nx, ny);
                                 mineDepth[(nx, ny, false)] = curMineDepth + 1;
                                 heap.Enqueue((nx, ny, false), ng + HeuristicWeight * MinDistToGoal(goalSet, nx, ny));
                             }
@@ -559,11 +563,11 @@ namespace TerraBlind
                     }
 
                     if (dy == 1 && dx == 0 && (IsBlock(cx, cy + 1) || IsBlock(cx + 1, cy + 1))) continue;
-                    if (dy == 1 && dx == 0 && !Standable(nx, ny) && !bridgeNodes.Contains((nx, ny, false)) && !pillarTopNodes.Contains((nx, ny))) continue;
+                    if (dy == 1 && dx == 0 && !Standable(nx, ny)) continue;
                     if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     if (dy == 0 && dx != 0 && (Solid(nx, ny - 1) || Solid(nx, ny - 2) || Solid(nx + dx, ny - 1) || Solid(nx + dx, ny - 2))) continue;
-                    if (dy == 0 && dx != 0 && !mineNodes.Contains((nx, ny, false)) && !bridgeNodes.Contains((nx, ny, false)) && !pillarTopNodes.Contains((nx, ny)) && !Standable(nx, ny)) continue;
+                    if (dy == 0 && dx != 0 && !IsStandableNode(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float moveCost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float moveng = curG + moveCost;
@@ -603,8 +607,7 @@ namespace TerraBlind
                 }
 
                 bool headClear = !Solid(cx - 1, cy - 1) && !Solid(cx - 1, cy - 2) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
-                bool canJump = (Standable(cx, cy) || bridgeNodes.Contains((cx, cy, hc)))
-                    && (headClear || hc);
+                bool canJump = IsStandableNode(cx, cy) && (headClear || hc);
                 if (canJump)
                 {
                     bool isStart = (cx == pcx && cy == feetY);
@@ -695,6 +698,7 @@ namespace TerraBlind
                                 g[(cx, topY, false)] = cost;
                                 pillarTopNodes.Add((cx, topY));
                                 bridgeNodes.Add((cx, topY, false));
+                                AddPlanned(cx, topY);
                                 prev[(cx, topY, false)] = ((cx, cy, hc), "pillar", null);
                                 pillarVerifyData[(cx, topY, false)] = (leftClear, rightClear, centerOnlyClear);
                                 float h = HeuristicWeight * MinDistToGoal(goalSet, cx, topY);
@@ -704,7 +708,7 @@ namespace TerraBlind
                     }
                 }
 
-                if (Standable(cx, cy) || pillarTopNodes.Contains((cx, cy)))
+                if (IsStandableNode(cx, cy))
                 {
                     foreach (int bsign in new[] { sign, -sign })
                     {
@@ -723,6 +727,7 @@ namespace TerraBlind
                                 {
                                     g[(nx, cy, false)] = ng;
                                     bridgeNodes.Add((nx, cy, false));
+                                    AddPlanned(nx, cy);
                                     prev[(nx, cy, false)] = ((cx, cy, hc), "bridge", null);
                                     float h = HeuristicWeight * MinDistToGoal(goalSet, nx, cy);
                                     heap.Enqueue((nx, cy, false), ng + h);
@@ -732,7 +737,7 @@ namespace TerraBlind
                     }
                 }
 
-                if ((Standable(cx, cy) || pillarTopNodes.Contains((cx, cy))) && HasPlatformInInventory(p))
+                if (IsStandableNode(cx, cy) && HasPlatformInInventory(p))
                 {
                     foreach (int bsign in new[] { sign, -sign })
                     {
@@ -760,6 +765,7 @@ namespace TerraBlind
                                 {
                                     g[(nx, cy, false)] = pwNg;
                                     bridgeNodes.Add((nx, cy, false));
+                                    AddPlanned(nx, cy);
                                     prev[(nx, cy, false)] = ((cx, cy, hc), "platform_walk", null);
                                     mineTilesData[(nx, cy, false)] = new List<(int, int)>(placeTiles);
                                     float h = HeuristicWeight * MinDistToGoal(goalSet, nx, cy);
@@ -809,6 +815,7 @@ namespace TerraBlind
                                 verifyData[(lx, ly, false)] = (hold, jumpVx2, endVx, wallFrames, ceilFrames);
                                 mineTilesData[(lx, ly, false)] = placeTiles;
                                 bridgeNodes.Add((lx, ly, false));
+                                AddPlanned(lx, ly);
                                 heap.Enqueue((lx, ly, false), jbNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
                             }
                         }
@@ -845,6 +852,7 @@ namespace TerraBlind
                             nodeEndVx[(lx, ly, false)] = simRes.endVx;
                             bridgeNodes.Add((lx, ly, false));
                             pillarTopNodes.Add((lx, ly));
+                            AddPlanned(lx, ly);
                             heap.Enqueue((lx, ly, false), jxNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
                         }
                     }
@@ -876,6 +884,7 @@ namespace TerraBlind
                                 mineTilesData[(cx, topY, false)] = new List<(int, int)> { (cx, topY) };
                                 pillarTopNodes.Add((cx, topY));
                                 bridgeNodes.Add((cx, topY, false));
+                                AddPlanned(cx, topY);
                                 heap.Enqueue((cx, topY, false), jyNg + HeuristicWeight * MinDistToGoal(goalSet, cx, topY));
                             }
                         }
