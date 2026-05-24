@@ -112,6 +112,68 @@ namespace TerraBlind
             return false;
         }
 
+        // simulate hold=15 air jump from tile (cx,cy) with startVx, returns landing cx, rise, endVx.
+        // landing detected by feetY >= startFeetY (vy>0 phase). uses real Step (tile collision applies).
+        private static (int landCx, int landFrame, int rise, float endVx) SimAirJumpRaw(
+            PhysicsSimulator.Params ph, int cx, int cy, int sign, float startVx, int moveEnd)
+        {
+            float startPx = cx * 16f - PhysicsSimulator.PlayerW / 2f + 8f;
+            float startPy = cy * 16f - PhysicsSimulator.PlayerH;
+            int startFeetY = cy;
+            var s = new PhysicsSimulator.State
+            {
+                Px = startPx, Py = startPy,
+                Vx = startVx, Vy = 0f, Grounded = true, JumpFramesLeft = 15,
+            };
+            int landIdx = -1;
+            int minFeetY = startFeetY;
+            for (int f = 0; f < 120; f++)
+            {
+                var input = new PhysicsSimulator.ControlInput
+                {
+                    Jump  = f < 15,
+                    Right = sign > 0 && f < moveEnd,
+                    Left  = sign < 0 && f < moveEnd,
+                };
+                s = PhysicsSimulator.Step(s, input, ph);
+                int curFeetY = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f);
+                if (curFeetY < minFeetY) minFeetY = curFeetY;
+                if (f > 15 && curFeetY >= startFeetY) { landIdx = f; break; }
+            }
+            if (landIdx < 0) landIdx = 119;
+            int landCx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+            return (landCx, landIdx, startFeetY - minFeetY, s.Vx);
+        }
+
+        // binary-search moveEnd so landCx matches full-press landCx with smallest |endVx| (mirror BuildPlatJumpFrames)
+        private static (int landCx, int landFrame, int rise, float endVx) SimAirJump(
+            PhysicsSimulator.Params ph, int cx, int cy, int sign, float startVx = 0f)
+        {
+            var full = SimAirJumpRaw(ph, cx, cy, sign, startVx, 120);
+            int target = full.landCx;
+            var best = full;
+            int lo = 1, hi = full.landFrame;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) / 2;
+                var sim = SimAirJumpRaw(ph, cx, cy, sign, startVx, mid);
+                if (sim.landCx == target)
+                {
+                    best = sim;
+                    hi = mid - 1;
+                }
+                else if ((sign > 0 && sim.landCx < target) || (sign < 0 && sim.landCx > target))
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
+            }
+            return best;
+        }
+
         public static bool CanPlacePlatformAt(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
@@ -497,6 +559,7 @@ namespace TerraBlind
                     }
 
                     if (dy == 1 && dx == 0 && (IsBlock(cx, cy + 1) || IsBlock(cx + 1, cy + 1))) continue;
+                    if (dy == 1 && dx == 0 && !Standable(nx, ny) && !bridgeNodes.Contains((nx, ny, false)) && !pillarTopNodes.Contains((nx, ny))) continue;
                     if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
                     if (dy == 0 && dx != 0 && (Solid(nx, ny - 1) || Solid(nx, ny - 2) || Solid(nx + dx, ny - 1) || Solid(nx + dx, ny - 2))) continue;
@@ -751,6 +814,73 @@ namespace TerraBlind
                         }
                     }
                 }
+
+                // jump_x: horizontal arc, place platform at landing (cy-1 row), land on platform
+                if (canJump && HasPlatformInInventory(p))
+                {
+                    foreach (int jsign in new[] { sign, -sign })
+                    {
+                        float jxStartVx = 0f;
+                        if (cx == pcx && cy == feetY) jxStartVx = startVx;
+                        else if (prev.TryGetValue((cx, cy, hc), out var pEntry3))
+                        {
+                            string pa3 = pEntry3.Item2;
+                            if (pa3 == "jump_x" && nodeEndVx.TryGetValue((cx, cy, false), out var jxev)) jxStartVx = jxev;
+                            else if (pa3 == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var mev3)) jxStartVx = mev3;
+                        }
+                        if (jxStartVx * jsign < 0) jxStartVx = 0f; // can't instantly reverse
+                        var simRes = SimAirJump(ph, cx, cy, jsign, jxStartVx);
+                        int lx = simRes.landCx;
+                        int ly = cy;
+                        if (Math.Abs(lx - cx) < 2) continue;
+                        if (lx < xMin || lx > xMax) continue;
+                        if (!CanPlacePlatformAt(lx, ly)) continue;
+                        float jxCost = Math.Abs(lx - cx) + 1f;
+                        float jxNg = curG + jxCost;
+                        if (jxNg < g.GetValueOrDefault((lx, ly, false), float.MaxValue))
+                        {
+                            g[(lx, ly, false)] = jxNg;
+                            prev[(lx, ly, false)] = ((cx, cy, hc), "jump_x", null);
+                            mineTilesData[(lx, ly, false)] = new List<(int, int)> { (lx, ly) };
+                            nodeEndVx[(lx, ly, false)] = simRes.endVx;
+                            bridgeNodes.Add((lx, ly, false));
+                            pillarTopNodes.Add((lx, ly));
+                            heap.Enqueue((lx, ly, false), jxNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
+                        }
+                    }
+                }
+
+                // jump_y: vertical jump, place platform at apex, land on it (replaces pillar for backwall envs)
+                if (Standable(cx, cy) && (headClear || hc) && HasPlatformInInventory(p))
+                {
+                    var simY = SimAirJump(ph, cx, cy, 0);
+                    int rise = simY.rise;
+                    if (rise >= 2)
+                    {
+                        int topY = cy - rise + 1;
+                        DiagLog.Write($"[plan] jump_y candidate cx={cx} cy={cy} rise={rise} topY={topY}");
+                        // ensure vertical column clear from cy-1 up to topY-2 (head room while rising)
+                        bool clear = true;
+                        for (int y = cy - 1; y >= topY - 2; y--)
+                        {
+                            if (Solid(cx, y)) { clear = false; break; }
+                        }
+                        if (clear && CanPlacePlatformAt(cx, topY) && topY >= yMin)
+                        {
+                            float jyCost = 4f + (cy - topY) * 1.5f; // cheaper than pillar (3 + rise*6)
+                            float jyNg = curG + jyCost;
+                            if (jyNg < g.GetValueOrDefault((cx, topY, false), float.MaxValue))
+                            {
+                                g[(cx, topY, false)] = jyNg;
+                                prev[(cx, topY, false)] = ((cx, cy, hc), "jump_y", null);
+                                mineTilesData[(cx, topY, false)] = new List<(int, int)> { (cx, topY) };
+                                pillarTopNodes.Add((cx, topY));
+                                bridgeNodes.Add((cx, topY, false));
+                                heap.Enqueue((cx, topY, false), jyNg + HeuristicWeight * MinDistToGoal(goalSet, cx, topY));
+                            }
+                        }
+                    }
+                }
             }
 
             if (noFallback)
@@ -804,7 +934,7 @@ namespace TerraBlind
                 sb.Append("{\"wx\":").Append(path[i].wx)
                   .Append(",\"wy\":").Append(path[i].wy)
                   .Append(",\"action\":\"").Append(path[i].action).Append("\"");
-                if (path[i].action == "pillar")
+                if (path[i].action == "pillar" || path[i].action == "jump_x" || path[i].action == "jump_y")
                 {
                     sb.Append(",\"swx\":").Append(path[i].swx)
                       .Append(",\"swy\":").Append(path[i].swy);
@@ -838,7 +968,7 @@ namespace TerraBlind
                     }
                     sb.Append("]");
                 }
-                if ((path[i].action == "jump_bridge" || path[i].action == "platform_walk") && mineTilesData != null && mineTilesData.TryGetValue((path[i].wx, path[i].wy, false), out var jbpt))
+                if ((path[i].action == "jump_bridge" || path[i].action == "platform_walk" || path[i].action == "jump_x" || path[i].action == "jump_y") && mineTilesData != null && mineTilesData.TryGetValue((path[i].wx, path[i].wy, false), out var jbpt))
                 {
                     sb.Append(",\"place_tiles\":[");
                     for (int mi = 0; mi < jbpt.Count; mi++)

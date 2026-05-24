@@ -5,7 +5,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum NavState { Idle, Move, Fall, Jump, JumpAlign, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, PlatformWalk, Done, Failed }
+    public enum NavState { Idle, Move, Fall, Jump, JumpAlign, Bridge, BridgeFall, PillarAlign, Pillar, MineAlign, Mine, PlatformWalk, JumpX, JumpY, Done, Failed }
 
     public struct NavNode
     {
@@ -492,7 +492,7 @@ namespace TerraBlind
                     Wy = int.Parse(hm.Groups[2].Value),
                     Action = hm.Groups[3].Value,
                 };
-                if (node.Action == "platform_walk" || node.Action == "jump_bridge")
+                if (node.Action == "platform_walk" || node.Action == "jump_bridge" || node.Action == "jump_x" || node.Action == "jump_y")
                 {
                     var ptRe2 = new System.Text.RegularExpressions.Regex("\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
                     int ptStart2 = nodeJson.IndexOf("\"place_tiles\"");
@@ -532,7 +532,7 @@ namespace TerraBlind
                         node.MineTiles = mtList;
                     }
                 }
-                if (node.Action == "jump" || node.Action == "jump_bridge" || node.Action == "pillar")
+                if (node.Action == "jump" || node.Action == "jump_bridge" || node.Action == "pillar" || node.Action == "jump_x" || node.Action == "jump_y")
                 {
                     var sm = sourceRe.Match(nodeJson);
                     if (sm.Success)
@@ -598,7 +598,7 @@ namespace TerraBlind
                 int feetY = FeetY(p);
                 float centerX = p.position.X + p.width / 2f;
 
-                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.JumpAlign && State != NavState.Mine && State != NavState.MineAlign && State != NavState.PlatformWalk && pcx == _lastStallPcx;
+                bool stalledX = State != NavState.Idle && State != NavState.Pillar && State != NavState.PillarAlign && State != NavState.Jump && State != NavState.JumpAlign && State != NavState.Mine && State != NavState.MineAlign && State != NavState.PlatformWalk && State != NavState.JumpX && State != NavState.JumpY && pcx == _lastStallPcx;
                 bool stalledY = State == NavState.Pillar && feetY == _lastStallFeetY;
                 if (stalledX || stalledY)
                 {
@@ -740,6 +740,21 @@ namespace TerraBlind
                     else if (_target.Action == "fall")
                     {
                         State = NavState.Fall;
+                    }
+                    else if (_target.Action == "jump_x")
+                    {
+                        int sign = _target.Wx >= pcx ? 1 : -1;
+                        var frames = PlatformExecutor.BuildPlatJumpFrames(p, FindPlatformSlot(p), sign, out _, out _, out _);
+                        ReplaySystem.Load(frames);
+                        DiagLog.Write($"[nav] jump_x enter sign={sign} target=({_target.Wx},{_target.Wy}) frames={frames.Count}");
+                        State = NavState.JumpX;
+                    }
+                    else if (_target.Action == "jump_y")
+                    {
+                        var frames = PlatformExecutor.BuildPlatUpFrames(p, FindPlatformSlot(p));
+                        ReplaySystem.Load(frames);
+                        DiagLog.Write($"[nav] jump_y enter target=({_target.Wx},{_target.Wy}) frames={frames.Count}");
+                        State = NavState.JumpY;
                     }
                     else if (_target.Action.StartsWith("mine_"))
                     {
@@ -1036,6 +1051,28 @@ namespace TerraBlind
                     }
                     if (pwSign > 0) p.controlRight = true;
                     else p.controlLeft = true;
+                    return;
+                }
+
+                if (State == NavState.JumpX || State == NavState.JumpY)
+                {
+                    if (ReplaySystem.IsActive) return;
+                    if (p.velocity.Y != 0f) return;
+                    string act = State == NavState.JumpX ? "jump_x" : "jump_y";
+                    int dx = Math.Abs(pcx - _target.Wx);
+                    int dy = Math.Abs(feetY - _target.Wy);
+                    DiagLog.Write($"[nav] {act} done target=({_target.Wx},{_target.Wy}) actual=({pcx},{feetY}) vx={p.velocity.X:0.##} dx={dx} dy={dy}");
+                    if (dx > 2 || dy > 2)
+                    {
+                        DiagLog.Write($"[nav] {act} deviated → blacklist+replan");
+                        EmitNavFailed($"{act}_deviated", _pathIdx, act, pcx, feetY);
+                        BlacklistNode(_target.Wx, _target.Wy);
+                        Replan(p);
+                        return;
+                    }
+                    EmitNodeExit(_pathIdx, act, "done", _target.Wx, _target.Wy, pcx, feetY);
+                    _pathIdx++;
+                    State = NavState.Idle;
                     return;
                 }
 

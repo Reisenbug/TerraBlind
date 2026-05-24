@@ -88,7 +88,9 @@ namespace TerraBlind
                         {
                             var tc = (node.Action == "platform_walk" || node.Action == "jump_bridge")
                                 ? new Color(0, 255, 180, 180)
-                                : new Color(255, 165, 0, 180);
+                                : (node.Action == "jump_x" || node.Action == "jump_y")
+                                    ? new Color(0, 220, 100, 220)
+                                    : new Color(255, 165, 0, 180);
                             DrawTile(spriteBatch, mx, my, tc);
                         }
 
@@ -151,6 +153,31 @@ namespace TerraBlind
                         DrawTile(spriteBatch, wx,     py, new Color(255, 50, 50, 100));
                     }
                 }
+                else if (action == "jump_x" && prevWx >= 0)
+                {
+                    int swx = path[i].SourceWx, swy = path[i].SourceWy;
+                    int jsign = wx > swx ? 1 : -1;
+                    var s = new PhysicsSimulator.State
+                    {
+                        Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,
+                        Py = swy * 16f - PhysicsSimulator.PlayerH,
+                        Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15,
+                    };
+                    var ph = lp != null ? PhysicsSimulator.Params.FromPlayer(lp) : PhysicsSimulator.Params.Default;
+                    for (int f = 0; f < 60; f++)
+                    {
+                        var inp = new PhysicsSimulator.ControlInput { Jump = f < 15, Right = jsign > 0, Left = jsign < 0 };
+                        s = PhysicsSimulator.Step(s, inp, ph);
+                        DrawDot(spriteBatch, s.Px + PhysicsSimulator.PlayerW / 2f, s.Py + PhysicsSimulator.PlayerH, new Color(0, 220, 100, 200));
+                        int feetY = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f);
+                        if (f > 15 && feetY >= swy) break;
+                    }
+                }
+                else if (action == "jump_y" && prevWy > wy)
+                {
+                    for (int py = wy; py <= prevWy; py++)
+                        DrawTile(spriteBatch, wx, py, new Color(0, 220, 100, 100));
+                }
 
                 if (action.StartsWith("mine_") && path[i].MineTiles != null)
                 {
@@ -170,6 +197,8 @@ namespace TerraBlind
                     c = new Color(0, 255, 120, 160);
                 else if (action == "jump_bridge")
                     c = new Color(100, 200, 255, 160);
+                else if (action == "jump_x" || action == "jump_y")
+                    c = new Color(0, 220, 100, 200);
                 else if (action == "fall")
                     c = new Color(0, 180, 255, 120);
                 else if (action == "pillar")
