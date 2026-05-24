@@ -657,6 +657,22 @@ namespace TerraBlind
 				sb2.Append("]}");
 				body = sb2.ToString();
 			}
+			else if (path == "/start_seg_nav")
+			{
+				string reqBodySN;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBodySN = sr.ReadToEnd();
+				var rbSN = reqBodySN.Replace(" ", "");
+				int gxSN = int.Parse(System.Text.RegularExpressions.Regex.Match(rbSN, "\"gx\":(-?\\d+)").Groups[1].Value);
+				int gySN = int.Parse(System.Text.RegularExpressions.Regex.Match(rbSN, "\"gy\":(-?\\d+)").Groups[1].Value);
+				SegmentedNavCoordinator.StartTo(gxSN, gySN);
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/stop_seg_nav")
+			{
+				SegmentedNavCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/debug_segment_plan")
 			{
 				string reqBodyS;
