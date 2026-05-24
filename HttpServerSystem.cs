@@ -657,6 +657,36 @@ namespace TerraBlind
 				sb2.Append("]}");
 				body = sb2.ToString();
 			}
+			else if (path == "/debug_waypoints")
+			{
+				string reqBodyW;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBodyW = sr.ReadToEnd();
+				var rbW = reqBodyW.Replace(" ", "");
+				int gxW = int.Parse(System.Text.RegularExpressions.Regex.Match(rbW, "\"gx\":(-?\\d+)").Groups[1].Value);
+				int gyW = int.Parse(System.Text.RegularExpressions.Regex.Match(rbW, "\"gy\":(-?\\d+)").Groups[1].Value);
+				var pw = Main.LocalPlayer;
+				if (pw == null) { body = "{\"error\":\"no_player\"}"; }
+				else
+				{
+					int sxW = (int)((pw.position.X + pw.width / 2f) / 16f);
+					int syW = (int)((pw.position.Y + pw.height) / 16f);
+					var wps = WaypointPlanner.Generate(sxW, syW, gxW, gyW);
+					var tilesW = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+					foreach (var (wxW, wyW) in wps)
+						tilesW.Add((wxW, wyW, new Microsoft.Xna.Framework.Color(255, 100, 255, 220)));
+					PathVisSystem.SetTiles(tilesW, ttlFrames: 600);
+					var sbW = new System.Text.StringBuilder();
+					sbW.Append("{\"start\":[").Append(sxW).Append(',').Append(syW).Append("],\"waypoints\":[");
+					for (int i = 0; i < wps.Count; i++)
+					{
+						if (i > 0) sbW.Append(',');
+						sbW.Append('[').Append(wps[i].wx).Append(',').Append(wps[i].wy).Append(']');
+					}
+					sbW.Append("]}");
+					body = sbW.ToString();
+				}
+			}
 			else if (path == "/exec_jump_to")
 			{
 				string reqBody;
