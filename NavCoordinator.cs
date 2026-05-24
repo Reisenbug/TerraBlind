@@ -55,6 +55,7 @@ namespace TerraBlind
         private static int _jumpPlaceFrameIdx = -1;  // frame index to place platform during jump
         private static int _jumpPlaceTileX, _jumpPlaceTileY;
         private static int _jumpReplayFrameCount;
+        private static int _mineTileIdx;
 
         // realtime jump control state
         private static bool _jumpAirborne;
@@ -750,6 +751,7 @@ namespace TerraBlind
                         else
                         {
                             State = NavState.Mine;
+                            _mineTileIdx = 0;
                         }
                         _invariantCheckCooldown = 0;
                     }
@@ -1017,26 +1019,19 @@ namespace TerraBlind
                         State = NavState.Idle;
                         return;
                     }
-                    // place platform under feet if needed
-                    if (_target.MineTiles != null && p.itemTime == 0)
+                    // place platform ahead if no floor
+                    if (p.itemTime == 0)
                     {
                         int slot = FindPlatformSlot(p);
-                        if (slot >= 0)
+                        int aheadX = pcx + pwSign;
+                        if (slot >= 0 && !PathPlanner.IsFloorPublic(aheadX, feetY + 1) && PathPlanner.CanPlacePlatformAt(aheadX, feetY + 1))
                         {
-                            foreach (var (ptx, pty) in _target.MineTiles)
-                            {
-                                // place 1 tile ahead so player doesn't fall before placing
-                                if (ptx == pcx + pwSign && pty == feetY + 1)
-                                {
-                                    p.selectedItem = slot;
-                                    p.controlUseItem = true;
-                                    Main.SmartCursorWanted_Mouse = false;
-                                    Main.mouseX = (int)(ptx * 16f + 8f - Main.screenPosition.X);
-                                    Main.mouseY = (int)(pty * 16f + 8f - Main.screenPosition.Y);
-                                    DiagLog.Write($"[nav] platform_walk place ({ptx},{pty}) player=({pcx},{feetY})");
-                                    break;
-                                }
-                            }
+                            p.selectedItem = slot;
+                            p.controlUseItem = true;
+                            Main.SmartCursorWanted_Mouse = false;
+                            Main.mouseX = (int)(aheadX * 16f + 8f - Main.screenPosition.X);
+                            Main.mouseY = (int)((feetY + 1) * 16f + 8f - Main.screenPosition.Y);
+                            DiagLog.Write($"[nav] platform_walk place ({aheadX},{feetY+1}) player=({pcx},{feetY})");
                         }
                     }
                     if (pwSign > 0) p.controlRight = true;
@@ -1230,6 +1225,7 @@ namespace TerraBlind
                     if (aligned)
                     {
                         State = NavState.Mine;
+                        _mineTileIdx = 0;
                         return;
                     }
                     {
@@ -1272,8 +1268,21 @@ namespace TerraBlind
                         Main.mouseX = (int)(centerX - 160f - Main.screenPosition.X);
                         Main.mouseY = (int)(midY - Main.screenPosition.Y);
                     }
-                    else if (mineDown) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y + p.height + 160f - Main.screenPosition.Y); }
-                    else if (mineUp) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y - 160f - Main.screenPosition.Y); }
+                    else if (mineDown || mineUp)
+                    {
+                        if (_target.MineTiles != null && _target.MineTiles.Count > 0)
+                        {
+                            // advance to next unbroken tile
+                            while (_mineTileIdx < _target.MineTiles.Count - 1 && !PathPlanner.IsBlockPublic(_target.MineTiles[_mineTileIdx].wx, _target.MineTiles[_mineTileIdx].wy))
+                                _mineTileIdx++;
+                            var mt = _target.MineTiles[_mineTileIdx];
+                            Main.SmartCursorWanted_Mouse = false;
+                            Main.mouseX = (int)(mt.wx * 16f + 8f - Main.screenPosition.X);
+                            Main.mouseY = (int)(mt.wy * 16f + 8f - Main.screenPosition.Y);
+                        }
+                        else if (mineDown) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y + p.height + 160f - Main.screenPosition.Y); }
+                        else { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y - 160f - Main.screenPosition.Y); }
+                    }
 
                     bool done = false;
                     if (mineDown)

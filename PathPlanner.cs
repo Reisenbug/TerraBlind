@@ -477,7 +477,7 @@ namespace TerraBlind
                             }
                             else
                             {
-                                for (int col = cx; col <= cx + 1; col++) { if (Solid(col, ny)) { mt.Add((col, ny)); mc += MineCostPerTile; } }
+                                for (int col = cx - 1; col <= cx; col++) { if (Solid(col, ny)) { mt.Add((col, ny)); mc += MineCostPerTile; } }
                                 if (mt.Count == 0) continue;
                             }
                             float cost = dy == 1 ? mc + FallCost : mc + MoveCostBase;

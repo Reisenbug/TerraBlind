@@ -529,3 +529,51 @@ PhysicsSimulator.Step 松手分支只处理地面（`else if (s.Grounded)`），
 
 ### 验证
 dx=1..7 向右跳精度测试，修复前系统性偏差 -1~-2，修复后全部 ±1 以内，dx=1..4,6 精确命中。
+
+---
+
+## 2026-05-24 分層規劃架構（待實現）
+
+### 設計方向
+- **大致路徑**：現有 A* 降採樣，只保留 action 變化點（jump/mine/pillar 起點）作為關鍵節點，move/fall 壓縮丟棄
+- **關鍵節點識別**：action 變化點——jump/mine/pillar/bridge 每個都是關鍵節點
+- **節點間 A* 範圍**：budget-based，展開 N 個節點截斷，平坦地形快，複雜地形不爆
+- **局部失敗兜底**：升級全量 A*
+
+### 整體架構
+```
+全量粗 A*（只生成關鍵節點序列）
+    ↓
+當前關鍵節點間：局部精細 A*（budget 限制）
+    ↓
+偏了/找不到 → 局部重規劃 → 失敗則全量重規劃
+```
+
+### 動機
+- 全量 A* 在某些位置性能影響大
+- 滿足大前提（目標導向）：每個局部段都從當前真實狀態重規劃，不依賴固定路徑序列
+- 地形變化/偏移自然體現在下一段局部規劃中
+
+---
+
+## 2026-05-24 plat_up / plat_jump 新邊類型設計
+
+### 場景一：plat_up（垂直上升，替代 pillar）
+- 跳躍到最高點時在腳底放 1 塊平台，上升 6-7 格只需 1 塊
+- 前提：最高點附近 CanPlacePlatformAt 為 true（需要背景牆）、有平台物品
+- cost 比 pillar 低
+- 執行：從 SimulateJump frames 找 MinPy 對應幀插入 UseItem
+
+### 場景二：plat_jump（水平穿越懸空，替代 bridge）
+- 跳躍落地前在落點腳下放 1 塊平台
+- 前提：落點腳下 CanPlacePlatformAt 為 true、有平台物品
+- cost 比 bridge 低
+- 執行：從 SimulateJump frames 找落地前對應幀插入 UseItem
+
+### 測試方式
+先實現 /test_plat_up 和 /test_plat_jump HTTP 端點，直接從當前位置執行，
+不需要 A* 規劃，確認放置時機正確後再接入 A*。
+
+### 規劃假設
+A* 規劃時假設平台會放好。執行失敗（背景牆不夠、放置失敗）→ deviated → 局部重規劃。
+與現有 pillar/bridge 處理方式一致。
