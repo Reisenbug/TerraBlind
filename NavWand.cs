@@ -39,18 +39,32 @@ namespace TerraBlind
             {
                 if (_pendingWx >= 0)
                 {
-                    NavCoordinator.StartTo(_pendingWx, _pendingWy);
+                    if (NavCoordinator.IsActive) NavCoordinator.Stop();
+                    if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
+                    SegmentedNavCoordinator.StartTo(_pendingWx, _pendingWy);
                 }
             }
             else
             {
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
+                if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
                 _pendingWx = mx;
                 _pendingWy = my;
-                string json = PathPlanner.PlanTo(mx, my);
+                // preview: show waypoints + first-segment plan
+                var p = Main.LocalPlayer;
+                int sx = (int)((p.position.X + p.width / 2f) / 16f);
+                int sy = (int)((p.position.Y + p.height) / 16f);
+                var wps = WaypointPlanner.Generate(sx, sy, mx, my);
+                var tiles = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+                foreach (var (wx, wy) in wps)
+                    tiles.Add((wx, wy, new Microsoft.Xna.Framework.Color(255, 100, 255, 220)));
+                PathVisSystem.SetTiles(tiles, ttlFrames: 600);
+                int firstWx = wps.Count > 0 ? wps[0].wx : mx;
+                int firstWy = wps.Count > 0 ? wps[0].wy : my;
+                string json = PathPlanner.PlanToWindowed(firstWx, firstWy, 25);
                 var path = NavCoordinator.ParsePathPublic(json);
                 var actions = string.Join(",", path.ConvertAll(n => $"({n.Wx},{n.Wy}){n.Action}"));
-                DiagLog.Write($"[wand] target=({mx},{my}) path={path.Count} nodes=[{actions}]");
+                DiagLog.Write($"[wand] target=({mx},{my}) wps={wps.Count} first-seg path={path.Count} nodes=[{actions}]");
                 PathVisSystem.SetPlanPath(path, PathPlanner.GetEnvelopeCache());
             }
             return true;
