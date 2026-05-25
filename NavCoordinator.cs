@@ -27,6 +27,18 @@ namespace TerraBlind
         public static bool IsActive => _started && State != NavState.Done && State != NavState.Failed;
         public static bool Done => State == NavState.Done;
         public static string FailReason = "";
+        // structured failure info. code is a stable enum string; ctxJson is a partial JSON object body
+        // (no enclosing braces) describing the failure site, e.g. `"tile":[123,45],"action":"jump"`.
+        public static string FailCode = "";
+        public static string FailCtxJson = "";
+        public const int NavMaxDist = 60; // manhattan tile distance for bounded /nav
+
+        private static void SetFail(string code, string ctxJson, string legacyReason)
+        {
+            FailCode = code;
+            FailCtxJson = ctxJson ?? "";
+            FailReason = legacyReason ?? code;
+        }
 
         private static int _sign;
         private static List<NavNode> _path = new List<NavNode>();
@@ -112,10 +124,25 @@ namespace TerraBlind
                 _fixedPath = false;
                 _pillarSettleTick = 0;
                 _lastPlanMaxRun = -1f;
-                FailReason = "";
+                FailReason = ""; FailCode = ""; FailCtxJson = "";
                 _started = true;
                 DiagLog.Write($"[nav] Start sign={sign}");
             }
+        }
+
+        // bounded entry: rejects if manhattan distance > NavMaxDist. AI default.
+        // returns ("ok", "") on accept, or (code, ctxJson) on reject (caller serializes; State stays Idle).
+        public static (string code, string ctxJson) StartToBounded(int goalWx, int goalWy)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null) return ("no_player", "");
+            int pcx = (int)((p.position.X + p.width / 2f) / 16f);
+            int pcy = (int)((p.position.Y + p.height) / 16f);
+            int dist = Math.Abs(goalWx - pcx) + Math.Abs(goalWy - pcy);
+            if (dist > NavMaxDist)
+                return ("too_far", $"\"dist\":{dist},\"limit\":{NavMaxDist},\"from\":[{pcx},{pcy}],\"tile\":[{goalWx},{goalWy}]");
+            StartTo(goalWx, goalWy);
+            return ("ok", "");
         }
 
         public static void StartTo(int goalWx, int goalWy)
@@ -142,7 +169,7 @@ namespace TerraBlind
                 _fixedPath = false;
                 _pillarSettleTick = 0;
                 _lastPlanMaxRun = -1f;
-                FailReason = "";
+                FailReason = ""; FailCode = ""; FailCtxJson = "";
                 _started = true;
                 DiagLog.Write($"[nav] StartTo ({goalWx},{goalWy})");
             }
@@ -172,7 +199,7 @@ namespace TerraBlind
                 _fixedPath = false;
                 _pillarSettleTick = 0;
                 _lastPlanMaxRun = -1f;
-                FailReason = "";
+                FailReason = ""; FailCode = ""; FailCtxJson = "";
                 _started = true;
                 DiagLog.Write($"[nav] StartToWithPath ({goalWx},{goalWy}) nodes={_path.Count}");
             }
@@ -198,7 +225,7 @@ namespace TerraBlind
                 _jumpReplayLoaded = false;
                 _fixedPath = true;
                 _pillarSettleTick = 0;
-                FailReason = "";
+                FailReason = ""; FailCode = ""; FailCtxJson = "";
                 _started = true;
                 DiagLog.Write($"[nav] SetPath sign={sign} nodes={nodes.Count}");
             }
@@ -226,8 +253,13 @@ namespace TerraBlind
         {
             lock (_lock)
             {
+                // only mark cancelled if a run was in progress; preserve prior Done/Failed reason otherwise
+                if (_started && State != NavState.Done && State != NavState.Failed)
+                {
+                    State = NavState.Failed;
+                    SetFail("cancelled", "", "cancelled");
+                }
                 _started = false;
-                State = NavState.Idle;
                 _path.Clear();
                 JumpCoordinator.Stop();
                 ReplaySystem.Stop();
@@ -435,7 +467,7 @@ namespace TerraBlind
             {
                 DiagLog.Write($"[loop] replan storm: {_replanTicks.Count} replans in {ReplanWindowFrames}f at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy}) blacklist=[{string.Join(",", BlacklistSet())}]");
                 State = NavState.Failed;
-                FailReason = "replan loop (window)";
+                SetFail("replan_storm", $"\"window\":\"window\",\"count\":{_replanTicks.Count},\"tile\":[{pcxBreak},{feetYBreak}]", "replan loop (window)");
                 EmitNavFailed("replan_loop_window", _pathIdx, _target.Action ?? "", pcxBreak, feetYBreak);
                 return;
             }
@@ -443,7 +475,7 @@ namespace TerraBlind
             {
                 DiagLog.Write($"[loop] replan total exceeded: {_replanCount} at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy})");
                 State = NavState.Failed;
-                FailReason = "replan loop (total)";
+                SetFail("replan_storm", $"\"window\":\"total\",\"count\":{_replanCount},\"tile\":[{pcxBreak},{feetYBreak}]", "replan loop (total)");
                 EmitNavFailed("replan_loop_total", _pathIdx, _target.Action ?? "", pcxBreak, feetYBreak);
                 return;
             }
@@ -491,7 +523,7 @@ namespace TerraBlind
                 if (_blacklist.Count >= BlacklistMax)
                 {
                     State = NavState.Failed;
-                    FailReason = $"blacklist full at ({pcx},{feetY})";
+                    SetFail("unreachable", $"\"tile\":[{_fixedGoalWx},{_fixedGoalWy}],\"from\":[{pcx},{feetY}]", $"blacklist full at ({pcx},{feetY})");
                     EmitNavFailed("blacklist_full", _pathIdx, _target.Action ?? "", pcx, feetY);
                     DiagLog.Write($"[nav] blacklist full, stopping");
                     return;
@@ -1230,7 +1262,7 @@ namespace TerraBlind
                     {
                         EmitNavFailed("no_platform", _pathIdx, "bridge", pcx, feetY);
                         State = NavState.Failed;
-                        FailReason = "no platform";
+                        SetFail("no_resource", $"\"kind\":\"platform\",\"action\":\"bridge\",\"tile\":[{pcx},{feetY}]", "no platform");
                         return;
                     }
                     if (!ReplaySystem.IsActive)
@@ -1254,7 +1286,7 @@ namespace TerraBlind
                     {
                         EmitNavFailed("no_platform", _pathIdx, "bridge_fall", pcx, feetY);
                         State = NavState.Failed;
-                        FailReason = "no platform";
+                        SetFail("no_resource", $"\"kind\":\"platform\",\"action\":\"bridge_fall\",\"tile\":[{pcx},{feetY}]", "no platform");
                         return;
                     }
                     if (!ReplaySystem.IsActive)
@@ -1398,7 +1430,7 @@ namespace TerraBlind
                 {
                     int slot = -1;
                     for (int si = 0; si < 10; si++) { var it = p.inventory[si]; if (it != null && !it.IsAir && it.pick > 0) { slot = si; break; } }
-                    if (slot < 0) { State = NavState.Failed; FailReason = "no pickaxe"; return; }
+                    if (slot < 0) { State = NavState.Failed; SetFail("no_resource", $"\"kind\":\"pickaxe\",\"action\":\"{_target.Action}\",\"tile\":[{pcx},{feetY}]", "no pickaxe"); return; }
 
                     string mineAction = _target.Action;
                     bool mineRight = mineAction == "mine_right";

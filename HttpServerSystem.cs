@@ -582,6 +582,55 @@ namespace TerraBlind
 						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
 				}
 			}
+			else if (path == "/nav")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
+				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
+				if (!gxM.Success || !gyM.Success)
+				{
+					body = "{\"ok\":false,\"reason\":\"bad_request\"}";
+					status = 400;
+				}
+				else
+				{
+					int gxN = int.Parse(gxM.Groups[1].Value);
+					int gyN = int.Parse(gyM.Groups[1].Value);
+					var (code, ctxJson) = NavCoordinator.StartToBounded(gxN, gyN);
+					if (code == "ok")
+						body = "{\"ok\":true,\"goal\":[" + gxN + "," + gyN + "]}";
+					else
+					{
+						string ctxPart = string.IsNullOrEmpty(ctxJson) ? "" : "," + ctxJson;
+						body = "{\"ok\":false,\"reason\":\"" + code + "\"" + ctxPart + "}";
+						status = 400;
+					}
+				}
+			}
+			else if (path == "/nav_unlimited")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
+				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
+				if (!gxM.Success || !gyM.Success)
+				{
+					body = "{\"ok\":false,\"reason\":\"bad_request\"}";
+					status = 400;
+				}
+				else
+				{
+					int gxN = int.Parse(gxM.Groups[1].Value);
+					int gyN = int.Parse(gyM.Groups[1].Value);
+					NavCoordinator.StartTo(gxN, gyN);
+					body = "{\"ok\":true,\"goal\":[" + gxN + "," + gyN + "],\"unlimited\":true}";
+				}
+			}
 			else if (path == "/nav_start")
 			{
 				string reqBody;
@@ -875,11 +924,30 @@ namespace TerraBlind
 			else if (path == "/nav_done")
 			{
 				if (NavCoordinator.Done)
-					body = "{\"done\":true,\"status\":\"done\"}";
+					body = "{\"done\":true,\"status\":\"done\",\"reason\":\"done\"}";
 				else if (!NavCoordinator.IsActive && !NavCoordinator.Done)
-					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + NavCoordinator.FailReason + "\"}";
+				{
+					string code = string.IsNullOrEmpty(NavCoordinator.FailCode) ? "unknown" : NavCoordinator.FailCode;
+					string ctxPart = string.IsNullOrEmpty(NavCoordinator.FailCtxJson) ? "" : "," + NavCoordinator.FailCtxJson;
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + code + "\",\"legacy_reason\":\"" + NavCoordinator.FailReason + "\"" + ctxPart + "}";
+				}
 				else
 					body = "{\"done\":false,\"status\":\"running\"}";
+			}
+			else if (path == "/seg_nav_done")
+			{
+				if (SegmentedNavCoordinator.State == SegState.Done)
+					body = "{\"done\":true,\"status\":\"done\",\"reason\":\"done\"}";
+				else if (SegmentedNavCoordinator.State == SegState.Failed)
+				{
+					string code = string.IsNullOrEmpty(SegmentedNavCoordinator.FailCode) ? "unknown" : SegmentedNavCoordinator.FailCode;
+					string ctxPart = string.IsNullOrEmpty(SegmentedNavCoordinator.FailCtxJson) ? "" : "," + SegmentedNavCoordinator.FailCtxJson;
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + code + "\",\"legacy_reason\":\"" + SegmentedNavCoordinator.FailReason + "\"" + ctxPart + "}";
+				}
+				else if (SegmentedNavCoordinator.IsActive)
+					body = "{\"done\":false,\"status\":\"running\"}";
+				else
+					body = "{\"done\":false,\"status\":\"idle\"}";
 			}
 			else if (path == "/nav_path")
 			{

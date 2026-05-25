@@ -28,13 +28,22 @@ namespace TerraBlind
         public static bool IsActive => _state != SegState.Idle && _state != SegState.Done && _state != SegState.Failed;
         public static SegState State => _state;
         public static string FailReason = "";
+        public static string FailCode = "";
+        public static string FailCtxJson = "";
+
+        private static void SetFail(string code, string ctxJson, string legacyReason)
+        {
+            FailCode = code;
+            FailCtxJson = ctxJson ?? "";
+            FailReason = legacyReason ?? code;
+        }
 
         public static void StartTo(int gx, int gy)
         {
             lock (_lock)
             {
                 var p = Main.LocalPlayer;
-                if (p == null) { _state = SegState.Failed; FailReason = "no player"; return; }
+                if (p == null) { _state = SegState.Failed; SetFail("no_player", "", "no player"); return; }
                 int sx = (int)((p.position.X + p.width / 2f) / 16f);
                 int sy = (int)((p.position.Y + p.height) / 16f);
                 _finalGx = gx; _finalGy = gy;
@@ -44,7 +53,7 @@ namespace TerraBlind
                 _state = SegState.Planning;
                 _executeTicks = 0;
                 _globalStartTick = (int)Main.GameUpdateCount;
-                FailReason = "";
+                FailReason = ""; FailCode = ""; FailCtxJson = "";
                 DiagLog.Write($"[seg] StartTo ({gx},{gy}) waypoints={_waypoints.Count}");
                 PushViz();
             }
@@ -54,7 +63,11 @@ namespace TerraBlind
         {
             lock (_lock)
             {
-                _state = SegState.Idle;
+                if (_state != SegState.Idle && _state != SegState.Done && _state != SegState.Failed)
+                {
+                    _state = SegState.Failed;
+                    SetFail("cancelled", "", "cancelled");
+                }
                 _waypoints.Clear();
                 NavCoordinator.Stop();
             }
@@ -73,7 +86,7 @@ namespace TerraBlind
                 {
                     DiagLog.Write($"[loop] seg global timeout reached → Failed");
                     _state = SegState.Failed;
-                    FailReason = "global timeout";
+                    SetFail("timeout", $"\"elapsed_frames\":{(int)Main.GameUpdateCount - _globalStartTick},\"wp_idx\":{_wpIdx}", "global timeout");
                     NavCoordinator.Stop();
                     return;
                 }
@@ -152,7 +165,7 @@ namespace TerraBlind
             {
                 DiagLog.Write($"[seg] too many skips → Failed ({reason})");
                 _state = SegState.Failed;
-                FailReason = reason;
+                SetFail("too_many_skips", $"\"last_reason\":\"{reason}\",\"skipped\":{_skipCount},\"wp_idx\":{_wpIdx}", reason);
                 return;
             }
             _wpIdx++;
