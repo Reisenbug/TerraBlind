@@ -11,6 +11,7 @@ namespace TerraBlind
     {
         public int Wx, Wy;
         public int SourceWx, SourceWy;
+        public int SourceSub; // 0=L, 1=C, 2=R; from PathPlanner.SubPx
         public string Action;
         public System.Collections.Generic.List<PhysicsSimulator.ControlInput> Frames;
         public System.Collections.Generic.List<(int wx, int wy)> MineTiles;
@@ -76,6 +77,18 @@ namespace TerraBlind
         private const int StallFrames = 60;
         private const int PillarThresh = 8; // slightly above max jump height (7 tiles)
 
+        // async replan state
+        private static bool _asyncReplanInflight = false;
+        private static int _asyncReplanSeq = -1;
+
+        // replan loop circuit breaker
+        private static int _replanCount = 0;
+        private static readonly Queue<int> _replanTicks = new Queue<int>();
+        private const int ReplanWindowFrames = 1800; // 30 sec
+        private const int ReplanWindowMax = 8;       // > 8 replans in 30s = loop
+        private const int ReplanTotalMax = 20;       // hard cap per StartTo session
+        public static int ReplanCount => _replanCount;
+
         public static void Start(int sign)
         {
             lock (_lock)
@@ -84,6 +97,11 @@ namespace TerraBlind
                 _fixedGoalWx = -1;
                 _fixedGoalWy = -1;
                 _blacklist.Clear();
+                _replanCount = 0;
+                _replanTicks.Clear();
+                _asyncReplanInflight = false;
+                _asyncReplanSeq = -1;
+                PlanningJob.Cancel();
                 State = NavState.Idle;
                 _path.Clear();
                 _pathIdx = 0;
@@ -109,6 +127,11 @@ namespace TerraBlind
                 _fixedGoalWx = goalWx;
                 _fixedGoalWy = goalWy;
                 _blacklist.Clear();
+                _replanCount = 0;
+                _replanTicks.Clear();
+                _asyncReplanInflight = false;
+                _asyncReplanSeq = -1;
+                PlanningJob.Cancel();
                 State = NavState.Idle;
                 _path.Clear();
                 _pathIdx = 0;
@@ -125,12 +148,47 @@ namespace TerraBlind
             }
         }
 
+        public static void StartToWithPath(int goalWx, int goalWy, List<NavNode> nodes)
+        {
+            lock (_lock)
+            {
+                var p = Main.LocalPlayer;
+                _sign = p != null && goalWx >= (int)((p.position.X + p.width / 2f) / 16f) ? 1 : -1;
+                _fixedGoalWx = goalWx;
+                _fixedGoalWy = goalWy;
+                _blacklist.Clear();
+                _replanCount = 0;
+                _replanTicks.Clear();
+                _asyncReplanInflight = false;
+                _asyncReplanSeq = -1;
+                PlanningJob.Cancel();
+                State = NavState.Idle;
+                _path = nodes ?? new List<NavNode>();
+                _pathIdx = 0;
+                _stallCount = 0;
+                _lastStallFeetY = 0;
+                _restartCooldown = 0;
+                _jumpReplayLoaded = false;
+                _fixedPath = false;
+                _pillarSettleTick = 0;
+                _lastPlanMaxRun = -1f;
+                FailReason = "";
+                _started = true;
+                DiagLog.Write($"[nav] StartToWithPath ({goalWx},{goalWy}) nodes={_path.Count}");
+            }
+        }
+
         public static void SetPath(int sign, List<NavNode> nodes)
         {
             lock (_lock)
             {
                 _sign = sign;
                 _blacklist.Clear();
+                _replanCount = 0;
+                _replanTicks.Clear();
+                _asyncReplanInflight = false;
+                _asyncReplanSeq = -1;
+                PlanningJob.Cancel();
                 State = NavState.Idle;
                 _path = nodes;
                 _pathIdx = 0;
@@ -364,6 +422,31 @@ namespace TerraBlind
         private static void Replan(Player p)
         {
             if (_fixedPath) { State = NavState.Done; DiagLog.Write("[nav] SetPath done"); return; }
+
+            // circuit breaker: detect replan loop
+            int nowTick = (int)Main.GameUpdateCount;
+            _replanTicks.Enqueue(nowTick);
+            while (_replanTicks.Count > 0 && nowTick - _replanTicks.Peek() > ReplanWindowFrames)
+                _replanTicks.Dequeue();
+            _replanCount++;
+            int pcxBreak = Pcx(p);
+            int feetYBreak = FeetY(p);
+            if (_replanTicks.Count > ReplanWindowMax)
+            {
+                DiagLog.Write($"[loop] replan storm: {_replanTicks.Count} replans in {ReplanWindowFrames}f at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy}) blacklist=[{string.Join(",", BlacklistSet())}]");
+                State = NavState.Failed;
+                FailReason = "replan loop (window)";
+                EmitNavFailed("replan_loop_window", _pathIdx, _target.Action ?? "", pcxBreak, feetYBreak);
+                return;
+            }
+            if (_replanCount > ReplanTotalMax)
+            {
+                DiagLog.Write($"[loop] replan total exceeded: {_replanCount} at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy})");
+                State = NavState.Failed;
+                FailReason = "replan loop (total)";
+                EmitNavFailed("replan_loop_total", _pathIdx, _target.Action ?? "", pcxBreak, feetYBreak);
+                return;
+            }
             if (p.velocity.Y != 0f)
             {
                 _restartCooldown = 6;
@@ -386,7 +469,16 @@ namespace TerraBlind
                     State = NavState.Done;
                     return;
                 }
-                json = PathPlanner.PlanTo(_fixedGoalWx, _fixedGoalWy);
+                // async: fire request and keep state=Idle; PollResult() will swap path in when done.
+                if (!_asyncReplanInflight)
+                {
+                    _asyncReplanInflight = true;
+                    _asyncReplanSeq = PlanningJob.Request(_fixedGoalWx, _fixedGoalWy);
+                    DiagLog.Write($"[nav] async replan seq={_asyncReplanSeq} goal=({_fixedGoalWx},{_fixedGoalWy})");
+                }
+                State = NavState.Idle;
+                _path.Clear(); _pathIdx = 0;
+                return;
             }
             else
             {
@@ -540,6 +632,8 @@ namespace TerraBlind
                         node.SourceWx = int.Parse(sm.Groups[1].Value);
                         node.SourceWy = int.Parse(sm.Groups[2].Value);
                     }
+                    var subm = System.Text.RegularExpressions.Regex.Match(nodeJson, "\"ssub\"\\s*:\\s*(\\d+)");
+                    node.SourceSub = subm.Success ? int.Parse(subm.Groups[1].Value) : 1; // default C
                     var svxm = System.Text.RegularExpressions.Regex.Match(nodeJson, "\"start_vx\"\\s*:\\s*(-?[0-9.]+)");
                     if (svxm.Success) node.StartVx = float.Parse(svxm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                     else node.StartVx = null;
@@ -583,6 +677,30 @@ namespace TerraBlind
             lock (_lock)
             {
                 if (!_started) return;
+
+                // pick up async replan result if ready
+                if (_asyncReplanInflight && PlanningJob.TryTakeResult(out string ajson, out int agx, out int agy, out int aseq))
+                {
+                    if (aseq == _asyncReplanSeq && agx == _fixedGoalWx && agy == _fixedGoalWy)
+                    {
+                        var newPath = ParsePath(ajson);
+                        DiagLog.Write($"[nav] async replan result seq={aseq} path={newPath.Count}");
+                        if (newPath != null && newPath.Count > 0)
+                        {
+                            _path = newPath;
+                            _pathIdx = 0;
+                            State = NavState.Idle;
+                        }
+                        else
+                        {
+                            BlacklistGoal();
+                            EmitNavFailed("replan_empty_async", _pathIdx, _target.Action ?? "", Pcx(Main.LocalPlayer), FeetY(Main.LocalPlayer));
+                            _restartCooldown = 30;
+                        }
+                    }
+                    _asyncReplanInflight = false;
+                }
+
                 if (State == NavState.Failed) return;
 
                 if (_restartCooldown > 0)
@@ -651,6 +769,7 @@ namespace TerraBlind
 
                 if (State == NavState.Idle)
                 {
+                    if (_asyncReplanInflight) return; // waiting for background plan
                     if (_pathIdx >= _path.Count)
                     {
                         Replan(p);
@@ -705,12 +824,13 @@ namespace TerraBlind
                             Replan(p);
                             return;
                         }
-                        _jumpSign = _target.Wx >= pcx ? 1 : -1;
+                        // sign follows the planned edge direction (SourceWx → Wx), not current player pos
+                        _jumpSign = _target.Wx > _target.SourceWx ? 1 : _target.Wx < _target.SourceWx ? -1 : (_target.Wx >= pcx ? 1 : -1);
                         _jumpAirborne = false;
                         _jumpHoldRemaining = 0;
                         _jumpAlignTick = 0;
                         _jumpReplayLoaded = false;
-                        DiagLog.Write($"[nav] jump enter realtime target=({_target.Wx},{_target.Wy}) sign={_jumpSign} vx={p.velocity.X:0.##} startVx={_target.StartVx:0.##}");
+                        DiagLog.Write($"[nav] jump enter realtime target=({_target.Wx},{_target.Wy}) src=({_target.SourceWx},{_target.SourceWy}) sign={_jumpSign} vx={p.velocity.X:0.##} startVx={_target.StartVx:0.##}");
                         // zero-speed jump: must align to SourceWx first
                         if (_target.StartVx.HasValue && Math.Abs(_target.StartVx.Value) < 0.5f)
                         {
@@ -865,14 +985,8 @@ namespace TerraBlind
                     if (!_jumpAirborne)
                     {
                         // grounded phase: try to find a good moment to jump
+                        // tick counter kept only for diagnostics; loop detection is owned by ReplanWindow circuit breaker
                         _jumpAlignTick++;
-                        if (_jumpAlignTick > JumpAlignMax)
-                        {
-                            DiagLog.Write($"[nav] jump align timeout → replan");
-                            EmitNavFailed("jump_align_timeout", _pathIdx, "jump", pcx, feetY);
-                            Replan(p);
-                            return;
-                        }
 
                         if (!grounded)
                         {
@@ -931,7 +1045,11 @@ namespace TerraBlind
                             PathVisSystem.SetTiles(visTiles, ttlFrames: 4);
                         }
 
-                        if (bestHold == 0 || bestDistCx > 1)
+                        // DEBUG: log every adjust decision to diagnose why realtime never fires
+                        if (_jumpAlignTick % 30 == 0)
+                            DiagLog.Write($"[rt] tick={_jumpAlignTick} bestHold={bestHold} bestSimCx={bestSimCx} bestSimCy={bestSimCy} target=({_target.Wx},{_target.Wy}) bestDistCx={bestDistCx} px={p.position.X:0.#} vx={p.velocity.X:0.##}");
+
+                        if (bestHold == 0 || bestDistCx > 0)
                         {
                             // move to reduce simDist: if sim lands short, move toward target; if overshoots, move back
                             int adjustSign;

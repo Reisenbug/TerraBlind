@@ -108,8 +108,8 @@ namespace TerraBlind
                     float arcVx = path[i].StartVx.HasValue ? jsign * System.Math.Abs(path[i].StartVx.Value) : jsign * PhysicsSimulator.MaxRunSpeed;
                     var s = new PhysicsSimulator.State
                     {
-                        Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,
-                        Py = swy * 16f - PhysicsSimulator.PlayerH,
+                        Px = PathPlanner.CanonicalPx(swx, (SubPx)path[i].SourceSub, PhysicsSimulator.PlayerW),
+                        Py = (swy + 1) * 16f - PhysicsSimulator.PlayerH,
                         Vx = arcVx,
                         Vy = 0f, Grounded = true,
                         JumpFramesLeft = path[i].Frames.Count,
@@ -159,8 +159,8 @@ namespace TerraBlind
                     int jsign = wx > swx ? 1 : -1;
                     var s = new PhysicsSimulator.State
                     {
-                        Px = swx * 16f - PhysicsSimulator.PlayerW / 2f + 8f,
-                        Py = swy * 16f - PhysicsSimulator.PlayerH,
+                        Px = PathPlanner.CanonicalPx(swx, (SubPx)path[i].SourceSub, PhysicsSimulator.PlayerW),
+                        Py = (swy + 1) * 16f - PhysicsSimulator.PlayerH,
                         Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15,
                     };
                     var ph = lp != null ? PhysicsSimulator.Params.FromPlayer(lp) : PhysicsSimulator.Params.Default;

@@ -4,7 +4,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    public enum SegState { Idle, Planning, Executing, WaitSettled, Done, Failed }
+    public enum SegState { Idle, Planning, Executing, Done, Failed }
 
     public class SegmentedNavCoordinator : ModSystem
     {
@@ -15,12 +15,15 @@ namespace TerraBlind
         private static int _wpIdx = 0;
         private static int _finalGx, _finalGy;
         private static int _segmentRadius = 25;
-        private static int _waitSettledTick = 0;
         private static int _executeTicks = 0;
         private static int _skipCount = 0;
         private const int MaxSkips = 3;
         private const int ExecuteTimeoutFrames = 60 * 30; // 30 sec
         private const int ArriveTolerance = 3;
+        private const int MaxReplansPerSegment = 5;
+        private static int _segStartReplanCount = 0;
+        private const int GlobalTimeoutFrames = 60 * 300; // 5 min hard cap
+        private static int _globalStartTick = 0;
 
         public static bool IsActive => _state != SegState.Idle && _state != SegState.Done && _state != SegState.Failed;
         public static SegState State => _state;
@@ -40,7 +43,7 @@ namespace TerraBlind
                 _skipCount = 0;
                 _state = SegState.Planning;
                 _executeTicks = 0;
-                _waitSettledTick = 0;
+                _globalStartTick = (int)Main.GameUpdateCount;
                 FailReason = "";
                 DiagLog.Write($"[seg] StartTo ({gx},{gy}) waypoints={_waypoints.Count}");
                 PushViz();
@@ -65,6 +68,16 @@ namespace TerraBlind
                 var p = Main.LocalPlayer;
                 if (p == null) return;
 
+                // global timeout
+                if ((int)Main.GameUpdateCount - _globalStartTick > GlobalTimeoutFrames)
+                {
+                    DiagLog.Write($"[loop] seg global timeout reached → Failed");
+                    _state = SegState.Failed;
+                    FailReason = "global timeout";
+                    NavCoordinator.Stop();
+                    return;
+                }
+
                 if (_state == SegState.Planning)
                 {
                     if (_wpIdx >= _waypoints.Count)
@@ -76,6 +89,7 @@ namespace TerraBlind
                     var (wx, wy) = _waypoints[_wpIdx];
                     DiagLog.Write($"[seg] plan segment to wp[{_wpIdx}]=({wx},{wy})");
                     NavCoordinator.StartTo(wx, wy);
+                    _segStartReplanCount = NavCoordinator.ReplanCount;
                     _executeTicks = 0;
                     _state = SegState.Executing;
                     return;
@@ -91,12 +105,11 @@ namespace TerraBlind
                     // arrival check (looser than NavCoordinator's exact match)
                     if (System.Math.Abs(pcx - wx) <= ArriveTolerance && System.Math.Abs(feetY - wy) <= ArriveTolerance)
                     {
-                        DiagLog.Write($"[seg] wp[{_wpIdx}] reached at ({pcx},{feetY}) target=({wx},{wy})");
+                        DiagLog.Write($"[seg] wp[{_wpIdx}] reached at ({pcx},{feetY}) target=({wx},{wy}) vx={p.velocity.X:0.##}");
                         NavCoordinator.Stop();
                         _wpIdx++;
                         _skipCount = 0;
-                        _waitSettledTick = 0;
-                        _state = SegState.WaitSettled;
+                        _state = SegState.Planning; // no settle wait; next segment plans from current state
                         PushViz();
                         return;
                     }
@@ -104,8 +117,18 @@ namespace TerraBlind
                     // NavCoordinator failed → skip waypoint
                     if (NavCoordinator.State == NavState.Failed || !NavCoordinator.IsActive)
                     {
-                        DiagLog.Write($"[seg] NavCoordinator inactive/failed at wp[{_wpIdx}] ({wx},{wy}) → skip");
+                        DiagLog.Write($"[seg] NavCoordinator inactive/failed at wp[{_wpIdx}] ({wx},{wy}) reason='{NavCoordinator.FailReason}' → skip");
                         SkipOrFail("nav_failed");
+                        return;
+                    }
+
+                    // per-segment replan limit
+                    int segReplans = NavCoordinator.ReplanCount - _segStartReplanCount;
+                    if (segReplans > MaxReplansPerSegment)
+                    {
+                        DiagLog.Write($"[loop] segment replan limit exceeded ({segReplans}) at wp[{_wpIdx}] ({wx},{wy}) → skip");
+                        NavCoordinator.Stop();
+                        SkipOrFail("seg_replan_limit");
                         return;
                     }
 
@@ -119,16 +142,6 @@ namespace TerraBlind
                     return;
                 }
 
-                if (_state == SegState.WaitSettled)
-                {
-                    _waitSettledTick++;
-                    bool settled = p.velocity.Y == 0f && System.Math.Abs(p.velocity.X) < 0.5f;
-                    if (settled || _waitSettledTick > 60)
-                    {
-                        _state = SegState.Planning;
-                    }
-                    return;
-                }
             }
         }
 

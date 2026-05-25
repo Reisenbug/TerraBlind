@@ -12,6 +12,10 @@ namespace TerraBlind
 
         private static int _pendingWx = -1;
         private static int _pendingWy = -1;
+        // pending plan request: when the async result arrives, what do we do?
+        // 0=nothing, 1=preview only, 2=exec
+        private static int _pendingMode = 0;
+        private static int _pendingSeq = -1;
 
         public override void SetDefaults()
         {
@@ -37,37 +41,36 @@ namespace TerraBlind
 
             if (player.altFunctionUse == 2)
             {
-                if (_pendingWx >= 0)
-                {
-                    if (NavCoordinator.IsActive) NavCoordinator.Stop();
-                    if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                    SegmentedNavCoordinator.StartTo(_pendingWx, _pendingWy);
-                }
+                if (NavCoordinator.IsActive) NavCoordinator.Stop();
+                if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
+                _pendingWx = mx; _pendingWy = my; _pendingMode = 2;
+                _pendingSeq = PlanningJob.Request(mx, my);
+                DiagLog.Write($"[wand] exec request target=({mx},{my}) seq={_pendingSeq}");
             }
             else
             {
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                _pendingWx = mx;
-                _pendingWy = my;
-                // preview: show waypoints + first-segment plan
-                var p = Main.LocalPlayer;
-                int sx = (int)((p.position.X + p.width / 2f) / 16f);
-                int sy = (int)((p.position.Y + p.height) / 16f);
-                var wps = WaypointPlanner.Generate(sx, sy, mx, my);
-                var tiles = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
-                foreach (var (wx, wy) in wps)
-                    tiles.Add((wx, wy, new Microsoft.Xna.Framework.Color(255, 100, 255, 220)));
-                PathVisSystem.SetTiles(tiles, ttlFrames: 600);
-                int firstWx = wps.Count > 0 ? wps[0].wx : mx;
-                int firstWy = wps.Count > 0 ? wps[0].wy : my;
-                string json = PathPlanner.PlanToWindowed(firstWx, firstWy, 25);
-                var path = NavCoordinator.ParsePathPublic(json);
-                var actions = string.Join(",", path.ConvertAll(n => $"({n.Wx},{n.Wy}){n.Action}"));
-                DiagLog.Write($"[wand] target=({mx},{my}) wps={wps.Count} first-seg path={path.Count} nodes=[{actions}]");
-                PathVisSystem.SetPlanPath(path, PathPlanner.GetEnvelopeCache());
+                _pendingWx = mx; _pendingWy = my; _pendingMode = 1;
+                _pendingSeq = PlanningJob.Request(mx, my);
+                DiagLog.Write($"[wand] preview request target=({mx},{my}) seq={_pendingSeq}");
             }
             return true;
+        }
+
+        public static void PollResult()
+        {
+            if (_pendingMode == 0) return;
+            if (!PlanningJob.TryTakeResult(out string json, out int gx, out int gy, out int seq)) return;
+            if (seq != _pendingSeq) return; // superseded
+            var path = NavCoordinator.ParsePathPublic(json);
+            DiagLog.Write($"[wand] result seq={seq} target=({gx},{gy}) path={path.Count} mode={_pendingMode}");
+            PathVisSystem.SetPlanPath(path, PathPlanner.GetEnvelopeCache());
+            if (_pendingMode == 2)
+            {
+                NavCoordinator.StartToWithPath(gx, gy, path);
+            }
+            _pendingMode = 0;
         }
 
         public override void ModifyTooltips(List<TooltipLine> tooltips)
@@ -83,5 +86,10 @@ namespace TerraBlind
                 .AddTile(TileID.WorkBenches)
                 .Register();
         }
+    }
+
+    public class NavWandPoller : ModSystem
+    {
+        public override void PostUpdateEverything() => NavWand.PollResult();
     }
 }

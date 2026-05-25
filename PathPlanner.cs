@@ -5,8 +5,46 @@ using Terraria;
 
 namespace TerraBlind
 {
+    // Sub-tile horizontal alignment of the player hitbox relative to its tile column cx.
+    // L: hitbox spans (cx-1, cx)  — player flush left
+    // R: hitbox spans (cx, cx+1)  — player flush right
+    // C: hitbox spans (cx-1, cx, cx+1) — crossing a tile boundary
+    public enum SubPx : byte { L = 0, C = 1, R = 2 }
+
     public static class PathPlanner
     {
+        // pixel → SubPx given player position.X and the canonical tile column cx
+        public static SubPx FromPx(float positionX, int cx, int playerW)
+        {
+            int leftCol  = (int)System.Math.Floor(positionX / 16f);
+            int rightCol = (int)System.Math.Floor((positionX + playerW - 1) / 16f);
+            if (leftCol == cx - 1 && rightCol == cx)     return SubPx.L;
+            if (leftCol == cx     && rightCol == cx + 1) return SubPx.R;
+            return SubPx.C; // spanning 3 cols, or anything unexpected
+        }
+
+        // tile columns occupied by the hitbox given the canonical cx and sub-position
+        public static int[] ColsOccupied(int cx, SubPx sub)
+        {
+            switch (sub)
+            {
+                case SubPx.L: return new[] { cx - 1, cx };
+                case SubPx.R: return new[] { cx, cx + 1 };
+                default:      return new[] { cx - 1, cx, cx + 1 };
+            }
+        }
+
+        // canonical px assumption for a non-start node when we need to feed sims a start position
+        public static float CanonicalPx(int cx, SubPx sub, int playerW)
+        {
+            switch (sub)
+            {
+                case SubPx.L: return cx * 16f - (playerW - 16f); // right edge at cx+0.something
+                case SubPx.R: return cx * 16f;                   // left edge at cx
+                default:      return cx * 16f - (playerW / 2f) + 8f; // straddle midline
+            }
+        }
+
         private const int GoalRangeFwd = 60;    // max forward search distance for goal (tiles)
         private const int GoalRangeBack = 60;   // max backward search distance for A* expansion (tiles)
         private const int MinGoalDist = 5;      // minimum distance from player to goal, prevents staying in place
@@ -15,6 +53,7 @@ namespace TerraBlind
         private const int BridgeDtgThresh = 12;
         private const int CanProgressK = 0;     // goal validity: 0 = any standable tile is valid goal
         private const int JumpMinCol = 0;
+        private const int NodeBudget = 15000;  // A* expansion cap — beyond this, return best partial path
         private const float JumpOverheadMax = 4f;    // extra cost for short jumps; full-range jump = 0, min jump = JumpOverheadMax
         private const float BridgeCostBase = 10f;
         private const float BridgeCostPerCol = 4f;
@@ -68,8 +107,9 @@ namespace TerraBlind
         public static List<(int lx, int ly, int hold)> DebugJumpEdges(Player p, int cx, int cy, int sign)
         {
             var result = new List<(int, int, int)>();
-            var edges = BuildJumpEdges(p, cx, cy, sign, cx - 80, cx + 80, cy - 50, cy + 50);
-            foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in edges)
+            SubPx sub = FromPx(p.position.X, cx, p.width);
+            var edges = BuildJumpEdges(p, cx, cy, sub, sign, cx - 80, cx + 80, cy - 50, cy + 50);
+            foreach (var (lx, ly, lsub, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in edges)
                 result.Add((lx, ly, hold));
             return result;
         }
@@ -271,41 +311,22 @@ namespace TerraBlind
             return (BridgeDtgThresh - dtg) * 4;
         }
 
-        private static bool ArcClipsWall(List<PhysicsSimulator.ControlInput> frames,
-            float startPx, float startPy, float startVx, int playerW, int playerH, int holdFrames,
-            PhysicsSimulator.Params ph)
+        // returns list of (landCx, landCy, landSub, frames, holdFrames) for all valid jump outcomes from this tile
+        private static List<(int cx, int cy, SubPx sub, List<PhysicsSimulator.ControlInput> frames, int hold, bool arcClips, int wallFrames, int ceilFrames, float endVx)>
+            BuildJumpEdges(Player p, int cx, int cy, SubPx startSub, int sign, int xMin, int xMax, int yMin, int yMax, float? overrideVx = null)
         {
-            var s = new PhysicsSimulator.State
-            {
-                Px = startPx, Py = startPy,
-                Vx = startVx, Vy = 0f,
-                Grounded = true,
-                JumpFramesLeft = holdFrames,
-            };
-            for (int f = 0; f < frames.Count; f++)
-            {
-                float prevVy = s.Vy;
-                s = PhysicsSimulator.Step(s, frames[f], ph);
-                if (prevVy > 0f) continue;
-                int tileX0 = (int)(s.Px / 16);
-                int tileX1 = (int)((s.Px + playerW - 1) / 16);
-                int tileY0 = (int)(s.Py / 16);
-                for (int tx = tileX0; tx <= tileX1; tx++)
-                    if (IsBlock(tx, tileY0)) return true;
-            }
-            return false;
-        }
-
-        // returns list of (landCx, landCy, frames, holdFrames) for all valid jump outcomes from this tile
-        private static List<(int cx, int cy, List<PhysicsSimulator.ControlInput> frames, int hold, bool arcClips, int wallFrames, int ceilFrames, float endVx)>
-            BuildJumpEdges(Player p, int cx, int cy, int sign, int xMin, int xMax, int yMin, int yMax, float? overrideVx = null)
-        {
-            var results = new List<(int, int, List<PhysicsSimulator.ControlInput>, int, bool, int, int, float)>();
-            var seen = new HashSet<(int, int)>();
+            var results = new List<(int, int, SubPx, List<PhysicsSimulator.ControlInput>, int, bool, int, int, float)>();
+            var seen = new HashSet<(int, int, SubPx)>();
             var ph = PhysicsSimulator.Params.FromPlayer(p);
 
-            float startPx = cx * 16f - (p.width / 2f) + 8f;
-            float startPy = cy * 16f - p.height;
+            // start node uses real player px so the first jump aligns with current pixel position;
+            // other nodes use canonical px derived from sub_px.
+            int playerCx = (int)((p.position.X + p.width / 2f) / 16f);
+            int playerFeetY = (int)((p.position.Y + p.height) / 16f);
+            bool isStartNode = (cx == playerCx && cy == playerFeetY);
+            float startPx = isStartNode ? p.position.X : CanonicalPx(cx, startSub, p.width);
+            // feet rest on the floor at (cy+1)*16 (top of the tile below), so player top is (cy+1)*16 - height
+            float startPy = isStartNode ? p.position.Y : ((cy + 1) * 16f - p.height);
             float startVx = overrideVx ?? sign * ph.MaxRun;
 
             var holdOptions = p.wet && !p.honeyWet && !p.merman ? HoldFrameOptionsWet : HoldFrameOptions;
@@ -327,23 +348,20 @@ namespace TerraBlind
                 if (Math.Abs(lx - cx) < JumpMinCol) continue;
                 if (Math.Abs(lx - cx) <= 2 && Math.Abs(ly - cy) < 2) continue;
                 if (!Standable(lx, ly)) continue;
-                if (seen.Contains((lx, ly))) continue;
-                bool arcClips = ArcClipsWall(result.Frames, startPx, startPy, startVx, p.width, p.height, hold, ph);
-                if (arcClips)
-                {
-                    DiagLog.Write($"[plan] jump edge wallclip src=({cx},{cy}) target=({lx},{ly}) hold={hold}");
-                    continue;
-                }
+                // landing sub_px derived from simulated end position (pixel-accurate)
+                SubPx lsub = FromPx(result.EndState.Px, lx, p.width);
+                if (seen.Contains((lx, ly, lsub))) continue;
+                // SimulateJump uses Terraria.Collision internally → wall-clipped jumps land short and would have been rejected by Standable above.
                 float endVx = result.EndState.Vx;
-                seen.Add((lx, ly));
-                results.Add((lx, ly, result.Frames, hold, arcClips, result.WallContactFrames, result.CeilingContactFrames, endVx));
+                seen.Add((lx, ly, lsub));
+                results.Add((lx, ly, lsub, result.Frames, hold, false, result.WallContactFrames, result.CeilingContactFrames, endVx));
 
-                if (lx != cx && Standable(lx, ly - 1) && !seen.Contains((lx, ly - 1))
+                if (lx != cx && Standable(lx, ly - 1) && !seen.Contains((lx, ly - 1, lsub))
                     && !Solid(lx, ly - 2) && !Solid(lx, ly - 3)
                     && !Solid(lx + (sign > 0 ? 1 : -1), ly - 2) && !Solid(lx + (sign > 0 ? 1 : -1), ly - 3))
                 {
-                    seen.Add((lx, ly - 1));
-                    results.Add((lx, ly - 1, result.Frames, hold, arcClips, result.WallContactFrames, result.CeilingContactFrames, endVx));
+                    seen.Add((lx, ly - 1, lsub));
+                    results.Add((lx, ly - 1, lsub, result.Frames, hold, false, result.WallContactFrames, result.CeilingContactFrames, endVx));
                 }
             }
             return results;
@@ -435,10 +453,18 @@ namespace TerraBlind
             if (IsHalfBrick(pcx, feetY)) feetY--;
             if (!Standable(pcx, feetY))
             {
-                for (int dy = 1; dy <= 3; dy++)
+                // prefer falling to ground (player will land there naturally); only go up if no floor below
+                int found = 0;
+                for (int dy = 1; dy <= 5; dy++)
                 {
-                    if (Standable(pcx, feetY + dy)) { feetY += dy; break; }
-                    if (Standable(pcx, feetY - dy)) { feetY -= dy; break; }
+                    if (Standable(pcx, feetY + dy)) { feetY += dy; found = 1; break; }
+                }
+                if (found == 0)
+                {
+                    for (int dy = 1; dy <= 3; dy++)
+                    {
+                        if (Standable(pcx, feetY - dy)) { feetY -= dy; break; }
+                    }
                 }
             }
 
@@ -510,42 +536,138 @@ namespace TerraBlind
             DiagLog.Write($"[plan] goal=({goalX},{goalY}) goalSet={goalSet.Count} start=({pcx},{feetY})");
 
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            var g = new Dictionary<(int, int, bool), float>();
-            var prev = new Dictionary<(int, int, bool), ((int, int, bool), string, List<PhysicsSimulator.ControlInput>)>();
-            var visited = new HashSet<(int, int, bool)>();
-            var bridgeNodes = new HashSet<(int, int, bool)>();
-            var heap = new PriorityQueue<(int wx, int wy, bool hc), float>();
-            var verifyData = new Dictionary<(int, int, bool), (int hold, float startVx, float endVx, int wallFrames, int ceilFrames)>();
-            var nodeEndVx = new Dictionary<(int, int, bool), float>();
-            var pillarVerifyData = new Dictionary<(int, int, bool), (bool leftClear, bool rightClear, bool centerOnlyClear)>();
-            var mineTilesData = new Dictionary<(int, int, bool), List<(int, int)>>();
-            var mineNodes = new HashSet<(int, int, bool)>();
-            var mineDepth = new Dictionary<(int, int, bool), int>();
+            var g = new Dictionary<(int, int, bool, SubPx), float>();
+            var prev = new Dictionary<(int, int, bool, SubPx), ((int, int, bool, SubPx), string, List<PhysicsSimulator.ControlInput>)>();
+            var visited = new HashSet<(int, int, bool, SubPx)>();
+            var bridgeNodes = new HashSet<(int, int, bool, SubPx)>();
+            var heap = new PriorityQueue<(int wx, int wy, bool hc, SubPx sub), float>();
+            var verifyData = new Dictionary<(int, int, bool, SubPx), (int hold, float startVx, float endVx, int wallFrames, int ceilFrames)>();
+            var nodeEndVx = new Dictionary<(int, int, bool, SubPx), float>();
+            var pillarVerifyData = new Dictionary<(int, int, bool, SubPx), (bool leftClear, bool rightClear, bool centerOnlyClear)>();
+            var mineTilesData = new Dictionary<(int, int, bool, SubPx), List<(int, int)>>();
+            var mineNodes = new HashSet<(int, int, bool, SubPx)>();
+            var mineDepth = new Dictionary<(int, int, bool, SubPx), int>();
             var pillarTopNodes = new HashSet<(int, int)>();
             var plannedStandable = new HashSet<(int, int)>(); // tiles A* assumes will be placed/mined-clear (bridge/pillar/jump_x/jump_y landing/mine air)
             bool IsStandableNode(int wx, int wy) => Standable(wx, wy) || plannedStandable.Contains((wx, wy));
             void AddPlanned(int wx, int wy) => plannedStandable.Add((wx, wy));
+
+            // ─── chunk mining helpers ───
+            const int MineMaxLen = 30;
+
+            // 2-wide vertical shaft. Columns chosen by sub_px.
+            void EmitMineShaftDown(int sx, int sy, bool sHc, SubPx ssub)
+            {
+                int col0 = ssub == SubPx.L ? sx - 1 : sx; // shaft left column
+                int col1 = col0 + 1;                      // shaft right column
+                int curDepth = mineDepth.TryGetValue((sx, sy, sHc, ssub), out var md0) ? md0 : 0;
+                float baseG = g.TryGetValue((sx, sy, sHc, ssub), out var bg0) ? bg0 : float.MaxValue;
+                if (baseG == float.MaxValue) return;
+                var mt = new List<(int, int)>();
+                int ey = sy;
+                for (int k = 1; k <= MineMaxLen; k++)
+                {
+                    int ty = sy + k;
+                    if (ty > yMax) break;
+                    bool anySolid = false;
+                    if (Solid(col0, ty)) { mt.Add((col0, ty)); anySolid = true; }
+                    if (Solid(col1, ty)) { mt.Add((col1, ty)); anySolid = true; }
+                    // hit non-solid floor (platform/halfbrick) → stop, don't break it
+                    if (!anySolid && (Platform(col0, ty) || Platform(col1, ty) || IsHalfBrick(col0, ty) || IsHalfBrick(col1, ty)))
+                    { ey = ty - 1; break; }
+                    if (!anySolid) { ey = ty - 1; break; } // air gap reached, player lands here
+                    ey = ty;
+                    // valid intermediate standable check: player feet at ty, needs floor at ty+1
+                    if (IsFloor(col0, ty + 1) || IsFloor(col1, ty + 1)) { /* this is a standable level we can stop at */ }
+                }
+                if (mt.Count == 0) return;
+                if (ey <= sy) return;
+                // landing tile is ey (player ends up standing at sy + len, sub stays)
+                SubPx esub = ssub;
+                var ekey = (sx, ey, false, esub);
+                float cost = baseG + mt.Count * MineCostPerTile + FallCost;
+                if (cost < g.GetValueOrDefault(ekey, float.MaxValue))
+                {
+                    g[ekey] = cost;
+                    prev[ekey] = ((sx, sy, sHc, ssub), "mine_down", null);
+                    mineTilesData[ekey] = mt;
+                    mineNodes.Add(ekey);
+                    foreach (var (mx, my) in mt) AddPlanned(mx, my);
+                    AddPlanned(sx, ey);
+                    mineDepth[ekey] = curDepth + mt.Count;
+                    heap.Enqueue(ekey, cost + HeuristicWeight * MinDistToGoal(goalSet, sx, ey));
+                }
+            }
+
+            // 3-tall horizontal tunnel.
+            void EmitMineTunnel(int sx, int sy, bool sHc, SubPx ssub, int dxDir)
+            {
+                int curDepth = mineDepth.TryGetValue((sx, sy, sHc, ssub), out var md1) ? md1 : 0;
+                float baseG = g.TryGetValue((sx, sy, sHc, ssub), out var bg1) ? bg1 : float.MaxValue;
+                if (baseG == float.MaxValue) return;
+                var mt = new List<(int, int)>();
+                int ex = sx;
+                for (int k = 1; k <= MineMaxLen; k++)
+                {
+                    int tx = sx + dxDir * k;
+                    if (tx < xMin || tx > xMax) break;
+                    bool anySolid = false;
+                    for (int ddy = 0; ddy <= 2; ddy++)
+                    {
+                        if (Solid(tx, sy - ddy)) { mt.Add((tx, sy - ddy)); anySolid = true; }
+                    }
+                    // need a floor at (tx, sy+1) so player can stand after walking onto tx
+                    if (!IsFloor(tx, sy + 1)) { ex = tx - dxDir; break; }
+                    ex = tx;
+                    if (!anySolid) break; // reached open air, stop tunneling further
+                }
+                if (mt.Count == 0) return;
+                if (ex == sx) return;
+                SubPx esub = dxDir > 0 ? SubPx.R : SubPx.L;
+                var ekey = (ex, sy, false, esub);
+                float cost = baseG + mt.Count * MineCostPerTile + Math.Abs(ex - sx) * MoveCostBase;
+                if (cost < g.GetValueOrDefault(ekey, float.MaxValue))
+                {
+                    g[ekey] = cost;
+                    string act = dxDir > 0 ? "mine_right" : "mine_left";
+                    prev[ekey] = ((sx, sy, sHc, ssub), act, null);
+                    mineTilesData[ekey] = mt;
+                    mineNodes.Add(ekey);
+                    foreach (var (mx, my) in mt) AddPlanned(mx, my);
+                    AddPlanned(ex, sy);
+                    mineDepth[ekey] = curDepth + mt.Count;
+                    heap.Enqueue(ekey, cost + HeuristicWeight * MinDistToGoal(goalSet, ex, sy));
+                }
+            }
             int maxMineDepth = Math.Abs(goalX - pcx) + Math.Abs(goalY - feetY) + 8;
             float startVx = p.velocity.X;
 
-            var startNode = (pcx, feetY, false);
+            SubPx startSub = FromPx(p.position.X, pcx, p.width);
+            var startNode = (pcx, feetY, false, startSub);
+            bool budgetHit = false;
             g[startNode] = 0f;
-            prev[startNode] = ((-1, -1, false), "", null);
-            heap.Enqueue((pcx, feetY, false), HeuristicWeight * MinDistToGoal(goalSet, pcx, feetY));
+            prev[startNode] = ((-1, -1, false, SubPx.C), "", null);
+            heap.Enqueue((pcx, feetY, false, startSub), HeuristicWeight * MinDistToGoal(goalSet, pcx, feetY));
 
             while (heap.Count > 0)
             {
-                var (cx, cy, hc) = heap.Dequeue();
+                var (cx, cy, hc, sub) = heap.Dequeue();
 
-                if (visited.Contains((cx, cy, hc))) continue;
-                visited.Add((cx, cy, hc));
+                if (visited.Contains((cx, cy, hc, sub))) continue;
+                visited.Add((cx, cy, hc, sub));
 
                 if (goalSet.Contains((cx, cy, false)) || goalSet.Contains((cx, cy, true)))
-                    return BuildResult(prev, g, cx, cy, hc, startNode, verifyData, pillarVerifyData, mineTilesData);
+                    return BuildResult(prev, g, cx, cy, hc, sub, startNode, verifyData, pillarVerifyData, mineTilesData);
 
-                float curG = g.TryGetValue((cx, cy, hc), out var cg) ? cg : float.MaxValue;
+                // budget disabled — partial paths cause executor thrash that's worse than the original lag
+                if (visited.Count >= NodeBudget)
+                {
+                    DiagLog.Write($"[plan] WARNING visited={visited.Count} exceeds NodeBudget={NodeBudget} (continuing anyway)");
+                }
 
-                int curMineDepth = mineDepth.TryGetValue((cx, cy, hc), out var md) ? md : 0;
+                float curG = g.TryGetValue((cx, cy, hc, sub), out var cg) ? cg : float.MaxValue;
+
+                int curMineDepth = mineDepth.TryGetValue((cx, cy, hc, sub), out var md) ? md : 0;
                 bool canMineFrom = IsStandableNode(cx, cy) && curMineDepth < maxMineDepth;
                 foreach (var (dx, dy) in new[] { (1,0),(-1,0),(0,1),(0,-1),(1,-1),(-1,-1) })
                 {
@@ -553,40 +675,7 @@ namespace TerraBlind
                     if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) continue;
                     if (dy == -1 && dx == 0) continue;
 
-                    if (Solid(nx, ny))
-                    {
-                        if (!canMineFrom) continue;
-                        if (dy == 1 || (dy == 0 && dx != 0))
-                        {
-                            var mt = new List<(int, int)>();
-                            float mc = 0f;
-                            if (dy == 0)
-                            {
-                                int wallX = dx > 0 ? nx : cx - 2;
-                                for (int ddy = 0; ddy <= 2; ddy++) { if (Solid(wallX, cy - ddy)) { mt.Add((wallX, cy - ddy)); mc += MineCostPerTile; } }
-                                if (mt.Count == 0 || !IsFloor(nx, ny + 1)) continue;
-                            }
-                            else
-                            {
-                                for (int col = cx - 1; col <= cx; col++) { if (Solid(col, ny)) { mt.Add((col, ny)); mc += MineCostPerTile; } }
-                                if (mt.Count == 0) continue;
-                            }
-                            float cost = dy == 1 ? mc + FallCost : mc + MoveCostBase;
-                            float ng = curG + cost;
-                            if (ng < g.GetValueOrDefault((nx, ny, false), float.MaxValue))
-                            {
-                                g[(nx, ny, false)] = ng;
-                                string mineAction = dy == 1 ? "mine_down" : (dx > 0 ? "mine_right" : "mine_left");
-                                prev[(nx, ny, false)] = ((cx, cy, hc), mineAction, null);
-                                mineTilesData[(nx, ny, false)] = mt;
-                                mineNodes.Add((nx, ny, false));
-                                AddPlanned(nx, ny);
-                                mineDepth[(nx, ny, false)] = curMineDepth + 1;
-                                heap.Enqueue((nx, ny, false), ng + HeuristicWeight * MinDistToGoal(goalSet, nx, ny));
-                            }
-                        }
-                        continue;
-                    }
+                    if (Solid(nx, ny)) continue; // shaft/tunnel edges are emitted below as multi-tile chunks
 
                     if (dy == 1 && dx == 0 && (IsBlock(cx, cy + 1) || IsBlock(cx + 1, cy + 1))) continue;
                     if (dy == 1 && dx == 0 && !Standable(nx, ny)) continue;
@@ -597,43 +686,58 @@ namespace TerraBlind
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;
                     float moveCost = dy == 1 ? FallCost : MoveCostBase + dtg;
                     float moveng = curG + moveCost;
-                    if (moveng < g.GetValueOrDefault((nx, ny, false), float.MaxValue))
+                    SubPx mvSub = dx == 0 ? sub : (dx > 0 ? SubPx.R : SubPx.L);
+                    var mvKey = (nx, ny, false, mvSub);
+                    if (moveng < g.GetValueOrDefault(mvKey, float.MaxValue))
                     {
-                        g[(nx, ny, false)] = moveng;
+                        g[mvKey] = moveng;
                         string action = dy == 1 ? "fall" : "move";
-                        prev[(nx, ny, false)] = ((cx, cy, hc), action, null);
-                        heap.Enqueue((nx, ny, false), moveng + HeuristicWeight * MinDistToGoal(goalSet, nx, ny));
+                        prev[mvKey] = ((cx, cy, hc, sub), action, null);
+                        heap.Enqueue(mvKey, moveng + HeuristicWeight * MinDistToGoal(goalSet, nx, ny));
                         if (dy == 0 && dx != 0)
                         {
-                            float curEndVx = nodeEndVx.TryGetValue((cx, cy, hc), out var ev) ? ev : (cx == pcx && cy == feetY ? startVx : sign * ph.MaxRun);
+                            float curEndVx = nodeEndVx.TryGetValue((cx, cy, hc, sub), out var ev) ? ev : (cx == pcx && cy == feetY ? startVx : sign * ph.MaxRun);
                             float nxEndVx = Math.Sign(dx) * Math.Min(Math.Abs(curEndVx) + ph.AccRun, ph.MaxRun);
-                            nodeEndVx[(nx, ny, false)] = nxEndVx;
+                            nodeEndVx[mvKey] = nxEndVx;
                         }
                     }
                 }
 
                 if (canMineFrom && !hc)
                 {
+                    // mine only the columns the hitbox actually occupies (based on sub_px)
                     var mt = new List<(int, int)>();
                     float mc = 0f;
-                    for (int col = cx - 1; col <= cx; col++)
+                    foreach (int col in ColsOccupied(cx, sub))
                         for (int ddy = 1; ddy <= 2; ddy++)
                             if (Solid(col, cy - ddy)) { mt.Add((col, cy - ddy)); mc += MineCostPerTile; }
                     if (mt.Count > 0)
                     {
                         float ng = curG + mc;
-                        if (ng < g.GetValueOrDefault((cx, cy, true), float.MaxValue))
+                        var mkey = (cx, cy, true, sub);
+                        if (ng < g.GetValueOrDefault(mkey, float.MaxValue))
                         {
-                            g[(cx, cy, true)] = ng;
-                            prev[(cx, cy, true)] = ((cx, cy, hc), "mine_up", null);
-                            mineTilesData[(cx, cy, true)] = mt;
-                            heap.Enqueue((cx, cy, true), ng + HeuristicWeight * MinDistToGoal(goalSet, cx, cy));
+                            g[mkey] = ng;
+                            prev[mkey] = ((cx, cy, hc, sub), "mine_up", null);
+                            mineTilesData[mkey] = mt;
+                            heap.Enqueue(mkey, ng + HeuristicWeight * MinDistToGoal(goalSet, cx, cy));
                         }
                     }
                 }
 
-                bool headClear = !Solid(cx - 1, cy - 1) && !Solid(cx - 1, cy - 2) && !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
-                bool canJump = IsStandableNode(cx, cy) && (headClear || hc);
+                // ─── chunk mining: emit one edge per shaft/tunnel rather than per tile ───
+                if (canMineFrom)
+                {
+                    EmitMineShaftDown(cx, cy, hc, sub);
+                    EmitMineTunnel(cx, cy, hc, sub, +1);
+                    EmitMineTunnel(cx, cy, hc, sub, -1);
+                }
+
+                // headClear removed: pixel-accurate collision in SimulateJump filters invalid arcs.
+                // canJump = standable; sim decides if any hold actually lands somewhere valid.
+                bool canJump = IsStandableNode(cx, cy);
+                // legacy compat for pillar / other paths still reading headClear
+                bool headClear = !Solid(cx, cy - 1) && !Solid(cx, cy - 2);
                 if (canJump)
                 {
                     bool isStart = (cx == pcx && cy == feetY);
@@ -642,14 +746,14 @@ namespace TerraBlind
                     {
                         inferredVx = startVx;
                     }
-                    else if (prev.TryGetValue((cx, cy, hc), out var prevEntry))
+                    else if (prev.TryGetValue((cx, cy, hc, sub), out var prevEntry))
                     {
                         string prevAction = prevEntry.Item2;
                         if (prevAction == "pillar" || prevAction.StartsWith("mine_"))
                             inferredVx = 0f;
-                        else if (prevAction == "jump" && verifyData.TryGetValue((cx, cy, false), out var prevVd))
+                        else if (prevAction == "jump" && verifyData.TryGetValue((cx, cy, false, sub), out var prevVd))
                             inferredVx = prevVd.endVx;
-                        else if (prevAction == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var moveEv))
+                        else if (prevAction == "move" && nodeEndVx.TryGetValue((cx, cy, false, sub), out var moveEv))
                             inferredVx = moveEv;
                         else
                             inferredVx = sign * ph.MaxRun; // fall/bridge → Full
@@ -663,8 +767,8 @@ namespace TerraBlind
                     {
                         // if inferred vx opposes jump direction, use 0 (can't instantly reverse)
                         float jumpVx = (inferredVx * jsign >= 0) ? jsign * Math.Abs(inferredVx) : 0f;
-                        var edges = BuildJumpEdges(p, cx, cy, jsign, xMin, xMax, yMin, yMax, jumpVx);
-                        foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in edges)
+                        var edges = BuildJumpEdges(p, cx, cy, sub, jsign, xMin, xMax, yMin, yMax, jumpVx);
+                        foreach (var (lx, ly, lsub, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in edges)
                         {
                             int rise = cy - ly;
                             float riseBonus = Math.Max(0, rise - 1) * 2f;
@@ -674,13 +778,14 @@ namespace TerraBlind
                             float jumpOverhead = JumpOverheadMax * (1f - efficiency);
                             float cost = Math.Max(col + jumpOverhead - riseBonus, 1f);
                             float ng = curG + cost;
-                            if (ng < g.GetValueOrDefault((lx, ly, false), float.MaxValue))
+                            var jkey = (lx, ly, false, lsub);
+                            if (ng < g.GetValueOrDefault(jkey, float.MaxValue))
                             {
-                                g[(lx, ly, false)] = ng;
-                                prev[(lx, ly, false)] = ((cx, cy, hc), "jump", frames);
-                                verifyData[(lx, ly, false)] = (hold, startVx: jumpVx, endVx: endVx, wallFrames, ceilFrames);
+                                g[jkey] = ng;
+                                prev[jkey] = ((cx, cy, hc, sub), "jump", frames);
+                                verifyData[jkey] = (hold, startVx: jumpVx, endVx: endVx, wallFrames, ceilFrames);
                                 float h = HeuristicWeight * MinDistToGoal(goalSet, lx, ly);
-                                heap.Enqueue((lx, ly, false), ng + h);
+                                heap.Enqueue(jkey, ng + h);
                             }
                         }
                     }
@@ -719,16 +824,17 @@ namespace TerraBlind
                             if (!leftClear) continue;
                             if (excludedGoals != null && excludedGoals.Contains((cx, topY))) continue;
                             float cost = curG + 3f + rise * 6f;
-                            if (cost < g.GetValueOrDefault((cx, topY, false), float.MaxValue))
+                            var pkey = (cx, topY, false, sub);
+                            if (cost < g.GetValueOrDefault(pkey, float.MaxValue))
                             {
-                                g[(cx, topY, false)] = cost;
+                                g[pkey] = cost;
                                 pillarTopNodes.Add((cx, topY));
-                                bridgeNodes.Add((cx, topY, false));
+                                bridgeNodes.Add(pkey);
                                 AddPlanned(cx, topY);
-                                prev[(cx, topY, false)] = ((cx, cy, hc), "pillar", null);
-                                pillarVerifyData[(cx, topY, false)] = (leftClear, rightClear, centerOnlyClear);
+                                prev[pkey] = ((cx, cy, hc, sub), "pillar", null);
+                                pillarVerifyData[pkey] = (leftClear, rightClear, centerOnlyClear);
                                 float h = HeuristicWeight * MinDistToGoal(goalSet, cx, topY);
-                                heap.Enqueue((cx, topY, false), cost + h);
+                                heap.Enqueue(pkey, cost + h);
                             }
                         }
                     }
@@ -749,14 +855,16 @@ namespace TerraBlind
                             {
                                 float cost = BridgeCostBase + col * BridgeCostPerCol + BridgePenalty(minDtg);
                                 float ng = curG + cost;
-                                if (ng < g.GetValueOrDefault((nx, cy, false), float.MaxValue))
+                                SubPx bSub = bsign > 0 ? SubPx.R : SubPx.L;
+                                var bkey = (nx, cy, false, bSub);
+                                if (ng < g.GetValueOrDefault(bkey, float.MaxValue))
                                 {
-                                    g[(nx, cy, false)] = ng;
-                                    bridgeNodes.Add((nx, cy, false));
+                                    g[bkey] = ng;
+                                    bridgeNodes.Add(bkey);
                                     AddPlanned(nx, cy);
-                                    prev[(nx, cy, false)] = ((cx, cy, hc), "bridge", null);
+                                    prev[bkey] = ((cx, cy, hc, sub), "bridge", null);
                                     float h = HeuristicWeight * MinDistToGoal(goalSet, nx, cy);
-                                    heap.Enqueue((nx, cy, false), ng + h);
+                                    heap.Enqueue(bkey, ng + h);
                                 }
                             }
                         }
@@ -787,15 +895,17 @@ namespace TerraBlind
                                 if (placeTiles.Count == 0) break; // no platform needed, regular move suffices
                                 float pwCost = col * MoveCostBase + placeTiles.Count * 3f;
                                 float pwNg = curG + pwCost;
-                                if (pwNg < g.GetValueOrDefault((nx, cy, false), float.MaxValue))
+                                SubPx pwSub = bsign > 0 ? SubPx.R : SubPx.L;
+                                var pwkey = (nx, cy, false, pwSub);
+                                if (pwNg < g.GetValueOrDefault(pwkey, float.MaxValue))
                                 {
-                                    g[(nx, cy, false)] = pwNg;
-                                    bridgeNodes.Add((nx, cy, false));
+                                    g[pwkey] = pwNg;
+                                    bridgeNodes.Add(pwkey);
                                     AddPlanned(nx, cy);
-                                    prev[(nx, cy, false)] = ((cx, cy, hc), "platform_walk", null);
-                                    mineTilesData[(nx, cy, false)] = new List<(int, int)>(placeTiles);
+                                    prev[pwkey] = ((cx, cy, hc, sub), "platform_walk", null);
+                                    mineTilesData[pwkey] = new List<(int, int)>(placeTiles);
                                     float h = HeuristicWeight * MinDistToGoal(goalSet, nx, cy);
-                                    heap.Enqueue((nx, cy, false), pwNg + h);
+                                    heap.Enqueue(pwkey, pwNg + h);
                                 }
                                 break;
                             }
@@ -809,19 +919,19 @@ namespace TerraBlind
                     {
                         float inferredVx2;
                         if (cx == pcx && cy == feetY) inferredVx2 = startVx;
-                        else if (prev.TryGetValue((cx, cy, hc), out var pEntry2))
+                        else if (prev.TryGetValue((cx, cy, hc, sub), out var pEntry2))
                         {
                             string pa2 = pEntry2.Item2;
                             if (pa2 == "pillar" || pa2.StartsWith("mine_")) inferredVx2 = 0f;
-                            else if (pa2 == "jump" && verifyData.TryGetValue((cx, cy, false), out var pvd2)) inferredVx2 = pvd2.endVx;
-                            else if (pa2 == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var moveEv2)) inferredVx2 = moveEv2;
+                            else if (pa2 == "jump" && verifyData.TryGetValue((cx, cy, false, sub), out var pvd2)) inferredVx2 = pvd2.endVx;
+                            else if (pa2 == "move" && nodeEndVx.TryGetValue((cx, cy, false, sub), out var moveEv2)) inferredVx2 = moveEv2;
                             else inferredVx2 = jsign * ph.MaxRun;
                         }
                         else inferredVx2 = jsign * ph.MaxRun;
                         float jumpVx2 = (inferredVx2 * jsign >= 0) ? jsign * Math.Abs(inferredVx2) : 0f;
 
-                        var jbEdges = BuildJumpEdges(p, cx, cy, jsign, xMin, xMax, yMin, yMax, jumpVx2);
-                        foreach (var (lx, ly, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in jbEdges)
+                        var jbEdges = BuildJumpEdges(p, cx, cy, sub, jsign, xMin, xMax, yMin, yMax, jumpVx2);
+                        foreach (var (lx, ly, lsub, frames, hold, arcClips, wallFrames, ceilFrames, endVx) in jbEdges)
                         {
                             var placeTiles = new List<(int, int)>();
                             for (int fi = hold; fi < frames.Count; fi++)
@@ -834,15 +944,16 @@ namespace TerraBlind
                             if (placeTiles.Count == 0) continue;
                             float jbCost = Math.Max(Math.Abs(lx - cx) + (JumpOverheadMax * (1f - (float)hold / HoldFrameOptions[HoldFrameOptions.Length - 1])) - Math.Max(0, cy - ly - 1) * 2f, 1f) + placeTiles.Count * 2f;
                             float jbNg = curG + jbCost;
-                            if (jbNg < g.GetValueOrDefault((lx, ly, false), float.MaxValue))
+                            var jbkey = (lx, ly, false, lsub);
+                            if (jbNg < g.GetValueOrDefault(jbkey, float.MaxValue))
                             {
-                                g[(lx, ly, false)] = jbNg;
-                                prev[(lx, ly, false)] = ((cx, cy, hc), "jump_bridge", frames);
-                                verifyData[(lx, ly, false)] = (hold, jumpVx2, endVx, wallFrames, ceilFrames);
-                                mineTilesData[(lx, ly, false)] = placeTiles;
-                                bridgeNodes.Add((lx, ly, false));
+                                g[jbkey] = jbNg;
+                                prev[jbkey] = ((cx, cy, hc, sub), "jump_bridge", frames);
+                                verifyData[jbkey] = (hold, jumpVx2, endVx, wallFrames, ceilFrames);
+                                mineTilesData[jbkey] = placeTiles;
+                                bridgeNodes.Add(jbkey);
                                 AddPlanned(lx, ly);
-                                heap.Enqueue((lx, ly, false), jbNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
+                                heap.Enqueue(jbkey, jbNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
                             }
                         }
                     }
@@ -855,11 +966,11 @@ namespace TerraBlind
                     {
                         float jxStartVx = 0f;
                         if (cx == pcx && cy == feetY) jxStartVx = startVx;
-                        else if (prev.TryGetValue((cx, cy, hc), out var pEntry3))
+                        else if (prev.TryGetValue((cx, cy, hc, sub), out var pEntry3))
                         {
                             string pa3 = pEntry3.Item2;
-                            if (pa3 == "jump_x" && nodeEndVx.TryGetValue((cx, cy, false), out var jxev)) jxStartVx = jxev;
-                            else if (pa3 == "move" && nodeEndVx.TryGetValue((cx, cy, false), out var mev3)) jxStartVx = mev3;
+                            if (pa3 == "jump_x" && nodeEndVx.TryGetValue((cx, cy, false, sub), out var jxev)) jxStartVx = jxev;
+                            else if (pa3 == "move" && nodeEndVx.TryGetValue((cx, cy, false, sub), out var mev3)) jxStartVx = mev3;
                         }
                         if (jxStartVx * jsign < 0) jxStartVx = 0f; // can't instantly reverse
                         var simRes = SimAirJump(ph, cx, cy, jsign, jxStartVx);
@@ -870,16 +981,18 @@ namespace TerraBlind
                         if (!CanPlacePlatformAt(lx, ly)) continue;
                         float jxCost = Math.Abs(lx - cx) + 1f;
                         float jxNg = curG + jxCost;
-                        if (jxNg < g.GetValueOrDefault((lx, ly, false), float.MaxValue))
+                        SubPx jxSub = jsign > 0 ? SubPx.R : SubPx.L;
+                        var jxkey = (lx, ly, false, jxSub);
+                        if (jxNg < g.GetValueOrDefault(jxkey, float.MaxValue))
                         {
-                            g[(lx, ly, false)] = jxNg;
-                            prev[(lx, ly, false)] = ((cx, cy, hc), "jump_x", null);
-                            mineTilesData[(lx, ly, false)] = new List<(int, int)> { (lx, ly) };
-                            nodeEndVx[(lx, ly, false)] = simRes.endVx;
-                            bridgeNodes.Add((lx, ly, false));
+                            g[jxkey] = jxNg;
+                            prev[jxkey] = ((cx, cy, hc, sub), "jump_x", null);
+                            mineTilesData[jxkey] = new List<(int, int)> { (lx, ly) };
+                            nodeEndVx[jxkey] = simRes.endVx;
+                            bridgeNodes.Add(jxkey);
                             pillarTopNodes.Add((lx, ly));
                             AddPlanned(lx, ly);
-                            heap.Enqueue((lx, ly, false), jxNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
+                            heap.Enqueue(jxkey, jxNg + HeuristicWeight * MinDistToGoal(goalSet, lx, ly));
                         }
                     }
                 }
@@ -893,7 +1006,6 @@ namespace TerraBlind
                     {
                         int topY = cy - rise + 1;
                         DiagLog.Write($"[plan] jump_y candidate cx={cx} cy={cy} rise={rise} topY={topY}");
-                        // ensure vertical column clear from cy-1 up to topY-2 (head room while rising)
                         bool clear = true;
                         for (int y = cy - 1; y >= topY - 2; y--)
                         {
@@ -901,66 +1013,67 @@ namespace TerraBlind
                         }
                         if (clear && CanPlacePlatformAt(cx, topY) && topY >= yMin)
                         {
-                            float jyCost = 4f + (cy - topY) * 1.5f; // cheaper than pillar (3 + rise*6)
+                            float jyCost = 4f + (cy - topY) * 1.5f;
                             float jyNg = curG + jyCost;
-                            if (jyNg < g.GetValueOrDefault((cx, topY, false), float.MaxValue))
+                            var jykey = (cx, topY, false, sub);
+                            if (jyNg < g.GetValueOrDefault(jykey, float.MaxValue))
                             {
-                                g[(cx, topY, false)] = jyNg;
-                                prev[(cx, topY, false)] = ((cx, cy, hc), "jump_y", null);
-                                mineTilesData[(cx, topY, false)] = new List<(int, int)> { (cx, topY) };
+                                g[jykey] = jyNg;
+                                prev[jykey] = ((cx, cy, hc, sub), "jump_y", null);
+                                mineTilesData[jykey] = new List<(int, int)> { (cx, topY) };
                                 pillarTopNodes.Add((cx, topY));
-                                bridgeNodes.Add((cx, topY, false));
+                                bridgeNodes.Add(jykey);
                                 AddPlanned(cx, topY);
-                                heap.Enqueue((cx, topY, false), jyNg + HeuristicWeight * MinDistToGoal(goalSet, cx, topY));
+                                heap.Enqueue(jykey, jyNg + HeuristicWeight * MinDistToGoal(goalSet, cx, topY));
                             }
                         }
                     }
                 }
             }
 
-            if (noFallback)
+            if (noFallback && !budgetHit)
             {
                 DiagLog.Write($"[plan] no path to goal visited={visited.Count}");
                 return "{\"path\":[],\"cost\":0}";
             }
-            (int, int, bool) best = startNode;
+            (int, int, bool, SubPx) best = startNode;
             int bestFwd = 0;
             int bestWy = int.MaxValue;
             foreach (var kv in g)
             {
-                var (wx, wy, whc) = kv.Key;
+                var (wx, wy, whc, wsub) = kv.Key;
                 int fwd = sign * (wx - pcx);
                 if (fwd <= 0) continue;
                 if (!Standable(wx, wy)) continue;
-                if (wy < bestWy || (wy == bestWy && fwd > bestFwd)) { bestFwd = fwd; bestWy = wy; best = (wx, wy, whc); }
+                if (wy < bestWy || (wy == bestWy && fwd > bestFwd)) { bestFwd = fwd; bestWy = wy; best = (wx, wy, whc, wsub); }
             }
-            if (best == startNode || bestFwd <= 0)
+            if (best.Equals(startNode) || bestFwd <= 0)
             {
                 DiagLog.Write($"[plan] no usable fallback bestFwd={bestFwd} visited={visited.Count}");
                 DiagLog.WriteEvent($"{{\"e\":\"plan_failed\",\"tick\":{Main.GameUpdateCount},\"reason\":\"no_fallback\",\"px\":{pcx},\"py\":{feetY},\"candidates_rejected\":[]}}");
                 return "{\"path\":[],\"cost\":0}";
             }
             DiagLog.Write($"[plan] fallback→({best.Item1},{best.Item2}) visited={visited.Count}");
-            return BuildResult(prev, g, best.Item1, best.Item2, best.Item3, startNode, verifyData, pillarVerifyData, mineTilesData);
+            return BuildResult(prev, g, best.Item1, best.Item2, best.Item3, best.Item4, startNode, verifyData, pillarVerifyData, mineTilesData);
         }
 
         private static string BuildResult(
-            Dictionary<(int, int, bool), ((int, int, bool), string, List<PhysicsSimulator.ControlInput>)> prev,
-            Dictionary<(int, int, bool), float> g,
-            int wx, int wy, bool hc, (int, int, bool) start,
-            Dictionary<(int, int, bool), (int hold, float startVx, float endVx, int wallFrames, int ceilFrames)> verifyData = null,
-            Dictionary<(int, int, bool), (bool leftClear, bool rightClear, bool centerOnlyClear)> pillarVerifyData = null,
-            Dictionary<(int, int, bool), List<(int, int)>> mineTilesData = null)
+            Dictionary<(int, int, bool, SubPx), ((int, int, bool, SubPx), string, List<PhysicsSimulator.ControlInput>)> prev,
+            Dictionary<(int, int, bool, SubPx), float> g,
+            int wx, int wy, bool hc, SubPx sub, (int, int, bool, SubPx) start,
+            Dictionary<(int, int, bool, SubPx), (int hold, float startVx, float endVx, int wallFrames, int ceilFrames)> verifyData = null,
+            Dictionary<(int, int, bool, SubPx), (bool leftClear, bool rightClear, bool centerOnlyClear)> pillarVerifyData = null,
+            Dictionary<(int, int, bool, SubPx), List<(int, int)>> mineTilesData = null)
         {
-            var path = new List<(int wx, int wy, int swx, int swy, string action, List<PhysicsSimulator.ControlInput> frames)>();
-            var pos = (wx, wy, hc);
-            while (prev.TryGetValue(pos, out var entry) && entry.Item1 != (-1, -1, false))
+            var path = new List<(int wx, int wy, bool hc, SubPx sub, int swx, int swy, SubPx ssub, string action, List<PhysicsSimulator.ControlInput> frames)>();
+            var pos = (wx, wy, hc, sub);
+            while (prev.TryGetValue(pos, out var entry) && !entry.Item1.Equals((-1, -1, false, SubPx.C)))
             {
-                path.Add((pos.Item1, pos.Item2, entry.Item1.Item1, entry.Item1.Item2, entry.Item2, entry.Item3));
+                path.Add((pos.Item1, pos.Item2, pos.Item3, pos.Item4, entry.Item1.Item1, entry.Item1.Item2, entry.Item1.Item4, entry.Item2, entry.Item3));
                 pos = entry.Item1;
             }
             path.Reverse();
-            float cost = g.TryGetValue((wx, wy, hc), out var c) ? c : 0f;
+            float cost = g.TryGetValue((wx, wy, hc, sub), out var c) ? c : 0f;
             var sb = new StringBuilder();
             sb.Append("{\"path\":[");
             for (int i = 0; i < path.Count; i++)
@@ -972,14 +1085,16 @@ namespace TerraBlind
                 if (path[i].action == "pillar" || path[i].action == "jump_x" || path[i].action == "jump_y")
                 {
                     sb.Append(",\"swx\":").Append(path[i].swx)
-                      .Append(",\"swy\":").Append(path[i].swy);
+                      .Append(",\"swy\":").Append(path[i].swy)
+                      .Append(",\"ssub\":").Append((int)path[i].ssub);
                 }
                 if ((path[i].action == "jump" || path[i].action == "jump_bridge") && path[i].frames != null)
                 {
-                    float jumpStartVx = verifyData != null && verifyData.TryGetValue((path[i].wx, path[i].wy, false), out var jvd) ? jvd.startVx : 0f;
+                    float jumpStartVx = verifyData != null && verifyData.TryGetValue((path[i].wx, path[i].wy, false, path[i].sub), out var jvd) ? jvd.startVx : 0f;
                     sb.Append(",\"start_vx\":").Append(jumpStartVx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
                     sb.Append(",\"swx\":").Append(path[i].swx)
-                      .Append(",\"swy\":").Append(path[i].swy);
+                      .Append(",\"swy\":").Append(path[i].swy)
+                      .Append(",\"ssub\":").Append((int)path[i].ssub);
                     sb.Append(",\"frames\":[");
                     var frames = path[i].frames;
                     for (int fi = 0; fi < frames.Count; fi++)
@@ -993,7 +1108,7 @@ namespace TerraBlind
                     }
                     sb.Append("]");
                 }
-                if (path[i].action.StartsWith("mine_") && mineTilesData != null && (mineTilesData.TryGetValue((path[i].wx, path[i].wy, false), out var mt) || mineTilesData.TryGetValue((path[i].wx, path[i].wy, true), out mt)))
+                if (path[i].action.StartsWith("mine_") && mineTilesData != null && (mineTilesData.TryGetValue((path[i].wx, path[i].wy, false, path[i].sub), out var mt) || mineTilesData.TryGetValue((path[i].wx, path[i].wy, true, path[i].sub), out mt)))
                 {
                     sb.Append(",\"mine_tiles\":[");
                     for (int mi = 0; mi < mt.Count; mi++)
@@ -1003,7 +1118,7 @@ namespace TerraBlind
                     }
                     sb.Append("]");
                 }
-                if ((path[i].action == "jump_bridge" || path[i].action == "platform_walk" || path[i].action == "jump_x" || path[i].action == "jump_y") && mineTilesData != null && mineTilesData.TryGetValue((path[i].wx, path[i].wy, false), out var jbpt))
+                if ((path[i].action == "jump_bridge" || path[i].action == "platform_walk" || path[i].action == "jump_x" || path[i].action == "jump_y") && mineTilesData != null && mineTilesData.TryGetValue((path[i].wx, path[i].wy, false, path[i].sub), out var jbpt))
                 {
                     sb.Append(",\"place_tiles\":[");
                     for (int mi = 0; mi < jbpt.Count; mi++)
@@ -1020,9 +1135,9 @@ namespace TerraBlind
             DiagLog.Write($"[plan] path len={path.Count} cost={cost:0.#}");
             foreach (var node in path)
             {
-                if (node.action == "jump" && verifyData != null && verifyData.TryGetValue((node.wx, node.wy, false), out var vd))
+                if (node.action == "jump" && verifyData != null && verifyData.TryGetValue((node.wx, node.wy, false, node.sub), out var vd))
                     DiagLog.Write($"[verify] edge_emit type=jump from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) hold={vd.hold} startVx={vd.startVx:0.##} endVx={vd.endVx:0.##} wall_frames={vd.wallFrames} ceil_frames={vd.ceilFrames} tick={Main.GameUpdateCount}");
-                if (node.action == "pillar" && pillarVerifyData != null && pillarVerifyData.TryGetValue((node.wx, node.wy, false), out var pv))
+                if (node.action == "pillar" && pillarVerifyData != null && pillarVerifyData.TryGetValue((node.wx, node.wy, false, node.sub), out var pv))
                 {
                     int rise = node.swy - node.wy;
                     DiagLog.Write($"[verify] edge_emit type=pillar from=({node.swx},{node.swy}) to=({node.wx},{node.wy}) rise={rise} side=Left left_clear={pv.leftClear} right_clear={pv.rightClear} center_only_clear={pv.centerOnlyClear} tick={Main.GameUpdateCount}");
