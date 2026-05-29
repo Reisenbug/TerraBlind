@@ -76,6 +76,9 @@ namespace TerraBlind
         private static int _jumpSign;
         private static int _jumpAlignTick;
         private const int JumpAlignMax = 120;
+        // max horizontal tile error of predicted landing that still triggers a jump.
+        // must be < landing Dx tolerance (3) so a fired jump lands within accept range.
+        private const int JumpFireDistCx = 1;
         private static int _fixedGoalWx = -1;
         private static int _fixedGoalWy = -1;
 
@@ -1106,7 +1109,10 @@ namespace TerraBlind
                         if (_jumpAlignTick % 30 == 0)
                             DiagLog.Write($"[rt] tick={_jumpAlignTick} bestHold={bestHold} bestSimCx={bestSimCx} bestSimCy={bestSimCy} target=({_target.Wx},{_target.Wy}) bestDistCx={bestDistCx} px={p.position.X:0.#} vx={p.velocity.X:0.##}");
 
-                        if (bestHold == 0 || bestDistCx > 0)
+                        // fire once the predicted landing is within tolerance horizontally; requiring
+                        // exact (==0) deadlocks when no hold can land precisely on the target column
+                        // (e.g. half-brick / odd-distance gaps) — landing Dx tolerance is 3, so 1 is safe.
+                        if (bestHold == 0 || bestDistCx > JumpFireDistCx)
                         {
                             // move to reduce simDist: if sim lands short, move toward target; if overshoots, move back
                             int adjustSign;
