@@ -612,3 +612,38 @@ A* 把 `(2835,L)`/`(2834,R)`/`(2834,C)`/`(2834,L)` 当成 4 个不同节点，
 - A：node key 去掉 sub 维度，挖掘时按进入方向现算占用列（改动大，g/prev/nodeEndVx/verifyData/mineDepth 全部 key 要改）
 - B：禁止纯换 sub 的边（但实测表明边来自 FromPx 映射跳变，非 A* 造边，B 可能不对症）
 - 需进一步确认 cx 该怎么定义（中心格？还是按占用列锚定），未拍板
+
+---
+
+## 2026-05-29 失败盘点 + 水里寻路两个待查问题
+
+### 失败盘点（扫 24M jump_trace.log）
+执行类失败频次：jump deviated 85、jump_x deviated 79、replan storm 88、jump_y deviated 23、JumpAlign timeout 10。
+unreachable 293（多为目标本就不可达，不算执行失败）。
+Replan 按 state：Idle 500、Move 158、Jump 118、JumpX 78、JumpY 21、Bridge 17。
+
+jump deviated 偏离分布：水平 dx 集中在 -2~+1（准），**垂直 dy 严重发散 -30~+21**，
+正偏(够不到掉回下层)与负偏(跳过头)双峰。→ 执行失败大头是垂直高度失控，不是水平。
+
+### 澄清：+8/+9 格 jump 边不是 bug
+原怀疑规划生成超上限(≤7)的跳跃边。核查 PhysicsSimulator.Params.FromPlayer：
+水里 grav=0.1、js=3.005、长按 hold 到 30 帧，**水里确实能跳 8-9 格**，物理建模正确。
+edge_emit 里 +8/+9 边来自水中场景，非陆地乐观误生成。
+（陆地纯 jump 上限由 SimulateJump 的 Landed 隐式约束，无显式 ≤7 常量。）
+
+### 水里待查问题 1：wet 抖动触发 replan 风暴（已确认现象）
+玩家在水面附近，p.wet 在 True/False 间反复抖动，日志大量：
+`[nav] wet changed →True → replan` / `→False → replan` 来回横跳。
+每次 wet 切换都 replan（水陆物理不同需重算），水线边缘抖动 → replan 风暴 → storm。
+候选修法：wet 状态加滞回/去抖，或只在"稳定进入/离开水"时才 replan。
+
+### 水里待查问题 2：模拟物理 ×0.5 是否正确（存疑，需查源码）
+执行期 jump fire 日志：水里 js=6.01 grav=0.2（Player.jumpSpeed / p.gravity 原始值）。
+模拟期 Params.FromPlayer：水里 grav=0.2*0.5=0.1、js=6.01*0.5=3.005（又各打 0.5）。
+疑点：模拟对水里 js/grav 各 ×0.5，是否与 Terraria 引擎实际水中物理一致？
+若不一致 → 水里模拟弧线 ≠ 真实弧线 → 落点偏。
+待办：查反编译源码确认 Terraria 水中 jumpSpeed/gravity 实际作用方式，再定 ×0.5 对错。
+
+### 优先级（数据驱动，未拍板）
+两个水里问题 + 已记录的 FromPx 亚像素问题（见上一条），三者都指向 replan storm。
+FromPx（Move 原地 158 次）与 wet 抖动是 storm 两大来源，建议优先。
