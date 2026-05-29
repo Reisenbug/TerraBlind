@@ -96,9 +96,16 @@ namespace TerraBlind
         // replan loop circuit breaker
         private static int _replanCount = 0;
         private static readonly Queue<int> _replanTicks = new Queue<int>();
-        private const int ReplanWindowFrames = 1800; // 30 sec
-        private const int ReplanWindowMax = 8;       // > 8 replans in 30s = loop
-        private const int ReplanTotalMax = 20;       // hard cap per StartTo session
+        // storm = no net forward progress despite repeated replans. Execution drift
+        // (jump/bridge landing off by a few tiles) replans a lot but keeps inching
+        // forward, so we anchor on position: as long as the player advances
+        // StormMinProgress tiles, the anchor rolls and the window count resets.
+        private const int ReplanWindowFrames = 300;  // 5 sec
+        private const int ReplanWindowMax = 4;        // >=4 replans in window with no progress = storm
+        private const int StormMinProgress = 3;       // tiles; advancing this far resets the storm window
+        private const int ReplanTotalMax = 100;       // absolute hard cap per StartTo session
+        private static int _stormAnchorPcx = 0;
+        private static bool _stormAnchorSet = false;
         public static int ReplanCount => _replanCount;
 
         public static void Start(int sign)
@@ -111,6 +118,7 @@ namespace TerraBlind
                 _blacklist.Clear();
                 _replanCount = 0;
                 _replanTicks.Clear();
+                _stormAnchorSet = false;
                 _asyncReplanInflight = false;
                 _asyncReplanSeq = -1;
                 PlanningJob.Cancel();
@@ -156,6 +164,7 @@ namespace TerraBlind
                 _blacklist.Clear();
                 _replanCount = 0;
                 _replanTicks.Clear();
+                _stormAnchorSet = false;
                 _asyncReplanInflight = false;
                 _asyncReplanSeq = -1;
                 PlanningJob.Cancel();
@@ -186,6 +195,7 @@ namespace TerraBlind
                 _blacklist.Clear();
                 _replanCount = 0;
                 _replanTicks.Clear();
+                _stormAnchorSet = false;
                 _asyncReplanInflight = false;
                 _asyncReplanSeq = -1;
                 PlanningJob.Cancel();
@@ -213,6 +223,7 @@ namespace TerraBlind
                 _blacklist.Clear();
                 _replanCount = 0;
                 _replanTicks.Clear();
+                _stormAnchorSet = false;
                 _asyncReplanInflight = false;
                 _asyncReplanSeq = -1;
                 PlanningJob.Cancel();
@@ -455,19 +466,33 @@ namespace TerraBlind
         {
             if (_fixedPath) { State = NavState.Done; DiagLog.Write("[nav] SetPath done"); return; }
 
-            // circuit breaker: detect replan loop
+            // circuit breaker: storm = repeated replans with no net forward progress.
             int nowTick = (int)Main.GameUpdateCount;
-            _replanTicks.Enqueue(nowTick);
-            while (_replanTicks.Count > 0 && nowTick - _replanTicks.Peek() > ReplanWindowFrames)
-                _replanTicks.Dequeue();
             _replanCount++;
             int pcxBreak = Pcx(p);
             int feetYBreak = FeetY(p);
-            if (_replanTicks.Count > ReplanWindowMax)
+
+            if (!_stormAnchorSet)
             {
-                DiagLog.Write($"[loop] replan storm: {_replanTicks.Count} replans in {ReplanWindowFrames}f at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy}) blacklist=[{string.Join(",", BlacklistSet())}]");
+                _stormAnchorSet = true;
+                _stormAnchorPcx = pcxBreak;
+            }
+            // advanced far enough since the anchor → execution is making progress, roll anchor + reset window
+            if (System.Math.Abs(pcxBreak - _stormAnchorPcx) >= StormMinProgress)
+            {
+                _stormAnchorPcx = pcxBreak;
+                _replanTicks.Clear();
+            }
+
+            _replanTicks.Enqueue(nowTick);
+            while (_replanTicks.Count > 0 && nowTick - _replanTicks.Peek() > ReplanWindowFrames)
+                _replanTicks.Dequeue();
+
+            if (_replanTicks.Count >= ReplanWindowMax)
+            {
+                DiagLog.Write($"[loop] replan storm: {_replanTicks.Count} replans in {ReplanWindowFrames}f, net progress <{StormMinProgress} from anchor {_stormAnchorPcx} at ({pcxBreak},{feetYBreak}) goal=({_fixedGoalWx},{_fixedGoalWy})");
                 State = NavState.Failed;
-                SetFail("replan_storm", $"\"window\":\"window\",\"count\":{_replanTicks.Count},\"tile\":[{pcxBreak},{feetYBreak}]", "replan loop (window)");
+                SetFail("replan_storm", $"\"window\":\"no_progress\",\"count\":{_replanTicks.Count},\"tile\":[{pcxBreak},{feetYBreak}]", "replan loop (no progress)");
                 EmitNavFailed("replan_loop_window", _pathIdx, _target.Action ?? "", pcxBreak, feetYBreak);
                 return;
             }
