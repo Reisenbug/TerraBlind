@@ -325,6 +325,37 @@ namespace TerraBlind
 				MineCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/item_use")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var wxM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wx\"\\s*:\\s*(-?\\d+)");
+				var wyM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wy\"\\s*:\\s*(-?\\d+)");
+				if (wxM.Success && wyM.Success)
+				{
+					var slotM = System.Text.RegularExpressions.Regex.Match(rb, "\"slot\"\\s*:\\s*(-?\\d+)");
+					var durM  = System.Text.RegularExpressions.Regex.Match(rb, "\"duration_ticks\"\\s*:\\s*(\\d+)");
+					ItemUseCoordinator.Start(new ItemUseRequest {
+						TargetWx      = int.Parse(wxM.Groups[1].Value),
+						TargetWy      = int.Parse(wyM.Groups[1].Value),
+						Slot          = slotM.Success ? int.Parse(slotM.Groups[1].Value) : -1,
+						DurationTicks = durM.Success  ? int.Parse(durM.Groups[1].Value)  : 0,
+					});
+					body = "{\"ok\":true}";
+				}
+				else
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /item_use {\\\"target_wx\\\":N,\\\"target_wy\\\":N,\\\"slot\\\":N,\\\"duration_ticks\\\":N}\"}";
+					status = 400;
+				}
+			}
+			else if (path == "/item_use_stop")
+			{
+				ItemUseCoordinator.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/walk_to_edge")
 			{
 				string reqBody;
