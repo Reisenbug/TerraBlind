@@ -677,3 +677,31 @@ NavCoordinator NavState.Jump 的 grounded 起跳判定（~1109 行）：
 起跳判定改为 `bestDistCx <= 落地容差(或一个小阈值如1)` 即可 fire，而非要求 ==0。
 与落地 Deviated 容差对齐，避免"能落、却因门槛过严不敢跳"的死锁。
 注意：半砖在此非直接根因（垂直 bestSimCy 命中正常），但半砖地形更容易撞上"落点差1格"的情形。
+
+---
+
+## 2026-05-29 根因坐实并修复：斜坡落地检测失效导致 Jump 哑死锁
+
+### 复现 + 坐实证据（diag-state 临时日志，连续不变）
+玩家跳过头落到 ◢ 斜坡上 (2750,211)，target=(2747,212) 在背后：
+```
+State=Jump feet=(2750,211) vx=0 vy=0 pathIdx=3 target=(2747,212) stall=0   (持续不变)
+```
+顶着右墙、完全静止、不跳、不 replan、日志不刷新 = 哑死锁。
+
+### 根因
+airborne 落地检测 `if (_prevVY > 0f && grounded)`：要求"上一帧在下落(vy>0)"。
+但 ◢/◣ 斜坡上，Terraria 的 Collision.SlopeCollision 落地时**直接把 vy 吸附归零**，
+没有经历正 vy 的下落帧 → _prevVY>0 永不成立 → 落地永不检测 → 卡在 airborne 分支每帧
+controlRight; return。且 Jump 状态被 stall 检测排除(779行 stalledX 条件)，永不超时 replan → 永久死锁。
+
+### 修复（已验证成功）
+1. 加 `_jumpLeftGround` 标志：airborne 中 vy<0(真离地) 时置真；起跳时重置 false。
+   落地判定改为 `grounded && (_prevVY > 0f || _jumpLeftGround)` —— 斜坡吸附零速也能判落地。
+2. 兜底：grounded 重瞄阶段若 target 落在 _jumpSign 反方向(跳过头/目标在背后) → Replan()，
+   避免实时重瞄只朝 _jumpSign 模拟、永远够不到背后目标的死调。
+
+### 关联坑
+- 斜坡/半砖在 `/state` tile flags 原先不可见(都被标 solid)，本次新增 128 位标记 slope/halfblock，
+  ASCII 调试可见(commit 见 StateSnapshotPlayer)。这是定位本 bug 的前提。
+- 同类已修：起跳门槛 bestDistCx==0 过严(70e20bc/d2edd2d)。两者都属"该跳却卡住"，但机制不同。

@@ -414,6 +414,8 @@ namespace TerraBlind
 							sflags |= 1;
 							if (Main.tileSolid[type]) sflags |= 2;
 								if (Main.tileSolidTop[type]) sflags |= 64;
+							// 128 = slope or half-brick (non-full collision shape); not visible otherwise
+							if ((int)t.Slope != 0 || t.IsHalfBlock) sflags |= 128;
 						}
 						if (t.LiquidAmount > 0)
 						{

@@ -72,6 +72,7 @@ namespace TerraBlind
 
         // realtime jump control state
         private static bool _jumpAirborne;
+        private static bool _jumpLeftGround;   // true once the jump actually left the ground (vy<0 seen)
         private static int _jumpHoldRemaining;
         private static int _jumpSign;
         private static int _jumpAlignTick;
@@ -1057,6 +1058,17 @@ namespace TerraBlind
                             return;
                         }
 
+                        // overshot: landed past the target so it now sits behind _jumpSign.
+                        // the realtime re-aim only simulates jumps in _jumpSign direction, so it can
+                        // never reach a target behind it → silent deadlock (Jump is exempt from stall).
+                        // replan from here instead (A* will route back / find a new path).
+                        if (_target.Wx != pcx && Math.Sign(_target.Wx - pcx) != _jumpSign)
+                        {
+                            DiagLog.Write($"[nav] jump overshoot: target=({_target.Wx},{_target.Wy}) behind jumpSign={_jumpSign} at ({pcx},{feetY}) → replan");
+                            Replan(p);
+                            return;
+                        }
+
                         // try each hold option, pick best landing
                         var ph = PhysicsSimulator.Params.FromPlayer(p);
                         // show target tile in green
@@ -1129,6 +1141,7 @@ namespace TerraBlind
                         // good to jump now
                         DiagLog.Write($"[nav] jump fire vx={p.velocity.X:0.##} hold={bestHold} simDist={bestDist} target=({_target.Wx},{_target.Wy}) js={Player.jumpSpeed:0.###} grav={p.gravity:0.###} maxRun={p.maxRunSpeed:0.###}");
                         _jumpAirborne = true;
+                        _jumpLeftGround = false;
                         _jumpHoldRemaining = bestHold;
                         p.controlJump = true;
                         if (_jumpSign > 0) p.controlRight = true;
@@ -1138,6 +1151,7 @@ namespace TerraBlind
                     else
                     {
                         // airborne phase
+                        if (p.velocity.Y < 0f) _jumpLeftGround = true;
                         if (_jumpHoldRemaining > 0)
                         {
                             p.controlJump = true;
@@ -1146,8 +1160,11 @@ namespace TerraBlind
                         if (_jumpSign > 0) p.controlRight = true;
                         else p.controlLeft = true;
 
-                        // landing detection
-                        if (_prevVY > 0f && grounded)
+                        // landing detection. _prevVY>0 (was falling) catches normal landings, but on
+                        // slopes/special tiles SlopeCollision can zero vy without a positive-vy frame.
+                        // also accept "left the ground earlier and is grounded again" to avoid a silent
+                        // airborne deadlock (Jump state is exempt from the stall detector).
+                        if (grounded && (_prevVY > 0f || _jumpLeftGround))
                         {
                             DiagLog.Write($"[verify] edge_actual type=jump from=({_target.SourceWx},{_target.SourceWy}) to=({_target.Wx},{_target.Wy}) actual_landing=({pcx},{feetY}) tick={Main.GameUpdateCount}");
                             EmitNodeExit(_pathIdx, _target.Action, "done", _target.Wx, _target.Wy, pcx, feetY);
