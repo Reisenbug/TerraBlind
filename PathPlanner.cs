@@ -681,6 +681,10 @@ namespace TerraBlind
                     if (dy == 1 && dx == 0 && !Standable(nx, ny)) continue;
                     if (dy == -1 && !IsFloor(nx, ny + 1)) continue;
                     if (dy == -1 && dx != 0 && !Standable(nx, ny)) continue;
+                    // diagonal-up move climbs ~1 tile via StepUp. Standing on a half-brick the feet
+                    // sit ~0.5 tile lower, so the real climb to a +1 tile becomes ~1.5 tiles which
+                    // StepUp can't do (executor stalls). Skip → A* must use a jump edge instead.
+                    if (dy == -1 && dx != 0 && IsHalfBrick(cx, cy + 1)) continue;
                     if (dy == 0 && dx != 0 && (Solid(nx, ny - 1) || Solid(nx, ny - 2) || Solid(nx + dx, ny - 1) || Solid(nx + dx, ny - 2))) continue;
                     if (dy == 0 && dx != 0 && !IsStandableNode(nx, ny)) continue;
                     int dtg = dx != 0 ? DistToGround(nx, ny) : 0;

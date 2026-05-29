@@ -321,6 +321,9 @@ namespace TerraBlind
         {
             int fy = (int)((p.position.Y + p.height) / 16f);
             while (fy > 0 && PathPlanner.IsBlockPublic(Pcx(p), fy)) fy--;
+            // align with planner: standing on a half-brick, the effective footing is the
+            // empty tile above it (planner does the same), so a "+1 move" stays "+1" for both.
+            if (PathPlanner.IsHalfBrickPublic(Pcx(p), fy)) fy--;
             return fy;
         }
 

@@ -705,3 +705,31 @@ controlRight; return。且 Jump 状态被 stall 检测排除(779行 stalledX 条
 - 斜坡/半砖在 `/state` tile flags 原先不可见(都被标 solid)，本次新增 128 位标记 slope/halfblock，
   ASCII 调试可见(commit 见 StateSnapshotPlayer)。这是定位本 bug 的前提。
 - 同类已修：起跳门槛 bestDistCx==0 过严(70e20bc/d2edd2d)。两者都属"该跳却卡住"，但机制不同。
+
+---
+
+## 2026-05-30 根因坐实并修复：半砖上斜向 move 实为 1.5 格爬升，应改 jump
+
+### 复现 + 坐实（diag-state）
+玩家站半砖 (3381,247，其下 248 是半砖)，goal (3399,241)。卡死：
+```
+State=Move feet=(3381,247) vx=0 vy=0 pathIdx=0 target=(3382,246) act=move stall 反复涨到~50重置
+```
+node[0] `move (3381,247)->(3382,246)` 上升1格(整格坐标)，但执行端顶墙走不上去。
+
+### 根因
+站半砖时脚比站整格低 ~0.5 格(陷进半砖)。到上方 +1 格目标的真实爬升 = 1.5 格。
+move 靠 StepUp 只能上 1 格整 → 上不去 1.5 格。但规划用整格坐标只看到"+1"，
+照样生成 move 边 → 执行 stall 循环。
+
+附带发现：规划端 feetY 与执行端 FeetY() 对半砖处理不一致(规划 line453 feetY--到247，
+执行停在248) → 即使坐标对齐后核心问题仍在(1.5格)。
+
+### 修复（已验证 pass）
+1. NavCoordinator.FeetY()：加 `if (IsHalfBrick(pcx, fy)) fy--`，与规划端对齐(都认半砖上方空格)。
+2. PathPlanner move 展开：斜上 move 若起点下方是半砖 `if (dy==-1 && dx!=0 && IsHalfBrick(cx,cy+1)) continue`
+   → 不生成 move 边，A* 改用 jump 边(jump 能上 1.5 格)。
+
+### 调试关键
+`/state` tile flags 128 位(slope/halfblock)实测打脸两次错误假设：半砖实际位置、目标vs起点下方。
+无实测数据必改错地方。关联 DECISIONS 半砖系列、FromPx 亚像素。
