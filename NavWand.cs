@@ -41,11 +41,12 @@ namespace TerraBlind
 
             if (player.altFunctionUse == 2)
             {
+                // right click = state-space plan + execute (planner manages its own frame replay)
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                _pendingWx = mx; _pendingWy = my; _pendingMode = 2;
-                _pendingSeq = PlanningJob.Request(mx, my);
-                DiagLog.Write($"[wand] exec request target=({mx},{my}) seq={_pendingSeq}");
+                StateSpacePlanner.StopExec();
+                var ssr = StateSpacePlanner.Execute(mx, my);
+                DiagLog.Write($"[wand] ss_exec target=({mx},{my}) found={ssr.Found} frames={ssr.ExecFrames.Count} ms={ssr.Millis:0.#}");
             }
             else
             {
