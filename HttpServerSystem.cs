@@ -767,6 +767,31 @@ namespace TerraBlind
 				var segNodes = NavCoordinator.ParsePathPublic(body);
 				PathVisSystem.SetPlanPath(segNodes, PathPlanner.GetEnvelopeCache());
 			}
+			else if (path == "/ss_plan")
+			{
+				string rbBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					rbBody = sr.ReadToEnd();
+				var rb2 = rbBody.Replace(" ", "");
+				int gx2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gx\":(-?\\d+)").Groups[1].Value);
+				int gy2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gy\":(-?\\d+)").Groups[1].Value);
+				var ssr = StateSpacePlanner.Plan(gx2, gy2);
+				var sb2 = new System.Text.StringBuilder();
+				sb2.Append("{\"found\":").Append(ssr.Found ? "true" : "false");
+				sb2.Append(",\"expansions\":").Append(ssr.Expansions);
+				sb2.Append(",\"millis\":").Append(ssr.Millis.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"path_len\":").Append(ssr.Path.Count);
+				sb2.Append(",\"best_dx\":").Append(ssr.BestDx.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"best_dy\":").Append(ssr.BestDy.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+				sb2.Append(",\"path\":[");
+				for (int i = 0; i < ssr.Path.Count; i++)
+				{
+					if (i > 0) sb2.Append(',');
+					sb2.Append('[').Append((int)ssr.Path[i].px).Append(',').Append((int)ssr.Path[i].py).Append(']');
+				}
+				sb2.Append("]}");
+				body = sb2.ToString();
+			}
 			else if (path == "/debug_waypoints")
 			{
 				string reqBodyW;
