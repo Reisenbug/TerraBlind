@@ -733,3 +733,34 @@ move 靠 StepUp 只能上 1 格整 → 上不去 1.5 格。但规划用整格坐
 ### 调试关键
 `/state` tile flags 128 位(slope/halfblock)实测打脸两次错误假设：半砖实际位置、目标vs起点下方。
 无实测数据必改错地方。关联 DECISIONS 半砖系列、FromPx 亚像素。
+
+---
+
+## 2026-06-01 状态空间物理寻路(取代 grid A* 的新方向)
+
+### 决策
+受够了 grid A* 的半砖/斜坡"修不完"。决定换状态空间物理采样规划:
+node = 真实物理状态(px,py,vx,vy,grounded),扩展 = 枚举输入×PhysicsSimulator 模拟到落地,
+A* + 状态量化去重。消灭"真实→格子→真实"翻译层,半砖/斜坡/亚像素/速度依赖类 bug 根本不存在。
+关键理由:未来玩家机动会增加(钩爪/翅膀/二段跳),状态空间下新机动=多一个输入原语,框架零改动。
+设计文档:PLAN-statespace.md(彻底版)、PLAN-realcoord.md(渐进折中,未采用)。
+
+### 已实现并验证(commits 0eaf248 / 62f5cfb / 853ae30 / bf19001)
+- 规划(StateSpacePlanner.cs):平地 8步1ms;半砖斜坡(grid 曾死循环的 3381->3399)4步0.9ms 零特殊处理。
+- 可视化(PathVisSystem.SetSSPath + DrawDot 小点):探索淡蓝、走路黄、跳跃弧绿、目标红。NavWand 左键=规划+可视化,右键=执行。
+- 执行(StateSpacePlanner.ApplyControls):自管帧重放,逐帧记 drift(规划 vs 实际)。
+- 闭环重规划:drift>24px 且落地时,从真实位置重规划换帧(冷却10帧+上限40防风暴)。
+- 动态 hold:HoldOptions 上限从 Player.jumpHeight 读(非硬编码15),粒度 HoldStep=2。
+
+### 关键发现/踩坑
+- "跳不上"根因(用户实测"frame按少了"):旧 hold 选项 {0,8,12,15} 太粗,需要的高度卡在12-15间无选项→跳不到。细化{0,2,4...maxHold}后解决。
+- 开环重放必漂移:小漂移(5-13px)可接受,但跳跃一旦没还原高度,漂移爆炸(13→200+),后续全崩→必须闭环。
+- 只在落地(velocity.Y==0)重规划:空中不是扩展点,跳到一半重规划没用。
+- Player.jumpHeight 是 static 字段(用 Player.jumpHeight 非 p.jumpHeight)。存疑:配件是否真改这个静态值(源码见 jump=jumpHeight*2/3 倍率在起跳时算),待装跳跃配件实测。
+
+### 待办(Phase 2+)
+- 需要平台的行为:挖掘/搭桥/放平台 作为新输入原语接入(下一步)。
+- 复杂地形性能压测(简单地形ms级,复杂未测,可能慢)。
+- 目标判定边界(站不住的点,如悬空/树上)。
+- 重规划收敛优化(现少量重规划,收敛但非0)。
+- 替换 grid A*(新旧并存对照,稳定后退役)。grid 仍是当前生产寻路。
