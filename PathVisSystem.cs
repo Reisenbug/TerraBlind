@@ -17,7 +17,20 @@ namespace TerraBlind
         private static List<NavNode> _planPath = new();
         private static int[] _planEnvelope;
 
+        // state-space planner viz: per-frame world positions
+        private static List<(float wpx, float wpy, bool isJump)> _ssTrail = new();
+        private static List<(float wpx, float wpy)> _ssExplored = new();
+        private static (float wpx, float wpy)? _ssGoal;
+        private static int _ssTtl = 0;
+
         private static Texture2D _pixel;
+
+        public static void SetSSPath(List<(float wpx, float wpy, bool isJump)> trail,
+                                     List<(float wpx, float wpy)> explored,
+                                     float goalPx, float goalPy, int ttlFrames = 1200)
+        {
+            lock (_lock) { _ssTrail = trail; _ssExplored = explored; _ssGoal = (goalPx, goalPy); _ssTtl = ttlFrames; }
+        }
 
         public static void SetTiles(List<(int wx, int wy, Color color)> tiles, int ttlFrames = 600)
         {
@@ -39,7 +52,7 @@ namespace TerraBlind
 
         public override void PostUpdateEverything()
         {
-            lock (_lock) { if (_ttl > 0) _ttl--; }
+            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; }
         }
 
         public override void PostDrawTiles()
@@ -64,6 +77,19 @@ namespace TerraBlind
             {
                 _pixel = new Texture2D(spriteBatch.GraphicsDevice, 1, 1);
                 _pixel.SetData(new[] { Color.White });
+            }
+
+            // state-space planner visualization (dots): explored dim, walk yellow, jump green, goal red
+            {
+                List<(float, float, bool)> ssTrail; List<(float, float)> ssExp; (float, float)? ssGoal; int ssTtl;
+                lock (_lock) { ssTrail = _ssTrail; ssExp = _ssExplored; ssGoal = _ssGoal; ssTtl = _ssTtl; }
+                if (ssTtl > 0)
+                {
+                    foreach (var (px, py) in ssExp) DrawDot(spriteBatch, px, py, new Color(70, 100, 200, 70));
+                    foreach (var (px, py, isJump) in ssTrail)
+                        DrawDot(spriteBatch, px, py, isJump ? new Color(0, 230, 90, 220) : new Color(255, 220, 0, 200));
+                    if (ssGoal.HasValue) DrawDot(spriteBatch, ssGoal.Value.Item1, ssGoal.Value.Item2, new Color(255, 40, 40, 240));
+                }
             }
 
             var envelope = NavCoordinator.IsActive ? PathPlanner.GetEnvelopeCache() : _planEnvelope;

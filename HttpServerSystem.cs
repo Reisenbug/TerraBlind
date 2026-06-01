@@ -776,6 +776,7 @@ namespace TerraBlind
 				int gx2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gx\":(-?\\d+)").Groups[1].Value);
 				int gy2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gy\":(-?\\d+)").Groups[1].Value);
 				var ssr = StateSpacePlanner.Plan(gx2, gy2);
+				StateSpacePlanner.Visualize(ssr, gx2, gy2);
 				var sb2 = new System.Text.StringBuilder();
 				sb2.Append("{\"found\":").Append(ssr.Found ? "true" : "false");
 				sb2.Append(",\"expansions\":").Append(ssr.Expansions);

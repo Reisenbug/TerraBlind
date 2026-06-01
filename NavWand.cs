@@ -49,11 +49,12 @@ namespace TerraBlind
             }
             else
             {
+                // left click = state-space plan + visualize (runs on main thread, ms-scale)
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                _pendingWx = mx; _pendingWy = my; _pendingMode = 1;
-                _pendingSeq = PlanningJob.Request(mx, my);
-                DiagLog.Write($"[wand] preview request target=({mx},{my}) seq={_pendingSeq}");
+                var ssr = StateSpacePlanner.Plan(mx, my);
+                StateSpacePlanner.Visualize(ssr, mx, my);
+                DiagLog.Write($"[wand] ss_plan target=({mx},{my}) found={ssr.Found} exp={ssr.Expansions} ms={ssr.Millis:0.#} path={ssr.Path.Count} best_dx={ssr.BestDx:0.#} best_dy={ssr.BestDy:0.#}");
             }
             return true;
         }

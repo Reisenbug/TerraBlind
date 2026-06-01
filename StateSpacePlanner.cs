@@ -44,9 +44,18 @@ namespace TerraBlind
             public bool Found;
             public int Expansions;
             public double Millis;
-            public List<(float px, float py)> Path = new();
+            public List<(float px, float py)> Path = new();        // segment landing points
+            public List<PathSeg> Segments = new();                  // per-segment trajectories for viz
             // debug: closest-to-goal state reached during search
             public float BestPx, BestPy, BestDx, BestDy;
+            // debug: all states expanded during search (for visualization)
+            public List<(float px, float py)> Explored = new();
+        }
+
+        public class PathSeg
+        {
+            public bool IsJump;
+            public List<(float px, float py)> Trail = new();        // per-frame positions
         }
 
         // Plan from player's current real state to tile (goalWx, goalWy).
@@ -103,6 +112,7 @@ namespace TerraBlind
                 }
 
                 expansions++;
+                if (res.Explored.Count < 3000) res.Explored.Add((cur.Px, cur.Py)); // cap for viz
                 foreach (var (next, frames, cost) in Expand(cur, ph, goalCx))
                 {
                     var nk = Key(next);
@@ -123,14 +133,27 @@ namespace TerraBlind
             if (found)
             {
                 var k = goalKey;
-                var rev = new List<(float, float)>();
+                var revPts = new List<(float, float)>();
+                var revSegs = new List<PathSeg>();
                 while (came.TryGetValue(k, out var e) && !e.prev.Equals(k))
                 {
-                    rev.Add((e.node.Px, e.node.Py));
+                    revPts.Add((e.node.Px, e.node.Py));
+                    if (e.frames != null)
+                    {
+                        var seg = new PathSeg();
+                        foreach (var fr in e.frames)
+                        {
+                            seg.IsJump |= fr.Jump;
+                            seg.Trail.Add((fr.Px, fr.Py));
+                        }
+                        revSegs.Add(seg);
+                    }
                     k = e.prev;
                 }
-                rev.Reverse();
-                res.Path = rev;
+                revPts.Reverse();
+                revSegs.Reverse();
+                res.Path = revPts;
+                res.Segments = revSegs;
             }
             return res;
         }
@@ -175,6 +198,7 @@ namespace TerraBlind
                 };
                 float prevPx = s.Px;
                 s = PhysicsSimulator.Step(s, input, ph);
+                input.Px = s.Px; input.Py = s.Py; // record per-frame position for viz
                 frames.Add(input);
                 if (!s.Grounded) everAirborne = true;
                 // decision point: landed after being airborne
@@ -209,6 +233,22 @@ namespace TerraBlind
             float dy = MathF.Abs(feetY - goalFeetY);
             // rough frame estimate: horizontal at maxRun, vertical at jump speed
             return dx / MathF.Max(ph.MaxRun, 0.1f) + dy / 5f;
+        }
+
+        // visualize via dots: explored (dim), walk trail (yellow), jump trail (green), goal (red).
+        // coords are converted to (center-x, feet-y) world px so DrawDot lands on the player's feet.
+        public static void Visualize(SSResult res, int goalWx, int goalWy)
+        {
+            const float CX = PhysicsSimulator.PlayerW / 2f, FY = PhysicsSimulator.PlayerH;
+            var trail = new List<(float, float, bool)>();
+            foreach (var seg in res.Segments)
+                foreach (var (px, py) in seg.Trail)
+                    trail.Add((px + CX, py + FY, seg.IsJump));
+            var explored = new List<(float, float)>();
+            foreach (var (px, py) in res.Explored) explored.Add((px + CX, py + FY));
+            float goalPx = goalWx * 16f + 8f;
+            float goalPy = (goalWy + 1) * 16f;
+            PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, ttlFrames: 1200);
         }
     }
 }
