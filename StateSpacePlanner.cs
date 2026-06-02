@@ -57,6 +57,7 @@ namespace TerraBlind
             public List<PhysicsSimulator.ControlInput> ExecFrames = new();
             public float BestPx, BestPy, BestDx, BestDy;
             public List<(float px, float py)> Explored = new();
+            public int GoalWx, GoalWy; // goal after snapping to a standable cell
         }
 
         public class PathSeg
@@ -76,6 +77,8 @@ namespace TerraBlind
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
+            goalWy = SnapGoalToStandable(goalWx, goalWy);
+            res.GoalWx = goalWx; res.GoalWy = goalWy;
             float goalCx = goalWx * 16f + 8f;
             float goalFeetY = (goalWy + 1) * 16f;
 
@@ -139,6 +142,8 @@ namespace TerraBlind
             res.Expansions = expansions;
             res.Millis = sw.Elapsed.TotalMilliseconds;
             res.Found = found;
+            if (!found)
+                DumpTerrain(start, goalWx, goalWy, res.Explored);
             if (found)
             {
                 var k = goalKey;
@@ -191,8 +196,8 @@ namespace TerraBlind
                 foreach (int hold in holdOptions)
                 {
                     var seg = SimulateSegment(cur, dir, hold, ph);
-                    if (seg.HasValue)
-                        yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count);
+                    if (!seg.HasValue) continue;
+                    yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count);
                 }
             }
         }
@@ -233,6 +238,65 @@ namespace TerraBlind
             return (node, frames);
         }
 
+        // A goal cell the player can't stand on (floating, no floor underneath) is unreachable, and the search
+        // burns its whole budget trying. Drop the goal down to the first standable cell so any click resolves
+        // to "go near there" instead of hanging on an impossible target.
+        const int GoalSnapMaxDrop = 40;
+        static int SnapGoalToStandable(int gx, int gy)
+        {
+            for (int d = 0; d <= GoalSnapMaxDrop; d++)
+            {
+                int y = gy + d;
+                if (PathPlanner.IsFloorPublic(gx, y + 1) && !PathPlanner.IsBlockPublic(gx, y))
+                {
+                    if (d > 0) DiagLog.Write($"[ss-snap] goal ({gx},{gy}) floating → ({gx},{y}) drop={d}");
+                    return y;
+                }
+            }
+            return gy;
+        }
+
+        // Temporary failure diagnostic: ASCII map of the start↔goal region with the explored frontier overlaid,
+        // to see why a plan that should exist wasn't found. '@'=start 'G'=goal '#'=solid '='=platform
+        // '/'=slope/halfbrick '*'=explored-air '.'=air
+        static void DumpTerrain(SSNode start, int goalWx, int goalWy, List<(float px, float py)> explored)
+        {
+            int sx = (int)((start.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+            int sy = (int)((start.Py + PhysicsSimulator.PlayerH) / 16f);
+            int minX = Math.Min(sx, goalWx) - 6, maxX = Math.Max(sx, goalWx) + 6;
+            int minY = Math.Min(sy, goalWy) - 4, maxY = Math.Max(sy, goalWy) + 4;
+            if (maxX - minX > 80) maxX = minX + 80;
+            if (maxY - minY > 40) maxY = minY + 40;
+
+            var exp = new HashSet<(int, int)>();
+            foreach (var (px, py) in explored)
+                exp.Add(((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH) / 16f)));
+
+            DiagLog.Write($"[ss-map] FAIL start=({sx},{sy}) goal=({goalWx},{goalWy}) region x[{minX},{maxX}] y[{minY},{maxY}]");
+            for (int y = minY; y <= maxY; y++)
+            {
+                var sb = new System.Text.StringBuilder();
+                for (int x = minX; x <= maxX; x++)
+                {
+                    char c;
+                    if (x == sx && y == sy) c = '@';
+                    else if (x == goalWx && y == goalWy) c = 'G';
+                    else if (PathPlanner.IsBlockPublic(x, y)) c = '#';
+                    else if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) c = ' ';
+                    else
+                    {
+                        var t = Main.tile[x, y];
+                        if (t.HasTile && Terraria.ID.TileID.Sets.Platforms[t.TileType]) c = '=';
+                        else if (t.HasTile && ((int)t.Slope != 0 || t.IsHalfBlock)) c = '/';
+                        else if (exp.Contains((x, y))) c = '*';
+                        else c = '.';
+                    }
+                    sb.Append(c);
+                }
+                DiagLog.Write($"[ss-map] {y,5} {sb}");
+            }
+        }
+
         static bool ReachedGoal(SSNode s, float goalCx, float goalFeetY)
         {
             float cx = s.Px + PhysicsSimulator.PlayerW / 2f;
@@ -258,8 +322,8 @@ namespace TerraBlind
                     trail.Add((px + CX, py + FY, seg.IsJump));
             var explored = new List<(float, float)>();
             foreach (var (px, py) in res.Explored) explored.Add((px + CX, py + FY));
-            float goalPx = goalWx * 16f + 8f;
-            float goalPy = (goalWy + 1) * 16f;
+            float goalPx = res.GoalWx * 16f + 8f;
+            float goalPy = (res.GoalWy + 1) * 16f;
             PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, ttlFrames: 1200);
         }
 
@@ -285,7 +349,7 @@ namespace TerraBlind
             if (!res.Found || res.ExecFrames.Count == 0) { StopExec(); return res; }
             _execFrames = res.ExecFrames;
             _execIdx = 0;
-            _execGoalWx = goalWx; _execGoalWy = goalWy;
+            _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
             _replanCount = 0;
             return res;
