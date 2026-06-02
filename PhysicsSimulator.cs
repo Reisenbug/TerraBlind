@@ -70,6 +70,8 @@ namespace TerraBlind
         {
             public bool Left, Right, Jump;
             public float Px, Py; // player position (top-left px) after this frame
+            public bool Place;   // place a platform this frame (execution-only; ignored by Step)
+            public int PlaceCx, PlaceCy;
         }
 
         public struct SimResult

@@ -82,6 +82,9 @@ namespace TerraBlind
             float goalCx = goalWx * 16f + 8f;
             float goalFeetY = (goalWy + 1) * 16f;
 
+            int platformSlot = NavCoordinator.FindPlatformSlot(p);
+            int platformTile = platformSlot >= 0 ? p.inventory[platformSlot].createTile : -1;
+
             var start = new SSNode
             {
                 Px = p.position.X, Py = p.position.Y,
@@ -125,7 +128,7 @@ namespace TerraBlind
 
                 expansions++;
                 if (res.Explored.Count < 3000) res.Explored.Add((cur.Px, cur.Py));
-                foreach (var (next, frames, cost) in Expand(cur, ph, goalCx, holdOptions))
+                foreach (var (next, frames, cost) in Expand(cur, ph, goalCx, holdOptions, platformTile))
                 {
                     var nk = Key(next);
                     float ng = curG + cost;
@@ -186,7 +189,7 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost)> Expand(
-            SSNode cur, PhysicsSimulator.Params ph, float goalCx, int[] holdOptions)
+            SSNode cur, PhysicsSimulator.Params ph, float goalCx, int[] holdOptions, int platformTile)
         {
             if (!cur.Grounded) yield break;
 
@@ -198,8 +201,95 @@ namespace TerraBlind
                     var seg = SimulateSegment(cur, dir, hold, ph);
                     if (!seg.HasValue) continue;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count);
+
+                    if (platformTile >= 0)
+                    {
+                        var jp = JumpPlace(cur, dir, hold, ph, platformTile);
+                        if (jp.HasValue)
+                            yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost);
+                    }
                 }
             }
+        }
+
+        const float JumpPlaceCost = 30f; // bias: prefer plain walk/jump; place only when it opens a path
+
+        // "Jump and place one platform": jump (hold), scan the arc for the FIRST frame where the foot cell is
+        // empty + adjacent to real support (cliff/wall), place a platform there, and land on it. One placement
+        // per jump, placed tile is NOT stored in the node (node stays pure physics) — the landing node simply
+        // stands on the new platform's top, supported by real terrain. Covers "hug a wall/block and jump-place
+        // upward". Pure open-air pillaring (placement supported only by prior placements) is left to the macro.
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlace(
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
+        {
+            if (hold == 0) return null; // need to leave the ground
+
+            // simulate the free arc to find where to place
+            var s = new PhysicsSimulator.State
+            {
+                Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy,
+                Grounded = true, JumpFramesLeft = hold,
+            };
+            int placeCx = int.MinValue, placeCy = 0;
+            for (int f = 0; f < MaxSegFrames; f++)
+            {
+                var input = new PhysicsSimulator.ControlInput { Right = dir > 0, Left = dir < 0, Jump = f < hold };
+                s = PhysicsSimulator.Step(s, input, ph);
+                if (f < hold) continue; // only consider placing after the hold phase (descending/apex)
+                int fcx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+                int fcy = (int)((s.Py + PhysicsSimulator.PlayerH + 1f) / 16f); // foot cell
+                if (CanPlaceReal(fcx, fcy)) { placeCx = fcx; placeCy = fcy; break; }
+            }
+            if (placeCx == int.MinValue) return null;
+
+            // re-simulate with the platform present so native collision lands the player on it
+            var seg = SimulateWithPlatform(cur, dir, hold, ph, placeCx, placeCy, platformTile);
+            if (!seg.HasValue || !seg.Value.node.Grounded) return null;
+            MarkPlaceFrame(seg.Value.frames, placeCx, placeCy);
+            return seg.Value;
+        }
+
+        // target cell empty (or cuttable) + at least one real neighbor gives support (block or background wall)
+        static bool CanPlaceReal(int wx, int wy)
+        {
+            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            var t = Main.tile[wx, wy];
+            if (t.HasTile && !Main.tileCut[t.TileType]) return false;
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int nx = wx + dx, ny = wy + dy;
+                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                    var nb = Main.tile[nx, ny];
+                    if (nb.HasTile || nb.WallType > 0) return true;
+                }
+            return false;
+        }
+
+        // Temp-write one platform tile into Main.tile, simulate the jump, restore. The placed tile is not kept
+        // in the node — it exists only for this segment's landing physics (the new node simply stands on top).
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateWithPlatform(
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int cx, int cy, int platformTile)
+        {
+            var t = Main.tile[cx, cy];
+            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
+            var oSlope = t.Slope;
+            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
+            try { return SimulateSegment(cur, dir, hold, ph); }
+            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
+        }
+
+        // Tag the apex frame for placement: at the apex the player is near-motionless, so stalling there to
+        // await UseItem won't drop the player past the platform; the descent then lands cleanly on it.
+        static void MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
+        {
+            int idx = 0;
+            float minPy = float.MaxValue;
+            for (int i = 0; i < frames.Count; i++)
+                if (frames[i].Py < minPy) { minPy = frames[i].Py; idx = i; }
+            var fr = frames[idx];
+            fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
+            frames[idx] = fr;
         }
 
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
@@ -322,9 +412,11 @@ namespace TerraBlind
                     trail.Add((px + CX, py + FY, seg.IsJump));
             var explored = new List<(float, float)>();
             foreach (var (px, py) in res.Explored) explored.Add((px + CX, py + FY));
+            var placed = new List<(int, int)>();
+            foreach (var fr in res.ExecFrames) if (fr.Place) placed.Add((fr.PlaceCx, fr.PlaceCy));
             float goalPx = res.GoalWx * 16f + 8f;
             float goalPy = (res.GoalWy + 1) * 16f;
-            PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, ttlFrames: 1200);
+            PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, placed, ttlFrames: 1200);
         }
 
         // ── execution ──
@@ -336,6 +428,8 @@ namespace TerraBlind
         static int _replanCooldownLeft;
         static int _replanCount;
         const int MaxReplans = 40;
+        static int _placeStall;
+        const int PlaceStallMax = 60;
 
         public static bool IsActive => _execFrames != null && _execIdx < _execFrames.Count;
 
@@ -352,6 +446,7 @@ namespace TerraBlind
             _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
             _replanCount = 0;
+            _placeStall = 0;
             return res;
         }
 
@@ -366,6 +461,7 @@ namespace TerraBlind
             _execFrames = res.ExecFrames;
             _execIdx = 0;
             _replanCooldownLeft = ReplanCooldown;
+            _placeStall = 0;
             return true;
         }
 
@@ -398,10 +494,48 @@ namespace TerraBlind
                 if (Replan("drift")) return;
             }
 
+            if (f.Place && !TilePlaced(f.PlaceCx, f.PlaceCy))
+            {
+                if (_placeStall == 0) DiagLog.Write($"[ss-place] frame={_execIdx} tile=({f.PlaceCx},{f.PlaceCy})");
+                _placeStall++;
+                if (_placeStall <= PlaceStallMax)
+                {
+                    if (f.Left) p.controlLeft = true;
+                    if (f.Right) p.controlRight = true;
+                    if (f.Jump) p.controlJump = true;
+                    EmitPlace(p, f.PlaceCx, f.PlaceCy);
+                    return; // stall here until the platform exists
+                }
+                DiagLog.Write($"[ss-place] FAILED tile=({f.PlaceCx},{f.PlaceCy}) after {PlaceStallMax}f → replan");
+                _placeStall = 0;
+                if (Replan("place_failed")) return;
+                StopExec();
+                return;
+            }
+            if (f.Place) { DiagLog.Write($"[ss-place] done tile=({f.PlaceCx},{f.PlaceCy})"); _placeStall = 0; }
+
             if (f.Left) p.controlLeft = true;
             if (f.Right) p.controlRight = true;
             if (f.Jump) p.controlJump = true;
             _execIdx++;
+        }
+
+        static bool TilePlaced(int cx, int cy)
+        {
+            if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
+            return Main.tile[cx, cy].HasTile;
+        }
+
+        static void EmitPlace(Player p, int cx, int cy)
+        {
+            int slot = NavCoordinator.FindPlatformSlot(p);
+            if (slot < 0) return;
+            p.selectedItem = slot;
+            Main.SmartCursorWanted_Mouse = false; // SmartCursor would retarget the cursor away from PlaceCx/Cy
+            if (p.itemTime > 0) return; // mid-swing; wait for cooldown before re-firing
+            Main.mouseX = (int)(cx * 16f + 8f - Main.screenPosition.X);
+            Main.mouseY = (int)(cy * 16f + 8f - Main.screenPosition.Y);
+            p.controlUseItem = true;
         }
     }
 }
