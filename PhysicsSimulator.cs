@@ -136,7 +136,9 @@ namespace TerraBlind
 
             if (input.Jump && jfl > 0)
             {
-                vy = -ph.JumpSpeed;
+                // Terraria's hold phase rises at jumpSpeed - gravity (a constant 4.61 for bare player),
+                // not the raw jumpSpeed; the gravity term is already folded in, not applied per-frame.
+                vy = -(ph.JumpSpeed - ph.Gravity);
                 jfl--;
             }
             else
