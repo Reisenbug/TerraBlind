@@ -40,12 +40,17 @@ namespace TerraBlind
             public override int GetHashCode() => HashCode.Combine(Cx, Cy, G);
         }
 
-        static CellKey Cell(SSNode s) => new CellKey
+        // The standing cell is the AIR cell the player's feet occupy (one above the support), matching the
+        // distance field's CoarseStand convention. -1 pulls a foot resting exactly on a block top (feetY at the
+        // block's top edge) up into that air cell instead of the block row itself.
+        static (int cx, int cy) StandCell(float px, float py)
+            => ((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f));
+
+        static CellKey Cell(SSNode s)
         {
-            Cx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f),
-            Cy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f),
-            G = s.Grounded,
-        };
+            var (cx, cy) = StandCell(s.Px, s.Py);
+            return new CellKey { Cx = cx, Cy = cy, G = s.Grounded };
+        }
 
         struct Label { public float G, Vx, Vy; }
 
@@ -102,9 +107,18 @@ namespace TerraBlind
             int platformSlot = NavCoordinator.FindPlatformSlot(p);
             int platformTile = platformSlot >= 0 ? p.inventory[platformSlot].createTile : -1;
 
-            int spx = (int)((p.position.X + PhysicsSimulator.PlayerW / 2f) / 16f);
-            int spy = (int)((p.position.Y + PhysicsSimulator.PlayerH) / 16f);
-            _distField = BuildDistField(goalWx, goalWy, spx, spy, platformTile >= 0);
+            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+
+            var blocks = BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
+            if (blocks != null)
+            {
+                var bd = new System.Text.StringBuilder();
+                foreach (var b in blocks) bd.Append($" {b.Kind}({b.FromCx},{b.FromCy}->{b.ToCx},{b.ToCy})");
+                DiagLog.Write($"[ss-blocks] n={blocks.Count}{bd}");
+                VisualizeBlocks(blocks);
+            }
+            else DiagLog.Write($"[ss-blocks] null start=({spx},{spy}) inField={_distField.ContainsKey((spx, spy))} fieldSize={_distField.Count} near={string.Join(";", System.Linq.Enumerable.Take(System.Linq.Enumerable.Where(_distField.Keys, k => Math.Abs(k.Item1 - spx) <= 1), 6))}");
 
             var start = new SSNode
             {
@@ -214,8 +228,7 @@ namespace TerraBlind
         {
             try
             {
-                int sx = (int)((start.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
-                int sy = (int)((start.Py + PhysicsSimulator.PlayerH) / 16f);
+                var (sx, sy) = StandCell(start.Px, start.Py);
                 int minX = Math.Min(sx, goalWx) - 8, maxX = Math.Max(sx, goalWx) + 8;
                 int minY = Math.Min(sy, goalWy) - 8, maxY = Math.Max(sy, goalWy) + 8;
 
@@ -511,8 +524,7 @@ namespace TerraBlind
         // '/'=slope/halfbrick '*'=explored-air '.'=air
         static void DumpTerrain(SSNode start, int goalWx, int goalWy, List<(float px, float py)> explored)
         {
-            int sx = (int)((start.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
-            int sy = (int)((start.Py + PhysicsSimulator.PlayerH) / 16f);
+            var (sx, sy) = StandCell(start.Px, start.Py);
             int minX = Math.Min(sx, goalWx) - 6, maxX = Math.Max(sx, goalWx) + 6;
             int minY = Math.Min(sy, goalWy) - 4, maxY = Math.Max(sy, goalWy) + 4;
             if (maxX - minX > 80) maxX = minX + 80;
@@ -520,7 +532,7 @@ namespace TerraBlind
 
             var exp = new HashSet<(int, int)>();
             foreach (var (px, py) in explored)
-                exp.Add(((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH) / 16f)));
+                exp.Add(StandCell(px, py));
 
             DiagLog.Write($"[ss-map] FAIL start=({sx},{sy}) goal=({goalWx},{goalWy}) region x[{minX},{maxX}] y[{minY},{maxY}]");
             for (int y = minY; y <= maxY; y++)
@@ -564,8 +576,7 @@ namespace TerraBlind
         {
             if (_distField != null)
             {
-                int cx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
-                int cy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f);
+                var (cx, cy) = StandCell(s.Px, s.Py);
                 if (_distField.TryGetValue((cx, cy), out int dstep))
                     return dstep * DistStepCost;
             }
@@ -587,47 +598,91 @@ namespace TerraBlind
             return PathPlanner.IsFloorPublic(cx, cy + 1);
         }
 
-        // Reverse BFS from goal over standable cells; edges = walk/step, jump-up, fall, and (if has platforms)
-        // build-up to an empty cell above. Gives every cell a coarse step-distance to the goal that the
-        // state-space heuristic follows downhill — steering it around walls and toward climbs.
-        static Dictionary<(int, int), int> BuildDistField(int gx, int gy, int sx, int sy, bool canBuild)
+        public enum BlockKind { Walk, PillarUp, DropDown, JumpAcross }
+
+        public struct Block
         {
-            int minX = Math.Min(gx, sx) - 12, maxX = Math.Max(gx, sx) + 12;
-            int minY = Math.Min(gy, sy) - 30, maxY = Math.Max(gy, sy) + 12;
+            public BlockKind Kind;
+            public int FromCx, FromCy, ToCx, ToCy;
+        }
 
-            var dist = new Dictionary<(int, int), int>();
-            var q = new Queue<(int, int)>();
-            dist[(gx, gy)] = 0;
-            q.Enqueue((gx, gy));
-
-            while (q.Count > 0)
+        // Macro layer: descend the distance field from start to goal, then merge the cell path into a short
+        // sequence of action blocks (walk runs, pillar climbs, drops, gap jumps). The bot decides "what to do
+        // roughly where" here — cheap, grid-level — and leaves precise frames to the micro (state-space) layer.
+        public static List<Block> BuildBlockPlan(int sx, int sy, int gx, int gy, Dictionary<(int, int), int> dist)
+        {
+            var path = new List<(int x, int y)>();
+            var cur = (sx, sy);
+            if (!dist.ContainsKey(cur)) return null;
+            path.Add(cur);
+            var seen = new HashSet<(int, int)> { cur };
+            for (int step = 0; step < 400 && cur != (gx, gy); step++)
             {
-                var (cx, cy) = q.Dequeue();
-                int nd = dist[(cx, cy)] + 1;
-
-                void Try(int nx, int ny)
-                {
-                    if (nx < minX || nx > maxX || ny < minY || ny > maxY) return;
-                    if (dist.ContainsKey((nx, ny))) return;
-                    if (!CoarseStand(nx, ny)) return;
-                    dist[(nx, ny)] = nd;
-                    q.Enqueue((nx, ny));
-                }
-
-                // reverse edges: a neighbor that could REACH (cx,cy) forward. Symmetric-enough for coarse use.
+                int bestD = dist[cur]; (int, int) best = cur;
                 for (int dx = -CoarseJumpSpan; dx <= CoarseJumpSpan; dx++)
-                {
-                    if (dx == 0) continue;
                     for (int dy = -CoarseJumpUp; dy <= CoarseJumpUp; dy++)
-                        Try(cx + dx, cy + dy);
-                }
-                Try(cx, cy - 1); Try(cx, cy + 1);
-
-                if (canBuild)
-                    for (int dy = 1; dy <= CoarseJumpUp; dy++)
-                        Try(cx, cy + dy); // could pillar up from below
+                    {
+                        var n = (cur.Item1 + dx, cur.Item2 + dy);
+                        if (seen.Contains(n)) continue;
+                        if (dist.TryGetValue(n, out int dn) && dn < bestD) { bestD = dn; best = n; }
+                    }
+                if (best == cur) break;
+                cur = best; seen.Add(cur); path.Add(cur);
             }
-            return dist;
+
+            var blocks = new List<Block>();
+            int i = 0;
+            while (i < path.Count - 1)
+            {
+                var (x0, y0) = path[i];
+                var (x1, y1) = path[i + 1];
+                int dyStep = y1 - y0;
+                BlockKind kind;
+                if (dyStep <= -2) kind = BlockKind.PillarUp;
+                else if (dyStep >= 3) kind = BlockKind.DropDown;
+                else if (Math.Abs(x1 - x0) >= 3 && dyStep > -2 && dyStep < 3 && !CoarseStand((x0 + x1) / 2, Math.Max(y0, y1))) kind = BlockKind.JumpAcross;
+                else kind = BlockKind.Walk;
+
+                int j = i + 1;
+                while (j < path.Count - 1)
+                {
+                    var (ax, ay) = path[j];
+                    var (bx, by) = path[j + 1];
+                    int d2 = by - ay;
+                    BlockKind k2 = d2 <= -2 ? BlockKind.PillarUp : (d2 >= 3 ? BlockKind.DropDown : BlockKind.Walk);
+                    if (k2 != kind && !(kind == BlockKind.JumpAcross && k2 == BlockKind.Walk)) break;
+                    j++;
+                }
+                blocks.Add(new Block { Kind = kind, FromCx = x0, FromCy = y0, ToCx = path[j].x, ToCy = path[j].y });
+                i = j;
+            }
+            return blocks;
+        }
+
+        static void VisualizeBlocks(List<Block> blocks)
+        {
+            var tiles = new List<(int, int, Microsoft.Xna.Framework.Color)>();
+            var labels = new List<(int, int, string, Microsoft.Xna.Framework.Color)>();
+            foreach (var b in blocks)
+            {
+                var col = b.Kind switch
+                {
+                    BlockKind.Walk => new Microsoft.Xna.Framework.Color(255, 230, 0, 120),
+                    BlockKind.PillarUp => new Microsoft.Xna.Framework.Color(180, 120, 255, 140),
+                    BlockKind.DropDown => new Microsoft.Xna.Framework.Color(0, 200, 255, 120),
+                    _ => new Microsoft.Xna.Framework.Color(255, 100, 0, 140),
+                };
+                int steps = Math.Max(Math.Abs(b.ToCx - b.FromCx), Math.Abs(b.ToCy - b.FromCy));
+                for (int s = 0; s <= steps; s++)
+                {
+                    int x = steps == 0 ? b.FromCx : b.FromCx + (b.ToCx - b.FromCx) * s / steps;
+                    int y = steps == 0 ? b.FromCy : b.FromCy + (b.ToCy - b.FromCy) * s / steps;
+                    tiles.Add((x, y, col));
+                }
+                labels.Add((b.FromCx, b.FromCy, b.Kind.ToString().Substring(0, 1), Microsoft.Xna.Framework.Color.White));
+            }
+            PathVisSystem.SetTiles(tiles, 1200);
+            PathVisSystem.SetLabels(labels, 1200);
         }
 
         public static void Visualize(SSResult res, int goalWx, int goalWy)
@@ -661,6 +716,27 @@ namespace TerraBlind
         public static bool IsActive => _execFrames != null && _execIdx < _execFrames.Count;
 
         public static void StopExec() { _execFrames = null; _execIdx = 0; }
+
+        // PROTOTYPE: build the maze field + macro block plan, and if the first block is a vertical climb, hand it
+        // straight to the legacy pillar-jump executor (no physics A*). Validates maze-block → pillarjump chain.
+        public static void ExecBlocks(int goalWx, int goalWy)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return;
+            goalWy = SnapGoalToStandable(goalWx, goalWy);
+            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            var blocks = BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
+            if (blocks == null || blocks.Count == 0) { DiagLog.Write("[ss-execblk] no blocks"); return; }
+            var b0 = blocks[0];
+            DiagLog.Write($"[ss-execblk] first={b0.Kind}({b0.FromCx},{b0.FromCy}->{b0.ToCx},{b0.ToCy})");
+            if (b0.Kind == BlockKind.PillarUp)
+            {
+                bool dirRight = b0.ToCx >= b0.FromCx;
+                SkillExecutor.StartPillarJump(dirRight, b0.ToCy);
+            }
+            else DiagLog.Write("[ss-execblk] first block not PillarUp — prototype only handles PillarUp");
+        }
 
         public static SSResult Execute(int goalWx, int goalWy)
         {

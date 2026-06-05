@@ -86,6 +86,7 @@ namespace TerraBlind
             _stalledCycles = 0;
             _cycleStartFeetY = 0;
             State = SkillState.PillarBuild;
+            DiagLog.Write($"[pillar] start dirRight={dirRight} targetWy={targetWy}");
         }
 
         public static void StartDigDown()  { State = SkillState.DigDown; }
@@ -131,13 +132,13 @@ namespace TerraBlind
         {
             if (State == SkillState.Idle) return;
             var p = Main.LocalPlayer;
-            if (p == null || !p.active) { Stop(); return; }
+            if (p == null || !p.active) { DiagLog.Write("[pillar] stop: no player"); Stop(); return; }
 
             int platformSlot = FindPlatformSlot(p);
 
             if (State == SkillState.PillarBuild)
             {
-                if (platformSlot < 0) { Stop(); return; }
+                if (platformSlot < 0) { DiagLog.Write("[pillar] stop: no platform slot"); Stop(); return; }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
                 // simulate hold=15 vx=0 jump; if end_py > start_py the path is blocked

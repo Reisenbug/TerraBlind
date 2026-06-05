@@ -41,12 +41,12 @@ namespace TerraBlind
 
             if (player.altFunctionUse == 2)
             {
-                // right click = state-space plan + execute (planner manages its own frame replay)
+                // right click = block-plan execute prototype: maze block → pillar-jump executor
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
                 StateSpacePlanner.StopExec();
-                var ssr = StateSpacePlanner.Execute(mx, my);
-                DiagLog.Write($"[wand] ss_exec target=({mx},{my}) found={ssr.Found} frames={ssr.ExecFrames.Count} ms={ssr.Millis:0.#}");
+                StateSpacePlanner.ExecBlocks(mx, my);
+                DiagLog.Write($"[wand] ss_execblk target=({mx},{my})");
             }
             else
             {

@@ -6,6 +6,10 @@ Items: {
 
 	MazeWand: {
 		DisplayName: Maze Wand
-		Tooltip: ""
+		Tooltip:
+			'''
+			Left: maze path to target
+			Right: cost-field heatmap (green near goal, red far)
+			'''
 	}
 }

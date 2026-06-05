@@ -84,6 +84,7 @@ namespace TerraBlind
 			if (SkillExecutor.IsActive)
 			{
 				SkillExecutor.ApplyControls();
+				ReplaySystem.ApplyControls();
 				PlaceCoordinator.ApplyControls();
 				return;
 			}
