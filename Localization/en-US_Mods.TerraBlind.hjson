@@ -3,4 +3,9 @@ Items: {
 		DisplayName: Nav Wand
 		Tooltip: ""
 	}
+
+	MazeWand: {
+		DisplayName: Maze Wand
+		Tooltip: ""
+	}
 }
