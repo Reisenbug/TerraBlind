@@ -717,16 +717,31 @@ namespace TerraBlind
 
         public static void StopExec() { _execFrames = null; _execIdx = 0; }
 
+        static List<Block> PlanBlocks(int goalWx, int goalWy)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return null;
+            goalWy = SnapGoalToStandable(goalWx, goalWy);
+            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            return BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
+        }
+
+        public static void VisualizeBlockPlan(int goalWx, int goalWy)
+        {
+            var blocks = PlanBlocks(goalWx, goalWy);
+            if (blocks == null || blocks.Count == 0) { DiagLog.Write("[ss-visblk] no blocks"); return; }
+            var bd = new System.Text.StringBuilder();
+            foreach (var b in blocks) bd.Append($" {b.Kind}({b.FromCx},{b.FromCy}->{b.ToCx},{b.ToCy})");
+            DiagLog.Write($"[ss-visblk] n={blocks.Count}{bd}");
+            VisualizeBlocks(blocks);
+        }
+
         // PROTOTYPE: build the maze field + macro block plan, and if the first block is a vertical climb, hand it
         // straight to the legacy pillar-jump executor (no physics A*). Validates maze-block → pillarjump chain.
         public static void ExecBlocks(int goalWx, int goalWy)
         {
-            var p = Main.LocalPlayer;
-            if (p == null || !p.active) return;
-            goalWy = SnapGoalToStandable(goalWx, goalWy);
-            var (spx, spy) = StandCell(p.position.X, p.position.Y);
-            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
-            var blocks = BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
+            var blocks = PlanBlocks(goalWx, goalWy);
             if (blocks == null || blocks.Count == 0) { DiagLog.Write("[ss-execblk] no blocks"); return; }
             var b0 = blocks[0];
             DiagLog.Write($"[ss-execblk] first={b0.Kind}({b0.FromCx},{b0.FromCy}->{b0.ToCx},{b0.ToCy})");
