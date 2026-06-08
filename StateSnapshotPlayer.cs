@@ -57,6 +57,8 @@ namespace TerraBlind
 			}
 			_prevVy = Player.velocity.Y;
 
+			StateSpacePlanner.TickBlocks();
+
 			if (StateSpacePlanner.IsActive)
 			{
 				StateSpacePlanner.ApplyControls();

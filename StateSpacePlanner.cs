@@ -327,6 +327,9 @@ namespace TerraBlind
                     if (jp.HasValue)
                         yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost);
                 }
+
+            // 3-1 bridge: TEMP DISABLED — placement fails (first tile into a gap has no neighbor support) and the
+            // 60f place-stall lets the player drift out of control. Reinstate after fixing BridgePlace legality.
         }
 
         const float VerticalJumpVxMax = 0.5f;
@@ -441,6 +444,26 @@ namespace TerraBlind
 
         // Temp-write one platform tile into Main.tile, simulate the jump, restore. The placed tile is not kept
         // in the node — it exists only for this segment's landing physics (the new node simply stands on top).
+        // 3-1 bridge place: stand still, place ONE platform on the support row one column toward dir, then walk
+        // onto it. Lets the player extend a walkway sideways out of a ceiling-sealed pocket where jump-place can't
+        // gain height. One tile per call; the greedy re-picks direction each step.
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
+            SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
+        {
+            var (scx, scy) = StandCell(cur.Px, cur.Py);
+            int placeCx = scx + dir, placeCy = scy + 1;        // support row, one column over
+            if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
+            if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target blocked
+            var seg = SimulateWithPlatform(cur, dir, 0, ph, placeCx, placeCy, platformTile); // hold=0: walk, no jump
+            if (!seg.HasValue || !seg.Value.node.Grounded) return null;
+            int landCx = (int)((seg.Value.node.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+            if (landCx == scx) return null;                    // didn't actually move over
+            var f0 = seg.Value.frames[0];                       // place before stepping onto it (flat walk, no apex)
+            f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
+            seg.Value.frames[0] = f0;
+            return seg.Value;
+        }
+
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateWithPlatform(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int cx, int cy, int platformTile)
         {
@@ -737,20 +760,103 @@ namespace TerraBlind
             VisualizeBlocks(blocks);
         }
 
-        // PROTOTYPE: build the maze field + macro block plan, and if the first block is a vertical climb, hand it
-        // straight to the legacy pillar-jump executor (no physics A*). Validates maze-block → pillarjump chain.
+        // GREEDY single-step driver (route 2): maze field gives the global trend; each step we forward-sim only a
+        // few candidate actions (walk/jump segments + jump-place left/right/up), score each landing cell by its
+        // maze cost, and execute the single best. No search tree → no blowup. When no candidate improves (shaft:
+        // jump-place blocked), fall back to one vertical pillar cycle — "low-gain → climb" emerges, not hardcoded.
+        static bool _greedyActive;
+        static int _greedyGoalWx, _greedyGoalWy;
+        static readonly List<(float, float, bool)> _greedyTrail = new();
+        static bool _prevReplayJump;
+        static readonly HashSet<(int, int)> _greedyVisited = new();
+        static int _greedyExploreSteps;
+        const int GreedyMaxExplore = 40; // cap on consecutive non-downhill (escaping-a-well) steps
+
+        public static bool GreedyActive => _greedyActive;
+
+        public static void StopGreedy()
+        {
+            _greedyActive = false;
+            StopExec();
+            if (SkillExecutor.IsActive) SkillExecutor.Stop();
+        }
+
         public static void ExecBlocks(int goalWx, int goalWy)
         {
-            var blocks = PlanBlocks(goalWx, goalWy);
-            if (blocks == null || blocks.Count == 0) { DiagLog.Write("[ss-execblk] no blocks"); return; }
-            var b0 = blocks[0];
-            DiagLog.Write($"[ss-execblk] first={b0.Kind}({b0.FromCx},{b0.FromCy}->{b0.ToCx},{b0.ToCy})");
-            if (b0.Kind == BlockKind.PillarUp)
+            StopGreedy();
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return;
+            goalWy = SnapGoalToStandable(goalWx, goalWy);
+            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            if (!_distField.ContainsKey((spx, spy))) { DiagLog.Write($"[ss-greedy] start ({spx},{spy}) not in field"); return; }
+            _greedyActive = true; _greedyGoalWx = goalWx; _greedyGoalWy = goalWy;
+            _greedyTrail.Clear(); _greedyVisited.Clear(); _greedyExploreSteps = 0;
+            DiagLog.Write($"[ss-greedy] start=({spx},{spy}) goal=({goalWx},{goalWy}) field={_distField.Count}");
+        }
+
+        const float GreedyGoalDistPx = 12f;
+
+        // chosen each time both executors are idle. Picks the candidate whose landing cell has the lowest maze cost.
+        public static void TickBlocks()
+        {
+            if (!_greedyActive) return;
+            if (IsActive || SkillExecutor.IsActive) return; // a step is running
+
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) { StopGreedy(); return; }
+
+            float gx = _greedyGoalWx * 16f + 8f, gy = (_greedyGoalWy + 1) * 16f;
+            float ccx = p.position.X + p.width / 2f, cfy = p.position.Y + p.height;
+            if (MathF.Abs(ccx - gx) <= GreedyGoalDistPx && MathF.Abs(cfy - gy) <= GreedyGoalDistPx)
+            { DiagLog.Write("[ss-greedy] reached goal"); StopGreedy(); return; }
+
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            int platformTile = -1;
+            int platformSlot = NavCoordinator.FindPlatformSlot(p);
+            if (platformSlot >= 0) platformTile = p.inventory[platformSlot].createTile;
+
+            var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
+            var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            int curCost = _distField.TryGetValue((curCx, curCy), out int cc) ? cc : int.MaxValue;
+
+            _greedyVisited.Add((curCx, curCy));
+
+            _jpNoSpot = _jpNoLand = _jpFellThrough = _jpSlidOff = _jpOk = 0;
+            // downhill = strictly lower cost than here (normal gradient descent).
+            // explore = best UNVISITED cell regardless of cost — used to climb out of a local-minimum well.
+            List<PhysicsSimulator.ControlInput> downFrames = null, expFrames = null;
+            int downCost = curCost, downFC = int.MaxValue, expCost = int.MaxValue, expFC = int.MaxValue;
+            var cand = new System.Text.StringBuilder();
+            int candN = 0;
+            foreach (var (next, frames, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile))
             {
-                bool dirRight = b0.ToCx >= b0.FromCx;
-                SkillExecutor.StartPillarJump(dirRight, b0.ToCy);
+                var (ncx, ncy) = StandCell(next.Px, next.Py);
+                bool inField = _distField.TryGetValue((ncx, ncy), out int ncost);
+                bool plc = frames.Count > 0 && frames[frames.Count - 1].Place;
+                if (candN++ < 16) cand.Append($" [{ncx},{ncy}{(plc ? "P" : "")}c{(inField ? ncost.ToString() : "∞")}f{frames.Count}]");
+                if (!inField) continue;
+                if (ncost < downCost || (ncost == downCost && frames.Count < downFC))
+                { downCost = ncost; downFrames = frames; downFC = frames.Count; }
+                if (!_greedyVisited.Contains((ncx, ncy)) && (ncost < expCost || (ncost == expCost && frames.Count < expFC)))
+                { expCost = ncost; expFrames = frames; expFC = frames.Count; }
             }
-            else DiagLog.Write("[ss-execblk] first block not PillarUp — prototype only handles PillarUp");
+
+            List<PhysicsSimulator.ControlInput> chosen; int chosenCost; string how;
+            if (downFrames != null && downCost < curCost) { chosen = downFrames; chosenCost = downCost; how = "down"; _greedyExploreSteps = 0; }
+            else if (expFrames != null && _greedyExploreSteps < GreedyMaxExplore) { chosen = expFrames; chosenCost = expCost; how = "explore"; _greedyExploreSteps++; }
+            else
+            {
+                DiagLog.Write($"[ss-greedy] stuck at ({curCx},{curCy}) cost={curCost} explore={_greedyExploreSteps} cands(n={candN}):{cand}");
+                StopGreedy(); return;
+            }
+
+            DiagLog.Write($"[ss-greedy] {how} ({curCx},{curCy})cost={curCost} -> cost={chosenCost} frames={chosen.Count}");
+            foreach (var fr in chosen) _greedyTrail.Add((fr.Px + PhysicsSimulator.PlayerW / 2f, fr.Py + PhysicsSimulator.PlayerH, fr.Jump));
+            PathVisSystem.SetSSPath(new List<(float, float, bool)>(_greedyTrail), new List<(float, float)>(), gx, gy);
+            _execFrames = chosen; _execIdx = 0;
+            _execGoalWx = _greedyGoalWx; _execGoalWy = _greedyGoalWy;
+            _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
         }
 
         public static SSResult Execute(int goalWx, int goalWy)
@@ -807,8 +913,10 @@ namespace TerraBlind
 
             if (_replanCooldownLeft > 0) _replanCooldownLeft--;
 
-            // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help
-            if (drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
+            // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help.
+            // greedy owns its own per-step re-decision (next TickBlocks re-picks from the real position), so the
+            // physics-A* replan must NOT fire under greedy — it would hijack the frame loop with failing searches.
+            if (!_greedyActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
             {
                 if (Replan("drift")) return;
             }
@@ -819,14 +927,26 @@ namespace TerraBlind
                 _placeStall++;
                 if (_placeStall <= PlaceStallMax)
                 {
-                    if (f.Left) p.controlLeft = true;
-                    if (f.Right) p.controlRight = true;
-                    if (f.Jump) p.controlJump = true;
+                    // pin the player while waiting for the platform: do NOT press the frame's move keys (they'd
+                    // walk it off into the gap before the tile exists). brake residual Vx so it stays put.
+                    if (p.velocity.Y == 0f)
+                    {
+                        if (p.velocity.X > 0.1f) p.controlLeft = true;
+                        else if (p.velocity.X < -0.1f) p.controlRight = true;
+                    }
                     EmitPlace(p, f.PlaceCx, f.PlaceCy);
                     return; // stall here until the platform exists
                 }
-                DiagLog.Write($"[ss-place] FAILED tile=({f.PlaceCx},{f.PlaceCy}) after {PlaceStallMax}f → replan");
+                {
+                    int fcx = (int)((p.position.X + p.width / 2f) / 16f), fcy = (int)((p.position.Y + p.height - 1f) / 16f);
+                    bool nbr = false;
+                    for (int ax = -1; ax <= 1; ax++) for (int ay = -1; ay <= 1; ay++) if (Main.tile[f.PlaceCx + ax, f.PlaceCy + ay].HasTile) nbr = true;
+                    DiagLog.Write($"[ss-place] FAILED tile=({f.PlaceCx},{f.PlaceCy}) playerCell=({fcx},{fcy}) nbrSupport={nbr} targetHasTile={Main.tile[f.PlaceCx, f.PlaceCy].HasTile} itemTime={p.itemTime} → replan");
+                }
                 _placeStall = 0;
+                // greedy owns re-decision: abort this step, TickBlocks re-picks from the real position next frame.
+                // the physics-A* Replan must not fire here — it would inject a long open-loop path that drifts.
+                if (_greedyActive) { StopExec(); return; }
                 if (Replan("place_failed")) return;
                 StopExec();
                 return;
@@ -836,6 +956,10 @@ namespace TerraBlind
             if (f.Left) p.controlLeft = true;
             if (f.Right) p.controlRight = true;
             if (f.Jump) p.controlJump = true;
+            // full per-frame replay trace: every frame's intent vs reality. lets one run reveal jump edges,
+            // drift, ground state, vx/vy without re-building to add more logging.
+            DiagLog.Write($"[ss-frame] idx={_execIdx}/{_execFrames.Count} J={(f.Jump ? 1 : 0)} L={(f.Left ? 1 : 0)} R={(f.Right ? 1 : 0)} P={(f.Place ? 1 : 0)} cJ={(p.controlJump ? 1 : 0)} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} gnd={(p.velocity.Y == 0f ? 1 : 0)} pos=({p.position.X:0.#},{p.position.Y:0.#}) exp=({f.Px:0.#},{f.Py:0.#}) drift={drift:0.#}");
+            _prevReplayJump = f.Jump;
             _execIdx++;
         }
 

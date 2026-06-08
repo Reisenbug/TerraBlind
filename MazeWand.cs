@@ -54,17 +54,16 @@ namespace TerraBlind
             return true;
         }
 
-        // Dijkstra FROM the goal over the raw tile grid (every cell a node, 4-connected). Fills the whole box —
-        // no early break — so every cell gets its true cost-to-goal. This is the trend/direction field: physics
-        // sim queries it as an admissible-ish heuristic and walks downhill. Physics ignored here; pure 2D maze.
-        // Costs are direction-aware (the price is for ENTERING (cx,cy) from neighbor, i.e. the forward step
-        // neighbor→cx,cy, so neighbor below paying DigUp/MoveUp etc.).
+        // Geometric 2D maze (route restored 2026-06): node = every tile cell, 4-connected, physics ignored.
+        // Direction-aware cost (walk cheap, dig expensive). This is the TREND field — the greedy executor reads its
+        // cost gradient, not the drawn path. Dead-ends are a separate problem handled at the execution layer.
         public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy)
         {
             int minX = System.Math.Min(sx, gx) - 120, maxX = System.Math.Max(sx, gx) + 120;
             int minY = System.Math.Min(sy, gy) - 120, maxY = System.Math.Max(sy, gy) + 120;
 
             var dist = new Dictionary<(int, int), int>();
+            var closed = new HashSet<(int, int)>();
             var pq = new SortedSet<(int cost, int x, int y)>();
             dist[(gx, gy)] = 0;
             pq.Add((0, gx, gy));
@@ -72,23 +71,26 @@ namespace TerraBlind
             int[] dxs = { 1, -1, 0, 0 };
             int[] dys = { 0, 0, 1, -1 };
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             while (pq.Count > 0)
             {
                 var cur = pq.Min;
                 pq.Remove(cur);
                 var (cost, cx, cy) = cur;
-                if (cost > dist[(cx, cy)]) continue;
+                if (!closed.Add((cx, cy))) continue;
 
                 for (int i = 0; i < 4; i++)
                 {
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+                    if (closed.Contains((nx, ny))) continue;
                     int nc = cost + StepCost(cx, cy, nx, ny);
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
                     pq.Add((nc, nx, ny));
                 }
             }
+            DiagLog.Write($"[ss-field] dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0}");
             return dist;
         }
 
@@ -109,19 +111,16 @@ namespace TerraBlind
             var cur = (sx, sy);
             if (!field.ContainsKey(cur)) return (path, breaks);
 
-            int[] dxs = { 1, -1, 0, 0 };
-            int[] dys = { 0, 0, 1, -1 };
             var seen = new HashSet<(int, int)>();
             for (int step = 0; step < 2000; step++)
             {
                 path.Add(cur);
-                if (PathPlanner.IsBlockPublic(cur.Item1, cur.Item2)) breaks++;
                 if (cur == (gx, gy)) break;
                 if (!seen.Add(cur)) break;
                 int bestD = field[cur]; var best = cur;
-                for (int i = 0; i < 4; i++)
+                foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
                 {
-                    var n = (cur.Item1 + dxs[i], cur.Item2 + dys[i]);
+                    var n = (cur.Item1 + dx, cur.Item2 + dy);
                     if (field.TryGetValue(n, out int dn) && dn < bestD) { bestD = dn; best = n; }
                 }
                 if (best == cur) break;
@@ -132,16 +131,18 @@ namespace TerraBlind
 
         static void DrawHeatmap(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
         {
-            int maxV = 1;
-            foreach (var v in field.Values) if (v > maxV) maxV = v;
+            // normalize by the start cell's cost so the gradient spreads across the actual start→goal range;
+            // cells farther than start clamp to red. (using global max washes everything green — a few far
+            // dig-heavy cells blow up the scale.)
+            float scale = field.TryGetValue((sx, sy), out int sc) && sc > 0 ? sc : 1f;
             var tiles = new List<(int, int, Color)>();
             foreach (var kv in field)
             {
-                float t = kv.Value / (float)maxV;
+                float t = System.Math.Min(1f, kv.Value / scale);
                 var c = new Color(t, 1f - t, 0.2f) * 0.5f;
                 tiles.Add((kv.Key.Item1, kv.Key.Item2, c));
             }
-            DiagLog.Write($"[maze-field] fieldSize={field.Count} maxCost={maxV} startInField={field.ContainsKey((sx, sy))}");
+            DiagLog.Write($"[maze-field] fieldSize={field.Count} scale={scale} startInField={field.ContainsKey((sx, sy))}");
             PathVisSystem.SetTiles(tiles);
         }
 
