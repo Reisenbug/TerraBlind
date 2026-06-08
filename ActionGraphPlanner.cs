@@ -16,10 +16,13 @@ namespace TerraBlind
 
         public struct Edge { public int Cx, Cy; public Act Act; public float Cost; }
 
-        // maze cost scale (carried over verbatim — proven good)
-        const int MoveDown = 1, MoveSide = 1, MoveUp = 3;
-        const int DigDown = 20, DigSide = 30, DigUp = 40;
-        const int PlacePenalty = 10; // jump-place / bridge surcharge: > walk, < dig (build sparingly, dig rarer)
+        // costs are in ~FRAMES so all actions compare on real time. dig cost is computed per-tile (DigTable) so a
+        // hard block under a weak pick is correctly expensive and A* routes around it (e.g. climbs out of a pit
+        // instead of mining 25 dungeon bricks). these are the move/build estimates on the same frame scale.
+        const int MoveSide = 5;   // ~16px / maxRun(3) per tile walked
+        const int MoveDown = 3;   // falling a tile is cheap
+        const int MoveUp = 9;     // climbing costs more than walking
+        const int PlacePenalty = 18; // platform place: swing + settle wait, on the frame scale
 
         const int PlayerCellH = 3; // 42px ≈ 2.6 tiles: foot cell + 2 head cells must clear
 
@@ -90,47 +93,37 @@ namespace TerraBlind
 
             if (canPlace)
             {
-                // jump-place: build a platform up to dyUp above, land on it. needs head clearance at destination.
-                for (int dy = 1; dy <= Math.Min(dyUp, 6); dy++)
+                // 2b PILLAR-UP (the key move for flat ground / pit floors): jump, place a platform under the feet,
+                // land on it, repeat. Stands on what it just placed — needs NO pre-existing support, only OPEN air
+                // to rise into. This is how you leave a flat floor. Each notch ≈ 2 tiles (SkillExecutor cadence).
+                for (int dy = 2; dy <= dyUp; dy += 2)
                 {
-                    int ny = cy - dy;
-                    if (Block(cx, ny + 1)) break;               // column blocked
-                    if (CanBuildStand(cx, ny)) { yield return new Edge { Cx = cx, Cy = ny, Act = Act.JumpPlace, Cost = dy * MoveUp + PlacePenalty }; }
+                    bool clear = true;
+                    for (int k = 0; k <= dy; k++) if (Block(cx, cy - k)) { clear = false; break; } // column up must be open
+                    if (!clear) break;
+                    yield return new Edge { Cx = cx, Cy = cy - dy, Act = Act.JumpPlace, Cost = dy * MoveUp + PlacePenalty };
                 }
-                // bridge: extend a platform sideways one cell (must have support to attach + head clear there)
+                // 3-1 BRIDGE: extend a platform sideways one cell, walk onto it. slides along even under a low
+                // ceiling (foot + 1 head cell clear). attaches to current support or the new neighbor.
                 foreach (int dir in new[] { -1, 1 })
                 {
                     int nx = cx + dir;
-                    if (CanBuildStand(nx, cy) && (Floor(cx, cy + 1) || Floor(nx, cy + 1)))
-                        yield return new Edge { Cx = nx, Cy = cy, Act = Act.Bridge, Cost = MoveSide + PlacePenalty };
+                    if (Block(nx, cy) || Block(nx, cy - 1)) continue;          // body must fit
+                    if (PathPlanner.PlatformPublic(nx, cy + 1)) continue;      // don't stack platforms
+                    yield return new Edge { Cx = nx, Cy = cy, Act = Act.Bridge, Cost = MoveSide + PlacePenalty };
                 }
             }
 
-            // dig: carve into an adjacent solid cell (always available → graph stays connected). 4-dir.
-            foreach (var (dx, dy, c) in new[] { (1, 0, DigSide), (-1, 0, DigSide), (0, 1, DigDown), (0, -1, DigUp) })
+            // dig: carve into an adjacent solid cell (always available → graph stays connected). cost = real frames
+            // to mine THAT tile with the current pick (hard block + weak pick = very expensive → A* routes around).
+            foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
             {
                 int nx = cx + dx, ny = cy + dy;
                 if (nx < 1 || ny < PlayerCellH || nx >= Main.maxTilesX - 1 || ny + 1 >= Main.maxTilesY) continue;
-                // after digging, the cell must become standable (dig the head cells too if needed is a future edge)
                 bool willStand = Floor(nx, ny + 1) || dy > 0; // digging down lands on what's below
                 if (Block(nx, ny) && willStand)
-                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Dig, Cost = c };
+                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Dig, Cost = DigTable.CostFrames(Main.tile[nx, ny].TileType) };
             }
-        }
-
-        // platform-build destination: empty (or cuttable) target, head clear for the player box, not stacking on
-        // an existing platform, and some real neighbor gives attach support.
-        static bool CanBuildStand(int cx, int cy)
-        {
-            if (cx < 1 || cy < PlayerCellH || cx >= Main.maxTilesX - 1 || cy + 1 >= Main.maxTilesY) return false;
-            for (int k = 0; k < PlayerCellH; k++) if (Block(cx, cy - k)) return false; // head/body room
-            // need attach support in the support row neighborhood (a real tile adjacent to the platform we'd place)
-            for (int ax = -1; ax <= 1; ax++)
-            {
-                var nb = Main.tile[cx + ax, cy + 1];
-                if (nb != null && nb.HasTile) return true;
-            }
-            return false;
         }
 
         // rough arc clearance: every tile column between start and end (at the player's head rows) is open enough.
@@ -161,6 +154,11 @@ namespace TerraBlind
 
         const int MaxExpansions = 60000;
 
+        // maze trend field for the current Plan run; H reads it as the cost-to-go so A* follows the same up/diagonal
+        // trend the maze gives (geometric 4-conn, walk/up/dig weighted) instead of bare manhattan, which underweighted
+        // vertical progress and made A* hug the floor.
+        static Dictionary<(int, int), int> _maze;
+
         public static Result Plan(int sx, int sy, int gx, int gy)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -168,8 +166,47 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             bool canPlace = p != null && NavCoordinator.FindPlatformSlot(p) >= 0;
 
+            {
+                // dump the 3x4 neighborhood around the clicked goal: block(B)/platform(P)/floor(F)/air(.) per cell
+                var sb2 = new System.Text.StringBuilder($"[ag-snap-dbg] click=({gx},{gy}) standable={Standable(gx, gy)}\n");
+                for (int yy = gy - 2; yy <= gy + 2; yy++)
+                {
+                    sb2.Append($"  y{yy}:");
+                    for (int xx = gx - 2; xx <= gx + 2; xx++)
+                    {
+                        char ch = '.';
+                        if (Block(xx, yy)) ch = 'B';
+                        else if (PathPlanner.PlatformPublic(xx, yy)) ch = 'P';
+                        else if (Floor(xx, yy)) ch = 'F';
+                        if (xx == gx && yy == gy) ch = char.ToLower(ch == '.' ? 'o' : ch);
+                        sb2.Append($" {ch}");
+                    }
+                    sb2.Append('\n');
+                }
+                DiagLog.Write(sb2.ToString());
+            }
             (int gx, int gy) goal = SnapGoal(gx, gy);
             res.GoalCx = goal.gx; res.GoalCy = goal.gy;
+            _maze = MazeWand.BuildField(goal.gx, goal.gy, sx, sy);
+
+            {
+                // exactly answer "why doesn't it go up first?" — dump every edge out of the start cell.
+                bool cp = p != null && NavCoordinator.FindPlatformSlot(p) >= 0;
+                var eb = new System.Text.StringBuilder($"[ag-startedges] from=({sx},{sy}) canPlace={cp}:");
+                foreach (var e in Edges(sx, sy, cp)) eb.Append($" {e.Act}->({e.Cx},{e.Cy})/{EdgeCost(sx, sy, e):0}");
+                DiagLog.Write(eb.ToString());
+
+                // DIAGNOSTIC: dump the maze-field cost up the start column (feet → 25 tiles up) to confirm H follows
+                // the maze trend (cost should drop going UP toward the goal).
+                var mb = new System.Text.StringBuilder($"[ag-mazecol] col={sx} (y:mazeCost) goal=({goal.gx},{goal.gy}):");
+                for (int yy = sy; yy >= sy - 25; yy--)
+                    mb.Append(_maze.TryGetValue((sx, yy), out int mc) ? $" {yy}:{mc}" : $" {yy}:x");
+                DiagLog.Write(mb.ToString());
+                _maze.TryGetValue((sx - 1, sy), out int mcl);
+                _maze.TryGetValue((sx + 1, sy), out int mcr);
+                _maze.TryGetValue((sx, sy), out int mc0);
+                DiagLog.Write($"[ag-mazenbr] here({sx},{sy})={mc0} left={mcl} right={mcr}");
+            }
 
             var g = new Dictionary<(int, int), float> { [(sx, sy)] = 0 };
             var came = new Dictionary<(int, int), (int, int, Edge)>();
@@ -185,8 +222,9 @@ namespace TerraBlind
                 if (cx == goal.gx && cy == goal.gy) { found = true; break; }
                 res.Expansions++;
                 float cg = g[(cx, cy)];
-                foreach (var e in Edges(cx, cy, canPlace))
+                foreach (var e0 in Edges(cx, cy, canPlace))
                 {
+                    var e = e0; e.Cost = EdgeCost(cx, cy, e0);
                     var nk = (e.Cx, e.Cy);
                     if (closed.Contains(nk)) continue;
                     float ng = cg + e.Cost;
@@ -212,12 +250,43 @@ namespace TerraBlind
             sw.Stop();
             res.Millis = sw.Elapsed.TotalMilliseconds;
             DiagLog.Write($"[ag-plan] start=({sx},{sy}) goal=({goal.gx},{goal.gy}) found={found} exp={res.Expansions} ms={res.Millis:0.#} pathLen={res.Path.Count} canPlace={canPlace}");
+            {
+                var pb = new System.Text.StringBuilder("[ag-path]");
+                int px = sx, py = sy;
+                foreach (var e in res.Path) { pb.Append($" ({px},{py})-{e.Act}/{e.Cost:0}->({e.Cx},{e.Cy})"); px = e.Cx; py = e.Cy; }
+                DiagLog.Write(pb.ToString());
+            }
             return res;
+        }
+
+        // edge cost = small action bias + maze-regress penalty. moving WITH the maze trend (maze value drops toward
+        // goal) costs only the bias, so A* is free to pick whatever executable action stays on-trend. moving AGAINST
+        // the trend (maze value rises) is penalized per cell, so A* won't hug the floor / detour. the maze owns the
+        // trend; the action graph only chooses how to execute it. dig keeps its real frame cost (hard blocks stay
+        // expensive) so the planner still routes around unmineable rock instead of tunneling.
+        static float EdgeCost(int fromCx, int fromCy, Edge e)
+        {
+            float bias = e.Act switch
+            {
+                Act.Dig => DigTable.CostFrames(Main.tile[e.Cx, e.Cy].TileType), // real mining frames, not a small bias
+                Act.Walk => 1f,
+                Act.Fall => 1f,
+                Act.Jump => 2f,
+                Act.JumpPlace => 3f,
+                Act.Bridge => 3f,
+                _ => 2f,
+            };
+            float regress = 0f;
+            if (_maze != null && _maze.TryGetValue((fromCx, fromCy), out int mf) && _maze.TryGetValue((e.Cx, e.Cy), out int mt))
+                regress = Math.Max(0, mt - mf); // only penalize moving away from the goal per the maze trend
+            return bias + regress;
         }
 
         static float H(int cx, int cy, int gx, int gy)
         {
-            // admissible-ish: manhattan with the cheapest move costs (down/side = 1)
+            // cost-to-go from the maze trend field (geometric, weights vertical/dig correctly). underestimates the
+            // frame-scale edge cost so stays admissible, but its gradient pulls A* up/diagonal like the maze does.
+            if (_maze != null && _maze.TryGetValue((cx, cy), out int mc)) return mc;
             int dx = Math.Abs(cx - gx), dy = Math.Abs(cy - gy);
             return dx * MoveSide + dy * MoveDown;
         }
