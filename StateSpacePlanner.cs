@@ -328,8 +328,13 @@ namespace TerraBlind
                         yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost);
                 }
 
-            // 3-1 bridge: TEMP DISABLED — placement fails (first tile into a gap has no neighbor support) and the
-            // 60f place-stall lets the player drift out of control. Reinstate after fixing BridgePlace legality.
+            // 3-1 bridge: place one platform on the support row, step onto it, brake to a stop. one tile each way.
+            foreach (int dir in new[] { dirToGoal, -dirToGoal })
+            {
+                var br = BridgePlace(cur, dir, ph, platformTile);
+                if (br.HasValue)
+                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost);
+            }
         }
 
         const float VerticalJumpVxMax = 0.5f;
@@ -344,6 +349,7 @@ namespace TerraBlind
         const bool F_Trend = true;       // two-phase up-then-left heuristic bias
 
         const float JumpPlaceCost = 30f; // bias: prefer plain walk/jump; place only when it opens a path
+        const float BridgeCost = 30f;    // same as jump-place: consumes a platform, use only to open a path
 
         // "Jump and place one platform": jump (hold), scan the arc for the FIRST frame where the foot cell is
         // empty + adjacent to real support (cliff/wall), place a platform there, and land on it. One placement
@@ -450,10 +456,20 @@ namespace TerraBlind
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
         {
-            var (scx, scy) = StandCell(cur.Px, cur.Py);
-            int placeCx = scx + dir, placeCy = scy + 1;        // support row, one column over
+            // basis = the foot column that actually has floor support, NOT the center column. the 20px base spans
+            // 2-3 cols; the center can land on a column the player merely overhangs (no support there), making the
+            // new tile adjacent to empty space → game rejects it. extend from the supported column toward dir.
+            int lcol = (int)(cur.Px / 16f), rcol = (int)((cur.Px + PhysicsSimulator.PlayerW - 1) / 16f);
+            int footRow = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
+            int baseCol = int.MinValue;
+            if (dir > 0) { for (int c = rcol; c >= lcol; c--) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
+            else { for (int c = lcol; c <= rcol; c++) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
+            if (baseCol == int.MinValue) return null;          // no supported foot column — nothing to extend from
+            int placeCx = baseCol + dir, placeCy = footRow;
+            int scy = footRow - 1;                              // standing (head) row above the support
             if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
             if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
+            DiagLog.Write($"[bridge-dbg] dir={dir} px={cur.Px:0.#} footCols[{lcol}..{rcol}] baseCol={baseCol} placeCx={placeCx} placeCy={placeCy}");
 
             var t = Main.tile[placeCx, placeCy];
             bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock; var oSlope = t.Slope;
