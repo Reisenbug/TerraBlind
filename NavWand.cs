@@ -50,11 +50,11 @@ namespace TerraBlind
             }
             else
             {
-                // left click = visualize the macro block plan (maze field → blocks), no physics A*
+                // left click = action-graph A* plan + visualize full action path (stage 1: no execution)
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                StateSpacePlanner.VisualizeBlockPlan(mx, my);
-                DiagLog.Write($"[wand] ss_visblk target=({mx},{my})");
+                ActionGraphPlanner.PlanAndVisualize(mx, my);
+                DiagLog.Write($"[wand] ag_plan target=({mx},{my})");
             }
             return true;
         }
