@@ -562,6 +562,19 @@ namespace TerraBlind
 				string recorded = RecordSystem.Stop();
 				body = recorded;
 			}
+			else if (path == "/test_action")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var nm = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
+				var dm = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\":(-?\\d+)");
+				string aName = nm.Success ? nm.Groups[1].Value : "";
+				int aDir = dm.Success ? int.Parse(dm.Groups[1].Value) : 0;
+				StateSpacePlanner.RequestTestAction(aName, aDir);
+				body = $"{{\"ok\":true,\"name\":\"{aName}\",\"dir\":{aDir}}}";
+			}
 			else if (path == "/craft")
 			{
 				string reqBody;

@@ -444,24 +444,51 @@ namespace TerraBlind
 
         // Temp-write one platform tile into Main.tile, simulate the jump, restore. The placed tile is not kept
         // in the node — it exists only for this segment's landing physics (the new node simply stands on top).
-        // 3-1 bridge place: stand still, place ONE platform on the support row one column toward dir, then walk
-        // onto it. Lets the player extend a walkway sideways out of a ceiling-sealed pocket where jump-place can't
-        // gain height. One tile per call; the greedy re-picks direction each step.
+        // 3-1 bridge place: place ONE platform on the support row one column toward dir, step ONTO it, and brake to
+        // a stop on that exact cell (don't overshoot — a single tile only holds one cell of standing room; walking
+        // a full segment slides off the end and falls). One tile per call; greedy re-picks each step.
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
         {
             var (scx, scy) = StandCell(cur.Px, cur.Py);
             int placeCx = scx + dir, placeCy = scy + 1;        // support row, one column over
             if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
-            if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target blocked
-            var seg = SimulateWithPlatform(cur, dir, 0, ph, placeCx, placeCy, platformTile); // hold=0: walk, no jump
-            if (!seg.HasValue || !seg.Value.node.Grounded) return null;
-            int landCx = (int)((seg.Value.node.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
-            if (landCx == scx) return null;                    // didn't actually move over
-            var f0 = seg.Value.frames[0];                       // place before stepping onto it (flat walk, no apex)
-            f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
-            seg.Value.frames[0] = f0;
-            return seg.Value;
+            if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
+
+            var t = Main.tile[placeCx, placeCy];
+            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock; var oSlope = t.Slope;
+            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
+            try
+            {
+                var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
+                float targetCenterPx = placeCx * 16f + 8f;     // stop with player center over the new tile
+                var frames = new List<PhysicsSimulator.ControlInput>();
+                for (int f = 0; f < MaxSegFrames; f++)
+                {
+                    float centerNow = s.Px + PhysicsSimulator.PlayerW / 2f;
+                    bool past = dir > 0 ? centerNow >= targetCenterPx : centerNow <= targetCenterPx;
+                    // approach: press dir until center reaches target cell; then brake (press opposite) to settle.
+                    var input = new PhysicsSimulator.ControlInput
+                    {
+                        Right = !past ? dir > 0 : s.Vx < -0.05f,
+                        Left = !past ? dir < 0 : s.Vx > 0.05f,
+                    };
+                    s = PhysicsSimulator.Step(s, input, ph);
+                    input.Px = s.Px; input.Py = s.Py;
+                    frames.Add(input);
+                    if (!s.Grounded) return null;              // slid off the single tile and fell — invalid
+                    if (past && MathF.Abs(s.Vx) < 0.1f) break; // settled on the new tile
+                }
+                if (frames.Count == 0) return null;
+                var (lcx, lcy) = StandCell(s.Px, s.Py);
+                if (lcx != placeCx) return null;               // didn't end standing on the new tile
+                var f0 = frames[0];                            // place on the first frame (before stepping over)
+                f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
+                frames[0] = f0;
+                var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
+                return (node, frames);
+            }
+            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateWithPlatform(
@@ -797,9 +824,59 @@ namespace TerraBlind
 
         const float GreedyGoalDistPx = 12f;
 
+        // HTTP sets this; consumed on the player thread (RunPendingTest) to avoid cross-thread tile/player reads.
+        static volatile string _pendingTestName;
+        static volatile int _pendingTestDir;
+        public static void RequestTestAction(string name, int dir) { _pendingTestDir = dir; _pendingTestName = name; }
+        static void RunPendingTest()
+        {
+            var n = _pendingTestName;
+            if (n == null) return;
+            _pendingTestName = null;
+            TestAction(n, _pendingTestDir);
+        }
+
+        // Isolated single-action test: from the player's current state, run ONE action generator (no greedy, no
+        // field). Replays the produced frames + visualizes. For debugging a single move type via HTTP /test_action.
+        public static void TestAction(string name, int dir)
+        {
+            StopGreedy();
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) { DiagLog.Write("[ss-test] no player"); return; }
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            int platformTile = -1;
+            int platformSlot = NavCoordinator.FindPlatformSlot(p);
+            if (platformSlot >= 0) platformTile = p.inventory[platformSlot].createTile;
+            var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
+            var (scx, scy) = StandCell(cur.Px, cur.Py);
+
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames)? r = name switch
+            {
+                "bridge" => BridgePlace(cur, dir, ph, platformTile),
+                "jumpplace" => JumpPlace(cur, dir, BuildHoldOptions()[^1], ph, platformTile),
+                "jump" => SimulateSegment(cur, dir, BuildHoldOptions()[^1], ph),
+                "walk" => SimulateSegment(cur, dir, 0, ph),
+                _ => null,
+            };
+
+            if (r == null) { DiagLog.Write($"[ss-test] {name} dir={dir} from=({scx},{scy}) → NULL (action produced nothing)"); return; }
+            var (node, frames) = r.Value;
+            var (ncx, ncy) = StandCell(node.Px, node.Py);
+            DiagLog.Write($"[ss-test] {name} dir={dir} from=({scx},{scy}) -> ({ncx},{ncy}) frames={frames.Count} place={(frames.Exists(fr => fr.Place))}");
+
+            var trail = new List<(float, float, bool)>();
+            foreach (var fr in frames) trail.Add((fr.Px + PhysicsSimulator.PlayerW / 2f, fr.Py + PhysicsSimulator.PlayerH, fr.Jump));
+            PathVisSystem.SetSSPath(trail, new List<(float, float)>(), node.Px + PhysicsSimulator.PlayerW / 2f, node.Py + PhysicsSimulator.PlayerH);
+
+            _execFrames = frames; _execIdx = 0;
+            _execGoalWx = ncx; _execGoalWy = ncy;
+            _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
+        }
+
         // chosen each time both executors are idle. Picks the candidate whose landing cell has the lowest maze cost.
         public static void TickBlocks()
         {
+            RunPendingTest();
             if (!_greedyActive) return;
             if (IsActive || SkillExecutor.IsActive) return; // a step is running
 
