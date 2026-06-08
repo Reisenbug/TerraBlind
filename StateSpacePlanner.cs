@@ -812,8 +812,6 @@ namespace TerraBlind
         static readonly List<(float, float, bool)> _greedyTrail = new();
         static bool _prevReplayJump;
         static readonly HashSet<(int, int)> _greedyVisited = new();
-        static int _greedyExploreSteps;
-        const int GreedyMaxExplore = 40; // cap on consecutive non-downhill (escaping-a-well) steps
 
         public static bool GreedyActive => _greedyActive;
 
@@ -834,7 +832,7 @@ namespace TerraBlind
             _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
             if (!_distField.ContainsKey((spx, spy))) { DiagLog.Write($"[ss-greedy] start ({spx},{spy}) not in field"); return; }
             _greedyActive = true; _greedyGoalWx = goalWx; _greedyGoalWy = goalWy;
-            _greedyTrail.Clear(); _greedyVisited.Clear(); _greedyExploreSteps = 0;
+            _greedyTrail.Clear(); _greedyVisited.Clear();
             DiagLog.Write($"[ss-greedy] start=({spx},{spy}) goal=({goalWx},{goalWy}) field={_distField.Count}");
         }
 
@@ -919,10 +917,12 @@ namespace TerraBlind
             _greedyVisited.Add((curCx, curCy));
 
             _jpNoSpot = _jpNoLand = _jpFellThrough = _jpSlidOff = _jpOk = 0;
-            // downhill = strictly lower cost than here (normal gradient descent).
-            // explore = best UNVISITED cell regardless of cost — used to climb out of a local-minimum well.
-            List<PhysicsSimulator.ControlInput> downFrames = null, expFrames = null;
-            int downCost = curCost, downFC = int.MaxValue, expCost = int.MaxValue, expFC = int.MaxValue;
+            // NO BACKTRACK: never step onto a visited cell. Among UNVISITED reachable candidates, pick the lowest
+            // maze cost. This forces forward progress out of local-minimum wells (a sealed pocket's low-cost floor
+            // is already visited → the bot must extend sideways into new cells, even if cost rises briefly). When
+            // every reachable candidate is already visited, there's genuinely nowhere new → report stuck.
+            List<PhysicsSimulator.ControlInput> chosen = null;
+            int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
             var cand = new System.Text.StringBuilder();
             int candN = 0;
             foreach (var (next, frames, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile))
@@ -931,23 +931,18 @@ namespace TerraBlind
                 bool inField = _distField.TryGetValue((ncx, ncy), out int ncost);
                 bool plc = frames.Count > 0 && frames[frames.Count - 1].Place;
                 if (candN++ < 16) cand.Append($" [{ncx},{ncy}{(plc ? "P" : "")}c{(inField ? ncost.ToString() : "∞")}f{frames.Count}]");
-                if (!inField) continue;
-                if (ncost < downCost || (ncost == downCost && frames.Count < downFC))
-                { downCost = ncost; downFrames = frames; downFC = frames.Count; }
-                if (!_greedyVisited.Contains((ncx, ncy)) && (ncost < expCost || (ncost == expCost && frames.Count < expFC)))
-                { expCost = ncost; expFrames = frames; expFC = frames.Count; }
+                if (!inField || _greedyVisited.Contains((ncx, ncy))) continue;
+                if (ncost < chosenCost || (ncost == chosenCost && frames.Count < chosenFC))
+                { chosenCost = ncost; chosen = frames; chosenFC = frames.Count; }
             }
 
-            List<PhysicsSimulator.ControlInput> chosen; int chosenCost; string how;
-            if (downFrames != null && downCost < curCost) { chosen = downFrames; chosenCost = downCost; how = "down"; _greedyExploreSteps = 0; }
-            else if (expFrames != null && _greedyExploreSteps < GreedyMaxExplore) { chosen = expFrames; chosenCost = expCost; how = "explore"; _greedyExploreSteps++; }
-            else
+            if (chosen == null)
             {
-                DiagLog.Write($"[ss-greedy] stuck at ({curCx},{curCy}) cost={curCost} explore={_greedyExploreSteps} cands(n={candN}):{cand}");
+                DiagLog.Write($"[ss-greedy] stuck at ({curCx},{curCy}) cost={curCost} (no unvisited candidate) cands(n={candN}):{cand}");
                 StopGreedy(); return;
             }
 
-            DiagLog.Write($"[ss-greedy] {how} ({curCx},{curCy})cost={curCost} -> cost={chosenCost} frames={chosen.Count}");
+            DiagLog.Write($"[ss-greedy] step ({curCx},{curCy})cost={curCost} -> cost={chosenCost} frames={chosen.Count}");
             foreach (var fr in chosen) _greedyTrail.Add((fr.Px + PhysicsSimulator.PlayerW / 2f, fr.Py + PhysicsSimulator.PlayerH, fr.Jump));
             PathVisSystem.SetSSPath(new List<(float, float, bool)>(_greedyTrail), new List<(float, float)>(), gx, gy);
             _execFrames = chosen; _execIdx = 0;
