@@ -12,4 +12,9 @@ Items: {
 			Right: cost-field heatmap (green near goal, red far)
 			'''
 	}
+
+	RecordWand: {
+		DisplayName: Record Wand
+		Tooltip: Right: toggle recording human input
+	}
 }

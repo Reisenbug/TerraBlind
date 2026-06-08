@@ -805,6 +805,9 @@ namespace TerraBlind
 
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopGreedy(); return; }
+            // each step must start from rest on the ground: picking mid-air gives a wrong start state and the next
+            // jump can't edge-trigger (controlJump never released). wait until landed and settled.
+            if (p.velocity.Y != 0f) return;
 
             float gx = _greedyGoalWx * 16f + 8f, gy = (_greedyGoalWy + 1) * 16f;
             float ccx = p.position.X + p.width / 2f, cfy = p.position.Y + p.height;
