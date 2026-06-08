@@ -14,7 +14,10 @@ namespace TerraBlind
     {
         public enum Act { Walk, Jump, Fall, JumpPlace, Bridge, Dig }
 
-        public struct Edge { public int Cx, Cy; public Act Act; public float Cost; }
+        // Frames = the forward-simulated control inputs that DEFINE this edge (Walk/Jump/Fall). execution replays
+        // exactly these → planned trajectory == executed trajectory (the 99.99% fit). null for state-machine edges
+        // (JumpPlace pillar / Bridge / Dig) which are driven by their own executors, not frame replay.
+        public struct Edge { public int Cx, Cy; public Act Act; public float Cost; public List<PhysicsSimulator.ControlInput> Frames; }
 
         // costs are in ~FRAMES so all actions compare on real time. dig cost is computed per-tile (DigTable) so a
         // hard block under a weak pick is correctly expensive and A* routes around it (e.g. climbs out of a pit
@@ -59,10 +62,39 @@ namespace TerraBlind
 
         const int FallMax = 25;
 
+        // player start State standing on cell (cx,cy): box centered on the column, feet on the (cy+1) floor top.
+        static PhysicsSimulator.State CellToState(int cx, int cy)
+        {
+            float px = cx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            float py = (cy + 1) * 16f - PhysicsSimulator.PlayerH;
+            return new PhysicsSimulator.State { Px = px, Py = py, Vx = 0f, Vy = 0f, Grounded = true };
+        }
+
+        static int[] JumpHolds()
+        {
+            int max = Player.jumpHeight > 0 ? Player.jumpHeight : 15;
+            var holds = new List<int>();
+            for (int h = 3; h < max; h += 3) holds.Add(h);
+            holds.Add(max);
+            return holds.ToArray();
+        }
+
+        // forward-simulate a jump from cell (cx,cy) with (dir,hold). returns the landing cell + the exact frames IF
+        // it lands. execution replays these frames → identical trajectory. this is the real edge test (no geometry).
+        static (int cx, int cy, List<PhysicsSimulator.ControlInput> frames)? SimEdge(int cx, int cy, int dir, int hold, PhysicsSimulator.Params ph)
+        {
+            var start = CellToState(cx, cy);
+            var r = PhysicsSimulator.SimulateJump(start, dir, hold, ph);
+            if (!r.Landed) return null;
+            if (r.Cx == cx && r.Cy == cy) return null; // didn't move
+            return (r.Cx, r.Cy, r.Frames);
+        }
+
         // generate all outgoing edges from (cx,cy). O(1)-ish per edge (tile lookups, no physics sim).
         static IEnumerable<Edge> Edges(int cx, int cy, bool canPlace)
         {
-            // walk to horizontally adjacent standable cells
+            // walk to horizontally adjacent standable cells (flat-ground walk: geometry == physics, no fake-edge
+            // risk; execution drives "walk to target cell" directly, no frame replay needed).
             foreach (int dir in new[] { -1, 1 })
                 if (Standable(cx + dir, cy))
                     yield return new Edge { Cx = cx + dir, Cy = cy, Act = Act.Walk, Cost = MoveSide };
@@ -78,17 +110,20 @@ namespace TerraBlind
                 }
             }
 
-            // jump: to a higher/level standable cell within reach, arc roughly clear (head clear along the way)
-            var (dxMax, dyUp) = JumpReach();
-            for (int dx = -dxMax; dx <= dxMax; dx++)
-                for (int dy = -dyUp; dy <= 2; dy++)
+            // jump: forward-simulate each (dir,hold). the landing cell IS the simulator's result (not a geometric
+            // guess), and the frames are carried on the edge so execution replays the identical arc. an arc that
+            // hits a wall / falls short / plunges simply lands somewhere else (or not standable) — no fake edges.
+            var ph = PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer);
+            foreach (int dir in new[] { -1, 1 })
+                foreach (int hold in JumpHolds())
                 {
-                    if (dx == 0 && dy >= 0) continue;            // straight-up handled, level handled by walk
-                    int nx = cx + dx, ny = cy + dy;
-                    if (!Standable(nx, ny)) continue;
-                    if (!ArcClear(cx, cy, nx, ny)) continue;
-                    int cost = Math.Abs(dx) * MoveSide + (dy < 0 ? -dy * MoveUp : 0) + 1;
-                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Jump, Cost = cost };
+                    var sj = SimEdge(cx, cy, dir, hold, ph);
+                    if (sj == null) continue;
+                    var (nx, ny, frames) = sj.Value;
+                    if (!Standable(nx, ny)) continue;           // must end on a real standable cell
+                    int dxa = Math.Abs(nx - cx), dyu = cy - ny;
+                    int cost = dxa * MoveSide + (dyu > 0 ? dyu * MoveUp : 0) + frames.Count / 4 + 1;
+                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Jump, Cost = cost, Frames = frames };
                 }
 
             if (canPlace)
@@ -96,7 +131,8 @@ namespace TerraBlind
                 // 2b PILLAR-UP (the key move for flat ground / pit floors): jump, place a platform under the feet,
                 // land on it, repeat. Stands on what it just placed — needs NO pre-existing support, only OPEN air
                 // to rise into. This is how you leave a flat floor. Each notch ≈ 2 tiles (SkillExecutor cadence).
-                for (int dy = 2; dy <= dyUp; dy += 2)
+                int pillarMax = JumpReach().dyUp;
+                for (int dy = 2; dy <= pillarMax; dy += 2)
                 {
                     bool clear = true;
                     for (int k = 0; k <= dy; k++) if (Block(cx, cy - k)) { clear = false; break; } // column up must be open
@@ -299,28 +335,38 @@ namespace TerraBlind
             return (gx, gy);
         }
 
-        // visualize the action path: color tiles by act, mark placements/digs.
+        // visualize the action path. Jump edges draw their REAL forward-simulated trajectory (per-frame dots, the
+        // arc the player will actually fly) — not a colored block. state-machine edges (pillar/bridge/dig) and the
+        // landing cells are marked as tiles. trail (SSPath dots) + tiles overlay in PathVisSystem.
         public static void Visualize(Result r)
         {
-            var tiles = new List<(int, int, Color)>();
-            int cx = r.StartCx, cy = r.StartCy;
-            tiles.Add((cx, cy, Color.White));
+            var trail = new List<(float, float, bool)>();   // (px, py, isJump) per simulated frame
+            var tiles = new List<(int, int, Color)>();      // landing cells + place/dig markers
+
+            tiles.Add((r.StartCx, r.StartCy, Color.White));
             foreach (var e in r.Path)
             {
+                if (e.Frames != null)
+                {
+                    // real physics trajectory: one dot per frame (foot point), green=jump arc, yellow=ground move
+                    foreach (var f in e.Frames)
+                        trail.Add((f.Px + PhysicsSimulator.PlayerW / 2f, f.Py + PhysicsSimulator.PlayerH, e.Act == Act.Jump));
+                }
                 Color c = e.Act switch
                 {
                     Act.Walk => new Color(255, 230, 0),
                     Act.Jump => new Color(0, 200, 90),
                     Act.Fall => new Color(0, 150, 255),
-                    Act.JumpPlace => new Color(180, 0, 255),
-                    Act.Bridge => new Color(255, 0, 200),
-                    Act.Dig => new Color(255, 60, 0),
+                    Act.JumpPlace => new Color(180, 0, 255),   // pillar
+                    Act.Bridge => new Color(255, 0, 200),      // bridge platform
+                    Act.Dig => new Color(255, 60, 0),          // mined tile
                     _ => Color.Gray,
                 };
                 tiles.Add((e.Cx, e.Cy, c));
-                cx = e.Cx; cy = e.Cy;
             }
-            tiles.Add((r.GoalCx, r.GoalCy, Color.Red));
+
+            float gpx = r.GoalCx * 16f + 8f, gpy = (r.GoalCy + 1) * 16f;
+            PathVisSystem.SetSSPath(trail, new List<(float, float)>(), gpx, gpy);
             PathVisSystem.SetTiles(tiles);
         }
 

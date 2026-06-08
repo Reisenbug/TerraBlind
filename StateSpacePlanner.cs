@@ -783,6 +783,95 @@ namespace TerraBlind
 
         public static void StopExec() { _execFrames = null; _execIdx = 0; }
 
+        // ===== Action-graph path executor: run ActionGraphPlanner.Plan's path edge-by-edge. Jump edges REPLAY the
+        // edge's own forward-simulated frames (planned trajectory == executed trajectory). pillar/bridge/dig go to
+        // their state-machine executors. each edge starts only when the player is landed + at rest (clean state).
+        static List<ActionGraphPlanner.Edge> _agPath;
+        static int _agIdx;
+        static bool _agDispatched;
+        public static bool AGActive => _agPath != null && _agIdx < _agPath.Count;
+
+        public static void StopAG() { _agPath = null; _agIdx = 0; _agDispatched = false; }
+
+        public static void ExecAGPath(int goalWx, int goalWy)
+        {
+            StopGreedy(); StopAG();
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return;
+            int sx = (int)(p.Center.X / 16f);
+            int sy = (int)((p.position.Y + p.height) / 16f) - 1;
+            var r = ActionGraphPlanner.Plan(sx, sy, goalWx, goalWy);
+            ActionGraphPlanner.Visualize(r);
+            if (!r.Found || r.Path.Count == 0) { DiagLog.Write("[ag-exec] plan not found / empty"); return; }
+            _agPath = r.Path; _agIdx = 0; _agDispatched = false;
+            DiagLog.Write($"[ag-exec] start path edges={r.Path.Count}");
+        }
+
+        static void TickAG()
+        {
+            if (!AGActive) return;
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) { StopAG(); return; }
+            bool busy = IsActive || SkillExecutor.IsActive;
+
+            if (_agDispatched)
+            {
+                if (busy) return;
+                if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
+                _agIdx++;
+                _agDispatched = false;
+                if (!AGActive) { DiagLog.Write("[ag-exec] done"); StopAG(); return; }
+            }
+            if (busy || p.velocity.Y != 0f) return; // start each edge from rest on the ground
+
+            var e = _agPath[_agIdx];
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            int ccx = (int)(p.Center.X / 16f);
+            int ccy = (int)((p.position.Y + p.height) / 16f) - 1;
+            int dir = e.Cx > ccx ? 1 : (e.Cx < ccx ? -1 : 0);
+            int platformTile = -1;
+            int ps = NavCoordinator.FindPlatformSlot(p);
+            if (ps >= 0) platformTile = p.inventory[ps].createTile;
+
+            DiagLog.Write($"[ag-exec] edge #{_agIdx}/{_agPath.Count} {e.Act} cur=({ccx},{ccy})->({e.Cx},{e.Cy}) dir={dir}");
+            _agDispatched = true;
+            _execGoalWx = e.Cx; _execGoalWy = e.Cy;
+
+            switch (e.Act)
+            {
+                case ActionGraphPlanner.Act.Jump:
+                    // REPLAY the edge's own simulated frames — identical trajectory, no re-simulation.
+                    if (e.Frames != null && e.Frames.Count > 0) { _execFrames = e.Frames; _execIdx = 0; }
+                    else DiagLog.Write("[ag-exec] jump edge has no frames — skip");
+                    return;
+                case ActionGraphPlanner.Act.JumpPlace:
+                    SkillExecutor.StartPillarJump(dir >= 0, e.Cy);
+                    return;
+                case ActionGraphPlanner.Act.Bridge:
+                {
+                    var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true };
+                    var br = BridgePlace(cur, dir == 0 ? 1 : dir, ph, platformTile);
+                    if (br.HasValue) { _execFrames = br.Value.frames; _execIdx = 0; }
+                    else DiagLog.Write("[ag-exec] bridge produced no frames — skip");
+                    return;
+                }
+                case ActionGraphPlanner.Act.Dig:
+                    if (e.Cy < ccy) SkillExecutor.StartDigUp();
+                    else if (e.Cy > ccy) SkillExecutor.StartDigDown();
+                    else if (dir < 0) SkillExecutor.StartDigLeft();
+                    else SkillExecutor.StartDigRight();
+                    return;
+                default: // Walk / Fall: simulate a ground move to the target cell, replay it
+                {
+                    var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true };
+                    var mv = SimulateSegment(cur, dir == 0 ? 1 : dir, 0, ph);
+                    if (mv.HasValue) { _execFrames = mv.Value.frames; _execIdx = 0; }
+                    else DiagLog.Write("[ag-exec] walk/fall produced no frames — skip");
+                    return;
+                }
+            }
+        }
+
         static List<Block> PlanBlocks(int goalWx, int goalWy)
         {
             var p = Main.LocalPlayer;
@@ -891,6 +980,7 @@ namespace TerraBlind
         public static void TickBlocks()
         {
             RunPendingTest();
+            TickAG();
             if (!_greedyActive) return;
             if (IsActive || SkillExecutor.IsActive) return; // a step is running
 

@@ -41,20 +41,21 @@ namespace TerraBlind
 
             if (player.altFunctionUse == 2)
             {
-                // right click = block-plan execute prototype: maze block → pillar-jump executor
+                // right click = state-space A* (velocity-carrying, forward-simulated edges) plan + execute
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
                 StateSpacePlanner.StopExec();
-                StateSpacePlanner.ExecBlocks(mx, my);
-                DiagLog.Write($"[wand] ss_execblk target=({mx},{my})");
+                StateSpacePlanner.Execute(mx, my);
+                DiagLog.Write($"[wand] ss_exec target=({mx},{my})");
             }
             else
             {
-                // left click = action-graph A* plan + visualize full action path (stage 1: no execution)
+                // left click = state-space A* plan + visualize (forward-simulated trajectory, no execution)
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                ActionGraphPlanner.PlanAndVisualize(mx, my);
-                DiagLog.Write($"[wand] ag_plan target=({mx},{my})");
+                var ssr = StateSpacePlanner.Plan(mx, my);
+                StateSpacePlanner.Visualize(ssr, mx, my);
+                DiagLog.Write($"[wand] ss_plan target=({mx},{my})");
             }
             return true;
         }
