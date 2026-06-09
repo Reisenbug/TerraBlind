@@ -102,6 +102,62 @@ namespace TerraBlind
 
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
 
+        // SHARED legality test for the pillar macro: planner (Expand) and executor both call this so the graph edge
+        // exists exactly when the executor can actually pillar (no fake edges). Mirrors ApplyControls' PillarBuild
+        // checks: must have a platform item, the head's two columns (20px body) must be clear of solid non-platform
+        // tiles going up, and a hold=15 vertical jump must rise (not be boxed in). Returns how high the feet can
+        // reach (topFeetY = the highest feet row before the head hits a ceiling), and whether pillaring is possible.
+        public static bool CanPillarFrom(int feetCx, int feetCy, out int topFeetY)
+        {
+            topFeetY = feetCy;
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return false;
+            if (FindPlatformSlot(p) < 0) return false;
+
+            // player box left/right columns when standing centered on feetCx
+            float px = feetCx * 16f + 8f - p.width / 2f;
+            int leftCol = (int)(px / 16f);
+            int rightCol = (int)((px + p.width - 1) / 16f);
+
+            // scan upward: head occupies the row above the feet. stop where either column hits a solid (non-platform)
+            // tile — that's the ceiling the executor's leftHeadBlocked/rightHeadBlocked check would stop at.
+            // body of height 42px occupies 3 rows: feetY, feetY-1, feetY-2. climbing 2 tiles to feetY-2 makes the
+            // body occupy feetY-2, feetY-3, feetY-4 — so the two NEW rows (feetY-3, feetY-4) must both be clear in
+            // both columns, else the head ends up inside a wall (the clip bug). only advance when they're clear.
+            int feetY = feetCy;
+            int reached = feetCy;
+            for (int step = 0; step < 40; step++)
+            {
+                int newRowA = feetY - 3, newRowB = feetY - 4; // rows the body newly enters on the next 2-tile climb
+                bool blocked = IsSolidNonPlatform(leftCol, newRowA) || IsSolidNonPlatform(rightCol, newRowA)
+                             || IsSolidNonPlatform(leftCol, newRowB) || IsSolidNonPlatform(rightCol, newRowB);
+                if (blocked) break;
+                feetY -= 2;
+                reached = feetY;
+            }
+            topFeetY = reached;
+            DiagLog.Write($"[pillar-can] from feet=({feetCx},{feetCy}) cols[{leftCol}..{rightCol}] reachedFeetY={reached} (box would occupy {reached-2}..{reached})");
+            if (reached >= feetCy) return false; // can't gain any height
+
+            // jump must not be boxed in at the start (hold=15 vertical rise ≥ 10px, allowing a small left/right nudge)
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            float startPy = feetCy * 16f + 16f - p.height; // feet on (feetCy+1) floor top → top-left py
+            bool RiseOk(float ox)
+            {
+                var sim = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = px + ox, Py = startPy, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, ph);
+                return startPy - sim.MinPy >= 10f;
+            }
+            if (!RiseOk(0f) && !RiseOk(-4f) && !RiseOk(4f)) return false;
+            return true;
+        }
+
+        static bool IsSolidNonPlatform(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+        }
+
         private static int FindPlatformSlot(Player p)
         {
             for (int i = 0; i < 10; i++)

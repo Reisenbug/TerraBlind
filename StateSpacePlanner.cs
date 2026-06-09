@@ -77,6 +77,16 @@ namespace TerraBlind
             public float BestPx, BestPy, BestDx, BestDy;
             public List<(float px, float py)> Explored = new();
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
+            public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
+        }
+
+        // one path edge to execute: a frame-replay move (Frames!=null) or the pillar macro (Pillar=true → drive
+        // SkillExecutor.StartPillarJump to TargetCy). TargetCx/Cy = the landing cell.
+        public class ExecStep
+        {
+            public bool Pillar;
+            public int TargetCx, TargetCy;
+            public List<PhysicsSimulator.ControlInput> Frames;
         }
 
         public class PathSeg
@@ -110,6 +120,15 @@ namespace TerraBlind
             var (spx, spy) = StandCell(p.position.X, p.position.Y);
             _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
 
+            // DIAGNOSTIC: dump the maze-field H up the start column to answer "why does A* go DOWN into the pit". if a
+            // lower cell has LOWER H than a higher one, the field itself rewards descending. x = cell not in field.
+            {
+                var hb = new System.Text.StringBuilder($"[ss-mazeH] start=({spx},{spy}) goal=({goalWx},{goalWy}) col={spx} (y:H):");
+                for (int yy = spy + 4; yy >= spy - 30; yy--)
+                    hb.Append(_distField.TryGetValue((spx, yy), out int d) ? $" {yy}:{d}" : $" {yy}:x");
+                DiagLog.Write(hb.ToString());
+            }
+
             var blocks = BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
             if (blocks != null)
             {
@@ -127,10 +146,10 @@ namespace TerraBlind
             };
 
             var labels = new Dictionary<CellKey, List<Label>>();
-            var came = new Dictionary<SSNode, (SSNode prev, List<PhysicsSimulator.ControlInput> frames, float g)>();
+            var came = new Dictionary<SSNode, (SSNode prev, List<PhysicsSimulator.ControlInput> frames, float g, bool pillar)>();
             var open = new PriorityQueue<SSNode, float>();
             labels[Cell(start)] = new List<Label> { new Label { G = 0f, Vx = start.Vx, Vy = start.Vy } };
-            came[start] = (start, null, 0f);
+            came[start] = (start, null, 0f, false);
             open.Enqueue(start, Heuristic(start, goalCx, goalFeetY, ph));
 
             int expansions = 0;
@@ -161,7 +180,7 @@ namespace TerraBlind
 
                 expansions++;
                 if (res.Explored.Count < 3000) res.Explored.Add((cur.Px, cur.Py));
-                foreach (var (next, frames, cost) in Expand(cur, ph, goalCx, goalFeetY, holdOptions, platformTile))
+                foreach (var (next, frames, cost, pillar) in Expand(cur, ph, goalCx, goalFeetY, holdOptions, platformTile))
                 {
                     float ng = curG + cost;
                     var ck = Cell(next);
@@ -169,7 +188,7 @@ namespace TerraBlind
                     if (F_Dominance && Dominated(list, ng, next.Vx, next.Vy)) continue;
                     list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
-                    came[next] = (cur, frames, ng);
+                    came[next] = (cur, frames, ng, pillar);
                     open.Enqueue(next, ng + HeuristicWeight * Heuristic(next, goalCx, goalFeetY, ph));
                 }
             }
@@ -185,11 +204,16 @@ namespace TerraBlind
                 var k = goalNode;
                 var revPts = new List<(float, float)>();
                 var revSegs = new List<PathSeg>();
-                var revFrameLists = new List<List<PhysicsSimulator.ControlInput>>();
+                var revSteps = new List<ExecStep>();
                 while (came.TryGetValue(k, out var e) && !e.prev.Equals(k))
                 {
                     revPts.Add((k.Px, k.Py));
-                    if (e.frames != null)
+                    var (kcx, kcy) = StandCell(k.Px, k.Py);
+                    if (e.pillar)
+                    {
+                        revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null });
+                    }
+                    else if (e.frames != null)
                     {
                         var seg = new PathSeg();
                         int hold = 0; bool counting = true;
@@ -202,21 +226,50 @@ namespace TerraBlind
                         seg.Hold = hold;
                         seg.FrameCount = e.frames.Count;
                         revSegs.Add(seg);
-                        revFrameLists.Add(e.frames);
+                        revSteps.Add(new ExecStep { Pillar = false, TargetCx = kcx, TargetCy = kcy, Frames = e.frames });
                     }
                     k = e.prev;
                 }
                 revPts.Reverse();
                 revSegs.Reverse();
-                revFrameLists.Reverse();
+                revSteps.Reverse();
                 res.Path = revPts;
                 res.Segments = revSegs;
-                foreach (var fl in revFrameLists) res.ExecFrames.AddRange(fl);
+                res.Steps = revSteps;
+                foreach (var st in revSteps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
 
                 var segDesc = new System.Text.StringBuilder();
-                foreach (var sg in revSegs)
-                    segDesc.Append(sg.IsJump ? $" jump(h{sg.Hold},{sg.FrameCount}f)" : $" walk({sg.FrameCount}f)");
-                DiagLog.Write($"[ss-path] segs={revSegs.Count}{segDesc}");
+                foreach (var st in revSteps)
+                    segDesc.Append(st.Pillar ? $" pillar(->{st.TargetCy})" : $" move({st.Frames.Count}f)");
+                DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
+
+                // PERSISTENT clip check: scan every move edge's frames for a player box overlapping a solid tile —
+                // i.e. the PLANNED trajectory passes through a wall. if this fires, the simulator/edge is producing a
+                // physically impossible path (not an execution drift). reports first clip per step.
+                for (int si = 0; si < revSteps.Count; si++)
+                {
+                    var st = revSteps[si];
+                    if (st.Frames == null) continue;
+                    for (int fi = 0; fi < st.Frames.Count; fi++)
+                    {
+                        var fr = st.Frames[fi];
+                        int x0 = (int)(fr.Px / 16f), x1 = (int)((fr.Px + PhysicsSimulator.PlayerW - 1) / 16f);
+                        int y0 = (int)(fr.Py / 16f), y1 = (int)((fr.Py + PhysicsSimulator.PlayerH - 1) / 16f);
+                        bool clip = false; int bx = 0, by = 0;
+                        for (int yy = y0; yy <= y1 && !clip; yy++)
+                            for (int xx = x0; xx <= x1 && !clip; xx++)
+                            {
+                                if (xx < 0 || yy < 0 || xx >= Main.maxTilesX || yy >= Main.maxTilesY) continue;
+                                var t = Main.tile[xx, yy];
+                                if (t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]) { clip = true; bx = xx; by = yy; }
+                            }
+                        if (clip)
+                        {
+                            DiagLog.Write($"[ss-clip] step#{si} frame#{fi}/{st.Frames.Count} pos=({fr.Px:0.#},{fr.Py:0.#}) box=[{x0}..{x1}]x[{y0}..{y1}] INSIDE solid ({bx},{by})");
+                            break;
+                        }
+                    }
+                }
             }
             DiagLog.Write($"[ss-jptally] ok={_jpOk} noSpot={_jpNoSpot} noLand={_jpNoLand} fellThrough={_jpFellThrough} slidOff={_jpSlidOff}");
             DumpPlanTrace(res, start, goalWx, goalWy);
@@ -284,7 +337,7 @@ namespace TerraBlind
             catch { }
         }
 
-        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost)> Expand(
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar)> Expand(
             SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile)
         {
             if (!cur.Grounded) yield break;
@@ -303,10 +356,47 @@ namespace TerraBlind
                     var seg = SimulateSegment(cur, dir, hold, ph);
                     if (!seg.HasValue) continue;
                     if (Heuristic(seg.Value.node, goalCx, goalFeetY, ph) < curH - HProgressEps) anyProgress = true;
-                    yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count);
+                    yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false);
                 }
             }
 
+            // PILLAR MACRO (the real vertical climb): one edge straight up to where the SkillExecutor pillar can
+            // reach. NOT gated by anyProgress — leaving a pit must climb even when sideways walk "progresses"
+            // horizontally; gating it (like jump-place below) is exactly why the pit plan failed. legality =
+            // executor's OWN test (CanPillarFrom) → no fake edge. driven by SkillExecutor.StartPillarJump, so
+            // frames=null, pillar=true. cost is high (climb cycles) so A* only climbs when the maze trend wants up.
+            if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            {
+                var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+                if (SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                {
+                    // emit ONE edge per 2-tile notch up to the executor's reachable top — NOT a single edge straight
+                    // to the top (that made the "fly to the sky" pillar). giving A* every height lets the maze
+                    // heuristic pick the notch where it should stop climbing and go sideways; over-climbing is
+                    // penalized by H (landing far above the goal) so A* won't take it.
+                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                    {
+                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                        int cycles = (ccy - fy) / 2;
+                        yield return (node, null, cycles * 43f, true);
+                    }
+                }
+            }
+
+            // 3-1 BRIDGE: also ALWAYS a candidate (not gated). leaving a pillar top sideways needs a supported
+            // landing — a plain jump there just falls; bridge extends a platform one cell over so the player has a
+            // foothold. BridgeCost is high so A* only bridges when a plain jump can't land. one tile each way.
+            if (platformTile >= 0)
+                foreach (int dir in new[] { dirToGoal, -dirToGoal })
+                {
+                    var br = BridgePlace(cur, dir, ph, platformTile);
+                    if (br.HasValue)
+                        yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false);
+                }
+
+            // jump-place below IS gated: only build single-tile jump-place platforms when plain movement is stuck.
             if (platformTile < 0 || (F_Gate && anyProgress)) yield break;
 
             // stuck: plain movement can't get closer. Build with platforms.
@@ -315,7 +405,7 @@ namespace TerraBlind
                 {
                     var jp = JumpPlace(cur, dir, hold, ph, platformTile);
                     if (jp.HasValue)
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost);
+                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
                 }
 
             // vertical jump-place (dir=0): stack straight up, no horizontal drift — the destination dictates
@@ -325,16 +415,9 @@ namespace TerraBlind
                 {
                     var jp = JumpPlace(cur, 0, hold, ph, platformTile);
                     if (jp.HasValue)
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost);
+                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
                 }
 
-            // 3-1 bridge: place one platform on the support row, step onto it, brake to a stop. one tile each way.
-            foreach (int dir in new[] { dirToGoal, -dirToGoal })
-            {
-                var br = BridgePlace(cur, dir, ph, platformTile);
-                if (br.HasValue)
-                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost);
-            }
         }
 
         const float VerticalJumpVxMax = 0.5f;
@@ -549,6 +632,15 @@ namespace TerraBlind
                     Right = dir > 0, Left = dir < 0, Jump = f < hold,
                 };
                 float prevPx = s.Px;
+                // a pure WALK (hold==0) must NOT walk off a ledge and plummet — that "walk into the pit" edge has a
+                // low-maze-cost landing at the bottom, so A* picks it over staying up to jump toward the goal (the
+                // pillar-top → fall-back-down bug). if the next ground step would leave the floor, stop at the edge
+                // instead (don't emit the plunge). real drops are expressed by fall/jump edges, not walk.
+                if (hold == 0)
+                {
+                    var probe = PhysicsSimulator.Step(s, input, ph);
+                    if (!probe.Grounded) break; // would step off the ledge → stop here, at the last grounded cell
+                }
                 s = PhysicsSimulator.Step(s, input, ph);
                 input.Px = s.Px; input.Py = s.Py;
                 frames.Add(input);
@@ -786,90 +878,52 @@ namespace TerraBlind
         // ===== Action-graph path executor: run ActionGraphPlanner.Plan's path edge-by-edge. Jump edges REPLAY the
         // edge's own forward-simulated frames (planned trajectory == executed trajectory). pillar/bridge/dig go to
         // their state-machine executors. each edge starts only when the player is landed + at rest (clean state).
-        static List<ActionGraphPlanner.Edge> _agPath;
-        static int _agIdx;
-        static bool _agDispatched;
-        public static bool AGActive => _agPath != null && _agIdx < _agPath.Count;
+        // Edge-by-edge executor for a state-space Plan path. frame steps replay their own simulated frames (planned
+        // == executed); pillar steps drive SkillExecutor.StartPillarJump (the macro climb). each step starts only
+        // when the previous executor is idle and the player is landed + settled (clean rest state).
+        static List<ExecStep> _ssSteps;
+        static int _ssStepIdx;
+        static bool _ssDispatched;
+        public static bool StepsActive => _ssSteps != null && _ssStepIdx < _ssSteps.Count;
 
-        public static void StopAG() { _agPath = null; _agIdx = 0; _agDispatched = false; }
+        public static void StopSteps() { _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; }
 
-        public static void ExecAGPath(int goalWx, int goalWy)
+        static void StartSteps(List<ExecStep> steps)
         {
-            StopGreedy(); StopAG();
-            var p = Main.LocalPlayer;
-            if (p == null || !p.active) return;
-            int sx = (int)(p.Center.X / 16f);
-            int sy = (int)((p.position.Y + p.height) / 16f) - 1;
-            var r = ActionGraphPlanner.Plan(sx, sy, goalWx, goalWy);
-            ActionGraphPlanner.Visualize(r);
-            if (!r.Found || r.Path.Count == 0) { DiagLog.Write("[ag-exec] plan not found / empty"); return; }
-            _agPath = r.Path; _agIdx = 0; _agDispatched = false;
-            DiagLog.Write($"[ag-exec] start path edges={r.Path.Count}");
+            StopExec();
+            _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false;
+            DiagLog.Write($"[ss-steps] start n={steps.Count}");
         }
 
-        static void TickAG()
+        static void TickSteps()
         {
-            if (!AGActive) return;
+            if (!StepsActive) return;
             var p = Main.LocalPlayer;
-            if (p == null || !p.active) { StopAG(); return; }
+            if (p == null || !p.active) { StopSteps(); return; }
             bool busy = IsActive || SkillExecutor.IsActive;
 
-            if (_agDispatched)
+            if (_ssDispatched)
             {
                 if (busy) return;
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
-                _agIdx++;
-                _agDispatched = false;
-                if (!AGActive) { DiagLog.Write("[ag-exec] done"); StopAG(); return; }
+                _ssStepIdx++;
+                _ssDispatched = false;
+                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); return; }
             }
-            if (busy || p.velocity.Y != 0f) return; // start each edge from rest on the ground
+            if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
-            var e = _agPath[_agIdx];
-            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            var st = _ssSteps[_ssStepIdx];
             int ccx = (int)(p.Center.X / 16f);
-            int ccy = (int)((p.position.Y + p.height) / 16f) - 1;
-            int dir = e.Cx > ccx ? 1 : (e.Cx < ccx ? -1 : 0);
-            int platformTile = -1;
-            int ps = NavCoordinator.FindPlatformSlot(p);
-            if (ps >= 0) platformTile = p.inventory[ps].createTile;
+            DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {(st.Pillar ? "pillar" : "move")} ->({st.TargetCx},{st.TargetCy})");
+            _ssDispatched = true;
+            _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
-            DiagLog.Write($"[ag-exec] edge #{_agIdx}/{_agPath.Count} {e.Act} cur=({ccx},{ccy})->({e.Cx},{e.Cy}) dir={dir}");
-            _agDispatched = true;
-            _execGoalWx = e.Cx; _execGoalWy = e.Cy;
-
-            switch (e.Act)
-            {
-                case ActionGraphPlanner.Act.Jump:
-                    // REPLAY the edge's own simulated frames — identical trajectory, no re-simulation.
-                    if (e.Frames != null && e.Frames.Count > 0) { _execFrames = e.Frames; _execIdx = 0; }
-                    else DiagLog.Write("[ag-exec] jump edge has no frames — skip");
-                    return;
-                case ActionGraphPlanner.Act.JumpPlace:
-                    SkillExecutor.StartPillarJump(dir >= 0, e.Cy);
-                    return;
-                case ActionGraphPlanner.Act.Bridge:
-                {
-                    var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true };
-                    var br = BridgePlace(cur, dir == 0 ? 1 : dir, ph, platformTile);
-                    if (br.HasValue) { _execFrames = br.Value.frames; _execIdx = 0; }
-                    else DiagLog.Write("[ag-exec] bridge produced no frames — skip");
-                    return;
-                }
-                case ActionGraphPlanner.Act.Dig:
-                    if (e.Cy < ccy) SkillExecutor.StartDigUp();
-                    else if (e.Cy > ccy) SkillExecutor.StartDigDown();
-                    else if (dir < 0) SkillExecutor.StartDigLeft();
-                    else SkillExecutor.StartDigRight();
-                    return;
-                default: // Walk / Fall: simulate a ground move to the target cell, replay it
-                {
-                    var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true };
-                    var mv = SimulateSegment(cur, dir == 0 ? 1 : dir, 0, ph);
-                    if (mv.HasValue) { _execFrames = mv.Value.frames; _execIdx = 0; }
-                    else DiagLog.Write("[ag-exec] walk/fall produced no frames — skip");
-                    return;
-                }
-            }
+            if (st.Pillar)
+                SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
+            else if (st.Frames != null && st.Frames.Count > 0)
+                { _execFrames = st.Frames; _execIdx = 0; }
+            else
+                DiagLog.Write("[ss-steps] step has no frames — skip");
         }
 
         static List<Block> PlanBlocks(int goalWx, int goalWy)
@@ -980,7 +1034,7 @@ namespace TerraBlind
         public static void TickBlocks()
         {
             RunPendingTest();
-            TickAG();
+            TickSteps();
             if (!_greedyActive) return;
             if (IsActive || SkillExecutor.IsActive) return; // a step is running
 
@@ -1015,8 +1069,9 @@ namespace TerraBlind
             int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
             var cand = new System.Text.StringBuilder();
             int candN = 0;
-            foreach (var (next, frames, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile))
+            foreach (var (next, frames, _, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile))
             {
+                if (frames == null) continue; // greedy can't drive the pillar macro; skip those edges
                 var (ncx, ncy) = StandCell(next.Px, next.Py);
                 bool inField = _distField.TryGetValue((ncx, ncy), out int ncost);
                 bool plc = frames.Count > 0 && frames[frames.Count - 1].Place;
@@ -1042,16 +1097,16 @@ namespace TerraBlind
 
         public static SSResult Execute(int goalWx, int goalWy)
         {
+            StopGreedy(); StopSteps();
             var res = Plan(goalWx, goalWy);
             Visualize(res, goalWx, goalWy);
-            DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} frames={res.ExecFrames.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
-            if (!res.Found || res.ExecFrames.Count == 0) { StopExec(); return res; }
-            _execFrames = res.ExecFrames;
-            _execIdx = 0;
+            DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
+            if (!res.Found || res.Steps.Count == 0) { StopSteps(); return res; }
             _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
             _replanCount = 0;
             _placeStall = 0;
+            StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
             return res;
         }
 
@@ -1097,7 +1152,8 @@ namespace TerraBlind
             // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help.
             // greedy owns its own per-step re-decision (next TickBlocks re-picks from the real position), so the
             // physics-A* replan must NOT fire under greedy — it would hijack the frame loop with failing searches.
-            if (!_greedyActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
+            // greedy & edge-by-edge both self-correct per step; global Replan would aim at the local step target (the pit).
+            if (!_greedyActive && !StepsActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
             {
                 if (Replan("drift")) return;
             }
@@ -1127,7 +1183,7 @@ namespace TerraBlind
                 _placeStall = 0;
                 // greedy owns re-decision: abort this step, TickBlocks re-picks from the real position next frame.
                 // the physics-A* Replan must not fire here — it would inject a long open-loop path that drifts.
-                if (_greedyActive) { StopExec(); return; }
+                if (_greedyActive || StepsActive) { StopExec(); return; }
                 if (Replan("place_failed")) return;
                 StopExec();
                 return;
