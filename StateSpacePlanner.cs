@@ -419,9 +419,17 @@ namespace TerraBlind
 
             if (isWall)
             {
-                // WALL: climb it (pillar). dig fallback deliberately NOT generated yet (would be a fake edge until the
-                // dig step is wired through _ssSteps) — better no edge than an unexecutable one. add dig later.
-                if (SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                // WALL: prefer JUMP-PLACE (跳放) — jump and, when the descending arc's foot has a real placement spot
+                // (CanPlaceReal inside JumpPlace), drop ONE platform and land on it, gaining several tiles at once.
+                // this is what a human does at a wall with a foothold. only when NO hold finds a spot (pure sheer
+                // wall, no placement point) fall back to PILLAR (原地垒). this is the 2a-vs-2b distinction.
+                bool anyJumpPlace = false;
+                foreach (int hold in BuildHoldOptions())
+                {
+                    var jp = JumpPlace(cur, gdir, hold, ph, platformTile);
+                    if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false); }
+                }
+                if (!anyJumpPlace && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
