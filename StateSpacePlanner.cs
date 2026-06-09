@@ -360,64 +360,86 @@ namespace TerraBlind
                 }
             }
 
-            // PILLAR MACRO (the real vertical climb): one edge straight up to where the SkillExecutor pillar can
-            // reach. NOT gated by anyProgress — leaving a pit must climb even when sideways walk "progresses"
-            // horizontally; gating it (like jump-place below) is exactly why the pit plan failed. legality =
-            // executor's OWN test (CanPillarFrom) → no fake edge. driven by SkillExecutor.StartPillarJump, so
-            // frames=null, pillar=true. cost is high (climb cycles) so A* only climbs when the maze trend wants up.
-            if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            // ON-DEMAND PLATFORM (see memory project_ondemand_platform): platforms are NOT enumerated everywhere.
+            // they exist only where the maze gradient wants to go but physics blocks it. find the first obstacle
+            // along the gradient direction, then generate ONE platform edge toward the standable cell on its far
+            // side. obstacle type picks the platform type. this collapses ~dozen platform edges/cell to ~1-2.
+            if (platformTile >= 0)
+                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile))
+                    yield return pe;
+        }
+
+        // MAX_SCAN = a jump's horizontal reach in tiles, from live stats (≈ maxRun × jumpHeight / gravity ≈ 7-8).
+        // beyond this a plain jump can't cross, so an obstacle within range needs a platform. self-documenting,
+        // scales with gear instead of a magic 8.
+        static int MaxScan(PhysicsSimulator.Params ph)
+        {
+            int jh = Player.jumpHeight > 0 ? Player.jumpHeight : 15;
+            float g = ph.Gravity > 0 ? ph.Gravity : 0.4f;
+            return (int)System.Math.Ceiling(ph.MaxRun * jh / g / 16f);
+        }
+
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar)> OnDemandPlatformEdges(
+            SSNode cur, PhysicsSimulator.Params ph, int platformTile)
+        {
+            var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            int curH = _distField != null && _distField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
+            int hl = _distField != null && _distField.TryGetValue((ccx - 1, ccy), out int a) ? a : int.MaxValue;
+            int hr = _distField != null && _distField.TryGetValue((ccx + 1, ccy), out int b) ? b : int.MaxValue;
+            int gdir = hl < hr ? -1 : 1;                 // gradient-descent horizontal direction (toward lower maze H)
+            int targetDir = gdir;
+            int maxScan = MaxScan(ph);
+
+            // --- VERTICAL first: maze wants UP from here and a plain jump can't reach → pillar macro toward B above.
+            if (MathF.Abs(cur.Vx) < VerticalJumpVxMax && _distField != null)
             {
-                var (ccx, ccy) = StandCell(cur.Px, cur.Py);
-                if (SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                int upH = _distField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
+                if (upH < curH && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
-                    // emit ONE edge per 2-tile notch up to the executor's reachable top — NOT a single edge straight
-                    // to the top (that made the "fly to the sky" pillar). giving A* every height lets the maze
-                    // heuristic pick the notch where it should stop climbing and go sideways; over-climbing is
-                    // penalized by H (landing far above the goal) so A* won't take it.
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
                     {
                         float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
                         var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                        int cycles = (ccy - fy) / 2;
-                        yield return (node, null, cycles * 43f, true);
+                        yield return (node, null, ((ccy - fy) / 2) * 43f, true);
                     }
                 }
             }
 
-            // 3-1 BRIDGE: also ALWAYS a candidate (not gated). leaving a pillar top sideways needs a supported
-            // landing — a plain jump there just falls; bridge extends a platform one cell over so the player has a
-            // foothold. BridgeCost is high so A* only bridges when a plain jump can't land. one tile each way.
-            if (platformTile >= 0)
-                foreach (int dir in new[] { dirToGoal, -dirToGoal })
+            // --- HORIZONTAL: scan along gdir for the first obstacle (wall or gap) within reach.
+            int obsX = int.MinValue; bool isWall = false;
+            for (int d = 1; d <= maxScan; d++)
+            {
+                int sx = ccx + gdir * d;
+                if (PathPlanner.IsBlockPublic(sx, ccy)) { obsX = sx; isWall = true; break; }      // wall at foot height
+                if (!PathPlanner.IsFloorPublic(sx, ccy + 1) && !PathPlanner.IsBlockPublic(sx, ccy)) { obsX = sx; isWall = false; break; } // gap
+            }
+            DiagLog.Write($"[ss-bridge-dir] from=({ccx},{ccy}) gdir={gdir} targetDir={targetDir} obsX={(obsX == int.MinValue ? "none" : obsX.ToString())} wall={isWall} maxScan={maxScan}");
+            if (obsX == int.MinValue) yield break;       // no obstacle within reach → plain walk/jump handles it
+
+            if (isWall)
+            {
+                // WALL: climb it (pillar). dig fallback deliberately NOT generated yet (would be a fake edge until the
+                // dig step is wired through _ssSteps) — better no edge than an unexecutable one. add dig later.
+                if (SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
-                    var br = BridgePlace(cur, dir, ph, platformTile);
-                    if (br.HasValue)
-                        yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false);
+                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                    {
+                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                        yield return (node, null, ((ccy - fy) / 2) * 43f, true);
+                    }
                 }
-
-            // jump-place below IS gated: only build single-tile jump-place platforms when plain movement is stuck.
-            if (platformTile < 0 || (F_Gate && anyProgress)) yield break;
-
-            // stuck: plain movement can't get closer. Build with platforms.
-            foreach (int dir in new[] { dirToGoal, -dirToGoal })
-                foreach (int hold in holdOptions)
-                {
-                    var jp = JumpPlace(cur, dir, hold, ph, platformTile);
-                    if (jp.HasValue)
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
-                }
-
-            // vertical jump-place (dir=0): stack straight up, no horizontal drift — the destination dictates
-            // the move. Vx≈0 means the player lands back on the tile it placed (no fall-through/slide-off).
-            if (MathF.Abs(cur.Vx) < VerticalJumpVxMax)
-                foreach (int hold in holdOptions)
-                {
-                    var jp = JumpPlace(cur, 0, hold, ph, platformTile);
-                    if (jp.HasValue)
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
-                }
-
+            }
+            else
+            {
+                // GAP: bridge toward the far side. each bridge step extends one cell; A* re-scans next step for wide
+                // gaps. BridgeCost high → only taken when a plain jump can't land on the far side.
+                var br = BridgePlace(cur, gdir, ph, platformTile);
+                if (br.HasValue)
+                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false);
+            }
         }
 
         const float VerticalJumpVxMax = 0.5f;
