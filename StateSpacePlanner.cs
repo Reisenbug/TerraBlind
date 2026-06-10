@@ -672,11 +672,22 @@ namespace TerraBlind
                     if (!probe.Grounded) break; // would step off the ledge → stop here, at the last grounded cell
                 }
                 s = PhysicsSimulator.Step(s, input, ph);
-                input.Px = s.Px; input.Py = s.Py;
+                input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
                 frames.Add(input);
                 if (!s.Grounded) everAirborne = true;
                 if (s.Grounded && everAirborne)
+                {
+                    // a jump in Terraria cannot re-launch the instant it touches ground — it spends (at least) one
+                    // frame ON the ground first, sliding with its residual vx. the planner used to end the edge AT
+                    // the touch frame and start the next edge there, omitting that grounded slide → every edge's
+                    // landing was ~vx*1frame (~3px) short of where execution actually is → seam drift accumulated.
+                    // model that one grounded settle frame so the planned landing matches the real one.
+                    var settle = PhysicsSimulator.Step(s, input, ph);
+                    var sf = input; sf.Jump = false; sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
+                    frames.Add(sf);
+                    s = settle;
                     break;
+                }
                 if (s.Grounded && hold == 0)
                 {
                     if (MathF.Abs(s.Px - startPx) >= 24f) break;
@@ -918,6 +929,8 @@ namespace TerraBlind
         static List<ExecStep> _ssSteps;
         static int _ssStepIdx;
         static bool _ssDispatched;
+        static ExecStep _ssPrevStep;       // the edge being executed, for plan-vs-exec frame-count diagnosis
+        static int _lastExecFrameCount;    // how many frames ApplyControls replayed for the current edge
         public static bool StepsActive => _ssSteps != null && _ssStepIdx < _ssSteps.Count;
 
         public static void StopSteps() { _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; }
@@ -940,6 +953,11 @@ namespace TerraBlind
             {
                 if (busy) return;
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
+                // DIAGNOSTIC: planned frame count vs how many frames execution actually replayed before this edge
+                // ended. if they differ by ~1, the landing/advance timing is off by a frame (= the ~3px = vx*1frame
+                // seam drift). _execFrames is null here (consumed); _lastExecFrameCount captured it at consume time.
+                if (_ssPrevStep != null && !_ssPrevStep.Pillar)
+                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount}");
                 _ssStepIdx++;
                 _ssDispatched = false;
                 if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); return; }
@@ -950,12 +968,19 @@ namespace TerraBlind
             int ccx = (int)(p.Center.X / 16f);
             DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {(st.Pillar ? "pillar" : "move")} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;
+            _ssPrevStep = st; _lastExecFrameCount = 0;
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
             if (st.Pillar)
                 SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
             else if (st.Frames != null && st.Frames.Count > 0)
-                { _execFrames = st.Frames; _execIdx = 0; }
+            {
+                // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?
+                // any gap here = open-loop replay from a wrong origin → accumulates → edge-of-block plunge.
+                var f0 = st.Frames[0];
+                DiagLog.Write($"[ss-startgap] step#{_ssStepIdx} planStart=({f0.Px:0.##},{f0.Py:0.##}) realStart=({p.position.X:0.##},{p.position.Y:0.##}) dPx={(p.position.X - f0.Px):0.##} dPy={(p.position.Y - f0.Py):0.##}");
+                _execFrames = st.Frames; _execIdx = 0;
+            }
             else
                 DiagLog.Write("[ss-steps] step has no frames — skip");
         }
@@ -1183,6 +1208,16 @@ namespace TerraBlind
             float dyp = p.position.Y - f.Py;
             float drift = MathF.Sqrt(dxp * dxp + dyp * dyp);
 
+            // FULL plan-vs-exec divergence trace: the player's state NOW reflects the controls from frame idx-1 (set
+            // last tick, applied by the game this tick). so compare player-now to PREVIOUS planned frame. the first
+            // frame where px/py/vx/vy diverges from plan is the偏差 source: vx diverge=accel/friction mismatch,
+            // py-only diverge=stepUp/slope/halfbrick mismatch, all-after-N diverge=a missing per-frame game physics.
+            if (_execIdx > 0)
+            {
+                var pf = _execFrames[_execIdx - 1];
+                DiagLog.Write($"[ss-cmp] i={_execIdx - 1} plan(px={pf.Px:0.##} py={pf.Py:0.##} vx={pf.Vx:0.##} vy={pf.Vy:0.##} L={(pf.Left?1:0)}R={(pf.Right?1:0)}J={(pf.Jump?1:0)}) exec(px={p.position.X:0.##} py={p.position.Y:0.##} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##}) d(px={(p.position.X-pf.Px):0.##} py={(p.position.Y-pf.Py):0.##} vx={(p.velocity.X-pf.Vx):0.##} vy={(p.velocity.Y-pf.Vy):0.##})");
+            }
+
             if (_execIdx % 15 == 0)
                 DiagLog.Write($"[ss-exec] frame={_execIdx}/{_execFrames.Count} expect=({f.Px:0.#},{f.Py:0.#}) actual=({p.position.X:0.#},{p.position.Y:0.#}) drift={drift:0.#}");
 
@@ -1236,6 +1271,7 @@ namespace TerraBlind
             DiagLog.Write($"[ss-frame] idx={_execIdx}/{_execFrames.Count} J={(f.Jump ? 1 : 0)} L={(f.Left ? 1 : 0)} R={(f.Right ? 1 : 0)} P={(f.Place ? 1 : 0)} cJ={(p.controlJump ? 1 : 0)} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} gnd={(p.velocity.Y == 0f ? 1 : 0)} pos=({p.position.X:0.#},{p.position.Y:0.#}) exp=({f.Px:0.#},{f.Py:0.#}) drift={drift:0.#}");
             _prevReplayJump = f.Jump;
             _execIdx++;
+            _lastExecFrameCount++;
         }
 
         static bool TilePlaced(int cx, int cy)

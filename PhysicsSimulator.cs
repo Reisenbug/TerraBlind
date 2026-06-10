@@ -70,6 +70,7 @@ namespace TerraBlind
         {
             public bool Left, Right, Jump;
             public float Px, Py; // player position (top-left px) after this frame
+            public float Vx, Vy; // player velocity after this frame (for plan-vs-exec divergence diagnosis)
             public bool Place;   // place a platform this frame (execution-only; ignored by Step)
             public int PlaceCx, PlaceCy;
         }
@@ -103,7 +104,7 @@ namespace TerraBlind
                 else if (vx < ph.AccRunSpeed)
                 {
                     if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
-                    vx += ph.AccRun;
+                    vx += ph.AccRun * 0.2f;   // past maxRunSpeed the game accelerates at runAcceleration*0.2, not full
                     if (vx > ph.AccRunSpeed) vx = ph.AccRunSpeed;
                 }
             }
@@ -118,7 +119,7 @@ namespace TerraBlind
                 else if (vx > -ph.AccRunSpeed)
                 {
                     if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
-                    vx -= ph.AccRun;
+                    vx -= ph.AccRun * 0.2f;   // past maxRunSpeed the game accelerates at runAcceleration*0.2, not full
                     if (vx < -ph.AccRunSpeed) vx = -ph.AccRunSpeed;
                 }
             }
