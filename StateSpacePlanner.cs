@@ -957,7 +957,10 @@ namespace TerraBlind
                 // ended. if they differ by ~1, the landing/advance timing is off by a frame (= the ~3px = vx*1frame
                 // seam drift). _execFrames is null here (consumed); _lastExecFrameCount captured it at consume time.
                 if (_ssPrevStep != null && !_ssPrevStep.Pillar)
-                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount}");
+                {
+                    var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
+                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##})");
+                }
                 _ssStepIdx++;
                 _ssDispatched = false;
                 if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); return; }

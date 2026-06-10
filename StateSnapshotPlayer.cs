@@ -13,6 +13,7 @@ namespace TerraBlind
 		private int _autoJumpCooldown;
 		private float _prevVy;
 		public static bool JumpPlaceEnabled = false;
+		public static bool WalkTraceEnabled = false;
 		private bool _jumpPlaceFired;
 
 		public override void SetControls()
@@ -132,6 +133,8 @@ namespace TerraBlind
 			bool walking = false, blocked = false;
 
 			FightCoordinator.Tick(Player);
+			if (WalkTraceEnabled && System.Math.Abs(Player.velocity.X) > 0.05f)
+				DiagLog.Write($"[walk-trace] vx={Player.velocity.X:0.####} vy={Player.velocity.Y:0.##} px={Player.position.X:0.##} gnd={(Player.velocity.Y == 0f ? 1 : 0)} maxRun={Player.maxRunSpeed:0.####} accRun={Player.accRunSpeed:0.####} slow={Player.runSlowdown:0.####} acc={Player.runAcceleration:0.####}");
 			if (ci == null)
 			{
 				if (placeActive || jflBefore != 0)
