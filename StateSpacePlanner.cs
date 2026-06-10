@@ -457,7 +457,7 @@ namespace TerraBlind
         const bool F_Gate = true;        // anyProgress gating of placement
         const bool F_Dominance = true;   // velocity dominance pruning
         const bool F_Brake = false;      // reject jump-place when brake can't settle
-        const bool F_LandOnPlat = true;  // reject jump-place when not landing on the placed tile
+        const bool F_LandOnPlat = false; // true killed ~all jump-place (fellThrough) → pillar overuse; 6/2 working ver had no such check
         const bool F_DescentOnly = true; // place only during descent (vy>0)
         const bool F_Trend = true;       // two-phase up-then-left heuristic bias
 
@@ -893,6 +893,10 @@ namespace TerraBlind
         static List<PhysicsSimulator.ControlInput> _execFrames;
         static int _execIdx;
         static int _execGoalWx, _execGoalWy;
+        // the TRUE destination, set once when execution starts and never overwritten by a per-step target. replan
+        // must aim here — replanning toward the local step target (the old _execGoal during edge exec) sent the bot
+        // to a mid-path cell, which is why replan was wrongly disabled and open-loop drift then dropped it in a pit.
+        static int _finalGoalWx, _finalGoalWy;
         const float ReplanDriftPx = 24f;
         const int ReplanCooldown = 10;
         static int _replanCooldownLeft;
@@ -1132,6 +1136,7 @@ namespace TerraBlind
             Visualize(res, goalWx, goalWy);
             DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
             if (!res.Found || res.Steps.Count == 0) { StopSteps(); return res; }
+            _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;  // true destination; replan aims here, never a step target
             _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
             _replanCount = 0;
@@ -1144,15 +1149,19 @@ namespace TerraBlind
         {
             if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); return false; }
             _replanCount++;
-            var res = Plan(_execGoalWx, _execGoalWy);
-            Visualize(res, _execGoalWx, _execGoalWy);
+            // aim at the TRUE goal from the player's real position (closed-loop correction). during edge-by-edge
+            // execution, rebuild the step list (not the open-loop ExecFrames); steps re-derive from where the
+            // player actually is, so accumulated drift can't snowball into a pit.
+            bool steps = StepsActive;
+            var res = Plan(_finalGoalWx, _finalGoalWy);
+            Visualize(res, _finalGoalWx, _finalGoalWy);
             var rp = Main.LocalPlayer;
-            DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} bestdy={res.BestDy:0.#} frames={res.ExecFrames.Count}");
-            if (!res.Found || res.ExecFrames.Count == 0) return false;
-            _execFrames = res.ExecFrames;
-            _execIdx = 0;
+            DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
+            if (!res.Found || res.Steps.Count == 0) return false;
             _replanCooldownLeft = ReplanCooldown;
             _placeStall = 0;
+            if (steps) { StartSteps(res.Steps); return true; }
+            _execFrames = res.ExecFrames; _execIdx = 0;
             return true;
         }
 
@@ -1180,10 +1189,9 @@ namespace TerraBlind
             if (_replanCooldownLeft > 0) _replanCooldownLeft--;
 
             // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help.
-            // greedy owns its own per-step re-decision (next TickBlocks re-picks from the real position), so the
-            // physics-A* replan must NOT fire under greedy — it would hijack the frame loop with failing searches.
-            // greedy & edge-by-edge both self-correct per step; global Replan would aim at the local step target (the pit).
-            if (!_greedyActive && !StepsActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
+            // closed-loop drift correction (now aims at the TRUE goal + rebuilds steps, so no storm/pit). greedy
+            // self-corrects per step so it skips this; edge-by-edge USES it — open-loop drift was what dropped it.
+            if (!_greedyActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
             {
                 if (Replan("drift")) return;
             }
@@ -1211,9 +1219,9 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-place] FAILED tile=({f.PlaceCx},{f.PlaceCy}) playerCell=({fcx},{fcy}) nbrSupport={nbr} targetHasTile={Main.tile[f.PlaceCx, f.PlaceCy].HasTile} itemTime={p.itemTime} → replan");
                 }
                 _placeStall = 0;
-                // greedy owns re-decision: abort this step, TickBlocks re-picks from the real position next frame.
-                // the physics-A* Replan must not fire here — it would inject a long open-loop path that drifts.
-                if (_greedyActive || StepsActive) { StopExec(); return; }
+                // greedy re-picks from real position next TickBlocks, so just abort this frame loop. edge-by-edge
+                // replans toward the true goal (closed-loop), same as drift.
+                if (_greedyActive) { StopExec(); return; }
                 if (Replan("place_failed")) return;
                 StopExec();
                 return;
