@@ -93,35 +93,27 @@ namespace TerraBlind
             float vy = s.Vy;
             int jfl = s.JumpFramesLeft;
 
-            if (input.Right)
+            // ASSUMPTION: Terraria's accel/friction is ONE else-if chain, NOT clamped. holding a key at vx>=maxRun
+            // falls through to friction → cruise sawtooths around maxRun (mean==maxRun). a flat clamp drifts vs exec.
+            if (input.Right && vx < ph.MaxRun)
             {
-                if (vx < ph.MaxRun)
-                {
-                    if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
-                    vx += ph.AccRun;
-                    if (vx > ph.MaxRun) vx = ph.MaxRun;
-                }
-                else if (vx < ph.AccRunSpeed)
-                {
-                    if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
-                    vx += ph.AccRun * 0.2f;   // past maxRunSpeed the game accelerates at runAcceleration*0.2, not full
-                    if (vx > ph.AccRunSpeed) vx = ph.AccRunSpeed;
-                }
+                if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
+                vx += ph.AccRun;
             }
-            else if (input.Left)
+            else if (input.Right && vx < ph.AccRunSpeed)
             {
-                if (vx > -ph.MaxRun)
-                {
-                    if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
-                    vx -= ph.AccRun;
-                    if (vx < -ph.MaxRun) vx = -ph.MaxRun;
-                }
-                else if (vx > -ph.AccRunSpeed)
-                {
-                    if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
-                    vx -= ph.AccRun * 0.2f;   // past maxRunSpeed the game accelerates at runAcceleration*0.2, not full
-                    if (vx < -ph.AccRunSpeed) vx = -ph.AccRunSpeed;
-                }
+                if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
+                vx += ph.AccRun * 0.2f;
+            }
+            else if (input.Left && vx > -ph.MaxRun)
+            {
+                if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
+                vx -= ph.AccRun;
+            }
+            else if (input.Left && vx > -ph.AccRunSpeed)
+            {
+                if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
+                vx -= ph.AccRun * 0.2f;
             }
             else if (s.Grounded)
             {
@@ -167,9 +159,10 @@ namespace TerraBlind
             vxClipped = System.Math.Abs(result.X - vel.X) > 0.01f;
             vyClipped = System.Math.Abs(result.Y - vel.Y) > 0.01f;
 
+            // game keeps the clipped fall residual on the landing frame (vy≠0); zeroing here lands one frame
+            // early → +0.1px/seam drift. next frame's gravity re-clips it to ~0.
             bool hitFloor = vel.Y > 0f && vyClipped;
-            if (hitFloor) vy = 0f;
-            else          vy = result.Y;
+            vy = result.Y;
 
             vx = result.X;
 
