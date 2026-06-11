@@ -240,7 +240,11 @@ namespace TerraBlind
 
                 var segDesc = new System.Text.StringBuilder();
                 foreach (var st in revSteps)
-                    segDesc.Append(st.Pillar ? $" pillar->({st.TargetCx},{st.TargetCy})" : $" move->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
+                {
+                    if (st.Pillar) { segDesc.Append($" pillar->({st.TargetCx},{st.TargetCy})"); continue; }
+                    bool hasPlace = st.Frames.Exists(fr => fr.Place);
+                    segDesc.Append($" {(hasPlace ? "BRIDGE" : "move")}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
+                }
                 DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
                 // PERSISTENT clip check: scan every move edge's frames for a player box overlapping a solid tile —
@@ -350,7 +354,7 @@ namespace TerraBlind
             bool anyProgress = false;
             bool vertProgress = false; // a plain jump that lands the player on a HIGHER cell (climbs a natural ledge)
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
-            var (dcx, dcy) = StandCell(cur.Px, cur.Py);
+            var (_, dcy) = StandCell(cur.Px, cur.Py);
             foreach (int dir in new[] { dirToGoal, -dirToGoal })
             {
                 foreach (int hold in holdOptions)
@@ -746,6 +750,15 @@ namespace TerraBlind
             if (frames.Count == 0) return null;
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) return null; // no self-loops
+            // FRAGILE: in water gravity is so weak the sim still reads Grounded=true while floating over empty cells
+            // (the player hasn't sunk enough to register a non-ground frame). a grounded landing whose foot columns
+            // have NO real floor below is a fake stand — reject it so A* must place a platform instead of "walking"
+            // across open water and looping. only applies to grounded landings (airborne fall/jump edges are fine).
+            if (node.Grounded)
+            {
+                var (ncx, ncy) = StandCell(node.Px, node.Py);
+                if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null; // the reported stand cell has no floor under it = fake
+            }
             return (node, frames);
         }
 
