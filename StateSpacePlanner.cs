@@ -85,8 +85,10 @@ namespace TerraBlind
         public class ExecStep
         {
             public bool Pillar;
+            public bool Dig;
             public int TargetCx, TargetCy;
             public List<PhysicsSimulator.ControlInput> Frames;
+            public List<(int wx, int wy)> MineTiles;
         }
 
         public class PathSeg
@@ -116,6 +118,8 @@ namespace TerraBlind
 
             int platformSlot = NavCoordinator.FindPlatformSlot(p);
             int platformTile = platformSlot >= 0 ? p.inventory[platformSlot].createTile : -1;
+            bool hasPickaxe = false;
+            for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPickaxe = true; break; } }
 
             var (spx, spy) = StandCell(p.position.X, p.position.Y);
             _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
@@ -146,10 +150,10 @@ namespace TerraBlind
             };
 
             var labels = new Dictionary<CellKey, List<Label>>();
-            var came = new Dictionary<SSNode, (SSNode prev, List<PhysicsSimulator.ControlInput> frames, float g, bool pillar)>();
+            var came = new Dictionary<SSNode, (SSNode prev, List<PhysicsSimulator.ControlInput> frames, float g, bool pillar, List<(int, int)> digTiles)>();
             var open = new PriorityQueue<SSNode, float>();
             labels[Cell(start)] = new List<Label> { new Label { G = 0f, Vx = start.Vx, Vy = start.Vy } };
-            came[start] = (start, null, 0f, false);
+            came[start] = (start, null, 0f, false, null);
             open.Enqueue(start, Heuristic(start, goalCx, goalFeetY, ph));
 
             int expansions = 0;
@@ -180,7 +184,7 @@ namespace TerraBlind
 
                 expansions++;
                 if (res.Explored.Count < 3000) res.Explored.Add((cur.Px, cur.Py));
-                foreach (var (next, frames, cost, pillar) in Expand(cur, ph, goalCx, goalFeetY, holdOptions, platformTile))
+                foreach (var (next, frames, cost, pillar, digTiles) in Expand(cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
                 {
                     float ng = curG + cost;
                     var ck = Cell(next);
@@ -188,7 +192,7 @@ namespace TerraBlind
                     if (F_Dominance && Dominated(list, ng, next.Vx, next.Vy)) continue;
                     list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
-                    came[next] = (cur, frames, ng, pillar);
+                    came[next] = (cur, frames, ng, pillar, digTiles);
                     open.Enqueue(next, ng + HeuristicWeight * Heuristic(next, goalCx, goalFeetY, ph));
                 }
             }
@@ -215,6 +219,10 @@ namespace TerraBlind
                     if (e.pillar)
                     {
                         revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null });
+                    }
+                    else if (e.digTiles != null)
+                    {
+                        revSteps.Add(new ExecStep { Dig = true, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles });
                     }
                     else if (e.frames != null)
                     {
@@ -245,6 +253,7 @@ namespace TerraBlind
                 foreach (var st in revSteps)
                 {
                     if (st.Pillar) { segDesc.Append($" pillar->({st.TargetCx},{st.TargetCy})"); continue; }
+                    if (st.Dig) { segDesc.Append($" dig({st.MineTiles.Count})->({st.TargetCx},{st.TargetCy})"); continue; }
                     bool hasPlace = st.Frames.Exists(fr => fr.Place);
                     segDesc.Append($" {(hasPlace ? "BRIDGE" : "move")}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
                 }
@@ -344,8 +353,8 @@ namespace TerraBlind
             catch { }
         }
 
-        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar)> Expand(
-            SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile)
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
+            SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
             if (!cur.Grounded) yield break;
 
@@ -367,7 +376,7 @@ namespace TerraBlind
                     if (Heuristic(seg.Value.node, goalCx, goalFeetY, ph) < curH - HProgressEps) anyProgress = true;
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (segFeetCy < dcy) vertProgress = true;
-                    yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false);
+                    yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
                 }
             }
 
@@ -378,8 +387,8 @@ namespace TerraBlind
             // jump-place stays a first-class option (A* picks it by cost). but PILLAR is bottom-tier: only when a
             // plain jump can't climb either. pass vertProgress so OnDemandPlatformEdges can gate pillar on it —
             // a natural ledge a plain jump reaches (vertProgress) must NOT spawn a pillar (human climbs it bare).
-            if (platformTile >= 0)
-                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress))
+            if (platformTile >= 0 || hasPickaxe)
+                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress, hasPickaxe))
                     yield return pe;
         }
 
@@ -393,8 +402,8 @@ namespace TerraBlind
             return (int)System.Math.Ceiling(ph.MaxRun * jh / g / 16f);
         }
 
-        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar)> OnDemandPlatformEdges(
-            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress)
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
+            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
             int curH = _distField != null && _distField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
@@ -408,7 +417,7 @@ namespace TerraBlind
             // jump straight up (dir=0), drop ONE platform at the arc top, land on it — gains several tiles at once
             // when a foothold (e.g. a tree) lets the tile stick. only fall back to PILLAR (原地一格格垒) when no
             // jump-place clears VertPlaceMinRise tiles (a short hop isn't worth the jump/land overhead).
-            if (MathF.Abs(cur.Vx) < VerticalJumpVxMax && _distField != null)
+            if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && _distField != null)
             {
                 int upH = _distField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
                 if (upH < curH)
@@ -421,7 +430,7 @@ namespace TerraBlind
                         var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
                         if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
                         anyVertJumpPlace = true;
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
+                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                     }
                     // PILLAR is the last resort: only when vertical jump-place failed AND no plain jump climbs a
                     // natural ledge (!vertProgress). a reachable ledge means a human would jump it, not pillar.
@@ -432,7 +441,7 @@ namespace TerraBlind
                         {
                             float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
                             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                            yield return (node, null, ((ccy - fy) / 2) * 43f, true);
+                            yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
                         }
                     }
                 }
@@ -456,30 +465,76 @@ namespace TerraBlind
                 // this is what a human does at a wall with a foothold. only when NO hold finds a spot (pure sheer
                 // wall, no placement point) fall back to PILLAR (原地垒). this is the 2a-vs-2b distinction.
                 bool anyJumpPlace = false;
-                foreach (int hold in BuildHoldOptions())
+                bool pillarGen = false;
+                if (platformTile >= 0)
                 {
-                    var jp = JumpPlace(cur, gdir, hold, ph, platformTile);
-                    if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false); }
-                }
-                if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
-                {
-                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                    foreach (int hold in BuildHoldOptions())
                     {
-                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
-                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                        yield return (node, null, ((ccy - fy) / 2) * 43f, true);
+                        var jp = JumpPlace(cur, gdir, hold, ph, platformTile);
+                        if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
+                    }
+                    if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                    {
+                        pillarGen = true;
+                        float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                        for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                        {
+                            float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                            var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                            yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
+                        }
                     }
                 }
+                // DIG fallback: only when neither jump-place nor pillar produced an edge. real mining-frame cost
+                // (expensive) keeps A* preferring walk/jump/place/bridge; dig opens an otherwise dead wall.
+                if (hasPickaxe && !anyJumpPlace && !pillarGen)
+                {
+                    var dig = DigThroughWall(gdir, ccx, ccy);
+                    if (dig.HasValue)
+                        yield return (dig.Value.node, null, dig.Value.cost, false, dig.Value.tiles);
+                }
             }
-            else
+            else if (platformTile >= 0)
             {
                 // GAP: bridge toward the far side. each bridge step extends one cell; A* re-scans next step for wide
                 // gaps. BridgeCost high → only taken when a plain jump can't land on the far side.
                 var br = BridgePlace(cur, gdir, ph, platformTile);
                 if (br.HasValue)
-                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false);
+                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false, null);
             }
+        }
+
+        const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
+
+        // Mine straight through a solid wall along dir, stopping at the first standable cell on the far side.
+        // Returns (landing node, tiles to mine, total mining-frame cost), or null if unmineable / no standable exit.
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(int dir, int ccx, int ccy)
+        {
+            var tiles = new List<(int, int)>();
+            float cost = 0f;
+            int x = ccx + dir;
+            for (int step = 0; step < DigMaxScan; step++, x += dir)
+            {
+                bool bodyClear = !PathPlanner.IsBlockPublic(x, ccy)
+                              && !PathPlanner.IsBlockPublic(x, ccy - 1)
+                              && !PathPlanner.IsBlockPublic(x, ccy - 2);
+                if (bodyClear && PathPlanner.IsFloorPublic(x, ccy + 1))
+                {
+                    float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
+                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                    return (node, tiles, cost);
+                }
+                foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
+                    if (PathPlanner.IsBlockPublic(x, y))
+                    {
+                        int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
+                        if (fc >= DigTable.Unmineable) return null;
+                        cost += fc;
+                        tiles.Add((x, y));
+                    }
+            }
+            return null;
         }
 
         const float VerticalJumpVxMax = 0.5f;
@@ -1003,7 +1058,7 @@ namespace TerraBlind
             if (!StepsActive) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopSteps(); return; }
-            bool busy = IsActive || SkillExecutor.IsActive;
+            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive;
 
             if (_ssDispatched)
             {
@@ -1012,7 +1067,7 @@ namespace TerraBlind
                 // DIAGNOSTIC: planned frame count vs how many frames execution actually replayed before this edge
                 // ended. if they differ by ~1, the landing/advance timing is off by a frame (= the ~3px = vx*1frame
                 // seam drift). _execFrames is null here (consumed); _lastExecFrameCount captured it at consume time.
-                if (_ssPrevStep != null && !_ssPrevStep.Pillar)
+                if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
                     DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##})");
@@ -1025,13 +1080,15 @@ namespace TerraBlind
 
             var st = _ssSteps[_ssStepIdx];
             int ccx = (int)(p.Center.X / 16f);
-            DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {(st.Pillar ? "pillar" : "move")} ->({st.TargetCx},{st.TargetCy})");
+            DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {(st.Pillar ? "pillar" : st.Dig ? "dig" : "move")} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;
             _ssPrevStep = st; _lastExecFrameCount = 0;
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
             if (st.Pillar)
                 SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
+            else if (st.Dig)
+                MineCoordinator.Start(new MineRequest { Tiles = st.MineTiles });
             else if (st.Frames != null && st.Frames.Count > 0)
             {
                 // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?
@@ -1187,7 +1244,7 @@ namespace TerraBlind
             int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
             var cand = new System.Text.StringBuilder();
             int candN = 0;
-            foreach (var (next, frames, _, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile))
+            foreach (var (next, frames, _, _, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile, false))
             {
                 if (frames == null) continue; // greedy can't drive the pillar macro; skip those edges
                 var (ncx, ncy) = StandCell(next.Px, next.Py);
