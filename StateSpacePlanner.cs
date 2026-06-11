@@ -10,7 +10,7 @@ namespace TerraBlind
     {
         const float VxQuant = 0.5f;
         const int   MaxExpansions = 20000;
-        const int   MaxSegFrames = 120;
+        const int   MaxSegFrames = 1200; // high enough that slow water descents reach the floor; still a fuse vs non-terminating edges
         const int   HoldStep = 2;
         // weighted A*: f = g + w·h. w>1 trades a little path optimality for far fewer expansions,
         // which is what makes the deep climb plans (exp~5000) affordable.
@@ -198,7 +198,10 @@ namespace TerraBlind
             res.Millis = sw.Elapsed.TotalMilliseconds;
             res.Found = found;
             if (!found)
+            {
+                DiagLog.Write($"[ss-fail] exp={expansions}/{MaxExpansions} openLeft={open.Count} bestCell={StandCell(res.BestPx, res.BestPy)} bestDx={res.BestDx:0.#} bestDy={res.BestDy:0.#}");
                 DumpTerrain(start, goalWx, goalWy, res.Explored);
+            }
             if (found)
             {
                 var k = goalNode;
@@ -715,15 +718,6 @@ namespace TerraBlind
                     Right = dir > 0, Left = dir < 0, Jump = f < hold,
                 };
                 float prevPx = s.Px;
-                // a pure WALK (hold==0) must NOT walk off a ledge and plummet — that "walk into the pit" edge has a
-                // low-maze-cost landing at the bottom, so A* picks it over staying up to jump toward the goal (the
-                // pillar-top → fall-back-down bug). if the next ground step would leave the floor, stop at the edge
-                // instead (don't emit the plunge). real drops are expressed by fall/jump edges, not walk.
-                if (hold == 0)
-                {
-                    var probe = PhysicsSimulator.Step(s, input, ph);
-                    if (!probe.Grounded) break; // would step off the ledge → stop here, at the last grounded cell
-                }
                 s = PhysicsSimulator.Step(s, input, ph);
                 input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
                 frames.Add(input);
