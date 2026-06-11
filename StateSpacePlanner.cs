@@ -348,7 +348,9 @@ namespace TerraBlind
             // (vertical-aware) heuristic. Horizontal shuffling toward a wall lowers x-distance but not h once
             // blocked; only real progress counts. Placement is expensive, so only build when walk/jump is stuck.
             bool anyProgress = false;
+            bool vertProgress = false; // a plain jump that lands the player on a HIGHER cell (climbs a natural ledge)
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
+            var (dcx, dcy) = StandCell(cur.Px, cur.Py);
             foreach (int dir in new[] { dirToGoal, -dirToGoal })
             {
                 foreach (int hold in holdOptions)
@@ -356,6 +358,8 @@ namespace TerraBlind
                     var seg = SimulateSegment(cur, dir, hold, ph);
                     if (!seg.HasValue) continue;
                     if (Heuristic(seg.Value.node, goalCx, goalFeetY, ph) < curH - HProgressEps) anyProgress = true;
+                    var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+                    if (segFeetCy < dcy) vertProgress = true;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false);
                 }
             }
@@ -364,8 +368,11 @@ namespace TerraBlind
             // they exist only where the maze gradient wants to go but physics blocks it. find the first obstacle
             // along the gradient direction, then generate ONE platform edge toward the standable cell on its far
             // side. obstacle type picks the platform type. this collapses ~dozen platform edges/cell to ~1-2.
+            // jump-place stays a first-class option (A* picks it by cost). but PILLAR is bottom-tier: only when a
+            // plain jump can't climb either. pass vertProgress so OnDemandPlatformEdges can gate pillar on it —
+            // a natural ledge a plain jump reaches (vertProgress) must NOT spawn a pillar (human climbs it bare).
             if (platformTile >= 0)
-                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile))
+                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress))
                     yield return pe;
         }
 
@@ -380,7 +387,7 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar)> OnDemandPlatformEdges(
-            SSNode cur, PhysicsSimulator.Params ph, int platformTile)
+            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
             int curH = _distField != null && _distField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
@@ -409,7 +416,9 @@ namespace TerraBlind
                         anyVertJumpPlace = true;
                         yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
                     }
-                    if (!anyVertJumpPlace && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                    // PILLAR is the last resort: only when vertical jump-place failed AND no plain jump climbs a
+                    // natural ledge (!vertProgress). a reachable ledge means a human would jump it, not pillar.
+                    if (!anyVertJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                         for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
@@ -445,7 +454,7 @@ namespace TerraBlind
                     var jp = JumpPlace(cur, gdir, hold, ph, platformTile);
                     if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false); }
                 }
-                if (!anyJumpPlace && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
