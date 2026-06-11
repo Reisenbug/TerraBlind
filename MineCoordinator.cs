@@ -44,8 +44,15 @@ namespace TerraBlind
 			int slot = FindPickaxeSlot(p);
 			if (slot < 0) { _active = null; return; }
 
-			Player.tileTargetX = wx;
-			Player.tileTargetY = wy;
+			// walk into the tunnel as it opens — deeper columns are outside mining reach from the start cell
+			int pcx = (int)(p.Center.X / 16f);
+			if (wx > pcx + 1) p.controlRight = true;
+			else if (wx < pcx - 1) p.controlLeft = true;
+
+			// Player.Update recomputes tileTargetX/Y from Main.mouseX every frame, so writing tileTarget
+			// directly gets overwritten — drive the mouse instead (same as PlaceCoordinator).
+			Main.mouseX = (int)(wx * 16f + 8f - Main.screenPosition.X);
+			Main.mouseY = (int)(wy * 16f + 8f - Main.screenPosition.Y);
 			Main.SmartCursorWanted_Mouse = false;
 			p.selectedItem = slot;
 			if (p.itemTime == 0)
