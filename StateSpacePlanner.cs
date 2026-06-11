@@ -240,7 +240,7 @@ namespace TerraBlind
 
                 var segDesc = new System.Text.StringBuilder();
                 foreach (var st in revSteps)
-                    segDesc.Append(st.Pillar ? $" pillar(->{st.TargetCy})" : $" move({st.Frames.Count}f)");
+                    segDesc.Append(st.Pillar ? $" pillar->({st.TargetCx},{st.TargetCy})" : $" move->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
                 DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
                 // PERSISTENT clip check: scan every move edge's frames for a player box overlapping a solid tile —
@@ -390,18 +390,34 @@ namespace TerraBlind
             int targetDir = gdir;
             int maxScan = MaxScan(ph);
 
-            // --- VERTICAL first: maze wants UP from here and a plain jump can't reach → pillar macro toward B above.
+            // --- VERTICAL: maze wants UP and a plain jump can't reach. prefer in-place VERTICAL JUMP-PLACE (跳放):
+            // jump straight up (dir=0), drop ONE platform at the arc top, land on it — gains several tiles at once
+            // when a foothold (e.g. a tree) lets the tile stick. only fall back to PILLAR (原地一格格垒) when no
+            // jump-place clears VertPlaceMinRise tiles (a short hop isn't worth the jump/land overhead).
             if (MathF.Abs(cur.Vx) < VerticalJumpVxMax && _distField != null)
             {
                 int upH = _distField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
-                if (upH < curH && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                if (upH < curH)
                 {
-                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                    bool anyVertJumpPlace = false;
+                    foreach (int hold in BuildHoldOptions())
                     {
-                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
-                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                        yield return (node, null, ((ccy - fy) / 2) * 43f, true);
+                        var jp = JumpPlace(cur, 0, hold, ph, platformTile);
+                        if (!jp.HasValue) continue;
+                        var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                        if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
+                        anyVertJumpPlace = true;
+                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false);
+                    }
+                    if (!anyVertJumpPlace && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                    {
+                        float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                        for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                        {
+                            float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                            var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                            yield return (node, null, ((ccy - fy) / 2) * 43f, true);
+                        }
                     }
                 }
             }
@@ -451,6 +467,8 @@ namespace TerraBlind
         }
 
         const float VerticalJumpVxMax = 0.5f;
+        const int   VertPlaceMinRise = 3;   // vertical jump-place below this many tiles isn't worth it → pillar instead
+        const int   PlatformMaxDropTiles = 4; // scan this many tiles below the arc apex for a placeable+landable spot
         const float HProgressEps = 1.5f;
 
         // temporary bisection switches: flip one off, rebuild, see which filter was killing valid plans
@@ -480,22 +498,41 @@ namespace TerraBlind
                 Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy,
                 Grounded = true, JumpFramesLeft = hold,
             };
-            int placeCx = int.MinValue, placeCy = 0;
-            float probeVy = 0f, probeFootPy = 0f;
+            // find the arc apex (highest point): the platform must go AT or BELOW the apex foot — a platform above
+            // the apex blocks the ascent / can't be reached. simulate the free arc, track the apex foot cell.
+            int apexFootCx = int.MinValue, apexFootCy = 0;
+            float minPy = float.MaxValue;
             for (int f = 0; f < MaxSegFrames; f++)
             {
                 var input = new PhysicsSimulator.ControlInput { Right = dir > 0, Left = dir < 0, Jump = f < hold };
                 s = PhysicsSimulator.Step(s, input, ph);
-                if (F_DescentOnly ? (s.Vy <= 0f) : (f < hold)) continue;
-                int fcx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
-                int fcy = (int)((s.Py + PhysicsSimulator.PlayerH + 1f) / 16f); // foot cell
-                if (CanPlaceReal(fcx, fcy)) { placeCx = fcx; placeCy = fcy; probeVy = s.Vy; probeFootPy = s.Py + PhysicsSimulator.PlayerH; break; }
+                if (s.Py < minPy)
+                {
+                    minPy = s.Py;
+                    apexFootCx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+                    apexFootCy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f);
+                }
+                if (s.Vy > 0f && s.Py > minPy + 1f) break; // past apex and descending — apex is locked
+            }
+            if (apexFootCx == int.MinValue) { _jpNoSpot++; return null; }
+
+            // scan downward from BELOW the apex foot (a platform in the apex foot's own cell can't catch the player —
+            // they descend through it back to origin). pick the highest cell that is placeable AND lands the player
+            // ABOVE the start (a real rise, not a fall-back). not pinned to a fixed offset.
+            int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
+            int placeCx = int.MinValue, placeCy = 0;
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
+            for (int py = apexFootCy + 1; py <= apexFootCy + PlatformMaxDropTiles; py++)
+            {
+                if (!CanPlaceReal(apexFootCx, py)) continue;
+                var trySeg = SimulateWithPlatform(cur, dir, hold, ph, apexFootCx, py, platformTile);
+                if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
+                int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
+                if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
+                placeCx = apexFootCx; placeCy = py; seg = trySeg; break;
             }
             if (placeCx == int.MinValue) { _jpNoSpot++; return null; }
-
-            // re-simulate with the platform present so native collision lands the player on it
-            var seg = SimulateWithPlatform(cur, dir, hold, ph, placeCx, placeCy, platformTile);
-            if (!seg.HasValue || !seg.Value.node.Grounded) { _jpNoLand++; return null; }
+            float probeVy = 0f, probeFootPy = 0f;
             // must actually land ON the placed platform — otherwise the player passed through it and landed
             // elsewhere (often back on the ground). Such "place but fall through" edges are useless and, when
             // admitted, flood the search with cheap no-op placements (exp blowup). Reject them.
@@ -626,7 +663,10 @@ namespace TerraBlind
             var t = Main.tile[cx, cy];
             bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
             var oSlope = t.Slope;
-            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
+            // FRAGILE: keep native slope (NOT forced Solid). a Solid platform blocks the ascent of an in-place
+            // vertical jump-place → player never clears it, falls back to origin (selfloop). real platforms are
+            // solidTop: pass-through going up, catch on descent.
+            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
             try { return SimulateSegment(cur, dir, hold, ph); }
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
