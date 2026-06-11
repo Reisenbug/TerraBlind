@@ -133,8 +133,8 @@ namespace TerraBlind
 			bool walking = false, blocked = false;
 
 			FightCoordinator.Tick(Player);
-			if (WalkTraceEnabled && System.Math.Abs(Player.velocity.X) > 0.05f)
-				DiagLog.Write($"[walk-trace] vx={Player.velocity.X:0.####} vy={Player.velocity.Y:0.##} px={Player.position.X:0.##} gnd={(Player.velocity.Y == 0f ? 1 : 0)} maxRun={Player.maxRunSpeed:0.####} accRun={Player.accRunSpeed:0.####} slow={Player.runSlowdown:0.####} acc={Player.runAcceleration:0.####}");
+			if (WalkTraceEnabled && (System.Math.Abs(Player.velocity.X) > 0.02f || System.Math.Abs(Player.velocity.Y) > 0.02f))
+				DiagLog.Write($"[jump-trace] py={Player.position.Y:0.##} vy={Player.velocity.Y:0.###} vx={Player.velocity.X:0.##} feetCy={(int)((Player.position.Y + Player.height) / 16f)} wet={Player.wet} jumpSpeed={Terraria.Player.jumpSpeed:0.##} grav={Player.gravity:0.###} jumpH={Player.jumpHeight}");
 			if (ci == null)
 			{
 				if (placeActive || jflBefore != 0)
