@@ -216,7 +216,21 @@ namespace TerraBlind
                 {
                     revPts.Add((k.Px, k.Py));
                     var (kcx, kcy) = StandCell(k.Px, k.Py);
-                    if (e.pillar)
+                    if (e.pillar && e.digTiles != null)
+                    {
+                        // dig-up composite: expand into alternating "mine 2 rows" / "pillar +2" sub-steps.
+                        // revSteps is reversed afterwards, so append the forward sequence backwards.
+                        var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
+                        var sub = new List<ExecStep>();
+                        for (int feetY = prevCy - 2; feetY >= kcy; feetY -= 2)
+                        {
+                            var chunk = e.digTiles.FindAll(t => t.Item2 == feetY - 1 || t.Item2 == feetY - 2);
+                            if (chunk.Count > 0) sub.Add(new ExecStep { Dig = true, TargetCx = kcx, TargetCy = feetY, MineTiles = chunk });
+                            sub.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = feetY });
+                        }
+                        for (int si = sub.Count - 1; si >= 0; si--) revSteps.Add(sub[si]);
+                    }
+                    else if (e.pillar)
                     {
                         revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null });
                     }
@@ -457,6 +471,17 @@ namespace TerraBlind
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
 
+            // --- VERTICAL UP THROUGH SEALED CEILING: cycles of "mine 2 rows above the head, pillar-jump
+            // 2 tiles onto placed blocks", until breaking out into a lower-H cell. pillar=true AND
+            // digTiles!=null together mark this composite edge; retrace expands it into alternating
+            // Dig/Pillar sub-steps. needs blocks to pillar with, hence platformTile gate.
+            if (hasPickaxe && platformTile >= 0 && _distField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            {
+                var du = DigUp(cur, ccx, ccy, curH);
+                if (du.HasValue)
+                    yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
+            }
+
             // --- HORIZONTAL: scan along gdir for the first obstacle (wall or gap) within reach.
             int obsX = int.MinValue; bool isWall = false;
             for (int d = 1; d <= maxScan; d++)
@@ -548,6 +573,40 @@ namespace TerraBlind
                         cost += fc;
                         tiles.Add((c, y));
                     }
+            }
+            return null;
+        }
+
+        // Dig upward through a sealed ceiling: per cycle mine 2 rows above the head (2 columns, same body-width
+        // reason as DigDown), then pillar-jump 2 tiles onto placed blocks. Yields only when the ceiling is
+        // actually sealed (first cycle mines something — open headroom belongs to jump/jump-place/pillar) and
+        // the breakout cell has lower maze H.
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(SSNode cur, int ccx, int ccy, int curH)
+        {
+            float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
+            int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
+            var tiles = new List<(int, int)>();
+            float cost = 0f;
+            for (int k = 1; k * 2 <= DigMaxScan; k++)
+            {
+                foreach (int y in new[] { ccy - 1 - 2 * k, ccy - 2 - 2 * k })
+                    foreach (int c in new[] { ccx, c2 })
+                        if (PathPlanner.IsBlockPublic(c, y))
+                        {
+                            int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
+                            if (fc >= DigTable.Unmineable) return null;
+                            cost += fc;
+                            tiles.Add((c, y));
+                        }
+                if (k == 1 && tiles.Count == 0) return null;
+                int feetY = ccy - 2 * k;
+                cost += 43f;
+                if (_distField.TryGetValue((ccx, feetY), out int lh) && lh < curH)
+                {
+                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    float npy = (feetY + 1) * 16f - PhysicsSimulator.PlayerH;
+                    return (new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
+                }
             }
             return null;
         }
