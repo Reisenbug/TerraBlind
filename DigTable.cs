@@ -18,8 +18,12 @@ namespace TerraBlind
         {
             switch (type)
             {
-                case TileID.Meteorite: return ("meteorite", 1, 0);
-                case TileID.Demonite: case TileID.Crimtane: return ("evil_ore", 1, 0);
+                // minPick from vanilla GetPickaxeDamage: below threshold the swing deals ZERO damage
+                // (not slow — nothing), so an underestimate here = infinite swing loop at execution.
+                case TileID.Meteorite: return ("meteorite", 1, 50);
+                case TileID.Demonite: case TileID.Crimtane: return ("evil_ore", 1, 55);
+                case TileID.Obsidian: return ("obsidian", 1, 55);
+                case TileID.Hellstone: return ("hellstone", 2, 65);
                 case TileID.Cobalt: case TileID.Palladium: return ("cobalt", 1, 100);
                 case TileID.Mythril: case TileID.Orichalcum: return ("mythril", 2, 110);
                 case TileID.Adamantite: case TileID.Titanium: return ("adamantite", 3, 150);
@@ -27,7 +31,7 @@ namespace TerraBlind
                 case TileID.LihzahrdBrick: return ("lihzahrd", 4, 210);
                 case TileID.BlueDungeonBrick: case TileID.GreenDungeonBrick: case TileID.PinkDungeonBrick:
                 case TileID.Crimstone: case TileID.Ebonstone: case TileID.Pearlstone:
-                    return ("dungeon/evilstone", 2, 0);
+                    return ("dungeon/evilstone", 2, 65);
                 default: return ("normal", 1, 0);
             }
         }
