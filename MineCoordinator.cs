@@ -44,10 +44,24 @@ namespace TerraBlind
 			int slot = FindPickaxeSlot(p);
 			if (slot < 0) { _active = null; return; }
 
-			// walk into the tunnel as it opens — deeper columns are outside mining reach from the start cell
-			int pcx = (int)(p.Center.X / 16f);
-			if (wx > pcx + 1) p.controlRight = true;
-			else if (wx < pcx - 1) p.controlLeft = true;
+			int feetY = (int)((p.position.Y + p.height) / 16f);
+			if (wy >= feetY)
+			{
+				// digging below (shaft): the 20px body can straddle 3 columns (2+16+2) and rest on a lip
+				// outside the 2-column shaft — micro-step until the body fits inside the shaft's column span
+				int minC = int.MaxValue, maxC = int.MinValue;
+				foreach (var t in req.Tiles) { if (t.Wx < minC) minC = t.Wx; if (t.Wx > maxC) maxC = t.Wx; }
+				float lo = minC * 16f, hi = (maxC + 1) * 16f - p.width;
+				if (p.position.X < lo - 0.5f) p.controlRight = true;
+				else if (p.position.X > hi + 0.5f) p.controlLeft = true;
+			}
+			else
+			{
+				// walk into the tunnel as it opens — deeper columns are outside mining reach from the start cell
+				int pcx = (int)(p.Center.X / 16f);
+				if (wx > pcx + 1) p.controlRight = true;
+				else if (wx < pcx - 1) p.controlLeft = true;
+			}
 
 			// Player.Update recomputes tileTargetX/Y from Main.mouseX every frame, so writing tileTarget
 			// directly gets overwritten — drive the mouse instead (same as PlaceCoordinator).

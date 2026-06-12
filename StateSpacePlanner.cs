@@ -447,6 +447,16 @@ namespace TerraBlind
                 }
             }
 
+            // --- VERTICAL DOWN: the maze field is lower (or only exists, e.g. sealed cave goal) below the
+            // floor → dig a shaft straight down. nothing else produces downward-through-floor edges, so no
+            // fallback gating needed beyond the maze-progress check inside DigDown.
+            if (hasPickaxe && _distField != null)
+            {
+                var dd = DigDown(cur, ccx, ccy, curH);
+                if (dd.HasValue)
+                    yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
+            }
+
             // --- HORIZONTAL: scan along gdir for the first obstacle (wall or gap) within reach.
             int obsX = int.MinValue; bool isWall = false;
             for (int d = 1; d <= maxScan; d++)
@@ -505,6 +515,42 @@ namespace TerraBlind
         }
 
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
+
+        // Dig a shaft straight down through the floor. The player (20px) can't fall through a 1-tile hole,
+        // so the shaft is TWO columns wide: the standing column + the neighbor the player's center leans
+        // toward. Stops at the first cell below with floor under either column; only yields when that
+        // landing cell has lower maze H than here (digging down must be progress toward the goal —
+        // covers sealed cave goals, where the surface isn't in the field at all and curH==MaxValue).
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(SSNode cur, int ccx, int ccy, int curH)
+        {
+            float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
+            int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
+            var tiles = new List<(int, int)>();
+            float cost = 0f;
+            for (int y = ccy + 1; y <= ccy + DigMaxScan; y++)
+            {
+                if (!PathPlanner.IsBlockPublic(ccx, y) && !PathPlanner.IsBlockPublic(c2, y) && tiles.Count > 0)
+                {
+                    int landC = PathPlanner.IsFloorPublic(ccx, y + 1) ? ccx
+                              : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
+                    if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
+                    if (!(_distField.TryGetValue((landC, y), out int lh) && lh < curH)) return null;
+                    float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
+                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                    return (node, tiles, cost);
+                }
+                foreach (int c in new[] { ccx, c2 })
+                    if (PathPlanner.IsBlockPublic(c, y))
+                    {
+                        int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
+                        if (fc >= DigTable.Unmineable) return null;
+                        cost += fc;
+                        tiles.Add((c, y));
+                    }
+            }
+            return null;
+        }
 
         // Mine straight through a solid wall along dir, stopping at the first standable cell on the far side.
         // Returns (landing node, tiles to mine, total mining-frame cost), or null if unmineable / no standable exit.
