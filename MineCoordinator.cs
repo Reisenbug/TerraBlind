@@ -13,6 +13,8 @@ namespace TerraBlind
 	{
 		private static volatile MineRequest _active;
 		private static int _idx;
+		private static int _stallFrames;
+		private const int StallMax = 600; // ~10s on one tile = pick can't damage it (planner table wrong) → bail
 
 		public static bool IsActive => _active != null;
 
@@ -20,6 +22,7 @@ namespace TerraBlind
 		{
 			_active = r;
 			_idx = 0;
+			_stallFrames = 0;
 		}
 
 		public static void Stop()
@@ -34,10 +37,19 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _active = null; return; }
 
+			int prevIdx = _idx;
 			while (_idx < req.Tiles.Count && !Main.tile[req.Tiles[_idx].Wx, req.Tiles[_idx].Wy].HasTile)
 				_idx++;
 
 			if (_idx >= req.Tiles.Count) { _active = null; return; }
+
+			_stallFrames = _idx == prevIdx ? _stallFrames + 1 : 0;
+			if (_stallFrames > StallMax)
+			{
+				DiagLog.Write($"[mine] stalled {StallMax}f on tile ({req.Tiles[_idx].Wx},{req.Tiles[_idx].Wy}) → stop");
+				_active = null;
+				return;
+			}
 
 			var (wx, wy) = req.Tiles[_idx];
 
@@ -48,12 +60,16 @@ namespace TerraBlind
 			if (wy >= feetY)
 			{
 				// digging below (shaft): the 20px body can straddle 3 columns (2+16+2) and rest on a lip
-				// outside the 2-column shaft — micro-step until the body fits inside the shaft's column span
+				// outside the 2-column shaft. aim for the shaft CENTER (±2px), not the edge — an edge-snug
+				// stop leaves a sub-pixel lip that still supports the player, who then never falls and the
+				// deeper tiles drop out of mining reach (infinite swing).
 				int minC = int.MaxValue, maxC = int.MinValue;
 				foreach (var t in req.Tiles) { if (t.Wx < minC) minC = t.Wx; if (t.Wx > maxC) maxC = t.Wx; }
-				float lo = minC * 16f, hi = (maxC + 1) * 16f - p.width;
-				if (p.position.X < lo - 0.5f) p.controlRight = true;
-				else if (p.position.X > hi + 0.5f) p.controlLeft = true;
+				float mid = (minC * 16f + (maxC + 1) * 16f - p.width) / 2f;
+				if (p.position.X < mid - 2f) p.controlRight = true;
+				else if (p.position.X > mid + 2f) p.controlLeft = true;
+				// platforms aren't mined (DigSolid skips solidTop) — hold down to drop through any in the shaft
+				p.controlDown = true;
 			}
 			else
 			{
