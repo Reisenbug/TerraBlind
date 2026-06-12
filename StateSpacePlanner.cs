@@ -524,7 +524,7 @@ namespace TerraBlind
                 // (expensive) keeps A* preferring walk/jump/place/bridge; dig opens an otherwise dead wall.
                 if (hasPickaxe && !anyJumpPlace && !pillarGen)
                 {
-                    var dig = DigThroughWall(gdir, ccx, ccy);
+                    var dig = DigThroughWall(gdir, ccx, ccy, curH);
                     if (dig.HasValue)
                         yield return (dig.Value.node, null, dig.Value.cost, false, dig.Value.tiles);
                 }
@@ -541,6 +541,16 @@ namespace TerraBlind
 
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
 
+        // solid INCLUDING slopes/half-bricks: IsBlock deliberately excludes them (walk logic treats them as
+        // passable), but a sloped half-tile still supports the player — exactly what strands a shaft descent.
+        // anything that can hold the hitbox must be on the mining list.
+        static bool DigSolid(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+        }
+
         // Dig a shaft straight down through the floor. The player (20px) can't fall through a 1-tile hole,
         // so the shaft is TWO columns wide: the standing column + the neighbor the player's center leans
         // toward. Stops at the first cell below with floor under either column; only yields when that
@@ -554,7 +564,7 @@ namespace TerraBlind
             float cost = 0f;
             for (int y = ccy + 1; y <= ccy + DigMaxScan; y++)
             {
-                if (!PathPlanner.IsBlockPublic(ccx, y) && !PathPlanner.IsBlockPublic(c2, y) && tiles.Count > 0)
+                if (!DigSolid(ccx, y) && !DigSolid(c2, y) && tiles.Count > 0)
                 {
                     int landC = PathPlanner.IsFloorPublic(ccx, y + 1) ? ccx
                               : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
@@ -566,13 +576,24 @@ namespace TerraBlind
                     return (node, tiles, cost);
                 }
                 foreach (int c in new[] { ccx, c2 })
-                    if (PathPlanner.IsBlockPublic(c, y))
+                    if (DigSolid(c, y))
                     {
                         int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
                         if (fc >= DigTable.Unmineable) return null;
                         cost += fc;
                         tiles.Add((c, y));
                     }
+            }
+            // no cavity within scan → land at the shaft bottom (the dug space IS the standing room, the
+            // undug rock below IS the floor). the maze field penetrates rock with dig-weighted costs, so
+            // the H gate stays meaningful mid-rock — long descents chain shaft after shaft.
+            int yEnd = ccy + DigMaxScan;
+            if (tiles.Count > 0 && PathPlanner.IsFloorPublic(ccx, yEnd + 1)
+                && _distField.TryGetValue((ccx, yEnd), out int eh) && eh < curH)
+            {
+                float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
+                return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
             }
             return null;
         }
@@ -591,7 +612,7 @@ namespace TerraBlind
             {
                 foreach (int y in new[] { ccy - 1 - 2 * k, ccy - 2 - 2 * k })
                     foreach (int c in new[] { ccx, c2 })
-                        if (PathPlanner.IsBlockPublic(c, y))
+                        if (DigSolid(c, y))
                         {
                             int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
                             if (fc >= DigTable.Unmineable) return null;
@@ -613,16 +634,16 @@ namespace TerraBlind
 
         // Mine straight through a solid wall along dir, stopping at the first standable cell on the far side.
         // Returns (landing node, tiles to mine, total mining-frame cost), or null if unmineable / no standable exit.
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(int dir, int ccx, int ccy)
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(int dir, int ccx, int ccy, int curH)
         {
             var tiles = new List<(int, int)>();
             float cost = 0f;
             int x = ccx + dir;
             for (int step = 0; step < DigMaxScan; step++, x += dir)
             {
-                bool bodyClear = !PathPlanner.IsBlockPublic(x, ccy)
-                              && !PathPlanner.IsBlockPublic(x, ccy - 1)
-                              && !PathPlanner.IsBlockPublic(x, ccy - 2);
+                bool bodyClear = !DigSolid(x, ccy)
+                              && !DigSolid(x, ccy - 1)
+                              && !DigSolid(x, ccy - 2);
                 if (bodyClear && PathPlanner.IsFloorPublic(x, ccy + 1))
                 {
                     float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
@@ -631,13 +652,23 @@ namespace TerraBlind
                     return (node, tiles, cost);
                 }
                 foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
-                    if (PathPlanner.IsBlockPublic(x, y))
+                    if (DigSolid(x, y))
                     {
                         int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
                         if (fc >= DigTable.Unmineable) return null;
                         cost += fc;
                         tiles.Add((x, y));
                     }
+            }
+            // no opening within scan → land at the tunnel end (dug space = standing room, rock below = floor).
+            // H gate (maze field penetrates rock) keeps the tunnel pointed at the goal; chains for long tunnels.
+            int xEnd = ccx + dir * DigMaxScan;
+            if (tiles.Count > 0 && PathPlanner.IsFloorPublic(xEnd, ccy + 1)
+                && _distField.TryGetValue((xEnd, ccy), out int eh) && eh < curH)
+            {
+                float epx = xEnd * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                float epy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
+                return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
             }
             return null;
         }
