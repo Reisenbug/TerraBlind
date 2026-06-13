@@ -68,7 +68,7 @@ namespace TerraBlind
 
         public struct ControlInput
         {
-            public bool Left, Right, Jump;
+            public bool Left, Right, Jump, Down;
             public float Px, Py; // player position (top-left px) after this frame
             public float Vx, Vy; // player velocity after this frame (for plan-vs-exec divergence diagnosis)
             public bool Place;   // place a platform this frame (execution-only; ignored by Step)
@@ -145,11 +145,14 @@ namespace TerraBlind
             var pos = new Vector2(s.Px, s.Py);
             var vel = new Vector2(vx, vy);
             float stepSpeed = 0f, gfxOffY = 0f;
+            // holding Down drops through platforms (solidTop): pass fallThrough=true to TileCollision and skip
+            // StepUp (it would lift the player back onto the platform). matches vanilla controlDown behavior.
+            bool ft = input.Down;
             // StepUp only near ground: if not grounded and falling but no floor within 2px, skip
-            bool nearGround = s.Grounded || (vy > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, false, false, 1).Y < 2f);
-            if (vx != 0f && nearGround)
+            bool nearGround = s.Grounded || (vy > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, ft, ft, 1).Y < 2f);
+            if (vx != 0f && nearGround && !ft)
                 Terraria.Collision.StepUp(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
-            var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, false, false, 1);
+            var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, ft, ft, 1);
 
             if (vy < 0f && System.Math.Abs(result.Y - vel.Y) > 0.01f) jfl = 0;
 

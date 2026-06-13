@@ -57,12 +57,17 @@ namespace TerraBlind
         // a candidate is dominated if some existing label reached the same cell no costlier (g) and with at
         // least as much usable speed (same-direction |vx|, and vy). dominated states can do nothing the
         // dominator can't, so they're pruned — this is what stops one cell soaking up hundreds of vx variants.
+        // NOTE: do NOT collapse grounded-cell vx variants to "cheapest only" — the residual landing vx is needed
+        // to chain continuous diagonal slides down a sloped seam (each step rides the prior step's velocity).
+        // tried it; it broke otherwise-solvable descents by severing that chain.
         static bool Dominated(List<Label> labels, float g, float vx, float vy)
         {
             foreach (var l in labels)
+            {
                 if (l.G <= g + 0.01f && MathF.Abs(l.Vx) >= MathF.Abs(vx) - 0.01f && MathF.Sign(l.Vx) == MathF.Sign(vx)
                     && MathF.Abs(l.Vy - vy) < VxQuant)
                     return true;
+            }
             return false;
         }
 
@@ -396,6 +401,27 @@ namespace TerraBlind
                 }
             }
 
+            // DROP THROUGH PLATFORM: if standing on a platform (solidTop), holding Down falls through it.
+            // SimulateSegment treats platforms as floor (Grounded), so without this no downward edge exists
+            // and a platform-floored cell with the goal below is a dead end (replan storm). only emit when a
+            // platform actually supports the feet, else this duplicates a plain fall.
+            {
+                var (fcx, fcy) = StandCell(cur.Px, cur.Py);
+                bool plat = PathPlanner.PlatformPublic(fcx, fcy + 1);
+                if (plat)
+                {
+                    // a human drops off a platform by holding Down (+ a direction) and rides the fall all the way
+                    // to the real floor, not stopping one tile below. emit drop edges for hold-left / -right /
+                    // -straight so A* can pick the one that rides the diagonal seam down to the bottom.
+                    foreach (int ddir in new[] { dirToGoal, -dirToGoal, 0 })
+                    {
+                        var drop = SimulateDrop(cur, ddir, ph);
+                        if (drop.HasValue)
+                            yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
+                    }
+                }
+            }
+
             // ON-DEMAND PLATFORM (see memory project_ondemand_platform): platforms are NOT enumerated everywhere.
             // they exist only where the maze gradient wants to go but physics blocks it. find the first obstacle
             // along the gradient direction, then generate ONE platform edge toward the standable cell on its far
@@ -404,7 +430,7 @@ namespace TerraBlind
             // plain jump can't climb either. pass vertProgress so OnDemandPlatformEdges can gate pillar on it —
             // a natural ledge a plain jump reaches (vertProgress) must NOT spawn a pillar (human climbs it bare).
             if (platformTile >= 0 || hasPickaxe)
-                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress, hasPickaxe))
+                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress, hasPickaxe, anyProgress))
                     yield return pe;
         }
 
@@ -419,7 +445,7 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
-            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe)
+            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe, bool anyProgress)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
             int curH = _distField != null && _distField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
@@ -463,10 +489,10 @@ namespace TerraBlind
                 }
             }
 
-            // --- VERTICAL DOWN: the maze field is lower (or only exists, e.g. sealed cave goal) below the
-            // floor → dig a shaft straight down. nothing else produces downward-through-floor edges, so no
-            // fallback gating needed beyond the maze-progress check inside DigDown.
-            if (hasPickaxe && _distField != null)
+            // --- VERTICAL DOWN: dig a shaft straight down. ONLY when no plain walk/jump/drop edge already makes
+            // progress (!anyProgress) — otherwise, in an open cave nearly every cell has some lower-H cell below
+            // and dig-down fires everywhere, flooding the search to its 20000 budget. dig is a last resort.
+            if (hasPickaxe && !anyProgress && _distField != null)
             {
                 var dd = DigDown(cur, ccx, ccy, curH);
                 if (dd.HasValue)
@@ -477,7 +503,7 @@ namespace TerraBlind
             // 2 tiles onto placed blocks", until breaking out into a lower-H cell. pillar=true AND
             // digTiles!=null together mark this composite edge; retrace expands it into alternating
             // Dig/Pillar sub-steps. needs blocks to pillar with, hence platformTile gate.
-            if (hasPickaxe && platformTile >= 0 && _distField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            if (hasPickaxe && !anyProgress && platformTile >= 0 && _distField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
             {
                 var du = DigUp(cur, ccx, ccy, curH);
                 if (du.HasValue)
@@ -571,7 +597,8 @@ namespace TerraBlind
                     int landC = PathPlanner.IsFloorPublic(ccx, y + 1) ? ccx
                               : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
                     if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
-                    if (!(_distField.TryGetValue((landC, y), out int lh) && lh < curH)) return null;
+                    bool hasH = _distField.TryGetValue((landC, y), out int lh);
+                    if (!(hasH && lh < curH)) { DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) cavity land=({landC},{y}) curH={curH} hasH={hasH} lh={(hasH ? lh.ToString() : "x")} → null"); return null; }
                     float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -590,13 +617,15 @@ namespace TerraBlind
             // undug rock below IS the floor). the maze field penetrates rock with dig-weighted costs, so
             // the H gate stays meaningful mid-rock — long descents chain shaft after shaft.
             int yEnd = ccy + DigMaxScan;
-            if (tiles.Count > 0 && PathPlanner.IsFloorPublic(ccx, yEnd + 1)
-                && _distField.TryGetValue((ccx, yEnd), out int eh) && eh < curH)
+            bool endFloor = PathPlanner.IsFloorPublic(ccx, yEnd + 1);
+            bool endH = _distField.TryGetValue((ccx, yEnd), out int eh);
+            if (tiles.Count > 0 && endFloor && endH && eh < curH)
             {
                 float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                 float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
                 return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
             }
+            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} curH={curH} endFloor={endFloor} endH={(endH ? eh.ToString() : "x")} → null");
             return null;
         }
 
@@ -893,6 +922,35 @@ namespace TerraBlind
             frames[idx] = fr;
         }
 
+        // A human drops off a platform by holding Down (+ a direction) and rides the fall all the way to the real
+        // floor — exactly the recorded path here: hold Down to clear the platform, hold a direction, ride the
+        // diagonal down to the bottom. Down is held only until clear of the start platform (so the player can land
+        // on a lower platform/floor instead of phasing through everything); the direction is held the whole way.
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateDrop(SSNode cur, int dir, PhysicsSimulator.Params ph)
+        {
+            var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
+            var frames = new List<PhysicsSimulator.ControlInput>();
+            float startFeetY = cur.Py + PhysicsSimulator.PlayerH;
+            bool leftStart = false; // must clear the start platform before a grounded frame counts as landing
+            for (int f = 0; f < MaxSegFrames; f++)
+            {
+                bool stillOnStart = (s.Py + PhysicsSimulator.PlayerH) < startFeetY + 16f;
+                var input = new PhysicsSimulator.ControlInput { Down = stillOnStart, Left = dir < 0, Right = dir > 0 };
+                s = PhysicsSimulator.Step(s, input, ph);
+                input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
+                frames.Add(input);
+                if (!s.Grounded) leftStart = true;
+                if (s.Grounded && leftStart) break; // landed below after clearing the platform
+            }
+            if (frames.Count == 0) return null;
+            var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
+            if (!node.Grounded) return null;
+            if (MathF.Abs(node.Py - cur.Py) < 1f) return null; // didn't drop
+            var (ncx, ncy) = StandCell(node.Px, node.Py);
+            if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null;
+            return (node, frames);
+        }
+
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph)
         {
@@ -930,8 +988,14 @@ namespace TerraBlind
                 }
                 if (s.Grounded && hold == 0)
                 {
-                    if (MathF.Abs(s.Px - startPx) >= 24f) break;
-                    if (MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
+                    // don't end the walk while the feet are over empty space (e.g. stepped off a 1-wide
+                    // platform/ledge): the sim still reads Grounded for a frame, but ending here yields a
+                    // fakeStand that gets rejected, killing the walk-off-ledge edge. keep simulating so the
+                    // player actually falls to the real floor below.
+                    var (wcx, wcy) = StandCell(s.Px, s.Py);
+                    bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
+                    if (footSupported && MathF.Abs(s.Px - startPx) >= 24f) break;
+                    if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
             }
             if (frames.Count == 0) return null;
@@ -944,7 +1008,7 @@ namespace TerraBlind
             if (node.Grounded)
             {
                 var (ncx, ncy) = StandCell(node.Px, node.Py);
-                if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null; // the reported stand cell has no floor under it = fake
+                if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null; // reported stand cell has no floor = fake
             }
             return (node, frames);
         }
@@ -1520,6 +1584,7 @@ namespace TerraBlind
             if (f.Left) p.controlLeft = true;
             if (f.Right) p.controlRight = true;
             if (f.Jump) p.controlJump = true;
+            if (f.Down) p.controlDown = true;
             // full per-frame replay trace: every frame's intent vs reality. lets one run reveal jump edges,
             // drift, ground state, vx/vy without re-building to add more logging.
             DiagLog.Write($"[ss-frame] idx={_execIdx}/{_execFrames.Count} J={(f.Jump ? 1 : 0)} L={(f.Left ? 1 : 0)} R={(f.Right ? 1 : 0)} P={(f.Place ? 1 : 0)} cJ={(p.controlJump ? 1 : 0)} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} gnd={(p.velocity.Y == 0f ? 1 : 0)} pos=({p.position.X:0.#},{p.position.Y:0.#}) exp=({f.Px:0.#},{f.Py:0.#}) drift={drift:0.#}");
