@@ -86,9 +86,9 @@ namespace TerraBlind
         {
             public bool Pillar;
             public bool Dig;
+            public MineDir DigDir;
             public int TargetCx, TargetCy;
             public List<PhysicsSimulator.ControlInput> Frames;
-            public List<(int wx, int wy)> MineTiles;
         }
 
         public class PathSeg
@@ -218,14 +218,13 @@ namespace TerraBlind
                     var (kcx, kcy) = StandCell(k.Px, k.Py);
                     if (e.pillar && e.digTiles != null)
                     {
-                        // dig-up composite: expand into alternating "mine 2 rows" / "pillar +2" sub-steps.
+                        // dig-up composite: expand into alternating "mine up 2 rows" / "pillar +2" sub-steps.
                         // revSteps is reversed afterwards, so append the forward sequence backwards.
                         var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
                         var sub = new List<ExecStep>();
                         for (int feetY = prevCy - 2; feetY >= kcy; feetY -= 2)
                         {
-                            var chunk = e.digTiles.FindAll(t => t.Item2 == feetY - 1 || t.Item2 == feetY - 2);
-                            if (chunk.Count > 0) sub.Add(new ExecStep { Dig = true, TargetCx = kcx, TargetCy = feetY, MineTiles = chunk });
+                            sub.Add(new ExecStep { Dig = true, DigDir = MineDir.Up, TargetCx = kcx, TargetCy = feetY });
                             sub.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = feetY });
                         }
                         for (int si = sub.Count - 1; si >= 0; si--) revSteps.Add(sub[si]);
@@ -236,7 +235,10 @@ namespace TerraBlind
                     }
                     else if (e.digTiles != null)
                     {
-                        revSteps.Add(new ExecStep { Dig = true, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles });
+                        var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
+                        MineDir d = kcy > prevCy ? MineDir.Down
+                                  : kcx > prevCx ? MineDir.Right : MineDir.Left;
+                        revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy });
                     }
                     else if (e.frames != null)
                     {
@@ -267,7 +269,7 @@ namespace TerraBlind
                 foreach (var st in revSteps)
                 {
                     if (st.Pillar) { segDesc.Append($" pillar->({st.TargetCx},{st.TargetCy})"); continue; }
-                    if (st.Dig) { segDesc.Append($" dig({st.MineTiles.Count})->({st.TargetCx},{st.TargetCy})"); continue; }
+                    if (st.Dig) { segDesc.Append($" dig({st.DigDir})->({st.TargetCx},{st.TargetCy})"); continue; }
                     bool hasPlace = st.Frames.Exists(fr => fr.Place);
                     segDesc.Append($" {(hasPlace ? "BRIDGE" : "move")}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
                 }
@@ -1224,7 +1226,7 @@ namespace TerraBlind
             if (st.Pillar)
                 SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
             else if (st.Dig)
-                MineCoordinator.Start(new MineRequest { Tiles = st.MineTiles });
+                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, TargetWx = st.TargetCx, TargetWy = st.TargetCy });
             else if (st.Frames != null && st.Frames.Count > 0)
             {
                 // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?

@@ -1,33 +1,43 @@
-using System.Collections.Generic;
 using Terraria;
 using Terraria.ModLoader;
 
 namespace TerraBlind
 {
+	public enum MineDir { Left, Right, Down, Up }
+
 	public class MineRequest
 	{
-		public List<(int Wx, int Wy)> Tiles;
+		public MineDir Dir;
+		public int TargetWx, TargetWy; // landing cell from the planner — mining ends when the player stands here
 	}
 
 	public class MineCoordinator : ModSystem
 	{
 		private static volatile MineRequest _active;
-		private static int _idx;
-		private static int _stallFrames;
-		private const int StallMax = 600; // ~10s on one tile = pick can't damage it (planner table wrong) → bail
+		private static int _stallFrames, _lastRemaining;
+		private const int StallMax = 600; // ~10s with no tile removed = can't reach the target → bail
 
 		public static bool IsActive => _active != null;
 
 		public static void Start(MineRequest r)
 		{
 			_active = r;
-			_idx = 0;
 			_stallFrames = 0;
+			_lastRemaining = int.MaxValue;
 		}
 
 		public static void Stop()
 		{
 			_active = null;
+		}
+
+		// solid INCLUDING slopes/half-bricks (mirrors StateSpacePlanner.DigSolid): anything that supports or
+		// blocks the hitbox must be mined; platforms (solidTop) are dropped through, not mined.
+		private static bool DigSolid(int x, int y)
+		{
+			if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
 		}
 
 		public static void ApplyControls()
@@ -37,56 +47,87 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _active = null; return; }
 
-			int prevIdx = _idx;
-			while (_idx < req.Tiles.Count && !Main.tile[req.Tiles[_idx].Wx, req.Tiles[_idx].Wy].HasTile)
-				_idx++;
+			int slot = FindPickaxeSlot(p);
+			if (slot < 0) { _active = null; return; }
 
-			if (_idx >= req.Tiles.Count) { _active = null; return; }
+			// real-time hitbox cells — recomputed every frame so upstream landing drift can't aim mining at
+			// stale absolute coords (the bug: tiles planned from a too-shallow landing ended up overhead).
+			// 20px wide → 2 columns; 42px tall → 3 rows.
+			int leftC = (int)(p.position.X / 16f);
+			int rightC = (int)((p.position.X + p.width - 1) / 16f);
+			int headR = (int)(p.position.Y / 16f);
+			int footR = (int)((p.position.Y + p.height - 1) / 16f);
 
-			_stallFrames = _idx == prevIdx ? _stallFrames + 1 : 0;
+			int pcx = (int)(p.Center.X / 16f), pfeet = (int)((p.position.Y + p.height) / 16f) - 1;
+
+			int tx = int.MinValue, ty = int.MinValue, remaining = 0;
+			bool done = false;
+			switch (req.Dir)
+			{
+				case MineDir.Right:
+				case MineDir.Left:
+				{
+					int col = req.Dir == MineDir.Right ? rightC + 1 : leftC - 1;
+					for (int y = footR; y >= footR - 2; y--) // 3 body rows
+						if (DigSolid(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
+					if (req.Dir == MineDir.Right) p.controlRight = true; else p.controlLeft = true;
+					done = pcx == req.TargetWx && pfeet == req.TargetWy; // walked through to the landing cell
+					break;
+				}
+				case MineDir.Down:
+				{
+					// start at footR (not footR+1): standing on a slope/half-brick puts that support tile in
+					// the foot row itself; skipping it mines the cell BELOW the slope and the player never sinks.
+					// on a full block footR is air (DigSolid false) so this is a harmless no-op there.
+					for (int row = footR; row <= footR + 1; row++)
+						for (int x = leftC; x <= rightC; x++) // 2 body columns
+							if (DigSolid(x, row)) { remaining++; if (tx == int.MinValue) { tx = x; ty = row; } }
+					CenterInShaft(p, leftC, rightC);
+					p.controlDown = true; // drop through platforms in the shaft
+					done = pfeet >= req.TargetWy; // sank to (or below) the landing cell
+					break;
+				}
+				case MineDir.Up:
+				{
+					// one dig-up cycle clears the 2 rows above the head so the pillar step can lift 2 tiles.
+					for (int y = headR - 1; y >= headR - 2; y--)
+						for (int x = leftC; x <= rightC; x++)
+							if (DigSolid(x, y)) { remaining++; if (ty == int.MinValue) { tx = x; ty = y; } }
+					CenterInShaft(p, leftC, rightC);
+					done = remaining == 0; // headroom cleared → let the pillar step take over
+					break;
+				}
+			}
+			if (done) { _active = null; return; }
+
+			// only count stalls while there's rock to remove and it isn't shrinking; remaining==0 means we're
+			// walking the opened tunnel toward the target, not stuck.
+			_stallFrames = (remaining == 0 || remaining < _lastRemaining) ? 0 : _stallFrames + 1;
+			_lastRemaining = remaining;
 			if (_stallFrames > StallMax)
 			{
-				DiagLog.Write($"[mine] stalled {StallMax}f on tile ({req.Tiles[_idx].Wx},{req.Tiles[_idx].Wy}) → stop");
+				DiagLog.Write($"[mine] stalled {StallMax}f dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) → stop");
 				_active = null;
 				return;
 			}
 
-			var (wx, wy) = req.Tiles[_idx];
+			if (tx == int.MinValue) return; // nothing to mine this frame (walking into the opened tunnel)
 
-			int slot = FindPickaxeSlot(p);
-			if (slot < 0) { _active = null; return; }
-
-			int feetY = (int)((p.position.Y + p.height) / 16f);
-			if (wy >= feetY)
-			{
-				// digging below (shaft): the 20px body can straddle 3 columns (2+16+2) and rest on a lip
-				// outside the 2-column shaft. aim for the shaft CENTER (±2px), not the edge — an edge-snug
-				// stop leaves a sub-pixel lip that still supports the player, who then never falls and the
-				// deeper tiles drop out of mining reach (infinite swing).
-				int minC = int.MaxValue, maxC = int.MinValue;
-				foreach (var t in req.Tiles) { if (t.Wx < minC) minC = t.Wx; if (t.Wx > maxC) maxC = t.Wx; }
-				float mid = (minC * 16f + (maxC + 1) * 16f - p.width) / 2f;
-				if (p.position.X < mid - 2f) p.controlRight = true;
-				else if (p.position.X > mid + 2f) p.controlLeft = true;
-				// platforms aren't mined (DigSolid skips solidTop) — hold down to drop through any in the shaft
-				p.controlDown = true;
-			}
-			else
-			{
-				// walk into the tunnel as it opens — deeper columns are outside mining reach from the start cell
-				int pcx = (int)(p.Center.X / 16f);
-				if (wx > pcx + 1) p.controlRight = true;
-				else if (wx < pcx - 1) p.controlLeft = true;
-			}
-
-			// Player.Update recomputes tileTargetX/Y from Main.mouseX every frame, so writing tileTarget
-			// directly gets overwritten — drive the mouse instead (same as PlaceCoordinator).
-			Main.mouseX = (int)(wx * 16f + 8f - Main.screenPosition.X);
-			Main.mouseY = (int)(wy * 16f + 8f - Main.screenPosition.Y);
+			Main.mouseX = (int)(tx * 16f + 8f - Main.screenPosition.X);
+			Main.mouseY = (int)(ty * 16f + 8f - Main.screenPosition.Y);
 			Main.SmartCursorWanted_Mouse = false;
 			p.selectedItem = slot;
 			if (p.itemTime == 0)
 				p.controlUseItem = true;
+		}
+
+		// aim for the 2-column shaft center (±2px), not the edge — an edge-snug stop leaves a sub-pixel lip
+		// that still supports the 20px body, who never falls and the deeper tiles leave mining reach.
+		private static void CenterInShaft(Player p, int leftC, int rightC)
+		{
+			float mid = (leftC * 16f + (rightC + 1) * 16f - p.width) / 2f;
+			if (p.position.X < mid - 2f) p.controlRight = true;
+			else if (p.position.X > mid + 2f) p.controlLeft = true;
 		}
 
 		private static int FindPickaxeSlot(Player p)

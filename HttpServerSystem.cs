@@ -303,20 +303,25 @@ namespace TerraBlind
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
-				var tiles = new System.Collections.Generic.List<(int, int)>();
-				var pairMatches = System.Text.RegularExpressions.Regex.Matches(
-					reqBody.Replace(" ", ""),
-					"\\{\"wx\"\\s*:\\s*(-?\\d+),\"wy\"\\s*:\\s*(-?\\d+)\\}");
-				foreach (System.Text.RegularExpressions.Match m in pairMatches)
-					tiles.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)));
-				if (tiles.Count > 0)
+				var rb = reqBody.Replace(" ", "");
+				var dirM = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\"\\s*:\\s*\"(left|right|up|down)\"");
+				var txM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wx\"\\s*:\\s*(-?\\d+)");
+				var tyM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wy\"\\s*:\\s*(-?\\d+)");
+				if (dirM.Success && txM.Success && tyM.Success)
 				{
-					MineCoordinator.Start(new MineRequest { Tiles = tiles });
+					var dir = dirM.Groups[1].Value switch {
+						"left" => MineDir.Left, "right" => MineDir.Right,
+						"up" => MineDir.Up, _ => MineDir.Down };
+					MineCoordinator.Start(new MineRequest {
+						Dir = dir,
+						TargetWx = int.Parse(txM.Groups[1].Value),
+						TargetWy = int.Parse(tyM.Groups[1].Value),
+					});
 					body = "{\"ok\":true}";
 				}
 				else
 				{
-					body = "{\"error\":\"bad_params\",\"usage\":\"POST /mine {\\\"tiles\\\":[{\\\"wx\\\":N,\\\"wy\\\":N}]}\"}";
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /mine {\\\"dir\\\":\\\"down\\\",\\\"target_wx\\\":N,\\\"target_wy\\\":N}\"}";
 					status = 400;
 				}
 			}
