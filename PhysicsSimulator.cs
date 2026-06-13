@@ -162,7 +162,10 @@ namespace TerraBlind
             int jumpHStart = s.JumpHStart;
             if (input.Jump && jfl > 0)
             {
-                if (jumpHStart == 0) jumpHStart = ph.JumpHeight; // capture the launch medium's hold cap
+                // clamp the requested hold to the LAUNCH medium's cap: BuildHoldOptions offers holds up to
+                // Player.jumpHeight (==30 when planning while submerged), but an air launch can only hold 15
+                // frames. without this an air jump runs ~24 hold frames and peaks ~10 tiles (real air max ~6.3).
+                if (jumpHStart == 0) { jumpHStart = ph.JumpHeight; if (jfl > ph.JumpHeight) jfl = ph.JumpHeight; }
                 // Terraria's hold phase rises at jumpSpeed - gravity (a constant 4.61 for bare player),
                 // not the raw jumpSpeed; the gravity term is already folded in, not applied per-frame.
                 vy = -(ph.JumpSpeed - ph.Gravity);
