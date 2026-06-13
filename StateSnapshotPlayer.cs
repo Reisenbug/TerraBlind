@@ -134,7 +134,7 @@ namespace TerraBlind
 
 			FightCoordinator.Tick(Player);
 			if (WalkTraceEnabled && (System.Math.Abs(Player.velocity.X) > 0.02f || System.Math.Abs(Player.velocity.Y) > 0.02f))
-				DiagLog.Write($"[jump-trace] py={Player.position.Y:0.##} vy={Player.velocity.Y:0.###} vx={Player.velocity.X:0.##} feetCy={(int)((Player.position.Y + Player.height) / 16f)} wet={Player.wet} jumpSpeed={Terraria.Player.jumpSpeed:0.##} grav={Player.gravity:0.###} jumpH={Player.jumpHeight}");
+				DiagLog.Write($"[jump-trace] py={Player.position.Y:0.##} vy={Player.velocity.Y:0.###} jump={Player.jump} feetCy={(int)((Player.position.Y + Player.height) / 16f)} wet={Player.wet} jumpH={Player.jumpHeight}");
 			if (ci == null)
 			{
 				if (placeActive || jflBefore != 0)

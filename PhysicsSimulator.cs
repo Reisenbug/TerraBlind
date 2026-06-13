@@ -10,45 +10,55 @@ namespace TerraBlind
         public const int PlayerW = 20;
         public const int PlayerH = 42;
 
+        // dry/wet variants for the current plan, filled by Params.FromPlayer; Step switches per-frame at the
+        // water surface. single-threaded planner, so static is safe.
+        static Params _dry, _wet;
+        static bool _wetReady;
+
         public struct Params
         {
             public float AccRun, MaxRun, AccRunSpeed, RunSlowdown, Gravity, MaxFall, JumpSpeed;
+            public int JumpHeight; // hold-frame cap: water 30, air 15 (verified from jump-trace)
 
             public float HoldVY => -JumpSpeed;
 
+            // FromPlayer returns the variant for the player's CURRENT wetness, but also stashes BOTH the dry and
+            // wet variants in PhysicsSimulator so Step can switch per-frame as a simulated jump crosses the water
+            // surface (params differ: water halves gravity/jumpSpeed/maxFall/run). Without per-frame switching a
+            // jump that leaves or enters water keeps the wrong params and the planned arc diverges at the surface.
             public static Params FromPlayer(Player p)
             {
-                float grav, js, maxFall, maxRun, accRunSpeed;
-                float accRun = p.runAcceleration > 0f ? p.runAcceleration : 0.08f;
-                float slow   = p.runSlowdown   > 0f ? p.runSlowdown   : 0.2f;
-                if (p.wet && !p.honeyWet && !p.merman)
-                {
-                    grav       = 0.2f * 0.5f;
-                    js         = 6.01f * 0.5f;
-                    maxFall    = 5f * 0.5f;
-                    maxRun     = 1.5f * p.moveSpeed;
-                    accRunSpeed = maxRun;
-                    accRun     = 0.08f * 0.5f;
-                    slow       = 0.2f * 0.5f;
-                }
-                else
-                {
-                    grav       = p.gravity > 0f ? p.gravity : 0.4f;
-                    js         = Player.jumpSpeed;
-                    maxFall    = p.maxFallSpeed > 0f ? p.maxFallSpeed : 10f;
-                    maxRun     = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
-                    float accRunRaw = p.accRunSpeed > 0f ? p.accRunSpeed : 3f;
-                    accRunSpeed = accRunRaw > maxRun ? accRunRaw : maxRun;
-                }
+                _dry = BuildDry(p);
+                _wet = BuildWet(p);
+                _wetReady = true;
+                bool wetNow = p.wet && !p.honeyWet && !p.merman;
+                return wetNow ? _wet : _dry;
+            }
+
+            static Params BuildWet(Player p) => new Params
+            {
+                Gravity = 0.2f * 0.5f, JumpSpeed = 6.01f * 0.5f, MaxFall = 5f * 0.5f,
+                MaxRun = 1.5f * p.moveSpeed, AccRunSpeed = 1.5f * p.moveSpeed,
+                AccRun = 0.08f * 0.5f, RunSlowdown = 0.2f * 0.5f, JumpHeight = 30,
+            };
+
+            static Params BuildDry(Player p)
+            {
+                // FRAGILE: do NOT read p.gravity / jumpSpeed / jumpHeight / runAccel / accRunSpeed here — when
+                // FromPlayer is called while the player is IN water those globals hold the WATER values
+                // (jumpHeight=30, accRun halved, ...), poisoning the "air" variant. the air variant must be the
+                // medium-independent bare-player values. moveSpeed is a gear stat (not water-modified) so it's safe.
+                float maxRun = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
                 return new Params
                 {
-                    AccRun      = accRun,
-                    MaxRun      = maxRun,
-                    AccRunSpeed = accRunSpeed,
-                    RunSlowdown = slow,
-                    Gravity     = grav,
-                    MaxFall     = maxFall,
-                    JumpSpeed   = js,
+                    AccRun = 0.08f,
+                    MaxRun = maxRun,
+                    AccRunSpeed = maxRun,
+                    RunSlowdown = 0.2f,
+                    Gravity = 0.4f,
+                    MaxFall = 10f,
+                    JumpSpeed = 5.01f,
+                    JumpHeight = 15,
                 };
             }
 
@@ -64,6 +74,8 @@ namespace TerraBlind
             public float Px, Py, Vx, Vy;
             public bool Grounded;
             public int JumpFramesLeft;
+            public int JumpHStart; // hold-frame cap of the medium the jump STARTED in (water=30, air=15)
+            public bool WasWet;    // medium last frame, to detect the water-surface crossing
         }
 
         public struct ControlInput
@@ -92,6 +104,24 @@ namespace TerraBlind
             float vx = s.Vx;
             float vy = s.Vy;
             int jfl = s.JumpFramesLeft;
+
+            // per-frame water-surface switch: pick the wet/dry variant by where the player IS this frame, so a jump
+            // crossing the surface uses the right gravity/jumpSpeed/hold-cap on each side. uses vanilla WetCollision.
+            bool wetNow = s.WasWet;
+            if (_wetReady)
+            {
+                wetNow = Terraria.Collision.WetCollision(new Vector2(s.Px, s.Py), PlayerW, PlayerH);
+                ph = wetNow ? _wet : _dry;
+                // crossing OUT of water mid-hold: the hold cap drops from water's 30 to air's 15, and the game
+                // re-clamps the remaining hold frames. verified from jump-trace: jfl 22(water) → 6(air) on exit.
+                // used = how many hold frames already spent; remaining air hold = airCap - used.
+                if (s.WasWet && !wetNow && jfl > 0 && s.JumpHStart > 0)
+                {
+                    int used = s.JumpHStart - jfl;
+                    int airRemain = ph.JumpHeight - used;
+                    if (airRemain < jfl) jfl = airRemain < 0 ? 0 : airRemain;
+                }
+            }
 
             // ASSUMPTION: Terraria's accel/friction is ONE else-if chain, NOT clamped. holding a key at vx>=maxRun
             // falls through to friction → cruise sawtooths around maxRun (mean==maxRun). a flat clamp drifts vs exec.
@@ -129,8 +159,10 @@ namespace TerraBlind
                 else                     vx  = 0f;
             }
 
+            int jumpHStart = s.JumpHStart;
             if (input.Jump && jfl > 0)
             {
+                if (jumpHStart == 0) jumpHStart = ph.JumpHeight; // capture the launch medium's hold cap
                 // Terraria's hold phase rises at jumpSpeed - gravity (a constant 4.61 for bare player),
                 // not the raw jumpSpeed; the gravity term is already folded in, not applied per-frame.
                 vy = -(ph.JumpSpeed - ph.Gravity);
@@ -169,7 +201,7 @@ namespace TerraBlind
 
             vx = result.X;
 
-            return new State { Px = nx, Py = ny, Vx = vx, Vy = vy, Grounded = hitFloor, JumpFramesLeft = jfl };
+            return new State { Px = nx, Py = ny, Vx = vx, Vy = vy, Grounded = hitFloor, JumpFramesLeft = jfl, JumpHStart = jfl > 0 ? jumpHStart : 0, WasWet = wetNow };
         }
 
         public static State Step(State s, ControlInput input, Params ph)
