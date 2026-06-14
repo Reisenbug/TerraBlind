@@ -276,7 +276,9 @@ namespace TerraBlind
                     if (st.Pillar) { segDesc.Append($" pillar->({st.TargetCx},{st.TargetCy})"); continue; }
                     if (st.Dig) { segDesc.Append($" dig({st.DigDir})->({st.TargetCx},{st.TargetCy})"); continue; }
                     bool hasPlace = st.Frames.Exists(fr => fr.Place);
-                    segDesc.Append($" {(hasPlace ? "BRIDGE" : "move")}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
+                    bool jumped = st.Frames.Count > 0 && st.Frames[0].Jump;
+                    string kind = !hasPlace ? "move" : (jumped ? "JPLACE" : "BRIDGE");
+                    segDesc.Append($" {kind}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
                 }
                 DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
@@ -559,11 +561,22 @@ namespace TerraBlind
             }
             else if (platformTile >= 0)
             {
-                // GAP: bridge toward the far side. each bridge step extends one cell; A* re-scans next step for wide
-                // gaps. BridgeCost high → only taken when a plain jump can't land on the far side.
-                var br = BridgePlace(cur, gdir, ph, platformTile);
-                if (br.HasValue)
-                    yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false, null);
+                // GAP: prefer JUMP-PLACE-ACROSS (移动跳放横穿) — jump toward the far side, drop one platform on the
+                // descending arc, land on it. This is what a human does: hop across, dropping footholds. Only when
+                // NO hold finds an across-landing (gap too wide for one jump) fall back to BridgePlace (原地搭桥).
+                // BridgeCost == JumpPlaceCost so neither is preferred on price; reachability decides.
+                bool anyAcross = false;
+                foreach (int hold in BuildHoldOptions())
+                {
+                    var jp = JumpPlaceAcross(cur, gdir, hold, ph, platformTile, curH);
+                    if (jp.HasValue) { anyAcross = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
+                }
+                if (!anyAcross)
+                {
+                    var br = BridgePlace(cur, gdir, ph, platformTile);
+                    if (br.HasValue)
+                        yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false, null);
+                }
             }
         }
 
@@ -795,6 +808,41 @@ namespace TerraBlind
             }
             _jpOk++;
             return seg.Value;
+        }
+
+        // "Jump and place ONE platform to cross a gap" (移动跳放横穿). Unlike JumpPlace (which only accepts
+        // landings HIGHER than the start — climbing), this accepts same-height / lower landings as long as the
+        // landing cell's maze H drops below here (real progress toward goal). One placement per (dir,hold): scan
+        // the descending arc for the FIRST foot cell that is placeable + adjacent to real support, drop a
+        // platform, land on it. Placed tile NOT stored in node (pure-physics key, no combinatorial blowup —
+        // the 118ab5f lesson). H-gate caps fan-out: an across-place that doesn't reduce H is never yielded.
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlaceAcross(
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
+        {
+            if (hold == 0 || dir == 0) return null;
+
+            var s = new PhysicsSimulator.State
+            {
+                Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy,
+                Grounded = true, JumpFramesLeft = hold,
+            };
+            // walk the free arc; once descending, the FIRST placeable+supported foot cell is the spot.
+            for (int f = 0; f < MaxSegFrames; f++)
+            {
+                var input = new PhysicsSimulator.ControlInput { Right = dir > 0, Left = dir < 0, Jump = f < hold };
+                s = PhysicsSimulator.Step(s, input, ph);
+                if (s.Vy <= 0f) continue; // ascending/apex — a platform here can't catch the player
+                int fcx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+                int fcy = (int)((s.Py + PhysicsSimulator.PlayerH + 1f) / 16f);
+                if (!CanPlaceReal(fcx, fcy)) continue;
+                var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
+                if (!seg.HasValue || !seg.Value.node.Grounded) continue;
+                var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+                if (!(_distField != null && _distField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
+                MarkPlaceFrame(seg.Value.frames, fcx, fcy);
+                return seg.Value;
+            }
+            return null;
         }
 
         const float BrakeVxEps = 0.3f;   // |Vx| below this counts as settled
