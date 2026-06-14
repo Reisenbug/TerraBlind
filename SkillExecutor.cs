@@ -119,6 +119,11 @@ namespace TerraBlind
             int leftCol = (int)(px / 16f);
             int rightCol = (int)((px + p.width - 1) / 16f);
 
+            // a tree (or other non-cuttable non-solid tile) in the body columns blocks platform placement → the
+            // pillar would stall in place. reject the edge so the planner routes around instead of replanning.
+            for (int y = feetCy; y >= feetCy - 2; y--)
+                if (BlocksPlacement(leftCol, y) || BlocksPlacement(rightCol, y)) { topFeetY = feetCy; return false; }
+
             // scan upward: head occupies the row above the feet. stop where either column hits a solid (non-platform)
             // tile — that's the ceiling the executor's leftHeadBlocked/rightHeadBlocked check would stop at.
             // body of height 42px occupies 3 rows: feetY, feetY-1, feetY-2. climbing 2 tiles to feetY-2 makes the
@@ -156,6 +161,15 @@ namespace TerraBlind
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
             var t = Main.tile[x, y];
             return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+        }
+
+        // a tile the platform can't be placed into: HasTile and not cuttable (trees, vines etc. are non-solid so
+        // IsSolidNonPlatform misses them, but they still block UseItem placement → pillar stalls in place).
+        static bool BlocksPlacement(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.HasTile && !Main.tileCut[t.TileType] && !Main.tileSolid[t.TileType];
         }
 
         private static int FindPlatformSlot(Player p)
