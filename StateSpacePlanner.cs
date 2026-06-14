@@ -94,6 +94,7 @@ namespace TerraBlind
             public MineDir DigDir;
             public int TargetCx, TargetCy;
             public List<PhysicsSimulator.ControlInput> Frames;
+            public List<(int wx, int wy)> MineTiles;
         }
 
         public class PathSeg
@@ -244,7 +245,7 @@ namespace TerraBlind
                         var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
                         MineDir d = kcy > prevCy ? MineDir.Down
                                   : kcx > prevCx ? MineDir.Right : MineDir.Left;
-                        revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy });
+                        revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles });
                     }
                     else if (e.frames != null)
                     {
@@ -1300,9 +1301,12 @@ namespace TerraBlind
             foreach (var (px, py) in res.Explored) explored.Add((px + CX, py + FY));
             var placed = new List<(int, int)>();
             foreach (var fr in res.ExecFrames) if (fr.Place) placed.Add((fr.PlaceCx, fr.PlaceCy));
+            var mineTiles = new List<(int, int)>();
+            if (res.Steps != null)
+                foreach (var st in res.Steps) if (st.Dig && st.MineTiles != null) mineTiles.AddRange(st.MineTiles);
             float goalPx = res.GoalWx * 16f + 8f;
             float goalPy = (res.GoalWy + 1) * 16f;
-            PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, placed, ttlFrames: 1200);
+            PathVisSystem.SetSSPath(trail, explored, goalPx, goalPy, placed, mineTiles, ttlFrames: 1200);
         }
 
         // ── execution ──
