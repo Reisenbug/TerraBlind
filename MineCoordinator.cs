@@ -8,6 +8,7 @@ namespace TerraBlind
 	public class MineRequest
 	{
 		public MineDir Dir;
+		public int StartWx, StartWy;   // cell the player stood on when mining began — defines the valid box with Target
 		public int TargetWx, TargetWy; // landing cell from the planner — mining ends when the player stands here
 	}
 
@@ -16,6 +17,7 @@ namespace TerraBlind
 		private static volatile MineRequest _active;
 		private static int _stallFrames, _lastRemaining;
 		private const int StallMax = 600; // ~10s with no tile removed = can't reach the target → bail
+		private const int MineBoxMargin = 2; // tiles of slack around the start↔target box before mining aborts
 
 		public static bool IsActive => _active != null;
 
@@ -59,6 +61,20 @@ namespace TerraBlind
 			int footR = (int)((p.position.Y + p.height - 1) / 16f);
 
 			int pcx = (int)(p.Center.X / 16f), pfeet = (int)((p.position.Y + p.height) / 16f) - 1;
+
+			// safety box: mining is only ever valid inside the start↔target rectangle (+margin). Any drift —
+			// horizontal or vertical — that walks the player out of it means execution lost the plan; stop and let
+			// the closed-loop replan re-plan from the new position rather than mining whatever is now in front.
+			int boxX0 = System.Math.Min(req.StartWx, req.TargetWx) - MineBoxMargin;
+			int boxX1 = System.Math.Max(req.StartWx, req.TargetWx) + MineBoxMargin;
+			int boxY0 = System.Math.Min(req.StartWy, req.TargetWy) - MineBoxMargin;
+			int boxY1 = System.Math.Max(req.StartWy, req.TargetWy) + MineBoxMargin;
+			if (pcx < boxX0 || pcx > boxX1 || pfeet < boxY0 || pfeet > boxY1)
+			{
+				DiagLog.Write($"[mine] out of box dir={req.Dir} p=({pcx},{pfeet}) box=[{boxX0}..{boxX1},{boxY0}..{boxY1}] → stop");
+				_active = null;
+				return;
+			}
 
 			int tx = int.MinValue, ty = int.MinValue, remaining = 0;
 			bool done = false;

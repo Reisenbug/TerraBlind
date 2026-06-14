@@ -398,7 +398,10 @@ namespace TerraBlind
                 {
                     var seg = SimulateSegment(cur, dir, hold, ph);
                     if (!seg.HasValue) continue;
-                    if (Heuristic(seg.Value.node, goalCx, goalFeetY, ph) < curH - HProgressEps) anyProgress = true;
+                    // progress uses the RAW per-cell field, not the block-coarsened Heuristic: inside an 8x8 block
+                    // the coarsened H is flat, so every in-block move reads "no progress" and dig fires even where a
+                    // plain jump clears a low step. raw field still drops cell-by-cell toward the goal.
+                    if (RawProgress(cur, seg.Value.node)) anyProgress = true;
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (segFeetCy < dcy) vertProgress = true;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
@@ -494,12 +497,11 @@ namespace TerraBlind
                 }
             }
 
-            // --- VERTICAL DOWN: dig a shaft straight down. ONLY when no plain walk/jump/drop edge already makes
-            // progress (!anyProgress) — otherwise, in an open cave nearly every cell has some lower-H cell below
-            // and dig-down fires everywhere, flooding the search to its 20000 budget. dig is a last resort.
-            if (hasPickaxe && !anyProgress && _distField != null)
+            // VERTICAL DOWN: worth-it test is inside DigDown (H drop >= margin AND no lateral walk reaches an
+            // equally-low cell), not !anyProgress — the latter made dig a last resort so A* detoured first.
+            if (hasPickaxe && _distField != null)
             {
-                var dd = DigDown(cur, ccx, ccy, curH);
+                var dd = DigDown(cur, ccx, ccy, curH, gdir, maxScan);
                 if (dd.HasValue)
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
@@ -553,9 +555,10 @@ namespace TerraBlind
                         }
                     }
                 }
-                // DIG fallback: only when neither jump-place nor pillar produced an edge. real mining-frame cost
-                // (expensive) keeps A* preferring walk/jump/place/bridge; dig opens an otherwise dead wall.
-                if (hasPickaxe && !anyJumpPlace && !pillarGen)
+                // DIG fallback: only when no walk/jump made progress (a low step a plain jump clears must NOT be
+                // mined) and neither jump-place nor pillar produced an edge. anyProgress covers the plain jump that
+                // anyJumpPlace/pillarGen miss — without it a 1-tile step gets mined instead of jumped.
+                if (hasPickaxe && !anyProgress && !anyJumpPlace && !pillarGen)
                 {
                     var dig = DigThroughWall(gdir, ccx, ccy, curH);
                     if (dig.HasValue)
@@ -584,6 +587,7 @@ namespace TerraBlind
         }
 
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
+        const int DigWorthMargin = 4; // dig-down only when the landing's H is at least this much lower (clearly worth it)
 
         // solid INCLUDING slopes/half-bricks: IsBlock deliberately excludes them (walk logic treats them as
         // passable), but a sloped half-tile still supports the player — exactly what strands a shaft descent.
@@ -600,7 +604,23 @@ namespace TerraBlind
         // toward. Stops at the first cell below with floor under either column; only yields when that
         // landing cell has lower maze H than here (digging down must be progress toward the goal —
         // covers sealed cave goals, where the surface isn't in the field at all and curH==MaxValue).
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(SSNode cur, int ccx, int ccy, int curH)
+        // worth digging down to a landing of maze-H lh: clearly closer along the field (curH - lh >= margin) and
+        // no lateral walk reaches an equally-low cell (else route around instead of mining). follows the maze
+        // field, which already plans the cheapest rock-penetrating route to the goal.
+        static bool WorthDig(int ccx, int ccy, int curH, int lh, int gdir, int maxScan)
+        {
+            if (curH - lh < DigWorthMargin) return false;
+            for (int d = 1; d <= maxScan; d++)
+                for (int dir = -1; dir <= 1; dir += 2)
+                {
+                    int x = ccx + dir * d;
+                    if (PathPlanner.IsBlockPublic(x, ccy)) continue;
+                    if (CoarseStand(x, ccy) && _distField.TryGetValue((x, ccy), out int hx) && hx <= lh) return false;
+                }
+            return true;
+        }
+
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
             int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
@@ -614,7 +634,7 @@ namespace TerraBlind
                               : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
                     if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
                     bool hasH = _distField.TryGetValue((landC, y), out int lh);
-                    if (!(hasH && lh < curH)) { DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) cavity land=({landC},{y}) curH={curH} hasH={hasH} lh={(hasH ? lh.ToString() : "x")} → null"); return null; }
+                    if (!(hasH && WorthDig(ccx, ccy, curH, lh, gdir, maxScan))) return null;
                     float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -635,13 +655,13 @@ namespace TerraBlind
             int yEnd = ccy + DigMaxScan;
             bool endFloor = PathPlanner.IsFloorPublic(ccx, yEnd + 1);
             bool endH = _distField.TryGetValue((ccx, yEnd), out int eh);
-            if (tiles.Count > 0 && endFloor && endH && eh < curH)
+            if (tiles.Count > 0 && endFloor && endH && WorthDig(ccx, ccy, curH, eh, gdir, maxScan))
             {
                 float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                 float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
                 return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
             }
-            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} curH={curH} endFloor={endFloor} endH={(endH ? eh.ToString() : "x")} → null");
+            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} endFloor={endFloor} → null");
             return null;
         }
 
@@ -1174,6 +1194,19 @@ namespace TerraBlind
             return false;
         }
 
+        // progress on the RAW per-cell maze field (not block-coarsened): landing cell's H lower than the current
+        // cell's. used to decide "a plain move already advances → don't dig"; the coarsened Heuristic is flat
+        // inside a block and would wrongly report no progress for in-block moves.
+        static bool RawProgress(SSNode from, SSNode to)
+        {
+            if (_distField == null) return false;
+            var (fcx, fcy) = StandCell(from.Px, from.Py);
+            var (tcx, tcy) = StandCell(to.Px, to.Py);
+            if (!_distField.TryGetValue((fcx, fcy), out int fh)) return false;
+            if (!_distField.TryGetValue((tcx, tcy), out int th)) return false;
+            return th < fh;
+        }
+
         static float Heuristic(SSNode s, float goalCx, float goalFeetY, PhysicsSimulator.Params ph)
         {
             if (_distField != null)
@@ -1386,7 +1419,10 @@ namespace TerraBlind
             if (st.Pillar)
                 SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
             else if (st.Dig)
-                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, TargetWx = st.TargetCx, TargetWy = st.TargetCy });
+            {
+                int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
+                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy });
+            }
             else if (st.Frames != null && st.Frames.Count > 0)
             {
                 // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?

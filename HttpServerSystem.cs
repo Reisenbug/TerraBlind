@@ -312,8 +312,11 @@ namespace TerraBlind
 					var dir = dirM.Groups[1].Value switch {
 						"left" => MineDir.Left, "right" => MineDir.Right,
 						"up" => MineDir.Up, _ => MineDir.Down };
+					var mp = Main.LocalPlayer;
 					MineCoordinator.Start(new MineRequest {
 						Dir = dir,
+						StartWx = (int)(mp.Center.X / 16f),
+						StartWy = (int)((mp.position.Y + mp.height) / 16f) - 1,
 						TargetWx = int.Parse(txM.Groups[1].Value),
 						TargetWy = int.Parse(tyM.Groups[1].Value),
 					});
