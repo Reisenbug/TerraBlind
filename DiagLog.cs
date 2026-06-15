@@ -9,6 +9,35 @@ namespace TerraBlind
         private static readonly object _lock = new object();
         private static string _logPath;
         private static string _eventsPath;
+        private static string _runPath;   // when set, Write goes here (one file per execution) instead of the shared log
+        private static string _runsDir;
+
+        // Begin a per-execution log file. name = caller-built "sx_sy__gx_gy"; collisions get _2, _3, ... suffixes so
+        // repeated runs between the same cells stay separate. all subsequent Write() calls land in this file until the
+        // next StartRun / EndRun. returns the final path.
+        public static string StartRun(string name)
+        {
+            _ = LogPath;
+            lock (_lock)
+            {
+                try
+                {
+                    if (_runsDir == null)
+                    {
+                        _runsDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(_logPath), "runs");
+                        Directory.CreateDirectory(_runsDir);
+                    }
+                    string p = System.IO.Path.Combine(_runsDir, name + ".log");
+                    for (int n = 2; File.Exists(p); n++) p = System.IO.Path.Combine(_runsDir, $"{name}_{n}.log");
+                    _runPath = p;
+                    File.WriteAllText(_runPath, "");
+                }
+                catch { _runPath = null; }
+                return _runPath;
+            }
+        }
+
+        public static void EndRun() { lock (_lock) { _runPath = null; } }
 
         private const int RingSize = 1800;
         private static readonly string[] _ring = new string[RingSize];
@@ -33,7 +62,7 @@ namespace TerraBlind
 
         public static void Write(string msg)
         {
-            string p = LogPath;
+            string p = _runPath ?? LogPath;
             if (string.IsNullOrEmpty(p)) return;
             try { lock (_lock) { File.AppendAllText(p, $"{Main.GameUpdateCount} {msg}\n"); } } catch { }
         }

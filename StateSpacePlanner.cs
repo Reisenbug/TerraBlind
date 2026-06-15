@@ -14,7 +14,7 @@ namespace TerraBlind
         const int   HoldStep = 2;
         // weighted A*: f = g + w·h. w>1 trades a little path optimality for far fewer expansions,
         // which is what makes the deep climb plans (exp~5000) affordable.
-        const float HeuristicWeight = 1.5f;
+        const float HeuristicWeight = 1.0f;
 
         // ASSUMPTION: Player.jumpHeight is the hold-frame cap and accessories raise it.
         // Reading it (vs hardcoding 15) keeps planning correct as gear changes.
@@ -139,16 +139,6 @@ namespace TerraBlind
                     hb.Append(_distField.TryGetValue((spx, yy), out int d) ? $" {yy}:{d}" : $" {yy}:x");
                 DiagLog.Write(hb.ToString());
             }
-
-            var blocks = BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
-            if (blocks != null)
-            {
-                var bd = new System.Text.StringBuilder();
-                foreach (var b in blocks) bd.Append($" {b.Kind}({b.FromCx},{b.FromCy}->{b.ToCx},{b.ToCy})");
-                DiagLog.Write($"[ss-blocks] n={blocks.Count}{bd}");
-                VisualizeBlocks(blocks);
-            }
-            else DiagLog.Write($"[ss-blocks] null start=({spx},{spy}) inField={_distField.ContainsKey((spx, spy))} fieldSize={_distField.Count} near={string.Join(";", System.Linq.Enumerable.Take(System.Linq.Enumerable.Where(_distField.Keys, k => Math.Abs(k.Item1 - spx) <= 1), 6))}");
 
             var start = new SSNode
             {
@@ -282,7 +272,7 @@ namespace TerraBlind
                     string kind = !hasPlace ? "move" : (jumped ? "JPLACE" : "BRIDGE");
                     segDesc.Append($" {kind}->({st.TargetCx},{st.TargetCy}){st.Frames.Count}f");
                 }
-                DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
+                if (!_silentPath) DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
                 // PERSISTENT clip check: scan every move edge's frames for a player box overlapping a solid tile —
                 // i.e. the PLANNED trajectory passes through a wall. if this fires, the simulator/edge is producing a
@@ -818,7 +808,7 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} probeVy={probeVy:0.#} probeFootPy={probeFootPy:0.#} platTopPy={placeCy * 16} landFeetCy={landFeetCy}");
                 _jpFellThrough++; return null;
             }
-            MarkPlaceFrame(seg.Value.frames, placeCx, placeCy);
+            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { _jpNoSpot++; return null; } // unreachable placement
 
             // Landing on a 1-tile platform with residual Vx slides the player off next frame. Append a brake:
             // counter-press to decelerate; the landing node takes the actual settled position. Only a slide
@@ -863,7 +853,7 @@ namespace TerraBlind
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                 if (!(_distField != null && _distField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
-                MarkPlaceFrame(seg.Value.frames, fcx, fcy);
+                if (!MarkPlaceFrame(seg.Value.frames, fcx, fcy)) continue; // unreachable placement → try a different landing
                 return seg.Value;
             }
             return null;
@@ -981,17 +971,40 @@ namespace TerraBlind
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
-        // Tag the apex frame for placement: at the apex the player is near-motionless, so stalling there to
-        // await UseItem won't drop the player past the platform; the descent then lands cleanly on it.
-        static void MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
+        // Vanilla placement reach (Player tileRangeX/Y, static). A tile (cx,cy) is reachable from a player whose
+        // top-left is at (px,py) iff it lies in this rectangle. Used to pick the placement frame.
+        const int TileRangeX = 5, TileRangeY = 4;
+        static bool CanReachTile(float px, float py, int cx, int cy)
         {
-            int idx = 0;
+            int loX = (int)(px / 16f) - TileRangeX;
+            int hiX = (int)((px + PhysicsSimulator.PlayerW) / 16f) + TileRangeX - 1;
+            int loY = (int)(py / 16f) - TileRangeY;
+            int hiY = (int)((py + PhysicsSimulator.PlayerH) / 16f) + TileRangeY - 2;
+            return cx >= loX && cx <= hiX && cy >= loY && cy <= hiY;
+        }
+
+        // Tag the placement frame. HARD RULE: placement must happen AT or AFTER the apex (vy >= 0) — never on the
+        // ascent. On the ascent the player is still rising through the target row and a platform there is either
+        // unsupported or gets passed through. Among apex-and-later frames, place on the FIRST one whose tileRange
+        // covers the landing cell: the apex is the highest+leftmost point and often can't reach a far/low landing
+        // (out of reach → UseItem silently fails → airborne stall → fall), so we wait for the descent to bring the
+        // player into reach, then drop straight onto the just-placed platform.
+        // returns false if NO apex-or-later frame can reach it (caller must reject the edge — it's unexecutable).
+        static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
+        {
+            int apex = 0;
             float minPy = float.MaxValue;
             for (int i = 0; i < frames.Count; i++)
-                if (frames[i].Py < minPy) { minPy = frames[i].Py; idx = i; }
-            var fr = frames[idx];
-            fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
-            frames[idx] = fr;
+                if (frames[i].Py < minPy) { minPy = frames[i].Py; apex = i; }
+            for (int i = apex; i < frames.Count; i++)
+            {
+                if (!CanReachTile(frames[i].Px, frames[i].Py, cx, cy)) continue;
+                var fr = frames[i];
+                fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
+                frames[i] = fr;
+                return true;
+            }
+            return false;
         }
 
         // A human drops off a platform by holding Down (+ a direction) and rides the fall all the way to the real
@@ -1226,9 +1239,6 @@ namespace TerraBlind
             return dx / MathF.Max(ph.MaxRun, 0.1f) + dy * dyW;
         }
 
-        const int CoarseJumpUp = 6;    // tiles a jump can clear
-        const int CoarseJumpSpan = 8;  // horizontal reach of a jump
-
         static bool CoarseStand(int cx, int cy)
         {
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy + 1 >= Main.maxTilesY) return false;
@@ -1236,92 +1246,6 @@ namespace TerraBlind
             return PathPlanner.IsFloorPublic(cx, cy + 1);
         }
 
-        public enum BlockKind { Walk, PillarUp, DropDown, JumpAcross }
-
-        public struct Block
-        {
-            public BlockKind Kind;
-            public int FromCx, FromCy, ToCx, ToCy;
-        }
-
-        // Macro layer: descend the distance field from start to goal, then merge the cell path into a short
-        // sequence of action blocks (walk runs, pillar climbs, drops, gap jumps). The bot decides "what to do
-        // roughly where" here — cheap, grid-level — and leaves precise frames to the micro (state-space) layer.
-        public static List<Block> BuildBlockPlan(int sx, int sy, int gx, int gy, Dictionary<(int, int), int> dist)
-        {
-            var path = new List<(int x, int y)>();
-            var cur = (sx, sy);
-            if (!dist.ContainsKey(cur)) return null;
-            path.Add(cur);
-            var seen = new HashSet<(int, int)> { cur };
-            for (int step = 0; step < 400 && cur != (gx, gy); step++)
-            {
-                int bestD = dist[cur]; (int, int) best = cur;
-                for (int dx = -CoarseJumpSpan; dx <= CoarseJumpSpan; dx++)
-                    for (int dy = -CoarseJumpUp; dy <= CoarseJumpUp; dy++)
-                    {
-                        var n = (cur.Item1 + dx, cur.Item2 + dy);
-                        if (seen.Contains(n)) continue;
-                        if (dist.TryGetValue(n, out int dn) && dn < bestD) { bestD = dn; best = n; }
-                    }
-                if (best == cur) break;
-                cur = best; seen.Add(cur); path.Add(cur);
-            }
-
-            var blocks = new List<Block>();
-            int i = 0;
-            while (i < path.Count - 1)
-            {
-                var (x0, y0) = path[i];
-                var (x1, y1) = path[i + 1];
-                int dyStep = y1 - y0;
-                BlockKind kind;
-                if (dyStep <= -2) kind = BlockKind.PillarUp;
-                else if (dyStep >= 3) kind = BlockKind.DropDown;
-                else if (Math.Abs(x1 - x0) >= 3 && dyStep > -2 && dyStep < 3 && !CoarseStand((x0 + x1) / 2, Math.Max(y0, y1))) kind = BlockKind.JumpAcross;
-                else kind = BlockKind.Walk;
-
-                int j = i + 1;
-                while (j < path.Count - 1)
-                {
-                    var (ax, ay) = path[j];
-                    var (bx, by) = path[j + 1];
-                    int d2 = by - ay;
-                    BlockKind k2 = d2 <= -2 ? BlockKind.PillarUp : (d2 >= 3 ? BlockKind.DropDown : BlockKind.Walk);
-                    if (k2 != kind && !(kind == BlockKind.JumpAcross && k2 == BlockKind.Walk)) break;
-                    j++;
-                }
-                blocks.Add(new Block { Kind = kind, FromCx = x0, FromCy = y0, ToCx = path[j].x, ToCy = path[j].y });
-                i = j;
-            }
-            return blocks;
-        }
-
-        static void VisualizeBlocks(List<Block> blocks)
-        {
-            var tiles = new List<(int, int, Microsoft.Xna.Framework.Color)>();
-            var labels = new List<(int, int, string, Microsoft.Xna.Framework.Color)>();
-            foreach (var b in blocks)
-            {
-                var col = b.Kind switch
-                {
-                    BlockKind.Walk => new Microsoft.Xna.Framework.Color(255, 230, 0, 120),
-                    BlockKind.PillarUp => new Microsoft.Xna.Framework.Color(180, 120, 255, 140),
-                    BlockKind.DropDown => new Microsoft.Xna.Framework.Color(0, 200, 255, 120),
-                    _ => new Microsoft.Xna.Framework.Color(255, 100, 0, 140),
-                };
-                int steps = Math.Max(Math.Abs(b.ToCx - b.FromCx), Math.Abs(b.ToCy - b.FromCy));
-                for (int s = 0; s <= steps; s++)
-                {
-                    int x = steps == 0 ? b.FromCx : b.FromCx + (b.ToCx - b.FromCx) * s / steps;
-                    int y = steps == 0 ? b.FromCy : b.FromCy + (b.ToCy - b.FromCy) * s / steps;
-                    tiles.Add((x, y, col));
-                }
-                labels.Add((b.FromCx, b.FromCy, b.Kind.ToString().Substring(0, 1), Microsoft.Xna.Framework.Color.White));
-            }
-            PathVisSystem.SetTiles(tiles, 1200);
-            PathVisSystem.SetLabels(labels, 1200);
-        }
 
         public static void Visualize(SSResult res, int goalWx, int goalWy)
         {
@@ -1353,7 +1277,27 @@ namespace TerraBlind
         const float ReplanDriftPx = 24f;
         const int ReplanCooldown = 10;
         static int _replanCooldownLeft;
+        // airborne self-rescue: when execution drifts off-arc AND the player is falling (off-track plunge — e.g. a
+        // failed placement / missed platform), don't wait to hit bottom. like a human who steps into air and slaps a
+        // platform under their feet, drop a platform just below the feet to arrest the fall, then replan from there.
+        const float RescueFallVy = 1.0f;   // vy above which we count as genuinely descending (not apex jitter)
+        const float PlungeBelowPx = 24f;   // real player this far BELOW the planned frame (+still falling) = off-arc plunge
+        const int RescueCooldown = 20;     // frames between rescue attempts so we don't spam-place every tick
+        static int _rescueCooldownLeft;
+
+        // PROPRIOCEPTION: instead of comparing position to the (possibly stale) planned frame, predict where ONE
+        // bare-player frame should land from last frame's real state under last frame's input, and compare to the
+        // real result. the mismatch is independent of whether the plan is right — it directly measures "my body did
+        // not respond to my command as physics says it should". this one signal covers every off-physics surprise:
+        //   real vy >> expected   → falling through (missed/failed platform)
+        //   real move << expected → stuck (cobweb / honey)
+        //   real vx flipped       → knockback / shoved
+        //   wet mismatch          → unexpected water
+        struct RealState { public float Px, Py, Vx, Vy; public bool Grounded, Valid; }
+        static RealState _lastReal;
+        const float ProprioMismatchPx = 6f;   // per-frame predicted-vs-actual gap that flags a control anomaly
         static int _replanCount;
+        static bool _silentPath;   // suppress the full [ss-path] dump during replan (storms flood the log); the [ss-replan] summary line carries the delta instead
         const int MaxReplans = 40;
         static int _placeStall;
         const int PlaceStallMax = 60;
@@ -1401,11 +1345,11 @@ namespace TerraBlind
                 if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
-                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##})");
+                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
                 }
                 _ssStepIdx++;
                 _ssDispatched = false;
-                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); return; }
+                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); DiagLog.EndRun(); return; }
             }
             if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
@@ -1433,27 +1377,6 @@ namespace TerraBlind
             }
             else
                 DiagLog.Write("[ss-steps] step has no frames — skip");
-        }
-
-        static List<Block> PlanBlocks(int goalWx, int goalWy)
-        {
-            var p = Main.LocalPlayer;
-            if (p == null || !p.active) return null;
-            goalWy = SnapGoalToStandable(goalWx, goalWy);
-            var (spx, spy) = StandCell(p.position.X, p.position.Y);
-            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
-            _blockH = null;
-            return BuildBlockPlan(spx, spy, goalWx, goalWy, _distField);
-        }
-
-        public static void VisualizeBlockPlan(int goalWx, int goalWy)
-        {
-            var blocks = PlanBlocks(goalWx, goalWy);
-            if (blocks == null || blocks.Count == 0) { DiagLog.Write("[ss-visblk] no blocks"); return; }
-            var bd = new System.Text.StringBuilder();
-            foreach (var b in blocks) bd.Append($" {b.Kind}({b.FromCx},{b.FromCy}->{b.ToCx},{b.ToCy})");
-            DiagLog.Write($"[ss-visblk] n={blocks.Count}{bd}");
-            VisualizeBlocks(blocks);
         }
 
         // GREEDY single-step driver (route 2): maze field gives the global trend; each step we forward-sim only a
@@ -1609,6 +1532,10 @@ namespace TerraBlind
         public static SSResult Execute(int goalWx, int goalWy)
         {
             StopGreedy(); StopSteps();
+            var pStart = Main.LocalPlayer;
+            var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
+            DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
+            DiagLog.Write($"[run] ss_exec start=({rsx},{rsy}) goal=({goalWx},{goalWy})");
             var res = Plan(goalWx, goalWy);
             Visualize(res, goalWx, goalWy);
             DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
@@ -1618,6 +1545,8 @@ namespace TerraBlind
             _replanCooldownLeft = 0;
             _replanCount = 0;
             _placeStall = 0;
+            _rescueCooldownLeft = 0;
+            _lastReal.Valid = false;
             StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
             return res;
         }
@@ -1630,10 +1559,15 @@ namespace TerraBlind
             // execution, rebuild the step list (not the open-loop ExecFrames); steps re-derive from where the
             // player actually is, so accumulated drift can't snowball into a pit.
             bool steps = StepsActive;
+            _silentPath = true;
             var res = Plan(_finalGoalWx, _finalGoalWy);
+            _silentPath = false;
             Visualize(res, _finalGoalWx, _finalGoalWy);
             var rp = Main.LocalPlayer;
-            DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
+            string first = res.Steps.Count > 0
+                ? (res.Steps[0].Pillar ? "pillar" : res.Steps[0].Dig ? "dig" : "move") + $"->({res.Steps[0].TargetCx},{res.Steps[0].TargetCy})"
+                : "-";
+            DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} first={first}");
             if (!res.Found || res.Steps.Count == 0) return false;
             _replanCooldownLeft = ReplanCooldown;
             _placeStall = 0;
@@ -1674,6 +1608,52 @@ namespace TerraBlind
                 DiagLog.Write($"[ss-exec] frame={_execIdx}/{_execFrames.Count} expect=({f.Px:0.#},{f.Py:0.#}) actual=({p.position.X:0.#},{p.position.Y:0.#}) drift={drift:0.#}");
 
             if (_replanCooldownLeft > 0) _replanCooldownLeft--;
+            if (_rescueCooldownLeft > 0) _rescueCooldownLeft--;
+
+            // ── PROPRIOCEPTION: predict one bare-player frame from last real state under last frame's input, compare
+            // to the real result NOW. mismatch = my body didn't obey physics as expected (fell through / stuck / shoved
+            // / wet). independent of the plan, so it works even when the planned frames are stale.
+            float predVy = p.velocity.Y, mismatch = 0f;
+            if (_lastReal.Valid && _execIdx > 0)
+            {
+                var pin = _execFrames[_execIdx - 1];
+                var ph0 = PhysicsSimulator.Params.FromPlayer(p);
+                var prev = new PhysicsSimulator.State { Px = _lastReal.Px, Py = _lastReal.Py, Vx = _lastReal.Vx, Vy = _lastReal.Vy, Grounded = _lastReal.Grounded, JumpFramesLeft = pin.Jump ? 1 : 0 };
+                var pred = PhysicsSimulator.Step(prev, pin, ph0);
+                predVy = pred.Vy;
+                mismatch = MathF.Abs(p.position.X - pred.Px) + MathF.Abs(p.position.Y - pred.Py);
+            }
+            // PLUNGE detection: a free fall is physically CORRECT per-frame (vy = +grav each tick), so the single-frame
+            // proprio mismatch stays ~0 and can't see it. vy-gap also lags (vy must build up first). the earliest,
+            // cleanest signal is POSITION: the player is well BELOW where the planned frame says it should be (real py
+            // >> planned py) and still descending. that gap appears the instant the player drops off the planned arc
+            // and grows monotonically.
+            float belowPlan = p.position.Y - f.Py; // +ve = real player is lower than the plan
+            bool falling = p.velocity.Y > RescueFallVy && belowPlan > PlungeBelowPx;
+            if (mismatch > ProprioMismatchPx)
+                DiagLog.Write($"[ss-proprio] mismatch={mismatch:0.#} realVy={p.velocity.Y:0.#} predVy={predVy:0.#} falling={(falling?1:0)} pos=({(int)(p.Center.X/16f)},{(int)((p.position.Y+p.height)/16f)})");
+            // record THIS frame's real state for next frame's prediction (before any early return below)
+            _lastReal = new RealState { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, Valid = true };
+
+            // AIRBORNE SELF-RESCUE: proprioception says I'm falling faster than my input should produce = an unplanned
+            // plunge (failed/missed platform). like a human slapping a platform under their feet, drop one below to
+            // arrest the fall; the grounded replan below then re-plans from the saved spot.
+            if (!_greedyActive && falling && _rescueCooldownLeft == 0)
+            {
+                int fcx = (int)((p.position.X + PhysicsSimulator.PlayerW / 2f) / 16f);
+                // player is 42px (~2.6 cells); the feet sit partway into their cell and a fast fall (vy up to 10/frame)
+                // would clear a platform placed in the feet cell or even one cell below within the same frame. drop it
+                // TWO cells below the feet so the descent has room to actually land on top instead of phasing through.
+                int feetCy = (int)((p.position.Y + PhysicsSimulator.PlayerH) / 16f);
+                int fcy = feetCy + 2;
+                if (CanPlaceReal(fcx, fcy))
+                {
+                    DiagLog.Write($"[ss-rescue] plunge belowPlan={belowPlan:0.#} realVy={p.velocity.Y:0.#} feet={feetCy} → place ({fcx},{fcy})");
+                    EmitPlace(p, fcx, fcy);
+                    _rescueCooldownLeft = RescueCooldown;
+                    return;
+                }
+            }
 
             // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help.
             // closed-loop drift correction (now aims at the TRUE goal + rebuilds steps, so no storm/pit). greedy
