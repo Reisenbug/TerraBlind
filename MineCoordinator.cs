@@ -10,6 +10,7 @@ namespace TerraBlind
 		public MineDir Dir;
 		public int StartWx, StartWy;   // cell the player stood on when mining began — defines the valid box with Target
 		public int TargetWx, TargetWy; // landing cell from the planner — mining ends when the player stands here
+		public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // planned tiles (fallback when the live hitbox window slides past an obstacle, e.g. a slope half-brick that lifted the player)
 	}
 
 	public class MineCoordinator : ModSystem
@@ -84,10 +85,24 @@ namespace TerraBlind
 				case MineDir.Left:
 				{
 					int col = req.Dir == MineDir.Right ? rightC + 1 : leftC - 1;
-					for (int y = footR; y >= footR - 2; y--) // 3 body rows
+					// rows cover the body (footR..footR-2) AND down to the target row. a slope/half-brick at the exit
+					// lifts the player a cell (footR rises), sliding the obstacle out of the body window — but it still
+					// sits at/below TargetWy, so include rows down to TargetWy. clamp the span against an anomalous gap.
+					int loRow = System.Math.Max(footR - 4, System.Math.Min(footR - 2, req.TargetWy));
+					int hiRow = System.Math.Min(footR + 2, System.Math.Max(footR, req.TargetWy));
+					for (int y = hiRow; y >= loRow; y--)
 						if (DigSolid(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
+					// fallback: live window empty but planner still lists an un-mined cell ahead → aim at it (covers
+					// obstacles the live hitbox slid past, e.g. a slope half-brick that lifted the player).
+					if (remaining == 0 && req.MineTiles != null)
+						foreach (var (mwx, mwy) in req.MineTiles)
+							if (DigSolid(mwx, mwy) && ((req.Dir == MineDir.Right && mwx >= pcx) || (req.Dir == MineDir.Left && mwx <= pcx)))
+							{ remaining++; tx = mwx; ty = mwy; break; }
 					if (req.Dir == MineDir.Right) p.controlRight = true; else p.controlLeft = true;
-					done = pcx == req.TargetWx && pfeet == req.TargetWy; // walked through to the landing cell
+					// done = reached OR passed the target column (don't require pfeet exact: a slope/half-brick at the
+					// exit lifts the player a cell, so pfeet==TargetWy never holds and mining hangs forever). horizontal
+					// progress to the target column is what "tunnelled through" means.
+					done = req.Dir == MineDir.Right ? pcx >= req.TargetWx : pcx <= req.TargetWx;
 					break;
 				}
 				case MineDir.Down:

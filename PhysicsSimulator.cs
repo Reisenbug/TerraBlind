@@ -194,6 +194,15 @@ namespace TerraBlind
             float nx = pos.X + result.X;
             float ny = pos.Y + result.Y;
 
+            // vanilla Player.SlopingCollision (Player.cs L27716) runs AFTER position += velocity: Collision.SlopeCollision
+            // lifts the player along a slope / half-brick face. without this the sim "walked through" slope half-bricks
+            // the real game pushes up — the player gets lifted ~8px and, if a ceiling is above, jams (vx clips next
+            // frame). modelling it makes the planner see the genuine block instead of a phantom flat walk.
+            {
+                var slope = Terraria.Collision.SlopeCollision(new Vector2(nx, ny), new Vector2(result.X, result.Y), PlayerW, PlayerH, ph.Gravity, ft);
+                nx = slope.X; ny = slope.Y; result.X = slope.Z; result.Y = slope.W;
+            }
+
             vxClipped = System.Math.Abs(result.X - vel.X) > 0.01f;
             vyClipped = System.Math.Abs(result.Y - vel.Y) > 0.01f;
 

@@ -516,16 +516,33 @@ namespace TerraBlind
                     yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
             }
 
-            // --- HORIZONTAL: scan along gdir for the first obstacle (wall or gap) within reach.
-            int obsX = int.MinValue; bool isWall = false;
-            for (int d = 1; d <= maxScan; d++)
+            // --- HORIZONTAL: the obstacle is wherever a PLAIN WALK can no longer advance. SimulateSegment's Step
+            // includes Collision.StepUp, so it truthfully climbs half-bricks / shallow slopes / 1-tile ledges and
+            // stops only at something it genuinely can't pass. a static IsBlockPublic scan was blind to slopes/half-
+            // bricks (Slope==0 && !IsHalfBlock) — it reported obsX=none at a slope half-brick the walk couldn't clear,
+            // so no dig/jump-place edge was generated and A* dead-ended there. let the walk's stop define the obstacle.
+            int obsX;
             {
-                int sx = ccx + gdir * d;
-                if (PathPlanner.IsBlockPublic(sx, ccy)) { obsX = sx; isWall = true; break; }      // wall at foot height
-                if (!PathPlanner.IsFloorPublic(sx, ccy + 1) && !PathPlanner.IsBlockPublic(sx, ccy)) { obsX = sx; isWall = false; break; } // gap
+                var walk = SimulateSegment(cur, gdir, 0, ph);
+                int walkCx = walk.HasValue ? StandCell(walk.Value.node.Px, walk.Value.node.Py).cx : ccx;
+                // if the plain walk advanced past where the maze wants (toward goal), there's no blocking obstacle
+                if ((gdir > 0 && walkCx > ccx) || (gdir < 0 && walkCx < ccx))
+                {
+                    // walk made ground; the obstacle (if any) is the first cell beyond where it stopped
+                    obsX = walkCx + gdir;
+                }
+                else
+                {
+                    obsX = ccx + gdir; // walk couldn't move at all → obstacle is right at the foot
+                }
             }
-            DiagLog.Write($"[ss-bridge-dir] from=({ccx},{ccy}) gdir={gdir} targetDir={targetDir} obsX={(obsX == int.MinValue ? "none" : obsX.ToString())} wall={isWall} maxScan={maxScan}");
-            if (obsX == int.MinValue) yield break;       // no obstacle within reach → plain walk/jump handles it
+            if (obsX < 0 || obsX >= Main.maxTilesX) yield break;
+            // classify: a cell with a collision body (full / half-brick / slope, via DigSolid) is a WALL; otherwise
+            // (no floor under it) it's a GAP. matches what actually stopped the walk.
+            bool isWall = DigSolid(obsX, ccy) || DigSolid(obsX, ccy - 1) || DigSolid(obsX, ccy - 2);
+            bool isGap = !isWall && !PathPlanner.IsFloorPublic(obsX, ccy + 1);
+            DiagLog.Write($"[ss-bridge-dir] from=({ccx},{ccy}) gdir={gdir} targetDir={targetDir} obsX={obsX} wall={isWall} gap={isGap} maxScan={maxScan}");
+            if (!isWall && !isGap) yield break;          // walk can pass freely → plain walk/jump handles it
 
             if (isWall)
             {
@@ -554,10 +571,11 @@ namespace TerraBlind
                         }
                     }
                 }
-                // DIG fallback: only when no walk/jump made progress (a low step a plain jump clears must NOT be
-                // mined) and neither jump-place nor pillar produced an edge. anyProgress covers the plain jump that
-                // anyJumpPlace/pillarGen miss — without it a 1-tile step gets mined instead of jumped.
-                if (hasPickaxe && !anyProgress && !anyJumpPlace && !pillarGen)
+                // DIG: always offer the horizontal tunnel edge (cost = real mining frames); let A* compare it on
+                // price against walk/jump/jump-place/pillar/detour rather than gating it out beforehand. a 1-tile step
+                // is NOT mined because mining a tile (~36f) costs more than the jump that clears it, so A* picks the
+                // jump; a wall is dug only when tunnelling is genuinely cheaper than routing around it.
+                if (hasPickaxe)
                 {
                     var dig = DigThroughWall(gdir, ccx, ccy, curH);
                     if (dig.HasValue)
@@ -707,35 +725,30 @@ namespace TerraBlind
             int x = ccx + dir;
             for (int step = 0; step < DigMaxScan; step++, x += dir)
             {
-                bool bodyClear = !DigSolid(x, ccy)
-                              && !DigSolid(x, ccy - 1)
-                              && !DigSolid(x, ccy - 2);
-                if (bodyClear && PathPlanner.IsFloorPublic(x, ccy + 1))
+                // mine whatever blocks the 3 body rows of THIS column first, accumulating real frame cost
+                foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
+                    if (DigSolid(x, y))
+                    {
+                        int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
+                        if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
+                        cost += fc;
+                        tiles.Add((x, y));
+                    }
+                // STOP as soon as this column is a valid landing toward the goal: body rows clear, support underfoot
+                // (native floor OR solid rock below — standing in the tunnel counts), and maze H lower than start.
+                // don't run to DigMaxScan — that overshoots the target column and the end-cell H climbs back up.
+                bool bodyClear = !DigSolid(x, ccy) && !DigSolid(x, ccy - 1) && !DigSolid(x, ccy - 2);
+                bool support = PathPlanner.IsFloorPublic(x, ccy + 1) || DigSolid(x, ccy + 1);
+                bool toward = _distField != null && _distField.TryGetValue((x, ccy), out int hx) && hx < curH;
+                if (bodyClear && support && toward)
                 {
                     float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
                     return (node, tiles, cost);
                 }
-                foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
-                    if (DigSolid(x, y))
-                    {
-                        int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
-                        if (fc >= DigTable.Unmineable) return null;
-                        cost += fc;
-                        tiles.Add((x, y));
-                    }
             }
-            // no opening within scan → land at the tunnel end (dug space = standing room, rock below = floor).
-            // H gate (maze field penetrates rock) keeps the tunnel pointed at the goal; chains for long tunnels.
-            int xEnd = ccx + dir * DigMaxScan;
-            if (tiles.Count > 0 && PathPlanner.IsFloorPublic(xEnd, ccy + 1)
-                && _distField.TryGetValue((xEnd, ccy), out int eh) && eh < curH)
-            {
-                float epx = xEnd * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                float epy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
-                return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
-            }
+            DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} NO LANDING within {DigMaxScan}: tiles={tiles.Count} → null");
             return null;
         }
 
@@ -1375,7 +1388,7 @@ namespace TerraBlind
             else if (st.Dig)
             {
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
-                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy });
+                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
             }
             else if (st.Frames != null && st.Frames.Count > 0)
             {
