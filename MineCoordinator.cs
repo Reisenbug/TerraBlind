@@ -144,6 +144,15 @@ namespace TerraBlind
 
 			if (tx == int.MinValue) return; // nothing to mine this frame (walking into the opened tunnel)
 
+			// the target tile supports an attached object above (chest/tree/etc.) → Terraria won't let it break;
+			// swinging forever would hang. abort now (don't wait out StallMax) so closed-loop replan routes around.
+			if (!Terraria.WorldGen.CanKillTile(tx, ty))
+			{
+				DiagLog.Write($"[mine] unbreakable ({tx},{ty}) dir={req.Dir} → stop");
+				_active = null;
+				return;
+			}
+
 			Main.mouseX = (int)(tx * 16f + 8f - Main.screenPosition.X);
 			Main.mouseY = (int)(ty * 16f + 8f - Main.screenPosition.Y);
 			Main.SmartCursorWanted_Mouse = false;

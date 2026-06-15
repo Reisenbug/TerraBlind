@@ -661,7 +661,10 @@ namespace TerraBlind
                     if (DigSolid(c, y))
                     {
                         int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
-                        if (fc >= DigTable.Unmineable) return null;
+                        // CanKillTile: Terraria forbids breaking a tile that supports an attached object above (chest /
+                        // tree / framed object) — mining it would never succeed and the executor would hang. treat it
+                        // as unmineable so A* routes around instead of planning an un-diggable tile.
+                        if (fc >= DigTable.Unmineable || !Terraria.WorldGen.CanKillTile(c, y)) return null;
                         cost += fc;
                         tiles.Add((c, y));
                     }
@@ -730,7 +733,9 @@ namespace TerraBlind
                     if (DigSolid(x, y))
                     {
                         int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
-                        if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
+                        // unmineable = no/weak pick, OR a tile that supports an attached object above (chest/tree/etc.)
+                        // which Terraria won't let break — mining it would hang the executor. route around instead.
+                        if (fc >= DigTable.Unmineable || !Terraria.WorldGen.CanKillTile(x, y)) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE/unbreakable at ({x},{y}) → null"); return null; }
                         cost += fc;
                         tiles.Add((x, y));
                     }
@@ -1306,6 +1311,14 @@ namespace TerraBlind
         const float PlungeBelowPx = 24f;   // real player this far BELOW the planned frame (+still falling) = off-arc plunge
         const int RescueCooldown = 20;     // frames between rescue attempts so we don't spam-place every tick
         static int _rescueCooldownLeft;
+        // STUCK = velocity deviation: the plan expected the player to be moving (|pf.Vx| >= VelDevExpect) but the real
+        // body is nearly still (|vx| < VelDevReal) and not advancing — "wanted to move, didn't" (wall / slope jam).
+        // this is the velocity axis of the unified deviation: position-distance checks miss it because the player
+        // barely moves. after StuckFrames such frames, replan from the real spot.
+        const float VelDevExpect = 1.5f;   // plan expected at least this |Vx|
+        const float VelDevReal = 0.4f;     // but real |Vx| is below this = blocked
+        const int StuckFrames = 18;        // consecutive blocked frames before declaring stuck
+        static int _stuckFrames;
 
         // PROPRIOCEPTION: instead of comparing position to the (possibly stale) planned frame, predict where ONE
         // bare-player frame should land from last frame's real state under last frame's input, and compare to the
@@ -1569,6 +1582,7 @@ namespace TerraBlind
             _replanCount = 0;
             _placeStall = 0;
             _rescueCooldownLeft = 0;
+            _stuckFrames = 0;
             _lastReal.Valid = false;
             StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
             return res;
@@ -1685,6 +1699,23 @@ namespace TerraBlind
                     EmitPlace(p, fcx, fcy);
                     _rescueCooldownLeft = RescueCooldown;
                     return;
+                }
+            }
+
+            // STUCK (velocity deviation): the plan wanted the player moving this frame but the real body is blocked
+            // (|pf.Vx| expected, |vx| ~0) — the velocity axis of deviation that position-distance checks miss. count
+            // consecutive blocked frames; after StuckFrames, replan from where the player actually is. covers wall /
+            // slope jams that otherwise spin replan-storms until MaxReplans.
+            if (!_greedyActive && _execIdx > 0)
+            {
+                var spf = _execFrames[_execIdx - 1];
+                bool blocked = MathF.Abs(spf.Vx) >= VelDevExpect && MathF.Abs(p.velocity.X) < VelDevReal && !(f.Place);
+                _stuckFrames = blocked ? _stuckFrames + 1 : 0;
+                if (_stuckFrames >= StuckFrames && _replanCooldownLeft == 0)
+                {
+                    DiagLog.Write($"[ss-dev] cls=stuck velDev={MathF.Abs(spf.Vx - p.velocity.X):0.#} planVx={spf.Vx:0.#} realVx={p.velocity.X:0.#} → replan");
+                    _stuckFrames = 0;
+                    if (Replan("stuck")) return;
                 }
             }
 
