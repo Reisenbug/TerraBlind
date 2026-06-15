@@ -11,6 +11,7 @@ namespace TerraBlind
         const float VxQuant = 0.5f;
         const int   MaxExpansions = 20000;
         const int   MaxSegFrames = 1200; // high enough that slow water descents reach the floor; still a fuse vs non-terminating edges
+        const int   MaxPlanSpanCells = 200; // refuse to plan if goal is farther than this in x or y — BuildField would hang
         const int   HoldStep = 2;
         // weighted A*: f = g + w·h. w>1 trades a little path optimality for far fewer expansions,
         // which is what makes the deep climb plans (exp~5000) affordable.
@@ -128,6 +129,14 @@ namespace TerraBlind
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPickaxe = true; break; } }
 
             var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            // distance fuse: BuildField is a reverse-Dijkstra over a (|dx|+240)×(|dy|+240) window; a goal hundreds of
+            // cells away (e.g. after a teleport leaves the old goal across the map) makes it explode and hang. refuse
+            // to even start — return empty so the caller aborts instead of freezing.
+            if (System.Math.Abs(spx - goalWx) > MaxPlanSpanCells || System.Math.Abs(spy - goalWy) > MaxPlanSpanCells)
+            {
+                DiagLog.Write($"[ss-toofar] start=({spx},{spy}) goal=({goalWx},{goalWy}) span>{MaxPlanSpanCells} → abort");
+                return res;
+            }
             _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
             _blockH = null;
 
@@ -1296,6 +1305,7 @@ namespace TerraBlind
         struct RealState { public float Px, Py, Vx, Vy; public bool Grounded, Valid; }
         static RealState _lastReal;
         const float ProprioMismatchPx = 6f;   // per-frame predicted-vs-actual gap that flags a control anomaly
+        const float TeleportPx = 160f;         // one-frame jump beyond any possible physics = teleport/yank → abort nav
         static int _replanCount;
         static bool _silentPath;   // suppress the full [ss-path] dump during replan (storms flood the log); the [ss-replan] summary line carries the delta instead
         const int MaxReplans = 40;
@@ -1632,6 +1642,16 @@ namespace TerraBlind
             bool falling = p.velocity.Y > RescueFallVy && belowPlan > PlungeBelowPx;
             if (mismatch > ProprioMismatchPx)
                 DiagLog.Write($"[ss-proprio] mismatch={mismatch:0.#} realVy={p.velocity.Y:0.#} predVy={predVy:0.#} falling={(falling?1:0)} pos=({(int)(p.Center.X/16f)},{(int)((p.position.Y+p.height)/16f)})");
+            // TELEPORT abort: a one-frame jump no physics can produce (recall/mirror/teleport, or being yanked far)
+            // means this whole navigation is meaningless from the new spot — don't rescue, don't replan (replanning to
+            // the old goal from spawn could be hundreds of cells away and blows up the planner). just stop dead; the
+            // player re-issues a NavWand command if they still want to go somewhere.
+            if (_lastReal.Valid && mismatch > TeleportPx)
+            {
+                DiagLog.Write($"[ss-teleport] mismatch={mismatch:0.#} → abort nav");
+                StopExec(); StopSteps(); DiagLog.EndRun();
+                return;
+            }
             // record THIS frame's real state for next frame's prediction (before any early return below)
             _lastReal = new RealState { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, Valid = true };
 
