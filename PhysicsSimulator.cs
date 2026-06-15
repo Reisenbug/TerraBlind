@@ -183,8 +183,19 @@ namespace TerraBlind
             // holding Down drops through platforms (solidTop): pass fallThrough=true to TileCollision and skip
             // StepUp (it would lift the player back onto the platform). matches vanilla controlDown behavior.
             bool ft = input.Down;
+            // vanilla per-frame order (Player.cs L27536-27557): SlopeDownMovement → StepDown → StepUp, BEFORE the
+            // move. these are the down-direction counterparts of StepUp — without them a walk off a downward slope or
+            // a 1-tile down-step floats out and free-falls instead of hugging the ground like the real player.
+            // SlopeDownMovement (WalkDownSlope): glue to a downward slope as you walk onto it.
+            {
+                var ds = Terraria.Collision.WalkDownSlope(pos, vel, PlayerW, PlayerH, ph.Gravity);
+                pos.X = ds.X; pos.Y = ds.Y; vel.X = ds.Z; vel.Y = ds.W;
+            }
+            // StepDown: walking on flat ground (vy==gravity) onto a 1-tile down-step / half-brick, drop the feet onto it.
+            if (vel.Y == ph.Gravity && !ft)
+                Terraria.Collision.StepDown(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
             // StepUp only near ground: if not grounded and falling but no floor within 2px, skip
-            bool nearGround = s.Grounded || (vy > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, ft, ft, 1).Y < 2f);
+            bool nearGround = s.Grounded || (vel.Y > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, ft, ft, 1).Y < 2f);
             if (vx != 0f && nearGround && !ft)
                 Terraria.Collision.StepUp(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
             var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, ft, ft, 1);
