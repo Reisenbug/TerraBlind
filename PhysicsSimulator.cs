@@ -127,8 +127,14 @@ namespace TerraBlind
             }
             else if (input.Right && vx < ph.AccRunSpeed)
             {
-                if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
-                vx += ph.AccRun * 0.2f;
+                // vanilla L19527: the maxRun→accRunSpeed weak-accel only runs on the ground (velocity.Y==0). airborne
+                // bare players get NO horizontal accel past maxRun — without this gate the sim adds 0.016/frame in air,
+                // accumulating a vx drift over every jump where the key is held.
+                if (s.Grounded)
+                {
+                    if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
+                    vx += ph.AccRun * 0.2f;
+                }
             }
             else if (input.Left && vx > -ph.MaxRun)
             {
@@ -137,8 +143,11 @@ namespace TerraBlind
             }
             else if (input.Left && vx > -ph.AccRunSpeed)
             {
-                if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
-                vx -= ph.AccRun * 0.2f;
+                if (s.Grounded)
+                {
+                    if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
+                    vx -= ph.AccRun * 0.2f;
+                }
             }
             else if (s.Grounded)
             {
