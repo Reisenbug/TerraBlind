@@ -112,15 +112,10 @@ namespace TerraBlind
             {
                 wetNow = Terraria.Collision.WetCollision(new Vector2(s.Px, s.Py), PlayerW, PlayerH);
                 ph = wetNow ? _wet : _dry;
-                // crossing OUT of water mid-hold: the hold cap drops from water's 30 to air's 15, and the game
-                // re-clamps the remaining hold frames. verified from jump-trace: jfl 22(water) → 6(air) on exit.
-                // used = how many hold frames already spent; remaining air hold = airCap - used.
-                if (s.WasWet && !wetNow && jfl > 0 && s.JumpHStart > 0)
-                {
-                    int used = s.JumpHStart - jfl;
-                    int airRemain = ph.JumpHeight - used;
-                    if (airRemain < jfl) jfl = airRemain < 0 ? 0 : airRemain;
-                }
+                // crossing OUT of water mid-hold: vanilla (Player.cs L27354) caps remaining hold to jumpHeight/5 of
+                // the AIR jumpHeight (15/5 = 3), regardless of frames already spent — NOT airCap-used.
+                if (s.WasWet && !wetNow && jfl > ph.JumpHeight / 5)
+                    jfl = ph.JumpHeight / 5;
             }
 
             // ASSUMPTION: Terraria's accel/friction is ONE else-if chain, NOT clamped. holding a key at vx>=maxRun
@@ -159,23 +154,27 @@ namespace TerraBlind
                 else                     vx  = 0f;
             }
 
+            // vanilla runs JumpMovement (sets vy = -jumpSpeed) and the gravity block (vy += gravity, then clamp to
+            // maxFall) as TWO separate steps in Update — and the gravity block runs EVERY frame, hold frames included
+            // (Player.cs: JumpMovement L20212/L20322 → gravity L26830 → maxFall clamp L26841). keep them separate here
+            // so each medium switch / future modifier lands on the right step instead of a pre-folded -4.61 constant.
             int jumpHStart = s.JumpHStart;
+            // step 1 — JumpMovement: hold/launch sets the raw upward speed (gravity is NOT folded in here).
             if (input.Jump && jfl > 0)
             {
                 // clamp the requested hold to the LAUNCH medium's cap: BuildHoldOptions offers holds up to
                 // Player.jumpHeight (==30 when planning while submerged), but an air launch can only hold 15
                 // frames. without this an air jump runs ~24 hold frames and peaks ~10 tiles (real air max ~6.3).
                 if (jumpHStart == 0) { jumpHStart = ph.JumpHeight; if (jfl > ph.JumpHeight) jfl = ph.JumpHeight; }
-                // Terraria's hold phase rises at jumpSpeed - gravity (a constant 4.61 for bare player),
-                // not the raw jumpSpeed; the gravity term is already folded in, not applied per-frame.
-                vy = -(ph.JumpSpeed - ph.Gravity);
+                vy = -ph.JumpSpeed;
                 jfl--;
             }
-            else
+            else if (!input.Jump)
             {
-                if (!input.Jump) jfl = 0;
-                vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall);
+                jfl = 0;
             }
+            // step 2 — gravity block: applied every frame (hold's -jumpSpeed + gravity = -4.61 net for bare player).
+            vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall);
 
             var pos = new Vector2(s.Px, s.Py);
             var vel = new Vector2(vx, vy);
