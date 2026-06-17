@@ -135,10 +135,9 @@ namespace TerraBlind
             }
             else if (input.Right && vx < ph.AccRunSpeed)
             {
-                // vanilla L19527: the maxRun→accRunSpeed weak-accel only runs on the ground (velocity.Y==0). airborne
-                // bare players get NO horizontal accel past maxRun — without this gate the sim adds 0.016/frame in air,
-                // accumulating a vx drift over every jump where the key is held.
-                if (s.Grounded)
+                // vanilla L19527: weak-accel inner gate is velocity.Y==0 (on ground). use frame-start vy (pre-gravity),
+                // matching HorizontalMovement's read. NOT a self-invented Grounded flag.
+                if (vy == 0f)
                 {
                     if (vx < -ph.RunSlowdown) vx += ph.RunSlowdown;
                     vx += ph.AccRun * 0.2f;
@@ -151,13 +150,13 @@ namespace TerraBlind
             }
             else if (input.Left && vx > -ph.AccRunSpeed)
             {
-                if (s.Grounded)
+                if (vy == 0f)
                 {
                     if (vx > ph.RunSlowdown) vx -= ph.RunSlowdown;
                     vx -= ph.AccRun * 0.2f;
                 }
             }
-            else if (s.Grounded)
+            else if (vy == 0f) // vanilla L19591 ground friction: velocity.Y==0, not a Grounded flag
             {
                 if (vx > ph.RunSlowdown)       vx -= ph.RunSlowdown;
                 else if (vx < -ph.RunSlowdown)  vx += ph.RunSlowdown;
@@ -176,15 +175,29 @@ namespace TerraBlind
             // (Player.cs: JumpMovement L20212/L20322 → gravity L26830 → maxFall clamp L26841). keep them separate here
             // so each medium switch / future modifier lands on the right step instead of a pre-folded -4.61 constant.
             int jumpHStart = s.JumpHStart;
-            // step 1 — JumpMovement: hold/launch sets the raw upward speed (gravity is NOT folded in here).
+            // step 1 — JumpMovement (vanilla): two distinct cases. LAUNCH (vanilla L20316 `velocity.Y==0` → fire) and
+            // HOLD-continue (vanilla L20204 `jump>0`, already airborne). vanilla's `if(velocity.Y==0)jump=0` (L20206)
+            // is the HOLD case ending on landing — it must NOT fire on the launch frame (which IS at velocity.Y==0).
+            // we distinguish them by jumpHStart: 0 = not launched yet (this is the launch frame), >0 = mid-hold.
             if (input.Jump && jfl > 0)
             {
-                // clamp the requested hold to the LAUNCH medium's cap: BuildHoldOptions offers holds up to
-                // Player.jumpHeight (==30 when planning while submerged), but an air launch can only hold 15
-                // frames. without this an air jump runs ~24 hold frames and peaks ~10 tiles (real air max ~6.3).
-                if (jumpHStart == 0) { jumpHStart = ph.JumpHeight; if (jfl > ph.JumpHeight) jfl = ph.JumpHeight; }
-                vy = -ph.JumpSpeed;
-                jfl--;
+                if (jumpHStart == 0)
+                {
+                    // LAUNCH frame: fire. clamp hold to launch-medium cap (planning submerged offers up to 30).
+                    jumpHStart = ph.JumpHeight; if (jfl > ph.JumpHeight) jfl = ph.JumpHeight;
+                    vy = -ph.JumpSpeed;
+                    jfl--;
+                }
+                else if (vy == 0f)
+                {
+                    // mid-hold landed (vanilla L20206 `if(velocity.Y==0)jump=0`): end the hold.
+                    jfl = 0;
+                }
+                else
+                {
+                    vy = -ph.JumpSpeed;
+                    jfl--;
+                }
             }
             else if (!input.Jump)
             {
@@ -207,12 +220,13 @@ namespace TerraBlind
                 var ds = Terraria.Collision.WalkDownSlope(pos, vel, PlayerW, PlayerH, ph.Gravity);
                 pos.X = ds.X; pos.Y = ds.Y; vel.X = ds.Z; vel.Y = ds.W;
             }
-            // StepDown: walking on flat ground (vy==gravity) onto a 1-tile down-step / half-brick, drop the feet onto it.
-            if (vel.Y == ph.Gravity && !ft)
+            // StepDown (vanilla L27544): condition is exactly velocity.Y == gravity. NO !controlDown gate — vanilla
+            // runs StepDown regardless of crouch; drop-through is handled by TileCollision's fallThrough below.
+            if (vel.Y == ph.Gravity)
                 Terraria.Collision.StepDown(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
-            // StepUp only near ground: if not grounded and falling but no floor within 2px, skip
-            bool nearGround = s.Grounded || (vel.Y > 0f && Terraria.Collision.TileCollision(pos, new Vector2(0f, 2f), PlayerW, PlayerH, ft, ft, 1).Y < 2f);
-            if (vx != 0f && nearGround && !ft)
+            // StepUp (vanilla L27555, gravDir=1 branch): exactly `(velocity.Y >= gravity) && !controlDown`. NOT a
+            // self-invented vx!=0 + Grounded + 2px-probe. holdsMatching = controlUp (bare nav never presses up → false).
+            if (vel.Y >= ph.Gravity && !ft)
                 Terraria.Collision.StepUp(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
             var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, ft, ft, 1);
 
