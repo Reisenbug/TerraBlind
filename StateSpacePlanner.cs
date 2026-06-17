@@ -98,6 +98,17 @@ namespace TerraBlind
             public List<(int wx, int wy)> MineTiles;
         }
 
+        // edge type for per-edge偏离 grouping in logs (move/jump/jumpPlace/dig/pillar): grep one label, awk by kind.
+        static string EdgeKind(ExecStep st)
+        {
+            if (st.Pillar) return "pillar";
+            if (st.Dig) return $"dig{st.DigDir}";
+            if (st.Frames == null || st.Frames.Count == 0) return "empty";
+            bool place = st.Frames.Exists(fr => fr.Place);
+            bool jump = st.Frames.Exists(fr => fr.Jump);
+            return place ? "jumpPlace" : jump ? "jump" : "move";
+        }
+
         public class PathSeg
         {
             public bool IsJump;
@@ -1381,7 +1392,7 @@ namespace TerraBlind
                 if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
-                    DiagLog.Write($"[ss-framecmp] planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
+                    DiagLog.Write($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
                 }
                 _ssStepIdx++;
                 _ssDispatched = false;
@@ -1391,7 +1402,7 @@ namespace TerraBlind
 
             var st = _ssSteps[_ssStepIdx];
             int ccx = (int)(p.Center.X / 16f);
-            DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {(st.Pillar ? "pillar" : st.Dig ? "dig" : "move")} ->({st.TargetCx},{st.TargetCy})");
+            DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {EdgeKind(st)} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;
             _ssPrevStep = st; _lastExecFrameCount = 0;
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
@@ -1407,8 +1418,15 @@ namespace TerraBlind
             {
                 // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?
                 // any gap here = open-loop replay from a wrong origin → accumulates → edge-of-block plunge.
+                // PHASE FIX: Frames[0] is the state AFTER executing frame 0 (jump already moved py up ~4.61), but the
+                // real player here is still AT the edge start (frame 0 not yet executed). comparing them directly shows
+                // a phantom one-frame gap (dPy=4.61 on every jump edge). step the real start one frame under f0's input
+                // so both sides are "after frame 0" — same phase as ss-cmp. residual = the TRUE seam misalignment.
                 var f0 = st.Frames[0];
-                DiagLog.Write($"[ss-startgap] step#{_ssStepIdx} planStart=({f0.Px:0.##},{f0.Py:0.##}) realStart=({p.position.X:0.##},{p.position.Y:0.##}) dPx={(p.position.X - f0.Px):0.##} dPy={(p.position.Y - f0.Py):0.##}");
+                var ph0 = PhysicsSimulator.Params.FromPlayer(p);
+                var rstart = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, JumpFramesLeft = f0.Jump ? Player.jumpHeight : 0 };
+                var rAfter = PhysicsSimulator.Step(rstart, f0, ph0);
+                DiagLog.Write($"[ss-startgap] step#{_ssStepIdx} kind={EdgeKind(st)} planStart=({f0.Px:0.##},{f0.Py:0.##}) realStart=({rAfter.Px:0.##},{rAfter.Py:0.##}) dPx={(rAfter.Px - f0.Px):0.##} dPy={(rAfter.Py - f0.Py):0.##}");
                 _execFrames = st.Frames; _execIdx = 0;
             }
             else
