@@ -35,12 +35,20 @@ namespace TerraBlind
                 return wetNow ? _wet : _dry;
             }
 
-            static Params BuildWet(Player p) => new Params
+            // vanilla water: the VERTICAL velocity algorithm IS scaled (Update L23958: gravity=0.2, jumpSpeed=6.01,
+            // maxFall=5) but the HORIZONTAL one is NOT (maxRun/accel stay bare). ON TOP of that, Player.WetCollision
+            // (L22960) applies position += velocity*0.5 on both axes (moved axis full-speed if TileCollision clipped).
+            // so: vertical params = water values, horizontal params = bare, plus Step's 0.5 position multiplier when wet.
+            static Params BuildWet(Player p)
             {
-                Gravity = 0.2f * 0.5f, JumpSpeed = 6.01f * 0.5f, MaxFall = 5f * 0.5f,
-                MaxRun = 1.5f * p.moveSpeed, AccRunSpeed = 1.5f * p.moveSpeed,
-                AccRun = 0.08f * 0.5f, RunSlowdown = 0.2f * 0.5f, JumpHeight = 30,
-            };
+                float maxRun = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
+                return new Params
+                {
+                    Gravity = 0.2f, JumpSpeed = 6.01f, MaxFall = 5f,
+                    MaxRun = maxRun, AccRunSpeed = maxRun,
+                    AccRun = 0.08f, RunSlowdown = 0.2f, JumpHeight = 30,
+                };
+            }
 
             static Params BuildDry(Player p)
             {
@@ -210,8 +218,19 @@ namespace TerraBlind
 
             if (vy < 0f && System.Math.Abs(result.Y - vel.Y) > 0.01f) jfl = 0;
 
-            float nx = pos.X + result.X;
-            float ny = pos.Y + result.Y;
+            // vanilla Player.WetCollision (Player.cs L22962-22973): in water position += velocity*0.5, but an axis
+            // that TileCollision CLIPPED (hit a wall/floor) moves at full speed, not halved. velocity itself stays
+            // full-speed (so leaving water restores full motion instantly — fixes the out-of-water seam drift where
+            // a speed-capped wet model crawled back to maxRun over ~18 frames). result is the post-collision move.
+            float moveX = result.X, moveY = result.Y;
+            if (wetNow)
+            {
+                if (System.Math.Abs(result.X - vel.X) <= 0.01f) moveX = result.X * 0.5f; // not clipped → halve
+                if (System.Math.Abs(result.Y - vel.Y) <= 0.01f) moveY = result.Y * 0.5f;
+            }
+
+            float nx = pos.X + moveX;
+            float ny = pos.Y + moveY;
 
             // vanilla Player.SlopingCollision (Player.cs L27716) runs AFTER position += velocity: Collision.SlopeCollision
             // lifts the player along a slope / half-brick face. without this the sim "walked through" slope half-bricks
