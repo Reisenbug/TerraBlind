@@ -651,13 +651,15 @@ namespace TerraBlind
 				{
 					int gxN = int.Parse(gxM.Groups[1].Value);
 					int gyN = int.Parse(gyM.Groups[1].Value);
-					var (code, ctxJson) = NavCoordinator.StartToBounded(gxN, gyN);
-					if (code == "ok")
+					// route single-point nav through the NEW StateSpacePlanner (physics-faithful) instead of the
+					// legacy NavCoordinator. Execute plans + dispatches; ExecFailCode tells us if planning failed.
+					var ssr = StateSpacePlanner.Execute(gxN, gyN);
+					if (ssr.Found)
 						body = "{\"ok\":true,\"goal\":[" + gxN + "," + gyN + "]}";
 					else
 					{
-						string ctxPart = string.IsNullOrEmpty(ctxJson) ? "" : "," + ctxJson;
-						body = "{\"ok\":false,\"reason\":\"" + code + "\"" + ctxPart + "}";
+						string code = string.IsNullOrEmpty(StateSpacePlanner.ExecFailCode) ? "unreachable" : StateSpacePlanner.ExecFailCode;
+						body = "{\"ok\":false,\"reason\":\"" + code + "\"}";
 						status = 400;
 					}
 				}
@@ -1001,16 +1003,17 @@ namespace TerraBlind
 			}
 			else if (path == "/nav_done")
 			{
-				if (NavCoordinator.Done)
-					body = "{\"done\":true,\"status\":\"done\",\"reason\":\"done\"}";
-				else if (!NavCoordinator.IsActive && !NavCoordinator.Done)
-				{
-					string code = string.IsNullOrEmpty(NavCoordinator.FailCode) ? "unknown" : NavCoordinator.FailCode;
-					string ctxPart = string.IsNullOrEmpty(NavCoordinator.FailCtxJson) ? "" : "," + NavCoordinator.FailCtxJson;
-					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + code + "\",\"legacy_reason\":\"" + NavCoordinator.FailReason + "\"" + ctxPart + "}";
-				}
-				else
+				// reads the NEW StateSpacePlanner status machine (see /nav). running while a route is in flight;
+				// done when steps finished; failed with a code (unreachable/too_far/replan_storm/cancelled).
+				if (StateSpacePlanner.ExecRunning)
 					body = "{\"done\":false,\"status\":\"running\"}";
+				else if (StateSpacePlanner.ExecDone)
+					body = "{\"done\":true,\"status\":\"done\",\"reason\":\"done\"}";
+				else
+				{
+					string code = string.IsNullOrEmpty(StateSpacePlanner.ExecFailCode) ? "unknown" : StateSpacePlanner.ExecFailCode;
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + code + "\"}";
+				}
 			}
 			else if (path == "/seg_nav_done")
 			{

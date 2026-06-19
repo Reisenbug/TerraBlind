@@ -1353,6 +1353,16 @@ namespace TerraBlind
 
         public static void StopExec() { _execFrames = null; _execIdx = 0; }
 
+        // ===== execution status machine (parity with NavCoordinator.Done/IsActive/FailCode) so HTTP /nav + /nav_done
+        // can drive the NEW StateSpacePlanner the same way the old NavCoordinator did. set by Execute / the step loop /
+        // failure exits; read by HttpServerSystem. "running" = a route is in flight (steps or frames active).
+        static bool _execDone;
+        static string _execFailCode;     // null while running/ok; set on any failure exit
+        public static bool ExecDone => _execDone;
+        public static string ExecFailCode => _execFailCode;
+        // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
+        public static bool ExecRunning => StepsActive || IsActive || _greedyActive;
+
         // ===== Action-graph path executor: run ActionGraphPlanner.Plan's path edge-by-edge. Jump edges REPLAY the
         // edge's own forward-simulated frames (planned trajectory == executed trajectory). pillar/bridge/dig go to
         // their state-machine executors. each edge starts only when the player is landed + at rest (clean state).
@@ -1396,7 +1406,7 @@ namespace TerraBlind
                 }
                 _ssStepIdx++;
                 _ssDispatched = false;
-                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); StopSteps(); DiagLog.EndRun(); return; }
+                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); _execDone = true; StopSteps(); DiagLog.EndRun(); return; }
             }
             if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
@@ -1586,6 +1596,7 @@ namespace TerraBlind
         public static SSResult Execute(int goalWx, int goalWy)
         {
             StopGreedy(); StopSteps();
+            _execDone = false; _execFailCode = null;
             var pStart = Main.LocalPlayer;
             var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
@@ -1593,7 +1604,14 @@ namespace TerraBlind
             var res = Plan(goalWx, goalWy);
             Visualize(res, goalWx, goalWy);
             DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
-            if (!res.Found || res.Steps.Count == 0) { StopSteps(); return res; }
+            if (!res.Found || res.Steps.Count == 0)
+            {
+                // distinguish unreachable vs distance fuse so callers (and the LLM) get an actionable reason.
+                _execFailCode = (System.Math.Abs(rsx - goalWx) > MaxPlanSpanCells || System.Math.Abs(rsy - goalWy) > MaxPlanSpanCells)
+                    ? "too_far" : "unreachable";
+                StopSteps();
+                return res;
+            }
             _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;  // true destination; replan aims here, never a step target
             _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
@@ -1608,7 +1626,7 @@ namespace TerraBlind
 
         static bool Replan(string reason)
         {
-            if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); return false; }
+            if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); _execFailCode = "replan_storm"; return false; }
             _replanCount++;
             // aim at the TRUE goal from the player's real position (closed-loop correction). during edge-by-edge
             // execution, rebuild the step list (not the open-loop ExecFrames); steps re-derive from where the
@@ -1694,6 +1712,7 @@ namespace TerraBlind
             if (_lastReal.Valid && mismatch > TeleportPx)
             {
                 DiagLog.Write($"[ss-teleport] mismatch={mismatch:0.#} → abort nav");
+                _execFailCode = "cancelled";  // teleported away (recall/mirror) — this nav is meaningless now
                 StopExec(); StopSteps(); DiagLog.EndRun();
                 return;
             }
