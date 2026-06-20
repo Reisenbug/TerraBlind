@@ -58,6 +58,10 @@ namespace TerraBlind
 			}
 			_prevVy = Player.velocity.Y;
 
+			// direction-explore drives StateSpacePlanner leg-by-leg; run it before TickBlocks so a freshly dispatched
+			// leg gets stepped this frame.
+			ExploreCoordinator.ApplyControls();
+
 			StateSpacePlanner.TickBlocks();
 
 			if (StateSpacePlanner.IsActive)

@@ -71,6 +71,7 @@ namespace TerraBlind
         public static bool PlatformPublic(int wx, int wy) => Platform(wx, wy);
         public static bool IsBlockPublic(int wx, int wy) => IsBlock(wx, wy);
         public static bool IsFloorPublic(int wx, int wy) => IsFloor(wx, wy);
+        public static bool StandablePublic(int wx, int wy) => Standable(wx, wy);
         public static bool IsHalfBrickPublic(int wx, int wy) => IsHalfBrick(wx, wy);
 
         public static string DebugJumpEdgesVerbose(Player p, int cx, int cy, int sign)

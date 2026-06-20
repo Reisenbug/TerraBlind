@@ -693,7 +693,8 @@ namespace TerraBlind
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
-				NavCoordinator.Start(navSign);
+				// direction explore now runs on the NEW StateSpacePlanner via ExploreCoordinator (was NavCoordinator).
+				ExploreCoordinator.Start(navSign);
 				body = "{\"ok\":true}";
 			}
 			else if (path == "/nav_set_path")
@@ -716,7 +717,9 @@ namespace TerraBlind
 			}
 			else if (path == "/nav_stop")
 			{
-				NavCoordinator.Stop();
+				ExploreCoordinator.Stop();   // direction explore (new); also stops the SSP leg it dispatched
+				NavCoordinator.Stop();       // legacy, in case anything still drives it
+				StateSpacePlanner.StopExec();
 				body = "{\"ok\":true}";
 			}
 			else if (path == "/sim_jump")
@@ -1003,9 +1006,14 @@ namespace TerraBlind
 			}
 			else if (path == "/nav_done")
 			{
-				// reads the NEW StateSpacePlanner status machine (see /nav). running while a route is in flight;
-				// done when steps finished; failed with a code (unreachable/too_far/replan_storm/cancelled).
-				if (StateSpacePlanner.ExecRunning)
+				// direction-explore (ExploreCoordinator) has priority: it walks forever (no 'done'), only ends on
+				// explore_stuck. while exploring, per-leg SSP states are internal → report explore-level status.
+				if (ExploreCoordinator.Active)
+					body = "{\"done\":false,\"status\":\"running\"}";
+				else if (!string.IsNullOrEmpty(ExploreCoordinator.FailCode))
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + ExploreCoordinator.FailCode + "\"}";
+				// else single-point /nav: read the StateSpacePlanner status machine.
+				else if (StateSpacePlanner.ExecRunning)
 					body = "{\"done\":false,\"status\":\"running\"}";
 				else if (StateSpacePlanner.ExecDone)
 					body = "{\"done\":true,\"status\":\"done\",\"reason\":\"done\"}";

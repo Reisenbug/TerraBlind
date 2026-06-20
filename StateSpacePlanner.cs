@@ -119,7 +119,10 @@ namespace TerraBlind
 
         static int _jpNoSpot, _jpNoLand, _jpFellThrough, _jpSlidOff, _jpOk;
 
-        public static SSResult Plan(int goalWx, int goalWy)
+        // startOverride: plan from a GIVEN start state (px,py,vx) instead of the live player. used by lookahead
+        // pre-planning — compute the next leg from the CURRENT leg's predicted landing while still walking, so the
+        // next leg can dispatch with zero stop-and-replan stall. null = plan from the real player (normal path).
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null)
         {
             _jpNoSpot = _jpNoLand = _jpFellThrough = _jpSlidOff = _jpOk = 0;
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -139,7 +142,10 @@ namespace TerraBlind
             bool hasPickaxe = false;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPickaxe = true; break; } }
 
-            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            float startPx = startOverride?.px ?? p.position.X;
+            float startPy = startOverride?.py ?? p.position.Y;
+            float startVx = startOverride?.vx ?? p.velocity.X;
+            var (spx, spy) = StandCell(startPx, startPy);
             // distance fuse: BuildField is a reverse-Dijkstra over a (|dx|+240)×(|dy|+240) window; a goal hundreds of
             // cells away (e.g. after a teleport leaves the old goal across the map) makes it explode and hang. refuse
             // to even start — return empty so the caller aborts instead of freezing.
@@ -162,8 +168,8 @@ namespace TerraBlind
 
             var start = new SSNode
             {
-                Px = p.position.X, Py = p.position.Y,
-                Vx = p.velocity.X, Vy = 0f, Grounded = true,
+                Px = startPx, Py = startPy,
+                Vx = startVx, Vy = 0f, Grounded = true,
             };
 
             var labels = new Dictionary<CellKey, List<Label>>();
