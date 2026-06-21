@@ -1150,20 +1150,19 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // A goal cell the player can't stand on (floating, no floor underneath) is unreachable, and the search
-        // burns its whole budget trying. Drop the goal down to the first standable cell so any click resolves
-        // to "go near there" instead of hanging on an impossible target.
+        // A goal cell the player can't stand on is unreachable, and the search burns its whole budget trying.
+        // Two cases a navwand click hits: the goal floats in air (no floor under it), or it lands INSIDE a solid
+        // block (mis-click into terrain). Snap to the nearest standable cell in the same column — searching BOTH
+        // ways by distance: up climbs out of a block to its top surface, down drops a floating goal to the floor.
         const int GoalSnapMaxDrop = 40;
+        static bool Standable(int gx, int gy) => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy);
         static int SnapGoalToStandable(int gx, int gy)
         {
-            for (int d = 0; d <= GoalSnapMaxDrop; d++)
+            if (Standable(gx, gy)) return gy;
+            for (int d = 1; d <= GoalSnapMaxDrop; d++)
             {
-                int y = gy + d;
-                if (PathPlanner.IsFloorPublic(gx, y + 1) && !PathPlanner.IsBlockPublic(gx, y))
-                {
-                    if (d > 0) DiagLog.Write($"[ss-snap] goal ({gx},{gy}) floating → ({gx},{y}) drop={d}");
-                    return y;
-                }
+                if (Standable(gx, gy - d)) { DiagLog.Write($"[ss-snap] goal ({gx},{gy}) → ({gx},{gy - d}) up={d}"); return gy - d; }
+                if (Standable(gx, gy + d)) { DiagLog.Write($"[ss-snap] goal ({gx},{gy}) → ({gx},{gy + d}) down={d}"); return gy + d; }
             }
             return gy;
         }
