@@ -25,6 +25,14 @@ namespace TerraBlind
         private static List<(int wx, int wy)> _ssMineTiles = new();
         private static int _ssTtl = 0;
 
+        // LOOKAHEAD viz: the next leg the background thread pre-planned while the current leg walks. Drawn dim so it
+        // reads as "tentative future" vs the bright current leg. _laStart = predicted landing the bg plan branched
+        // from (white ring) — eyeball whether the bg trail actually connects to where the current leg ends.
+        private static List<(float wpx, float wpy, bool isJump)> _laTrail = new();
+        private static (float wpx, float wpy)? _laGoal;
+        private static (float wpx, float wpy)? _laStart;
+        private static int _laTtl = 0;
+
         private static Texture2D _pixel;
 
         public static void SetSSPath(List<(float wpx, float wpy, bool isJump)> trail,
@@ -34,6 +42,19 @@ namespace TerraBlind
                                      List<(int wx, int wy)> mineTiles = null, int ttlFrames = 1200)
         {
             lock (_lock) { _ssTrail = trail; _ssExplored = explored; _ssGoal = (goalPx, goalPy); _ssPlaced = placed ?? new(); _ssMineTiles = mineTiles ?? new(); _ssTtl = ttlFrames; }
+        }
+
+        // called from the background lookahead thread → must stay lock-guarded. Pass startPx/Py = the predicted
+        // landing the plan branched from (drawn as a white ring to spot prediction-vs-reality drift).
+        public static void SetLookaheadPath(List<(float wpx, float wpy, bool isJump)> trail,
+                                            float goalPx, float goalPy, float startPx, float startPy, int ttlFrames = 1200)
+        {
+            lock (_lock) { _laTrail = trail; _laGoal = (goalPx, goalPy); _laStart = (startPx, startPy); _laTtl = ttlFrames; }
+        }
+
+        public static void ClearLookahead()
+        {
+            lock (_lock) { _laTtl = 0; _laTrail = new(); _laGoal = null; _laStart = null; }
         }
 
         public static void SetTiles(List<(int wx, int wy, Color color)> tiles, int ttlFrames = 600)
@@ -56,7 +77,7 @@ namespace TerraBlind
 
         public override void PostUpdateEverything()
         {
-            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; }
+            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; }
         }
 
         public override void PostDrawTiles()
@@ -95,6 +116,20 @@ namespace TerraBlind
                     foreach (var (px, py, isJump) in ssTrail)
                         DrawDot(spriteBatch, px, py, isJump ? new Color(0, 230, 90, 220) : new Color(255, 220, 0, 200));
                     if (ssGoal.HasValue) DrawDot(spriteBatch, ssGoal.Value.Item1, ssGoal.Value.Item2, new Color(255, 40, 40, 240));
+                }
+            }
+
+            // LOOKAHEAD: the background-planned NEXT leg, drawn dim. walk=dim amber, jump=dim teal, goal=orange,
+            // start=white ring (the predicted landing it branched from — should sit on the current leg's end).
+            {
+                List<(float, float, bool)> laTrail; (float, float)? laGoal; (float, float)? laStart; int laTtl;
+                lock (_lock) { laTrail = _laTrail; laGoal = _laGoal; laStart = _laStart; laTtl = _laTtl; }
+                if (laTtl > 0)
+                {
+                    foreach (var (px, py, isJump) in laTrail)
+                        DrawDot(spriteBatch, px, py, isJump ? new Color(0, 150, 150, 130) : new Color(200, 150, 40, 120));
+                    if (laGoal.HasValue) DrawDot(spriteBatch, laGoal.Value.Item1, laGoal.Value.Item2, new Color(255, 140, 0, 200));
+                    if (laStart.HasValue) DrawDot(spriteBatch, laStart.Value.Item1, laStart.Value.Item2, new Color(255, 255, 255, 220));
                 }
             }
 
