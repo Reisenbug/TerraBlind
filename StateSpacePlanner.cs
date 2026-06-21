@@ -117,14 +117,22 @@ namespace TerraBlind
             public List<(float px, float py)> Trail = new();
         }
 
-        static int _jpNoSpot, _jpNoLand, _jpFellThrough, _jpSlidOff, _jpOk;
+        // Per-plan scratch state (distance field + caches + jump-place tally). Was global static, which welded a
+        // "only one plan at a time" assumption into ~50 call sites. Now passed explicitly so plans are re-entrant:
+        // the live executor holds one ctx across frames while a background lookahead plan uses its own.
+        public class PlanCtx
+        {
+            public Dictionary<(int, int), int> DistField;
+            public Dictionary<(int, int), int> BlockH;
+            public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
+        }
 
         // startOverride: plan from a GIVEN start state (px,py,vx) instead of the live player. used by lookahead
         // pre-planning — compute the next leg from the CURRENT leg's predicted landing while still walking, so the
         // next leg can dispatch with zero stop-and-replan stall. null = plan from the real player (normal path).
         public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null)
         {
-            _jpNoSpot = _jpNoLand = _jpFellThrough = _jpSlidOff = _jpOk = 0;
+            var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var res = new SSResult();
             var p = Main.LocalPlayer;
@@ -154,15 +162,15 @@ namespace TerraBlind
                 DiagLog.Write($"[ss-toofar] start=({spx},{spy}) goal=({goalWx},{goalWy}) span>{MaxPlanSpanCells} → abort");
                 return res;
             }
-            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
-            _blockH = null;
+            ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            ctx.BlockH = null;
 
             // DIAGNOSTIC: dump the maze-field H up the start column to answer "why does A* go DOWN into the pit". if a
             // lower cell has LOWER H than a higher one, the field itself rewards descending. x = cell not in field.
             {
                 var hb = new System.Text.StringBuilder($"[ss-mazeH] start=({spx},{spy}) goal=({goalWx},{goalWy}) col={spx} (y:H):");
                 for (int yy = spy + 4; yy >= spy - 30; yy--)
-                    hb.Append(_distField.TryGetValue((spx, yy), out int d) ? $" {yy}:{d}" : $" {yy}:x");
+                    hb.Append(ctx.DistField.TryGetValue((spx, yy), out int d) ? $" {yy}:{d}" : $" {yy}:x");
                 DiagLog.Write(hb.ToString());
             }
 
@@ -177,7 +185,7 @@ namespace TerraBlind
             var open = new PriorityQueue<SSNode, float>();
             labels[Cell(start)] = new List<Label> { new Label { G = 0f, Vx = start.Vx, Vy = start.Vy } };
             came[start] = (start, null, 0f, false, null);
-            open.Enqueue(start, Heuristic(start, goalCx, goalFeetY, ph));
+            open.Enqueue(start, Heuristic(ctx, start, goalCx, goalFeetY, ph));
 
             int expansions = 0;
             SSNode goalNode = default; bool found = false;
@@ -207,7 +215,7 @@ namespace TerraBlind
 
                 expansions++;
                 if (res.Explored.Count < 3000) res.Explored.Add((cur.Px, cur.Py));
-                foreach (var (next, frames, cost, pillar, digTiles) in Expand(cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
+                foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
                 {
                     float ng = curG + cost;
                     var ck = Cell(next);
@@ -216,7 +224,7 @@ namespace TerraBlind
                     list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
                     came[next] = (cur, frames, ng, pillar, digTiles);
-                    open.Enqueue(next, ng + HeuristicWeight * Heuristic(next, goalCx, goalFeetY, ph));
+                    open.Enqueue(next, ng + HeuristicWeight * Heuristic(ctx, next, goalCx, goalFeetY, ph));
                 }
             }
 
@@ -328,7 +336,7 @@ namespace TerraBlind
                     }
                 }
             }
-            DiagLog.Write($"[ss-jptally] ok={_jpOk} noSpot={_jpNoSpot} noLand={_jpNoLand} fellThrough={_jpFellThrough} slidOff={_jpSlidOff}");
+            DiagLog.Write($"[ss-jptally] ok={ctx.JpOk} noSpot={ctx.JpNoSpot} noLand={ctx.JpNoLand} fellThrough={ctx.JpFellThrough} slidOff={ctx.JpSlidOff}");
             DumpPlanTrace(res, start, goalWx, goalWy);
             return res;
         }
@@ -395,11 +403,11 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
-            SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
             if (!cur.Grounded) yield break;
 
-            float curH = Heuristic(cur, goalCx, goalFeetY, ph);
+            float curH = Heuristic(ctx, cur, goalCx, goalFeetY, ph);
 
             // First emit all plain walk/jump edges, tracking whether ANY of them meaningfully reduces the
             // (vertical-aware) heuristic. Horizontal shuffling toward a wall lowers x-distance but not h once
@@ -417,7 +425,7 @@ namespace TerraBlind
                     // progress uses the RAW per-cell field, not the block-coarsened Heuristic: inside an 8x8 block
                     // the coarsened H is flat, so every in-block move reads "no progress" and dig fires even where a
                     // plain jump clears a low step. raw field still drops cell-by-cell toward the goal.
-                    if (RawProgress(cur, seg.Value.node)) anyProgress = true;
+                    if (RawProgress(ctx, cur, seg.Value.node)) anyProgress = true;
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (segFeetCy < dcy) vertProgress = true;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
@@ -453,7 +461,7 @@ namespace TerraBlind
             // plain jump can't climb either. pass vertProgress so OnDemandPlatformEdges can gate pillar on it —
             // a natural ledge a plain jump reaches (vertProgress) must NOT spawn a pillar (human climbs it bare).
             if (platformTile >= 0 || hasPickaxe)
-                foreach (var pe in OnDemandPlatformEdges(cur, ph, platformTile, vertProgress, hasPickaxe, anyProgress))
+                foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertProgress, hasPickaxe, anyProgress))
                     yield return pe;
         }
 
@@ -468,12 +476,12 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
-            SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe, bool anyProgress)
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe, bool anyProgress)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
-            int curH = _distField != null && _distField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
-            int hl = _distField != null && _distField.TryGetValue((ccx - 1, ccy), out int a) ? a : int.MaxValue;
-            int hr = _distField != null && _distField.TryGetValue((ccx + 1, ccy), out int b) ? b : int.MaxValue;
+            int curH = ctx.DistField != null && ctx.DistField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
+            int hl = ctx.DistField != null && ctx.DistField.TryGetValue((ccx - 1, ccy), out int a) ? a : int.MaxValue;
+            int hr = ctx.DistField != null && ctx.DistField.TryGetValue((ccx + 1, ccy), out int b) ? b : int.MaxValue;
             int gdir = hl < hr ? -1 : 1;                 // gradient-descent horizontal direction (toward lower maze H)
             int targetDir = gdir;
             int maxScan = MaxScan(ph);
@@ -482,15 +490,15 @@ namespace TerraBlind
             // jump straight up (dir=0), drop ONE platform at the arc top, land on it — gains several tiles at once
             // when a foothold (e.g. a tree) lets the tile stick. only fall back to PILLAR (原地一格格垒) when no
             // jump-place clears VertPlaceMinRise tiles (a short hop isn't worth the jump/land overhead).
-            if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && _distField != null)
+            if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && ctx.DistField != null)
             {
-                int upH = _distField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
+                int upH = ctx.DistField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
                 if (upH < curH)
                 {
                     bool anyVertJumpPlace = false;
                     foreach (int hold in BuildHoldOptions())
                     {
-                        var jp = JumpPlace(cur, 0, hold, ph, platformTile);
+                        var jp = JumpPlace(ctx, cur, 0, hold, ph, platformTile);
                         if (!jp.HasValue) continue;
                         var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
                         if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
@@ -499,7 +507,7 @@ namespace TerraBlind
                     }
                     // gate pillar on no lateral way out: if walking along gdir reaches a lower-H standable cell,
                     // a human walks out and climbs the slope rather than pillaring up in place.
-                    bool lateralOut = F_PillarNeedNoLateral && HasLateralProgress(ccx, ccy, gdir, curH, maxScan);
+                    bool lateralOut = F_PillarNeedNoLateral && HasLateralProgress(ctx, ccx, ccy, gdir, curH, maxScan);
                     if (!anyVertJumpPlace && !vertProgress && !lateralOut && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
@@ -515,9 +523,9 @@ namespace TerraBlind
 
             // VERTICAL DOWN: worth-it test is inside DigDown (H drop >= margin AND no lateral walk reaches an
             // equally-low cell), not !anyProgress — the latter made dig a last resort so A* detoured first.
-            if (hasPickaxe && _distField != null)
+            if (hasPickaxe && ctx.DistField != null)
             {
-                var dd = DigDown(cur, ccx, ccy, curH, gdir, maxScan);
+                var dd = DigDown(ctx, cur, ccx, ccy, curH, gdir, maxScan);
                 if (dd.HasValue)
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
@@ -526,9 +534,9 @@ namespace TerraBlind
             // 2 tiles onto placed blocks", until breaking out into a lower-H cell. pillar=true AND
             // digTiles!=null together mark this composite edge; retrace expands it into alternating
             // Dig/Pillar sub-steps. needs blocks to pillar with, hence platformTile gate.
-            if (hasPickaxe && !anyProgress && platformTile >= 0 && _distField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            if (hasPickaxe && !anyProgress && platformTile >= 0 && ctx.DistField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
             {
-                var du = DigUp(cur, ccx, ccy, curH);
+                var du = DigUp(ctx, cur, ccx, ccy, curH);
                 if (du.HasValue)
                     yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
             }
@@ -573,7 +581,7 @@ namespace TerraBlind
                 {
                     foreach (int hold in BuildHoldOptions())
                     {
-                        var jp = JumpPlace(cur, gdir, hold, ph, platformTile);
+                        var jp = JumpPlace(ctx, cur, gdir, hold, ph, platformTile);
                         if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
                     }
                     if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
@@ -594,7 +602,7 @@ namespace TerraBlind
                 // jump; a wall is dug only when tunnelling is genuinely cheaper than routing around it.
                 if (hasPickaxe)
                 {
-                    var dig = DigThroughWall(gdir, ccx, ccy, curH);
+                    var dig = DigThroughWall(ctx, gdir, ccx, ccy, curH);
                     if (dig.HasValue)
                         yield return (dig.Value.node, null, dig.Value.cost, false, dig.Value.tiles);
                 }
@@ -608,7 +616,7 @@ namespace TerraBlind
                 bool anyAcross = false;
                 foreach (int hold in BuildHoldOptions())
                 {
-                    var jp = JumpPlaceAcross(cur, gdir, hold, ph, platformTile, curH);
+                    var jp = JumpPlaceAcross(ctx, cur, gdir, hold, ph, platformTile, curH);
                     if (jp.HasValue) { anyAcross = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
                 }
                 if (!anyAcross)
@@ -641,7 +649,7 @@ namespace TerraBlind
         // worth digging down to a landing of maze-H lh: clearly closer along the field (curH - lh >= margin) and
         // no lateral walk reaches an equally-low cell (else route around instead of mining). follows the maze
         // field, which already plans the cheapest rock-penetrating route to the goal.
-        static bool WorthDig(int ccx, int ccy, int curH, int lh, int gdir, int maxScan)
+        static bool WorthDig(PlanCtx ctx, int ccx, int ccy, int curH, int lh, int gdir, int maxScan)
         {
             if (curH - lh < DigWorthMargin) return false;
             for (int d = 1; d <= maxScan; d++)
@@ -649,12 +657,12 @@ namespace TerraBlind
                 {
                     int x = ccx + dir * d;
                     if (PathPlanner.IsBlockPublic(x, ccy)) continue;
-                    if (CoarseStand(x, ccy) && _distField.TryGetValue((x, ccy), out int hx) && hx <= lh) return false;
+                    if (CoarseStand(x, ccy) && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx <= lh) return false;
                 }
             return true;
         }
 
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
             int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
@@ -667,8 +675,8 @@ namespace TerraBlind
                     int landC = PathPlanner.IsFloorPublic(ccx, y + 1) ? ccx
                               : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
                     if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
-                    bool hasH = _distField.TryGetValue((landC, y), out int lh);
-                    if (!(hasH && WorthDig(ccx, ccy, curH, lh, gdir, maxScan))) return null;
+                    bool hasH = ctx.DistField.TryGetValue((landC, y), out int lh);
+                    if (!(hasH && WorthDig(ctx, ccx, ccy, curH, lh, gdir, maxScan))) return null;
                     float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -691,8 +699,8 @@ namespace TerraBlind
             // the H gate stays meaningful mid-rock — long descents chain shaft after shaft.
             int yEnd = ccy + DigMaxScan;
             bool endFloor = PathPlanner.IsFloorPublic(ccx, yEnd + 1);
-            bool endH = _distField.TryGetValue((ccx, yEnd), out int eh);
-            if (tiles.Count > 0 && endFloor && endH && WorthDig(ccx, ccy, curH, eh, gdir, maxScan))
+            bool endH = ctx.DistField.TryGetValue((ccx, yEnd), out int eh);
+            if (tiles.Count > 0 && endFloor && endH && WorthDig(ctx, ccx, ccy, curH, eh, gdir, maxScan))
             {
                 float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                 float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -706,7 +714,7 @@ namespace TerraBlind
         // reason as DigDown), then pillar-jump 2 tiles onto placed blocks. Yields only when the ceiling is
         // actually sealed (first cycle mines something — open headroom belongs to jump/jump-place/pillar) and
         // the breakout cell has lower maze H.
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(SSNode cur, int ccx, int ccy, int curH)
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
             int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
@@ -726,7 +734,7 @@ namespace TerraBlind
                 if (k == 1 && tiles.Count == 0) return null;
                 int feetY = ccy - 2 * k;
                 cost += 43f;
-                if (_distField.TryGetValue((ccx, feetY), out int lh) && lh < curH)
+                if (ctx.DistField.TryGetValue((ccx, feetY), out int lh) && lh < curH)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (feetY + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -738,7 +746,7 @@ namespace TerraBlind
 
         // Mine straight through a solid wall along dir, stopping at the first standable cell on the far side.
         // Returns (landing node, tiles to mine, total mining-frame cost), or null if unmineable / no standable exit.
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(int dir, int ccx, int ccy, int curH)
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(PlanCtx ctx, int dir, int ccx, int ccy, int curH)
         {
             var tiles = new List<(int, int)>();
             float cost = 0f;
@@ -761,7 +769,7 @@ namespace TerraBlind
                 // don't run to DigMaxScan — that overshoots the target column and the end-cell H climbs back up.
                 bool bodyClear = !DigSolid(x, ccy) && !DigSolid(x, ccy - 1) && !DigSolid(x, ccy - 2);
                 bool support = PathPlanner.IsFloorPublic(x, ccy + 1) || DigSolid(x, ccy + 1);
-                bool toward = _distField != null && _distField.TryGetValue((x, ccy), out int hx) && hx < curH;
+                bool toward = ctx.DistField != null && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH;
                 if (bodyClear && support && toward)
                 {
                     float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
@@ -797,7 +805,7 @@ namespace TerraBlind
         // stands on the new platform's top, supported by real terrain. Covers "hug a wall/block and jump-place
         // upward". Pure open-air pillaring (placement supported only by prior placements) is left to the macro.
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlace(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
+            PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
         {
             if (hold == 0) return null; // need to leave the ground
 
@@ -823,7 +831,7 @@ namespace TerraBlind
                 }
                 if (s.Vy > 0f && s.Py > minPy + 1f) break; // past apex and descending — apex is locked
             }
-            if (apexFootCx == int.MinValue) { _jpNoSpot++; return null; }
+            if (apexFootCx == int.MinValue) { ctx.JpNoSpot++; return null; }
 
             // scan downward from BELOW the apex foot (a platform in the apex foot's own cell can't catch the player —
             // they descend through it back to origin). pick the highest cell that is placeable AND lands the player
@@ -840,7 +848,7 @@ namespace TerraBlind
                 if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
                 placeCx = apexFootCx; placeCy = py; seg = trySeg; break;
             }
-            if (placeCx == int.MinValue) { _jpNoSpot++; return null; }
+            if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             float probeVy = 0f, probeFootPy = 0f;
             // must actually land ON the placed platform — otherwise the player passed through it and landed
             // elsewhere (often back on the ground). Such "place but fall through" edges are useless and, when
@@ -848,11 +856,11 @@ namespace TerraBlind
             int landFeetCy = (int)((seg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
             if (F_LandOnPlat && landFeetCy != placeCy)
             {
-                if (_jpFellThrough < 12)
+                if (ctx.JpFellThrough < 12)
                     DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} probeVy={probeVy:0.#} probeFootPy={probeFootPy:0.#} platTopPy={placeCy * 16} landFeetCy={landFeetCy}");
-                _jpFellThrough++; return null;
+                ctx.JpFellThrough++; return null;
             }
-            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { _jpNoSpot++; return null; } // unreachable placement
+            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
 
             // Landing on a 1-tile platform with residual Vx slides the player off next frame. Append a brake:
             // counter-press to decelerate; the landing node takes the actual settled position. Only a slide
@@ -860,11 +868,11 @@ namespace TerraBlind
             if (F_Brake)
             {
                 var braked = AppendBrake(seg.Value.node, seg.Value.frames, ph);
-                if (braked == null) { _jpSlidOff++; return null; }
-                _jpOk++;
+                if (braked == null) { ctx.JpSlidOff++; return null; }
+                ctx.JpOk++;
                 return braked.Value;
             }
-            _jpOk++;
+            ctx.JpOk++;
             return seg.Value;
         }
 
@@ -875,7 +883,7 @@ namespace TerraBlind
         // platform, land on it. Placed tile NOT stored in node (pure-physics key, no combinatorial blowup —
         // the 118ab5f lesson). H-gate caps fan-out: an across-place that doesn't reduce H is never yielded.
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlaceAcross(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
+            PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
         {
             if (hold == 0 || dir == 0) return null;
 
@@ -896,7 +904,7 @@ namespace TerraBlind
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
-                if (!(_distField != null && _distField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
+                if (!(ctx.DistField != null && ctx.DistField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
                 if (!MarkPlaceFrame(seg.Value.frames, fcx, fcy)) continue; // unreachable placement → try a different landing
                 return seg.Value;
             }
@@ -1211,8 +1219,6 @@ namespace TerraBlind
         const float TrendNearDyTiles = 2f;
         const float DistStepCost = 8f; // h per coarse-BFS step (≈ frames to traverse one cell)
 
-        static Dictionary<(int, int), int> _distField;
-
         // The maze field is a memoryless 2D cost grid: it scores a path only by total weighted cost, blind to the
         // ORDER of moves. So "up-then-right" and "right-then-up" get identical H even though the player's physics
         // make them very different (horizontal speed feeds the jump). Its per-cell gradient down the start column
@@ -1221,32 +1227,31 @@ namespace TerraBlind
         // no longer chases the per-cell vertical gradient — it explores move order freely via physics Expand, and
         // the field only steers the coarse region-to-region direction. HBlockSize=1 disables (per-cell = old behavior).
         const int HBlockSize = 8;
-        static Dictionary<(int, int), int> _blockH;
 
-        static int BlockMinH(int cx, int cy)
+        static int BlockMinH(PlanCtx ctx, int cx, int cy)
         {
             int bx = (cx < 0 ? cx - HBlockSize + 1 : cx) / HBlockSize;
             int by = (cy < 0 ? cy - HBlockSize + 1 : cy) / HBlockSize;
-            if (_blockH != null && _blockH.TryGetValue((bx, by), out int cached)) return cached;
+            if (ctx.BlockH != null && ctx.BlockH.TryGetValue((bx, by), out int cached)) return cached;
             int best = int.MaxValue;
             int x0 = bx * HBlockSize, y0 = by * HBlockSize;
             for (int x = x0; x < x0 + HBlockSize; x++)
                 for (int y = y0; y < y0 + HBlockSize; y++)
-                    if (_distField.TryGetValue((x, y), out int v) && v < best) best = v;
-            _blockH ??= new Dictionary<(int, int), int>();
-            _blockH[(bx, by)] = best;
+                    if (ctx.DistField.TryGetValue((x, y), out int v) && v < best) best = v;
+            ctx.BlockH ??= new Dictionary<(int, int), int>();
+            ctx.BlockH[(bx, by)] = best;
             return best;
         }
 
         // is there a standable cell along gdir (within reach) with lower maze H than here — i.e. a walk-out route.
-        static bool HasLateralProgress(int ccx, int ccy, int gdir, int curH, int maxScan)
+        static bool HasLateralProgress(PlanCtx ctx, int ccx, int ccy, int gdir, int curH, int maxScan)
         {
             for (int d = 1; d <= maxScan; d++)
             {
                 int x = ccx + gdir * d;
                 if (PathPlanner.IsBlockPublic(x, ccy)) break; // wall blocks the walk-out
                 if (!CoarseStand(x, ccy)) continue;
-                if (_distField.TryGetValue((x, ccy), out int hx) && hx < curH) return true;
+                if (ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH) return true;
             }
             return false;
         }
@@ -1254,24 +1259,24 @@ namespace TerraBlind
         // progress on the RAW per-cell maze field (not block-coarsened): landing cell's H lower than the current
         // cell's. used to decide "a plain move already advances → don't dig"; the coarsened Heuristic is flat
         // inside a block and would wrongly report no progress for in-block moves.
-        static bool RawProgress(SSNode from, SSNode to)
+        static bool RawProgress(PlanCtx ctx, SSNode from, SSNode to)
         {
-            if (_distField == null) return false;
+            if (ctx.DistField == null) return false;
             var (fcx, fcy) = StandCell(from.Px, from.Py);
             var (tcx, tcy) = StandCell(to.Px, to.Py);
-            if (!_distField.TryGetValue((fcx, fcy), out int fh)) return false;
-            if (!_distField.TryGetValue((tcx, tcy), out int th)) return false;
+            if (!ctx.DistField.TryGetValue((fcx, fcy), out int fh)) return false;
+            if (!ctx.DistField.TryGetValue((tcx, tcy), out int th)) return false;
             return th < fh;
         }
 
-        static float Heuristic(SSNode s, float goalCx, float goalFeetY, PhysicsSimulator.Params ph)
+        static float Heuristic(PlanCtx ctx, SSNode s, float goalCx, float goalFeetY, PhysicsSimulator.Params ph)
         {
-            if (_distField != null)
+            if (ctx.DistField != null)
             {
                 var (cx, cy) = StandCell(s.Px, s.Py);
                 int h = HBlockSize <= 1
-                    ? (_distField.TryGetValue((cx, cy), out int d0) ? d0 : int.MaxValue)
-                    : BlockMinH(cx, cy);
+                    ? (ctx.DistField.TryGetValue((cx, cy), out int d0) ? d0 : int.MaxValue)
+                    : BlockMinH(ctx, cx, cy);
                 if (h != int.MaxValue)
                     return h * DistStepCost;
             }
@@ -1454,6 +1459,7 @@ namespace TerraBlind
         // maze cost, and execute the single best. No search tree → no blowup. When no candidate improves (shaft:
         // jump-place blocked), fall back to one vertical pillar cycle — "low-gain → climb" emerges, not hardcoded.
         static bool _greedyActive;
+        static PlanCtx _greedyCtx;   // greedy runs across frames on the game thread: ctx built in ExecBlocks, read each TickBlocks
         static int _greedyGoalWx, _greedyGoalWy;
         static readonly List<(float, float, bool)> _greedyTrail = new();
         static bool _prevReplayJump;
@@ -1475,12 +1481,13 @@ namespace TerraBlind
             if (p == null || !p.active) return;
             goalWy = SnapGoalToStandable(goalWx, goalWy);
             var (spx, spy) = StandCell(p.position.X, p.position.Y);
-            _distField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
-            _blockH = null;
-            if (!_distField.ContainsKey((spx, spy))) { DiagLog.Write($"[ss-greedy] start ({spx},{spy}) not in field"); return; }
+            _greedyCtx = new PlanCtx();
+            _greedyCtx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            _greedyCtx.BlockH = null;
+            if (!_greedyCtx.DistField.ContainsKey((spx, spy))) { DiagLog.Write($"[ss-greedy] start ({spx},{spy}) not in field"); return; }
             _greedyActive = true; _greedyGoalWx = goalWx; _greedyGoalWy = goalWy;
             _greedyTrail.Clear(); _greedyVisited.Clear();
-            DiagLog.Write($"[ss-greedy] start=({spx},{spy}) goal=({goalWx},{goalWy}) field={_distField.Count}");
+            DiagLog.Write($"[ss-greedy] start=({spx},{spy}) goal=({goalWx},{goalWy}) field={_greedyCtx.DistField.Count}");
         }
 
         const float GreedyGoalDistPx = 12f;
@@ -1514,7 +1521,7 @@ namespace TerraBlind
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? r = name switch
             {
                 "bridge" => BridgePlace(cur, dir, ph, platformTile),
-                "jumpplace" => JumpPlace(cur, dir, BuildHoldOptions()[^1], ph, platformTile),
+                "jumpplace" => JumpPlace(new PlanCtx(), cur, dir, BuildHoldOptions()[^1], ph, platformTile),
                 "jump" => SimulateSegment(cur, dir, BuildHoldOptions()[^1], ph),
                 "walk" => SimulateSegment(cur, dir, 0, ph),
                 _ => null,
@@ -1560,11 +1567,11 @@ namespace TerraBlind
 
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
-            int curCost = _distField.TryGetValue((curCx, curCy), out int cc) ? cc : int.MaxValue;
+            int curCost = _greedyCtx.DistField.TryGetValue((curCx, curCy), out int cc) ? cc : int.MaxValue;
 
             _greedyVisited.Add((curCx, curCy));
 
-            _jpNoSpot = _jpNoLand = _jpFellThrough = _jpSlidOff = _jpOk = 0;
+            _greedyCtx.JpNoSpot = _greedyCtx.JpNoLand = _greedyCtx.JpFellThrough = _greedyCtx.JpSlidOff = _greedyCtx.JpOk = 0;
             // NO BACKTRACK: never step onto a visited cell. Among UNVISITED reachable candidates, pick the lowest
             // maze cost. This forces forward progress out of local-minimum wells (a sealed pocket's low-cost floor
             // is already visited → the bot must extend sideways into new cells, even if cost rises briefly). When
@@ -1573,11 +1580,11 @@ namespace TerraBlind
             int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
             var cand = new System.Text.StringBuilder();
             int candN = 0;
-            foreach (var (next, frames, _, _, _) in Expand(cur, ph, gx, gy, BuildHoldOptions(), platformTile, false))
+            foreach (var (next, frames, _, _, _) in Expand(_greedyCtx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, false))
             {
                 if (frames == null) continue; // greedy can't drive the pillar macro; skip those edges
                 var (ncx, ncy) = StandCell(next.Px, next.Py);
-                bool inField = _distField.TryGetValue((ncx, ncy), out int ncost);
+                bool inField = _greedyCtx.DistField.TryGetValue((ncx, ncy), out int ncost);
                 bool plc = frames.Count > 0 && frames[frames.Count - 1].Place;
                 if (candN++ < 16) cand.Append($" [{ncx},{ncy}{(plc ? "P" : "")}c{(inField ? ncost.ToString() : "∞")}f{frames.Count}]");
                 if (!inField || _greedyVisited.Contains((ncx, ncy))) continue;
