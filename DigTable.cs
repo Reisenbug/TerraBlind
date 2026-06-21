@@ -14,41 +14,124 @@ namespace TerraBlind
 
     public static class DigTable
     {
-        static (string cat, int div, int minPick) Category(ushort type)
+        // Per-swing pickaxe damage, transcribed VERBATIM from vanilla Player.GetPickaxeDamage (Player.cs 1.4.5.4
+        // L52756-52838). Bare type numbers kept exactly as vanilla (226, 211, 85, ...) — NOT translated to TileID
+        // constants and NOT annotated with block names, so this can be diffed line-for-line against the source with
+        // zero room for a mislabel. Returns 0 when the current pickaxe is too weak (= unmineable). ONLY字面 deviation
+        // from source: vanilla's `tileTarget.type`/`.frameY` become tModLoader's `.TileType`/`.TileFrameY` (the Tile
+        // wrapper renames the fields) — the numeric type IDs and all logic are untouched.
+        //
+        // NOT transcribed: the framed-object tail (vanilla L52839-52900, types 128/269/334 = racks/dressers). It has
+        // side effects (mutates x/y, writes hitTile.UpdatePosition and Main.blockMouse) that a pure cost query must
+        // not perform, and those are non-solid furniture the navigator never digs (it only mines solid blocks), so
+        // the branch is unreachable here. If digging ever targets framed tiles, port that tail WITHOUT its writes.
+        static int GetPickaxeDamage(int x, int y, int pickPower, Tile tileTarget)
         {
-            switch (type)
+            int num = 0;
+            if (Main.tileNoFail[tileTarget.TileType])
             {
-                // minPick from vanilla GetPickaxeDamage: below threshold the swing deals ZERO damage
-                // (not slow — nothing), so an underestimate here = infinite swing loop at execution.
-                case TileID.Meteorite: return ("meteorite", 1, 50);
-                case TileID.Demonite: case TileID.Crimtane: return ("evil_ore", 1, 55);
-                case TileID.Obsidian: return ("obsidian", 1, 55);
-                case TileID.Hellstone: return ("hellstone", 2, 65);
-                case TileID.Cobalt: case TileID.Palladium: return ("cobalt", 1, 100);
-                case TileID.Mythril: case TileID.Orichalcum: return ("mythril", 2, 110);
-                case TileID.Adamantite: case TileID.Titanium: return ("adamantite", 3, 150);
-                case TileID.Chlorophyte: return ("chlorophyte", 5, 200);
-                case TileID.LihzahrdBrick: return ("lihzahrd", 4, 210);
-                case TileID.BlueDungeonBrick: case TileID.GreenDungeonBrick: case TileID.PinkDungeonBrick:
-                case TileID.Crimstone: case TileID.Ebonstone: case TileID.Pearlstone:
-                    return ("dungeon/evilstone", 2, 65);
-                default: return ("normal", 1, 0);
+                num = 100;
             }
+            num = ((!Main.tileDungeon[tileTarget.TileType] && tileTarget.TileType != 58 && tileTarget.TileType != 25 && tileTarget.TileType != 117 && tileTarget.TileType != 203) ? ((tileTarget.TileType == 85) ? ((!Main.getGoodWorld) ? (num + pickPower) : (num + pickPower / 4)) : ((tileTarget.TileType != 48 && tileTarget.TileType != 232 && (tileTarget.TileType < 0 || !TileID.Sets.Clouds[tileTarget.TileType])) ? ((tileTarget.TileType == 226) ? (num + pickPower / 4) : ((tileTarget.TileType != 107 && tileTarget.TileType != 221) ? ((tileTarget.TileType != 108 && tileTarget.TileType != 222) ? ((tileTarget.TileType == 111 || tileTarget.TileType == 223) ? (num + pickPower / 4) : ((tileTarget.TileType != 211) ? (num + pickPower) : (num + pickPower / 5))) : (num + pickPower / 3)) : (num + pickPower / 2))) : (num + pickPower * 2))) : (num + pickPower / 2));
+            if (tileTarget.TileType == 211 && pickPower < 200)
+            {
+                num = 0;
+            }
+            // vanilla guards this with `!Main.infectedSeed`, but tModLoader's Terraria assembly doesn't expose that
+            // field. infectedSeed is a special drunk-world variant; assume a normal world (false) → keep the guard.
+            if ((tileTarget.TileType == 25 || tileTarget.TileType == 203) && pickPower < 65)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 117 && pickPower < 65)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 37 && pickPower < 50)
+            {
+                num = 0;
+            }
+            else if ((tileTarget.TileType == 22 || tileTarget.TileType == 204) && (double)y > Main.worldSurface && pickPower < 55)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 56 && pickPower < 55)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 77 && pickPower < 65 && y >= Main.UnderworldLayer)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 58 && pickPower < 65)
+            {
+                num = 0;
+            }
+            else if ((tileTarget.TileType == 226 || tileTarget.TileType == 237) && pickPower < 210)
+            {
+                num = 0;
+            }
+            else if (tileTarget.TileType == 137 && pickPower < 210 && (!Main.notTheBeesWorld || !Main.noTrapsWorld || Main.tenthAnniversaryWorld))
+            {
+                int num2 = tileTarget.TileFrameY / 18;
+                if ((uint)(num2 - 1) <= 3u)
+                {
+                    num = 0;
+                }
+            }
+            else if (Main.tileDungeon[tileTarget.TileType] && pickPower < 100 && (double)y > Main.worldSurface)
+            {
+                if ((double)x < (double)Main.maxTilesX * 0.35 || (double)x > (double)Main.maxTilesX * 0.65)
+                {
+                    num = 0;
+                }
+            }
+            else if ((tileTarget.TileType == 107 || tileTarget.TileType == 221) && pickPower < 100)
+            {
+                num = 0;
+            }
+            else if ((tileTarget.TileType == 108 || tileTarget.TileType == 222) && pickPower < 110)
+            {
+                num = 0;
+            }
+            else if ((tileTarget.TileType == 111 || tileTarget.TileType == 223) && pickPower < 150)
+            {
+                num = 0;
+            }
+            if (tileTarget.TileType == 147 || tileTarget.TileType == 0 || tileTarget.TileType == 40 || tileTarget.TileType == 53 || tileTarget.TileType == 57 || tileTarget.TileType == 59 || tileTarget.TileType == 123 || tileTarget.TileType == 224 || tileTarget.TileType == 397)
+            {
+                num += pickPower;
+            }
+            if (tileTarget.TileType == 404)
+            {
+                num += 5;
+            }
+            if (tileTarget.TileType == 165 || Main.tileRope[tileTarget.TileType] || tileTarget.TileType == 199)
+            {
+                num = 100;
+            }
+            return num;
         }
 
         public const int Unmineable = 100000;
-        public static int CostFrames(ushort type)
+
+        // real mining time in frames for the tile at (x,y) with the player's current best pickaxe, using vanilla's
+        // per-swing damage. swings = ceil(100 / damage); frames = swings * useTime * pickSpeed. damage 0 (pick too
+        // weak, e.g. Lihzahrd brick before Picksaw) or CanKillTile false (supports an attached object) = Unmineable.
+        public static int CostFrames(int x, int y)
         {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
             var p = Main.LocalPlayer;
             if (p == null) return Unmineable;
             int slot = -1;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { slot = i; break; } }
             if (slot < 0) return Unmineable;
             var pick = p.inventory[slot];
-            var (_, div, minPick) = Category(type);
-            if (pick.pick < minPick) return Unmineable;
-            int perSwing = System.Math.Max(1, pick.pick / div);
-            int swings = (100 + perSwing - 1) / perSwing;
+            var tile = Main.tile[x, y];
+            int dmg = GetPickaxeDamage(x, y, pick.pick, tile);
+            if (Main.getGoodWorld) dmg *= 2;
+            if (dmg <= 0 || !Terraria.WorldGen.CanKillTile(x, y)) return Unmineable;
+            int swings = (100 + dmg - 1) / dmg;
             return (int)(swings * pick.useTime * p.pickSpeed);
         }
 
@@ -67,25 +150,22 @@ namespace TerraBlind
             DiagLog.Write($"[digtable] pickaxe='{pick.Name}' pickPower={pickPower} useTime={useTime} pickSpeed={pickSpeed:0.##}");
 
             int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-            var seen = new Dictionary<ushort, int>();
+            // one representative (x,y) per tile type so CostFrames sees real coords (some thresholds are depth/x-gated)
+            var seen = new Dictionary<ushort, (int x, int y, int cnt)>();
             for (int y = pcy - 12; y <= pcy + 12; y++)
                 for (int x = pcx - 14; x <= pcx + 14; x++)
                 {
                     if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
                     var t = Main.tile[x, y];
-                    if (t.HasTile && Main.tileSolid[t.TileType]) seen[t.TileType] = seen.TryGetValue(t.TileType, out int c) ? c + 1 : 1;
+                    if (t.HasTile && Main.tileSolid[t.TileType])
+                        seen[t.TileType] = seen.TryGetValue(t.TileType, out var e) ? (e.x, e.y, e.cnt + 1) : (x, y, 1);
                 }
 
-            var sb = new StringBuilder("[digtable] surrounding blocks (type:name cat canMine perSwing swings frames count):\n");
+            var sb = new StringBuilder("[digtable] surrounding blocks (type frames count):\n");
             foreach (var kv in seen)
             {
-                ushort type = kv.Key;
-                var (cat, div, minPick) = Category(type);
-                bool canMine = pickPower >= minPick;
-                int perSwing = canMine ? System.Math.Max(1, pickPower / div) : 0;
-                int swings = canMine ? (100 + perSwing - 1) / perSwing : -1;
-                int frames = canMine ? (int)(swings * useTime * pickSpeed) : -1;
-                sb.Append($"  type={type} {cat} mine={canMine} per={perSwing} swings={swings} frames={frames} cnt={kv.Value}\n");
+                int frames = CostFrames(kv.Value.x, kv.Value.y);
+                sb.Append($"  type={kv.Key} frames={(frames >= Unmineable ? "UNMINEABLE" : frames.ToString())} cnt={kv.Value.cnt}\n");
             }
             DiagLog.Write(sb.ToString());
         }

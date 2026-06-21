@@ -158,7 +158,7 @@ namespace TerraBlind
                 if (nx < 1 || ny < PlayerCellH || nx >= Main.maxTilesX - 1 || ny + 1 >= Main.maxTilesY) continue;
                 bool willStand = Floor(nx, ny + 1) || dy > 0; // digging down lands on what's below
                 if (Block(nx, ny) && willStand)
-                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Dig, Cost = DigTable.CostFrames(Main.tile[nx, ny].TileType) };
+                    yield return new Edge { Cx = nx, Cy = ny, Act = Act.Dig, Cost = DigTable.CostFrames(nx, ny) };
             }
         }
 
@@ -304,7 +304,7 @@ namespace TerraBlind
         {
             float bias = e.Act switch
             {
-                Act.Dig => DigTable.CostFrames(Main.tile[e.Cx, e.Cy].TileType), // real mining frames, not a small bias
+                Act.Dig => DigTable.CostFrames(e.Cx, e.Cy), // real mining frames, not a small bias
                 Act.Walk => 1f,
                 Act.Fall => 1f,
                 Act.Jump => 2f,

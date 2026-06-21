@@ -687,11 +687,10 @@ namespace TerraBlind
                 foreach (int c in new[] { ccx, c2 })
                     if (DigSolid(c, y))
                     {
-                        int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
-                        // CanKillTile: Terraria forbids breaking a tile that supports an attached object above (chest /
-                        // tree / framed object) — mining it would never succeed and the executor would hang. treat it
-                        // as unmineable so A* routes around instead of planning an un-diggable tile.
-                        if (fc >= DigTable.Unmineable || !Terraria.WorldGen.CanKillTile(c, y)) return null;
+                        int fc = DigTable.CostFrames(c, y);
+                        // CostFrames already folds in CanKillTile and pick-too-weak (both → Unmineable), so a tile that
+                        // supports an attached object or needs a stronger pickaxe is routed around by A*.
+                        if (fc >= DigTable.Unmineable) return null;
                         cost += fc;
                         tiles.Add((c, y));
                     }
@@ -728,7 +727,7 @@ namespace TerraBlind
                     foreach (int c in new[] { ccx, c2 })
                         if (DigSolid(c, y))
                         {
-                            int fc = DigTable.CostFrames(Main.tile[c, y].TileType);
+                            int fc = DigTable.CostFrames(c, y);
                             if (fc >= DigTable.Unmineable) return null;
                             cost += fc;
                             tiles.Add((c, y));
@@ -759,10 +758,9 @@ namespace TerraBlind
                 foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
                     if (DigSolid(x, y))
                     {
-                        int fc = DigTable.CostFrames(Main.tile[x, y].TileType);
-                        // unmineable = no/weak pick, OR a tile that supports an attached object above (chest/tree/etc.)
-                        // which Terraria won't let break — mining it would hang the executor. route around instead.
-                        if (fc >= DigTable.Unmineable || !Terraria.WorldGen.CanKillTile(x, y)) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE/unbreakable at ({x},{y}) → null"); return null; }
+                        int fc = DigTable.CostFrames(x, y);
+                        // Unmineable folds in pick-too-weak AND CanKillTile (attached object) — route around either way.
+                        if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
                         cost += fc;
                         tiles.Add((x, y));
                     }

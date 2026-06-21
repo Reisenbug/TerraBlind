@@ -164,6 +164,11 @@ namespace TerraBlind
 			{
 				body = StateSerializer.ToJson(LatestSnapshot);
 			}
+			else if (path == "/digtable")
+			{
+				DigTableSystem.Pending = true;   // Dump runs on the main thread (PostUpdateEverything) to read tiles safely
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/cursor")
 			{
 				var p = Main.LocalPlayer;
