@@ -41,27 +41,29 @@ namespace TerraBlind
             // so: vertical params = water values, horizontal params = bare, plus Step's 0.5 position multiplier when wet.
             static Params BuildWet(Player p)
             {
-                float maxRun = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
+                // vertical = water values; horizontal = live baked fields (water never modifies them), same as BuildDry.
                 return new Params
                 {
                     Gravity = 0.2f, JumpSpeed = 6.01f, MaxFall = 5f,
-                    MaxRun = maxRun, AccRunSpeed = maxRun,
-                    AccRun = 0.08f, RunSlowdown = 0.2f, JumpHeight = 30,
+                    MaxRun = p.maxRunSpeed, AccRunSpeed = p.accRunSpeed,
+                    AccRun = p.runAcceleration, RunSlowdown = 0.2f, JumpHeight = 30,
                 };
             }
 
             static Params BuildDry(Player p)
             {
-                // FRAGILE: do NOT read p.gravity / jumpSpeed / jumpHeight / runAccel / accRunSpeed here — when
-                // FromPlayer is called while the player is IN water those globals hold the WATER values
-                // (jumpHeight=30, accRun halved, ...), poisoning the "air" variant. the air variant must be the
-                // medium-independent bare-player values. moveSpeed is a gear stat (not water-modified) so it's safe.
-                float maxRun = p.moveSpeed > 0f ? 3f * p.moveSpeed : 3f;
+                // FRAGILE: the VERTICAL fields (gravity/jumpSpeed/jumpHeight/maxFallSpeed) are water-modified — when
+                // FromPlayer runs while IN water they hold water values (gravity=0.2, jumpHeight=30, ...), so the air
+                // variant must hardcode bare values, NOT read p.*. The HORIZONTAL fields are NEVER touched by water
+                // (verified: no wet/liquid-gated write to runAcceleration/maxRunSpeed/accRunSpeed in Player.cs), and
+                // by SetControls they're already BAKED with moveSpeed + accessories (probe: maxRun=3.63 accel=0.0968
+                // under a +21% buff). So read them live → all speed buffs/accessories (sunflower, swiftness, boots...)
+                // are covered for free instead of hardcoding 3.0/0.08.
                 return new Params
                 {
-                    AccRun = 0.08f,
-                    MaxRun = maxRun,
-                    AccRunSpeed = maxRun,
+                    AccRun = p.runAcceleration,
+                    MaxRun = p.maxRunSpeed,
+                    AccRunSpeed = p.accRunSpeed,
                     RunSlowdown = 0.2f,
                     Gravity = 0.4f,
                     MaxFall = 10f,
