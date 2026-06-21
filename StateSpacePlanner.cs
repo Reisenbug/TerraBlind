@@ -1370,6 +1370,8 @@ namespace TerraBlind
         static string _execFailCode;     // null while running/ok; set on any failure exit
         public static bool ExecDone => _execDone;
         public static string ExecFailCode => _execFailCode;
+        static SSResult _lastExecResult;
+        public static SSResult LastExecResult => _lastExecResult;   // the plan the current/last leg dispatched (for lookahead landing prediction)
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive;
 
@@ -1614,6 +1616,7 @@ namespace TerraBlind
             DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
             DiagLog.Write($"[run] ss_exec start=({rsx},{rsy}) goal=({goalWx},{goalWy})");
             var res = Plan(goalWx, goalWy);
+            _lastExecResult = res;
             Visualize(res, goalWx, goalWy);
             DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
             if (!res.Found || res.Steps.Count == 0)
@@ -1634,6 +1637,30 @@ namespace TerraBlind
             _lastReal.Valid = false;
             StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
             return res;
+        }
+
+        // Dispatch a plan computed earlier (lookahead: a background Plan ran while the previous leg executed).
+        // Same tail as Execute but skips planning — the caller already validated the player's real position matches
+        // the plan's start cell. Sets _lastExecResult so the NEXT lookahead chains off this leg's predicted landing.
+        public static void DispatchPlan(SSResult res)
+        {
+            StopGreedy(); StopSteps();
+            _execDone = false; _execFailCode = null;
+            _lastExecResult = res;
+            var pStart = Main.LocalPlayer;
+            var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
+            DiagLog.StartRun($"{rsx}_{rsy}__{res.GoalWx}_{res.GoalWy}");
+            DiagLog.Write($"[run] ss_exec(lookahead) start=({rsx},{rsy}) goal=({res.GoalWx},{res.GoalWy}) steps={res.Steps.Count}");
+            Visualize(res, res.GoalWx, res.GoalWy);
+            _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;
+            _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
+            _replanCooldownLeft = 0;
+            _replanCount = 0;
+            _placeStall = 0;
+            _rescueCooldownLeft = 0;
+            _stuckFrames = 0;
+            _lastReal.Valid = false;
+            StartSteps(res.Steps);
         }
 
         static bool Replan(string reason)
