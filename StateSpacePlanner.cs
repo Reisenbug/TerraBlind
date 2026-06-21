@@ -81,6 +81,7 @@ namespace TerraBlind
             public List<PathSeg> Segments = new();
             public List<PhysicsSimulator.ControlInput> ExecFrames = new();
             public float BestPx, BestPy, BestDx, BestDy;
+            public float StartPx, StartPy; // the player position this plan was computed from (for lookahead frame realignment)
             public List<(float px, float py)> Explored = new();
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
@@ -153,6 +154,7 @@ namespace TerraBlind
             float startPx = startOverride?.px ?? p.position.X;
             float startPy = startOverride?.py ?? p.position.Y;
             float startVx = startOverride?.vx ?? p.velocity.X;
+            res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
             // distance fuse: BuildField is a reverse-Dijkstra over a (|dx|+240)×(|dy|+240) window; a goal hundreds of
             // cells away (e.g. after a teleport leaves the old goal across the map) makes it explode and hang. refuse
@@ -1646,8 +1648,30 @@ namespace TerraBlind
         {
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
-            _lastExecResult = res;
             var pStart = Main.LocalPlayer;
+
+            // REALIGN: the plan was computed from the PREDICTED landing of the previous leg; the real player is a few
+            // px off that prediction. Open-loop frame replay from the un-shifted plan would平移 the whole leg by that
+            // gap (the恒定 dPy=-8 seam). Shift every frame's absolute position so the plan starts exactly where the
+            // player really is. Velocity is position-invariant (unchanged); Place cell coords are tile-grid and a
+            // sub-tile shift doesn't move them, so leave them.
+            float offX = pStart.position.X - res.StartPx;
+            float offY = pStart.position.Y - res.StartPy;
+            if (res.Steps != null && (MathF.Abs(offX) > 0.01f || MathF.Abs(offY) > 0.01f))
+            {
+                foreach (var st in res.Steps)
+                {
+                    if (st.Frames == null) continue;
+                    for (int i = 0; i < st.Frames.Count; i++)
+                    {
+                        var fr = st.Frames[i];
+                        fr.Px += offX; fr.Py += offY;
+                        st.Frames[i] = fr;
+                    }
+                }
+                DiagLog.Write($"[ss-realign] lookahead leg shifted by ({offX:0.##},{offY:0.##}) to match real start");
+            }
+            _lastExecResult = res;
             var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{res.GoalWx}_{res.GoalWy}");
             DiagLog.Write($"[run] ss_exec(lookahead) start=({rsx},{rsy}) goal=({res.GoalWx},{res.GoalWy}) steps={res.Steps.Count}");
