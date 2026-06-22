@@ -18,21 +18,12 @@ namespace TerraBlind
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 80, DigSide = 120, DigUp = 160;
 
-        // AIR penalty: the maze is a geometric 4-connected field, so without this it抄近 straight through the sky
-        // (air cell == ground cell cost). Penalize by HEIGHT above the nearest floor: low air (pits/gaps/steps) is
-        // free so the field still glides over a pit without being misled into filling/detouring it; high air (a真·
-        // sky shortcut) gets expensive fast and is pushed back to the ground. Tunable via the MazeWand probe.
-        const int FreeAir = 3;       // air this many cells above ground is free (jump over pits / small gaps)
-        const int AirQuad = 1;       // penalty grows with height SQUARED: (h-FreeAir)^2 * AirQuad. low flight stays
-                                     // cheap (indicates trend) while high flight escalates fast and is pushed down.
-        const int AirCap = 400;      // …but capped, so a cell over a deep abyss doesn't blow up to an absurd cost.
-                                     // high enough that ~50-cell sky cruising is crushed (was 60 → flat above ~11 cells,
-                                     // so high flight wasn't punished more than low; 400 ≈ caps around 23 cells up).
-        // how deep below an air cell we look for ground = the deepest valley whose true depth we can MEASURE. Too
-        // small and a deep canyon reads as only this-many cells of air, so its squared penalty never builds and the
-        // field happily cruises over it. Must comfortably exceed the radius where AirCap saturates (~23 cells) so
-        // any flight high enough to matter is actually detected as high.
-        const int MaxAirProbe = 60;
+        // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
+        // background walls everywhere so flight is cheap; this just nudges toward ground and stops surface sky-cruising.
+        const int FreeAir = 7;       // free below this (one jump's worth)
+        const int AirSat = 10;       // h'=AirSat → half AirCap
+        const int AirCap = 6;        // asymptote. tiny on purpose
+        const int MaxAirProbe = 60;  // must exceed deepest valley we want to measure, else it reads shallow
 
         // entering a lava cell would burn the player to death — never route through it. A huge step cost makes the
         // field treat lava as effectively impassable (it'll still cross a 1-cell lava bridge only if literally no
@@ -211,15 +202,18 @@ namespace TerraBlind
             return baseCost;
         }
 
-        // height of cell (cx,cy) above the nearest floor below it, mapped to a cost. probe down for a floor; cells
-        // within FreeAir of the ground cost nothing (gliding over a pit), higher cells cost (height-FreeAir)*perTile.
+        // height above the nearest floor below, mapped to a cost. FreeAir tiles are free (gliding over a small pit).
+        // Above that the penalty SATURATES: AirCap * h'/(h'+AirSat). Low h' is区分得开 (near-linear), high h' all
+        // trends to AirCap so "40 deep" and "100 deep" read the same (both = a fall you can't return from). Smooth,
+        // no threshold, no hard-cap cliff — AirCap is an asymptote, not a cutoff.
         static int AirCost(int cx, int cy)
         {
-            for (int h = 1; h <= MaxAirProbe; h++)
-                if (PathPlanner.IsFloorPublic(cx, cy + h))
-                    return h <= FreeAir ? 0 : System.Math.Min(AirCap, (h - FreeAir) * (h - FreeAir) * AirQuad);
-            int maxH = MaxAirProbe - FreeAir;
-            return System.Math.Min(AirCap, maxH * maxH * AirQuad); // no floor within probe = max height
+            int h = MaxAirProbe;
+            for (int d = 1; d <= MaxAirProbe; d++)
+                if (PathPlanner.IsFloorPublic(cx, cy + d)) { h = d; break; }
+            if (h <= FreeAir) return 0;
+            float hp = h - FreeAir;
+            return (int)(AirCap * hp / (hp + AirSat));
         }
 
         static (List<(int, int)>, int) DescendPath(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
