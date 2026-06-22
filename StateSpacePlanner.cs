@@ -549,6 +549,16 @@ namespace TerraBlind
                 }
             }
 
+            // FREE FALL off a ledge: when the foot column is open below (a cliff/shaft, not a wall), ride it down to
+            // the real floor — exactly what a human does (mined=0). DigDown only reaches DigMaxScan deep and needs to
+            // mine, so a 24-tile cliff探不到底就作废; this no-dig edge covers any depth. emit before DigDown so A*
+            // prefers falling over digging a shaft.
+            {
+                var fall = FreeFall(cur, gdir, ph);
+                if (fall.HasValue)
+                    yield return (fall.Value.node, fall.Value.frames, fall.Value.frames.Count, false, null);
+            }
+
             // VERTICAL DOWN: worth-it test is inside DigDown (H drop >= margin AND no lateral walk reaches an
             // equally-low cell), not !anyProgress — the latter made dig a last resort so A* detoured first.
             if (hasPickaxe && ctx.DistField != null)
@@ -1178,6 +1188,36 @@ namespace TerraBlind
                 var (ncx, ncy) = StandCell(node.Px, node.Py);
                 if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null; // reported stand cell has no floor = fake
             }
+            return (node, frames);
+        }
+
+        // Walk off a ledge and ride gravity to the real floor — no dig, any depth. Holds gdir the whole way (a human
+        // keeps the direction held while falling). Returns null if the player never leaves the ground (no cliff here,
+        // plain walk already covers it) or never lands within the fuse.
+        const int FallMinDropPx = 32;   // must drop >=2 tiles, else it's a step plain walk/jump handles
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? FreeFall(SSNode cur, int gdir, PhysicsSimulator.Params ph)
+        {
+            var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
+            var frames = new List<PhysicsSimulator.ControlInput>();
+            bool everAirborne = false;
+            float startPy = s.Py;
+            for (int f = 0; f < MaxSegFrames; f++)
+            {
+                // hold the direction only until the feet leave the ledge; once airborne, release it so the player
+                // drops vertically (a human doesn't keep steering mid-fall — holding it sails far past the target).
+                bool airborne = !s.Grounded;
+                var input = new PhysicsSimulator.ControlInput { Right = !airborne && gdir > 0, Left = !airborne && gdir < 0 };
+                s = PhysicsSimulator.Step(s, input, ph);
+                input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
+                frames.Add(input);
+                if (!s.Grounded) everAirborne = true;
+                else if (everAirborne) break;   // landed
+            }
+            if (!everAirborne || !s.Grounded) return null;          // no cliff, or never landed
+            if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
+            var (ncx, ncy) = StandCell(s.Px, s.Py);
+            if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null;
+            var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
         }
 
