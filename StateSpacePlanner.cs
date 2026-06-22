@@ -9,7 +9,9 @@ namespace TerraBlind
     public static class StateSpacePlanner
     {
         const float VxQuant = 0.5f;
+        const float WalkStridePx = 112f; // one walk edge spans ~a jump's horizontal reach (maxRun*jumpHeight/gravity) so walk/jump edges are cost-comparable; 24px died in the accel ramp and made walk look slow
         const int   MaxExpansions = 20000;
+        const int   LegSubgoalCells = 80; // rolling: each leg targets a SUBGOAL this many cells ahead along the field gradient (reachable → A* finds it fast, like a manual single-point nav), not the far final goal
         const int   MaxSegFrames = 1200; // high enough that slow water descents reach the floor; still a fuse vs non-terminating edges
         const int   MaxPlanSpanCells = 200; // refuse to plan if goal is farther than this in x or y — BuildField would hang
         const int   HoldStep = 2;
@@ -82,6 +84,7 @@ namespace TerraBlind
             public List<PhysicsSimulator.ControlInput> ExecFrames = new();
             public float BestPx, BestPy, BestDx, BestDy;
             public float StartPx, StartPy; // the player position this plan was computed from (for lookahead frame realignment)
+            public bool Partial;           // true = this leg stops at the nearest grounded node, NOT the final goal (roll again from there)
             public List<(float px, float py)> Explored = new();
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
@@ -131,7 +134,11 @@ namespace TerraBlind
         // startOverride: plan from a GIVEN start state (px,py,vx) instead of the live player. used by lookahead
         // pre-planning — compute the next leg from the CURRENT leg's predicted landing while still walking, so the
         // next leg can dispatch with zero stop-and-replan stall. null = plan from the real player (normal path).
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null)
+        // goalWx/Wy = the cell A* searches to (a near SUBGOAL during rolling). fieldGoalWx/Wy = the cell the cached
+        // compass field is keyed on (the FINAL goal) — kept separate so rolling's per-leg subgoals don't each rebuild
+        // the million-cell field (the freeze). Pass (-1,-1) [default] to key the field on goalWx/Wy itself (single
+        // point nav / non-rolling callers).
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -156,15 +163,15 @@ namespace TerraBlind
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
-            // distance fuse: BuildField is a reverse-Dijkstra over a (|dx|+240)×(|dy|+240) window; a goal hundreds of
-            // cells away (e.g. after a teleport leaves the old goal across the map) makes it explode and hang. refuse
-            // to even start — return empty so the caller aborts instead of freezing.
-            if (System.Math.Abs(spx - goalWx) > MaxPlanSpanCells || System.Math.Abs(spy - goalWy) > MaxPlanSpanCells)
-            {
-                DiagLog.Write($"[ss-toofar] start=({spx},{spy}) goal=({goalWx},{goalWy}) span>{MaxPlanSpanCells} → abort");
-                return res;
-            }
-            ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            // h source depends on caller:
+            //  - ROLLING (fieldGoal passed): reuse the CACHED big compass keyed on the final goal — built once, every
+            //    leg shares it, no per-leg rebuild.
+            //  - SINGLE-POINT (no fieldGoal, e.g. navwand /nav): build a small box field around start↔goal, fast (tens
+            //    of ms). Do NOT route these through the big cached field — that's a 1.4s build that froze near nav.
+            if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
+                ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
+            else
+                ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
             ctx.BlockH = null;
 
             // DIAGNOSTIC: dump the maze-field H up the start column to answer "why does A* go DOWN into the pit". if a
@@ -192,6 +199,10 @@ namespace TerraBlind
             int expansions = 0;
             SSNode goalNode = default; bool found = false;
             float bestDist = float.MaxValue;
+            // ROLLING (partial) plan: the nearest GROUNDED state seen. If the goal is out of one budget's reach, we
+            // return the path to this instead of failing — the caller walks it and re-plans from there. Must be
+            // grounded (a leg ends standing still, so the next leg starts from a valid grounded state).
+            SSNode bestGroundedNode = start; bool haveBestGrounded = false; float bestGroundedDist = float.MaxValue;
 
             while (open.Count > 0 && expansions < MaxExpansions)
             {
@@ -207,6 +218,10 @@ namespace TerraBlind
                         bestDist = dist;
                         res.BestPx = cur.Px; res.BestPy = cur.Py;
                         res.BestDx = ccx - goalCx; res.BestDy = cfy - goalFeetY;
+                    }
+                    if (cur.Grounded && dist < bestGroundedDist && !cur.Equals(start))
+                    {
+                        bestGroundedDist = dist; bestGroundedNode = cur; haveBestGrounded = true;
                     }
                 }
 
@@ -234,12 +249,23 @@ namespace TerraBlind
             res.Expansions = expansions;
             res.Millis = sw.Elapsed.TotalMilliseconds;
             res.Found = found;
-            if (!found)
+            // ROLLING: goal out of this budget's reach → fall back to the nearest grounded node as a PARTIAL leg, so
+            // the caller walks it and re-plans from there. Only when that node is genuinely closer than the start
+            // (haveBestGrounded guards "never moved" / start is the only grounded node = truly stuck).
+            bool retrace = found;
+            if (!found && haveBestGrounded)
+            {
+                goalNode = bestGroundedNode;
+                res.Partial = true;
+                retrace = true;
+                DiagLog.Write($"[ss-partial] exp={expansions}/{MaxExpansions} → leg to grounded best {StandCell(bestGroundedNode.Px, bestGroundedNode.Py)} (goal still {bestDist:0.#}px away)");
+            }
+            if (!found && !haveBestGrounded)
             {
                 DiagLog.Write($"[ss-fail] exp={expansions}/{MaxExpansions} openLeft={open.Count} bestCell={StandCell(res.BestPx, res.BestPy)} bestDx={res.BestDx:0.#} bestDy={res.BestDy:0.#}");
                 DumpTerrain(start, goalWx, goalWy, res.Explored);
             }
-            if (found)
+            if (retrace)
             {
                 var k = goalNode;
                 var revPts = new List<(float, float)>();
@@ -1131,7 +1157,12 @@ namespace TerraBlind
                     // player actually falls to the real floor below.
                     var (wcx, wcy) = StandCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
-                    if (footSupported && MathF.Abs(s.Px - startPx) >= 24f) break;
+                    // walk a full stride before ending the edge, not 24px. At 24px the edge died in the acceleration
+                    // ramp (0.08/frame, ~37 frames to reach maxRun) so every walk edge averaged ~1px/frame — making
+                    // walk look far slower per cell than a jump (which yields one long edge), so A* picked jumps on
+                    // flat ground. WalkStridePx ≈ a jump's horizontal reach, so walk and jump edges span comparable
+                    // distance and their per-cell cost is comparable; A* then chooses by real cost, not edge length.
+                    if (footSupported && MathF.Abs(s.Px - startPx) >= WalkStridePx) break;
                     if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
             }
@@ -1322,6 +1353,25 @@ namespace TerraBlind
         // must aim here — replanning toward the local step target (the old _execGoal during edge exec) sent the bot
         // to a mid-path cell, which is why replan was wrongly disabled and open-loop drift then dropped it in a pit.
         static int _finalGoalWx, _finalGoalWy;
+
+        // ROLLING nav (budget-limited A* over a long route): a single Plan only reaches one budget's worth; when a leg
+        // is PARTIAL we re-Plan from the new position toward the TRUE final goal, leg after leg, until we arrive. If
+        // several legs in a row stop making progress toward the goal (local minimum — sealed pit, etc.) we bail.
+        static bool _rolling;
+        static int _rollFinalWx, _rollFinalWy;
+        static float _rollPrevDist;          // goal distance at the end of the previous leg (to detect "not advancing")
+        static int _rollStuckLegs;
+        const int RollMaxStuckLegs = 3;      // consecutive legs without progress → genuinely stuck → give up
+        const float RollProgressPx = 16f;    // a leg must close at least this much distance to count as progress
+
+        // LOOKAHEAD: while the current leg walks, a thread-pool task plans the NEXT leg from this leg's predicted
+        // landing, so arrival doesn't pay a synchronous Plan (the per-leg main-thread hitch). On arrival, if the
+        // cached plan's start matches the real landing it dispatches with zero stall; otherwise we plan fresh.
+        static volatile System.Threading.Tasks.Task _rollBgTask;
+        static volatile SSResult _rollBgResult;
+        static int _rollBgFromCx, _rollBgFromCy;   // predicted landing the bg leg planned from (for arrival validation)
+        const int RollLandMatchTol = 2;
+
         const float ReplanDriftPx = 24f;
         const int ReplanCooldown = 10;
         static int _replanCooldownLeft;
@@ -1362,6 +1412,10 @@ namespace TerraBlind
         public static bool IsActive => _execFrames != null && _execIdx < _execFrames.Count;
 
         public static void StopExec() { _execFrames = null; _execIdx = 0; }
+
+        // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
+        // the step list, and the rolling loop so it doesn't auto-plan another leg.
+        public static void StopNav() { _rolling = false; _rollBgResult = null; StopSteps(); StopExec(); DiagLog.EndRun(); }
 
         // ===== execution status machine (parity with NavCoordinator.Done/IsActive/FailCode) so HTTP /nav + /nav_done
         // can drive the NEW StateSpacePlanner the same way the old NavCoordinator did. set by Execute / the step loop /
@@ -1418,7 +1472,13 @@ namespace TerraBlind
                 }
                 _ssStepIdx++;
                 _ssDispatched = false;
-                if (!StepsActive) { DiagLog.Write("[ss-steps] done"); _execDone = true; StopSteps(); DiagLog.EndRun(); return; }
+                if (!StepsActive)
+                {
+                    DiagLog.Write("[ss-steps] done");
+                    StopSteps();
+                    if (_rolling && RollNextLeg(p)) return;   // partial leg finished → plan & dispatch the next one
+                    _execDone = true; DiagLog.EndRun(); return;
+                }
             }
             if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
@@ -1607,26 +1667,157 @@ namespace TerraBlind
             _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
         }
 
-        public static SSResult Execute(int goalWx, int goalWy)
+        // Pick a SUBGOAL ~LegSubgoalCells ahead toward the final goal by walking the cached field's gradient downhill
+        // from (sx,sy). Returns the cell reached (a real standable surface cell on the field). If the final goal is
+        // already within range, returns it directly. This is what makes a leg "manual-single-point-nav fast": A*
+        // chases a NEARBY reachable cell (found→stop in tens of expansions) instead of穷举 toward a far goal.
+        static (int gx, int gy) SubgoalToward(int sx, int sy, int finalWx, int finalWy)
+        {
+            var field = MazeWand.GetField(finalWx, finalWy);
+            var cur = (x: sx, y: sy);
+            if (!field.ContainsKey(cur)) return (finalWx, finalWy); // off-field → just aim at final, A* will partial
+            var seen = new HashSet<(int, int)>();
+            for (int step = 0; step < LegSubgoalCells; step++)
+            {
+                if (cur == (finalWx, finalWy)) break;
+                if (System.Math.Abs(cur.x - finalWx) + System.Math.Abs(cur.y - finalWy) <= 8) return (finalWx, finalWy);
+                if (!seen.Add(cur)) break;
+                int bestD = field[cur]; var best = cur;
+                foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                {
+                    var n = (cur.x + dx, cur.y + dy);
+                    if (field.TryGetValue(n, out int dn) && dn < bestD) { bestD = dn; best = n; }
+                }
+                if (best == cur) break;
+                cur = best;
+            }
+            return cur;
+        }
+
+        // ===== BLOCK NAV (J): cut the cached field's gradient path into fixed ~BlockCells chunks ONCE, then run each
+        // chunk as a plain single-point nav (Execute rolling=false → target==goal, box field, h precise → never the
+        //子目标≠h freeze). A block queue + per-frame driver advances chunk by chunk. This is the "can't possibly hang"
+        // design: every chunk is exactly the navwand case that's already fast.
+        const int BlockCells = 70;
+        static readonly List<(int x, int y)> _blockQueue = new();
+        static int _blockIdx;
+        static bool _blockActive;
+        static int _blockGoalWx, _blockGoalWy;
+
+        public static bool BlockNavActive => _blockActive;
+
+        public static void BlockNavStart(int goalWx, int goalWy)
+        {
+            StopNav(); StopGreedy();
+            _blockQueue.Clear(); _blockIdx = 0; _blockActive = false;
+            _blockGoalWx = goalWx; _blockGoalWy = goalWy;
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return;
+            var (sx, sy) = StandCell(p.position.X, p.position.Y);
+            var field = MazeWand.GetField(goalWx, goalWy);
+            if (!field.ContainsKey((sx, sy))) { DiagLog.Write($"[block] start ({sx},{sy}) off field → abort"); Main.NewText("[TerraBlind] start off nav field"); return; }
+
+            // walk the gradient from start to goal, emitting a waypoint every BlockCells cells (and the final goal).
+            var cur = (x: sx, y: sy);
+            var seen = new HashSet<(int, int)>();
+            int sinceCut = 0;
+            for (int step = 0; step < 20000; step++)
+            {
+                if (cur == (goalWx, goalWy)) break;
+                if (!seen.Add(cur)) break;
+                int bestD = field[cur]; var best = cur;
+                foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                {
+                    var n = (cur.x + dx, cur.y + dy);
+                    if (field.TryGetValue(n, out int dn) && dn < bestD) { bestD = dn; best = n; }
+                }
+                if (best == cur) break;
+                cur = best;
+                // cut every BlockCells. The field gradient threads through air/walls, so the raw cut cell may be
+                // mid-air; snap it to the nearest standable cell (same as navwand's goal snap) so each block's
+                // single-point A* targets a cell the player can actually reach — an un-snapped air target = the freeze.
+                if (++sinceCut >= BlockCells) { _blockQueue.Add((cur.x, SnapGoalToStandable(cur.x, cur.y))); sinceCut = 0; }
+            }
+            if (_blockQueue.Count == 0 || _blockQueue[_blockQueue.Count - 1] != (goalWx, goalWy))
+                _blockQueue.Add((goalWx, goalWy));
+            _blockActive = true; _blockIdx = 0;
+            DiagLog.Write($"[block] start=({sx},{sy}) goal=({goalWx},{goalWy}) blocks={_blockQueue.Count}");
+            DispatchBlock();
+        }
+
+        public static void BlockNavStop()
+        {
+            _blockActive = false; _blockQueue.Clear(); _blockIdx = 0;
+            StopNav();
+            DiagLog.Write("[block] stop");
+        }
+
+        static void DispatchBlock()
+        {
+            if (_blockIdx >= _blockQueue.Count) { _blockActive = false; DiagLog.Write("[block] all blocks done"); return; }
+            var (bx, by) = _blockQueue[_blockIdx];
+            DiagLog.Write($"[block] leg {_blockIdx + 1}/{_blockQueue.Count} → ({bx},{by})");
+            Execute(bx, by, rolling: false);   // plain single-point: fast, can't hang
+        }
+
+        // per-frame driver: when the current block's single-point nav finishes, advance to the next block.
+        public static void BlockNavTick()
+        {
+            if (!_blockActive) return;
+            if (ExecRunning) return;        // current block still navigating
+            if (ExecDone)
+            {
+                _blockIdx++;
+                if (_blockIdx >= _blockQueue.Count) { _blockActive = false; DiagLog.Write("[block] reached goal"); Main.NewText("[TerraBlind] block nav done"); return; }
+                DispatchBlock();
+            }
+            else
+            {
+                // block failed (unreachable/etc.) → stop the whole run
+                DiagLog.Write($"[block] leg {_blockIdx + 1} failed ({ExecFailCode}) → stop");
+                _blockActive = false;
+            }
+        }
+
+        // rolling=false (navwand /nav, single point): plan ONCE straight to the goal with a fast box field, dispatch,
+        // done. This is the original fast near-nav — NOT routed through the big cached field or the leg/subgoal loop.
+        // rolling=true (J maze-nav, long route): big cached compass + subgoal legs + lookahead, for far goals.
+        public static SSResult Execute(int goalWx, int goalWy, bool rolling = false)
         {
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
+            _rolling = rolling; _rollFinalWx = goalWx; _rollFinalWy = goalWy;
+            _rollPrevDist = float.MaxValue; _rollStuckLegs = 0;
+            _rollBgResult = null;
             var pStart = Main.LocalPlayer;
             var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
-            DiagLog.Write($"[run] ss_exec start=({rsx},{rsy}) goal=({goalWx},{goalWy})");
-            var res = Plan(goalWx, goalWy);
-            _lastExecResult = res;
-            Visualize(res, goalWx, goalWy);
-            DiagLog.Write($"[ss-plan] target=({goalWx},{goalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} best_dx={res.BestDx:0.#} best_dy={res.BestDy:0.#}");
-            if (!res.Found || res.Steps.Count == 0)
+            DiagLog.Write($"[run] ss_exec start=({rsx},{rsy}) goal=({goalWx},{goalWy}) rolling={rolling}");
+
+            SSResult res;
+            int targetWx, targetWy;
+            if (rolling)
             {
-                // distinguish unreachable vs distance fuse so callers (and the LLM) get an actionable reason.
-                _execFailCode = (System.Math.Abs(rsx - goalWx) > MaxPlanSpanCells || System.Math.Abs(rsy - goalWy) > MaxPlanSpanCells)
-                    ? "too_far" : "unreachable";
+                var (sgx, sgy) = SubgoalToward(rsx, rsy, goalWx, goalWy);
+                res = Plan(sgx, sgy, null, goalWx, goalWy);
+                targetWx = sgx; targetWy = sgy;
+            }
+            else
+            {
+                res = Plan(goalWx, goalWy);   // one-shot, box field
+                targetWx = goalWx; targetWy = goalWy;
+            }
+            _lastExecResult = res;
+            Visualize(res, targetWx, targetWy);
+            DiagLog.Write($"[ss-plan] target=({targetWx},{targetWy}) final=({goalWx},{goalWy}) found={res.Found} partial={res.Partial} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
+            if (!res.Found && !res.Partial || res.Steps.Count == 0)
+            {
+                _rolling = false;
+                _execFailCode = "unreachable";
                 StopSteps();
                 return res;
             }
+            _rollPrevDist = MathF.Abs(res.BestDx) + MathF.Abs(res.BestDy);
             _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;  // true destination; replan aims here, never a step target
             _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
             _replanCooldownLeft = 0;
@@ -1636,7 +1827,108 @@ namespace TerraBlind
             _stuckFrames = 0;
             _lastReal.Valid = false;
             StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
+            if (rolling) LaunchRollLookahead(res);   // background-plan the next leg while this one walks
             return res;
+        }
+
+        // Rolling: a partial leg just finished. If we're at the final goal, done. Otherwise plan the next leg from the
+        // player's real position toward the TRUE final goal (reusing the cached compass) and dispatch it. Bail if
+        // several legs in a row fail to close distance (local minimum). Returns true if a next leg was dispatched.
+        static bool RollNextLeg(Player p)
+        {
+            float gx = _rollFinalWx * 16f + 8f, gy = (_rollFinalWy + 1) * 16f;
+            float ccx = p.position.X + p.width / 2f, cfy = p.position.Y + p.height;
+            float dist = MathF.Abs(ccx - gx) + MathF.Abs(cfy - gy);
+            if (dist <= GreedyGoalDistPx) { DiagLog.Write($"[ss-roll] reached final goal ({_rollFinalWx},{_rollFinalWy})"); _rolling = false; return false; }
+
+            // GUARDRAIL: the cached field only covers a box around the goal. If the player has drifted/run outside it
+            // (no field value at the current cell) we can't steer — stop instead of rebuilding a giant field or guessing.
+            var fcell = StandCell(p.position.X, p.position.Y);
+            if (!MazeWand.GetField(_rollFinalWx, _rollFinalWy).ContainsKey(fcell))
+            {
+                DiagLog.Write($"[ss-roll] off-field at {fcell} → stop (player left the cached field box)");
+                Main.NewText("[TerraBlind] left nav field — stopped");
+                _execFailCode = "off_field"; _rolling = false; return false;
+            }
+
+            // progress check: did the leg we just finished close the gap? if not for too many legs, we're stuck.
+            if (_rollPrevDist - dist < RollProgressPx)
+            {
+                _rollStuckLegs++;
+                if (_rollStuckLegs >= RollMaxStuckLegs)
+                {
+                    DiagLog.Write($"[ss-roll] stuck {_rollStuckLegs} legs at dist={dist:0.#} → give up");
+                    _execFailCode = "roll_stuck"; _rolling = false; return false;
+                }
+            }
+            else _rollStuckLegs = 0;
+            _rollPrevDist = dist;
+
+            // LOOKAHEAD HIT: the bg task already planned this leg from the predicted landing; if the real landing
+            // matches, dispatch it with realign (zero synchronous Plan). Otherwise fall through and plan fresh.
+            var cached = _rollBgResult; _rollBgResult = null;
+            var (rcx, rcy) = StandCell(p.position.X, p.position.Y);
+            if (cached != null && (cached.Found || cached.Partial) && cached.Steps.Count > 0
+                && System.Math.Abs(rcx - _rollBgFromCx) <= RollLandMatchTol && System.Math.Abs(rcy - _rollBgFromCy) <= RollLandMatchTol)
+            {
+                DiagLog.Write($"[ss-roll] HIT cached leg → ({cached.GoalWx},{cached.GoalWy}) dist={dist:0.#}");
+                DispatchPlan(cached);
+                LaunchRollLookahead(cached);
+                return true;
+            }
+
+            var (sgx, sgy) = SubgoalToward(rcx, rcy, _rollFinalWx, _rollFinalWy);
+            var res = Plan(sgx, sgy, null, _rollFinalWx, _rollFinalWy);
+            DiagLog.Write($"[ss-roll] next leg subgoal=({sgx},{sgy}) found={res.Found} partial={res.Partial} steps={res.Steps.Count} dist={dist:0.#} stuck={_rollStuckLegs}");
+            if ((!res.Found && !res.Partial) || res.Steps.Count == 0) { _execFailCode = "roll_noplan"; _rolling = false; return false; }
+            DispatchLeg(res);
+            LaunchRollLookahead(res);
+            return true;
+        }
+
+        // shared dispatch tail for a rolling leg planned synchronously (vs DispatchPlan which realigns a cached one).
+        static void DispatchLeg(SSResult res)
+        {
+            _lastExecResult = res;
+            Visualize(res, res.GoalWx, res.GoalWy);
+            _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;
+            _execGoalWx = res.GoalWx; _execGoalWy = res.GoalWy;
+            _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0; _rescueCooldownLeft = 0; _stuckFrames = 0;
+            _lastReal.Valid = false;
+            StartSteps(res.Steps);
+        }
+
+        // Kick off ONE bg task that plans the NEXT leg from THIS leg's predicted landing, toward the next subgoal.
+        // Result cached for RollNextLeg to pick up on arrival. Exceptions swallowed = treated as "no cache".
+        static void LaunchRollLookahead(SSResult curLeg)
+        {
+            _rollBgResult = null;
+            var (px, py, vx) = RollPredictedLanding(curLeg);
+            int fromCx = curLeg.GoalWx, fromCy = curLeg.GoalWy;
+            int finalWx = _rollFinalWx, finalWy = _rollFinalWy;
+            _rollBgFromCx = fromCx; _rollBgFromCy = fromCy;
+            _rollBgTask = System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var (sgx, sgy) = SubgoalToward(fromCx, fromCy, finalWx, finalWy);
+                    var r = Plan(sgx, sgy, (px, py, vx), finalWx, finalWy);
+                    _rollBgResult = r;
+                }
+                catch (System.Exception e) { DiagLog.Write($"[ss-roll] bg EXC {e.Message}"); _rollBgResult = null; }
+            });
+        }
+
+        static (float px, float py, float vx) RollPredictedLanding(SSResult res)
+        {
+            for (int i = res.Steps.Count - 1; i >= 0; i--)
+            {
+                var f = res.Steps[i].Frames;
+                if (f != null && f.Count > 0) { var last = f[f.Count - 1]; return (last.Px, last.Py, last.Vx); }
+            }
+            float px = res.GoalWx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            float py = (res.GoalWy + 1) * 16f - PhysicsSimulator.PlayerH;
+            return (px, py, 0f);
         }
 
         // Dispatch a plan computed earlier (lookahead: a background Plan ran while the previous leg executed).
@@ -1694,7 +1986,17 @@ namespace TerraBlind
             // player actually is, so accumulated drift can't snowball into a pit.
             bool steps = StepsActive;
             _silentPath = true;
-            var res = Plan(_finalGoalWx, _finalGoalWy);
+            // during rolling, replan toward a NEAR subgoal (keyed field on the final goal) — never the far final goal,
+            // or A* exhausts its full budget every replan (the ~10s × storm freeze). mirrors RollNextLeg.
+            var rpl = Main.LocalPlayer;
+            SSResult res;
+            if (_rolling)
+            {
+                var (rcx, rcy) = StandCell(rpl.position.X, rpl.position.Y);
+                var (sgx, sgy) = SubgoalToward(rcx, rcy, _rollFinalWx, _rollFinalWy);
+                res = Plan(sgx, sgy, null, _rollFinalWx, _rollFinalWy);
+            }
+            else res = Plan(_finalGoalWx, _finalGoalWy);
             _silentPath = false;
             Visualize(res, _finalGoalWx, _finalGoalWy);
             var rp = Main.LocalPlayer;
@@ -1702,7 +2004,7 @@ namespace TerraBlind
                 ? (res.Steps[0].Pillar ? "pillar" : res.Steps[0].Dig ? "dig" : "move") + $"->({res.Steps[0].TargetCx},{res.Steps[0].TargetCy})"
                 : "-";
             DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} first={first}");
-            if (!res.Found || res.Steps.Count == 0) return false;
+            if ((!res.Found && !res.Partial) || res.Steps.Count == 0) return false;
             _replanCooldownLeft = ReplanCooldown;
             _placeStall = 0;
             if (steps) { StartSteps(res.Steps); return true; }

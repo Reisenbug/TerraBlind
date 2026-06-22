@@ -65,6 +65,20 @@ namespace TerraBlind
         static (int x, int y)? _p1, _p2;
         static volatile bool _mazeBusy;
 
+        // J toggles rolling maze-nav toward point1 (the goal). Starts from the player's CURRENT position (the cached
+        // compass is goal-keyed and valid anywhere), so it works even if you walked far from p2 after building.
+        public static void ToggleNav()
+        {
+            Main.NewText($"[TerraBlind] J (active={StateSpacePlanner.BlockNavActive} goal=p2={(_p2.HasValue ? $"{_p2.Value.x},{_p2.Value.y}" : "none")})");
+            DiagLog.Write("[maze-nav] J pressed");
+            if (StateSpacePlanner.BlockNavActive) { StateSpacePlanner.BlockNavStop(); DiagLog.Write("[maze-nav] J → pause"); return; }
+            // point2 is the GOAL (point1 = start marker). Block-nav: cut the path into fixed chunks, run each as a
+            // plain single-point nav (can't hang). Starts from the player's current position.
+            if (!_p2.HasValue) { DiagLog.Write("[maze-nav] J → no point2 (goal) set"); Main.NewText("[TerraBlind] set point2 (right-click) first"); return; }
+            DiagLog.Write($"[maze-nav] J → block-nav toward p2=({_p2.Value.x},{_p2.Value.y})");
+            StateSpacePlanner.BlockNavStart(_p2.Value.x, _p2.Value.y);
+        }
+
         public override bool? UseItem(Player player)
         {
             if (player != Main.LocalPlayer) return null;
@@ -81,8 +95,10 @@ namespace TerraBlind
             }
             DiagLog.Write($"[maze] p1={_p1?.ToString() ?? "-"} p2={_p2?.ToString() ?? "-"}");
 
+            // p2 = goal, p1 = start. Flood the field FROM p2 (the goal) and cache it keyed on p2, so pressing J reuses
+            // this very field instead of rebuilding. Player is expected to stay near p1 (inside the field's box).
             if (_p1.HasValue && _p2.HasValue)
-                RunMazeAsync(_p1.Value, _p2.Value);
+                RunMazeAsync(_p2.Value, _p1.Value);
             return true;
         }
 
@@ -98,7 +114,8 @@ namespace TerraBlind
                 {
                     DiagLog.StartRun($"{start.x}_{start.y}__{goal.x}_{goal.y}");
                     var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var field = BuildField(goal.x, goal.y, start.x, start.y);
+                    var field = BuildField(goal.x, goal.y, start.x, start.y, bigMargin: true);
+                    _cachedField = field; _cachedGoal = (goal.x, goal.y);   // reuse on J (GetField(p2) hits this)
                     var (path, breaks) = DescendPath(field, start.x, start.y, goal.x, goal.y);
                     DiagLog.Write($"[maze] start=({start.x},{start.y}) goal=({goal.x},{goal.y}) path={path.Count} breaks={breaks} field={field.Count} ms={sw.Elapsed.TotalMilliseconds:0} startInField={field.ContainsKey(start)}");
                     var tiles = new List<(int, int, Color)>();
@@ -115,10 +132,33 @@ namespace TerraBlind
         // Geometric 2D maze (route restored 2026-06): node = every tile cell, 4-connected, physics ignored.
         // Direction-aware cost (walk cheap, dig expensive). This is the TREND field — the greedy executor reads its
         // cost gradient, not the drawn path. Dead-ends are a separate problem handled at the execution layer.
-        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy)
+        // CACHED whole-region field, keyed by goal. The field is the EXPENSIVE part (seconds for a cross-map flood),
+        // but it's a全图 compass valid from anywhere — so rolling A* builds it ONCE per goal and every leg reuses it
+        // as the heuristic. Local terrain edits (a few dug tiles) don't change the大方向, so we DON'T rebuild on them;
+        // only a new goal triggers a rebuild. Returns the same dictionary instance — callers must treat it read-only.
+        // big margin around the goal↔start span so the cached compass still covers the player after drift / running
+        // off; large enough for cross-map routes without flooding the entire 5M-cell world (memory + time).
+        const int FieldMargin = 400;   // TEMP small for rolling validation (1500 = cross-map but builds on main thread
+                                       // ~5s = hitch; real fix is off-thread field build). Keep goals within range for now.
+        static (int gx, int gy) _cachedGoal = (int.MinValue, int.MinValue);
+        static Dictionary<(int, int), int> _cachedField;
+        public static Dictionary<(int, int), int> GetField(int gx, int gy)
         {
-            int minX = System.Math.Min(sx, gx) - 120, maxX = System.Math.Max(sx, gx) + 120;
-            int minY = System.Math.Min(sy, gy) - 120, maxY = System.Math.Max(sy, gy) + 120;
+            var p = Main.LocalPlayer;
+            int sx = p != null ? (int)(p.Center.X / 16f) : gx;
+            int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
+            if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
+            _cachedField = BuildField(gx, gy, sx, sy, bigMargin: true);
+            _cachedGoal = (gx, gy);
+            return _cachedField;
+        }
+        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); }
+
+        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
+        {
+            int m = bigMargin ? FieldMargin : 120;
+            int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
+            int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();

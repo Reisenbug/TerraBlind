@@ -18,3 +18,5 @@ Items: {
 		Tooltip: Right: toggle recording human input
 	}
 }
+
+Keybinds.ToggleMazeNav.DisplayName: Toggle Maze Nav

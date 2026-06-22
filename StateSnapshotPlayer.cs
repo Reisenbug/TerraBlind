@@ -16,6 +16,12 @@ namespace TerraBlind
 		public static bool WalkTraceEnabled = false;
 		private bool _jumpPlaceFired;
 
+		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
+		{
+			if (TerraBlind.ToggleMazeNav != null && TerraBlind.ToggleMazeNav.JustPressed)
+				MazeWand.ToggleNav();
+		}
+
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
@@ -63,6 +69,7 @@ namespace TerraBlind
 			ExploreCoordinator.ApplyControls();
 
 			StateSpacePlanner.TickBlocks();
+			StateSpacePlanner.BlockNavTick();   // block-nav driver: advance to next chunk when current single-point leg finishes
 
 			if (StateSpacePlanner.IsActive)
 			{
