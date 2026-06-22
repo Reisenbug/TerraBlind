@@ -141,7 +141,6 @@ namespace TerraBlind
                 reached = feetY;
             }
             topFeetY = reached;
-            DiagLog.Write($"[pillar-can] from feet=({feetCx},{feetCy}) cols[{leftCol}..{rightCol}] reachedFeetY={reached} (box would occupy {reached-2}..{reached})");
             if (reached >= feetCy) return false; // can't gain any height
 
             // jump must not be boxed in at the start (hold=15 vertical rise ≥ 10px, allowing a small left/right nudge)
