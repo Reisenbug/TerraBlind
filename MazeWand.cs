@@ -34,6 +34,17 @@ namespace TerraBlind
         // any flight high enough to matter is actually detected as high.
         const int MaxAirProbe = 60;
 
+        // entering a lava cell would burn the player to death — never route through it. A huge step cost makes the
+        // field treat lava as effectively impassable (it'll still cross a 1-cell lava bridge only if literally no
+        // other route exists, same as a very expensive dig). LiquidID/LiquidAmount API per StateSnapshotPlayer.
+        const int LavaCost = 100000;
+        static bool IsLava(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.LiquidAmount > 0 && t.LiquidType == LiquidID.Lava;
+        }
+
         public override void SetDefaults()
         {
             Item.width = 28;
@@ -145,6 +156,7 @@ namespace TerraBlind
         // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
         static int StepCost(int cx, int cy, int nx, int ny)
         {
+            if (IsLava(cx, cy)) return LavaCost;   // entering lava = death; treat as impassable
             bool wall = PathPlanner.IsBlockPublic(cx, cy);
             bool horizontal = cx != nx;
             int baseCost;
