@@ -1807,6 +1807,14 @@ namespace TerraBlind
                 res = Plan(goalWx, goalWy);   // one-shot, box field
                 targetWx = goalWx; targetWy = goalWy;
             }
+            ExecDispatch(res, targetWx, targetWy, goalWx, goalWy, rolling);
+            return res;
+        }
+
+        // Main-thread dispatch tail shared by sync Execute and async ExecuteAsync. Visualize + StartSteps touch
+        // Main rendering/input, so this must run on the main thread; only Plan (above / in the bg task) is heavy.
+        static void ExecDispatch(SSResult res, int targetWx, int targetWy, int goalWx, int goalWy, bool rolling)
+        {
             _lastExecResult = res;
             Visualize(res, targetWx, targetWy);
             DiagLog.Write($"[ss-plan] target=({targetWx},{targetWy}) final=({goalWx},{goalWy}) found={res.Found} partial={res.Partial} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
@@ -1815,7 +1823,7 @@ namespace TerraBlind
                 _rolling = false;
                 _execFailCode = "unreachable";
                 StopSteps();
-                return res;
+                return;
             }
             _rollPrevDist = MathF.Abs(res.BestDx) + MathF.Abs(res.BestDy);
             _finalGoalWx = res.GoalWx; _finalGoalWy = res.GoalWy;  // true destination; replan aims here, never a step target
@@ -1828,7 +1836,57 @@ namespace TerraBlind
             _lastReal.Valid = false;
             StartSteps(res.Steps);   // edge-by-edge: frame replay + pillar macro
             if (rolling) LaunchRollLookahead(res);   // background-plan the next leg while this one walks
-            return res;
+        }
+
+        // Async Execute: run the heavy Plan (BuildField + A*) on a bg thread so a slow plan never stutters the game.
+        // The result is stashed and ExecDispatch runs on the main thread via PollAsyncExec. Non-rolling (navwand) only.
+        static volatile SSResult _asyncRes;
+        static volatile bool _asyncPending;
+        static int _asyncGoalWx, _asyncGoalWy, _asyncSeq;
+        public static void ExecuteAsync(int goalWx, int goalWy)
+        {
+            StopGreedy(); StopSteps();
+            _execDone = false; _execFailCode = null;
+            _rolling = false; _rollFinalWx = goalWx; _rollFinalWy = goalWy;
+            _asyncGoalWx = goalWx; _asyncGoalWy = goalWy;
+            int seq = ++_asyncSeq;
+            _asyncRes = null; _asyncPending = true; _asyncExecMode = true;
+            var (rsx, rsy) = StandCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
+            DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
+            DiagLog.Write($"[run] ss_exec_async start=({rsx},{rsy}) goal=({goalWx},{goalWy})");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try { var r = Plan(goalWx, goalWy); if (seq == _asyncSeq) _asyncRes = r; }
+                catch (System.Exception e) { DiagLog.Write($"[ss-async] EXC {e.Message}"); if (seq == _asyncSeq) { _asyncRes = null; _asyncPending = false; } }
+            });
+        }
+
+        // preview-only async: same bg Plan, but main-thread tail just Visualizes (no StartSteps). _asyncExec
+        // distinguishes the two so PollAsyncExec knows whether to run the leg or only draw it.
+        static bool _asyncExecMode;
+        public static void PlanAsync(int goalWx, int goalWy)
+        {
+            int seq = ++_asyncSeq;
+            _asyncGoalWx = goalWx; _asyncGoalWy = goalWy;
+            _asyncRes = null; _asyncPending = true; _asyncExecMode = false;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try { var r = Plan(goalWx, goalWy); if (seq == _asyncSeq) _asyncRes = r; }
+                catch (System.Exception e) { DiagLog.Write($"[ss-async] preview EXC {e.Message}"); if (seq == _asyncSeq) { _asyncRes = null; _asyncPending = false; } }
+            });
+        }
+
+        // main thread: when the bg plan lands, dispatch it (Visualize + StartSteps), or just Visualize for preview.
+        public static void PollAsyncExec()
+        {
+            if (!_asyncPending) return;
+            var r = _asyncRes;
+            if (r == null) return;
+            _asyncPending = false; _asyncRes = null;
+            if (_asyncExecMode)
+                ExecDispatch(r, _asyncGoalWx, _asyncGoalWy, _asyncGoalWx, _asyncGoalWy, false);
+            else
+                Visualize(r, _asyncGoalWx, _asyncGoalWy);
         }
 
         // Rolling: a partial leg just finished. If we're at the final goal, done. Otherwise plan the next leg from the
