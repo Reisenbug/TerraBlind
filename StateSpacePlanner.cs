@@ -1215,8 +1215,9 @@ namespace TerraBlind
             }
             if (!everAirborne || !s.Grounded) return null;          // no cliff, or never landed
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
-            var (ncx, ncy) = StandCell(s.Px, s.Py);
-            if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null;
+            // NO IsFloorPublic re-check: physics Step returning Grounded after a real fall IS the authoritative
+            // landing. The fake-stand guard (IsFloorPublic on ncy+1) misfired when StandCell rounds the sub-pixel
+            // landing py up a tile, killing a genuine vertical fall (the (2944,364) bug).
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
         }
