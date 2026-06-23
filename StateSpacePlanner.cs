@@ -1505,9 +1505,15 @@ namespace TerraBlind
         static int _placeStall;
         const int PlaceStallMax = 60;
 
-        public static bool IsActive => _execFrames != null && _execIdx < _execFrames.Count;
+        public static bool IsActive => (_execFrames != null && _execIdx < _execFrames.Count) || _walkActive;
 
-        public static void StopExec() { _execFrames = null; _execIdx = 0; }
+        // CLOSED-LOOP walk: instead of open-loop replaying the planned frames (which平移s the whole edge if the start
+        // is off), press toward the target X and finish when the body reaches it — self-correcting, absorbs the接力
+        // drift. NO brake on arrival: vx carries into the next edge (a jump needs the run speed, don't zero it).
+        static bool _walkActive;
+        static int _walkTargetCx, _walkDir;
+
+        public static void StopExec() { _execFrames = null; _execIdx = 0; _walkActive = false; }
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
@@ -1591,6 +1597,11 @@ namespace TerraBlind
             {
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
+            }
+            else if (st.Frames != null && st.Frames.Count > 0 && !st.Frames.Exists(fr => fr.Place || fr.Jump))
+            {
+                // pure WALK edge → closed-loop: press toward target X, finish on arrival (no brake, vx carries on).
+                _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
             }
             else if (st.Frames != null && st.Frames.Count > 0)
             {
@@ -2195,8 +2206,23 @@ namespace TerraBlind
             StartSteps(res.Steps);
         }
 
+        // Closed-loop walk driver: press toward the target column until the body's center reaches it, then finish
+        // WITHOUT braking so the run speed carries into the next edge (jump needs it). Self-correcting: it aims at the
+        // real target each frame, so a wrong start just means a few more/fewer steps — no whole-edge平移.
+        const float WalkArrivePx = 4f;
+        static void WalkTick()
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) { _walkActive = false; return; }
+            float targetX = _walkTargetCx * 16f + 8f;
+            float dx = targetX - p.Center.X;
+            if (_walkDir > 0 ? dx <= WalkArrivePx : dx >= -WalkArrivePx) { _walkActive = false; return; }  // arrived, no brake
+            if (_walkDir > 0) p.controlRight = true; else p.controlLeft = true;
+        }
+
         public static void ApplyControls()
         {
+            if (_walkActive) { WalkTick(); return; }
             if (_execFrames == null) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopExec(); return; }
