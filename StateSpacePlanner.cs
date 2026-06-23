@@ -758,16 +758,18 @@ namespace TerraBlind
             // no cavity within scan → land at the shaft bottom (the dug space IS the standing room, the
             // undug rock below IS the floor). the maze field penetrates rock with dig-weighted costs, so
             // the H gate stays meaningful mid-rock — long descents chain shaft after shaft.
+            // shaft ran the full scan without hitting a cavity → stand at the bottom. The undug rock below IS the floor
+            // (no endFloor check: requiring a pre-existing floor under the shaft bottom voided every partial descent —
+            // 312/312 nulled in one plan — even though standing on solid rock at the shaft bottom is always valid).
             int yEnd = ccy + DigMaxScan;
-            bool endFloor = PathPlanner.IsFloorPublic(ccx, yEnd + 1);
             bool endH = ctx.DistField.TryGetValue((ccx, yEnd), out int eh);
-            if (tiles.Count > 0 && endFloor && endH && WorthDig(ctx, ccx, ccy, curH, eh, gdir, maxScan))
+            if (tiles.Count > 0 && endH && WorthDig(ctx, ccx, ccy, curH, eh, gdir, maxScan))
             {
                 float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                 float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
                 return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
             }
-            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} endFloor={endFloor} → null");
+            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} → null");
             return null;
         }
 
