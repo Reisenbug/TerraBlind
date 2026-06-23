@@ -57,6 +57,24 @@ namespace TerraBlind
 
         struct Label { public float G, Vx, Vy; }
 
+        // TEMP scan profiler: which edge type eats the search. reset per Plan, dumped after jptally. T<name>(()=>expr).
+        static readonly Dictionary<string, (int n, long ticks)> _prof = new();
+        static T Prof<T>(string k, System.Func<T> f)
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            var r = f();
+            var c = _prof.TryGetValue(k, out var v) ? v : (0, 0L);
+            _prof[k] = (c.Item1 + 1, c.Item2 + System.Diagnostics.Stopwatch.GetTimestamp() - t0);
+            return r;
+        }
+        static void DumpProf()
+        {
+            double f = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            var sb = new System.Text.StringBuilder("[ss-prof]");
+            foreach (var kv in _prof) sb.Append($" {kv.Key}={kv.Value.n}x/{kv.Value.ticks * f:0}ms");
+            DiagLog.Write(sb.ToString());
+        }
+
         // a candidate is dominated if some existing label reached the same cell no costlier (g) and with at
         // least as much usable speed (same-direction |vx|, and vy). dominated states can do nothing the
         // dominator can't, so they're pruned — this is what stops one cell soaking up hundreds of vx variants.
@@ -65,10 +83,14 @@ namespace TerraBlind
         // tried it; it broke otherwise-solvable descents by severing that chain.
         static bool Dominated(List<Label> labels, float g, float vx, float vy)
         {
+            // quantize vx into VxQuant buckets: flat-ground walk produces a continuum of vx, none strictly dominating
+            // (higher vx costs more g), so a cell hoarded hundreds of variants → 8844 re-expansions on a straight walk.
+            // same bucket + same sign + cheaper g dominates; the high-vx bucket a slope-slide chain needs still survives.
+            int vb = (int)(MathF.Abs(vx) / VxQuant);
             foreach (var l in labels)
             {
-                if (l.G <= g + 0.01f && MathF.Abs(l.Vx) >= MathF.Abs(vx) - 0.01f && MathF.Sign(l.Vx) == MathF.Sign(vx)
-                    && MathF.Abs(l.Vy - vy) < VxQuant)
+                if (l.G <= g + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(vx)
+                    && (int)(MathF.Abs(l.Vx) / VxQuant) >= vb && MathF.Abs(l.Vy - vy) < VxQuant)
                     return true;
             }
             return false;
@@ -196,6 +218,7 @@ namespace TerraBlind
             came[start] = (start, null, 0f, false, null);
             open.Enqueue(start, Heuristic(ctx, start, goalCx, goalFeetY, ph));
 
+            _prof.Clear();
             int expansions = 0;
             SSNode goalNode = default; bool found = false;
             float bestDist = float.MaxValue;
@@ -365,6 +388,7 @@ namespace TerraBlind
                 }
             }
             DiagLog.Write($"[ss-jptally] ok={ctx.JpOk} noSpot={ctx.JpNoSpot} noLand={ctx.JpNoLand} fellThrough={ctx.JpFellThrough} slidOff={ctx.JpSlidOff}");
+            DumpProf();
             DumpPlanTrace(res, start, goalWx, goalWy);
             return res;
         }
@@ -448,7 +472,7 @@ namespace TerraBlind
             {
                 foreach (int hold in holdOptions)
                 {
-                    var seg = SimulateSegment(cur, dir, hold, ph);
+                    var seg = Prof(hold == 0 ? "walk" : "jump", () => SimulateSegment(cur, dir, hold, ph));
                     if (!seg.HasValue) continue;
                     // progress uses the RAW per-cell field, not the block-coarsened Heuristic: inside an 8x8 block
                     // the coarsened H is flat, so every in-block move reads "no progress" and dig fires even where a
@@ -474,7 +498,7 @@ namespace TerraBlind
                     // -straight so A* can pick the one that rides the diagonal seam down to the bottom.
                     foreach (int ddir in new[] { dirToGoal, -dirToGoal, 0 })
                     {
-                        var drop = SimulateDrop(cur, ddir, ph);
+                        var drop = Prof("drop", () => SimulateDrop(cur, ddir, ph));
                         if (drop.HasValue)
                             yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
                     }
@@ -526,7 +550,7 @@ namespace TerraBlind
                     bool anyVertJumpPlace = false;
                     foreach (int hold in BuildHoldOptions())
                     {
-                        var jp = JumpPlace(ctx, cur, 0, hold, ph, platformTile);
+                        var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
                         if (!jp.HasValue) continue;
                         var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
                         if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
@@ -554,7 +578,7 @@ namespace TerraBlind
             // mine, so a 24-tile cliff探不到底就作废; this no-dig edge covers any depth. emit before DigDown so A*
             // prefers falling over digging a shaft.
             {
-                var fall = FreeFall(cur, gdir, ph);
+                var fall = Prof("fall", () => FreeFall(cur, gdir, ph));
                 if (fall.HasValue)
                     yield return (fall.Value.node, fall.Value.frames, fall.Value.frames.Count, false, null);
             }
@@ -563,7 +587,7 @@ namespace TerraBlind
             // equally-low cell), not !anyProgress — the latter made dig a last resort so A* detoured first.
             if (hasPickaxe && ctx.DistField != null)
             {
-                var dd = DigDown(ctx, cur, ccx, ccy, curH, gdir, maxScan);
+                var dd = Prof("digdown", () => DigDown(ctx, cur, ccx, ccy, curH, gdir, maxScan));
                 if (dd.HasValue)
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
@@ -574,7 +598,7 @@ namespace TerraBlind
             // Dig/Pillar sub-steps. needs blocks to pillar with, hence platformTile gate.
             if (hasPickaxe && !anyProgress && platformTile >= 0 && ctx.DistField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
             {
-                var du = DigUp(ctx, cur, ccx, ccy, curH);
+                var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy, curH));
                 if (du.HasValue)
                     yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
             }
@@ -586,7 +610,7 @@ namespace TerraBlind
             // so no dig/jump-place edge was generated and A* dead-ended there. let the walk's stop define the obstacle.
             int obsX;
             {
-                var walk = SimulateSegment(cur, gdir, 0, ph);
+                var walk = Prof("walkprobe", () => SimulateSegment(cur, gdir, 0, ph));
                 int walkCx = walk.HasValue ? StandCell(walk.Value.node.Px, walk.Value.node.Py).cx : ccx;
                 // if the plain walk advanced past where the maze wants (toward goal), there's no blocking obstacle
                 if ((gdir > 0 && walkCx > ccx) || (gdir < 0 && walkCx < ccx))
@@ -619,7 +643,7 @@ namespace TerraBlind
                 {
                     foreach (int hold in BuildHoldOptions())
                     {
-                        var jp = JumpPlace(ctx, cur, gdir, hold, ph, platformTile);
+                        var jp = Prof("jplace", () => JumpPlace(ctx, cur, gdir, hold, ph, platformTile));
                         if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
                     }
                     if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
@@ -640,7 +664,7 @@ namespace TerraBlind
                 // jump; a wall is dug only when tunnelling is genuinely cheaper than routing around it.
                 if (hasPickaxe)
                 {
-                    var dig = DigThroughWall(ctx, gdir, ccx, ccy, curH);
+                    var dig = Prof("digwall", () => DigThroughWall(ctx, gdir, ccx, ccy, curH));
                     if (dig.HasValue)
                         yield return (dig.Value.node, null, dig.Value.cost, false, dig.Value.tiles);
                 }
@@ -654,12 +678,12 @@ namespace TerraBlind
                 bool anyAcross = false;
                 foreach (int hold in BuildHoldOptions())
                 {
-                    var jp = JumpPlaceAcross(ctx, cur, gdir, hold, ph, platformTile, curH);
+                    var jp = Prof("jplaceX", () => JumpPlaceAcross(ctx, cur, gdir, hold, ph, platformTile, curH));
                     if (jp.HasValue) { anyAcross = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
                 }
                 if (!anyAcross)
                 {
-                    var br = BridgePlace(cur, gdir, ph, platformTile);
+                    var br = Prof("bridge", () => BridgePlace(cur, gdir, ph, platformTile));
                     if (br.HasValue)
                         yield return (br.Value.node, br.Value.frames, br.Value.frames.Count + BridgeCost, false, null);
                 }
@@ -840,10 +864,32 @@ namespace TerraBlind
         // per jump, placed tile is NOT stored in the node (node stays pure physics) — the landing node simply
         // stands on the new platform's top, supported by real terrain. Covers "hug a wall/block and jump-place
         // upward". Pure open-air pillaring (placement supported only by prior placements) is left to the macro.
+        // Is there ANY placeable cell within one jump's reach toward dir? Conservative box: dir × MaxScan wide,
+        // from one jump's apex height down to PlatformMaxDropTiles below the feet. Wider than any real arc, so a
+        // false "none" is impossible — only used to skip a jump-place that provably has nowhere to drop a platform.
+        static bool AnyPlaceableInReach(SSNode cur, int dir, PhysicsSimulator.Params ph)
+        {
+            var (ccx, cfy) = StandCell(cur.Px, cur.Py);
+            int reach = MaxScan(ph);
+            int apex = (Player.jumpHeight > 0 ? Player.jumpHeight : 15) + 1;
+            for (int dx = 0; dx <= reach; dx++)
+            {
+                int x = ccx + dir * dx;
+                for (int y = cfy - apex; y <= cfy + PlatformMaxDropTiles; y++)
+                    if (CanPlaceReal(x, y)) return true;
+            }
+            return false;
+        }
+
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlace(
             PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
         {
             if (hold == 0) return null; // need to leave the ground
+
+            // O(1) early-out: if NO placeable cell exists anywhere in the jump's reach box, the arc sim + drop scan
+            // below are guaranteed to noSpot — skip them. CanPlaceReal is a tile query; the box is one jump's reach.
+            // Conservative (scans wider than the real arc) so it never rejects a jump-place that could actually exist.
+            if (!AnyPlaceableInReach(cur, dir, ph)) { ctx.JpNoSpot++; return null; }
 
             // simulate the free arc to find where to place
             var s = new PhysicsSimulator.State
@@ -922,6 +968,7 @@ namespace TerraBlind
             PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
         {
             if (hold == 0 || dir == 0) return null;
+            if (!AnyPlaceableInReach(cur, dir, ph)) { ctx.JpNoSpot++; return null; }   // O(1) skip: no drop spot in reach
 
             var s = new PhysicsSimulator.State
             {
@@ -1231,11 +1278,17 @@ namespace TerraBlind
         static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;
-            for (int d = 1; d <= GoalSnapMaxDrop; d++)
+            // clicked INTO a block → climb up to its surface (bounded: a surface is a few tiles up). clicked in AIR →
+            // fall down to the ground, however deep — a click in air means "go to the floor below it", and capping the
+            // drop left the goal floating mid-air over a deep pit, which A* burned its whole budget failing to reach.
+            if (PathPlanner.IsBlockPublic(gx, gy))
             {
-                if (Standable(gx, gy - d)) { DiagLog.Write($"[ss-snap] goal ({gx},{gy}) → ({gx},{gy - d}) up={d}"); return gy - d; }
-                if (Standable(gx, gy + d)) { DiagLog.Write($"[ss-snap] goal ({gx},{gy}) → ({gx},{gy + d}) down={d}"); return gy + d; }
+                for (int d = 1; d <= GoalSnapMaxDrop; d++)
+                    if (Standable(gx, gy - d)) return gy - d;
+                return gy;
             }
+            for (int y = gy + 1; y < Main.maxTilesY - 1; y++)
+                if (Standable(gx, y)) return y;
             return gy;
         }
 
@@ -1456,7 +1509,7 @@ namespace TerraBlind
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
-        public static void StopNav() { _rolling = false; _rollBgResult = null; StopSteps(); StopExec(); DiagLog.EndRun(); }
+        public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; StopSteps(); StopExec(); DiagLog.EndRun(); }
 
         // ===== execution status machine (parity with NavCoordinator.Done/IsActive/FailCode) so HTTP /nav + /nav_done
         // can drive the NEW StateSpacePlanner the same way the old NavCoordinator did. set by Execute / the step loop /
@@ -1468,7 +1521,7 @@ namespace TerraBlind
         static SSResult _lastExecResult;
         public static SSResult LastExecResult => _lastExecResult;   // the plan the current/last leg dispatched (for lookahead landing prediction)
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
-        public static bool ExecRunning => StepsActive || IsActive || _greedyActive;
+        public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
 
         // ===== Action-graph path executor: run ActionGraphPlanner.Plan's path edge-by-edge. Jump edges REPLAY the
         // edge's own forward-simulated frames (planned trajectory == executed trajectory). pillar/bridge/dig go to
@@ -1647,6 +1700,7 @@ namespace TerraBlind
         public static void TickBlocks()
         {
             RunPendingTest();
+            PollReplan();
             TickSteps();
             if (!_greedyActive) return;
             if (IsActive || SkillExecutor.IsActive) return; // a step is running
@@ -1774,10 +1828,10 @@ namespace TerraBlind
                 }
                 if (best == cur) break;
                 cur = best;
-                // cut every BlockCells. The field gradient threads through air/walls, so the raw cut cell may be
-                // mid-air; snap it to the nearest standable cell (same as navwand's goal snap) so each block's
-                // single-point A* targets a cell the player can actually reach — an un-snapped air target = the freeze.
-                if (++sinceCut >= BlockCells) { _blockQueue.Add((cur.x, SnapGoalToStandable(cur.x, cur.y))); sinceCut = 0; }
+                // cut ≥BlockCells apart, but only on a standable cell ON the path. Air stretches extend the cut to the
+                // next landable cell — never snap off-path (that floated 60 tiles up and A* pillared to it = freeze).
+                sinceCut++;
+                if (sinceCut >= BlockCells && Standable(cur.x, cur.y)) { _blockQueue.Add((cur.x, cur.y)); sinceCut = 0; }
             }
             if (_blockQueue.Count == 0 || _blockQueue[_blockQueue.Count - 1] != (goalWx, goalWy))
                 _blockQueue.Add((goalWx, goalWy));
@@ -1798,7 +1852,7 @@ namespace TerraBlind
             if (_blockIdx >= _blockQueue.Count) { _blockActive = false; DiagLog.Write("[block] all blocks done"); return; }
             var (bx, by) = _blockQueue[_blockIdx];
             DiagLog.Write($"[block] leg {_blockIdx + 1}/{_blockQueue.Count} → ({bx},{by})");
-            Execute(bx, by, rolling: false);   // plain single-point: fast, can't hang
+            ExecuteAsync(bx, by);   // off-thread Plan; each leg's A* no longer stutters the main thread
         }
 
         // per-frame driver: when the current block's single-point nav finishes, advance to the next block.
@@ -1910,6 +1964,8 @@ namespace TerraBlind
             int seq = ++_asyncSeq;
             _asyncGoalWx = goalWx; _asyncGoalWy = goalWy;
             _asyncRes = null; _asyncPending = true; _asyncExecMode = false;
+            var (rsx, rsy) = StandCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
+            DiagLog.StartRun($"preview_{rsx}_{rsy}__{goalWx}_{goalWy}");   // own run file so "latest left-click log" is unique
             System.Threading.Tasks.Task.Run(() =>
             {
                 try { var r = Plan(goalWx, goalWy); if (seq == _asyncSeq) _asyncRes = r; }
@@ -2076,39 +2132,65 @@ namespace TerraBlind
             StartSteps(res.Steps);
         }
 
+        static volatile SSResult _replanRes;
+        static volatile bool _replanPending;
+        static int _replanSeq;
+        static string _replanReason;
+
+        // Background replan: stop exec (player brakes to a brief 罚站), plan the correction off-thread, dispatch when
+        // ready via PollReplan. The old plan is invalid the moment we deviate, so waiting a few frames beats freezing
+        // the whole game on a synchronous Plan. Returns true so the caller's frame loop stops this tick.
         static bool Replan(string reason)
         {
+            if (_replanPending) return true;   // a replan is already cooking; keep waiting
             if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); _execFailCode = "replan_storm"; return false; }
             _replanCount++;
-            // aim at the TRUE goal from the player's real position (closed-loop correction). during edge-by-edge
-            // execution, rebuild the step list (not the open-loop ExecFrames); steps re-derive from where the
-            // player actually is, so accumulated drift can't snowball into a pit.
-            bool steps = StepsActive;
-            _silentPath = true;
-            // during rolling, replan toward a NEAR subgoal (keyed field on the final goal) — never the far final goal,
-            // or A* exhausts its full budget every replan (the ~10s × storm freeze). mirrors RollNextLeg.
-            var rpl = Main.LocalPlayer;
-            SSResult res;
-            if (_rolling)
+            _replanReason = reason;
+            var p = Main.LocalPlayer;
+            float sx = p.position.X, sy = p.position.Y;   // snapshot; player brakes to rest while we plan
+            bool rolling = _rolling;
+            int finalWx = _finalGoalWx, finalWy = _finalGoalWy;
+            int rollWx = _rollFinalWx, rollWy = _rollFinalWy;
+            StopExec(); StopSteps();
+            _replanPending = true; _replanRes = null;
+            int seq = ++_replanSeq;
+            System.Threading.Tasks.Task.Run(() =>
             {
-                var (rcx, rcy) = StandCell(rpl.position.X, rpl.position.Y);
-                var (sgx, sgy) = SubgoalToward(rcx, rcy, _rollFinalWx, _rollFinalWy);
-                res = Plan(sgx, sgy, null, _rollFinalWx, _rollFinalWy);
-            }
-            else res = Plan(_finalGoalWx, _finalGoalWy);
-            _silentPath = false;
+                try
+                {
+                    _silentPath = true;
+                    SSResult res;
+                    if (rolling)
+                    {
+                        var (rcx, rcy) = StandCell(sx, sy);
+                        var (sgx, sgy) = SubgoalToward(rcx, rcy, rollWx, rollWy);
+                        res = Plan(sgx, sgy, (sx, sy, 0f), rollWx, rollWy);
+                    }
+                    else res = Plan(finalWx, finalWy, (sx, sy, 0f));
+                    _silentPath = false;
+                    if (seq == _replanSeq) _replanRes = res;
+                }
+                catch (System.Exception e) { DiagLog.Write($"[ss-replan] bg EXC {e.Message}"); if (seq == _replanSeq) { _replanRes = null; _replanPending = false; } }
+            });
+            return true;
+        }
+
+        // main thread: dispatch the background replan when it lands.
+        static void PollReplan()
+        {
+            if (!_replanPending) return;
+            var res = _replanRes;
+            if (res == null) return;
+            _replanPending = false; _replanRes = null;
             Visualize(res, _finalGoalWx, _finalGoalWy);
-            var rp = Main.LocalPlayer;
-            string first = res.Steps.Count > 0
-                ? (res.Steps[0].Pillar ? "pillar" : res.Steps[0].Dig ? "dig" : "move") + $"->({res.Steps[0].TargetCx},{res.Steps[0].TargetCy})"
-                : "-";
-            DiagLog.Write($"[ss-replan] reason={reason} #{_replanCount} from=({(int)((rp.position.X+10)/16f)},{(int)((rp.position.Y+42)/16f)}) goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count} first={first}");
-            if ((!res.Found && !res.Partial) || res.Steps.Count == 0) return false;
+            DiagLog.Write($"[ss-replan] reason={_replanReason} #{_replanCount} goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
+            // found + zero steps = already AT the goal (drift fired right as we arrived). Not a failure — mark done so
+            // block-nav advances to the next leg instead of aborting the whole run.
+            if (res.Found && res.Steps.Count == 0) { _execDone = true; return; }
+            if ((!res.Found && !res.Partial) || res.Steps.Count == 0) { _execFailCode = "replan_noplan"; return; }
             _replanCooldownLeft = ReplanCooldown;
             _placeStall = 0;
-            if (steps) { StartSteps(res.Steps); return true; }
-            _execFrames = res.ExecFrames; _execIdx = 0;
-            return true;
+            StartSteps(res.Steps);
         }
 
         public static void ApplyControls()
