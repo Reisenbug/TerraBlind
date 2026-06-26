@@ -20,6 +20,8 @@ namespace TerraBlind
 		{
 			if (TerraBlind.ToggleMazeNav != null && TerraBlind.ToggleMazeNav.JustPressed)
 				MazeWand.ToggleNav();
+			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
+				RecedingNav.Toggle();
 		}
 
 		public override void SetControls()
@@ -68,6 +70,7 @@ namespace TerraBlind
 			// leg gets stepped this frame.
 			ExploreCoordinator.ApplyControls();
 
+			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it
 			StateSpacePlanner.TickBlocks();
 			StateSpacePlanner.BlockNavTick();   // block-nav driver: advance to next chunk when current single-point leg finishes
 

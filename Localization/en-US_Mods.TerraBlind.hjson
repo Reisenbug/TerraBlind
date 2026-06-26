@@ -19,4 +19,7 @@ Items: {
 	}
 }
 
-Keybinds.ToggleMazeNav.DisplayName: Toggle Maze Nav
+Keybinds: {
+	ToggleMazeNav.DisplayName: Toggle Maze Nav
+	ToggleRecedingNav.DisplayName: Toggle Receding Nav
+}

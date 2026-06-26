@@ -96,6 +96,9 @@ namespace TerraBlind
             return false;
         }
 
+        // one candidate action considered at a decision point (for the receding viz). Cx/Cy = landing cell.
+        public struct Cand { public int Cx, Cy, H, Cost; public string Kind; public bool Descends; }
+
         public class SSResult
         {
             public bool Found;
@@ -160,7 +163,7 @@ namespace TerraBlind
         // compass field is keyed on (the FINAL goal) — kept separate so rolling's per-leg subgoals don't each rebuild
         // the million-cell field (the freeze). Pass (-1,-1) [default] to key the field on goalWx/Wy itself (single
         // point nav / non-rolling callers).
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -227,7 +230,7 @@ namespace TerraBlind
             // grounded (a leg ends standing still, so the next leg starts from a valid grounded state).
             SSNode bestGroundedNode = start; bool haveBestGrounded = false; float bestGroundedDist = float.MaxValue;
 
-            while (open.Count > 0 && expansions < MaxExpansions)
+            while (open.Count > 0 && expansions < maxExp)
             {
                 var cur = open.Dequeue();
                 float curG = came.TryGetValue(cur, out var ce) ? ce.g : float.MaxValue;
@@ -1598,9 +1601,12 @@ namespace TerraBlind
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
             }
-            else if (st.Frames != null && st.Frames.Count > 0 && !st.Frames.Exists(fr => fr.Place || fr.Jump))
+            else if (st.Frames != null && st.Frames.Count > 0 && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
             {
-                // pure WALK edge → closed-loop: press toward target X, finish on arrival (no brake, vx carries on).
+                // pure WALK edge (no Place/Jump/Down) → closed-loop: press toward target X, finish on arrival (no
+                // brake, vx carries on). Down is excluded because WalkTick only presses left/right — a drop-through-
+                // platform edge needs Down held, which closed-loop wouldn't do, so it ran in place左右横跳. Those go
+                // open-loop below (frame replay presses the recorded Down).
                 _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
             }
             else if (st.Frames != null && st.Frames.Count > 0)
@@ -1707,6 +1713,129 @@ namespace TerraBlind
             _execFrames = frames; _execIdx = 0;
             _execGoalWx = ncx; _execGoalWy = ncy;
             _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
+        }
+
+        // RECEDING / single-action follow-the-field. The big field is the (trusted) compass; this picks ONE physical
+        // action that best descends it. Direction = field; which action = best (ΔH / real-action-cost) among actions
+        // that lower H. Returns a one-action SSResult to DispatchPlan, or null if nothing descends (caller may deepen).
+        // pillar/dig/jumpplace all eligible (unlike the old greedy which skipped frameless edges). No visited-blacklist.
+        public static SSResult StepAlongField(int goalWx, int goalWy, (int x, int y)? blocked = null)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active) return null;
+            var field = MazeWand.GetField(goalWx, goalWy);
+            var ctx = new PlanCtx { DistField = field };
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            int platformTile = -1;
+            int slot = NavCoordinator.FindPlatformSlot(p);
+            if (slot >= 0) platformTile = p.inventory[slot].createTile;
+            bool hasPick = false;
+            for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
+
+            var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
+            var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
+            float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
+
+            // score = ΔH per unit real cost. field H sets direction (trusted); real action cost (frames / mine-frames /
+            // pillar-frames) decides which descending action is cheapest — so a tiny-H-gain that needs a 10-tile pillar
+            // loses to a cheap walk, fixing "picks lowest H even if absurdly expensive".
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
+            float bestScore = 0f;
+            var cands = new List<Cand>();      // viz: every action considered this decision (kind/landing/H/cost/descends)
+            (int, int) bestCell = (curCx, curCy);
+            foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
+            {
+                var (ncx, ncy) = StandCell(next.Px, next.Py);
+                if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move) → would spin in place
+                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // last action toward this cell didn't move us → don't re-pick it (撞墙感知)
+                bool inField = field.TryGetValue((ncx, ncy), out int nH);
+                string kind = pillar ? "pillar" : digTiles != null ? "dig"
+                    : (frames != null && frames.Exists(f => f.Place)) ? "place"
+                    : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
+                bool descends = inField && nH < curH;
+                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = inField ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = descends });
+                if (!descends) continue;                 // only actions that lower the field can be chosen
+                float c = MathF.Max(cost, 1f);
+                float score = (curH - nH) / c;
+                if (best == null || score > bestScore) { bestScore = score; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+            }
+            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int,int)?)null, bestScore);
+            {
+                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:");
+                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}c{cd.Cost}{(cd.Descends ? "↓" : "")}");
+                DiagLog.Write(sbc.ToString());
+            }
+            if (best == null)
+            {
+                // GREEDY STUCK: no single action descends — the next lower cell needs a MULTI-action combo (walk-then-
+                // jump, step-then-climb) that depth-1 can't see. Deepen: run a real (backtracking) A* with a small
+                // budget toward a subgoal a short way downhill along the field, and take only its FIRST step (stay
+                // per-action / closed-loop). This is "A* runs a couple steps" — not greedy — so先退后进 combos resolve.
+                var (sgx, sgy) = FieldSubgoal(field, curCx, curCy, 15);
+                if (sgx == curCx && sgy == curCy) return null;       // field has no lower cell within reach → real stuck
+                var sub = Plan(sgx, sgy, null, goalWx, goalWy, 3000);
+                if ((!sub.Found && !sub.Partial) || sub.Steps.Count == 0)
+                { DiagLog.Write($"[recede] deepen FAILED to ({sgx},{sgy}) exp={sub.Expansions}"); return null; }
+                var first = sub.Steps[0];
+                var fr = new SSResult { Found = true, GoalWx = first.TargetCx, GoalWy = first.TargetCy, StartPx = cur.Px, StartPy = cur.Py };
+                fr.Steps = new List<ExecStep> { first };
+                if (first.Frames != null) fr.ExecFrames.AddRange(first.Frames);
+                DiagLog.Write($"[recede] DEEPEN ({curCx},{curCy})H={curH} → subgoal({sgx},{sgy}) firstStep→({first.TargetCx},{first.TargetCy})");
+                return fr;
+            }
+
+            var b = best.Value;
+            var (bcx, bcy) = StandCell(b.node.Px, b.node.Py);
+            var res = new SSResult { Found = true, GoalWx = bcx, GoalWy = bcy, StartPx = cur.Px, StartPy = cur.Py };
+            res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
+            foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
+            DiagLog.Write($"[recede] ({curCx},{curCy})H={curH} -> ({bcx},{bcy})H={field[(bcx,bcy)]} score={bestScore:0.00} cost={b.cost:0} pillar={b.pillar}");
+            return res;
+        }
+
+        // walk the field gradient downhill from (cx,cy) up to maxSteps cells; return the lowest-H cell reached. used as
+        // the deepen-A* subgoal — a nearby cell the field says is clearly closer, reachable by a short multi-action combo.
+        static (int, int) FieldSubgoal(Dictionary<(int, int), int> field, int cx, int cy, int maxSteps)
+        {
+            var cur = (x: cx, y: cy);
+            for (int s = 0; s < maxSteps; s++)
+            {
+                if (!field.TryGetValue(cur, out int hc)) break;
+                var best = cur; int bh = hc;
+                foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                    if (field.TryGetValue((cur.x + dx, cur.y + dy), out int hn) && hn < bh) { bh = hn; best = (cur.x + dx, cur.y + dy); }
+                if (best == cur) break;
+                cur = best;
+            }
+            return cur;
+        }
+
+        // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
+        // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
+        static List<ExecStep> EdgeToSteps(SSNode from, SSNode to, List<PhysicsSimulator.ControlInput> frames, bool pillar, List<(int,int)> dig)
+        {
+            var (tcx, tcy) = StandCell(to.Px, to.Py);
+            var (fcx, fcy) = StandCell(from.Px, from.Py);
+            var steps = new List<ExecStep>();
+            if (pillar && dig != null)
+            {
+                for (int feetY = fcy - 2; feetY >= tcy; feetY -= 2)
+                {
+                    steps.Add(new ExecStep { Dig = true, DigDir = MineDir.Up, TargetCx = tcx, TargetCy = feetY });
+                    steps.Add(new ExecStep { Pillar = true, TargetCx = tcx, TargetCy = feetY });
+                }
+            }
+            else if (pillar)
+                steps.Add(new ExecStep { Pillar = true, TargetCx = tcx, TargetCy = tcy, Frames = null });
+            else if (dig != null)
+            {
+                MineDir d = tcy > fcy ? MineDir.Down : tcx > fcx ? MineDir.Right : MineDir.Left;
+                steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig });
+            }
+            else if (frames != null)
+                steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = frames });
+            return steps;
         }
 
         // chosen each time both executors are idle. Picks the candidate whose landing cell has the lowest maze cost.
