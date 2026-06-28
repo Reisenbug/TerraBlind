@@ -113,6 +113,7 @@ namespace TerraBlind
             public List<(float px, float py)> Explored = new();
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
+            public float CostFrames;       // this action's cost in frames (walk/jump frame count, or pillar/dig frame-equivalent) — caller uses it as the time denominator for progress-efficiency stuck detection
         }
 
         // one path edge to execute: a frame-replay move (Frames!=null) or the pillar macro (Pillar=true → drive
@@ -837,6 +838,10 @@ namespace TerraBlind
                 bool toward = ctx.DistField != null && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH;
                 if (bodyClear && support && toward)
                 {
+                    // nothing was actually mined to reach here → this isn't a dig, it's a plain walk. return null so the
+                    // walk edge handles it; otherwise we'd emit a cost=0 "dig" whose ΔH/cost is infinite and wrongly
+                    // beats every real walk/jump (the "该走却挖, 一格一格挖过去" bug).
+                    if (tiles.Count == 0) return null;
                     float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -1171,8 +1176,9 @@ namespace TerraBlind
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (!node.Grounded) return null;
             if (MathF.Abs(node.Py - cur.Py) < 1f) return null; // didn't drop
-            var (ncx, ncy) = StandCell(node.Px, node.Py);
-            if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null;
+            // NO IsFloorPublic re-check: physics Grounded after the drop IS the authoritative landing. The check
+            // misfired when StandCell rounds the sub-pixel landing py up a tile, killing a real drop (same bug as the
+            // free-fall fix, commit dc2a9e6) → drop edge vanished → had to hand-mine the platform to proceed.
             return (node, frames);
         }
 
@@ -1280,7 +1286,7 @@ namespace TerraBlind
         // ways by distance: up climbs out of a block to its top surface, down drops a floating goal to the floor.
         const int GoalSnapMaxDrop = 40;
         static bool Standable(int gx, int gy) => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy);
-        static int SnapGoalToStandable(int gx, int gy)
+        public static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;
             // clicked INTO a block → climb up to its surface (bounded: a surface is a few tiles up). clicked in AIR →
@@ -1715,10 +1721,12 @@ namespace TerraBlind
             _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
         }
 
-        // RECEDING / single-action follow-the-field. The big field is the (trusted) compass; this picks ONE physical
-        // action that best descends it. Direction = field; which action = best (ΔH / real-action-cost) among actions
-        // that lower H. Returns a one-action SSResult to DispatchPlan, or null if nothing descends (caller may deepen).
-        // pillar/dig/jumpplace all eligible (unlike the old greedy which skipped frameless edges). No visited-blacklist.
+        // RECEDING / follow-the-line. Each call picks ONE Expand edge that advances furthest along the DescendPath line
+        // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
+
+        static int _lineIdx;   // player's tracked progress along the line; carried across steps so the projection window follows forward
+        public static void ResetLineProgress() => _lineIdx = 0;
+
         public static SSResult StepAlongField(int goalWx, int goalWy, (int x, int y)? blocked = null)
         {
             var p = Main.LocalPlayer;
@@ -1737,78 +1745,90 @@ namespace TerraBlind
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
 
-            // score = ΔH per unit real cost. field H sets direction (trusted); real action cost (frames / mine-frames /
-            // pillar-frames) decides which descending action is cheapest — so a tiny-H-gain that needs a 10-tile pillar
-            // loses to a cheap walk, fixing "picks lowest H even if absurdly expensive".
+            // FOLLOW THE line (DescendPath) AS A WHOLE PATH — not a single-cell gradient. The line is the field-optimal grid
+            // route to goal; it threads out of basins, across shallow dips, around obstacles. We track PROGRESS ALONG it:
+            //   • myIdx   = index of the line cell nearest the player (projection onto the route).
+            //   • landIdx = for each Expand landing (all Grounded), index of the line cell nearest THAT landing.
+            // pick the landing that advances furthest along the line (max landIdx). The line may float (a low cell off the
+            // ground) or climb cell-by-cell — body can't do those — but we never step onto line cells, only onto physics
+            // landings, and judge them by which line cell they sit nearest. So a floating line segment just means the nearest
+            // ground landing carries us past it. Using path INDEX (not single-cell FieldDir) is what fixes the off-line
+            // arch death: even standing on a pillar tip the route still has a well-defined "further along" direction.
+            var line = MazeWand.GetPath(goalWx, goalWy);
+            // project the player onto the line around the TRACKED progress _lineIdx (carried across steps), not from 0 —
+            // the window must follow the player forward, else once past the window myIdx stays pinned and everything reads
+            // as wild progress → shuffle. snap _lineIdx to where the player actually is this step.
+            var (myIdx, _) = NearestLineIdx(line, curCx, curCy, _lineIdx);
+            _lineIdx = myIdx;
+            // PREFERRED pick = the Expand landing that advances FURTHEST along the line (line gives the good route).
+            // SAFETY pick = the reachable landing with the lowest field H, regardless of line/direction (always exists if
+            // ANY edge moves us, since the field guarantees a lower-H neighbour unless we're at goal). When the preferred
+            // filter comes up empty (line floats out of reach, basin floor, awkward spot), we DON'T stuck — we take the
+            // safety step to shuffle off this cell; from the new cell the preferred filter almost always works again.
+            // The ONLY null return is "Expand produced no edge at all" = truly walled in by unbreakable tiles.
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
-            float bestScore = 0f;
-            var cands = new List<Cand>();      // viz: every action considered this decision (kind/landing/H/cost/descends)
-            (int, int) bestCell = (curCx, curCy);
+            int bestIdx = myIdx; float bestCost = float.MaxValue; (int, int) bestCell = (curCx, curCy);
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? safe = null;
+            int safeH = int.MaxValue; (int, int) safeCell = (curCx, curCy);
+            var cands = new List<Cand>();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
                 var (ncx, ncy) = StandCell(next.Px, next.Py);
-                if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move) → would spin in place
-                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // last action toward this cell didn't move us → don't re-pick it (撞墙感知)
-                bool inField = field.TryGetValue((ncx, ncy), out int nH);
+                if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
+                var (landIdx, _) = NearestLineIdx(line, ncx, ncy, myIdx);  // how far along the line this landing sits
+                bool hasH = field.TryGetValue((ncx, ncy), out int nH);
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : (frames != null && frames.Exists(f => f.Place)) ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
-                bool descends = inField && nH < curH;
-                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = inField ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = descends });
-                if (!descends) continue;                 // only actions that lower the field can be chosen
-                float c = MathF.Max(cost, 1f);
-                float score = (curH - nH) / c;
-                if (best == null || score > bestScore) { bestScore = score; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                bool advances = landIdx > myIdx;
+                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = hasH ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = advances });
+                // SAFETY: lowest-H reachable landing (never gated on line/direction/blocked → can't be filtered to empty)
+                if (hasH && nH < safeH) { safeH = nH; safe = (next, frames, cost, pillar, digTiles); safeCell = (ncx, ncy); }
+                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // 撞墙感知: don't re-pick a target that didn't move us (preferred only)
+                if (!advances) continue;                                   // preferred: must move FORWARD along the line
+                if (landIdx > bestIdx || (landIdx == bestIdx && cost < bestCost))
+                { bestIdx = landIdx; bestCost = cost; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
             }
-            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int,int)?)null, bestScore);
+            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, bestIdx - myIdx);
             {
-                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:");
-                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}c{cd.Cost}{(cd.Descends ? "↓" : "")}");
+                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} lineIdx={myIdx}/{line.Count} n={cands.Count}:");
+                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}c{cd.Cost}{(cd.Descends ? "↑" : "")}");
                 DiagLog.Write(sbc.ToString());
             }
-            if (best == null)
-            {
-                // GREEDY STUCK: no single action descends — the next lower cell needs a MULTI-action combo (walk-then-
-                // jump, step-then-climb) that depth-1 can't see. Deepen: run a real (backtracking) A* with a small
-                // budget toward a subgoal a short way downhill along the field, and take only its FIRST step (stay
-                // per-action / closed-loop). This is "A* runs a couple steps" — not greedy — so先退后进 combos resolve.
-                var (sgx, sgy) = FieldSubgoal(field, curCx, curCy, 15);
-                if (sgx == curCx && sgy == curCy) return null;       // field has no lower cell within reach → real stuck
-                var sub = Plan(sgx, sgy, null, goalWx, goalWy, 3000);
-                if ((!sub.Found && !sub.Partial) || sub.Steps.Count == 0)
-                { DiagLog.Write($"[recede] deepen FAILED to ({sgx},{sgy}) exp={sub.Expansions}"); return null; }
-                var first = sub.Steps[0];
-                var fr = new SSResult { Found = true, GoalWx = first.TargetCx, GoalWy = first.TargetCy, StartPx = cur.Px, StartPy = cur.Py };
-                fr.Steps = new List<ExecStep> { first };
-                if (first.Frames != null) fr.ExecFrames.AddRange(first.Frames);
-                DiagLog.Write($"[recede] DEEPEN ({curCx},{curCy})H={curH} → subgoal({sgx},{sgy}) firstStep→({first.TargetCx},{first.TargetCy})");
-                return fr;
-            }
 
+            bool usedSafe = best == null;
+            if (usedSafe) { best = safe; bestCell = safeCell; }
+            if (best == null)   // not even a safety edge → Expand gave nothing → truly walled in (unbreakable)
+            {
+                DiagLog.Write($"[recede] STUCK at ({curCx},{curCy}) lineIdx={myIdx}/{line.Count}: Expand gave no edge at all → walled in by unbreakable");
+                return null;
+            }
+            var pickCell = bestCell;
             var b = best.Value;
-            var (bcx, bcy) = StandCell(b.node.Px, b.node.Py);
-            var res = new SSResult { Found = true, GoalWx = bcx, GoalWy = bcy, StartPx = cur.Px, StartPy = cur.Py };
+            var res = new SSResult { Found = true, GoalWx = pickCell.Item1, GoalWy = pickCell.Item2, StartPx = cur.Px, StartPy = cur.Py, CostFrames = b.cost };
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
-            DiagLog.Write($"[recede] ({curCx},{curCy})H={curH} -> ({bcx},{bcy})H={field[(bcx,bcy)]} score={bestScore:0.00} cost={b.cost:0} pillar={b.pillar}");
+            int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
+            DiagLog.Write($"[recede] ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} lineIdx {myIdx}→{bestIdx} cost={b.cost:0} pillar={b.pillar}{(usedSafe ? " [SAFETY: shuffle off awkward spot]" : "")}");
             return res;
         }
 
-        // walk the field gradient downhill from (cx,cy) up to maxSteps cells; return the lowest-H cell reached. used as
-        // the deepen-A* subgoal — a nearby cell the field says is clearly closer, reachable by a short multi-action combo.
-        static (int, int) FieldSubgoal(Dictionary<(int, int), int> field, int cx, int cy, int maxSteps)
+        // (idx, manhattan-dist) of the line cell nearest (cx,cy), searched in a window around `near` (the player's
+        // tracked line progress) so a self-crossing route doesn't snap to a far pass, and so the window follows the
+        // player forward instead of staying pinned at the start. STRICT < (first/lowest-index minimum wins): an earlier
+        // <= made ties keep the highest index, so a landing far from the whole window snapped to its far end → every
+        // landing read as huge progress → shuffle in place.
+        static (int idx, int dist) NearestLineIdx(List<(int, int)> line, int cx, int cy, int near)
         {
-            var cur = (x: cx, y: cy);
-            for (int s = 0; s < maxSteps; s++)
+            if (line == null || line.Count == 0) return (0, int.MaxValue);
+            int lo = System.Math.Max(0, near - 120), hi = System.Math.Min(line.Count - 1, near + 120);
+            int bestI = lo, bestD = int.MaxValue;
+            for (int i = lo; i <= hi; i++)
             {
-                if (!field.TryGetValue(cur, out int hc)) break;
-                var best = cur; int bh = hc;
-                foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-                    if (field.TryGetValue((cur.x + dx, cur.y + dy), out int hn) && hn < bh) { bh = hn; best = (cur.x + dx, cur.y + dy); }
-                if (best == cur) break;
-                cur = best;
+                int d = System.Math.Abs(line[i].Item1 - cx) + System.Math.Abs(line[i].Item2 - cy);
+                if (d < bestD) { bestD = d; bestI = i; }
             }
-            return cur;
+            return (bestI, bestD);
         }
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,

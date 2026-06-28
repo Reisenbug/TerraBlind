@@ -58,16 +58,15 @@ namespace TerraBlind
 
         // J toggles rolling maze-nav toward point1 (the goal). Starts from the player's CURRENT position (the cached
         // compass is goal-keyed and valid anywhere), so it works even if you walked far from p2 after building.
+        // J now drives RECEDING nav toward point2 (the goal set by right-click), using the big maze field as compass.
+        // Same entry as before (mazewand point1/point2 + J), but the走法 is the per-action receding loop, not block-nav.
         public static void ToggleNav()
         {
-            Main.NewText($"[TerraBlind] J (active={StateSpacePlanner.BlockNavActive} goal=p2={(_p2.HasValue ? $"{_p2.Value.x},{_p2.Value.y}" : "none")})");
             DiagLog.Write("[maze-nav] J pressed");
-            if (StateSpacePlanner.BlockNavActive) { StateSpacePlanner.BlockNavStop(); DiagLog.Write("[maze-nav] J → pause"); return; }
-            // point2 is the GOAL (point1 = start marker). Block-nav: cut the path into fixed chunks, run each as a
-            // plain single-point nav (can't hang). Starts from the player's current position.
+            if (RecedingNav.Active) { RecedingNav.Stop(); Main.NewText("[TerraBlind] receding nav OFF"); return; }
             if (!_p2.HasValue) { DiagLog.Write("[maze-nav] J → no point2 (goal) set"); Main.NewText("[TerraBlind] set point2 (right-click) first"); return; }
-            DiagLog.Write($"[maze-nav] J → block-nav toward p2=({_p2.Value.x},{_p2.Value.y})");
-            StateSpacePlanner.BlockNavStart(_p2.Value.x, _p2.Value.y);
+            DiagLog.Write($"[maze-nav] J → receding toward p2=({_p2.Value.x},{_p2.Value.y})");
+            RecedingNav.Start(_p2.Value.x, _p2.Value.y);
         }
 
         public override bool? UseItem(Player player)
@@ -108,6 +107,7 @@ namespace TerraBlind
                     var field = BuildField(goal.x, goal.y, start.x, start.y, bigMargin: true);
                     _cachedField = field; _cachedGoal = (goal.x, goal.y);   // reuse on J (GetField(p2) hits this)
                     var (path, breaks) = DescendPath(field, start.x, start.y, goal.x, goal.y);
+                    _cachedPath = path; _cachedPathGoal = (goal.x, goal.y);   // receding nav follows this line
                     DiagLog.Write($"[maze] start=({start.x},{start.y}) goal=({goal.x},{goal.y}) path={path.Count} breaks={breaks} field={field.Count} ms={sw.Elapsed.TotalMilliseconds:0} startInField={field.ContainsKey(start)}");
                     var tiles = new List<(int, int, Color)>();
                     foreach (var (x, y) in path)
@@ -143,7 +143,41 @@ namespace TerraBlind
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
-        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); }
+        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); _cachedPath = null; }
+
+        // the DescendPath LINE (field-optimal grid route start→goal) that receding nav follows. cached per goal alongside
+        // the field; built here from the player's current cell if not already cached (e.g. J without a prior mazewand run).
+        static (int gx, int gy) _cachedPathGoal = (int.MinValue, int.MinValue);
+        static List<(int, int)> _cachedPath;
+        public static List<(int, int)> GetPath(int gx, int gy)
+        {
+            if (_cachedPath != null && _cachedPathGoal == (gx, gy)) return _cachedPath;
+            var field = GetField(gx, gy);
+            var p = Main.LocalPlayer;
+            int sx = p != null ? (int)(p.Center.X / 16f) : gx;
+            int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
+            var (path, _) = DescendPath(field, sx, sy, gx, gy);
+            _cachedPath = path; _cachedPathGoal = (gx, gy);
+            return path;
+        }
+
+        // the field's recommended next cell from (cx,cy): the neighbour minimizing StepCost(this move) + field[neighbour]
+        // (= Dijkstra-optimal next hop). This is what DescendPath draws — exposed so receding nav steers by the SAME
+        // rule the field/line uses, instead of naive "lowest-H neighbour" (which gets lured up a costly pillar into a well).
+        // returns (0,0) if no better neighbour (local min / at goal). null field → (0,0).
+        public static (int dx, int dy) FieldDir(Dictionary<(int, int), int> field, int cx, int cy)
+        {
+            if (field == null) return (0, 0);
+            int bestTotal = int.MaxValue; var best = (dx: 0, dy: 0);
+            foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+            {
+                var n = (cx + dx, cy + dy);
+                if (!field.TryGetValue(n, out int dn)) continue;
+                int total = StepCost(n.Item1, n.Item2, cx, cy) + dn;
+                if (total < bestTotal) { bestTotal = total; best = (dx, dy); }
+            }
+            return best;
+        }
 
         public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
         {
