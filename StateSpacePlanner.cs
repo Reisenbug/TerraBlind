@@ -596,11 +596,25 @@ namespace TerraBlind
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
 
-            // --- VERTICAL UP THROUGH SEALED CEILING: cycles of "mine 2 rows above the head, pillar-jump
-            // 2 tiles onto placed blocks", until breaking out into a lower-H cell. pillar=true AND
-            // digTiles!=null together mark this composite edge; retrace expands it into alternating
-            // Dig/Pillar sub-steps. needs blocks to pillar with, hence platformTile gate.
-            if (hasPickaxe && !anyProgress && platformTile >= 0 && ctx.DistField != null && MathF.Abs(cur.Vx) < VerticalJumpVxMax)
+            // HORIZONTAL DIG — UNCONDITIONAL, both directions. Dig must always be an option: gating it behind obstacle
+            // classification (isWall, which relies on a fragile walkprobe) meant that in an awkward stance — feet on a
+            // half-brick, head jammed on the ceiling — the classifier misfired and NO dig edge was generated, so Expand
+            // came up empty and the bot "stuck" though a human just steps/digs aside. DigThroughWall already mines the
+            // full 3-row body column (handles player width/height) and only returns toward-goal landings, so emitting it
+            // unconditionally is safe; cost+field selection still demotes it when a plain walk works.
+            if (hasPickaxe && ctx.DistField != null)
+                foreach (int ddir in new[] { gdir, -gdir })
+                {
+                    var dw = Prof("digwall", () => DigThroughWall(ctx, ddir, ccx, ccy, curH));
+                    if (dw.HasValue)
+                        yield return (dw.Value.node, null, dw.Value.cost, false, dw.Value.tiles);
+                }
+
+            // VERTICAL UP — now unconditional too (was gated on !anyProgress && Vx<max, which suppressed the up-dig in
+            // awkward stances). Mine 2 rows above the head + pillar up, until breaking into a lower-H cell. Still needs
+            // platformTile (blocks to pillar on — a physical necessity, not a heuristic gate). DigUp returns null unless
+            // the ceiling above leads to lower H, so emitting it always is safe; selection demotes it when cheaper moves exist.
+            if (hasPickaxe && platformTile >= 0 && ctx.DistField != null)
             {
                 var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy, curH));
                 if (du.HasValue)
@@ -662,16 +676,7 @@ namespace TerraBlind
                         }
                     }
                 }
-                // DIG: always offer the horizontal tunnel edge (cost = real mining frames); let A* compare it on
-                // price against walk/jump/jump-place/pillar/detour rather than gating it out beforehand. a 1-tile step
-                // is NOT mined because mining a tile (~36f) costs more than the jump that clears it, so A* picks the
-                // jump; a wall is dug only when tunnelling is genuinely cheaper than routing around it.
-                if (hasPickaxe)
-                {
-                    var dig = Prof("digwall", () => DigThroughWall(ctx, gdir, ccx, ccy, curH));
-                    if (dig.HasValue)
-                        yield return (dig.Value.node, null, dig.Value.cost, false, dig.Value.tiles);
-                }
+                // (horizontal dig now emitted unconditionally above, both directions — not gated on this isWall branch)
             }
             else if (platformTile >= 0)
             {
@@ -715,19 +720,6 @@ namespace TerraBlind
         // worth digging down to a landing of maze-H lh: clearly closer along the field (curH - lh >= margin) and
         // no lateral walk reaches an equally-low cell (else route around instead of mining). follows the maze
         // field, which already plans the cheapest rock-penetrating route to the goal.
-        static bool WorthDig(PlanCtx ctx, int ccx, int ccy, int curH, int lh, int gdir, int maxScan)
-        {
-            if (curH - lh < DigWorthMargin) return false;
-            for (int d = 1; d <= maxScan; d++)
-                for (int dir = -1; dir <= 1; dir += 2)
-                {
-                    int x = ccx + dir * d;
-                    if (PathPlanner.IsBlockPublic(x, ccy)) continue;
-                    if (CoarseStand(x, ccy) && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx <= lh) return false;
-                }
-            return true;
-        }
-
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
@@ -742,7 +734,11 @@ namespace TerraBlind
                               : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
                     if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
                     bool hasH = ctx.DistField.TryGetValue((landC, y), out int lh);
-                    if (!(hasH && WorthDig(ctx, ccx, ccy, curH, lh, gdir, maxScan))) return null;
+                    // UNCONDITIONAL down-dig: only require the landing be toward goal (lower H). The old WorthDig also
+                    // refused to dig when a lateral walk could reach an equally-low cell — a "route around instead" gate
+                    // that, in an awkward stance, suppressed the down edge and left Expand empty. Selection (cost+field)
+                    // already prefers a cheap walk when one exists, so the gate isn't needed to avoid needless digging.
+                    if (!(hasH && lh < curH)) return null;
                     float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
                     var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -767,7 +763,7 @@ namespace TerraBlind
             // 312/312 nulled in one plan — even though standing on solid rock at the shaft bottom is always valid).
             int yEnd = ccy + DigMaxScan;
             bool endH = ctx.DistField.TryGetValue((ccx, yEnd), out int eh);
-            if (tiles.Count > 0 && endH && WorthDig(ctx, ccx, ccy, curH, eh, gdir, maxScan))
+            if (tiles.Count > 0 && endH && eh < curH)
             {
                 float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                 float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -1182,6 +1178,7 @@ namespace TerraBlind
             return (node, frames);
         }
 
+        static bool SegDiag;   // temp: when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph)
         {
@@ -1234,9 +1231,9 @@ namespace TerraBlind
                     if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
             }
-            if (frames.Count == 0) return null;
+            if (frames.Count == 0) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
-            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) return null; // no self-loops
+            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
             // FRAGILE: in water gravity is so weak the sim still reads Grounded=true while floating over empty cells
             // (the player hasn't sunk enough to register a non-ground frame). a grounded landing whose foot columns
             // have NO real floor below is a fake stand — reject it so A* must place a platform instead of "walking"
@@ -1244,8 +1241,20 @@ namespace TerraBlind
             if (node.Grounded)
             {
                 var (ncx, ncy) = StandCell(node.Px, node.Py);
-                if (!PathPlanner.IsFloorPublic(ncx, ncy + 1)) return null; // reported stand cell has no floor = fake
+                // a slope / half-brick supports the player but IsFloorPublic excludes it → it wrongly read as a fake
+                // stand and killed every walk/jump off a half-brick tile (EXPAND-EMPTY death穴). DigSolid认 slopes/
+                // half-bricks as支撑 (see its comment), so accept either as real floor below the landing.
+                if (!PathPlanner.IsFloorPublic(ncx, ncy + 1) && !DigSolid(ncx, ncy + 1))
+                {
+                    if (SegDiag)
+                    {
+                        var bt = Main.tile[ncx, ncy + 1];
+                        DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: fake-stand at ({ncx},{ncy}); below ({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
+                    }
+                    return null;
+                } // reported stand cell has no floor = fake
             }
+            if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
             return (node, frames);
         }
 
@@ -1724,8 +1733,13 @@ namespace TerraBlind
         // RECEDING / follow-the-line. Each call picks ONE Expand edge that advances furthest along the DescendPath line
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
-        static int _lineIdx;   // player's tracked progress along the line; carried across steps so the projection window follows forward
-        public static void ResetLineProgress() => _lineIdx = 0;
+        static int _lineIdx;       // player's tracked progress along the line; carried across steps so the window follows forward
+        static int _bestIdx;       // best line progress reached SO FAR this run. forward = beating it. a step that doesn't beat
+                                   // it is a "step back" (detour to get around something); allowed, but must eventually pay off
+                                   // by beating _bestIdx again. if it never does and we revisit cells, that's a loop → break it.
+        static readonly HashSet<(int, int)> _detour = new();  // cells visited WHILE below _bestIdx (a detour in progress). cleared
+                                   // the moment we beat _bestIdx. revisiting one of these without progress = looping → exclude it.
+        public static void ResetLineProgress() { _lineIdx = 0; _bestIdx = 0; _detour.Clear(); }
 
         public static SSResult StepAlongField(int goalWx, int goalWy, (int x, int y)? blocked = null)
         {
@@ -1760,14 +1774,19 @@ namespace TerraBlind
             // as wild progress → shuffle. snap _lineIdx to where the player actually is this step.
             var (myIdx, _) = NearestLineIdx(line, curCx, curCy, _lineIdx);
             _lineIdx = myIdx;
-            // PREFERRED pick = the Expand landing that advances FURTHEST along the line (line gives the good route).
-            // SAFETY pick = the reachable landing with the lowest field H, regardless of line/direction (always exists if
-            // ANY edge moves us, since the field guarantees a lower-H neighbour unless we're at goal). When the preferred
-            // filter comes up empty (line floats out of reach, basin floor, awkward spot), we DON'T stuck — we take the
-            // safety step to shuffle off this cell; from the new cell the preferred filter almost always works again.
-            // The ONLY null return is "Expand produced no edge at all" = truly walled in by unbreakable tiles.
+            if (myIdx > _bestIdx) { _bestIdx = myIdx; _detour.Clear(); }   // we beat our best → forward progress, detour over
+
+            // THREE-TIER pick. (1) FORWARD: an Expand landing whose line index beats _bestIdx (real progress toward goal),
+            // furthest wins, cheapest breaks ties. (2) DETOUR: if nothing beats _bestIdx we must step back to get around
+            // something — allowed, but never back onto a cell already visited during THIS detour (that's the loop), and
+            // among the rest take the one nearest along the line (claw back toward _bestIdx). (3) SAFETY: lowest-H
+            // reachable cell, last resort so we always move. Loops are structurally impossible: forward clears the detour
+            // set; detour refuses revisited cells; so we can't cycle a fixed pocket — each detour step burns a new cell
+            // until one beats _bestIdx. (no magic counters; a back-step is fine, an UNPAID back-step that revisits is not.)
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
-            int bestIdx = myIdx; float bestCost = float.MaxValue; (int, int) bestCell = (curCx, curCy);
+            int bestIdx = _bestIdx; float bestCost = float.MaxValue; (int, int) bestCell = (curCx, curCy);
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? det = null;
+            int detIdx = int.MinValue; (int, int) detCell = (curCx, curCy);
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? safe = null;
             int safeH = int.MaxValue; (int, int) safeCell = (curCx, curCy);
             var cands = new List<Cand>();
@@ -1780,15 +1799,22 @@ namespace TerraBlind
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : (frames != null && frames.Exists(f => f.Place)) ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
-                bool advances = landIdx > myIdx;
-                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = hasH ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = advances });
-                // SAFETY: lowest-H reachable landing (never gated on line/direction/blocked → can't be filtered to empty)
+                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = hasH ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = landIdx > _bestIdx });
+                // SAFETY: lowest-H reachable landing (never gated → can't be filtered to empty)
                 if (hasH && nH < safeH) { safeH = nH; safe = (next, frames, cost, pillar, digTiles); safeCell = (ncx, ncy); }
-                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // 撞墙感知: don't re-pick a target that didn't move us (preferred only)
-                if (!advances) continue;                                   // preferred: must move FORWARD along the line
-                if (landIdx > bestIdx || (landIdx == bestIdx && cost < bestCost))
-                { bestIdx = landIdx; bestCost = cost; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // 撞墙感知 (forward/detour only)
+                if (landIdx > _bestIdx)        // (1) FORWARD: beats our best
+                {
+                    if (landIdx > bestIdx || (landIdx == bestIdx && cost < bestCost))
+                    { bestIdx = landIdx; bestCost = cost; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                }
+                else if (!_detour.Contains((ncx, ncy)))   // (2) DETOUR candidate: a step back we haven't already tried this detour
+                {
+                    if (landIdx > detIdx) { detIdx = landIdx; det = (next, frames, cost, pillar, digTiles); detCell = (ncx, ncy); }
+                }
             }
+            if (best == null && det != null)   // no forward move → take the detour step, remember we've been here
+            { best = det; bestCell = detCell; bestIdx = detIdx; _detour.Add((curCx, curCy)); }
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, bestIdx - myIdx);
             {
                 var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} lineIdx={myIdx}/{line.Count} n={cands.Count}:");
@@ -1798,9 +1824,17 @@ namespace TerraBlind
 
             bool usedSafe = best == null;
             if (usedSafe) { best = safe; bestCell = safeCell; }
-            if (best == null)   // not even a safety edge → Expand gave nothing → truly walled in (unbreakable)
+            if (best == null)
             {
-                DiagLog.Write($"[recede] STUCK at ({curCx},{curCy}) lineIdx={myIdx}/{line.Count}: Expand gave no edge at all → walled in by unbreakable");
+                // Expand produced NOTHING. There is NO separate "primitive" fallback: the set of escape actions must EQUAL
+                // the set of actions the bot can perform = Expand itself. If Expand is empty, either we're truly walled in
+                // (every neighbour unbreakable — a human couldn't pass either) OR a precondition inside Expand misfired on
+                // an awkward tile (slope/half-brick) and wrongly suppressed a doable edge. The fix belongs in Expand, not
+                // in a shrunken side-list that would inevitably miss actions. Log loudly so the real cause is visible.
+                DiagLog.Write($"[recede] EXPAND-EMPTY at ({curCx},{curCy}) H={curH} lineIdx={myIdx}/{line.Count}: no edge generated. re-running Expand with SegDiag to show why each action failed:");
+                SegDiag = true;
+                foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
+                SegDiag = false;
                 return null;
             }
             var pickCell = bestCell;
