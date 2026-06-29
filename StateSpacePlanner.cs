@@ -1733,13 +1733,17 @@ namespace TerraBlind
         // RECEDING / follow-the-line. Each call picks ONE Expand edge that advances furthest along the DescendPath line
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
-        static int _lineIdx;       // player's tracked progress along the line; carried across steps so the window follows forward
-        static int _bestIdx;       // best line progress reached SO FAR this run. forward = beating it. a step that doesn't beat
-                                   // it is a "step back" (detour to get around something); allowed, but must eventually pay off
-                                   // by beating _bestIdx again. if it never does and we revisit cells, that's a loop → break it.
-        static readonly HashSet<(int, int)> _detour = new();  // cells visited WHILE below _bestIdx (a detour in progress). cleared
-                                   // the moment we beat _bestIdx. revisiting one of these without progress = looping → exclude it.
-        public static void ResetLineProgress() { _lineIdx = 0; _bestIdx = 0; _detour.Clear(); }
+        static int _lineIdx;       // player's tracked projection onto the line (viz only now)
+        public static void ResetLineProgress() { _lineIdx = 0; }
+        // StepCost units — MUST match MazeWand's StepCost weights so g(step) and H are the same unit (Bellman sum valid).
+        const int SC_MoveSide = 3, SC_DigSide = 120, SC_MoveUp = 9;
+
+        static bool IsLavaCell(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.LiquidAmount > 0 && t.LiquidType == Terraria.ID.LiquidID.Lava;
+        }
 
         public static SSResult StepAlongField(int goalWx, int goalWy, (int x, int y)? blocked = null)
         {
@@ -1759,79 +1763,49 @@ namespace TerraBlind
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
 
-            // FOLLOW THE line (DescendPath) AS A WHOLE PATH — not a single-cell gradient. The line is the field-optimal grid
-            // route to goal; it threads out of basins, across shallow dips, around obstacles. We track PROGRESS ALONG it:
-            //   • myIdx   = index of the line cell nearest the player (projection onto the route).
-            //   • landIdx = for each Expand landing (all Grounded), index of the line cell nearest THAT landing.
-            // pick the landing that advances furthest along the line (max landIdx). The line may float (a low cell off the
-            // ground) or climb cell-by-cell — body can't do those — but we never step onto line cells, only onto physics
-            // landings, and judge them by which line cell they sit nearest. So a floating line segment just means the nearest
-            // ground landing carries us past it. Using path INDEX (not single-cell FieldDir) is what fixes the off-line
-            // arch death: even standing on a pillar tip the route still has a well-defined "further along" direction.
-            var line = MazeWand.GetPath(goalWx, goalWy);
-            // project the player onto the line around the TRACKED progress _lineIdx (carried across steps), not from 0 —
-            // the window must follow the player forward, else once past the window myIdx stays pinned and everything reads
-            // as wild progress → shuffle. snap _lineIdx to where the player actually is this step.
+            // PURE BELLMAN. The field H is the value function V(s) = min cost-to-goal (Dijkstra built it with StepCost),
+            // so the optimal action is the one minimizing  g(this step) + H(landing)  — exactly V(s)=cost(s→s')+V(s').
+            // No line, no target, no backtrack bans, no per-terrain special-case. H (already weights dig/up/lava as
+            // expensive) makes the choice route around walls/lava and prefer cheap moves on its own; loops are impossible
+            // because H strictly decreases each step (Bellman optimality), so no禁退 is needed. Closed loop: every cycle
+            // recomputes from the REAL position, so physics imprecision is absorbed (we never assume we reached s').
+            // CRITICAL: g must be in the SAME UNIT as H (StepCost), not frames — else the sum is meaningless. So g is
+            // recomputed in StepCost units: travelled cells × MoveSide + dug cells × DigSide + pillared cells × MoveUp.
+            var line = MazeWand.GetPath(goalWx, goalWy);   // kept only for the viz overlay; NOT used for the decision
             var (myIdx, _) = NearestLineIdx(line, curCx, curCy, _lineIdx);
             _lineIdx = myIdx;
-            if (myIdx > _bestIdx) { _bestIdx = myIdx; _detour.Clear(); }   // we beat our best → forward progress, detour over
 
-            // THREE-TIER pick. (1) FORWARD: an Expand landing whose line index beats _bestIdx (real progress toward goal),
-            // furthest wins, cheapest breaks ties. (2) DETOUR: if nothing beats _bestIdx we must step back to get around
-            // something — allowed, but never back onto a cell already visited during THIS detour (that's the loop), and
-            // among the rest take the one nearest along the line (claw back toward _bestIdx). (3) SAFETY: lowest-H
-            // reachable cell, last resort so we always move. Loops are structurally impossible: forward clears the detour
-            // set; detour refuses revisited cells; so we can't cycle a fixed pocket — each detour step burns a new cell
-            // until one beats _bestIdx. (no magic counters; a back-step is fine, an UNPAID back-step that revisits is not.)
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
-            int bestIdx = _bestIdx; float bestCost = float.MaxValue; (int, int) bestCell = (curCx, curCy);
-            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? det = null;
-            int detIdx = int.MinValue; (int, int) detCell = (curCx, curCy);
-            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? safe = null;
-            int safeH = int.MaxValue; (int, int) safeCell = (curCx, curCy);
+            float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
                 var (ncx, ncy) = StandCell(next.Px, next.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
-                var (landIdx, _) = NearestLineIdx(line, ncx, ncy, myIdx);  // how far along the line this landing sits
-                bool hasH = field.TryGetValue((ncx, ncy), out int nH);
+                if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
+                if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
+                // g in StepCost units (same as H): manhattan cells moved × MoveSide, plus extra for digging/pillaring
+                int manh = System.Math.Abs(ncx - curCx) + System.Math.Abs(ncy - curCy);
+                int dug = digTiles?.Count ?? 0;
+                int pil = pillar ? System.Math.Abs(curCy - ncy) : 0;
+                float g = manh * SC_MoveSide + dug * (SC_DigSide - SC_MoveSide) + pil * (SC_MoveUp - SC_MoveSide);
+                float total = g + nH;                          // Bellman: g(step) + V(landing)
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : (frames != null && frames.Exists(f => f.Place)) ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
-                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = hasH ? nH : int.MaxValue, Cost = (int)cost, Kind = kind, Descends = landIdx > _bestIdx });
-                // SAFETY: lowest-H reachable landing (never gated → can't be filtered to empty)
-                if (hasH && nH < safeH) { safeH = nH; safe = (next, frames, cost, pillar, digTiles); safeCell = (ncx, ncy); }
-                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;  // 撞墙感知 (forward/detour only)
-                if (landIdx > _bestIdx)        // (1) FORWARD: beats our best
-                {
-                    if (landIdx > bestIdx || (landIdx == bestIdx && cost < bestCost))
-                    { bestIdx = landIdx; bestCost = cost; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
-                }
-                else if (!_detour.Contains((ncx, ncy)))   // (2) DETOUR candidate: a step back we haven't already tried this detour
-                {
-                    if (landIdx > detIdx) { detIdx = landIdx; det = (next, frames, cost, pillar, digTiles); detCell = (ncx, ncy); }
-                }
+                cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
+                if (total < bestTotal) { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
             }
-            if (best == null && det != null)   // no forward move → take the detour step, remember we've been here
-            { best = det; bestCell = detCell; bestIdx = detIdx; _detour.Add((curCx, curCy)); }
-            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, bestIdx - myIdx);
+            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f);
             {
-                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} lineIdx={myIdx}/{line.Count} n={cands.Count}:");
-                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}c{cd.Cost}{(cd.Descends ? "↑" : "")}");
+                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:");
+                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}g{cd.Cost}{(cd.Descends ? "↓" : "")}");
                 DiagLog.Write(sbc.ToString());
             }
 
-            bool usedSafe = best == null;
-            if (usedSafe) { best = safe; bestCell = safeCell; }
-            if (best == null)
+            if (best == null)   // null ONLY when Expand yielded no edge on the field at all
             {
-                // Expand produced NOTHING. There is NO separate "primitive" fallback: the set of escape actions must EQUAL
-                // the set of actions the bot can perform = Expand itself. If Expand is empty, either we're truly walled in
-                // (every neighbour unbreakable — a human couldn't pass either) OR a precondition inside Expand misfired on
-                // an awkward tile (slope/half-brick) and wrongly suppressed a doable edge. The fix belongs in Expand, not
-                // in a shrunken side-list that would inevitably miss actions. Log loudly so the real cause is visible.
-                DiagLog.Write($"[recede] EXPAND-EMPTY at ({curCx},{curCy}) H={curH} lineIdx={myIdx}/{line.Count}: no edge generated. re-running Expand with SegDiag to show why each action failed:");
+                DiagLog.Write($"[recede] EXPAND-EMPTY at ({curCx},{curCy}) H={curH}: no edge generated.");
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
                 SegDiag = false;
@@ -1843,7 +1817,7 @@ namespace TerraBlind
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
-            DiagLog.Write($"[recede] ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} lineIdx {myIdx}→{bestIdx} cost={b.cost:0} pillar={b.pillar}{(usedSafe ? " [SAFETY: shuffle off awkward spot]" : "")}");
+            DiagLog.Write($"[recede] BELLMAN ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} total={bestTotal:0} pillar={b.pillar}");
             return res;
         }
 
