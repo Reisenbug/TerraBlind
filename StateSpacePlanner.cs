@@ -720,57 +720,36 @@ namespace TerraBlind
         // worth digging down to a landing of maze-H lh: clearly closer along the field (curH - lh >= margin) and
         // no lateral walk reaches an equally-low cell (else route around instead of mining). follows the maze
         // field, which already plans the cheapest rock-penetrating route to the goal.
+        // ATOMIC down-dig: mine ONLY the one cell directly underfoot (the player is 20px wide so that's two columns,
+        // the standing column + the neighbor the center leans toward) and step down into it. Not a shaft to a landing —
+        // just one cell. The closed loop re-plans from the new real position each cycle, so a deep descent emerges as
+        // dig→dig→dig (or dig→fall once a cavity opens) rather than one pre-planned tunnel. This kills the DigMaxScan
+        // "no landing within 12 → null" dead-end that stranded the bot at a thick wall, and aligns plan with execution
+        // (one cell per edge, no over-mined tunnel that the next cycle finds unnecessary).
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
             int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
+            int y = ccy + 1;   // the single row directly under the feet
             var tiles = new List<(int, int)>();
             float cost = 0f;
-            for (int y = ccy + 1; y <= ccy + DigMaxScan; y++)
-            {
-                if (!DigSolid(ccx, y) && !DigSolid(c2, y) && tiles.Count > 0)
+            foreach (int c in new[] { ccx, c2 })
+                if (DigSolid(c, y))
                 {
-                    int landC = PathPlanner.IsFloorPublic(ccx, y + 1) ? ccx
-                              : PathPlanner.IsFloorPublic(c2, y + 1) ? c2 : int.MinValue;
-                    if (landC == int.MinValue) continue;   // open cavity, keep falling deeper in scan
-                    bool hasH = ctx.DistField.TryGetValue((landC, y), out int lh);
-                    // UNCONDITIONAL down-dig: only require the landing be toward goal (lower H). The old WorthDig also
-                    // refused to dig when a lateral walk could reach an equally-low cell — a "route around instead" gate
-                    // that, in an awkward stance, suppressed the down edge and left Expand empty. Selection (cost+field)
-                    // already prefers a cheap walk when one exists, so the gate isn't needed to avoid needless digging.
-                    if (!(hasH && lh < curH)) return null;
-                    float npx = landC * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
-                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                    return (node, tiles, cost);
+                    int fc = DigTable.CostFrames(c, y);
+                    if (fc >= DigTable.Unmineable) return null;   // unbreakable (attached object / pick too weak) → route around
+                    cost += fc;
+                    tiles.Add((c, y));
                 }
-                foreach (int c in new[] { ccx, c2 })
-                    if (DigSolid(c, y))
-                    {
-                        int fc = DigTable.CostFrames(c, y);
-                        // CostFrames already folds in CanKillTile and pick-too-weak (both → Unmineable), so a tile that
-                        // supports an attached object or needs a stronger pickaxe is routed around by A*.
-                        if (fc >= DigTable.Unmineable) return null;
-                        cost += fc;
-                        tiles.Add((c, y));
-                    }
-            }
-            // no cavity within scan → land at the shaft bottom (the dug space IS the standing room, the
-            // undug rock below IS the floor). the maze field penetrates rock with dig-weighted costs, so
-            // the H gate stays meaningful mid-rock — long descents chain shaft after shaft.
-            // shaft ran the full scan without hitting a cavity → stand at the bottom. The undug rock below IS the floor
-            // (no endFloor check: requiring a pre-existing floor under the shaft bottom voided every partial descent —
-            // 312/312 nulled in one plan — even though standing on solid rock at the shaft bottom is always valid).
-            int yEnd = ccy + DigMaxScan;
-            bool endH = ctx.DistField.TryGetValue((ccx, yEnd), out int eh);
-            if (tiles.Count > 0 && endH && eh < curH)
-            {
-                float epx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                float epy = (yEnd + 1) * 16f - PhysicsSimulator.PlayerH;
-                return (new SSNode { Px = epx, Py = epy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
-            }
-            DiagLog.Write($"[ss-digdown] from=({ccx},{ccy}) shaftEnd=({ccx},{yEnd}) tiles={tiles.Count} → null");
-            return null;
+            if (tiles.Count == 0) return null;   // nothing solid underfoot → not a dig (free fall / walk handles it)
+            // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
+            // it if that cell is lower H (toward goal). If ccy+2 is ALSO open, the next cycle's free-fall/dig continues.
+            bool hasH = ctx.DistField.TryGetValue((ccx, y), out int lh);
+            if (!(hasH && lh < curH)) return null;
+            float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
+            var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+            return (node, tiles, cost);
         }
 
         // Dig upward through a sealed ceiling: per cycle mine 2 rows above the head (2 columns, same body-width
@@ -807,45 +786,32 @@ namespace TerraBlind
             return null;
         }
 
-        // Mine straight through a solid wall along dir, stopping at the first standable cell on the far side.
-        // Returns (landing node, tiles to mine, total mining-frame cost), or null if unmineable / no standable exit.
+        // ATOMIC horizontal dig: mine ONLY the one adjacent column (its 3 body rows) along dir and step into it. Not a
+        // tunnel to a far standable cell — just one cell. Same reason as the atomic down-dig: the closed loop re-plans
+        // each cycle, so a thick wall is breached as dig→dig→dig (横竖组合 emerges across cycles), with no DigMaxScan
+        // "no landing within 12 → null" dead-end (the (744,998) stuck) and no over-mined tunnel the next cycle finds
+        // unnecessary. If the cell underfoot in the entered column is open, the bot falls in — next cycle handles the
+        // landing from the real position; we only commit to mining this one column.
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(PlanCtx ctx, int dir, int ccx, int ccy, int curH)
         {
+            int x = ccx + dir;
             var tiles = new List<(int, int)>();
             float cost = 0f;
-            int x = ccx + dir;
-            for (int step = 0; step < DigMaxScan; step++, x += dir)
-            {
-                // mine whatever blocks the 3 body rows of THIS column first, accumulating real frame cost
-                foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
-                    if (DigSolid(x, y))
-                    {
-                        int fc = DigTable.CostFrames(x, y);
-                        // Unmineable folds in pick-too-weak AND CanKillTile (attached object) — route around either way.
-                        if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
-                        cost += fc;
-                        tiles.Add((x, y));
-                    }
-                // STOP as soon as this column is a valid landing toward the goal: body rows clear, support underfoot
-                // (native floor OR solid rock below — standing in the tunnel counts), and maze H lower than start.
-                // don't run to DigMaxScan — that overshoots the target column and the end-cell H climbs back up.
-                bool bodyClear = !DigSolid(x, ccy) && !DigSolid(x, ccy - 1) && !DigSolid(x, ccy - 2);
-                bool support = PathPlanner.IsFloorPublic(x, ccy + 1) || DigSolid(x, ccy + 1);
-                bool toward = ctx.DistField != null && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH;
-                if (bodyClear && support && toward)
+            foreach (int y in new[] { ccy, ccy - 1, ccy - 2 })
+                if (DigSolid(x, y))
                 {
-                    // nothing was actually mined to reach here → this isn't a dig, it's a plain walk. return null so the
-                    // walk edge handles it; otherwise we'd emit a cost=0 "dig" whose ΔH/cost is infinite and wrongly
-                    // beats every real walk/jump (the "该走却挖, 一格一格挖过去" bug).
-                    if (tiles.Count == 0) return null;
-                    float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
-                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                    return (node, tiles, cost);
+                    int fc = DigTable.CostFrames(x, y);
+                    if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
+                    cost += fc;
+                    tiles.Add((x, y));
                 }
-            }
-            DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} NO LANDING within {DigMaxScan}: tiles={tiles.Count} → null");
-            return null;
+            if (tiles.Count == 0) return null;   // adjacent column already clear → plain walk handles it, not a dig
+            bool toward = ctx.DistField != null && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH;
+            if (!toward) return null;
+            float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
+            var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+            return (node, tiles, cost);
         }
 
         const float VerticalJumpVxMax = 0.5f;
@@ -1737,6 +1703,10 @@ namespace TerraBlind
         public static void ResetLineProgress() { _lineIdx = 0; }
         // StepCost units — MUST match MazeWand's StepCost weights so g(step) and H are the same unit (Bellman sum valid).
         const int SC_MoveSide = 3, SC_DigSide = 120, SC_MoveUp = 9;
+        const int SC_DigDown = 80, SC_DigUp = 160;   // match MazeWand's directional dig weights so g and H share a unit
+        // place (bridge/jump-place) alters terrain like digging — the field H doesn't model it, so price it here at a
+        // dig-cell's level so the bot only bridges when walking/jumping can't reach a much lower H (never for a few cells).
+        const int SC_PlaceCost = 120;
 
         static bool IsLavaCell(int x, int y)
         {
@@ -1776,7 +1746,7 @@ namespace TerraBlind
             _lineIdx = myIdx;
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
-            float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
+            float bestTotal = float.MaxValue; bool bestDescends = false; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
@@ -1784,17 +1754,46 @@ namespace TerraBlind
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
-                // g in StepCost units (same as H): manhattan cells moved × MoveSide, plus extra for digging/pillaring
-                int manh = System.Math.Abs(ncx - curCx) + System.Math.Abs(ncy - curCy);
-                int dug = digTiles?.Count ?? 0;
+                // g = the TRUE extra cost of terrain-altering actions only; plain travel (walk/jump distance) is NOT
+                // charged. Reason: the field H is built from move/dig weights but has NO concept of place/dig-from-here,
+                // so a place/dig landing often sits 1-2 cells lower in H than a walk/jump landing and a manhattan-based g
+                // couldn't out-price it → the bot dug/bridged for a few cells of H it could have walked to. Charging
+                // travel distance also virtually-inflated far jumps (large manhattan) so cheap飞-in-place小跳 won → jitter.
+                // Fix both: walk/jump g≈0 (total≈H, pure field descent, far jumps not penalized), while dig/pillar/place
+                // carry their real StepCost-unit price so they're only chosen when H drops enough to be worth it.
+                bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);
                 int pil = pillar ? System.Math.Abs(curCy - ncy) : 0;
-                float g = manh * SC_MoveSide + dug * (SC_DigSide - SC_MoveSide) + pil * (SC_MoveUp - SC_MoveSide);
+                // dig cost MUST use the SAME directional weights MazeWand baked into H (DigDown 80 / DigSide 120 / DigUp
+                // 160), per tile by its row vs the player's — a flat SC_DigSide over-priced downward digs and under-priced
+                // upward ones, so g and H were different units and g+H was meaningless (the bug behind the loops).
+                float digCost = 0f;
+                if (digTiles != null)
+                    foreach (var (tx, ty) in digTiles)
+                        digCost += ty > curCy ? SC_DigDown : ty < curCy ? SC_DigUp : SC_DigSide;
+                float g = digCost + pil * SC_MoveUp + (isPlace ? SC_PlaceCost : 0);
                 float total = g + nH;                          // Bellman: g(step) + V(landing)
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
-                    : (frames != null && frames.Exists(f => f.Place)) ? "place"
+                    : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
-                if (total < bestTotal) { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                // bump-sense (this round only, NOT a backtrack ban): if last round's chosen target didn't actually move
+                // us (RecedingNav saw same-cell), skip it as best so we take the next-best edge instead of replanning the
+                // identical physics-impossible move forever. No accumulation, no direction/idx ban — next round blocked is
+                // null again and this same cell can win if it's truly optimal.
+                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;
+                // Bellman with a descent-first tier: a candidate that LOWERS H (moves toward goal) always beats one that
+                // doesn't, even if the descending one must pay to dig. This breaks the local-valley loop where the only
+                // forward path is through a wall (dig, g>0) but a free sideways/back walk (g=0) had a smaller g+H and won
+                // forever — the bot horizontally bounced in the valley, never paying to dig the one true exit. Within the
+                // same tier (both descend, or both don't) plain g+H decides, so cheap walks still beat needless digs and
+                // we never dig for a tiny gain when a descending walk exists. NOT a backtrack ban: non-descending edges
+                // are merely lower priority, still chosen when nothing descends (so we can climb out of a pocket).
+                bool descends = nH < curH;
+                bool better = best == null
+                    || (descends && !bestDescends)
+                    || (descends == bestDescends && total < bestTotal);
+                if (better)
+                { bestDescends = descends; bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
             }
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f);
             {
