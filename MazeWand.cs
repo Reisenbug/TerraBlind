@@ -24,6 +24,12 @@ namespace TerraBlind
         const int AirSat = 10;       // h'=AirSat → half AirCap
         const int AirCap = 6;        // asymptote. tiny on purpose
         const int MaxAirProbe = 60;  // must exceed deepest valley we want to measure, else it reads shallow
+        // sideways-air SPAN penalty: a continuous horizontal float longer than the body can jump must out-price going
+        // down and back up so the field descends instead of sailing over wide pits. AirSpanFree ≈ a jump's reach (free
+        // below it → narrow pits still floated). Per-cell cost beyond that makes a long span's TOTAL super-linear.
+        const int AirSpanFree = 10;   // cells of sideways air that stay free (within a jump's horizontal reach)
+        const int AirSpanK = 6;       // per-cell cost for each air cell beyond AirSpanFree (tunes float-vs-descend)
+        const int AirSpanProbe = 40;  // how far ahead to measure the continuous air span
 
         // entering a lava cell would burn the player to death — never route through it. A huge step cost makes the
         // field treat lava as effectively impassable (it'll still cross a 1-cell lava bridge only if literally no
@@ -232,22 +238,40 @@ namespace TerraBlind
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a
             // wall face has the feet briefly unsupported too — penalizing it made an 18-cell climb-around (1458)
             // cost more than digging through the wall (1440), which is backwards.
-            if (!wall && horizontal) baseCost += AirCost(cx, cy);
+            if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost;
         }
 
-        // height above the nearest floor below, mapped to a cost. FreeAir tiles are free (gliding over a small pit).
-        // Above that the penalty SATURATES: AirCap * h'/(h'+AirSat). Low h' is区分得开 (near-linear), high h' all
-        // trends to AirCap so "40 deep" and "100 deep" read the same (both = a fall you can't return from). Smooth,
-        // no threshold, no hard-cap cliff — AirCap is an asymptote, not a cutoff.
-        static int AirCost(int cx, int cy)
+        // Cost of stepping sideways into open air. Two factors, both real costs (NO judgement here — the field weighs
+        // "float across" vs "go down the slope and back up" itself; we only price floating honestly):
+        //   • DEPTH h: how far below is the floor. Small h (a sub-jump dip, ≤ FreeAir≈9) is free — a real jump clears it.
+        //   • SPAN L: how many cells of CONTINUOUS sideways air lie ahead in the travel direction before the ground
+        //     returns. A long unsupported horizontal run is what the body physically can't do (no walk/jump crosses 13
+        //     blank cells) — the longer the span, the costlier per cell, so a long float's TOTAL price climbs past the
+        //     down-slope-and-up alternative and the field switches to descending. A short span (≤ a jump's reach) stays
+        //     cheap so narrow pits are still floated/jumped. Span dominates depth: a deep-but-narrow chasm is jumpable;
+        //     a long shallow ledge-gap is the thing to avoid sailing over.
+        static int AirCost(int cx, int cy, int dir)
         {
             int h = MaxAirProbe;
             for (int d = 1; d <= MaxAirProbe; d++)
                 if (PathPlanner.IsFloorPublic(cx, cy + d)) { h = d; break; }
-            if (h <= FreeAir) return 0;
+            if (h <= FreeAir) return 0;                       // shallow dip a jump clears → free, regardless of span
+            // span: continuous sideways air ahead before the floor (at this row's reach) returns
+            int span = 0;
+            for (int s = 1; s <= AirSpanProbe; s++)
+            {
+                int tx = cx + dir * s;
+                bool airHere = !PathPlanner.IsBlockPublic(tx, cy) && !PathPlanner.IsFloorPublic(tx, cy + 1);
+                if (!airHere) break;
+                span++;
+            }
             float hp = h - FreeAir;
-            return (int)(AirCap * hp / (hp + AirSat));
+            float depthW = AirCap * hp / (hp + AirSat);        // saturating depth term (unchanged shape)
+            // span term: per-cell cost grows with span so a long float is super-linear in total. AirSpanFree cells are
+            // free (a jump's horizontal reach); beyond that each cell costs AirSpanK*(span-AirSpanFree).
+            float spanExtra = span > AirSpanFree ? AirSpanK * (span - AirSpanFree) : 0f;
+            return (int)(depthW + spanExtra);
         }
 
         static (List<(int, int)>, int) DescendPath(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
@@ -291,7 +315,7 @@ namespace TerraBlind
                     bool down = cyk > py;
                     string dir = cxk != px ? (cxk > px ? "R" : "L") : (down ? "D" : "U");
                     int sc = StepCost(cxk, cyk, px, py);
-                    int air = (!wall && !down) ? AirCost(cxk, cyk) : 0;
+                    int air = (!wall && !down) ? AirCost(cxk, cyk, cxk - px) : 0;
                     if (wall) dig++; else walk++;
                     DiagLog.Write($"[maze-step] {i} {dir} ({cxk},{cyk}) {(wall ? "DIG" : "walk")} stepCost={sc} air={air} field={field[path[i]]}");
                 }

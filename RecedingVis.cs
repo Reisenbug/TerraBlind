@@ -25,6 +25,7 @@ namespace TerraBlind
         static List<StateSpacePlanner.Cand> _cands = new();
         static (int, int)? _chosen;
         static float _score;
+        static (float x, float y) _dS, _dM, _dL;   // multi-scale big-direction vectors (unit) for viz
         static int _ttl;
 
         static Texture2D _pixel;
@@ -36,9 +37,10 @@ namespace TerraBlind
         }
 
         public static void SetDecision(int curCx, int curCy, int curH, int gx, int gy,
-                                       List<StateSpacePlanner.Cand> cands, (int, int)? chosen, float score)
+                                       List<StateSpacePlanner.Cand> cands, (int, int)? chosen, float score,
+                                       (float x, float y) dS, (float x, float y) dM, (float x, float y) dL)
         {
-            lock (_lock) { _curCx = curCx; _curCy = curCy; _curH = curH; _goalWx = gx; _goalWy = gy; _cands = cands; _chosen = chosen; _score = score; _ttl = 180; }
+            lock (_lock) { _curCx = curCx; _curCy = curCy; _curH = curH; _goalWx = gx; _goalWy = gy; _cands = cands; _chosen = chosen; _score = score; _dS = dS; _dM = dM; _dL = dL; _ttl = 180; }
         }
 
         public static void Clear() { lock (_lock) { _cands = new(); _chosen = null; _ttl = 0; } }
@@ -50,7 +52,8 @@ namespace TerraBlind
             if (!RecedingNav.Active) return;
             Dictionary<(int, int), int> field;
             int curCx, curCy, curH; List<StateSpacePlanner.Cand> cands; (int, int)? chosen; float score; int ttl;
-            lock (_lock) { field = _field; curCx = _curCx; curCy = _curCy; curH = _curH; cands = _cands; chosen = _chosen; score = _score; ttl = _ttl; }
+            (float x, float y) dS, dM, dL;
+            lock (_lock) { field = _field; curCx = _curCx; curCy = _curCy; curH = _curH; cands = _cands; chosen = _chosen; score = _score; dS = _dS; dM = _dM; dL = _dL; ttl = _ttl; }
 
             var sb = Main.spriteBatch;
             sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
@@ -95,6 +98,18 @@ namespace TerraBlind
                     Label(sb, font, chosen.Value.Item1, chosen.Value.Item2 - 1, $"★{score:0.0}", Color.Yellow);
                 }
 
+                // multi-scale big-direction vectors from the current cell: short=cyan, mid=orange (the workhorse),
+                // long=magenta. Drawn at each scale's arc length so their reach is visible. If mid points at the real
+                // exit while the bot shuffles sideways, that's the bug-by-eye.
+                void Vec((float x, float y) d, int reach, Color c, int thick)
+                {
+                    if (d.x == 0f && d.y == 0f) return;
+                    Arrow(sb, curCx, curCy, d.x * reach, d.y * reach, c, thick);
+                }
+                Vec(dL, 8, new Color(220, 80, 220, 200), 4);
+                Vec(dS, 4, new Color(0, 230, 230, 230), 4);
+                Vec(dM, 6, new Color(255, 150, 0, 255), 6);   // mid = workhorse, thickest
+
                 // current cell: white box + H (red if stuck)
                 Box(sb, curCx, curCy, stuck ? new Color(255, 40, 40, 240) : new Color(255, 255, 255, 220));
                 Label(sb, font, curCx, curCy + 1, stuck ? $"STUCK H{curH} {cands.Count} cands none↓" : $"H{curH}",
@@ -103,7 +118,7 @@ namespace TerraBlind
 
             // legend
             ChatManager.DrawColorCodedStringWithShadow(sb, font,
-                "RECEDING  white=here  blue=field compass  green=action↓H  gray=action not↓  yellow=chosen  red=STUCK",
+                "RECEDING  white=here  blue=field compass  cyan/orange/magenta=dir vec S/M/L  green=action↓H  gray=action not↓  yellow=chosen  red=STUCK",
                 new Vector2(10, 30), Color.White, 0f, Vector2.Zero, new Vector2(0.7f));
 
             sb.End();
@@ -133,6 +148,31 @@ namespace TerraBlind
             float x1 = bx * 16f + 8 - Main.screenPosition.X, y1 = by * 16f + 8 - Main.screenPosition.Y;
             float dx = x1 - x0, dy = y1 - y0; int n = (int)(System.MathF.Max(System.MathF.Abs(dx), System.MathF.Abs(dy)) / 3) + 1;
             for (int i = 0; i <= n; i++) sb.Draw(_pixel, new Rectangle((int)(x0 + dx * i / n) - 1, (int)(y0 + dy * i / n) - 1, 3, 3), c);
+        }
+
+        // thick arrow from cell (ax,ay) center, extending (dxCells,dyCells) in cell units. Draws a fat shaft plus two
+        // arrowhead barbs at the tip so the direction reads at a glance.
+        static void Arrow(SpriteBatch sb, int ax, int ay, float dxCells, float dyCells, Color c, int thick)
+        {
+            float x0 = ax * 16f + 8 - Main.screenPosition.X, y0 = ay * 16f + 8 - Main.screenPosition.Y;
+            float vx = dxCells * 16f, vy = dyCells * 16f;
+            float len = System.MathF.Sqrt(vx * vx + vy * vy);
+            if (len < 1f) return;
+            float ux = vx / len, uy = vy / len;          // unit along arrow
+            float px = -uy, py = ux;                       // perpendicular
+            float x1 = x0 + vx, y1 = y0 + vy;
+            void Seg(float sx, float sy, float ex, float ey)
+            {
+                float ddx = ex - sx, ddy = ey - sy;
+                int n = (int)(System.MathF.Max(System.MathF.Abs(ddx), System.MathF.Abs(ddy)) / 2) + 1;
+                int h = thick;
+                for (int i = 0; i <= n; i++)
+                    sb.Draw(_pixel, new Rectangle((int)(sx + ddx * i / n) - h / 2, (int)(sy + ddy * i / n) - h / 2, h, h), c);
+            }
+            Seg(x0, y0, x1, y1);                                            // shaft
+            float bl = 10f;                                                 // barb length
+            Seg(x1, y1, x1 - ux * bl + px * bl * 0.6f, y1 - uy * bl + py * bl * 0.6f);   // barb 1
+            Seg(x1, y1, x1 - ux * bl - px * bl * 0.6f, y1 - uy * bl - py * bl * 0.6f);   // barb 2
         }
 
         static void Label(SpriteBatch sb, ReLogic.Graphics.DynamicSpriteFont font, int wx, int wy, string t, Color c)

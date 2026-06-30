@@ -13,8 +13,8 @@ namespace TerraBlind
         public static bool Active;
         static int _goalWx, _goalWy;
         const float GoalDistPx = 24f;
-        static (int, int) _lastCell;
-        static (int, int)? _lastTarget;  // cell the last action aimed at (to blacklist if it didn't move us this round)
+        static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
+        static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
 
         public static void Toggle()
@@ -30,7 +30,7 @@ namespace TerraBlind
         {
             StateSpacePlanner.StopNav();
             goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
-            _goalWx = goalWx; _goalWy = goalWy; Active = true; _haveLast = false; _lastTarget = null; _lastCell = (int.MinValue, int.MinValue);
+            _goalWx = goalWx; _goalWy = goalWy; Active = true; _haveLast = false; _lastTarget = null; _lastFrom = null;
             StateSpacePlanner.ResetLineProgress();
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
             // Tick waits on _fieldReady; the player just stands a moment until the compass is built.
@@ -71,25 +71,26 @@ namespace TerraBlind
 
             // MUST match StandCell's rounding (the -1f), else cell reads one tile below the planner's landing.
             var cell = ((int)((p.position.X + p.width / 2f) / 16f), (int)((p.position.Y + p.height - 1f) / 16f));
-            if (_haveLast && _lastTarget.HasValue)
+            // ATTENTION feedback: report how the last edge actually turned out (did the real landing reach the cell the
+            // edge planned for?). StepAlongField turns that into a continuous per-edge mismatch weight that softly
+            // down-weights edges physics keeps failing to honour. Then decay the whole table one cycle so memory fades —
+            // no hard blacklist, no backtrack ban; a penalized edge always recovers in time and can be chosen again.
+            if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
-                var t = _lastTarget.Value;
+                var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
-                DiagLog.Write($"[recede-exec] expected→({t.Item1},{t.Item2}) actual→({cell.Item1},{cell.Item2}) d=({dxc},{dyc}) {(dxc == 0 && dyc == 0 ? "HIT" : "MISS")}");
+                DiagLog.Write($"[recede-exec] from=({f.Item1},{f.Item2}) expected→({t.Item1},{t.Item2}) actual→({cell.Item1},{cell.Item2}) d=({dxc},{dyc}) {(dxc == 0 && dyc == 0 ? "HIT" : "MISS")}");
+                StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2);
             }
-            // 撞墙感知 (this round only, NOT a stuck counter): if the last action left us on the same cell, blacklist its
-            // target so we pick a DIFFERENT action this round. NO accumulation, NO stuck — StepAlongField's safety step
-            // always returns SOMETHING that moves us, so we never need to give up.
-            (int, int)? blocked = null;
-            if (_haveLast && cell == _lastCell && _lastTarget.HasValue) blocked = _lastTarget;
+            StateSpacePlanner.DecayMiss();
 
             // NO stuck triggers. The field guarantees a lower-H neighbour everywhere but the goal, and StepAlongField's
-            // safety pick always takes a reachable edge toward it — so we keep moving and eventually clear any awkward
-            // spot. The ONLY stop is StepAlongField returning null = Expand produced no edge = truly walled in.
-            var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy, blocked);
+            // attention-weighted pick always takes a reachable edge toward it — so we keep moving and eventually clear any
+            // awkward spot. The ONLY stop is StepAlongField returning null = Expand produced no edge = truly walled in.
+            var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
-            _lastCell = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
+            _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             StateSpacePlanner.DispatchPlan(res);
         }
     }

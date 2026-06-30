@@ -1700,7 +1700,33 @@ namespace TerraBlind
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
         static int _lineIdx;       // player's tracked projection onto the line (viz only now)
-        public static void ResetLineProgress() { _lineIdx = 0; }
+        public static void ResetLineProgress() { _lineIdx = 0; _miss.Clear(); }
+
+        // ATTENTION mismatch memory — a CONTINUOUS per-edge weight, NOT a hard ban. An edge keyed by (fromCell→toCell):
+        // when the bot's real landing falls short of an edge's optimistic simulated landing (a jump the physics couldn't
+        // make, sliding into a pit), that edge accrues a penalty proportional to how far off it landed (manhattan cells,
+        // same unit as g/H). The penalty is ADDED to g+H at selection, so a repeatedly-failing optimistic edge is softly
+        // down-weighted and a reliable alternative (place/bridge/walk-down) wins — behavior emerges from the weight, no
+        // if-else. It is NEVER ∞ and NEVER removes a candidate: if a penalized edge is still the only option it is still
+        // chosen (stuck stays structurally impossible). It DECAYS every cycle (half-life ≈ a pit-fall-and-climb-back loop),
+        // so memory fades — this is what keeps it from becoming a backtrack ban: a penalized edge always recovers in time.
+        static readonly System.Collections.Generic.Dictionary<(int, int, int, int), float> _miss = new();
+        const float MissDecayTick = 0.93f;   // per-cycle decay → half-life ~10 cycles (a typical pit fall+climb loop)
+        const float MissForgiveHit = 0.3f;   // an edge that DID reach its target this time is largely forgiven
+        public static void DecayMiss()
+        {
+            if (_miss.Count == 0) return;
+            var keys = new System.Collections.Generic.List<(int, int, int, int)>(_miss.Keys);
+            foreach (var k in keys) { float v = _miss[k] * MissDecayTick; if (v < 0.5f) _miss.Remove(k); else _miss[k] = v; }
+        }
+        // report the last edge's outcome: did the real landing match the cell the edge planned for?
+        public static void ReportEdge(int fromCx, int fromCy, int planCx, int planCy, int realCx, int realCy)
+        {
+            var key = (fromCx, fromCy, planCx, planCy);
+            int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
+            if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
+            else _miss[key] = _miss.GetValueOrDefault(key) + miss;
+        }
         // StepCost units — MUST match MazeWand's StepCost weights so g(step) and H are the same unit (Bellman sum valid).
         const int SC_MoveSide = 3, SC_DigSide = 120, SC_MoveUp = 9;
         const int SC_DigDown = 80, SC_DigUp = 160;   // match MazeWand's directional dig weights so g and H share a unit
@@ -1715,7 +1741,7 @@ namespace TerraBlind
             return t.LiquidAmount > 0 && t.LiquidType == Terraria.ID.LiquidID.Lava;
         }
 
-        public static SSResult StepAlongField(int goalWx, int goalWy, (int x, int y)? blocked = null)
+        public static SSResult StepAlongField(int goalWx, int goalWy)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return null;
@@ -1744,9 +1770,13 @@ namespace TerraBlind
             var line = MazeWand.GetPath(goalWx, goalWy);   // kept only for the viz overlay; NOT used for the decision
             var (myIdx, _) = NearestLineIdx(line, curCx, curCy, _lineIdx);
             _lineIdx = myIdx;
+            // multi-scale big-direction vectors from the player's line projection (unit; (0,0) if line too short)
+            var dS = LineDir(line, myIdx, ArcShort);
+            var dM = LineDir(line, myIdx, ArcMid);
+            var dL = LineDir(line, myIdx, ArcLong);
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
-            float bestTotal = float.MaxValue; bool bestDescends = false; (int, int) bestCell = (curCx, curCy);
+            float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
@@ -1771,31 +1801,36 @@ namespace TerraBlind
                     foreach (var (tx, ty) in digTiles)
                         digCost += ty > curCy ? SC_DigDown : ty < curCy ? SC_DigUp : SC_DigSide;
                 float g = digCost + pil * SC_MoveUp + (isPlace ? SC_PlaceCost : 0);
-                float total = g + nH;                          // Bellman: g(step) + V(landing)
+                // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
+                // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
+                // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
+                // wins. Pure g+H already allows a transient H rise (walk/jump down into a shallow pit then climb the far
+                // side); the penalty only kicks in for edges physics keeps failing to honour — the optimistic jump that
+                // slides into a pit. Penalty is finite and decays, never removes the candidate (stuck stays impossible).
+                float pen = _miss.GetValueOrDefault((curCx, curCy, ncx, ncy));
+                // big-direction alignment: how well this step's displacement points along the multi-scale line vectors.
+                // Subtracted from total (a well-aligned step is cheaper), scaled to H's unit. This is what disambiguates
+                // equal-H cells: the 1680↔1682 shuffle moves perpendicular to the corridor (align≈0, no reward) while
+                // the pillar/walk that actually heads up-corridor gets rewarded and wins. It also blesses a V-pit
+                // downslope (transient H rise but aligned). Bounded (±~AlignScale·Σw), decays to 0 at line bends where
+                // the scales disagree, never removes a candidate → stuck stays structurally impossible.
+                float ddx = ncx - curCx, ddy = ncy - curCy;
+                float dlen = MathF.Sqrt(ddx * ddx + ddy * ddy);
+                float align = 0f;
+                if (dlen >= 0.5f)
+                {
+                    float ux = ddx / dlen, uy = ddy / dlen;
+                    align = WShort * (ux * dS.x + uy * dS.y) + WMid * (ux * dM.x + uy * dM.y) + WLong * (ux * dL.x + uy * dL.y);
+                }
+                float total = g + nH + pen - AlignScale * align;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
-                // bump-sense (this round only, NOT a backtrack ban): if last round's chosen target didn't actually move
-                // us (RecedingNav saw same-cell), skip it as best so we take the next-best edge instead of replanning the
-                // identical physics-impossible move forever. No accumulation, no direction/idx ban — next round blocked is
-                // null again and this same cell can win if it's truly optimal.
-                if (blocked.HasValue && ncx == blocked.Value.x && ncy == blocked.Value.y) continue;
-                // Bellman with a descent-first tier: a candidate that LOWERS H (moves toward goal) always beats one that
-                // doesn't, even if the descending one must pay to dig. This breaks the local-valley loop where the only
-                // forward path is through a wall (dig, g>0) but a free sideways/back walk (g=0) had a smaller g+H and won
-                // forever — the bot horizontally bounced in the valley, never paying to dig the one true exit. Within the
-                // same tier (both descend, or both don't) plain g+H decides, so cheap walks still beat needless digs and
-                // we never dig for a tiny gain when a descending walk exists. NOT a backtrack ban: non-descending edges
-                // are merely lower priority, still chosen when nothing descends (so we can climb out of a pocket).
-                bool descends = nH < curH;
-                bool better = best == null
-                    || (descends && !bestDescends)
-                    || (descends == bestDescends && total < bestTotal);
-                if (better)
-                { bestDescends = descends; bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                if (total < bestTotal)
+                { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
             }
-            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f);
+            RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
             {
                 var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:");
                 foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}g{cd.Cost}{(cd.Descends ? "↓" : "")}");
@@ -1837,6 +1872,35 @@ namespace TerraBlind
             }
             return (bestI, bestD);
         }
+
+        // Unit direction along the line from idx, advancing until the cumulative MANHATTAN arc length reaches `arc`
+        // cells (not idx steps: the line walks diagonally so one idx ≈ 1-2 cells; arc length keeps the vector's reach
+        // scale-constant regardless of how densely the line is sampled). Clamps to the line end (near the goal the
+        // short/mid/long vectors all collapse to "toward goal", which is correct). Returns (0,0) if the line is too
+        // short to move at all. This is the multi-scale "big direction" the scalar field H can't express: H says how
+        // far, the vector says which way the corridor actually heads — disambiguating equal-H cells (the 1680↔1682
+        // contour-line shuffle) and rewarding a transient-H-rise step that still goes the right way (V-pit downslope).
+        static (float x, float y) LineDir(List<(int, int)> line, int idx, int arc)
+        {
+            if (line == null || idx < 0 || idx >= line.Count) return (0f, 0f);
+            int j = idx, acc = 0;
+            while (j + 1 < line.Count && acc < arc)
+            {
+                acc += System.Math.Abs(line[j + 1].Item1 - line[j].Item1) + System.Math.Abs(line[j + 1].Item2 - line[j].Item2);
+                j++;
+            }
+            float dx = line[j].Item1 - line[idx].Item1, dy = line[j].Item2 - line[idx].Item2;
+            float len = MathF.Sqrt(dx * dx + dy * dy);
+            return len < 0.5f ? (0f, 0f) : (dx / len, dy / len);
+        }
+
+        // multi-scale arc lengths (cells) + their blend weights: mid is the workhorse (corridor heading), short trims
+        // for near obstacles, long guards against mid-scale detours. Three dot-products cross-check: at a line bend
+        // short and mid disagree (opposite sign) → the blended alignment shrinks → we fall back toward pure g+H there
+        // instead of confidently shoving a wrong direction. AlignScale puts the term in H's unit (one dig-cell), so a
+        // perfectly-aligned step is worth up to ~one dig of H — enough to flip a free contour-shuffle for the real exit.
+        const int ArcShort = 6, ArcMid = 20, ArcLong = 80;
+        const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 120f;
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
