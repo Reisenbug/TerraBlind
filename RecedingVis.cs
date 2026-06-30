@@ -78,6 +78,23 @@ namespace TerraBlind
                 }
             }
 
+            // multi-scale big-direction arrows, anchored to the PLAYER every frame (not the last decision cell) so they
+            // track the body as it moves. Direction is the latest computed dS/dM/dL; origin is the live player cell.
+            // short=cyan, mid=orange (workhorse, thickest), long=magenta. If mid points at the real exit while the bot
+            // shuffles sideways, that's the bug-by-eye.
+            {
+                var lp = Main.LocalPlayer;
+                int pcx = (int)(lp.Center.X / 16f), pcy = (int)((lp.position.Y + lp.height) / 16f) - 1;
+                void Vec((float x, float y) d, int reach, Color col, int thick)
+                {
+                    if (d.x == 0f && d.y == 0f) return;
+                    Arrow(sb, pcx, pcy, d.x * reach, d.y * reach, col, thick);
+                }
+                Vec(dL, 8, new Color(220, 80, 220, 200), 4);
+                Vec(dS, 4, new Color(0, 230, 230, 230), 4);
+                Vec(dM, 6, new Color(255, 150, 0, 255), 6);
+            }
+
             if (ttl > 0)
             {
                 bool stuck = chosen == null && cands.Count > 0;
@@ -97,18 +114,6 @@ namespace TerraBlind
                     Line(sb, curCx, curCy, chosen.Value.Item1, chosen.Value.Item2, new Color(255, 230, 0, 200));
                     Label(sb, font, chosen.Value.Item1, chosen.Value.Item2 - 1, $"★{score:0.0}", Color.Yellow);
                 }
-
-                // multi-scale big-direction vectors from the current cell: short=cyan, mid=orange (the workhorse),
-                // long=magenta. Drawn at each scale's arc length so their reach is visible. If mid points at the real
-                // exit while the bot shuffles sideways, that's the bug-by-eye.
-                void Vec((float x, float y) d, int reach, Color c, int thick)
-                {
-                    if (d.x == 0f && d.y == 0f) return;
-                    Arrow(sb, curCx, curCy, d.x * reach, d.y * reach, c, thick);
-                }
-                Vec(dL, 8, new Color(220, 80, 220, 200), 4);
-                Vec(dS, 4, new Color(0, 230, 230, 230), 4);
-                Vec(dM, 6, new Color(255, 150, 0, 255), 6);   // mid = workhorse, thickest
 
                 // current cell: white box + H (red if stuck)
                 Box(sb, curCx, curCy, stuck ? new Color(255, 40, 40, 240) : new Color(255, 255, 255, 220));

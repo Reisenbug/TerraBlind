@@ -546,33 +546,32 @@ namespace TerraBlind
             // jump straight up (dir=0), drop ONE platform at the arc top, land on it — gains several tiles at once
             // when a foothold (e.g. a tree) lets the tile stick. only fall back to PILLAR (原地一格格垒) when no
             // jump-place clears VertPlaceMinRise tiles (a short hop isn't worth the jump/land overhead).
+            // VERTICAL UP — UNCONDITIONAL (no upH<curH gate). Climbing up is the only escape from a pit wall, where the
+            // cell straight up is NOT immediately lower H (you must rise then walk out), so the old gate suppressed every
+            // up-move and stranded the bot at the bottom. Like the unconditional digs: always emit, let g+H + the line-
+            // deviation penalty decide — in a pit, rising shrinks deviation so it wins; on flat ground its cost/H lose to
+            // a plain walk so it's harmlessly ignored. In-place vertical jump-place (跳放) lifts the bot a tile at a time,
+            // turning a far overhead obstacle into an adjacent one (then a plain step/dig clears it).
             if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && ctx.DistField != null)
             {
-                int upH = ctx.DistField.TryGetValue((ccx, ccy - 3), out int hu) ? hu : int.MaxValue;
-                if (upH < curH)
+                bool anyVertJumpPlace = false;
+                foreach (int hold in BuildHoldOptions())
                 {
-                    bool anyVertJumpPlace = false;
-                    foreach (int hold in BuildHoldOptions())
+                    var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
+                    if (!jp.HasValue) continue;
+                    var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                    if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
+                    anyVertJumpPlace = true;
+                    yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
+                }
+                if (!anyVertJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                {
+                    float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
                     {
-                        var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
-                        if (!jp.HasValue) continue;
-                        var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
-                        if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
-                        anyVertJumpPlace = true;
-                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
-                    }
-                    // gate pillar on no lateral way out: if walking along gdir reaches a lower-H standable cell,
-                    // a human walks out and climbs the slope rather than pillaring up in place.
-                    bool lateralOut = F_PillarNeedNoLateral && HasLateralProgress(ctx, ccx, ccy, gdir, curH, maxScan);
-                    if (!anyVertJumpPlace && !vertProgress && !lateralOut && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
-                    {
-                        float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                        for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
-                        {
-                            float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
-                            var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                            yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
-                        }
+                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                        yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
                     }
                 }
             }
@@ -1049,16 +1048,21 @@ namespace TerraBlind
                     s = PhysicsSimulator.Step(s, input, ph);
                     input.Px = s.Px; input.Py = s.Py;
                     frames.Add(input);
-                    if (!s.Grounded) return null;              // slid off the single tile and fell — invalid
                     if (past && MathF.Abs(s.Vx) < 0.1f) break; // settled on the new tile
                 }
                 if (frames.Count == 0) return null;
-                var (lcx, lcy) = StandCell(s.Px, s.Py);
-                if (lcx != placeCx) return null;               // didn't end standing on the new tile
+                // landing is GEOMETRICALLY certain: a solid platform was placed at (placeCx,placeCy), so the bot stands on
+                // it at (placeCx, placeCy-1) — no need to trust the approximate sim's Grounded/end-cell to validate it.
+                // The old "if(!s.Grounded) return null" + "if(lcx!=placeCx) return null" killed a perfectly good bridge at
+                // a pit edge whenever the imperfect PhysicsSimulator misread a frame as airborne mid-step. The sim is kept
+                // only to PRODUCE the drive frames; its imprecision no longer vetoes the edge. Drift is absorbed by the
+                // closed loop replanning from the real position next cycle.
                 var f0 = frames[0];                            // place on the first frame (before stepping over)
                 f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
                 frames[0] = f0;
-                var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
+                float standPx = placeCx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                float standPy = placeCy * 16f - PhysicsSimulator.PlayerH;   // feet on top of the new tile (row placeCy)
+                var node = new SSNode { Px = standPx, Py = standPy, Vx = 0f, Vy = 0f, Grounded = true };
                 return (node, frames);
             }
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
@@ -1822,7 +1826,21 @@ namespace TerraBlind
                     float ux = ddx / dlen, uy = ddy / dlen;
                     align = WShort * (ux * dS.x + uy * dS.y) + WMid * (ux * dM.x + uy * dM.y) + WLong * (ux * dL.x + uy * dL.y);
                 }
-                float total = g + nH + pen - AlignScale * align;
+                // deviation penalty: how far this landing sits from the line (the field-optimal route). The line is the
+                // cheapest path the field found; a landing far off it is drifting away from that route. Charged per cell
+                // of distance, so a step that strays (walk down INTO a pit the line floats over) costs more the deeper it
+                // strays, while a landing that hugs the line (bridge across at line height) is barely charged. Applied
+                // each cycle from the real position, so a transient excursion that returns to the line (the désert V-pit,
+                // already fine after the air-cost fix) nets little, but a one-way descent into a /_/ trap that can't climb
+                // back accrues unboundedly → the pit edge picks the bridge instead. Uses the line-distance search.
+                var (_, devDist) = NearestLineIdx(line, ncx, ncy, _lineIdx);
+                // SUPER-LINEAR in distance: small strays (hugging the line, skimming a shallow V-pit) cost almost
+                // nothing, but the penalty steepens fast so a landing many cells off the line (jumping into a pit wall the
+                // line floats over) is heavily out-priced — the pit edge then refuses the descent. Same term pulls a bot
+                // that DID fall in back out: deeper in the pit = larger distance = steeper penalty, so climbing toward the
+                // line (shrinking distance) beats burrowing deeper. dist^1.5 grows past linear without dist²'s blow-up.
+                float dev = DeviCost * devDist * MathF.Sqrt(devDist);
+                float total = g + nH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
@@ -1901,6 +1919,10 @@ namespace TerraBlind
         // perfectly-aligned step is worth up to ~one dig of H — enough to flip a free contour-shuffle for the real exit.
         const int ArcShort = 6, ArcMid = 20, ArcLong = 80;
         const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 120f;
+        // per-cell cost of a landing's distance from the line (the field-optimal route). Charges drift away from the
+        // line, so a one-way descent into a trap the line floats over loses to a line-hugging bridge. Tuned so a few
+        // cells off costs little (transient excursions ok) but a deep stray (10+ cells into a pit) clearly out-prices it.
+        const float DeviCost = 3f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
