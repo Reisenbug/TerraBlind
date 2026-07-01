@@ -472,10 +472,15 @@ namespace TerraBlind
             bool vertProgress = false; // a plain jump that lands the player on a HIGHER cell (climbs a natural ledge)
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
             var (_, dcy) = StandCell(cur.Px, cur.Py);
-            foreach (int dir in new[] { dirToGoal, -dirToGoal })
+            // dir 0 = IN-PLACE vertical jump (no horizontal input): hop straight up onto a ledge directly overhead — the
+            // "align then jump up" escape a human uses at a step it can't walk up. Only with hold>0 (hold==0 dir==0 is
+            // standing still, a no-op). Alignment is not handled yet (step a): this works where the body already lines up
+            // under the ledge; where it doesn't the sim just fails and the edge is skipped (harmless).
+            foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
             {
                 foreach (int hold in holdOptions)
                 {
+                    if (dir == 0 && hold == 0) continue;   // standing still, not a move
                     var seg = Prof(hold == 0 ? "walk" : "jump", () => SimulateSegment(cur, dir, hold, ph));
                     if (!seg.HasValue) continue;
                     // progress uses the RAW per-cell field, not the block-coarsened Heuristic: inside an 8x8 block
@@ -1704,7 +1709,7 @@ namespace TerraBlind
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
         static int _lineIdx;       // player's tracked projection onto the line (viz only now)
-        public static void ResetLineProgress() { _lineIdx = 0; _miss.Clear(); }
+        public static void ResetLineProgress() { _lineIdx = 0; _miss.Clear(); _recent.Clear(); }
 
         // ATTENTION mismatch memory — a CONTINUOUS per-edge weight, NOT a hard ban. An edge keyed by (fromCell→toCell):
         // when the bot's real landing falls short of an edge's optimistic simulated landing (a jump the physics couldn't
@@ -1730,7 +1735,26 @@ namespace TerraBlind
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
             if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
             else _miss[key] = _miss.GetValueOrDefault(key) + miss;
+
+            // REVISIT penalty — the SAME continuous mechanism, extended to catch a shuffle that HITS every step (miss=0)
+            // yet goes nowhere: a contour-line loop where each move lands exactly on its target but the target is a cell
+            // we were just on. Detect it not with a stuck counter but by memory: if the real landing is one we've stood on
+            // in the last few steps, the edge (from→landing) that led here accrues a penalty. Cycling the same 2-3 cells
+            // keeps re-penalizing those edges until one of them out-costs the escape edge (e.g. the lower-H jump the align
+            // term had been vetoing) and the bot leaves. Decays like _miss, so a legitimate re-tread later is not banned.
+            var landed = (realCx, realCy);
+            int recency = _recent.IndexOf(landed);
+            if (recency >= 0)
+            {
+                var ekey = (fromCx, fromCy, realCx, realCy);
+                _miss[ekey] = _miss.GetValueOrDefault(ekey) + (RevisitPenalty * (_recent.Count - recency));
+            }
+            _recent.Add(landed);
+            if (_recent.Count > RecentLen) _recent.RemoveAt(0);
         }
+        static readonly System.Collections.Generic.List<(int, int)> _recent = new();
+        const int RecentLen = 6;              // how many past landings to remember for revisit detection
+        const float RevisitPenalty = 6f;      // per-step penalty added to an edge that lands on a recently-visited cell
 
         static bool IsLavaCell(int x, int y)
         {
@@ -1800,6 +1824,15 @@ namespace TerraBlind
                 // away. clamp negative ΔH (a landing with HIGHER H) to 0 cost — the deviation term handles the penalty.
                 float g = MathF.Max(0f, curH - nH);
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
+                // g=ΔH is right for choosing among reachable landings, but it dropped one true cost H can't see: altering
+                // terrain (dig/place/pillar) is physically MORE expensive than just moving to the same spot (it takes
+                // time, destroys blocks). H only encodes distance-to-goal, so a dig and a walk that reach equal-H cells
+                // tie — and the bot would dig where it could have walked (the "block-edge crawl": dig straight down a
+                // ledge instead of walking off it). Add a SMALL surcharge per altered cell — a TIE-BREAKER (dwarfed by
+                // any real H drop, so a dig that genuinely descends far is still taken), just enough that when a walk
+                // reaches an equal-or-near landing, the walk wins. NOT the old hand-authored 80/120 that fought H.
+                int altered = (digTiles?.Count ?? 0) + (pillar ? System.Math.Abs(curCy - ncy) : 0) + (isPlace ? 1 : 0);
+                g += altered * TerrainAlterSurcharge;
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
                 // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
@@ -1910,14 +1943,25 @@ namespace TerraBlind
         // multi-scale arc lengths (cells) + their blend weights: mid is the workhorse (corridor heading), short trims
         // for near obstacles, long guards against mid-scale detours. Three dot-products cross-check: at a line bend
         // short and mid disagree (opposite sign) → the blended alignment shrinks → we fall back toward pure g+H there
-        // instead of confidently shoving a wrong direction. AlignScale puts the term in H's unit (one dig-cell), so a
-        // perfectly-aligned step is worth up to ~one dig of H — enough to flip a free contour-shuffle for the real exit.
+        // instead of confidently shoving a wrong direction. AlignScale is deliberately SMALL: alignment is a TIE-BREAKER
+        // for near-equal-H candidates (a contour shuffle where H differs by ~1-3), NOT a force that can override a clear
+        // H descent. At 120 it could out-vote a landing whose H was 42 lower — vetoing the real downhill exit and pinning
+        // the bot in an equal-H shuffle (the near-goal 3-cell loop). Sized so a fully-aligned step is worth only ~a dozen
+        // H — enough to settle ties, never enough to beat an obviously lower-H action.
         const int ArcShort = 6, ArcMid = 20, ArcLong = 80;
-        const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 120f;
+        const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 18f;
         // per-cell cost of a landing's distance from the line (the field-optimal route). Charges drift away from the
         // line, so a one-way descent into a trap the line floats over loses to a line-hugging bridge. Tuned so a few
         // cells off costs little (transient excursions ok) but a deep stray (10+ cells into a pit) clearly out-prices it.
-        const float DeviCost = 3f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty
+        const float DeviCost = 0.5f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty — TIE-BREAKER size (must lose to a real H descent, else it vetoes a big-drop walk in favor of a one-cell dig)
+        // per-altered-cell surcharge for dig/place/pillar. KEY INSIGHT: Bellman (total=ΔV+V(s')≡V(s)) only sees the
+        // LANDING's value, not HOW you got there — so "walk over and fall down" and "dig straight down" to the same cell
+        // tie exactly. But altering terrain is really far costlier than moving (time, destroyed blocks); V can't encode
+        // that. This surcharge IS that cost-of-how. Sized so digging one cell is worth going ~a dozen cells out of the
+        // way to avoid — big enough that walk+fall beats a dig to the same/near spot (kills the 60% avoidable digs), yet
+        // still lost to a dig that's the ONLY descent (no walk/jump candidate, or all far higher H). Not in V (that would
+        // re-introduce the two-cost mismatch) — purely a per-action tiebreak on "how".
+        const float TerrainAlterSurcharge = 40f;
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
