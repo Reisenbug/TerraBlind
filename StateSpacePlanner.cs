@@ -1731,12 +1731,6 @@ namespace TerraBlind
             if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
             else _miss[key] = _miss.GetValueOrDefault(key) + miss;
         }
-        // StepCost units — MUST match MazeWand's StepCost weights so g(step) and H are the same unit (Bellman sum valid).
-        const int SC_MoveSide = 3, SC_DigSide = 120, SC_MoveUp = 9;
-        const int SC_DigDown = 80, SC_DigUp = 160;   // match MazeWand's directional dig weights so g and H share a unit
-        // place (bridge/jump-place) alters terrain like digging — the field H doesn't model it, so price it here at a
-        // dig-cell's level so the bot only bridges when walking/jumping can't reach a much lower H (never for a few cells).
-        const int SC_PlaceCost = 120;
 
         static bool IsLavaCell(int x, int y)
         {
@@ -1795,16 +1789,17 @@ namespace TerraBlind
                 // travel distance also virtually-inflated far jumps (large manhattan) so cheap飞-in-place小跳 won → jitter.
                 // Fix both: walk/jump g≈0 (total≈H, pure field descent, far jumps not penalized), while dig/pillar/place
                 // carry their real StepCost-unit price so they're only chosen when H drops enough to be worth it.
-                bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);
-                int pil = pillar ? System.Math.Abs(curCy - ncy) : 0;
-                // dig cost MUST use the SAME directional weights MazeWand baked into H (DigDown 80 / DigSide 120 / DigUp
-                // 160), per tile by its row vs the player's — a flat SC_DigSide over-priced downward digs and under-priced
-                // upward ones, so g and H were different units and g+H was meaningless (the bug behind the loops).
-                float digCost = 0f;
-                if (digTiles != null)
-                    foreach (var (tx, ty) in digTiles)
-                        digCost += ty > curCy ? SC_DigDown : ty < curCy ? SC_DigUp : SC_DigSide;
-                float g = digCost + pil * SC_MoveUp + (isPlace ? SC_PlaceCost : 0);
+                // GOLDEN RULE: g is the SAME cost that defined H, not a second hand-authored one. H (Dijkstra) already is
+                // the per-cell cost accumulated to goal, so the ideal cost of the multi-cell action s→s' is exactly
+                // H(s)−H(s'). Using that guarantees g and H share one cost function at one granularity (Bellman is then
+                // exact). Hand-coded per-action costs (place=120, pillar×9, dig weights) were a SECOND, mismatched cost
+                // at a different granularity — the root of the pit loops (a bridge priced 120 while H valued the same
+                // float at ~26, so it always lost to a free step into the pit). With g=ΔH, total=g+H(s')≡H(s) for every
+                // candidate, so H alone can't rank them — the alignment/deviation terms below break the tie, which is
+                // legitimate: they ARE the "how far this action strays from the field-optimal (line)" part that H folded
+                // away. clamp negative ΔH (a landing with HIGHER H) to 0 cost — the deviation term handles the penalty.
+                float g = MathF.Max(0f, curH - nH);
+                bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
                 // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
