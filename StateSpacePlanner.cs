@@ -700,6 +700,21 @@ namespace TerraBlind
                 }
             }
             if (obsX < 0 || obsX >= Main.maxTilesX) yield break;
+            // CHASM override: the walk probe defines the obstacle by where the walk STOPPED — but a walk that falls
+            // into a deep chasm keeps "advancing" along its bottom and reports the far wall as the obstacle (22 cells
+            // away, out of jump-place reach → no bridge candidate at all). At (3277,1024) that made every candidate a
+            // 30-cell tumble to the valley floor while the field's route floated east over the gap: climb, tumble,
+            // re-climb. If, before the reported obstacle, some column has NO landing within ChasmProbeDepth rows below
+            // the current stance, that ledge IS the obstacle and it is a GAP — the bridge machinery gets its chance
+            // (candidates only; cost still decides bridge vs descend).
+            for (int c = ccx + gdir; c != obsX && c >= 0 && c < Main.maxTilesX; c += gdir)
+            {
+                if (DigSolid(c, ccy) || DigSolid(c, ccy - 1) || DigSolid(c, ccy - 2)) break;   // wall first → wall branch
+                bool landing = false;
+                for (int ry = ccy + 1; ry <= ccy + ChasmProbeDepth; ry++)
+                    if (PathPlanner.IsFloorPublic(c, ry)) { landing = true; break; }
+                if (!landing) { obsX = c; break; }
+            }
             // classify: a cell with a collision body (full / half-brick / slope, via DigSolid) is a WALL; otherwise
             // (no floor under it) it's a GAP. matches what actually stopped the walk.
             bool isWall = DigSolid(obsX, ccy) || DigSolid(obsX, ccy - 1) || DigSolid(obsX, ccy - 2);
@@ -757,6 +772,7 @@ namespace TerraBlind
             }
         }
 
+        const int ChasmProbeDepth = 6;   // a column with no landing within this many rows below the stance is a chasm ledge (≈ max jump-back-out height)
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
         const int DigWorthMargin = 4; // dig-down only when the landing's H is at least this much lower (clearly worth it)
 
@@ -1781,6 +1797,7 @@ namespace TerraBlind
         static readonly System.Collections.Generic.Dictionary<(int, int, int, int), float> _miss = new();
         const float MissDecayTick = 0.93f;   // per-cycle decay → half-life ~10 cycles (a typical pit fall+climb loop)
         const float MissForgiveHit = 0.3f;   // an edge that DID reach its target this time is largely forgiven
+        const int NoMoveMissFloor = 10;      // a zero-move failure charges at least this (≫ tie-break scale, ≪ shock)
         public static void DecayMiss()
         {
             if (_miss.Count == 0) return;
@@ -1792,6 +1809,11 @@ namespace TerraBlind
         {
             var key = (fromCx, fromCy, planCx, planCy);
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
+            // ZERO-MOVE floor: landing back on the start cell is the most total breach of an edge's promise — the sim
+            // said "this advances" and reality said "you didn't move at all" (half-brick/slope collision optimism).
+            // Manhattan alone prices it at 1-2, weaker than "overshot by two cells", so a slope edge with a few points
+            // of advantage got retried for cycles. Floor it so one failed try out-prices any tie-break-scale advantage.
+            if (miss > 0 && realCx == fromCx && realCy == fromCy) miss = System.Math.Max(miss, NoMoveMissFloor);
             if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
             else _miss[key] = _miss.GetValueOrDefault(key) + miss;
 
@@ -2095,8 +2117,28 @@ namespace TerraBlind
                 steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig });
             }
             else if (frames != null)
-                steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = frames });
+                steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames) });
             return steps;
+        }
+
+        // The frame plan IS the position prediction for the next stretch of time — and a plan can predict garbage:
+        // BridgePlace's "walk to tile center" was unreachable past a wall, so its loop pressed dir into the wall to
+        // the 1200-frame fuse and the executor faithfully replayed ~9s of standing still (the y≈1010 freeze). Any
+        // open-loop plan whose predicted position stops changing is dead weight BY DEFINITION — cutting the frozen
+        // tail cannot alter the outcome (nothing moves in it), it only returns control to the closed loop sooner.
+        // Zero false-kill risk, generator-agnostic. Short frozen tails (brake settle) are left alone.
+        const int FreezeTailMin = 20;   // only cut when the frozen run is clearly dead weight (>⅓s)
+        const int FreezeTailKeep = 3;   // frames of the frozen run kept so the settle still registers
+        static List<PhysicsSimulator.ControlInput> TrimFrozenTail(List<PhysicsSimulator.ControlInput> frames)
+        {
+            if (frames == null || frames.Count < FreezeTailMin) return frames;
+            float ex = frames[frames.Count - 1].Px, ey = frames[frames.Count - 1].Py;
+            int i = frames.Count - 1;
+            while (i > 0 && MathF.Abs(frames[i - 1].Px - ex) < 0.01f && MathF.Abs(frames[i - 1].Py - ey) < 0.01f) i--;
+            int keep = System.Math.Min(frames.Count, i + FreezeTailKeep);
+            if (frames.Count - keep < FreezeTailMin) return frames;
+            DiagLog.Write($"[ss-trim] frozen tail cut {frames.Count}→{keep} frames");
+            return frames.GetRange(0, keep);
         }
 
         // chosen each time both executors are idle. Picks the candidate whose landing cell has the lowest maze cost.
