@@ -1815,6 +1815,20 @@ namespace TerraBlind
         const int RecentLen = 6;              // how many past landings to remember for revisit detection
         const float RevisitPenalty = 6f;      // per-step penalty added to an edge that lands on a recently-visited cell
 
+        // LOOP SHOCK — the universal escape (see PROJECT_STATE.md): when the detector sees best-H stall, every edge
+        // the loop traversed gets one large decaying penalty. Loops exist because the cost structure lies somewhere;
+        // making the lying edges expensive re-routes Bellman onto the next-best alternative without banning anything
+        // (the penalty is finite and DecayMiss forgets it, so a legitimate re-tread later is not forbidden).
+        internal static void PenalizeEdges(System.Collections.Generic.IEnumerable<(int fx, int fy, int tx, int ty)> edges, float amount)
+        {
+            foreach (var e in edges)
+            {
+                var key = (e.fx, e.fy, e.tx, e.ty);
+                _miss[key] = _miss.GetValueOrDefault(key) + amount;
+                DiagLog.Write($"[recede-shock] edge ({e.fx},{e.fy})→({e.tx},{e.ty}) +{amount}");
+            }
+        }
+
         static bool IsLavaCell(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;

@@ -54,9 +54,13 @@ SkillExecutor : 帧重放执行,自带实时检查
 
 ## 四、之后怎么走
 
-### Phase A — 真相与可观测(立刻,便宜)
-- [ ] 决策日志加四邻居 H + tile 状态行 → 用它定罪 (981,435),修掉该实例。
-- [ ] 生成器拒绝原因可见化(至少 digdown/digup/drop 的 null 原因计数)。
+### Phase A — 真相与可观测(已大部完成)
+- [x] 决策日志四邻居行 `[recede-nbrs]` + cands total → 已定罪并修掉 (981,435)
+      (真凶:StandCell 贴合快照拿现在的世界检查未来世界的 dig 落点,两处:选边标签 + EdgeToSteps 方向)。
+- [x] **循环检测器+电击**(用户拍板的普适机制):循环普适特征=best-H 停滞 20 replan;
+      普适跳出=对循环环上所有边注入 200 可衰减 miss 罚(电击),Bellman 改道;
+      电击3次仍无新低H → 停机+dump(真模型缺口,须改代码)。任何新机制引入的新循环类都先被它兜住。
+- [ ] 生成器拒绝原因可见化(digdown/digup/drop 的 null 原因计数)。
 
 ### Phase B — 关闭一致性缺口(真正的修复)
 - **场只定价身体做得到的事**:MazeWand StepCost 接入 DigTable(可挖性/镐力)、

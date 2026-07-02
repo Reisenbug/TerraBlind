@@ -17,14 +17,18 @@ namespace TerraBlind
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
 
-        // LOOP DETECTOR — a reporter, not a control mechanism (no nudges, no bans; those stay forbidden). H is the
-        // one progress signal every loop shape must stall: if the lowest H ever reached hasn't improved for this many
-        // replans, we are cycling — even when every step HITs its plan (the loops attention is structurally blind to).
-        // On detection: dump the recent transition ring + stop + shout, so the failure is coordinated immediately with
-        // full evidence instead of discovered later from a thousand-file runs directory.
+        // LOOP DETECTOR + SHOCK ESCAPE. H is the one progress signal every loop shape must stall: if the lowest H
+        // ever reached hasn't improved for LoopStallReplans, we are cycling — even when every step HITs its plan
+        // (the loops attention is structurally blind to). Response is two-tier:
+        //   soft — shock: one large decaying penalty on every edge the ring traversed; Bellman re-routes onto the
+        //          next-best alternative. Finite + decaying = not a ban, so no rule is violated.
+        //   hard — after MaxShocks shocks with still no new best-H, this is a real model gap (a transition the field
+        //          prices but no action realizes): stop, dump the trail, shout. Code has to change; hiding it doesn't.
         const int LoopStallReplans = 20;                 // ~4 laps of the widest loop seen (5 replans/lap)
-        static int _bestH; static int _replansSinceBest;
-        static readonly System.Collections.Generic.List<string> _ring = new();
+        const float ShockPenalty = 200f;                 // big enough to flip any H-margin a loop can trap in (seen: 3~50)
+        const int MaxShocks = 3;
+        static int _bestH; static int _replansSinceBest; static int _shocks;
+        static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
         const int RingLen = 24;
 
         public static void Toggle()
@@ -41,7 +45,7 @@ namespace TerraBlind
             StateSpacePlanner.StopNav();
             goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; _haveLast = false; _lastTarget = null; _lastFrom = null;
-            _bestH = int.MaxValue; _replansSinceBest = 0; _ring.Clear();
+            _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
             StateSpacePlanner.ResetLineProgress();
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
             // Tick waits on _fieldReady; the player just stands a moment until the compass is built.
@@ -102,16 +106,30 @@ namespace TerraBlind
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
 
-            if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; }
+            if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; }
             else _replansSinceBest++;
-            _ring.Add($"({cell.Item1},{cell.Item2})H{res.CurH}→({res.GoalWx},{res.GoalWy})");
+            _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
             if (_ring.Count > RingLen) _ring.RemoveAt(0);
             if (_replansSinceBest >= LoopStallReplans)
             {
-                DiagLog.Write($"[recede] LOOP DETECTED at {cell}: bestH={_bestH} unimproved for {_replansSinceBest} replans. Trail: {string.Join(" ", _ring)}");
-                Stop();
-                Main.NewText($"[TerraBlind] LOOP at ({cell.Item1},{cell.Item2}) — nav stopped, see jump_trace.log");
-                return;
+                string trail = string.Join(" ", _ring.ConvertAll(r => $"({r.fx},{r.fy})H{r.h}→({r.tx},{r.ty})"));
+                if (_shocks < MaxShocks)
+                {
+                    _shocks++;
+                    DiagLog.Write($"[recede] LOOP DETECTED at {cell}: bestH={_bestH} unimproved for {_replansSinceBest} replans → SHOCK {_shocks}/{MaxShocks}. Trail: {trail}");
+                    Main.NewText($"[TerraBlind] loop at ({cell.Item1},{cell.Item2}) — shock {_shocks}/{MaxShocks}, re-routing");
+                    var edges = new System.Collections.Generic.HashSet<(int, int, int, int)>();
+                    foreach (var r in _ring) edges.Add((r.fx, r.fy, r.tx, r.ty));
+                    StateSpacePlanner.PenalizeEdges(edges, ShockPenalty);
+                    _replansSinceBest = 0;   // fresh window to let the re-route prove itself
+                }
+                else
+                {
+                    DiagLog.Write($"[recede] LOOP UNRESOLVED at {cell}: {MaxShocks} shocks, bestH={_bestH} still stuck. Trail: {trail}");
+                    Stop();
+                    Main.NewText($"[TerraBlind] LOOP at ({cell.Item1},{cell.Item2}) — {MaxShocks} shocks failed, nav stopped, see jump_trace.log");
+                    return;
+                }
             }
 
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
