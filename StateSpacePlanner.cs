@@ -46,8 +46,61 @@ namespace TerraBlind
         // The standing cell is the AIR cell the player's feet occupy (one above the support), matching the
         // distance field's CoarseStand convention. -1 pulls a foot resting exactly on a block top (feetY at the
         // block's top edge) up into that air cell instead of the block row itself.
-        static (int cx, int cy) StandCell(float px, float py)
+        // HONEST LABEL: the center-point column is only the label if the 3-row body actually FITS there. The
+        // 20px hitbox straddles two columns; a landing 0.7px inside a column whose head rows are solid used to be
+        // labeled as standing IN that column — a cell only reachable by digging, whose H the field prices as a dig.
+        // The free jump then "stole" that H, next tick the center slid back over the boundary and the truth
+        // reasserted → the (800,937)↔(801,937) boundary oscillation. If the center column can't hold the body,
+        // the label snaps to the other straddled column; if neither fits (mid-dig, clipped) keep the center
+        // (fallback, never unlabeled).
+        // raw center rounding, no body-fit snap — the ONLY correct label for planned terrain-altering landings, whose
+        // tiles aren't modified yet (StandCell's fit check would judge them against the pre-dig/pre-place world).
+        internal static (int cx, int cy) RawCell(float px, float py)
             => ((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f));
+
+        internal static (int cx, int cy) StandCell(float px, float py)
+        {
+            int cy = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
+            int cx = (int)((px + PhysicsSimulator.PlayerW / 2f) / 16f);
+            if (BodyFits(cx, cy)) return (cx, cy);
+            // snap only to a column that both fits the body AND has support under the feet — a planned dig landing
+            // (tiles still solid at plan time, so its center column "doesn't fit") must NOT get relabeled onto an
+            // open neighbor column that has no floor (cliff edge); it keeps its center label via the fallback.
+            int leftCol = (int)(px / 16f);
+            int rightCol = (int)((px + PhysicsSimulator.PlayerW - 1f) / 16f);
+            int other = cx == leftCol ? rightCol : leftCol;
+            if (other != cx && BodyFits(other, cy) && HasSupport(other, cy + 1)) return (other, cy);
+            return (cx, cy);
+        }
+
+        static bool BodyFits(int c, int cy) => !DigSolid(c, cy) && !DigSolid(c, cy - 1) && !DigSolid(c, cy - 2);
+
+        // advance the node with idle input to the state the NEXT replan will actually read: RecedingNav replans on the
+        // first tick after the frames end with vy==0, so that's ≥1 idle step, more if the edge ends airborne. Labeling
+        // the last planned frame instead lied whenever residual vx slid the player over a cell boundary in that gap —
+        // the plan "reached" a cell no post-action read ever sees (the (800,937) phantom 3-point descent, re-picked
+        // forever ↔ oscillation). Capped: if still airborne after the cap, use the last state (fallback — the closed
+        // loop replans from wherever it really lands).
+        const int SettleMaxFrames = 30;
+        static SSNode SettleNode(SSNode n, PhysicsSimulator.Params ph)
+        {
+            var s = new PhysicsSimulator.State { Px = n.Px, Py = n.Py, Vx = n.Vx, Vy = n.Vy, Grounded = n.Grounded };
+            var idle = new PhysicsSimulator.ControlInput();
+            for (int f = 0; f < SettleMaxFrames; f++)
+            {
+                s = PhysicsSimulator.Step(s, idle, ph);
+                if (s.Grounded) break;
+            }
+            return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
+        }
+
+        // support includes platforms (solidTop), unlike DigSolid
+        static bool HasSupport(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.HasTile && Main.tileSolid[t.TileType];
+        }
 
         static CellKey Cell(SSNode s)
         {
@@ -114,6 +167,7 @@ namespace TerraBlind
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
             public float CostFrames;       // this action's cost in frames (walk/jump frame count, or pillar/dig frame-equivalent) — caller uses it as the time denominator for progress-efficiency stuck detection
+            public int CurH;               // field H at the cell this plan started from (loop-detector progress signal)
         }
 
         // one path edge to execute: a frame-replay move (Frames!=null) or the pillar macro (Pillar=true → drive
@@ -762,14 +816,19 @@ namespace TerraBlind
         // the breakout cell has lower maze H.
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH)
         {
-            float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
-            int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
+            // MUST match SkillExecutor's live head-check columns exactly (leftCol/rightCol from p.position.X), else
+            // DigUp can clear cells the pillar executor never looks at while leaving unchecked the ones it does —
+            // pillar then aborts mid-climb on a "blocked" ceiling this plan believed was already mined (the
+            // (3242,299)↔(3242,300) stuck loop: DigUp mined (ccx,c2) by cell-center lean, pillar checked
+            // (leftCol,rightCol) by live pixel position — different columns).
+            int leftCol = (int)(cur.Px / 16f);
+            int rightCol = (int)((cur.Px + PhysicsSimulator.PlayerW - 1) / 16f);
             var tiles = new List<(int, int)>();
             float cost = 0f;
             for (int k = 1; k * 2 <= DigMaxScan; k++)
             {
                 foreach (int y in new[] { ccy - 1 - 2 * k, ccy - 2 - 2 * k })
-                    foreach (int c in new[] { ccx, c2 })
+                    foreach (int c in new[] { leftCol, rightCol })
                         if (DigSolid(c, y))
                         {
                             int fc = DigTable.CostFrames(c, y);
@@ -1780,6 +1839,20 @@ namespace TerraBlind
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
+            // 4-neighbour truth line: where does the FIELD want to descend from here, and what is physically there?
+            // Dijkstra guarantees some neighbour has lower H; when no candidate reaches it, this line convicts the
+            // generator that silently refused (unmineable? platform? H-missing?) without another archaeology session.
+            {
+                var nb = new System.Text.StringBuilder($"[recede-nbrs] at=({curCx},{curCy})H={curH}");
+                foreach (var (tag, nx, ny) in new[] { ("E", curCx + 1, curCy), ("W", curCx - 1, curCy), ("U", curCx, curCy - 1), ("D", curCx, curCy + 1) })
+                {
+                    string hs = field.TryGetValue((nx, ny), out int nh) ? nh.ToString() : "—";
+                    string ts = DigSolid(nx, ny) ? $"sol{DigTable.CostFrames(nx, ny)}f"
+                        : PathPlanner.PlatformPublic(nx, ny) ? "plat" : "air";
+                    nb.Append($" {tag}:H{hs}/{ts}");
+                }
+                DiagLog.Write(nb.ToString());
+            }
 
             // PURE BELLMAN. The field H is the value function V(s) = min cost-to-goal (Dijkstra built it with StepCost),
             // so the optimal action is the one minimizing  g(this step) + H(landing)  — exactly V(s)=cost(s→s')+V(s').
@@ -1800,9 +1873,24 @@ namespace TerraBlind
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
+            var _candLog = new System.Text.StringBuilder();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
-                var (ncx, ncy) = StandCell(next.Px, next.Py);
+                // label the landing by its SETTLED state, not the last planned frame. A jump can end 0.7px inside a
+                // cell with residual vx that slides the player back over the boundary before the next replan reads the
+                // position — the plan "reached" a cell no rest state occupies (the (800,937) phantom: a 3-point H drop
+                // selected forever, each time settling back into the start cell → oscillation). Settling costs a few
+                // sim frames; dig/pillar/place nodes are constructed at rest (vx=0, grounded) so they no-op. Terrain-
+                // altering landings must NOT free-fall settle here (their tiles aren't dug/placed yet, the sim would
+                // drop them through the still-open/solid world) — they're rest states by construction anyway.
+                // terrain-altering edges (dig/pillar/place) describe a FUTURE world — their tiles aren't dug/placed
+                // yet, so both the settle sim AND StandCell's body-fit snap would judge them against the wrong world
+                // (a side-dig landing failed the fit on its still-solid tiles and got snapped back onto the CURRENT
+                // cell → self-loop filter silently deleted the only descending edge → the (981,435) loop). Their nodes
+                // are constructed dead-center on the intended cell, so the raw center rounding is exact — use it.
+                bool alters = digTiles != null || pillar || (frames != null && frames.Exists(f => f.Place));
+                var landed = alters ? next : SettleNode(next, ph);
+                var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
@@ -1825,14 +1913,16 @@ namespace TerraBlind
                 float g = MathF.Max(0f, curH - nH);
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
                 // g=ΔH is right for choosing among reachable landings, but it dropped one true cost H can't see: altering
-                // terrain (dig/place/pillar) is physically MORE expensive than just moving to the same spot (it takes
-                // time, destroys blocks). H only encodes distance-to-goal, so a dig and a walk that reach equal-H cells
-                // tie — and the bot would dig where it could have walked (the "block-edge crawl": dig straight down a
-                // ledge instead of walking off it). Add a SMALL surcharge per altered cell — a TIE-BREAKER (dwarfed by
-                // any real H drop, so a dig that genuinely descends far is still taken), just enough that when a walk
-                // reaches an equal-or-near landing, the walk wins. NOT the old hand-authored 80/120 that fought H.
-                int altered = (digTiles?.Count ?? 0) + (pillar ? System.Math.Abs(curCy - ncy) : 0) + (isPlace ? 1 : 0);
-                g += altered * TerrainAlterSurcharge;
+                // terrain (dig/place/pillar) takes real TIME standing still that moving to the same spot doesn't. So the
+                // surcharge is that time itself: the edge's cost field already carries the actual frames (DigTable mining
+                // frames by hardness+pick for digs, 43/2-cell cycle for pillar, jump+place frames for place), converted
+                // to H units (MoveSide=3 per ~5.3-frame cell run ≈ 0.5 H/frame). Self-scaling where a constant failed
+                // both ways (40 killed the only escape at (3242,299)/(801,937); 3 let every near-tie dig through): dirt
+                // digs stay cheap, hard rock is routed around when a walk is close. CAPPED so a necessary dig can never
+                // be starved: the cap keeps the surcharge below typical real-descent H drops, so when digging is the
+                // only descending edge it still beats any H-rising shuffle.
+                int altered = (digTiles?.Count ?? 0) + (pillar ? 1 : 0) + (isPlace ? 1 : 0);
+                if (altered > 0) g += MathF.Min(AlterSurchargeCap, cost * DigFramesToH);
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
                 // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
@@ -1873,15 +1963,12 @@ namespace TerraBlind
                     : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
+                _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
             }
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
-            {
-                var sbc = new System.Text.StringBuilder($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:");
-                foreach (var cd in cands) sbc.Append($" {cd.Kind}→({cd.Cx},{cd.Cy})H{cd.H}g{cd.Cost}{(cd.Descends ? "↓" : "")}");
-                DiagLog.Write(sbc.ToString());
-            }
+            DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
 
             if (best == null)   // null ONLY when Expand yielded no edge on the field at all
             {
@@ -1893,7 +1980,7 @@ namespace TerraBlind
             }
             var pickCell = bestCell;
             var b = best.Value;
-            var res = new SSResult { Found = true, GoalWx = pickCell.Item1, GoalWy = pickCell.Item2, StartPx = cur.Px, StartPy = cur.Py, CostFrames = b.cost };
+            var res = new SSResult { Found = true, GoalWx = pickCell.Item1, GoalWy = pickCell.Item2, StartPx = cur.Px, StartPy = cur.Py, CostFrames = b.cost, CurH = curH };
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
@@ -1961,13 +2048,21 @@ namespace TerraBlind
         // way to avoid — big enough that walk+fall beats a dig to the same/near spot (kills the 60% avoidable digs), yet
         // still lost to a dig that's the ONLY descent (no walk/jump candidate, or all far higher H). Not in V (that would
         // re-introduce the two-cost mismatch) — purely a per-action tiebreak on "how".
-        const float TerrainAlterSurcharge = 40f;
+        // terrain-alter surcharge = the action's actual frames × this (H units per frame: MoveSide=3 per ~5.3-frame
+        // cell at run speed). Capped: with g=ΔH every descending edge totals exactly H(s), so an uncapped surcharge
+        // on slow digs would let an H-RISING shuffle beat the only descending edge (the constant-40 stucks at
+        // (3242,299) and (801,937)); the cap keeps a necessary dig affordable no matter how hard the rock.
+        const float DigFramesToH = 0.5f;
+        const float AlterSurchargeCap = 15f;
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
         static List<ExecStep> EdgeToSteps(SSNode from, SSNode to, List<PhysicsSimulator.ControlInput> frames, bool pillar, List<(int,int)> dig)
         {
-            var (tcx, tcy) = StandCell(to.Px, to.Py);
+            // dig/pillar/place `to` nodes describe the POST-alter world: StandCell's body-fit snap would judge them
+            // against the still-unmodified tiles and relabel them back onto the current cell — which flipped the mine
+            // direction (dig east → "digLeft to self", the second (981,435) loop). RawCell for those; `from` is real.
+            var (tcx, tcy) = (dig != null || pillar) ? RawCell(to.Px, to.Py) : StandCell(to.Px, to.Py);
             var (fcx, fcy) = StandCell(from.Px, from.Py);
             var steps = new List<ExecStep>();
             if (pillar && dig != null)
