@@ -15,6 +15,24 @@ namespace TerraBlind
         static Params _dry, _wet;
         static bool _wetReady;
 
+        // BAKED speed fields, captured at PostUpdate. Vanilla resets maxRunSpeed=3 every frame (ResetEffects), then
+        // multiplies moveSpeed in LATE in the update (Player.cs 1.4.5.4 L25491: runAcceleration *= moveSpeed;
+        // maxRunSpeed *= moveSpeed). Our planning hook (SetControls) sits between the reset and the bake, so reading
+        // p.maxRunSpeed there returns bare 3.0 even under Happy! (buff 146: moveSpeed += 0.1 then *= 1.1 → +21%,
+        // exactly the measured 3.64/3.0) — every plan near a sunflower undershot. PostUpdate reads the fully-baked
+        // values of the SAME frame; planning prefers this snapshot when fresh.
+        static float _bakedMaxRun, _bakedAccRunSpeed, _bakedRunAccel;
+        static uint _bakedTick;
+        public static void CaptureBaked(Player p)
+        {
+            _bakedMaxRun = p.maxRunSpeed; _bakedAccRunSpeed = p.accRunSpeed; _bakedRunAccel = p.runAcceleration;
+            _bakedTick = Main.GameUpdateCount;
+        }
+        static bool BakedFresh => _bakedMaxRun > 0f && Main.GameUpdateCount - _bakedTick <= 2;
+        static float BakedMaxRun(Player p) => BakedFresh ? _bakedMaxRun : p.maxRunSpeed;
+        static float BakedAccRunSpeed(Player p) => BakedFresh ? _bakedAccRunSpeed : p.accRunSpeed;
+        static float BakedRunAccel(Player p) => BakedFresh ? _bakedRunAccel : p.runAcceleration;
+
         public struct Params
         {
             public float AccRun, MaxRun, AccRunSpeed, RunSlowdown, Gravity, MaxFall, JumpSpeed;
@@ -45,8 +63,8 @@ namespace TerraBlind
                 return new Params
                 {
                     Gravity = 0.2f, JumpSpeed = 6.01f, MaxFall = 5f,
-                    MaxRun = p.maxRunSpeed, AccRunSpeed = p.accRunSpeed,
-                    AccRun = p.runAcceleration, RunSlowdown = 0.2f, JumpHeight = 30,
+                    MaxRun = BakedMaxRun(p), AccRunSpeed = BakedAccRunSpeed(p),
+                    AccRun = BakedRunAccel(p), RunSlowdown = 0.2f, JumpHeight = 30,
                 };
             }
 
@@ -55,15 +73,15 @@ namespace TerraBlind
                 // FRAGILE: the VERTICAL fields (gravity/jumpSpeed/jumpHeight/maxFallSpeed) are water-modified — when
                 // FromPlayer runs while IN water they hold water values (gravity=0.2, jumpHeight=30, ...), so the air
                 // variant must hardcode bare values, NOT read p.*. The HORIZONTAL fields are NEVER touched by water
-                // (verified: no wet/liquid-gated write to runAcceleration/maxRunSpeed/accRunSpeed in Player.cs), and
-                // by SetControls they're already BAKED with moveSpeed + accessories (probe: maxRun=3.63 accel=0.0968
-                // under a +21% buff). So read them live → all speed buffs/accessories (sunflower, swiftness, boots...)
-                // are covered for free instead of hardcoding 3.0/0.08.
+                // (verified: no wet/liquid-gated write to runAcceleration/maxRunSpeed/accRunSpeed in Player.cs).
+                // NOT baked at SetControls though (the old probe note claiming so was wrong): vanilla resets them
+                // each frame and multiplies moveSpeed in only late in the update — so use the PostUpdate-captured
+                // snapshot (Baked*), which covers all speed buffs/accessories (sunflower, swiftness, boots...).
                 return new Params
                 {
-                    AccRun = p.runAcceleration,
-                    MaxRun = p.maxRunSpeed,
-                    AccRunSpeed = p.accRunSpeed,
+                    AccRun = BakedRunAccel(p),
+                    MaxRun = BakedMaxRun(p),
+                    AccRunSpeed = BakedAccRunSpeed(p),
                     RunSlowdown = 0.2f,
                     Gravity = 0.4f,
                     MaxFall = 10f,

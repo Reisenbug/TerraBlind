@@ -1783,6 +1783,7 @@ namespace TerraBlind
         // RECEDING / follow-the-line. Each call picks ONE Expand edge that advances furthest along the DescendPath line
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
+        static string _lastParamsSig;   // last logged [ss-params] signature (log on change only)
         static int _lineIdx;       // player's tracked projection onto the line (viz only now)
         public static void ResetLineProgress() { _lineIdx = 0; _miss.Clear(); _recent.Clear(); }
 
@@ -1865,6 +1866,13 @@ namespace TerraBlind
             var field = MazeWand.GetField(goalWx, goalWy);
             var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
+            // sunflower-drift evidence: the Happy! buff (+move speed, active in a 169x124-tile rect around any
+            // sunflower) should already be inside the live-read maxRun/accRun — if landings drift near sunflowers,
+            // either these values don't track the buff or the buff flips mid-edge. Log on change only.
+            {
+                string sig = $"maxRun={ph.MaxRun:0.###} accRunSpd={ph.AccRunSpeed:0.###} accRun={ph.AccRun:0.####} sunflower={Main.SceneMetrics.HasSunflower}";
+                if (sig != _lastParamsSig) { _lastParamsSig = sig; DiagLog.Write($"[ss-params] {sig}"); }
+            }
             int platformTile = -1;
             int slot = NavCoordinator.FindPlatformSlot(p);
             if (slot >= 0) platformTile = p.inventory[slot].createTile;
