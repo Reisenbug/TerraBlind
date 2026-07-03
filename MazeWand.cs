@@ -17,6 +17,8 @@ namespace TerraBlind
         // too eagerly): dig only when it clearly beats routing around.
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 80, DigSide = 120, DigUp = 160;
+        const int PillarUp = 45;   // vertical ascent in open air BEYOND jump reach: only a pillar can do it — price the pillar, not a free climb
+        const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
 
         // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
         // background walls everywhere so flight is cheap; this just nudges toward ground and stops surface sky-cruising.
@@ -239,13 +241,37 @@ namespace TerraBlind
         static int StepCost(int cx, int cy, int nx, int ny)
         {
             if (IsLava(cx, cy)) return LavaCost;   // entering lava = death; treat as impassable
-            bool wall = PathPlanner.IsBlockPublic(cx, cy);
-            if (wall && !DigTable.MineableWith(cx, cy, _fieldPickPower)) return LavaCost;   // pick can't break it → don't route through
+            // BODY CLEARANCE: the player is 3 tiles tall — "standing in cell (cx,cy)" occupies rows cy..cy-2 of the
+            // column. Judging wall-ness by the feet cell alone priced a chimney whose feet-row is air but whose head
+            // rows are rock as a FREE climb (MoveUp=9) when the body actually has to mine its way up — the field
+            // loved tight shafts it couldn't fit through, the line threaded them, and the bot obediently dug upward
+            // where pillar/bridge routes were genuinely cheaper. A move is a dig if ANY of the 3 body rows is solid,
+            // and every solid row must be mineable with the current pick.
+            bool wall = false;
+            for (int r = 0; r < 3; r++)
+            {
+                if (!PathPlanner.IsBlockPublic(cx, cy - r)) continue;
+                wall = true;
+                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return LavaCost;   // pick can't break it → don't route through
+            }
             bool horizontal = cx != nx;
             int baseCost;
             if (horizontal) baseCost = wall ? DigSide : MoveSide;
             else if (cy > ny) baseCost = wall ? DigDown : MoveDown;    // y+ is down
-            else baseCost = wall ? DigUp : MoveUp;
+            else if (wall) baseCost = DigUp;
+            else
+            {
+                // ascending into open air: a jump only reaches ~JumpReach cells above support — beyond that the body
+                // can't climb air, it can only PILLAR (slow, consumes platforms). Pricing all vertical air at MoveUp=9
+                // made the open sky the cheapest highway on the map the moment ground routes got honest body-clearance
+                // pricing: the line went skyward and the bot built a tower at (823,283→257). Price beyond-jump ascent
+                // as the pillar it really is (also sits well below DigUp=160, so pillar beats digging up — as it should).
+                baseCost = MoveUp;
+                bool nearSupport = false;
+                for (int d = 1; d <= JumpReach + 1; d++)
+                    if (PathPlanner.IsFloorPublic(cx, cy + d)) { nearSupport = true; break; }
+                if (!nearSupport) baseCost = PillarUp;
+            }
             // air penalty ONLY on HORIZONTAL entry into open air — that's "flying sideways", which doesn't exist.
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a
             // wall face has the feet briefly unsupported too — penalizing it made an 18-cell climb-around (1458)
