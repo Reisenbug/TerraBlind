@@ -102,7 +102,12 @@ namespace TerraBlind
 					// done = reached OR passed the target column (don't require pfeet exact: a slope/half-brick at the
 					// exit lifts the player a cell, so pfeet==TargetWy never holds and mining hangs forever). horizontal
 					// progress to the target column is what "tunnelled through" means.
-					done = req.Dir == MineDir.Right ? pcx >= req.TargetWx : pcx <= req.TargetWx;
+					// AND nothing solid left in the window: a sloped half-brick lets the hitbox squeeze a few px into
+					// the target column, so the raw center crosses the line BEFORE anything is mined — done fired on
+					// dispatch, zero tiles dug, and the replan re-picked the same dig every 2 ticks (the (1502,588)
+					// overhead-slope loop). Passing the line only counts once the tunnel is actually clear; if some
+					// tile can never clear, the step watchdog bounds the wait.
+					done = (req.Dir == MineDir.Right ? pcx >= req.TargetWx : pcx <= req.TargetWx) && remaining == 0;
 					break;
 				}
 				case MineDir.Down:

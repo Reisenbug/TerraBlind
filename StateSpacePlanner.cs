@@ -193,6 +193,32 @@ namespace TerraBlind
             return place ? "jumpPlace" : jump ? "jump" : "move";
         }
 
+        // per-step time estimate for the execution watchdog. frame edges know their exact length; walk edges run
+        // closed-loop so estimate from distance at cruise; pillar ≈ 43f per 2-cell cycle; dig = the mining table's
+        // per-tile frames. Deliberately generous-side constants — the watchdog's margin handles the rest.
+        static float EstStepFrames(ExecStep st, Player p)
+        {
+            if (st.Pillar)
+            {
+                int feet = (int)((p.position.Y + p.height) / 16f);
+                int cells = System.Math.Max(2, feet - st.TargetCy);
+                return cells * 21.5f + 45f;
+            }
+            if (st.Dig)
+            {
+                float c = 0f;
+                if (st.MineTiles != null) foreach (var t in st.MineTiles) c += System.Math.Min(DigTable.CostFrames(t.wx, t.wy), 600);
+                return System.MathF.Max(120f, c + 60f);
+            }
+            if (st.Frames != null && st.Frames.Count > 0)
+            {
+                if (!st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))   // closed-loop walk: distance-based
+                    return System.MathF.Abs(st.TargetCx * 16f + 8f - p.Center.X) / 2f + 30f;
+                return st.Frames.Count;
+            }
+            return 300f;
+        }
+
         public class PathSeg
         {
             public bool IsJump;
@@ -1608,6 +1634,12 @@ namespace TerraBlind
         static List<ExecStep> _ssSteps;
         static int _ssStepIdx;
         static bool _ssDispatched;
+        static uint _stepStartTick;        // watchdog soft clock: start of the current NO-MOTION window (slides while moving)
+        static uint _stepDispatchTick;     // watchdog hard clock: when the step was dispatched (never slides)
+        static long _stepTimeoutTicks;     // soft deadline (est × 1.75 + 60, capped 1min) — frozen position
+        static long _stepHardTicks;        // hard deadline (est × 4 + 300, capped 2min) — even while moving
+        static float _stepEstFrames;       // the step's own time estimate (for the announcement)
+        static float _stepLastPx, _stepLastPy;   // last observed position (motion slides the soft window)
         static ExecStep _ssPrevStep;       // the edge being executed, for plan-vs-exec frame-count diagnosis
         static int _lastExecFrameCount;    // how many frames ApplyControls replayed for the current edge
         public static bool StepsActive => _ssSteps != null && _ssStepIdx < _ssSteps.Count;
@@ -1627,6 +1659,38 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopSteps(); return; }
             bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive;
+
+            // WATCHDOG — every action gets a deadline. All the plan-level defenses (miss, revisit, shock, loop
+            // detector) live in the replan cycle, and the replan cycle waits for ExecRunning to clear — so ONE
+            // executor that never terminates (the 77s PillarWait) starves the entire immune system. Deadline =
+            // its own estimated frames × margin (margin scales with the estimate: long actions get more slack)
+            // + a floor for tiny actions. On breach: announce, kill every executor, hand control back to the
+            // closed loop — the next replan retries from reality and attention prices repeated failures.
+            // two watchdog clocks. SOFT (slides while moving): a long free-fall is physics working, not a hang — only
+            // a frozen position runs this clock down (the 77s PillarWait fires fast). HARD (absolute, never slides):
+            // an in-step motion loop (bouncing around a target it never satisfies) would reset the soft clock forever —
+            // the hard cap bounds the step no matter how lively it looks. Between-step loops are the replan-level
+            // detector's job (best-H stall → shock), unaffected here.
+            if (_ssDispatched)
+            {
+                float moved = System.MathF.Abs(p.position.X - _stepLastPx) + System.MathF.Abs(p.position.Y - _stepLastPy);
+                if (moved > 2f) _stepStartTick = Main.GameUpdateCount;
+                _stepLastPx = p.position.X; _stepLastPy = p.position.Y;
+            }
+            bool softOut = _ssDispatched && Main.GameUpdateCount - _stepStartTick > _stepTimeoutTicks;
+            bool hardOut = _ssDispatched && Main.GameUpdateCount - _stepDispatchTick > _stepHardTicks;
+            if (softOut || hardOut)
+            {
+                var tst = _ssPrevStep;
+                string tkind = tst != null ? EdgeKind(tst) : "?";
+                string clock = hardOut ? "hard" : "soft";
+                long ran = Main.GameUpdateCount - _stepDispatchTick;
+                DiagLog.Write($"[timeout] {clock} step {tkind} →({(tst?.TargetCx ?? -1)},{(tst?.TargetCy ?? -1)}) est={_stepEstFrames:0}f soft={_stepTimeoutTicks}f hard={_stepHardTicks}f ran={ran}f — abort, back to closed loop");
+                Main.NewText($"[TerraBlind] TIMEOUT({clock}) {tkind}→({tst?.TargetCx},{tst?.TargetCy}) est {_stepEstFrames:0}f ran {ran}f — replanning");
+                SkillExecutor.Stop(); MineCoordinator.Stop(); StopExec(); StopSteps();
+                DiagLog.EndRun();
+                return;
+            }
 
             if (_ssDispatched)
             {
@@ -1656,6 +1720,12 @@ namespace TerraBlind
             int ccx = (int)(p.Center.X / 16f);
             DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {EdgeKind(st)} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;
+            _stepEstFrames = EstStepFrames(st, p);
+            _stepTimeoutTicks = (long)System.Math.Min(_stepEstFrames * 1.75f + 60f, 3600f);
+            _stepHardTicks = (long)System.Math.Min(_stepEstFrames * 4f + 300f, 7200f);
+            _stepStartTick = Main.GameUpdateCount;
+            _stepDispatchTick = Main.GameUpdateCount;
+            _stepLastPx = p.position.X; _stepLastPy = p.position.Y;
             _ssPrevStep = st; _lastExecFrameCount = 0;
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
@@ -1836,7 +1906,7 @@ namespace TerraBlind
         }
         static readonly System.Collections.Generic.List<(int, int)> _recent = new();
         const int RecentLen = 6;              // how many past landings to remember for revisit detection
-        const float RevisitPenalty = 6f;      // per-step penalty added to an edge that lands on a recently-visited cell
+        const float RevisitPenalty = 12f;     // per-step penalty added to an edge that lands on a recently-visited cell (6 was too weak to outweigh typical H margins before the shock tier kicked in)
 
         // LOOP SHOCK — the universal escape (see PROJECT_STATE.md): when the detector sees best-H stall, every edge
         // the loop traversed gets one large decaying penalty. Loops exist because the cost structure lies somewhere;

@@ -20,6 +20,7 @@ namespace TerraBlind
         private static int _cycleStartFeetY;
 
         private static float _pillarWaitPrevVY;
+        private static int _pillarWaitFellTicks;
 
         private const int WaitFrames = 10;
         private const int JumpHoldFrames = 15;
@@ -246,6 +247,7 @@ namespace TerraBlind
                         DiagLog.Write($"[pillar_wait_enter] tick={Main.GameUpdateCount} cyclesDone={_cyclesDone} feetY={feetYNow} targetWy={_targetWy} vy={vyAtEntry} prevVY={_pillarWaitPrevVY}");
                         _phaseTick = 0;
                         _pillarWaitPrevVY = p.velocity.Y;
+                        _pillarWaitFellTicks = 0;
                         State = SkillState.PillarWait;
                         return;
                     }
@@ -283,6 +285,16 @@ namespace TerraBlind
                 if (grounded && atTarget)
                 {
                     DiagLog.Write($"[pillar_wait_exit] tick={Main.GameUpdateCount} reason=grounded_at_target vy={vy} prevVY={_pillarWaitPrevVY} feetY={feetYNow} targetWy={_targetWy}");
+                    Stop();
+                }
+                // FELL BACK: "reached target" can trigger on the way DOWN (feetY grazed the target at the arc top but
+                // the cycle's platform never materialized), after which the player lands BELOW target — grounded=true,
+                // atTarget=false, and this wait had no exit for that: 77s of wait ticks at (2623,254). Grounded at the
+                // wrong height means the climb attempt is over, full stop — hand control back so the nav replans and
+                // retries from the real position (attention prices repeated failures).
+                else if (grounded && !atTarget && ++_pillarWaitFellTicks >= 10)
+                {
+                    DiagLog.Write($"[pillar_wait_exit] tick={Main.GameUpdateCount} reason=fell_back_below_target feetY={feetYNow} targetWy={_targetWy}");
                     Stop();
                 }
                 _pillarWaitPrevVY = vy;

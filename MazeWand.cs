@@ -187,6 +187,15 @@ namespace TerraBlind
 
         public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
         {
+            // the field must only price digs the CURRENT pick can actually perform — a flat DigSide/DigDown for every
+            // wall routed the line straight through the Lihzahrd temple (pick damage 0 before Picksaw): Expand's
+            // generators correctly refuse the unmineable dig, only backward edges remain, loop. Capture the pick
+            // power once per build; StepCost prices undiggable walls like lava (impassable-expensive, still finite
+            // so a genuinely sealed goal degrades to "walled in" instead of a broken field).
+            _fieldPickPower = 0;
+            var pl = Main.LocalPlayer;
+            if (pl != null)
+                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
             int m = bigMargin ? FieldMargin : 120;
             int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
             int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
@@ -225,10 +234,13 @@ namespace TerraBlind
 
         // forward cost of moving FROM (nx,ny) TO (cx,cy): direction is (cx,cy)-(nx,ny), price set by the cell
         // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
+        static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
+
         static int StepCost(int cx, int cy, int nx, int ny)
         {
             if (IsLava(cx, cy)) return LavaCost;   // entering lava = death; treat as impassable
             bool wall = PathPlanner.IsBlockPublic(cx, cy);
+            if (wall && !DigTable.MineableWith(cx, cy, _fieldPickPower)) return LavaCost;   // pick can't break it → don't route through
             bool horizontal = cx != nx;
             int baseCost;
             if (horizontal) baseCost = wall ? DigSide : MoveSide;

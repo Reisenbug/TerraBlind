@@ -115,6 +115,20 @@ namespace TerraBlind
 
         public const int Unmineable = 100000;
 
+        // slim mineability check for the field build's Dijkstra (hundreds of thousands of wall cells, off-thread):
+        // pick damage only — no inventory scan (pick power passed in), no CanKillTile (attached-object check left to
+        // the Expand-side generators, which already refuse those digs).
+        public static bool MineableWith(int x, int y, int pickPower)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            if (pickPower <= 0) return false;
+            var tile = Main.tile[x, y];
+            if (!tile.HasTile) return true;
+            int dmg = GetPickaxeDamage(x, y, pickPower, tile);
+            if (Main.getGoodWorld) dmg *= 2;
+            return dmg > 0;
+        }
+
         // real mining time in frames for the tile at (x,y) with the player's current best pickaxe, using vanilla's
         // per-swing damage. swings = ceil(100 / damage); frames = swings * useTime * pickSpeed. damage 0 (pick too
         // weak, e.g. Lihzahrd brick before Picksaw) or CanKillTile false (supports an attached object) = Unmineable.
