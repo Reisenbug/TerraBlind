@@ -73,7 +73,16 @@ namespace TerraBlind
             return (cx, cy);
         }
 
-        static bool BodyFits(int c, int cy) => !DigSolid(c, cy) && !DigSolid(c, cy - 1) && !DigSolid(c, cy - 2);
+        // Same envelope geometry as the field's StepCost body clearance: feet row may hold a slope/half-brick
+        // (valid footing — DigSolid there used to mislabel every slope stand as "unfit"), upper rows block on ANY
+        // solid shape, and partial footing (feet 6-16px up the slope) pushes the head into the 4th row (42+6 > 48).
+        static bool BodyFits(int c, int cy)
+        {
+            if (PathPlanner.IsBlockPublic(c, cy)) return false;
+            if (DigSolid(c, cy - 1) || DigSolid(c, cy - 2)) return false;
+            if (DigSolid(c, cy) && DigSolid(c, cy - 3)) return false;   // DigSolid but not IsBlock = slope/half footing
+            return true;
+        }
 
         // advance the node with idle input to the state the NEXT replan will actually read: RecedingNav replans on the
         // first tick after the frames end with vy==0, so that's ≥1 idle step, more if the edge ends airborne. Labeling
@@ -244,7 +253,7 @@ namespace TerraBlind
         // compass field is keyed on (the FINAL goal) — kept separate so rolling's per-leg subgoals don't each rebuild
         // the million-cell field (the freeze). Pass (-1,-1) [default] to key the field on goalWx/Wy itself (single
         // point nav / non-rolling callers).
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -254,7 +263,20 @@ namespace TerraBlind
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
+            // goalSnapCap: SnapGoalToStandable's unbounded down-scan is navwand-click semantics ("a click in air
+            // means the floor below it"). An INTERNAL replan re-targeting a stale edge landing must NOT inherit
+            // that: when the world changed under the old landing (a place edge whose platform ended up one column
+            // over), the scan can teleport the goal down an open air column — the (2907,223) drift-replan became
+            // goal (2907,349) and the planner dutifully planned a 126-cell dive through the rescue platform into
+            // an unmineable chasm. If the snap moves the goal further than the caller allows, the leg is
+            // meaningless — fail fast, the receding loop re-selects from the real position.
+            int requestedWy = goalWy;
             goalWy = SnapGoalToStandable(goalWx, goalWy);
+            if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
+            {
+                DiagLog.Write($"[ss-plan] goal snap ({goalWx},{requestedWy})→({goalWx},{goalWy}) exceeds cap {goalSnapCap} → fail fast");
+                return res;
+            }
             res.GoalWx = goalWx; res.GoalWy = goalWy;
             float goalCx = goalWx * 16f + 8f;
             float goalFeetY = (goalWy + 1) * 16f;
@@ -578,8 +600,18 @@ namespace TerraBlind
             // and a platform-floored cell with the goal below is a dead end (replan storm). only emit when a
             // platform actually supports the feet, else this duplicates a plain fall.
             {
+                // support is judged over BOTH hitbox columns, not the center cell: the 20px body can rest on a
+                // platform EDGE with its center column over open air (the (3393,700) temple-shaft stuck: center
+                // support = air → no drop edge generated → only H-rising edges left → shock death). A drop is
+                // physically possible when at least one straddled column stands on a platform and NO column
+                // stands on a solid block (a solid support holds the body up through a Down-press).
                 var (fcx, fcy) = StandCell(cur.Px, cur.Py);
-                bool plat = PathPlanner.PlatformPublic(fcx, fcy + 1);
+                int dropLc = (int)(cur.Px / 16f);
+                int dropRc = (int)((cur.Px + PhysicsSimulator.PlayerW - 1f) / 16f);
+                bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
+                bool anySolid = DigSolid(dropLc, fcy + 1) || DigSolid(dropRc, fcy + 1);
+                bool plat = anyPlat && !anySolid;
+                if (SegDiag && !plat) DiagLog.Write($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
                     // a human drops off a platform by holding Down (+ a direction) and rides the fall all the way
@@ -837,15 +869,15 @@ namespace TerraBlind
                 if (DigSolid(c, y))
                 {
                     int fc = DigTable.CostFrames(c, y);
-                    if (fc >= DigTable.Unmineable) return null;   // unbreakable (attached object / pick too weak) → route around
+                    if (fc >= DigTable.Unmineable) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})"); return null; }   // unbreakable (attached object / pick too weak) → route around
                     cost += fc;
                     tiles.Add((c, y));
                 }
-            if (tiles.Count == 0) return null;   // nothing solid underfoot → not a dig (free fall / walk handles it)
+            if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
             // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
             // it if that cell is lower H (toward goal). If ccy+2 is ALSO open, the next cycle's free-fall/dig continues.
             bool hasH = ctx.DistField.TryGetValue((ccx, y), out int lh);
-            if (!(hasH && lh < curH)) return null;
+            if (!(hasH && lh < curH)) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: landing H {(hasH ? lh.ToString() : "off-field")} !< {curH}"); return null; }
             float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
             float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -874,11 +906,11 @@ namespace TerraBlind
                         if (DigSolid(c, y))
                         {
                             int fc = DigTable.CostFrames(c, y);
-                            if (fc >= DigTable.Unmineable) return null;
+                            if (fc >= DigTable.Unmineable) { if (SegDiag) DiagLog.Write($"[ss-digup] NULL: unmineable ({c},{y})"); return null; }
                             cost += fc;
                             tiles.Add((c, y));
                         }
-                if (k == 1 && tiles.Count == 0) return null;
+                if (k == 1 && tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digup] NULL: ceiling already open"); return null; }
                 int feetY = ccy - 2 * k;
                 cost += 43f;
                 if (ctx.DistField.TryGetValue((ccx, feetY), out int lh) && lh < curH)
@@ -2084,13 +2116,43 @@ namespace TerraBlind
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
             DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
 
-            if (best == null)   // null ONLY when Expand yielded no edge on the field at all
+            // STARVED EXPAND (Phase A: generator rejections must be visible): when no descending candidate exists —
+            // the cycles where a silently-refusing generator matters — re-run Expand once with SegDiag on so every
+            // walk/jump/dig null logs its reason. Convicts the missing edge in one run instead of an archaeology
+            // session (the (2959,262) n=1 place-only loop: walk-west existed physically, never generated, no trace).
+            if (best != null && (cands.Count <= 2 || !cands.Exists(c => c.Descends)))
+            {
+                SegDiag = true;
+                foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
+                SegDiag = false;
+            }
+
+            if (best == null)   // Expand yielded no edge on the field at all
             {
                 DiagLog.Write($"[recede] EXPAND-EMPTY at ({curCx},{curCy}) H={curH}: no edge generated.");
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
                 SegDiag = false;
-                return null;
+                // SAFE ESCAPE STEP (hard rule: stuck must be structurally impossible — when nothing selects, move one
+                // cell and re-select; never stop on a reachable stance). Expand goes empty in wedged stances the
+                // normal generators don't model (walked 6px into a slope: every field-gated edge nulls) — but walking
+                // reachability is symmetric, the body that walked in can walk back out. Accept ANY real movement,
+                // field membership and H ignored (this is not progress, it is un-wedging); the next replan re-selects
+                // from the new stance where the field's honest pricing (the slope is a dig now) takes over.
+                foreach (int edir in new[] { -1, 1 })
+                    foreach (int ehold in new[] { 0, 8 })
+                    {
+                        var esc = SimulateSegment(cur, edir, ehold, ph);
+                        if (!esc.HasValue) continue;
+                        var (ecx, ecy) = StandCell(esc.Value.node.Px, esc.Value.node.Py);
+                        if (IsLavaCell(ecx, ecy)) continue;
+                        DiagLog.Write($"[recede] ESCAPE-STEP dir={edir} hold={ehold} -> ({ecx},{ecy})");
+                        var eres = new SSResult { Found = true, GoalWx = ecx, GoalWy = ecy, StartPx = cur.Px, StartPy = cur.Py, CostFrames = esc.Value.frames.Count, CurH = curH };
+                        eres.Steps = EdgeToSteps(cur, esc.Value.node, esc.Value.frames, false, null);
+                        foreach (var st in eres.Steps) if (st.Frames != null) eres.ExecFrames.AddRange(st.Frames);
+                        return eres;
+                    }
+                return null;   // cannot move a single pixel either way → true seal (a human couldn't either)
             }
             var pickCell = bestCell;
             var b = best.Value;
@@ -2655,6 +2717,14 @@ namespace TerraBlind
             StartSteps(res.Steps);
         }
 
+        // a drift-replan re-targets the CURRENT leg's landing — the "same landing" tolerance is the label/terrain
+        // quantization only: StandCell rounding (±1) plus a mid-execution dig leaving the landing up to 2 rows inside
+        // yet-unmined rock (dig-up mines 2 rows per cycle → snap climbs ≤2). Beyond 2 rows it is a DIFFERENT place,
+        // not the leg's landing → fail the leg (cheap: receding re-selects) rather than risk pursuing a teleported
+        // goal (catastrophic: the 126-cell chasm dive). Derived bound, not margin-padded — the error asymmetry
+        // (one wasted select cycle vs a dive) says keep it tight.
+        const int ReplanGoalSnapCap = 2;
+
         static volatile SSResult _replanRes;
         static volatile bool _replanPending;
         static int _replanSeq;
@@ -2689,7 +2759,7 @@ namespace TerraBlind
                         var (sgx, sgy) = SubgoalToward(rcx, rcy, rollWx, rollWy);
                         res = Plan(sgx, sgy, (sx, sy, 0f), rollWx, rollWy);
                     }
-                    else res = Plan(finalWx, finalWy, (sx, sy, 0f));
+                    else res = Plan(finalWx, finalWy, (sx, sy, 0f), goalSnapCap: ReplanGoalSnapCap);
                     _silentPath = false;
                     if (seq == _replanSeq) _replanRes = res;
                 }
@@ -2898,11 +2968,22 @@ namespace TerraBlind
 
         static void EmitPlace(Player p, int cx, int cy)
         {
+            // the two silent-return paths made a never-materializing platform undiagnosable (the (2959,262) 16-leg
+            // stall: 60 ticks/leg of TilePlaced=false with zero telemetry). Log the reason once per stall period.
             int slot = NavCoordinator.FindPlatformSlot(p);
-            if (slot < 0) return;
+            if (slot < 0)
+            {
+                if (_placeStall == 1) DiagLog.Write($"[ss-place] STALL-WHY tile=({cx},{cy}) no platform slot (out of platforms?)");
+                return;
+            }
             p.selectedItem = slot;
             Main.SmartCursorWanted_Mouse = false; // SmartCursor would retarget the cursor away from PlaceCx/Cy
-            if (p.itemTime > 0) return; // mid-swing; wait for cooldown before re-firing
+            if (p.itemTime > 0)
+            {
+                if (_placeStall == 1) DiagLog.Write($"[ss-place] STALL-WHY tile=({cx},{cy}) itemTime={p.itemTime} slot={slot} stack={p.inventory[slot].stack}");
+                return; // mid-swing; wait for cooldown before re-firing
+            }
+            if (_placeStall == 1) DiagLog.Write($"[ss-place] emit tile=({cx},{cy}) slot={slot} stack={p.inventory[slot].stack} item={p.inventory[slot].Name}");
             Main.mouseX = (int)(cx * 16f + 8f - Main.screenPosition.X);
             Main.mouseY = (int)(cy * 16f + 8f - Main.screenPosition.Y);
             p.controlUseItem = true;

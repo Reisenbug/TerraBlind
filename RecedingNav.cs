@@ -11,6 +11,9 @@ namespace TerraBlind
     public static class RecedingNav
     {
         public static bool Active;
+        // outcome of the last run, for the HTTP bridge: null while running/never-ran,
+        // "done" | "walled_in" | "loop_unresolved" | "stopped" after it ends.
+        public static string LastStop;
         static int _goalWx, _goalWy;
         const float GoalDistPx = 24f;
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
@@ -27,6 +30,10 @@ namespace TerraBlind
         const int LoopStallReplans = 20;                 // ~4 laps of the widest loop seen (5 replans/lap)
         const float ShockPenalty = 200f;                 // big enough to flip any H-margin a loop can trap in (seen: 3~50)
         const int MaxShocks = 3;
+        // single-cycle H regression above this = involuntary displacement (fall/knockback into a worse basin), not a
+        // loop. Sized between the largest possible ring-internal H spread (ring ≤ ~8 cells × ≤45/cell ≈ tens; observed
+        // ≤50) and the smallest catastrophic fall (tens of cells × climb pricing; observed +500..+1300).
+        const int DisplacementRebase = 200;
         static int _bestH; static int _replansSinceBest; static int _shocks;
         static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
         const int RingLen = 24;
@@ -44,7 +51,7 @@ namespace TerraBlind
         {
             StateSpacePlanner.StopNav();
             goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
-            _goalWx = goalWx; _goalWy = goalWy; Active = true; _haveLast = false; _lastTarget = null; _lastFrom = null;
+            _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
             StateSpacePlanner.ResetLineProgress();
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
@@ -62,6 +69,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            if (Active && LastStop == null) LastStop = "stopped";
             Active = false;
             StateSpacePlanner.StopNav();
             RecedingVis.Clear();
@@ -79,7 +87,7 @@ namespace TerraBlind
             float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
             float cx = p.Center.X, fy = p.position.Y + p.height;
             if (System.Math.Abs(cx - gx) <= GoalDistPx && System.Math.Abs(fy - gy) <= GoalDistPx)
-            { DiagLog.Write("[recede] reached goal"); Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
+            { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
 
             if (StateSpacePlanner.ExecRunning) return;        // current action still executing
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled
@@ -104,8 +112,20 @@ namespace TerraBlind
             // awkward spot. The ONLY stop is StepAlongField returning null = Expand produced no edge = truly walled in.
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             if (res == null || res.Steps.Count == 0)
-            { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
+            { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
 
+            // DISPLACEMENT RE-BASELINE: bestH must measure progress within the current basin, not all-time. After a
+            // catastrophic involuntary displacement (a missed sky jump dropping 47 cells raised H by ~500), the honest
+            // route DOWN from the crash site cannot beat the pre-fall bestH for dozens of replans — the detector then
+            // shocked a perfectly descending path, its +200 penalties bent selection into a real wander-loop, and 3
+            // "failed" shocks hard-stopped the run. A single-cycle H jump far above any loop ring's internal spread
+            // (rings span a few cells × step costs ≈ ≤50; observed falls jump +500..+1300) is a basin change, not a
+            // loop symptom → reset the baseline and the shock budget to judge progress from here.
+            if (_bestH != int.MaxValue && res.CurH > _bestH + DisplacementRebase)
+            {
+                DiagLog.Write($"[recede] DISPLACED: H {_bestH}→{res.CurH} (+{res.CurH - _bestH}) — re-baseline, shocks reset");
+                _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
+            }
             if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; }
             else _replansSinceBest++;
             _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
@@ -126,6 +146,7 @@ namespace TerraBlind
                 else
                 {
                     DiagLog.Write($"[recede] LOOP UNRESOLVED at {cell}: {MaxShocks} shocks, bestH={_bestH} still stuck. Trail: {trail}");
+                    LastStop = "loop_unresolved";
                     Stop();
                     Main.NewText($"[TerraBlind] LOOP at ({cell.Item1},{cell.Item2}) — {MaxShocks} shocks failed, nav stopped, see jump_trace.log");
                     return;

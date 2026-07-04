@@ -247,12 +247,34 @@ namespace TerraBlind
             // loved tight shafts it couldn't fit through, the line threaded them, and the bot obediently dug upward
             // where pillar/bridge routes were genuinely cheaper. A move is a dig if ANY of the 3 body rows is solid,
             // and every solid row must be mineable with the current pick.
+            // SLOPES/HALF-BRICKS: the 48px 3-row envelope holds the 42px body with only 6px of slack. IsBlock exempts
+            // sloped/half tiles (walkable FOOTING via StepUp), but that exemption is a lie anywhere else: a diagonal at
+            // chest/head level eats the slack ~6px into the tile (real SlopeCollision jams the walk), and PARTIAL FOOTING
+            // (feet standing 6-8px up a slope/half-brick) pushes the head into the 4th row (42+6 > 48). So: feet row
+            // keeps the exemption, upper rows count ANY solid shape, and partial footing extends the envelope to cy-3.
             bool wall = false;
             for (int r = 0; r < 3; r++)
             {
-                if (!PathPlanner.IsBlockPublic(cx, cy - r)) continue;
+                bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
+                if (!solid) continue;
                 wall = true;
                 if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return LavaCost;   // pick can't break it → don't route through
+            }
+            if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
+            {
+                wall = true;
+                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return LavaCost;
+            }
+            // BODY WIDTH: the 20px body straddles TWO columns — a cell whose own column is open but whose left AND
+            // right neighbor columns are both blocked (any of the 3 body rows) is a 1-tile-wide slot the body cannot
+            // occupy. Pricing it as free flow let H stream up a 1-wide temple-wall shaft the body could never enter
+            // ((3393,700): all 61 candidates H-rising, shock death) — the true route was digging the mineable east
+            // rock. A side column counts as widenable if every solid row in it is mineable: then entering costs a dig;
+            // if neither side is widenable the slot is impassable.
+            if (!wall && !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
+            {
+                wall = true;
+                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy)) return LavaCost;
             }
             bool horizontal = cx != nx;
             int baseCost;
@@ -278,6 +300,35 @@ namespace TerraBlind
             // cost more than digging through the wall (1440), which is backwards.
             if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost;
+        }
+
+        // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
+        static bool ColumnOpen(int c, int cy)
+            => !PathPlanner.IsBlockPublic(c, cy) && !SolidAnyShape(c, cy - 1) && !SolidAnyShape(c, cy - 2);
+
+        // column c can be MINED open at stand height cy: every solid body row is mineable with the field's pick
+        static bool ColumnWidenable(int c, int cy)
+        {
+            for (int r = 0; r < 3; r++)
+                if (SolidAnyShape(c, cy - r) && !DigTable.MineableWith(c, cy - r, _fieldPickPower)) return false;
+            return true;
+        }
+
+        // solid of ANY shape (full, slope, half-brick) — what the body envelope collides with above the feet row
+        static bool SolidAnyShape(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return true;
+            var t = Main.tile[x, y];
+            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+        }
+
+        // slope/half-brick in the feet cell: standable, but the feet ride 6-16px up inside the row
+        static bool PartialFooting(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            var t = Main.tile[x, y];
+            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]
+                && ((int)t.Slope != 0 || t.IsHalfBlock);
         }
 
         // Cost of stepping sideways into open air. Two factors, both real costs (NO judgement here — the field weighs

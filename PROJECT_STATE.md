@@ -1,91 +1,108 @@
 # TerraBlind 项目总体状态
 
-> 2026-07-02,与 Fable 5 的架构讨论产出。给未来的 agent 和自己:先读这个,再看代码。
+> 2026-07-03 更新(与 Fable 5 的战略讨论产出)。给未来的 agent 和自己:**先读这个,再干活**。
+> 上一版(纯寻路阶段)的核心知识已压缩保留在第五、六节。
 
-## 一、项目是什么
+## 一、战略转向(2026-07-03,用户拍板)
 
-盲视 AI agent 玩 Terraria:出生点→丛林→地狱→血肉之墙。tModLoader C# mod,60fps 实时。
-当前里程碑:**导航跑通几千格,不卡死、不循环、不乱挖**。
+**寻路降级,LLM 层升级。** 原话:"I'm tired of debugging path-finding. Fuck this." 结论:
 
-### 架构(receding-horizon = MPC)
+- 寻路只是 LLM 的**手**,不需要优雅、不需要最优,只需要**够用**。不再主动修寻路 bug,
+  只修**挡住上层任务**的。每次修都要问:这真的挡路了吗?
+- 项目的新前沿是 **LLM second player**:玩家在游戏里给 AI 队友下自然语言指令,
+  AI 分解、执行、用人话汇报。LLM 不可或缺的四个位置(全部已开工):
+  1. **指令理解**:自然语言 → 机器目标(开放指令空间,手写解析器覆盖不完)
+  2. **战略规划**:Terraria 世界知识(配方/进度/深度)→ 任务图,叶子是原语调用
+  3. **对话**:澄清、汇报、协商——"像队友"的全部所在
+  4. **语义异常处理**:寻路报 walled_in/loop_unresolved 时,LLM 决定任务级改道
+     (绕路?先升级镐?问玩家?)——正是结构层解决不了的类3谎言的最上层兜底
+- **LLM 只住在秒级慢层,永远不碰帧和格子。** 层级:LLM(任务)→ 场/规划(路线)→ 执行器(帧)。
+
+## 二、当前架构(三层,已跑通竖切)
 
 ```
-MazeWand      : Dijkstra 从目标建 H 场(完美地图信息),StepCost: Move 1/3/9, Dig 80/120/160
-StateSpace-   : 每周期从真实位置 Expand(动作原语: walk/jump/dig/pillar/place/drop),
- Planner        选边 total = g + H(落点) + tie-break(align/dev/miss/revisit)
-                g = max(0, ΔH) + 地形改动的真实帧数×0.5(封顶15)     ← golden rule
-SkillExecutor : 帧重放执行,自带实时检查
-闭环          : 执行一条边 → 从真实状态重规划(吸收怪物击退等一切扰动)
+玩家: /tb <指令>  (游戏聊天)
+  ↓ AgentChat.cs 入队
+[mod HTTP 桥, 127.0.0.1:17878]
+  GET /instruction   agent 轮询指令
+  POST /say          agent → 游戏聊天(<TB> 前缀)
+  POST /find_tiles   {name:"Iron",n,max_dist} 按 TileID 名找最近方块(环扫,按距排序)
+  POST /nav_recede   {gx,gy} Bellman receding nav(与 K 键同引擎)
+  GET /nav_recede_done  {done,status,reason: walled_in|loop_unresolved|stopped|timeout}
+  POST /nav_recede_stop
+  POST /mine /craft /fight /state /interact /loot_all ... (原语早已齐全,见 HttpServerSystem.cs)
+  ↑ HTTP
+[agent: /Users/lhy/Documents/Terraria-Agent/scripts/second_player.py]
+  openai 兼容接口;配置读 .env: SECOND_PLAYER_API_URL/MODEL/KEY,回落 COMMANDER_*
+  (当前 deepseek-chat @ SJTU。不许硬编码任何一家 provider——用户在 .env 里定)
+  无 thinking,普通 chat completions + function calling
+  工具: get_state / find_tiles / nav_to(阻塞轮询,失败带原因码) / mine / say
+  跨指令滚动对话记忆(HISTORY_MAX_MSGS=60);最终文字回复自动转发游戏聊天
 ```
 
-### 不可违反的硬规则(血泪换的,见 memory)
+已验证:`/tb 你好` → LLM 回话;`/tb 向右走100格` → nav 调用。中文编码、代理绕行
+(urllib 必须 ProxyHandler({}) 绕过 http_proxy,SJTU 网络环境)、断线重连都已修。
 
+## 三、接下来的路(按序)
+
+1. **竖切打穿**:`/tb 去挖10个铁矿` 端到端跑通(find_tiles→nav→mine→验证背包→汇报)。
+   期间暴露的寻路 bug,只修挡路的。
+2. **工具面扩充**(按需,不预建):craft(配方)、chest/loot、fight、place、
+   背包查询(get_state 已含)。每个工具描述写清"何时用",别只写"是什么"。
+3. **失败语义化**:nav 的原因码 → prompt 里教 LLM 翻译成人话+备选方案。
+   这是4号能力的落点,也是寻路 bug 的新出口:修不动就让 TB 说"我过不去,要不…"。
+4. **prompt 迭代**:system prompt 在 second_player.py 里,中文。观察实际对话打磨:
+   汇报节奏(开始/关键进展/完成)、何时问何时自主、Terraria 知识注入。
+5. **记忆**(远期):跨会话共享记忆、命名地点("我们上次那个洞")。
+6. **寻路兜底方案(如 Bellman 继续拖后腿)——轨道模式**:把 MazeWand 的线当轨道字面
+   执行,下一线格在哪就走/挖/垒到那格,一格一格,不模拟不选边。失败模式塌缩成
+   "能否进入相邻一格"。无聊但接近保证。用户已认可此方案为备胎。
+
+## 四、硬规则(血泪换的,violate 前先想三遍)
+
+寻路层(见 memory,依然有效):
 1. **一套 cost**:选边 g ≡ H(s)−H(s'),绝不手编第二套 per-action 成本。
-2. **不准禁退**:防循环靠诚实,不靠禁止回头/禁重访。
-3. **stuck 必须结构上不可能**:不靠 trigger/计数器检测卡住。
+2. **不准禁退**:防循环靠诚实,不靠禁止回头/重访。
+3. **stuck 必须结构上不可能**:选不出就走安全步挪一格(EXPAND-EMPTY 已有 escape step)。
 4. **一切方案带不精确 fallback**:不假设精确对齐,读真实状态。
-5. **手写附加项必须封顶在真实 H 落差量级之下**(surcharge=40 两次压死唯一出路)。
+5. **手写附加项必须封顶在真实 H 落差量级之下**。
 
-## 二、本阶段最大的认识:三类循环,一个根
+agent 层(本次新增):
+6. **provider 由用户定**:agent 代码读 env,绝不默认/硬编码某家 API。
+7. **agent 代码住 Terraria-Agent 仓库**,mod 仓库只放 C# 桥。
+8. **TB 对玩家说中文**;mod C# 代码注释用英文。
+9. **玩家看不到 TB 的任何动作**——不 say 等于没发生,失败绝不假装成功。
 
-**Bellman 从来没错。错的永远是喂给它的世界。** 三类死循环全是"场的世界"和"身体的世界"之间的谎言:
+流程规矩:build 只能游戏内 `/build TerraBlind` 回复 1;commit/push 需用户同意,
+英文 conventional commits;日志在 tModLoader/TerraBlindLogs/(jump_trace.log + runs/)。
 
-| 类 | 谎言 | 案例 | 状态 |
-|---|---|---|---|
-| 1 | **代价撒谎**:手写项盖过真实 H 落差,否决唯一降H边 | surcharge=40 压死 (3242,299) 的 pillar、(801,937) 的挖井 | 已修:帧数×0.5 封顶15 |
-| 2 | **标签撒谎**:落点按"最后一帧/中心点"算,是 replan 永远读不到的幽灵状态 | (800,937):落点带 vx=1.04 离边界 0.7px,下 tick 滑走 | 已修:settle-label(推进到 replan 实读时刻)+ StandCell 身体贴合 |
-| 3 | **能力撒谎**:场定价了 Expand 造不出的转移 | (981,435):场要的降H邻居,所有生成器静默 null,只剩回头路 | **未修,当前卡点** |
+## 五、寻路知识压缩(改寻路前必读)
 
-类 2、3 的共同险恶之处:**每一步都完美 HIT**,attention(miss 罚)全盲。
-结论:防循环的根本手段是**消灭谎言**(结构诚实),不是加惩罚项。
+**Bellman 从来没错,错的永远是喂给它的世界。** 三类死循环谎言:
 
-## 三、当前困难(按优先级)
+| 类 | 谎言 | 修复状态 |
+|---|---|---|
+| 1 | 代价撒谎:手写项盖过真实H落差 | 已修:g=ΔH + 地形改动帧数×0.5封顶15 |
+| 2 | 标签撒谎:落点是 replan 读不到的幽灵态 | 已修:SettleNode + StandCell body-fit |
+| 3 | 能力撒谎:场定价了身体做不到的转移 | 逐类修:可挖性/竖3行/斜砖6px/垫脚第4行/横向宽度均已入场;写回自愈(D* Lite)未做 |
 
-1. **场/Expand 一致性缺口**(类3,活着):MazeWand 建场对 dig 只有 flat 80/120/160,
-   **不看可挖性**(镐力/DigTable)、不看平台、和 Expand 的身体判定不完全一致。
-   场可以把路线定进挖不动的方块;Expand 端正确拒绝 → 死路 → 循环。
-2. **生成器静默失败**:DigDown/DigUp 对"挖不动/H不降/脚下平台"都无日志 null。
-   每次卡点都要考古。缺:每周期四邻居 H + 实心/平台/开采帧 的诊断行(一行,待加)。
-3. **attention 盲区**:miss 只看"计划 vs 执行",类2/3 执行完美;revisit 罚 6 分压不过 H 结构。
-4. **标量 H 的表达力天花板**:场看不见"怎么到的"(挖vs走)、身体状态(vx)、装备能力。
-   每个 tie-break 补丁都有自己的失效模式,补丁叠补丁有极限。
-5. **Expand 不完备**:缺 align-then-act 前奏(窄井精确进入)、walk-off-edge、连跳链。
-6. 两套物理:目前 framecmp d=0,惊人地准,不是火线问题;击退由闭环吸收(设计意图)。
+类2/3的险恶:每步都完美HIT,attention 全盲 → 防循环根本手段是消灭谎言,不是加惩罚。
 
-## 四、之后怎么走
+已落地机制:循环电击器(bestH 停滞20 replan→环上边+200衰减罚,3次无效→停机dump;
+坠落等非自愿位移 H 暴涨>200 会重定基线防误伤)、执行 watchdog(软/硬双钟)、
+EXPAND-EMPTY 安全脱困步、STARVED-EXPAND 自动 SegDiag 诊断、EmitPlace STALL-WHY 遥测。
 
-### Phase A — 真相与可观测(已大部完成)
-- [x] 决策日志四邻居行 `[recede-nbrs]` + cands total → 已定罪并修掉 (981,435)
-      (真凶:StandCell 贴合快照拿现在的世界检查未来世界的 dig 落点,两处:选边标签 + EdgeToSteps 方向)。
-- [x] **循环检测器+电击**(用户拍板的普适机制):循环普适特征=best-H 停滞 20 replan;
-      普适跳出=对循环环上所有边注入 200 可衰减 miss 罚(电击),Bellman 改道;
-      电击3次仍无新低H → 停机+dump(真模型缺口,须改代码)。任何新机制引入的新循环类都先被它兜住。
-- [ ] 生成器拒绝原因可见化(digdown/digup/drop 的 null 原因计数)。
+身体几何常数:玩家 20px 宽(跨2-3列)、42px 高(3行包络48px,仅 **6px 富余**——
+斜砖/半砖在胸头行或垫脚都会吃光它)、单跳约6格、站立格约定 (px+10)/16, (py+41)/16。
 
-### Phase B — 关闭一致性缺口(真正的修复)
-- **场只定价身体做得到的事**:MazeWand StepCost 接入 DigTable(可挖性/镐力)、
-  平台向下、身体净空。类3循环在源头消失。镐升级时重建场(场本来就按目标建一次,可接受)。
-- **attention 写回场**(架构级杠杆,fallback 兜底一切残余谎言):
-  执行反复证伪的转移,把它在**场里**重定价并局部 Dijkstra 修复(学术锚点: D* Lite),
-  而不是只在选边层加罚。有限、可衰减,不违反"不禁退"。
-  这使未来任何类3谎言**自愈**,不再需要逐例改代码。
-- 上两条做完,循环的三类根源全部有结构性答案:代价诚实(golden rule + 帧数)、
-  标签诚实(settle + body-fit)、能力诚实(场=身体 + 写回自愈)。
+未验证的最新修复(2026-07-03 后半):位移重定基线、安全脱困步、宽度净空、
+goalSnapCap=2(drift-replan 目标被 snap 传送>2行则弃腿重选)。跑 L-run 验证。
 
-### Phase C — 能力生长(之后)
-- 窄井/精确进入的 align 前奏(作为动作的一部分,不是全局要求)。
-- Params 驱动的原语:二段跳/翅膀/重力药水 = 物理参数变化,运行时发现,不加新代码。
-- line 的身体化(现在 line 是无身体的逐格路径)。
+## 六、试过且丢弃的(别再试)
 
-### 里程碑
-1. L-run 地表几千格无循环(眼下)。
-2. 混合挖掘下降到地狱。
-3. WoF 战斗准备(远期)。
-
-## 五、试过且丢弃的(别再试)
-
-- **local-action-graph 重写**:整体推倒,神秘 bug("walled in"),已删("好的设计不应该出 bug")。
+- **local-action-graph 重写**:整体推倒,神秘 bug,已删("好的设计不应该出 bug")。
 - **2-cell lookahead**:深谷里第二层同样出不去,退化为无用。
-- **surcharge 常数**:40 和 3 都错,证明单常数在"防乱挖"和"不饿死必要挖"之间无解 → 帧数化。
+- **surcharge 常数**(40/3):单常数在"防乱挖"和"不饿死必要挖"间无解 → 帧数化。
 - **手编 per-action 成本**(place=120 等):golden rule 之前的循环之根。
-- **AlignScale=120**:否决真实降H,tie-break 项必须小(现 18)。
+- **AlignScale=120**:否决真实降H;tie-break 项必须小(现18)。
+- **在 mod 仓库里放 agent 代码 / 默认 Claude API**:用户明确否决。
