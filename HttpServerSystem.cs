@@ -1318,6 +1318,188 @@ namespace TerraBlind
 			{
 				body = "{\"ok\":true}";
 			}
+			// ---- LLM agent bridge (see AgentChat.cs) ----
+			else if (path == "/nav_recede")
+			{
+				// Bellman receding-horizon nav (same engine as the K keybind). Poll /nav_recede_done for the outcome.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "");
+				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
+				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
+				if (!gxM.Success || !gyM.Success) { body = "{\"ok\":false,\"reason\":\"bad_request\"}"; status = 400; }
+				else
+				{
+					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value));
+					body = "{\"ok\":true}";
+				}
+			}
+			else if (path == "/nav_recede_done")
+			{
+				if (RecedingNav.Active)
+					body = "{\"done\":false,\"status\":\"running\"}";
+				else if (RecedingNav.LastStop == "done")
+					body = "{\"done\":true,\"status\":\"done\"}";
+				else
+					body = "{\"done\":false,\"status\":\"failed\",\"reason\":\"" + (RecedingNav.LastStop ?? "never_ran") + "\"}";
+			}
+			else if (path == "/nav_recede_stop")
+			{
+				RecedingNav.Stop();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/instruction")
+			{
+				body = AgentChat.Instructions.TryDequeue(out var ins)
+					? "{\"instruction\":\"" + JsonEsc(ins) + "\"}"
+					: "{\"instruction\":null}";
+			}
+			else if (path == "/say")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var tM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+				if (tM.Success)
+				{
+					AgentChat.Say(JsonUnesc(tM.Groups[1].Value));
+					body = "{\"ok\":true}";
+				}
+				else { body = "{\"error\":\"bad_params\",\"usage\":\"POST /say {\\\"text\\\":\\\"...\\\"}\"}"; status = 400; }
+			}
+			else if (path == "/find_biome")
+			{
+				// POST {"name":"jungle"} → a standable coordinate at the biome's center of mass. The whole map is
+				// readable, so a biome is a query, not an exploration: scan for its signature tile, average the
+				// hits, snap down to a floor. Returns {found, x, y, count}. Supported: jungle, snow, desert, dungeon,
+				// corruption, crimson, hallow.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
+				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
+				ushort[] sigTypes = biome switch
+				{
+					"jungle" => new[] { Terraria.ID.TileID.JungleGrass },
+					"snow" or "ice" or "tundra" => new[] { Terraria.ID.TileID.SnowBlock, Terraria.ID.TileID.IceBlock },
+					"desert" => new[] { Terraria.ID.TileID.Sandstone, Terraria.ID.TileID.HardenedSand },
+					"dungeon" => new[] { Terraria.ID.TileID.BlueDungeonBrick, Terraria.ID.TileID.GreenDungeonBrick, Terraria.ID.TileID.PinkDungeonBrick },
+					"corruption" => new[] { Terraria.ID.TileID.CorruptGrass, Terraria.ID.TileID.Ebonstone },
+					"crimson" => new[] { Terraria.ID.TileID.CrimsonGrass, Terraria.ID.TileID.Crimstone },
+					"hallow" => new[] { Terraria.ID.TileID.HallowedGrass, Terraria.ID.TileID.Pearlstone },
+					_ => null,
+				};
+				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
+				else
+				{
+					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
+					long sx = 0, sy = 0; int count = 0;
+					// coarse scan (every 4th tile) — signature blocks form contiguous regions, so subsampling still
+					// finds the centroid and keeps a full-map scan fast.
+					for (int x = 0; x < Main.maxTilesX; x += 4)
+						for (int y = 0; y < Main.maxTilesY; y += 4)
+						{
+							var t = Main.tile[x, y];
+							if (t.HasTile && want.Contains(t.TileType)) { sx += x; sy += y; count++; }
+						}
+					if (count == 0) { body = "{\"found\":false,\"count\":0}"; }
+					else
+					{
+						int cx = (int)(sx / count), cy = (int)(sy / count);
+						// snap to a standable surface: from the centroid, walk up to open air then find the floor top.
+						int fy = cy;
+						while (fy > 1 && Main.tile[cx, fy].HasTile && Main.tileSolid[Main.tile[cx, fy].TileType]) fy--;
+						while (fy < Main.maxTilesY - 2 && !(Main.tile[cx, fy + 1].HasTile && Main.tileSolid[Main.tile[cx, fy + 1].TileType])) fy++;
+						body = "{\"found\":true,\"x\":" + cx + ",\"y\":" + fy + ",\"count\":" + count + "}";
+					}
+				}
+			}
+			else if (path == "/tile_names")
+			{
+				// POST {"q":"heart"} → all vanilla TileID names containing the substring (case-insensitive), so the
+				// agent can resolve a fuzzy name ("生命水晶"→"Heart") before calling find_tiles instead of guessing.
+				// Omit q to list everything. The names here are exactly what find_tiles's TileID.Search accepts.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var qM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"q\"\\s*:\\s*\"([^\"]*)\"");
+				string q = qM.Success ? qM.Groups[1].Value.ToLowerInvariant() : "";
+				var names = new System.Collections.Generic.List<string>();
+				for (int t = 0; t < Terraria.ID.TileID.Count; t++)
+				{
+					if (!Terraria.ID.TileID.Search.TryGetName(t, out string nm) || nm == null) continue;
+					if (q.Length == 0 || nm.ToLowerInvariant().Contains(q))
+						names.Add(nm);
+				}
+				var tsb = new StringBuilder("{\"names\":[");
+				for (int i = 0; i < names.Count; i++) { if (i > 0) tsb.Append(','); tsb.Append('"').Append(JsonEsc(names[i])).Append('"'); }
+				tsb.Append("]}");
+				body = tsb.ToString();
+			}
+			else if (path == "/find_tiles")
+			{
+				// POST {"name":"Iron","n":5,"max_dist":300} → nearest tiles of that TileID name (exact vanilla name,
+				// e.g. Iron/Copper/Gold/Demonite/Containers), expanding-ring scan from the player → sorted by distance.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var nameM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([A-Za-z0-9_]+)\"");
+				var nM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"n\"\\s*:\\s*(\\d+)");
+				var mdM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"max_dist\"\\s*:\\s*(\\d+)");
+				int wantN = nM2.Success ? int.Parse(nM2.Groups[1].Value) : 5;
+				int maxD = mdM.Success ? int.Parse(mdM.Groups[1].Value) : 300;
+				var pl = Main.LocalPlayer;
+				if (!nameM.Success || pl == null)
+				{
+					body = "{\"error\":\"bad_params\",\"usage\":\"POST /find_tiles {\\\"name\\\":\\\"Iron\\\",\\\"n\\\":5,\\\"max_dist\\\":300}\"}";
+					status = 400;
+				}
+				else if (!Terraria.ID.TileID.Search.TryGetId(nameM.Groups[1].Value, out int wantType))
+				{
+					body = "{\"error\":\"unknown_tile_name\",\"name\":\"" + JsonEsc(nameM.Groups[1].Value) + "\"}";
+					status = 400;
+				}
+				else
+				{
+					int pcx = (int)(pl.Center.X / 16f), pcy = (int)(pl.Center.Y / 16f);
+					var found = new System.Collections.Generic.List<(int x, int y, string kind)>();
+					for (int r = 0; r <= maxD && found.Count < wantN; r++)
+						for (int dx = -r; dx <= r && found.Count < wantN; dx++)
+						{
+							// ring only: interior columns contribute just their top/bottom rows
+							int[] dys = System.Math.Abs(dx) == r
+								? System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Range(-r, 2 * r + 1))
+								: (r == 0 ? new[] { 0 } : new[] { -r, r });
+							foreach (int dy in dys)
+							{
+								int x = pcx + dx, y = pcy + dy;
+								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
+								var t = Main.tile[x, y];
+								if (!t.HasTile || t.TileType != wantType) continue;
+								// Containers are 2x2, one TileID; only the top-left tile (frameX%36==0 && frameY%36==0)
+								// anchors a chest. Dedup to it and derive the chest sub-type from frameX.
+								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
+								{
+									if (t.TileFrameX % 36 != 0 || t.TileFrameY % 36 != 0) continue;
+									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
+								}
+								else found.Add((x, y, null));
+								if (found.Count >= wantN) break;
+							}
+						}
+					var fsb = new StringBuilder("{\"tiles\":[");
+					for (int i = 0; i < found.Count; i++)
+					{
+						if (i > 0) fsb.Append(',');
+						fsb.Append($"{{\"x\":{found[i].x},\"y\":{found[i].y},\"dist\":{System.Math.Abs(found[i].x - pcx) + System.Math.Abs(found[i].y - pcy)}");
+						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
+						fsb.Append("}");
+					}
+					fsb.Append("]}");
+					body = fsb.ToString();
+				}
+			}
 			else
 			{
 				body = "{\"error\":\"not_found\"}";
@@ -1330,6 +1512,25 @@ namespace TerraBlind
 			ctx.Response.ContentLength64 = bytes.Length;
 			ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
 			ctx.Response.OutputStream.Close();
+		}
+
+		static string JsonEsc(string s) =>
+			s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+
+		static string JsonUnesc(string s) =>
+			s.Replace("\\n", "\n").Replace("\\r", "\r").Replace("\\t", "\t").Replace("\\\"", "\"").Replace("\\\\", "\\");
+
+		// Chest sub-type from its placement style (frameX/36). Uses the vanilla map-object name so modded chests and
+		// future vanilla additions resolve automatically instead of a hand-kept table.
+		static string ChestKindName(int tileType, int style)
+		{
+			try
+			{
+				var name = Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(tileType, style));
+				if (!string.IsNullOrEmpty(name)) return name;
+			}
+			catch { }
+			return "Chest";
 		}
 	}
 }
