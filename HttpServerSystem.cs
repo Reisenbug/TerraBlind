@@ -212,6 +212,10 @@ namespace TerraBlind
 				}
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/fight_active")
+			{
+				body = "{\"active\":" + (FightCoordinator.IsActive ? "true" : "false") + "}";
+			}
 			else if (path == "/loot_all")
 			{
 				_lootAllRequested = true;
@@ -1424,7 +1428,7 @@ namespace TerraBlind
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
 				var qM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"q\"\\s*:\\s*\"([^\"]*)\"");
-				string q = qM.Success ? qM.Groups[1].Value.ToLowerInvariant() : "";
+				string q = qM.Success ? qM.Groups[1].Value.Trim().ToLowerInvariant() : "";
 				var names = new System.Collections.Generic.List<string>();
 				for (int t = 0; t < Terraria.ID.TileID.Count; t++)
 				{
@@ -1520,14 +1524,20 @@ namespace TerraBlind
 		static string JsonUnesc(string s) =>
 			s.Replace("\\n", "\n").Replace("\\r", "\r").Replace("\\t", "\t").Replace("\\\"", "\"").Replace("\\\\", "\\");
 
-		// Chest sub-type from its placement style (frameX/36). Uses the vanilla map-object name so modded chests and
-		// future vanilla additions resolve automatically instead of a hand-kept table.
+		// Chest sub-type name. frameX/36 IS the chest sub-id (Gold=1, Ivy=21, ...). Vanilla names them via
+		// Lang.chestType[] for Containers(21) and Lang.chestType2[] for Containers2(467) — NOT MapHelper's
+		// TileToLookup, whose "option" is a map-COLOR group (many chests share one color → wrong names, e.g. a gold
+		// chest resolving to a crimson-altar color slot). style here is frameX/36, passed by the caller.
 		static string ChestKindName(int tileType, int style)
 		{
 			try
 			{
-				var name = Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(tileType, style));
-				if (!string.IsNullOrEmpty(name)) return name;
+				var tbl = tileType == Terraria.ID.TileID.Containers2 ? Lang.chestType2 : Lang.chestType;
+				if (style >= 0 && style < tbl.Length)
+				{
+					var name = tbl[style]?.Value;
+					if (!string.IsNullOrEmpty(name)) return name;
+				}
 			}
 			catch { }
 			return "Chest";
