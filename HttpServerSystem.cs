@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ModLoader;
@@ -23,6 +24,32 @@ namespace TerraBlind
 	{
 		public static volatile Snapshot LatestSnapshot;
 		public static volatile ControlInput PendingControl;
+
+		// EVENT PUSH (game ↔ agent) over WebSocket on /ws. WebSocket (not SSE) because the channel is bidirectional:
+		// the game pushes events (player chat, nav_done, took damage) AND the agent can push low-latency interrupts
+		// back without a request/response round-trip. Uses HttpListener's built-in WebSocket support (no third-party
+		// lib). PushEvent may be called from the game thread; WebSocket.SendAsync can't be called concurrently on one
+		// socket, so each client owns a send queue drained by its own async loop — PushEvent only enqueues.
+		sealed class WsClient
+		{
+			public System.Net.WebSockets.WebSocket Sock;
+			public readonly System.Collections.Concurrent.BlockingCollection<string> Out =
+				new System.Collections.Concurrent.BlockingCollection<string>();
+		}
+		private static readonly System.Collections.Generic.List<WsClient> _wsClients = new();
+		private static readonly object _wsLock = new();
+
+		public static void PushEvent(string type, string jsonBody = "{}")
+		{
+			string msg = "{\"type\":\"" + type + "\",\"data\":" + jsonBody + "}";
+			lock (_wsLock)
+				foreach (var c in _wsClients)
+					try { c.Out.Add(msg); } catch { }
+		}
+
+		// messages received FROM the agent over the WebSocket (e.g. an interrupt / command). Drained on the main
+		// thread if needed; for now the agent still commands via HTTP, this is the reverse push channel.
+		public static readonly ConcurrentQueue<string> WsInbound = new();
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
@@ -137,6 +164,14 @@ namespace TerraBlind
 				{
 					break;
 				}
+				// WebSocket event channel: upgrade and hand off to a dedicated thread; the connection lives until
+				// the client disconnects. Everything else is a normal HTTP request → Handle.
+				if (ctx.Request.IsWebSocketRequest && ctx.Request.Url.AbsolutePath == "/ws")
+				{
+					var c = ctx;
+					new Thread(() => ServeWebSocket(c)) { IsBackground = true, Name = "TerraBlindWs" }.Start();
+					continue;
+				}
 				try
 				{
 					Handle(ctx);
@@ -151,6 +186,52 @@ namespace TerraBlind
 					catch { }
 					Mod.Logger.Warn("TerraBlind request error: " + e.Message);
 				}
+			}
+		}
+
+		// Run one WebSocket client to completion: accept the upgrade, then pump a send loop (drains the client's
+		// Out queue) and a receive loop (agent→game messages into WsInbound) until either side closes.
+		private void ServeWebSocket(HttpListenerContext ctx)
+		{
+			System.Net.WebSockets.HttpListenerWebSocketContext wsCtx;
+			try { wsCtx = ctx.AcceptWebSocketAsync(null).GetAwaiter().GetResult(); }
+			catch { try { ctx.Response.Close(); } catch { } return; }
+			var sock = wsCtx.WebSocket;
+			var client = new WsClient { Sock = sock };
+			lock (_wsLock) _wsClients.Add(client);
+			try
+			{
+				client.Out.Add("{\"type\":\"hello\",\"data\":{}}");
+				// send loop
+				var sender = Task.Run(async () =>
+				{
+					try
+					{
+						foreach (var msg in client.Out.GetConsumingEnumerable())
+						{
+							var buf = Encoding.UTF8.GetBytes(msg);
+							await sock.SendAsync(new ArraySegment<byte>(buf),
+								System.Net.WebSockets.WebSocketMessageType.Text, true, System.Threading.CancellationToken.None);
+						}
+					}
+					catch { }
+				});
+				// receive loop (blocks this thread until close)
+				var rbuf = new byte[4096];
+				while (sock.State == System.Net.WebSockets.WebSocketState.Open)
+				{
+					var res = sock.ReceiveAsync(new ArraySegment<byte>(rbuf), System.Threading.CancellationToken.None)
+						.GetAwaiter().GetResult();
+					if (res.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) break;
+					if (res.Count > 0) WsInbound.Enqueue(Encoding.UTF8.GetString(rbuf, 0, res.Count));
+				}
+			}
+			catch { }
+			finally
+			{
+				lock (_wsLock) _wsClients.Remove(client);
+				try { client.Out.CompleteAdding(); } catch { }
+				try { sock.Abort(); } catch { }
 			}
 		}
 
@@ -1372,6 +1453,50 @@ namespace TerraBlind
 				}
 				else { body = "{\"error\":\"bad_params\",\"usage\":\"POST /say {\\\"text\\\":\\\"...\\\"}\"}"; status = 400; }
 			}
+			else if (path == "/item_info")
+			{
+				// POST {"slot":18} or {"name":"Bomb"} → full item info so the agent can tell same-named / confusable
+				// items apart (BOMB summons a fairy; 炸弹 destroys tiles). Returns type flags + tooltip lines.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var slM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"slot\"\\s*:\\s*(\\d+)");
+				var inM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
+				var pl = Main.LocalPlayer;
+				Item it = null;
+				if (pl != null && slM.Success)
+				{
+					int sl = int.Parse(slM.Groups[1].Value);
+					if (sl >= 0 && sl < pl.inventory.Length) it = pl.inventory[sl];
+				}
+				else if (pl != null && inM.Success)
+				{
+					string want = inM.Groups[1].Value.ToLowerInvariant();
+					foreach (var cand in pl.inventory)
+						if (cand != null && !cand.IsAir && (cand.Name ?? "").ToLowerInvariant() == want) { it = cand; break; }
+				}
+				if (it == null || it.IsAir) { body = "{\"found\":false}"; }
+				else
+				{
+					var isb = new StringBuilder("{\"found\":true");
+					isb.Append(",\"name\":\"").Append(JsonEsc(it.Name ?? "")).Append('"');
+					isb.Append(",\"type\":").Append(it.type);
+					isb.Append(",\"stack\":").Append(it.stack);
+					isb.Append(",\"damage\":").Append(it.damage);
+					isb.Append(",\"pick\":").Append(it.pick);
+					isb.Append(",\"axe\":").Append(it.axe);
+					isb.Append(",\"hammer\":").Append(it.hammer);
+					isb.Append(",\"createTile\":").Append(it.createTile);
+					isb.Append(",\"createWall\":").Append(it.createWall);
+					isb.Append(",\"consumable\":").Append(it.consumable ? "true" : "false");
+					isb.Append(",\"healLife\":").Append(it.healLife);
+					isb.Append(",\"healMana\":").Append(it.healMana);
+					isb.Append(",\"useStyle\":").Append(it.useStyle);
+					isb.Append(",\"tooltip\":\"").Append(JsonEsc(ItemTooltipText(it))).Append('"');
+					isb.Append('}');
+					body = isb.ToString();
+				}
+			}
 			else if (path == "/find_biome")
 			{
 				// POST {"name":"jungle"} → a standable coordinate at the biome's center of mass. The whole map is
@@ -1518,11 +1643,32 @@ namespace TerraBlind
 			ctx.Response.OutputStream.Close();
 		}
 
+		public static string JsonEscPublic(string s) => JsonEsc(s);
+
 		static string JsonEsc(string s) =>
 			s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
 
 		static string JsonUnesc(string s) =>
 			s.Replace("\\n", "\n").Replace("\\r", "\r").Replace("\\t", "\t").Replace("\\\"", "\"").Replace("\\\\", "\\");
+
+		// Vanilla tooltip text for an item, lines joined by " | ". This is what the mouseover box shows — the only
+		// reliable way to tell same-named / confusable items apart (BOMB=summon vs 炸弹=destroy tiles).
+		static string ItemTooltipText(Item it)
+		{
+			try
+			{
+				var tt = it.ToolTip ?? Lang.GetTooltip(it.type);
+				if (tt == null || tt.Lines <= 0) return "";
+				var parts = new System.Collections.Generic.List<string>();
+				for (int i = 0; i < tt.Lines; i++)
+				{
+					string ln = tt.GetLine(i);
+					if (!string.IsNullOrWhiteSpace(ln)) parts.Add(ln);
+				}
+				return string.Join(" | ", parts);
+			}
+			catch { return ""; }
+		}
 
 		// Chest sub-type name. frameX/36 IS the chest sub-id (Gold=1, Ivy=21, ...). Vanilla names them via
 		// Lang.chestType[] for Containers(21) and Lang.chestType2[] for Containers2(467) — NOT MapHelper's

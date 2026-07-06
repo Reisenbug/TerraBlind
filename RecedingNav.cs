@@ -70,6 +70,8 @@ namespace TerraBlind
         public static void Stop()
         {
             if (Active && LastStop == null) LastStop = "stopped";
+            if (Active)   // only fire on an actual running→stopped transition
+                HttpServerSystem.PushEvent("nav_done", "{\"result\":\"" + (LastStop ?? "stopped") + "\"}");
             Active = false;
             StateSpacePlanner.StopNav();
             RecedingVis.Clear();

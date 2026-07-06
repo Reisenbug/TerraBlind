@@ -41,33 +41,15 @@ namespace TerraBlind
 			sb.Append("\"held_item\":");
 			AppendSlot(sb, s.Equipment.HeldItem);
 			sb.Append(',');
-			sb.Append("\"hotbar\":[");
+			// ONE "items" array of NON-EMPTY slots only (hotbar 0-9, backpack 10-49). Empty slots are the bulk of a
+			// snapshot (40 mostly-air backpack rows) and pure token waste — omit them. Each item carries its absolute
+			// "slot" so the agent copies it verbatim into use_item instead of counting/offsetting.
+			sb.Append("\"items\":[");
+			bool first = true;
 			for (int i = 0; i < s.Equipment.Hotbar.Length; i++)
-			{
-				if (i > 0) sb.Append(',');
-				AppendSlot(sb, s.Equipment.Hotbar[i]);
-			}
-			sb.Append("],");
-			sb.Append("\"inventory\":[");
+				AppendSlotIfPresent(sb, s.Equipment.Hotbar[i], i, ref first);
 			for (int i = 0; i < s.Equipment.Inventory.Length; i++)
-			{
-				if (i > 0) sb.Append(',');
-				AppendSlot(sb, s.Equipment.Inventory[i]);
-			}
-			sb.Append("],");
-			sb.Append("\"coins\":[");
-			for (int i = 0; i < s.Equipment.Coins.Length; i++)
-			{
-				if (i > 0) sb.Append(',');
-				AppendSlot(sb, s.Equipment.Coins[i]);
-			}
-			sb.Append("],");
-			sb.Append("\"ammo\":[");
-			for (int i = 0; i < s.Equipment.Ammo.Length; i++)
-			{
-				if (i > 0) sb.Append(',');
-				AppendSlot(sb, s.Equipment.Ammo[i]);
-			}
+				AppendSlotIfPresent(sb, s.Equipment.Inventory[i], i + 10, ref first);
 			sb.Append(']');
 			sb.Append("},");
 
@@ -235,14 +217,24 @@ namespace TerraBlind
 			return sb.ToString();
 		}
 
-		private static void AppendSlot(StringBuilder sb, HotbarSlot slot)
+		// emit a slot only if it holds a real item; keeps the comma bookkeeping via `first`.
+		private static void AppendSlotIfPresent(StringBuilder sb, HotbarSlot slot, int absSlot, ref bool first)
+		{
+			if (slot == null || string.IsNullOrEmpty(slot.Name) || slot.Stack <= 0) return;
+			if (!first) sb.Append(',');
+			first = false;
+			AppendSlot(sb, slot, absSlot);
+		}
+
+		private static void AppendSlot(StringBuilder sb, HotbarSlot slot, int absSlot = -1)
 		{
 			if (slot == null)
 			{
-				sb.Append("{\"id\":0,\"name\":\"\",\"stack\":0,\"damage\":0,\"pick\":0,\"axe\":0,\"hammer\":0,\"create_tile\":-1,\"consumable\":false,\"category\":\"misc\"}");
+				sb.Append("{\"slot\":").Append(absSlot).Append(",\"id\":0,\"name\":\"\",\"stack\":0,\"damage\":0,\"pick\":0,\"axe\":0,\"hammer\":0,\"create_tile\":-1,\"consumable\":false,\"category\":\"misc\"}");
 				return;
 			}
-			sb.Append("{\"id\":").Append(slot.Id);
+			sb.Append("{\"slot\":").Append(absSlot);
+			sb.Append(",\"id\":").Append(slot.Id);
 			sb.Append(",\"name\":\"").Append(EscapeStr(slot.Name)).Append("\"");
 			sb.Append(",\"stack\":").Append(slot.Stack);
 			sb.Append(",\"damage\":").Append(slot.Damage);

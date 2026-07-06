@@ -50,6 +50,19 @@ namespace TerraBlind
 					return;
 				}
 			}
+			// selectedItem only holds items in the hotbar (0-9). A backpack slot (10-49) can't be held — swap it
+			// into a hotbar slot first (prefer an empty one, else slot 0), then use from there.
+			if (slot >= 10 && slot < p.inventory.Length)
+			{
+				int hb = -1;
+				for (int i = 0; i < 10; i++)
+					if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
+				if (hb < 0) hb = 0;   // no empty hotbar slot → displace slot 0 (its item goes to the backpack slot)
+				var tmp = p.inventory[hb];
+				p.inventory[hb] = p.inventory[slot];
+				p.inventory[slot] = tmp;
+				slot = hb;
+			}
 
 			float worldX = req.TargetWx * 16f + 8f;
 			float worldY = req.TargetWy * 16f + 8f;

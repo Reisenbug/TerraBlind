@@ -21,6 +21,8 @@ namespace TerraBlind
 			AgentChat.Instructions.Enqueue(text);
 			Main.NewText($"<you → TB> {text}", 120, 200, 255);
 			DiagLog.Write($"[agent] instruction queued: {text}");
+			// push it as an event too, so the agent reacts instantly instead of polling /instruction
+			HttpServerSystem.PushEvent("instruction", "{\"text\":\"" + HttpServerSystem.JsonEscPublic(text) + "\"}");
 		}
 	}
 
