@@ -454,6 +454,14 @@ namespace TerraBlind
 				ItemUseCoordinator.Stop();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/item_use_status")
+			{
+				// running | removed (collect target gone) | timeout (swings ran out, tile still there) | stopped | n/a
+				body = "{\"active\":" + (ItemUseCoordinator.IsActive ? "true" : "false")
+					+ ",\"outcome\":\"" + JsonEsc(ItemUseCoordinator.Outcome) + "\""
+					+ ",\"snapped_wx\":" + ItemUseCoordinator.SnappedWx
+					+ ",\"snapped_wy\":" + ItemUseCoordinator.SnappedWy + "}";
+			}
 			else if (path == "/walk_to_edge")
 			{
 				string reqBody;
