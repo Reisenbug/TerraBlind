@@ -18,6 +18,11 @@ namespace TerraBlind
 		private static int _ticksLeft;
 		private static bool _snapped;    // has this request already snapped its target this session?
 		private static int _watchType = -1;  // TileType of the collect target we're watching; -1 = not watching
+		private static int _elapsed;         // ticks since this action started (for the no-progress grace window)
+		// NO-PROGRESS window: after this many ticks of swinging, if the target tile still shows zero accumulated
+		// mining damage, the tool simply can't dent it (wooden pick on stone, wrong tool). Stop early and report
+		// "no_progress" instead of flailing to the full timeout — this is the human "two swings, nope, wrong tool".
+		private const int ProgressGrace = 45;
 
 		// the tile the target snapped to (for HTTP reporting); -1,-1 if no snap happened.
 		public static int SnappedWx = -1;
@@ -26,6 +31,9 @@ namespace TerraBlind
 		// gone = tree fell / ore mined) or "timeout" (duration ran out, tile still there). HTTP reports this so the LLM
 		// knows the outcome instead of guessing. "n/a" for non-collect items (place/throw/potion) — nothing to watch.
 		public static string Outcome = "idle";
+		// when Outcome == "no_progress", why: "blocked" (a tree/chest sits on top, vanilla forbids mining the support —
+		// clear the obstruction first, a better pick won't help) or "tool_weak" (pick just can't dent it — upgrade).
+		public static string Reason = "";
 
 		public static bool IsActive => _active != null;
 
@@ -35,8 +43,10 @@ namespace TerraBlind
 			_ticksLeft = r.DurationTicks > 0 ? r.DurationTicks : int.MaxValue;
 			_snapped = false;
 			_watchType = -1;
+			_elapsed = 0;
 			SnappedWx = -1; SnappedWy = -1;
 			Outcome = "running";
+			Reason = "";
 		}
 
 		public static void Stop()
@@ -52,14 +62,28 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _active = null; return; }
 
-			// COMPLETION DETECTION: once snapped onto a collect target, watch that tile. When it goes empty (tree fell,
-			// ore mined) the action is done — stop early. This is "use axe until the tree is down": the terminating
-			// condition is the game fact, not a fixed swing count.
+			_elapsed++;
+
+			// COMPLETION DETECTION — three-way termination on a collect target (chop/mine):
+			//   removed     → target tile gone (tree fell / ore mined): success. Stop.
+			//   no_progress → swung past the grace window but the tile shows zero mining damage: the tool can't dent it
+			//                 (wooden pick on stone). Stop early instead of flailing to timeout.
+			//   timeout     → ran out the swing budget with the tile still there but being chipped: fallback.
+			// This is "use axe until the tree is down" plus the human "wrong tool, give up early".
 			if (_watchType >= 0)
 			{
 				var wt = Main.tile[SnappedWx, SnappedWy];
 				if (!wt.HasTile || wt.TileType != _watchType)
 				{ Outcome = "removed"; _active = null; return; }
+
+				if (_elapsed >= ProgressGrace && TileMineDamage(p, SnappedWx, SnappedWy) <= 0)
+				{
+					// zero damage after the grace window → distinguish WHY. Vanilla CanKillTile is false when a tree or
+					// chest sits on top (can't mine a support out from under it): that's structural, a better pick won't
+					// help — clear the obstruction. Otherwise the pick simply isn't strong enough.
+					Reason = WorldGen.CanKillTile(SnappedWx, SnappedWy) ? "tool_weak" : "blocked";
+					Outcome = "no_progress"; _active = null; return;
+				}
 			}
 
 			if (_ticksLeft <= 0)
@@ -179,6 +203,15 @@ namespace TerraBlind
 
 			wx = bestX; wy = bestY;
 			return true;
+		}
+
+		// Accumulated mining damage on a tile from this player's swings (hitTile buffers it, decaying after 60 ticks
+		// of no hits). >0 means the tool is actually chipping the tile; 0 after the grace window means it isn't.
+		private static int TileMineDamage(Player p, int x, int y)
+		{
+			int id = p.hitTile.TryFinding(x, y, 1);   // hitType 1 = TILE
+			if (id < 0) return 0;
+			return p.hitTile.data[id].damage;
 		}
 
 		private static bool InBounds(int x, int y) =>

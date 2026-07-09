@@ -75,6 +75,7 @@ namespace TerraBlind
 			if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
 
 			PerceptionDiff.Tick();   // eye B-path: push salient world-change events to the agent (silent otherwise)
+			SurvivalReflex.Tick();   // hand reflex: stay alive (jump out of lava / quick-heal) while any action runs
 
 			while (_swapQueue.TryDequeue(out var swap))
 			{
@@ -462,6 +463,7 @@ namespace TerraBlind
 				// running | removed (collect target gone) | timeout (swings ran out, tile still there) | stopped | n/a
 				body = "{\"active\":" + (ItemUseCoordinator.IsActive ? "true" : "false")
 					+ ",\"outcome\":\"" + JsonEsc(ItemUseCoordinator.Outcome) + "\""
+					+ ",\"reason\":\"" + JsonEsc(ItemUseCoordinator.Reason) + "\""
 					+ ",\"snapped_wx\":" + ItemUseCoordinator.SnappedWx
 					+ ",\"snapped_wy\":" + ItemUseCoordinator.SnappedWy + "}";
 			}
