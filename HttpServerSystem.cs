@@ -73,6 +73,9 @@ namespace TerraBlind
 			}
 
 			if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
+
+			PerceptionDiff.Tick();   // eye B-path: push salient world-change events to the agent (silent otherwise)
+
 			while (_swapQueue.TryDequeue(out var swap))
 			{
 				int src = swap.src, dst = swap.dst;
