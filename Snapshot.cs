@@ -43,6 +43,32 @@ namespace TerraBlind
 		public bool OnGround;
 		public bool InLiquid;
 		public string Biome = "forest";
+		// combat-derived stats a player reads off the character panel — drive fight decisions.
+		public int Defense;
+		public int MinionSlots;     // used / max summon capacity
+		public int MaxMinionSlots;
+		public int Coins;           // total wealth in copper (1 platinum = 1,000,000)
+	}
+
+	// World-global state a player perceives at a glance: time of day, weather, active events, progression.
+	// This whole block was missing — the biggest completeness gap. "It's night / blood moon / hardmode" changes
+	// what's dangerous and what the bot should do.
+	public sealed class WorldSnapshot
+	{
+		public bool DayTime;
+		public double Time;         // raw Main.time (ticks into the current day/night segment)
+		public string Clock = "";   // human 24h clock, e.g. "19:30"
+		public bool Raining;
+		public float RainIntensity;
+		public bool Sandstorm;
+		public bool Hardmode;
+		public bool BloodMoon;
+		public bool Eclipse;
+		public bool DownedEyeOfCthulhu;
+		public bool DownedEvilBoss;   // Eater of Worlds / Brain of Cthulhu
+		public bool DownedSkeletron;
+		public bool DownedWallOfFlesh;
+		public string ActiveEvent = "";  // "" | goblin_army | blood_moon | eclipse | pirates | frost_legion | ...
 	}
 
 	public sealed class CameraSnapshot
@@ -163,6 +189,7 @@ namespace TerraBlind
 		public long Tick;
 		public bool WalkToEdgeDone;
 		public PlayerSnapshot Player = new PlayerSnapshot();
+		public WorldSnapshot World = new WorldSnapshot();
 		public EquipmentSnapshot Equipment = new EquipmentSnapshot();
 		public CameraSnapshot Camera = new CameraSnapshot();
 		public MovementSnapshot Movement = new MovementSnapshot();

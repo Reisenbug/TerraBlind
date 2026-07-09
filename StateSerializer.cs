@@ -30,8 +30,30 @@ namespace TerraBlind
 			sb.Append("\"direction\":\"").Append(EscapeStr(s.Player.Direction)).Append("\",");
 			sb.Append("\"on_ground\":").Append(B(s.Player.OnGround)).Append(',');
 			sb.Append("\"in_liquid\":").Append(B(s.Player.InLiquid)).Append(',');
-			sb.Append("\"biome\":\"").Append(EscapeStr(s.Player.Biome)).Append("\"");
+			sb.Append("\"biome\":\"").Append(EscapeStr(s.Player.Biome)).Append("\",");
+			sb.Append("\"defense\":").Append(s.Player.Defense).Append(',');
+			sb.Append("\"minion_slots\":").Append(s.Player.MinionSlots).Append(',');
+			sb.Append("\"max_minion_slots\":").Append(s.Player.MaxMinionSlots).Append(',');
+			sb.Append("\"coins\":").Append(s.Player.Coins);
 			sb.Append("},");
+
+			var w = s.World;
+			sb.Append("\"world\":{");
+			sb.Append("\"day\":").Append(B(w.DayTime)).Append(',');
+			sb.Append("\"clock\":\"").Append(EscapeStr(w.Clock)).Append("\",");
+			sb.Append("\"raining\":").Append(B(w.Raining)).Append(',');
+			sb.Append("\"rain_intensity\":").Append(F(w.RainIntensity)).Append(',');
+			sb.Append("\"sandstorm\":").Append(B(w.Sandstorm)).Append(',');
+			sb.Append("\"hardmode\":").Append(B(w.Hardmode)).Append(',');
+			sb.Append("\"blood_moon\":").Append(B(w.BloodMoon)).Append(',');
+			sb.Append("\"eclipse\":").Append(B(w.Eclipse)).Append(',');
+			sb.Append("\"active_event\":\"").Append(EscapeStr(w.ActiveEvent)).Append("\",");
+			sb.Append("\"downed\":{");
+			sb.Append("\"eye_of_cthulhu\":").Append(B(w.DownedEyeOfCthulhu)).Append(',');
+			sb.Append("\"evil_boss\":").Append(B(w.DownedEvilBoss)).Append(',');
+			sb.Append("\"skeletron\":").Append(B(w.DownedSkeletron)).Append(',');
+			sb.Append("\"wall_of_flesh\":").Append(B(w.DownedWallOfFlesh));
+			sb.Append("}},");
 
 			sb.Append("\"equipment\":{");
 			sb.Append("\"selected_slot\":").Append(s.Equipment.SelectedSlot).Append(',');

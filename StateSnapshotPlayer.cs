@@ -232,7 +232,12 @@ namespace TerraBlind
 					OnGround = Player.velocity.Y == 0f,
 					InLiquid = Player.wet,
 					Biome = DetectBiome(),
+					Defense = Player.statDefense,
+					MinionSlots = (int)Player.slotsMinions,
+					MaxMinionSlots = Player.maxMinions,
+					Coins = (int)System.Math.Min(int.MaxValue, Terraria.Utils.CoinsCount(out _, Player.inventory)),
 				},
+				World = BuildWorld(),
 				Equipment = BuildEquipment(),
 				Camera = new CameraSnapshot
 				{
@@ -257,6 +262,43 @@ namespace TerraBlind
 
 			HttpServerSystem.LatestSnapshot = snap;
 			PhysicsRecorder.Capture(Player, Player.controlJump);
+		}
+
+		private WorldSnapshot BuildWorld()
+		{
+			// Terraria clock: Main.time counts ticks into the current segment. Day starts at 4:30am and lasts 54000
+			// ticks; night starts at 7:30pm and lasts 32400. Convert to a 24h wall clock the way the in-game clock does.
+			double t = Main.time;
+			double hours;
+			if (Main.dayTime) hours = t / 3600.0 + 4.5;          // day segment → 4:30 .. 19:30
+			else hours = t / 3600.0 + 19.5;                      // night segment → 19:30 .. 4:30(+24)
+			hours %= 24.0;
+			int hh = (int)hours;
+			int mm = (int)((hours - hh) * 60);
+
+			string evt = "";
+			if (Main.invasionType > 0) evt = Main.invasionType switch {
+				1 => "goblin_army", 2 => "frost_legion", 3 => "pirates", 4 => "martians", _ => "invasion" };
+			else if (Main.eclipse) evt = "eclipse";
+			else if (Main.bloodMoon) evt = "blood_moon";
+
+			return new WorldSnapshot
+			{
+				DayTime = Main.dayTime,
+				Time = Main.time,
+				Clock = $"{hh:D2}:{mm:D2}",
+				Raining = Main.raining,
+				RainIntensity = Main.raining ? Main.maxRaining : 0f,
+				Sandstorm = Player.ZoneSandstorm,
+				Hardmode = Main.hardMode,
+				BloodMoon = Main.bloodMoon,
+				Eclipse = Main.eclipse,
+				DownedEyeOfCthulhu = NPC.downedBoss1,
+				DownedEvilBoss = NPC.downedBoss2,
+				DownedSkeletron = NPC.downedBoss3,
+				DownedWallOfFlesh = Main.hardMode,   // hardmode is entered exactly by killing WoF
+				ActiveEvent = evt,
+			};
 		}
 
 		private string DetectBiome()
