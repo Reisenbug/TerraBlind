@@ -1642,6 +1642,35 @@ namespace TerraBlind
 					body = fsb.ToString();
 				}
 			}
+			else if (path == "/probe_cell")
+			{
+				// Spatial query the brain can ask about ONE cell it's describing: is there a background wall here,
+				// can I put a block / platform here, is this cell open. Answers the "有背景墙吗 / 这儿能放平台吗"
+				// questions instead of leaving the bot blind on structure.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else
+				{
+					int x = int.Parse(xm.Groups[1].Value), y = int.Parse(ym.Groups[1].Value);
+					body = ProbeCellJson(x, y);
+				}
+			}
+			else if (path == "/measure")
+			{
+				// How big is the connected blob of the same tile at (x,y): tree height, ore-vein size, cavity — the
+				// "这棵树多高 / 这堆矿多大" question. For an empty cell it measures the open cavity instead.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else
+				{
+					int x = int.Parse(xm.Groups[1].Value), y = int.Parse(ym.Groups[1].Value);
+					body = MeasureBlobJson(x, y);
+				}
+			}
 			else
 			{
 				body = "{\"error\":\"not_found\"}";
@@ -1654,6 +1683,89 @@ namespace TerraBlind
 			ctx.Response.ContentLength64 = bytes.Length;
 			ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
 			ctx.Response.OutputStream.Close();
+		}
+
+		static string ReadBody(HttpListenerContext ctx)
+		{
+			using var sr = new System.IO.StreamReader(ctx.Request.InputStream);
+			return sr.ReadToEnd();
+		}
+
+		static bool CellInBounds(int x, int y) =>
+			x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
+
+		// Structure facts about one cell: background wall, whether it's open, and whether a block / platform could be
+		// placed here. Placement rule is the practical one the bot needs (not a full vanilla worldgen check):
+		// a platform can go in any open cell; a solid block needs an open cell with at least one solid/platform neighbour
+		// to attach to. Good enough for "这儿能放平台吗 / 有背景墙吗".
+		static string ProbeCellJson(int x, int y)
+		{
+			if (!CellInBounds(x, y)) return "{\"error\":\"out_of_bounds\"}";
+			var t = Main.tile[x, y];
+			bool hasTile = t.HasTile;
+			int wall = t.WallType;
+			bool open = !hasTile || !Main.tileSolid[t.TileType];
+
+			bool NeighbourSupport(int nx, int ny)
+			{
+				if (!CellInBounds(nx, ny)) return false;
+				var n = Main.tile[nx, ny];
+				return n.HasTile && (Main.tileSolid[n.TileType] || Terraria.ID.TileID.Sets.Platforms[n.TileType]);
+			}
+			bool canPlatform = open;
+			bool canBlock = open && (NeighbourSupport(x - 1, y) || NeighbourSupport(x + 1, y)
+				|| NeighbourSupport(x, y - 1) || NeighbourSupport(x, y + 1));
+
+			var sb = new StringBuilder("{");
+			sb.Append("\"has_tile\":").Append(hasTile ? "true" : "false");
+			if (hasTile) sb.Append(",\"tile_type\":").Append(t.TileType);
+			sb.Append(",\"open\":").Append(open ? "true" : "false");
+			sb.Append(",\"wall\":").Append(wall);
+			sb.Append(",\"has_wall\":").Append(wall > 0 ? "true" : "false");
+			sb.Append(",\"can_place_platform\":").Append(canPlatform ? "true" : "false");
+			sb.Append(",\"can_place_block\":").Append(canBlock ? "true" : "false");
+			sb.Append('}');
+			return sb.ToString();
+		}
+
+		// Size of the connected same-type blob at (x,y): tree height / ore-vein size, or — for an open cell — the
+		// open cavity. BFS with a cap so a huge open area can't run away. Returns bounding box + cell count.
+		static string MeasureBlobJson(int x, int y)
+		{
+			if (!CellInBounds(x, y)) return "{\"error\":\"out_of_bounds\"}";
+			var start = Main.tile[x, y];
+			bool measuringTile = start.HasTile;
+			int wantType = measuringTile ? start.TileType : -1;
+			const int Cap = 400;
+
+			var seen = new System.Collections.Generic.HashSet<(int, int)>();
+			var q = new System.Collections.Generic.Queue<(int, int)>();
+			q.Enqueue((x, y)); seen.Add((x, y));
+			int minX = x, maxX = x, minY = y, maxY = y, count = 0;
+			bool Match(int cx, int cy)
+			{
+				var c = Main.tile[cx, cy];
+				return measuringTile ? (c.HasTile && c.TileType == wantType)
+									  : (!c.HasTile || !Main.tileSolid[c.TileType]);
+			}
+			while (q.Count > 0 && count < Cap)
+			{
+				var (cx, cy) = q.Dequeue();
+				if (!CellInBounds(cx, cy) || !Match(cx, cy)) continue;
+				count++;
+				if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+				if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+				foreach (var (nx, ny) in new[] { (cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1) })
+					if (!seen.Contains((nx, ny)) && CellInBounds(nx, ny)) { seen.Add((nx, ny)); q.Enqueue((nx, ny)); }
+			}
+			var sb = new StringBuilder("{");
+			sb.Append("\"kind\":\"").Append(measuringTile ? "solid" : "cavity").Append("\"");
+			sb.Append(",\"cells\":").Append(count);
+			sb.Append(",\"width\":").Append(maxX - minX + 1);
+			sb.Append(",\"height\":").Append(maxY - minY + 1);
+			sb.Append(",\"capped\":").Append(count >= Cap ? "true" : "false");
+			sb.Append('}');
+			return sb.ToString();
 		}
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);
