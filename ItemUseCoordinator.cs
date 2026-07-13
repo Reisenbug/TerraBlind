@@ -181,9 +181,12 @@ namespace TerraBlind
 			return true;
 		}
 
-		// Chop must land on the tree's LOWEST trunk cell, not wherever the LLM aimed. Find the nearest trunk tile
-		// (TileID.Sets.IsATreeTrunk), then slide straight down while the cell below is still the same trunk — same as
-		// vanilla SmartCursorHelper.Step_Axe. This gives the axe an actual trunk cell at the base so the tree falls.
+		// Chop must land on the MAIN TRUNK's lowest cell — cutting a ROOT or BRANCH (the sideways-offset columns) only
+		// drops that decoration and its bit of wood; only severing the base of the central trunk fells the whole tree.
+		// A tree is one TileType; body parts are distinguished by frameX (22=centre trunk, 44=left, 66=right, 88=branch)
+		// and frameY. The LLM's rough coord often snaps to a root/branch column, so: find the nearest trunk tile, if it
+		// sits on a root column shift sideways to the centre trunk (vanilla WorldGen.IsTileATreeRoot's offsetToTrunk),
+		// then slide down to the base. Cut that and the tree falls.
 		private static bool TrySnapTree(ref int wx, ref int wy)
 		{
 			int bestX = -1, bestY = -1, bestD = int.MaxValue;
@@ -200,10 +203,24 @@ namespace TerraBlind
 			if (bestX < 0) return false;
 
 			int type = Main.tile[bestX, bestY].TileType;
-			while (InBounds(bestX, bestY + 1)
-				&& Main.tile[bestX, bestY + 1].HasTile
-				&& Main.tile[bestX, bestY + 1].TileType == type)
-				bestY++;
+			bool IsTree(int x, int y) => InBounds(x, y) && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type;
+			// THE TRUNK is the ONE column spanning the tree's full height; branches/roots stick out sideways on only
+			// part of the height, so they're always SHORTER. Among the columns near the hit, pick the LONGEST run of
+			// tree (measured up + down from this row), then cut its lowest cell. Longest = trunk, no matter how thick a
+			// branch is. Picture 1=tree: 010/110/010/011/111 — the middle column is the only full-height one.
+			int trunkX = bestX, trunkLen = -1;
+			for (int sx = -3; sx <= 3; sx++)
+			{
+				int cx = bestX + sx;
+				if (!IsTree(cx, bestY)) continue;
+				int up = 0, dn = 0;
+				while (IsTree(cx, bestY - up - 1)) up++;
+				while (IsTree(cx, bestY + dn + 1)) dn++;
+				int len = up + dn + 1;
+				if (len > trunkLen) { trunkLen = len; trunkX = cx; }
+			}
+			bestX = trunkX;
+			while (IsTree(bestX, bestY + 1)) bestY++;   // walk down the trunk column to its ground-contact cell
 
 			wx = bestX; wy = bestY;
 			return true;
