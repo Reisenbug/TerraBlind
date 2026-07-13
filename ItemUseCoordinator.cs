@@ -86,9 +86,13 @@ namespace TerraBlind
 				}
 			}
 
-			if (_ticksLeft <= 0)
+			// A collect target has an OBSERVABLE result — it ends by removed (gone) or no_progress (can't dent it),
+			// never by a swing count. So ignore the tick budget while watching a tile: keep swinging until the world
+			// fact changes. The budget only bounds non-collect uses (throw a bomb / drink a potion) that have no
+			// result tile to watch — those end at n/a when the budget runs out.
+			if (_watchType < 0 && _ticksLeft <= 0)
 			{
-				if (Outcome == "running") Outcome = _watchType >= 0 ? "timeout" : "n/a";
+				if (Outcome == "running") Outcome = "n/a";
 				_active = null;
 				return;
 			}

@@ -1536,24 +1536,36 @@ namespace TerraBlind
 				else
 				{
 					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
-					long sx = 0, sy = 0; int count = 0;
-					// coarse scan (every 4th tile) — signature blocks form contiguous regions, so subsampling still
-					// finds the centroid and keeps a full-map scan fast.
-					for (int x = 0; x < Main.maxTilesX; x += 4)
-						for (int y = 0; y < Main.maxTilesY; y += 4)
+					// NOT the centroid — that lands deep underground (a biome's signature tiles run from surface to
+					// caverns, so their average is a point no human would dig to). We want the SURFACE ENTRANCE: a
+					// signature tile whose head is open sky, nearest to the player. nav walks there over ground instead
+					// of tunneling down to the middle. "Open sky above" = a few empty cells overhead.
+					var pl0 = Main.LocalPlayer;
+					int px = pl0 != null ? (int)(pl0.Center.X / 16f) : Main.maxTilesX / 2;
+					int total = 0, bestX = -1, bestY = -1, bestDx = int.MaxValue;
+					int surfaceCap = (int)Main.worldSurface;   // signature tiles above this are surface; below is underground
+					for (int x = 0; x < Main.maxTilesX; x += 2)
+						for (int y = 0; y < surfaceCap && y < Main.maxTilesY; y += 2)
 						{
 							var t = Main.tile[x, y];
-							if (t.HasTile && want.Contains(t.TileType)) { sx += x; sy += y; count++; }
+							if (!t.HasTile || !want.Contains(t.TileType)) continue;
+							total++;
+							bool sky = true;
+							for (int k = 1; k <= 5 && sky; k++)
+							{
+								if (y - k < 0) break;
+								var a = Main.tile[x, y - k];
+								if (a.HasTile && Main.tileSolid[a.TileType]) sky = false;
+							}
+							if (!sky) continue;
+							int dx = System.Math.Abs(x - px);
+							if (dx < bestDx) { bestDx = dx; bestX = x; bestY = y; }
 						}
-					if (count == 0) { body = "{\"found\":false,\"count\":0}"; }
+					if (bestX < 0) { body = "{\"found\":false,\"count\":" + total + "}"; }
 					else
 					{
-						int cx = (int)(sx / count), cy = (int)(sy / count);
-						// snap to a standable surface: from the centroid, walk up to open air then find the floor top.
-						int fy = cy;
-						while (fy > 1 && Main.tile[cx, fy].HasTile && Main.tileSolid[Main.tile[cx, fy].TileType]) fy--;
-						while (fy < Main.maxTilesY - 2 && !(Main.tile[cx, fy + 1].HasTile && Main.tileSolid[Main.tile[cx, fy + 1].TileType])) fy++;
-						body = "{\"found\":true,\"x\":" + cx + ",\"y\":" + fy + ",\"count\":" + count + "}";
+						// stand ON the surface tile: entrance point is the open cell just above it.
+						body = "{\"found\":true,\"x\":" + bestX + ",\"y\":" + (bestY - 1) + ",\"count\":" + total + "}";
 					}
 				}
 			}
