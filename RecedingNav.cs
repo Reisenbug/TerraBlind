@@ -15,6 +15,10 @@ namespace TerraBlind
         // "done" | "walled_in" | "loop_unresolved" | "stopped" after it ends.
         public static string LastStop;
         static int _goalWx, _goalWy;
+        // EXACT goal: don't snap the goal to a standable cell, and count arrival as "the goal tile is gone" (mined out)
+        // rather than "the body stands on it". Used for mining: the target is a solid ore INSIDE rock — the body (2x3)
+        // can never stand on that exact cell, so the field digs a shaft down to it and arrival = the ore tile removed.
+        static bool _exact;
         const float GoalDistPx = 24f;
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
@@ -47,10 +51,12 @@ namespace TerraBlind
         }
 
         static volatile bool _fieldReady;
-        public static void Start(int goalWx, int goalWy)
+        public static void Start(int goalWx, int goalWy, bool exact = false)
         {
             StateSpacePlanner.StopNav();
-            goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
+            _exact = exact;
+            if (!exact)
+                goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
             StateSpacePlanner.ResetLineProgress();
@@ -86,10 +92,21 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
 
-            float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
-            float cx = p.Center.X, fy = p.position.Y + p.height;
-            if (System.Math.Abs(cx - gx) <= GoalDistPx && System.Math.Abs(fy - gy) <= GoalDistPx)
-            { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
+            // EXACT (mining): the goal is a solid ore the body can't stand on — arrival is the tile being MINED OUT.
+            // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
+            if (_exact)
+            {
+                var gt = Main.tile[_goalWx, _goalWy];
+                if (!gt.HasTile || !Main.tileSolid[gt.TileType])
+                { DiagLog.Write("[recede] exact goal mined out"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done (mined)"); return; }
+            }
+            else
+            {
+                float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
+                float cx = p.Center.X, fy = p.position.Y + p.height;
+                if (System.Math.Abs(cx - gx) <= GoalDistPx && System.Math.Abs(fy - gy) <= GoalDistPx)
+                { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
+            }
 
             if (StateSpacePlanner.ExecRunning) return;        // current action still executing
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled

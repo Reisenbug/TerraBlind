@@ -267,6 +267,32 @@ namespace TerraBlind
 				}
 				else body = "{\"error\":\"no_player\"}";
 			}
+			else if (path == "/mine_reach")
+			{
+				// Reachable-to-mine rectangle. tML dropped the public GetTileRegion, so use the vanilla per-tile
+				// predicate IsInTileInteractionRange (which the game itself uses to gate pick swings) and take the
+				// bounding box of the reachable cells around the player. Range = tileRangeX/Y + tileBoost + blockRange
+				// (NOT the pickaxe — the pick only decides if a tile can be dented).
+				var pr = Main.LocalPlayer;
+				if (pr != null && pr.active)
+				{
+					int tb = (pr.HeldItem != null ? pr.HeldItem.tileBoost : 0) + pr.blockRange;
+					int cx = (int)((pr.position.X + pr.width / 2f) / 16f);
+					int cy = (int)((pr.position.Y + pr.height / 2f) / 16f);
+					int scan = Player.tileRangeX + Player.tileRangeY + tb + 4;  // tb kept for scan margin
+					int lx = int.MaxValue, ly = int.MaxValue, hx = int.MinValue, hy = int.MinValue;
+					for (int x = cx - scan; x <= cx + scan; x++)
+						for (int y = cy - scan; y <= cy + scan; y++)
+							if (pr.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+							{
+								if (x < lx) lx = x; if (x > hx) hx = x;
+								if (y < ly) ly = y; if (y > hy) hy = y;
+							}
+					if (hx < lx) body = "{\"error\":\"no_reach\"}";
+					else body = $"{{\"lx\":{lx},\"ly\":{ly},\"hx\":{hx},\"hy\":{hy}}}";
+				}
+				else body = "{\"error\":\"no_player\"}";
+			}
 			else if (path == "/swap")
 			{
 				var qs = ctx.Request.QueryString;
@@ -1429,7 +1455,8 @@ namespace TerraBlind
 				if (!gxM.Success || !gyM.Success) { body = "{\"ok\":false,\"reason\":\"bad_request\"}"; status = 400; }
 				else
 				{
-					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value));
+					bool exact = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"exact\":true");
+					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), exact);
 					body = "{\"ok\":true}";
 				}
 			}
