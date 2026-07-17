@@ -234,6 +234,46 @@ namespace TerraBlind
             return dist;
         }
 
+        // Multi-source Dijkstra: every source seeds cost 0. /find_descent floods UP from the whole hell band at
+        // once — the surface cell with the lowest H then marks the cheapest REAL route down. Descent cost is
+        // topological, not per-column: an S-shaped cave entered from its top beats digging straight anywhere.
+        public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
+        {
+            _fieldPickPower = 0;
+            var pl = Main.LocalPlayer;
+            if (pl != null)
+                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
+
+            var dist = new Dictionary<(int, int), int>();
+            var closed = new HashSet<(int, int)>();
+            var pq = new SortedSet<(int cost, int x, int y)>();
+            foreach (var (sx0, sy0) in sources) { dist[(sx0, sy0)] = 0; pq.Add((0, sx0, sy0)); }
+
+            int[] dxs = { 1, -1, 0, 0 };
+            int[] dys = { 0, 0, 1, -1 };
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (pq.Count > 0)
+            {
+                var cur = pq.Min;
+                pq.Remove(cur);
+                var (cost, cx, cy) = cur;
+                if (!closed.Add((cx, cy))) continue;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    int nx = cx + dxs[i], ny = cy + dys[i];
+                    if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+                    if (closed.Contains((nx, ny))) continue;
+                    int nc = cost + StepCost(cx, cy, nx, ny);
+                    if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
+                    dist[(nx, ny)] = nc;
+                    pq.Add((nc, nx, ny));
+                }
+            }
+            DiagLog.Write($"[descent-field] sources={sources.Count} dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0}");
+            return dist;
+        }
+
         // forward cost of moving FROM (nx,ny) TO (cx,cy): direction is (cx,cy)-(nx,ny), price set by the cell
         // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)

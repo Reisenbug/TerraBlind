@@ -1550,17 +1550,7 @@ namespace TerraBlind
 					reqBody = sr.ReadToEnd();
 				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
-				ushort[] sigTypes = biome switch
-				{
-					"jungle" => new[] { Terraria.ID.TileID.JungleGrass },
-					"snow" or "ice" or "tundra" => new[] { Terraria.ID.TileID.SnowBlock, Terraria.ID.TileID.IceBlock },
-					"desert" => new[] { Terraria.ID.TileID.Sandstone, Terraria.ID.TileID.HardenedSand },
-					"dungeon" => new[] { Terraria.ID.TileID.BlueDungeonBrick, Terraria.ID.TileID.GreenDungeonBrick, Terraria.ID.TileID.PinkDungeonBrick },
-					"corruption" => new[] { Terraria.ID.TileID.CorruptGrass, Terraria.ID.TileID.Ebonstone },
-					"crimson" => new[] { Terraria.ID.TileID.CrimsonGrass, Terraria.ID.TileID.Crimstone },
-					"hallow" => new[] { Terraria.ID.TileID.HallowedGrass, Terraria.ID.TileID.Pearlstone },
-					_ => null,
-				};
+				ushort[] sigTypes = BiomeSig(biome);
 				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
 				else
 				{
@@ -1595,6 +1585,111 @@ namespace TerraBlind
 					{
 						// stand ON the surface tile: entrance point is the open cell just above it.
 						body = "{\"found\":true,\"x\":" + bestX + ",\"y\":" + (bestY - 1) + ",\"count\":" + total + "}";
+					}
+				}
+			}
+			else if (path == "/find_descent")
+			{
+				// POST {"name":"jungle"} → the surface entrance whose REAL route down to hell is cheapest.
+				// Not a per-column scan — descent cost is topological (an S-shaped cave entered from its top beats
+				// digging straight down anywhere), so flood a multi-source Dijkstra field UP from the whole hell
+				// band under the biome and read H at every open-sky surface candidate; minimum H wins.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
+				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
+				ushort[] sigTypes = BiomeSig(biome);
+				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
+				else
+				{
+					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
+					int surfaceCap = (int)Main.worldSurface;
+					// SURFACE LINE S(x), not "any open-sky cell" (a shaft interior has open sky overhead too — that's
+					// how (676,329) posed as an entrance). Three steps, per the topology definition:
+					//   raw(x): first solid from the sky whose underside is SUPPORTED (>=15 solid in the 20 cells
+					//           below) — thin shells like living-tree canopies and structure roofs are skipped;
+					//   S(x):   width-64 morphological closing of raw — pits narrower than ~40 get their flanks'
+					//           level, so pit/shaft interiors can never be surface; wide real valleys survive;
+					//   candidates: the line's stand cells (x, S(x)-1) across the biome's SURFACE span.
+					int sMinX = int.MaxValue, sMaxX = int.MinValue;
+					for (int x = 0; x < Main.maxTilesX; x += 2)
+						for (int y = 0; y < surfaceCap; y += 2)
+						{
+							var t = Main.tile[x, y];
+							if (!t.HasTile || !want.Contains(t.TileType)) continue;
+							if (x < sMinX) sMinX = x;
+							if (x > sMaxX) sMaxX = x;
+						}
+					if (sMinX > sMaxX) body = "{\"found\":false,\"reason\":\"no_surface_biome\"}";
+					else
+					{
+						int w = sMaxX - sMinX + 1;
+						int hellCap = Main.maxTilesY - 200;
+						var raw = new int[w];
+						for (int i = 0; i < w; i++)
+						{
+							int x = sMinX + i, y = 0;
+							raw[i] = surfaceCap;
+							while (y < hellCap)
+							{
+								while (y < hellCap && !(Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType])) y++;
+								if (y >= hellCap) break;
+								int solidBelow = 0;
+								for (int k = 1; k <= 20; k++)
+									if (Main.tile[x, y + k].HasTile && Main.tileSolid[Main.tile[x, y + k].TileType]) solidBelow++;
+								if (solidBelow >= 15) { raw[i] = y; break; }
+								y++;
+							}
+						}
+						const int r = 32;
+						var ero = new int[w];
+						var surf = new int[w];
+						for (int i = 0; i < w; i++)
+						{
+							int m = int.MaxValue;
+							for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (raw[k] < m) m = raw[k];
+							ero[i] = m;
+						}
+						for (int i = 0; i < w; i++)
+						{
+							int m = int.MinValue;
+							for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (ero[k] > m) m = ero[k];
+							surf[i] = m;
+						}
+						// sources: every open, lava-free cell in a thin underworld band under the span
+						var sources = new System.Collections.Generic.List<(int x, int y)>();
+						int hellTop = Main.maxTilesY - 190, hellBot = Main.maxTilesY - 160;
+						for (int x = sMinX; x <= sMaxX; x += 2)
+							for (int y = hellTop; y <= hellBot; y += 2)
+							{
+								var t = Main.tile[x, y];
+								if (t.HasTile && Main.tileSolid[t.TileType]) continue;
+								if (t.LiquidAmount > 0) continue;
+								sources.Add((x, y));
+							}
+						if (sources.Count == 0) body = "{\"found\":false,\"reason\":\"no_hell_sources\"}";
+						else
+						{
+							int minY = surf[0];
+							for (int i = 1; i < w; i++) if (surf[i] < minY) minY = surf[i];
+							minY = System.Math.Max(0, minY - 10);
+							var field = MazeWand.BuildFieldMulti(sources,
+								System.Math.Max(0, sMinX - 60), System.Math.Min(Main.maxTilesX - 1, sMaxX + 60),
+								minY, Main.maxTilesY - 1);
+							int bestX = -1, bestY = -1, bestH = int.MaxValue, cands = 0;
+							for (int i = 0; i < w; i += 2)
+							{
+								int ex = sMinX + i, ey = surf[i] - 1;
+								cands++;
+								// the stand cell over a pit mouth is air — the field prices it; try one higher as fallback
+								if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
+								if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
+							}
+							body = bestX < 0
+								? "{\"found\":false,\"reason\":\"no_route\"}"
+								: "{\"found\":true,\"x\":" + bestX + ",\"y\":" + bestY + ",\"cost\":" + bestH + ",\"entrances\":" + cands + "}";
+						}
 					}
 				}
 			}
@@ -1808,6 +1903,19 @@ namespace TerraBlind
 			sb.Append('}');
 			return sb.ToString();
 		}
+
+		// signature tiles that identify a biome — shared by /find_biome and /find_descent
+		static ushort[] BiomeSig(string biome) => biome switch
+		{
+			"jungle" => new[] { Terraria.ID.TileID.JungleGrass },
+			"snow" or "ice" or "tundra" => new[] { Terraria.ID.TileID.SnowBlock, Terraria.ID.TileID.IceBlock },
+			"desert" => new[] { Terraria.ID.TileID.Sandstone, Terraria.ID.TileID.HardenedSand },
+			"dungeon" => new[] { Terraria.ID.TileID.BlueDungeonBrick, Terraria.ID.TileID.GreenDungeonBrick, Terraria.ID.TileID.PinkDungeonBrick },
+			"corruption" => new[] { Terraria.ID.TileID.CorruptGrass, Terraria.ID.TileID.Ebonstone },
+			"crimson" => new[] { Terraria.ID.TileID.CrimsonGrass, Terraria.ID.TileID.Crimstone },
+			"hallow" => new[] { Terraria.ID.TileID.HallowedGrass, Terraria.ID.TileID.Pearlstone },
+			_ => null,
+		};
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);
 
