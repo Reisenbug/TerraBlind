@@ -1603,93 +1603,160 @@ namespace TerraBlind
 				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
 				else
 				{
-					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
-					int surfaceCap = (int)Main.worldSurface;
-					// SURFACE LINE S(x), not "any open-sky cell" (a shaft interior has open sky overhead too — that's
-					// how (676,329) posed as an entrance). Three steps, per the topology definition:
-					//   raw(x): first solid from the sky whose underside is SUPPORTED (>=15 solid in the 20 cells
-					//           below) — thin shells like living-tree canopies and structure roofs are skipped;
-					//   S(x):   width-64 morphological closing of raw — pits narrower than ~40 get their flanks'
-					//           level, so pit/shaft interiors can never be surface; wide real valleys survive;
-					//   candidates: the line's stand cells (x, S(x)-1) across the biome's SURFACE span.
-					int sMinX = int.MaxValue, sMaxX = int.MinValue;
-					for (int x = 0; x < Main.maxTilesX; x += 2)
-						for (int y = 0; y < surfaceCap; y += 2)
-						{
-							var t = Main.tile[x, y];
-							if (!t.HasTile || !want.Contains(t.TileType)) continue;
-							if (x < sMinX) sMinX = x;
-							if (x > sMaxX) sMaxX = x;
-						}
-					if (sMinX > sMaxX) body = "{\"found\":false,\"reason\":\"no_surface_biome\"}";
+					var dd = ComputeDescent(sigTypes, out string why);
+					body = dd == null
+						? "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}"
+						: "{\"found\":true,\"x\":" + dd.EntX + ",\"y\":" + dd.EntY + ",\"cost\":" + dd.Cost + ",\"entrances\":" + dd.Cands + "}";
+				}
+			}
+			else if (path == "/descent_route")
+			{
+				// POST {"name":"jungle"} → the /find_descent entrance PLUS the traced route line down to hell and
+				// every treasure (chest / life crystal) within the corridor (±25 tiles of the line), each tied to
+				// its nearest line point. Also draws it in-world for 2 minutes: cyan main line, gold chests with a
+				// yellow branch, pink hearts with a magenta branch. The treasures' line_x/line_y are the junction
+				// points a collector would branch off from.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
+				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
+				ushort[] sigTypes = BiomeSig(biome);
+				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
+				else
+				{
+					var dd = ComputeDescent(sigTypes, out string why);
+					if (dd == null) body = "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 					else
 					{
-						int w = sMaxX - sMinX + 1;
-						int hellCap = Main.maxTilesY - 200;
-						var raw = new int[w];
-						for (int i = 0; i < w; i++)
+						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
+						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
+						var line = new System.Collections.Generic.List<(int x, int y)>();
+						var cur = (dd.EntX, dd.EntY);
+						var seen = new System.Collections.Generic.HashSet<(int, int)>();
+						for (int step = 0; step < 20000; step++)
 						{
-							int x = sMinX + i, y = 0;
-							raw[i] = surfaceCap;
-							while (y < hellCap)
+							line.Add(cur);
+							if (!seen.Add(cur)) break;
+							if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
+							int bestN = int.MaxValue; var best = cur;
+							foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
 							{
-								while (y < hellCap && !(Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType])) y++;
-								if (y >= hellCap) break;
-								int solidBelow = 0;
-								for (int k = 1; k <= 20; k++)
-									if (Main.tile[x, y + k].HasTile && Main.tileSolid[Main.tile[x, y + k].TileType]) solidBelow++;
-								if (solidBelow >= 15) { raw[i] = y; break; }
-								y++;
+								var n = (cur.Item1 + dx2, cur.Item2 + dy2);
+								if (!dd.Field.TryGetValue(n, out int dn)) continue;
+								if (dn < bestN) { bestN = dn; best = n; }
 							}
+							if (best == cur) break;
+							cur = best;
 						}
-						const int r = 32;
-						var ero = new int[w];
-						var surf = new int[w];
-						for (int i = 0; i < w; i++)
+						// DETOUR-COST corridor, not geometric distance: walking a tile costs 3, digging one costs 120
+						// — "25 tiles away" says nothing about worth. Build a SECOND multi-source field seeded on the
+						// line itself (every line cell cost 0); descending it from a treasure traces the ACTUAL detour
+						// path, and summing StepCost along that path in each direction prices the round trip (falling
+						// in is cheap, climbing back out is not). A treasure qualifies when go+back <= budget.
+						// two separate allowances in natural units — a single cost budget conflates them (dig=120
+						// vs walk=3 in one currency meant "more dig headroom" flooded the walk range and vice versa).
+						// TWO TIERS: inside (dig_max, walk_max) → "main" (grab-worthy); inside the wider
+						// (dig_max2, walk_max2) → "optional" (only if the brain judges it worth it); beyond → ignored.
+						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");
+						var wlkM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max\"\\s*:\\s*(\\d+)");
+						var digM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max2\"\\s*:\\s*(\\d+)");
+						var wlkM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max2\"\\s*:\\s*(\\d+)");
+						int digMax = digM.Success ? int.Parse(digM.Groups[1].Value) : 20;
+						int walkMax = wlkM.Success ? int.Parse(wlkM.Groups[1].Value) : 60;
+						int digMax2 = digM2.Success ? int.Parse(digM2.Groups[1].Value) : 50;
+						int walkMax2 = wlkM2.Success ? int.Parse(wlkM2.Groups[1].Value) : 120;
+						int rejectBound = digMax2 * 160 + walkMax2 * 12;   // loose upper bound for the quick reject
+						const int margin = 80;
+						int bMinX = int.MaxValue, bMaxX = int.MinValue, bMinY = int.MaxValue, bMaxY = int.MinValue;
+						foreach (var (lx, ly) in line)
 						{
-							int m = int.MaxValue;
-							for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (raw[k] < m) m = raw[k];
-							ero[i] = m;
+							if (lx < bMinX) bMinX = lx;
+							if (lx > bMaxX) bMaxX = lx;
+							if (ly < bMinY) bMinY = ly;
+							if (ly > bMaxY) bMaxY = ly;
 						}
-						for (int i = 0; i < w; i++)
-						{
-							int m = int.MinValue;
-							for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (ero[k] > m) m = ero[k];
-							surf[i] = m;
-						}
-						// sources: every open, lava-free cell in a thin underworld band under the span
-						var sources = new System.Collections.Generic.List<(int x, int y)>();
-						int hellTop = Main.maxTilesY - 190, hellBot = Main.maxTilesY - 160;
-						for (int x = sMinX; x <= sMaxX; x += 2)
-							for (int y = hellTop; y <= hellBot; y += 2)
+						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
+						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
+						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
+						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
+						for (int x = bMinX; x <= bMaxX; x++)
+							for (int y = bMinY; y <= bMaxY; y++)
 							{
 								var t = Main.tile[x, y];
-								if (t.HasTile && Main.tileSolid[t.TileType]) continue;
-								if (t.LiquidAmount > 0) continue;
-								sources.Add((x, y));
+								if (!t.HasTile) continue;
+								string kind = null;
+								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "chest";
+								else if (t.TileType == Terraria.ID.TileID.Heart
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "heart";
+								if (kind == null) continue;
+								if (!lineField.TryGetValue((x, y), out int d0) || d0 > rejectBound) continue;   // quick reject
+								// trace the detour path treasure→line by descending the line-field
+								var bpath = new System.Collections.Generic.List<(int, int)>();
+								var bc2 = (x, y);
+								var bseen = new System.Collections.Generic.HashSet<(int, int)>();
+								while (bpath.Count < 4000)
+								{
+									bpath.Add(bc2);
+									if (!bseen.Add(bc2)) break;
+									if (lineField.TryGetValue(bc2, out int bh) && bh == 0) break;
+									int bestN = int.MaxValue; var nb = bc2;
+									foreach (var (dx3, dy3) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+									{
+										var n = (bc2.Item1 + dx3, bc2.Item2 + dy3);
+										if (lineField.TryGetValue(n, out int dn) && dn < bestN) { bestN = dn; nb = n; }
+									}
+									if (nb == bc2) break;
+									bc2 = nb;
+								}
+								var junction = bpath[bpath.Count - 1];
+								if (!lineField.TryGetValue(junction, out int endH) || endH != 0) continue;   // never reached the line
+								// classify each one-way edge by its full StepCost price: >=80 (DigDown) means the body
+								// has to mine through, else it's movement. The return trip reuses the opened tunnel,
+								// so one-way counts are the honest units to cap.
+								int nDig = 0, nWalk = 0;
+								for (int i = 1; i < bpath.Count; i++)
+								{
+									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
+									if (c >= 80) nDig++; else nWalk++;
+								}
+								string tier = nDig <= digMax && nWalk <= walkMax ? "main"
+									: nDig <= digMax2 && nWalk <= walkMax2 ? "optional" : null;
+								if (tier == null) continue;
+								treasures.Add((x, y, kind, junction.Item1, junction.Item2, nDig, nWalk, tier, bpath));
 							}
-						if (sources.Count == 0) body = "{\"found\":false,\"reason\":\"no_hell_sources\"}";
-						else
+						// in-world drawing: cyan line, gold/pink markers, yellow/magenta REAL detour paths
+						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+						foreach (var (lx, ly) in line) vis.Add((lx, ly, new Microsoft.Xna.Framework.Color(0, 200, 255, 140)));
+						foreach (var tr in treasures)
 						{
-							int minY = surf[0];
-							for (int i = 1; i < w; i++) if (surf[i] < minY) minY = surf[i];
-							minY = System.Math.Max(0, minY - 10);
-							var field = MazeWand.BuildFieldMulti(sources,
-								System.Math.Max(0, sMinX - 60), System.Math.Min(Main.maxTilesX - 1, sMaxX + 60),
-								minY, Main.maxTilesY - 1);
-							int bestX = -1, bestY = -1, bestH = int.MaxValue, cands = 0;
-							for (int i = 0; i < w; i += 2)
-							{
-								int ex = sMinX + i, ey = surf[i] - 1;
-								cands++;
-								// the stand cell over a pit mouth is air — the field prices it; try one higher as fallback
-								if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
-								if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
-							}
-							body = bestX < 0
-								? "{\"found\":false,\"reason\":\"no_route\"}"
-								: "{\"found\":true,\"x\":" + bestX + ",\"y\":" + bestY + ",\"cost\":" + bestH + ",\"entrances\":" + cands + "}";
+							bool opt = tr.tier == "optional";   // optional tier draws at half brightness
+							var bc = tr.kind == "chest"
+								? new Microsoft.Xna.Framework.Color(255, 220, 0, opt ? 60 : 130)
+								: new Microsoft.Xna.Framework.Color(255, 0, 180, opt ? 60 : 130);
+							foreach (var (bx, by) in tr.path) vis.Add((bx, by, bc));
+							var mc = tr.kind == "chest"
+								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 110 : 230)
+								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 110 : 230);
+							vis.Add((tr.x, tr.y, mc)); vis.Add((tr.x + 1, tr.y, mc));
+							vis.Add((tr.x, tr.y + 1, mc)); vis.Add((tr.x + 1, tr.y + 1, mc));
 						}
+						PathVisSystem.SetTiles(vis, 7200);
+						var rsb = new StringBuilder();
+						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
+						   .Append("},\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(line.Count)
+						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax).Append(",\"treasures\":[");
+						for (int i = 0; i < treasures.Count; i++)
+						{
+							var tr = treasures[i];
+							if (i > 0) rsb.Append(',');
+							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y).Append(",\"kind\":\"").Append(tr.kind)
+							   .Append("\",\"tier\":\"").Append(tr.tier).Append("\",\"line_x\":").Append(tr.jx).Append(",\"line_y\":").Append(tr.jy)
+							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
+						}
+						rsb.Append("]}");
+						body = rsb.ToString();
 					}
 				}
 			}
@@ -1916,6 +1983,96 @@ namespace TerraBlind
 			"hallow" => new[] { Terraria.ID.TileID.HallowedGrass, Terraria.ID.TileID.Pearlstone },
 			_ => null,
 		};
+
+		class DescentData
+		{
+			public int EntX, EntY, Cost, Cands;
+			public System.Collections.Generic.Dictionary<(int, int), int> Field;
+		}
+
+		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
+		// solid in the 20 cells below — thin shells like canopies/roofs are skipped), then a width-64 morphological
+		// closing so pit/shaft interiors can never pose as surface. Then a multi-source Dijkstra field UP from the
+		// hell band under the biome span; the surface stand cell with minimal H is the cheapest REAL entrance down.
+		static DescentData ComputeDescent(ushort[] sigTypes, out string failReason)
+		{
+			failReason = "";
+			var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
+			int surfaceCap = (int)Main.worldSurface;
+			int sMinX = int.MaxValue, sMaxX = int.MinValue;
+			for (int x = 0; x < Main.maxTilesX; x += 2)
+				for (int y = 0; y < surfaceCap; y += 2)
+				{
+					var t = Main.tile[x, y];
+					if (!t.HasTile || !want.Contains(t.TileType)) continue;
+					if (x < sMinX) sMinX = x;
+					if (x > sMaxX) sMaxX = x;
+				}
+			if (sMinX > sMaxX) { failReason = "no_surface_biome"; return null; }
+
+			int w = sMaxX - sMinX + 1;
+			int hellCap = Main.maxTilesY - 200;
+			var raw = new int[w];
+			for (int i = 0; i < w; i++)
+			{
+				int x = sMinX + i, y = 0;
+				raw[i] = surfaceCap;
+				while (y < hellCap)
+				{
+					while (y < hellCap && !(Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType])) y++;
+					if (y >= hellCap) break;
+					int solidBelow = 0;
+					for (int k = 1; k <= 20; k++)
+						if (Main.tile[x, y + k].HasTile && Main.tileSolid[Main.tile[x, y + k].TileType]) solidBelow++;
+					if (solidBelow >= 15) { raw[i] = y; break; }
+					y++;
+				}
+			}
+			const int r = 32;
+			var ero = new int[w];
+			var surf = new int[w];
+			for (int i = 0; i < w; i++)
+			{
+				int m = int.MaxValue;
+				for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (raw[k] < m) m = raw[k];
+				ero[i] = m;
+			}
+			for (int i = 0; i < w; i++)
+			{
+				int m = int.MinValue;
+				for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (ero[k] > m) m = ero[k];
+				surf[i] = m;
+			}
+			var sources = new System.Collections.Generic.List<(int x, int y)>();
+			int hellTop = Main.maxTilesY - 190, hellBot = Main.maxTilesY - 160;
+			for (int x = sMinX; x <= sMaxX; x += 2)
+				for (int y = hellTop; y <= hellBot; y += 2)
+				{
+					var t = Main.tile[x, y];
+					if (t.HasTile && Main.tileSolid[t.TileType]) continue;
+					if (t.LiquidAmount > 0) continue;
+					sources.Add((x, y));
+				}
+			if (sources.Count == 0) { failReason = "no_hell_sources"; return null; }
+
+			int minY = surf[0];
+			for (int i = 1; i < w; i++) if (surf[i] < minY) minY = surf[i];
+			minY = System.Math.Max(0, minY - 10);
+			var field = MazeWand.BuildFieldMulti(sources,
+				System.Math.Max(0, sMinX - 60), System.Math.Min(Main.maxTilesX - 1, sMaxX + 60),
+				minY, Main.maxTilesY - 1);
+			int bestX = -1, bestY = -1, bestH = int.MaxValue, cands = 0;
+			for (int i = 0; i < w; i += 2)
+			{
+				int ex = sMinX + i, ey = surf[i] - 1;
+				cands++;
+				// the stand cell over a pit mouth is air — the field prices it; try one higher as fallback
+				if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
+				if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
+			}
+			if (bestX < 0) { failReason = "no_route"; return null; }
+			return new DescentData { EntX = bestX, EntY = bestY, Cost = bestH, Cands = cands, Field = field };
+		}
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);
 

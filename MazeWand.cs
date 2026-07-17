@@ -274,6 +274,10 @@ namespace TerraBlind
             return dist;
         }
 
+        // exposed for /descent_route to price a traced detour path edge by edge in BOTH directions
+        // (going down a chasm is cheap, climbing back out is not — a one-way field hides that).
+        public static int StepCostPublic(int cx, int cy, int nx, int ny) => StepCost(cx, cy, nx, ny);
+
         // forward cost of moving FROM (nx,ny) TO (cx,cy): direction is (cx,cy)-(nx,ny), price set by the cell
         // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
