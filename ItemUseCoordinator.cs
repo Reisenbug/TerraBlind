@@ -10,6 +10,7 @@ namespace TerraBlind
 		public int TargetWy;
 		public int Slot;          // -1 = keep current selection
 		public int DurationTicks; // 0 = run until Stop()
+		public bool Strict;       // exact-coord caller: never snap to a different tile; target gone = report, don't hunt
 	}
 
 	public class ItemUseCoordinator : ModSystem
@@ -131,11 +132,28 @@ namespace TerraBlind
 			{
 				_snapped = true;
 				var it = p.inventory[slot];
-				if (it != null && !it.IsAir && TrySnap(it, ref req.TargetWx, ref req.TargetWy))
+				if (it != null && !it.IsAir)
 				{
-					SnappedWx = req.TargetWx; SnappedWy = req.TargetWy;
-					var st = Main.tile[SnappedWx, SnappedWy];
-					if (st.HasTile) _watchType = st.TileType;   // watch this tile for removal (chop/mine done)
+					if (req.Strict)
+					{
+						// exact-coord caller (batch mine): never re-aim to a different tile. Target gone = report it,
+						// not silently snap onto whatever solid rock happens to be nearby.
+						var tt = Main.tile[req.TargetWx, req.TargetWy];
+						if (!tt.HasTile) { Outcome = "target_gone"; _active = null; return; }
+						SnappedWx = req.TargetWx; SnappedWy = req.TargetWy;
+						_watchType = tt.TileType;
+					}
+					else if (TrySnap(it, ref req.TargetWx, ref req.TargetWy))
+					{
+						SnappedWx = req.TargetWx; SnappedWy = req.TargetWy;
+						var st = Main.tile[SnappedWx, SnappedWy];
+						if (st.HasTile) _watchType = st.TileType;   // watch this tile for removal (chop/mine done)
+					}
+					// REACH: swinging at a tile outside interaction range just flails (vanilla clamps the tile target),
+					// and mining below the feet moves the player, so a batch computed from the old stance goes stale.
+					// Check the authoritative range up front and report at once instead of burning the grace window.
+					if (_watchType >= 0 && !p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					{ Outcome = "no_progress"; Reason = "out_of_reach"; _active = null; return; }
 				}
 			}
 
@@ -224,6 +242,33 @@ namespace TerraBlind
 
 			wx = bestX; wy = bestY;
 			return true;
+		}
+
+		// Live view of the watched target for /item_use_status: is there still a tile, can the HELD tool act on it,
+		// and how much mining damage has accumulated — rising damage = the swings are landing; flat 0 = flailing.
+		public static string TargetJson()
+		{
+			if (SnappedWx < 0 || !InBounds(SnappedWx, SnappedWy)) return "null";
+			var t = Main.tile[SnappedWx, SnappedWy];
+			bool has = t.HasTile;
+			int type = has ? t.TileType : -1;
+			var p = Main.LocalPlayer;
+			bool toolOk = false;
+			int dmg = 0;
+			if (p != null && p.active)
+			{
+				if (has)
+				{
+					var it = p.inventory[p.selectedItem];
+					if (it != null && !it.IsAir)
+						toolOk = it.axe > 0 ? Main.tileAxe[type]
+							: it.hammer > 0 ? Main.tileHammer[type]
+							: it.pick > 0 && Main.tileSolid[type] && !Main.tileAxe[type] && !Main.tileHammer[type];
+					dmg = TileMineDamage(p, SnappedWx, SnappedWy);
+				}
+			}
+			return "{\"has_tile\":" + (has ? "true" : "false") + ",\"type\":" + type
+				+ ",\"tool_ok\":" + (toolOk ? "true" : "false") + ",\"damage\":" + dmg + "}";
 		}
 
 		// Accumulated mining damage on a tile from this player's swings (hitTile buffers it, decaying after 60 ticks

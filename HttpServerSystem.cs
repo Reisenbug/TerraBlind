@@ -470,6 +470,7 @@ namespace TerraBlind
 						TargetWy      = int.Parse(wyM.Groups[1].Value),
 						Slot          = slotM.Success ? int.Parse(slotM.Groups[1].Value) : -1,
 						DurationTicks = durM.Success  ? int.Parse(durM.Groups[1].Value)  : 0,
+						Strict        = rb.Contains("\"strict\":true"),
 					});
 					body = "{\"ok\":true}";
 				}
@@ -491,7 +492,8 @@ namespace TerraBlind
 					+ ",\"outcome\":\"" + JsonEsc(ItemUseCoordinator.Outcome) + "\""
 					+ ",\"reason\":\"" + JsonEsc(ItemUseCoordinator.Reason) + "\""
 					+ ",\"snapped_wx\":" + ItemUseCoordinator.SnappedWx
-					+ ",\"snapped_wy\":" + ItemUseCoordinator.SnappedWy + "}";
+					+ ",\"snapped_wy\":" + ItemUseCoordinator.SnappedWy
+					+ ",\"target\":" + ItemUseCoordinator.TargetJson() + "}";
 			}
 			else if (path == "/walk_to_edge")
 			{
