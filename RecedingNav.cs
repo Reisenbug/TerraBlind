@@ -59,6 +59,7 @@ namespace TerraBlind
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
+            StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
             // Tick waits on _fieldReady; the player just stands a moment until the compass is built.
@@ -107,6 +108,19 @@ namespace TerraBlind
                 if (System.Math.Abs(cx - gx) <= GoalDistPx && System.Math.Abs(fy - gy) <= GoalDistPx)
                 { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
             }
+
+            // FAST STUCK SENTINEL — every frame, not just at replan boundaries. It watches the four progress
+            // signals (displacement, H, dig damage, nearby tiles) and runs the response ladder itself: safe
+            // step within ~0.5s, abandon the leg after ~6-8s of true flatline. While it nudges, it owns the
+            // controls for this frame.
+            if (StuckSentinel.Tick(p, _goalWx, _goalWy))
+            {
+                DiagLog.Write($"[recede] SENTINEL give-up at H-flatline goal=({_goalWx},{_goalWy})");
+                LastStop = "stuck"; Stop();
+                Main.NewText("[TerraBlind] receding: stuck (sentinel) — abandoning leg");
+                return;
+            }
+            if (StuckSentinel.Nudging) return;
 
             if (StateSpacePlanner.ExecRunning) return;        // current action still executing
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled
