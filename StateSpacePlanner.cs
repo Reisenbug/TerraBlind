@@ -1886,8 +1886,7 @@ namespace TerraBlind
         // (line = global route, gives direction; Expand landings = physics-valid cells, give a body-doable step).
 
         static string _lastParamsSig;   // last logged [ss-params] signature (log on change only)
-        static int _lineIdx;       // player's tracked projection onto the line (viz only now)
-        public static void ResetLineProgress() { _lineIdx = 0; _miss.Clear(); _recent.Clear(); }
+        public static void ResetLineProgress() { _miss.Clear(); _recent.Clear(); }
 
         // ATTENTION mismatch memory — a CONTINUOUS per-edge weight, NOT a hard ban. An edge keyed by (fromCell→toCell):
         // when the bot's real landing falls short of an edge's optimistic simulated landing (a jump the physics couldn't
@@ -2008,13 +2007,16 @@ namespace TerraBlind
             // recomputes from the REAL position, so physics imprecision is absorbed (we never assume we reached s').
             // CRITICAL: g must be in the SAME UNIT as H (StepCost), not frames — else the sum is meaningless. So g is
             // recomputed in StepCost units: travelled cells × MoveSide + dug cells × DigSide + pillared cells × MoveUp.
-            var line = MazeWand.GetPath(goalWx, goalWy);   // kept only for the viz overlay; NOT used for the decision
-            var (myIdx, _) = NearestLineIdx(line, curCx, curCy, _lineIdx);
-            _lineIdx = myIdx;
-            // multi-scale big-direction vectors from the player's line projection (unit; (0,0) if line too short)
-            var dS = LineDir(line, myIdx, ArcShort);
-            var dM = LineDir(line, myIdx, ArcMid);
-            var dL = LineDir(line, myIdx, ArcLong);
+            // STATELESS LINE: re-traced from the CURRENT cell every replan (greedy field descent, cheap). The old
+            // frozen start→goal trace plus a monotonic _lineIdx projection was memory that survived reality changes —
+            // after any large involuntary displacement (fall, knockback, teleport) the projection still claimed the
+            // player was back where it last saw them, and the dev term dragged the bot toward the stale route. A line
+            // that always emanates from the real cell makes dev/align pure functions of the current state: idx 0 IS
+            // the player, the direction vectors read "where the best route from HERE heads".
+            var line = MazeWand.TraceFrom(field, curCx, curCy, goalWx, goalWy);
+            var dS = LineDir(line, 0, ArcShort);
+            var dM = LineDir(line, 0, ArcMid);
+            var dL = LineDir(line, 0, ArcLong);
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
@@ -2097,7 +2099,7 @@ namespace TerraBlind
                 // each cycle from the real position, so a transient excursion that returns to the line (the désert V-pit,
                 // already fine after the air-cost fix) nets little, but a one-way descent into a /_/ trap that can't climb
                 // back accrues unboundedly → the pit edge picks the bridge instead. Uses the line-distance search.
-                var (_, devDist) = NearestLineIdx(line, ncx, ncy, _lineIdx);
+                var (_, devDist) = NearestLineIdx(line, ncx, ncy, 0);
                 // SUPER-LINEAR in distance: small strays (hugging the line, skimming a shallow V-pit) cost almost
                 // nothing, but the penalty steepens fast so a landing many cells off the line (jumping into a pit wall the
                 // line floats over) is heavily out-priced — the pit edge then refuses the descent. Same term pulls a bot
@@ -2164,9 +2166,9 @@ namespace TerraBlind
             return res;
         }
 
-        // (idx, manhattan-dist) of the line cell nearest (cx,cy), searched in a window around `near` (the player's
-        // tracked line progress) so a self-crossing route doesn't snap to a far pass, and so the window follows the
-        // player forward instead of staying pinned at the start. STRICT < (first/lowest-index minimum wins): an earlier
+        // (idx, manhattan-dist) of the line cell nearest (cx,cy), searched in a window around `near`. The line now
+        // starts at the player's real cell (stateless re-trace), so callers pass near=0 — the window covers the
+        // first ~120 line cells, ample for candidate landings a few cells away. STRICT < (first/lowest-index minimum wins): an earlier
         // <= made ties keep the highest index, so a landing far from the whole window snapped to its far end → every
         // landing read as huge progress → shuffle in place.
         static (int idx, int dist) NearestLineIdx(List<(int, int)> line, int cx, int cy, int near)

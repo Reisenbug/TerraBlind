@@ -115,7 +115,6 @@ namespace TerraBlind
                     var field = BuildField(goal.x, goal.y, start.x, start.y, bigMargin: true);
                     _cachedField = field; _cachedGoal = (goal.x, goal.y);   // reuse on J (GetField(p2) hits this)
                     var (path, breaks) = DescendPath(field, start.x, start.y, goal.x, goal.y);
-                    _cachedPath = path; _cachedPathGoal = (goal.x, goal.y);   // receding nav follows this line
                     DiagLog.Write($"[maze] start=({start.x},{start.y}) goal=({goal.x},{goal.y}) path={path.Count} breaks={breaks} field={field.Count} ms={sw.Elapsed.TotalMilliseconds:0} startInField={field.ContainsKey(start)}");
                     var tiles = new List<(int, int, Color)>();
                     foreach (var (x, y) in path)
@@ -151,23 +150,14 @@ namespace TerraBlind
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
-        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); _cachedPath = null; }
+        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); }
 
-        // the DescendPath LINE (field-optimal grid route start→goal) that receding nav follows. cached per goal alongside
-        // the field; built here from the player's current cell if not already cached (e.g. J without a prior mazewand run).
-        static (int gx, int gy) _cachedPathGoal = (int.MinValue, int.MinValue);
-        static List<(int, int)> _cachedPath;
-        public static List<(int, int)> GetPath(int gx, int gy)
-        {
-            if (_cachedPath != null && _cachedPathGoal == (gx, gy)) return _cachedPath;
-            var field = GetField(gx, gy);
-            var p = Main.LocalPlayer;
-            int sx = p != null ? (int)(p.Center.X / 16f) : gx;
-            int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
-            var (path, _) = DescendPath(field, sx, sy, gx, gy);
-            _cachedPath = path; _cachedPathGoal = (gx, gy);
-            return path;
-        }
+        // STATELESS LINE: the field-optimal route FROM an arbitrary cell, traced fresh per call (no cache). Receding
+        // nav re-traces from the player's REAL cell every replan, so the line always emanates from reality — after a
+        // fall/knockback/teleport the next replan's line is already "the best route from HERE", never a frozen trace
+        // from where the nav happened to start. Cost is a greedy dict walk (~route length), negligible per replan.
+        public static List<(int, int)> TraceFrom(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
+            => DescendPath(field, sx, sy, gx, gy, quiet: true).Item1;
 
         // the field's recommended next cell from (cx,cy): the neighbour minimizing StepCost(this move) + field[neighbour]
         // (= Dijkstra-optimal next hop). This is what DescendPath draws — exposed so receding nav steers by the SAME
@@ -407,7 +397,7 @@ namespace TerraBlind
             return (int)(depthW + spanExtra);
         }
 
-        static (List<(int, int)>, int) DescendPath(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
+        static (List<(int, int)>, int) DescendPath(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy, bool quiet = false)
         {
             var path = new List<(int, int)>();
             int breaks = 0;
@@ -437,7 +427,7 @@ namespace TerraBlind
             }
             // per-step cost breakdown for a small probe (a few dozen cells with a wall in the middle): show why the
             // field picked THIS route — direction, walk vs dig, the air penalty, and the running field value.
-            if (path.Count <= 3000)
+            if (!quiet && path.Count <= 3000)
             {
                 int walk = 0, dig = 0;
                 for (int i = 1; i < path.Count; i++)
