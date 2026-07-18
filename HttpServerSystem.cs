@@ -1679,7 +1679,11 @@ namespace TerraBlind
 						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
 						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
 						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
-						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
+						// junction cell → its index along the line, so the executor can visit treasures in line order
+						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
+						for (int i = 0; i < line.Count; i++)
+							if (!lineIdx.ContainsKey(line[i])) lineIdx[line[i]] = i;
+						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int li, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
 						for (int x = bMinX; x <= bMaxX; x++)
 							for (int y = bMinY; y <= bMaxY; y++)
 							{
@@ -1724,7 +1728,8 @@ namespace TerraBlind
 								string tier = nDig <= digMax && nWalk <= walkMax ? "main"
 									: nDig <= digMax2 && nWalk <= walkMax2 ? "optional" : null;
 								if (tier == null) continue;
-								treasures.Add((x, y, kind, junction.Item1, junction.Item2, nDig, nWalk, tier, bpath));
+								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
+									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
 							}
 						// in-world drawing: cyan line, gold/pink markers, yellow/magenta REAL detour paths
 						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
@@ -1745,7 +1750,8 @@ namespace TerraBlind
 						PathVisSystem.SetTiles(vis, 7200);
 						var rsb = new StringBuilder();
 						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
-						   .Append("},\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(line.Count)
+						   .Append("},\"hell_x\":").Append(line[line.Count - 1].x).Append(",\"hell_y\":").Append(line[line.Count - 1].y)
+						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(line.Count)
 						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax).Append(",\"treasures\":[");
 						for (int i = 0; i < treasures.Count; i++)
 						{
@@ -1753,6 +1759,7 @@ namespace TerraBlind
 							if (i > 0) rsb.Append(',');
 							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y).Append(",\"kind\":\"").Append(tr.kind)
 							   .Append("\",\"tier\":\"").Append(tr.tier).Append("\",\"line_x\":").Append(tr.jx).Append(",\"line_y\":").Append(tr.jy)
+							   .Append(",\"line_i\":").Append(tr.li)
 							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
 						}
 						rsb.Append("]}");
