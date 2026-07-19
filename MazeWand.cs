@@ -132,8 +132,9 @@ namespace TerraBlind
         // cost gradient, not the drawn path. Dead-ends are a separate problem handled at the execution layer.
         // CACHED whole-region field, keyed by goal. The field is the EXPENSIVE part (seconds for a cross-map flood),
         // but it's a全图 compass valid from anywhere — so rolling A* builds it ONCE per goal and every leg reuses it
-        // as the heuristic. Local terrain edits (a few dug tiles) don't change the大方向, so we DON'T rebuild on them;
-        // only a new goal triggers a rebuild. Returns the same dictionary instance — callers must treat it read-only.
+        // as the heuristic. A few local edits don't change the大方向, but accumulated digs/places, a pick upgrade, or
+        // the player leaving the box DO go stale — receding nav swap-rebuilds via Rebuild() on those triggers.
+        // Returns the same dictionary instance — callers must treat it read-only.
         // big margin around the goal↔start span so the cached compass still covers the player after drift / running
         // off; large enough for cross-map routes without flooding the entire 5M-cell world (memory + time).
         const int FieldMargin = 400;   // TEMP small for rolling validation (1500 = cross-map but builds on main thread
@@ -151,6 +152,25 @@ namespace TerraBlind
             return _cachedField;
         }
         public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); }
+
+        // FRESHNESS swap-rebuild: build a NEW field for the same goal (call off the main thread) and swap the cache
+        // reference when done — the old field keeps serving replans until the swap, never a null window.
+        public static void Rebuild(int gx, int gy, int sx, int sy)
+        {
+            var f = BuildField(gx, gy, sx, sy, bigMargin: true);
+            _cachedField = f; _cachedGoal = (gx, gy);
+        }
+
+        // the field priced digs with the pick power captured at build time — a pick upgrade mid-nav makes those
+        // prices lies (walls it now chews through still priced near-impassable).
+        public static bool FieldPickStale()
+        {
+            if (_cachedField == null) return false;
+            int best = 0; var pl = Main.LocalPlayer;
+            if (pl != null)
+                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > best) best = it.pick; }
+            return best != _fieldPickPower;
+        }
 
         // STATELESS LINE: the field-optimal route FROM an arbitrary cell, traced fresh per call (no cache). Receding
         // nav re-traces from the player's REAL cell every replan, so the line always emanates from reality — after a

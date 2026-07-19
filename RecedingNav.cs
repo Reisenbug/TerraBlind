@@ -57,6 +57,30 @@ namespace TerraBlind
             Start(mx, my);
         }
 
+        // FIELD FRESHNESS — the field is a snapshot; three things rot it: our own digs/places accumulating (H prices
+        // a world that no longer exists), a pick upgrade (dig prices captured at build), and the player leaving the
+        // flood box (no H at all). Each triggers an off-thread swap-rebuild anchored at the CURRENT position; the old
+        // field keeps serving until the new one swaps in (only the off-field case must wait — it has no compass).
+        const int RebuildAltered = 40;      // our altered tiles before a background re-flood (coarse; big-方向 shifts need dozens of tiles)
+        static int _altered;
+        static volatile bool _rebuilding;
+        static void RebuildFieldAsync(string why)
+        {
+            if (_rebuilding) return;
+            _rebuilding = true; _altered = 0;
+            int gx = _goalWx, gy = _goalWy;
+            var p = Main.LocalPlayer;
+            int sx = p != null ? (int)(p.Center.X / 16f) : gx;
+            int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
+            DiagLog.Write($"[recede] field REBUILD ({why}) anchor=({sx},{sy})");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try { MazeWand.Rebuild(gx, gy, sx, sy); }
+                catch (System.Exception e) { DiagLog.Write($"[recede] rebuild EXC {e.Message}"); }
+                finally { _rebuilding = false; }
+            });
+        }
+
         static volatile bool _fieldReady;
         public static void Start(int goalWx, int goalWy, bool exact = false)
         {
@@ -68,6 +92,7 @@ namespace TerraBlind
             _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear(); _sinceBest.Clear(); _prevCell = null;
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
+            _altered = 0;
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
             // Tick waits on _fieldReady; the player just stands a moment until the compass is built.
             _fieldReady = false;
@@ -134,6 +159,15 @@ namespace TerraBlind
 
             // one label function everywhere: same rounding AND same body-fit snap as the planner's landing labels.
             var cell = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
+            // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap — no compass here, and
+            // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
+            if (MazeWand.FieldPickStale())
+                RebuildFieldAsync("pick change");
+            if (!MazeWand.GetField(_goalWx, _goalWy).ContainsKey(cell))
+            {
+                RebuildFieldAsync("off-field");
+                return;
+            }
             // ATTENTION feedback: report how the last edge actually turned out (did the real landing reach the cell the
             // edge planned for?). StepAlongField turns that into a continuous per-edge mismatch weight that softly
             // down-weights edges physics keeps failing to honour. Then decay the whole table one cycle so memory fades —
@@ -199,6 +233,10 @@ namespace TerraBlind
                     return;
                 }
             }
+
+            _altered += res.Altered;
+            if (_altered >= RebuildAltered)
+                RebuildFieldAsync($"altered {_altered} tiles");
 
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             StateSpacePlanner.DispatchPlan(res);

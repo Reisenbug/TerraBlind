@@ -177,6 +177,7 @@ namespace TerraBlind
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
             public float CostFrames;       // this action's cost in frames (walk/jump frame count, or pillar/dig frame-equivalent) — caller uses it as the time denominator for progress-efficiency stuck detection
             public int CurH;               // field H at the cell this plan started from (loop-detector progress signal)
+            public int Altered;            // tiles this edge digs/places/pillars — field-staleness accumulator input
         }
 
         // one path edge to execute: a frame-replay move (Frames!=null) or the pillar macro (Pillar=true → drive
@@ -2159,6 +2160,7 @@ namespace TerraBlind
             var pickCell = bestCell;
             var b = best.Value;
             var res = new SSResult { Found = true, GoalWx = pickCell.Item1, GoalWy = pickCell.Item2, StartPx = cur.Px, StartPy = cur.Py, CostFrames = b.cost, CurH = curH };
+            res.Altered = (b.dig?.Count ?? 0) + (b.pillar ? 1 : 0) + (b.frames != null && b.frames.Exists(f => f.Place) ? 1 : 0);
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
