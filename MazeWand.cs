@@ -44,6 +44,30 @@ namespace TerraBlind
             return t.LiquidAmount > 0 && t.LiquidType == LiquidID.Lava;
         }
 
+        // SLOW MEDIA the field previously priced as free air, luring routes straight through them:
+        //   water — swimming is ~2-3× slower than running, so a submerged cell carries that ratio on top of the move.
+        //   honey — far thicker, near-crawl.
+        //   cobweb — vanilla StickyTiles: pushing through destroys the web after a beat of near-standstill; priced as
+        //            a per-cell toll rather than a dig because no tool/action is needed — walking through IS the break.
+        // These are surcharges, never impassable: the field may still route through a flooded cave when detouring is
+        // dearer. The physics sim stays dry-land (no water/web modelling) — mid-water landings will run short of their
+        // simulated targets, which the per-edge miss attention + sentinel already absorb; the surcharge just keeps the
+        // field from PREFERRING slow media when an honest dry route exists.
+        const int WaterExtra = 6, HoneyExtra = 20, WebExtra = 12;
+        static int MediumExtra(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return 0;
+            var t = Main.tile[x, y];
+            int extra = 0;
+            if (t.LiquidAmount > 0)
+            {
+                if (t.LiquidType == LiquidID.Water) extra += WaterExtra;
+                else if (t.LiquidType == LiquidID.Honey) extra += HoneyExtra;
+            }
+            if (t.HasTile && t.TileType == TileID.Cobweb) extra += WebExtra;
+            return extra;
+        }
+
         public override void SetDefaults()
         {
             Item.width = 28;
@@ -353,7 +377,7 @@ namespace TerraBlind
             // wall face has the feet briefly unsupported too — penalizing it made an 18-cell climb-around (1458)
             // cost more than digging through the wall (1440), which is backwards.
             if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
-            return baseCost;
+            return baseCost + MediumExtra(cx, cy);
         }
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
