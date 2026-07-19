@@ -24,9 +24,12 @@ namespace TerraBlind
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
 
-        // LOOP DETECTOR + SHOCK ESCAPE. H is the one progress signal every loop shape must stall: if the lowest H
-        // ever reached hasn't improved for LoopStallReplans, we are cycling — even when every step HITs its plan
-        // (the loops attention is structurally blind to). Response is two-tier:
+        // LOOP DETECTOR + SHOCK ESCAPE. H is the one progress signal every loop shape must stall. PRIMARY trigger is
+        // human-eye fast: REVISIT — coming BACK to a replan cell already stood on since the last best-H improvement
+        // (arriving from elsewhere, i.e. an A…B…A cycle, not an in-place stall — those are _miss/sentinel territory)
+        // means one full lap is proven, verdict within seconds. FALLBACK is the stall counter: if best-H hasn't
+        // improved for LoopStallReplans we are cycling even if no exact cell repeated (drifting loops). Response is
+        // the same two-tier for both:
         //   soft — shock: one large decaying penalty on every edge the ring traversed; Bellman re-routes onto the
         //          next-best alternative. Finite + decaying = not a ban, so no rule is violated.
         //   hard — after MaxShocks shocks with still no new best-H, this is a real model gap (a transition the field
@@ -41,6 +44,10 @@ namespace TerraBlind
         static int _bestH; static int _replansSinceBest; static int _shocks;
         static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
         const int RingLen = 24;
+        // replan cells stood on since the last best-H improvement (revisit detection) + the previous replan cell
+        // (to tell a travelled-away-and-back lap from an in-place stall, which is not a loop).
+        static readonly System.Collections.Generic.HashSet<(int, int)> _sinceBest = new();
+        static (int, int)? _prevCell;
 
         public static void Toggle()
         {
@@ -58,7 +65,7 @@ namespace TerraBlind
             if (!exact)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
-            _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
+            _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear(); _sinceBest.Clear(); _prevCell = null;
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
@@ -157,24 +164,31 @@ namespace TerraBlind
             if (_bestH != int.MaxValue && res.CurH > _bestH + DisplacementRebase)
             {
                 DiagLog.Write($"[recede] DISPLACED: H {_bestH}→{res.CurH} (+{res.CurH - _bestH}) — re-baseline, shocks reset");
-                _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _ring.Clear();
+                _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _ring.Clear(); _sinceBest.Clear();
             }
-            if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; }
+            if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _sinceBest.Clear(); }
             else _replansSinceBest++;
             _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
             if (_ring.Count > RingLen) _ring.RemoveAt(0);
-            if (_replansSinceBest >= LoopStallReplans)
+            // REVISIT: back on a cell already stood on since the last best-H improvement, having travelled away in
+            // between (prev replan cell differs) — one lap proven, no need to wait out the stall counter.
+            bool revisit = _sinceBest.Contains(cell) && _prevCell.HasValue && _prevCell.Value != cell;
+            _sinceBest.Add(cell);
+            _prevCell = cell;
+            if (revisit || _replansSinceBest >= LoopStallReplans)
             {
+                string why = revisit ? $"revisit of ({cell.Item1},{cell.Item2})" : $"bestH={_bestH} unimproved for {_replansSinceBest} replans";
                 string trail = string.Join(" ", _ring.ConvertAll(r => $"({r.fx},{r.fy})H{r.h}→({r.tx},{r.ty})"));
                 if (_shocks < MaxShocks)
                 {
                     _shocks++;
-                    DiagLog.Write($"[recede] LOOP DETECTED at {cell}: bestH={_bestH} unimproved for {_replansSinceBest} replans → SHOCK {_shocks}/{MaxShocks}. Trail: {trail}");
+                    DiagLog.Write($"[recede] LOOP DETECTED at {cell}: {why} → SHOCK {_shocks}/{MaxShocks}. Trail: {trail}");
                     Main.NewText($"[TerraBlind] loop at ({cell.Item1},{cell.Item2}) — shock {_shocks}/{MaxShocks}, re-routing");
                     var edges = new System.Collections.Generic.HashSet<(int, int, int, int)>();
                     foreach (var r in _ring) edges.Add((r.fx, r.fy, r.tx, r.ty));
                     StateSpacePlanner.PenalizeEdges(edges, ShockPenalty);
                     _replansSinceBest = 0;   // fresh window to let the re-route prove itself
+                    _sinceBest.Clear(); _prevCell = null;
                 }
                 else
                 {
