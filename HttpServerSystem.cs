@@ -1629,6 +1629,7 @@ namespace TerraBlind
 					if (dd == null) body = "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 					else
 					{
+						_descentField = dd.Field;   // kept for /descent_h progress queries
 						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
 						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
 						var line = new System.Collections.Generic.List<(int x, int y)>();
@@ -1765,6 +1766,24 @@ namespace TerraBlind
 						rsb.Append("]}");
 						body = rsb.ToString();
 					}
+				}
+			}
+			else if (path == "/descent_h")
+			{
+				// POST {"x":..,"y":..} → H of the last /descent_route hell-band field at that cell (= cost-to-hell).
+				// The itinerary consumer compares H(junction) vs H(player): larger H = farther from hell = BEHIND us,
+				// so progress is judged by the real field, never by script position. h:-1 = cell outside the field.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var xM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"x\"\\s*:\\s*(-?\\d+)");
+				var yM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (_descentField == null || !xM.Success || !yM.Success)
+				{ body = "{\"error\":\"no_descent_route\"}"; status = 400; }
+				else
+				{
+					int qx = int.Parse(xM.Groups[1].Value), qy = int.Parse(yM.Groups[1].Value);
+					body = "{\"h\":" + (_descentField.TryGetValue((qx, qy), out int hv) ? hv : -1) + "}";
 				}
 			}
 			else if (path == "/tile_names")
@@ -1996,6 +2015,9 @@ namespace TerraBlind
 			public int EntX, EntY, Cost, Cands;
 			public System.Collections.Generic.Dictionary<(int, int), int> Field;
 		}
+
+		// the last /descent_route hell-band field, retained so /descent_h can answer progress queries for free
+		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
 		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
 		// solid in the 20 cells below — thin shells like canopies/roofs are skipped), then a width-64 morphological
