@@ -694,6 +694,20 @@ namespace TerraBlind
                 }
             }
 
+            // LATERAL JUMP-PLACE — UNCONDITIONAL, both directions. It used to exist only inside the isWall branch,
+            // but a slope never classifies as wall (StepUp keeps the walk advancing), so "hop toward the face and
+            // drop a rung" — the human slope climb — was never generated and the only ascent realization left was
+            // the dig-up composite. JumpPlace only returns real rises and JumpPlaceCost biases plain walk/jump ahead
+            // of it, so unconditional emission is safe; cost demotes it wherever it isn't needed.
+            bool anyLateralJp = false;
+            if (platformTile >= 0 && ctx.DistField != null)
+                foreach (int ldir in new[] { gdir, -gdir })
+                    foreach (int hold in BuildHoldOptions())
+                    {
+                        var jp = Prof("jplaceL", () => JumpPlace(ctx, cur, ldir, hold, ph, platformTile));
+                        if (jp.HasValue) { anyLateralJp = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
+                    }
+
             // FREE FALL off a ledge: when the foot column is open below (a cliff/shaft, not a wall), ride it down to
             // the real floor — exactly what a human does (mined=0). DigDown only reaches DigMaxScan deep and needs to
             // mine, so a 24-tile cliff探不到底就作废; this no-dig edge covers any depth. emit before DigDown so A*
@@ -783,22 +797,13 @@ namespace TerraBlind
 
             if (isWall)
             {
-                // WALL: prefer JUMP-PLACE (跳放) — jump and, when the descending arc's foot has a real placement spot
-                // (CanPlaceReal inside JumpPlace), drop ONE platform and land on it, gaining several tiles at once.
-                // this is what a human does at a wall with a foothold. only when NO hold finds a spot (pure sheer
-                // wall, no placement point) fall back to PILLAR (原地垒). this is the 2a-vs-2b distinction.
-                bool anyJumpPlace = false;
-                bool pillarGen = false;
+                // WALL: the jump-place candidates are already emitted unconditionally above — here only the fallback
+                // remains: when NO hold found a spot (pure sheer wall, no placement point) fall back to PILLAR
+                // (原地垒). this is the 2a-vs-2b distinction.
                 if (platformTile >= 0)
                 {
-                    foreach (int hold in BuildHoldOptions())
+                    if (!anyLateralJp && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                     {
-                        var jp = Prof("jplace", () => JumpPlace(ctx, cur, gdir, hold, ph, platformTile));
-                        if (jp.HasValue) { anyJumpPlace = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
-                    }
-                    if (!anyJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
-                    {
-                        pillarGen = true;
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                         for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
                         {
@@ -987,6 +992,11 @@ namespace TerraBlind
                 int x = ccx + dir * dx;
                 for (int y = cfy - apex; y <= cfy + PlatformMaxDropTiles; y++)
                     if (CanPlaceReal(x, y)) return true;
+                // dir=0 walks x nowhere — cover the neighbour columns the placement scan now tries
+                if (dir == 0 && dx == 0)
+                    for (int sx = -1; sx <= 1; sx += 2)
+                        for (int y = cfy - apex; y <= cfy + PlatformMaxDropTiles; y++)
+                            if (CanPlaceReal(ccx + sx, y)) return true;
             }
             return false;
         }
@@ -1028,17 +1038,25 @@ namespace TerraBlind
             // scan downward from BELOW the apex foot (a platform in the apex foot's own cell can't catch the player —
             // they descend through it back to origin). pick the highest cell that is placeable AND lands the player
             // ABOVE the start (a real rise, not a fall-back). not pinned to a fixed offset.
+            // COLUMNS: the apex column first, then its two neighbours. On a slope the anchored cell is usually one
+            // column toward the face — own-column-only scanning found no anchor there, yielded nothing, and the only
+            // ascent realization left was the dig-up composite. The 20px body overlaps a neighbour-column platform,
+            // and SimulateWithPlatform verifies the landing honestly, so a side-column rung is a real edge.
             int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int placeCx = int.MinValue, placeCy = 0;
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
-            for (int py = apexFootCy + 1; py <= apexFootCy + PlatformMaxDropTiles; py++)
+            foreach (int pcxTry in new[] { apexFootCx, apexFootCx + 1, apexFootCx - 1 })
             {
-                if (!CanPlaceReal(apexFootCx, py)) continue;
-                var trySeg = SimulateWithPlatform(cur, dir, hold, ph, apexFootCx, py, platformTile);
-                if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
-                int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
-                if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
-                placeCx = apexFootCx; placeCy = py; seg = trySeg; break;
+                for (int py = apexFootCy + 1; py <= apexFootCy + PlatformMaxDropTiles; py++)
+                {
+                    if (!CanPlaceReal(pcxTry, py)) continue;
+                    var trySeg = SimulateWithPlatform(cur, dir, hold, ph, pcxTry, py, platformTile);
+                    if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
+                    int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
+                    if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
+                    placeCx = pcxTry; placeCy = py; seg = trySeg; break;
+                }
+                if (placeCx != int.MinValue) break;
             }
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             float probeVy = 0f, probeFootPy = 0f;
@@ -2964,10 +2982,15 @@ namespace TerraBlind
             _lastExecFrameCount++;
         }
 
+        // "placed" = STANDABLE SUPPORT exists (solid or platform) — the same standard the sim used when it promised
+        // the landing. Bare HasTile lied: a cut decoration (plant/vine/web) in the target cell read as "done", the
+        // placement swing was skipped, and the replayed jump landed one tile short (the (1379,224) grass that pinned
+        // a whole loop). Cut tiles must count as NOT placed — vanilla placement clears them and puts the platform.
         static bool TilePlaced(int cx, int cy)
         {
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
-            return Main.tile[cx, cy].HasTile;
+            var t = Main.tile[cx, cy];
+            return t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]);
         }
 
         static void EmitPlace(Player p, int cx, int cy)

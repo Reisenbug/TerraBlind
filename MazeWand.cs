@@ -17,7 +17,8 @@ namespace TerraBlind
         // too eagerly): dig only when it clearly beats routing around.
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 80, DigSide = 120, DigUp = 160;
-        const int PillarUp = 45;   // vertical ascent in open air BEYOND jump reach: only a pillar can do it — price the pillar, not a free climb
+        const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
+        const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
 
         // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
@@ -370,7 +371,11 @@ namespace TerraBlind
                 bool nearSupport = false;
                 for (int d = 1; d <= JumpReach + 1; d++)
                     if (PathPlanner.IsFloorPublic(cx, cy + d)) { nearSupport = true; break; }
-                if (!nearSupport) baseCost = PillarUp;
+                // PLATFORMS ARE POWERFUL: they anchor to nearly anything — grass, vines, rubble, tree trunks, back
+                // walls. Air beyond jump reach that has an anchor nearby supports a jump-place LADDER (one jump gains
+                // 4-6 cells), ~3× faster than the anchorless pillar cycle — price it as the ladder, not the pillar.
+                // One rate for all unsupported air made a bare cliff column beat the tree-side ladder next to it.
+                if (!nearSupport) baseCost = PlatformAnchor(cx, cy) ? JPlaceUp : PillarUp;
             }
             // air penalty ONLY on HORIZONTAL entry into open air — that's "flying sideways", which doesn't exist.
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a
@@ -378,6 +383,21 @@ namespace TerraBlind
             // cost more than digging through the wall (1440), which is backwards.
             if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost + MediumExtra(cx, cy);
+        }
+
+        // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
+        // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
+        static bool PlatformAnchor(int x, int y)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                    var t = Main.tile[nx, ny];
+                    if (t.HasTile || t.WallType > 0) return true;
+                }
+            return false;
         }
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
