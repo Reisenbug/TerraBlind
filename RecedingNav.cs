@@ -81,6 +81,29 @@ namespace TerraBlind
             });
         }
 
+        static void SmashWeb(Player p)
+        {
+            int x0 = (int)(p.position.X / 16f), x1 = (int)((p.position.X + p.width) / 16f);
+            int y0 = (int)(p.position.Y / 16f), y1 = (int)((p.position.Y + p.height) / 16f);
+            for (int x = x0; x <= x1; x++)
+                for (int y = y0; y <= y1; y++)
+                {
+                    if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
+                    var t = Main.tile[x, y];
+                    if (!t.HasTile || t.TileType != Terraria.ID.TileID.Cobweb) continue;
+                    int slot = -1, bp = 0;
+                    for (int i = 0; i < 10; i++)
+                    { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > bp) { bp = it.pick; slot = i; } }
+                    if (slot < 0) return;
+                    p.selectedItem = slot;
+                    Main.SmartCursorWanted_Mouse = false;
+                    Main.mouseX = (int)(x * 16f + 8f - Main.screenPosition.X);
+                    Main.mouseY = (int)(y * 16f + 8f - Main.screenPosition.Y);
+                    if (p.itemTime == 0) p.controlUseItem = true;
+                    return;
+                }
+        }
+
         static volatile bool _fieldReady;
         public static void Start(int goalWx, int goalWy, bool exact = false)
         {
@@ -124,6 +147,11 @@ namespace TerraBlind
             if (!_fieldReady) return;          // field still building off-thread → wait (player stands a moment)
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
+
+            // WEB REFLEX: a cobweb overlapping the body slows the walk to a crawl until vanilla's push-through
+            // counter breaks it (20-100 ticks/web). A pick swing kills it in one hit — smash it actively instead
+            // of wading. Runs every frame while nav is active, whatever step is executing.
+            SmashWeb(p);
 
             // EXACT (mining): the goal is a solid ore the body can't stand on — arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
