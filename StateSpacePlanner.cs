@@ -2089,7 +2089,17 @@ namespace TerraBlind
                 // be starved: the cap keeps the surcharge below typical real-descent H drops, so when digging is the
                 // only descending edge it still beats any H-rising shuffle.
                 int altered = (digTiles?.Count ?? 0) + (pillar ? 1 : 0) + (isPlace ? 1 : 0);
-                if (altered > 0) g += MathF.Min(AlterSurchargeCap, cost * DigFramesToH);
+                // PROGRESS-NORMALIZED: every descending candidate totals exactly H(s), so the surcharge alone ranks
+                // them — and a per-ACTION time fee made a 2-cell pillar (≈21) forever beat a 4-cell jump-place rung
+                // (≈37) even though the ladder is faster per cell (the greedy step can't see the second pillar that
+                // follows). Scale the fee by cells gained, discount only for LONG edges (≤2 cells unchanged, so the
+                // tuned dig-vs-walk balance is untouched): fee × 2/max(2, manhattan). Pillar stays 21, the rung drops
+                // to ~18 — per-cell-faster actions now win their ties.
+                if (altered > 0)
+                {
+                    float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
+                    g += MathF.Min(AlterSurchargeCap, cost * DigFramesToH) * (2f / MathF.Max(2f, edgeCells));
+                }
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
                 // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
