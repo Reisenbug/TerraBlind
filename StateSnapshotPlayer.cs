@@ -93,6 +93,20 @@ namespace TerraBlind
 			}
 			_prevVy = Player.velocity.Y;
 
+			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
+			// below so a cell it starts this frame gets swung at immediately.
+			PlaceAction.Tick();
+
+			// rope ladder: alternates placing (via ItemUseCoordinator) and climbing (writes controlUp itself). Its
+			// climb phase owns the controls, so it returns before anything else can fight it for them.
+			if (RopeLadder.IsRunning)
+			{
+				RopeLadder.Tick();
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// /act takes the wheel outright: it is the raw action primitive the LLM drives by hand, so nothing else may
 			// write controls underneath it. First in, and it returns — nav/mine/place all stand down while it runs.
 			if (ActExecutor.IsActive)
