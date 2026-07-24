@@ -30,6 +30,8 @@ namespace TerraBlind
 		// How many full swings a placement gets before we call it refused. One is enough when it works — the extra
 		// two absorb a swing eaten by a stance change or an item swap.
 		private const int PlaceSwingGrace = 3;
+		// hard ceiling in frames for one placement attempt, so the attempt ends even if no swing ever completes.
+		private const int PlaceFrameCeiling = 90;
 		private static int _elapsed;         // ticks since this action started (for the no-progress grace window)
 		// NO-PROGRESS window: after this many ticks of swinging, if the target tile still shows zero accumulated
 		// mining damage, the tool simply can't dent it (wooden pick on stone, wrong tool). Stop early and report
@@ -119,9 +121,13 @@ namespace TerraBlind
 			// structurally guaranteed to close: no path here can spin forever.
 			if (_placeType >= 0)
 			{
-				if (_swings >= PlaceSwingGrace)
+				// belt-and-braces on the swing count: an item whose animation never returns to 0 (autoReuse held down)
+				// would never tick a falling edge, so an elapsed-frame ceiling backs it up. Whichever fires first ends
+				// the attempt — the point is only that SOMETHING always does.
+				if (_swings >= PlaceSwingGrace || _elapsed >= PlaceFrameCeiling)
 				{
 					Outcome = "not_placed"; Reason = DiagnosePlace(p, req);
+					DiagLog.Write($"[item_use] not_placed at ({req.TargetWx},{req.TargetWy}) swings={_swings} elapsed={_elapsed} reason={Reason}");
 					_active = null; return;
 				}
 			}
