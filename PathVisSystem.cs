@@ -14,6 +14,17 @@ namespace TerraBlind
         private static List<(int wx, int wy, string text, Color color)> _labels = new();
         private static int _ttl = 0;
 
+        // GHOST TILES: draw a recorded structure as faint real-tile sprites (the actual block's look, half-transparent
+        // "air version"), not solid debug squares. Each entry carries the tile type + frame so the correct sprite +
+        // orientation renders. mineGhost cells (recorded removals) draw as a faint red outline instead.
+        private static List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> _ghosts = new();
+        private static int _ghostTtl = 0;
+        public static void SetGhosts(List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> g, int ttlFrames = 7200)
+        {
+            lock (_lock) { _ghosts = g; _ghostTtl = ttlFrames; }
+        }
+        public static void ClearGhosts() { lock (_lock) { _ghosts = new(); _ghostTtl = 0; } }
+
         private static List<NavNode> _planPath = new();
         private static int[] _planEnvelope;
 
@@ -77,7 +88,7 @@ namespace TerraBlind
 
         public override void PostUpdateEverything()
         {
-            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; }
+            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; }
         }
 
         public override void PostDrawTiles()
@@ -147,6 +158,12 @@ namespace TerraBlind
             lock (_lock) { extraTiles = new List<(int, int, Color)>(_tiles); }
             foreach (var (tx, ty, tc) in extraTiles)
                 DrawTile(spriteBatch, tx, ty, tc);
+
+            List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> ghosts; int ghostTtl;
+            lock (_lock) { ghosts = _ghosts; ghostTtl = _ghostTtl; }
+            if (ghostTtl > 0)
+                foreach (var g in ghosts)
+                    DrawGhost(spriteBatch, g.wx, g.wy, g.type, g.frameX, g.frameY, g.mine);
 
             if (path != null)
                 foreach (var node in path)
@@ -301,6 +318,32 @@ namespace TerraBlind
             if (sx < -16 || sx > Main.screenWidth + 16) return;
             if (sy < -16 || sy > Main.screenHeight + 16) return;
             sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), c);
+        }
+
+        // GHOST: the recorded block's ACTUAL sprite drawn faint (a half-transparent "air version"), so the preview
+        // reads as the real structure — wood looks like wood, a platform like a platform, with correct orientation
+        // from the recorded frameX/Y. A mine cell has no sprite (it's a removal) → faint red hollow square instead.
+        private void DrawGhost(SpriteBatch sb, int wx, int wy, ushort type, short frameX, short frameY, bool mine)
+        {
+            float sx = wx * 16f - Main.screenPosition.X;
+            float sy = wy * 16f - Main.screenPosition.Y;
+            if (sx < -16 || sx > Main.screenWidth + 16) return;
+            if (sy < -16 || sy > Main.screenHeight + 16) return;
+            if (mine)
+            {
+                var red = new Color(255, 60, 60) * 0.35f;
+                sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 1), red);
+                sb.Draw(_pixel, new Rectangle((int)sx, (int)sy + 15, 16, 1), red);
+                sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 1, 16), red);
+                sb.Draw(_pixel, new Rectangle((int)sx + 15, (int)sy, 1, 16), red);
+                return;
+            }
+            if (type >= Terraria.ID.TileID.Count) { sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), new Color(170, 0, 255) * 0.3f); return; }
+            Main.instance.LoadTiles(type);   // vanilla's own ensure-loaded before a single-tile draw
+            var tex = Terraria.GameContent.TextureAssets.Tile[type];
+            if (tex == null || !tex.IsLoaded) { sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), new Color(170, 0, 255) * 0.3f); return; }
+            var src = new Rectangle(frameX, frameY, 16, 16);
+            sb.Draw(tex.Value, new Vector2(sx, sy), src, Color.White * 0.4f, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0f);
         }
 
         private void DrawDot(SpriteBatch sb, float px, float py, Color c)
