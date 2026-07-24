@@ -10,9 +10,9 @@ namespace TerraBlind
         public const int PlayerW = 20;
         public const int PlayerH = 42;
 
-        // dry/wet variants for the current plan, filled by Params.FromPlayer; Step switches per-frame at the
-        // water surface. single-threaded planner, so static is safe.
-        static Params _dry, _wet;
+        // dry/wet/honey variants for the current plan, filled by Params.FromPlayer; Step switches per-frame at the
+        // liquid surface. single-threaded planner, so static is safe.
+        static Params _dry, _wet, _honey;
         static bool _wetReady;
 
         // BAKED speed fields, captured at PostUpdate. Vanilla resets maxRunSpeed=3 every frame (ResetEffects), then
@@ -48,9 +48,10 @@ namespace TerraBlind
             {
                 _dry = BuildDry(p);
                 _wet = BuildWet(p);
+                _honey = BuildHoney(p);
                 _wetReady = true;
-                bool wetNow = p.wet && !p.honeyWet && !p.merman;
-                return wetNow ? _wet : _dry;
+                if (p.honeyWet) return _honey;
+                return p.wet && !p.merman ? _wet : _dry;
             }
 
             // vanilla water: the VERTICAL velocity algorithm IS scaled (Update L23958: gravity=0.2, jumpSpeed=6.01,
@@ -65,6 +66,19 @@ namespace TerraBlind
                     Gravity = 0.2f, JumpSpeed = 6.01f, MaxFall = 5f,
                     MaxRun = BakedMaxRun(p), AccRunSpeed = BakedAccRunSpeed(p),
                     AccRun = BakedRunAccel(p), RunSlowdown = 0.2f, JumpHeight = 30,
+                };
+            }
+
+            // vanilla honey liquid (Update L23934): gravity=0.1, maxFall=3, jump params UNTOUCHED (unlike water's
+            // 30-frame hold) — the crawl comes from the 0.25 position multiplier (L27588; water is 0.5), applied
+            // in Step the same way as water's.
+            static Params BuildHoney(Player p)
+            {
+                return new Params
+                {
+                    Gravity = 0.1f, JumpSpeed = 5.01f, MaxFall = 3f,
+                    MaxRun = BakedMaxRun(p), AccRunSpeed = BakedAccRunSpeed(p),
+                    AccRun = BakedRunAccel(p), RunSlowdown = 0.2f, JumpHeight = 15,
                 };
             }
 
@@ -133,13 +147,16 @@ namespace TerraBlind
             float vy = s.Vy;
             int jfl = s.JumpFramesLeft;
 
-            // per-frame water-surface switch: pick the wet/dry variant by where the player IS this frame, so a jump
-            // crossing the surface uses the right gravity/jumpSpeed/hold-cap on each side. uses vanilla WetCollision.
+            // per-frame liquid-surface switch: pick the dry/wet/honey variant by where the player IS this frame, so
+            // a jump crossing the surface uses the right gravity/jumpSpeed/hold-cap on each side. WetCollision also
+            // sets Collision.honey when the touched liquid is honey (vanilla reads it the same way).
             bool wetNow = s.WasWet;
+            bool honeyNow = false;
             if (_wetReady)
             {
                 wetNow = Terraria.Collision.WetCollision(new Vector2(s.Px, s.Py), PlayerW, PlayerH);
-                ph = wetNow ? _wet : _dry;
+                honeyNow = wetNow && Terraria.Collision.honey;
+                ph = honeyNow ? _honey : wetNow ? _wet : _dry;
                 // crossing OUT of water mid-hold: vanilla (Player.cs L27354) caps remaining hold to jumpHeight/5 of
                 // the AIR jumpHeight (15/5 = 3), regardless of frames already spent — NOT airCap-used.
                 if (s.WasWet && !wetNow && jfl > ph.JumpHeight / 5)
@@ -226,6 +243,20 @@ namespace TerraBlind
             // step 2 — gravity block: applied every frame (hold's -jumpSpeed + gravity = -4.61 net for bare player).
             vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall);
 
+            // vanilla StickyMovement (Update L27137: after gravity, BEFORE the move): a honey block touching the
+            // hitbox clamps and damps velocity every frame — vx to ±1 then ×0.85 (|vx|>0.75) / ×0.6, vy ≤1 / ≥−5
+            // then ×0.96 rising / ×0.3 falling. This is what makes walking on a honey floor crawl at ≤1px/f; the
+            // dry sim promised full-speed landings across honey that reality missed by cells. Cobweb (51) is NOT
+            // modelled: the web reflex smashes it in one hit, so plans should treat it as passable.
+            if (TouchesHoneyBlock(s.Px, s.Py))
+            {
+                if (vx > 1f) vx = 1f; else if (vx < -1f) vx = -1f;
+                vx *= (vx > 0.75f || vx < -0.75f) ? 0.85f : 0.6f;
+                if (vy > 1f) vy = 1f;
+                if (vy < -5f) vy = -5f;
+                vy *= vy < 0f ? 0.96f : 0.3f;
+            }
+
             var pos = new Vector2(s.Px, s.Py);
             var vel = new Vector2(vx, vy);
             float stepSpeed = 0f, gfxOffY = 0f;
@@ -252,15 +283,16 @@ namespace TerraBlind
 
             if (vy < 0f && System.Math.Abs(result.Y - vel.Y) > 0.01f) jfl = 0;
 
-            // vanilla Player.WetCollision (Player.cs L22962-22973): in water position += velocity*0.5, but an axis
-            // that TileCollision CLIPPED (hit a wall/floor) moves at full speed, not halved. velocity itself stays
-            // full-speed (so leaving water restores full motion instantly — fixes the out-of-water seam drift where
-            // a speed-capped wet model crawled back to maxRun over ~18 frames). result is the post-collision move.
+            // vanilla Player.WetCollision (Player.cs L22962-22973): in liquid position += velocity×mult, but an axis
+            // that TileCollision CLIPPED (hit a wall/floor) moves at full speed, not scaled. velocity itself stays
+            // full-speed (so leaving liquid restores full motion instantly — fixes the out-of-water seam drift where
+            // a speed-capped wet model crawled back to maxRun over ~18 frames). mult: water 0.5, honey 0.25 (L27588).
             float moveX = result.X, moveY = result.Y;
             if (wetNow)
             {
-                if (System.Math.Abs(result.X - vel.X) <= 0.01f) moveX = result.X * 0.5f; // not clipped → halve
-                if (System.Math.Abs(result.Y - vel.Y) <= 0.01f) moveY = result.Y * 0.5f;
+                float mult = honeyNow ? 0.25f : 0.5f;
+                if (System.Math.Abs(result.X - vel.X) <= 0.01f) moveX = result.X * mult; // not clipped → scale
+                if (System.Math.Abs(result.Y - vel.Y) <= 0.01f) moveY = result.Y * mult;
             }
 
             float nx = pos.X + moveX;
@@ -286,6 +318,27 @@ namespace TerraBlind
             vx = result.X;
 
             return new State { Px = nx, Py = ny, Vx = vx, Vy = vy, Grounded = hitFloor, JumpFramesLeft = jfl, JumpHStart = jfl > 0 ? jumpHStart : 0, WasWet = wetNow };
+        }
+
+        // vanilla Collision.StickyTiles honey-block test (L3447-3467): un-sloped honey block (half-brick allowed),
+        // tile box expanded 1px horizontally, hitbox nudged 0.01 up so standing exactly ON the block counts.
+        static bool TouchesHoneyBlock(float px, float py)
+        {
+            float y0 = py - 0.01f;
+            int c0 = (int)(px / 16f) - 1, c1 = (int)((px + PlayerW) / 16f) + 1;
+            int r0 = (int)(y0 / 16f) - 1, r1 = (int)((y0 + PlayerH) / 16f) + 1;
+            for (int i = c0; i <= c1; i++)
+                for (int j = r0; j <= r1; j++)
+                {
+                    if (i < 0 || j < 0 || i >= Main.maxTilesX || j >= Main.maxTilesY) continue;
+                    var t = Main.tile[i, j];
+                    if (!t.HasTile || t.TileType != Terraria.ID.TileID.HoneyBlock || t.Slope != Terraria.ID.SlopeType.Solid) continue;
+                    float ty = j * 16f, th = 16.01f;
+                    if (t.IsHalfBlock) { ty += 8f; th -= 8f; }
+                    if (px + PlayerW > i * 16f - 1f && px < i * 16f + 17f && y0 + PlayerH > ty && y0 < ty + th)
+                        return true;
+                }
+            return false;
         }
 
         public static State Step(State s, ControlInput input, Params ph)

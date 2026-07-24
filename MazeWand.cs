@@ -66,6 +66,13 @@ namespace TerraBlind
                 else if (t.LiquidType == LiquidID.Honey) extra += HoneyExtra;
             }
             if (t.HasTile && t.TileType == TileID.Cobweb) extra += WebExtra;
+            // HONEY BLOCK contact: standing ON a honey block (solid, so it's the floor below, never the entered cell)
+            // slows movement as brutally as swimming in honey — charge the cell whose support is honey.
+            if (y + 1 < Main.maxTilesY)
+            {
+                var f = Main.tile[x, y + 1];
+                if (f.HasTile && f.TileType == TileID.HoneyBlock) extra += HoneyExtra;
+            }
             return extra;
         }
 

@@ -22,6 +22,33 @@ namespace TerraBlind
 				MazeWand.ToggleNav();
 			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
 				RecedingNav.Toggle();
+			// U toggles build RECORDING: capture place/mine intents (build_rec.json) while you build by hand.
+			if (TerraBlind.ToggleBuildRecord != null && TerraBlind.ToggleBuildRecord.JustPressed)
+			{
+				if (BuildRecorder.IsRecording)
+				{
+					BuildRecorder.Stop();
+					Main.NewText($"[TerraBlind] 停止建造录制（{BuildRecorder.LastEventCount} 事件）→ build_rec.json", 255, 120, 120);
+				}
+				else
+				{
+					BuildRecorder.Start();
+					Main.NewText("[TerraBlind] 开始建造录制（放置/挖掘意图）", 120, 255, 120);
+				}
+			}
+			// I toggles build REPLAY: start at the player's feet (anchor -1,-1) if idle, stop if running.
+			if (TerraBlind.ToggleBuildReplay != null && TerraBlind.ToggleBuildReplay.JustPressed)
+			{
+				if (BuildReplayer.Running)
+				{
+					BuildReplayer.Stop();
+					Main.NewText("[TerraBlind] 建造回放已停止");
+				}
+				else if (BuildReplayer.Start(-1, -1, out string why))
+					Main.NewText("[TerraBlind] 开始回放建造（锚点=脚下）");
+				else
+					Main.NewText($"[TerraBlind] 无法回放：{why}");
+			}
 		}
 
 		public override void SetControls()
@@ -66,9 +93,24 @@ namespace TerraBlind
 			}
 			_prevVy = Player.velocity.Y;
 
+			// /act takes the wheel outright: it is the raw action primitive the LLM drives by hand, so nothing else may
+			// write controls underneath it. First in, and it returns — nav/mine/place all stand down while it runs.
+			if (ActExecutor.IsActive)
+			{
+				ActExecutor.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				BuildRecorder.Tick(Player);
+				return;
+			}
+
 			// direction-explore drives StateSpacePlanner leg-by-leg; run it before TickBlocks so a freshly dispatched
 			// leg gets stepped this frame.
 			ExploreCoordinator.ApplyControls();
+
+			// build replay orchestrator: a frame state machine that STARTS RecedingNav / ItemUseCoordinator for each
+			// recorded event and advances when they finish. Must run before RecedingNav.Tick so a nav it starts this
+			// frame gets driven immediately by the same-frame Tick + the IsActive block below.
+			BuildReplayer.Tick();
 
 			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it
 			StateSpacePlanner.TickBlocks();
@@ -119,6 +161,7 @@ namespace TerraBlind
 			{
 				WalkCoordinator.ApplyControls();
 				RecordSystem.CaptureFrame(Player);
+				BuildRecorder.Tick(Player);
 				return;
 			}
 			bool placeActive = PlaceCoordinator.IsActive;
@@ -155,6 +198,7 @@ namespace TerraBlind
 					DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=null place={placeActive} cJ={Player.controlJump}");
 				bool jumpActive = jflBefore > 0 || Player.controlJump;
 				RecordSystem.CaptureFrame(Player, jumpActive);
+				BuildRecorder.Tick(Player);
 				return;
 			}
 			if (ciAge > ControlTimeoutTicks)
@@ -162,6 +206,7 @@ namespace TerraBlind
 				DiagLog.JumpTrace($"jfl={jflBefore}->{_jumpFramesLeft} ci=EXPIRED age={ciAge} place={placeActive}");
 				HttpServerSystem.PendingControl = null;
 				RecordSystem.CaptureFrame(Player, jflBefore > 0);
+				BuildRecorder.Tick(Player);
 				return;
 			}
 			if (ci.Left) Player.controlLeft = true;
@@ -205,6 +250,7 @@ namespace TerraBlind
 				);
 			}
 			RecordSystem.CaptureFrame(Player, jflBefore > 0 || jumpFromCi);
+			BuildRecorder.Tick(Player);
 		}
 
 		public override void PostUpdate()

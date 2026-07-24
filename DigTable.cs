@@ -116,8 +116,11 @@ namespace TerraBlind
         public const int Unmineable = 100000;
 
         // slim mineability check for the field build's Dijkstra (hundreds of thousands of wall cells, off-thread):
-        // pick damage only — no inventory scan (pick power passed in), no CanKillTile (attached-object check left to
-        // the Expand-side generators, which already refuse those digs).
+        // pick damage only — no inventory scan (pick power passed in). CanKillTile IS included: leaving the
+        // attached-object check "to the Expand-side generators" made the FIELD price routes through tiles no
+        // generator would touch — a tree-root block overhead read as a cheap 160 dig, the line threaded it, every
+        // generator refused, and the bot was pinned under the tree until shock death ((1335,223)). The field and
+        // the generators must share ONE definition of mineable.
         public static bool MineableWith(int x, int y, int pickPower)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
@@ -126,7 +129,7 @@ namespace TerraBlind
             if (!tile.HasTile) return true;
             int dmg = GetPickaxeDamage(x, y, pickPower, tile);
             if (Main.getGoodWorld) dmg *= 2;
-            return dmg > 0;
+            return dmg > 0 && Terraria.WorldGen.CanKillTile(x, y);
         }
 
         // real mining time in frames for the tile at (x,y) with the player's current best pickaxe, using vanilla's

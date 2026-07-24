@@ -701,6 +701,41 @@ namespace TerraBlind
 				string recorded = RecordSystem.Stop();
 				body = recorded;
 			}
+			else if (path == "/build_rec_start")
+			{
+				BuildRecorder.Start();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/build_rec_stop")
+			{
+				body = BuildRecorder.Stop();
+			}
+			else if (path == "/build_replay_start")
+			{
+				// POST {ax?,ay?} → kick off the mod-side frame replayer for build_rec.json, rebased at anchor
+				// (omitted = player's feet). Draws the faint overlay + conflict highlight, then drives the whole
+				// build itself (nav→place/mine→next). All logic is in BuildReplayer; Python only triggers + polls.
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var axM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"ax\"\\s*:\\s*(-?\\d+)");
+				var ayM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"ay\"\\s*:\\s*(-?\\d+)");
+				int ax = axM.Success ? int.Parse(axM.Groups[1].Value) : -1;
+				int ay = ayM.Success ? int.Parse(ayM.Groups[1].Value) : -1;
+				if (!BuildReplayer.Start(ax, ay, out string why))
+					body = "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				else
+					body = "{\"ok\":true,\"events\":" + BuildReplayer.Total + ",\"conflicts\":" + BuildOverlay.ConflictCount + "}";
+			}
+			else if (path == "/build_replay_status")
+			{
+				body = BuildReplayer.StatusJson();
+			}
+			else if (path == "/build_replay_stop")
+			{
+				BuildReplayer.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/test_action")
 			{
 				string reqBody;
@@ -1444,6 +1479,64 @@ namespace TerraBlind
 			{
 				body = "{\"ok\":true}";
 			}
+			// ---- /act : the complete action primitive. steps run serially, fields inside a step run in parallel.
+			// Every step MUST carry an `until` (no open-ended steps — a step that cannot end is a step that can hang).
+			else if (path == "/act")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace(" ", "").Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var steps = new System.Collections.Generic.List<ActStep>();
+				string err = null;
+				// split the steps array on top-level object boundaries (steps are flat: one nesting level for
+				// cursor/until/invariant, so brace counting is enough — no full JSON parser needed).
+				int arr = rb.IndexOf("\"steps\":[");
+				if (arr < 0) err = "no_steps";
+				else
+				{
+					int i2 = arr + 9, depth = 0, start = -1;
+					for (; i2 < rb.Length; i2++)
+					{
+						char c = rb[i2];
+						if (c == '{') { if (depth == 0) start = i2; depth++; }
+						else if (c == '}') { depth--; if (depth == 0 && start >= 0) { steps.Add(ParseActStep(rb.Substring(start, i2 - start + 1))); start = -1; } }
+						else if (c == ']' && depth == 0) break;
+					}
+					if (steps.Count == 0) err = "no_steps";
+					foreach (var st in steps)
+						if (st == null || st.UntilKind.Length == 0) { err = "step_missing_until"; break; }
+				}
+				if (err != null) { body = "{\"ok\":false,\"reason\":\"" + err + "\"}"; status = 400; }
+				else
+				{
+					var toM = System.Text.RegularExpressions.Regex.Match(rb, "\"timeout_frames\":(\\d+)");
+					ActExecutor.Start(steps, toM.Success ? int.Parse(toM.Groups[1].Value) : 0);
+					body = "{\"ok\":true,\"steps\":" + steps.Count + "}";
+				}
+			}
+			else if (path == "/act_status")
+			{
+				body = ActExecutor.StatusJson();
+			}
+			else if (path == "/act_stop")
+			{
+				ActExecutor.Stop();
+				body = "{\"ok\":true}";
+			}
+			// /origin — the anchor every relative coordinate resolves against. Returned so a caller can SEE the cell
+			// it is aiming from before it commits to an offset (the body spans 2-3 columns; which one counts is a rule,
+			// not a guess), and highlighted on screen for the same reason.
+			else if (path == "/origin")
+			{
+				var op = Main.LocalPlayer;
+				int ocx = ActExecutor.OriginCx(op), ocy = ActExecutor.OriginCy(op);
+				PathVisSystem.SetTiles(new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>
+					{ (ocx, ocy, new Microsoft.Xna.Framework.Color(0, 220, 255, 200)) }, ttlFrames: 300);
+				body = "{\"cx\":" + ocx + ",\"cy\":" + ocy
+					+ ",\"pos\":[" + op.position.X.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+					+ "," + op.position.Y.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "]}";
+			}
 			// ---- LLM agent bridge (see AgentChat.cs) ----
 			else if (path == "/nav_recede")
 			{
@@ -2101,6 +2194,51 @@ namespace TerraBlind
 			}
 			if (bestX < 0) { failReason = "no_route"; return null; }
 			return new DescentData { EntX = bestX, EntY = bestY, Cost = bestH, Cands = cands, Field = field };
+		}
+
+		// one step of /act. Keys are flags; cursor is rel (follows the player each frame) or at (origin frozen at step
+		// start); until is mandatory and names the progress quantity the executor watches for stalling.
+		static ActStep ParseActStep(string o)
+		{
+			var s = new ActStep();
+			bool Key(string k) => o.Contains("\"" + k + "\"");
+			if (Key("left")) s.Left = true;
+			if (Key("right")) s.Right = true;
+			if (Key("up")) s.Up = true;
+			if (Key("down")) s.Down = true;
+			if (Key("jump")) s.Jump = true;
+			if (Key("use_tile")) s.UseTile = true;
+			if (Key("throw")) s.Throw = true;
+			if (Key("hook")) s.Hook = true;
+			if (Key("mount")) s.Mount = true;
+			s.UseItem = System.Text.RegularExpressions.Regex.IsMatch(o, "\"use\":true");
+
+			var slotM = System.Text.RegularExpressions.Regex.Match(o, "\"slot\":(\\d+)");
+			if (slotM.Success) s.Slot = int.Parse(slotM.Groups[1].Value);
+
+			var relM = System.Text.RegularExpressions.Regex.Match(o, "\"(rel|at)\":\\[(-?\\d+),(-?\\d+)\\]");
+			if (relM.Success)
+			{
+				s.HasCursor = true;
+				s.CursorFrozen = relM.Groups[1].Value == "at";
+				s.CurDx = int.Parse(relM.Groups[2].Value);
+				s.CurDy = int.Parse(relM.Groups[3].Value);
+			}
+
+			var uf = System.Text.RegularExpressions.Regex.Match(o, "\"until\":\\{\"frames\":(\\d+)");
+			var ut = System.Text.RegularExpressions.Regex.Match(o, "\"until\":\\{\"times\":(\\d+)");
+			var uc = System.Text.RegularExpressions.Regex.Match(o, "\"consumed\":\\{\"item\":(\\d+),\"n\":(\\d+)\\}");
+			var um = System.Text.RegularExpressions.Regex.Match(o, "\"moved\":\\{\"dx\":(-?\\d+),\"dy\":(-?\\d+)\\}");
+			var uy = System.Text.RegularExpressions.Regex.Match(o, "\"tile\":\\{\"rel\":\\[(-?\\d+),(-?\\d+)\\],\"has\":(true|false)\\}");
+			if (uf.Success) { s.UntilKind = "frames"; s.UntilN = int.Parse(uf.Groups[1].Value); }
+			else if (ut.Success) { s.UntilKind = "times"; s.UntilN = int.Parse(ut.Groups[1].Value); }
+			else if (uc.Success) { s.UntilKind = "consumed"; s.UntilItemType = int.Parse(uc.Groups[1].Value); s.UntilN = int.Parse(uc.Groups[2].Value); }
+			else if (um.Success) { s.UntilKind = "moved"; s.UntilDx = int.Parse(um.Groups[1].Value); s.UntilDy = int.Parse(um.Groups[2].Value); }
+			else if (uy.Success) { s.UntilKind = "tile"; s.UntilDx = int.Parse(uy.Groups[1].Value); s.UntilDy = int.Parse(uy.Groups[2].Value); s.UntilTileHas = uy.Groups[3].Value == "true"; }
+
+			var inv = System.Text.RegularExpressions.Regex.Match(o, "\"invariant\":\\{\"(on_rope|cursor_in_reach|on_ground)\":(true|false)\\}");
+			if (inv.Success) { s.InvKind = inv.Groups[1].Value; s.InvWant = inv.Groups[2].Value == "true"; }
+			return s;
 		}
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);

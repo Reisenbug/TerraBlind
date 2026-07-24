@@ -22,4 +22,6 @@ Items: {
 Keybinds: {
 	ToggleMazeNav.DisplayName: Toggle Maze Nav
 	ToggleRecedingNav.DisplayName: Toggle Receding Nav
+	ToggleBuildReplay.DisplayName: Toggle Build Replay
+	ToggleBuildRecord.DisplayName: Toggle Build Record
 }

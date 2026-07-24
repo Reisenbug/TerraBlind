@@ -8,18 +8,24 @@ namespace TerraBlind
 		// StateSnapshotPlayer.ProcessTriggers.
 		public static ModKeybind ToggleMazeNav;
 		public static ModKeybind ToggleRecedingNav;
+		public static ModKeybind ToggleBuildReplay;
+		public static ModKeybind ToggleBuildRecord;
 
 		public override void Load()
 		{
 			ToggleMazeNav = KeybindLoader.RegisterKeybind(this, "ToggleMazeNav", "J");
 			ToggleRecedingNav = KeybindLoader.RegisterKeybind(this, "ToggleRecedingNav", "K");
-			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K registered (verify in Settings→Controls)");
+			ToggleBuildReplay = KeybindLoader.RegisterKeybind(this, "ToggleBuildReplay", "I");
+			ToggleBuildRecord = KeybindLoader.RegisterKeybind(this, "ToggleBuildRecord", "U");
+			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ToggleBuildReplay=I, ToggleBuildRecord=U registered (verify in Settings→Controls)");
 		}
 
 		public override void Unload()
 		{
 			ToggleMazeNav = null;
 			ToggleRecedingNav = null;
+			ToggleBuildReplay = null;
+			ToggleBuildRecord = null;
 		}
 	}
 }

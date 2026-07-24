@@ -1948,15 +1948,23 @@ namespace TerraBlind
             int recency = _recent.IndexOf(landed);
             if (recency >= 0)
             {
+                // ESCALATING: a flat +12 per lap took ~3 shock rounds (+10s) to out-price a near-free shuffle edge
+                // that beat the true escape by single digits (the tree-ledge trap: shuffle t404 vs jump-place t411).
+                // Adding at least the edge's CURRENT penalty doubles it per repeat (12→24→48…), so the second lap
+                // already completes the correction shocks used to grind out. Still finite (capped at shock scale),
+                // still decaying, never removes the candidate — the no-ban rule holds.
                 var ekey = (fromCx, fromCy, realCx, realCy);
-                _miss[ekey] = _miss.GetValueOrDefault(ekey) + (RevisitPenalty * (_recent.Count - recency));
+                float cur = _miss.GetValueOrDefault(ekey);
+                float inc = System.MathF.Max(RevisitPenalty * (_recent.Count - recency), cur);
+                _miss[ekey] = System.MathF.Min(cur + inc, RevisitCap);
             }
             _recent.Add(landed);
             if (_recent.Count > RecentLen) _recent.RemoveAt(0);
         }
         static readonly System.Collections.Generic.List<(int, int)> _recent = new();
         const int RecentLen = 6;              // how many past landings to remember for revisit detection
-        const float RevisitPenalty = 12f;     // per-step penalty added to an edge that lands on a recently-visited cell (6 was too weak to outweigh typical H margins before the shock tier kicked in)
+        const float RevisitPenalty = 12f;     // base penalty for an edge landing on a recently-visited cell; repeats double it (see ReportEdge)
+        const float RevisitCap = 200f;        // escalation ceiling = one shock's worth — revisit alone can do what a shock did, but no more
 
         // LOOP SHOCK — the universal escape (see PROJECT_STATE.md): when the detector sees best-H stall, every edge
         // the loop traversed gets one large decaying penalty. Loops exist because the cost structure lies somewhere;
@@ -2097,8 +2105,15 @@ namespace TerraBlind
                 // to ~18 — per-cell-faster actions now win their ties.
                 if (altered > 0)
                 {
+                    // KIND-ORDERED CAP: one flat cap (15) erased the intended ordering — dig-up's honest fee
+                    // (mining + pillar frames, ~36 dirt / ~170 stone) capped to the same 15 as a pillar cycle, so
+                    // the costliest ascent tied with the cheapest. The dig-up composite (pillar && digTiles) gets
+                    // its own higher cap so the ranking dig-up ≫ pillar ≫ place survives selection; if a small
+                    // climb-around exists it now wins first, and when digging up is truly the only way the
+                    // revisit/shock ladder prices the alternatives back above it within a few replans.
+                    float capK = (pillar && digTiles != null) ? DigUpSurchargeCap : AlterSurchargeCap;
                     float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
-                    g += MathF.Min(AlterSurchargeCap, cost * DigFramesToH) * (2f / MathF.Max(2f, edgeCells));
+                    g += MathF.Min(capK, cost * DigFramesToH) * (2f / MathF.Max(2f, edgeCells));
                 }
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
@@ -2262,6 +2277,7 @@ namespace TerraBlind
         // (3242,299) and (801,937)); the cap keeps a necessary dig affordable no matter how hard the rock.
         const float DigFramesToH = 0.5f;
         const float AlterSurchargeCap = 15f;
+        const float DigUpSurchargeCap = 40f;   // dig-up composite only: the costliest ascent must never tie with pillar/place (see kind-ordered cap)
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
