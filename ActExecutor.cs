@@ -19,7 +19,7 @@ namespace TerraBlind
 		public bool HasCursor;
 		public int CurDx, CurDy;              // cursor offset in tiles from the ORIGIN CELL
 		public bool CursorFrozen;             // "at": resolve the origin once at step start. else "rel": follow the player
-		public string UntilKind = "";         // frames | times | consumed | moved | tile
+		public string UntilKind = "";         // frames | times | consumed | moved | tile | placed
 		public int UntilN;                    // frames / times / stack-to-consume
 		public int UntilDx, UntilDy;          // moved: target delta; tile: relative cell
 		public int UntilItemType = -1;        // consumed: which item
@@ -45,11 +45,46 @@ namespace TerraBlind
 		private static int _frozenCx, _frozenCy;         // "at" cursor: origin frozen at step start
 		private static int _curWx = -1, _curWy = -1;     // last resolved cursor world cell (for the report)
 
+		// REPEAT — the step list is a LOOP BODY, re-run until its own condition holds. Without this the caller has to
+		// unroll by hand (20 ropes = 20 near-identical steps), which is where "the player will have climbed by then"
+		// silently breaks: an unrolled chain freezes the geometry it was written against. One loop body re-reads the
+		// world every pass instead. `Max` is mandatory in spirit — a loop that cannot be bounded can hang, so the
+		// parser supplies a default — which is what makes non-termination structurally impossible here.
+		private static bool _hasRepeat;
+		private static string _repUntilKind = "";
+		private static int _repUntilN, _repUntilItemType = -1, _repUntilDx, _repUntilDy;
+		private static int _repMax, _laps;
+		private static int _repStartStack, _repStartCx, _repStartCy;   // baselines for the loop-level condition
+
 		public static string Outcome = "idle";           // idle running done no_progress timeout invariant_broken bad_request
 		public static bool IsActive => _steps != null;
 		private static readonly List<string> _why = new();
 
 		public static void Start(List<ActStep> steps, int timeoutFrames)
+		{
+			_hasRepeat = false; _repUntilKind = ""; _laps = 0;
+			StartInternal(steps, timeoutFrames);
+			DiagLog.Write($"[act] start steps={steps.Count} timeout={_timeout}");
+		}
+
+		// same chain, but the step list is a loop body run until `untilKind` holds (or `max` laps elapse).
+		public static void StartRepeat(List<ActStep> steps, int timeoutFrames,
+			string untilKind, int untilN, int untilItemType, int untilDx, int untilDy, int max)
+		{
+			_hasRepeat = true;
+			_repUntilKind = untilKind; _repUntilN = untilN; _repUntilItemType = untilItemType;
+			_repUntilDx = untilDx; _repUntilDy = untilDy;
+			_repMax = max > 0 ? max : 100;
+			_laps = 0;
+			StartInternal(steps, timeoutFrames);
+			var p0 = Main.LocalPlayer;
+			_repStartStack = (p0 != null && untilKind == "consumed") ? StackOf(p0, untilItemType) : 0;
+			_repStartCx = p0 != null ? OriginCx(p0) : 0;
+			_repStartCy = p0 != null ? OriginCy(p0) : 0;
+			DiagLog.Write($"[act] start REPEAT body={steps.Count} until={untilKind}:{untilN} max={_repMax} timeout={_timeout}");
+		}
+
+		private static void StartInternal(List<ActStep> steps, int timeoutFrames)
 		{
 			_steps = steps; _i = 0;
 			_timeout = timeoutFrames > 0 ? timeoutFrames : DefaultTimeout;
@@ -57,7 +92,6 @@ namespace TerraBlind
 			Outcome = "running";
 			_why.Clear();
 			BeginStep();
-			DiagLog.Write($"[act] start steps={steps.Count} timeout={_timeout}");
 		}
 
 		public static void Stop()
@@ -181,8 +215,31 @@ namespace TerraBlind
 		private static void Advance()
 		{
 			_i++;
-			if (_i >= _steps.Count) { Finish("done"); return; }
+			if (_i < _steps.Count) { BeginStep(); return; }
+
+			// end of the step list. A plain chain is done; a loop body checks its own condition and goes round again.
+			if (!_hasRepeat) { Finish("done"); return; }
+			_laps++;
+			if (RepeatSatisfied()) { Finish("done"); return; }
+			if (_laps >= _repMax) { _why.Add("repeat_max_laps"); Finish("no_progress"); return; }
+			_i = 0;
 			BeginStep();
+		}
+
+		// the loop-level condition, measured against the baseline captured when the LOOP started (not the step).
+		private static bool RepeatSatisfied()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return true;
+			switch (_repUntilKind)
+			{
+				case "consumed": return _repStartStack - StackOf(p, _repUntilItemType) >= _repUntilN;
+				case "moved":
+					return (_repUntilDx == 0 || System.Math.Abs(OriginCx(p) - _repStartCx) >= System.Math.Abs(_repUntilDx))
+						&& (_repUntilDy == 0 || System.Math.Abs(OriginCy(p) - _repStartCy) >= System.Math.Abs(_repUntilDy));
+				case "times": return _laps >= _repUntilN;
+				default: return false;   // no/unknown condition → only _repMax stops it
+			}
 		}
 
 		private static void Finish(string outcome)
@@ -200,8 +257,18 @@ namespace TerraBlind
 				case "moved": return System.Math.Abs(OriginCx(p) - _startCx) + System.Math.Abs(OriginCy(p) - _startCy);
 				case "times": return _times;
 				case "tile": return HasTileAt(s) ? 1 : 0;
+				case "placed": return CursorCellFilled() ? 1 : 0;
 				default: return _stepFrames;
 			}
+		}
+
+		// "placed" — the natural terminator for a placement: the cell the cursor is aiming at now holds a tile. Without
+		// it a caller has to spell the same cell out twice (once as the cursor, once as a tile condition) or fall back
+		// to a frame count, and a frame count is how 19 of 20 ropes got skipped while the chain still reported done.
+		private static bool CursorCellFilled()
+		{
+			if (_curWx < 0 || !InBounds(_curWx, _curWy)) return false;
+			return Main.tile[_curWx, _curWy].HasTile;
 		}
 
 		private static bool Satisfied(Player p, ActStep s, int prog)
@@ -215,6 +282,7 @@ namespace TerraBlind
 					return (s.UntilDx == 0 || System.Math.Abs(OriginCx(p) - _startCx) >= System.Math.Abs(s.UntilDx))
 						&& (s.UntilDy == 0 || System.Math.Abs(OriginCy(p) - _startCy) >= System.Math.Abs(s.UntilDy));
 				case "tile": return HasTileAt(s) == s.UntilTileHas;
+				case "placed": return CursorCellFilled();
 				default: return false;
 			}
 		}
@@ -332,6 +400,7 @@ namespace TerraBlind
 			  .Append(",\"step\":").Append(_i)
 			  .Append(",\"steps\":").Append(_steps != null ? _steps.Count : 0)
 			  .Append(",\"frames\":").Append(_totalFrames);
+			if (_hasRepeat) sb.Append(",\"laps\":").Append(_laps).Append(",\"max_laps\":").Append(_repMax);
 
 			sb.Append(",\"why\":[");
 			for (int i = 0; i < _why.Count; i++) { if (i > 0) sb.Append(','); sb.Append('"').Append(_why[i]).Append('"'); }

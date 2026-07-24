@@ -1511,9 +1511,100 @@ namespace TerraBlind
 				else
 				{
 					var toM = System.Text.RegularExpressions.Regex.Match(rb, "\"timeout_frames\":(\\d+)");
-					ActExecutor.Start(steps, toM.Success ? int.Parse(toM.Groups[1].Value) : 0);
-					body = "{\"ok\":true,\"steps\":" + steps.Count + "}";
+					int tf = toM.Success ? int.Parse(toM.Groups[1].Value) : 0;
+					// REPEAT wrapper: the same step list, re-run as a loop body. Its `until` is measured against the
+					// state when the LOOP started, so "consume 20 rope" counts across every lap, not per lap.
+					if (rb.Contains("\"repeat\":{"))
+					{
+						var rc = System.Text.RegularExpressions.Regex.Match(rb, "\"consumed\":\\{\"item\":(\\d+),\"n\":(\\d+)\\}");
+						var rt = System.Text.RegularExpressions.Regex.Match(rb, "\"repeat\":\\{\"until\":\\{\"times\":(\\d+)");
+						var rm = System.Text.RegularExpressions.Regex.Match(rb, "\"moved\":\\{([^}]*)\\}");
+						var mx = System.Text.RegularExpressions.Regex.Match(rb, "\"max\":(\\d+)");
+						string kind = ""; int n = 0, it = -1, dx = 0, dy = 0;
+						if (rc.Success) { kind = "consumed"; it = int.Parse(rc.Groups[1].Value); n = int.Parse(rc.Groups[2].Value); }
+						else if (rt.Success) { kind = "times"; n = int.Parse(rt.Groups[1].Value); }
+						else if (rm.Success)
+						{
+							kind = "moved";
+							var g = rm.Groups[1].Value;
+							var gx = System.Text.RegularExpressions.Regex.Match(g, "\"dx\":(-?\\d+)");
+							var gy = System.Text.RegularExpressions.Regex.Match(g, "\"dy\":(-?\\d+)");
+							dx = gx.Success ? int.Parse(gx.Groups[1].Value) : 0;
+							dy = gy.Success ? int.Parse(gy.Groups[1].Value) : 0;
+						}
+						ActExecutor.StartRepeat(steps, tf, kind, n, it, dx, dy,
+							mx.Success ? int.Parse(mx.Groups[1].Value) : 0);
+						body = "{\"ok\":true,\"repeat\":true,\"body_steps\":" + steps.Count + "}";
+					}
+					else
+					{
+						ActExecutor.Start(steps, tf);
+						body = "{\"ok\":true,\"steps\":" + steps.Count + "}";
+					}
 				}
+			}
+			// /place_at — SEMANTIC placement: say WHAT and WHERE, nothing else. Item by name (no slot numbers), cell
+			// relative to the origin cell, optional run of n. The completion condition is not the caller's business:
+			// a placement is done when the tile is there.
+			else if (path == "/place_at")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var atM = System.Text.RegularExpressions.Regex.Match(rb, "\"at\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
+				var stM = System.Text.RegularExpressions.Regex.Match(rb, "\"step\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				if (!itM.Success || !atM.Success)
+				{
+					body = "{\"ok\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_at {\\\"item\\\":\\\"绳\\\",\\\"at\\\":[0,-1],\\\"n\\\":1,\\\"step\\\":[0,-1]}\"}";
+					status = 400;
+				}
+				else
+				{
+					int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 1;
+					int sdx = stM.Success ? int.Parse(stM.Groups[1].Value) : 0;
+					int sdy = stM.Success ? int.Parse(stM.Groups[2].Value) : 0;
+					bool ok = PlaceAction.Start(itM.Groups[1].Value,
+						int.Parse(atM.Groups[1].Value), int.Parse(atM.Groups[2].Value), n, sdx, sdy, out string why);
+					body = ok ? "{\"ok\":true,\"n\":" + n + "}"
+							  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				}
+			}
+			// /rope_ladder — build a rope column N tall from where the player stands. Place as far as the arm reaches,
+			// climb the rope just placed, repeat. Both phases end on a world fact, so it holds up at any move speed.
+			else if (path == "/rope_ladder")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
+				string item = itM.Success ? itM.Groups[1].Value : "绳";
+				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 20;
+				bool ok = RopeLadder.Start(item, n, out string why);
+				body = ok ? "{\"ok\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + "}"
+						  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+			}
+			else if (path == "/rope_ladder_status")
+			{
+				body = RopeLadder.StatusJson();
+			}
+			else if (path == "/rope_ladder_stop")
+			{
+				RopeLadder.Stop();
+				body = "{\"ok\":true}";
+			}
+			else if (path == "/place_at_status")
+			{
+				body = PlaceAction.StatusJson();
+			}
+			else if (path == "/place_at_stop")
+			{
+				PlaceAction.Stop();
+				body = "{\"ok\":true}";
 			}
 			else if (path == "/act_status")
 			{
@@ -2227,13 +2318,24 @@ namespace TerraBlind
 
 			var uf = System.Text.RegularExpressions.Regex.Match(o, "\"until\":\\{\"frames\":(\\d+)");
 			var ut = System.Text.RegularExpressions.Regex.Match(o, "\"until\":\\{\"times\":(\\d+)");
+			bool upPlaced = System.Text.RegularExpressions.Regex.IsMatch(o, "\"until\":\\{\"placed\":true");
 			var uc = System.Text.RegularExpressions.Regex.Match(o, "\"consumed\":\\{\"item\":(\\d+),\"n\":(\\d+)\\}");
-			var um = System.Text.RegularExpressions.Regex.Match(o, "\"moved\":\\{\"dx\":(-?\\d+),\"dy\":(-?\\d+)\\}");
+			// moved: dx and dy are INDEPENDENTLY optional — {"moved":{"dy":-1}} is the natural way to say "one cell up",
+			// and demanding both would reject it for a reason the caller cannot see.
+			var umAny = System.Text.RegularExpressions.Regex.Match(o, "\"moved\":\\{([^}]*)\\}");
+			var umDx = umAny.Success ? System.Text.RegularExpressions.Regex.Match(umAny.Groups[1].Value, "\"dx\":(-?\\d+)") : System.Text.RegularExpressions.Match.Empty;
+			var umDy = umAny.Success ? System.Text.RegularExpressions.Regex.Match(umAny.Groups[1].Value, "\"dy\":(-?\\d+)") : System.Text.RegularExpressions.Match.Empty;
 			var uy = System.Text.RegularExpressions.Regex.Match(o, "\"tile\":\\{\"rel\":\\[(-?\\d+),(-?\\d+)\\],\"has\":(true|false)\\}");
-			if (uf.Success) { s.UntilKind = "frames"; s.UntilN = int.Parse(uf.Groups[1].Value); }
+			if (upPlaced) { s.UntilKind = "placed"; }
+			else if (uf.Success) { s.UntilKind = "frames"; s.UntilN = int.Parse(uf.Groups[1].Value); }
 			else if (ut.Success) { s.UntilKind = "times"; s.UntilN = int.Parse(ut.Groups[1].Value); }
 			else if (uc.Success) { s.UntilKind = "consumed"; s.UntilItemType = int.Parse(uc.Groups[1].Value); s.UntilN = int.Parse(uc.Groups[2].Value); }
-			else if (um.Success) { s.UntilKind = "moved"; s.UntilDx = int.Parse(um.Groups[1].Value); s.UntilDy = int.Parse(um.Groups[2].Value); }
+			else if (umAny.Success)
+			{
+				s.UntilKind = "moved";
+				s.UntilDx = umDx.Success ? int.Parse(umDx.Groups[1].Value) : 0;
+				s.UntilDy = umDy.Success ? int.Parse(umDy.Groups[1].Value) : 0;
+			}
 			else if (uy.Success) { s.UntilKind = "tile"; s.UntilDx = int.Parse(uy.Groups[1].Value); s.UntilDy = int.Parse(uy.Groups[2].Value); s.UntilTileHas = uy.Groups[3].Value == "true"; }
 
 			var inv = System.Text.RegularExpressions.Regex.Match(o, "\"invariant\":\\{\"(on_rope|cursor_in_reach|on_ground)\":(true|false)\\}");
