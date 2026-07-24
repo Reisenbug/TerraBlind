@@ -1588,6 +1588,33 @@ namespace TerraBlind
 				body = ok ? "{\"ok\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + "}"
 						  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 			}
+			// /bridge — lay a platform run N long. Place as far as the arm reaches, walk out onto what was laid,
+			// repeat. Walking happens only on ground already placed, so no speed matching is involved.
+			else if (path == "/bridge")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var dM = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\"\\s*:\\s*\"(left|right)\"");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
+				string item = itM.Success ? itM.Groups[1].Value : "木平台";
+				string dir = dM.Success ? dM.Groups[1].Value : "right";
+				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 10;
+				bool ok = BridgeBuilder.Start(item, dir, n, out string why);
+				body = ok ? "{\"ok\":true,\"item\":\"" + JsonEsc(item) + "\",\"dir\":\"" + dir + "\",\"n\":" + n + "}"
+						  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+			}
+			else if (path == "/bridge_status")
+			{
+				body = BridgeBuilder.StatusJson();
+			}
+			else if (path == "/bridge_stop")
+			{
+				BridgeBuilder.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/rope_ladder_status")
 			{
 				body = RopeLadder.StatusJson();

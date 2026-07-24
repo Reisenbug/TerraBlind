@@ -107,6 +107,15 @@ namespace TerraBlind
 				return;
 			}
 
+			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
+			if (BridgeBuilder.IsRunning)
+			{
+				BridgeBuilder.Tick();
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// /act takes the wheel outright: it is the raw action primitive the LLM drives by hand, so nothing else may
 			// write controls underneath it. First in, and it returns — nav/mine/place all stand down while it runs.
 			if (ActExecutor.IsActive)
