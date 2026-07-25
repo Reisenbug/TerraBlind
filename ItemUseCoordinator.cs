@@ -27,6 +27,7 @@ namespace TerraBlind
 		private static int _placeType = -1;  // TileType this item will create; -1 = not a placing item
 		private static int _swings;          // COMPLETED swings (itemAnimation falling edge), not frames pressed
 		private static int _prevAnim;        // last frame's itemAnimation, for that falling edge
+		private static bool _preHadTile;     // something (not ours) occupied the target before we swung
 		// How many full swings a placement gets before we call it refused. One is enough when it works — the extra
 		// two absorb a swing eaten by a stance change or an item swap.
 		private const int PlaceSwingGrace = 3;
@@ -42,8 +43,9 @@ namespace TerraBlind
 		public static int SnappedWx = -1;
 		public static int SnappedWy = -1;
 		// completion detection. Collect (chop/mine): "removed" (target gone) / "no_progress" (can't dent) / "timeout".
-		// Place (block/platform/rope): "placed" (target cell now holds our tile) / "not_placed" (swung but nothing
-		// landed — see Reason) / "no_swing" (never even swung — target unreachable / wrong item / out of stock).
+		// Place (block/platform/rope): "placed" (WE put a tile in an empty cell) / "already_there" (the cell was
+		// occupied before we swung — we did nothing) / "not_placed" (swung but nothing landed — see Reason) /
+		// "no_swing" (never even swung — target unreachable / wrong item / out of stock).
 		// "n/a" is now RESERVED for items that are genuinely neither (potion/bomb): no tile to watch either way.
 		public static string Outcome = "idle";
 		// why the action failed. collect: "blocked" (support tile, can't mine) / "tool_weak" (pick too weak) /
@@ -62,6 +64,7 @@ namespace TerraBlind
 			_placeType = -1;
 			_swings = 0;
 			_prevAnim = 0;
+			_preHadTile = false;
 			_elapsed = 0;
 			SnappedWx = -1; SnappedWy = -1;
 			Outcome = "running";
@@ -198,6 +201,17 @@ namespace TerraBlind
 					{
 						_placeType = it.createTile;
 						SnappedWx = req.TargetWx; SnappedWy = req.TargetWy;
+						// ALREADY-THERE means OUR tile is already in that cell — not merely that something is. Grass, vines
+						// and other cut-through decorations sit in cells that accept a placement perfectly well; refusing
+						// to swing at them skips a placement the game would have allowed. So only an exact match counts
+						// as "nothing to do"; everything else gets swung at, and the MAP decides what happened.
+						var pre = Main.tile[req.TargetWx, req.TargetWy];
+						if (pre.HasTile && pre.TileType == _placeType)
+						{
+							Outcome = "already_there"; Reason = pre.TileType.ToString();
+							_active = null; return;
+						}
+						_preHadTile = pre.HasTile;
 					}
 
 					// REACH: swinging at a tile outside interaction range just flails (vanilla clamps the tile target),

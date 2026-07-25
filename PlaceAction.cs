@@ -26,11 +26,18 @@ namespace TerraBlind
 		private static int _qi;
 		private static int _slot = -1;
 		private static string _itemName = "";
-		private static int _placedCount;
 		private static bool _running;
 
+		// PER-CELL OUTCOMES. The counters are kept apart on purpose: "we placed it" and "it was already there" are
+		// different facts about the world, and one number that means either is a number a caller can act wrongly on.
+		// `_cells` records what happened at each coordinate so a caller can also catch aiming at the wrong cell —
+		// a mistake no summary count can ever reveal.
+		private struct Res { public int Wx, Wy; public string What; public int Type; }
+		private static readonly List<Res> _cells = new();
+		private static int _placedCount, _alreadyCount, _failedCount;
+
 		public static bool IsRunning => _running;
-		public static string Outcome = "idle";     // idle running done blocked no_item
+		public static string Outcome = "idle";     // idle running done partial blocked no_item
 		public static string Reason = "";
 		public static int PlacedCount => _placedCount;
 		private static int _stopWx = -1, _stopWy = -1;
@@ -58,7 +65,9 @@ namespace TerraBlind
 
 		// Start a placement of `n` cells beginning at the origin-relative offset (dx,dy), advancing by `step` each
 		// time. n=1 with no step is the ordinary single placement.
-		public static bool Start(string itemName, int dx, int dy, int n, int stepDx, int stepDy, out string why)
+		// absolute=true → (dx,dy) IS the world cell, no arithmetic on the caller's part. Making a caller convert a cell
+		// it already knows into an offset from a moving origin is handing it a subtraction to get wrong.
+		public static bool Start(string itemName, int dx, int dy, int n, int stepDx, int stepDy, bool absolute, out string why)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
@@ -71,13 +80,16 @@ namespace TerraBlind
 				return false;
 			}
 
-			int ox = ActExecutor.OriginCx(p), oy = ActExecutor.OriginCy(p);
+			int ox = absolute ? 0 : ActExecutor.OriginCx(p);
+			int oy = absolute ? 0 : ActExecutor.OriginCy(p);
 			_queue.Clear();
 			if (n < 1) n = 1;
 			for (int k = 0; k < n; k++)
 				_queue.Add(new Cell { Wx = ox + dx + stepDx * k, Wy = oy + dy + stepDy * k });
 
-			_qi = 0; _placedCount = 0; _running = true;
+			_qi = 0; _placedCount = 0; _alreadyCount = 0; _failedCount = 0;
+			_cells.Clear();
+			_running = true;
 			_itemName = itemName;
 			_stopWx = -1; _stopWy = -1;
 			Outcome = "running"; Reason = "";
@@ -96,18 +108,47 @@ namespace TerraBlind
 		private static void BeginCell()
 		{
 			var c = _queue[_qi];
-			// already filled counts as satisfied — placing into an occupied cell is a no-op for a person too.
-			if (InBounds(c.Wx, c.Wy) && Main.tile[c.Wx, c.Wy].HasTile) { NextCell(true); return; }
+			// Only skip when the cell ALREADY holds the very tile this item makes — that is genuinely nothing to do.
+			// Anything else in the cell (grass, vines, decorations) does not stop a placement, and refusing to swing
+			// at it would skip a placement the game allows. Swing, then let the map say what happened.
+			int wantTile = WantTileType();
+			if (InBounds(c.Wx, c.Wy) && Main.tile[c.Wx, c.Wy].HasTile
+				&& wantTile >= 0 && Main.tile[c.Wx, c.Wy].TileType == wantTile)
+			{
+				Record(c.Wx, c.Wy, "already_there", Main.tile[c.Wx, c.Wy].TileType);
+				_alreadyCount++;
+				NextCell();
+				return;
+			}
 			ItemUseCoordinator.Start(new ItemUseRequest
 			{ TargetWx = c.Wx, TargetWy = c.Wy, Slot = _slot, DurationTicks = 0, Strict = false });
 		}
 
-		private static void NextCell(bool counted)
+		// the tile type the held item creates — what "placed" must mean for this run.
+		private static int WantTileType()
 		{
-			if (counted) _placedCount++;
+			var p = Main.LocalPlayer;
+			if (p == null || _slot < 0 || _slot >= p.inventory.Length) return -1;
+			var it = p.inventory[_slot];
+			return (it != null && !it.IsAir) ? it.createTile : -1;
+		}
+
+		private static void Record(int wx, int wy, string what, int type)
+			=> _cells.Add(new Res { Wx = wx, Wy = wy, What = what, Type = type });
+
+		private static void NextCell()
+		{
 			_qi++;
-			if (_qi >= _queue.Count) { Outcome = "done"; _running = false; return; }
+			if (_qi >= _queue.Count) { Finish(); return; }
 			BeginCell();
+		}
+
+		// `done` only when every cell was actually placed by us. Anything else is `partial` — a word that cannot be
+		// mistaken for success at a glance.
+		private static void Finish()
+		{
+			Outcome = _placedCount == _queue.Count ? "done" : "partial";
+			_running = false;
 		}
 
 		// drives the queue: one cell at a time, each ending on the world fact that the tile appeared (or the observed
@@ -118,15 +159,26 @@ namespace TerraBlind
 			if (!_running) return;
 			if (ItemUseCoordinator.IsActive) return;
 
-			string o = ItemUseCoordinator.Outcome;
-			if (o == "placed") { NextCell(true); return; }
-
 			var c = _queue[_qi];
+			string o = ItemUseCoordinator.Outcome;
+			if (o == "placed")
+			{
+				Record(c.Wx, c.Wy, "placed", InBounds(c.Wx, c.Wy) ? Main.tile[c.Wx, c.Wy].TileType : -1);
+				_placedCount++; NextCell(); return;
+			}
+			if (o == "already_there")
+			{
+				Record(c.Wx, c.Wy, "already_there", InBounds(c.Wx, c.Wy) ? Main.tile[c.Wx, c.Wy].TileType : -1);
+				_alreadyCount++; NextCell(); return;
+			}
+
 			_stopWx = c.Wx; _stopWy = c.Wy;
-			Outcome = "blocked";
 			Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
+			Record(c.Wx, c.Wy, Reason, -1);
+			_failedCount++;
+			Outcome = "blocked";
 			_running = false;
-			DiagLog.Write($"[place] stopped at ({c.Wx},{c.Wy}) after {_placedCount} — {Outcome}/{Reason}");
+			DiagLog.Write($"[place] stopped at ({c.Wx},{c.Wy}) placed={_placedCount} already={_alreadyCount} — {Reason}");
 		}
 
 		public static string StatusJson()
@@ -137,8 +189,22 @@ namespace TerraBlind
 			  .Append(",\"running\":").Append(_running ? "true" : "false")
 			  .Append(",\"item\":\"").Append(JsonEsc(_itemName)).Append('"')
 			  .Append(",\"placed\":").Append(_placedCount)
+			  .Append(",\"already_there\":").Append(_alreadyCount)
+			  .Append(",\"failed\":").Append(_failedCount)
 			  .Append(",\"wanted\":").Append(_queue.Count)
 			  .Append(",\"reason\":\"").Append(JsonEsc(Reason)).Append('"');
+			// every cell we touched and what actually happened there — this is what makes a mis-aimed coordinate
+			// visible, which no summary count can do.
+			sb.Append(",\"cells\":[");
+			for (int i = 0; i < _cells.Count; i++)
+			{
+				if (i > 0) sb.Append(',');
+				sb.Append("{\"at\":[").Append(_cells[i].Wx).Append(',').Append(_cells[i].Wy)
+				  .Append("],\"result\":\"").Append(JsonEsc(_cells[i].What)).Append('"');
+				if (_cells[i].Type >= 0) sb.Append(",\"type\":").Append(_cells[i].Type);
+				sb.Append('}');
+			}
+			sb.Append(']');
 			if (_stopWx >= 0)
 			{
 				sb.Append(",\"stopped_at\":[").Append(_stopWx).Append(',').Append(_stopWy).Append(']');

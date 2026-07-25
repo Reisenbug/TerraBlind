@@ -107,6 +107,14 @@ namespace TerraBlind
 				return;
 			}
 
+			// hop-up: writes controlJump itself until the player is standing on the target row.
+			if (HopUp.IsRunning)
+			{
+				HopUp.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)
 			{

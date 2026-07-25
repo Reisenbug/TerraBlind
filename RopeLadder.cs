@@ -17,24 +17,29 @@ namespace TerraBlind
 	// (wings, boots, honey, potions) — a fixed-frame replay would silently drift the moment the player moves faster.
 	public static class RopeLadder
 	{
-		private enum Ph { Idle, Place, Climb, Done }
+		// TopUp is the finishing climb: placement stops wherever the arm last reached, which leaves the player several
+		// cells BELOW the rope's top and therefore unable to reach the cell above it. Ending the action at the top —
+		// and reporting that cell outright — is what lets the next action use the coordinate instead of deriving it.
+		private enum Ph { Idle, Place, Climb, TopUp, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _item = "";
 		private static int _slot = -1;
-		private static int _want, _placed;
+		private static int _want, _placed, _already;
 		private static int _targetWy;          // the cell currently being placed into
 		private static int _climbToCy;         // origin cell we must reach before placing again
 		private static int _climbFrames;
 		private static int _lastOriginCy;      // to notice the climb actually progressing
 		private static int _climbStall;
 		private static bool _swingIssued;      // we started a swing whose outcome is ours to read
+		private static int _topWy = -1;        // highest rope cell of this column (world Y)
+		private static int _topStall;
 
 		// A climb that stops making progress is stuck (blocked above, fell off, not actually on a rope). Bounded so
 		// no path here can hang: this is the structural guarantee, not a heuristic.
 		private const int ClimbStallLimit = 120;
 
-		public static bool IsRunning => _ph == Ph.Place || _ph == Ph.Climb;
+		public static bool IsRunning => _ph == Ph.Place || _ph == Ph.Climb || _ph == Ph.TopUp;
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
 		public static string Reason = "";
 		public static int Placed => _placed;
@@ -47,7 +52,7 @@ namespace TerraBlind
 			_slot = PlaceAction.FindSlotByName(itemName);
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 
-			_item = itemName; _want = n < 1 ? 1 : n; _placed = 0;
+			_item = itemName; _want = n < 1 ? 1 : n; _placed = 0; _already = 0; _topWy = -1;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
@@ -79,17 +84,28 @@ namespace TerraBlind
 				BeginClimb();
 				return;
 			}
-			// already a rope there (previous run, or the world had one): count it and move up without swinging.
-			if (InBounds(cx, _targetWy) && Main.tile[cx, _targetWy].HasTile)
+			// A ROPE ALREADY THERE is the only reason to skip a swing. Anything else occupying the cell — grass, a
+			// vine, any cut-through decoration — does NOT stop a rope going in, and treating "HasTile" as "occupied"
+			// is what silently skipped the first rope: the swing never happened, so the cell above had no rope under
+			// it to extend from. Never predict whether the game will accept a placement; swing and read the map.
+			if (IsRope(cx, _targetWy))
 			{
-				_placed++; _targetWy--;
-				if (_placed >= _want) { Finish("done"); return; }
+				_already++; _topWy = _targetWy; _targetWy--;
+				if (_placed + _already >= _want) { BeginTopUp(); return; }
 				BeginPlace();
 				return;
 			}
 			ItemUseCoordinator.Start(new ItemUseRequest
 			{ TargetWx = cx, TargetWy = _targetWy, Slot = _slot, DurationTicks = 0, Strict = false });
 			_swingIssued = true;
+		}
+
+		// climb the finished column until the body is AT its top cell, so the cell above it is within reach.
+		private static void BeginTopUp()
+		{
+			_lastOriginCy = ActExecutor.OriginCy(Main.LocalPlayer);
+			_topStall = 0;
+			_ph = Ph.TopUp;
 		}
 
 		private static void BeginClimb()
@@ -114,11 +130,16 @@ namespace TerraBlind
 				if (ItemUseCoordinator.IsActive) return;   // still swinging
 				if (!_swingIssued) return;                 // nothing of ours to read yet — don't judge a stale outcome
 				_swingIssued = false;
+				int cx0 = ActExecutor.OriginCx(p);
 				string o = ItemUseCoordinator.Outcome;
-				if (o == "placed")
+				// THE MAP IS THE VERDICT: a rope in that cell means it worked, whatever the coordinator concluded.
+				// Rope placement depends on map state in ways not worth re-deriving here — so don't; just look.
+				if (IsRope(cx0, _targetWy))
 				{
-					_placed++; _targetWy--;
-					if (_placed >= _want) { Finish("done"); return; }
+					if (o == "already_there") _already++; else _placed++;
+					_topWy = _targetWy;
+					_targetWy--;
+					if (_placed + _already >= _want) { BeginTopUp(); return; }
 					BeginPlace();
 					return;
 				}
@@ -126,6 +147,16 @@ namespace TerraBlind
 				if (o == "no_swing" && ItemUseCoordinator.Reason == "out_of_reach") { BeginClimb(); return; }
 				Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
 				Finish("blocked");
+				return;
+			}
+
+			if (_ph == Ph.TopUp)
+			{
+				p.controlUp = true;
+				int tcy = ActExecutor.OriginCy(p);
+				if (tcy <= _topWy) { Finish("done"); return; }
+				if (tcy != _lastOriginCy) { _lastOriginCy = tcy; _topStall = 0; }
+				else if (++_topStall >= ClimbStallLimit) { Finish("done"); return; }   // as high as it goes; still a built ladder
 				return;
 			}
 
@@ -154,7 +185,14 @@ namespace TerraBlind
 		{
 			Outcome = outcome;
 			_ph = Ph.Done;
-			DiagLog.Write($"[rope] {outcome} placed={_placed}/{_want} reason={Reason}");
+			DiagLog.Write($"[rope] {outcome} placed={_placed} already={_already}/{_want} reason={Reason}");
+		}
+
+		private static bool IsRope(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && Main.tileRope[t.TileType];
 		}
 
 		private static bool OnRope(Player p)
@@ -178,9 +216,12 @@ namespace TerraBlind
 			  .Append(",\"running\":").Append(IsRunning ? "true" : "false")
 			  .Append(",\"phase\":\"").Append(_ph.ToString().ToLowerInvariant()).Append('"')
 			  .Append(",\"item\":\"").Append(_item).Append('"')
-			  .Append(",\"placed\":").Append(_placed).Append(",\"wanted\":").Append(_want)
+			  .Append(",\"placed\":").Append(_placed).Append(",\"already_there\":").Append(_already).Append(",\"wanted\":").Append(_want)
 			  .Append(",\"reason\":\"").Append(Reason).Append('"')
 			  .Append(",\"target_cell\":[").Append(p != null ? ActExecutor.OriginCx(p) : -1).Append(',').Append(_targetWy).Append(']');
+			if (_topWy >= 0 && p != null)
+				sb.Append(",\"top\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(_topWy).Append(']')
+				  .Append(",\"above_top\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(_topWy - 1).Append(']');
 			if (p != null)
 				sb.Append(",\"origin\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(ActExecutor.OriginCy(p)).Append(']')
 				  .Append(",\"on_rope\":").Append(OnRope(p) ? "true" : "false")

@@ -25,7 +25,7 @@ namespace TerraBlind
 		private static string _item = "";
 		private static int _slot = -1;
 		private static int _dir = 1;           // +1 right, -1 left
-		private static int _want, _placed;
+		private static int _want, _placed, _already;
 		private static int _targetWx, _rowWy;  // cell being placed into; the row the bridge runs along
 		private static int _walkToCx;
 		private static int _lastOriginCx, _walkStall;
@@ -47,7 +47,7 @@ namespace TerraBlind
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 
 			_item = itemName; _dir = dir == "left" ? -1 : 1;
-			_want = n < 1 ? 1 : n; _placed = 0;
+			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
@@ -77,10 +77,12 @@ namespace TerraBlind
 				BeginWalk();
 				return;
 			}
-			if (InBounds(_targetWx, _rowWy) && Main.tile[_targetWx, _rowWy].HasTile)
+			// only OUR tile already being there is a reason to skip; grass and other cut-through decorations do not
+			// block a placement, and refusing to swing at them would skip a cell the game would have accepted.
+			if (IsWanted(_targetWx, _rowWy))
 			{
-				_placed++; _targetWx += _dir;
-				if (_placed >= _want) { Finish("done"); return; }
+				_already++; _targetWx += _dir;
+				if (_placed + _already >= _want) { Finish("done"); return; }
 				BeginPlace();
 				return;
 			}
@@ -112,10 +114,12 @@ namespace TerraBlind
 				if (!_swingIssued) return;
 				_swingIssued = false;
 				string o = ItemUseCoordinator.Outcome;
-				if (o == "placed")
+				// THE MAP IS THE VERDICT: our tile in that cell means it worked.
+				if (IsWanted(_targetWx, _rowWy))
 				{
-					_placed++; _targetWx += _dir;
-					if (_placed >= _want) { Finish("done"); return; }
+					if (o == "already_there") _already++; else _placed++;
+					_targetWx += _dir;
+					if (_placed + _already >= _want) { Finish("done"); return; }
 					BeginPlace();
 					return;
 				}
@@ -149,7 +153,7 @@ namespace TerraBlind
 		{
 			Outcome = outcome;
 			_ph = Ph.Done;
-			DiagLog.Write($"[bridge] {outcome} placed={_placed}/{_want} reason={Reason}");
+			DiagLog.Write($"[bridge] {outcome} placed={_placed} already={_already}/{_want} reason={Reason}");
 		}
 
 		public static string StatusJson()
@@ -161,7 +165,7 @@ namespace TerraBlind
 			  .Append(",\"phase\":\"").Append(_ph.ToString().ToLowerInvariant()).Append('"')
 			  .Append(",\"item\":\"").Append(_item).Append('"')
 			  .Append(",\"dir\":").Append(_dir)
-			  .Append(",\"placed\":").Append(_placed).Append(",\"wanted\":").Append(_want)
+			  .Append(",\"placed\":").Append(_placed).Append(",\"already_there\":").Append(_already).Append(",\"wanted\":").Append(_want)
 			  .Append(",\"reason\":\"").Append(Reason).Append('"')
 			  .Append(",\"target_cell\":[").Append(_targetWx).Append(',').Append(_rowWy).Append(']');
 			if (p != null)
@@ -170,6 +174,18 @@ namespace TerraBlind
 				  .Append(",\"vel_x\":").Append(p.velocity.X.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
 			sb.Append('}');
 			return sb.ToString();
+		}
+
+		// does this cell hold the tile our item makes?
+		private static bool IsWanted(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			if (!t.HasTile) return false;
+			var p = Main.LocalPlayer;
+			if (p == null || _slot < 0 || _slot >= p.inventory.Length) return false;
+			var it = p.inventory[_slot];
+			return it != null && !it.IsAir && it.createTile >= 0 && t.TileType == it.createTile;
 		}
 
 		private static bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;

@@ -1554,11 +1554,15 @@ namespace TerraBlind
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var atM = System.Text.RegularExpressions.Regex.Match(rb, "\"at\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				// "world" takes the cell outright, so a caller holding a known coordinate never has to convert it
+				// into an offset from a moving origin.
+				var wM = System.Text.RegularExpressions.Regex.Match(rb, "\"world\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
 				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
 				var stM = System.Text.RegularExpressions.Regex.Match(rb, "\"step\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
-				if (!itM.Success || !atM.Success)
+				var posM = wM.Success ? wM : atM;
+				if (!itM.Success || !posM.Success)
 				{
-					body = "{\"ok\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_at {\\\"item\\\":\\\"绳\\\",\\\"at\\\":[0,-1],\\\"n\\\":1,\\\"step\\\":[0,-1]}\"}";
+					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_at {\\\"item\\\":\\\"绳\\\",\\\"at\\\":[0,-1]} 或 {\\\"world\\\":[2051,239]}; 可加 n/step\"}";
 					status = 400;
 				}
 				else
@@ -1567,9 +1571,11 @@ namespace TerraBlind
 					int sdx = stM.Success ? int.Parse(stM.Groups[1].Value) : 0;
 					int sdy = stM.Success ? int.Parse(stM.Groups[2].Value) : 0;
 					bool ok = PlaceAction.Start(itM.Groups[1].Value,
-						int.Parse(atM.Groups[1].Value), int.Parse(atM.Groups[2].Value), n, sdx, sdy, out string why);
-					body = ok ? "{\"ok\":true,\"n\":" + n + "}"
-							  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+						int.Parse(posM.Groups[1].Value), int.Parse(posM.Groups[2].Value), n, sdx, sdy, wM.Success, out string why);
+					// "accepted", not "ok": this says the request was taken, NOT that anything got built. Only
+					// /place_at_status can say that, and it says it per cell.
+					body = ok ? "{\"accepted\":true,\"n\":" + n + ",\"note\":\"poll /place_at_status for what actually happened\"}"
+							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 				}
 			}
 			// /rope_ladder — build a rope column N tall from where the player stands. Place as far as the arm reaches,
@@ -1585,8 +1591,8 @@ namespace TerraBlind
 				string item = itM.Success ? itM.Groups[1].Value : "绳";
 				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 20;
 				bool ok = RopeLadder.Start(item, n, out string why);
-				body = ok ? "{\"ok\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + "}"
-						  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + ",\"note\":\"poll /rope_ladder_status for what actually happened\"}"
+						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 			}
 			// /bridge — lay a platform run N long. Place as far as the arm reaches, walk out onto what was laid,
 			// repeat. Walking happens only on ground already placed, so no speed matching is involved.
@@ -1603,8 +1609,27 @@ namespace TerraBlind
 				string dir = dM.Success ? dM.Groups[1].Value : "right";
 				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 10;
 				bool ok = BridgeBuilder.Start(item, dir, n, out string why);
-				body = ok ? "{\"ok\":true,\"item\":\"" + JsonEsc(item) + "\",\"dir\":\"" + dir + "\",\"n\":" + n + "}"
-						  : "{\"ok\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"dir\":\"" + dir + "\",\"n\":" + n + ",\"note\":\"poll /bridge_status for what actually happened\"}"
+						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+			}
+			// /hop_up — jump until standing on the given surface row (getting off a rope onto a platform above it).
+			else if (path == "/hop_up")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"row\"\\s*:\\s*(-?\\d+)");
+				if (!rM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /hop_up {\\\"row\\\":242}\"}"; status = 400; }
+				else
+				{
+					bool ok = HopUp.Start(int.Parse(rM.Groups[1].Value), out string why);
+					body = ok ? "{\"accepted\":true,\"note\":\"poll /hop_up_status\"}"
+							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				}
+			}
+			else if (path == "/hop_up_status")
+			{
+				body = HopUp.StatusJson();
 			}
 			else if (path == "/bridge_status")
 			{
