@@ -115,6 +115,14 @@ namespace TerraBlind
 				return;
 			}
 
+			// drop: falls through the platform underfoot to the solid ground below (roof → base).
+			if (DropDown.IsRunning)
+			{
+				DropDown.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// settle: brakes to a stop on a target column, writing movement keys itself.
 			if (SettleAt.IsRunning)
 			{

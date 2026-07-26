@@ -1638,6 +1638,22 @@ namespace TerraBlind
 				PillarUp.Stop();
 				body = "{\"ok\":true}";
 			}
+			// /drop — fall through the platform underfoot down to solid ground (come off the roof onto the base).
+			else if (path == "/drop")
+			{
+				bool ok = DropDown.Start(out string why);
+				body = ok ? "{\"accepted\":true,\"note\":\"poll /drop_status\"}"
+						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+			}
+			else if (path == "/drop_status")
+			{
+				body = DropDown.StatusJson();
+			}
+			else if (path == "/drop_stop")
+			{
+				DropDown.Stop();
+				body = "{\"ok\":true}";
+			}
 			// /settle — brake to a full stop standing on a given column (no overshoot off a narrow platform).
 			else if (path == "/settle")
 			{

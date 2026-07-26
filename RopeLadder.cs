@@ -152,15 +152,14 @@ namespace TerraBlind
 
 			if (_ph == Ph.TopUp)
 			{
-				// DONE = stopped rising. The feet row (origin) can never equal the top rope cell — the body is ~3
-				// cells tall, so origin sits that far below the rope's top even when hanging at the very top. So the
-				// finish signal is simply "climbing no longer raises us": a few frames with origin unchanged means the
-				// top is reached. (The old target origin<=topWy was unreachable and always fell through to a 120-frame
-				// stall — that was the ~2s pause after the player had visibly already arrived.)
+				// Climb to the ACTUAL top of the rope — the highest the body can rise. Rope-climbing hitches (a frame
+				// or two of no movement mid-climb) fooled the old 6-frame "stopped rising" check into finishing several
+				// cells short, which is why the later hop launched too low to reach the platform. Require a longer,
+				// unmistakable stall (no rise for 30 frames) so brief hitches don't count as the top.
 				p.controlUp = true;
 				int tcy = ActExecutor.OriginCy(p);
 				if (tcy != _lastOriginCy) { _lastOriginCy = tcy; _topStall = 0; }
-				else if (++_topStall >= 6) { Finish("done"); return; }   // 6 frames without rising = at the top
+				else if (++_topStall >= 30) { Finish("done"); return; }   // sustained no-rise = truly at the top
 				return;
 			}
 

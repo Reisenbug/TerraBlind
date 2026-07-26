@@ -29,8 +29,15 @@ namespace TerraBlind
 		private static int _wy;                // the cell the cursor is currently on (world Y), decreasing upward
 		private static int _baseWy;            // ground level: the lowest cell of the column
 		private static int _frames, _phaseFrames;
+		private static int _wyStuckFrames;     // frames the cursor cell has NOT advanced (real no-progress)
+		private static int _lastWy;
+		private static bool _grounded;         // have the feet touched down so the ground row is valid?
 
 		private const int MaxPhaseFrames = 240;   // a single fill/jump phase can't outlast this — structural bound
+		// If the cursor cell hasn't advanced for this long, the column simply cannot grow (target unreachable even by
+		// jumping, out of stock, blocked). This counter is NEVER reset by landing, so a jump loop can't dodge it —
+		// which is exactly what let JumpRise spin forever (each landing zeroed _phaseFrames before it hit the cap).
+		private const int NoProgressFrames = 180;
 
 		public static bool IsRunning => _ph == Ph.StepAside || _ph == Ph.Fill || _ph == Ph.JumpRise;
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
@@ -56,9 +63,12 @@ namespace TerraBlind
 			_baseWy = ActExecutor.OriginCy(p);         // ground-level cell of the column (the row the player stands on)
 			_wy = _baseWy;
 			_frames = 0; _phaseFrames = 0;
+			_lastWy = int.MinValue; _wyStuckFrames = 0; _grounded = false;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[pillar] start {itemName} n={_want} slot={_slot} col={_colCx} base_y={_baseWy}");
-			_ph = Ph.StepAside;
+			// col given → the caller already anchored the player; do NOT move. Only step aside when building the
+			// player's own column (col < 0), where the body sits in the column and must clear it.
+			_ph = col >= 0 ? Ph.Fill : Ph.StepAside;
 			return true;
 		}
 
@@ -103,6 +113,22 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Reason = "no_player"; Finish("stuck"); return; }
 			_frames++; _phaseFrames++;
+
+			// LAND FIRST. A previous pillar ends mid-air (its last block is jump-placed, player still falling), and if
+			// the next pillar grabs the ground row NOW it grabs a mid-air row and builds from the sky. So wait until
+			// the feet are on the ground, THEN take the ground row as the column's first cell.
+			if (!_grounded)
+			{
+				if (p.velocity.Y != 0f) { if (_phaseFrames > MaxPhaseFrames) { Reason = "no_landing"; Finish("stuck"); return; } return; }
+				_grounded = true;
+				_wy = ActExecutor.OriginCy(p);
+				_baseWy = _wy;
+			}
+
+			// GLOBAL no-progress guard, immune to the per-jump reset. If the cursor cell (_wy) hasn't changed for
+			// NoProgressFrames, the pillar cannot advance — bail instead of jumping forever.
+			if (_wy != _lastWy) { _lastWy = _wy; _wyStuckFrames = 0; }
+			else if (++_wyStuckFrames > NoProgressFrames) { Reason = "unreachable"; Finish("stuck"); return; }
 
 			// backpack slot → swap into hotbar once (same trick the coordinator uses).
 			if (_slot >= 10 && _slot < p.inventory.Length)
