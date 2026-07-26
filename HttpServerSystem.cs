@@ -1612,6 +1612,56 @@ namespace TerraBlind
 				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"dir\":\"" + dir + "\",\"n\":" + n + ",\"note\":\"poll /bridge_status for what actually happened\"}"
 						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 			}
+			// /pillar — build a solid column N tall by jump-placing blocks under the feet.
+			else if (path == "/pillar")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
+				string item = itM.Success ? itM.Groups[1].Value : "木材";
+				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 9;
+				var colM = System.Text.RegularExpressions.Regex.Match(rb, "\"col\"\\s*:\\s*(-?\\d+)");
+				int col = colM.Success ? int.Parse(colM.Groups[1].Value) : -1;
+				bool ok = PillarUp.Start(item, n, col, out string why);
+				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + ",\"note\":\"poll /pillar_status for what actually happened\"}"
+						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+			}
+			else if (path == "/pillar_status")
+			{
+				body = PillarUp.StatusJson();
+			}
+			else if (path == "/pillar_stop")
+			{
+				PillarUp.Stop();
+				body = "{\"ok\":true}";
+			}
+			// /settle — brake to a full stop standing on a given column (no overshoot off a narrow platform).
+			else if (path == "/settle")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var cM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"col\"\\s*:\\s*(-?\\d+)");
+				if (!cM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /settle {\\\"col\\\":2027}\"}"; status = 400; }
+				else
+				{
+					bool ok = SettleAt.Start(int.Parse(cM.Groups[1].Value), out string why);
+					body = ok ? "{\"accepted\":true,\"note\":\"poll /settle_status\"}"
+							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				}
+			}
+			else if (path == "/settle_status")
+			{
+				body = SettleAt.StatusJson();
+			}
+			else if (path == "/settle_stop")
+			{
+				SettleAt.Stop();
+				body = "{\"ok\":true}";
+			}
 			// /hop_up — jump until standing on the given surface row (getting off a rope onto a platform above it).
 			else if (path == "/hop_up")
 			{
@@ -1619,10 +1669,12 @@ namespace TerraBlind
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
 				var rM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"row\"\\s*:\\s*(-?\\d+)");
-				if (!rM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /hop_up {\\\"row\\\":242}\"}"; status = 400; }
+				var cM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"col\"\\s*:\\s*(-?\\d+)");
+				if (!rM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /hop_up {\\\"row\\\":242,\\\"col\\\":2027}\"}"; status = 400; }
 				else
 				{
-					bool ok = HopUp.Start(int.Parse(rM.Groups[1].Value), out string why);
+					int col = cM.Success ? int.Parse(cM.Groups[1].Value) : int.MinValue;
+					bool ok = HopUp.Start(int.Parse(rM.Groups[1].Value), col, out string why);
 					body = ok ? "{\"accepted\":true,\"note\":\"poll /hop_up_status\"}"
 							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 				}

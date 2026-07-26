@@ -152,11 +152,15 @@ namespace TerraBlind
 
 			if (_ph == Ph.TopUp)
 			{
+				// DONE = stopped rising. The feet row (origin) can never equal the top rope cell — the body is ~3
+				// cells tall, so origin sits that far below the rope's top even when hanging at the very top. So the
+				// finish signal is simply "climbing no longer raises us": a few frames with origin unchanged means the
+				// top is reached. (The old target origin<=topWy was unreachable and always fell through to a 120-frame
+				// stall — that was the ~2s pause after the player had visibly already arrived.)
 				p.controlUp = true;
 				int tcy = ActExecutor.OriginCy(p);
-				if (tcy <= _topWy) { Finish("done"); return; }
 				if (tcy != _lastOriginCy) { _lastOriginCy = tcy; _topStall = 0; }
-				else if (++_topStall >= ClimbStallLimit) { Finish("done"); return; }   // as high as it goes; still a built ladder
+				else if (++_topStall >= 6) { Finish("done"); return; }   // 6 frames without rising = at the top
 				return;
 			}
 

@@ -107,6 +107,22 @@ namespace TerraBlind
 				return;
 			}
 
+			// pillar: builds a platform column to the player's right, driving jump + useItem + cursor itself.
+			if (PillarUp.IsRunning)
+			{
+				PillarUp.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
+			// settle: brakes to a stop on a target column, writing movement keys itself.
+			if (SettleAt.IsRunning)
+			{
+				SettleAt.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// hop-up: writes controlJump itself until the player is standing on the target row.
 			if (HopUp.IsRunning)
 			{
