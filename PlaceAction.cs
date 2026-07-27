@@ -45,6 +45,10 @@ namespace TerraBlind
 		// Resolve an item by NAME (exact, then contains) anywhere in the inventory — hotbar or backpack, since
 		// ItemUseCoordinator swaps a backpack slot up on its own. Returns -1 when the player simply doesn't have it,
 		// which is a fact the caller can act on ("我没有绳"), not an internal error.
+		//
+		// TODO(brittle): lookup is by LOCALIZED CHINESE NAME. This breaks under a language change or item aliases.
+		// FindSlotById(id) below is the stable path — the LLM layer can pass names, but callers that know the item
+		// should move to item.type ids. Kept as Chinese for now to keep moving.
 		public static int FindSlotByName(string name)
 		{
 			var p = Main.LocalPlayer;
@@ -65,15 +69,41 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// Resolve an item by its numeric ID (item.type) — the stable, language-independent key. Name lookup is kept
+		// for callers that still pass a name, but ID is preferred: a Chinese literal breaks under localization/aliases.
+		public static int FindSlotById(int id)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null || id < 0) return -1;
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir && it.type == id) return i;
+			}
+			return -1;
+		}
+
 		// GIVE AN ITEM A PERMANENT HOTBAR HOME. A build action uses one item many times; if it lives in the backpack
 		// (slot ≥ 10) and gets swapped up per use, the swaps fight and the backpack slot number goes stale. Instead:
-		// find it by name, and if it is in the backpack, swap it ONCE into an empty hotbar slot (else slot 0) and
-		// leave it there. Returns the hotbar slot to use for every subsequent use — no more swapping. -1 if not found.
+		// swap it ONCE into an empty hotbar slot (else slot 0) and leave it there. Returns the hotbar slot to use for
+		// every subsequent use — no more swapping. -1 if not found.
+		public static int HomeInHotbar(int id)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return -1;
+			return HomeSlot(FindSlotById(id));
+		}
+
 		public static int HomeInHotbar(string name)
 		{
 			var p = Main.LocalPlayer;
 			if (p == null) return -1;
-			int slot = FindSlotByName(name);
+			return HomeSlot(FindSlotByName(name));
+		}
+
+		private static int HomeSlot(int slot)
+		{
+			var p = Main.LocalPlayer;
 			if (slot < 0) return -1;
 			if (slot <= 9) return slot;                    // already in the hotbar — leave it
 			int hb = -1;
