@@ -49,18 +49,39 @@ namespace TerraBlind
 		{
 			var p = Main.LocalPlayer;
 			if (p == null || string.IsNullOrEmpty(name)) return -1;
+			// PLACEABLE = makes a tile OR a wall. Walls have createTile == -1 and createWall >= 0, so filtering on
+			// createTile alone silently hid every wall — the "no_item" for 木墙 despite 95 in the pack.
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.Name == name && it.createTile >= 0) return i;
+				if (it != null && !it.IsAir && it.Name == name && (it.createTile >= 0 || it.createWall >= 0)) return i;
 			}
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.createTile >= 0 &&
+				if (it != null && !it.IsAir && (it.createTile >= 0 || it.createWall >= 0) &&
 					(it.Name.Contains(name) || name.Contains(it.Name))) return i;
 			}
 			return -1;
+		}
+
+		// GIVE AN ITEM A PERMANENT HOTBAR HOME. A build action uses one item many times; if it lives in the backpack
+		// (slot ≥ 10) and gets swapped up per use, the swaps fight and the backpack slot number goes stale. Instead:
+		// find it by name, and if it is in the backpack, swap it ONCE into an empty hotbar slot (else slot 0) and
+		// leave it there. Returns the hotbar slot to use for every subsequent use — no more swapping. -1 if not found.
+		public static int HomeInHotbar(string name)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return -1;
+			int slot = FindSlotByName(name);
+			if (slot < 0) return -1;
+			if (slot <= 9) return slot;                    // already in the hotbar — leave it
+			int hb = -1;
+			for (int i = 0; i < 10; i++)
+				if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
+			if (hb < 0) hb = 0;                            // no empty slot — displace slot 0
+			var tmp = p.inventory[hb]; p.inventory[hb] = p.inventory[slot]; p.inventory[slot] = tmp;
+			return hb;
 		}
 
 		// Start a placement of `n` cells beginning at the origin-relative offset (dx,dy), advancing by `step` each
@@ -73,7 +94,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 
-			_slot = FindSlotByName(itemName);
+			_slot = HomeInHotbar(itemName);   // home once in the hotbar; every cell in a run uses that stable slot
 			if (_slot < 0)
 			{
 				why = "no_item"; Outcome = "no_item"; Reason = itemName;

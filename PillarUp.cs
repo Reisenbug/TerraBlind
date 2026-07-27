@@ -52,7 +52,7 @@ namespace TerraBlind
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
-			_slot = PlaceAction.FindSlotByName(itemName);
+			_slot = PlaceAction.HomeInHotbar(itemName);   // home the item in the hotbar once; use that slot for the whole run
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 			var it = p.inventory[_slot];
 			_tileType = (it != null && !it.IsAir) ? it.createTile : -1;
@@ -130,15 +130,7 @@ namespace TerraBlind
 			if (_wy != _lastWy) { _lastWy = _wy; _wyStuckFrames = 0; }
 			else if (++_wyStuckFrames > NoProgressFrames) { Reason = "unreachable"; Finish("stuck"); return; }
 
-			// backpack slot → swap into hotbar once (same trick the coordinator uses).
-			if (_slot >= 10 && _slot < p.inventory.Length)
-			{
-				int hb = -1;
-				for (int i = 0; i < 10; i++) if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
-				if (hb < 0) hb = 0;
-				var tmp = p.inventory[hb]; p.inventory[hb] = p.inventory[_slot]; p.inventory[_slot] = tmp;
-				_slot = hb;
-			}
+			// (item already homed in the hotbar at Start — _slot is a stable 0-9 slot, no per-frame swapping.)
 
 			// STEP ASIDE — stand just LEFT of the target column, body clear of it, close enough to reach it. The body
 			// must not overlap the column (block/platform can't go inside the hitbox), and must be adjacent so the

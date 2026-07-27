@@ -115,6 +115,22 @@ namespace TerraBlind
 				return;
 			}
 
+			// place-walls: places background walls at an ordered cell list, jumping for the ones too high.
+			if (PlaceWalls.IsRunning)
+			{
+				PlaceWalls.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
+			// walk-place: walks to a column, dropping furniture at in-reach targets along the way.
+			if (WalkPlace.IsRunning)
+			{
+				WalkPlace.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// drop: falls through the platform underfoot to the solid ground below (roof → base).
 			if (DropDown.IsRunning)
 			{

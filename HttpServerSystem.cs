@@ -1638,6 +1638,74 @@ namespace TerraBlind
 				PillarUp.Stop();
 				body = "{\"ok\":true}";
 			}
+			// /place_walls — place background walls at an ORDERED list of cells (order matters for vanilla spread).
+			// body: {"item":"木墙","cells":[[x,y],[x,y],...]}  cells are absolute, placed strictly in the given order.
+			else if (path == "/place_walls")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var cells = new System.Collections.Generic.List<(int, int)>();
+				foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(rb,
+					"\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]"))
+					cells.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)));
+				if (!itM.Success || cells.Count == 0)
+				{
+					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_walls {item, cells:[[x,y],...]}\"}";
+					status = 400;
+				}
+				else
+				{
+					bool ok = PlaceWalls.Start(itM.Groups[1].Value, cells, out string why);
+					body = ok ? "{\"accepted\":true,\"cells\":" + cells.Count + ",\"note\":\"poll /place_walls_status\"}"
+							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				}
+			}
+			else if (path == "/place_walls_status")
+			{
+				body = PlaceWalls.StatusJson();
+			}
+			else if (path == "/place_walls_stop")
+			{
+				PlaceWalls.Stop();
+				body = "{\"ok\":true}";
+			}
+			// /walk_place — walk to dest_x, placing furniture at listed targets whenever they come within reach.
+			// body: {"dest_x":N,"targets":[{"x":N,"y":N,"item":"木桌"}, ...]}
+			else if (path == "/walk_place")
+			{
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var dM = System.Text.RegularExpressions.Regex.Match(rb, "\"dest_x\"\\s*:\\s*(-?\\d+)");
+				var targets = new System.Collections.Generic.List<(int, int, string)>();
+				foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(rb,
+					"\\{\\s*\"x\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"y\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"item\"\\s*:\\s*\"([^\"]*)\"\\s*\\}"))
+					targets.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), m.Groups[3].Value));
+				if (!dM.Success || targets.Count == 0)
+				{
+					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /walk_place {dest_x, targets:[{x,y,item}]}\"}";
+					status = 400;
+				}
+				else
+				{
+					bool ok = WalkPlace.Start(int.Parse(dM.Groups[1].Value), targets, out string why);
+					body = ok ? "{\"accepted\":true,\"targets\":" + targets.Count + ",\"note\":\"poll /walk_place_status\"}"
+							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+				}
+			}
+			else if (path == "/walk_place_status")
+			{
+				body = WalkPlace.StatusJson();
+			}
+			else if (path == "/walk_place_stop")
+			{
+				WalkPlace.Stop();
+				body = "{\"ok\":true}";
+			}
 			// /drop — fall through the platform underfoot down to solid ground (come off the roof onto the base).
 			else if (path == "/drop")
 			{

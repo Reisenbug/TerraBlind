@@ -49,7 +49,7 @@ namespace TerraBlind
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
-			_slot = PlaceAction.FindSlotByName(itemName);
+			_slot = PlaceAction.HomeInHotbar(itemName);   // home the item in the hotbar once; use that slot for the whole run
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 
 			_item = itemName; _want = n < 1 ? 1 : n; _placed = 0; _already = 0; _topWy = -1;
