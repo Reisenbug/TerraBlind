@@ -42,13 +42,18 @@ namespace TerraBlind
 		public static int PlacedCount => _placedCount;
 		private static int _stopWx = -1, _stopWy = -1;
 
+		// THE one item resolver every action goes through. `spec` is either a numeric item id ("965") or a display
+		// name ("绳"). Ids are the stable key — language-independent, alias-free — so a caller that knows what it
+		// wants should send one; names stay supported because the LLM layer speaks names, not numbers.
+		public static int ResolveSlot(string spec)
+		{
+			if (string.IsNullOrEmpty(spec)) return -1;
+			return int.TryParse(spec, out int id) ? FindSlotById(id) : FindSlotByName(spec);
+		}
+
 		// Resolve an item by NAME (exact, then contains) anywhere in the inventory — hotbar or backpack, since
 		// ItemUseCoordinator swaps a backpack slot up on its own. Returns -1 when the player simply doesn't have it,
 		// which is a fact the caller can act on ("我没有绳"), not an internal error.
-		//
-		// TODO(brittle): lookup is by LOCALIZED CHINESE NAME. This breaks under a language change or item aliases.
-		// FindSlotById(id) below is the stable path — the LLM layer can pass names, but callers that know the item
-		// should move to item.type ids. Kept as Chinese for now to keep moving.
 		public static int FindSlotByName(string name)
 		{
 			var p = Main.LocalPlayer;
@@ -69,8 +74,7 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// Resolve an item by its numeric ID (item.type) — the stable, language-independent key. Name lookup is kept
-		// for callers that still pass a name, but ID is preferred: a Chinese literal breaks under localization/aliases.
+		// Resolve an item by its numeric ID (item.type) — exact, no aliasing, no localization.
 		public static int FindSlotById(int id)
 		{
 			var p = Main.LocalPlayer;
@@ -87,18 +91,11 @@ namespace TerraBlind
 		// (slot ≥ 10) and gets swapped up per use, the swaps fight and the backpack slot number goes stale. Instead:
 		// swap it ONCE into an empty hotbar slot (else slot 0) and leave it there. Returns the hotbar slot to use for
 		// every subsequent use — no more swapping. -1 if not found.
-		public static int HomeInHotbar(int id)
+		public static int HomeInHotbar(string spec)
 		{
 			var p = Main.LocalPlayer;
 			if (p == null) return -1;
-			return HomeSlot(FindSlotById(id));
-		}
-
-		public static int HomeInHotbar(string name)
-		{
-			var p = Main.LocalPlayer;
-			if (p == null) return -1;
-			return HomeSlot(FindSlotByName(name));
+			return HomeSlot(ResolveSlot(spec));
 		}
 
 		private static int HomeSlot(int slot)

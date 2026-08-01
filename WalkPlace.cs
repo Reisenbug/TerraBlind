@@ -43,7 +43,7 @@ namespace TerraBlind
 			int nextHb = 0;
 			foreach (var (wx, wy, item) in targets)
 			{
-				int slot = PlaceAction.FindSlotByName(item);
+				int slot = PlaceAction.ResolveSlot(item);
 				if (slot < 0) { why = "no_item:" + item; Outcome = "no_item"; Reason = item; return false; }
 				var it = p.inventory[slot];
 				int type = it.type;
