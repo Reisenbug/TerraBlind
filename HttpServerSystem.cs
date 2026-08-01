@@ -2104,16 +2104,96 @@ namespace TerraBlind
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
 									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
 							}
-						// in-world drawing: cyan line, gold/pink markers, yellow/magenta REAL detour paths
+						// ── STITCH THE TREASURES INTO ONE ITINERARY ────────────────────────────────────────────
+						// The tiers above price every treasure against THE LINE, and that verdict is frozen at plan
+						// time. It is wrong the moment the body leaves the line: standing at a treasure 19 tiles off
+						// the line, a second one 2 tiles further out was already written off as "too far" — measured
+						// from a line the player is no longer on.
+						//
+						// So order them as a CHAIN instead: from where the last pickup left us, the next stop is
+						// whichever remaining treasure is cheapest to reach FROM HERE, as long as it lies ahead
+						// (lower H = closer to hell — never walk back up the mountain for loot).
+						//
+						// The costs come out of the two fields already built — a treasure's own detour path (its
+						// dig/walk out to the junction) plus the line distance between junctions. No third field,
+						// no per-segment Dijkstra: stitching is arithmetic over data we already have.
+						// ORDERING NEVER DROPS A STOP. Whether a treasure is worth visiting was already decided by the
+						// tier test above; every "main" goes in the chain. All this does is choose the ORDER — and an
+						// earlier version that picked "cheapest next" each time quietly deleted six of thirteen stops:
+						// anything needing digging priced high, sank to the end of the queue, and by the time its turn
+						// came the body was already past it on a one-way descent, so it got dropped as "behind us".
+						//
+						// So: line order is the backbone (top to bottom, nothing skipped). The only rearranging is
+						// LOCAL — once we are standing off the line at a treasure, a later stop that is close TO US
+						// gets pulled forward, which is the whole point: the old code priced it against the line the
+						// body had already left, and abandoned a stop two tiles away for being "far from the line".
+						// ── ONE LINE THAT THREADS THE TREASURES ────────────────────────────────────────────────
+						// Everything above only DECIDED THINGS: where the entrance is, which treasures are worth the
+						// trip, and — by line order — what sequence to take them in. The route it traced is a scaffold
+						// for those judgements, not the path to walk: treasures hang off it on detours, and no amount
+						// of re-sorting removes a bulge, because a detour is a shape and sorting only permutes.
+						//
+						// So plan the path separately, now that the stops are fixed points in a fixed order:
+						//   entrance → treasure 1 → treasure 2 → … → treasure N → hell
+						// Each leg is an ordinary two-point route — build a field seeded on the leg's TARGET, then walk
+						// downhill from its start. The treasures are leg endpoints, so the line goes THROUGH every one
+						// by construction; there is nothing to branch off to.
+						//
+						// Per-leg fields are local (BuildField boxes the search around the two endpoints), not the
+						// world-sized flood the scaffold needed — legs are tens of tiles apart, so each is cheap.
+						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
+						for (int i = 0; i < treasures.Count; i++)
+							if (treasures[i].tier == "main") chain.Add(i);
+						chain.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // down the line, top to bottom
+						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
+						{
+							var stops = new System.Collections.Generic.List<(int x, int y)>();
+							foreach (int ti in chain) stops.Add((treasures[ti].x, treasures[ti].y));
+							stops.Add((line[line.Count - 1].x, line[line.Count - 1].y));    // finish at hell
+							var cursor = (x: dd.EntX, y: dd.EntY);
+							threaded.Add(cursor);
+							foreach (var goal in stops)
+							{
+								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
+								if (!f.ContainsKey(cursor)) continue;                       // leg unroutable — skip to next
+								for (int step = 0; step < 20000; step++)
+								{
+									if (cursor.x == goal.x && cursor.y == goal.y) break;
+									if (f.TryGetValue(cursor, out int hc0) && hc0 == 0) break;
+									int bestN = int.MaxValue; var best = cursor;
+									foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+									{
+										var n = (x: cursor.x + dx2, y: cursor.y + dy2);
+										if (f.TryGetValue((n.x, n.y), out int dn) && dn < bestN) { bestN = dn; best = n; }
+									}
+									if (best.x == cursor.x && best.y == cursor.y) break;
+									cursor = best;
+									threaded.Add((cursor.x, cursor.y));
+								}
+							}
+						}
+
+						// IN-WORLD DRAWING — the picture must match what the body will actually do. Every "main" stop is
+						// a place we WILL walk through, so its detour path is drawn as trunk (cyan), not as a branch:
+						// the route reads as ONE line threading the stops. Only "optional" — the ones we may or may
+						// not take — is drawn branching off, dim, because a branch is exactly what it would be.
 						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
-						foreach (var (lx, ly) in line) vis.Add((lx, ly, new Microsoft.Xna.Framework.Color(0, 200, 255, 140)));
+						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
+						// draw the THREADED line — the one that goes through the treasures. The original hell-only
+						// line is not drawn: it is not the route any more, it was only the scaffold the corridor and
+						// the tiers were measured against.
+						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
 						foreach (var tr in treasures)
 						{
-							bool opt = tr.tier == "optional";   // optional tier draws at half brightness
-							var bc = tr.kind == "chest"
-								? new Microsoft.Xna.Framework.Color(255, 220, 0, opt ? 60 : 130)
-								: new Microsoft.Xna.Framework.Color(255, 0, 180, opt ? 60 : 130);
-							foreach (var (bx, by) in tr.path) vis.Add((bx, by, bc));
+							bool opt = tr.tier == "optional";
+							// only optional branches off — main stops are ON the line above, so they need no branch
+							if (opt)
+							{
+								var bc = tr.kind == "chest"
+									? new Microsoft.Xna.Framework.Color(255, 220, 0, 60)
+									: new Microsoft.Xna.Framework.Color(255, 0, 180, 60);
+								foreach (var (bx, by) in tr.path) vis.Add((bx, by, bc));
+							}
 							var mc = tr.kind == "chest"
 								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 110 : 230)
 								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 110 : 230);
@@ -2122,10 +2202,15 @@ namespace TerraBlind
 						}
 						PathVisSystem.SetTiles(vis, 7200);
 						var rsb = new StringBuilder();
+						var tail = threaded.Count > 0 ? threaded[threaded.Count - 1] : (line[line.Count - 1].x, line[line.Count - 1].y);
 						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
-						   .Append("},\"hell_x\":").Append(line[line.Count - 1].x).Append(",\"hell_y\":").Append(line[line.Count - 1].y)
-						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(line.Count)
+						   .Append("},\"hell_x\":").Append(tail.Item1).Append(",\"hell_y\":").Append(tail.Item2)
+						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(threaded.Count)
+						   .Append(",\"scaffold_len\":").Append(line.Count)
 						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax).Append(",\"treasures\":[");
+						// stop number = position in the stitched chain (-1 for treasures not on it)
+						var stopOf = new System.Collections.Generic.Dictionary<int, int>();
+						for (int i = 0; i < chain.Count; i++) stopOf[chain[i]] = i;
 						for (int i = 0; i < treasures.Count; i++)
 						{
 							var tr = treasures[i];
@@ -2133,7 +2218,19 @@ namespace TerraBlind
 							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y).Append(",\"kind\":\"").Append(tr.kind)
 							   .Append("\",\"tier\":\"").Append(tr.tier).Append("\",\"line_x\":").Append(tr.jx).Append(",\"line_y\":").Append(tr.jy)
 							   .Append(",\"line_i\":").Append(tr.li)
+							   .Append(",\"stop\":").Append(stopOf.TryGetValue(i, out int sn) ? sn : -1)
 							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
+						}
+						rsb.Append(']');
+						// ITINERARY — the visit order, already stitched. The executor walks this and nothing else:
+						// go to each stop in turn, collect, continue. No re-deciding what is worth a detour mid-run.
+						rsb.Append(",\"itinerary\":[");
+						for (int i = 0; i < chain.Count; i++)
+						{
+							var tr = treasures[chain[i]];
+							if (i > 0) rsb.Append(',');
+							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y)
+							   .Append(",\"kind\":\"").Append(tr.kind).Append("\",\"line_i\":").Append(tr.li).Append('}');
 						}
 						rsb.Append("]}");
 						body = rsb.ToString();
