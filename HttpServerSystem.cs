@@ -2258,6 +2258,81 @@ namespace TerraBlind
 					body = ProbeCellJson(x, y);
 				}
 			}
+			// ── PREDICATES ── pure queries, no side effects. These answer the questions that used to be either burned
+			// into a script as a constant or handed to the LLM to guess at. See Predicates.cs.
+			else if (path == "/can_stand")
+			{
+				// Every geometric predicate for one cell at once: can_stand plus the measurements behind it, so a
+				// caller learns WHY it can't stand there (no ground / no headroom / lava) instead of a bare false.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
+				var wm = System.Text.RegularExpressions.Regex.Match(rb, "\"width_cap\"\\s*:\\s*(\\d+)");
+				var hm = System.Text.RegularExpressions.Regex.Match(rb, "\"head_cap\"\\s*:\\s*(\\d+)");
+				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else
+					body = Predicates.CellJson(int.Parse(xm.Groups[1].Value), int.Parse(ym.Groups[1].Value),
+						wm.Success ? int.Parse(wm.Groups[1].Value) : 32,
+						hm.Success ? int.Parse(hm.Groups[1].Value) : 16);
+			}
+			else if (path == "/scan_flat")
+			{
+				// Find a build site: nearest spot with `w` standable columns, `h` rows of headroom, no hazard within
+				// `hazard_r`. THE replacement for a hardcoded build coordinate — same question, terrain-dependent answer.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				int Get(string k, int dflt)
+				{
+					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
+					return m.Success ? int.Parse(m.Groups[1].Value) : dflt;
+				}
+				var p = Main.LocalPlayer;
+				int fx = Get("from_x", p != null ? ActExecutor.OriginCx(p) : 0);
+				int fy = Get("from_y", p != null ? ActExecutor.OriginCy(p) : 0);
+				int w = Get("w", 14), h = Get("h", 12), hr = Get("hazard_r", 0), range = Get("range", 200);
+				bool found = Predicates.ScanFlat(fx, fy, w, h, hr, range, out int hx, out int hy, out int scanned);
+				var sb = new System.Text.StringBuilder();
+				sb.Append("{\"found\":").Append(found ? "true" : "false");
+				sb.Append(",\"from\":[").Append(fx).Append(',').Append(fy).Append(']');
+				sb.Append(",\"want\":{\"w\":").Append(w).Append(",\"h\":").Append(h).Append(",\"hazard_r\":").Append(hr).Append('}');
+				if (found) sb.Append(",\"at\":[").Append(hx).Append(',').Append(hy).Append("],\"span\":[")
+					.Append(hx).Append(',').Append(hx + w - 1).Append(']');
+				sb.Append(",\"scanned\":").Append(scanned).Append('}');
+				body = sb.ToString();
+			}
+			else if (path == "/room_check")
+			{
+				// Vanilla's own housing test, flood-filled from a point INSIDE the room (not a rectangle). Reports
+				// which of door/table/chair/torch is missing — "no door" is a diagnosis, "the NPC didn't move in" isn't.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else body = Predicates.RoomJson(int.Parse(xm.Groups[1].Value), int.Parse(ym.Groups[1].Value));
+			}
+			else if (path == "/have")
+			{
+				// How many of an item id are held. The material precondition, asked directly.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var im = System.Text.RegularExpressions.Regex.Match(rb, "\"id\"\\s*:\\s*(\\d+)");
+				if (!im.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else
+				{
+					int id = int.Parse(im.Groups[1].Value);
+					var nm = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
+					int want = nm.Success ? int.Parse(nm.Groups[1].Value) : 1;
+					int has = Predicates.Have(id);
+					body = "{\"id\":" + id + ",\"have\":" + has + ",\"want\":" + want +
+						   ",\"enough\":" + (has >= want ? "true" : "false") + "}";
+				}
+			}
+			else if (path == "/npc_find")
+			{
+				// Where an NPC is, by type id (omit type for all actives). Needed to wait for a merchant to arrive and
+				// to dig out the cell under the Guide.
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var tm = System.Text.RegularExpressions.Regex.Match(rb, "\"type\"\\s*:\\s*(-?\\d+)");
+				body = Predicates.NpcJson(tm.Success ? int.Parse(tm.Groups[1].Value) : -1);
+			}
 			else if (path == "/measure")
 			{
 				// How big is the connected blob of the same tile at (x,y): tree height, ore-vein size, cavity — the
