@@ -612,7 +612,10 @@ namespace TerraBlind
                 bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
                 bool anySolid = DigSolid(dropLc, fcy + 1) || DigSolid(dropRc, fcy + 1);
                 bool plat = anyPlat && !anySolid;
-                if (SegDiag && !plat) DiagLog.Write($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                // logged unconditionally: SegDiag only switches on when NO candidate descends, so a loop that still
+                // has descending candidates — the platform-shuffle at (988,551) — never recorded why the drop edge
+                // was missing, and "why didn't it press Down" had no answer anywhere in the trace.
+                if (!plat) DiagLog.Write($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
                     // a human drops off a platform by holding Down (+ a direction) and rides the fall all the way
@@ -623,6 +626,8 @@ namespace TerraBlind
                         var drop = Prof("drop", () => SimulateDrop(cur, ddir, ph));
                         if (drop.HasValue)
                             yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
+                        else
+                            DiagLog.Write($"[ss-drop] SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
                     }
                 }
             }
@@ -1970,6 +1975,50 @@ namespace TerraBlind
         // the loop traversed gets one large decaying penalty. Loops exist because the cost structure lies somewhere;
         // making the lying edges expensive re-routes Bellman onto the next-best alternative without banning anything
         // (the penalty is finite and DecayMiss forgets it, so a legitimate re-tread later is not forbidden).
+        // JIGGLE — the loop breaker. A loop is not a shortage of candidates: at (988,551) the planner had 34, several
+        // of them descending, and a human breaks the same loop by tapping Down once. It persists because selection is
+        // deterministic — identical stance, identical scores, identical pick, forever — and because the penalties that
+        // were supposed to break it had themselves priced the one good step out (the shock that fired on the loop
+        // charged +200 to (987,549)→(987,551), the single edge reaching the lowest H in the neighbourhood).
+        //
+        // So when a loop is detected, stop trusting `total` for one step and pick a DESCENDING candidate at random.
+        // A descending edge is progress by the field's own measure, so this cannot wander; and randomness is what
+        // makes the cycle break with probability 1 instead of replaying the same deterministic pick. No parameter to
+        // tune — it sidesteps the weighted sum rather than reweighting it.
+        // A single random step is enough to break the tie but usually not enough to leave: the basin at
+        // (985..989, 545..551) took three separate loop detections to escape, each jiggle nudging H down a few
+        // points (367 → 364 → 356) before deterministic selection pulled it back in. Escaping wanted several
+        // random steps IN A ROW, so one request now buys a short burst.
+        static int _jiggle;
+        const int JiggleSteps = 4;
+        static readonly System.Random _rng = new();
+        public static void RequestJiggle() { _jiggle = JiggleSteps; }
+
+        // the accumulated edge penalties inside a region — the hidden state that makes a loop unreproducible, and
+        // the reason a good edge can be the most expensive one on the board.
+        // last decision's candidates, kept so a stuck snapshot can record what the planner was actually choosing from
+        static List<Cand> _lastCands;
+        static (int cx, int cy, int h) _lastAt;
+        static (int gx, int gy) _lastGoal;
+        public static string CaptureStuck(string why, string trail) =>
+            StuckSnapshot.Capture(_lastAt.cx, _lastAt.cy, _lastAt.h, _lastGoal.gx, _lastGoal.gy, _lastCands, why, trail);
+
+        public static string PenaltyJson(int x0, int y0, int x1, int y1)
+        {
+            var sb = new System.Text.StringBuilder();
+            bool first = true;
+            foreach (var kv in _miss)
+            {
+                var (fx, fy, tx, ty) = kv.Key;
+                if (fx < x0 || fx > x1 || fy < y0 || fy > y1) continue;
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("{\"from\":[").Append(fx).Append(',').Append(fy).Append("],\"to\":[")
+                  .Append(tx).Append(',').Append(ty).Append("],\"p\":").Append(kv.Value.ToString("0.#")).Append('}');
+            }
+            return sb.ToString();
+        }
+
         internal static void PenalizeEdges(System.Collections.Generic.IEnumerable<(int fx, int fy, int tx, int ty)> edges, float amount)
         {
             foreach (var e in edges)
@@ -2048,6 +2097,13 @@ namespace TerraBlind
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
+            // every edge, kept whole (frames/dig/pillar included) so the loop breaker can pick one and dispatch it
+            // like any other choice. ALL of them, not just the descending ones: a snapshot of the basin at
+            // (987,549) had 42 candidates of which exactly 2 descended — both still inside the basin, worth 2 points
+            // of H — while the nearest standable low ground was H=177 twenty cells away. Restricted to descending
+            // edges the jiggle could only shuffle between those two; the way out is over the rim, and every edge
+            // crossing it raises H.
+            var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h)>();
             var _candLog = new System.Text.StringBuilder();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
@@ -2158,7 +2214,32 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH));
             }
+            // loop breaker: one random descending step instead of the deterministic best (see RequestJiggle)
+            // cleared only when actually spent: a cycle with nothing descending must not silently consume the
+            // request, or the loop that asked for a jiggle never gets one.
+            if (_jiggle > 0 && jigglePool.Count > 0)
+            {
+                // Random, but not indifferent. Uniform picking climbed out of the basin by mining an 8-cell shaft
+                // straight up when walking west would have done — every edge was equally likely, so the expensive
+                // ones came up as often as the free ones. Weight by cost instead: cheap edges (a walk, a hop) are
+                // strongly favoured and the costly ones (pillar, dig) stay in the pool but rarely surface, so an
+                // escape that only terrain-alteration can achieve is still reachable, just not the first resort.
+                float wsum = 0f;
+                foreach (var c in jigglePool) wsum += 1f / (1f + c.edge.cost);
+                float roll = (float)_rng.NextDouble() * wsum;
+                var pickJ = jigglePool[jigglePool.Count - 1];
+                foreach (var c in jigglePool)
+                {
+                    roll -= 1f / (1f + c.edge.cost);
+                    if (roll <= 0f) { pickJ = c; break; }
+                }
+                _jiggle--;
+                DiagLog.Write($"[recede] JIGGLE({_jiggle} left) at ({curCx},{curCy})H={curH}: {jigglePool.Count} cands, took ({pickJ.cell.Item1},{pickJ.cell.Item2})H={pickJ.h} cost={pickJ.edge.cost:0} instead of best t={bestTotal:0}");
+                best = pickJ.edge; bestCell = pickJ.cell; bestTotal = pickJ.h;
+            }
+            _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
             DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
 

@@ -78,53 +78,22 @@ namespace TerraBlind
                 }
             }
 
-            // multi-scale big-direction arrows, anchored to the PLAYER every frame (not the last decision cell) so they
-            // track the body as it moves. Direction is the latest computed dS/dM/dL; origin is the live player cell.
-            // short=cyan, mid=orange (workhorse, thickest), long=magenta. If mid points at the real exit while the bot
-            // shuffles sideways, that's the bug-by-eye.
-            {
-                var lp = Main.LocalPlayer;
-                int pcx = (int)(lp.Center.X / 16f), pcy = (int)((lp.position.Y + lp.height) / 16f) - 1;
-                void Vec((float x, float y) d, int reach, Color col, int thick)
-                {
-                    if (d.x == 0f && d.y == 0f) return;
-                    Arrow(sb, pcx, pcy, d.x * reach, d.y * reach, col, thick);
-                }
-                Vec(dL, 8, new Color(220, 80, 220, 200), 4);
-                Vec(dS, 4, new Color(0, 230, 230, 230), 4);
-                Vec(dM, 6, new Color(255, 150, 0, 255), 6);
-            }
-
+            // THE SCREEN SHOWS A LINE AND A POINT — nothing else. Everything this used to draw at once (three
+            // direction arrows, a box and a text label per candidate, the chosen box with its score, the current
+            // cell with its H) turned the answer to "where is it going?" into a pile no one could read at a glance.
+            // Candidate H values, costs and scores are diagnosis material: they belong in the log, where they can be
+            // read at leisure, not stacked on top of the very cells they describe. See RecedingNav's [rn-dec] lines.
             if (ttl > 0)
             {
                 bool stuck = chosen == null && cands.Count > 0;
-
-                // candidates: green=lowers H (eligible), gray=not. label H/cost.
-                foreach (var cd in cands)
-                {
-                    Color col = cd.Descends ? new Color(40, 200, 60, 160) : new Color(110, 110, 110, 130);
-                    Box(sb, cd.Cx, cd.Cy, col);
-                    Label(sb, font, cd.Cx, cd.Cy, $"{cd.Kind} H{cd.H} c{cd.Cost}", cd.Descends ? Color.LightGreen : Color.Gray);
-                }
-
-                // chosen action: yellow box + line from current + score
+                // the point: where the next step lands — yellow normally, red when nothing can lower H
+                var pt = chosen ?? (curCx, curCy);
+                Box(sb, pt.Item1, pt.Item2, stuck ? new Color(255, 40, 40, 240) : new Color(255, 230, 0, 230));
                 if (chosen.HasValue)
-                {
-                    Box(sb, chosen.Value.Item1, chosen.Value.Item2, new Color(255, 230, 0, 220));
-                    Line(sb, curCx, curCy, chosen.Value.Item1, chosen.Value.Item2, new Color(255, 230, 0, 200));
-                    Label(sb, font, chosen.Value.Item1, chosen.Value.Item2 - 1, $"★{score:0.0}", Color.Yellow);
-                }
-
-                // current cell: white box + H (red if stuck)
-                Box(sb, curCx, curCy, stuck ? new Color(255, 40, 40, 240) : new Color(255, 255, 255, 220));
-                Label(sb, font, curCx, curCy + 1, stuck ? $"STUCK H{curH} {cands.Count} cands none↓" : $"H{curH}",
-                      stuck ? Color.Red : Color.White);
+                    Line(sb, curCx, curCy, pt.Item1, pt.Item2, new Color(255, 230, 0, 200));
+                if (stuck)
+                    Label(sb, font, curCx, curCy + 1, "STUCK", Color.Red);
             }
-
-            // legend
-            ChatManager.DrawColorCodedStringWithShadow(sb, font,
-                "RECEDING  white=here  blue=field compass  cyan/orange/magenta=dir vec S/M/L  green=action↓H  gray=action not↓  yellow=chosen  red=STUCK",
-                new Vector2(10, 30), Color.White, 0f, Vector2.Zero, new Vector2(0.7f));
 
             sb.End();
         }

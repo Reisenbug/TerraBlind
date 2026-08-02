@@ -2207,7 +2207,17 @@ namespace TerraBlind
 						   .Append("},\"hell_x\":").Append(tail.Item1).Append(",\"hell_y\":").Append(tail.Item2)
 						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(threaded.Count)
 						   .Append(",\"scaffold_len\":").Append(line.Count)
-						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax).Append(",\"treasures\":[");
+						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax);
+						// the threaded line's own cells, so its SHAPE can be inspected outside the game instead of
+						// judged by eye through a tile overlay
+						rsb.Append(",\"line\":[");
+						for (int i = 0; i < threaded.Count; i++)
+						{
+							if (i > 0) rsb.Append(',');
+							rsb.Append('[').Append(threaded[i].Item1).Append(',').Append(threaded[i].Item2).Append(']');
+						}
+						rsb.Append(']');
+						rsb.Append(",\"treasures\":[");
 						// stop number = position in the stitched chain (-1 for treasures not on it)
 						var stopOf = new System.Collections.Generic.Dictionary<int, int>();
 						for (int i = 0; i < chain.Count; i++) stopOf[chain[i]] = i;
@@ -2357,6 +2367,42 @@ namespace TerraBlind
 			}
 			// ── PREDICATES ── pure queries, no side effects. These answer the questions that used to be either burned
 			// into a script as a constant or handed to the LLM to guess at. See Predicates.cs.
+			// /nav_h — the planner's own H over a rectangle, with can_stand beside it. H is what every routing
+			// decision is made of, but it was only ever visible in log lines for cells already visited, so a stuck
+			// bot's surroundings could not be read at all. Returns null for cells outside the field — and which
+			// cells are OUTSIDE is itself the answer when a low-H cell sits next to unreachable ones.
+			else if (path == "/nav_h")
+			{
+				string rb = ReadBody(ctx).Replace(" ", "");
+				int G(string k, int dflt)
+				{
+					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
+					return m.Success ? int.Parse(m.Groups[1].Value) : dflt;
+				}
+				int x0 = G("x0", 0), x1 = G("x1", x0), y0 = G("y0", 0), y1 = G("y1", y0);
+				if (x1 < x0 || y1 < y0 || (x1 - x0) > 200 || (y1 - y0) > 200)
+				{ body = "{\"error\":\"bad_range\"}"; status = 400; }
+				else
+				{
+					var sb = new System.Text.StringBuilder();
+					MazeWand.TryPeek(x0, y0, out _, out var goal, out int cells);
+					sb.Append("{\"goal\":[").Append(goal.gx).Append(',').Append(goal.gy).Append(']')
+					  .Append(",\"field_cells\":").Append(cells).Append(",\"cells\":[");
+					bool f1 = true;
+					for (int y = y0; y <= y1; y++)
+						for (int x = x0; x <= x1; x++)
+						{
+							bool has = MazeWand.TryPeek(x, y, out int h, out _, out _);
+							if (!f1) sb.Append(',');
+							f1 = false;
+							sb.Append("{\"x\":").Append(x).Append(",\"y\":").Append(y)
+							  .Append(",\"h\":").Append(has ? h.ToString() : "null")
+							  .Append(",\"stand\":").Append(Predicates.CanStand(x, y) ? "true" : "false").Append('}');
+						}
+					sb.Append("]}");
+					body = sb.ToString();
+				}
+			}
 			else if (path == "/can_stand")
 			{
 				// Every geometric predicate for one cell at once: can_stand plus the measurements behind it, so a

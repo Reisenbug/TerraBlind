@@ -171,19 +171,56 @@ namespace TerraBlind
         // off; large enough for cross-map routes without flooding the entire 5M-cell world (memory + time).
         const int FieldMargin = 400;   // TEMP small for rolling validation (1500 = cross-map but builds on main thread
                                        // ~5s = hitch; real fix is off-thread field build). Keep goals within range for now.
+        // set from Mod.Load, which runs on the game thread — a build logged as MAIN is one that froze the game for
+        // its whole duration
+        static int _mainThreadId;
+        public static void MarkMainThread() => _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+
         static (int gx, int gy) _cachedGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _cachedField;
+
+        // read the LIVE nav field without rebuilding it. The planner's H is the only number that explains a routing
+        // decision, and until now it was visible only where a log line happened to print it — so "why is the exit not
+        // being taken" could not be answered for any cell the bot had not already stood on.
+        public static Dictionary<(int, int), int> PeekField() => _cachedField;
+
+        public static bool TryPeek(int x, int y, out int h, out (int gx, int gy) goal, out int cells)
+        {
+            goal = _cachedGoal; cells = _cachedField?.Count ?? 0;
+            h = -1;
+            return _cachedField != null && _cachedField.TryGetValue((x, y), out h);
+        }
+        // A SECOND slot, because more than one goal is live at a time. Receding nav steers to a commitment target
+        // while the leg/rolling executors keep asking about the real goal; with a single cache each request evicted
+        // the other's field and rebuilt it — ~500ms on the main thread, roughly every twenty frames, forever. The
+        // fields are per-goal and expensive, so keep the previous one instead of throwing it away.
+        static (int gx, int gy) _prevGoal = (int.MinValue, int.MinValue);
+        static Dictionary<(int, int), int> _prevField;
+
         public static Dictionary<(int, int), int> GetField(int gx, int gy)
         {
             var p = Main.LocalPlayer;
             int sx = p != null ? (int)(p.Center.X / 16f) : gx;
             int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
             if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
+            if (_prevField != null && _prevGoal == (gx, gy))
+            {
+                // promote the other slot rather than rebuild — this is the whole point of keeping two
+                var f = _prevField; var g = _prevGoal;
+                _prevField = _cachedField; _prevGoal = _cachedGoal;
+                _cachedField = f; _cachedGoal = g;
+                return _cachedField;
+            }
+            _prevField = _cachedField; _prevGoal = _cachedGoal;
             _cachedField = BuildField(gx, gy, sx, sy, bigMargin: true);
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
-        public static void InvalidateField() { _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue); }
+        public static void InvalidateField()
+        {
+            _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue);
+            _prevField = null; _prevGoal = (int.MinValue, int.MinValue);
+        }
 
         // FRESHNESS swap-rebuild: build a NEW field for the same goal (call off the main thread) and swap the cache
         // reference when done — the old field keeps serving replans until the swap, never a null window.
@@ -272,7 +309,26 @@ namespace TerraBlind
                     pq.Add((nc, nx, ny));
                 }
             }
-            DiagLog.Write($"[ss-field] dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0}");
+            // WHO built this, and was it on the main thread? Field builds are ~500ms over ~650k cells; several
+            // callers reach BuildField by different routes and the log recorded none of them, so a rebuild storm
+            // could be seen but not attributed.
+            string who = "?";
+            try
+            {
+                var st = new System.Diagnostics.StackTrace(1, false);
+                var sbw = new System.Text.StringBuilder();
+                for (int i = 0; i < st.FrameCount && i < 4; i++)
+                {
+                    var mi = st.GetFrame(i)?.GetMethod();
+                    if (mi == null) continue;
+                    if (sbw.Length > 0) sbw.Append('<');
+                    sbw.Append(mi.DeclaringType?.Name).Append('.').Append(mi.Name);
+                }
+                who = sbw.ToString();
+            }
+            catch { }
+            bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
+            DiagLog.Write($"[ss-field] dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0} goal=({gx},{gy}) box=[{minX}..{maxX}]x[{minY}..{maxY}] {(mainThread ? "MAIN" : "bg")} by {who}");
             return dist;
         }
 
