@@ -264,7 +264,9 @@ namespace TerraBlind
             {
                 var n = (cx + dx, cy + dy);
                 if (!field.TryGetValue(n, out int dn)) continue;
-                int total = StepCost(n.Item1, n.Item2, cx, cy) + dn;
+                int sc0 = StepCost(n.Item1, n.Item2, cx, cy);
+                if (sc0 == Impassable) continue;   // 同 DescendPath:相加会溢出
+                int total = sc0 + dn;
                 if (total < bestTotal) { bestTotal = total; best = (dx, dy); }
             }
             return best;
@@ -563,7 +565,9 @@ namespace TerraBlind
                 {
                     var n = (cur.Item1 + dx, cur.Item2 + dy);
                     if (!field.TryGetValue(n, out int dn)) continue;
-                    int total = StepCost(n.Item1, n.Item2, cur.Item1, cur.Item2) + dn;
+                    int sc0 = StepCost(n.Item1, n.Item2, cur.Item1, cur.Item2);
+                    if (sc0 == Impassable) continue;   // int.MaxValue + dn 会溢出成大负数,那一格反而变成"最优"
+                    int total = sc0 + dn;
                     if (total < bestTotal) { bestTotal = total; best = n; }
                 }
                 if (best == cur) break;
