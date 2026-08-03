@@ -29,14 +29,18 @@ namespace TerraBlind
 	public class AgentChat : ModSystem
 	{
 		public static readonly ConcurrentQueue<string> Instructions = new();
-		static readonly ConcurrentQueue<string> _say = new();
+		static readonly ConcurrentQueue<(string text, bool bot)> _say = new();
 
-		public static void Say(string text) => _say.Enqueue(text);
+		// bot=true 是脚本硬编的进度播报,false 是 LLM 自己写的话。颜色分开,不然分不清哪句是"想"出来的
+		public static void Say(string text, bool bot = false) => _say.Enqueue((text, bot));
 
 		public override void PostUpdateEverything()
 		{
 			while (_say.TryDequeue(out var t))
-				Main.NewText($"<TB> {t}", 255, 200, 80);
+			{
+				if (t.bot) Main.NewText($"<TB> {t.text}", 140, 170, 200);   // 灰蓝 = 脚本
+				else Main.NewText($"<TB> {t.text}", 255, 200, 80);          // 橙 = LLM
+			}
 		}
 	}
 }

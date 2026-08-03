@@ -38,6 +38,10 @@ namespace TerraBlind
         // field treat lava as effectively impassable (it'll still cross a 1-cell lava bridge only if literally no
         // other route exists, same as a very expensive dig). LiquidID/LiquidAmount API per StateSnapshotPlayer.
         const int LavaCost = 100000;
+        // 挖不动的砖(神庙,Picksaw 之前)要真不可达,不能只是"很贵"。
+        // 100000 是有限数,Dijkstra 照样穿墙算出墙后面的 H —— 于是墙后的格子看起来又近又好,
+        // 上层(承诺机制)挑中它一头撞上去开挖。Impassable 让这条边根本不入队,墙后面干脆没有 H。
+        const int Impassable = int.MaxValue;
         static bool IsLava(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
@@ -303,7 +307,9 @@ namespace TerraBlind
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
-                    int nc = cost + StepCost(cx, cy, nx, ny);
+                    int sc = StepCost(cx, cy, nx, ny);
+                    if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
+                    int nc = cost + sc;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
                     pq.Add((nc, nx, ny));
@@ -362,7 +368,9 @@ namespace TerraBlind
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
-                    int nc = cost + StepCost(cx, cy, nx, ny);
+                    int sc = StepCost(cx, cy, nx, ny);
+                    if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
+                    int nc = cost + sc;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
                     pq.Add((nc, nx, ny));
@@ -394,18 +402,27 @@ namespace TerraBlind
             // chest/head level eats the slack ~6px into the tile (real SlopeCollision jams the walk), and PARTIAL FOOTING
             // (feet standing 6-8px up a slope/half-brick) pushes the head into the 4th row (42+6 > 48). So: feet row
             // keeps the exemption, upper rows count ANY solid shape, and partial footing extends the envelope to cy-3.
+            // 上锁的门(神庙门)身体3行里有一个就过不去:钥匙没有、砸也砸不开。
+            // MineableWith 对门返回 true(门本身能挖),所以不特判的话线会直接穿过去。
+            for (int r = 0; r < 3; r++)
+            {
+                int dy2 = cy - r;
+                if (dy2 < 0 || dy2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
+                if (WorldGen.IsLockedDoor(cx, dy2)) return Impassable;
+            }
+
             bool wall = false;
             for (int r = 0; r < 3; r++)
             {
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
                 wall = true;
-                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return LavaCost;   // pick can't break it → don't route through
+                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return Impassable;   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
                 wall = true;
-                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return LavaCost;
+                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
             }
             // BODY WIDTH: the 20px body straddles TWO columns — a cell whose own column is open but whose left AND
             // right neighbor columns are both blocked (any of the 3 body rows) is a 1-tile-wide slot the body cannot
@@ -416,7 +433,7 @@ namespace TerraBlind
             if (!wall && !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
             {
                 wall = true;
-                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy)) return LavaCost;
+                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy)) return Impassable;
             }
             bool horizontal = cx != nx;
             int baseCost;

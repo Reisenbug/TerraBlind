@@ -24,29 +24,13 @@ namespace TerraBlind
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
 
-        // LOOP DETECTOR + SHOCK ESCAPE. H is the one progress signal every loop shape must stall. PRIMARY trigger is
-        // human-eye fast: REVISIT — coming BACK to a replan cell already stood on since the last best-H improvement
-        // (arriving from elsewhere, i.e. an A…B…A cycle, not an in-place stall — those are _miss/sentinel territory)
-        // means one full lap is proven, verdict within seconds. FALLBACK is the stall counter: if best-H hasn't
-        // improved for LoopStallReplans we are cycling even if no exact cell repeated (drifting loops). Response is
-        // the same two-tier for both:
-        //   soft — shock: one large decaying penalty on every edge the ring traversed; Bellman re-routes onto the
-        //          next-best alternative. Finite + decaying = not a ban, so no rule is violated.
-        //   hard — after MaxShocks shocks with still no new best-H, this is a real model gap (a transition the field
-        //          prices but no action realizes): stop, dump the trail, shout. Code has to change; hiding it doesn't.
-        const int LoopStallReplans = 20;                 // ~4 laps of the widest loop seen (5 replans/lap)
-        const float ShockPenalty = 200f;                 // big enough to flip any H-margin a loop can trap in (seen: 3~50)
-        const int MaxShocks = 3;
-        // single-cycle H regression above this = involuntary displacement (fall/knockback into a worse basin), not a
-        // loop. Sized between the largest possible ring-internal H spread (ring ≤ ~8 cells × ≤45/cell ≈ tens; observed
-        // ≤50) and the smallest catastrophic fall (tens of cells × climb pricing; observed +500..+1300).
-        const int DisplacementRebase = 200;
-        static int _bestH; static int _replansSinceBest; static int _shocks;
+        // 打转不在这里处理了。以前是"事后检测 + 罚边/换目标",试过 shock、jiggle、softmax、承诺,全失败:
+        // 罚边罚死过唯一出口,随机在平坦地形上纯添乱,承诺又要另建一套目标选择。根因不在检测,在选边那一刻
+        // g+H 没有任何"我到底有没有靠近终点"的记忆。现在由 StateSpacePlanner 的进度地板在选边时直接掐掉。
+        // 这里只留 _bestH/_ring 供日志和快照读,不驱动任何决策。
+        static int _bestH;
         static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
         const int RingLen = 24;
-        // replan cells stood on since the last best-H improvement (revisit detection) + the previous replan cell
-        // (to tell a travelled-away-and-back lap from an in-place stall, which is not a loop).
-        static readonly System.Collections.Generic.HashSet<(int, int)> _sinceBest = new();
         static (int, int)? _prevCell;
 
         public static void Toggle()
@@ -83,12 +67,10 @@ namespace TerraBlind
         {
             if (_rebuilding) return;
             _rebuilding = true; _altered = 0;
-            // rebuild for whatever we are actually routing to. Hardcoding the real goal here while a commitment was
-            // steering elsewhere made the two fight over one cache: the async rebuild wrote the goal's field, the
-            // next StepAlongField wanted the commitment's and rebuilt it SYNCHRONOUSLY on the main thread — 450-570ms
-            // of freeze, every cycle, forever.
-            int gx = Commitment.Active ? Commitment.Gx : _goalWx;
-            int gy = Commitment.Active ? Commitment.Gy : _goalWy;
+            // 重建的 box 锚在当前位置,格子的 H 会整体变(有的格子新进场,有的出场)。地板记的是旧场的数,
+            // 换了尺子还留着就会把正常的一步误判成"没前进" → 一路 PUSH。所以重建时清掉。
+            StateSpacePlanner.ResetFloor();
+            int gx = _goalWx, gy = _goalWy;
             var p = Main.LocalPlayer;
             int sx = p != null ? (int)(p.Center.X / 16f) : gx;
             int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
@@ -132,7 +114,8 @@ namespace TerraBlind
             if (!exact)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
-            _bestH = int.MaxValue; _replansSinceBest = 0; _shocks = 0; _ring.Clear(); _sinceBest.Clear(); _prevCell = null;
+            _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
+            StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             _altered = 0;
@@ -157,7 +140,6 @@ namespace TerraBlind
             Active = false;
             StateSpacePlanner.StopNav();
             RecedingVis.Clear();
-            Commitment.Reset();   // a commitment and its failures belong to one run; never inherit into the next
         }
 
         // per-frame driver (called from SetControls). When the current window finishes (or none running), plan the
@@ -212,10 +194,7 @@ namespace TerraBlind
             // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
             if (MazeWand.FieldPickStale())
                 RebuildFieldAsync("pick change");
-            // ask about the field we are ACTUALLY routing on — asking for the real goal's field mid-commitment
-            // rebuilt it inline (main thread, ~500ms) and then the commitment's step rebuilt it right back
-            if (!MazeWand.GetField(Commitment.Active ? Commitment.Gx : _goalWx,
-                                   Commitment.Active ? Commitment.Gy : _goalWy).ContainsKey(cell))
+            if (!MazeWand.GetField(_goalWx, _goalWy).ContainsKey(cell))
             {
                 RebuildFieldAsync("off-field");
                 return;
@@ -233,16 +212,11 @@ namespace TerraBlind
             }
             StateSpacePlanner.DecayMiss();
 
-            // NO stuck triggers. The field guarantees a lower-H neighbour everywhere but the goal, and StepAlongField's
-            // attention-weighted pick always takes a reachable edge toward it — so we keep moving and eventually clear any
-            // awkward spot. The ONLY stop is StepAlongField returning null = Expand produced no edge = truly walled in.
-            // While committed, route to the commitment's target rather than the real goal — that IS the commitment:
-            // the destination does not get re-litigated every cycle just because H rose on the way there.
-            if (Commitment.Active && !Commitment.Tick(cell.Item1, cell.Item2))
-                SwitchFieldAsync(_goalWx, _goalWy, "commitment ended");
-            int planGx = Commitment.Active ? Commitment.Gx : _goalWx;
-            int planGy = Commitment.Active ? Commitment.Gy : _goalWy;
-            var res = StateSpacePlanner.StepAlongField(planGx, planGy);
+            // NO stuck triggers, NO loop detection, NO commitment. 不再需要:打转的根因(每步 g+H 最优,合起来
+            // 原地不动)由 StateSpacePlanner 的进度地板在选边那一刻就掐掉了 —— 选出来的落点压不低历史最低 H,
+            // 当场关掉 g 改选 H 最低的候选。地板单调下降且有下界 0,所以"一直不前进"结构上不可能发生,
+            // 不用事后检测、不用罚边、不用换目标。唯一的停机仍然是 StepAlongField 返回 null(真被封死)。
+            var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
 
@@ -253,60 +227,10 @@ namespace TerraBlind
             // "failed" shocks hard-stopped the run. A single-cycle H jump far above any loop ring's internal spread
             // (rings span a few cells × step costs ≈ ≤50; observed falls jump +500..+1300) is a basin change, not a
             // loop symptom → reset the baseline and the shock budget to judge progress from here.
-            // While committed, res.CurH is distance to the COMMITMENT's target, not to the real goal — feeding it to
-            // the progress baseline would compare two different measurements and corrupt it. Skip the bookkeeping
-            // entirely; it resumes, from the honest number, once the commitment ends.
-            if (!Commitment.Active)
-            {
-                if (_bestH != int.MaxValue && res.CurH > _bestH + DisplacementRebase)
-                {
-                    DiagLog.Write($"[recede] DISPLACED: H {_bestH}→{res.CurH} (+{res.CurH - _bestH}) — re-baseline, shocks reset");
-                    _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _ring.Clear(); _sinceBest.Clear();
-                }
-                if (res.CurH < _bestH) { _bestH = res.CurH; _replansSinceBest = 0; _shocks = 0; _sinceBest.Clear(); }
-                else _replansSinceBest++;
-                _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
-                if (_ring.Count > RingLen) _ring.RemoveAt(0);
-            }
-            // REVISIT: back on a cell already stood on since the last best-H improvement, having travelled away in
-            // between (prev replan cell differs) — one lap proven, no need to wait out the stall counter.
-            bool revisit = _sinceBest.Contains(cell) && _prevCell.HasValue && _prevCell.Value != cell;
-            _sinceBest.Add(cell);
+            if (res.CurH < _bestH) _bestH = res.CurH;
+            _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
+            if (_ring.Count > RingLen) _ring.RemoveAt(0);
             _prevCell = cell;
-            // Loop detection is suspended while committed. Its whole basis — "H stopped improving" — is exactly what
-            // a commitment expects to see: H measured against the real goal is allowed to get worse the entire way
-            // there. Letting it fire would abort the escape it just ordered. Commitment.Tick does the watching
-            // instead, against distance to the target.
-            if (!Commitment.Active && (revisit || _replansSinceBest >= LoopStallReplans))
-            {
-                string why = revisit ? $"revisit of ({cell.Item1},{cell.Item2})" : $"bestH={_bestH} unimproved for {_replansSinceBest} replans";
-                string trail = string.Join(" ", _ring.ConvertAll(r => $"({r.fx},{r.fy})H{r.h}→({r.tx},{r.ty})"));
-                // A loop is broken by JIGGLING, not by pricing: take one random descending step and let the cycle
-                // fall apart. Shocks used to do this job by charging every edge of the ring — but the ring contains
-                // the good edges too, and the run that prompted this change had the shock charge +200 to the one
-                // step reaching the lowest H around, then declare defeat after three rounds of making the exit
-                // costlier. Penalising a path to escape it is self-defeating when the path is the escape.
-                //
-                // There is no failure branch any more: navigation does not get to give up on a stance a human could
-                // walk out of. Termination does not come from a shock budget but from the randomness — a descending
-                // step is progress by the field's own measure, and a random one breaks the repetition that IS the
-                // loop, so the cycle ends with probability 1 rather than by timing out.
-                _shocks++;
-                DiagLog.Write($"[recede] LOOP DETECTED at {cell}: {why} → #{_shocks}. Trail: {trail}");
-                if (_shocks == 1) StateSpacePlanner.CaptureStuck(why, trail);   // first lap only — one file per loop
-                // COMMIT to a cell that is genuinely better and go there without re-deciding en route. The random
-                // jiggle only stands in when no such cell is in range: it breaks the repetition but chooses no
-                // direction, so it is the fallback, not the plan.
-                bool committed = Commitment.Begin(cell.Item1, cell.Item2, res.CurH);
-                if (committed) SwitchFieldAsync(Commitment.Gx, Commitment.Gy, "commit");
-                else StateSpacePlanner.RequestJiggle();
-                if (_shocks <= MaxShocks)
-                    Main.NewText(committed
-                        ? $"[TerraBlind] loop at ({cell.Item1},{cell.Item2}) — committing to ({Commitment.Gx},{Commitment.Gy})"
-                        : $"[TerraBlind] loop at ({cell.Item1},{cell.Item2}) — jiggling out");
-                _replansSinceBest = 0;   // fresh window to let the jiggled route prove itself
-                _sinceBest.Clear(); _prevCell = null;
-            }
 
             _altered += res.Altered;
             if (_altered >= RebuildAltered)

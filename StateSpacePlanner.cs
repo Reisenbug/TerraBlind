@@ -1985,14 +1985,22 @@ namespace TerraBlind
         // A descending edge is progress by the field's own measure, so this cannot wander; and randomness is what
         // makes the cycle break with probability 1 instead of replaying the same deterministic pick. No parameter to
         // tune — it sidesteps the weighted sum rather than reweighting it.
-        // A single random step is enough to break the tie but usually not enough to leave: the basin at
-        // (985..989, 545..551) took three separate loop detections to escape, each jiggle nudging H down a few
-        // points (367 → 364 → 356) before deterministic selection pulled it back in. Escaping wanted several
-        // random steps IN A ROW, so one request now buys a short burst.
-        static int _jiggle;
-        const int JiggleSteps = 4;
-        static readonly System.Random _rng = new();
-        public static void RequestJiggle() { _jiggle = JiggleSteps; }
+        // 进度地板 —— greedy 逃不出去的唯一解药,也是唯一还留着的 loop 机制。
+        //
+        // total=g+H 每轮独立算,没有任何量记录"我整体有没有靠近终点"。走廊 y=506 上 H 是 …7515 7512 7515…,
+        // 2925 是行最低点,真出口在正上方(要放平台,g≈40,total 7543 输给往东走的 7518)。于是永远东西横跳,
+        // 每一步的账都没算错。
+        //
+        // 地板 = 到目前为止踩到过的最低 H。规则一条:选出来的落点 H 没低于地板,这一步就不是前进 —— 当场
+        // 改按纯 H 重选一次(g 关掉)。在 2925:第一次算出往东(7515 ≥ 地板 7512)→ 判定没前进 → 改选 H
+        // 最低的候选(上方 7503)→ 上去 → 地板刷新 → 恢复正常。一步都不晃。
+        //
+        // 为什么结构上停机:强推那步选的就是邻域 H 最低的候选。要么它低于地板(地板严格下降,地板有下界 0),
+        // 要么邻域里没有比地板低的 —— 那是真被围住,该挖该造,不是打转。不存在"既不刷新地板又能一直选下去"。
+        // 不需要计数器,不需要温度,不需要随机:没前进就是没前进,不用等 N 次才承认。
+        static int _hFloor = int.MaxValue;
+        public static void ResetFloor() { _hFloor = int.MaxValue; }
+        public static void RequestJiggle() { }
 
         // the accumulated edge penalties inside a region — the hidden state that makes a loop unreproducible, and
         // the reason a good edge can be the most expensive one on the board.
@@ -2097,13 +2105,8 @@ namespace TerraBlind
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             var cands = new List<Cand>();
-            // every edge, kept whole (frames/dig/pillar included) so the loop breaker can pick one and dispatch it
-            // like any other choice. ALL of them, not just the descending ones: a snapshot of the basin at
-            // (987,549) had 42 candidates of which exactly 2 descended — both still inside the basin, worth 2 points
-            // of H — while the nearest standable low ground was H=177 twenty cells away. Restricted to descending
-            // edges the jiggle could only shuffle between those two; the way out is over the rim, and every edge
-            // crossing it raises H.
-            var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h)>();
+            // 所有候选,连 total 一起留着 —— 选边要按 total 采样,不是取最小(见下面的 softmax)
+            var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
             var _candLog = new System.Text.StringBuilder();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
@@ -2214,30 +2217,29 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
-                jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH));
+                jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
-            // loop breaker: one random descending step instead of the deterministic best (see RequestJiggle)
-            // cleared only when actually spent: a cycle with nothing descending must not silently consume the
-            // request, or the loop that asked for a jiggle never gets one.
-            if (_jiggle > 0 && jigglePool.Count > 0)
+            // ── 进度地板 ────────────────────────────────────────────────────────────────────────────
+            // 见上面 _hFloor 的说明。先把脚下算进地板(换目标/传送后 curH 可能远低于旧地板,不认下来的话
+            // 第一步就会被误判成没前进)。然后:g+H 选出来的这步如果不能把地板压低,就关掉 g 重选。
+            if (curH != int.MaxValue && curH < _hFloor) _hFloor = curH;
+            if (jigglePool.Count > 0 && best != null)
             {
-                // Random, but not indifferent. Uniform picking climbed out of the basin by mining an 8-cell shaft
-                // straight up when walking west would have done — every edge was equally likely, so the expensive
-                // ones came up as often as the free ones. Weight by cost instead: cheap edges (a walk, a hop) are
-                // strongly favoured and the costly ones (pillar, dig) stay in the pool but rarely surface, so an
-                // escape that only terrain-alteration can achieve is still reachable, just not the first resort.
-                float wsum = 0f;
-                foreach (var c in jigglePool) wsum += 1f / (1f + c.edge.cost);
-                float roll = (float)_rng.NextDouble() * wsum;
-                var pickJ = jigglePool[jigglePool.Count - 1];
-                foreach (var c in jigglePool)
+                int bestH = -1;
+                foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
+                if (bestH >= _hFloor)
                 {
-                    roll -= 1f / (1f + c.edge.cost);
-                    if (roll <= 0f) { pickJ = c; break; }
+                    var push = jigglePool[0];
+                    foreach (var c in jigglePool) if (c.h < push.h) push = c;
+                    if (push.cell != bestCell)
+                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH} floor={_hFloor}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 不降地板,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} ({jigglePool.Count} cands)");
+                    best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
-                _jiggle--;
-                DiagLog.Write($"[recede] JIGGLE({_jiggle} left) at ({curCx},{curCy})H={curH}: {jigglePool.Count} cands, took ({pickJ.cell.Item1},{pickJ.cell.Item2})H={pickJ.h} cost={pickJ.edge.cost:0} instead of best t={bestTotal:0}");
-                best = pickJ.edge; bestCell = pickJ.cell; bestTotal = pickJ.h;
+            }
+            {
+                int landH2 = -1;
+                foreach (var c in jigglePool) if (c.cell == bestCell) { landH2 = c.h; break; }
+                if (landH2 >= 0 && landH2 < _hFloor) _hFloor = landH2;
             }
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);

@@ -1862,7 +1862,9 @@ namespace TerraBlind
 				var tM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 				if (tM.Success)
 				{
-					AgentChat.Say(JsonUnesc(tM.Groups[1].Value));
+					// {"bot":true} = 脚本播报,灰蓝;缺省 = LLM 说的,橙
+					bool isBot = System.Text.RegularExpressions.Regex.IsMatch(reqBody, "\"bot\"\\s*:\\s*true");
+					AgentChat.Say(JsonUnesc(tM.Groups[1].Value), isBot);
 					body = "{\"ok\":true}";
 				}
 				else { body = "{\"error\":\"bad_params\",\"usage\":\"POST /say {\\\"text\\\":\\\"...\\\"}\"}"; status = 400; }
@@ -2005,6 +2007,36 @@ namespace TerraBlind
 						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
 						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
 						var line = new System.Collections.Generic.List<(int x, int y)>();
+						// 先接一段「玩家现在的位置 → 入口」。脚手架原来从入口起,而搜索盒子是脚手架的包围盒,
+						// 所以人在出生点跑"去地狱"时,出生点到丛林入口这一路完全在盒子外——那一路的箱子一个都看不见。
+						{
+							var pl = Main.LocalPlayer;
+							if (pl != null)
+							{
+								int pcx = ActExecutor.OriginCx(pl), pcy = ActExecutor.OriginCy(pl);
+								if (System.Math.Abs(pcx - dd.EntX) + System.Math.Abs(pcy - dd.EntY) > 4)
+								{
+									var af = MazeWand.BuildField(dd.EntX, dd.EntY, pcx, pcy);
+									var ac = (x: pcx, y: pcy);
+									var aseen = new System.Collections.Generic.HashSet<(int, int)>();
+									for (int step = 0; step < 20000; step++)
+									{
+										line.Add(ac);
+										if (!aseen.Add(ac)) break;
+										if (ac.x == dd.EntX && ac.y == dd.EntY) break;
+										if (!af.TryGetValue((ac.x, ac.y), out int ah)) break;
+										int bn = ah; var bc = ac; bool moved = false;
+										foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+										{
+											var n = (x: ac.x + dx2, y: ac.y + dy2);
+											if (af.TryGetValue((n.x, n.y), out int nh) && nh < bn) { bn = nh; bc = n; moved = true; }
+										}
+										if (!moved) break;
+										ac = bc;
+									}
+								}
+							}
+						}
 						var cur = (dd.EntX, dd.EntY);
 						var seen = new System.Collections.Generic.HashSet<(int, int)>();
 						for (int step = 0; step < 20000; step++)
@@ -2127,30 +2159,24 @@ namespace TerraBlind
 						// LOCAL — once we are standing off the line at a treasure, a later stop that is close TO US
 						// gets pulled forward, which is the whole point: the old code priced it against the line the
 						// body had already left, and abandoned a stop two tiles away for being "far from the line".
-						// ── ONE LINE THAT THREADS THE TREASURES ────────────────────────────────────────────────
-						// Everything above only DECIDED THINGS: where the entrance is, which treasures are worth the
-						// trip, and — by line order — what sequence to take them in. The route it traced is a scaffold
-						// for those judgements, not the path to walk: treasures hang off it on detours, and no amount
-						// of re-sorting removes a bulge, because a detour is a shape and sorting only permutes.
-						//
-						// So plan the path separately, now that the stops are fixed points in a fixed order:
-						//   entrance → treasure 1 → treasure 2 → … → treasure N → hell
-						// Each leg is an ordinary two-point route — build a field seeded on the leg's TARGET, then walk
-						// downhill from its start. The treasures are leg endpoints, so the line goes THROUGH every one
-						// by construction; there is nothing to branch off to.
-						//
-						// Per-leg fields are local (BuildField boxes the search around the two endpoints), not the
-						// world-sized flood the scaffold needed — legs are tens of tiles apart, so each is cheap.
+						// 线要穿过宝藏,不是挂在旁边。上面那条 line 只是脚手架(用来筛 tier / 定顺序),
+						// 真正走的路在这里重新规划:入口→宝1→…→宝N→地狱,每段一次两点寻路,
+						// 宝藏是段的端点所以必然穿过。排序改不了形状——绕道是几何,排序只是排列。
+						// 每段的场是局部的(BuildField 按起终点划盒子),不是脚手架那种全图 flood。
 						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
 						for (int i = 0; i < treasures.Count; i++)
-							if (treasures[i].tier == "main") chain.Add(i);
+							if (treasures[i].tier != null) chain.Add(i);   // main + optional 都要
 						chain.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // down the line, top to bottom
 						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
 						{
 							var stops = new System.Collections.Generic.List<(int x, int y)>();
 							foreach (int ti in chain) stops.Add((treasures[ti].x, treasures[ti].y));
 							stops.Add((line[line.Count - 1].x, line[line.Count - 1].y));    // finish at hell
-							var cursor = (x: dd.EntX, y: dd.EntY);
+							// 从玩家现在站的地方起,不是从入口起——不然前半程(走去入口那段)不在路线里
+							var pl0 = Main.LocalPlayer;
+							var cursor = pl0 != null
+								? (x: ActExecutor.OriginCx(pl0), y: ActExecutor.OriginCy(pl0))
+								: (x: dd.EntX, y: dd.EntY);
 							threaded.Add(cursor);
 							foreach (var goal in stops)
 							{
@@ -2173,30 +2199,17 @@ namespace TerraBlind
 							}
 						}
 
-						// IN-WORLD DRAWING — the picture must match what the body will actually do. Every "main" stop is
-						// a place we WILL walk through, so its detour path is drawn as trunk (cyan), not as a branch:
-						// the route reads as ONE line threading the stops. Only "optional" — the ones we may or may
-						// not take — is drawn branching off, dim, because a branch is exactly what it would be.
+						// 只画穿宝线。所有 tier(main+optional)现在都在线上,所以一根分叉都不画。
+						// 原来那条 hell-only 主线也不画——它已经不是路线,只是量代价的脚手架。
 						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
-						// draw the THREADED line — the one that goes through the treasures. The original hell-only
-						// line is not drawn: it is not the route any more, it was only the scaffold the corridor and
-						// the tiers were measured against.
 						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
 						foreach (var tr in treasures)
 						{
 							bool opt = tr.tier == "optional";
-							// only optional branches off — main stops are ON the line above, so they need no branch
-							if (opt)
-							{
-								var bc = tr.kind == "chest"
-									? new Microsoft.Xna.Framework.Color(255, 220, 0, 60)
-									: new Microsoft.Xna.Framework.Color(255, 0, 180, 60);
-								foreach (var (bx, by) in tr.path) vis.Add((bx, by, bc));
-							}
 							var mc = tr.kind == "chest"
-								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 110 : 230)
-								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 110 : 230);
+								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 160 : 230)
+								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 160 : 230);
 							vis.Add((tr.x, tr.y, mc)); vis.Add((tr.x + 1, tr.y, mc));
 							vis.Add((tr.x, tr.y + 1, mc)); vis.Add((tr.x + 1, tr.y + 1, mc));
 						}
