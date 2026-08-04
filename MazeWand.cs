@@ -283,7 +283,11 @@ namespace TerraBlind
             var pl = Main.LocalPlayer;
             if (pl != null)
                 for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
-            int m = bigMargin ? FieldMargin : 120;
+            // 边距 = 让路线有绕开障碍的余地。固定 120 是按长途定的:两个相隔 10 格的宝藏之间也要 flood
+            // 250×250,一趟 80-160ms,穿宝线上二十几段串起来就是好几秒(/descent_route 10s 超时的主因)。
+            // 按段长缩放:短段给小盒子,长段照旧。下限 40 够绕开一般地形。
+            int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
+            int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
             int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
             int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
 
