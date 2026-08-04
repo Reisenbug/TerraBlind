@@ -39,7 +39,7 @@ namespace TerraBlind
 			while (_say.TryDequeue(out var t))
 			{
 				if (t.bot) Main.NewText($"<TB> {t.text}", 140, 170, 200);   // 灰蓝 = 脚本
-				else Main.NewText($"<TB> {t.text}", 255, 200, 80);          // 橙 = LLM
+				else Main.NewText($"<TB> {t.text}", 90, 230, 120);          // 绿 = LLM
 			}
 		}
 	}
