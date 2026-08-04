@@ -2178,25 +2178,36 @@ namespace TerraBlind
 								? (x: ActExecutor.OriginCx(pl0), y: ActExecutor.OriginCy(pl0))
 								: (x: dd.EntX, y: dd.EntY);
 							threaded.Add(cursor);
+							var swAll = System.Diagnostics.Stopwatch.StartNew();
+							int legN = 0, legFail = 0;
 							foreach (var goal in stops)
 							{
+								legN++;
 								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
-								if (!f.ContainsKey(cursor)) continue;                       // leg unroutable — skip to next
+								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable — skip to next
+								// bestN 从 int.MaxValue 起 = 只要邻居有 H 就收,不要求比脚下低。落进局部窝里就会挑
+								// "没那么差"的邻居,那个邻居再挑回来 → 原地弹,一轮加 2 格跑满 20000 步,
+								// 每段都这样 → /descent_route 90s 也回不来。改成从脚下的 H 起步(只收严格更低的),
+								// 再加 seen 兜住平地和环。
+								var lseen = new System.Collections.Generic.HashSet<(int, int)> { (cursor.x, cursor.y) };
 								for (int step = 0; step < 20000; step++)
 								{
 									if (cursor.x == goal.x && cursor.y == goal.y) break;
-									if (f.TryGetValue(cursor, out int hc0) && hc0 == 0) break;
-									int bestN = int.MaxValue; var best = cursor;
+									if (!f.TryGetValue((cursor.x, cursor.y), out int hc0)) break;
+									if (hc0 == 0) break;
+									int bestN = hc0; var best = cursor;
 									foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
 									{
 										var n = (x: cursor.x + dx2, y: cursor.y + dy2);
 										if (f.TryGetValue((n.x, n.y), out int dn) && dn < bestN) { bestN = dn; best = n; }
 									}
 									if (best.x == cursor.x && best.y == cursor.y) break;
+									if (!lseen.Add((best.x, best.y))) break;
 									cursor = best;
 									threaded.Add((cursor.x, cursor.y));
 								}
 							}
+							DiagLog.Write($"[descent-thread] legs={legN} unroutable={legFail} cells={threaded.Count} ms={swAll.ElapsedMilliseconds}");
 						}
 
 						// 只画穿宝线。所有 tier(main+optional)现在都在线上,所以一根分叉都不画。
