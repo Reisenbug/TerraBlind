@@ -2095,8 +2095,12 @@ namespace TerraBlind
 								var t = Main.tile[x, y];
 								if (!t.HasTile) continue;
 								string kind = null;
+								// 箱子种类在 TileFrameX/36 这个 style 里。Containers style 0 = 木箱(本地化叫"宝箱",
+								// 最常见、基本没好东西);红木箱 8、乌木 7、珍珠木 9 各自独立 style,不会混进来。
+								// 单独标出来,好在下面给木箱更紧的挖掘额度。
 								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
-									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "chest";
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
+									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
 								else if (t.TileType == Terraria.ID.TileID.Heart
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "heart";
 								if (kind == null) continue;
@@ -2130,8 +2134,12 @@ namespace TerraBlind
 									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
 									if (c >= 80) nDig++; else nWalk++;
 								}
-								string tier = nDig <= digMax && nWalk <= walkMax ? "main"
-									: nDig <= digMax2 && nWalk <= walkMax2 ? "optional" : null;
+								// 木箱不值得为它挖:挖一格 80~160,走一格才 3。额度分开卡(不折成一个 cost 池——
+								// 换算过来 15 格挖 = 400 格走,等于"只要不用挖多远都去"),只把挖那档收到 15。
+								int dCap = kind == "wood_chest" ? System.Math.Min(digMax, WoodChestDigMax) : digMax;
+								int dCap2 = kind == "wood_chest" ? System.Math.Min(digMax2, WoodChestDigMax) : digMax2;
+								string tier = nDig <= dCap && nWalk <= walkMax ? "main"
+									: nDig <= dCap2 && nWalk <= walkMax2 ? "optional" : null;
 								if (tier == null) continue;
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
 									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
@@ -2631,6 +2639,8 @@ namespace TerraBlind
 		}
 
 		// the last /descent_route hell-band field, retained so /descent_h can answer progress queries for free
+		// 木箱最多值得挖这么多格(走的额度不受影响,走路便宜)。main/optional 两档都收到这个数。
+		const int WoodChestDigMax = 15;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
 		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
