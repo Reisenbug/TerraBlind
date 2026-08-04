@@ -764,11 +764,26 @@ namespace TerraBlind
 					targetId = int.Parse(idMatch.Groups[1].Value);
 				else if (nameMatch.Success)
 				{
-					string targetName = nameMatch.Groups[1].Value.ToLowerInvariant();
+					// 游戏是中文的,createItem.Name 返回中文;而 LLM 记忆里全是英文名("Work Bench")。
+					// 只认显示名的话英文一发必失败,还白烧一次调用。所以再认内部名(ItemID 的字段名,
+					// 如 WorkBench/Torch)——它不随语言变,是稳定的英文标识。空格去掉再查,
+					// "Work Bench" 就能落到 WorkBench 上。
+					string rawName = nameMatch.Groups[1].Value;
+					string targetName = rawName.ToLowerInvariant();
+					int byInternal = -1;
+					{
+						string key = rawName.Replace(" ", "");
+						foreach (var nm in new[] { rawName, key })
+						{
+							if (Terraria.ID.ItemID.Search.ContainsName(nm))
+							{ byInternal = Terraria.ID.ItemID.Search.GetId(nm); break; }
+						}
+					}
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
 					{
 						var r = Main.recipe[Main.availableRecipe[ri]];
-						if ((r.createItem.Name ?? "").ToLowerInvariant() == targetName)
+						if ((r.createItem.Name ?? "").ToLowerInvariant() == targetName
+							|| (byInternal >= 0 && r.createItem.type == byInternal))
 						{
 							targetId = r.createItem.type;
 							break;
@@ -785,7 +800,12 @@ namespace TerraBlind
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
 					{
 						if (ri > 0) sb2.Append(',');
-						sb2.Append('"').Append(Main.recipe[Main.availableRecipe[ri]].createItem.Name ?? "").Append('"');
+						// 中文名(显示)和内部名(英文,可直接回传)一起给,LLM 失败一次就知道该发什么
+					var cr = Main.recipe[Main.availableRecipe[ri]].createItem;
+					string inm = Terraria.ID.ItemID.Search.ContainsId(cr.type) ? Terraria.ID.ItemID.Search.GetName(cr.type) : "";
+					sb2.Append('"').Append(JsonEsc(cr.Name ?? ""));
+					if (inm.Length > 0) sb2.Append('/').Append(JsonEsc(inm));
+					sb2.Append('"');
 					}
 					sb2.Append("]}");
 					body = sb2.ToString();
@@ -798,6 +818,79 @@ namespace TerraBlind
 						body = "{\"ok\":true,\"crafted\":" + crafted + "}";
 					else
 						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
+				}
+			}
+			else if (path == "/recipe")
+			{
+				// 查配方:要什么材料、要站在哪种工作台旁、我还差多少。
+				// craft 失败只说 not_available,不说缺什么 —— 凑"125木材/20绳子/4火把"这种账时
+				// LLM 问不到绳子火把要啥材料,只能去翻 wiki(慢且不一定对得上这个版本)。
+				// 不限于"当前可合成":没材料的照样能查,那才是查配方的意义。
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
+				if (!rnM.Success)
+				{ body = "{\"error\":\"bad_request\"}"; status = 400; }
+				else
+				{
+					string raw = rnM.Groups[1].Value;
+					string low = raw.ToLowerInvariant();
+					int want = -1;
+					foreach (var nm in new[] { raw, raw.Replace(" ", "") })
+						if (Terraria.ID.ItemID.Search.ContainsName(nm))
+						{ want = Terraria.ID.ItemID.Search.GetId(nm); break; }
+					var p2 = Main.LocalPlayer;
+					var sbr = new System.Text.StringBuilder();
+					int found = 0;
+					sbr.Append("{\"recipes\":[");
+					for (int ri = 0; ri < Recipe.numRecipes && found < 12; ri++)
+					{
+						var r = Main.recipe[ri];
+						if (r == null || r.createItem == null || r.createItem.type <= 0) continue;
+						bool hit = want >= 0 ? r.createItem.type == want
+							: (r.createItem.Name ?? "").ToLowerInvariant() == low;
+						if (!hit) continue;
+						if (found > 0) sbr.Append(',');
+						found++;
+						string inm = Terraria.ID.ItemID.Search.ContainsId(r.createItem.type)
+							? Terraria.ID.ItemID.Search.GetName(r.createItem.type) : "";
+						sbr.Append("{\"makes\":\"").Append(JsonEsc(r.createItem.Name ?? ""))
+						   .Append("\",\"internal\":\"").Append(JsonEsc(inm))
+						   .Append("\",\"amount\":").Append(r.createItem.stack)
+						   .Append(",\"ingredients\":[");
+						for (int k = 0; k < r.requiredItem.Count; k++)
+						{
+							var ing = r.requiredItem[k];
+							if (ing == null || ing.type <= 0) continue;
+							if (k > 0) sbr.Append(',');
+							// 背包里现有多少 —— 直接把"还差多少"算好,省得 LLM 自己对账
+							int have = 0;
+							if (p2 != null)
+								foreach (var it in p2.inventory)
+									if (it != null && !it.IsAir && it.type == ing.type) have += it.stack;
+							string iinm = Terraria.ID.ItemID.Search.ContainsId(ing.type)
+								? Terraria.ID.ItemID.Search.GetName(ing.type) : "";
+							sbr.Append("{\"name\":\"").Append(JsonEsc(ing.Name ?? ""))
+							   .Append("\",\"internal\":\"").Append(JsonEsc(iinm))
+							   .Append("\",\"need\":").Append(ing.stack)
+							   .Append(",\"have\":").Append(have).Append('}');
+						}
+						sbr.Append("],\"stations\":[");
+						for (int k = 0; k < r.requiredTile.Count; k++)
+						{
+							int tt = r.requiredTile[k];
+							if (tt < 0) continue;
+							if (k > 0) sbr.Append(',');
+							string tnm = Terraria.ID.TileID.Search.ContainsId(tt)
+								? Terraria.ID.TileID.Search.GetName(tt) : tt.ToString();
+							sbr.Append('"').Append(JsonEsc(tnm)).Append('"');
+						}
+						sbr.Append("]}");
+					}
+					sbr.Append("],\"found\":").Append(found).Append('}');
+					body = sbr.ToString();
+					if (found == 0) status = 404;
 				}
 			}
 			else if (path == "/nav")
