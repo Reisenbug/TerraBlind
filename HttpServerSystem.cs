@@ -795,6 +795,15 @@ namespace TerraBlind
 					var sb2 = new System.Text.StringBuilder();
 					sb2.Append("{\"error\":\"item_not_found\",\"name_matched\":").Append(nameMatch.Success.ToString().ToLower());
 					sb2.Append(",\"available_count\":").Append(Main.numAvailableRecipes);
+					// 背包满时游戏不把任何配方算作 available,available_count=0 看着像"没材料"
+					{
+						int freeSlots = 0;
+						var pf = Main.LocalPlayer;
+						if (pf != null)
+							for (int i = 0; i < 50; i++)
+								if (pf.inventory[i] == null || pf.inventory[i].IsAir) freeSlots++;
+						sb2.Append(",\"free_slots\":").Append(freeSlots);
+					}
 					sb2.Append(",\"raw_name\":\"").Append(nameMatch.Success ? nameMatch.Groups[1].Value : "").Append("\"");
 					sb2.Append(",\"available_names\":[");
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
