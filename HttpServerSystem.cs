@@ -2238,8 +2238,10 @@ namespace TerraBlind
 								}
 								// 木箱不值得为它挖:挖一格 80~160,走一格才 3。额度分开卡(不折成一个 cost 池——
 								// 换算过来 15 格挖 = 400 格走,等于"只要不用挖多远都去"),只把挖那档收到 15。
-								int dCap = kind == "wood_chest" ? System.Math.Min(digMax, WoodChestDigMax) : digMax;
-								int dCap2 = kind == "wood_chest" ? System.Math.Min(digMax2, WoodChestDigMax) : digMax2;
+								int wcap = digM.Success ? digMax : System.Math.Min(digMax, WoodChestDigMax);
+								int wcap2 = digM2.Success ? digMax2 : System.Math.Min(digMax2, WoodChestDigMax);
+								int dCap = kind == "wood_chest" ? wcap : digMax;
+								int dCap2 = kind == "wood_chest" ? wcap2 : digMax2;
 								string tier = nDig <= dCap && nWalk <= walkMax ? "main"
 									: nDig <= dCap2 && nWalk <= walkMax2 ? "optional" : null;
 								if (tier == null) continue;
