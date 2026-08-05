@@ -83,6 +83,33 @@ namespace TerraBlind
             });
         }
 
+        // 顺路砸罐子(出绳子/金币/火把,赶路白捡)。和 SmashWeb 同套路,只是范围不同:
+        // 网必须重叠身体才碍事,罐子是够得到就砸,所以用原版 gate 挖掘的 IsInTileInteractionRange。
+        static void SmashPot(Player p)
+        {
+            int cx = (int)((p.position.X + p.width / 2f) / 16f);
+            int cy = (int)((p.position.Y + p.height / 2f) / 16f);
+            const int scan = 8;
+            for (int x = cx - scan; x <= cx + scan; x++)
+                for (int y = cy - scan; y <= cy + scan; y++)
+                {
+                    if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
+                    var t = Main.tile[x, y];
+                    if (!t.HasTile || t.TileType != Terraria.ID.TileID.Pots) continue;
+                    if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
+                    int slot = -1, bp = 0;
+                    for (int i = 0; i < 10; i++)
+                    { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > bp) { bp = it.pick; slot = i; } }
+                    if (slot < 0) return;
+                    p.selectedItem = slot;
+                    Main.SmartCursorWanted_Mouse = false;
+                    Main.mouseX = (int)(x * 16f + 8f - Main.screenPosition.X);
+                    Main.mouseY = (int)(y * 16f + 8f - Main.screenPosition.Y);
+                    if (p.itemTime == 0) p.controlUseItem = true;
+                    return;
+                }
+        }
+
         static void SmashWeb(Player p)
         {
             int x0 = (int)(p.position.X / 16f), x1 = (int)((p.position.X + p.width) / 16f);
@@ -155,6 +182,8 @@ namespace TerraBlind
             // counter breaks it (20-100 ticks/web). A pick swing kills it in one hit — smash it actively instead
             // of wading. Runs every frame while nav is active, whatever step is executing.
             SmashWeb(p);
+            // 抢同一帧的 controlUseItem,网优先(网拖慢移动,罐子晚一帧无所谓)
+            if (!p.controlUseItem) SmashPot(p);
 
             // EXACT (mining): the goal is a solid ore the body can't stand on — arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
