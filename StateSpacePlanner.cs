@@ -593,6 +593,8 @@ namespace TerraBlind
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (segFeetCy < dcy) vertProgress = true;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
+                    foreach (var sp in SplitFall(cur, seg.Value.frames, platformTile))
+                        yield return (sp.node, sp.frames, sp.cost, false, null);
                 }
             }
 
@@ -628,6 +630,9 @@ namespace TerraBlind
                             yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
                         else
                             DiagLog.Write($"[ss-drop] SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                        if (drop.HasValue)
+                            foreach (var sp in SplitFall(cur, drop.Value.frames, platformTile))
+                                yield return (sp.node, sp.frames, sp.cost, false, null);
                     }
                 }
             }
@@ -1308,6 +1313,48 @@ namespace TerraBlind
             // misfired when StandCell rounds the sub-pixel landing py up a tile, killing a real drop (same bug as the
             // free-fall fix, commit dc2a9e6) → drop edge vanished → had to hand-mine the platform to proceed.
             return (node, frames);
+        }
+
+        // 大落差的边,统一拆出"半路接住"的版本:下坠途中往脚下第二格拍一块平台就停住了
+        // (第一格来不及,下落速度已经穿过去)。没有这个动作时一条 walk 边就能摔 130 格
+        // ——(4712,334) 当时唯一的候选就是这个。洞里到处是背景墙,平台几乎处处能锚。
+        //
+        // 每个深度发一条,深浅由 g+H 自己权衡。传入的是别的边已经模拟好的帧,所以 walk/jump/drop
+        // 都能拆,不用各改一遍。
+        const int DropSplitMin = 6;      // 落差小于这个不值得拆
+        static IEnumerable<(SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost)> SplitFall(
+            SSNode cur, List<PhysicsSimulator.ControlInput> frames, int platformTile)
+        {
+            if (platformTile < 0 || frames == null || frames.Count == 0) yield break;
+            int startCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
+            var last = frames[frames.Count - 1];
+            int endCy = (int)((last.Py + PhysicsSimulator.PlayerH) / 16f);
+            if (endCy - startCy < DropSplitMin) yield break;
+            var emitted = new HashSet<int>();
+            for (int i = 0; i < frames.Count; i++)
+            {
+                var fr = frames[i];
+                if (fr.Vy <= 0f) continue;                    // 只在下落段接
+                int feetCy = (int)((fr.Py + PhysicsSimulator.PlayerH) / 16f);
+                int fell = feetCy - startCy;
+                if (fell < 3) continue;
+                if (feetCy >= endCy - 1) break;               // 已经快到底了,不如让它自己落
+                if (!emitted.Add(fell)) continue;
+                int cx = (int)((fr.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
+                int cy = feetCy + 2;                          // 脚下第二格
+                if (cx < 1 || cy < 1 || cx >= Main.maxTilesX - 1 || cy >= Main.maxTilesY - 1) break;
+                if (!Predicates.Vacant(cx, cy)) continue;
+                if (!MazeWand.PlatformAnchor(cx, cy)) continue;
+                var take = frames.GetRange(0, i + 1);
+                if (!MarkPlaceFrame(take, cx, cy)) continue;
+                var node = new SSNode
+                {
+                    Px = cx * 16f + 8f - PhysicsSimulator.PlayerW / 2f,
+                    Py = cy * 16f - PhysicsSimulator.PlayerH,
+                    Vx = 0f, Vy = 0f, Grounded = true,
+                };
+                yield return (node, take, take.Count);
+            }
         }
 
         static bool SegDiag;   // temp: when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)

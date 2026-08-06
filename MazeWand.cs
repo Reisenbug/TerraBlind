@@ -473,7 +473,7 @@ namespace TerraBlind
 
         // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
-        static bool PlatformAnchor(int x, int y)
+        public static bool PlatformAnchor(int x, int y)
         {
             for (int dx = -1; dx <= 1; dx++)
                 for (int dy = -1; dy <= 1; dy++)
