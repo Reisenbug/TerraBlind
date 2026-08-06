@@ -106,6 +106,16 @@ namespace TerraBlind
 		// 房子是 L 形:一根 ropeH 高的绳梯只占 1 列,顶上才是 w×h 的房身。拿 w×(ropeH+h) 的
 		// 矩形去找会把大量能盖的地方判掉。这里按真实形状找:脚下能站、这一列往上 ropeH 格净空、
 		// 且绳梯顶端那一行往上 h 行、往右 w 列全空。
+		// 这一格是不是真的空 —— 没有 tile、也没有背景墙。
+		// 和 IsPassable 的区别:树、草这类非固体物不挡路但占着格子(绳子放不进去);
+		// 背景墙更不挡路,但房子盖在别人的墙里就不算独立房间了。
+		public static bool Vacant(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return !t.HasTile && t.WallType == 0;
+		}
+
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int ropeH, int range,
 			out int hitX, out int hitY, out int scanned)
 		{
@@ -122,12 +132,16 @@ namespace TerraBlind
 							if (!InBounds(x, y)) continue;
 							scanned++;
 							if (!CanStand(x, y)) continue;
-							if (Headroom(x, y, ropeH) < ropeH) continue;
-							int top = y - ropeH;
+							// 空 = 那格根本没有 tile。IsPassable 只判"不挡路",而树是非固体:
+							// 树干那一列 IsPassable 全过,但绳子放不进去(placed=0),房子也盖不上。
 							bool ok = true;
+							for (int k = 0; k < ropeH && ok; k++)
+								if (!Vacant(x, y - 1 - k)) ok = false;
+							if (!ok) continue;
+							int top = y - ropeH;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)
-									if (!IsPassable(x + ix, top - iy)) ok = false;
+									if (!Vacant(x + ix, top - iy)) ok = false;
 							if (!ok) continue;
 							hitX = x; hitY = y;
 							return true;
