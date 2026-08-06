@@ -103,6 +103,39 @@ namespace TerraBlind
 		//
 		// Sweeps columns outward from the start and, in each column, walks down the surface to find standable rows —
 		// so it works on a flat plain and in hell's broken ceiling alike.
+		// 房子是 L 形:一根 ropeH 高的绳梯只占 1 列,顶上才是 w×h 的房身。拿 w×(ropeH+h) 的
+		// 矩形去找会把大量能盖的地方判掉。这里按真实形状找:脚下能站、这一列往上 ropeH 格净空、
+		// 且绳梯顶端那一行往上 h 行、往右 w 列全空。
+		public static bool ScanHouse(int fromX, int fromY, int w, int h, int ropeH, int range,
+			out int hitX, out int hitY, out int scanned)
+		{
+			hitX = hitY = -1; scanned = 0;
+			for (int d = 0; d <= range; d++)
+				for (int sgn = 0; sgn < (d == 0 ? 1 : 2); sgn++)
+				{
+					int x = d == 0 ? fromX : (sgn == 0 ? fromX - d : fromX + d);
+					if (x < 1 || x + w >= Main.maxTilesX - 1) continue;
+					for (int dy = 0; dy <= 60; dy++)
+						for (int vs = 0; vs < (dy == 0 ? 1 : 2); vs++)
+						{
+							int y = dy == 0 ? fromY : (vs == 0 ? fromY - dy : fromY + dy);
+							if (!InBounds(x, y)) continue;
+							scanned++;
+							if (!CanStand(x, y)) continue;
+							if (Headroom(x, y, ropeH) < ropeH) continue;
+							int top = y - ropeH;
+							bool ok = true;
+							for (int ix = 0; ix < w && ok; ix++)
+								for (int iy = 0; iy < h && ok; iy++)
+									if (!IsPassable(x + ix, top - iy)) ok = false;
+							if (!ok) continue;
+							hitX = x; hitY = y;
+							return true;
+						}
+				}
+			return false;
+		}
+
 		public static bool ScanFlat(int fromX, int fromY, int w, int h, int hazardR, int range,
 			out int hitX, out int hitY, out int scanned)
 		{

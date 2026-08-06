@@ -2578,6 +2578,29 @@ namespace TerraBlind
 				sb.Append(",\"scanned\":").Append(scanned).Append('}');
 				body = sb.ToString();
 			}
+			else if (path == "/scan_house")
+			{
+				// 按房子的真实形状找地方:一根 rope_h 高的绳梯(占1列)+ 顶上 w×h 的房身。
+				string rb = ReadBody(ctx).Replace(" ", "");
+				int Get(string k, int dflt)
+				{
+					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
+					return m.Success ? int.Parse(m.Groups[1].Value) : dflt;
+				}
+				var ph = Main.LocalPlayer;
+				int fx = Get("from_x", ph != null ? ActExecutor.OriginCx(ph) : 0);
+				int fy = Get("from_y", ph != null ? ActExecutor.OriginCy(ph) : 0);
+				int w = Get("w", 21), h = Get("h", 10), rh = Get("rope_h", 20), range = Get("range", 200);
+				bool fnd = Predicates.ScanHouse(fx, fy, w, h, rh, range, out int hx2, out int hy2, out int sc2);
+				var sbh = new System.Text.StringBuilder();
+				sbh.Append("{\"found\":").Append(fnd ? "true" : "false");
+				sbh.Append(",\"from\":[").Append(fx).Append(',').Append(fy).Append(']');
+				sbh.Append(",\"want\":{\"w\":").Append(w).Append(",\"h\":").Append(h).Append(",\"rope_h\":").Append(rh).Append('}');
+				if (fnd) sbh.Append(",\"at\":[").Append(hx2).Append(',').Append(hy2).Append(']')
+					.Append(",\"top\":").Append(hy2 - rh);
+				sbh.Append(",\"scanned\":").Append(sc2).Append('}');
+				body = sbh.ToString();
+			}
 			else if (path == "/room_check")
 			{
 				// Vanilla's own housing test, flood-filled from a point INSIDE the room (not a rectangle). Reports
