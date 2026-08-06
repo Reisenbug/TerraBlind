@@ -1616,17 +1616,17 @@ namespace TerraBlind
             return px;
         }
 
+        // 平台在背包里但不在 hotbar 时,以前直接返回 -1 —— 寻路的跳放/搭桥全哑火,人明明有平台。
+        // 手只够得到 hotbar,所以扫全背包,找到了就 home 进 hotbar 再用。
         public static int FindPlatformSlot(Player p)
         {
-            for (int i = 0; i < 10; i++)
+            var td = Terraria.ID.TileID.Sets.Platforms;
+            for (int i = 0; i < p.inventory.Length; i++)
             {
                 var item = p.inventory[i];
-                if (item != null && !item.IsAir && item.createTile >= 0)
-                {
-                    var td = Terraria.ID.TileID.Sets.Platforms;
-                    if (td != null && item.createTile < td.Length && td[item.createTile])
-                        return i;
-                }
+                if (item == null || item.IsAir || item.createTile < 0) continue;
+                if (td == null || item.createTile >= td.Length || !td[item.createTile]) continue;
+                return i <= 9 ? i : PlaceAction.HomeSlot(i);
             }
             return -1;
         }

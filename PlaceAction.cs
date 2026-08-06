@@ -98,7 +98,7 @@ namespace TerraBlind
 			return HomeSlot(ResolveSlot(spec));
 		}
 
-		private static int HomeSlot(int slot)
+		public static int HomeSlot(int slot)
 		{
 			var p = Main.LocalPlayer;
 			if (slot < 0) return -1;
