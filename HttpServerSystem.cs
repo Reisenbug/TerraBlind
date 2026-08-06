@@ -2578,6 +2578,48 @@ namespace TerraBlind
 				sb.Append(",\"scanned\":").Append(scanned).Append('}');
 				body = sb.ToString();
 			}
+			else if (path == "/path_cost")
+			{
+				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格。
+				// find_tiles 的 max_dist 是直线距离 —— 直线 25 格的东西可能隔着山要绕几百格。
+				// 判断"值不值得绕过去"要看真实路径,和 descent_route 的 tier 同一套判据。
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
+				var pc = Main.LocalPlayer;
+				if (!xm.Success || !ym.Success || pc == null)
+				{ body = "{\"ok\":false,\"reason\":\"bad_request\"}"; status = 400; }
+				else
+				{
+					int tx = int.Parse(xm.Groups[1].Value), ty = int.Parse(ym.Groups[1].Value);
+					int scx = ActExecutor.OriginCx(pc), scy = ActExecutor.OriginCy(pc);
+					var fld = MazeWand.BuildField(tx, ty, scx, scy);
+					if (!fld.ContainsKey((scx, scy)))
+						body = "{\"ok\":false,\"reason\":\"unreachable\"}";
+					else
+					{
+						int dig = 0, walk = 0;
+						var cur = (x: scx, y: scy);
+						var seen = new System.Collections.Generic.HashSet<(int, int)> { cur };
+						for (int step = 0; step < 4000; step++)
+						{
+							if (cur.x == tx && cur.y == ty) break;
+							if (!fld.TryGetValue((cur.x, cur.y), out int hc) || hc == 0) break;
+							int bn = hc; var best = cur;
+							foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+							{
+								var n = (x: cur.x + dx, y: cur.y + dy);
+								if (fld.TryGetValue((n.x, n.y), out int dn) && dn < bn) { bn = dn; best = n; }
+							}
+							if (best.x == cur.x && best.y == cur.y) break;
+							if (!seen.Add((best.x, best.y))) break;
+							if (MazeWand.StepCostPublic(cur.x, cur.y, best.x, best.y) >= 80) dig++; else walk++;
+							cur = best;
+						}
+						body = "{\"ok\":true,\"dig\":" + dig + ",\"walk\":" + walk + "}";
+					}
+				}
+			}
 			else if (path == "/scan_house")
 			{
 				// 按房子的真实形状找地方:一根 rope_h 高的绳梯(占1列)+ 顶上 w×h 的房身。
