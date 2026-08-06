@@ -1999,7 +1999,11 @@ namespace TerraBlind
         // 要么邻域里没有比地板低的 —— 那是真被围住,该挖该造,不是打转。不存在"既不刷新地板又能一直选下去"。
         // 不需要计数器,不需要温度,不需要随机:没前进就是没前进,不用等 N 次才承认。
         static int _hFloor = int.MaxValue;
-        public static void ResetFloor() { _hFloor = int.MaxValue; }
+        // 最近站过的格子。只用来在 PUSH 时把"去过的"排到后面,不做循环判定、不禁止重访。
+        const int VisitedLen = 40;
+        static readonly System.Collections.Generic.HashSet<(int, int)> _visited = new();
+        static readonly System.Collections.Generic.Queue<(int, int)> _visitedQ = new();
+        public static void ResetFloor() { _hFloor = int.MaxValue; _visited.Clear(); _visitedQ.Clear(); }
         public static void RequestJiggle() { }
 
         // the accumulated edge penalties inside a region — the hidden state that makes a loop unreproducible, and
@@ -2229,10 +2233,21 @@ namespace TerraBlind
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
                 if (bestH >= _hFloor)
                 {
+                    // 管子里 H 最低的那个候选常常就是来路 —— (4854,379) 的 49 个候选去重后只有 10 格,
+                    // 其中 7 格在人刚走过的那 4×4 里,H 最低的正是回头那一格,于是来回弹。
+                    // 人一眼看出"左右是墙只能往下",靠的不是比 H,是「哪边没去过」。所以先在没去过的
+                    // 候选里挑 H 最低;没去过的都用完了才退回全体(不是禁止回头,只是排在后面)。
+                    bool anyFresh = false;
+                    foreach (var c in jigglePool) if (!_visited.Contains(c.cell)) { anyFresh = true; break; }
                     var push = jigglePool[0];
-                    foreach (var c in jigglePool) if (c.h < push.h) push = c;
+                    bool have = false;
+                    foreach (var c in jigglePool)
+                    {
+                        if (anyFresh && _visited.Contains(c.cell)) continue;
+                        if (!have || c.h < push.h) { push = c; have = true; }
+                    }
                     if (push.cell != bestCell)
-                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH} floor={_hFloor}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 不降地板,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} ({jigglePool.Count} cands)");
+                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH} floor={_hFloor}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 不降地板,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh} ({jigglePool.Count} cands)");
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
@@ -2241,6 +2256,8 @@ namespace TerraBlind
                 foreach (var c in jigglePool) if (c.cell == bestCell) { landH2 = c.h; break; }
                 if (landH2 >= 0 && landH2 < _hFloor) _hFloor = landH2;
             }
+            if (_visited.Add((curCx, curCy))) _visitedQ.Enqueue((curCx, curCy));
+            while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
             DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
