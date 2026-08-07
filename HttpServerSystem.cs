@@ -808,14 +808,7 @@ namespace TerraBlind
 					sb2.Append("{\"error\":\"item_not_found\",\"name_matched\":").Append(nameMatch.Success.ToString().ToLower());
 					sb2.Append(",\"available_count\":").Append(Main.numAvailableRecipes);
 					// 背包满时游戏不把任何配方算作 available,available_count=0 看着像"没材料"
-					{
-						int freeSlots = 0;
-						var pf = Main.LocalPlayer;
-						if (pf != null)
-							for (int i = 0; i < 50; i++)
-								if (pf.inventory[i] == null || pf.inventory[i].IsAir) freeSlots++;
-						sb2.Append(",\"free_slots\":").Append(freeSlots);
-					}
+					sb2.Append(",\"free_slots\":").Append(FreeSlots());
 					sb2.Append(",\"raw_name\":\"").Append(nameMatch.Success ? nameMatch.Groups[1].Value : "").Append("\"");
 					sb2.Append(",\"available_names\":[");
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
@@ -835,10 +828,19 @@ namespace TerraBlind
 				else
 				{
 					int crafted = CraftCoordinator.Craft(targetId, amount);
-					if (crafted > 0)
-						body = "{\"ok\":true,\"crafted\":" + crafted + "}";
+					// crafted 只数真进背包的。要了 96 个只进来 0 个也是失败 —— 以前报 ok:true crafted:96,
+					// 库存却是 0,错要到下一步才炸出来。
+					string extra = ",\"wanted\":" + amount
+						+ ",\"overflow\":" + CraftCoordinator.LastOverflow
+						+ ",\"stop\":\"" + JsonEsc(CraftCoordinator.LastStop) + "\""
+						+ ",\"free_slots\":" + FreeSlots();
+					if (crafted >= amount)
+						body = "{\"ok\":true,\"crafted\":" + crafted + extra + "}";
+					else if (crafted > 0)
+						body = "{\"ok\":false,\"error\":\"partial\",\"crafted\":" + crafted + extra + "}";
 					else
-						body = "{\"error\":\"not_available\",\"item_id\":" + targetId + "}";
+						body = "{\"ok\":false,\"error\":\"" + (CraftCoordinator.LastStop == "inventory_full" ? "inventory_full" : "not_available")
+							 + "\",\"crafted\":0,\"item_id\":" + targetId + extra + "}";
 				}
 			}
 			else if (path == "/recipe")
@@ -2967,6 +2969,18 @@ namespace TerraBlind
 			var inv = System.Text.RegularExpressions.Regex.Match(o, "\"invariant\":\\{\"(on_rope|cursor_in_reach|on_ground)\":(true|false)\\}");
 			if (inv.Success) { s.InvKind = inv.Groups[1].Value; s.InvWant = inv.Groups[2].Value == "true"; }
 			return s;
+		}
+
+		// 背包空槽数。背包满时游戏不把任何配方算作 available,available_count=0 看着像"没材料",
+		// 所以合成失败一律把这个数报出来。
+		static int FreeSlots()
+		{
+			var pf = Main.LocalPlayer;
+			if (pf == null) return 0;
+			int n = 0;
+			for (int i = 0; i < 50; i++)
+				if (pf.inventory[i] == null || pf.inventory[i].IsAir) n++;
+			return n;
 		}
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);
