@@ -1321,6 +1321,51 @@ namespace TerraBlind
         //
         // 每个深度发一条,深浅由 g+H 自己权衡。传入的是别的边已经模拟好的帧,所以 walk/jump/drop
         // 都能拆,不用各改一遍。
+        // ── LOOKAHEAD ───────────────────────────────────────────────────────────────────────────
+        // greedy 只比落点那一格的 H,所以跨多格的"坎"能骗过它:管子底 (4854,379)H=443 往下掉到
+        // (4854,389) 是 H=473(涨 30),往上回头只涨 2 —— 于是选回头,可回头是来路。真相是 389 再
+        // 走一步就有 (4862,383)H=395,先涨 30 后降 78。人看的是"哪边通向别处",不是下一格的数字。
+        //
+        // 所以评分不用落点那一格的 H,改用"从落点能望到的最低 H"。只在 H 场上漫延,不生成边、不跑
+        // 物理 —— H 场是现成的字典,查一次 O(1),几十格的开销可以忽略(生成真边一次 4.3ms)。
+        // 代价是近似:可能望见一格 H 很低但实际有挖不动的墙隔着,把这个落点评高了。方向是安全的
+        // (最多多探一个落点,不会漏掉出路),而且每周期重算,走过去发现不对下一周期就改。
+        // 半径按实测定:管子底 (4854,389) 望出去,6 格处有 H431(足够把"往下"选出来),真正的出口
+        // (4862,383)H395 在 14 格外。取 18 让出口本身进视野,判断有余量而不是压线过。
+        const int LookaheadRadius = 18;
+        const int LookaheadBudget = 400;   // 望多少格封顶,保证不随地形爆炸
+
+        static int LookaheadH(System.Collections.Generic.Dictionary<(int, int), int> field,
+            int sx, int sy, int landH,
+            System.Collections.Generic.Dictionary<(int, int), int> cache)
+        {
+            if (cache.TryGetValue((sx, sy), out int hit)) return hit;
+            int best = landH;
+            var seen = new System.Collections.Generic.HashSet<(int, int)> { (sx, sy) };
+            var q = new System.Collections.Generic.Queue<(int x, int y)>();
+            q.Enqueue((sx, sy));
+            int visited = 0;
+            while (q.Count > 0 && visited < LookaheadBudget)
+            {
+                var (cx0, cy0) = q.Dequeue();
+                visited++;
+                for (int i = 0; i < 4; i++)
+                {
+                    int nx = cx0 + (i == 0 ? 1 : i == 1 ? -1 : 0);
+                    int ny = cy0 + (i == 2 ? 1 : i == 3 ? -1 : 0);
+                    if (System.Math.Abs(nx - sx) + System.Math.Abs(ny - sy) > LookaheadRadius) continue;
+                    if (!seen.Add((nx, ny))) continue;
+                    // 只在身体过得去的格子上漫延,不然会穿墙望见墙那边的低 H(那边根本走不过去)
+                    if (!Predicates.IsPassable(nx, ny)) continue;
+                    if (!field.TryGetValue((nx, ny), out int nh)) continue;
+                    if (nh < best) best = nh;
+                    q.Enqueue((nx, ny));
+                }
+            }
+            cache[(sx, sy)] = best;
+            return best;
+        }
+
         const int DropSplitMin = 6;      // 落差小于这个不值得拆
         static IEnumerable<(SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost)> SplitFall(
             SSNode cur, List<PhysicsSimulator.ControlInput> frames, int platformTile)
@@ -2032,25 +2077,11 @@ namespace TerraBlind
         // A descending edge is progress by the field's own measure, so this cannot wander; and randomness is what
         // makes the cycle break with probability 1 instead of replaying the same deterministic pick. No parameter to
         // tune — it sidesteps the weighted sum rather than reweighting it.
-        // 进度地板 —— greedy 逃不出去的唯一解药,也是唯一还留着的 loop 机制。
-        //
-        // total=g+H 每轮独立算,没有任何量记录"我整体有没有靠近终点"。走廊 y=506 上 H 是 …7515 7512 7515…,
-        // 2925 是行最低点,真出口在正上方(要放平台,g≈40,total 7543 输给往东走的 7518)。于是永远东西横跳,
-        // 每一步的账都没算错。
-        //
-        // 地板 = 到目前为止踩到过的最低 H。规则一条:选出来的落点 H 没低于地板,这一步就不是前进 —— 当场
-        // 改按纯 H 重选一次(g 关掉)。在 2925:第一次算出往东(7515 ≥ 地板 7512)→ 判定没前进 → 改选 H
-        // 最低的候选(上方 7503)→ 上去 → 地板刷新 → 恢复正常。一步都不晃。
-        //
-        // 为什么结构上停机:强推那步选的就是邻域 H 最低的候选。要么它低于地板(地板严格下降,地板有下界 0),
-        // 要么邻域里没有比地板低的 —— 那是真被围住,该挖该造,不是打转。不存在"既不刷新地板又能一直选下去"。
-        // 不需要计数器,不需要温度,不需要随机:没前进就是没前进,不用等 N 次才承认。
-        static int _hFloor = int.MaxValue;
         // 最近站过的格子。只用来在 PUSH 时把"去过的"排到后面,不做循环判定、不禁止重访。
         const int VisitedLen = 40;
         static readonly System.Collections.Generic.HashSet<(int, int)> _visited = new();
         static readonly System.Collections.Generic.Queue<(int, int)> _visitedQ = new();
-        public static void ResetFloor() { _hFloor = int.MaxValue; _visited.Clear(); _visitedQ.Clear(); }
+        public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); }
         public static void RequestJiggle() { }
 
         // the accumulated edge penalties inside a region — the hidden state that makes a loop unreproducible, and
@@ -2115,6 +2146,7 @@ namespace TerraBlind
             bool hasPick = false;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
 
+            var laCache = new System.Collections.Generic.Dictionary<(int, int), int>();
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
@@ -2261,25 +2293,32 @@ namespace TerraBlind
                 // that DID fall in back out: deeper in the pit = larger distance = steeper penalty, so climbing toward the
                 // line (shrinking distance) beats burrowing deeper. dist^1.5 grows past linear without dist²'s blow-up.
                 float dev = DeviCost * devDist * MathF.Sqrt(devDist);
-                float total = g + nH + pen - AlignScale * align + dev;
+                // 落点值取"从落点望得到的最低 H",而不是落点那一格的 H —— 见 LookaheadH。
+                // g 仍按真实落点算(那是真花掉的代价),只有"这个落点值多少"换成了望出去的值。
+                int laH = LookaheadH(field, ncx, ncy, nH, laCache);
+                float total = g + laH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
-                _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
+                _candLog.Append($" {kind}→({ncx},{ncy})H{nH}{(laH < nH ? $"la{laH}" : "")}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
-            // ── 进度地板 ────────────────────────────────────────────────────────────────────────────
-            // 见上面 _hFloor 的说明。先把脚下算进地板(换目标/传送后 curH 可能远低于旧地板,不认下来的话
-            // 第一步就会被误判成没前进)。然后:g+H 选出来的这步如果不能把地板压低,就关掉 g 重选。
-            if (curH != int.MaxValue && curH < _hFloor) _hFloor = curH;
+            // ── 没进展就换个方向 ──────────────────────────────────────────────────────────────────
+            // 原判据是"落点 H 有没有低于历史最低 H(_hFloor)"。这个是错的:一旦人为了绕路离开过最低点,
+            // 之后每一步的落点都 ≥ 历史最低,PUSH 就永久触发。管子里实测 40+ 步连续 PUSH、floor 一直
+            // 卡在 443 不动,而 PUSH 专挑"没去过的",于是一路往上刷新格子搭平台 —— 就是那段"先上去
+            // 到处搭平台,又慢慢下来晃悠"。
+            // 改成跟脚下比:greedy 挑的落点不比现在近,才算这一步没进展。绕路(H 暂时升高)是允许的,
+            // 只有真的原地弹才触发。_hFloor 一起删掉 —— 它记的是历史最低点,而"这一步有没有前进"是
+            // 局部的事,两者不是一回事。
             if (jigglePool.Count > 0 && best != null)
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
-                if (bestH >= _hFloor)
+                if (bestH >= curH)
                 {
                     // 管子里 H 最低的那个候选常常就是来路 —— (4854,379) 的 49 个候选去重后只有 10 格,
                     // 其中 7 格在人刚走过的那 4×4 里,H 最低的正是回头那一格,于是来回弹。
@@ -2295,14 +2334,9 @@ namespace TerraBlind
                         if (!have || c.h < push.h) { push = c; have = true; }
                     }
                     if (push.cell != bestCell)
-                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH} floor={_hFloor}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 不降地板,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh} ({jigglePool.Count} cands)");
+                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh} ({jigglePool.Count} cands)");
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
-            }
-            {
-                int landH2 = -1;
-                foreach (var c in jigglePool) if (c.cell == bestCell) { landH2 = c.h; break; }
-                if (landH2 >= 0 && landH2 < _hFloor) _hFloor = landH2;
             }
             if (_visited.Add((curCx, curCy))) _visitedQ.Enqueue((curCx, curCy));
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
