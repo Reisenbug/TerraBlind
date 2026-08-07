@@ -2159,6 +2159,7 @@ namespace TerraBlind
             // 所有候选,连 total 一起留着 —— 选边要按 total 采样,不是取最小(见下面的 softmax)
             var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
             var _candLog = new System.Text.StringBuilder();
+            var _swCycle = System.Diagnostics.Stopwatch.StartNew();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
                 // label the landing by its SETTLED state, not the last planned frame. A jump can end 0.7px inside a
@@ -2307,7 +2308,7 @@ namespace TerraBlind
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
-            DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
+            DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count} expandMs={_swCycle.Elapsed.TotalMilliseconds:0.0}:{_candLog}");
 
             // STARVED EXPAND (Phase A: generator rejections must be visible): when no descending candidate exists —
             // the cycles where a silently-refusing generator matters — re-run Expand once with SegDiag on so every
@@ -2316,7 +2317,9 @@ namespace TerraBlind
             if (best != null && (cands.Count <= 2 || !cands.Exists(c => c.Descends)))
             {
                 SegDiag = true;
+                var _swRe = System.Diagnostics.Stopwatch.StartNew();
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
+                DiagLog.Write($"[expand-cost] bare re-run at ({curCx},{curCy}) ms={_swRe.Elapsed.TotalMilliseconds:0.0}");
                 SegDiag = false;
             }
 
