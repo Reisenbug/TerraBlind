@@ -2663,6 +2663,24 @@ namespace TerraBlind
 					.Append(",\"top\":").Append(hy2 - h + 1)
 					.Append(",\"right\":").Append(hx2 + w - 1);
 				sbh.Append(",\"scanned\":").Append(sc2).Append('}');
+				// 把结论画出来 —— 选出来的框对不对,看一眼比读坐标可靠。
+				// 找到了:整框绿色。没找到:把出发点那个框画出来,占着格子的标红,一眼看出被什么挡了。
+				{
+					var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+					int bx = fnd ? hx2 : fx, by = fnd ? hy2 : fy;
+					for (int ix = 0; ix < w; ix++)
+						for (int iy = 0; iy < h; iy++)
+						{
+							int cx3 = bx + ix, cy3 = by - iy;
+							bool blocked = !Predicates.Vacant(cx3, cy3);
+							vis.Add((cx3, cy3, blocked
+								? new Microsoft.Xna.Framework.Color(255, 60, 60) * 0.55f
+								: new Microsoft.Xna.Framework.Color(60, 230, 90) * 0.28f));
+						}
+					PathVisSystem.SetTiles(vis, 3600);
+					PathVisSystem.SetLabels(new System.Collections.Generic.List<(int, int, string, Microsoft.Xna.Framework.Color)>
+					{ (bx, by, fnd ? $"house {w}x{h}" : "NO SITE (from here)", Microsoft.Xna.Framework.Color.White) }, 3600);
+				}
 				body = sbh.ToString();
 			}
 			else if (path == "/room_check")
