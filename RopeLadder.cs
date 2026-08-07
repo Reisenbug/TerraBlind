@@ -33,6 +33,7 @@ namespace TerraBlind
 		private static int _climbStall;
 		private static bool _swingIssued;      // we started a swing whose outcome is ours to read
 		private static int _topWy = -1;        // highest rope cell of this column (world Y)
+		private static int _col;               // 整根绳梯钉在这一列,开工时定,中途不跟着身体走
 		private static int _topStall;
 
 		// A climb that stops making progress is stuck (blocked above, fell off, not actually on a rope). Bounded so
@@ -60,7 +61,10 @@ namespace TerraBlind
 			// the floor IS that cell — aiming a cell higher targets empty air with no rope below it to extend from,
 			// which vanilla refuses while the swing animation plays on regardless (looks like working, places nothing).
 			_targetWy = ActExecutor.OriginCy(p);
-			DiagLog.Write($"[rope] start {itemName} n={_want} slot={_slot} origin=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+			// 列钉死在开工那一刻 —— BeginPlace 以前每次重读 OriginCx,爬的过程里身体飘一格,
+			// 后面的绳就串到隔壁列去了。
+			_col = ActExecutor.OriginCx(p);
+			DiagLog.Write($"[rope] start {itemName} n={_want} slot={_slot} origin=({_col},{ActExecutor.OriginCy(p)})");
 			BeginPlace();
 			return true;
 		}
@@ -75,7 +79,7 @@ namespace TerraBlind
 		private static void BeginPlace()
 		{
 			var p = Main.LocalPlayer;
-			int cx = ActExecutor.OriginCx(p);
+			int cx = _col;
 
 			// ARM CHECK against vanilla's own range test — the authority on what the player can touch. Out of reach is
 			// not a failure, it is simply the moment to climb: the ropes already placed are the way up.
@@ -221,10 +225,12 @@ namespace TerraBlind
 			  .Append(",\"item\":\"").Append(_item).Append('"')
 			  .Append(",\"placed\":").Append(_placed).Append(",\"already_there\":").Append(_already).Append(",\"wanted\":").Append(_want)
 			  .Append(",\"reason\":\"").Append(Reason).Append('"')
-			  .Append(",\"target_cell\":[").Append(p != null ? ActExecutor.OriginCx(p) : -1).Append(',').Append(_targetWy).Append(']');
-			if (_topWy >= 0 && p != null)
-				sb.Append(",\"top\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(_topWy).Append(']')
-				  .Append(",\"above_top\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(_topWy - 1).Append(']');
+			  .Append(",\"target_cell\":[").Append(_col).Append(',').Append(_targetWy).Append(']');
+			// top/above_top 是后续每一步(墙、地板、家具)的锚点,必须报绳梯真正所在的列。
+			// 报 OriginCx 的话身体飘一格,整座房子就盖到绳梯隔壁去了。
+			if (_topWy >= 0)
+				sb.Append(",\"top\":[").Append(_col).Append(',').Append(_topWy).Append(']')
+				  .Append(",\"above_top\":[").Append(_col).Append(',').Append(_topWy - 1).Append(']');
 			if (p != null)
 				sb.Append(",\"origin\":[").Append(ActExecutor.OriginCx(p)).Append(',').Append(ActExecutor.OriginCy(p)).Append(']')
 				  .Append(",\"on_rope\":").Append(OnRope(p) ? "true" : "false")
