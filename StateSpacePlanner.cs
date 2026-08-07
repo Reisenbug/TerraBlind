@@ -2184,6 +2184,8 @@ namespace TerraBlind
             var dS = LineDir(line, 0, ArcShort);
             var dM = LineDir(line, 0, ArcMid);
             var dL = LineDir(line, 0, ArcLong);
+            // 脚下的望值。g 必须和落点价值用同一把尺子量,否则恒等式 total≡当前值 不成立 —— 见下面 laH。
+            int curLaH = curH == int.MaxValue ? int.MaxValue : LookaheadH(field, curCx, curCy, curH, laCache);
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
@@ -2228,7 +2230,12 @@ namespace TerraBlind
                 // candidate, so H alone can't rank them — the alignment/deviation terms below break the tie, which is
                 // legitimate: they ARE the "how far this action strays from the field-optimal (line)" part that H folded
                 // away. clamp negative ΔH (a landing with HIGHER H) to 0 cost — the deviation term handles the penalty.
-                float g = MathF.Max(0f, curH - nH);
+                // 落点值 = 从落点望得到的最低 H(见 LookaheadH)。g 和它必须用同一把尺子:先用 nH 算 g、
+                // 再用 laH 当落点值,恒等式 total≡当前值 就破了 —— 往上跳时 g 被 clamp 成 0,而 laH 又不再
+                // 反映落点本身有多烂,两道保险同时失效。实测 (3343,378):跳到 nH=619(比脚下差 202)却因
+                // laH≈332 拿到全场最低分,老实走向 H332 的候选反而输,一格被 PUSH 救了 21 次。
+                int laH = LookaheadH(field, ncx, ncy, nH, laCache);
+                float g = MathF.Max(0f, (curLaH == int.MaxValue ? curH : curLaH) - laH);
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
                 // g=ΔH is right for choosing among reachable landings, but it dropped one true cost H can't see: altering
                 // terrain (dig/place/pillar) takes real TIME standing still that moving to the same spot doesn't. So the
@@ -2293,9 +2300,6 @@ namespace TerraBlind
                 // that DID fall in back out: deeper in the pit = larger distance = steeper penalty, so climbing toward the
                 // line (shrinking distance) beats burrowing deeper. dist^1.5 grows past linear without dist²'s blow-up.
                 float dev = DeviCost * devDist * MathF.Sqrt(devDist);
-                // 落点值取"从落点望得到的最低 H",而不是落点那一格的 H —— 见 LookaheadH。
-                // g 仍按真实落点算(那是真花掉的代价),只有"这个落点值多少"换成了望出去的值。
-                int laH = LookaheadH(field, ncx, ncy, nH, laCache);
                 float total = g + laH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : isPlace ? "place"
