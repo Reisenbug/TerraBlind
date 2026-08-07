@@ -22,6 +22,25 @@ namespace TerraBlind
 				MazeWand.ToggleNav();
 			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
 				RecedingNav.Toggle();
+			// H 找一次房址并画出来:绿=空,红=被占。找不到就画脚下那个框,直接看出被什么挡的。
+			if (TerraBlind.ShowHouseSite != null && TerraBlind.ShowHouseSite.JustPressed)
+			{
+				var hp = Main.LocalPlayer;
+				int fx = ActExecutor.OriginCx(hp), fy = ActExecutor.OriginCy(hp);
+				const int HW = 21, HH = 10;
+				bool got = Predicates.ScanHouse(fx, fy, HW, HH, 200, out int hbx, out int hby, out int hsc);
+				if (got)
+				{
+					int d = System.Math.Abs(hbx - fx) + System.Math.Abs(hby - fy);
+					Predicates.VisualizeBox(hbx, hby, HW, HH, $"house {HW}x{HH}");
+					Main.NewText($"[TerraBlind] 房址 左下角({hbx},{hby}) 右上角({hbx + HW - 1},{hby - HH + 1}) 离你{d}格", 120, 255, 120);
+				}
+				else
+				{
+					int blocked = Predicates.VisualizeBox(fx, fy, HW, HH, "NO SITE (from here)");
+					Main.NewText($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{hsc}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
+				}
+			}
 			// U toggles build RECORDING: capture place/mine intents (build_rec.json) while you build by hand.
 			if (TerraBlind.ToggleBuildRecord != null && TerraBlind.ToggleBuildRecord.JustPressed)
 			{

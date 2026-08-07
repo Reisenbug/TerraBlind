@@ -154,10 +154,29 @@ namespace TerraBlind
                 DrawTile(spriteBatch, lpx, lpy, new Color(255, 255, 255, 160));
             }
 
+            // SetTiles/SetLabels 的 ttl 以前只递减不生效:格子画上去就再也不消失,标签更是存了却
+            // 从没画过(唯一的文字绘制在下面那个 path 为空就 return 的分支后面,平时根本到不了)。
             List<(int wx, int wy, Color color)> extraTiles;
-            lock (_lock) { extraTiles = new List<(int, int, Color)>(_tiles); }
-            foreach (var (tx, ty, tc) in extraTiles)
-                DrawTile(spriteBatch, tx, ty, tc);
+            List<(int wx, int wy, string text, Color color)> extraLabels;
+            int extraTtl;
+            lock (_lock) { extraTiles = new List<(int, int, Color)>(_tiles); extraLabels = new List<(int, int, string, Color)>(_labels); extraTtl = _ttl; }
+            if (extraTtl > 0)
+            {
+                foreach (var (tx, ty, tc) in extraTiles)
+                    DrawTile(spriteBatch, tx, ty, tc);
+                if (extraLabels.Count > 0)
+                {
+                    var lfont = Terraria.GameContent.FontAssets.MouseText.Value;
+                    foreach (var (lx, ly, ltext, lc) in extraLabels)
+                    {
+                        float lsx = lx * 16f - Main.screenPosition.X;
+                        float lsy = (ly + 1) * 16f - Main.screenPosition.Y;
+                        if (lsx < -300 || lsx > Main.screenWidth + 300 || lsy < -100 || lsy > Main.screenHeight + 100) continue;
+                        ChatManager.DrawColorCodedStringWithShadow(spriteBatch, lfont, ltext,
+                            new Vector2(lsx, lsy), lc, 0f, Vector2.Zero, new Vector2(0.75f));
+                    }
+                }
+            }
 
             List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> ghosts; int ghostTtl;
             lock (_lock) { ghosts = _ghosts; ghostTtl = _ghostTtl; }

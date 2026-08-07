@@ -107,6 +107,28 @@ namespace TerraBlind
 			return !t.HasTile && t.WallType == 0;
 		}
 
+		// 把一个 w×h 的框画到游戏里:绿=空(放得下),红=被占。选址对不对,看一眼比读坐标可靠。
+		// 键盘 H 和 /scan_house 共用这一份 —— 画的必须和判的是同一套 Vacant。
+		public static int VisualizeBox(int bx, int by, int w, int h, string label, int ttlFrames = 3600)
+		{
+			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+			int blocked = 0;
+			for (int ix = 0; ix < w; ix++)
+				for (int iy = 0; iy < h; iy++)
+				{
+					int cx = bx + ix, cy = by - iy;
+					bool bad = !Vacant(cx, cy);
+					if (bad) blocked++;
+					vis.Add((cx, cy, bad
+						? new Microsoft.Xna.Framework.Color(255, 60, 60) * 0.55f
+						: new Microsoft.Xna.Framework.Color(60, 230, 90) * 0.28f));
+				}
+			PathVisSystem.SetTiles(vis, ttlFrames);
+			PathVisSystem.SetLabels(new System.Collections.Generic.List<(int, int, string, Microsoft.Xna.Framework.Color)>
+			{ (bx, by, label, Microsoft.Xna.Framework.Color.White) }, ttlFrames);
+			return blocked;
+		}
+
 		// 每列上下试探多少格。房子悬空也合法,所以不再是"沿地表找落脚点",纯粹是在附近找空位。
 		const int VertScan = 60;
 
