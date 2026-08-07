@@ -2641,7 +2641,8 @@ namespace TerraBlind
 			}
 			else if (path == "/scan_house")
 			{
-				// 按房子的真实形状找地方:一根 rope_h 高的绳梯(占1列)+ 顶上 w×h 的房身。
+				// 房子就是一个 w×h 的矩形,(x,y) 是左下角。除了"里面全空"没有别的条件:
+				// 脚下是不是实地不管,悬空也行 —— 施工时垫平台上去,垫多高跟选址无关。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				int Get(string k, int dflt)
 				{
@@ -2651,14 +2652,16 @@ namespace TerraBlind
 				var ph = Main.LocalPlayer;
 				int fx = Get("from_x", ph != null ? ActExecutor.OriginCx(ph) : 0);
 				int fy = Get("from_y", ph != null ? ActExecutor.OriginCy(ph) : 0);
-				int w = Get("w", 21), h = Get("h", 10), rh = Get("rope_h", 20), range = Get("range", 200);
-				bool fnd = Predicates.ScanHouse(fx, fy, w, h, rh, range, out int hx2, out int hy2, out int sc2);
+				int w = Get("w", 21), h = Get("h", 10), range = Get("range", 200);
+				bool fnd = Predicates.ScanHouse(fx, fy, w, h, range, out int hx2, out int hy2, out int sc2);
 				var sbh = new System.Text.StringBuilder();
 				sbh.Append("{\"found\":").Append(fnd ? "true" : "false");
 				sbh.Append(",\"from\":[").Append(fx).Append(',').Append(fy).Append(']');
-				sbh.Append(",\"want\":{\"w\":").Append(w).Append(",\"h\":").Append(h).Append(",\"rope_h\":").Append(rh).Append('}');
+				sbh.Append(",\"want\":{\"w\":").Append(w).Append(",\"h\":").Append(h).Append('}');
+				// at = 矩形左下角。top/right 是另外两条边,省得调用方自己算错(都含自己那格)。
 				if (fnd) sbh.Append(",\"at\":[").Append(hx2).Append(',').Append(hy2).Append(']')
-					.Append(",\"top\":").Append(hy2 - rh);
+					.Append(",\"top\":").Append(hy2 - h + 1)
+					.Append(",\"right\":").Append(hx2 + w - 1);
 				sbh.Append(",\"scanned\":").Append(sc2).Append('}');
 				body = sbh.ToString();
 			}

@@ -97,15 +97,6 @@ namespace TerraBlind
 			return false;
 		}
 
-		// SCAN FOR A BUILD SITE — sweep outward from (fromX, fromY) for a spot with `w` standable columns and `h` rows
-		// of headroom, clear of hazards by `hazardR`. Returns the nearest hit. THIS is what replaces a hardcoded
-		// coordinate: the question is fixed, the answer is computed against whatever terrain is actually there.
-		//
-		// Sweeps columns outward from the start and, in each column, walks down the surface to find standable rows —
-		// so it works on a flat plain and in hell's broken ceiling alike.
-		// 房子是 L 形:一根 ropeH 高的绳梯只占 1 列,顶上才是 w×h 的房身。拿 w×(ropeH+h) 的
-		// 矩形去找会把大量能盖的地方判掉。这里按真实形状找:脚下能站、这一列往上 ropeH 格净空、
-		// 且绳梯顶端那一行往上 h 行、往右 w 列全空。
 		// 这一格是不是真的空 —— 没有 tile、也没有背景墙。
 		// 和 IsPassable 的区别:树、草这类非固体物不挡路但占着格子(绳子放不进去);
 		// 背景墙更不挡路,但房子盖在别人的墙里就不算独立房间了。
@@ -116,7 +107,18 @@ namespace TerraBlind
 			return !t.HasTile && t.WallType == 0;
 		}
 
-		public static bool ScanHouse(int fromX, int fromY, int w, int h, int ropeH, int range,
+		// 每列上下试探多少格。房子悬空也合法,所以不再是"沿地表找落脚点",纯粹是在附近找空位。
+		const int VertScan = 60;
+
+		// SCAN FOR A BUILD SITE — 从 (fromX,fromY) 向外扫,找一个放得下房子的地方,返回最近的。
+		//
+		// 房子就是一个 w×h 的矩形:(x,y) 是左下角,往右 w 列、往上 h 行(都含自己那格),
+		// 里面必须全空(没 tile、没背景墙)。除此之外没有任何条件 —— 脚下是不是实地不管,
+		// 悬空也行,施工时自己垫平台上去;垫多高是施工的事,跟选址无关。
+		//
+		// 用 Vacant 不用 IsPassable:树、草这类非固体物不挡路却占着格子,什么也放不进去;
+		// 背景墙更不挡路,但盖在别人墙里就不算独立房间。
+		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
 			out int hitX, out int hitY, out int scanned)
 		{
 			hitX = hitY = -1; scanned = 0;
@@ -125,23 +127,17 @@ namespace TerraBlind
 				{
 					int x = d == 0 ? fromX : (sgn == 0 ? fromX - d : fromX + d);
 					if (x < 1 || x + w >= Main.maxTilesX - 1) continue;
-					for (int dy = 0; dy <= 60; dy++)
+					// 同一列里由近及远试各个高度,先到先得 → 返回的总是离出发点最近的合法位置。
+					for (int dy = 0; dy <= VertScan; dy++)
 						for (int vs = 0; vs < (dy == 0 ? 1 : 2); vs++)
 						{
 							int y = dy == 0 ? fromY : (vs == 0 ? fromY - dy : fromY + dy);
-							if (!InBounds(x, y)) continue;
+							if (!InBounds(x, y) || !InBounds(x + w - 1, y - h + 1)) continue;
 							scanned++;
-							if (!CanStand(x, y)) continue;
-							// 空 = 那格根本没有 tile。IsPassable 只判"不挡路",而树是非固体:
-							// 树干那一列 IsPassable 全过,但绳子放不进去(placed=0),房子也盖不上。
 							bool ok = true;
-							for (int k = 0; k < ropeH && ok; k++)
-								if (!Vacant(x, y - 1 - k)) ok = false;
-							if (!ok) continue;
-							int top = y - ropeH;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)
-									if (!Vacant(x + ix, top - iy)) ok = false;
+									if (!Vacant(x + ix, y - iy)) ok = false;
 							if (!ok) continue;
 							hitX = x; hitY = y;
 							return true;
