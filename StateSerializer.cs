@@ -59,6 +59,7 @@ namespace TerraBlind
 			sb.Append("\"selected_slot\":").Append(s.Equipment.SelectedSlot).Append(',');
 			sb.Append("\"inventory_open\":").Append(B(s.Equipment.InventoryOpen)).Append(',');
 			sb.Append("\"chest_open\":").Append(B(s.Equipment.ChestOpen)).Append(',');
+			sb.Append("\"last_interact\":\"").Append(HttpServerSystem.LastInteract).Append("\",");
 			sb.Append("\"smart_cursor\":").Append(B(s.Equipment.SmartCursor)).Append(',');
 			sb.Append("\"held_item\":");
 			AppendSlot(sb, s.Equipment.HeldItem);

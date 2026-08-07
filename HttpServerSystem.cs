@@ -53,6 +53,8 @@ namespace TerraBlind
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
+		// 上一次开箱的结果,给 /interact 的调用方看。以前拒绝是静默 continue,外面只知道"没开",不知道为什么。
+		public static volatile string LastInteract = "idle";
 		private static volatile bool _lootAllRequested;
 		private static volatile bool _quickHealRequested;
 
@@ -86,10 +88,18 @@ namespace TerraBlind
 			}
 			while (_interactQueue.TryDequeue(out var tile))
 			{
-				if (Main.LocalPlayer.chest != -1) continue;
+				if (Main.LocalPlayer.chest != -1) { LastInteract = "already_open"; continue; }
 				int idx = Chest.FindChest(tile.tx, tile.ty);
-				if (idx == -1) continue;
-				if (Chest.UsingChest(idx) != -1) continue;
+				if (idx == -1) { LastInteract = "no_chest"; continue; }
+				// 开箱是直接写 Player.chest,绕过了 vanilla 右键那条路 —— 锁的判定就在那条路上,所以
+				// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)以前照开不误,是作弊。
+				// 用 vanilla 自己的判据,别自己抄 frameX 范围。IsLockedOrInUse 顺带覆盖了"别人正在用"。
+				var ch = Main.chest[idx];
+				if (ch == null) { LastInteract = "no_chest"; continue; }
+				// 用箱子自己的锚点格判锁,不用传进来的那格 —— 箱子占 2×2,判据看 frameX,点右下角会读错。
+				if (Chest.IsLocked(ch.x, ch.y)) { LastInteract = "locked"; continue; }
+				if (Chest.UsingChest(idx) != -1) { LastInteract = "in_use"; continue; }
+				LastInteract = "opened";
 				Main.LocalPlayer.chest = idx;
 				Main.LocalPlayer.chestX = tile.tx;
 				Main.LocalPlayer.chestY = tile.ty;
@@ -377,8 +387,10 @@ namespace TerraBlind
 				{
 					int tx = int.Parse(txMatch.Groups[1].Value);
 					int ty = int.Parse(tyMatch.Groups[1].Value);
+					// 排队,主线程才真去开。锁着/有人在用会被拒,结果在 /state 的 last_interact 里读。
+					LastInteract = "pending";
 					_interactQueue.Enqueue((tx, ty));
-					body = "{\"ok\":true,\"tile_x\":" + tx + ",\"tile_y\":" + ty + "}";
+					body = "{\"ok\":true,\"tile_x\":" + tx + ",\"tile_y\":" + ty + ",\"note\":\"read last_interact from /state\"}";
 				}
 				else
 				{
@@ -2202,7 +2214,12 @@ namespace TerraBlind
 								// 单独标出来,好在下面给木箱更紧的挖掘额度。
 								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
+								{
+									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
+									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
+									if (Terraria.Chest.IsLocked(x, y)) continue;
 									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
+								}
 								else if (t.TileType == Terraria.ID.TileID.Heart
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "heart";
 								if (kind == null) continue;
