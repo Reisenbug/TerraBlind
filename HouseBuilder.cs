@@ -23,7 +23,7 @@ namespace TerraBlind
 		{
 			Idle, Lift, SeedFloor, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
-			SupportSettle, Support, Bench, Craft, Furniture, WallSettle, WallHop, Walls,
+			SupportSettle, Support, BenchSettle, Bench, Craft, Furniture, WallSettle, WallHop, Walls, Torch,
 			Done
 		}
 
@@ -34,11 +34,22 @@ namespace TerraBlind
 		private static int _rooms = 1;
 		private static int _waited, _hopTries, _liftTries;
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
-		private static int _supIdx;               // 这一间的第几根支柱
+		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
+
+		// 照抄 python 的 H_*:全部用数字 id。ResolveSlot 先 int.TryParse,能解析就按
+		// item.type 精确匹配;否则拿去比 it.Name —— 那是本地化名(中文"工作台"),
+		// 内部名 "WorkBench" 永远匹配不上,报 no_item。
+		const int H_FLOOR = 94;       // 木平台
+		const int H_WOOD = 9;         // 木材
+		const int H_WORKBENCH = 36;
+		const int H_TABLE = 32;
+		const int H_CHAIR = 34;
+		const int H_WALL = 93;        // 木墙
+		const int H_TORCH = 8;
 
 		public const int RoomWidth = 5;           // 每间宽度
-		public const int PillarH = 9;             // 主柱高
-		public const int SupportH = 8;            // 支柱高
+		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
+		public const int SupportH = 8;            // 支柱高 (H_SUP)
 		private const int MaxHopTries = 12;
 		private const int MaxLift = 40;
 		private const int StepTimeout = 60 * 120;
@@ -47,7 +58,7 @@ namespace TerraBlind
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
-		public static int Width => RoomWidth * _rooms + 1;     // 地板总长(列数)
+		public static int Width => RoomWidth * _rooms;         // bridge 铺几格(python: H_LEN=20)
 
 		// 家具:大房子 3 桌 4 椅,单间 1 工作台 1 椅子(玩家定的,不是推出来的)
 		static int TableCount => _rooms >= 4 ? 3 : 0;
@@ -63,7 +74,7 @@ namespace TerraBlind
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
-			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _supIdx = 0;
+			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width}");
 			// 先对齐到左下角那一列:nav 容差 1.5 格,后面每一步都拿 _x0 当锚点。
@@ -88,38 +99,18 @@ namespace TerraBlind
 			SettleAt.Stop(); PlaceAction.Stop(); PlaceWalls.Stop(); WalkPlace.Stop();
 		}
 
-		// 地板要实心方块(站的地面),柱子屋顶用平台(能穿过去,盖的时候不挡自己)。
-		// 按背包里存量最多的挑,不写死物品 —— 地狱里挖出来的地狱岩一样能用。
-		static string SolidName() => PickItem(true);
-		static string PlatName() => PickItem(false);
+		// python 里地基用 H_WOOD(木材),其它一律 H_FLOOR(木平台)。照抄,不自己挑。
+		static string Floor() => H_WOOD.ToString();
+		static string Plat() => H_FLOOR.ToString();
 
-		static string PickItem(bool wantSolid)
-		{
-			var p = Main.LocalPlayer;
-			var td = Terraria.ID.TileID.Sets.Platforms;
-			string best = null; int bestStack = 0;
-			for (int i = 0; i < p.inventory.Length; i++)
-			{
-				var it = p.inventory[i];
-				if (it == null || it.IsAir || it.createTile < 0) continue;
-				bool isPlat = td != null && it.createTile < td.Length && td[it.createTile];
-				if (wantSolid) { if (isPlat || !Main.tileSolid[it.createTile]) continue; }
-				else if (!isPlat) continue;
-				if (it.stack > bestStack) { bestStack = it.stack; best = it.Name; }
-			}
-			return best ?? (wantSolid ? "木材" : "木平台");
-		}
 
-		// 物品名按内部名查 —— createItem.Name 在中文环境返回中文,拿去匹配会失败。
-		static string ItemName(int id)
-			=> Terraria.ID.ItemID.Search.ContainsId(id) ? Terraria.ID.ItemID.Search.GetName(id) : id.ToString();
 
-		static int Col(int k) => _x0 + _dir * k;          // 相对左下角第 k 列
-		static int MainCol => Col(Width);                  // 最右那根主柱
+		// python 用局部坐标 wx(local):wx(1)=ax(左下角), wx(21)=end_x(主柱)。
+		// 所有摆放位置都照抄它的 local 值,不自己另算一套。
+		static int Wx(int local) => _x0 + _dir * (local - 1);
+		static int MainCol => Wx(LocalMax);                // = end_x
+		static int LocalMax => RoomWidth * _rooms + 1;     // 4间→21, 1间→6
 		static int PillarTop => _floorRow - (PillarH - 1); // 照抄 _build_house
-
-		// 第 r 间的支柱列:每间左边那根。间 0 → 第1列,间 1 → 第6列 …
-		static int SupportCol(int r) => Col(1 + RoomWidth * r);
 
 		public static void Tick()
 		{
@@ -141,12 +132,12 @@ namespace TerraBlind
 					{
 						_floorRow = _ay;
 						Advance(Ph.SeedFloor);
-						if (!Need(PlaceAction.Start(SolidName(), _x0, _ay, 1, 0, 0, true, out string ws1), "放地板第一格", ws1)) return;
+						if (!Need(PlaceAction.Start(Plat(), _x0, _ay, 1, 0, 0, true, out string ws1), "放地板第一格", ws1)) return;
 						return;
 					}
 					if (++_liftTries > MaxLift) { Fail($"垫了{MaxLift}次还没到 {_ay + 1}"); return; }
 					// col 不传:让 PillarUp 自己把身体从这一列让开
-					if (!Need(PillarUp.Start(PlatName(), 1, -1, out string ws2), "垫平台", ws2)) return;
+					if (!Need(PillarUp.Start(Plat(), 1, -1, out string ws2), "垫平台", ws2)) return;
 					_ph = Ph.Lift; _waited = 0;
 					return;
 				}
@@ -170,7 +161,7 @@ namespace TerraBlind
 					}
 					_hopTries = 0;
 					Advance(Ph.Floor);
-					if (!Need(BridgeBuilder.Start(SolidName(), _dir > 0 ? "right" : "left", Width, out string ws3), "铺地板", ws3)) return;
+					if (!Need(BridgeBuilder.Start(Floor(), _dir > 0 ? "right" : "left", Width, out string ws3), "铺地板", ws3)) return;
 					return;
 
 				case Ph.Floor:
@@ -178,7 +169,7 @@ namespace TerraBlind
 					if (BridgeBuilder.Outcome != "done") { Fail($"地板:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
 					// 砌柱子前【不要】站到那一列:传了 col 的 PillarUp 不会 StepAside,身体占着就砌不上
 					Advance(Ph.MainPillar);
-					if (!Need(PillarUp.Start(PlatName(), PillarH, MainCol, out string ws4), "砌主柱", ws4)) return;
+					if (!Need(PillarUp.Start(Plat(), PillarH, MainCol, out string ws4), "砌主柱", ws4)) return;
 					return;
 
 				case Ph.MainPillar:
@@ -212,9 +203,10 @@ namespace TerraBlind
 						return;
 					}
 					_hopTries = 0;
-					// 屋顶沿人现在脚下那一行铺(照抄 roof_row = o["cy"]+1),不用公式
+					// 照抄 roof_row = o["cy"] + 1:屋顶行按实际站位记下来,后面铺墙/放火把都用它
+					_roofRow = ActExecutor.OriginCy(p) + 1;
 					Advance(Ph.Roof);
-					if (!Need(BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", Width - 1, out string ws5), "铺屋顶", ws5)) return;
+					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width - 1, out string ws5), "铺屋顶", ws5)) return;
 					return;
 
 				case Ph.Roof:
@@ -236,13 +228,13 @@ namespace TerraBlind
 					if (DropDown.IsRunning) return;
 					_roomIdx = 0;
 					Advance(Ph.SupportSettle);
-					SettleAt.Start(SupportCol(0) + _dir * 2, out _);
+					SettleAt.Start(Wx(3), out _);
 					return;
 
 				case Ph.SupportSettle:
 					if (SettleAt.IsRunning) return;
 					Advance(Ph.Support);
-					if (!Need(PillarUp.Start(PlatName(), SupportH, SupportCol(_roomIdx), out string ws7), "砌支柱", ws7)) return;
+					if (!Need(PillarUp.Start(Plat(), SupportH, Wx(1 + RoomWidth * _roomIdx), out string ws7), "砌支柱", ws7)) return;
 					return;
 
 				case Ph.Support:
@@ -251,30 +243,35 @@ namespace TerraBlind
 					if (++_roomIdx < _rooms)
 					{
 						Advance(Ph.SupportSettle);
-						SettleAt.Start(SupportCol(_roomIdx) + _dir * 2, out _);
+						SettleAt.Start(Wx(3 + RoomWidth * _roomIdx), out _);
 						return;
 					}
-					// 支柱都砌完 → 先【合成】工作台,再放。椅子和墙都要工作台才能合成,
-					// 而工作台本身只要木材,徒手就能合(照抄 _build_house 的顺序)。
-					// 之前直接去放,背包里根本没有 → WalkPlace.Start 立刻 return false,
-					// 一帧就"失败"了。
-					{
-						int benchCol = Col(Width - 2);
-						if (Predicates.Have(Terraria.ID.ItemID.WorkBench) < 1)
-							CraftCoordinator.Craft(Terraria.ID.ItemID.WorkBench, 1);
-						if (Predicates.Have(Terraria.ID.ItemID.WorkBench) < 1)
-						{ Fail($"合不出工作台({CraftCoordinator.LastStop},空槽不足?)"); return; }
-						Advance(Ph.Bench);
-						if (!Need(WalkPlace.Start(benchCol, new List<(int, int, string)>
-							{ (benchCol, _floorRow - 1, ItemName(Terraria.ID.ItemID.WorkBench)) }, out string wb),
-							"放工作台", wb)) return;
-					}
+					// python: 支柱砌完 → settle wx(19) → 重读 floor_row = o["cy"] → 合工作台 → 放
+					Advance(Ph.BenchSettle);
+					SettleAt.Start(Wx(LocalMax - 2), out _);
 					return;
 
+				case Ph.BenchSettle:
+				{
+					if (SettleAt.IsRunning) return;
+					_floorRow = ActExecutor.OriginCy(p);
+					// 先合成再放:椅子和墙要工作台才能合,而工作台本身只要木材,徒手就能合。
+					// 之前直接去放,背包里没有 → WalkPlace.Start 立刻 return false,一帧就"失败"。
+					if (Predicates.Have(H_WORKBENCH) < 1)
+						CraftCoordinator.Craft(H_WORKBENCH, 1);
+					if (Predicates.Have(H_WORKBENCH) < 1)
+					{ Fail($"合不出工作台({CraftCoordinator.LastStop})"); return; }
+					// python 用 place_at(人已经站在 wx(19) 了),不是 walk_place
+					Advance(Ph.Bench);
+					if (!Need(PlaceAction.Start(H_WORKBENCH.ToString(), Wx(LocalMax - 2), _floorRow, 1, 0, 0, true, out string wb),
+						"放工作台", wb)) return;
+					return;
+				}
+
 				case Ph.Bench:
-					if (WalkPlace.IsRunning) return;
-					if (!Main.tile[Col(Width - 2), _floorRow - 1].HasTile)
-					{ Fail($"工作台没放上 ({Col(Width - 2)},{_floorRow - 1}):{WalkPlace.Outcome}/{WalkPlace.Reason}"); return; }
+					if (PlaceAction.IsRunning) return;
+					if (!Main.tile[Wx(LocalMax - 2), _floorRow].HasTile)
+					{ Fail($"工作台没放上 ({Wx(LocalMax - 2)},{_floorRow}):{PlaceAction.Outcome}"); return; }
 					Advance(Ph.Craft);
 					return;
 
@@ -283,33 +280,35 @@ namespace TerraBlind
 					// 工作台放下后配方要几帧才出现,所以这一步等它出现再合成
 					bool ready = false;
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
-						if (Main.recipe[Main.availableRecipe[ri]].createItem.type == Terraria.ID.ItemID.WoodenChair)
+						if (Main.recipe[Main.availableRecipe[ri]].createItem.type == H_TABLE)
 						{ ready = true; break; }
 					if (!ready) return;      // 等,由 StepTimeout 兜底
 
 					if (TableCount > 0)
 					{
-						int tables = Predicates.Have(Terraria.ID.ItemID.WoodenTable);
-						if (tables < TableCount) CraftCoordinator.Craft(Terraria.ID.ItemID.WoodenTable, TableCount - tables);
+						int tables = Predicates.Have(H_TABLE);
+						if (tables < TableCount) CraftCoordinator.Craft(H_TABLE, TableCount - tables);
 					}
-					int chairs = Predicates.Have(Terraria.ID.ItemID.WoodenChair);
-					if (chairs < ChairCount) CraftCoordinator.Craft(Terraria.ID.ItemID.WoodenChair, ChairCount - chairs);
-					int walls = Predicates.Have(Terraria.ID.ItemID.WoodWall);
-					if (walls < WallCount) CraftCoordinator.Craft(Terraria.ID.ItemID.WoodWall, WallCount - walls);
+					int chairs = Predicates.Have(H_CHAIR);
+					if (chairs < ChairCount) CraftCoordinator.Craft(H_CHAIR, ChairCount - chairs);
+					int walls = Predicates.Have(H_WALL);
+					if (walls < WallCount) CraftCoordinator.Craft(H_WALL, WallCount - walls);
 
 					// 合不出来就如实失败 —— CraftCoordinator 只数真进了背包的
-					if (Predicates.Have(Terraria.ID.ItemID.WoodenChair) < ChairCount)
-					{ Fail($"椅子只有 {Predicates.Have(Terraria.ID.ItemID.WoodenChair)}/{ChairCount}"); return; }
-					if (Predicates.Have(Terraria.ID.ItemID.WoodWall) < WallCount)
-					{ Fail($"木墙只有 {Predicates.Have(Terraria.ID.ItemID.WoodWall)}/{WallCount}"); return; }
+					if (Predicates.Have(H_CHAIR) < ChairCount)
+					{ Fail($"椅子只有 {Predicates.Have(H_CHAIR)}/{ChairCount}"); return; }
+					if (Predicates.Have(H_WALL) < WallCount)
+					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
 
 					Advance(Ph.Furniture);
+					// python: 桌 wx(14,9,4) 走到 wx(3);椅 wx(2,7,12,17) 走到 wx(19)。
+					// 一间的时候只摆 1 把椅子(玩家定的),桌子不摆。
 					var targets = new List<(int, int, string)>();
 					for (int i = 0; i < TableCount; i++)
-						targets.Add((Col(Width - 7 - RoomWidth * i), _floorRow - 1, ItemName(Terraria.ID.ItemID.WoodenTable)));
+						targets.Add((Wx(14 - RoomWidth * i), _floorRow, H_TABLE.ToString()));
 					for (int i = 0; i < ChairCount; i++)
-						targets.Add((Col(Width - 4 - RoomWidth * i), _floorRow - 1, ItemName(Terraria.ID.ItemID.WoodenChair)));
-					if (!Need(WalkPlace.Start(Col(1), targets, out string ws8), "摆家具", ws8)) return;
+						targets.Add((Wx(2 + RoomWidth * i), _floorRow, H_CHAIR.ToString()));
+					if (!Need(WalkPlace.Start(Wx(TableCount > 0 ? 3 : LocalMax - 2), targets, out string ws8), "摆家具", ws8)) return;
 					return;
 				}
 
@@ -317,14 +316,14 @@ namespace TerraBlind
 					if (WalkPlace.IsRunning) return;
 					_roomIdx = 0;
 					Advance(Ph.WallSettle);
-					SettleAt.Start(SupportCol(0) + _dir * 3, out _);
+					SettleAt.Start(Wx(4), out _);
 					return;
 
 				// ── 一间一间铺墙:站到那一间中间,跳回地板层,铺 ──────────────────
 				case Ph.WallSettle:
 					if (SettleAt.IsRunning) return;
 					Advance(Ph.WallHop);
-					HopUp.Start(_floorRow, SupportCol(_roomIdx) + _dir * 3, out _);
+					HopUp.Start(_floorRow, Wx(4 + RoomWidth * _roomIdx), out _);
 					return;
 
 				case Ph.WallHop:
@@ -335,10 +334,18 @@ namespace TerraBlind
 
 				case Ph.Walls:
 					if (PlaceWalls.IsRunning) return;
+					// python 每间铺完墙紧接着放一个火把:place_at wx(col1+2), roof_row+2
+					Advance(Ph.Torch);
+					PlaceAction.Start(H_TORCH.ToString(), Wx(1 + RoomWidth * _roomIdx + 2), _roofRow + 2, 1, 0, 0, true, out _);
+					return;
+
+				case Ph.Torch:
+					if (PlaceAction.IsRunning) return;
+					// 火把放不上不算失败(python 也不检查) —— 少个照明不影响房子成立
 					if (++_roomIdx < _rooms)
 					{
 						Advance(Ph.WallSettle);
-						SettleAt.Start(SupportCol(_roomIdx) + _dir * 3, out _);
+						SettleAt.Start(Wx(4 + RoomWidth * _roomIdx), out _);
 						return;
 					}
 					Outcome = "done"; _ph = Ph.Done;
@@ -361,12 +368,11 @@ namespace TerraBlind
 
 		static void StartWalls(int room)
 		{
-			int roofRow = _floorRow - PillarH;
 			int col1 = 1 + RoomWidth * room;
 			var cells = new List<(int, int)>();
 			foreach (var (dr, dc) in WallOrder)
-				cells.Add((Col(col1 + (dc - 1)), roofRow + dr));
-			if (!Need(PlaceWalls.Start(ItemName(Terraria.ID.ItemID.WoodWall), cells, out string ws9), "铺墙", ws9)) return;
+				cells.Add((Wx(col1 + (dc - 1)), _roofRow + dr));
+			if (!Need(PlaceWalls.Start(H_WALL.ToString(), cells, out string ws9), "铺墙", ws9)) return;
 		}
 
 		// 原语的 Start 失败时【不会】把 IsRunning 置起来,所以丢掉返回值的话下一帧看见
