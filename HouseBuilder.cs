@@ -128,7 +128,19 @@ namespace TerraBlind
 					if (ActExecutor.OriginCx(p) != _x0 && _liftTries == 0)
 					{ Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
 					int cy = ActExecutor.OriginCy(p);
-					if (cy <= _ay + 1)   // 地板放在 _ay,人得站在 _ay+1 才够得着往上放
+					// 人站在 _ay 那格时,身体正占着要放地板的位置 —— 方块放不进碰撞箱,
+					// 报出来就是"没放上地板"。选址允许房子悬空,左下角完全可能就是人脚下那格。
+					// N 键那条能跑通的路径用的是 OriginCy(p)+1:地板铺在【人踩着的那一行】,
+					// 房子长在人现在站的高度上。这里对齐成一样的行为。
+					if (cy >= _ay - 1)
+					{
+						// 人已经在目标高度或更高:地板就铺在脚下那一行,和 N 键(OriginCy+1)一致。
+						// 直接用 _ay 的话人正占着那格,方块放不进碰撞箱 → "没放上地板"。
+						if (_ay != cy + 1)
+							DiagLog.Write($"[house] 左下角 y={_ay} 够不着/在身上,地板改到脚下那行 {cy + 1}");
+						_ay = cy + 1;
+					}
+					if (cy == _ay - 1)   // 站在地板那行的上面一格 = 踩着它
 					{
 						_floorRow = _ay;
 						Advance(Ph.SeedFloor);
