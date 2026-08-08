@@ -277,10 +277,13 @@ namespace TerraBlind
 
 				case Ph.Craft:
 				{
-					// 工作台放下后配方要几帧才出现,所以这一步等它出现再合成
+					// 工作台放下后配方要几帧才出现,等它出现再合成。
+					// 等的是【自己真要合的那样东西】:python 盖 4 间所以等木桌,单间不做桌子,
+					// 等木桌会一直等到超时 —— 单间等木椅。
+					int waitFor = TableCount > 0 ? H_TABLE : H_CHAIR;
 					bool ready = false;
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
-						if (Main.recipe[Main.availableRecipe[ri]].createItem.type == H_TABLE)
+						if (Main.recipe[Main.availableRecipe[ri]].createItem.type == waitFor)
 						{ ready = true; break; }
 					if (!ready) return;      // 等,由 StepTimeout 兜底
 
@@ -300,9 +303,8 @@ namespace TerraBlind
 					if (Predicates.Have(H_WALL) < WallCount)
 					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
 
-					// python 分两趟,方向相反:桌 wx(14,9,4) 一路走到 wx(3);椅 wx(2,7,12,17)
-					// 再走回 wx(19)。合成一趟的话人只朝一个方向走,反向的目标会被走过头。
-					// 一间的时候没有桌子,直接进椅子那趟。
+					// 单间:工作台就在脚下,合完椅子直接原地放,不走来走去。
+					// 多间才需要 walk_place —— 桌 wx(14,9,4) 走到 wx(3),椅 wx(2,7,12,17) 走回 wx(19)。
 					if (TableCount > 0)
 					{
 						var tt = new List<(int, int, string)>();
@@ -312,8 +314,10 @@ namespace TerraBlind
 						if (!Need(WalkPlace.Start(Wx(3), tt, out string wt), "摆桌子", wt)) return;
 						return;
 					}
+					// 椅子放在工作台旁边那格(人现在就站这儿)
 					Advance(Ph.Chairs);
-					if (!Need(StartChairs(out string wc0), "摆椅子", wc0)) return;
+					if (!Need(PlaceAction.Start(H_CHAIR.ToString(), Wx(LocalMax - 3), _floorRow, 1, 0, 0, true, out string wc0),
+						"放椅子", wc0)) return;
 					return;
 				}
 
@@ -325,18 +329,12 @@ namespace TerraBlind
 					return;
 
 				case Ph.Chairs:
-					if (WalkPlace.IsRunning) return;
-					DiagLog.Write($"[house] chairs → {WalkPlace.Outcome}/{WalkPlace.Reason} 背包椅子={Predicates.Have(H_CHAIR)}");
-					// incomplete = 走到头了但有目标没放上(路过时还够不着)。再走一趟就补上了,
-					// 因为这次是从另一头出发 —— 这就是"有时候椅子放不出来"。
-					if (WalkPlace.Outcome == "incomplete" && ++_hopTries <= 3)
-					{
-						if (!Need(StartChairs(out string wc2), "补摆椅子", wc2)) return;
-						_waited = 0;
-						return;
-					}
-					_hopTries = 0;
+					// 单间走的是 PlaceAction,多间走 WalkPlace —— 等哪个都行,两个都不在跑就是完了
+					if (PlaceAction.IsRunning || WalkPlace.IsRunning) return;
+					DiagLog.Write($"[house] chairs → 背包椅子={Predicates.Have(H_CHAIR)}");
 					_roomIdx = 0;
+					// 单间:人已经站在地板上了,直接砌墙。PlaceWalls 够不着的格子自己会跳。
+					if (_rooms == 1) { Advance(Ph.Walls); StartWalls(0); return; }
 					Advance(Ph.WallSettle);
 					SettleAt.Start(Wx(4), out _);
 					return;
