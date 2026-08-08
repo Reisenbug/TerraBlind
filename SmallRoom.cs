@@ -15,7 +15,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Floor, RightPillar, HopTop, Roof, Drop, LeftPillar,
+			Idle, Floor, RightPillar, SettleBelow, HopTop, SettleTop, Roof, Drop, LeftPillar,
 			Bench, Chair, Walls, Done
 		}
 
@@ -56,7 +56,7 @@ namespace TerraBlind
 		{
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
-			BridgeBuilder.Stop(); PillarUp.Stop(); HopUp.Stop(); DropDown.Stop();
+			BridgeBuilder.Stop(); PillarUp.Stop(); HopUp.Stop(); DropDown.Stop(); SettleAt.Stop();
 			PlaceAction.Stop(); PlaceWalls.Stop();
 		}
 
@@ -102,6 +102,8 @@ namespace TerraBlind
 				case Ph.Floor:
 					if (BridgeBuilder.IsRunning) return;
 					if (BridgeBuilder.Outcome != "done") { Fail($"floor:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
+					// 砌柱子之前【不要】站到那一列去:传了 col 的 PillarUp 不会 StepAside,
+					// 身体占着那格就砌不上。站在地基上别处就行,顺序照搬 _build_house。
 					Advance(Ph.RightPillar);
 					PillarUp.Start(PlatName(), PillarH, RightCol, out _);
 					return;
@@ -109,6 +111,13 @@ namespace TerraBlind
 				case Ph.RightPillar:
 					if (PillarUp.IsRunning) return;
 					if (PillarUp.Outcome != "done") { Fail($"right_pillar:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					// 砌完了才站到柱子底下,再往上跳。
+					Advance(Ph.SettleBelow);
+					SettleAt.Start(RightCol, out _);
+					return;
+
+				case Ph.SettleBelow:
+					if (SettleAt.IsRunning) return;
 					Advance(Ph.HopTop);
 					HopUp.Start(_floorRow - 1 - PillarH, RightCol, out _);
 					return;
@@ -129,11 +138,29 @@ namespace TerraBlind
 						HopUp.Start(topRow, RightCol, out _);
 						return;
 					}
+					// 跳上来带着横向残速,不刹住会滑出柱子一格 —— 屋顶是从人脚下那格往回铺的,
+					// 起点错一格整个屋顶就错一格。
 					_hopTries = 0;
+					Advance(Ph.SettleTop);
+					SettleAt.Start(RightCol, out _);
+					return;
+				}
+
+				case Ph.SettleTop:
+					if (SettleAt.IsRunning) return;
+					// 照 _build_house 那样验一遍列和行都对了才铺屋顶 —— 屋顶沿人脚下那一行走,
+					// 站错了整条屋顶就错。
+					if (ActExecutor.OriginCx(p) != RightCol || ActExecutor.OriginCy(p) > _floorRow - 1 - PillarH)
+					{
+						if (++_hopTries > MaxHopTries)
+						{ Fail($"top:({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 要 ({RightCol},{_floorRow - 1 - PillarH})"); return; }
+						_ph = Ph.HopTop; _waited = 0;
+						HopUp.Start(_floorRow - 1 - PillarH, RightCol, out _);
+						return;
+					}
 					Advance(Ph.Roof);
 					BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", RoofLen, out _);
 					return;
-				}
 
 				case Ph.Roof:
 					if (BridgeBuilder.IsRunning) return;
