@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, LiftHop, LiftSettle, SeedFloor, HopFloor, Floor,
+			Idle, Lift, LiftPillar, LiftSettle, LiftHop, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
@@ -128,68 +128,55 @@ namespace TerraBlind
 			switch (_ph)
 			{
 				// ── 先站到左下角那一列,再垫到地板下面那一行 ────────────────────────
+				// 悬空的房址靠【平台】上去:平台既是梯子也是地板。
+				// PillarUp 直接砌房子那一列,一路砌到 _ay —— 最上面那块平台就是地板第一格,
+				// 人踩着它就是"脚踩左下角"。不需要先站到空中再放东西(站不住),也不需要
+				// 在旁边另砌一根再横跨过去。
 				case Ph.Lift:
 				{
 					if (SettleAt.IsRunning || PillarUp.IsRunning || HopUp.IsRunning) return;
-					if (ActExecutor.OriginCx(p) != _x0)
-					{
-						// 每一轮都要在这一列上:后面每一步都拿 _x0 当锚点,差一格整座房子就偏。
-						// 用自己的计数,别和垫高共用 —— 否则对几次列就把垫高的次数耗光了。
-						if (++_alignTries > MaxLift) { Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
-						SettleAt.Start(_x0, out _);
-						return;
-					}
 					int cy = ActExecutor.OriginCy(p);
-					// 开工的唯一前置条件:【脚踩着左下角那一格】,即 OriginCy == _ay - 1。
-					// _ay 就是地板要铺的那一行,人的身体在它上面一行。人站在 _ay 里的话
-					// 身体占着要放方块的格子,放不进去 —— 那就是 "没放上地板"。
-					if (cy == _ay - 1)
+					// 已经踩在左下角上了 → 直接开工
+					if (cy == _ay - 1 && ActExecutor.OriginCx(p) == _x0 && Main.tile[_x0, _ay].HasTile)
 					{
 						_floorRow = _ay;
-						Advance(Ph.SeedFloor);
-						if (!Need(PlaceAction.Start(Plat(), _x0, _ay, 1, 0, 0, true, out string ws1), "放地板第一格", ws1)) return;
+						Advance(Ph.HopFloor);
+						HopUp.Start(_ay, _x0, out _);
 						return;
 					}
-					if (++_liftTries > MaxLift) { Fail($"垫了{MaxLift}次还站不到 ({_x0},{_ay - 1}),现在 cy={cy}"); return; }
+					if (++_liftTries > MaxLift) { Fail($"上不到 ({_x0},{_ay - 1}),现在 ({ActExecutor.OriginCx(p)},{cy})"); return; }
 					if (cy < _ay - 1)
 					{
-						// 站得比左下角还高 —— 掉下来。悬空选址时会出现。
-						if (!Need(DropDown.Start(out string wd), "下到左下角", wd)) return;
+						// 比房址还高 —— 先掉下来
+						if (!Need(DropDown.Start(out string wd), "下到房址高度", wd)) return;
 						_ph = Ph.Lift; _waited = 0;
 						return;
 					}
-					// 在下面:一格一格垫上去,每垫一格跳上去再回到这里重新判 —— 不猜要垫几格。
-					// col 不传,让 PillarUp 自己把身体从这一列让开(照抄 python)。
-					if (!Need(PillarUp.Start(Plat(), 1, -1, out string ws2), "垫平台", ws2)) return;
-					Advance(Ph.LiftHop);
+					// 砌平台梯:目标就是房子那一列,砌到 _ay 为止。柱顶那块平台 = 地板第一格。
+					int need = cy - (_ay - 1);
+					Advance(Ph.LiftPillar);
+					if (!Need(PillarUp.Start(Plat(), need, _x0, out string ws2), "砌平台梯", ws2)) return;
 					return;
 				}
 
-				case Ph.LiftHop:
+				case Ph.LiftPillar:
 					if (PillarUp.IsRunning) return;
-					if (PillarUp.Outcome != "done") { Fail($"垫平台:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
-					// hop_up 【不传 col】—— 照抄 python。传了 col 它会先进 Align 相位左右走到那一列,
-					// 而 PillarUp(col<0) 刚把身体往旁边让开过,于是每垫一格都要来回蹭一趟,
-					// 蹭的时候脚下未必有平台又跳不上去 —— 就是"跳半天才放出第二个平台"。
-					// 就地起跳,对齐留给下一步的 settle。
+					if (PillarUp.Outcome != "done") { Fail($"平台梯:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					// 砌完站到那一列底下再往上跳 —— 顺序照抄 _build_house 的 pillar→settle→hop
 					Advance(Ph.LiftSettle);
-					HopUp.Start(ActExecutor.OriginCy(p) - 1, int.MinValue, out _);
-					return;
-
-				case Ph.LiftSettle:
-					if (HopUp.IsRunning) return;
-					// 每次垫完都重新对回左下角那一列,再回 Lift 重判高度
-					_ph = Ph.Lift; _waited = 0;
 					SettleAt.Start(_x0, out _);
 					return;
 
-				case Ph.SeedFloor:
-					if (PlaceAction.IsRunning) return;
-					// bridge 是"站在已铺好的地板上往外接",起点这格得先有
-					if (!Predicates.InBounds(_x0, _ay) || !Main.tile[_x0, _ay].HasTile)
-					{ Fail($"({_x0},{_ay}) 没放上地板"); return; }
-					Advance(Ph.HopFloor);
+				case Ph.LiftSettle:
+					if (SettleAt.IsRunning) return;
+					Advance(Ph.LiftHop);
 					HopUp.Start(_ay, _x0, out _);
+					return;
+
+				case Ph.LiftHop:
+					if (HopUp.IsRunning) return;
+					// 回 Lift 重判:上到了就开工,没上到就再砌/再跳(有 _liftTries 兜底)
+					_ph = Ph.Lift; _waited = 0;
 					return;
 
 				case Ph.HopFloor:
