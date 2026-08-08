@@ -25,4 +25,6 @@ Keybinds: {
 	ToggleBuildReplay.DisplayName: Toggle Build Replay
 	ToggleBuildRecord.DisplayName: Toggle Build Record
 	ShowHouseSite.DisplayName: Show House Site
+	TestBridge.DisplayName: Test Bridge
+	TestRoom.DisplayName: Test Room
 }

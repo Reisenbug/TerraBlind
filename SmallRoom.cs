@@ -23,6 +23,8 @@ namespace TerraBlind
 		private static int _dir = 1;              // 房间往哪边铺(+1 右)
 		private static int _x0, _floorRow;        // 起点列 / 地板所在行
 		private static int _waited;
+		private static int _hopTries;
+		private const int MaxHopTries = 12;
 
 		public const int Width = 6;
 		public const int PillarH = 9;
@@ -42,11 +44,11 @@ namespace TerraBlind
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ActExecutor.OriginCx(p);
 			_floorRow = ActExecutor.OriginCy(p) + 1;
-			_waited = 0;
+			_waited = 0; _hopTries = 0;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Floor;
 			DiagLog.Write($"[room] start dir={_dir} x0={_x0} floor_row={_floorRow}");
-			BridgeBuilder.Start(PlatformName(), _dir > 0 ? "right" : "left", Width, out _);
+			BridgeBuilder.Start(SolidName(), _dir > 0 ? "right" : "left", Width, out _);
 			return true;
 		}
 
@@ -58,26 +60,35 @@ namespace TerraBlind
 			PlaceAction.Stop(); PlaceWalls.Stop();
 		}
 
-		// 手上有什么就用什么:地狱里木材未必够,挖出来的地狱岩一样能铺。
-		static string PlatformName()
+		// 地板要实心方块(人站的地面),柱子和屋顶用平台 —— 平台能穿过去,盖的时候不挡自己。
+		// 地狱里木材未必够,挖出来的地狱岩一样能用,所以按"背包里存量最多的"挑,不写死物品。
+		static string SolidName() => PickItem(true);
+		static string PlatName() => PickItem(false);
+
+		static string PickItem(bool wantSolid)
 		{
 			var p = Main.LocalPlayer;
 			var td = Terraria.ID.TileID.Sets.Platforms;
+			string best = null; int bestStack = 0;
 			for (int i = 0; i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
 				if (it == null || it.IsAir || it.createTile < 0) continue;
-				if (td != null && it.createTile < td.Length && td[it.createTile]) return it.Name;
+				bool isPlat = td != null && it.createTile < td.Length && td[it.createTile];
+				if (wantSolid)
+				{
+					// 实心地面:平台不算(会被穿过去),家具火把之类也不算
+					if (isPlat || !Main.tileSolid[it.createTile]) continue;
+				}
+				else if (!isPlat) continue;
+				if (it.stack > bestStack) { bestStack = it.stack; best = it.Name; }
 			}
-			for (int i = 0; i < p.inventory.Length; i++)
-			{
-				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.createTile >= 0 && it.stack >= Width) return it.Name;
-			}
-			return "木平台";
+			return best ?? (wantSolid ? "木材" : "木平台");
 		}
 
-		static int RightCol => _x0 + _dir * (Width - 1);
+		// 地板是从 _x0+dir 开始铺 Width 格(BridgeBuilder 不铺人脚下那格),所以最后一格是 _x0+dir*Width。
+		// 以前按 _x0+dir*(Width-1) 算,柱子就歪进了地板里一格。
+		static int RightCol => _x0 + _dir * Width;
 
 		public static void Tick()
 		{
@@ -92,22 +103,37 @@ namespace TerraBlind
 					if (BridgeBuilder.IsRunning) return;
 					if (BridgeBuilder.Outcome != "done") { Fail($"floor:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
 					Advance(Ph.RightPillar);
-					PillarUp.Start(PlatformName(), PillarH, RightCol, out _);
+					PillarUp.Start(PlatName(), PillarH, RightCol, out _);
 					return;
 
 				case Ph.RightPillar:
 					if (PillarUp.IsRunning) return;
 					if (PillarUp.Outcome != "done") { Fail($"right_pillar:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
 					Advance(Ph.HopTop);
-					HopUp.Start(_floorRow - (PillarH - 1), RightCol, out _);
+					HopUp.Start(_floorRow - 1 - PillarH, RightCol, out _);
 					return;
 
 				case Ph.HopTop:
+				{
 					if (HopUp.IsRunning) return;
-					// 上没上去看脚下那一行,不看 outcome —— 跳不满也可能已经站上去了
+					// 屋顶铺在"人当时脚下那一行",所以人没真上到柱顶就铺,屋顶就长在半空的错误高度上
+					// (实测 row=205 和 207,柱顶其实是 200)。这里必须验高度,不能直接往下走。
+					// PillarUp 的第一块砌在【人自己那格】(_baseWy = OriginCy),所以 n 块的顶块在
+					// OriginCy-(n-1),站上去就是 OriginCy-n。人开工时站在 _floorRow-1。
+					int topRow = _floorRow - 1 - PillarH;
+					int cy = ActExecutor.OriginCy(p);
+					if (cy > topRow)
+					{
+						// 一次跳不满是正常的(9 格柱子要跳几次),再跳,别当失败。
+						if (++_hopTries > MaxHopTries) { Fail($"hop_top:停在 {cy},要到 {topRow}"); return; }
+						HopUp.Start(topRow, RightCol, out _);
+						return;
+					}
+					_hopTries = 0;
 					Advance(Ph.Roof);
-					BridgeBuilder.Start(PlatformName(), _dir > 0 ? "left" : "right", RoofLen, out _);
+					BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", RoofLen, out _);
 					return;
+				}
 
 				case Ph.Roof:
 					if (BridgeBuilder.IsRunning) return;
@@ -119,7 +145,7 @@ namespace TerraBlind
 				case Ph.Drop:
 					if (DropDown.IsRunning) return;
 					Advance(Ph.LeftPillar);
-					PillarUp.Start(PlatformName(), LeftPillarH, _x0, out _);
+					PillarUp.Start(PlatName(), LeftPillarH, _x0, out _);
 					return;
 
 				case Ph.LeftPillar:
@@ -166,10 +192,11 @@ namespace TerraBlind
 		// 墙铺在地板和屋顶之间的内腔:地板上一行到屋顶下一行,两根柱子之间。
 		static void StartWalls()
 		{
+			// 内腔:地板上面一行 到 屋顶下面一行,左右柱子之间(都不含柱子本身)。
 			var cells = new System.Collections.Generic.List<(int, int)>();
-			int top = _floorRow - (PillarH - 1);
-			for (int r = _floorRow - 1; r > top; r--)
-				for (int k = 1; k < Width - 1; k++)
+			int roofRow = _floorRow - 1 - PillarH;
+			for (int r = _floorRow - 1; r > roofRow; r--)
+				for (int k = 1; k < Width; k++)
 					cells.Add((_x0 + _dir * k, r));
 			PlaceWalls.Start("木墙", cells, out _);
 		}
