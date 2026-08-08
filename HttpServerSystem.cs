@@ -2639,6 +2639,34 @@ namespace TerraBlind
 					}
 				}
 			}
+			else if (path == "/build_house")
+			{
+				// 盖房子的唯一入口。rooms=4 是地表那座 21 宽的,rooms=1 是肉山桥起点那间。
+				// 编排整个在 mod 里(HouseBuilder),python 只负责选址和触发。
+				string rbh = ReadBody(ctx).Replace(" ", "");
+				int GetH(string k, int dflt)
+				{
+					var m = System.Text.RegularExpressions.Regex.Match(rbh, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
+					return m.Success ? int.Parse(m.Groups[1].Value) : dflt;
+				}
+				var php = Main.LocalPlayer;
+				int rooms = GetH("rooms", 4);
+				int hdir = GetH("dir", 1);
+				int hax = GetH("x", php != null ? ActExecutor.OriginCx(php) : 0);
+				int hay = GetH("y", php != null ? ActExecutor.OriginCy(php) + 1 : 0);
+				bool okh = HouseBuilder.Start(rooms, hdir, hax, hay, out string whyh);
+				body = okh ? "{\"accepted\":true,\"rooms\":" + rooms + ",\"corner\":[" + hax + "," + hay + "],\"note\":\"poll /build_house_status\"}"
+						   : "{\"accepted\":false,\"reason\":\"" + JsonEsc(whyh) + "\"}";
+			}
+			else if (path == "/build_house_status")
+			{
+				body = HouseBuilder.StatusJson();
+			}
+			else if (path == "/build_house_stop")
+			{
+				HouseBuilder.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/scan_house")
 			{
 				// 房子就是一个 w×h 的矩形,(x,y) 是左下角。除了"里面全空"没有别的条件:

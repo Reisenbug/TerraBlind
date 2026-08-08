@@ -73,12 +73,12 @@ namespace TerraBlind
 			// N 测试单间:在脚下朝面朝方向盖 6 宽的单间。
 			if (TerraBlind.TestRoom != null && TerraBlind.TestRoom.JustPressed)
 			{
-				if (SmallRoom.IsRunning)
+				if (HouseBuilder.IsRunning)
 				{
-					SmallRoom.Stop();
-					Main.NewText("[TerraBlind] 单间已停", 255, 200, 120);
+					HouseBuilder.Stop();
+					Main.NewText("[TerraBlind] 盖房已停", 255, 200, 120);
 				}
-				else if (SmallRoom.Start(Main.LocalPlayer.direction, out string rwhy))
+				else if (HouseBuilder.StartHere(1, Main.LocalPlayer.direction, out string rwhy))
 					Main.NewText("[TerraBlind] 盖单间…", 120, 255, 120);
 				else
 					Main.NewText($"[TerraBlind] 盖不了: {rwhy}", 255, 120, 120);
@@ -216,9 +216,9 @@ namespace TerraBlind
 				return;
 			}
 
-			// small room: pure orchestration over the other primitives. Ticked BEFORE them so a step it starts
+			// house: pure orchestration over the other primitives. Ticked BEFORE them so a step it starts
 			// this frame is driven immediately; it writes no controls itself.
-			if (SmallRoom.IsRunning) SmallRoom.Tick();
+			if (HouseBuilder.IsRunning) HouseBuilder.Tick();
 
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)
