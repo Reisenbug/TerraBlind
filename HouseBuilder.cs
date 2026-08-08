@@ -68,7 +68,7 @@ namespace TerraBlind
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width}");
 			// 先对齐到左下角那一列:nav 容差 1.5 格,后面每一步都拿 _x0 当锚点。
 			_ph = Ph.Lift;
-			SettleAt.Start(_x0, out _);
+			if (!Need(SettleAt.Start(_x0, out string w0), "对齐左下角", w0)) return false;
 			return true;
 		}
 
@@ -141,12 +141,12 @@ namespace TerraBlind
 					{
 						_floorRow = _ay;
 						Advance(Ph.SeedFloor);
-						PlaceAction.Start(SolidName(), _x0, _ay, 1, 0, 0, true, out _);
+						if (!Need(PlaceAction.Start(SolidName(), _x0, _ay, 1, 0, 0, true, out string ws1), "放地板第一格", ws1)) return;
 						return;
 					}
 					if (++_liftTries > MaxLift) { Fail($"垫了{MaxLift}次还没到 {_ay + 1}"); return; }
 					// col 不传:让 PillarUp 自己把身体从这一列让开
-					PillarUp.Start(PlatName(), 1, -1, out _);
+					if (!Need(PillarUp.Start(PlatName(), 1, -1, out string ws2), "垫平台", ws2)) return;
 					_ph = Ph.Lift; _waited = 0;
 					return;
 				}
@@ -170,7 +170,7 @@ namespace TerraBlind
 					}
 					_hopTries = 0;
 					Advance(Ph.Floor);
-					BridgeBuilder.Start(SolidName(), _dir > 0 ? "right" : "left", Width, out _);
+					if (!Need(BridgeBuilder.Start(SolidName(), _dir > 0 ? "right" : "left", Width, out string ws3), "铺地板", ws3)) return;
 					return;
 
 				case Ph.Floor:
@@ -178,7 +178,7 @@ namespace TerraBlind
 					if (BridgeBuilder.Outcome != "done") { Fail($"地板:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
 					// 砌柱子前【不要】站到那一列:传了 col 的 PillarUp 不会 StepAside,身体占着就砌不上
 					Advance(Ph.MainPillar);
-					PillarUp.Start(PlatName(), PillarH, MainCol, out _);
+					if (!Need(PillarUp.Start(PlatName(), PillarH, MainCol, out string ws4), "砌主柱", ws4)) return;
 					return;
 
 				case Ph.MainPillar:
@@ -214,7 +214,7 @@ namespace TerraBlind
 					_hopTries = 0;
 					// 屋顶沿人现在脚下那一行铺(照抄 roof_row = o["cy"]+1),不用公式
 					Advance(Ph.Roof);
-					BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", Width - 1, out _);
+					if (!Need(BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", Width - 1, out string ws5), "铺屋顶", ws5)) return;
 					return;
 
 				case Ph.Roof:
@@ -228,7 +228,7 @@ namespace TerraBlind
 				case Ph.MoveOver:
 					if (SettleAt.IsRunning) return;
 					Advance(Ph.Drop);
-					DropDown.Start(out _);
+					if (!Need(DropDown.Start(out string ws6), "掉下来", ws6)) return;
 					return;
 
 				// ── 每间一根支柱。站到支柱旁边(不是支柱上)再砌 ────────────────────
@@ -242,7 +242,7 @@ namespace TerraBlind
 				case Ph.SupportSettle:
 					if (SettleAt.IsRunning) return;
 					Advance(Ph.Support);
-					PillarUp.Start(PlatName(), SupportH, SupportCol(_roomIdx), out _);
+					if (!Need(PillarUp.Start(PlatName(), SupportH, SupportCol(_roomIdx), out string ws7), "砌支柱", ws7)) return;
 					return;
 
 				case Ph.Support:
@@ -254,19 +254,27 @@ namespace TerraBlind
 						SettleAt.Start(SupportCol(_roomIdx) + _dir * 2, out _);
 						return;
 					}
-					// 支柱都砌完 → 放工作台(椅子和墙都要它才能合成)
-					Advance(Ph.Bench);
+					// 支柱都砌完 → 先【合成】工作台,再放。椅子和墙都要工作台才能合成,
+					// 而工作台本身只要木材,徒手就能合(照抄 _build_house 的顺序)。
+					// 之前直接去放,背包里根本没有 → WalkPlace.Start 立刻 return false,
+					// 一帧就"失败"了。
 					{
 						int benchCol = Col(Width - 2);
-						WalkPlace.Start(benchCol, new List<(int, int, string)>
-						{ (benchCol, _floorRow - 1, ItemName(Terraria.ID.ItemID.WorkBench)) }, out _);
+						if (Predicates.Have(Terraria.ID.ItemID.WorkBench) < 1)
+							CraftCoordinator.Craft(Terraria.ID.ItemID.WorkBench, 1);
+						if (Predicates.Have(Terraria.ID.ItemID.WorkBench) < 1)
+						{ Fail($"合不出工作台({CraftCoordinator.LastStop},空槽不足?)"); return; }
+						Advance(Ph.Bench);
+						if (!Need(WalkPlace.Start(benchCol, new List<(int, int, string)>
+							{ (benchCol, _floorRow - 1, ItemName(Terraria.ID.ItemID.WorkBench)) }, out string wb),
+							"放工作台", wb)) return;
 					}
 					return;
 
 				case Ph.Bench:
 					if (WalkPlace.IsRunning) return;
 					if (!Main.tile[Col(Width - 2), _floorRow - 1].HasTile)
-					{ Fail($"工作台没放上 ({Col(Width - 2)},{_floorRow - 1})"); return; }
+					{ Fail($"工作台没放上 ({Col(Width - 2)},{_floorRow - 1}):{WalkPlace.Outcome}/{WalkPlace.Reason}"); return; }
 					Advance(Ph.Craft);
 					return;
 
@@ -301,7 +309,7 @@ namespace TerraBlind
 						targets.Add((Col(Width - 7 - RoomWidth * i), _floorRow - 1, ItemName(Terraria.ID.ItemID.WoodenTable)));
 					for (int i = 0; i < ChairCount; i++)
 						targets.Add((Col(Width - 4 - RoomWidth * i), _floorRow - 1, ItemName(Terraria.ID.ItemID.WoodenChair)));
-					WalkPlace.Start(Col(1), targets, out _);
+					if (!Need(WalkPlace.Start(Col(1), targets, out string ws8), "摆家具", ws8)) return;
 					return;
 				}
 
@@ -358,7 +366,18 @@ namespace TerraBlind
 			var cells = new List<(int, int)>();
 			foreach (var (dr, dc) in WallOrder)
 				cells.Add((Col(col1 + (dc - 1)), roofRow + dr));
-			PlaceWalls.Start(ItemName(Terraria.ID.ItemID.WoodWall), cells, out _);
+			if (!Need(PlaceWalls.Start(ItemName(Terraria.ID.ItemID.WoodWall), cells, out string ws9), "铺墙", ws9)) return;
+		}
+
+		// 原语的 Start 失败时【不会】把 IsRunning 置起来,所以丢掉返回值的话下一帧看见
+		// IsRunning==false,会误判成"这步跑完了"然后去验结果 —— 报出来的是"东西没放上",
+		// 而真正的原因(背包里没有 / 够不着)全丢了。实测:工作台那步 1 帧就失败,因为
+		// 背包里还没有工作台,而 Start 早就 return false 了。
+		static bool Need(bool started, string what, string why)
+		{
+			if (started) return true;
+			Fail($"{what} 启动失败:{why}");
+			return false;
 		}
 
 		static void Advance(Ph next)
