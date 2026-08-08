@@ -212,7 +212,10 @@ namespace TerraBlind
                 float tol = _mode == Mode.Stand ? StandDistPx : GoalDistPx;
                 if (System.Math.Abs(cx - gx) <= tol && System.Math.Abs(fy - gy) <= tol
                     && (_mode != Mode.Stand || p.velocity.Y == 0f))
-                { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
+                {
+                    DiagLog.Write($"[recede] reached goal mode={_mode} goal=({_goalWx},{_goalWy}) dx={cx - gx:0.#} dy={fy - gy:0.#} body=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+                    LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return;
+                }
             }
 
             // FAST STUCK SENTINEL — every frame, not just at replan boundaries. It watches the four progress

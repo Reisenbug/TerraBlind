@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, HopFloor, Floor,
+			Idle, Corner, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
@@ -67,29 +67,46 @@ namespace TerraBlind
 		// (ax,ay) = 房子矩形的左下角,也就是【地板要铺的那一格】。
 		// 开工的站位约定:人脚踩着 (ax,ay),即 OriginCx==ax 且 OriginCy==ay-1,静止。
 		//
-		// 这里只【检查】,不搬人。以前是自己砌一根平台梯上去,可房址下面挡着一棵树就整个失败 ——
-		// 而绕开/砍掉/挖穿本来就是寻路会的事。现在搬人是 nav 的活(RecedingNav.Mode.Stand),
-		// 站好了才准开工;没站好当场报错,绝不偷偷改 ay 凑合。
+		// 左下角 (ax,ay) 那一格【是要造出来的,不是走得到的】—— 它就是原来绳子阶段最后放的那块平台:
+		// 既是梯子的顶,也是房子地板的第一格,人站上去才开工。所以 nav 送不到它(要站在一格上,
+		// 那格下面得有东西;而 A* 的 ReachedGoal 要 Grounded,悬空目标永远不成立)。
+		//
+		// 开工站位:站在【旁边一列、下面一行】,即 (ax-dir, ay+1)。为什么不站正下方 (ax,ay+1):
+		// 人 2 列 3 行,站那儿身体正好占着 ay,平台放不进碰撞箱。站旁边一列就让开了,横着把
+		// 平台放到 (ax,ay),再跳上去。
 		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
-			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
-			if (cx != ax || cy != ay - 1)
-			{
-				why = $"not_at_corner: 要脚踩({ax},{ay}) 即身体在({ax},{ay - 1}),现在({cx},{cy})";
-				return false;
-			}
 			_rooms = rooms < 1 ? 1 : rooms;
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _roomIdx = 0; _roofRow = 0;
 			Outcome = "running"; Reason = "";
-			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width}");
-			Advance(Ph.HopFloor);
-			HopUp.Start(_ay, _x0, out _);
+
+			// 一律按【脚】报,别混两套基准:OriginCy 是身体那行,脚在 +1。
+			int cx = ActExecutor.OriginCx(p), footY = ActExecutor.OriginCy(p) + 1;
+			int wantX = ax - _dir, wantFootY = ay + 1;
+			bool onCorner = cx == ax && footY == ay;          // 已经踩在左下角上(角落已存在)
+			bool beside = cx == wantX && footY == wantFootY;  // 站在旁边一列、下面一行
+			if (!onCorner && !beside)
+			{
+				why = $"not_at_corner: 要脚踩({wantX},{wantFootY})[左下角旁边] 或 ({ax},{ay})[左下角本身],现在脚踩({cx},{footY})";
+				return false;
+			}
+			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} beside={beside}");
+			if (onCorner)
+			{
+				Advance(Ph.HopFloor);
+				HopUp.Start(_ay, _x0, out _);
+				return true;
+			}
+			// 横着把左下角那块平台放出来,再跳上去
+			Advance(Ph.Corner);
+			if (!Need(PlaceAction.Start(Plat(), ax, ay, 1, 0, 0, true, out string w0), "放左下角那块平台", w0))
+				return false;
 			return true;
 		}
 
@@ -132,6 +149,16 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
+				// 左下角那块平台 = 原来绳子阶段最后放的那块。放出来了才有地方站。
+				case Ph.Corner:
+					if (PlaceAction.IsRunning) return;
+					if (!Main.tile[_x0, _ay].HasTile)
+					{ Fail($"左下角那块平台没放出来 ({_x0},{_ay}):{PlaceAction.Outcome}/{PlaceAction.Reason}"); return; }
+					// 跳上去交给 HopFloor —— 它本来就是"跳到 _ay 那一行并确认站住",别再写一遍
+					Advance(Ph.HopFloor);
+					HopUp.Start(_ay, _x0, out _);
+					return;
+
 				case Ph.HopFloor:
 					if (HopUp.IsRunning) return;
 					if (ActExecutor.OriginCy(p) != _ay - 1)
