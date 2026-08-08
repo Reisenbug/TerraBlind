@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, SeedFloor, HopFloor, Floor,
+			Idle, Lift, LiftHop, LiftSettle, SeedFloor, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
@@ -65,6 +65,11 @@ namespace TerraBlind
 		static int ChairCount => _rooms >= 4 ? 4 : 1;
 		static int WallCount => _rooms * 24;
 
+		// (ax,ay) = 房子矩形的左下角,也就是【地板要铺的那一格】。
+		// 开工的站位约定:人脚踩着 (ax,ay),即 OriginCx==ax 且 OriginCy==ay-1,静止。
+		// 不满足时 Lift 负责把人送过去(低了垫平台,高了掉下来),送不到就失败 —— 它只搬人,
+		// 绝不偷偷改 ay。以前三个入口对 ay 的理解各不相同,补丁又在这里改 ay,于是
+		// "左下角就在脚下"时人占着要放方块的格子,报 "没放上地板"。
 		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
 		{
 			why = "";
@@ -83,7 +88,8 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 从人当前位置开工(测试键用):脚下那格当左下角。
+		// 从人当前位置开工(测试键用)。左下角 = 人脚踩着的那一格:OriginCy 是身体那行,
+		// 脚下是 +1。这正是 Start 要求的站位,所以 Lift 会直接通过。
 		public static bool StartHere(int rooms, int dir, out string why)
 		{
 			var p = Main.LocalPlayer;
@@ -125,34 +131,52 @@ namespace TerraBlind
 				case Ph.Lift:
 				{
 					if (SettleAt.IsRunning || PillarUp.IsRunning || HopUp.IsRunning) return;
-					if (ActExecutor.OriginCx(p) != _x0 && _liftTries == 0)
-					{ Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
-					int cy = ActExecutor.OriginCy(p);
-					// 人站在 _ay 那格时,身体正占着要放地板的位置 —— 方块放不进碰撞箱,
-					// 报出来就是"没放上地板"。选址允许房子悬空,左下角完全可能就是人脚下那格。
-					// N 键那条能跑通的路径用的是 OriginCy(p)+1:地板铺在【人踩着的那一行】,
-					// 房子长在人现在站的高度上。这里对齐成一样的行为。
-					if (cy >= _ay - 1)
+					if (ActExecutor.OriginCx(p) != _x0)
 					{
-						// 人已经在目标高度或更高:地板就铺在脚下那一行,和 N 键(OriginCy+1)一致。
-						// 直接用 _ay 的话人正占着那格,方块放不进碰撞箱 → "没放上地板"。
-						if (_ay != cy + 1)
-							DiagLog.Write($"[house] 左下角 y={_ay} 够不着/在身上,地板改到脚下那行 {cy + 1}");
-						_ay = cy + 1;
+						// 每一轮都要在这一列上:后面每一步都拿 _x0 当锚点,差一格整座房子就偏。
+						if (++_liftTries > MaxLift) { Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
+						SettleAt.Start(_x0, out _);
+						return;
 					}
-					if (cy == _ay - 1)   // 站在地板那行的上面一格 = 踩着它
+					int cy = ActExecutor.OriginCy(p);
+					// 开工的唯一前置条件:【脚踩着左下角那一格】,即 OriginCy == _ay - 1。
+					// _ay 就是地板要铺的那一行,人的身体在它上面一行。人站在 _ay 里的话
+					// 身体占着要放方块的格子,放不进去 —— 那就是 "没放上地板"。
+					if (cy == _ay - 1)
 					{
 						_floorRow = _ay;
 						Advance(Ph.SeedFloor);
 						if (!Need(PlaceAction.Start(Plat(), _x0, _ay, 1, 0, 0, true, out string ws1), "放地板第一格", ws1)) return;
 						return;
 					}
-					if (++_liftTries > MaxLift) { Fail($"垫了{MaxLift}次还没到 {_ay + 1}"); return; }
-					// col 不传:让 PillarUp 自己把身体从这一列让开
+					if (++_liftTries > MaxLift) { Fail($"垫了{MaxLift}次还站不到 ({_x0},{_ay - 1}),现在 cy={cy}"); return; }
+					if (cy < _ay - 1)
+					{
+						// 站得比左下角还高 —— 掉下来。悬空选址时会出现。
+						if (!Need(DropDown.Start(out string wd), "下到左下角", wd)) return;
+						_ph = Ph.Lift; _waited = 0;
+						return;
+					}
+					// 在下面:一格一格垫上去,每垫一格跳上去再回到这里重新判 —— 不猜要垫几格。
+					// col 不传,让 PillarUp 自己把身体从这一列让开(照抄 python)。
 					if (!Need(PillarUp.Start(Plat(), 1, -1, out string ws2), "垫平台", ws2)) return;
-					_ph = Ph.Lift; _waited = 0;
+					Advance(Ph.LiftHop);
 					return;
 				}
+
+				case Ph.LiftHop:
+					if (PillarUp.IsRunning) return;
+					if (PillarUp.Outcome != "done") { Fail($"垫平台:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					Advance(Ph.LiftSettle);
+					HopUp.Start(ActExecutor.OriginCy(p) - 1, _x0, out _);
+					return;
+
+				case Ph.LiftSettle:
+					if (HopUp.IsRunning) return;
+					// 每次垫完都重新对回左下角那一列,再回 Lift 重判高度
+					_ph = Ph.Lift; _waited = 0;
+					SettleAt.Start(_x0, out _);
+					return;
 
 				case Ph.SeedFloor:
 					if (PlaceAction.IsRunning) return;
