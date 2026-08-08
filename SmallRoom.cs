@@ -15,8 +15,8 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Floor, RightPillar, SettleBelow, HopTop, SettleTop, Roof, Drop, LeftPillar,
-			Bench, Chair, Walls, Done
+			Idle, Floor, RightPillar, SettleBelow, HopTop, SettleTop, Roof, Drop, SettleLeft, LeftPillar,
+			Furniture, Walls, Done
 		}
 
 		private static Ph _ph = Ph.Idle;
@@ -57,7 +57,7 @@ namespace TerraBlind
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
 			BridgeBuilder.Stop(); PillarUp.Stop(); HopUp.Stop(); DropDown.Stop(); SettleAt.Stop();
-			PlaceAction.Stop(); PlaceWalls.Stop();
+			PlaceAction.Stop(); PlaceWalls.Stop(); WalkPlace.Stop();
 		}
 
 		// 地板要实心方块(人站的地面),柱子和屋顶用平台 —— 平台能穿过去,盖的时候不挡自己。
@@ -158,6 +158,15 @@ namespace TerraBlind
 
 				case Ph.Drop:
 					if (DropDown.IsRunning) return;
+					// 屋顶只有 RoofLen 格,铺完人停在屋顶那一端,离 _x0 还差一截 —— 掉下来直接砌
+					// 左柱是够不着的。先走到贴着 _x0 内侧那一格:够得着 _x0,又没占着它
+					// (占着的话传了 col 的 PillarUp 不会 StepAside,砌不上)。
+					Advance(Ph.SettleLeft);
+					SettleAt.Start(_x0 + _dir, out _);
+					return;
+
+				case Ph.SettleLeft:
+					if (SettleAt.IsRunning) return;
 					Advance(Ph.LeftPillar);
 					PillarUp.Start(PlatName(), LeftPillarH, _x0, out _);
 					return;
@@ -165,18 +174,21 @@ namespace TerraBlind
 				case Ph.LeftPillar:
 					if (PillarUp.IsRunning) return;
 					if (PillarUp.Outcome != "done") { Fail($"left_pillar:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
-					Advance(Ph.Bench);
-					PlaceAction.Start("工作台", _x0 + _dir * 2, _floorRow - 1, 1, 0, 0, true, out _);
+					// 家具用 WalkPlace 不用 PlaceAction:砌完柱子人在 _x0 那头,家具在房间中间,
+					// 站着够不着。WalkPlace 会边走边放,路过够得着就放 —— _build_house 也是这么摆的。
+					Advance(Ph.Furniture);
+					{
+						var targets = new System.Collections.Generic.List<(int, int, string)>
+						{
+							(_x0 + _dir * 2, _floorRow - 1, "工作台"),
+							(_x0 + _dir * 4, _floorRow - 1, "木椅"),
+						};
+						WalkPlace.Start(_x0 + _dir * (Width - 1), targets, out _);
+					}
 					return;
 
-				case Ph.Bench:
-					if (PlaceAction.IsRunning) return;
-					Advance(Ph.Chair);
-					PlaceAction.Start("木椅", _x0 + _dir * 4, _floorRow - 1, 1, 0, 0, true, out _);
-					return;
-
-				case Ph.Chair:
-					if (PlaceAction.IsRunning) return;
+				case Ph.Furniture:
+					if (WalkPlace.IsRunning) return;
 					Advance(Ph.Walls);
 					StartWalls();
 					return;
