@@ -23,7 +23,7 @@ namespace TerraBlind
 		{
 			Idle, Lift, SeedFloor, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
-			SupportSettle, Support, BenchSettle, Bench, Craft, Furniture, WallSettle, WallHop, Walls, Torch,
+			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
 		}
 
@@ -206,7 +206,7 @@ namespace TerraBlind
 					// 照抄 roof_row = o["cy"] + 1:屋顶行按实际站位记下来,后面铺墙/放火把都用它
 					_roofRow = ActExecutor.OriginCy(p) + 1;
 					Advance(Ph.Roof);
-					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width - 1, out string ws5), "铺屋顶", ws5)) return;
+					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width, out string ws5), "铺屋顶", ws5)) return;
 					return;
 
 				case Ph.Roof:
@@ -300,20 +300,42 @@ namespace TerraBlind
 					if (Predicates.Have(H_WALL) < WallCount)
 					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
 
-					Advance(Ph.Furniture);
-					// python: 桌 wx(14,9,4) 走到 wx(3);椅 wx(2,7,12,17) 走到 wx(19)。
-					// 一间的时候只摆 1 把椅子(玩家定的),桌子不摆。
-					var targets = new List<(int, int, string)>();
-					for (int i = 0; i < TableCount; i++)
-						targets.Add((Wx(14 - RoomWidth * i), _floorRow, H_TABLE.ToString()));
-					for (int i = 0; i < ChairCount; i++)
-						targets.Add((Wx(2 + RoomWidth * i), _floorRow, H_CHAIR.ToString()));
-					if (!Need(WalkPlace.Start(Wx(TableCount > 0 ? 3 : LocalMax - 2), targets, out string ws8), "摆家具", ws8)) return;
+					// python 分两趟,方向相反:桌 wx(14,9,4) 一路走到 wx(3);椅 wx(2,7,12,17)
+					// 再走回 wx(19)。合成一趟的话人只朝一个方向走,反向的目标会被走过头。
+					// 一间的时候没有桌子,直接进椅子那趟。
+					if (TableCount > 0)
+					{
+						var tt = new List<(int, int, string)>();
+						for (int i = 0; i < TableCount; i++)
+							tt.Add((Wx(14 - RoomWidth * i), _floorRow, H_TABLE.ToString()));
+						Advance(Ph.Tables);
+						if (!Need(WalkPlace.Start(Wx(3), tt, out string wt), "摆桌子", wt)) return;
+						return;
+					}
+					Advance(Ph.Chairs);
+					if (!Need(StartChairs(out string wc0), "摆椅子", wc0)) return;
 					return;
 				}
 
-				case Ph.Furniture:
+				case Ph.Tables:
 					if (WalkPlace.IsRunning) return;
+					DiagLog.Write($"[house] tables → {WalkPlace.Outcome}/{WalkPlace.Reason}");
+					Advance(Ph.Chairs);
+					if (!Need(StartChairs(out string wc), "摆椅子", wc)) return;
+					return;
+
+				case Ph.Chairs:
+					if (WalkPlace.IsRunning) return;
+					DiagLog.Write($"[house] chairs → {WalkPlace.Outcome}/{WalkPlace.Reason} 背包椅子={Predicates.Have(H_CHAIR)}");
+					// incomplete = 走到头了但有目标没放上(路过时还够不着)。再走一趟就补上了,
+					// 因为这次是从另一头出发 —— 这就是"有时候椅子放不出来"。
+					if (WalkPlace.Outcome == "incomplete" && ++_hopTries <= 3)
+					{
+						if (!Need(StartChairs(out string wc2), "补摆椅子", wc2)) return;
+						_waited = 0;
+						return;
+					}
+					_hopTries = 0;
 					_roomIdx = 0;
 					Advance(Ph.WallSettle);
 					SettleAt.Start(Wx(4), out _);
@@ -384,6 +406,17 @@ namespace TerraBlind
 			if (started) return true;
 			Fail($"{what} 启动失败:{why}");
 			return false;
+		}
+
+		// python: 椅子 wx(2,7,12,17),走到 wx(19)。
+		// 重试时换个终点往回走 —— 同一个方向再走一遍,够不着的还是够不着。
+		static bool StartChairs(out string why)
+		{
+			var cc = new List<(int, int, string)>();
+			for (int i = 0; i < ChairCount; i++)
+				cc.Add((Wx(2 + RoomWidth * i), _floorRow, H_CHAIR.ToString()));
+			int dest = (_hopTries % 2 == 0) ? Wx(LocalMax - 2) : Wx(2);
+			return WalkPlace.Start(dest, cc, out why);
 		}
 
 		static void Advance(Ph next)
