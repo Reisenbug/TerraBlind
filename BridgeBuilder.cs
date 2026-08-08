@@ -4,22 +4,27 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// BRIDGE — lay a horizontal platform run N cells long, in a given direction, from where the player stands.
+	// BRIDGE — lay a horizontal run N cells long, in a given direction, from where the player stands.
 	//
-	// Same two-phase shape as RopeLadder, for the same reason: the arm runs out before the run does.
-	//   PLACE — stand still, step the cursor outward one cell at a time, place into every cell the arm reaches.
-	//   WALK  — walk out onto the far end of what was just laid, then place again.
+	// ONE phase, not two. Placing and walking happen in the SAME frame: the cursor always aims at the edge cell and
+	// swings whenever the hand is free, while the feet advance in the gaps. Laying a tile pushes the edge one cell
+	// further out, which is what the feet were walking toward — the two chase each other and neither waits its turn.
 	//
-	// Walking only ever happens on ground that is ALREADY laid, so there is no speed to match and nothing to fall
-	// through: the two phases never overlap. (A human paves while walking and therefore has to meter their speed
-	// against their placement rate — a program moves the cursor a cell per frame, so it can simply stop, fill the
-	// whole reach, and then walk. The human's timing problem is an artefact of the human's hands.)
+	// It used to alternate: fill the whole arm's reach standing still, then walk to the end, then fill again. Every
+	// frame spent walking placed nothing, so roughly half the run was the hand sitting idle. Nothing forced that —
+	// it was justified by "a program can move the cursor a cell per frame, so it need not pave while walking", which
+	// is true and beside the point: not having to interleave is not a reason to leave the hand idle.
 	//
-	// Both phases end on an observed fact — the tile is there / the origin cell actually moved — so the result holds
-	// at any movement speed, with or without boots, wings or honey.
+	// The HAND is the bottleneck (a placement takes item.useTime frames; walking a cell takes fewer), so the feet
+	// yield to it: stop advancing once the edge is close enough that another step would overshoot what the hand can
+	// lay in the meantime. That margin is computed from the live useTime and the live speed, so boots or a slowing
+	// liquid change it automatically — no tuned constant.
+	//
+	// Everything still ends on an observed fact — the tile is there, the origin cell actually moved — so the result
+	// holds at any movement speed.
 	public static class BridgeBuilder
 	{
-		private enum Ph { Idle, Place, Walk, Done }
+		private enum Ph { Idle, Lay, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _item = "";
@@ -27,13 +32,14 @@ namespace TerraBlind
 		private static int _dir = 1;           // +1 right, -1 left
 		private static int _want, _placed, _already;
 		private static int _targetWx, _rowWy;  // cell being placed into; the row the bridge runs along
-		private static int _walkToCx;
 		private static int _lastOriginCx, _walkStall;
 		private static bool _swingIssued;
+		private static int _reachStall;          // 手够不着、脚又走不动 = 真卡住了
 
 		private const int WalkStallLimit = 120;
+		private const int ReachStallLimit = 240;
 
-		public static bool IsRunning => _ph == Ph.Place || _ph == Ph.Walk;
+		public static bool IsRunning => _ph == Ph.Lay;
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
 		public static string Reason = "";
 		public static int Placed => _placed;
@@ -50,14 +56,14 @@ namespace TerraBlind
 			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
-			_ph = Ph.Place;
+			_ph = Ph.Lay;
 
 			// The bridge runs along the row the player STANDS ON — one below their own cell — so walking out onto it
 			// needs no drop or jump.
 			_rowWy = ActExecutor.OriginCy(p) + 1;
 			_targetWx = ActExecutor.OriginCx(p) + _dir;
+			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0;
 			DiagLog.Write($"[bridge] start {itemName} dir={dir} n={_want} slot={_slot} row={_rowWy} from={_targetWx}");
-			BeginPlace();
 			return true;
 		}
 
@@ -68,38 +74,40 @@ namespace TerraBlind
 			ItemUseCoordinator.Stop();
 		}
 
-		private static void BeginPlace()
+		// 手上一次挥完后,ItemUseCoordinator 会把结果留在 Outcome 里。这里只负责:结果算不算数、
+		// 边缘往前推一格、够不够数。
+		private static bool HarvestSwing()
 		{
-			var p = Main.LocalPlayer;
-			// vanilla's own reach test decides where the arm ends — it already accounts for whatever is modifying it.
-			if (!p.IsInTileInteractionRange(_targetWx, _rowWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
-			{
-				BeginWalk();
-				return;
-			}
-			// only OUR tile already being there is a reason to skip; grass and other cut-through decorations do not
-			// block a placement, and refusing to swing at them would skip a cell the game would have accepted.
+			if (!_swingIssued) return true;
+			if (ItemUseCoordinator.IsActive) return false;   // 还在挥,等
+			_swingIssued = false;
+			string o = ItemUseCoordinator.Outcome;
+			// 地图说了算:那格有我们要的东西就是成了。
 			if (IsWanted(_targetWx, _rowWy))
 			{
-				_already++; _targetWx += _dir;
-				if (_placed + _already >= _want) { Finish("done"); return; }
-				BeginPlace();
-				return;
+				if (o == "already_there") _already++; else _placed++;
+				_targetWx += _dir;
+				return true;
 			}
-			ItemUseCoordinator.Start(new ItemUseRequest
-			{ TargetWx = _targetWx, TargetWy = _rowWy, Slot = _slot, DurationTicks = 0, Strict = false });
-			_swingIssued = true;
+			// 够不着不是失败,是该往前走了 —— 走完这一格自然就够得着。
+			if (o == "no_swing" && ItemUseCoordinator.Reason == "out_of_reach") return true;
+			Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
+			Finish("blocked");
+			return false;
 		}
 
-		private static void BeginWalk()
+		// 脚该不该再往前迈一格。手是瓶颈,所以留出"这一块放完期间脚会走多远"的余量:
+		// 放一块 useTime 帧(tileSpeed 是玩家身上的实时加成),这些帧里脚走 useTime×maxRun 像素。
+		// 边缘离得比这还近就停下等手 —— 不然人会走到还没铺的地方掉下去。
+		private static bool ShouldAdvance(Player p)
 		{
-			var p = Main.LocalPlayer;
-			// step out one cell at a time and re-test the reach from there: the arm's true length is whatever vanilla
-			// says at the new stance, never a number assumed here.
-			_walkToCx = ActExecutor.OriginCx(p) + _dir;
-			_lastOriginCx = ActExecutor.OriginCx(p);
-			_walkStall = 0;
-			_ph = Ph.Walk;
+			float edgePx = _targetWx * 16f + 8f;
+			float me = p.position.X + p.width / 2f;
+			float gap = System.Math.Abs(edgePx - me);
+			var it = p.inventory[_slot];
+			float placeFrames = (it != null && !it.IsAir) ? it.useTime * System.Math.Max(0.1f, p.tileSpeed) : 15f;
+			float speed = System.Math.Max(0.5f, p.maxRunSpeed);
+			return gap > placeFrames * speed + 8f;
 		}
 
 		public static void Tick()
@@ -108,44 +116,40 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Reason = "no_player"; Finish("stuck"); return; }
 
-			if (_ph == Ph.Place)
+			// 1) 收上一次挥的结果(可能把边缘往前推一格,也可能判定失败直接结束)
+			if (!HarvestSwing()) return;
+			if (!IsRunning) return;
+
+			// 2) 边缘那格已经是我们要的东西(之前铺过/地形本来就有)→ 跳过,不必挥
+			while (_placed + _already < _want && IsWanted(_targetWx, _rowWy))
 			{
-				if (ItemUseCoordinator.IsActive) return;
-				if (!_swingIssued) return;
-				_swingIssued = false;
-				string o = ItemUseCoordinator.Outcome;
-				// THE MAP IS THE VERDICT: our tile in that cell means it worked.
-				if (IsWanted(_targetWx, _rowWy))
-				{
-					if (o == "already_there") _already++; else _placed++;
-					_targetWx += _dir;
-					if (_placed + _already >= _want) { Finish("done"); return; }
-					BeginPlace();
-					return;
-				}
-				if (o == "no_swing" && ItemUseCoordinator.Reason == "out_of_reach") { BeginWalk(); return; }
-				Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
-				Finish("blocked");
-				return;
+				_already++; _targetWx += _dir;
+			}
+			if (_placed + _already >= _want) { Finish("done"); return; }
+
+			// 3) 手空着且够得着 → 这一帧就挥
+			bool inReach = p.IsInTileInteractionRange(_targetWx, _rowWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			if (!ItemUseCoordinator.IsActive && !_swingIssued && inReach)
+			{
+				ItemUseCoordinator.Start(new ItemUseRequest
+				{ TargetWx = _targetWx, TargetWy = _rowWy, Slot = _slot, DurationTicks = 0, Strict = false });
+				_swingIssued = true;
 			}
 
-			// WALK — onto ground already laid. Held, not tapped: there is nothing to fall through, so speed is free.
-			if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
+			// 4) 同一帧里决定脚走不走 —— 手在挥的时候脚照样能走,这正是省下来的时间。
+			bool advance = !inReach || ShouldAdvance(p);
+			if (advance)
+			{
+				if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
+			}
 
+			// 卡死:手够不着、脚又没挪窝,才是真卡住。
 			int cx = ActExecutor.OriginCx(p);
-			if (cx != _lastOriginCx) { _lastOriginCx = cx; _walkStall = 0; }
-			else if (++_walkStall >= WalkStallLimit)
+			if (cx != _lastOriginCx) { _lastOriginCx = cx; _walkStall = 0; _reachStall = 0; }
+			else
 			{
-				Reason = "walk_blocked";
-				Finish("stuck");
-				return;
-			}
-
-			bool arrived = _dir > 0 ? cx >= _walkToCx : cx <= _walkToCx;
-			if (arrived)
-			{
-				_ph = Ph.Place;
-				BeginPlace();
+				if (advance && ++_walkStall >= WalkStallLimit) { Reason = "walk_blocked"; Finish("stuck"); return; }
+				if (!inReach && ++_reachStall >= ReachStallLimit) { Reason = "cant_reach_edge"; Finish("stuck"); return; }
 			}
 		}
 

@@ -12,6 +12,7 @@ namespace TerraBlind
 		private int _jumpFramesLeft;
 		private int _autoJumpCooldown;
 		private float _prevVy;
+		private static int _bridgeStartTick;   // 测铺路用时:开工那一帧,铺完报一次
 		public static bool JumpPlaceEnabled = false;
 		public static bool WalkTraceEnabled = false;
 		private bool _jumpPlaceFired;
@@ -40,6 +41,47 @@ namespace TerraBlind
 					int blocked = Predicates.VisualizeBox(fx, fy, HW, HH, "NO SITE (from here)");
 					Main.NewText($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{hsc}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
 				}
+			}
+			// B 测试铺路:朝面朝的方向铺 30 格。再按一次停。
+			if (TerraBlind.TestBridge != null && TerraBlind.TestBridge.JustPressed)
+			{
+				if (BridgeBuilder.IsRunning)
+				{
+					BridgeBuilder.Stop();
+					Main.NewText($"[TerraBlind] 铺路停止,已铺 {BridgeBuilder.Placed}", 255, 200, 120);
+				}
+				else
+				{
+					var bp = Main.LocalPlayer;
+					string bdir = bp.direction >= 0 ? "right" : "left";
+					_bridgeStartTick = (int)Main.GameUpdateCount;
+					if (BridgeBuilder.Start(BridgeTestItem(bp), bdir, 30, out string bwhy))
+						Main.NewText($"[TerraBlind] 铺路 {bdir} 30 格…", 120, 255, 120);
+					else
+					{ _bridgeStartTick = 0; Main.NewText($"[TerraBlind] 铺不了: {bwhy}", 255, 120, 120); }
+				}
+			}
+			// 铺完报一次用时 —— "边走边放"到底快多少,就看这个数。
+			if (_bridgeStartTick > 0 && !BridgeBuilder.IsRunning)
+			{
+				int el = (int)Main.GameUpdateCount - _bridgeStartTick;
+				_bridgeStartTick = 0;
+				Main.NewText($"[TerraBlind] 铺了 {BridgeBuilder.Placed} 格,{el} 帧 ({el / 60f:0.0}s, {BridgeBuilder.Placed * 60f / System.Math.Max(1, el):0.00} 格/秒) {BridgeBuilder.Outcome}", 200, 220, 255);
+				DiagLog.Write($"[bridge-test] placed={BridgeBuilder.Placed} frames={el} rate={BridgeBuilder.Placed * 60f / System.Math.Max(1, el):0.00}/s outcome={BridgeBuilder.Outcome}");
+			}
+
+			// N 测试单间:在脚下朝面朝方向盖 6 宽的单间。
+			if (TerraBlind.TestRoom != null && TerraBlind.TestRoom.JustPressed)
+			{
+				if (SmallRoom.IsRunning)
+				{
+					SmallRoom.Stop();
+					Main.NewText("[TerraBlind] 单间已停", 255, 200, 120);
+				}
+				else if (SmallRoom.Start(Main.LocalPlayer.direction, out string rwhy))
+					Main.NewText("[TerraBlind] 盖单间…", 120, 255, 120);
+				else
+					Main.NewText($"[TerraBlind] 盖不了: {rwhy}", 255, 120, 120);
 			}
 			// U toggles build RECORDING: capture place/mine intents (build_rec.json) while you build by hand.
 			if (TerraBlind.ToggleBuildRecord != null && TerraBlind.ToggleBuildRecord.JustPressed)
@@ -173,6 +215,10 @@ namespace TerraBlind
 				RecordSystem.CaptureFrame(Player);
 				return;
 			}
+
+			// small room: pure orchestration over the other primitives. Ticked BEFORE them so a step it starts
+			// this frame is driven immediately; it writes no controls itself.
+			if (SmallRoom.IsRunning) SmallRoom.Tick();
 
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)
@@ -481,6 +527,26 @@ namespace TerraBlind
 				eq.Ammo[i] = ItemToSlot(Player.inventory[i + 54]);
 			}
 			return eq;
+		}
+
+		// 测试用:背包里挑个能铺的 —— 平台优先,没有就拿存量最多的方块。
+		private static string BridgeTestItem(Player p)
+		{
+			var td = Terraria.ID.TileID.Sets.Platforms;
+			for (int i = 0; i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.createTile < 0) continue;
+				if (td != null && it.createTile < td.Length && td[it.createTile]) return it.Name;
+			}
+			string best = "木平台"; int bestStack = 0;
+			for (int i = 0; i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.createTile < 0) continue;
+				if (it.stack > bestStack) { bestStack = it.stack; best = it.Name; }
+			}
+			return best;
 		}
 
 		private static HotbarSlot ItemToSlot(Item item)

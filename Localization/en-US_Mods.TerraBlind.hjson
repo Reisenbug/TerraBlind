@@ -24,4 +24,5 @@ Keybinds: {
 	ToggleRecedingNav.DisplayName: Toggle Receding Nav
 	ToggleBuildReplay.DisplayName: Toggle Build Replay
 	ToggleBuildRecord.DisplayName: Toggle Build Record
+	ShowHouseSite.DisplayName: Show House Site
 }
