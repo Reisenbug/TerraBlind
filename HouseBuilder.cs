@@ -32,7 +32,7 @@ namespace TerraBlind
 		private static int _x0, _ay;              // 房子矩形的左下角(选址给的)
 		private static int _floorRow;             // 地板实际所在行
 		private static int _rooms = 1;
-		private static int _waited, _hopTries, _liftTries;
+		private static int _waited, _hopTries, _liftTries, _alignTries;
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
 		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
 
@@ -79,7 +79,7 @@ namespace TerraBlind
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
-			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0;
+			_waited = 0; _hopTries = 0; _liftTries = 0; _alignTries = 0; _roomIdx = 0; _roofRow = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width}");
 			// 先对齐到左下角那一列:nav 容差 1.5 格,后面每一步都拿 _x0 当锚点。
@@ -134,7 +134,8 @@ namespace TerraBlind
 					if (ActExecutor.OriginCx(p) != _x0)
 					{
 						// 每一轮都要在这一列上:后面每一步都拿 _x0 当锚点,差一格整座房子就偏。
-						if (++_liftTries > MaxLift) { Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
+						// 用自己的计数,别和垫高共用 —— 否则对几次列就把垫高的次数耗光了。
+						if (++_alignTries > MaxLift) { Fail($"站不到左下角那一列(要{_x0},在{ActExecutor.OriginCx(p)})"); return; }
 						SettleAt.Start(_x0, out _);
 						return;
 					}
@@ -167,8 +168,12 @@ namespace TerraBlind
 				case Ph.LiftHop:
 					if (PillarUp.IsRunning) return;
 					if (PillarUp.Outcome != "done") { Fail($"垫平台:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					// hop_up 【不传 col】—— 照抄 python。传了 col 它会先进 Align 相位左右走到那一列,
+					// 而 PillarUp(col<0) 刚把身体往旁边让开过,于是每垫一格都要来回蹭一趟,
+					// 蹭的时候脚下未必有平台又跳不上去 —— 就是"跳半天才放出第二个平台"。
+					// 就地起跳,对齐留给下一步的 settle。
 					Advance(Ph.LiftSettle);
-					HopUp.Start(ActExecutor.OriginCy(p) - 1, _x0, out _);
+					HopUp.Start(ActExecutor.OriginCy(p) - 1, int.MinValue, out _);
 					return;
 
 				case Ph.LiftSettle:
