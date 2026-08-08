@@ -1945,8 +1945,11 @@ namespace TerraBlind
 				if (!gxM.Success || !gyM.Success) { body = "{\"ok\":false,\"reason\":\"bad_request\"}"; status = 400; }
 				else
 				{
+					// stand=true:目标是悬空格,要求真站上去(盖房)。不 snap 到地面,近处交给 A*。
 					bool exact = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"exact\":true");
-					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), exact);
+					bool stand = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"stand\":true");
+					var nmode = stand ? RecedingNav.Mode.Stand : exact ? RecedingNav.Mode.Mine : RecedingNav.Mode.Snap;
+					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), nmode);
 					body = "{\"ok\":true}";
 				}
 			}

@@ -35,6 +35,9 @@ namespace TerraBlind
 					int d = System.Math.Abs(hbx - fx) + System.Math.Abs(hby - fy);
 					Predicates.VisualizeBox(hbx, hby, HW, HH, $"house {HW}x{HH}");
 					Main.NewText($"[TerraBlind] 房址 左下角({hbx},{hby}) 右上角({hbx + HW - 1},{hby - HH + 1}) 离你{d}格", 120, 255, 120);
+					// 顺手走过去站稳 —— 悬空房址靠 stand 模式(不 snap,近处 A* 垫平台上去)。
+					// 这就是盖房前那一步,单独按 H 就能试。
+					RecedingNav.Start(hbx, hby, RecedingNav.Mode.Stand);
 				}
 				else
 				{

@@ -15,11 +15,17 @@ namespace TerraBlind
         // "done" | "walled_in" | "loop_unresolved" | "stopped" after it ends.
         public static string LastStop;
         static int _goalWx, _goalWy;
-        // EXACT goal: don't snap the goal to a standable cell, and count arrival as "the goal tile is gone" (mined out)
-        // rather than "the body stands on it". Used for mining: the target is a solid ore INSIDE rock — the body (2x3)
-        // can never stand on that exact cell, so the field digs a shaft down to it and arrival = the ore tile removed.
-        static bool _exact;
+        // 三种目标语义:
+        //   Snap  — 悬空目标掉到下面的地面,到达=人站在那格上。走路默认。
+        //   Mine  — 不 snap,到达=目标格被挖空。挖矿:目标是岩石里的矿,身体(2x3)根本站不上去。
+        //   Stand — 不 snap,到达=人站在那格上。房址:目标本来就悬空,必须真站上去。
+        public enum Mode { Snap, Mine, Stand }
+        static Mode _mode;
         const float GoalDistPx = 24f;
+        const float StandDistPx = 8f;    // 建房契约要求脚踩准那一格,±24px 会站到隔壁列
+        const int StandSwitch = 20;      // 离目标这么近就把最后一段交给 A*
+        const int StandMaxTries = 3;     // A* 连着搜不到就认输,别让 greedy 在这地形上空转
+        static int _standTries;
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
@@ -135,10 +141,14 @@ namespace TerraBlind
 
         static volatile bool _fieldReady;
         public static void Start(int goalWx, int goalWy, bool exact = false)
+            => Start(goalWx, goalWy, exact ? Mode.Mine : Mode.Snap);
+
+        public static void Start(int goalWx, int goalWy, Mode mode)
         {
             StateSpacePlanner.StopNav();
-            _exact = exact;
-            if (!exact)
+            _mode = mode;
+            _standTries = 0;
+            if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
@@ -187,7 +197,7 @@ namespace TerraBlind
 
             // EXACT (mining): the goal is a solid ore the body can't stand on — arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
-            if (_exact)
+            if (_mode == Mode.Mine)
             {
                 var gt = Main.tile[_goalWx, _goalWy];
                 if (!gt.HasTile || !Main.tileSolid[gt.TileType])
@@ -197,7 +207,11 @@ namespace TerraBlind
             {
                 float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
                 float cx = p.Center.X, fy = p.position.Y + p.height;
-                if (System.Math.Abs(cx - gx) <= GoalDistPx && System.Math.Abs(fy - gy) <= GoalDistPx)
+                // Stand 的契约是"脚踩着那一格开工",±24px 会让人站在隔壁列上就报到达 —— 建房那边整套
+                // 局部坐标就全偏一格。收到半格,并且要求真落地。
+                float tol = _mode == Mode.Stand ? StandDistPx : GoalDistPx;
+                if (System.Math.Abs(cx - gx) <= tol && System.Math.Abs(fy - gy) <= tol
+                    && (_mode != Mode.Stand || p.velocity.Y == 0f))
                 { DiagLog.Write("[recede] reached goal"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done"); return; }
             }
 
@@ -245,6 +259,47 @@ namespace TerraBlind
             // 原地不动)由 StateSpacePlanner 的进度地板在选边那一刻就掐掉了 —— 选出来的落点压不低历史最低 H,
             // 当场关掉 g 改选 H 最低的候选。地板单调下降且有下界 0,所以"一直不前进"结构上不可能发生,
             // 不用事后检测、不用罚边、不用换目标。唯一的停机仍然是 StepAlongField 返回 null(真被封死)。
+            // STAND 的最后一段交给 A*。greedy 沿 H 场滚,而 H 场是格子 Dijkstra:悬空格 (x,y) 的 H 只比正下方
+            // 低 MoveUp×高差,它不知道那几格竖直是跳不上去的 —— 梯度把人吸到正下方那列然后原地打转。
+            // A* 搜的是真实物理状态空间,ReachedGoal 判的就是"Grounded 且坐标对上",跳放平台/pillar/挖 都是
+            // 它自己的边,能不能站上去由搜索本身回答。只在近处切:远距离 A* 才是会卡很久的那个。
+            if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
+                                    && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
+            {
+                // goalSnapCap:0 —— 目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
+                // 建房整套坐标全错。宁可 fail fast。
+                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
+                if (ap.Found && ap.Steps.Count > 0)
+                {
+                    DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
+                    // 往上垫平台/pillar 时人几乎不横移、H 也几乎不降 —— 正好是 sentinel 判"卡死"的特征。
+                    // A* 每次真给出一条路就把它的计时清零,否则爬到一半就被当成卡住放弃。
+                    StuckSentinel.Reset();
+                    _standTries = 0;
+                    _lastFrom = cell; _lastTarget = (_goalWx, _goalWy); _haveLast = true;
+                    StateSpacePlanner.DispatchPlan(ap);
+                    return;
+                }
+                if (ap.Partial && ap.Steps.Count > 0)
+                {
+                    // 搜不到终点但有更近的落脚点 —— 走过去换个角度再搜。人真的动了,不算一次失败。
+                    StuckSentinel.Reset();
+                    _standTries = 0;
+                    _lastFrom = cell; _lastTarget = (ap.GoalWx, ap.GoalWy); _haveLast = true;
+                    StateSpacePlanner.DispatchPlan(ap);
+                    return;
+                }
+                // 一步都给不出来。别退回 greedy —— 它在这地形上只会打转到 sentinel 报卡死。
+                DiagLog.Write($"[recede] STAND A* no plan at {cell} → ({_goalWx},{_goalWy}) exp={ap.Expansions} try={_standTries + 1}/{StandMaxTries}");
+                if (++_standTries >= StandMaxTries)
+                {
+                    LastStop = "unreachable"; Stop();
+                    Main.NewText("[TerraBlind] receding: can't stand on goal");
+                    return;
+                }
+                return;
+            }
+
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
