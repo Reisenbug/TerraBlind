@@ -89,6 +89,8 @@ namespace TerraBlind
 		// 地板是从 _x0+dir 开始铺 Width 格(BridgeBuilder 不铺人脚下那格),所以最后一格是 _x0+dir*Width。
 		// 以前按 _x0+dir*(Width-1) 算,柱子就歪进了地板里一格。
 		static int RightCol => _x0 + _dir * Width;
+		// 照 _build_house:pillar_top = 地板行 - (柱高-1)
+		static int PillarTop => _floorRow - (PillarH - 1);
 
 		public static void Tick()
 		{
@@ -119,45 +121,30 @@ namespace TerraBlind
 				case Ph.SettleBelow:
 					if (SettleAt.IsRunning) return;
 					Advance(Ph.HopTop);
-					HopUp.Start(_floorRow - 1 - PillarH, RightCol, out _);
+					HopUp.Start(PillarTop, RightCol, out _);
 					return;
 
 				case Ph.HopTop:
-				{
 					if (HopUp.IsRunning) return;
-					// 屋顶铺在"人当时脚下那一行",所以人没真上到柱顶就铺,屋顶就长在半空的错误高度上
-					// (实测 row=205 和 207,柱顶其实是 200)。这里必须验高度,不能直接往下走。
-					// PillarUp 的第一块砌在【人自己那格】(_baseWy = OriginCy),所以 n 块的顶块在
-					// OriginCy-(n-1),站上去就是 OriginCy-n。人开工时站在 _floorRow-1。
-					int topRow = _floorRow - 1 - PillarH;
-					int cy = ActExecutor.OriginCy(p);
-					if (cy > topRow)
-					{
-						// 一次跳不满是正常的(9 格柱子要跳几次),再跳,别当失败。
-						if (++_hopTries > MaxHopTries) { Fail($"hop_top:停在 {cy},要到 {topRow}"); return; }
-						HopUp.Start(topRow, RightCol, out _);
-						return;
-					}
-					// 跳上来带着横向残速,不刹住会滑出柱子一格 —— 屋顶是从人脚下那格往回铺的,
-					// 起点错一格整个屋顶就错一格。
-					_hopTries = 0;
 					Advance(Ph.SettleTop);
 					SettleAt.Start(RightCol, out _);
 					return;
-				}
 
 				case Ph.SettleTop:
 					if (SettleAt.IsRunning) return;
-					// 照 _build_house 那样验一遍列和行都对了才铺屋顶 —— 屋顶沿人脚下那一行走,
-					// 站错了整条屋顶就错。
-					if (ActExecutor.OriginCx(p) != RightCol || ActExecutor.OriginCy(p) > _floorRow - 1 - PillarH)
+					// 判据照抄 _build_house:cx == 柱列 且 cy <= pillar_top-1 就是上去了。
+					// 之前我自己推了另一套行号,人明明已经站在柱顶还被判成没到,于是一直跳。
+					if (ActExecutor.OriginCx(p) != RightCol || ActExecutor.OriginCy(p) > PillarTop - 1)
 					{
 						if (++_hopTries > MaxHopTries)
-						{ Fail($"top:({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 要 ({RightCol},{_floorRow - 1 - PillarH})"); return; }
+						{ Fail($"没上到柱顶:({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
 						_ph = Ph.HopTop; _waited = 0;
-						HopUp.Start(_floorRow - 1 - PillarH, RightCol, out _);
+						HopUp.Start(PillarTop, RightCol, out _);
 						return;
 					}
+					_hopTries = 0;
+					// 屋顶沿【人现在脚下那一行】走 —— 和 _build_house 的 roof_row = o["cy"]+1 一样,
+					// 用实际站位,不用公式。
 					Advance(Ph.Roof);
 					BridgeBuilder.Start(PlatName(), _dir > 0 ? "left" : "right", RoofLen, out _);
 					return;
