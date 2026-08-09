@@ -30,10 +30,7 @@ namespace TerraBlind
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
 
-        // 打转不在这里处理了。以前是"事后检测 + 罚边/换目标",试过 shock、jiggle、softmax、承诺,全失败:
-        // 罚边罚死过唯一出口,随机在平坦地形上纯添乱,承诺又要另建一套目标选择。根因不在检测,在选边那一刻
-        // g+H 没有任何"我到底有没有靠近终点"的记忆。现在由 StateSpacePlanner 的进度地板在选边时直接掐掉。
-        // 这里只留 _bestH/_ring 供日志和快照读,不驱动任何决策。
+        // 打转由 StateSpacePlanner 的进度地板在选边时掐掉;这里只留 _bestH/_ring 供日志读
         static int _bestH;
         static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
         const int RingLen = 24;
@@ -47,16 +44,11 @@ namespace TerraBlind
             Start(mx, my);
         }
 
-        // FIELD FRESHNESS — the field is a snapshot; three things rot it: our own digs/places accumulating (H prices
-        // a world that no longer exists), a pick upgrade (dig prices captured at build), and the player leaving the
-        // flood box (no H at all). Each triggers an off-thread swap-rebuild anchored at the CURRENT position; the old
-        // field keeps serving until the new one swaps in (only the off-field case must wait — it has no compass).
+        // 场会过期:自己挖/放的多了、换镐、人走出 flood box。三者都触发后台重建,旧场先顶着用
         const int RebuildAltered = 40;      // our altered tiles before a background re-flood (coarse; big-方向 shifts need dozens of tiles)
         static int _altered;
         static volatile bool _rebuilding;
-        // Switching which cell we route to means a DIFFERENT field, and building one costs ~500ms over ~700k cells.
-        // GetField would do it inline on the main thread — a visible freeze every cycle. Clear the ready flag and
-        // build off-thread instead, exactly like nav startup does: the body simply stands still for a moment.
+        // 换目标=换场,建一次 ~500ms/70万格。GetField 会在主线程内联建 → 每周期一次可见卡顿,所以丢后台
         static void SwitchFieldAsync(int gx, int gy, string why)
         {
             _fieldReady = false;
@@ -188,9 +180,7 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
 
-            // WEB REFLEX: a cobweb overlapping the body slows the walk to a crawl until vanilla's push-through
-            // counter breaks it (20-100 ticks/web). A pick swing kills it in one hit — smash it actively instead
-            // of wading. Runs every frame while nav is active, whatever step is executing.
+            // 蜘蛛网压身体会把移动拖到爬(原版要 20-100 tick 才顶开),一镐就没,所以主动砸
             SmashWeb(p);
             // 抢同一帧的 controlUseItem,网优先(网拖慢移动,罐子晚一帧无所谓)
             if (!p.controlUseItem) SmashPot(p);
@@ -218,10 +208,7 @@ namespace TerraBlind
                 }
             }
 
-            // FAST STUCK SENTINEL — every frame, not just at replan boundaries. It watches the four progress
-            // signals (displacement, H, dig damage, nearby tiles) and runs the response ladder itself: safe
-            // step within ~0.5s, abandon the leg after ~6-8s of true flatline. While it nudges, it owns the
-            // controls for this frame.
+            // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
             {
                 DiagLog.Write($"[recede] SENTINEL give-up at H-flatline goal=({_goalWx},{_goalWy})");
@@ -245,10 +232,7 @@ namespace TerraBlind
                 RebuildFieldAsync("off-field");
                 return;
             }
-            // ATTENTION feedback: report how the last edge actually turned out (did the real landing reach the cell the
-            // edge planned for?). StepAlongField turns that into a continuous per-edge mismatch weight that softly
-            // down-weights edges physics keeps failing to honour. Then decay the whole table one cycle so memory fades —
-            // no hard blacklist, no backtrack ban; a penalized edge always recovers in time and can be chosen again.
+            // 上一条边真落到哪了 → 变成连续的失配权重,软性压低老是落空的边。随后整表衰减:不做黑名单、不禁回头
             if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
@@ -258,14 +242,7 @@ namespace TerraBlind
             }
             StateSpacePlanner.DecayMiss();
 
-            // NO stuck triggers, NO loop detection, NO commitment. 不再需要:打转的根因(每步 g+H 最优,合起来
-            // 原地不动)由 StateSpacePlanner 的进度地板在选边那一刻就掐掉了 —— 选出来的落点压不低历史最低 H,
-            // 当场关掉 g 改选 H 最低的候选。地板单调下降且有下界 0,所以"一直不前进"结构上不可能发生,
-            // 不用事后检测、不用罚边、不用换目标。唯一的停机仍然是 StepAlongField 返回 null(真被封死)。
-            // STAND 的最后一段交给 A*。greedy 沿 H 场滚,而 H 场是格子 Dijkstra:悬空格 (x,y) 的 H 只比正下方
-            // 低 MoveUp×高差,它不知道那几格竖直是跳不上去的 —— 梯度把人吸到正下方那列然后原地打转。
-            // A* 搜的是真实物理状态空间,ReachedGoal 判的就是"Grounded 且坐标对上",跳放平台/pillar/挖 都是
-            // 它自己的边,能不能站上去由搜索本身回答。只在近处切:远距离 A* 才是会卡很久的那个。
+            // STAND 末段交给 A*:H 场是格子 Dijkstra,不知道悬空格竖直跳不上去,梯度会把人吸到正下方打转
             if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
                                     && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
             {
@@ -307,13 +284,7 @@ namespace TerraBlind
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
 
-            // DISPLACEMENT RE-BASELINE: bestH must measure progress within the current basin, not all-time. After a
-            // catastrophic involuntary displacement (a missed sky jump dropping 47 cells raised H by ~500), the honest
-            // route DOWN from the crash site cannot beat the pre-fall bestH for dozens of replans — the detector then
-            // shocked a perfectly descending path, its +200 penalties bent selection into a real wander-loop, and 3
-            // "failed" shocks hard-stopped the run. A single-cycle H jump far above any loop ring's internal spread
-            // (rings span a few cells × step costs ≈ ≤50; observed falls jump +500..+1300) is a basin change, not a
-            // loop symptom → reset the baseline and the shock budget to judge progress from here.
+            // bestH 只在当前盆地内衡量进度:摔一次能让 H 跳 +500~1300(循环环内才 ≤50),那是换盆地不是打转
             if (res.CurH < _bestH) _bestH = res.CurH;
             _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
             if (_ring.Count > RingLen) _ring.RemoveAt(0);

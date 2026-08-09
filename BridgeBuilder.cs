@@ -45,6 +45,11 @@ namespace TerraBlind
 		public static int Placed => _placed;
 
 		public static bool Start(string itemName, string dir, int n, out string why)
+			=> Start(itemName, dir, n, int.MinValue, int.MinValue, out why);
+
+		// startWx/startWy: 从哪一格开始铺。传了就照着铺,人自己走过去够 —— 铺哪儿是调用方定的,
+		// 不该跟着身体停在哪儿走。不传(int.MinValue)才退回"从我站的地方往外铺"。
+		public static bool Start(string itemName, string dir, int n, int startWx, int startWy, out string why)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
@@ -60,8 +65,8 @@ namespace TerraBlind
 
 			// The bridge runs along the row the player STANDS ON — one below their own cell — so walking out onto it
 			// needs no drop or jump.
-			_rowWy = ActExecutor.OriginCy(p) + 1;
-			_targetWx = ActExecutor.OriginCx(p) + _dir;
+			_rowWy = startWy != int.MinValue ? startWy : ActExecutor.OriginCy(p) + 1;
+			_targetWx = startWx != int.MinValue ? startWx : ActExecutor.OriginCx(p) + _dir;
 			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0;
 			DiagLog.Write($"[bridge] start {itemName} dir={dir} n={_want} slot={_slot} row={_rowWy} from={_targetWx}");
 			return true;
@@ -96,9 +101,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 脚该不该再往前迈一格。手是瓶颈,所以留出"这一块放完期间脚会走多远"的余量:
-		// 放一块 useTime 帧(tileSpeed 是玩家身上的实时加成),这些帧里脚走 useTime×maxRun 像素。
-		// 边缘离得比这还近就停下等手 —— 不然人会走到还没铺的地方掉下去。
+		// 手是瓶颈:边缘比"放完这块的功夫脚能走的距离"还近就停下等手,不然会走到没铺的地方掉下去
 		private static bool ShouldAdvance(Player p)
 		{
 			float edgePx = _targetWx * 16f + 8f;

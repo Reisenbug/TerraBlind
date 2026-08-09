@@ -36,9 +36,7 @@ namespace TerraBlind
 			return t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]);
 		}
 
-		// PASSABLE = the player's body can occupy this cell. Liquid is passable (you can swim/wade) — dangerous, not
-		// blocking. Danger is a separate predicate, because "can I fit" and "will it kill me" are different questions
-		// and conflating them is how a lava lake becomes a wall.
+		// 液体算可通过(能游/趟):"塞不塞得下"和"会不会死"是两个问题,混在一起岩浆湖就成了墙
 		public static bool IsPassable(int x, int y) => InBounds(x, y) && !IsSolid(x, y);
 
 		public static bool IsLava(int x, int y)
@@ -50,9 +48,7 @@ namespace TerraBlind
 
 		public static bool IsAnyLiquid(int x, int y) => InBounds(x, y) && Main.tile[x, y].LiquidAmount > 0;
 
-		// CAN STAND — the player is 3 cells tall, so standing at (x,y) means (x,y) and the two cells above are clear
-		// and the cell below is ground. The player is also 20px wide and may straddle two columns, but a stand cell is
-		// defined on the origin column alone; width is what ClearWidth below measures.
+		// 人 3 格高:(x,y) 和上面两格要空、下面一格是地。宽度不在这判(人 20px 会跨两列),那是 ClearWidth 的事
 		public static bool CanStand(int x, int y)
 		{
 			if (!InBounds(x, y)) return false;
@@ -97,9 +93,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 这一格是不是真的空 —— 没有 tile、也没有背景墙。
-		// 和 IsPassable 的区别:树、草这类非固体物不挡路但占着格子(绳子放不进去);
-		// 背景墙更不挡路,但房子盖在别人的墙里就不算独立房间了。
+		// 真的空:没 tile 也没背景墙。树/草不挡路但占着格子,背景墙不挡路但盖在里面不算独立房间
 		public static bool Vacant(int x, int y)
 		{
 			if (!InBounds(x, y)) return false;
@@ -132,14 +126,7 @@ namespace TerraBlind
 		// 每列上下试探多少格。房子悬空也合法,所以不再是"沿地表找落脚点",纯粹是在附近找空位。
 		const int VertScan = 60;
 
-		// SCAN FOR A BUILD SITE — 从 (fromX,fromY) 向外扫,找一个放得下房子的地方,返回最近的。
-		//
-		// 房子就是一个 w×h 的矩形:(x,y) 是左下角,往右 w 列、往上 h 行(都含自己那格),
-		// 里面必须全空(没 tile、没背景墙)。除此之外没有任何条件 —— 脚下是不是实地不管,
-		// 悬空也行,施工时自己垫平台上去;垫多高是施工的事,跟选址无关。
-		//
-		// 用 Vacant 不用 IsPassable:树、草这类非固体物不挡路却占着格子,什么也放不进去;
-		// 背景墙更不挡路,但盖在别人墙里就不算独立房间。
+		// 向外扫最近的房址:(x,y)=左下角,往右 w 列往上 h 行(含自己)必须全空,外加左下角要够得着
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
 			out int hitX, out int hitY, out int scanned)
 		{
@@ -156,6 +143,9 @@ namespace TerraBlind
 							int y = dy == 0 ? fromY : (vs == 0 ? fromY - dy : fromY + dy);
 							if (!InBounds(x, y) || !InBounds(x + w - 1, y - h + 1)) continue;
 							scanned++;
+							// 隔两列站:人 20px 宽 + settle 容差半格,隔一列身体会压到 x 那列
+							if (!CanStand(x - 2, y + 1) && !CanStand(x + 2, y + 1)) continue;
+							if (!IsGround(x, y + 1) && !IsGround(x, y + 2)) continue;   // (x,y) 要有锚点
 							bool ok = true;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)
@@ -203,13 +193,8 @@ namespace TerraBlind
 			return false;
 		}
 
-		// ROOM CHECK — vanilla's own housing test, not a reimplementation. StartRoomCheck flood-fills from an interior
-		// cell (so the caller gives a point INSIDE the room, not a rectangle), then RoomNeeds reports which of the four
-		// requirements are present. Reporting WHICH one is missing is the whole point: "the NPC didn't move in" is not
-		// a diagnosis, "no door" is.
-		// WorldGen.roomDoor/roomTable/roomChair/roomTorch are PRIVATE, so we re-derive the same verdict from the public
-		// houseTile[] that StartRoomCheck fills: does any tile the room contains belong to the given RoomNeeds list?
-		// (the tModLoader members are TileID.Sets.RoomNeeds.CountsAsX — int[] of tile types, no "Types" suffix.)
+		// 用原版的房屋判定(不自己重写):传【房间内部】一点,报缺哪一项 —— "NPC 没入住"不算诊断,"没门"才算。
+		// roomDoor/roomTable 那几个是 private,所以从公开的 houseTile[] 反推
 		private static bool HasAny(int[] types)
 		{
 			for (int i = 0; i < types.Length; i++)

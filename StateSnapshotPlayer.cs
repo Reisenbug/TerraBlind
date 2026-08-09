@@ -16,9 +16,49 @@ namespace TerraBlind
 		public static bool JumpPlaceEnabled = false;
 		public static bool WalkTraceEnabled = false;
 		private bool _jumpPlaceFired;
+		// 后台扫房址的结果。画图和 nav 都只能在主线程碰,所以后台只放结论,下一帧再消费。
+		private class SiteResult { public bool Got; public int Bx, By, Scanned, Fx, Fy; }
+		private static volatile SiteResult _site;
+		// H 选好的房址:nav 走完就在这儿开工。站位由 HouseBuilder.Ph.Lift 自己对齐,不要求按键时站对。
+		private static (int x, int y)? _pendingHouse;
+		private static int _pillarTestFrom, _pillarTestTarget;
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
+			if (_pendingHouse.HasValue && !RecedingNav.Active && !HouseBuilder.IsRunning)
+			{
+				var (hx, hy) = _pendingHouse.Value; _pendingHouse = null;
+				if (RecedingNav.LastStop == "done")
+				{
+					if (HouseBuilder.Start(4, 1, hx, hy, out string whyH))
+						Main.NewText($"[TerraBlind] 到了,开工盖房 ({hx},{hy})", 120, 255, 120);
+					else
+						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
+				}
+				else
+					Main.NewText($"[TerraBlind] 没走到房址:{RecedingNav.LastStop}", 255, 120, 120);
+			}
+			var site = _site;
+			if (site != null)
+			{
+				_site = null;
+				const int HW = 21, HH = 10;
+				if (site.Got)
+				{
+					int d = System.Math.Abs(site.Bx - site.Fx) + System.Math.Abs(site.By - site.Fy);
+					Predicates.VisualizeBox(site.Bx, site.By, HW, HH, $"house {HW}x{HH}");
+					Main.NewText($"[TerraBlind] 房址 左下角({site.Bx},{site.By}) 右上角({site.Bx + HW - 1},{site.By - HH + 1}) 离你{d}格", 120, 255, 120);
+					// 走过去,到了自己开工。nav 直接送到【开工站位】而不是房址本身:
+					// 房址那格是要放出来的,还不存在;站位是隔两列、下面一行的实地。
+					_pendingHouse = (site.Bx, site.By);
+					RecedingNav.Start(HouseBuilder.StandCol(site.Bx, site.By, 1), site.By + 1);
+				}
+				else
+				{
+					int blocked = Predicates.VisualizeBox(site.Fx, site.Fy, HW, HH, "NO SITE (from here)");
+					Main.NewText($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{site.Scanned}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
+				}
+			}
 			if (TerraBlind.ToggleMazeNav != null && TerraBlind.ToggleMazeNav.JustPressed)
 				MazeWand.ToggleNav();
 			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
@@ -29,21 +69,17 @@ namespace TerraBlind
 				var hp = Main.LocalPlayer;
 				int fx = ActExecutor.OriginCx(hp), fy = ActExecutor.OriginCy(hp);
 				const int HW = 21, HH = 10;
-				bool got = Predicates.ScanHouse(fx, fy, HW, HH, 200, out int hbx, out int hby, out int hsc);
-				if (got)
+				// 扫最坏是 200×60×4 个候选,每个再验 210 格 —— 放主线程上就是一次可见的卡顿。
+				// 纯读 tile,丢后台;画和走留到结果回来那一帧(SiteReady 在下面消费)。
+				System.Threading.Tasks.Task.Run(() =>
 				{
-					int d = System.Math.Abs(hbx - fx) + System.Math.Abs(hby - fy);
-					Predicates.VisualizeBox(hbx, hby, HW, HH, $"house {HW}x{HH}");
-					Main.NewText($"[TerraBlind] 房址 左下角({hbx},{hby}) 右上角({hbx + HW - 1},{hby - HH + 1}) 离你{d}格", 120, 255, 120);
-					// 顺手走过去站稳 —— 悬空房址靠 stand 模式(不 snap,近处 A* 垫平台上去)。
-					// 这就是盖房前那一步,单独按 H 就能试。
-					RecedingNav.Start(hbx, hby, RecedingNav.Mode.Stand);
-				}
-				else
-				{
-					int blocked = Predicates.VisualizeBox(fx, fy, HW, HH, "NO SITE (from here)");
-					Main.NewText($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{hsc}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
-				}
+					try
+					{
+						bool g = Predicates.ScanHouse(fx, fy, HW, HH, 200, out int bx, out int by, out int sc);
+						_site = new SiteResult { Got = g, Bx = bx, By = by, Scanned = sc, Fx = fx, Fy = fy };
+					}
+					catch (System.Exception e) { DiagLog.Write($"[house-scan] EXC {e.Message}"); }
+				});
 			}
 			// B 测试铺路:朝面朝的方向铺 30 格。再按一次停。
 			if (TerraBlind.TestBridge != null && TerraBlind.TestBridge.JustPressed)
@@ -85,6 +121,31 @@ namespace TerraBlind
 					Main.NewText("[TerraBlind] 盖单间…", 120, 255, 120);
 				else
 					Main.NewText($"[TerraBlind] 盖不了: {rwhy}", 255, 120, 120);
+			}
+			// P 单测 pillar:原地往上搭 10 格,人跟着爬上去。再按一次停。
+			if (TerraBlind.TestPillar != null && TerraBlind.TestPillar.JustPressed)
+			{
+				if (SkillExecutor.IsActive) { SkillExecutor.Stop(); Main.NewText("[TerraBlind] pillar 停", 255, 200, 120); }
+				else
+				{
+					var pp = Main.LocalPlayer;
+					int feet = (int)((pp.position.Y + pp.height) / 16f);
+					int tgt = feet - 10;
+					_pillarTestFrom = feet; _pillarTestTarget = tgt;
+					SkillExecutor.StartPillarJump(pp.direction >= 0, tgt);
+					Main.NewText($"[TerraBlind] pillar: 脚 {feet} → {tgt}(10格)", 120, 255, 120);
+				}
+			}
+			if (_pillarTestFrom != 0 && !SkillExecutor.IsActive)
+			{
+				var pp = Main.LocalPlayer;
+				int feet = (int)((pp.position.Y + pp.height) / 16f);
+				int got = _pillarTestFrom - feet;
+				bool ok = feet <= _pillarTestTarget;
+				Main.NewText($"[TerraBlind] pillar 结束:升了 {got}/10 格,脚在 {feet}(要 {_pillarTestTarget}) {(ok ? "OK" : "没到")}",
+					ok ? (byte)120 : (byte)255, ok ? (byte)255 : (byte)120, 120);
+				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
+				_pillarTestFrom = 0;
 			}
 			// U toggles build RECORDING: capture place/mine intents (build_rec.json) while you build by hand.
 			if (TerraBlind.ToggleBuildRecord != null && TerraBlind.ToggleBuildRecord.JustPressed)
@@ -246,9 +307,7 @@ namespace TerraBlind
 			// leg gets stepped this frame.
 			ExploreCoordinator.ApplyControls();
 
-			// build replay orchestrator: a frame state machine that STARTS RecedingNav / ItemUseCoordinator for each
-			// recorded event and advances when they finish. Must run before RecedingNav.Tick so a nav it starts this
-			// frame gets driven immediately by the same-frame Tick + the IsActive block below.
+			// 必须在 RecedingNav.Tick 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			BuildReplayer.Tick();
 
 			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it

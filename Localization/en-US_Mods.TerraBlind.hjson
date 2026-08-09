@@ -27,4 +27,5 @@ Keybinds: {
 	ShowHouseSite.DisplayName: Show House Site
 	TestBridge.DisplayName: Test Bridge
 	TestRoom.DisplayName: Test Room
+	TestPillar.DisplayName: Test Pillar
 }

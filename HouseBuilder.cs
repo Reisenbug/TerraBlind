@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Corner, HopFloor, Floor,
+			Idle, Lift, LiftStep, Corner, HopFloor, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
@@ -30,15 +30,14 @@ namespace TerraBlind
 		private static Ph _ph = Ph.Idle;
 		private static int _dir = 1;
 		private static int _x0, _ay;              // 房子矩形的左下角(选址给的)
+		private static int _standCx;              // 放左下角那两格时人站的列(左下角旁边)
 		private static int _floorRow;             // 地板实际所在行
 		private static int _rooms = 1;
-		private static int _waited, _hopTries;
+		private static int _waited, _hopTries, _liftTries;
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
 		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
 
-		// 照抄 python 的 H_*:全部用数字 id。ResolveSlot 先 int.TryParse,能解析就按
-		// item.type 精确匹配;否则拿去比 it.Name —— 那是本地化名(中文"工作台"),
-		// 内部名 "WorkBench" 永远匹配不上,报 no_item。
+		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
 		const int H_FLOOR = 94;       // 木平台
 		const int H_WOOD = 9;         // 木材
 		const int H_WORKBENCH = 36;
@@ -51,6 +50,7 @@ namespace TerraBlind
 		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
 		public const int SupportH = 8;            // 支柱高 (H_SUP)
 		private const int MaxHopTries = 12;
+		private const int MaxLift = 40;
 		private const int StepTimeout = 60 * 120;
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -64,16 +64,7 @@ namespace TerraBlind
 		static int ChairCount => _rooms >= 4 ? 4 : 1;
 		static int WallCount => _rooms * 24;
 
-		// (ax,ay) = 房子矩形的左下角,也就是【地板要铺的那一格】。
-		// 开工的站位约定:人脚踩着 (ax,ay),即 OriginCx==ax 且 OriginCy==ay-1,静止。
-		//
-		// 左下角 (ax,ay) 那一格【是要造出来的,不是走得到的】—— 它就是原来绳子阶段最后放的那块平台:
-		// 既是梯子的顶,也是房子地板的第一格,人站上去才开工。所以 nav 送不到它(要站在一格上,
-		// 那格下面得有东西;而 A* 的 ReachedGoal 要 Grounded,悬空目标永远不成立)。
-		//
-		// 开工站位:站在【旁边一列、下面一行】,即 (ax-dir, ay+1)。为什么不站正下方 (ax,ay+1):
-		// 人 2 列 3 行,站那儿身体正好占着 ay,平台放不进碰撞箱。站旁边一列就让开了,横着把
-		// 平台放到 (ax,ay),再跳上去。
+		// (ax,ay)=左下角=地板第一格,是放出来的不是走上去的:站旁边放出它 → 跳上去踩着 → 往外铺
 		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
 		{
 			why = "";
@@ -83,40 +74,32 @@ namespace TerraBlind
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
-			_waited = 0; _hopTries = 0; _roomIdx = 0; _roofRow = 0;
+			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0;
 			Outcome = "running"; Reason = "";
-
-			// 一律按【脚】报,别混两套基准:OriginCy 是身体那行,脚在 +1。
-			int cx = ActExecutor.OriginCx(p), footY = ActExecutor.OriginCy(p) + 1;
-			int wantX = ax - _dir, wantFootY = ay + 1;
-			bool onCorner = cx == ax && footY == ay;          // 已经踩在左下角上(角落已存在)
-			bool beside = cx == wantX && footY == wantFootY;  // 站在旁边一列、下面一行
-			if (!onCorner && !beside)
-			{
-				why = $"not_at_corner: 要脚踩({wantX},{wantFootY})[左下角旁边] 或 ({ax},{ay})[左下角本身],现在脚踩({cx},{footY})";
-				return false;
-			}
-			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} beside={beside}");
-			if (onCorner)
-			{
-				Advance(Ph.HopFloor);
-				HopUp.Start(_ay, _x0, out _);
-				return true;
-			}
-			// 横着把左下角那块平台放出来,再跳上去
-			Advance(Ph.Corner);
-			if (!Need(PlaceAction.Start(Plat(), ax, ay, 1, 0, 0, true, out string w0), "放左下角那块平台", w0))
-				return false;
+			// 站左边还是右边:哪边站得住用哪边。优先房子延伸的反方向,那一列不在房子里,
+			// 不会跟后面铺的地板抢位置。
+			_standCx = StandCol(ax, ay, _dir);
+			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} stand={_standCx} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+			_ph = Ph.Lift;
 			return true;
 		}
 
-		// 从人当前位置开工(测试键用)。左下角 = 人脚踩着的那一格:OriginCy 是身体那行,
-		// 脚下是 +1 —— 正好满足 Start 的站位检查。
+		// 从人当前位置开工(测试键用)。人站在左下角【隔两列】,所以左下角在两列外、高一行。
 		public static bool StartHere(int rooms, int dir, out string why)
 		{
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
-			return Start(rooms, dir, ActExecutor.OriginCx(p), ActExecutor.OriginCy(p) + 1, out why);
+			int d = dir >= 0 ? 1 : -1;
+			return Start(rooms, d, ActExecutor.OriginCx(p) + d * 2, ActExecutor.OriginCy(p) - 1, out why);
+		}
+
+		// 隔两列站:SettleAt 容差半格(8px)+人 20px 宽,隔一列身体会压到 x0,格子就进了碰撞箱。
+		// nav 和这里共用这一份,免得两边各推一遍
+		public static int StandCol(int ax, int ay, int dir)
+		{
+			int d = dir >= 0 ? 1 : -1;
+			return Predicates.CanStand(ax - d * 2, ay + 1) ? ax - d * 2
+				 : Predicates.CanStand(ax + d * 2, ay + 1) ? ax + d * 2 : ax - d * 2;
 		}
 
 		public static void Stop()
@@ -149,12 +132,43 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
-				// 左下角那块平台 = 原来绳子阶段最后放的那块。放出来了才有地方站。
+				// 站到 (_standCx, _ay+1) —— 左下角隔两列。站正下方不行:(_x0,_ay) 会在身体里。
+				case Ph.Lift:
+				{
+					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
+					int lcx = ActExecutor.OriginCx(p), lcy = ActExecutor.OriginCy(p);
+					if (lcx == _standCx && lcy == _ay + 1)
+					{
+						_liftTries = 0;
+						// 下面是地面就只放 (x0,ay);是空的就先放 (x0,ay+1) 当锚点
+						bool haveBelow = Main.tile[_x0, _ay + 1].HasTile;
+						Advance(Ph.Corner);
+						if (!Need(PlaceAction.Start(Plat(), _x0, haveBelow ? _ay : _ay + 1,
+								haveBelow ? 1 : 2, 0, -1, true, out string wcorner), "放左下角", wcorner)) return;
+						return;
+					}
+					if (++_liftTries > MaxLift)
+					{ Fail($"站不到左下角旁边 ({_standCx},{_ay + 1}),现在({lcx},{lcy})"); return; }
+					if (lcy < _ay + 1) { DropDown.Start(out _); _waited = 0; return; }
+					if (lcy == _ay + 1) { SettleAt.Start(_standCx, out _); _waited = 0; return; }
+					// 人比站位低:用寻路那条 pillar 边爬上去 —— 它自己搭平台自己站上去,一路到指定行。
+					// PillarUp 只搭不爬,搭完人还在底下,再 hop 十几格就上不去→掉回来→死循环。
+					if (!SkillExecutor.CanPillarFrom(lcx, lcy, out int topY) || topY > _ay + 1)
+					{ Fail($"爬不到 ({_standCx},{_ay + 1}):现在({lcx},{lcy}) 最高只能到 {topY}"); return; }
+					Advance(Ph.LiftStep);
+					SkillExecutor.StartPillarJump(_dir > 0, _ay + 1);
+					return;
+				}
+
+				case Ph.LiftStep:
+					if (SkillExecutor.IsActive) return;
+					_ph = Ph.Lift; _waited = 0;
+					return;
+
 				case Ph.Corner:
 					if (PlaceAction.IsRunning) return;
 					if (!Main.tile[_x0, _ay].HasTile)
-					{ Fail($"左下角那块平台没放出来 ({_x0},{_ay}):{PlaceAction.Outcome}/{PlaceAction.Reason}"); return; }
-					// 跳上去交给 HopFloor —— 它本来就是"跳到 _ay 那一行并确认站住",别再写一遍
+					{ Fail($"({_x0},{_ay}) 没放上左下角:{PlaceAction.Outcome}/{PlaceAction.Reason}"); return; }
 					Advance(Ph.HopFloor);
 					HopUp.Start(_ay, _x0, out _);
 					return;
@@ -168,8 +182,10 @@ namespace TerraBlind
 						return;
 					}
 					_hopTries = 0;
+					// 起点写死 _x0+dir,不看人停在哪:跳上来可能冲过一格,跟着身体走就整排偏一格,
+					// 第一格没了锚点 → no_anchor。铺哪儿是这里定的,人自己走过去够。
 					Advance(Ph.Floor);
-					if (!Need(BridgeBuilder.Start(Floor(), _dir > 0 ? "right" : "left", Width, out string ws3), "铺地板", ws3)) return;
+					if (!Need(BridgeBuilder.Start(Floor(), _dir > 0 ? "right" : "left", Width, _x0 + _dir, _ay, out string ws3), "铺地板", ws3)) return;
 					return;
 
 				case Ph.Floor:
@@ -285,9 +301,7 @@ namespace TerraBlind
 
 				case Ph.Craft:
 				{
-					// 工作台放下后配方要几帧才出现,等它出现再合成。
-					// 等的是【自己真要合的那样东西】:python 盖 4 间所以等木桌,单间不做桌子,
-					// 等木桌会一直等到超时 —— 单间等木椅。
+					// 等【自己真要合的】那样出现:单间不做桌子,等木桌会一直等到超时
 					int waitFor = TableCount > 0 ? H_TABLE : H_CHAIR;
 					bool ready = false;
 					for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
@@ -403,10 +417,7 @@ namespace TerraBlind
 			if (!Need(PlaceWalls.Start(H_WALL.ToString(), cells, out string ws9), "铺墙", ws9)) return;
 		}
 
-		// 原语的 Start 失败时【不会】把 IsRunning 置起来,所以丢掉返回值的话下一帧看见
-		// IsRunning==false,会误判成"这步跑完了"然后去验结果 —— 报出来的是"东西没放上",
-		// 而真正的原因(背包里没有 / 够不着)全丢了。实测:工作台那步 1 帧就失败,因为
-		// 背包里还没有工作台,而 Start 早就 return false 了。
+		// 原语 Start 失败不会置 IsRunning,丢掉返回值就会被当成"这步跑完了",真原因(没东西/够不着)全丢
 		static bool Need(bool started, string what, string why)
 		{
 			if (started) return true;

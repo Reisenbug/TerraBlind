@@ -18,60 +18,19 @@ namespace TerraBlind
         private static int _targetWy;
         private static int _stalledCycles;
         private static int _cycleStartFeetY;
+        private static int _anchorWy;      // 下一块要放的行(锚点上面那格)
+        private static int _pillarCol;     // 柱子那一列,起跳时钉死
+        private static int _airFrames;     // 这一跳飞了多久,落地判据
+        private static int _jumpStartFeetY;
+        private static int _jumps, _totalFrames;
 
         private static float _pillarWaitPrevVY;
         private static int _pillarWaitFellTicks;
 
         private const int WaitFrames = 10;
-        private const int JumpHoldFrames = 15;
+        private const int JumpHoldFrames = 9;   // 实测 10 格:7帧=156, 9帧=133(3,2,3,2), 11帧更慢。手是瓶颈,跳太高只是干等
         private const int LaunchFrames = 20;
 
-        // pillar_jump_2_height.json fully expanded (43 frames)
-        private static readonly (bool jump, bool use, float mx, float my)[] PillarCycleFrames = {
-            (true,  false, -0.1f, 1.7f),
-            (true,  false, -0.1f, 1.7f),
-            (true,  true,  -0.1f, 1.6f),
-            (true,  true,  -0.1f, 1.7f),
-            (true,  true,  -0.1f, 1.7f),
-            (true,  true,  -0.1f, 1.9f),
-            (true,  true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.6f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-            (false, true,  -0.1f, 1.7f),
-        };
 
         public static bool IsActive => State != SkillState.Idle;
 
@@ -86,6 +45,11 @@ namespace TerraBlind
             _placeStarted = false;
             _stalledCycles = 0;
             _cycleStartFeetY = 0;
+            _airFrames = 0;
+            _jumpStartFeetY = 0;
+            _anchorWy = int.MaxValue;
+            _pillarCol = 0;
+            _jumps = 0; _totalFrames = 0;
             State = SkillState.PillarBuild;
             DiagLog.Write($"[pillar] start dirRight={dirRight} targetWy={targetWy}");
         }
@@ -99,6 +63,33 @@ namespace TerraBlind
         {
             State = SkillState.Idle;
             PlaceCoordinator.Stop();
+        }
+
+
+        // 这一格现在放得进去吗:身体没占着 + 够得着 + 有邻居可贴 + 那格是空的
+        static bool CanPlaceNow(Player p, int x, int y)
+        {
+            if (!Predicates.InBounds(x, y)) return false;
+            if (Main.tile[x, y].HasTile) return false;
+            int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
+            int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
+            if (x >= bl && x <= br && y >= bt && y <= bb) return false;
+            if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
+            return PlatAnchor(x, y);
+        }
+
+        // 平台要贴着邻居才放得出(原版会拒 no_anchor)
+        static bool PlatAnchor(int x, int y)
+        {
+            (int dx, int dy)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
+            foreach (var (dx, dy) in n)
+            {
+                int a = x + dx, b = y + dy;
+                if (!Predicates.InBounds(a, b)) continue;
+                var t = Main.tile[a, b];
+                if (t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType])) return true;
+            }
+            return false;
         }
 
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
@@ -238,39 +229,49 @@ namespace TerraBlind
                     Stop();
                     return;
                 }
-                if (!ReplaySystem.IsActive)
+                // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
+                // 放成功锚点上移,继续找下一格。不回放录制 —— 录制写死一 cycle 2 格,地形一变就错。
+                _totalFrames++;
+                if (feetYNow <= _targetWy && p.velocity.Y == 0f)
                 {
-                    if (_cyclesDone > 0 && feetYNow <= _targetWy)
+                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
+                    Stop(); return;
+                }
+                bool grounded = p.velocity.Y == 0f;
+                if (grounded)
+                {
+                    if (_airFrames > 0)   // 刚落地:这一跳到底升了没有
                     {
-                        float vyAtEntry = p.velocity.Y;
-                        DiagLog.Write($"[pillar] reached target feetY={feetYNow} targetWy={_targetWy} cycles={_cyclesDone}");
-                        DiagLog.Write($"[pillar_wait_enter] tick={Main.GameUpdateCount} cyclesDone={_cyclesDone} feetY={feetYNow} targetWy={_targetWy} vy={vyAtEntry} prevVY={_pillarWaitPrevVY}");
-                        _phaseTick = 0;
-                        _pillarWaitPrevVY = p.velocity.Y;
-                        _pillarWaitFellTicks = 0;
-                        State = SkillState.PillarWait;
-                        return;
-                    }
-                    if (_cyclesDone > 0)
-                    {
-                        if (feetYNow >= _cycleStartFeetY)
+                        if (feetYNow >= _jumpStartFeetY)
                         {
                             _stalledCycles++;
-                            DiagLog.Write($"[pillar] stall cycle={_cyclesDone} feetY={feetYNow} prev={_cycleStartFeetY} stalls={_stalledCycles}");
-                            if (_stalledCycles >= 2) { Stop(); return; }
+                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles}");
+                            if (_stalledCycles >= 3) { DiagLog.Write("[pillar] stop: no progress"); Stop(); return; }
                         }
-                        else
-                        {
-                            _stalledCycles = 0;
-                        }
+                        else _stalledCycles = 0;
+                        _airFrames = 0;
                     }
-                    _cycleStartFeetY = feetYNow;
-                    _cyclesDone++;
-                    DiagLog.Write($"[pillar] cycle={_cyclesDone} feetY={feetYNow} targetWy={_targetWy}");
-                    var frames = new System.Collections.Generic.List<ReplayFrame>();
-                    foreach (var (jump, use, mx, my) in PillarCycleFrames)
-                        frames.Add(new ReplayFrame { Jump = jump, UseItem = use, SelectedSlot = platformSlot, SmartCursor = 0, Mx = mx, My = my });
-                    ReplaySystem.Load(frames);
+                    if (_jumpStartFeetY != 0 && _jumpStartFeetY != feetYNow)
+                        DiagLog.Write($"[pillar] jump#{_jumps} rose={_jumpStartFeetY - feetYNow} feetY={feetYNow}");
+                    _jumpStartFeetY = feetYNow;
+                    _anchorWy = feetYNow - 1;     // 人自己那格 = 下一块要放的地方
+                    _pillarCol = Pcx(p);
+                    _jumpFramesLeft = JumpHoldFrames;
+                    _jumps++;
+                }
+                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
+                if (!grounded) _airFrames++;
+
+                // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
+                while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
+
+                if (_anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy))
+                {
+                    p.selectedItem = platformSlot;
+                    Main.SmartCursorWanted_Mouse = false;
+                    Main.mouseX = (int)(_pillarCol * 16f + 8f - Main.screenPosition.X);
+                    Main.mouseY = (int)(_anchorWy * 16f + 8f - Main.screenPosition.Y);
+                    if (p.itemTime == 0) { p.controlUseItem = true; _cyclesDone++; }
                 }
                 return;
             }
