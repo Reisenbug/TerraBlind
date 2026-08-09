@@ -18,9 +18,10 @@ namespace TerraBlind
 		private static bool _running;
 		private static int _destCx, _dir;
 		private static readonly List<Target> _targets = new();
-		private static int _frames;
+		private static int _frames, _pendingFrames;
 
 		private const int MaxFrames = 1200;
+		private const int PendingLimit = 90;   // 等手够久了还没放上,就是放不上,别死等
 
 		public static bool IsRunning => _running;
 		public static string Outcome = "idle";   // idle running done timeout no_item
@@ -82,6 +83,25 @@ namespace TerraBlind
 			_running = false;
 		}
 
+		static void Dump(string tag)
+		{
+			var p = Main.LocalPlayer;
+			var miss = new StringBuilder();
+			foreach (var t in _targets)
+			{
+				if (t.Done) continue;
+				bool reach = p != null && p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+				string occ = "oob";
+				if (InBounds(t.Wx, t.Wy))
+				{
+					var tile = Main.tile[t.Wx, t.Wy];
+					occ = tile.HasTile ? "占用t" + tile.TileType : "空";
+				}
+				miss.Append($"({t.Wx},{t.Wy})slot{t.Slot} 够得着={reach} 那格={occ} ");
+			}
+			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
+		}
+
 		private static bool Filled(Target t)
 		{
 			if (!InBounds(t.Wx, t.Wy)) return false;
@@ -96,7 +116,7 @@ namespace TerraBlind
 			if (p == null || !p.active) { Reason = "no_player"; Outcome = "timeout"; _running = false; return; }
 
 			_frames++;
-			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; return; }
+			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; Dump("timeout"); return; }
 
 			// 放成没放成看地图说了算,不看挥舞结果
 			bool swungThisFrame = false;
@@ -132,15 +152,13 @@ namespace TerraBlind
 			{
 				// reached the end but something didn't get placed (missed its reach window). Report it rather than
 				// walking past forever.
-				Outcome = "incomplete"; _running = false;
-				var miss = new StringBuilder();
-				foreach (var t in _targets) if (!t.Done) miss.Append($"({t.Wx},{t.Wy})slot{t.Slot} ");
-				DiagLog.Write($"[walkplace] incomplete placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={cx} 手上={p.selectedItem}");
+				Outcome = "incomplete"; _running = false; Dump("incomplete");
 				return;
 			}
-			// 够得着但手还在冷却 → 站着等手。走过去就出了射程,这一格永远补不上:
-			// 桌子间隔 5 格,冷却撞上窗口就丢一张,报 incomplete(有概率复现,就是这个)
-			if (pending) return;
+			// 够得着但手还在冷却 → 站着等手,不然走过去就出了射程,这一格永远补不上。
+			// 但只等 PendingLimit 帧:那格要是根本放不上(被占/地面不对),死等会拖到超时。
+			if (pending && ++_pendingFrames <= PendingLimit) return;
+			if (!pending) _pendingFrames = 0;
 			if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
 		}
 
