@@ -163,17 +163,16 @@ namespace TerraBlind
 			foreach (var t in _targets) if (!t.Done) { allDone = false; break; }
 
 			if (arrived && allDone) { Outcome = "done"; _running = false; DiagLog.Write($"[walkplace] done placed={PlacedCount}"); return; }
-			if (arrived && !allDone)
+
+			// 终点也要等手:最后一张桌子的射程窗口和终点重叠,一到就判失败等于从不给它机会
+			if (pending && ++_pendingFrames <= PendingLimit) return;
+			if (!pending) _pendingFrames = 0;
+
+			if (arrived)
 			{
-				// reached the end but something didn't get placed (missed its reach window). Report it rather than
-				// walking past forever.
 				Outcome = "incomplete"; _running = false; Dump("incomplete");
 				return;
 			}
-			// 够得着但手还在冷却 → 站着等手,不然走过去就出了射程,这一格永远补不上。
-			// 但只等 PendingLimit 帧:那格要是根本放不上(被占/地面不对),死等会拖到超时。
-			if (pending && ++_pendingFrames <= PendingLimit) return;
-			if (!pending) _pendingFrames = 0;
 			if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
 		}
 
