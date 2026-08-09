@@ -73,7 +73,9 @@ namespace TerraBlind
 			_frames = 0; PlacedCount = 0;
 			_running = true;
 			Outcome = "running"; Reason = "";
-			DiagLog.Write($"[walkplace] start dest={destCx} dir={_dir} targets={_targets.Count}");
+			var tl = new StringBuilder();
+			foreach (var t in _targets) tl.Append($"({t.Wx},{t.Wy}) ");
+			DiagLog.Write($"[walkplace] start dest={destCx} dir={_dir} 人在={ActExecutor.OriginCx(p)} 目标={tl.ToString().Trim()}");
 			return true;
 		}
 
@@ -81,6 +83,19 @@ namespace TerraBlind
 		{
 			if (Outcome == "running") Outcome = "stopped";
 			_running = false;
+		}
+
+		// 桌子 3 格宽 2 格高,锚点那格空不代表放得下 —— 连脚下支撑一起看
+		static string Foot(int wx, int wy)
+		{
+			var sb = new StringBuilder();
+			for (int y = wy - 1; y <= wy + 1; y++)
+			{
+				for (int x = wx - 1; x <= wx + 1; x++)
+					sb.Append(!InBounds(x, y) ? '?' : (Main.tile[x, y].HasTile ? '#' : '.'));
+				sb.Append('/');
+			}
+			return sb.ToString();
 		}
 
 		static void Dump(string tag)
@@ -97,7 +112,7 @@ namespace TerraBlind
 					var tile = Main.tile[t.Wx, t.Wy];
 					occ = tile.HasTile ? "占用t" + tile.TileType : "空";
 				}
-				miss.Append($"({t.Wx},{t.Wy})slot{t.Slot} 够得着={reach} 那格={occ} ");
+				miss.Append($"({t.Wx},{t.Wy})slot{t.Slot} 够得着={reach} 那格={occ} 占地={Foot(t.Wx, t.Wy)} ");
 			}
 			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
 		}
