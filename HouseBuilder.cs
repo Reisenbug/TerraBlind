@@ -110,6 +110,14 @@ namespace TerraBlind
 			return float.NaN;
 		}
 
+		static string ColDump(int col, int fromCy, int toCy)
+		{
+			var sb = new System.Text.StringBuilder($"{col}:");
+			for (int y = toCy; y <= fromCy; y++)
+				sb.Append(Predicates.IsSolid(col, y) ? '#' : '.');
+			return sb.ToString();
+		}
+
 		static bool ColClear(int col, int fromCy, int toCy)
 		{
 			for (int y = toCy; y <= fromCy; y++)
@@ -167,9 +175,10 @@ namespace TerraBlind
 					// 爬过头:只挪到位,别一路掉到地面再重爬一遍
 					if (lcy < _ay - 1) { DropDown.Start(_ay - 1, out _); _waited = 0; return; }
 					// 爬之前先把身体挪到头顶干净的那半边 —— 人跨两列,撞上哪列就卡在那儿
-					float wantPx = ClearStandPx(_x0, lcy, _ay - 1);
+					// 从头顶那格起扫,别把人自己占的 3 行算进去 —— 站半砖上脚那格是实心,不是障碍
+					float wantPx = ClearStandPx(_x0, lcy - 3, _ay - 1);
 					if (float.IsNaN(wantPx))
-					{ Fail($"({_x0}) 那一列爬不上去:{lcy}→{_ay - 1} 之间头顶有方块"); return; }
+					{ Fail($"({_x0}) 那一列爬不上去:{lcy - 3}→{_ay - 1} 头顶有方块 {ColDump(_x0 - 1, lcy - 3, _ay - 1)} {ColDump(_x0, lcy - 3, _ay - 1)} {ColDump(_x0 + 1, lcy - 3, _ay - 1)}"); return; }
 					float curPx = p.position.X + p.width / 2f;
 					if (System.Math.Abs(curPx - wantPx) > 3f)
 					{ SettleAt.StartPx(_x0, wantPx, 3f, out _); _waited = 0; return; }
