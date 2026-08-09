@@ -62,7 +62,9 @@ namespace TerraBlind
 							if (hbItem == null || hbItem.IsAir) { home = nextHb; break; }
 						}
 						if (home < 0) home = 0;                  // no empty slot — displace slot 0
+						int beforeSwap = Predicates.Have(type);
 						var tmp = p.inventory[home]; p.inventory[home] = p.inventory[slot]; p.inventory[slot] = tmp;
+						DiagLog.Write($"[walkplace] 换槽 {slot}→{home} type={type} 数量 {beforeSwap}→{Predicates.Have(type)} 背包界面={Main.playerInventory}");
 					}
 					homeOf[type] = home;
 				}
@@ -158,6 +160,7 @@ namespace TerraBlind
 					Main.SmartCursorWanted_Mouse = false;
 					p.controlUseItem = true;
 					swungThisFrame = true;
+					DiagLog.Write($"[walkplace] 挥 →({t.Wx},{t.Wy}) 槽{t.Slot} 背包={Predicates.Have(t.ItemType)} 帧={_frames} 背包界面={Main.playerInventory}");
 				}
 			}
 
