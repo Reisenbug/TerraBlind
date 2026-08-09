@@ -18,7 +18,20 @@ namespace TerraBlind
 		private static bool _running;
 		private static int _destCx, _dir;
 		private static readonly List<Target> _targets = new();
-		private static int _frames, _pendingFrames;
+		private static int _frames, _pendingFrames, _lastHave;
+
+		static string Slots(int type)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return "?";
+			var sb = new StringBuilder();
+			for (int i = 0; i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir && it.type == type) sb.Append($"[{i}]x{it.stack} ");
+			}
+			return sb.Length == 0 ? "无" : sb.ToString().Trim();
+		}
 
 		private const int MaxFrames = 1200;
 		private const int PendingLimit = 90;   // 等手够久了还没放上,就是放不上,别死等
@@ -72,7 +85,8 @@ namespace TerraBlind
 			}
 			_destCx = destCx;
 			_dir = destCx >= ActExecutor.OriginCx(p) ? 1 : -1;
-			_frames = 0; PlacedCount = 0;
+			_frames = 0; PlacedCount = 0; _pendingFrames = 0;
+			_lastHave = _targets.Count > 0 ? Predicates.Have(_targets[0].ItemType) : 0;
 			_running = true;
 			Outcome = "running"; Reason = "";
 			var tl = new StringBuilder();
@@ -134,6 +148,16 @@ namespace TerraBlind
 
 			_frames++;
 			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; Dump("timeout"); return; }
+
+			if (_targets.Count > 0)
+			{
+				int nowHave = Predicates.Have(_targets[0].ItemType);
+				if (nowHave != _lastHave)
+				{
+					DiagLog.Write($"[walkplace] 数量变 {_lastHave}→{nowHave} 帧={_frames} 已放={PlacedCount} 分布={Slots(_targets[0].ItemType)}");
+					_lastHave = nowHave;
+				}
+			}
 
 			// 放成没放成看地图说了算,不看挥舞结果
 			bool swungThisFrame = false;
