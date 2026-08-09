@@ -82,6 +82,14 @@ namespace TerraBlind
             _placeVeto = ""; return true;
         }
 
+        // 撑住人的是哪一行:feetY 自己算不得数,斜坡上人陷进去了。往下找到第一个实心行。
+        static int SupportRow(int col, int feetY)
+        {
+            for (int y = feetY; y <= feetY + 2; y++)
+                if (Predicates.IsSolid(col, y)) return y;
+            return feetY;
+        }
+
         // 平台要贴着邻居才放得出(原版会拒 no_anchor)
         static bool PlatAnchor(int x, int y)
         {
@@ -253,8 +261,10 @@ namespace TerraBlind
                     if (_jumpStartFeetY != 0 && _jumpStartFeetY != feetYNow)
                         DiagLog.Write($"[pillar] jump#{_jumps} rose={_jumpStartFeetY - feetYNow} feetY={feetYNow}");
                     _jumpStartFeetY = feetYNow;
-                    _anchorWy = feetYNow - 1;     // 人自己那格 = 下一块要放的地方
                     _pillarCol = Pcx(p);
+                    // 斜坡/半砖上人会陷进 feetY 那一行,feetY-1 就悬空了(下面没邻居贴)。
+                    // 从真正撑住人的那一行往上一格起,第一块才贴得住。
+                    _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
                     _jumpFramesLeft = JumpHoldFrames;
                     _lastAirVeto = "";
                     _jumps++;
