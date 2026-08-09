@@ -345,9 +345,10 @@ namespace TerraBlind
 					if (TableCount > 0)
 					{
 						int tables = Predicates.Have(H_TABLE);
-						if (tables < TableCount)
+						// 多合一张:合成数对不上背包实际数,少一张就摆不满
+						if (tables < TableCount + 1)
 						{
-							CraftCoordinator.Craft(H_TABLE, TableCount - tables);
+							CraftCoordinator.Craft(H_TABLE, TableCount + 1 - tables);
 							DiagLog.Write($"[house] craft table +{CraftCoordinator.LastCrafted} overflow={CraftCoordinator.LastOverflow} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(H_TABLE)} 分布={SlotDump(H_TABLE)}");
 						}
 					}
