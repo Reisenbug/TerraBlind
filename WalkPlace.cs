@@ -19,6 +19,7 @@ namespace TerraBlind
 		private static int _destCx, _dir;
 		private static readonly List<Target> _targets = new();
 		private static int _frames, _pendingFrames, _lastHave;
+		private static bool _armed;
 
 		static string Slots(int type)
 		{
@@ -48,41 +49,15 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 
-			// 每种物品开局占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉
 			_targets.Clear();
-			var homeOf = new Dictionary<int, int>();   // item.type -> hotbar slot it now lives in
-			int nextHb = 0;
 			foreach (var (wx, wy, item) in targets)
 			{
 				int slot = PlaceAction.ResolveSlot(item);
 				if (slot < 0) { why = "no_item:" + item; Outcome = "no_item"; Reason = item; return false; }
 				var it = p.inventory[slot];
-				int type = it.type;
-
-				if (!homeOf.TryGetValue(type, out int home))
-				{
-					if (slot <= 9) { home = slot; }              // already in the hotbar — leave it
-					else
-					{
-						// find a free hotbar slot not already claimed by another item this run; swap the item down into it.
-						home = -1;
-						for (; nextHb < 10; nextHb++)
-						{
-							bool claimed = false;
-							foreach (var v in homeOf.Values) if (v == nextHb) { claimed = true; break; }
-							if (claimed) continue;
-							var hbItem = p.inventory[nextHb];
-							if (hbItem == null || hbItem.IsAir) { home = nextHb; break; }
-						}
-						if (home < 0) home = 0;                  // no empty slot — displace slot 0
-						int beforeSwap = Predicates.Have(type);
-						var tmp = p.inventory[home]; p.inventory[home] = p.inventory[slot]; p.inventory[slot] = tmp;
-						DiagLog.Write($"[walkplace] 换槽 {slot}→{home} type={type} 数量 {beforeSwap}→{Predicates.Have(type)} 背包界面={Main.playerInventory}");
-					}
-					homeOf[type] = home;
-				}
-				_targets.Add(new Target { Wx = wx, Wy = wy, Slot = home, TileType = it.createTile, ItemType = type, Done = false });
+				_targets.Add(new Target { Wx = wx, Wy = wy, Slot = slot, TileType = it.createTile, ItemType = it.type, Done = false });
 			}
+			_armed = false;
 			_destCx = destCx;
 			_dir = destCx >= ActExecutor.OriginCx(p) ? 1 : -1;
 			_frames = 0; PlacedCount = 0; _pendingFrames = 0;
@@ -133,6 +108,42 @@ namespace TerraBlind
 			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
 		}
 
+		// 每种物品占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉。
+		// 只在手空闲时调用 —— 冷却里换槽会被原版补一次消耗。
+		static void Arm(Player p)
+		{
+			var homeOf = new Dictionary<int, int>();
+			int nextHb = 0;
+			for (int i = 0; i < _targets.Count; i++)
+			{
+				var t = _targets[i];
+				if (!homeOf.TryGetValue(t.ItemType, out int home))
+				{
+					int slot = t.Slot;
+					if (slot <= 9) home = slot;
+					else
+					{
+						home = -1;
+						for (; nextHb < 10; nextHb++)
+						{
+							bool claimed = false;
+							foreach (var v in homeOf.Values) if (v == nextHb) { claimed = true; break; }
+							if (claimed) continue;
+							var hbItem = p.inventory[nextHb];
+							if (hbItem == null || hbItem.IsAir) { home = nextHb; break; }
+						}
+						if (home < 0) home = 0;
+						int beforeSwap = Predicates.Have(t.ItemType);
+						var tmp = p.inventory[home]; p.inventory[home] = p.inventory[slot]; p.inventory[slot] = tmp;
+						DiagLog.Write($"[walkplace] 换槽 {slot}→{home} type={t.ItemType} 数量 {beforeSwap}→{Predicates.Have(t.ItemType)} 帧={_frames}");
+					}
+					homeOf[t.ItemType] = home;
+				}
+				t.Slot = home; _targets[i] = t;
+			}
+			_lastHave = _targets.Count > 0 ? Predicates.Have(_targets[0].ItemType) : 0;
+		}
+
 		private static bool Filled(Target t)
 		{
 			if (!InBounds(t.Wx, t.Wy)) return false;
@@ -148,6 +159,15 @@ namespace TerraBlind
 
 			_frames++;
 			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; Dump("timeout"); return; }
+
+			// 上一个动作的手还没收:这时候换槽,冷却归零那一帧原版会拿刚换进来的东西补一次
+			// 消耗,物品扣了却没落地(桌子每次蒸发一张就是这个)。等手真空了再开工。
+			if (!_armed)
+			{
+				if (p.itemTime > 0 || p.itemAnimation > 0) return;
+				Arm(p);
+				_armed = true;
+			}
 
 			if (_targets.Count > 0)
 			{
