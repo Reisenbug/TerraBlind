@@ -110,6 +110,20 @@ namespace TerraBlind
 			return float.NaN;
 		}
 
+		// 数量对不上时要看的是"在哪个槽",不是"有几个"
+		static string SlotDump(int id)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return "?";
+			var sb = new System.Text.StringBuilder();
+			for (int i = 0; i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir && it.type == id) sb.Append($"[{i}]x{it.stack} ");
+			}
+			return sb.Length == 0 ? "无" : sb.ToString().Trim();
+		}
+
 		static string ColDump(int col, int fromCy, int toCy)
 		{
 			var sb = new System.Text.StringBuilder($"{col}:");
@@ -334,7 +348,7 @@ namespace TerraBlind
 						if (tables < TableCount)
 						{
 							CraftCoordinator.Craft(H_TABLE, TableCount - tables);
-							DiagLog.Write($"[house] craft table +{CraftCoordinator.LastCrafted} overflow={CraftCoordinator.LastOverflow} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(H_TABLE)}");
+							DiagLog.Write($"[house] craft table +{CraftCoordinator.LastCrafted} overflow={CraftCoordinator.LastOverflow} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(H_TABLE)} 分布={SlotDump(H_TABLE)}");
 						}
 					}
 					int walls = Predicates.Have(H_WALL);
@@ -355,7 +369,7 @@ namespace TerraBlind
 						var tt = new List<(int, int, string)>();
 						for (int i = 0; i < TableCount; i++)
 							tt.Add((Wx(14 - RoomWidth * i), _floorRow, H_TABLE.ToString()));
-						DiagLog.Write($"[house] 摆桌前 背包桌子={Predicates.Have(H_TABLE)} 目标{tt.Count}个 mouseItem={(Main.mouseItem != null && !Main.mouseItem.IsAir ? Main.mouseItem.type + "x" + Main.mouseItem.stack : "空")}");
+						DiagLog.Write($"[house] 摆桌前 背包桌子={Predicates.Have(H_TABLE)} 目标{tt.Count}个 mouseItem={(Main.mouseItem != null && !Main.mouseItem.IsAir ? Main.mouseItem.type + "x" + Main.mouseItem.stack : "空")} 分布={SlotDump(H_TABLE)}");
 						Advance(Ph.Tables);
 						if (!Need(WalkPlace.Start(Wx(3), tt, out string wt), "摆桌子", wt)) return;
 						return;

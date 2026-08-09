@@ -34,10 +34,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 
-			// ASSIGN each distinct item ONE hotbar slot up front and leave it there for the whole run. The old way —
-			// swapping a backpack item into a hotbar slot per placement — had several targets fight over the same
-			// hotbar slot, knocking each other out mid-run so the selected item was wrong when it swung. Here every
-			// item gets its own home hotbar slot once; Tick only selects it, never swaps again.
+			// 每种物品开局占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉
 			_targets.Clear();
 			var homeOf = new Dictionary<int, int>();   // item.type -> hotbar slot it now lives in
 			int nextHb = 0;
@@ -101,9 +98,7 @@ namespace TerraBlind
 			_frames++;
 			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; return; }
 
-			// PLACE any in-reach, not-yet-done target this frame. Judge success by the map; a placed one is marked done
-			// so we don't swing at it again. Only one swing per frame overall (itemTime gate) is fine — furniture is a
-			// single placement, and reach windows while walking are wide.
+			// 放成没放成看地图说了算,不看挥舞结果
 			bool swungThisFrame = false;
 			bool pending = false;   // 够得着但还没放上的目标
 			for (int i = 0; i < _targets.Count; i++)
@@ -138,7 +133,9 @@ namespace TerraBlind
 				// reached the end but something didn't get placed (missed its reach window). Report it rather than
 				// walking past forever.
 				Outcome = "incomplete"; _running = false;
-				DiagLog.Write($"[walkplace] incomplete placed={PlacedCount}/{_targets.Count}");
+				var miss = new StringBuilder();
+				foreach (var t in _targets) if (!t.Done) miss.Append($"({t.Wx},{t.Wy})slot{t.Slot} ");
+				DiagLog.Write($"[walkplace] incomplete placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={cx} 手上={p.selectedItem}");
 				return;
 			}
 			// 够得着但手还在冷却 → 站着等手。走过去就出了射程,这一格永远补不上:
