@@ -232,7 +232,10 @@ namespace TerraBlind
                 // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
                 // 放成功锚点上移,继续找下一格。不回放录制 —— 录制写死一 cycle 2 格,地形一变就错。
                 _totalFrames++;
-                if (feetYNow <= _targetWy && p.velocity.Y == 0f)
+                // 脚下真有东西才算到 —— 只比行号会在起步那一帧就"到了"(脚下地面行本来就等于目标行),
+                // 调用方按身体行判又说没到,两边基准差一格 → start/done 空转
+                if (feetYNow <= _targetWy && p.velocity.Y == 0f
+                    && Predicates.IsGround(Pcx(p), feetYNow))
                 {
                     DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
                     Stop(); return;

@@ -126,6 +126,21 @@ namespace TerraBlind
 		// 每列上下试探多少格。房子悬空也合法,所以不再是"沿地表找落脚点",纯粹是在附近找空位。
 		const int VertScan = 60;
 
+		// 梯子:从 (x,y) 往下数到第一块地,中间必须全空。返回要搭几格(0=左下角就贴着地),
+		// 超过 MaxLadder 或够不到地返回 -1。
+		public const int MaxLadder = 20;
+		public static int LadderLen(int x, int y)
+		{
+			for (int L = 0; L <= MaxLadder; L++)
+			{
+				int below = y + L + 1;
+				if (!InBounds(x, below)) return -1;
+				if (IsGround(x, below)) return L;
+				if (!Vacant(x, below)) return -1;
+			}
+			return -1;
+		}
+
 		// 向外扫最近的房址:(x,y)=左下角,往右 w 列往上 h 行(含自己)必须全空,外加左下角要够得着
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
 			out int hitX, out int hitY, out int scanned)
@@ -143,9 +158,8 @@ namespace TerraBlind
 							int y = dy == 0 ? fromY : (vs == 0 ? fromY - dy : fromY + dy);
 							if (!InBounds(x, y) || !InBounds(x + w - 1, y - h + 1)) continue;
 							scanned++;
-							// 隔两列站:人 20px 宽 + settle 容差半格,隔一列身体会压到 x 那列
-							if (!CanStand(x - 2, y + 1) && !CanStand(x + 2, y + 1)) continue;
-							if (!IsGround(x, y + 1) && !IsGround(x, y + 2)) continue;   // (x,y) 要有锚点
+							// 房址可以悬空:平台梯从下面的地一路搭上来。要求那一列 L 格全空、L<=20、底下是地
+							if (LadderLen(x, y) < 0) continue;
 							bool ok = true;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)

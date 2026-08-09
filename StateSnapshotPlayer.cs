@@ -22,21 +22,33 @@ namespace TerraBlind
 		// H 选好的房址:nav 走完就在这儿开工。站位由 HouseBuilder.Ph.Lift 自己对齐,不要求按键时站对。
 		private static (int x, int y)? _pendingHouse;
 		private static int _pillarTestFrom, _pillarTestTarget;
+		private static int _houseNavTries;
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
 			if (_pendingHouse.HasValue && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
-				var (hx, hy) = _pendingHouse.Value; _pendingHouse = null;
-				if (RecedingNav.LastStop == "done")
+				var (hx, hy) = _pendingHouse.Value;
+				var php2 = Main.LocalPlayer;
+				int scol = hx;   // 梯子就在房子那一列
+				int gapX = System.Math.Abs(ActExecutor.OriginCx(php2) - scol);
+				// nav 会在半路停下还报 done,所以自己验位置。差得远就重走 —— SettleAt 只会走平地,
+				// 跨不了沟翻不了墙,那是寻路的活。差几格才交给 Ph.Lift 精调。
+				if (gapX > 6 && ++_houseNavTries <= 3)
 				{
-					if (HouseBuilder.Start(4, 1, hx, hy, out string whyH))
+					Main.NewText($"[TerraBlind] 离开工位还差 {gapX} 格,再走一次({_houseNavTries}/3)", 255, 220, 120);
+					RecedingNav.Start(scol, HouseBuilder.LadderFootRow(hx, hy));
+				}
+				else
+				{
+					_pendingHouse = null; _houseNavTries = 0;
+					if (gapX > 6)
+						Main.NewText($"[TerraBlind] 走不到开工位({scol},{hy + 1}),还差 {gapX} 格", 255, 120, 120);
+					else if (HouseBuilder.Start(4, 1, hx, hy, out string whyH))
 						Main.NewText($"[TerraBlind] 到了,开工盖房 ({hx},{hy})", 120, 255, 120);
 					else
 						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
-				else
-					Main.NewText($"[TerraBlind] 没走到房址:{RecedingNav.LastStop}", 255, 120, 120);
 			}
 			var site = _site;
 			if (site != null)
@@ -51,7 +63,7 @@ namespace TerraBlind
 					// 走过去,到了自己开工。nav 直接送到【开工站位】而不是房址本身:
 					// 房址那格是要放出来的,还不存在;站位是隔两列、下面一行的实地。
 					_pendingHouse = (site.Bx, site.By);
-					RecedingNav.Start(HouseBuilder.StandCol(site.Bx, site.By, 1), site.By + 1);
+					RecedingNav.Start(site.Bx, HouseBuilder.LadderFootRow(site.Bx, site.By));
 				}
 				else
 				{

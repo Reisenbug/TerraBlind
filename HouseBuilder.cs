@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, LiftStep, Corner, HopFloor, Floor,
+			Idle, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			Done
@@ -30,10 +30,9 @@ namespace TerraBlind
 		private static Ph _ph = Ph.Idle;
 		private static int _dir = 1;
 		private static int _x0, _ay;              // 房子矩形的左下角(选址给的)
-		private static int _standCx;              // 放左下角那两格时人站的列(左下角旁边)
 		private static int _floorRow;             // 地板实际所在行
 		private static int _rooms = 1;
-		private static int _waited, _hopTries, _liftTries;
+		private static int _waited, _hopTries, _liftTries, _liftBefore;
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
 		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
 
@@ -76,10 +75,7 @@ namespace TerraBlind
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0;
 			Outcome = "running"; Reason = "";
-			// 站左边还是右边:哪边站得住用哪边。优先房子延伸的反方向,那一列不在房子里,
-			// 不会跟后面铺的地板抢位置。
-			_standCx = StandCol(ax, ay, _dir);
-			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} stand={_standCx} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 			_ph = Ph.Lift;
 			return true;
 		}
@@ -93,13 +89,15 @@ namespace TerraBlind
 			return Start(rooms, d, ActExecutor.OriginCx(p) + d * 2, ActExecutor.OriginCy(p) - 1, out why);
 		}
 
-		// 隔两列站:SettleAt 容差半格(8px)+人 20px 宽,隔一列身体会压到 x0,格子就进了碰撞箱。
+		// 梯子和房子共用 x0 那一列:人站在下面的地上,一路往上搭平台,最上面那格就是左下角。
 		// nav 和这里共用这一份,免得两边各推一遍
-		public static int StandCol(int ax, int ay, int dir)
+		public static int StandCol(int ax, int ay, int dir) => ax;
+
+		// 梯脚:x0 那一列往下第一块地的上面一格。够不到地返回 int.MinValue
+		public static int LadderFootRow(int ax, int ay)
 		{
-			int d = dir >= 0 ? 1 : -1;
-			return Predicates.CanStand(ax - d * 2, ay + 1) ? ax - d * 2
-				 : Predicates.CanStand(ax + d * 2, ay + 1) ? ax + d * 2 : ax - d * 2;
+			int L = Predicates.LadderLen(ax, ay);
+			return L < 0 ? int.MinValue : ay + L;
 		}
 
 		public static void Stop()
@@ -137,55 +135,32 @@ namespace TerraBlind
 				{
 					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
 					int lcx = ActExecutor.OriginCx(p), lcy = ActExecutor.OriginCy(p);
-					if (lcx == _standCx && lcy == _ay + 1)
+					// 踩在左下角上了 → 开工。梯子最上面那格就是左下角,不用再单独放
+					if (lcx == _x0 && lcy == _ay - 1)
 					{
 						_liftTries = 0;
-						// 下面是地面就只放 (x0,ay);是空的就先放 (x0,ay+1) 当锚点
-						bool haveBelow = Main.tile[_x0, _ay + 1].HasTile;
-						Advance(Ph.Corner);
-						if (!Need(PlaceAction.Start(Plat(), _x0, haveBelow ? _ay : _ay + 1,
-								haveBelow ? 1 : 2, 0, -1, true, out string wcorner), "放左下角", wcorner)) return;
+						Advance(Ph.Floor);
+						if (!Need(BridgeBuilder.Start(Floor(), _dir > 0 ? "right" : "left", Width, _x0 + _dir, _ay, out string wf), "铺地板", wf)) return;
 						return;
 					}
 					if (++_liftTries > MaxLift)
-					{ Fail($"站不到左下角旁边 ({_standCx},{_ay + 1}),现在({lcx},{lcy})"); return; }
-					if (lcy < _ay + 1) { DropDown.Start(out _); _waited = 0; return; }
-					if (lcy == _ay + 1) { SettleAt.Start(_standCx, out _); _waited = 0; return; }
-					// 人比站位低:用寻路那条 pillar 边爬上去 —— 它自己搭平台自己站上去,一路到指定行。
-					// PillarUp 只搭不爬,搭完人还在底下,再 hop 十几格就上不去→掉回来→死循环。
-					if (!SkillExecutor.CanPillarFrom(lcx, lcy, out int topY) || topY > _ay + 1)
-					{ Fail($"爬不到 ({_standCx},{_ay + 1}):现在({lcx},{lcy}) 最高只能到 {topY}"); return; }
+					{ Fail($"上不到左下角 ({_x0},{_ay}),现在({lcx},{lcy})"); return; }
+					// 先对 x 再对高度:地面上横向走安全,爬到柱顶再横向走是悬空,走不过去还会掉下来
+					if (lcx != _x0) { SettleAt.Start(_x0, out _); _waited = 0; return; }
+					if (lcy < _ay - 1) { DropDown.Start(out _); _waited = 0; return; }
+					// 平台当绳子:从脚下的地一路搭到左下角,搭完人就站在左下角上。
+					_liftBefore = lcy;
 					Advance(Ph.LiftStep);
-					SkillExecutor.StartPillarJump(_dir > 0, _ay + 1);
+					SkillExecutor.StartPillarJump(_dir > 0, _ay);
 					return;
 				}
 
 				case Ph.LiftStep:
 					if (SkillExecutor.IsActive) return;
+					// 没爬高就别回去重启 —— 会 start/done 空转到 MaxLift,还把人蹭下平台
+					if (ActExecutor.OriginCy(p) >= _liftBefore)
+					{ Fail($"爬不动:还在 {ActExecutor.OriginCy(p)},要到 {_ay - 1}"); return; }
 					_ph = Ph.Lift; _waited = 0;
-					return;
-
-				case Ph.Corner:
-					if (PlaceAction.IsRunning) return;
-					if (!Main.tile[_x0, _ay].HasTile)
-					{ Fail($"({_x0},{_ay}) 没放上左下角:{PlaceAction.Outcome}/{PlaceAction.Reason}"); return; }
-					Advance(Ph.HopFloor);
-					HopUp.Start(_ay, _x0, out _);
-					return;
-
-				case Ph.HopFloor:
-					if (HopUp.IsRunning) return;
-					if (ActExecutor.OriginCy(p) != _ay - 1)
-					{
-						if (++_hopTries > MaxHopTries) { Fail($"没站上地板:cy={ActExecutor.OriginCy(p)} 应为 {_ay - 1}"); return; }
-						HopUp.Start(_ay, _x0, out _);
-						return;
-					}
-					_hopTries = 0;
-					// 起点写死 _x0+dir,不看人停在哪:跳上来可能冲过一格,跟着身体走就整排偏一格,
-					// 第一格没了锚点 → no_anchor。铺哪儿是这里定的,人自己走过去够。
-					Advance(Ph.Floor);
-					if (!Need(BridgeBuilder.Start(Floor(), _dir > 0 ? "right" : "left", Width, _x0 + _dir, _ay, out string ws3), "铺地板", ws3)) return;
 					return;
 
 				case Ph.Floor:
