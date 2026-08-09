@@ -66,16 +66,19 @@ namespace TerraBlind
         }
 
 
+        static string _placeVeto = "";
+
         // 这一格现在放得进去吗:身体没占着 + 够得着 + 有邻居可贴 + 那格是空的
         static bool CanPlaceNow(Player p, int x, int y)
         {
-            if (!Predicates.InBounds(x, y)) return false;
-            if (Main.tile[x, y].HasTile) return false;
+            if (!Predicates.InBounds(x, y)) { _placeVeto = "oob"; return false; }
+            if (Main.tile[x, y].HasTile) { _placeVeto = "occupied"; return false; }
             int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
             int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
-            if (x >= bl && x <= br && y >= bt && y <= bb) return false;
-            if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
-            return PlatAnchor(x, y);
+            if (x >= bl && x <= br && y >= bt && y <= bb) { _placeVeto = $"in_body[{bl}..{br}]x[{bt}..{bb}]"; return false; }
+            if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) { _placeVeto = "out_of_reach"; return false; }
+            if (!PlatAnchor(x, y)) { _placeVeto = "no_anchor"; return false; }
+            _placeVeto = ""; return true;
         }
 
         // 平台要贴着邻居才放得出(原版会拒 no_anchor)
@@ -94,11 +97,7 @@ namespace TerraBlind
 
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
 
-        // SHARED legality test for the pillar macro: planner (Expand) and executor both call this so the graph edge
-        // exists exactly when the executor can actually pillar (no fake edges). Mirrors ApplyControls' PillarBuild
-        // checks: must have a platform item, the head's two columns (20px body) must be clear of solid non-platform
-        // tiles going up, and a hold=15 vertical jump must rise (not be boxed in). Returns how high the feet can
-        // reach (topFeetY = the highest feet row before the head hits a ceiling), and whether pillaring is possible.
+        // 规划和执行共用这一个判据,否则图里会有执行不了的假边。返回脚能升到的最高行。
         public static bool CanPillarFrom(int feetCx, int feetCy, out int topFeetY)
         {
             topFeetY = feetCy;
@@ -116,11 +115,7 @@ namespace TerraBlind
             for (int y = feetCy; y >= feetCy - 2; y--)
                 if (BlocksPlacement(leftCol, y) || BlocksPlacement(rightCol, y)) { topFeetY = feetCy; return false; }
 
-            // scan upward: head occupies the row above the feet. stop where either column hits a solid (non-platform)
-            // tile — that's the ceiling the executor's leftHeadBlocked/rightHeadBlocked check would stop at.
-            // body of height 42px occupies 3 rows: feetY, feetY-1, feetY-2. climbing 2 tiles to feetY-2 makes the
-            // body occupy feetY-2, feetY-3, feetY-4 — so the two NEW rows (feetY-3, feetY-4) must both be clear in
-            // both columns, else the head ends up inside a wall (the clip bug). only advance when they're clear.
+            // 升 2 格后身体新进入 feetY-3/-4 两行,这两行不干净就会把头卡进墙里
             int feetY = feetCy;
             int reached = feetCy;
             for (int step = 0; step < 40; step++)
@@ -248,7 +243,7 @@ namespace TerraBlind
                         if (feetYNow >= _jumpStartFeetY)
                         {
                             _stalledCycles++;
-                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles}");
+                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles} anchor=({_pillarCol},{_anchorWy}) target={_targetWy} veto={_placeVeto} placed={_cyclesDone}");
                             if (_stalledCycles >= 3) { DiagLog.Write("[pillar] stop: no progress"); Stop(); return; }
                         }
                         else _stalledCycles = 0;
@@ -291,11 +286,7 @@ namespace TerraBlind
                     DiagLog.Write($"[pillar_wait_exit] tick={Main.GameUpdateCount} reason=grounded_at_target vy={vy} prevVY={_pillarWaitPrevVY} feetY={feetYNow} targetWy={_targetWy}");
                     Stop();
                 }
-                // FELL BACK: "reached target" can trigger on the way DOWN (feetY grazed the target at the arc top but
-                // the cycle's platform never materialized), after which the player lands BELOW target — grounded=true,
-                // atTarget=false, and this wait had no exit for that: 77s of wait ticks at (2623,254). Grounded at the
-                // wrong height means the climb attempt is over, full stop — hand control back so the nav replans and
-                // retries from the real position (attention prices repeated failures).
+                // 掉回目标下面 = 这次爬完了,交还控制权重新规划;没这个分支会干等 77 秒
                 else if (grounded && !atTarget && ++_pillarWaitFellTicks >= 10)
                 {
                     DiagLog.Write($"[pillar_wait_exit] tick={Main.GameUpdateCount} reason=fell_back_below_target feetY={feetYNow} targetWy={_targetWy}");
