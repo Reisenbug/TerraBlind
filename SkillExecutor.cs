@@ -67,6 +67,7 @@ namespace TerraBlind
 
 
         static string _placeVeto = "";
+        static string _lastAirVeto = "";
 
         // 这一格现在放得进去吗:身体没占着 + 够得着 + 有邻居可贴 + 那格是空的
         static bool CanPlaceNow(Player p, int x, int y)
@@ -255,6 +256,7 @@ namespace TerraBlind
                     _anchorWy = feetYNow - 1;     // 人自己那格 = 下一块要放的地方
                     _pillarCol = Pcx(p);
                     _jumpFramesLeft = JumpHoldFrames;
+                    _lastAirVeto = "";
                     _jumps++;
                 }
                 if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
@@ -263,7 +265,13 @@ namespace TerraBlind
                 // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
-                if (_anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy))
+                bool canPlace = _anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy);
+                if (!grounded && _placeVeto != _lastAirVeto)
+                {
+                    _lastAirVeto = _placeVeto;
+                    DiagLog.Write($"[pillar] air anchor=({_pillarCol},{_anchorWy}) feetY={feetYNow} veto={(canPlace ? "OK" : _placeVeto)}");
+                }
+                if (canPlace)
                 {
                     p.selectedItem = platformSlot;
                     Main.SmartCursorWanted_Mouse = false;
