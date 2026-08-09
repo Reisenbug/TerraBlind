@@ -11,12 +11,31 @@ namespace TerraBlind
         public static int LastCrafted, LastOverflow;
         public static string LastStop = "";
 
+        // 合成数和背包实际数对不上时,要看的是每一轮各发生了什么,不是最后一个总数
+        public static bool Trace = false;
+
+        static int Count(int id)
+        {
+            var p = Main.LocalPlayer;
+            if (p == null) return -1;
+            int n = 0;
+            for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+            {
+                var it = p.inventory[i];
+                if (it != null && !it.IsAir && it.type == id) n += it.stack;
+            }
+            return n;
+        }
+
         public static int Craft(int targetItemId, int amount)
         {
             LastCrafted = 0; LastOverflow = 0; LastStop = "";
             int remaining = amount;
+            if (Trace) DiagLog.Write($"[craft] 合成前 当前数={Count(targetItemId)} 要合={amount}");
+            int round = 0;
             while (remaining > 0)
             {
+                round++;
                 int recipeIdx = -1;
                 for (int ri = 0; ri < Main.numAvailableRecipes; ri++)
                 {
@@ -31,6 +50,7 @@ namespace TerraBlind
                 // available,材料再多也查不到 —— 那次房子就是这样,报 not_available 像是缺材料。
                 if (recipeIdx < 0)
                 {
+                    if (Trace) DiagLog.Write($"[craft] 第{round}轮 找不到配方 当前数={Count(targetItemId)} 还要={remaining}");
                     if (LastStop == "")
                     {
                         int free = 0;
@@ -61,6 +81,8 @@ namespace TerraBlind
                     }
                 }
 
+                int before = Trace ? Count(targetItemId) : 0;
+
                 var result = new Item();
                 result.SetDefaults(targetItemId);
                 result.stack = stackPerCraft;
@@ -70,6 +92,8 @@ namespace TerraBlind
                 int refused = (left == null || left.IsAir) ? 0 : left.stack;
                 LastCrafted += stackPerCraft - refused;
                 remaining -= stackPerCraft;
+                if (Trace)
+                    DiagLog.Write($"[craft] 第{round}轮 产出{stackPerCraft} 拒收{refused} 数量 {before}→{Count(targetItemId)} 还要={remaining}");
                 if (refused > 0)
                 {
                     LastOverflow += refused;
@@ -77,6 +101,7 @@ namespace TerraBlind
                     break;   // 背包已经收不下,再合下去只会继续白烧材料
                 }
             }
+            if (Trace) DiagLog.Write($"[craft] 合成后 当前数={Count(targetItemId)} 记账crafted={LastCrafted} overflow={LastOverflow} stop={LastStop}");
             return LastCrafted;
         }
     }

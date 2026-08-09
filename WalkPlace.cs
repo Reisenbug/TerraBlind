@@ -13,7 +13,7 @@ namespace TerraBlind
 	// judged by the MAP (the cell now holds that item's tile). Walking ends at the destination column.
 	public static class WalkPlace
 	{
-		public struct Target { public int Wx, Wy, Slot, TileType; public bool Done; }
+		public struct Target { public int Wx, Wy, Slot, TileType, ItemType; public bool Done; }
 
 		private static bool _running;
 		private static int _destCx, _dir;
@@ -66,7 +66,7 @@ namespace TerraBlind
 					}
 					homeOf[type] = home;
 				}
-				_targets.Add(new Target { Wx = wx, Wy = wy, Slot = home, TileType = it.createTile, Done = false });
+				_targets.Add(new Target { Wx = wx, Wy = wy, Slot = home, TileType = it.createTile, ItemType = type, Done = false });
 			}
 			_destCx = destCx;
 			_dir = destCx >= ActExecutor.OriginCx(p) ? 1 : -1;
@@ -140,7 +140,12 @@ namespace TerraBlind
 			{
 				var t = _targets[i];
 				if (t.Done) continue;
-				if (Filled(t)) { t.Done = true; _targets[i] = t; PlacedCount++; continue; }
+				if (Filled(t))
+				{
+					t.Done = true; _targets[i] = t; PlacedCount++;
+					DiagLog.Write($"[walkplace] 放上 ({t.Wx},{t.Wy}) 背包剩={Predicates.Have(t.ItemType)} 已放={PlacedCount}/{_targets.Count}");
+					continue;
+				}
 				if (!p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
 				pending = true;
 
