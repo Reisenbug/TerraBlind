@@ -21,6 +21,7 @@ namespace TerraBlind
 		private static bool _running;
 		private static int _col;
 		private static float _targetPx;          // world-x of the target column's CENTER
+		private static float _tol = HalfTile;
 		private static int _frames, _stableFrames;
 
 		private const int MaxFrames = 300;
@@ -32,13 +33,18 @@ namespace TerraBlind
 		public static string Outcome = "idle";   // idle running done timeout
 		public static string Reason = "";
 
-		public static bool Start(int col, out string why)
+		public static bool Start(int col, out string why) => StartPx(col, col * 16f + 8f, HalfTile, out why);
+
+		// 精确停位:身体中心停到 centerPx(容差 tol)。柱子放哪一列看身体中心,
+		// 半格容差下人可能跨 {col-1,col} 也可能跨 {col,col+1} —— 头顶哪一列有方块就撞哪列。
+		public static bool StartPx(int col, float centerPx, float tol, out string why)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 			_col = col;
-			_targetPx = col * 16f + 8f;         // center of the target column
+			_targetPx = centerPx;
+			_tol = tol;
 			_frames = 0; _stableFrames = 0;
 			_running = true;
 			Outcome = "running"; Reason = "";
@@ -66,7 +72,7 @@ namespace TerraBlind
 			float vx = p.velocity.X;
 
 			// SETTLED — centered within half a tile, ~stopped, on the ground, held a few frames.
-			if (System.MathF.Abs(err) <= HalfTile && System.MathF.Abs(vx) <= VxDead && p.velocity.Y == 0f)
+			if (System.MathF.Abs(err) <= _tol && System.MathF.Abs(vx) <= VxDead && p.velocity.Y == 0f)
 			{
 				if (++_stableFrames >= StableNeeded)
 				{
@@ -94,7 +100,7 @@ namespace TerraBlind
 				// coasting will land us on (or past) the cell. If we are clearly going to overshoot, brake against
 				// the motion; otherwise release and let friction do the rest.
 				float overshoot = System.MathF.Abs(slideSigned) - System.MathF.Abs(err);
-				if (overshoot > HalfTile)
+				if (overshoot > _tol)
 				{
 					if (vx > 0f) p.controlLeft = true; else if (vx < 0f) p.controlRight = true;
 				}

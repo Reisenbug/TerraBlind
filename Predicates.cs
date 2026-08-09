@@ -18,6 +18,10 @@ namespace TerraBlind
 
 		private static string Esc(string s) => string.IsNullOrEmpty(s) ? "" : s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
+		// 柱子建在哪一列由身体中心决定,和 OriginCx(覆盖最多的列)不是一回事。
+		// 横向对位只认这个,混用两套判据会互相推翻死循环。
+		public static int PillarCol(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
+
 		// SOLID = a tile the player rests on and cannot walk through. Platforms are solid-top: they hold you up, so
 		// they count as ground. Trees/vines/grass have HasTile but are not solid — walking into them is fine, which is
 		// exactly why "HasTile" was the wrong question all along.
@@ -126,6 +130,23 @@ namespace TerraBlind
 		// 每列上下试探多少格。房子悬空也合法,所以不再是"沿地表找落脚点",纯粹是在附近找空位。
 		const int VertScan = 60;
 
+		// 腐化/猩红:用原版自己的集合,别自己列 ID
+		public static bool EvilTile(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && (TileID.Sets.Corrupt[t.TileType] || TileID.Sets.Crimson[t.TileType]);
+		}
+
+		// 房址周围这个半径内不能有邪恶方块 —— 挨着腐化盖,蔓延过来房子就废了
+		public const int EvilClearR = 100;
+		// 只看四角:腐化成片,r=100 时四角落在片里就够判,逐格是 22 万格/候选点
+		public static bool EvilNearby(int bx, int by, int w, int h, int r)
+		{
+			int l = bx - r, rr = bx + w - 1 + r, t = by - h + 1 - r, b = by + r;
+			return EvilTile(l, t) || EvilTile(rr, t) || EvilTile(l, b) || EvilTile(rr, b);
+		}
+
 		// 梯子:从 (x,y) 往下数到第一块地,中间必须全空。返回要搭几格(0=左下角就贴着地),
 		// 超过 MaxLadder 或够不到地返回 -1。
 		public const int MaxLadder = 20;
@@ -165,6 +186,8 @@ namespace TerraBlind
 								for (int iy = 0; iy < h && ok; iy++)
 									if (!Vacant(x + ix, y - iy)) ok = false;
 							if (!ok) continue;
+							// 最后再查邪恶:要扫 71x60,比前面几条贵得多,让便宜的先筛
+							if (EvilNearby(x, y, w, h, EvilClearR)) continue;
 							hitX = x; hitY = y;
 							return true;
 						}

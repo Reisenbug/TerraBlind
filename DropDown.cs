@@ -15,6 +15,7 @@ namespace TerraBlind
 		private static bool _running;
 		private static int _frames;
 		private static int _startCy;
+		private static int _stopCy = int.MaxValue;
 
 		private const int MaxFrames = 240;
 
@@ -22,15 +23,20 @@ namespace TerraBlind
 		public static string Outcome = "idle";   // idle running done timeout
 		public static string Reason = "";
 
-		public static bool Start(out string why)
+		public static bool Start(out string why) => Start(int.MaxValue, out why);
+
+		// stopCy: 掉到这一行(身体行)就停,不再往下穿。爬过头一格时只需挪一格,
+		// 不传则一路掉到实心地面。
+		public static bool Start(int stopCy, out string why)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 			_running = true; _frames = 0;
 			_startCy = ActExecutor.OriginCy(p);
+			_stopCy = stopCy;
 			Outcome = "running"; Reason = "";
-			DiagLog.Write($"[drop] start from cy={_startCy}");
+			DiagLog.Write($"[drop] start from cy={_startCy} stop={(stopCy == int.MaxValue ? "ground" : stopCy.ToString())}");
 			return true;
 		}
 
@@ -54,6 +60,13 @@ namespace TerraBlind
 
 			// LANDED ON SOLID GROUND = done. Grounded, moved down from the start, and the tile just below the feet is
 			// SOLID (not a platform — landing on a platform we would just keep dropping through).
+			// 到了指定行就停:再往下穿就得重爬一遍
+			if (cy >= _stopCy && p.velocity.Y == 0f)
+			{
+				Outcome = "done"; _running = false;
+				DiagLog.Write($"[drop] done at cy={cy} (stop row) after {_frames}f");
+				return;
+			}
 			if (p.velocity.Y == 0f && cy > _startCy)
 			{
 				var below = InBounds(cx, cy + 1) ? Main.tile[cx, cy + 1] : default;

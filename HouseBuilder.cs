@@ -100,6 +100,23 @@ namespace TerraBlind
 			return L < 0 ? int.MinValue : ay + L;
 		}
 
+		// 人 20px 跨两列,爬升段里那两列头顶都不能有方块 —— 挑干净的那半边站。
+		// +3/+13 不取 +1/+15:贴着列边界站,几 px 误差就把 PillarCol 甩到隔壁列。
+		static float ClearStandPx(int x0, int fromCy, int toCy)
+		{
+			if (!ColClear(x0, fromCy, toCy)) return float.NaN;
+			if (ColClear(x0 - 1, fromCy, toCy)) return x0 * 16f + 3f;
+			if (ColClear(x0 + 1, fromCy, toCy)) return x0 * 16f + 13f;
+			return float.NaN;
+		}
+
+		static bool ColClear(int col, int fromCy, int toCy)
+		{
+			for (int y = toCy; y <= fromCy; y++)
+				if (Predicates.IsSolid(col, y)) return false;
+			return true;
+		}
+
 		public static void Stop()
 		{
 			if (Outcome == "running") Outcome = "stopped";
@@ -134,7 +151,7 @@ namespace TerraBlind
 				case Ph.Lift:
 				{
 					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
-					int lcx = ActExecutor.OriginCx(p), lcy = ActExecutor.OriginCy(p);
+					int lcx = Predicates.PillarCol(p), lcy = ActExecutor.OriginCy(p);
 					// 踩在左下角上了 → 开工。梯子最上面那格就是左下角,不用再单独放
 					if (lcx == _x0 && lcy == _ay - 1)
 					{
@@ -147,7 +164,15 @@ namespace TerraBlind
 					{ Fail($"上不到左下角 ({_x0},{_ay}),现在({lcx},{lcy})"); return; }
 					// 先对 x 再对高度:地面上横向走安全,爬到柱顶再横向走是悬空,走不过去还会掉下来
 					if (lcx != _x0) { SettleAt.Start(_x0, out _); _waited = 0; return; }
-					if (lcy < _ay - 1) { DropDown.Start(out _); _waited = 0; return; }
+					// 爬过头:只挪到位,别一路掉到地面再重爬一遍
+					if (lcy < _ay - 1) { DropDown.Start(_ay - 1, out _); _waited = 0; return; }
+					// 爬之前先把身体挪到头顶干净的那半边 —— 人跨两列,撞上哪列就卡在那儿
+					float wantPx = ClearStandPx(_x0, lcy, _ay - 1);
+					if (float.IsNaN(wantPx))
+					{ Fail($"({_x0}) 那一列爬不上去:{lcy}→{_ay - 1} 之间头顶有方块"); return; }
+					float curPx = p.position.X + p.width / 2f;
+					if (System.Math.Abs(curPx - wantPx) > 3f)
+					{ SettleAt.StartPx(_x0, wantPx, 3f, out _); _waited = 0; return; }
 					// 平台当绳子:从脚下的地一路搭到左下角,搭完人就站在左下角上。
 					_liftBefore = lcy;
 					Advance(Ph.LiftStep);
@@ -276,6 +301,9 @@ namespace TerraBlind
 
 				case Ph.Craft:
 				{
+					// 背包不开就合不了:原版 AdjTiles()(扫身边工作台)只在 Main.playerInventory 时跑,
+					// 不跑 adjTile[] 就是空的,要工作台的配方永远不出现。人也一样,得开背包。
+					Main.playerInventory = true;
 					// 等【自己真要合的】那样出现:单间不做桌子,等木桌会一直等到超时
 					int waitFor = TableCount > 0 ? H_TABLE : H_CHAIR;
 					bool ready = false;
@@ -284,17 +312,28 @@ namespace TerraBlind
 						{ ready = true; break; }
 					if (!ready) return;      // 等,由 StepTimeout 兜底
 
+					// 椅子先合:桌子排第一时老是只出 2 张(合成本身报成功),换个顺序试
+					int chairs = Predicates.Have(H_CHAIR);
+					if (chairs < ChairCount)
+					{
+						CraftCoordinator.Craft(H_CHAIR, ChairCount - chairs);
+						DiagLog.Write($"[house] craft chair +{CraftCoordinator.LastCrafted} overflow={CraftCoordinator.LastOverflow} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(H_CHAIR)}");
+					}
 					if (TableCount > 0)
 					{
 						int tables = Predicates.Have(H_TABLE);
-						if (tables < TableCount) CraftCoordinator.Craft(H_TABLE, TableCount - tables);
+						if (tables < TableCount)
+						{
+							CraftCoordinator.Craft(H_TABLE, TableCount - tables);
+							DiagLog.Write($"[house] craft table +{CraftCoordinator.LastCrafted} overflow={CraftCoordinator.LastOverflow} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(H_TABLE)}");
+						}
 					}
-					int chairs = Predicates.Have(H_CHAIR);
-					if (chairs < ChairCount) CraftCoordinator.Craft(H_CHAIR, ChairCount - chairs);
 					int walls = Predicates.Have(H_WALL);
 					if (walls < WallCount) CraftCoordinator.Craft(H_WALL, WallCount - walls);
 
-					// 合不出来就如实失败 —— CraftCoordinator 只数真进了背包的
+					// 桌子当初漏了验,少一张就静默过去,摆的时候挥空到超时
+					if (TableCount > 0 && Predicates.Have(H_TABLE) < TableCount)
+					{ Fail($"木桌只有 {Predicates.Have(H_TABLE)}/{TableCount}:{CraftCoordinator.LastStop}"); return; }
 					if (Predicates.Have(H_CHAIR) < ChairCount)
 					{ Fail($"椅子只有 {Predicates.Have(H_CHAIR)}/{ChairCount}"); return; }
 					if (Predicates.Have(H_WALL) < WallCount)
@@ -307,6 +346,7 @@ namespace TerraBlind
 						var tt = new List<(int, int, string)>();
 						for (int i = 0; i < TableCount; i++)
 							tt.Add((Wx(14 - RoomWidth * i), _floorRow, H_TABLE.ToString()));
+						DiagLog.Write($"[house] 摆桌前 背包桌子={Predicates.Have(H_TABLE)} 目标{tt.Count}个 mouseItem={(Main.mouseItem != null && !Main.mouseItem.IsAir ? Main.mouseItem.type + "x" + Main.mouseItem.stack : "空")}");
 						Advance(Ph.Tables);
 						if (!Need(WalkPlace.Start(Wx(3), tt, out string wt), "摆桌子", wt)) return;
 						return;
@@ -320,7 +360,9 @@ namespace TerraBlind
 
 				case Ph.Tables:
 					if (WalkPlace.IsRunning) return;
-					DiagLog.Write($"[house] tables → {WalkPlace.Outcome}/{WalkPlace.Reason}");
+					DiagLog.Write($"[house] tables → {WalkPlace.Outcome}/{WalkPlace.Reason} placed={WalkPlace.PlacedCount}");
+					if (WalkPlace.Outcome != "done")
+					{ Fail($"桌子只摆了 {WalkPlace.PlacedCount}/{TableCount}:{WalkPlace.Outcome}"); return; }
 					Advance(Ph.Chairs);
 					if (!Need(StartChairs(out string wc), "摆椅子", wc)) return;
 					return;
@@ -329,11 +371,12 @@ namespace TerraBlind
 					// 单间走的是 PlaceAction,多间走 WalkPlace —— 等哪个都行,两个都不在跑就是完了
 					if (PlaceAction.IsRunning || WalkPlace.IsRunning) return;
 					DiagLog.Write($"[house] chairs → 背包椅子={Predicates.Have(H_CHAIR)}");
-					_roomIdx = 0;
+					// 从最后一间开始倒着铺:摆完椅子人就在第四间那头,顺手就砌,不用先跑回第一间
+					_roomIdx = _rooms - 1;
 					// 单间:人已经站在地板上了,直接砌墙。PlaceWalls 够不着的格子自己会跳。
 					if (_rooms == 1) { Advance(Ph.Walls); StartWalls(0); return; }
 					Advance(Ph.WallSettle);
-					SettleAt.Start(Wx(4), out _);
+					SettleAt.Start(Wx(4 + RoomWidth * _roomIdx), out _);
 					return;
 
 				// ── 一间一间铺墙:站到那一间中间,跳回地板层,铺 ──────────────────
@@ -359,7 +402,7 @@ namespace TerraBlind
 				case Ph.Torch:
 					if (PlaceAction.IsRunning) return;
 					// 火把放不上不算失败(python 也不检查) —— 少个照明不影响房子成立
-					if (++_roomIdx < _rooms)
+					if (--_roomIdx >= 0)
 					{
 						Advance(Ph.WallSettle);
 						SettleAt.Start(Wx(4 + RoomWidth * _roomIdx), out _);

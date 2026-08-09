@@ -105,12 +105,14 @@ namespace TerraBlind
 			// so we don't swing at it again. Only one swing per frame overall (itemTime gate) is fine — furniture is a
 			// single placement, and reach windows while walking are wide.
 			bool swungThisFrame = false;
+			bool pending = false;   // 够得着但还没放上的目标
 			for (int i = 0; i < _targets.Count; i++)
 			{
 				var t = _targets[i];
 				if (t.Done) continue;
 				if (Filled(t)) { t.Done = true; _targets[i] = t; PlacedCount++; continue; }
 				if (!p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
+				pending = true;
 
 				if (!swungThisFrame && p.itemTime == 0)
 				{
@@ -139,6 +141,9 @@ namespace TerraBlind
 				DiagLog.Write($"[walkplace] incomplete placed={PlacedCount}/{_targets.Count}");
 				return;
 			}
+			// 够得着但手还在冷却 → 站着等手。走过去就出了射程,这一格永远补不上:
+			// 桌子间隔 5 格,冷却撞上窗口就丢一张,报 incomplete(有概率复现,就是这个)
+			if (pending) return;
 			if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
 		}
 
