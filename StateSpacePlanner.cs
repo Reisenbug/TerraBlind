@@ -2269,15 +2269,10 @@ namespace TerraBlind
                 // to ~18 — per-cell-faster actions now win their ties.
                 if (altered > 0)
                 {
-                    // KIND-ORDERED CAP: one flat cap (15) erased the intended ordering — dig-up's honest fee
-                    // (mining + pillar frames, ~36 dirt / ~170 stone) capped to the same 15 as a pillar cycle, so
-                    // the costliest ascent tied with the cheapest. The dig-up composite (pillar && digTiles) gets
-                    // its own higher cap so the ranking dig-up ≫ pillar ≫ place survives selection; if a small
-                    // climb-around exists it now wins first, and when digging up is truly the only way the
-                    // revisit/shock ladder prices the alternatives back above it within a few replans.
-                    float capK = (pillar && digTiles != null) ? DigUpSurchargeCap : AlterSurchargeCap;
+                    // 不封顶:真实帧数直接定价。封顶让挖 2 格和挖 8 格一样贵,规划器看不见厚薄,
+                    // 该往旁边走 4 格时偏要原地挖上去 (2710)。卡死交给 PUSH/StuckSentinel/revisit ladder。
                     float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
-                    g += MathF.Min(capK, cost * DigFramesToH) * (2f / MathF.Max(2f, edgeCells));
+                    g += cost * DigFramesToH * (2f / MathF.Max(2f, edgeCells));
                 }
                 // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
                 // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
@@ -2478,13 +2473,8 @@ namespace TerraBlind
         // way to avoid — big enough that walk+fall beats a dig to the same/near spot (kills the 60% avoidable digs), yet
         // still lost to a dig that's the ONLY descent (no walk/jump candidate, or all far higher H). Not in V (that would
         // re-introduce the two-cost mismatch) — purely a per-action tiebreak on "how".
-        // terrain-alter surcharge = the action's actual frames × this (H units per frame: MoveSide=3 per ~5.3-frame
-        // cell at run speed). Capped: with g=ΔH every descending edge totals exactly H(s), so an uncapped surcharge
-        // on slow digs would let an H-RISING shuffle beat the only descending edge (the constant-40 stucks at
-        // (3242,299) and (801,937)); the cap keeps a necessary dig affordable no matter how hard the rock.
+        // 帧数→H:MoveSide=3 每 ~5.3 帧一格
         const float DigFramesToH = 0.5f;
-        const float AlterSurchargeCap = 15f;
-        const float DigUpSurchargeCap = 40f;   // dig-up composite only: the costliest ascent must never tie with pillar/place (see kind-ordered cap)
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
