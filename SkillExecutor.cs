@@ -51,7 +51,7 @@ namespace TerraBlind
             _anchorWy = int.MaxValue;
             _pillarCol = 0;
             _jumps = 0; _totalFrames = 0;
-            _nudgeFrames = 0; _releaseFrames = 0;
+            _nudgeFrames = 0;
             State = SkillState.PillarBuild;
             DiagLog.Write($"[pillar] start dirRight={dirRight} targetWy={targetWy}");
         }
@@ -71,7 +71,6 @@ namespace TerraBlind
         static string _placeVeto = "";
         static string _lastAirVeto = "";
         static int _nudgeFrames;
-        static int _releaseFrames;
         private const int NudgeGrace = 20;
         // 逐帧拍下整个放置窗口:跳多高、箱子在哪、够不够得着、手好了没 —— 定不下窗口就别改跳跃帧数
         public static bool PillarTrace = false;
@@ -302,14 +301,10 @@ namespace TerraBlind
                     // 从真正撑住人的那一行往上一格起,第一块才贴得住。
                     _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
                     _jumpFramesLeft = JumpHoldFrames;
-                    _releaseFrames = 1;   // 见下:落地后要先松一帧,不然起跳判据不成立
                     _lastAirVeto = "";
                     _jumps++;
                 }
-                // 原版起跳要 releaseJump(上一帧松开这一帧按下),按住不放时它一直是 false。
-                // 一路按到底,落地后就再也跳不起来了 —— 日志里 hold=8 却 vy=0 三帧就是这个。
-                if (_releaseFrames > 0) _releaseFrames--;
-                else if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
+                if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
                 if (!grounded) _airFrames++;
 
                 // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
