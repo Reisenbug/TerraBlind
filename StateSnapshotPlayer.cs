@@ -468,6 +468,7 @@ namespace TerraBlind
 			if (Player != Main.LocalPlayer) return;
 			// speed fields are baked (×moveSpeed) LATE in Player.Update — only here are they trustworthy for planning
 			PhysicsSimulator.CaptureBaked(Player);
+			PlatformStock.Tick();
 
 			var snap = new Snapshot
 			{

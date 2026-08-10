@@ -182,19 +182,29 @@ namespace TerraBlind
             return t.HasTile && !Main.tileCut[t.TileType] && !Main.tileSolid[t.TileType];
         }
 
+        static bool IsPlatformItem(Terraria.Item item)
+        {
+            if (item == null || item.IsAir || item.createTile < 0) return false;
+            var td = Terraria.ID.TileID.Sets.Platforms;
+            return td != null && item.createTile < td.Length && td[item.createTile];
+        }
+
+        // 热键栏没有就从背包搬一叠上来 —— selectedItem 只认 0-9。补货是 PlatformStock 的事,这里不管。
         private static int FindPlatformSlot(Player p)
         {
             for (int i = 0; i < 10; i++)
-            {
-                var item = p.inventory[i];
-                if (item != null && !item.IsAir && item.createTile >= 0)
-                {
-                    var td = Terraria.ID.TileID.Sets.Platforms;
-                    if (td != null && item.createTile < td.Length && td[item.createTile])
-                        return i;
-                }
-            }
-            return -1;
+                if (IsPlatformItem(p.inventory[i])) return i;
+
+            int fromBag = -1;
+            for (int i = 10; i < p.inventory.Length; i++)
+                if (IsPlatformItem(p.inventory[i])) { fromBag = i; break; }
+            if (fromBag < 0) return -1;
+
+            int hb = 0;
+            for (int i = 0; i < 10; i++)
+                if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
+            var tmp = p.inventory[hb]; p.inventory[hb] = p.inventory[fromBag]; p.inventory[fromBag] = tmp;
+            return hb;
         }
 
         private static int FindPickaxeSlot(Player p)
