@@ -39,6 +39,9 @@ namespace TerraBlind
 		private static int _outOfReachFrames;
 		private const int ReachLostGrace = 30;
 
+		// 镐/斧/锤挥出去是为了让某一格消失,那格找不到就没有终点可等 —— 药水炸弹不算
+		private static bool IsCollectTool(Item it) => it.pick > 0 || it.axe > 0 || it.hammer > 0;
+
 		// the tile the target snapped to (for HTTP reporting); -1,-1 if no snap happened.
 		public static int SnappedWx = -1;
 		public static int SnappedWy = -1;
@@ -188,6 +191,15 @@ namespace TerraBlind
 							_active = null; return;
 						}
 						_preHadTile = pre.HasTile;
+					}
+
+					// 采集工具吸附不到任何目标(够不着时半径内一格可作用的都没有)= 没有可观测的终点,
+					// 而 DurationTicks=0 的预算是无限的 —— 不在这儿报,就会对着空气永远挥下去。
+					if (_watchType < 0 && _placeType < 0 && IsCollectTool(it))
+					{
+						Outcome = "no_progress"; Reason = "out_of_reach";
+						DiagLog.Write($"[item_use] 吸附不到 ({req.TargetWx},{req.TargetWy}),够不着,不挥了");
+						_active = null; return;
 					}
 
 					// 够不着就是挥空(原版会把目标钳回来),挖脚下还会把人挪走让批量作废 —— 直接报,别耗宽限窗口
