@@ -2410,6 +2410,11 @@ namespace TerraBlind
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
             DiagLog.Write($"[recede] BELLMAN ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} total={bestTotal:0} pillar={b.pillar} dig={(b.dig == null ? "-" : string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
+            // 选了要挖的边就把左右两边的账一起打出来 —— "旁边明明能走却偏要挖"每次都得回答这个
+            if (b.dig != null && b.dig.Count > 0)
+                DiagLog.Write($"[costcmp] 挖{b.dig.Count}格 vs 横向: 西({curCx - 1})cost={MazeWand.StepCostPublic(curCx - 1, curCy, curCx, curCy)}"
+                    + $" 东({curCx + 1})cost={MazeWand.StepCostPublic(curCx + 1, curCy, curCx, curCy)}"
+                    + $" 上cost={MazeWand.StepCostPublic(curCx, curCy - 1, curCx, curCy)}");
             return res;
         }
 
