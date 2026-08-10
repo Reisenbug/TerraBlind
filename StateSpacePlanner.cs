@@ -43,21 +43,13 @@ namespace TerraBlind
             public override int GetHashCode() => HashCode.Combine(Cx, Cy, G);
         }
 
-        // The standing cell is the AIR cell the player's feet occupy (one above the support), matching the
-        // distance field's CoarseStand convention. -1 pulls a foot resting exactly on a block top (feetY at the
-        // block's top edge) up into that air cell instead of the block row itself.
-        // HONEST LABEL: the center-point column is only the label if the 3-row body actually FITS there. The
-        // 20px hitbox straddles two columns; a landing 0.7px inside a column whose head rows are solid used to be
-        // labeled as standing IN that column — a cell only reachable by digging, whose H the field prices as a dig.
-        // The free jump then "stole" that H, next tick the center slid back over the boundary and the truth
-        // reasserted → the (800,937)↔(801,937) boundary oscillation. If the center column can't hold the body,
-        // the label snaps to the other straddled column; if neither fits (mid-dig, clipped) keep the center
-        // (fallback, never unlabeled).
-        // raw center rounding, no body-fit snap — the ONLY correct label for planned terrain-altering landings, whose
-        // tiles aren't modified yet (StandCell's fit check would judge them against the pre-dig/pre-place world).
+        // 挖/放的落点只能用这个:那些格子还没被改,StandCell 的 BodyFits 会拿改造前的世界去判它。
         internal static (int cx, int cy) RawCell(float px, float py)
             => ((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f));
 
+        // 站哪一格 = 脚占的那个空气格。中心列只有在身体真放得下时才算数:20px 跨两列,
+        // 落点探进头顶是实心的那列 0.7px 就被标成"站在里面",而那格的 H 是按挖算的
+        // —— 跳跃白嫖了这个 H,下一帧中心滑回来真相恢复 → (800,937)↔(801,937) 边界震荡。
         internal static (int cx, int cy) StandCell(float px, float py)
         {
             int cy = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
@@ -860,20 +852,8 @@ namespace TerraBlind
             return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
         }
 
-        // Dig a shaft straight down through the floor. The player (20px) can't fall through a 1-tile hole,
-        // so the shaft is TWO columns wide: the standing column + the neighbor the player's center leans
-        // toward. Stops at the first cell below with floor under either column; only yields when that
-        // landing cell has lower maze H than here (digging down must be progress toward the goal —
-        // covers sealed cave goals, where the surface isn't in the field at all and curH==MaxValue).
-        // worth digging down to a landing of maze-H lh: clearly closer along the field (curH - lh >= margin) and
-        // no lateral walk reaches an equally-low cell (else route around instead of mining). follows the maze
-        // field, which already plans the cheapest rock-penetrating route to the goal.
-        // ATOMIC down-dig: mine ONLY the one cell directly underfoot (the player is 20px wide so that's two columns,
-        // the standing column + the neighbor the center leans toward) and step down into it. Not a shaft to a landing —
-        // just one cell. The closed loop re-plans from the new real position each cycle, so a deep descent emerges as
-        // dig→dig→dig (or dig→fall once a cavity opens) rather than one pre-planned tunnel. This kills the DigMaxScan
-        // "no landing within 12 → null" dead-end that stranded the bot at a thick wall, and aligns plan with execution
-        // (one cell per edge, no over-mined tunnel that the next cycle finds unnecessary).
+        // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。
+        // 竖井版有 "12 格内没落点就 null" 的死角,厚墙前把人钉住过。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
             float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
@@ -1329,23 +1309,9 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // 大落差的边,统一拆出"半路接住"的版本:下坠途中往脚下第二格拍一块平台就停住了
-        // (第一格来不及,下落速度已经穿过去)。没有这个动作时一条 walk 边就能摔 130 格
-        // ——(4712,334) 当时唯一的候选就是这个。洞里到处是背景墙,平台几乎处处能锚。
-        //
-        // 每个深度发一条,深浅由 g+H 自己权衡。传入的是别的边已经模拟好的帧,所以 walk/jump/drop
-        // 都能拆,不用各改一遍。
-        // ── LOOKAHEAD ───────────────────────────────────────────────────────────────────────────
-        // greedy 只比落点那一格的 H,所以跨多格的"坎"能骗过它:管子底 (4854,379)H=443 往下掉到
-        // (4854,389) 是 H=473(涨 30),往上回头只涨 2 —— 于是选回头,可回头是来路。真相是 389 再
-        // 走一步就有 (4862,383)H=395,先涨 30 后降 78。人看的是"哪边通向别处",不是下一格的数字。
-        //
-        // 所以评分不用落点那一格的 H,改用"从落点能望到的最低 H"。只在 H 场上漫延,不生成边、不跑
-        // 物理 —— H 场是现成的字典,查一次 O(1),几十格的开销可以忽略(生成真边一次 4.3ms)。
-        // 代价是近似:可能望见一格 H 很低但实际有挖不动的墙隔着,把这个落点评高了。方向是安全的
-        // (最多多探一个落点,不会漏掉出路),而且每周期重算,走过去发现不对下一周期就改。
-        // 半径按实测定:管子底 (4854,389) 望出去,6 格处有 H431(足够把"往下"选出来),真正的出口
-        // (4862,383)H395 在 14 格外。取 18 让出口本身进视野,判断有余量而不是压线过。
+        // 评分不用落点那一格的 H,用"从落点能望到的最低 H":跨多格的坎能骗过 greedy —— 管子底
+        // (4854,379) 往下掉涨 30、回头只涨 2,于是选回头,可回头是来路;真相是再走一步就降 78。
+        // 半径实测定:出口 (4862,383) 在 14 格外,取 18 让它进视野而不是压线过。
         const int LookaheadRadius = 18;
         const int LookaheadBudget = 400;   // 望多少格封顶,保证不随地形爆炸
 
@@ -2077,20 +2043,6 @@ namespace TerraBlind
         const float RevisitPenalty = 12f;     // base penalty for an edge landing on a recently-visited cell; repeats double it (see ReportEdge)
         const float RevisitCap = 200f;        // escalation ceiling = one shock's worth — revisit alone can do what a shock did, but no more
 
-        // LOOP SHOCK — the universal escape (see PROJECT_STATE.md): when the detector sees best-H stall, every edge
-        // the loop traversed gets one large decaying penalty. Loops exist because the cost structure lies somewhere;
-        // making the lying edges expensive re-routes Bellman onto the next-best alternative without banning anything
-        // (the penalty is finite and DecayMiss forgets it, so a legitimate re-tread later is not forbidden).
-        // JIGGLE — the loop breaker. A loop is not a shortage of candidates: at (988,551) the planner had 34, several
-        // of them descending, and a human breaks the same loop by tapping Down once. It persists because selection is
-        // deterministic — identical stance, identical scores, identical pick, forever — and because the penalties that
-        // were supposed to break it had themselves priced the one good step out (the shock that fired on the loop
-        // charged +200 to (987,549)→(987,551), the single edge reaching the lowest H in the neighbourhood).
-        //
-        // So when a loop is detected, stop trusting `total` for one step and pick a DESCENDING candidate at random.
-        // A descending edge is progress by the field's own measure, so this cannot wander; and randomness is what
-        // makes the cycle break with probability 1 instead of replaying the same deterministic pick. No parameter to
-        // tune — it sidesteps the weighted sum rather than reweighting it.
         // 最近站过的格子。只用来在 PUSH 时把"去过的"排到后面,不做循环判定、不禁止重访。
         const int VisitedLen = 40;
         static readonly System.Collections.Generic.HashSet<(int, int)> _visited = new();
@@ -2180,20 +2132,8 @@ namespace TerraBlind
                 DiagLog.Write(nb.ToString());
             }
 
-            // PURE BELLMAN. The field H is the value function V(s) = min cost-to-goal (Dijkstra built it with StepCost),
-            // so the optimal action is the one minimizing  g(this step) + H(landing)  — exactly V(s)=cost(s→s')+V(s').
-            // No line, no target, no backtrack bans, no per-terrain special-case. H (already weights dig/up/lava as
-            // expensive) makes the choice route around walls/lava and prefer cheap moves on its own; loops are impossible
-            // because H strictly decreases each step (Bellman optimality), so no禁退 is needed. Closed loop: every cycle
-            // recomputes from the REAL position, so physics imprecision is absorbed (we never assume we reached s').
-            // CRITICAL: g must be in the SAME UNIT as H (StepCost), not frames — else the sum is meaningless. So g is
-            // recomputed in StepCost units: travelled cells × MoveSide + dug cells × DigSide + pillared cells × MoveUp.
-            // STATELESS LINE: re-traced from the CURRENT cell every replan (greedy field descent, cheap). The old
-            // frozen start→goal trace plus a monotonic _lineIdx projection was memory that survived reality changes —
-            // after any large involuntary displacement (fall, knockback, teleport) the projection still claimed the
-            // player was back where it last saw them, and the dev term dragged the bot toward the stale route. A line
-            // that always emanates from the real cell makes dev/align pure functions of the current state: idx 0 IS
-            // the player, the direction vectors read "where the best route from HERE heads".
+            // 线每次从【当前格】重新描。老做法冻结 start→goal 再用 _lineIdx 单调投影,那是能扛过现实变化的记忆:
+            // 摔一跤/被击退/传送之后,投影还咬定人在它上次看见的地方,dev 项就把人往过期路线上拽。
             var line = MazeWand.TraceFrom(field, curCx, curCy, goalWx, goalWy);
             var dS = LineDir(line, 0, ArcShort);
             var dM = LineDir(line, 0, ArcMid);
@@ -2228,22 +2168,10 @@ namespace TerraBlind
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
-                // g = the TRUE extra cost of terrain-altering actions only; plain travel (walk/jump distance) is NOT
-                // charged. Reason: the field H is built from move/dig weights but has NO concept of place/dig-from-here,
-                // so a place/dig landing often sits 1-2 cells lower in H than a walk/jump landing and a manhattan-based g
-                // couldn't out-price it → the bot dug/bridged for a few cells of H it could have walked to. Charging
-                // travel distance also virtually-inflated far jumps (large manhattan) so cheap飞-in-place小跳 won → jitter.
-                // Fix both: walk/jump g≈0 (total≈H, pure field descent, far jumps not penalized), while dig/pillar/place
-                // carry their real StepCost-unit price so they're only chosen when H drops enough to be worth it.
-                // GOLDEN RULE: g is the SAME cost that defined H, not a second hand-authored one. H (Dijkstra) already is
-                // the per-cell cost accumulated to goal, so the ideal cost of the multi-cell action s→s' is exactly
-                // H(s)−H(s'). Using that guarantees g and H share one cost function at one granularity (Bellman is then
-                // exact). Hand-coded per-action costs (place=120, pillar×9, dig weights) were a SECOND, mismatched cost
-                // at a different granularity — the root of the pit loops (a bridge priced 120 while H valued the same
-                // float at ~26, so it always lost to a free step into the pit). With g=ΔH, total=g+H(s')≡H(s) for every
-                // candidate, so H alone can't rank them — the alignment/deviation terms below break the tie, which is
-                // legitimate: they ARE the "how far this action strays from the field-optimal (line)" part that H folded
-                // away. clamp negative ΔH (a landing with HIGHER H) to 0 cost — the deviation term handles the penalty.
+                // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。H 已是逐格累加到目标的代价,
+                // 所以 s→s' 的理想代价恰好 = H(s)−H(s')。手编的 per-action 价(place=120、pillar×9)
+                // 是第二套、粒度还不同 —— 坑循环的根:桥标价 120 而 H 只给同一块浮空 26,永远输给白送的一步。
+                // 代价是 total=g+H(s')≡H(s) 全场相等,排序交给下面的 align/dev 项。ΔH 为负 clamp 到 0。
                 // 落点值 = 从落点望得到的最低 H(见 LookaheadH)。g 和它必须用同一把尺子:先用 nH 算 g、
                 // 再用 laH 当落点值,恒等式 total≡当前值 就破了 —— 往上跳时 g 被 clamp 成 0,而 laH 又不再
                 // 反映落点本身有多烂,两道保险同时失效。实测 (3343,378):跳到 nH=619(比脚下差 202)却因
