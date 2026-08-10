@@ -134,8 +134,27 @@ namespace TerraBlind
 				else
 					Main.NewText($"[TerraBlind] 盖不了: {rwhy}", 255, 120, 120);
 			}
+			// 场把往上那一列算成多少钱:H 说该挖上去、实际要挖 8 格,得看每格的账
+			if (TerraBlind.TestPillar != null && TerraBlind.TestPillar.JustPressed
+				&& Main.keyState.PressingShift())
+			{
+				var cp = Main.LocalPlayer;
+				int ccx = (int)((cp.position.X + cp.width / 2f) / 16f);
+				int ccy = (int)((cp.position.Y + cp.height - 2f) / 16f);
+				var sb = new System.Text.StringBuilder($"[costdump] 从 ({ccx},{ccy}) 往上\n");
+				for (int r = 1; r <= 10; r++)
+				{
+					int from = ccy - r + 1, to = ccy - r;
+					sb.Append($"  ({ccx},{from})→({ccx},{to}) cost={MazeWand.StepCostPublic(ccx, to, ccx, from)}"
+						+ $" solid={Predicates.IsSolid(ccx, to)}\n");
+				}
+				sb.Append($"  横向 ({ccx},{ccy})→西 cost={MazeWand.StepCostPublic(ccx - 1, ccy, ccx, ccy)}"
+					+ $" 东 cost={MazeWand.StepCostPublic(ccx + 1, ccy, ccx, ccy)}");
+				DiagLog.Write(sb.ToString());
+				Main.NewText("[TerraBlind] 代价已打进日志", 120, 255, 120);
+			}
 			// P 单测 pillar:原地往上搭 10 格,人跟着爬上去。再按一次停。
-			if (TerraBlind.TestPillar != null && TerraBlind.TestPillar.JustPressed)
+			else if (TerraBlind.TestPillar != null && TerraBlind.TestPillar.JustPressed)
 			{
 				if (SkillExecutor.IsActive) { SkillExecutor.Stop(); Main.NewText("[TerraBlind] pillar 停", 255, 200, 120); }
 				else
