@@ -35,6 +35,7 @@ namespace TerraBlind
 		private static int _waited, _hopTries, _liftTries, _liftBefore;
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
 		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
+		private static int _torchWx, _torchWy;
 
 		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
 		const int H_FLOOR = 94;       // 木平台
@@ -62,6 +63,8 @@ namespace TerraBlind
 		static int TableCount => _rooms >= 4 ? 3 : 0;
 		static int ChairCount => _rooms >= 4 ? 4 : 1;
 		static int WallCount => _rooms * 24;
+		// 每间一个火把。合不出来:配方要凝胶,不刷怪就只能开箱砸罐捡 —— 是进屋前该备好的料
+		static int TorchCount => _rooms;
 
 		// (ax,ay)=左下角=地板第一格,是放出来的不是走上去的:站旁边放出它 → 跳上去踩着 → 往外铺
 		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
@@ -361,6 +364,8 @@ namespace TerraBlind
 					{ Fail($"椅子只有 {Predicates.Have(H_CHAIR)}/{ChairCount}"); return; }
 					if (Predicates.Have(H_WALL) < WallCount)
 					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
+					if (Predicates.Have(H_TORCH) < TorchCount)
+					{ Fail($"火把只有 {Predicates.Have(H_TORCH)}/{TorchCount},进屋前得先攒够(开箱砸罐)"); return; }
 
 					// 单间:工作台就在脚下,合完椅子直接原地放,不走来走去。
 					// 多间才需要 walk_place —— 桌 wx(14,9,4) 走到 wx(3),椅 wx(2,7,12,17) 走回 wx(19)。
@@ -418,13 +423,16 @@ namespace TerraBlind
 				case Ph.Walls:
 					if (PlaceWalls.IsRunning) return;
 					// python 每间铺完墙紧接着放一个火把:place_at wx(col1+2), roof_row+2
+					_torchWx = Wx(1 + RoomWidth * _roomIdx + 2); _torchWy = _roofRow + 2;
 					Advance(Ph.Torch);
-					PlaceAction.Start(H_TORCH.ToString(), Wx(1 + RoomWidth * _roomIdx + 2), _roofRow + 2, 1, 0, 0, true, out _);
+					PlaceAction.Start(H_TORCH.ToString(), _torchWx, _torchWy, 1, 0, 0, true, out _);
 					return;
 
 				case Ph.Torch:
 					if (PlaceAction.IsRunning) return;
-					// 火把放不上不算失败(python 也不检查) —— 少个照明不影响房子成立
+					// NPC 要光源才肯住,少一个火把这间房就不算数
+					if (!Main.tile[_torchWx, _torchWy].HasTile)
+					{ Fail($"第{_roomIdx + 1}间火把没放上 ({_torchWx},{_torchWy}):{PlaceAction.Outcome}"); return; }
 					if (--_roomIdx >= 0)
 					{
 						Advance(Ph.WallSettle);
