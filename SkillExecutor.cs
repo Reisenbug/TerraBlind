@@ -97,6 +97,17 @@ namespace TerraBlind
             _placeVeto = ""; return true;
         }
 
+        // 身体跨的那几列里,脚下真踩着东西的是哪一列。都没有就退回中心列。
+        static int FootedCol(Player p, int feetY)
+        {
+            int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
+            int mid = Pcx(p);
+            if (Predicates.IsSolid(mid, SupportRow(mid, feetY))) return mid;   // 中心列站得住就用它
+            for (int c = bl; c <= br; c++)
+                if (Predicates.IsSolid(c, SupportRow(c, feetY))) return c;
+            return mid;
+        }
+
         // 撑住人的是哪一行:feetY 自己算不得数,斜坡上人陷进去了。往下找到第一个实心行。
         static int SupportRow(int col, int feetY)
         {
@@ -296,9 +307,9 @@ namespace TerraBlind
                     if (_jumpStartFeetY != 0 && _jumpStartFeetY != feetYNow)
                         DiagLog.Write($"[pillar] jump#{_jumps} rose={_jumpStartFeetY - feetYNow} feetY={feetYNow}");
                     _jumpStartFeetY = feetYNow;
-                    _pillarCol = Pcx(p);
-                    // 斜坡/半砖上人会陷进 feetY 那一行,feetY-1 就悬空了(下面没邻居贴)。
-                    // 从真正撑住人的那一行往上一格起,第一块才贴得住。
+                    // 柱子建在【脚下真有支撑】的那一列,不是身体中心那一列:人跨两列时中心可能
+                    // 偏在悬空的一边,锚点贴不住东西,一块也放不出来(2711站着,却往2712放)。
+                    _pillarCol = FootedCol(p, feetYNow);
                     _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
                     _jumpFramesLeft = JumpHoldFrames;
                     _lastAirVeto = "";
