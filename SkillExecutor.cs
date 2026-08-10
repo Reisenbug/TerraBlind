@@ -51,6 +51,7 @@ namespace TerraBlind
             _anchorWy = int.MaxValue;
             _pillarCol = 0;
             _jumps = 0; _totalFrames = 0;
+            _nudgeFrames = 0;
             State = SkillState.PillarBuild;
             DiagLog.Write($"[pillar] start dirRight={dirRight} targetWy={targetWy}");
         }
@@ -69,6 +70,8 @@ namespace TerraBlind
 
         static string _placeVeto = "";
         static string _lastAirVeto = "";
+        static int _nudgeFrames;
+        private const int NudgeGrace = 20;
         // 逐帧拍下整个放置窗口:跳多高、箱子在哪、够不够得着、手好了没 —— 定不下窗口就别改跳跃帧数
         public static bool PillarTrace = false;
 
@@ -223,6 +226,8 @@ namespace TerraBlind
                 var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
                 var nudgeSim = PhysicsSimulator.SimulateJump(nudgeState, 0, 15, nudgePh);
                 bool jumpBlocked = p.position.Y - nudgeSim.MinPy < 10f; // normal unobstructed rise = 93.46px; <10 = blocked
+                // 挪一下是【下一帧】才生效的:同一帧拿没变的位置再判一次,必然还是挡着 —— 以前就是这样
+                // 把自己判死的,nudge 写了等于没写。所以设完输入就让开这一帧,给它时间挪。
                 if (jumpBlocked)
                 {
                     float shift = 4f;
@@ -230,21 +235,23 @@ namespace TerraBlind
                     var simR = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = p.position.X + shift, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, nudgePh);
                     bool clearLeft = p.position.Y - simL.MinPy >= 10f;
                     bool clearRight = p.position.Y - simR.MinPy >= 10f;
-                    DiagLog.Write($"[pillar_nudge] blocked px={p.position.X:0.##} clearLeft={clearLeft} clearRight={clearRight}");
-                    if (clearLeft && !clearRight) p.controlLeft = true;
-                    else if (clearRight && !clearLeft) p.controlRight = true;
+                    if (clearLeft != clearRight && ++_nudgeFrames <= NudgeGrace)
+                    {
+                        if (_nudgeFrames == 1)
+                            DiagLog.Write($"[pillar_nudge] blocked px={p.position.X:0.##} clearLeft={clearLeft} clearRight={clearRight} 挪开试试");
+                        if (clearLeft) p.controlLeft = true; else p.controlRight = true;
+                        return;
+                    }
+                    if (_nudgeFrames > NudgeGrace)
+                    {
+                        DiagLog.Write($"[pillar] 挪了{NudgeGrace}帧还是跳不起来 px={p.position.X:0.##},放弃");
+                        Stop(); return;
+                    }
+                    // 两边都不行(或两边都行却还是跳不动):挪也没用,如实放弃
+                    DiagLog.Write($"[pillar] 跳不起来 px={p.position.X:0.##} clearLeft={clearLeft} clearRight={clearRight},放弃");
+                    Stop(); return;
                 }
-                int leftCol = (int)(p.position.X / 16f);
-                int rightCol = (int)((p.position.X + p.width - 1) / 16f);
-                int headTileY = (int)(p.position.Y / 16f);
-                bool leftHeadBlocked = Main.tile[leftCol, headTileY - 1] is { HasTile: true } lh && Main.tileSolid[lh.TileType] && !Main.tileSolidTop[lh.TileType];
-                bool rightHeadBlocked = Main.tile[rightCol, headTileY - 1] is { HasTile: true } rh && Main.tileSolid[rh.TileType] && !Main.tileSolidTop[rh.TileType];
-                if (leftHeadBlocked || rightHeadBlocked)
-                {
-                    DiagLog.Write($"[pillar] head blocked at leftCol={leftCol} rightCol={rightCol} headY={headTileY - 1}, stopping");
-                    Stop();
-                    return;
-                }
+                _nudgeFrames = 0;
                 // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
                 // 放成功锚点上移,继续找下一格。不回放录制 —— 录制写死一 cycle 2 格,地形一变就错。
                 _totalFrames++;

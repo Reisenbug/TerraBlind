@@ -915,9 +915,13 @@ namespace TerraBlind
             int rightCol = (int)((cur.Px + PhysicsSimulator.PlayerW - 1) / 16f);
             var tiles = new List<(int, int)>();
             float cost = 0f;
+            // 挖满 [feetY-2, ccy-3] 整段,不跳着挖:pillar 一跳升几格是随地形变的(1~3格),
+            // 按"每跳2格"只挖 ccy-1-2k/ccy-2-2k,人升 3 格时 ccy-5 没挖 → 撞上没挖的天花板卡死。
+            int prevTop = ccy - 2;
             for (int k = 1; k * 2 <= DigMaxScan; k++)
             {
-                foreach (int y in new[] { ccy - 1 - 2 * k, ccy - 2 - 2 * k })
+                int newTop = ccy - 2 * k - 2;
+                for (int y = prevTop - 1; y >= newTop; y--)
                     foreach (int c in new[] { leftCol, rightCol })
                         if (DigSolid(c, y))
                         {
@@ -926,6 +930,7 @@ namespace TerraBlind
                             cost += fc;
                             tiles.Add((c, y));
                         }
+                prevTop = newTop;
                 if (k == 1 && tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digup] NULL: ceiling already open"); return null; }
                 int feetY = ccy - 2 * k;
                 cost += 43f;
