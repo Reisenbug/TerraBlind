@@ -231,11 +231,17 @@ namespace TerraBlind
                 if (platformSlot < 0) { DiagLog.Write("[pillar] stop: no platform slot"); Stop(); return; }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
-                // simulate hold=15 vx=0 jump; if end_py > start_py the path is blocked
-                var nudgeState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 };
+                // 只有脚踏实地时问"能不能起跳"才有意义:人在空中头顶本来就贴着方块,一算就说跳不起来,
+                // 于是一跳到半路把自己判死 —— 平台其实已经放出去了
                 var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
-                var nudgeSim = PhysicsSimulator.SimulateJump(nudgeState, 0, 15, nudgePh);
-                bool jumpBlocked = p.position.Y - nudgeSim.MinPy < 10f; // normal unobstructed rise = 93.46px; <10 = blocked
+                bool onGround = p.velocity.Y == 0f;
+                bool jumpBlocked = false;
+                if (onGround)
+                {
+                    var nudgeState = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 };
+                    var nudgeSim = PhysicsSimulator.SimulateJump(nudgeState, 0, 15, nudgePh);
+                    jumpBlocked = p.position.Y - nudgeSim.MinPy < 10f; // 正常无遮挡上升 93.46px;<10 就是被挡住了
+                }
                 // 挪一下是【下一帧】才生效的:同一帧拿没变的位置再判一次,必然还是挡着 —— 以前就是这样
                 // 把自己判死的,nudge 写了等于没写。所以设完输入就让开这一帧,给它时间挪。
                 if (jumpBlocked)
