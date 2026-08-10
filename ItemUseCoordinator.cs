@@ -34,23 +34,18 @@ namespace TerraBlind
 		// hard ceiling in frames for one placement attempt, so the attempt ends even if no swing ever completes.
 		private const int PlaceFrameCeiling = 90;
 		private static int _elapsed;         // ticks since this action started (for the no-progress grace window)
-		// NO-PROGRESS window: after this many ticks of swinging, if the target tile still shows zero accumulated
-		// mining damage, the tool simply can't dent it (wooden pick on stone, wrong tool). Stop early and report
-		// "no_progress" instead of flailing to the full timeout — this is the human "two swings, nope, wrong tool".
+		// 挥这么多帧还是零伤害 = 工具啃不动,早停别耗到超时("两下没动静,换工具")
 		private const int ProgressGrace = 45;
+		private static int _outOfReachFrames;
+		private const int ReachLostGrace = 30;
 
 		// the tile the target snapped to (for HTTP reporting); -1,-1 if no snap happened.
 		public static int SnappedWx = -1;
 		public static int SnappedWy = -1;
-		// completion detection. Collect (chop/mine): "removed" (target gone) / "no_progress" (can't dent) / "timeout".
-		// Place (block/platform/rope): "placed" (WE put a tile in an empty cell) / "already_there" (the cell was
-		// occupied before we swung — we did nothing) / "not_placed" (swung but nothing landed — see Reason) /
-		// "no_swing" (never even swung — target unreachable / wrong item / out of stock).
-		// "n/a" is now RESERVED for items that are genuinely neither (potion/bomb): no tile to watch either way.
+		// 采集:removed/no_progress/timeout。放置:placed/already_there/not_placed/no_swing。
+		// n/a 只留给药水炸弹这种既不采也不放的 —— 没有可观测的目标格
 		public static string Outcome = "idle";
-		// why the action failed. collect: "blocked" (support tile, can't mine) / "tool_weak" (pick too weak) /
-		// "out_of_reach". place: "occupied" (cell already has a different tile) / "no_anchor" (rope/platform needs a
-		// neighbour to attach to) / "out_of_reach" / "wrong_item" / "out_of_stock".
+		// 采集:blocked/tool_weak/out_of_reach。放置:occupied/no_anchor/out_of_reach/wrong_item/out_of_stock
 		public static string Reason = "";
 
 		public static bool IsActive => _active != null;
@@ -66,6 +61,7 @@ namespace TerraBlind
 			_prevAnim = 0;
 			_preHadTile = false;
 			_elapsed = 0;
+			_outOfReachFrames = 0;
 			SnappedWx = -1; SnappedWy = -1;
 			Outcome = "running";
 			Reason = "";
@@ -86,12 +82,7 @@ namespace TerraBlind
 
 			_elapsed++;
 
-			// COMPLETION DETECTION — three-way termination on a collect target (chop/mine):
-			//   removed     → target tile gone (tree fell / ore mined): success. Stop.
-			//   no_progress → swung past the grace window but the tile shows zero mining damage: the tool can't dent it
-			//                 (wooden pick on stone). Stop early instead of flailing to timeout.
-			//   timeout     → ran out the swing budget with the tile still there but being chipped: fallback.
-			// This is "use axe until the tree is down" plus the human "wrong tool, give up early".
+			// 采集三分:removed(目标没了=成)/no_progress(零伤害=工具不行,早停)/timeout(还在啃但超预算)
 			if (_watchType >= 0)
 			{
 				var wt = Main.tile[SnappedWx, SnappedWy];
@@ -100,9 +91,7 @@ namespace TerraBlind
 
 				if (_elapsed >= ProgressGrace && TileMineDamage(p, SnappedWx, SnappedWy) <= 0)
 				{
-					// zero damage after the grace window → distinguish WHY. Vanilla CanKillTile is false when a tree or
-					// chest sits on top (can't mine a support out from under it): that's structural, a better pick won't
-					// help — clear the obstruction. Otherwise the pick simply isn't strong enough.
+					// 零伤害要分清原因:上面压着树/箱子是结构问题(换镐没用),否则才是镐不够硬
 					Reason = WorldGen.CanKillTile(SnappedWx, SnappedWy) ? "tool_weak" : "blocked";
 					Outcome = "no_progress"; _active = null; return;
 				}
@@ -117,16 +106,11 @@ namespace TerraBlind
 				{ Outcome = "placed"; _active = null; return; }
 			}
 
-			// PLACE gives up only after COMPLETED SWINGS, never on the tick budget. A placement takes item.useTime
-			// frames to resolve, which the caller has no way of knowing — judging it by a caller-supplied budget meant
-			// dur:2 reported "the game refused" when the truth was "the animation had not finished yet". Swings are
-			// counted on the itemAnimation falling edge, which vanilla always drives to 0, so this window is
-			// structurally guaranteed to close: no path here can spin forever.
+			// 放置只按【挥完的次数】判,不按帧预算:一次放置要 useTime 帧,调用方不可能知道,
+			// 按预算判会把"动画还没完"误报成"游戏拒绝了" 
 			if (_placeType >= 0)
 			{
-				// belt-and-braces on the swing count: an item whose animation never returns to 0 (autoReuse held down)
-				// would never tick a falling edge, so an elapsed-frame ceiling backs it up. Whichever fires first ends
-				// the attempt — the point is only that SOMETHING always does.
+			// 动画永不归零的物品(autoReuse)数不到下降沿,所以再加个帧数上限兜底
 				if (_swings >= PlaceSwingGrace || _elapsed >= PlaceFrameCeiling)
 				{
 					Outcome = "not_placed"; Reason = DiagnosePlace(p, req);
@@ -169,10 +153,7 @@ namespace TerraBlind
 				slot = hb;
 			}
 
-			// SNAP (once per request): a mining/chopping tool must land on an actual workable tile, but the LLM only
-			// gives a rough "the tree is around here" coord that usually lands on air/leaves/an adjacent cell. Same idea
-			// as vanilla SmartCursor: pull the target to the nearest tile the tool can act on. Non-collecting items
-			// (place/throw/potion) are left untouched.
+			// LLM 给的是"树大概在这儿",常落在树叶或空气上 —— 像原版 SmartCursor 那样吸附到最近可作用的格
 			if (!_snapped)
 			{
 				_snapped = true;
@@ -194,17 +175,12 @@ namespace TerraBlind
 						var st = Main.tile[SnappedWx, SnappedWy];
 						if (st.HasTile) _watchType = st.TileType;   // watch this tile for removal (chop/mine done)
 					}
-					// PLACING item (createTile >= 0): register the tile we expect to appear at the EXACT target. No snap
-					// — a placement coord means the cell you want filled, not "somewhere around here". Registering
-					// this is what gives the place path an observable result at all.
+					// 放置不吸附:给的坐标就是要填的那格。登记期望出现的 tile,放置才有可观测结果
 					if (_watchType < 0 && it.createTile >= 0)
 					{
 						_placeType = it.createTile;
 						SnappedWx = req.TargetWx; SnappedWy = req.TargetWy;
-						// ALREADY-THERE means OUR tile is already in that cell — not merely that something is. Grass, vines
-						// and other cut-through decorations sit in cells that accept a placement perfectly well; refusing
-						// to swing at them skips a placement the game would have allowed. So only an exact match counts
-						// as "nothing to do"; everything else gets swung at, and the MAP decides what happened.
+						// 只有【同类型】才算已经放过了:草和藤蔓那格照样放得进去,不挥等于白白少放一次
 						var pre = Main.tile[req.TargetWx, req.TargetWy];
 						if (pre.HasTile && pre.TileType == _placeType)
 						{
@@ -214,16 +190,28 @@ namespace TerraBlind
 						_preHadTile = pre.HasTile;
 					}
 
-					// REACH: swinging at a tile outside interaction range just flails (vanilla clamps the tile target),
-					// and mining below the feet moves the player, so a batch computed from the old stance goes stale.
-					// Check the authoritative range up front and report at once instead of burning the grace window.
-					// Placement is bounded by the same reach, so it reports the same way rather than swinging at air.
+					// 够不着就是挥空(原版会把目标钳回来),挖脚下还会把人挪走让批量作废 —— 直接报,别耗宽限窗口
 					if ((_watchType >= 0 || _placeType >= 0)
 						&& !p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 					{
 						Outcome = _placeType >= 0 ? "no_swing" : "no_progress";
 						Reason = "out_of_reach"; _active = null; return;
 					}
+				}
+			}
+
+			// 开工时够得着不代表一直够得着:被怪击退、脚下塌了,目标就出了射程,再挥全是空的。
+			// 每帧复查,但给宽限 —— 挖矿本来就会小幅位移,一出界就放弃太脆。
+			if ((_watchType >= 0 || _placeType >= 0) && SnappedWx >= 0)
+			{
+				if (p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					_outOfReachFrames = 0;
+				else if (++_outOfReachFrames >= ReachLostGrace)
+				{
+					Outcome = _placeType >= 0 ? "no_swing" : "no_progress";
+					Reason = "out_of_reach";
+					DiagLog.Write($"[item_use] out_of_reach at ({SnappedWx},{SnappedWy}) after {_elapsed}f — 被挪开了");
+					_active = null; return;
 				}
 			}
 
@@ -234,9 +222,7 @@ namespace TerraBlind
 			Main.SmartCursorWanted_Mouse = false;
 			p.selectedItem = slot;
 
-			// COMPLETED-SWING COUNT on the itemAnimation falling edge. Counting "frames we pressed the button" instead
-			// would multiply-count one swing (itemAnimation stays 0 for several frames before vanilla starts it), which
-			// is what made a 2-frame budget look like a swing that had already been given its chance.
+			// 数 itemAnimation 的下降沿:数"按了几帧"会把一次挥舞重复计数(动画启动前有好几帧是 0)
 			if (_prevAnim > 0 && p.itemAnimation == 0) _swings++;
 			_prevAnim = p.itemAnimation;
 
@@ -244,11 +230,8 @@ namespace TerraBlind
 				p.controlUseItem = true;
 		}
 
-		// WHY a placement produced nothing — but ONLY reasons that are OBSERVED world facts, never a prediction of
-		// whether vanilla would accept the tile. The eye reports what happened; it must not pre-judge what CAN happen,
-		// or it will refuse legal placements the way it wrongly refused rope-into-air (a rope into an anchorless cell
-		// is legal, just pointless — the player is allowed to do pointless things, so the primitive must be too).
-		// "no_anchor" survives only as an appended HINT below, never as a gate.
+		// 只报【观测到的事实】,绝不预判原版会不会接受 —— 眼睛报发生了什么,不判断能不能发生。
+		// 所以 no_anchor 只作为提示附上,永远不当拦截条件(往空中放绳子是合法的,只是没意义)
 		private static string DiagnosePlace(Player p, ItemUseRequest req)
 		{
 			int x = req.TargetWx, y = req.TargetWy;
@@ -260,15 +243,11 @@ namespace TerraBlind
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return "out_of_reach";
 			var t = Main.tile[x, y];
 			if (t.HasTile) return "occupied";
-			// nothing observed blocked it: the swing landed, the cell is empty, in reach, right item, in stock — yet
-			// no tile appeared, so vanilla rejected the placement for its own reason. Report that plainly and hand the
-			// LLM a NON-BINDING hint (anchorless neighbours) to reason from, rather than inventing a verdict.
+			// 挥了、格子空、够得着、东西对、有货,却没出现 —— 原版自己拒的。如实报,附个不具约束力的提示
 			return HasAnchor(x, y) ? "rejected" : "rejected_no_anchor_hint";
 		}
 
-		// A placed tile needs something to attach to. Rope in particular only extends from an existing rope or a
-		// ceiling — a mid-air target silently does nothing at all, which is exactly the failure that used to report
-		// as success. Main.tileRope covers every rope variant, so no ID list to keep in sync.
+		// 绳子只能从已有绳子或天花板往下接,对着半空放是静默失败 —— 以前这种情况会误报成功
 		private static bool HasAnchor(int x, int y)
 		{
 			(int, int)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
@@ -283,11 +262,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// Snap a rough target to the nearest tile the given tool can actually act on, within a radius.
-		// The LLM only knows "the tree is around here" — its coord routinely lands in the canopy or empty air a dozen
-		// cells off the trunk, so the radius has to be generous. axe → tree trunk (then slid to the root); hammer →
-		// Main.tileHammer; pick → any mineable solid. Returns true and rewrites wx/wy on a match; false leaves them
-		// untouched (non-collecting item, already on a valid tile, or nothing in range).
+		// 把粗略坐标吸附到最近的可作用格。半径要给得宽:LLM 的坐标常偏出树干十几格
 		private const int SnapRadius = 12;
 		private static bool TrySnap(Item it, ref int wx, ref int wy)
 		{
@@ -314,12 +289,8 @@ namespace TerraBlind
 			return true;
 		}
 
-		// Chop must land on the MAIN TRUNK's lowest cell — cutting a ROOT or BRANCH (the sideways-offset columns) only
-		// drops that decoration and its bit of wood; only severing the base of the central trunk fells the whole tree.
-		// A tree is one TileType; body parts are distinguished by frameX (22=centre trunk, 44=left, 66=right, 88=branch)
-		// and frameY. The LLM's rough coord often snaps to a root/branch column, so: find the nearest trunk tile, if it
-		// sits on a root column shift sideways to the centre trunk (vanilla WorldGen.IsTileATreeRoot's offsetToTrunk),
-		// then slide down to the base. Cut that and the tree falls.
+		// 只有砍中主干最底下那格整棵树才倒,砍树根/枝杈只掉那点装饰。
+		// 树是同一个 TileType,靠 frameX 区分部位(22=主干 44=左 66=右 88=枝),先找主干再滑到根部
 		private static bool TrySnapTree(ref int wx, ref int wy)
 		{
 			int bestX = -1, bestY = -1, bestD = int.MaxValue;
@@ -337,10 +308,7 @@ namespace TerraBlind
 
 			int type = Main.tile[bestX, bestY].TileType;
 			bool IsTree(int x, int y) => InBounds(x, y) && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type;
-			// THE TRUNK is the ONE column spanning the tree's full height; branches/roots stick out sideways on only
-			// part of the height, so they're always SHORTER. Among the columns near the hit, pick the LONGEST run of
-			// tree (measured up + down from this row), then cut its lowest cell. Longest = trunk, no matter how thick a
-			// branch is. Picture 1=tree: 010/110/010/011/111 — the middle column is the only full-height one.
+			// 主干是唯一贯穿整棵树高的那一列,枝杈只占部分高度所以总更短 —— 取最长的那列就是主干
 			int trunkX = bestX, trunkLen = -1;
 			for (int sx = -3; sx <= 3; sx++)
 			{
