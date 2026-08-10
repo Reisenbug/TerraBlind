@@ -2409,7 +2409,7 @@ namespace TerraBlind
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
-            DiagLog.Write($"[recede] BELLMAN ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} total={bestTotal:0} pillar={b.pillar}");
+            DiagLog.Write($"[recede] BELLMAN ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} total={bestTotal:0} pillar={b.pillar} dig={(b.dig == null ? "-" : string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
             return res;
         }
 
