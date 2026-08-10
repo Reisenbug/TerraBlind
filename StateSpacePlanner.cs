@@ -1065,6 +1065,7 @@ namespace TerraBlind
                 for (int py = apexFootCy + 1; py <= apexFootCy + PlatformMaxDropTiles; py++)
                 {
                     if (!CanPlaceReal(pcxTry, py)) continue;
+                    if (!ClearOfBody(minPy, pcxTry, py)) continue;
                     var trySeg = SimulateWithPlatform(cur, dir, hold, ph, pcxTry, py, platformTile);
                     if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
                     int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
@@ -1160,6 +1161,14 @@ namespace TerraBlind
         }
 
         // target cell empty (or cuttable) + at least one real neighbor gives support (block or background wall)
+        // 跳到最高点时,那格得在身体下面【留够一格】才放得出来 —— 贴着箱底算出来的落点,
+        // 起跳时机差几像素就还在箱子里,执行侧一律否决,规划却一轮轮把它当最优解 (1346,192)。
+        static bool ClearOfBody(float apexPy, int wx, int wy)
+        {
+            int bodyBottomRow = (int)((apexPy + PhysicsSimulator.PlayerH - 1) / 16f);
+            return wy > bodyBottomRow + 1;
+        }
+
         static bool CanPlaceReal(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
