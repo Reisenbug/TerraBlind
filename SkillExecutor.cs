@@ -34,8 +34,9 @@ namespace TerraBlind
 
         public static bool IsActive => State != SkillState.Idle;
 
-        public static void StartPillarJump(bool dirRight, int targetWy)
+        public static void StartPillarJump(bool dirRight, int targetWy, bool trace = true)
         {
+            PillarTrace = trace;
             DirectionRight = dirRight;
             _targetWy = targetWy;
             _jumpFramesLeft = 0;
@@ -68,6 +69,17 @@ namespace TerraBlind
 
         static string _placeVeto = "";
         static string _lastAirVeto = "";
+        // 逐帧拍下整个放置窗口:跳多高、箱子在哪、够不够得着、手好了没 —— 定不下窗口就别改跳跃帧数
+        public static bool PillarTrace = false;
+
+        // 头顶到第一个实心块还有几格:跳不满就是被它挡的
+        static int HeadClear(Player p, int col)
+        {
+            int top = (int)(p.position.Y / 16f);
+            for (int n = 0; n < 12; n++)
+                if (Predicates.IsSolid(col, top - 1 - n)) return n;
+            return 12;
+        }
 
         // 这一格现在放得进去吗:身体没占着 + 够得着 + 有邻居可贴 + 那格是空的
         static bool CanPlaceNow(Player p, int x, int y)
@@ -276,10 +288,17 @@ namespace TerraBlind
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
                 bool canPlace = _anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy);
-                if (!grounded && _placeVeto != _lastAirVeto)
+                if (PillarTrace)
                 {
-                    _lastAirVeto = _placeVeto;
-                    DiagLog.Write($"[pillar] air anchor=({_pillarCol},{_anchorWy}) feetY={feetYNow} veto={(canPlace ? "OK" : _placeVeto)}");
+                    int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
+                    int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
+                    var itNow = p.inventory[platformSlot];
+                    int useT = (itNow != null && !itNow.IsAir) ? itNow.useTime : -1;
+                    float ddx = (_pillarCol * 16f + 8f) - p.Center.X, ddy = (_anchorWy * 16f + 8f) - p.Center.Y;
+                    float dPx = System.MathF.Sqrt(ddx * ddx + ddy * ddy) / 16f;
+                    DiagLog.Write($"[ptrace] f={_totalFrames} feetY={feetYNow} vy={p.velocity.Y:0.##} hold={_jumpFramesLeft} "
+                        + $"box=[{bl}..{br}]x[{bt}..{bb}] anchor=({_pillarCol},{_anchorWy}) dist={dPx:0.0}格 "
+                        + $"itemTime={p.itemTime} useTime={useT} head={HeadClear(p, _pillarCol)} veto={(canPlace ? "OK" : _placeVeto)}");
                 }
                 if (canPlace)
                 {

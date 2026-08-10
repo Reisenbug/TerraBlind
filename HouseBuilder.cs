@@ -202,7 +202,7 @@ namespace TerraBlind
 					// 平台当绳子:从脚下的地一路搭到左下角,搭完人就站在左下角上。
 					_liftBefore = lcy;
 					Advance(Ph.LiftStep);
-					SkillExecutor.StartPillarJump(_dir > 0, _ay);
+					SkillExecutor.StartPillarJump(_dir > 0, _ay, false);
 					return;
 				}
 
