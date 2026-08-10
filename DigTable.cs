@@ -115,12 +115,18 @@ namespace TerraBlind
 
         public const int Unmineable = 100000;
 
-        // slim mineability check for the field build's Dijkstra (hundreds of thousands of wall cells, off-thread):
-        // pick damage only — no inventory scan (pick power passed in). CanKillTile IS included: leaving the
-        // attached-object check "to the Expand-side generators" made the FIELD price routes through tiles no
-        // generator would touch — a tree-root block overhead read as a cheap 160 dig, the line threaded it, every
-        // generator refused, and the bot was pinned under the tree until shock death ((1335,223)). The field and
-        // the generators must share ONE definition of mineable.
+        // 挖开的【后果】,不是挖它要多久。蜂巢又软又快,纯按耗时算规划器专挑它走 —— 但捅破了
+        // 蜂蜜流出来拖慢移动、放出小蜜蜂、还可能招来蜂王。有别的路就绕开,只有无路可走才付这个价。
+        private const int HivePenalty = 3000;
+        private static int Trouble(int type)
+        {
+            if (type == TileID.Hive) return HivePenalty;
+            if (type == TileID.HoneyBlock || type == TileID.CrispyHoneyBlock) return HivePenalty / 3;
+            return 0;
+        }
+
+        // 场和生成器必须共用同一套"能不能挖"的定义:漏掉 CanKillTile 那次,树根块被算成便宜的 160,
+        // 线穿过去了但每个生成器都拒绝,人就被钉在树下电死((1335,223))
         public static bool MineableWith(int x, int y, int pickPower)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
@@ -132,9 +138,7 @@ namespace TerraBlind
             return dmg > 0 && Terraria.WorldGen.CanKillTile(x, y);
         }
 
-        // real mining time in frames for the tile at (x,y) with the player's current best pickaxe, using vanilla's
-        // per-swing damage. swings = ceil(100 / damage); frames = swings * useTime * pickSpeed. damage 0 (pick too
-        // weak, e.g. Lihzahrd brick before Picksaw) or CanKillTile false (supports an attached object) = Unmineable.
+        // 真实挖掘帧数:swings=ceil(100/伤害),再乘 useTime 和 pickSpeed。伤害 0 或 CanKillTile 假 = 挖不动
         public static int CostFrames(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
@@ -149,7 +153,7 @@ namespace TerraBlind
             if (Main.getGoodWorld) dmg *= 2;
             if (dmg <= 0 || !Terraria.WorldGen.CanKillTile(x, y)) return Unmineable;
             int swings = (100 + dmg - 1) / dmg;
-            return (int)(swings * pick.useTime * p.pickSpeed);
+            return (int)(swings * pick.useTime * p.pickSpeed) + Trouble(tile.TileType);
         }
 
         public static void Dump()
