@@ -22,6 +22,11 @@ namespace TerraBlind
 		// 横向对位只认这个,混用两套判据会互相推翻死循环。
 		public static int PillarCol(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
 
+		// 碰撞箱压住的列区间。-1 不能省:右边缘那 px 属于前一列,多算一列就会往自己脚底下搭桥。
+		public static (int left, int right) BodyCols(float px, float w)
+			=> ((int)(px / 16f), (int)((px + w - 1f) / 16f));
+		public static (int left, int right) BodyCols(Player p) => BodyCols(p.position.X, p.width);
+
 		// SOLID = a tile the player rests on and cannot walk through. Platforms are solid-top: they hold you up, so
 		// they count as ground. Trees/vines/grass have HasTile but are not solid — walking into them is fine, which is
 		// exactly why "HasTile" was the wrong question all along.

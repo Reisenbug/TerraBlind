@@ -47,17 +47,15 @@ namespace TerraBlind
         internal static (int cx, int cy) RawCell(float px, float py)
             => ((int)((px + PhysicsSimulator.PlayerW / 2f) / 16f), (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f));
 
-        // 站哪一格 = 脚占的那个空气格。中心列只有在身体真放得下时才算数:20px 跨两列,
-        // 落点探进头顶是实心的那列 0.7px 就被标成"站在里面",而那格的 H 是按挖算的
-        // —— 跳跃白嫖了这个 H,下一帧中心滑回来真相恢复 → (800,937)↔(801,937) 边界震荡。
+        // 站哪一格 = 脚占的那个空气格。中心列得身体真放得下才算数:0.7px 探进头顶实心的那列就被标成站在里面,
+        // 而那格 H 是按挖算的,跳跃白嫖了它 → (800,937)↔(801,937) 边界震荡。
         internal static (int cx, int cy) StandCell(float px, float py)
         {
             int cy = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
             int cx = (int)((px + PhysicsSimulator.PlayerW / 2f) / 16f);
             if (BodyFits(cx, cy)) return (cx, cy);
-            // snap only to a column that both fits the body AND has support under the feet — a planned dig landing
-            // (tiles still solid at plan time, so its center column "doesn't fit") must NOT get relabeled onto an
-            // open neighbor column that has no floor (cliff edge); it keeps its center label via the fallback.
+            // 只吸附到既放得下身体、脚下又有支撑的列。挖的落点(规划时砖还在,中心列判"放不下")要是被吸到
+            // 隔壁没地板的悬崖列就废了 —— 那种情况保留中心列。
             int leftCol = (int)(px / 16f);
             int rightCol = (int)((px + PhysicsSimulator.PlayerW - 1f) / 16f);
             int other = cx == leftCol ? rightCol : leftCol;
@@ -65,9 +63,8 @@ namespace TerraBlind
             return (cx, cy);
         }
 
-        // Same envelope geometry as the field's StepCost body clearance: feet row may hold a slope/half-brick
-        // (valid footing — DigSolid there used to mislabel every slope stand as "unfit"), upper rows block on ANY
-        // solid shape, and partial footing (feet 6-16px up the slope) pushes the head into the 4th row (42+6 > 48).
+        // 和场的 StepCost 用同一套身体包络:脚那行可以是斜坡/半砖(DigSolid 曾把每次站斜坡都误判成不合身),
+        // 上面几行任何实心都挡,脚陷进斜坡 6-16px 时头会顶到第 4 行(42+6 > 48)。
         static bool BodyFits(int c, int cy)
         {
             if (PathPlanner.IsBlockPublic(c, cy)) return false;
@@ -76,12 +73,8 @@ namespace TerraBlind
             return true;
         }
 
-        // advance the node with idle input to the state the NEXT replan will actually read: RecedingNav replans on the
-        // first tick after the frames end with vy==0, so that's ≥1 idle step, more if the edge ends airborne. Labeling
-        // the last planned frame instead lied whenever residual vx slid the player over a cell boundary in that gap —
-        // the plan "reached" a cell no post-action read ever sees (the (800,937) phantom 3-point descent, re-picked
-        // forever ↔ oscillation). Capped: if still airborne after the cap, use the last state (fallback — the closed
-        // loop replans from wherever it really lands).
+        // 推进到【下次重规划真正会读到的那个状态】:RecedingNav 在帧跑完且 vy==0 后的第一 tick 重规划,中间至少一个 idle 步。
+        // 标最后一帧会撒谎 —— 残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
         const int SettleMaxFrames = 30;
         static SSNode SettleNode(SSNode n, PhysicsSimulator.Params ph)
         {
@@ -129,17 +122,12 @@ namespace TerraBlind
             DiagLog.Write(sb.ToString());
         }
 
-        // a candidate is dominated if some existing label reached the same cell no costlier (g) and with at
-        // least as much usable speed (same-direction |vx|, and vy). dominated states can do nothing the
-        // dominator can't, so they're pruned — this is what stops one cell soaking up hundreds of vx variants.
-        // NOTE: do NOT collapse grounded-cell vx variants to "cheapest only" — the residual landing vx is needed
-        // to chain continuous diagonal slides down a sloped seam (each step rides the prior step's velocity).
-        // tried it; it broke otherwise-solvable descents by severing that chain.
+        // 同格里 g 不更贵、可用速度不更小的标签支配掉对方,这是防止一格囤几百个 vx 变体的关键。
+        // 别把落地格的 vx 变体压成"只留最便宜":斜坡连滑要靠上一步的残速接力,试过,会切断链子。
         static bool Dominated(List<Label> labels, float g, float vx, float vy)
         {
-            // quantize vx into VxQuant buckets: flat-ground walk produces a continuum of vx, none strictly dominating
-            // (higher vx costs more g), so a cell hoarded hundreds of variants → 8844 re-expansions on a straight walk.
-            // same bucket + same sign + cheaper g dominates; the high-vx bucket a slope-slide chain needs still survives.
+            // vx 按桶量化:平地走出来的 vx 是连续谱且互不支配(vx 越高 g 越贵),一格能囤几百个变体 → 直走重展开 8844 次。
+            // 同桶同号更便宜就支配;斜坡连滑要的那个高速桶仍然活着。
             int vb = (int)(MathF.Abs(vx) / VxQuant);
             foreach (var l in labels)
             {
@@ -195,9 +183,7 @@ namespace TerraBlind
             return place ? "jumpPlace" : jump ? "jump" : "move";
         }
 
-        // per-step time estimate for the execution watchdog. frame edges know their exact length; walk edges run
-        // closed-loop so estimate from distance at cruise; pillar ≈ 43f per 2-cell cycle; dig = the mining table's
-        // per-tile frames. Deliberately generous-side constants — the watchdog's margin handles the rest.
+        // 给执行看门狗的耗时估计。常数一律往宽了取 —— 余量交给看门狗自己的 margin。
         static float EstStepFrames(ExecStep st, Player p)
         {
             if (st.Pillar)
@@ -229,9 +215,8 @@ namespace TerraBlind
             public List<(float px, float py)> Trail = new();
         }
 
-        // Per-plan scratch state (distance field + caches + jump-place tally). Was global static, which welded a
-        // "only one plan at a time" assumption into ~50 call sites. Now passed explicitly so plans are re-entrant:
-        // the live executor holds one ctx across frames while a background lookahead plan uses its own.
+        // 每次规划的临时状态。原来是全局 static,等于把"同时只能有一个规划"焊进了 ~50 个调用点;
+        // 改成显式传递后可重入:执行器跨帧持一个 ctx,后台 lookahead 用自己的。
         public class PlanCtx
         {
             public Dictionary<(int, int), int> DistField;
@@ -239,13 +224,8 @@ namespace TerraBlind
             public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
         }
 
-        // startOverride: plan from a GIVEN start state (px,py,vx) instead of the live player. used by lookahead
-        // pre-planning — compute the next leg from the CURRENT leg's predicted landing while still walking, so the
-        // next leg can dispatch with zero stop-and-replan stall. null = plan from the real player (normal path).
-        // goalWx/Wy = the cell A* searches to (a near SUBGOAL during rolling). fieldGoalWx/Wy = the cell the cached
-        // compass field is keyed on (the FINAL goal) — kept separate so rolling's per-leg subgoals don't each rebuild
-        // the million-cell field (the freeze). Pass (-1,-1) [default] to key the field on goalWx/Wy itself (single
-        // point nav / non-rolling callers).
+        // startOverride:从给定状态起规划(lookahead 用 —— 边走边算下一段,到点零停顿)。
+        // goalWx/Wy 是 A* 搜的格(滚动时是近子目标),fieldGoal 是缓存罗盘场的键(最终目标),分开才不会每段重建百万格场(卡死)。
         public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue)
         {
             var ctx = new PlanCtx();
@@ -256,13 +236,8 @@ namespace TerraBlind
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
-            // goalSnapCap: SnapGoalToStandable's unbounded down-scan is navwand-click semantics ("a click in air
-            // means the floor below it"). An INTERNAL replan re-targeting a stale edge landing must NOT inherit
-            // that: when the world changed under the old landing (a place edge whose platform ended up one column
-            // over), the scan can teleport the goal down an open air column — the (2907,223) drift-replan became
-            // goal (2907,349) and the planner dutifully planned a 126-cell dive through the rescue platform into
-            // an unmineable chasm. If the snap moves the goal further than the caller allows, the leg is
-            // meaningless — fail fast, the receding loop re-selects from the real position.
+            // goalSnapCap:向下无限扫是 navwand 点击语义("点空中=点它下面的地"),内部重规划不能继承。
+            // 世界变了以后那一扫能把目标传送到深渊 —— (2907,223) 变成 (2907,349),规划器老老实实规划了 126 格俯冲。
             int requestedWy = goalWy;
             goalWy = SnapGoalToStandable(goalWx, goalWy);
             if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
@@ -284,11 +259,8 @@ namespace TerraBlind
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
-            // h source depends on caller:
-            //  - ROLLING (fieldGoal passed): reuse the CACHED big compass keyed on the final goal — built once, every
-            //    leg shares it, no per-leg rebuild.
-            //  - SINGLE-POINT (no fieldGoal, e.g. navwand /nav): build a small box field around start↔goal, fast (tens
-            //    of ms). Do NOT route these through the big cached field — that's a 1.4s build that froze near nav.
+            // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
+            // 单点绝不能走大场 —— 那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
                 ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
             else
@@ -321,9 +293,8 @@ namespace TerraBlind
             int expansions = 0;
             SSNode goalNode = default; bool found = false;
             float bestDist = float.MaxValue;
-            // ROLLING (partial) plan: the nearest GROUNDED state seen. If the goal is out of one budget's reach, we
-            // return the path to this instead of failing — the caller walks it and re-plans from there. Must be
-            // grounded (a leg ends standing still, so the next leg starts from a valid grounded state).
+            // 滚动(部分)规划:记住见过的最近的【落地】状态。目标超出预算时返回到它而不是失败,调用方走过去再重规划。
+            // 必须落地:一段路以站定结束,下一段才有合法起点。
             SSNode bestGroundedNode = start; bool haveBestGrounded = false; float bestGroundedDist = float.MaxValue;
 
             while (open.Count > 0 && expansions < maxExp)
@@ -371,9 +342,7 @@ namespace TerraBlind
             res.Expansions = expansions;
             res.Millis = sw.Elapsed.TotalMilliseconds;
             res.Found = found;
-            // ROLLING: goal out of this budget's reach → fall back to the nearest grounded node as a PARTIAL leg, so
-            // the caller walks it and re-plans from there. Only when that node is genuinely closer than the start
-            // (haveBestGrounded guards "never moved" / start is the only grounded node = truly stuck).
+            // 目标超出本次预算 → 退回最近的落地节点当部分段。haveBestGrounded 防的是"根本没动"(起点是唯一落地点 = 真卡住)。
             bool retrace = found;
             if (!found && haveBestGrounded)
             {
@@ -458,9 +427,8 @@ namespace TerraBlind
                 }
                 if (!_silentPath) DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
-                // PERSISTENT clip check: scan every move edge's frames for a player box overlapping a solid tile —
-                // i.e. the PLANNED trajectory passes through a wall. if this fires, the simulator/edge is producing a
-                // physically impossible path (not an execution drift). reports first clip per step.
+                // 持久 clip 检查:扫每条移动边的帧,看玩家箱有没有和实心格重叠 —— 即【规划出的轨迹穿墙】。
+                // 这个响了说明模拟器/边生成器在产出物理上不可能的路径,不是执行漂移。
                 for (int si = 0; si < revSteps.Count; si++)
                 {
                     var st = revSteps[si];
@@ -560,17 +528,14 @@ namespace TerraBlind
 
             float curH = Heuristic(ctx, cur, goalCx, goalFeetY, ph);
 
-            // First emit all plain walk/jump edges, tracking whether ANY of them meaningfully reduces the
-            // (vertical-aware) heuristic. Horizontal shuffling toward a wall lowers x-distance but not h once
-            // blocked; only real progress counts. Placement is expensive, so only build when walk/jump is stuck.
+            // 先发普通 walk/jump,记录有没有哪条真降低了(带竖直权重的)启发值。朝墙横向蹭能降 x 距离但降不了 h,
+            // 不算真进展。放置很贵,只有走跳都卡住时才建。
             bool anyProgress = false;
             bool vertProgress = false; // a plain jump that lands the player on a HIGHER cell (climbs a natural ledge)
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
             var (_, dcy) = StandCell(cur.Px, cur.Py);
-            // dir 0 = IN-PLACE vertical jump (no horizontal input): hop straight up onto a ledge directly overhead — the
-            // "align then jump up" escape a human uses at a step it can't walk up. Only with hold>0 (hold==0 dir==0 is
-            // standing still, a no-op). Alignment is not handled yet (step a): this works where the body already lines up
-            // under the ledge; where it doesn't the sim just fails and the edge is skipped (harmless).
+            // dir 0 = 原地竖直跳:直接跳上头顶正上方的台阶,人在走不上去的坎前就这么干。
+            // 对位还没做,身体本来就对齐时才成;没对齐时模拟自己会失败,边被跳过,无害。
             foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
             {
                 foreach (int hold in holdOptions)
@@ -578,9 +543,8 @@ namespace TerraBlind
                     if (dir == 0 && hold == 0) continue;   // standing still, not a move
                     var seg = Prof(hold == 0 ? "walk" : "jump", () => SimulateSegment(cur, dir, hold, ph));
                     if (!seg.HasValue) continue;
-                    // progress uses the RAW per-cell field, not the block-coarsened Heuristic: inside an 8x8 block
-                    // the coarsened H is flat, so every in-block move reads "no progress" and dig fires even where a
-                    // plain jump clears a low step. raw field still drops cell-by-cell toward the goal.
+                    // 进展用【原始逐格】场判,不用块粗化的 Heuristic:8x8 块内部 H 是平的,块内任何移动都读成"没进展",
+                    // 于是普通跳能过的矮坎也会触发挖掘。
                     if (RawProgress(ctx, cur, seg.Value.node)) anyProgress = true;
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (segFeetCy < dcy) vertProgress = true;
@@ -590,31 +554,24 @@ namespace TerraBlind
                 }
             }
 
-            // DROP THROUGH PLATFORM: if standing on a platform (solidTop), holding Down falls through it.
-            // SimulateSegment treats platforms as floor (Grounded), so without this no downward edge exists
-            // and a platform-floored cell with the goal below is a dead end (replan storm). only emit when a
-            // platform actually supports the feet, else this duplicates a plain fall.
+            // 站平台(solidTop)上按住 Down 会掉下去。SimulateSegment 把平台当地板(Grounded),没这条就没有任何向下的边,
+            // 目标在下方的平台格成死路(重规划风暴)。只在平台真撑着脚时发,否则和普通下落重复。
             {
-                // support is judged over BOTH hitbox columns, not the center cell: the 20px body can rest on a
-                // platform EDGE with its center column over open air (the (3393,700) temple-shaft stuck: center
-                // support = air → no drop edge generated → only H-rising edges left → shock death). A drop is
-                // physically possible when at least one straddled column stands on a platform and NO column
-                // stands on a solid block (a solid support holds the body up through a Down-press).
+                // 支撑判据看【两个碰撞箱列】,不是中心格:20px 的身体能踩在平台边缘而中心列悬空
+                // ((3393,700) 神庙竖井卡死:中心支撑=空气 → 不生成 drop 边 → 只剩 H 上升的边 → 被 shock 打死)。
                 var (fcx, fcy) = StandCell(cur.Px, cur.Py);
                 int dropLc = (int)(cur.Px / 16f);
                 int dropRc = (int)((cur.Px + PhysicsSimulator.PlayerW - 1f) / 16f);
                 bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
                 bool anySolid = DigSolid(dropLc, fcy + 1) || DigSolid(dropRc, fcy + 1);
                 bool plat = anyPlat && !anySolid;
-                // logged unconditionally: SegDiag only switches on when NO candidate descends, so a loop that still
-                // has descending candidates — the platform-shuffle at (988,551) — never recorded why the drop edge
-                // was missing, and "why didn't it press Down" had no answer anywhere in the trace.
+                // 无条件打日志:SegDiag 只在【没有任何下降候选】时才开,而 (988,551) 那种平台蹭是有下降候选的,
+                // 于是"为什么没生成 drop 边"在全部 trace 里根本没有答案。
                 if (!plat) DiagLog.Write($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
-                    // a human drops off a platform by holding Down (+ a direction) and rides the fall all the way
-                    // to the real floor, not stopping one tile below. emit drop edges for hold-left / -right /
-                    // -straight so A* can pick the one that rides the diagonal seam down to the bottom.
+                    // 人从平台上下来是按住 Down 加一个方向,一路滑到真正的地板,不是停在下面一格。
+                    // 左/右/直三种都发,让 A* 挑那条顺着斜缝滑到底的。
                     foreach (int ddir in new[] { dirToGoal, -dirToGoal, 0 })
                     {
                         var drop = Prof("drop", () => SimulateDrop(cur, ddir, ph));
@@ -629,21 +586,14 @@ namespace TerraBlind
                 }
             }
 
-            // ON-DEMAND PLATFORM (see memory project_ondemand_platform): platforms are NOT enumerated everywhere.
-            // they exist only where the maze gradient wants to go but physics blocks it. find the first obstacle
-            // along the gradient direction, then generate ONE platform edge toward the standable cell on its far
-            // side. obstacle type picks the platform type. this collapses ~dozen platform edges/cell to ~1-2.
-            // jump-place stays a first-class option (A* picks it by cost). but PILLAR is bottom-tier: only when a
-            // plain jump can't climb either. pass vertProgress so OnDemandPlatformEdges can gate pillar on it —
-            // a natural ledge a plain jump reaches (vertProgress) must NOT spawn a pillar (human climbs it bare).
+            // 平台不是到处枚举的,只在"场想去但物理挡住"的地方生成:沿梯度找第一个障碍,朝它另一侧发【一条】平台边。
+            // pillar 是最末选择 —— 普通跳够得着的自然台阶(vertProgress)绝不该生柱子,人是徒手爬上去的。
             if (platformTile >= 0 || hasPickaxe)
                 foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertProgress, hasPickaxe, anyProgress))
                     yield return pe;
         }
 
-        // MAX_SCAN = a jump's horizontal reach in tiles, from live stats (≈ maxRun × jumpHeight / gravity ≈ 7-8).
-        // beyond this a plain jump can't cross, so an obstacle within range needs a platform. self-documenting,
-        // scales with gear instead of a magic 8.
+        // MAX_SCAN = 一次跳的水平射程(格),从实时属性算(≈ maxRun × jumpHeight / gravity ≈ 7-8),随装备变,不写死 8。
         static int MaxScan(PhysicsSimulator.Params ph)
         {
             int jh = Player.jumpHeight > 0 ? Player.jumpHeight : 15;
@@ -662,16 +612,8 @@ namespace TerraBlind
             int targetDir = gdir;
             int maxScan = MaxScan(ph);
 
-            // --- VERTICAL: maze wants UP and a plain jump can't reach. prefer in-place VERTICAL JUMP-PLACE (跳放):
-            // jump straight up (dir=0), drop ONE platform at the arc top, land on it — gains several tiles at once
-            // when a foothold (e.g. a tree) lets the tile stick. only fall back to PILLAR (原地一格格垒) when no
-            // jump-place clears VertPlaceMinRise tiles (a short hop isn't worth the jump/land overhead).
-            // VERTICAL UP — UNCONDITIONAL (no upH<curH gate). Climbing up is the only escape from a pit wall, where the
-            // cell straight up is NOT immediately lower H (you must rise then walk out), so the old gate suppressed every
-            // up-move and stranded the bot at the bottom. Like the unconditional digs: always emit, let g+H + the line-
-            // deviation penalty decide — in a pit, rising shrinks deviation so it wins; on flat ground its cost/H lose to
-            // a plain walk so it's harmlessly ignored. In-place vertical jump-place (跳放) lifts the bot a tile at a time,
-            // turning a far overhead obstacle into an adjacent one (then a plain step/dig clears it).
+            // 向上优先【原地跳放】:竖直跳起,弧顶拍一块平台,落上去,一次能升好几格;够不到 VertPlaceMinRise 才退回 pillar。
+            // 向上无条件发,不加 upH<curH 的门:坑底正上方那格 H 本来就不低(得先升起来再走出去),加了门就把人钉死在坑底。
             if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && ctx.DistField != null)
             {
                 bool anyVertJumpPlace = false;
@@ -696,11 +638,8 @@ namespace TerraBlind
                 }
             }
 
-            // LATERAL JUMP-PLACE — UNCONDITIONAL, both directions. It used to exist only inside the isWall branch,
-            // but a slope never classifies as wall (StepUp keeps the walk advancing), so "hop toward the face and
-            // drop a rung" — the human slope climb — was never generated and the only ascent realization left was
-            // the dig-up composite. JumpPlace only returns real rises and JumpPlaceCost biases plain walk/jump ahead
-            // of it, so unconditional emission is safe; cost demotes it wherever it isn't needed.
+            // 横向跳放也无条件发。原先只在 isWall 分支里有,而斜坡永远不判 wall(StepUp 让走路继续推进),
+            // 于是"朝坡面跳一下垫一级"这个人类爬坡动作从来没生成过,唯一的上升手段只剩挖上去。
             bool anyLateralJp = false;
             if (platformTile >= 0 && ctx.DistField != null)
                 foreach (int ldir in new[] { gdir, -gdir })
@@ -710,10 +649,8 @@ namespace TerraBlind
                         if (jp.HasValue) { anyLateralJp = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
                     }
 
-            // FREE FALL off a ledge: when the foot column is open below (a cliff/shaft, not a wall), ride it down to
-            // the real floor — exactly what a human does (mined=0). DigDown only reaches DigMaxScan deep and needs to
-            // mine, so a 24-tile cliff探不到底就作废; this no-dig edge covers any depth. emit before DigDown so A*
-            // prefers falling over digging a shaft.
+            // 从崖边自由落体:脚下那列是空的(悬崖/竖井而非墙)就一路掉到真地板,和人一样(mined=0)。
+            // DigDown 只探 DigMaxScan 深且必须挖,24 格的崖探不到底就作废;这条边覆盖任意深度,且排在 DigDown 前面。
             {
                 var fall = Prof("fall", () => FreeFall(cur, gdir, ph));
                 if (fall.HasValue)
@@ -729,12 +666,8 @@ namespace TerraBlind
                     yield return (dd.Value.node, null, dd.Value.cost, false, dd.Value.tiles);
             }
 
-            // HORIZONTAL DIG — UNCONDITIONAL, both directions. Dig must always be an option: gating it behind obstacle
-            // classification (isWall, which relies on a fragile walkprobe) meant that in an awkward stance — feet on a
-            // half-brick, head jammed on the ceiling — the classifier misfired and NO dig edge was generated, so Expand
-            // came up empty and the bot "stuck" though a human just steps/digs aside. DigThroughWall already mines the
-            // full 3-row body column (handles player width/height) and only returns toward-goal landings, so emitting it
-            // unconditionally is safe; cost+field selection still demotes it when a plain walk works.
+            // 横挖无条件发。挂在 isWall 分类后面(依赖脆弱的 walkprobe)时,姿势一别扭(脚踩半砖、头顶天花板)分类就误判,
+            // 一条挖掘边都不生成,Expand 空了人就"卡住",而人只需侧身挖一下。
             if (hasPickaxe && ctx.DistField != null)
                 foreach (int ddir in new[] { gdir, -gdir })
                 {
@@ -743,10 +676,8 @@ namespace TerraBlind
                         yield return (dw.Value.node, null, dw.Value.cost, false, dw.Value.tiles);
                 }
 
-            // VERTICAL UP — now unconditional too (was gated on !anyProgress && Vx<max, which suppressed the up-dig in
-            // awkward stances). Mine 2 rows above the head + pillar up, until breaking into a lower-H cell. Still needs
-            // platformTile (blocks to pillar on — a physical necessity, not a heuristic gate). DigUp returns null unless
-            // the ceiling above leads to lower H, so emitting it always is safe; selection demotes it when cheaper moves exist.
+            // 向上挖也改成无条件(原先门在 !anyProgress && Vx<max,别扭姿势下会把它压掉)。
+            // 仍然要 platformTile —— 那是物理必需(得有砖垫脚),不是启发式的门。
             if (hasPickaxe && platformTile >= 0 && ctx.DistField != null)
             {
                 var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy, curH));
@@ -754,11 +685,8 @@ namespace TerraBlind
                     yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
             }
 
-            // --- HORIZONTAL: the obstacle is wherever a PLAIN WALK can no longer advance. SimulateSegment's Step
-            // includes Collision.StepUp, so it truthfully climbs half-bricks / shallow slopes / 1-tile ledges and
-            // stops only at something it genuinely can't pass. a static IsBlockPublic scan was blind to slopes/half-
-            // bricks (Slope==0 && !IsHalfBlock) — it reported obsX=none at a slope half-brick the walk couldn't clear,
-            // so no dig/jump-place edge was generated and A* dead-ended there. let the walk's stop define the obstacle.
+            // 障碍 = 【普通行走再也推不动】的地方。Step 里含 Collision.StepUp,所以它诚实地爬半砖/缓坡/一格台阶,只在真过不去时停。
+            // 静态 IsBlockPublic 扫描看不见斜坡半砖,会报 obsX=none,于是死在那儿 —— 让走路的停止点定义障碍。
             int obsX;
             {
                 var walk = Prof("walkprobe", () => SimulateSegment(cur, gdir, 0, ph));
@@ -775,13 +703,8 @@ namespace TerraBlind
                 }
             }
             if (obsX < 0 || obsX >= Main.maxTilesX) yield break;
-            // CHASM override: the walk probe defines the obstacle by where the walk STOPPED — but a walk that falls
-            // into a deep chasm keeps "advancing" along its bottom and reports the far wall as the obstacle (22 cells
-            // away, out of jump-place reach → no bridge candidate at all). At (3277,1024) that made every candidate a
-            // 30-cell tumble to the valley floor while the field's route floated east over the gap: climb, tumble,
-            // re-climb. If, before the reported obstacle, some column has NO landing within ChasmProbeDepth rows below
-            // the current stance, that ledge IS the obstacle and it is a GAP — the bridge machinery gets its chance
-            // (candidates only; cost still decides bridge vs descend).
+            // 深谷覆盖:掉进深谷的走路会沿谷底一路"推进",把远处的墙报成障碍(22 格外,跳放够不着 → 一条桥候选都没有)。
+            // (3277,1024) 因此每个候选都是 30 格翻滚,而场的路线是从空中往东飘 —— 前方某列探不到底就把那个崖边当【缺口】。
             for (int c = ccx + gdir; c != obsX && c >= 0 && c < Main.maxTilesX; c += gdir)
             {
                 if (DigSolid(c, ccy) || DigSolid(c, ccy - 1) || DigSolid(c, ccy - 2)) break;   // wall first → wall branch
@@ -799,9 +722,7 @@ namespace TerraBlind
 
             if (isWall)
             {
-                // WALL: the jump-place candidates are already emitted unconditionally above — here only the fallback
-                // remains: when NO hold found a spot (pure sheer wall, no placement point) fall back to PILLAR
-                // (原地垒). this is the 2a-vs-2b distinction.
+                // 墙:跳放候选上面已经无条件发过了,这里只剩兜底 —— 一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
                     if (!anyLateralJp && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
@@ -819,10 +740,8 @@ namespace TerraBlind
             }
             else if (platformTile >= 0)
             {
-                // GAP: prefer JUMP-PLACE-ACROSS (移动跳放横穿) — jump toward the far side, drop one platform on the
-                // descending arc, land on it. This is what a human does: hop across, dropping footholds. Only when
-                // NO hold finds an across-landing (gap too wide for one jump) fall back to BridgePlace (原地搭桥).
-                // BridgeCost == JumpPlaceCost so neither is preferred on price; reachability decides.
+                // 缺口:优先【移动跳放横穿】(朝对岸跳,下降弧上垫一块,落上去),这是人的做法。
+                // 一个 hold 都跨不过去(缺口太宽)才退回原地搭桥。两者标价相同,由可达性决定,不由价格。
                 bool anyAcross = false;
                 foreach (int hold in BuildHoldOptions())
                 {
@@ -842,9 +761,8 @@ namespace TerraBlind
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
         const int DigWorthMargin = 4; // dig-down only when the landing's H is at least this much lower (clearly worth it)
 
-        // solid INCLUDING slopes/half-bricks: IsBlock deliberately excludes them (walk logic treats them as
-        // passable), but a sloped half-tile still supports the player — exactly what strands a shaft descent.
-        // anything that can hold the hitbox must be on the mining list.
+        // 实心【含】斜坡半砖:IsBlock 故意排除它们(走路逻辑当可通行),但斜半砖照样撑住人 —— 竖井下降就卡在这儿。
+        // 任何能托住碰撞箱的东西都得进挖掘清单。
         static bool DigSolid(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
@@ -880,17 +798,12 @@ namespace TerraBlind
             return (node, tiles, cost);
         }
 
-        // Dig upward through a sealed ceiling: per cycle mine 2 rows above the head (2 columns, same body-width
-        // reason as DigDown), then pillar-jump 2 tiles onto placed blocks. Yields only when the ceiling is
-        // actually sealed (first cycle mines something — open headroom belongs to jump/jump-place/pillar) and
-        // the breakout cell has lower maze H.
+        // 挖穿封死的天花板:每周期挖头顶两行(两列,和 DigDown 同样的身体宽度理由),再 pillar 跳两格上去。
+        // 只在天花板真封死(第一周期挖到东西)且突破格 H 更低时才产出 —— 头顶本来就空的归跳跃/跳放/pillar 管。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH)
         {
-            // MUST match SkillExecutor's live head-check columns exactly (leftCol/rightCol from p.position.X), else
-            // DigUp can clear cells the pillar executor never looks at while leaving unchecked the ones it does —
-            // pillar then aborts mid-climb on a "blocked" ceiling this plan believed was already mined (the
-            // (3242,299)↔(3242,300) stuck loop: DigUp mined (ccx,c2) by cell-center lean, pillar checked
-            // (leftCol,rightCol) by live pixel position — different columns).
+            // 必须和 SkillExecutor 实时检查的列【完全一致】,否则 DigUp 挖的是执行器根本不看的格,
+            // 而执行器要看的没挖 → 爬到一半撞上"已挖过"的天花板 ((3242,299)↔(3242,300) 卡死:一个按格心偏移取列,一个按实时像素取列)。
             int leftCol = (int)(cur.Px / 16f);
             int rightCol = (int)((cur.Px + PhysicsSimulator.PlayerW - 1) / 16f);
             var tiles = new List<(int, int)>();
@@ -924,12 +837,8 @@ namespace TerraBlind
             return null;
         }
 
-        // ATOMIC horizontal dig: mine ONLY the one adjacent column (its 3 body rows) along dir and step into it. Not a
-        // tunnel to a far standable cell — just one cell. Same reason as the atomic down-dig: the closed loop re-plans
-        // each cycle, so a thick wall is breached as dig→dig→dig (横竖组合 emerges across cycles), with no DigMaxScan
-        // "no landing within 12 → null" dead-end (the (744,998) stuck) and no over-mined tunnel the next cycle finds
-        // unnecessary. If the cell underfoot in the entered column is open, the bot falls in — next cycle handles the
-        // landing from the real position; we only commit to mining this one column.
+        // 原子横挖:只挖相邻那一列的 3 个身体行,踏进去。不挖到远处落点的隧道 —— 闭环每周期重规划,厚墙靠 dig→dig→dig 逐格破,
+        // 没有 "12 格内没落点就 null" 的死角 ((744,998) 卡死),也不会挖出下一周期发现多余的隧道。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(PlanCtx ctx, int dir, int ccx, int ccy, int curH)
         {
             int x = ccx + dir;
@@ -969,14 +878,8 @@ namespace TerraBlind
         const float JumpPlaceCost = 30f; // bias: prefer plain walk/jump; place only when it opens a path
         const float BridgeCost = 30f;    // same as jump-place: consumes a platform, use only to open a path
 
-        // "Jump and place one platform": jump (hold), scan the arc for the FIRST frame where the foot cell is
-        // empty + adjacent to real support (cliff/wall), place a platform there, and land on it. One placement
-        // per jump, placed tile is NOT stored in the node (node stays pure physics) — the landing node simply
-        // stands on the new platform's top, supported by real terrain. Covers "hug a wall/block and jump-place
-        // upward". Pure open-air pillaring (placement supported only by prior placements) is left to the macro.
-        // Is there ANY placeable cell within one jump's reach toward dir? Conservative box: dir × MaxScan wide,
-        // from one jump's apex height down to PlatformMaxDropTiles below the feet. Wider than any real arc, so a
-        // false "none" is impossible — only used to skip a jump-place that provably has nowhere to drop a platform.
+        // 跳起来放一块:扫弧线找第一个"脚下格空 + 紧邻真支撑"的帧,放平台,落上去。
+        // 放置的砖【不】存进节点(节点保持纯物理),落点只是站在新平台顶上。纯空中垒柱交给宏。
         static bool AnyPlaceableInReach(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
             var (ccx, cfy) = StandCell(cur.Px, cur.Py);
@@ -1001,9 +904,8 @@ namespace TerraBlind
         {
             if (hold == 0) return null; // need to leave the ground
 
-            // O(1) early-out: if NO placeable cell exists anywhere in the jump's reach box, the arc sim + drop scan
-            // below are guaranteed to noSpot — skip them. CanPlaceReal is a tile query; the box is one jump's reach.
-            // Conservative (scans wider than the real arc) so it never rejects a jump-place that could actually exist.
+            // O(1) 早退:整个跳跃射程盒里一个可放格都没有,下面的弧线模拟必然 noSpot,直接跳过。
+            // 盒扫得比真弧宽,所以绝不会误杀一条真实存在的跳放。
             if (!AnyPlaceableInReach(cur, dir, ph)) { ctx.JpNoSpot++; return null; }
 
             // simulate the free arc to find where to place
@@ -1030,13 +932,8 @@ namespace TerraBlind
             }
             if (apexFootCx == int.MinValue) { ctx.JpNoSpot++; return null; }
 
-            // scan downward from BELOW the apex foot (a platform in the apex foot's own cell can't catch the player —
-            // they descend through it back to origin). pick the highest cell that is placeable AND lands the player
-            // ABOVE the start (a real rise, not a fall-back). not pinned to a fixed offset.
-            // COLUMNS: the apex column first, then its two neighbours. On a slope the anchored cell is usually one
-            // column toward the face — own-column-only scanning found no anchor there, yielded nothing, and the only
-            // ascent realization left was the dig-up composite. The 20px body overlaps a neighbour-column platform,
-            // and SimulateWithPlatform verifies the landing honestly, so a side-column rung is a real edge.
+            // 从弧顶脚下【那一格的下面】往下扫(平台放在弧顶脚所在格接不住人,人会穿过去掉回原地)。
+            // 列的顺序:弧顶列优先,再左右邻列 —— 斜坡上能锚住的格通常偏向坡面一列,只扫自己那列会一无所获。
             int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int placeCx = int.MinValue, placeCy = 0;
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
@@ -1056,9 +953,7 @@ namespace TerraBlind
             }
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             float probeVy = 0f, probeFootPy = 0f;
-            // must actually land ON the placed platform — otherwise the player passed through it and landed
-            // elsewhere (often back on the ground). Such "place but fall through" edges are useless and, when
-            // admitted, flood the search with cheap no-op placements (exp blowup). Reject them.
+            // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,放进来还会用廉价空操作淹没搜索(指数爆炸)。
             int landFeetCy = (int)((seg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
             if (F_LandOnPlat && landFeetCy != placeCy)
             {
@@ -1068,9 +963,8 @@ namespace TerraBlind
             }
             if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
 
-            // Landing on a 1-tile platform with residual Vx slides the player off next frame. Append a brake:
-            // counter-press to decelerate; the landing node takes the actual settled position. Only a slide
-            // that loses ground contact (falls off) invalidates the edge.
+            // 落在一格宽的平台上带着残余 vx 下一帧就滑下去了 —— 追加一段反向按键刹车,落点节点取真正停稳的位置。
+            // 只有滑到脱离地面(掉下去)才判这条边无效。
             if (F_Brake)
             {
                 var braked = AppendBrake(seg.Value.node, seg.Value.frames, ph);
@@ -1082,12 +976,8 @@ namespace TerraBlind
             return seg.Value;
         }
 
-        // "Jump and place ONE platform to cross a gap" (移动跳放横穿). Unlike JumpPlace (which only accepts
-        // landings HIGHER than the start — climbing), this accepts same-height / lower landings as long as the
-        // landing cell's maze H drops below here (real progress toward goal). One placement per (dir,hold): scan
-        // the descending arc for the FIRST foot cell that is placeable + adjacent to real support, drop a
-        // platform, land on it. Placed tile NOT stored in node (pure-physics key, no combinatorial blowup —
-        // the 118ab5f lesson). H-gate caps fan-out: an across-place that doesn't reduce H is never yielded.
+        // 移动跳放横穿:和 JumpPlace(只收比起点高的落点)不同,这里同高/更低也收,只要落点 H 真的降。
+        // 放置砖不存进节点(纯物理键,避免组合爆炸 —— 118ab5f 的教训)。H 门限住扇出。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlaceAcross(
             PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
         {
@@ -1121,9 +1011,8 @@ namespace TerraBlind
         const float BrakeVxEps = 0.3f;   // |Vx| below this counts as settled
         const int   BrakeMaxFrames = 30;
 
-        // After landing on a narrow platform with residual Vx, counter-press to decelerate. The landing node
-        // takes the ACTUAL settled position — a wall or platform edge may stop the slide, that's a valid stand.
-        // Only a slide that loses ground contact (falls off) invalidates the edge.
+        // 落在窄平台上带残速要反压刹车。落点节点取【实际】停稳的位置 —— 墙或平台边缘挡住滑动也是合法站位,
+        // 只有滑到失去地面接触才算这条边废了。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? AppendBrake(
             SSNode land, List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
@@ -1140,9 +1029,8 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // target cell empty (or cuttable) + at least one real neighbor gives support (block or background wall)
-        // 跳到最高点时,那格得在身体下面【留够一格】才放得出来 —— 贴着箱底算出来的落点,
-        // 起跳时机差几像素就还在箱子里,执行侧一律否决,规划却一轮轮把它当最优解 (1346,192)。
+        // 目标格是空的(或可砍) + 至少一个真邻居提供支撑(方块或背景墙)。
+        // 跳到最高点时那格得在身体下面【留够一格】:贴着箱底算的落点,起跳差几像素人还在箱子里,执行侧一律否决 (1346,192)。
         static bool ClearOfBody(float apexPy, int wx, int wy)
         {
             int bodyBottomRow = (int)((apexPy + PhysicsSimulator.PlayerH - 1) / 16f);
@@ -1165,24 +1053,21 @@ namespace TerraBlind
             return false;
         }
 
-        // Temp-write one platform tile into Main.tile, simulate the jump, restore. The placed tile is not kept
-        // in the node — it exists only for this segment's landing physics (the new node simply stands on top).
-        // 3-1 bridge place: place ONE platform on the support row one column toward dir, step ONTO it, and brake to
-        // a stop on that exact cell (don't overshoot — a single tile only holds one cell of standing room; walking
-        // a full segment slides off the end and falls). One tile per call; greedy re-picks each step.
+        // 临时把一块平台写进 Main.tile,模拟,再还原 —— 那块砖不进节点,只为这一段的落地物理存在。
+        // 搭桥要精确停在新砖那一格(一块砖只有一格站立空间,走完整段会滑出去掉下)。一次一块,贪心每步重挑。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
         {
-            // basis = the foot column that actually has floor support, NOT the center column. the 20px base spans
-            // 2-3 cols; the center can land on a column the player merely overhangs (no support there), making the
-            // new tile adjacent to empty space → game rejects it. extend from the supported column toward dir.
-            int lcol = (int)(cur.Px / 16f), rcol = (int)((cur.Px + PhysicsSimulator.PlayerW - 1) / 16f);
+            // baseCol 是撑住人的那列,可能在身体【后方】(贴着邻列平台柱站,自己这列脚下全空),
+            // 那时 +dir 只回到人自己站的格,落点=当前格被自环过滤 —— 竖井里唯一的横向出路就没了 (608,656)。
+            var (lcol, rcol) = Predicates.BodyCols(cur.Px, PhysicsSimulator.PlayerW);
             int footRow = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int baseCol = int.MinValue;
             if (dir > 0) { for (int c = rcol; c >= lcol; c--) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
             else { for (int c = lcol; c <= rcol; c++) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
             if (baseCol == int.MinValue) return null;          // no supported foot column — nothing to extend from
-            int placeCx = baseCol + dir, placeCy = footRow;
+            int placeCx = dir > 0 ? System.Math.Max(baseCol + dir, rcol + 1) : System.Math.Min(baseCol + dir, lcol - 1);
+            int placeCy = footRow;
             int scy = footRow - 1;                              // standing (head) row above the support
             if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
             if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
@@ -1212,12 +1097,8 @@ namespace TerraBlind
                     if (past && MathF.Abs(s.Vx) < 0.1f) break; // settled on the new tile
                 }
                 if (frames.Count == 0) return null;
-                // landing is GEOMETRICALLY certain: a solid platform was placed at (placeCx,placeCy), so the bot stands on
-                // it at (placeCx, placeCy-1) — no need to trust the approximate sim's Grounded/end-cell to validate it.
-                // The old "if(!s.Grounded) return null" + "if(lcx!=placeCx) return null" killed a perfectly good bridge at
-                // a pit edge whenever the imperfect PhysicsSimulator misread a frame as airborne mid-step. The sim is kept
-                // only to PRODUCE the drive frames; its imprecision no longer vetoes the edge. Drift is absorbed by the
-                // closed loop replanning from the real position next cycle.
+                // 落点是【几何上确定】的:平台放在 (placeCx,placeCy),人就站在它上面,不需要相信近似模拟器的 Grounded。
+                // 老的 "!s.Grounded → null" 会在模拟器把某帧误读成腾空时,杀掉坑边一条完全好用的桥。
                 var f0 = frames[0];                            // place on the first frame (before stepping over)
                 f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
                 frames[0] = f0;
@@ -1235,9 +1116,8 @@ namespace TerraBlind
             var t = Main.tile[cx, cy];
             bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
             var oSlope = t.Slope;
-            // FRAGILE: keep native slope (NOT forced Solid). a Solid platform blocks the ascent of an in-place
-            // vertical jump-place → player never clears it, falls back to origin (selfloop). real platforms are
-            // solidTop: pass-through going up, catch on descent.
+            // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升 —— 人永远够不到,落回原地成自环。
+            // 真平台是 solidTop:上升穿过去,下降接住。
             t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
             try { return SimulateSegment(cur, dir, hold, ph); }
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
@@ -1255,13 +1135,8 @@ namespace TerraBlind
             return cx >= loX && cx <= hiX && cy >= loY && cy <= hiY;
         }
 
-        // Tag the placement frame. HARD RULE: placement must happen AT or AFTER the apex (vy >= 0) — never on the
-        // ascent. On the ascent the player is still rising through the target row and a platform there is either
-        // unsupported or gets passed through. Among apex-and-later frames, place on the FIRST one whose tileRange
-        // covers the landing cell: the apex is the highest+leftmost point and often can't reach a far/low landing
-        // (out of reach → UseItem silently fails → airborne stall → fall), so we wait for the descent to bring the
-        // player into reach, then drop straight onto the just-placed platform.
-        // returns false if NO apex-or-later frame can reach it (caller must reject the edge — it's unexecutable).
+        // 硬规则:放置必须在弧顶【或之后】(vy >= 0),绝不在上升段 —— 上升时人还在穿过那一行,砖要么没支撑要么被穿过。
+        // 弧顶常常够不到远/低的落点(够不着 → UseItem 静默失败 → 腾空僵住 → 摔),所以等下降把人带进射程再放。
         static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
         {
             int apex = 0;
@@ -1279,10 +1154,7 @@ namespace TerraBlind
             return false;
         }
 
-        // A human drops off a platform by holding Down (+ a direction) and rides the fall all the way to the real
-        // floor — exactly the recorded path here: hold Down to clear the platform, hold a direction, ride the
-        // diagonal down to the bottom. Down is held only until clear of the start platform (so the player can land
-        // on a lower platform/floor instead of phasing through everything); the direction is held the whole way.
+        // 人从平台上下来:按住 Down 直到离开起始平台(这样才能落在下面的平台/地板而不是一路穿过去),方向键全程按住。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateDrop(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
@@ -1303,15 +1175,13 @@ namespace TerraBlind
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (!node.Grounded) return null;
             if (MathF.Abs(node.Py - cur.Py) < 1f) return null; // didn't drop
-            // NO IsFloorPublic re-check: physics Grounded after the drop IS the authoritative landing. The check
-            // misfired when StandCell rounds the sub-pixel landing py up a tile, killing a real drop (same bug as the
-            // free-fall fix, commit dc2a9e6) → drop edge vanished → had to hand-mine the platform to proceed.
+            // 不再复查 IsFloorPublic:物理 Grounded 就是权威落点。StandCell 把亚像素的 py 向上取整时这个检查会误杀真实下落
+            // (和自由落体那个 bug 同源,commit dc2a9e6) → drop 边消失 → 只能手动挖掉平台才能继续。
             return (node, frames);
         }
 
-        // 评分不用落点那一格的 H,用"从落点能望到的最低 H":跨多格的坎能骗过 greedy —— 管子底
-        // (4854,379) 往下掉涨 30、回头只涨 2,于是选回头,可回头是来路;真相是再走一步就降 78。
-        // 半径实测定:出口 (4862,383) 在 14 格外,取 18 让它进视野而不是压线过。
+        // 评分不用落点那一格的 H,用"从落点能望到的最低 H":跨多格的坎能骗过 greedy —— (4854,379) 往下掉涨 30、
+        // 回头只涨 2 于是选回头,可回头是来路;真相是再走一步就降 78。半径 18 是实测:出口在 14 格外,留余量。
         const int LookaheadRadius = 18;
         const int LookaheadBudget = 400;   // 望多少格封顶,保证不随地形爆炸
 
@@ -1407,11 +1277,8 @@ namespace TerraBlind
                 if (!s.Grounded) everAirborne = true;
                 if (s.Grounded && everAirborne)
                 {
-                    // a jump in Terraria cannot re-launch the instant it touches ground — it spends (at least) one
-                    // frame ON the ground first, sliding with its residual vx. the planner used to end the edge AT
-                    // the touch frame and start the next edge there, omitting that grounded slide → every edge's
-                    // landing was ~vx*1frame (~3px) short of where execution actually is → seam drift accumulated.
-                    // model that one grounded settle frame so the planned landing matches the real one.
+                    // 泰拉的跳跃碰地后不能立刻起跳,至少在地上待一帧,带着残余 vx 滑行。
+                    // 规划器原先在触地帧就结束边,漏掉这一帧滑行 → 每条边的落点都比执行短 ~vx*1帧(~3px) → 接缝漂移累积。
                     var settle = PhysicsSimulator.Step(s, input, ph);
                     var sf = input; sf.Jump = false; sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
                     frames.Add(sf);
@@ -1420,17 +1287,12 @@ namespace TerraBlind
                 }
                 if (s.Grounded && hold == 0)
                 {
-                    // don't end the walk while the feet are over empty space (e.g. stepped off a 1-wide
-                    // platform/ledge): the sim still reads Grounded for a frame, but ending here yields a
-                    // fakeStand that gets rejected, killing the walk-off-ledge edge. keep simulating so the
-                    // player actually falls to the real floor below.
+                    // 脚悬在空中时别结束走路边(比如刚走下一格宽的平台):模拟器还会读到一帧 Grounded,
+                    // 在这儿结束会产出被拒的假站位,把"走下崖"这条边杀掉。继续模拟,让人真的落到下面的地板。
                     var (wcx, wcy) = StandCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
-                    // walk a full stride before ending the edge, not 24px. At 24px the edge died in the acceleration
-                    // ramp (0.08/frame, ~37 frames to reach maxRun) so every walk edge averaged ~1px/frame — making
-                    // walk look far slower per cell than a jump (which yields one long edge), so A* picked jumps on
-                    // flat ground. WalkStridePx ≈ a jump's horizontal reach, so walk and jump edges span comparable
-                    // distance and their per-cell cost is comparable; A* then chooses by real cost, not edge length.
+                    // 走满一个完整步幅再结束,不是 24px。24px 时边死在加速斜坡里(0.08/帧,要 37 帧才到 maxRun),
+                    // 于是每条走路边平均 ~1px/帧,看起来比跳慢得多,A* 在平地上就一路跳。步幅取一次跳的射程,两者才可比。
                     if (footSupported && MathF.Abs(s.Px - startPx) >= WalkStridePx) break;
                     if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
@@ -1438,16 +1300,13 @@ namespace TerraBlind
             if (frames.Count == 0) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
-            // FRAGILE: in water gravity is so weak the sim still reads Grounded=true while floating over empty cells
-            // (the player hasn't sunk enough to register a non-ground frame). a grounded landing whose foot columns
-            // have NO real floor below is a fake stand — reject it so A* must place a platform instead of "walking"
-            // across open water and looping. only applies to grounded landings (airborne fall/jump edges are fine).
+            // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位 —— 拒掉,
+            // 逼 A* 去放平台,而不是"走"过开阔水面然后循环。只管落地边,腾空的下落/跳跃边不受影响。
             if (node.Grounded)
             {
                 var (ncx, ncy) = StandCell(node.Px, node.Py);
-                // a slope / half-brick supports the player but IsFloorPublic excludes it → it wrongly read as a fake
-                // stand and killed every walk/jump off a half-brick tile (EXPAND-EMPTY death穴). DigSolid认 slopes/
-                // half-bricks as支撑 (see its comment), so accept either as real floor below the landing.
+                // 斜坡/半砖撑得住人但 IsFloorPublic 不认 → 被误判成假站位,把每一条从半砖起跳/起步的边都杀了(EXPAND-EMPTY 死穴)。
+                // DigSolid 认斜坡半砖为支撑,所以两者取其一即可。
                 if (!PathPlanner.IsFloorPublic(ncx, ncy + 1) && !DigSolid(ncx, ncy + 1))
                 {
                     if (SegDiag)
@@ -1462,9 +1321,8 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // Walk off a ledge and ride gravity to the real floor — no dig, any depth. Holds gdir the whole way (a human
-        // keeps the direction held while falling). Returns null if the player never leaves the ground (no cliff here,
-        // plain walk already covers it) or never lands within the fuse.
+        // 走下崖边顺着重力落到真地板 —— 不挖,任意深度,全程按住 gdir(人下落时就是一直按着方向)。
+        // 人根本没离地(这儿没崖,普通走路已覆盖)或引信内没落地,返回 null。
         const int FallMinDropPx = 32;   // must drop >=2 tiles, else it's a step plain walk/jump handles
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? FreeFall(SSNode cur, int gdir, PhysicsSimulator.Params ph)
         {
@@ -1486,25 +1344,21 @@ namespace TerraBlind
             }
             if (!everAirborne || !s.Grounded) return null;          // no cliff, or never landed
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
-            // NO IsFloorPublic re-check: physics Step returning Grounded after a real fall IS the authoritative
-            // landing. The fake-stand guard (IsFloorPublic on ncy+1) misfired when StandCell rounds the sub-pixel
-            // landing py up a tile, killing a genuine vertical fall (the (2944,364) bug).
+            // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
+            // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
         }
 
-        // A goal cell the player can't stand on is unreachable, and the search burns its whole budget trying.
-        // Two cases a navwand click hits: the goal floats in air (no floor under it), or it lands INSIDE a solid
-        // block (mis-click into terrain). Snap to the nearest standable cell in the same column — searching BOTH
-        // ways by distance: up climbs out of a block to its top surface, down drops a floating goal to the floor.
+        // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
+        // 在同一列里按距离【双向】找最近可站格:向上是从块里爬到表面,向下是把悬空目标落到地板。
         const int GoalSnapMaxDrop = 40;
         static bool Standable(int gx, int gy) => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy);
         public static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;
-            // clicked INTO a block → climb up to its surface (bounded: a surface is a few tiles up). clicked in AIR →
-            // fall down to the ground, however deep — a click in air means "go to the floor below it", and capping the
-            // drop left the goal floating mid-air over a deep pit, which A* burned its whole budget failing to reach.
+            // 点进方块 → 向上爬到表面(有界,表面就在几格内)。点在空中 → 一路往下落,多深都行 —— 
+            // "点空中"的意思就是"去它下面的地",给下落设上限会把目标留在深坑上方飘着,A* 烧光预算也够不到。
             if (PathPlanner.IsBlockPublic(gx, gy))
             {
                 for (int d = 1; d <= GoalSnapMaxDrop; d++)
@@ -1516,9 +1370,8 @@ namespace TerraBlind
             return gy;
         }
 
-        // Temporary failure diagnostic: ASCII map of the start↔goal region with the explored frontier overlaid,
-        // to see why a plan that should exist wasn't found. '@'=start 'G'=goal '#'=solid '='=platform
-        // '/'=slope/halfbrick '*'=explored-air '.'=air
+        // 临时失败诊断:start↔goal 区域的 ASCII 图叠上已探索前沿,用来看"本该存在的路为什么没找到"。
+        // '@'=起点 'G'=目标 '#'=实心 '='=平台 '/'=斜坡半砖 '*'=已探索空气 '.'=空气
         static void DumpTerrain(SSNode start, int goalWx, int goalWy, List<(float px, float py)> explored)
         {
             var (sx, sy) = StandCell(start.Px, start.Py);
@@ -1567,13 +1420,8 @@ namespace TerraBlind
         const float TrendNearDyTiles = 2f;
         const float DistStepCost = 8f; // h per coarse-BFS step (≈ frames to traverse one cell)
 
-        // The maze field is a memoryless 2D cost grid: it scores a path only by total weighted cost, blind to the
-        // ORDER of moves. So "up-then-right" and "right-then-up" get identical H even though the player's physics
-        // make them very different (horizontal speed feeds the jump). Its per-cell gradient down the start column
-        // tricks A* into climbing straight up (pillar) instead of walking out and jumping diagonally like a human.
-        // Fix: coarsen H to N×N blocks (min field value in the block). The block's interior has a FLAT H, so A*
-        // no longer chases the per-cell vertical gradient — it explores move order freely via physics Expand, and
-        // the field only steers the coarse region-to-region direction. HBlockSize=1 disables (per-cell = old behavior).
+        // 迷宫场是无记忆的 2D 代价格,只看总代价、看不见【顺序】,于是"先上后右"和"先右后上" H 相同,
+        // 而物理上天差地别(水平速度喂给跳跃)。粗化成 N×N 块后块内 H 是平的,A* 不再追逐逐格竖直梯度爬直柱。
         const int HBlockSize = 8;
 
         static int BlockMinH(PlanCtx ctx, int cx, int cy)
@@ -1604,9 +1452,7 @@ namespace TerraBlind
             return false;
         }
 
-        // progress on the RAW per-cell maze field (not block-coarsened): landing cell's H lower than the current
-        // cell's. used to decide "a plain move already advances → don't dig"; the coarsened Heuristic is flat
-        // inside a block and would wrongly report no progress for in-block moves.
+        // 用【原始逐格】场判进展,不用块粗化的:粗化后块内是平的,块内移动会被误报成没进展,于是不该挖的地方也挖。
         static bool RawProgress(PlanCtx ctx, SSNode from, SSNode to)
         {
             if (ctx.DistField == null) return false;
@@ -1667,14 +1513,12 @@ namespace TerraBlind
         static List<PhysicsSimulator.ControlInput> _execFrames;
         static int _execIdx;
         static int _execGoalWx, _execGoalWy;
-        // the TRUE destination, set once when execution starts and never overwritten by a per-step target. replan
-        // must aim here — replanning toward the local step target (the old _execGoal during edge exec) sent the bot
-        // to a mid-path cell, which is why replan was wrongly disabled and open-loop drift then dropped it in a pit.
+        // 真正的终点,执行开始时设一次,绝不被单步目标覆盖。重规划必须瞄这里 —— 瞄单步目标(旧的 _execGoal)会把人送到路径中间某格,
+        // 这正是当初错误地禁用重规划、进而开环漂移掉进坑里的原因。
         static int _finalGoalWx, _finalGoalWy;
 
-        // ROLLING nav (budget-limited A* over a long route): a single Plan only reaches one budget's worth; when a leg
-        // is PARTIAL we re-Plan from the new position toward the TRUE final goal, leg after leg, until we arrive. If
-        // several legs in a row stop making progress toward the goal (local minimum — sealed pit, etc.) we bail.
+        // 滚动导航:一次 Plan 只够一个预算的距离,部分段就从新位置朝【最终目标】再规划,一段接一段。
+        // 连续几段都不朝目标推进(局部极小 —— 封死的坑之类)就放弃。
         static bool _rolling;
         static int _rollFinalWx, _rollFinalWy;
         static float _rollPrevDist;          // goal distance at the end of the previous leg (to detect "not advancing")
@@ -1682,9 +1526,8 @@ namespace TerraBlind
         const int RollMaxStuckLegs = 3;      // consecutive legs without progress → genuinely stuck → give up
         const float RollProgressPx = 16f;    // a leg must close at least this much distance to count as progress
 
-        // LOOKAHEAD: while the current leg walks, a thread-pool task plans the NEXT leg from this leg's predicted
-        // landing, so arrival doesn't pay a synchronous Plan (the per-leg main-thread hitch). On arrival, if the
-        // cached plan's start matches the real landing it dispatches with zero stall; otherwise we plan fresh.
+        // lookahead:当前段在走的时候,线程池里按本段的预测落点规划下一段,到点时不用付同步 Plan 的主线程卡顿。
+        // 到达时缓存计划的起点和真实落点吻合就零停顿派发,否则现算。
         static volatile System.Threading.Tasks.Task _rollBgTask;
         static volatile SSResult _rollBgResult;
         static int _rollBgFromCx, _rollBgFromCy;   // predicted landing the bg leg planned from (for arrival validation)
@@ -1693,30 +1536,21 @@ namespace TerraBlind
         const float ReplanDriftPx = 24f;
         const int ReplanCooldown = 10;
         static int _replanCooldownLeft;
-        // airborne self-rescue: when execution drifts off-arc AND the player is falling (off-track plunge — e.g. a
-        // failed placement / missed platform), don't wait to hit bottom. like a human who steps into air and slaps a
-        // platform under their feet, drop a platform just below the feet to arrest the fall, then replan from there.
+        // 空中自救:执行偏离弧线【且】人在下落(脱轨俯冲 —— 放置失败/踩空),不等落地。
+        // 像人踩空时往脚下拍一块平台一样,放一块止住下落,再从那儿重规划。
         const float RescueFallVy = 1.0f;   // vy above which we count as genuinely descending (not apex jitter)
         const float PlungeBelowPx = 24f;   // real player this far BELOW the planned frame (+still falling) = off-arc plunge
         const int RescueCooldown = 20;     // frames between rescue attempts so we don't spam-place every tick
         static int _rescueCooldownLeft;
-        // STUCK = velocity deviation: the plan expected the player to be moving (|pf.Vx| >= VelDevExpect) but the real
-        // body is nearly still (|vx| < VelDevReal) and not advancing — "wanted to move, didn't" (wall / slope jam).
-        // this is the velocity axis of the unified deviation: position-distance checks miss it because the player
-        // barely moves. after StuckFrames such frames, replan from the real spot.
+        // 卡住 = 速度偏差:计划说该在动(|pf.Vx| 够大)而真身几乎不动(|vx| 很小)且没推进 —— "想动没动成"(撞墙/卡坡)。
+        // 这是偏差的速度轴,按位置距离判的检查看不见它,因为人几乎没位移。
         const float VelDevExpect = 1.5f;   // plan expected at least this |Vx|
         const float VelDevReal = 0.4f;     // but real |Vx| is below this = blocked
         const int StuckFrames = 18;        // consecutive blocked frames before declaring stuck
         static int _stuckFrames;
 
-        // PROPRIOCEPTION: instead of comparing position to the (possibly stale) planned frame, predict where ONE
-        // bare-player frame should land from last frame's real state under last frame's input, and compare to the
-        // real result. the mismatch is independent of whether the plan is right — it directly measures "my body did
-        // not respond to my command as physics says it should". this one signal covers every off-physics surprise:
-        //   real vy >> expected   → falling through (missed/failed platform)
-        //   real move << expected → stuck (cobweb / honey)
-        //   real vx flipped       → knockback / shoved
-        //   wet mismatch          → unexpected water
+        // 本体感觉:不去和(可能过期的)计划帧比位置,而是从上一帧真实状态+上一帧输入预测【一帧裸玩家】该到哪,再和真实结果比。
+        // 这个失配与计划对错无关,直接量的是"我的身体没有按物理响应我的指令",一个信号覆盖穿透/卡住/击退/入水。
         struct RealState { public float Px, Py, Vx, Vy; public bool Grounded, Valid; }
         static RealState _lastReal;
         const float ProprioMismatchPx = 6f;   // per-frame predicted-vs-actual gap that flags a control anomaly
@@ -1729,9 +1563,8 @@ namespace TerraBlind
 
         public static bool IsActive => (_execFrames != null && _execIdx < _execFrames.Count) || _walkActive;
 
-        // CLOSED-LOOP walk: instead of open-loop replaying the planned frames (which平移s the whole edge if the start
-        // is off), press toward the target X and finish when the body reaches it — self-correcting, absorbs the接力
-        // drift. NO brake on arrival: vx carries into the next edge (a jump needs the run speed, don't zero it).
+        // 闭环走路:不开环重放计划帧(起点偏了会平移整条边),而是朝目标 X 按键、到位即止,自我纠正。
+        // 到位【不】刹车:vx 要带进下一条边(跳跃需要助跑速度,别归零)。
         static bool _walkActive;
         static int _walkTargetCx, _walkDir;
 
@@ -1741,9 +1574,7 @@ namespace TerraBlind
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
         public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; StopSteps(); StopExec(); DiagLog.EndRun(); }
 
-        // ===== execution status machine (parity with NavCoordinator.Done/IsActive/FailCode) so HTTP /nav + /nav_done
-        // can drive the NEW StateSpacePlanner the same way the old NavCoordinator did. set by Execute / the step loop /
-        // failure exits; read by HttpServerSystem. "running" = a route is in flight (steps or frames active).
+        // 执行状态机(和 NavCoordinator.Done/IsActive/FailCode 对齐),这样 HTTP /nav 能用同一套方式驱动新规划器。
         static bool _execDone;
         static string _execFailCode;     // null while running/ok; set on any failure exit
         public static bool ExecDone => _execDone;
@@ -1753,12 +1584,8 @@ namespace TerraBlind
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
 
-        // ===== Action-graph path executor: run ActionGraphPlanner.Plan's path edge-by-edge. Jump edges REPLAY the
-        // edge's own forward-simulated frames (planned trajectory == executed trajectory). pillar/bridge/dig go to
-        // their state-machine executors. each edge starts only when the player is landed + at rest (clean state).
-        // Edge-by-edge executor for a state-space Plan path. frame steps replay their own simulated frames (planned
-        // == executed); pillar steps drive SkillExecutor.StartPillarJump (the macro climb). each step starts only
-        // when the previous executor is idle and the player is landed + settled (clean rest state).
+        // 逐边执行:帧步重放自己模拟出的帧(规划即执行),pillar 步交给 SkillExecutor 的宏。
+        // 每一步都要等上一个执行器空闲、人落地站稳(干净静止态)才开始。
         static List<ExecStep> _ssSteps;
         static int _ssStepIdx;
         static bool _ssDispatched;
@@ -1788,17 +1615,8 @@ namespace TerraBlind
             if (p == null || !p.active) { StopSteps(); return; }
             bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive;
 
-            // WATCHDOG — every action gets a deadline. All the plan-level defenses (miss, revisit, shock, loop
-            // detector) live in the replan cycle, and the replan cycle waits for ExecRunning to clear — so ONE
-            // executor that never terminates (the 77s PillarWait) starves the entire immune system. Deadline =
-            // its own estimated frames × margin (margin scales with the estimate: long actions get more slack)
-            // + a floor for tiny actions. On breach: announce, kill every executor, hand control back to the
-            // closed loop — the next replan retries from reality and attention prices repeated failures.
-            // two watchdog clocks. SOFT (slides while moving): a long free-fall is physics working, not a hang — only
-            // a frozen position runs this clock down (the 77s PillarWait fires fast). HARD (absolute, never slides):
-            // an in-step motion loop (bouncing around a target it never satisfies) would reset the soft clock forever —
-            // the hard cap bounds the step no matter how lively it looks. Between-step loops are the replan-level
-            // detector's job (best-H stall → shock), unaffected here.
+            // 看门狗:每个动作都有死线。所有计划层的免疫机制(miss/revisit/shock/循环检测)都活在重规划周期里,而重规划要等 ExecRunning 清零
+            // —— 一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
             if (_ssDispatched)
             {
                 float moved = System.MathF.Abs(p.position.X - _stepLastPx) + System.MathF.Abs(p.position.Y - _stepLastPy);
@@ -1824,9 +1642,7 @@ namespace TerraBlind
             {
                 if (busy) return;
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
-                // DIAGNOSTIC: planned frame count vs how many frames execution actually replayed before this edge
-                // ended. if they differ by ~1, the landing/advance timing is off by a frame (= the ~3px = vx*1frame
-                // seam drift). _execFrames is null here (consumed); _lastExecFrameCount captured it at consume time.
+                // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
                 if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
@@ -1866,20 +1682,14 @@ namespace TerraBlind
             }
             else if (st.Frames != null && st.Frames.Count > 0 && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
             {
-                // pure WALK edge (no Place/Jump/Down) → closed-loop: press toward target X, finish on arrival (no
-                // brake, vx carries on). Down is excluded because WalkTick only presses left/right — a drop-through-
-                // platform edge needs Down held, which closed-loop wouldn't do, so it ran in place左右横跳. Those go
-                // open-loop below (frame replay presses the recorded Down).
+                // 纯 walk 边走闭环。排除 Down 是因为 WalkTick 只按左右 —— 穿平台下落的边需要按住 Down,
+                // 闭环不会按,结果原地左右横跳。那些走下面的开环重放(重放录下的 Down)。
                 _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
             }
             else if (st.Frames != null && st.Frames.Count > 0)
             {
-                // DIAGNOSTIC: does the player's REAL start match the start this edge's frames were planned from?
-                // any gap here = open-loop replay from a wrong origin → accumulates → edge-of-block plunge.
-                // PHASE FIX: Frames[0] is the state AFTER executing frame 0 (jump already moved py up ~4.61), but the
-                // real player here is still AT the edge start (frame 0 not yet executed). comparing them directly shows
-                // a phantom one-frame gap (dPy=4.61 on every jump edge). step the real start one frame under f0's input
-                // so both sides are "after frame 0" — same phase as ss-cmp. residual = the TRUE seam misalignment.
+                // 诊断:玩家真实起点和这条边规划时的起点对不对得上?有缝 = 从错误原点开环重放 → 累积 → 块边缘俯冲。
+                // 相位坑:Frames[0] 是执行完第 0 帧【之后】的状态,而真人还【没】执行第 0 帧,直接比会看到 dPy=4.61 的幻影差。
                 var f0 = st.Frames[0];
                 var ph0 = PhysicsSimulator.Params.FromPlayer(p);
                 var rstart = new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, JumpFramesLeft = f0.Jump ? Player.jumpHeight : 0 };
@@ -1891,10 +1701,8 @@ namespace TerraBlind
                 DiagLog.Write("[ss-steps] step has no frames — skip");
         }
 
-        // GREEDY single-step driver (route 2): maze field gives the global trend; each step we forward-sim only a
-        // few candidate actions (walk/jump segments + jump-place left/right/up), score each landing cell by its
-        // maze cost, and execute the single best. No search tree → no blowup. When no candidate improves (shaft:
-        // jump-place blocked), fall back to one vertical pillar cycle — "low-gain → climb" emerges, not hardcoded.
+        // 贪心单步驱动:场给全局趋势,每步只前向模拟几个候选动作,按落点格的场代价打分,执行最好的那一个。
+        // 没有搜索树 → 不会爆炸。都不改善时(竖井:跳放被挡)退回一个 pillar 周期 —— "低收益就爬"是涌现的,不是写死的。
         static bool _greedyActive;
         static PlanCtx _greedyCtx;   // greedy runs across frames on the game thread: ctx built in ExecBlocks, read each TickBlocks
         static int _greedyGoalWx, _greedyGoalWy;
@@ -1984,14 +1792,8 @@ namespace TerraBlind
         static string _lastParamsSig;   // last logged [ss-params] signature (log on change only)
         public static void ResetLineProgress() { _miss.Clear(); _recent.Clear(); }
 
-        // ATTENTION mismatch memory — a CONTINUOUS per-edge weight, NOT a hard ban. An edge keyed by (fromCell→toCell):
-        // when the bot's real landing falls short of an edge's optimistic simulated landing (a jump the physics couldn't
-        // make, sliding into a pit), that edge accrues a penalty proportional to how far off it landed (manhattan cells,
-        // same unit as g/H). The penalty is ADDED to g+H at selection, so a repeatedly-failing optimistic edge is softly
-        // down-weighted and a reliable alternative (place/bridge/walk-down) wins — behavior emerges from the weight, no
-        // if-else. It is NEVER ∞ and NEVER removes a candidate: if a penalized edge is still the only option it is still
-        // chosen (stuck stays structurally impossible). It DECAYS every cycle (half-life ≈ a pit-fall-and-climb-back loop),
-        // so memory fades — this is what keeps it from becoming a backtrack ban: a penalized edge always recovers in time.
+        // 注意力失配记忆 —— 【连续】的逐边权重,不是硬禁。真实落点比模拟落点差多少就记多少罚分(曼哈顿格,和 g/H 同单位)。
+        // 永不为 ∞、永不删除候选(卡死在结构上仍不可能),且每周期衰减 —— 这是它不退化成禁退的关键:被罚的边总会恢复。
         static readonly System.Collections.Generic.Dictionary<(int, int, int, int), float> _miss = new();
         const float MissDecayTick = 0.93f;   // per-cycle decay → half-life ~10 cycles (a typical pit fall+climb loop)
         const float MissForgiveHit = 0.3f;   // an edge that DID reach its target this time is largely forgiven
@@ -2007,29 +1809,20 @@ namespace TerraBlind
         {
             var key = (fromCx, fromCy, planCx, planCy);
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
-            // ZERO-MOVE floor: landing back on the start cell is the most total breach of an edge's promise — the sim
-            // said "this advances" and reality said "you didn't move at all" (half-brick/slope collision optimism).
-            // Manhattan alone prices it at 1-2, weaker than "overshot by two cells", so a slope edge with a few points
-            // of advantage got retried for cycles. Floor it so one failed try out-prices any tie-break-scale advantage.
+            // 零位移地板:落回起点格是对边的承诺最彻底的违背 —— 模拟说"这步能推进",现实说"你压根没动"。
+            // 曼哈顿只给它 1-2 分,比"超了两格"还轻,于是有点微弱优势的斜坡边被反复重试。给它一个地板价。
             if (miss > 0 && realCx == fromCx && realCy == fromCy) miss = System.Math.Max(miss, NoMoveMissFloor);
             if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
             else _miss[key] = _miss.GetValueOrDefault(key) + miss;
 
-            // REVISIT penalty — the SAME continuous mechanism, extended to catch a shuffle that HITS every step (miss=0)
-            // yet goes nowhere: a contour-line loop where each move lands exactly on its target but the target is a cell
-            // we were just on. Detect it not with a stuck counter but by memory: if the real landing is one we've stood on
-            // in the last few steps, the edge (from→landing) that led here accrues a penalty. Cycling the same 2-3 cells
-            // keeps re-penalizing those edges until one of them out-costs the escape edge (e.g. the lower-H jump the align
-            // term had been vetoing) and the bot leaves. Decays like _miss, so a legitimate re-tread later is not banned.
+            // 重访罚分:同一套连续机制,用来抓【每步都命中(miss=0)却哪也没去】的等高线蹭 —— 落点是刚站过的格就罚那条边。
+            // 不靠卡住计数器靠记忆。像 _miss 一样衰减,所以以后正当地重走同一条路不会被禁。
             var landed = (realCx, realCy);
             int recency = _recent.IndexOf(landed);
             if (recency >= 0)
             {
-                // ESCALATING: a flat +12 per lap took ~3 shock rounds (+10s) to out-price a near-free shuffle edge
-                // that beat the true escape by single digits (the tree-ledge trap: shuffle t404 vs jump-place t411).
-                // Adding at least the edge's CURRENT penalty doubles it per repeat (12→24→48…), so the second lap
-                // already completes the correction shocks used to grind out. Still finite (capped at shock scale),
-                // still decaying, never removes the candidate — the no-ban rule holds.
+                // 递增:每圈固定 +12 要 ~3 轮 shock(+10s)才压过一条只赢几分的蹭边(树台阶陷阱:蹭 t404 vs 跳放 t411)。
+                // 每次至少加上它【当前】的罚分 = 每重复一次翻倍(12→24→48…),第二圈就完成了原来要靠 shock 磨出来的修正。
                 var ekey = (fromCx, fromCy, realCx, realCy);
                 float cur = _miss.GetValueOrDefault(ekey);
                 float inc = System.MathF.Max(RevisitPenalty * (_recent.Count - recency), cur);
@@ -2050,9 +1843,7 @@ namespace TerraBlind
         public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); }
         public static void RequestJiggle() { }
 
-        // the accumulated edge penalties inside a region — the hidden state that makes a loop unreproducible, and
-        // the reason a good edge can be the most expensive one on the board.
-        // last decision's candidates, kept so a stuck snapshot can record what the planner was actually choosing from
+        // 区域内累积的边罚分 —— 让循环无法复现的隐藏状态,也是"一条好边反而全场最贵"的原因。
         static List<Cand> _lastCands;
         static (int cx, int cy, int h) _lastAt;
         static (int gx, int gy) _lastGoal;
@@ -2099,9 +1890,8 @@ namespace TerraBlind
             var field = MazeWand.GetField(goalWx, goalWy);
             var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            // sunflower-drift evidence: the Happy! buff (+move speed, active in a 169x124-tile rect around any
-            // sunflower) should already be inside the live-read maxRun/accRun — if landings drift near sunflowers,
-            // either these values don't track the buff or the buff flips mid-edge. Log on change only.
+            // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
+            // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {
                 string sig = $"maxRun={ph.MaxRun:0.###} accRunSpd={ph.AccRunSpeed:0.###} accRun={ph.AccRun:0.####} sunflower={Main.SceneMetrics.HasSunflower}";
                 if (sig != _lastParamsSig) { _lastParamsSig = sig; DiagLog.Write($"[ss-params] {sig}"); }
@@ -2117,9 +1907,8 @@ namespace TerraBlind
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
-            // 4-neighbour truth line: where does the FIELD want to descend from here, and what is physically there?
-            // Dijkstra guarantees some neighbour has lower H; when no candidate reaches it, this line convicts the
-            // generator that silently refused (unmineable? platform? H-missing?) without another archaeology session.
+            // 四邻真相行:场想从这儿往哪降,那里物理上到底是什么。Dijkstra 保证必有一个邻居 H 更低;
+            // 当没有候选够得到它,这一行就当场定罪那个静默拒绝的生成器,不用再考古一轮。
             {
                 var nb = new System.Text.StringBuilder($"[recede-nbrs] at=({curCx},{curCy})H={curH}");
                 foreach (var (tag, nx, ny) in new[] { ("E", curCx + 1, curCy), ("W", curCx - 1, curCy), ("U", curCx, curCy - 1), ("D", curCx, curCy + 1) })
@@ -2150,51 +1939,24 @@ namespace TerraBlind
             var _swCycle = System.Diagnostics.Stopwatch.StartNew();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
-                // label the landing by its SETTLED state, not the last planned frame. A jump can end 0.7px inside a
-                // cell with residual vx that slides the player back over the boundary before the next replan reads the
-                // position — the plan "reached" a cell no rest state occupies (the (800,937) phantom: a 3-point H drop
-                // selected forever, each time settling back into the start cell → oscillation). Settling costs a few
-                // sim frames; dig/pillar/place nodes are constructed at rest (vx=0, grounded) so they no-op. Terrain-
-                // altering landings must NOT free-fall settle here (their tiles aren't dug/placed yet, the sim would
-                // drop them through the still-open/solid world) — they're rest states by construction anyway.
-                // terrain-altering edges (dig/pillar/place) describe a FUTURE world — their tiles aren't dug/placed
-                // yet, so both the settle sim AND StandCell's body-fit snap would judge them against the wrong world
-                // (a side-dig landing failed the fit on its still-solid tiles and got snapped back onto the CURRENT
-                // cell → self-loop filter silently deleted the only descending edge → the (981,435) loop). Their nodes
-                // are constructed dead-center on the intended cell, so the raw center rounding is exact — use it.
+                // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
+                // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降 —— 它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || (frames != null && frames.Exists(f => f.Place));
                 var landed = alters ? next : SettleNode(next, ph);
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
-                // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。H 已是逐格累加到目标的代价,
-                // 所以 s→s' 的理想代价恰好 = H(s)−H(s')。手编的 per-action 价(place=120、pillar×9)
-                // 是第二套、粒度还不同 —— 坑循环的根:桥标价 120 而 H 只给同一块浮空 26,永远输给白送的一步。
-                // 代价是 total=g+H(s')≡H(s) 全场相等,排序交给下面的 align/dev 项。ΔH 为负 clamp 到 0。
-                // 落点值 = 从落点望得到的最低 H(见 LookaheadH)。g 和它必须用同一把尺子:先用 nH 算 g、
-                // 再用 laH 当落点值,恒等式 total≡当前值 就破了 —— 往上跳时 g 被 clamp 成 0,而 laH 又不再
-                // 反映落点本身有多烂,两道保险同时失效。实测 (3343,378):跳到 nH=619(比脚下差 202)却因
-                // laH≈332 拿到全场最低分,老实走向 H332 的候选反而输,一格被 PUSH 救了 21 次。
+                // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。手编的 per-action 价(place=120、pillar×9)是第二套、粒度还不同
+                // —— 坑循环的根。代价是 total≡H(s) 全场相等,排序交给下面的 align/dev 项。落点值用 laH,算 g 也必须用 laH,混用两道保险同时失效。
                 int laH = LookaheadH(field, ncx, ncy, nH, laCache);
                 float g = MathF.Max(0f, (curLaH == int.MaxValue ? curH : curLaH) - laH);
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
-                // g=ΔH is right for choosing among reachable landings, but it dropped one true cost H can't see: altering
-                // terrain (dig/place/pillar) takes real TIME standing still that moving to the same spot doesn't. So the
-                // surcharge is that time itself: the edge's cost field already carries the actual frames (DigTable mining
-                // frames by hardness+pick for digs, 43/2-cell cycle for pillar, jump+place frames for place), converted
-                // to H units (MoveSide=3 per ~5.3-frame cell run ≈ 0.5 H/frame). Self-scaling where a constant failed
-                // both ways (40 killed the only escape at (3242,299)/(801,937); 3 let every near-tie dig through): dirt
-                // digs stay cheap, hard rock is routed around when a walk is close. CAPPED so a necessary dig can never
-                // be starved: the cap keeps the surcharge below typical real-descent H drops, so when digging is the
-                // only descending edge it still beats any H-rising shuffle.
+                // g=ΔH 挑落点是对的,但漏了一项 H 看不见的真实代价:改造地形要【站着不动】耗时间,走过去不用。
+                // 附加费就是这个时间本身,由边自带的真实帧数换算(0.5 H/帧)。
                 int altered = (digTiles?.Count ?? 0) + (pillar ? 1 : 0) + (isPlace ? 1 : 0);
-                // PROGRESS-NORMALIZED: every descending candidate totals exactly H(s), so the surcharge alone ranks
-                // them — and a per-ACTION time fee made a 2-cell pillar (≈21) forever beat a 4-cell jump-place rung
-                // (≈37) even though the ladder is faster per cell (the greedy step can't see the second pillar that
-                // follows). Scale the fee by cells gained, discount only for LONG edges (≤2 cells unchanged, so the
-                // tuned dig-vs-walk balance is untouched): fee × 2/max(2, manhattan). Pillar stays 21, the rung drops
-                // to ~18 — per-cell-faster actions now win their ties.
+                // 按【推进的格数】摊薄,只给长边打折(≤2 格不变):否则 per-action 的固定费会让 2 格 pillar(≈21)永远赢过
+                // 4 格跳放梯(≈37),哪怕后者每格更快 —— 贪心那一步看不见紧随其后的第二根柱子。
                 if (altered > 0)
                 {
                     // 不封顶:真实帧数直接定价。封顶让挖 2 格和挖 8 格一样贵,规划器看不见厚薄,
@@ -2202,19 +1964,11 @@ namespace TerraBlind
                     float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
                     g += cost * DigFramesToH * (2f / MathF.Max(2f, edgeCells));
                 }
-                // Bellman base score g(step)+V(landing), PLUS the attention mismatch weight for this exact edge: an edge
-                // whose real landing has repeatedly fallen short of its optimistic simulated landing carries a penalty
-                // (manhattan cells it missed by, decayed over cycles), softly down-weighting it so a reliable alternative
-                // wins. Pure g+H already allows a transient H rise (walk/jump down into a shallow pit then climb the far
-                // side); the penalty only kicks in for edges physics keeps failing to honour — the optimistic jump that
-                // slides into a pit. Penalty is finite and decays, never removes the candidate (stuck stays impossible).
+                // Bellman 基础分 g+V(落点),再加这条边的注意力失配权重:反复落空的乐观边被软性降权,可靠的替代就赢了。
+                // 纯 g+H 本来就允许 H 暂时升高(走进浅坑再爬出),罚分只针对物理反复不兑现的边。
                 float pen = _miss.GetValueOrDefault((curCx, curCy, ncx, ncy));
-                // big-direction alignment: how well this step's displacement points along the multi-scale line vectors.
-                // Subtracted from total (a well-aligned step is cheaper), scaled to H's unit. This is what disambiguates
-                // equal-H cells: the 1680↔1682 shuffle moves perpendicular to the corridor (align≈0, no reward) while
-                // the pillar/walk that actually heads up-corridor gets rewarded and wins. It also blesses a V-pit
-                // downslope (transient H rise but aligned). Bounded (±~AlignScale·Σw), decays to 0 at line bends where
-                // the scales disagree, never removes a candidate → stuck stays structurally impossible.
+                // 大方向对齐:这一步的位移和多尺度线向量有多同向,从 total 里减掉。这是用来区分【等 H 格】的:
+                // 1680↔1682 那种蹭是垂直于走廊的(align≈0 无奖励),真正朝走廊方向走的才拿奖励。在线的拐弯处衰减到 0。
                 float ddx = ncx - curCx, ddy = ncy - curCy;
                 float dlen = MathF.Sqrt(ddx * ddx + ddy * ddy);
                 float align = 0f;
@@ -2223,19 +1977,11 @@ namespace TerraBlind
                     float ux = ddx / dlen, uy = ddy / dlen;
                     align = WShort * (ux * dS.x + uy * dS.y) + WMid * (ux * dM.x + uy * dM.y) + WLong * (ux * dL.x + uy * dL.y);
                 }
-                // deviation penalty: how far this landing sits from the line (the field-optimal route). The line is the
-                // cheapest path the field found; a landing far off it is drifting away from that route. Charged per cell
-                // of distance, so a step that strays (walk down INTO a pit the line floats over) costs more the deeper it
-                // strays, while a landing that hugs the line (bridge across at line height) is barely charged. Applied
-                // each cycle from the real position, so a transient excursion that returns to the line (the désert V-pit,
-                // already fine after the air-cost fix) nets little, but a one-way descent into a /_/ trap that can't climb
-                // back accrues unboundedly → the pit edge picks the bridge instead. Uses the line-distance search.
+                // 偏离罚分:落点离线(场认定的最优路线)多远。按每格距离收费,所以走进线在上面飘过去的坑越深越贵,
+                // 贴着线走几乎不收费。单向下坠进爬不回来的陷阱会无界累积 → 坑边那条边转而选桥。
                 var (_, devDist) = NearestLineIdx(line, ncx, ncy, 0);
-                // SUPER-LINEAR in distance: small strays (hugging the line, skimming a shallow V-pit) cost almost
-                // nothing, but the penalty steepens fast so a landing many cells off the line (jumping into a pit wall the
-                // line floats over) is heavily out-priced — the pit edge then refuses the descent. Same term pulls a bot
-                // that DID fall in back out: deeper in the pit = larger distance = steeper penalty, so climbing toward the
-                // line (shrinking distance) beats burrowing deeper. dist^1.5 grows past linear without dist²'s blow-up.
+                // 距离的超线性:贴着线蹭几乎不花钱,但陡增得快,离线很多格(跳进线在上方飘过的坑壁)会被重重压价。
+                // 同一项也把已经掉进去的人拉出来:越深距离越大罚得越狠,朝线爬(缩小距离)就赢过继续下钻。dist^1.5,比线性陡但不像平方那样爆。
                 float dev = DeviCost * devDist * MathF.Sqrt(devDist);
                 float total = g + laH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
@@ -2247,24 +1993,16 @@ namespace TerraBlind
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
-            // ── 没进展就换个方向 ──────────────────────────────────────────────────────────────────
-            // 原判据是"落点 H 有没有低于历史最低 H(_hFloor)"。这个是错的:一旦人为了绕路离开过最低点,
-            // 之后每一步的落点都 ≥ 历史最低,PUSH 就永久触发。管子里实测 40+ 步连续 PUSH、floor 一直
-            // 卡在 443 不动,而 PUSH 专挑"没去过的",于是一路往上刷新格子搭平台 —— 就是那段"先上去
-            // 到处搭平台,又慢慢下来晃悠"。
-            // 改成跟脚下比:greedy 挑的落点不比现在近,才算这一步没进展。绕路(H 暂时升高)是允许的,
-            // 只有真的原地弹才触发。_hFloor 一起删掉 —— 它记的是历史最低点,而"这一步有没有前进"是
-            // 局部的事,两者不是一回事。
+            // 原判据是"落点 H 有没有低于历史最低",错的:人为绕路离开最低点后,之后每一步都 ≥ 历史最低,PUSH 就永久触发。
+            // 改成跟【脚下】比:greedy 挑的落点不比现在近才算没进展。绕路(H 暂时升高)允许,只有真原地弹才触发。
             if (jigglePool.Count > 0 && best != null)
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
                 if (bestH >= curH)
                 {
-                    // 管子里 H 最低的那个候选常常就是来路 —— (4854,379) 的 49 个候选去重后只有 10 格,
-                    // 其中 7 格在人刚走过的那 4×4 里,H 最低的正是回头那一格,于是来回弹。
-                    // 人一眼看出"左右是墙只能往下",靠的不是比 H,是「哪边没去过」。所以先在没去过的
-                    // 候选里挑 H 最低;没去过的都用完了才退回全体(不是禁止回头,只是排在后面)。
+                    // 管子里 H 最低的候选常常就是来路 —— (4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
+                    // 人一眼看出"左右是墙只能往下"靠的不是比 H,是【哪边没去过】。所以先在没去过的里挑,用完了才退回全体(排后面,不是禁止)。
                     bool anyFresh = false;
                     foreach (var c in jigglePool) if (!_visited.Contains(c.cell)) { anyFresh = true; break; }
                     var push = jigglePool[0];
@@ -2285,10 +2023,8 @@ namespace TerraBlind
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
             DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count} expandMs={_swCycle.Elapsed.TotalMilliseconds:0.0}:{_candLog}");
 
-            // STARVED EXPAND (Phase A: generator rejections must be visible): when no descending candidate exists —
-            // the cycles where a silently-refusing generator matters — re-run Expand once with SegDiag on so every
-            // walk/jump/dig null logs its reason. Convicts the missing edge in one run instead of an archaeology
-            // session (the (2959,262) n=1 place-only loop: walk-west existed physically, never generated, no trace).
+            // 饥饿 Expand:没有任何下降候选时(正是静默拒绝的生成器要命的那些周期),开着 SegDiag 重跑一次 Expand,
+            // 让每个 null 都说出理由。一次运行定罪,不用再考古 ((2959,262) 那次 n=1 只剩 place 的循环,走西边物理上存在却从没生成过)。
             if (best != null && (cands.Count <= 2 || !cands.Exists(c => c.Descends)))
             {
                 SegDiag = true;
@@ -2304,12 +2040,8 @@ namespace TerraBlind
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
                 SegDiag = false;
-                // SAFE ESCAPE STEP (hard rule: stuck must be structurally impossible — when nothing selects, move one
-                // cell and re-select; never stop on a reachable stance). Expand goes empty in wedged stances the
-                // normal generators don't model (walked 6px into a slope: every field-gated edge nulls) — but walking
-                // reachability is symmetric, the body that walked in can walk back out. Accept ANY real movement,
-                // field membership and H ignored (this is not progress, it is un-wedging); the next replan re-selects
-                // from the new stance where the field's honest pricing (the slope is a dig now) takes over.
+                // 安全逃逸步(硬规则:卡死必须在结构上不可能 —— 选不出来就挪一格重选,绝不停在能站的姿势上)。
+                // 接受【任何】真实位移,不管场和 H(这不是进展,这是脱困):能走进来的身体就能走出去,下一周期由场的诚实定价接管。
                 foreach (int edir in new[] { -1, 1 })
                     foreach (int ehold in new[] { 0, 8 })
                     {
@@ -2341,11 +2073,8 @@ namespace TerraBlind
             return res;
         }
 
-        // (idx, manhattan-dist) of the line cell nearest (cx,cy), searched in a window around `near`. The line now
-        // starts at the player's real cell (stateless re-trace), so callers pass near=0 — the window covers the
-        // first ~120 line cells, ample for candidate landings a few cells away. STRICT < (first/lowest-index minimum wins): an earlier
-        // <= made ties keep the highest index, so a landing far from the whole window snapped to its far end → every
-        // landing read as huge progress → shuffle in place.
+        // 离 (cx,cy) 最近的线格,在 near 附近的窗口里找。严格小于(取最先/最小 idx 的那个最小值):
+        // 用 <= 会让并列时留下最大 idx,于是离整个窗口都远的落点吸附到窗口末端 → 每个落点都读成巨大进展 → 原地蹭。
         static (int idx, int dist) NearestLineIdx(List<(int, int)> line, int cx, int cy, int near)
         {
             if (line == null || line.Count == 0) return (0, int.MaxValue);
@@ -2359,13 +2088,8 @@ namespace TerraBlind
             return (bestI, bestD);
         }
 
-        // Unit direction along the line from idx, advancing until the cumulative MANHATTAN arc length reaches `arc`
-        // cells (not idx steps: the line walks diagonally so one idx ≈ 1-2 cells; arc length keeps the vector's reach
-        // scale-constant regardless of how densely the line is sampled). Clamps to the line end (near the goal the
-        // short/mid/long vectors all collapse to "toward goal", which is correct). Returns (0,0) if the line is too
-        // short to move at all. This is the multi-scale "big direction" the scalar field H can't express: H says how
-        // far, the vector says which way the corridor actually heads — disambiguating equal-H cells (the 1680↔1682
-        // contour-line shuffle) and rewarding a transient-H-rise step that still goes the right way (V-pit downslope).
+        // 从 idx 出发沿线走,累计【曼哈顿弧长】到 arc 格为止的单位方向(不是走 idx 步:线是斜的,一个 idx ≈ 1-2 格)。
+        // 这是标量场 H 表达不了的"大方向":H 说多远,向量说走廊实际朝哪拐 —— 用来区分等 H 格,也奖励暂时升 H 但方向对的一步。
         static (float x, float y) LineDir(List<(int, int)> line, int idx, int arc)
         {
             if (line == null || idx < 0 || idx >= line.Count) return (0f, 0f);
@@ -2380,37 +2104,22 @@ namespace TerraBlind
             return len < 0.5f ? (0f, 0f) : (dx / len, dy / len);
         }
 
-        // multi-scale arc lengths (cells) + their blend weights: mid is the workhorse (corridor heading), short trims
-        // for near obstacles, long guards against mid-scale detours. Three dot-products cross-check: at a line bend
-        // short and mid disagree (opposite sign) → the blended alignment shrinks → we fall back toward pure g+H there
-        // instead of confidently shoving a wrong direction. AlignScale is deliberately SMALL: alignment is a TIE-BREAKER
-        // for near-equal-H candidates (a contour shuffle where H differs by ~1-3), NOT a force that can override a clear
-        // H descent. At 120 it could out-vote a landing whose H was 42 lower — vetoing the real downhill exit and pinning
-        // the bot in an equal-H shuffle (the near-goal 3-cell loop). Sized so a fully-aligned step is worth only ~a dozen
-        // H — enough to settle ties, never enough to beat an obviously lower-H action.
+        // 多尺度弧长 + 混合权重:中尺度是主力,短的修近处障碍,长的防中尺度绕远。三个点积互相校验,拐弯处彼此矛盾 → 对齐值缩小 → 退回纯 g+H。
+        // AlignScale 故意取小:对齐是【近似平局】时的仲裁,不是能推翻明显 H 下降的力。取 120 时它能否决 H 低 42 的落点,把人钉在等 H 蹭里。
         const int ArcShort = 6, ArcMid = 20, ArcLong = 80;
         const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 18f;
-        // per-cell cost of a landing's distance from the line (the field-optimal route). Charges drift away from the
-        // line, so a one-way descent into a trap the line floats over loses to a line-hugging bridge. Tuned so a few
-        // cells off costs little (transient excursions ok) but a deep stray (10+ cells into a pit) clearly out-prices it.
+        // 落点离线每格的单价。调到:偏几格几乎不花钱(允许短暂外出),但深偏(10+ 格进坑)明显被压价。
         const float DeviCost = 0.5f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty — TIE-BREAKER size (must lose to a real H descent, else it vetoes a big-drop walk in favor of a one-cell dig)
-        // per-altered-cell surcharge for dig/place/pillar. KEY INSIGHT: Bellman (total=ΔV+V(s')≡V(s)) only sees the
-        // LANDING's value, not HOW you got there — so "walk over and fall down" and "dig straight down" to the same cell
-        // tie exactly. But altering terrain is really far costlier than moving (time, destroyed blocks); V can't encode
-        // that. This surcharge IS that cost-of-how. Sized so digging one cell is worth going ~a dozen cells out of the
-        // way to avoid — big enough that walk+fall beats a dig to the same/near spot (kills the 60% avoidable digs), yet
-        // still lost to a dig that's the ONLY descent (no walk/jump candidate, or all far higher H). Not in V (that would
-        // re-introduce the two-cost mismatch) — purely a per-action tiebreak on "how".
-        // 帧数→H:MoveSide=3 每 ~5.3 帧一格
+        // 改造地形的逐格附加费。Bellman 只看落点的价值、看不见"你是怎么到的" —— "走过去掉下来"和"直接挖下去"到同一格完全平手。
+        // 但改造地形真的贵得多(时间、毁掉的方块),V 编码不了,这笔费就是那个"怎么到的"。帧数→H:MoveSide=3 每 ~5.3 帧一格。
         const float DigFramesToH = 0.5f;
 
         // one Expand edge → its ExecStep(s). Mirrors the retrace conversion: pillar-composite (dig-up), pillar, dig,
         // or frame edge. dig-up composite splits into alternating mine/pillar sub-steps the executor can drive.
         static List<ExecStep> EdgeToSteps(SSNode from, SSNode to, List<PhysicsSimulator.ControlInput> frames, bool pillar, List<(int,int)> dig)
         {
-            // dig/pillar/place `to` nodes describe the POST-alter world: StandCell's body-fit snap would judge them
-            // against the still-unmodified tiles and relabel them back onto the current cell — which flipped the mine
-            // direction (dig east → "digLeft to self", the second (981,435) loop). RawCell for those; `from` is real.
+            // 挖/放/柱的 to 节点描述的是【改造后】的世界:StandCell 的合身吸附会拿还没改的砖去判它,把它relabel 回当前格
+            // —— 那次翻转了挖掘方向(往东挖变成"往左挖到自己",第二次 (981,435) 循环)。这些用 RawCell,from 用真实的。
             var (tcx, tcy) = (dig != null || pillar) ? RawCell(to.Px, to.Py) : StandCell(to.Px, to.Py);
             var (fcx, fcy) = StandCell(from.Px, from.Py);
             var steps = new List<ExecStep>();
@@ -2434,12 +2143,8 @@ namespace TerraBlind
             return steps;
         }
 
-        // The frame plan IS the position prediction for the next stretch of time — and a plan can predict garbage:
-        // BridgePlace's "walk to tile center" was unreachable past a wall, so its loop pressed dir into the wall to
-        // the 1200-frame fuse and the executor faithfully replayed ~9s of standing still (the y≈1010 freeze). Any
-        // open-loop plan whose predicted position stops changing is dead weight BY DEFINITION — cutting the frozen
-        // tail cannot alter the outcome (nothing moves in it), it only returns control to the closed loop sooner.
-        // Zero false-kill risk, generator-agnostic. Short frozen tails (brake settle) are left alone.
+        // 帧计划就是对下一段时间的位置预测,而计划可以预测出垃圾:BridgePlace 的"走到格心"在墙后根本到不了,
+        // 于是循环朝墙按到 1200 帧引信,执行器忠实重放了 ~9s 的原地不动。预测位置不再变化的开环尾巴按定义是死重,砍掉只会更早交还闭环。
         const int FreezeTailMin = 20;   // only cut when the frozen run is clearly dead weight (>⅓s)
         const int FreezeTailKeep = 3;   // frames of the frozen run kept so the settle still registers
         static List<PhysicsSimulator.ControlInput> TrimFrozenTail(List<PhysicsSimulator.ControlInput> frames)
@@ -2486,10 +2191,8 @@ namespace TerraBlind
             _greedyVisited.Add((curCx, curCy));
 
             _greedyCtx.JpNoSpot = _greedyCtx.JpNoLand = _greedyCtx.JpFellThrough = _greedyCtx.JpSlidOff = _greedyCtx.JpOk = 0;
-            // NO BACKTRACK: never step onto a visited cell. Among UNVISITED reachable candidates, pick the lowest
-            // maze cost. This forces forward progress out of local-minimum wells (a sealed pocket's low-cost floor
-            // is already visited → the bot must extend sideways into new cells, even if cost rises briefly). When
-            // every reachable candidate is already visited, there's genuinely nowhere new → report stuck.
+            // 不回头:绝不踏上已访问格。在未访问的可达候选里挑场代价最低的 —— 这逼着人走出局部极小的井
+            // (封死口袋的低代价地板已经访问过 → 只能横向伸进新格,哪怕代价暂时上升)。全都访问过了才真是无处可去。
             List<PhysicsSimulator.ControlInput> chosen = null;
             int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
             var cand = new System.Text.StringBuilder();
@@ -2520,10 +2223,8 @@ namespace TerraBlind
             _replanCooldownLeft = 0; _replanCount = 0; _placeStall = 0;
         }
 
-        // Pick a SUBGOAL ~LegSubgoalCells ahead toward the final goal by walking the cached field's gradient downhill
-        // from (sx,sy). Returns the cell reached (a real standable surface cell on the field). If the final goal is
-        // already within range, returns it directly. This is what makes a leg "manual-single-point-nav fast": A*
-        // chases a NEARBY reachable cell (found→stop in tens of expansions) instead of穷举 toward a far goal.
+        // 沿缓存场的梯度下山走 ~LegSubgoalCells 格取一个子目标。这就是让每一段"和手动单点导航一样快"的原因:
+        // A* 追的是【附近可达】的格(几十次展开就找到),而不是朝着远目标穷举。
         static (int gx, int gy) SubgoalToward(int sx, int sy, int finalWx, int finalWy)
         {
             var field = MazeWand.GetField(finalWx, finalWy);
@@ -2547,10 +2248,8 @@ namespace TerraBlind
             return cur;
         }
 
-        // ===== BLOCK NAV (J): cut the cached field's gradient path into fixed ~BlockCells chunks ONCE, then run each
-        // chunk as a plain single-point nav (Execute rolling=false → target==goal, box field, h precise → never the
-        //子目标≠h freeze). A block queue + per-frame driver advances chunk by chunk. This is the "can't possibly hang"
-        // design: every chunk is exactly the navwand case that's already fast.
+        // 块导航:把缓存场的梯度路径【一次性】切成 ~BlockCells 的块,每块当成普通单点导航跑(target==goal,盒场,h 精确)。
+        // 这是"不可能卡死"的设计:每一块都恰好是那个已经很快的 navwand 场景。
         const int BlockCells = 70;
         static readonly List<(int x, int y)> _blockQueue = new();
         static int _blockIdx;
@@ -2632,9 +2331,8 @@ namespace TerraBlind
             }
         }
 
-        // rolling=false (navwand /nav, single point): plan ONCE straight to the goal with a fast box field, dispatch,
-        // done. This is the original fast near-nav — NOT routed through the big cached field or the leg/subgoal loop.
-        // rolling=true (J maze-nav, long route): big cached compass + subgoal legs + lookahead, for far goals.
+        // rolling=false(navwand 单点):用快速盒场一次直达目标 —— 原本就快的近距离导航,不走大缓存场也不走分段循环。
+        // rolling=true(长路线):大缓存罗盘 + 子目标分段 + lookahead。
         public static SSResult Execute(int goalWx, int goalWy, bool rolling = false)
         {
             StopGreedy(); StopSteps();
@@ -2744,9 +2442,8 @@ namespace TerraBlind
                 Visualize(r, _asyncGoalWx, _asyncGoalWy);
         }
 
-        // Rolling: a partial leg just finished. If we're at the final goal, done. Otherwise plan the next leg from the
-        // player's real position toward the TRUE final goal (reusing the cached compass) and dispatch it. Bail if
-        // several legs in a row fail to close distance (local minimum). Returns true if a next leg was dispatched.
+        // 滚动:一个部分段刚跑完。到最终目标就收工,否则从真实位置朝【真正的终点】规划下一段(复用缓存罗盘)。
+        // 连续几段都没缩短距离(局部极小)就放弃。
         static bool RollNextLeg(Player p)
         {
             float gx = _rollFinalWx * 16f + 8f, gy = (_rollFinalWy + 1) * 16f;
@@ -2844,20 +2541,15 @@ namespace TerraBlind
             return (px, py, 0f);
         }
 
-        // Dispatch a plan computed earlier (lookahead: a background Plan ran while the previous leg executed).
-        // Same tail as Execute but skips planning — the caller already validated the player's real position matches
-        // the plan's start cell. Sets _lastExecResult so the NEXT lookahead chains off this leg's predicted landing.
+        // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划 —— 调用方已经验证过真实位置匹配。
         public static void DispatchPlan(SSResult res)
         {
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
             var pStart = Main.LocalPlayer;
 
-            // REALIGN: the plan was computed from the PREDICTED landing of the previous leg; the real player is a few
-            // px off that prediction. Open-loop frame replay from the un-shifted plan would平移 the whole leg by that
-            // gap (the恒定 dPy=-8 seam). Shift every frame's absolute position so the plan starts exactly where the
-            // player really is. Velocity is position-invariant (unchanged); Place cell coords are tile-grid and a
-            // sub-tile shift doesn't move them, so leave them.
+            // 重对齐:计划是从上一段的【预测】落点算的,真人差几像素。开环重放会把整段平移那个差值(恒定 dPy=-8 的接缝)。
+            // 把每帧的绝对位置整体平移到人真正所在处。速度与位置无关(不动),Place 的格坐标是格对齐的(亚格平移不影响)。
             float offX = pStart.position.X - res.StartPx;
             float offY = pStart.position.Y - res.StartPy;
             if (res.Steps != null && (MathF.Abs(offX) > 0.01f || MathF.Abs(offY) > 0.01f))
@@ -2890,12 +2582,8 @@ namespace TerraBlind
             StartSteps(res.Steps);
         }
 
-        // a drift-replan re-targets the CURRENT leg's landing — the "same landing" tolerance is the label/terrain
-        // quantization only: StandCell rounding (±1) plus a mid-execution dig leaving the landing up to 2 rows inside
-        // yet-unmined rock (dig-up mines 2 rows per cycle → snap climbs ≤2). Beyond 2 rows it is a DIFFERENT place,
-        // not the leg's landing → fail the leg (cheap: receding re-selects) rather than risk pursuing a teleported
-        // goal (catastrophic: the 126-cell chasm dive). Derived bound, not margin-padded — the error asymmetry
-        // (one wasted select cycle vs a dive) says keep it tight.
+        // 容差只包含标签/地形量化:StandCell 取整(±1)加上执行中途挖掘让落点最多陷进未挖岩石 2 行。
+        // 超过 2 行就是【另一个地方】,不是本段的落点 → 判这段失败(便宜:重选一次)而不是去追一个被传送的目标(灾难:126 格俯冲)。
         const int ReplanGoalSnapCap = 2;
 
         static volatile SSResult _replanRes;
@@ -2903,9 +2591,8 @@ namespace TerraBlind
         static int _replanSeq;
         static string _replanReason;
 
-        // Background replan: stop exec (player brakes to a brief 罚站), plan the correction off-thread, dispatch when
-        // ready via PollReplan. The old plan is invalid the moment we deviate, so waiting a few frames beats freezing
-        // the whole game on a synchronous Plan. Returns true so the caller's frame loop stops this tick.
+        // 后台重规划:停执行(人刹住站一会儿),在别的线程算修正,好了再派发。偏离的那一刻旧计划就失效了,
+        // 等几帧比同步 Plan 冻住整个游戏强。
         static bool Replan(string reason)
         {
             if (_replanPending) return true;   // a replan is already cooking; keep waiting
@@ -2959,9 +2646,8 @@ namespace TerraBlind
             StartSteps(res.Steps);
         }
 
-        // Closed-loop walk driver: press toward the target column until the body's center reaches it, then finish
-        // WITHOUT braking so the run speed carries into the next edge (jump needs it). Self-correcting: it aims at the
-        // real target each frame, so a wrong start just means a few more/fewer steps — no whole-edge平移.
+        // 闭环走路驱动:朝目标列按键直到身体中心到达,然后【不刹车】结束,让助跑速度带进下一条边(跳跃需要)。
+        // 自我纠正:每帧都瞄真实目标,起点错了只是多走几步少走几步,不会整条边平移。
         const float WalkArrivePx = 4f;
         static void WalkTick()
         {
@@ -2992,10 +2678,8 @@ namespace TerraBlind
             float dyp = p.position.Y - f.Py;
             float drift = MathF.Sqrt(dxp * dxp + dyp * dyp);
 
-            // FULL plan-vs-exec divergence trace: the player's state NOW reflects the controls from frame idx-1 (set
-            // last tick, applied by the game this tick). so compare player-now to PREVIOUS planned frame. the first
-            // frame where px/py/vx/vy diverges from plan is the偏差 source: vx diverge=accel/friction mismatch,
-            // py-only diverge=stepUp/slope/halfbrick mismatch, all-after-N diverge=a missing per-frame game physics.
+            // 完整的计划 vs 执行分歧追踪:玩家【现在】的状态反映的是 idx-1 帧设下的控制,所以要和【前一个】计划帧比。
+            // 第一个分歧帧就是偏差源头:vx 分歧=加速度/摩擦不符,只有 py 分歧=StepUp/斜坡/半砖不符,N 帧后全分歧=漏了某个逐帧物理。
             if (_execIdx > 0)
             {
                 var pf = _execFrames[_execIdx - 1];
@@ -3008,9 +2692,8 @@ namespace TerraBlind
             if (_replanCooldownLeft > 0) _replanCooldownLeft--;
             if (_rescueCooldownLeft > 0) _rescueCooldownLeft--;
 
-            // ── PROPRIOCEPTION: predict one bare-player frame from last real state under last frame's input, compare
-            // to the real result NOW. mismatch = my body didn't obey physics as expected (fell through / stuck / shoved
-            // / wet). independent of the plan, so it works even when the planned frames are stale.
+            // 本体感觉:从上一帧真实状态按上一帧输入预测一帧,和现在的真实结果比。失配 = 身体没按物理听话(穿透/卡住/被推/入水)。
+            // 与计划无关,所以计划帧过期了它照样有效。
             float predVy = p.velocity.Y, mismatch = 0f;
             if (_lastReal.Valid && _execIdx > 0)
             {
@@ -3021,19 +2704,14 @@ namespace TerraBlind
                 predVy = pred.Vy;
                 mismatch = MathF.Abs(p.position.X - pred.Px) + MathF.Abs(p.position.Y - pred.Py);
             }
-            // PLUNGE detection: a free fall is physically CORRECT per-frame (vy = +grav each tick), so the single-frame
-            // proprio mismatch stays ~0 and can't see it. vy-gap also lags (vy must build up first). the earliest,
-            // cleanest signal is POSITION: the player is well BELOW where the planned frame says it should be (real py
-            // >> planned py) and still descending. that gap appears the instant the player drops off the planned arc
-            // and grows monotonically.
+            // 俯冲检测:自由落体逐帧看是物理【正确】的(vy 每 tick +grav),单帧本体感觉失配 ~0,看不见它;vy 差也滞后。
+            // 最早最干净的信号是【位置】:人明显低于计划帧该在的地方且还在下降,这个差在脱离计划弧线的瞬间出现并单调增长。
             float belowPlan = p.position.Y - f.Py; // +ve = real player is lower than the plan
             bool falling = p.velocity.Y > RescueFallVy && belowPlan > PlungeBelowPx;
             if (mismatch > ProprioMismatchPx)
                 DiagLog.Write($"[ss-proprio] mismatch={mismatch:0.#} realVy={p.velocity.Y:0.#} predVy={predVy:0.#} falling={(falling?1:0)} pos=({(int)(p.Center.X/16f)},{(int)((p.position.Y+p.height)/16f)})");
-            // TELEPORT abort: a one-frame jump no physics can produce (recall/mirror/teleport, or being yanked far)
-            // means this whole navigation is meaningless from the new spot — don't rescue, don't replan (replanning to
-            // the old goal from spawn could be hundreds of cells away and blows up the planner). just stop dead; the
-            // player re-issues a NavWand command if they still want to go somewhere.
+            // 传送中止:一帧内的位移是任何物理都产生不了的(回忆药水/镜子/被拽走),说明这次导航从新位置看毫无意义。
+            // 不救援不重规划(从出生点重规划到旧目标可能几百格,会把规划器撑爆),直接停死,人想去哪自己再下指令。
             if (_lastReal.Valid && mismatch > TeleportPx)
             {
                 DiagLog.Write($"[ss-teleport] mismatch={mismatch:0.#} → abort nav");
@@ -3044,15 +2722,13 @@ namespace TerraBlind
             // record THIS frame's real state for next frame's prediction (before any early return below)
             _lastReal = new RealState { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, Valid = true };
 
-            // AIRBORNE SELF-RESCUE: proprioception says I'm falling faster than my input should produce = an unplanned
-            // plunge (failed/missed platform). like a human slapping a platform under their feet, drop one below to
-            // arrest the fall; the grounded replan below then re-plans from the saved spot.
+            // 空中自救:本体感觉说我下落得比输入该产生的更快 = 非计划的俯冲(平台放失败/踩空)。
+            // 像人往脚下拍一块平台一样,放一块止住,下面的落地重规划再从存下的位置重新规划。
             if (!_greedyActive && falling && _rescueCooldownLeft == 0)
             {
                 int fcx = (int)((p.position.X + PhysicsSimulator.PlayerW / 2f) / 16f);
-                // player is 42px (~2.6 cells); the feet sit partway into their cell and a fast fall (vy up to 10/frame)
-                // would clear a platform placed in the feet cell or even one cell below within the same frame. drop it
-                // TWO cells below the feet so the descent has room to actually land on top instead of phasing through.
+                // 人有 42px(~2.6 格),脚踩在格子中间,快速下落(vy 可达 10/帧)一帧就能穿过放在脚下那格甚至下一格的平台。
+                // 所以放在脚下【两】格,让下落有空间真正落在它上面而不是穿过去。
                 int feetCy = (int)((p.position.Y + PhysicsSimulator.PlayerH) / 16f);
                 int fcy = feetCy + 2;
                 if (CanPlaceReal(fcx, fcy))
@@ -3064,10 +2740,8 @@ namespace TerraBlind
                 }
             }
 
-            // STUCK (velocity deviation): the plan wanted the player moving this frame but the real body is blocked
-            // (|pf.Vx| expected, |vx| ~0) — the velocity axis of deviation that position-distance checks miss. count
-            // consecutive blocked frames; after StuckFrames, replan from where the player actually is. covers wall /
-            // slope jams that otherwise spin replan-storms until MaxReplans.
+            // 卡住(速度偏差):计划要人这帧在动而真身被挡住(该有 |pf.Vx|,实际 |vx| ~0)—— 按位置距离判的检查看不见的那条轴。
+            // 数连续被挡的帧,超过 StuckFrames 就从人真正所在的地方重规划。覆盖撞墙/卡坡这类否则会一路重规划风暴到 MaxReplans 的情况。
             if (!_greedyActive && _execIdx > 0)
             {
                 var spf = _execFrames[_execIdx - 1];
@@ -3081,9 +2755,8 @@ namespace TerraBlind
                 }
             }
 
-            // replan only when grounded: airborne states aren't expansion points, so mid-jump replan can't help.
-            // closed-loop drift correction (now aims at the TRUE goal + rebuilds steps, so no storm/pit). greedy
-            // self-corrects per step so it skips this; edge-by-edge USES it — open-loop drift was what dropped it.
+            // 只在落地时重规划:腾空态不是展开点,跳到一半重规划没有意义。
+            // 贪心逐步自我纠正所以跳过这里;逐边执行【要】它 —— 当初把人摔进坑的正是开环漂移。
             if (!_greedyActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
             {
                 if (Replan("drift")) return;
@@ -3133,10 +2806,8 @@ namespace TerraBlind
             _lastExecFrameCount++;
         }
 
-        // "placed" = STANDABLE SUPPORT exists (solid or platform) — the same standard the sim used when it promised
-        // the landing. Bare HasTile lied: a cut decoration (plant/vine/web) in the target cell read as "done", the
-        // placement swing was skipped, and the replayed jump landed one tile short (the (1379,224) grass that pinned
-        // a whole loop). Cut tiles must count as NOT placed — vanilla placement clears them and puts the platform.
+        // "放好了" = 真有能站的支撑(实心或平台),和模拟当初承诺落点时用的是同一把尺子。光看 HasTile 会撒谎:
+        // 目标格里一株草/藤/蛛网就读成"已完成",放置挥空,重放的跳跃差一格 —— (1379,224) 那撮草钉住了整个循环。
         static bool TilePlaced(int cx, int cy)
         {
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
