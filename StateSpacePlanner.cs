@@ -626,15 +626,14 @@ namespace TerraBlind
                     anyVertJumpPlace = true;
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                 }
+                // 只发【爬到顶】这一条,不再按"每跳 2 格"铺一串中间落点:一跳升几格由地形定(1~3),
+                // 承诺了就兑现不了 —— 上一轮 50 条 pillar 边 45 条 MISS,31 条差的正是 ±2 行。
                 if (!anyVertJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
-                    {
-                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
-                        var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                        yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
-                    }
+                    float npy = (topFeetY + 1) * 16f - PhysicsSimulator.PlayerH;
+                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                    yield return (node, null, ((ccy - topFeetY) / 2f) * 43f, true, null);
                 }
             }
 
@@ -1820,17 +1819,19 @@ namespace TerraBlind
         }
 
         // 到没到:格号差一行、同一列、踩同一块砖 = 到了。日志和罚分必须用同一个判据,否则日志说 MISS 罚分说 HIT。
-        public static bool Arrived(int planCx, int planCy, int realCx, int realCy)
+        // pillar 只承诺【往上爬】,不承诺爬到哪一行(一跳 1~3 格由地形定):同一列、升上去了就算到。
+        public static bool Arrived(int planCx, int planCy, int realCx, int realCy, bool pillar = false)
             => (planCx == realCx && planCy == realCy)
-            || (planCx == realCx && System.Math.Abs(planCy - realCy) == 1 && SameFooting(realCx, realCy, planCy));
+            || (planCx == realCx && System.Math.Abs(planCy - realCy) == 1 && SameFooting(realCx, realCy, planCy))
+            || (pillar && planCx == realCx && realCy <= planCy + 1);
 
-        public static void ReportEdge(int fromCx, int fromCy, int planCx, int planCy, int realCx, int realCy)
+        public static void ReportEdge(int fromCx, int fromCy, int planCx, int planCy, int realCx, int realCy, bool pillar = false)
         {
             var key = (fromCx, fromCy, planCx, planCy);
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
             // 差一行但踩着同一块砖 = 到了,只是两把尺子读数不同(StandCell 取整 vs 物理落点)。
             // 按格号判 miss 会把这种情况罚成失败,边被压价、下轮不选、换条边又是同样的偏差 —— (1998,196)→(1999,198) 13 次。
-            if (Arrived(planCx, planCy, realCx, realCy)) miss = 0;
+            if (Arrived(planCx, planCy, realCx, realCy, pillar)) miss = 0;
             // 零位移地板:落回起点格是对边的承诺最彻底的违背 —— 模拟说"这步能推进",现实说"你压根没动"。
             // 曼哈顿只给它 1-2 分,比"超了两格"还轻,于是有点微弱优势的斜坡边被反复重试。给它一个地板价。
             if (miss > 0 && realCx == fromCx && realCy == fromCy) miss = System.Math.Max(miss, NoMoveMissFloor);

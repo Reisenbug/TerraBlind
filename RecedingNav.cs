@@ -29,6 +29,7 @@ namespace TerraBlind
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
+        static bool _lastPillar;         // pillar 边只承诺往上,判到没到时要放宽行号
 
         // 打转由 StateSpacePlanner 的进度地板在选边时掐掉;这里只留 _bestH/_ring 供日志读
         static int _bestH;
@@ -245,9 +246,9 @@ namespace TerraBlind
                 for (int c = bl; c <= br; c++)
                     if (Predicates.IsGround(c, feetRow)) under += $"{c}:{Main.tile[c, feetRow].TileType} ";
                 EventLog.W(Ev.Exec, $"({f.Item1},{f.Item2})→({t.Item1},{t.Item2}) actual=({cell.Item1},{cell.Item2}) "
-                    + $"{(StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2) ? "HIT" : $"MISS d=({dxc},{dyc})")} "
+                    + $"{(StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar) ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
                     + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}");
-                StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2);
+                StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
             }
             StateSpacePlanner.DecayMiss();
 
@@ -266,6 +267,7 @@ namespace TerraBlind
                     StuckSentinel.Reset();
                     _standTries = 0;
                     _lastFrom = cell; _lastTarget = (_goalWx, _goalWy); _haveLast = true;
+                    _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
                     StateSpacePlanner.DispatchPlan(ap);
                     return;
                 }
@@ -275,6 +277,7 @@ namespace TerraBlind
                     StuckSentinel.Reset();
                     _standTries = 0;
                     _lastFrom = cell; _lastTarget = (ap.GoalWx, ap.GoalWy); _haveLast = true;
+                    _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
                     StateSpacePlanner.DispatchPlan(ap);
                     return;
                 }
@@ -304,6 +307,7 @@ namespace TerraBlind
                 RebuildFieldAsync($"altered {_altered} tiles");
 
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
+            _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             StateSpacePlanner.DispatchPlan(res);
         }
     }
