@@ -1949,7 +1949,6 @@ namespace TerraBlind
             var dM = LineDir(line, 0, ArcMid);
             var dL = LineDir(line, 0, ArcLong);
             // 脚下的望值。g 必须和落点价值用同一把尺子量,否则恒等式 total≡当前值 不成立 —— 见下面 laH。
-            int curLaH = curH == int.MaxValue ? int.MaxValue : LookaheadH(field, curCx, curCy, curH, laCache);
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
@@ -1971,17 +1970,17 @@ namespace TerraBlind
                 // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。手编的 per-action 价(place=120、pillar×9)是第二套、粒度还不同
                 // —— 坑循环的根。代价是 total≡H(s) 全场相等,排序交给下面的 align/dev 项。落点值用 laH,算 g 也必须用 laH,混用两道保险同时失效。
                 int laH = LookaheadH(field, ncx, ncy, nH, laCache);
-                float g = MathF.Max(0f, (curLaH == int.MaxValue ? curH : curLaH) - laH);
+                // g 只装【这一步花了多少】,不再装 ΔH。原来 g=ΔH 让 total=g+laH≡H(s) 全场恒等 ——
+                // 落点值被约掉,收益完全不参与排序,只剩附加费在比。于是穿墙那一挖(降 120)和平地那一挖(降 3)同分。
+                float g = 0f;
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
-                // g=ΔH 挑落点是对的,但漏了一项 H 看不见的真实代价:改造地形要【站着不动】耗时间,走过去不用。
-                // 附加费就是这个时间本身,由边自带的真实帧数换算(0.5 H/帧)。
+                // 改造地形要【站着不动】耗时间,走过去不用。附加费就是这个时间,由边自带的真实帧数换算(0.5 H/帧)。
                 int altered = (digTiles?.Count ?? 0) + (pillar ? 1 : 0) + (isPlace ? 1 : 0);
                 // 按【推进的格数】摊薄,只给长边打折(≤2 格不变):否则 per-action 的固定费会让 2 格 pillar(≈21)永远赢过
                 // 4 格跳放梯(≈37),哪怕后者每格更快 —— 贪心那一步看不见紧随其后的第二根柱子。
                 if (altered > 0)
                 {
-                    // 不封顶:真实帧数直接定价。封顶让挖 2 格和挖 8 格一样贵,规划器看不见厚薄,
-                    // 该往旁边走 4 格时偏要原地挖上去 (2710)。卡死交给 PUSH/StuckSentinel/revisit ladder。
+                    // 不封顶:真实帧数直接定价。收益已经在 laH 里参与排序,厚墙该挖时收益压得过费用。
                     float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
                     g += cost * DigFramesToH * (2f / MathF.Max(2f, edgeCells));
                 }
