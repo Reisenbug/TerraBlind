@@ -1953,6 +1953,9 @@ namespace TerraBlind
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
+                // 场里有 H ≠ 站得住:H 是"钻过去要多少代价",实心格照样有 H。不改地形的边落点必须真能站,
+                // 否则亚像素取整会把落点标到隔壁实心格上 —— (1999,198) 是砖,却当了 13 次落点,每次都 MISS 回 197。
+                if (!alters && Predicates.IsSolid(ncx, ncy)) continue;
                 // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。手编的 per-action 价(place=120、pillar×9)是第二套、粒度还不同
                 // —— 坑循环的根。代价是 total≡H(s) 全场相等,排序交给下面的 align/dev 项。落点值用 laH,算 g 也必须用 laH,混用两道保险同时失效。
                 int laH = LookaheadH(field, ncx, ncy, nH, laCache);
