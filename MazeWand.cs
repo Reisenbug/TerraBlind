@@ -10,13 +10,10 @@ namespace TerraBlind
     {
         public override string Texture => "Terraria/Images/Item_" + ItemID.RodofDiscord;
 
-        // cost ≈ relative TIME per cell (Dijkstra is a compass, not frame-exact). Horizontal = 3px/frame; bare fall
-        // tops out at maxFall=10px/frame (gravity 0.4, ~25-frame ramp). So a downward cell costs ~1/3 of a sideways
-        // cell at terminal velocity — this is what makes a long drop (jungle main shaft) beat a walk-and-dig detour.
-        // Up is the slowest (climbing), so it's the dearest move. Dig is ~10× a walk and bumped further (was digging
-        // too eagerly): dig only when it clearly beats routing around.
+        // cost ≈ 每格相对耗时。走 3px/帧,落到头 10px/帧,所以往下约是横走的 1/3;往上最慢。
+        // 挖按真帧数:铜镐石头 45 帧/格,走一格 5.3 帧=3,故横挖 26。原来 120 等于"绕 40 格也比挖便宜",墙前必掉头。
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
-        const int DigDown = 80, DigSide = 120, DigUp = 160;
+        const int DigDown = 26, DigSide = 26, DigUp = 71;   // DigUp 多的是 PillarUp:挖开还得垫脚上去
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
@@ -27,20 +24,16 @@ namespace TerraBlind
         const int AirSat = 10;       // h'=AirSat → half AirCap
         const int AirCap = 6;        // asymptote. tiny on purpose
         const int MaxAirProbe = 60;  // must exceed deepest valley we want to measure, else it reads shallow
-        // sideways-air SPAN penalty: a continuous horizontal float longer than the body can jump must out-price going
-        // down and back up so the field descends instead of sailing over wide pits. AirSpanFree ≈ a jump's reach (free
-        // below it → narrow pits still floated). Per-cell cost beyond that makes a long span's TOTAL super-linear.
+        // 横向浮空罚:连续悬空超过一跳的距离必须贵过"下去再上来",否则场会直接飞过大坑。
+        // 超出 AirSpanFree 的每格计费,让长跨越的总价超线性;窄坑照旧免费飘过去。
         const int AirSpanFree = 10;   // cells of sideways air that stay free (within a jump's horizontal reach)
         const int AirSpanK = 6;       // per-cell cost for each air cell beyond AirSpanFree (tunes float-vs-descend)
         const int AirSpanProbe = 40;  // how far ahead to measure the continuous air span
 
-        // entering a lava cell would burn the player to death — never route through it. A huge step cost makes the
-        // field treat lava as effectively impassable (it'll still cross a 1-cell lava bridge only if literally no
-        // other route exists, same as a very expensive dig). LiquidID/LiquidAmount API per StateSnapshotPlayer.
+        // 踩进岩浆就是死。大到实际不可达,但仍是有限数 —— 万不得已跨一格岩浆桥还是允许的。
         const int LavaCost = 100000;
-        // 挖不动的砖(神庙,Picksaw 之前)要真不可达,不能只是"很贵"。
-        // 100000 是有限数,Dijkstra 照样穿墙算出墙后面的 H —— 于是墙后的格子看起来又近又好,
-        // 上层(承诺机制)挑中它一头撞上去开挖。Impassable 让这条边根本不入队,墙后面干脆没有 H。
+        // 挖不动的砖(神庙)必须真不可达。有限数的话 Dijkstra 照样穿墙算出墙后的 H,
+        // 墙后看着又近又好,上层挑中它一头撞上去开挖。Impassable 让边根本不入队。
         const int Impassable = int.MaxValue;
         static bool IsLava(int x, int y)
         {
@@ -49,15 +42,8 @@ namespace TerraBlind
             return t.LiquidAmount > 0 && t.LiquidType == LiquidID.Lava;
         }
 
-        // SLOW MEDIA the field previously priced as free air, luring routes straight through them:
-        //   water — swimming is ~2-3× slower than running, so a submerged cell carries that ratio on top of the move.
-        //   honey — far thicker, near-crawl.
-        //   cobweb — vanilla StickyTiles: pushing through destroys the web after a beat of near-standstill; priced as
-        //            a per-cell toll rather than a dig because no tool/action is needed — walking through IS the break.
-        // These are surcharges, never impassable: the field may still route through a flooded cave when detouring is
-        // dearer. The physics sim stays dry-land (no water/web modelling) — mid-water landings will run short of their
-        // simulated targets, which the per-edge miss attention + sentinel already absorb; the surcharge just keeps the
-        // field from PREFERRING slow media when an honest dry route exists.
+        // 水/蜂蜜/蛛网原先按免费空气算,线就往里钻。蛛网算过路费不算挖:走过去本身就是破网,不需要工具。
+        // 只是附加费不是禁行 —— 绕路更贵时照样淌水过。物理模拟是旱地的,水里落点会短,miss 机制吸收。
         const int WaterExtra = 6, HoneyExtra = 20, WebExtra = 12;
         static int MediumExtra(int x, int y)
         {
@@ -94,16 +80,13 @@ namespace TerraBlind
 
         public override bool AltFunctionUse(Player player) => true;
 
-        // Debug tool: left-click clears and sets point1 (the maze GOAL); right-click sets point2 (the START). When both
-        // exist, run the maze field point2→point1 and draw the descended path. p1/p2 are static — this is a single-
-        // instance manual probe, not the nav pipeline.
+        // 调试工具:左键设 point1(目标)并清空,右键设 point2(起点),两个都有就跑场画线。
+        // static 是因为这是单实例手动探针,不走 nav 管线。
         static (int x, int y)? _p1, _p2;
         static volatile bool _mazeBusy;
 
-        // J toggles rolling maze-nav toward point1 (the goal). Starts from the player's CURRENT position (the cached
-        // compass is goal-keyed and valid anywhere), so it works even if you walked far from p2 after building.
-        // J now drives RECEDING nav toward point2 (the goal set by right-click), using the big maze field as compass.
-        // Same entry as before (mazewand point1/point2 + J), but the走法 is the per-action receding loop, not block-nav.
+        // J 开关朝 point2 的 receding nav,拿大场当罗盘。从玩家【当前】位置起步 ——
+        // 场是按目标缓存的、哪儿都有效,所以建完场再走远也不影响。
         public static void ToggleNav()
         {
             DiagLog.Write("[maze-nav] J pressed");
