@@ -2262,14 +2262,13 @@ namespace TerraBlind
 								}
 								var junction = bpath[bpath.Count - 1];
 								if (!lineField.TryGetValue(junction, out int endH) || endH != 0) continue;   // never reached the line
-								// classify each one-way edge by its full StepCost price: >=80 (DigDown) means the body
-								// has to mine through, else it's movement. The return trip reuses the opened tunnel,
-								// so one-way counts are the honest units to cap.
+								// 按 StepCost 分类:超过最贵的移动就是挖。回程走已挖开的隧道,
+								// 所以单向计数才是该设上限的那个单位。
 								int nDig = 0, nWalk = 0;
 								for (int i = 1; i < bpath.Count; i++)
 								{
 									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
-									if (c >= 80) nDig++; else nWalk++;
+									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
 								}
 								// 木箱不值得为它挖:挖一格 80~160,走一格才 3。额度分开卡(不折成一个 cost 池——
 								// 换算过来 15 格挖 = 400 格走,等于"只要不用挖多远都去"),只把挖那档收到 15。

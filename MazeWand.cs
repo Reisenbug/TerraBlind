@@ -13,10 +13,12 @@ namespace TerraBlind
         // cost ≈ 每格相对耗时。走 3px/帧,落到头 10px/帧,所以往下约是横走的 1/3;往上最慢。
         // 挖按真帧数:铜镐石头 45 帧/格,走一格 5.3 帧=3,故横挖 26。原来 120 等于"绕 40 格也比挖便宜",墙前必掉头。
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
-        const int DigDown = 26, DigSide = 26, DigUp = 71;   // DigUp 多的是 PillarUp:挖开还得垫脚上去
+        const int DigDown = 26, DigSide = 26, DigUp = 26;   // 【每格】挖价,要乘实际挖的格数
+        const int DigUpLift = 19;   // 向上挖额外一次性的垫脚钱:凿开还得砌东西站上去,和挖几格无关
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
+        public const int MaxMoveCost = PillarUp;   // 比这贵的边一定含挖掘 —— 别在别处硬编阈值
 
         // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
         // background walls everywhere so flight is cheap; this just nudges toward ground and stops surface sky-cruising.
@@ -146,29 +148,18 @@ namespace TerraBlind
             });
         }
 
-        // Geometric 2D maze (route restored 2026-06): node = every tile cell, 4-connected, physics ignored.
-        // Direction-aware cost (walk cheap, dig expensive). This is the TREND field — the greedy executor reads its
-        // cost gradient, not the drawn path. Dead-ends are a separate problem handled at the execution layer.
-        // CACHED whole-region field, keyed by goal. The field is the EXPENSIVE part (seconds for a cross-map flood),
-        // but it's a全图 compass valid from anywhere — so rolling A* builds it ONCE per goal and every leg reuses it
-        // as the heuristic. A few local edits don't change the大方向, but accumulated digs/places, a pick upgrade, or
-        // the player leaving the box DO go stale — receding nav swap-rebuilds via Rebuild() on those triggers.
-        // Returns the same dictionary instance — callers must treat it read-only.
-        // big margin around the goal↔start span so the cached compass still covers the player after drift / running
-        // off; large enough for cross-map routes without flooding the entire 5M-cell world (memory + time).
-        const int FieldMargin = 400;   // TEMP small for rolling validation (1500 = cross-map but builds on main thread
-                                       // ~5s = hitch; real fix is off-thread field build). Keep goals within range for now.
-        // set from Mod.Load, which runs on the game thread — a build logged as MAIN is one that froze the game for
-        // its whole duration
+        // 每格一个节点,4 连通,不管物理。执行器读的是这张图的【梯度】,不是画出来的那条线;死胡同归执行层管。
+        // 按目标缓存整片:建场是秒级的,但建一次全图哪儿都能用。地形改多了/换镐/人走出盒子才 Rebuild。
+        const int FieldMargin = 400;   // 太大就要 flood 整个 5M 格世界(内存+主线程 5s 卡顿),够跨图就行
+        // Mod.Load 跑在游戏线程 —— 日志记 MAIN 的那次建场,就是把游戏冻住的那次
         static int _mainThreadId;
         public static void MarkMainThread() => _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
 
         static (int gx, int gy) _cachedGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _cachedField;
 
-        // read the LIVE nav field without rebuilding it. The planner's H is the only number that explains a routing
-        // decision, and until now it was visible only where a log line happened to print it — so "why is the exit not
-        // being taken" could not be answered for any cell the bot had not already stood on.
+        // 不重建就读活场。H 是唯一能解释路由决策的数,以前只有日志碰巧打印的地方看得见 ——
+        // "那个出口为什么不走"对人没站过的格子根本答不了。
         public static Dictionary<(int, int), int> PeekField() => _cachedField;
 
         public static bool TryPeek(int x, int y, out int h, out (int gx, int gy) goal, out int cells)
@@ -177,10 +168,8 @@ namespace TerraBlind
             h = -1;
             return _cachedField != null && _cachedField.TryGetValue((x, y), out h);
         }
-        // A SECOND slot, because more than one goal is live at a time. Receding nav steers to a commitment target
-        // while the leg/rolling executors keep asking about the real goal; with a single cache each request evicted
-        // the other's field and rebuilt it — ~500ms on the main thread, roughly every twenty frames, forever. The
-        // fields are per-goal and expensive, so keep the previous one instead of throwing it away.
+        // 第二个槽:同时有两个目标是活的(receding 朝承诺点、执行器问真目标)。单槽的话两边互相驱逐,
+        // 每二十帧就在主线程重建一次 500ms 的场,永远停不下来。
         static (int gx, int gy) _prevGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _prevField;
 
@@ -228,17 +217,13 @@ namespace TerraBlind
             return best != _fieldPickPower;
         }
 
-        // STATELESS LINE: the field-optimal route FROM an arbitrary cell, traced fresh per call (no cache). Receding
-        // nav re-traces from the player's REAL cell every replan, so the line always emanates from reality — after a
-        // fall/knockback/teleport the next replan's line is already "the best route from HERE", never a frozen trace
-        // from where the nav happened to start. Cost is a greedy dict walk (~route length), negligible per replan.
+        // 无状态:每次调用从给定格现描,不缓存。所以摔一跤/被击退/传送之后,下次重规划的线
+        // 已经是"从【现在这儿】出发的最优路",不是冻结在出发点的老线。
         public static List<(int, int)> TraceFrom(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
             => DescendPath(field, sx, sy, gx, gy, quiet: true).Item1;
 
-        // the field's recommended next cell from (cx,cy): the neighbour minimizing StepCost(this move) + field[neighbour]
-        // (= Dijkstra-optimal next hop). This is what DescendPath draws — exposed so receding nav steers by the SAME
-        // rule the field/line uses, instead of naive "lowest-H neighbour" (which gets lured up a costly pillar into a well).
-        // returns (0,0) if no better neighbour (local min / at goal). null field → (0,0).
+        // 场推荐的下一格 = 使 StepCost(这一步) + field[邻居] 最小的那个,也就是 Dijkstra 最优跳。
+        // 不是"H 最低的邻居" —— 那个判据会被诱上一根很贵的柱子掉进井里。没有更好的邻居返回 (0,0)。
         public static (int dx, int dy) FieldDir(Dictionary<(int, int), int> field, int cx, int cy)
         {
             if (field == null) return (0, 0);
@@ -400,19 +385,22 @@ namespace TerraBlind
                 if (WorldGen.IsLockedDoor(cx, dy2)) return Impassable;
             }
 
-            bool wall = false;
+            // 数出到底要挖几格,不只是"要不要挖":身体 3 行高,横着进一格得挖 1~3 格,价钱差 3 倍。
+            // 一律按一格收费的话,一层薄壳和三层实心同价,场就分不出该从哪儿破。
+            int digCells = 0;
             for (int r = 0; r < 3; r++)
             {
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
-                wall = true;
+                digCells++;
                 if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return Impassable;   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
-                wall = true;
+                digCells++;
                 if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
             }
+            bool wall = digCells > 0;
             // BODY WIDTH: the 20px body straddles TWO columns — a cell whose own column is open but whose left AND
             // right neighbor columns are both blocked (any of the 3 body rows) is a 1-tile-wide slot the body cannot
             // occupy. Pricing it as free flow let H stream up a 1-wide temple-wall shaft the body could never enter
@@ -422,13 +410,17 @@ namespace TerraBlind
             if (!wall && !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
             {
                 wall = true;
+                digCells = 1;   // 拓宽一格宽的缝:至少凿掉一侧的一格
                 if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy)) return Impassable;
             }
+            // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
+            // 取左右里实心行少的那侧 —— 人可以站偏,挑便宜的那半边走。
+            if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
             bool horizontal = cx != nx;
             int baseCost;
-            if (horizontal) baseCost = wall ? DigSide : MoveSide;
-            else if (cy > ny) baseCost = wall ? DigDown : MoveDown;    // y+ is down
-            else if (wall) baseCost = DigUp;
+            if (horizontal) baseCost = wall ? DigSide * digCells : MoveSide;
+            else if (cy > ny) baseCost = wall ? DigDown * digCells : MoveDown;    // y+ is down
+            else if (wall) baseCost = DigUp * digCells + DigUpLift;
             else
             {
                 // ascending into open air: a jump only reaches ~JumpReach cells above support — beyond that the body
@@ -472,6 +464,14 @@ namespace TerraBlind
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
         static bool ColumnOpen(int c, int cy)
             => !PathPlanner.IsBlockPublic(c, cy) && !SolidAnyShape(c, cy - 1) && !SolidAnyShape(c, cy - 2);
+
+        // c 列在站立高度 cy 上有几行实心 = 竖直穿过去要在这一列挖几格
+        static int SolidRows(int c, int cy)
+        {
+            int n = 0;
+            for (int r = 0; r < 3; r++) if (SolidAnyShape(c, cy - r)) n++;
+            return n;
+        }
 
         // column c can be MINED open at stand height cy: every solid body row is mineable with the field's pick
         static bool ColumnWidenable(int c, int cy)
