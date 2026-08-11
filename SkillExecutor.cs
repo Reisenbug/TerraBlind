@@ -19,7 +19,8 @@ namespace TerraBlind
         private static int _stalledCycles;
         private static int _cycleStartFeetY;
         private static int _anchorWy;      // 下一块要放的行(锚点上面那格)
-        private static int _pillarCol;     // 柱子那一列,起跳时钉死
+        private static int _pillarCol;     // 柱子那一列
+        private static int _pinnedCol;     // 调用方指定的列(int.MinValue=没指定,每跳自己找)
         private static int _airFrames;     // 这一跳飞了多久,落地判据
         private static int _jumpStartFeetY;
         private static int _jumps, _totalFrames;
@@ -34,9 +35,12 @@ namespace TerraBlind
 
         public static bool IsActive => State != SkillState.Idle;
 
-        public static void StartPillarJump(bool dirRight, int targetWy, bool trace = true)
+        // col:柱子钉在哪一列。不传就每跳按脚下支撑现找 —— 人在两列间飘时那个结果会跳变,
+        // 锚点跟着换列,一块也砌不稳(规划说 2906,执行给 2907,50 条 pillar 只中 5 条)。
+        public static void StartPillarJump(bool dirRight, int targetWy, bool trace = true, int col = int.MinValue)
         {
             PillarTrace = trace;
+            _pinnedCol = col;
             DirectionRight = dirRight;
             _targetWy = targetWy;
             _jumpFramesLeft = 0;
@@ -49,7 +53,7 @@ namespace TerraBlind
             _airFrames = 0;
             _jumpStartFeetY = 0;
             _anchorWy = int.MaxValue;
-            _pillarCol = 0;
+            _pillarCol = _pinnedCol != int.MinValue ? _pinnedCol : 0;
             _jumps = 0; _totalFrames = 0;
             _nudgeFrames = 0;
             State = SkillState.PillarBuild;
@@ -307,9 +311,10 @@ namespace TerraBlind
                     if (_jumpStartFeetY != 0 && _jumpStartFeetY != feetYNow)
                         DiagLog.Write($"[pillar] jump#{_jumps} rose={_jumpStartFeetY - feetYNow} feetY={feetYNow}");
                     _jumpStartFeetY = feetYNow;
-                    // 柱子建在【脚下真有支撑】的那一列,不是身体中心那一列:人跨两列时中心可能
-                    // 偏在悬空的一边,锚点贴不住东西,一块也放不出来(2711站着,却往2712放)。
-                    _pillarCol = FootedCol(p, feetYNow);
+                    // 优先用调用方钉的列;那列脚下真没支撑才现找【踩着东西】的列 ——
+                    // 中心列可能悬空在两列之间,锚点贴不住,一块也放不出来(2711站着,却往2712放)。
+                    bool pinnedOk = _pinnedCol != int.MinValue && Predicates.IsSolid(_pinnedCol, SupportRow(_pinnedCol, feetYNow));
+                    _pillarCol = pinnedOk ? _pinnedCol : FootedCol(p, feetYNow);
                     _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
                     _jumpFramesLeft = JumpHoldFrames;
                     _lastAirVeto = "";

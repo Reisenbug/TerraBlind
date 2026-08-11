@@ -1679,8 +1679,9 @@ namespace TerraBlind
             _ssPrevStep = st; _lastExecFrameCount = 0;
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
+            // 列必须传下去:边的落点写死在 TargetCx,执行器不传就每跳按脚下现找,两边能差一列。
             if (st.Pillar)
-                SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy);
+                SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
             else if (st.Dig)
             {
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
