@@ -1058,16 +1058,14 @@ namespace TerraBlind
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
         {
-            // baseCol 是撑住人的那列,可能在身体【后方】(贴着邻列平台柱站,自己这列脚下全空),
-            // 那时 +dir 只回到人自己站的格,落点=当前格被自环过滤 —— 竖井里唯一的横向出路就没了 (608,656)。
+            // 没有背景墙时锚点必须紧邻已有支撑,所以 placeCx 只可能是 baseCol±1,没有第二种选择。
             var (lcol, rcol) = Predicates.BodyCols(cur.Px, PhysicsSimulator.PlayerW);
             int footRow = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int baseCol = int.MinValue;
             if (dir > 0) { for (int c = rcol; c >= lcol; c--) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
             else { for (int c = lcol; c <= rcol; c++) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
             if (baseCol == int.MinValue) return null;          // no supported foot column — nothing to extend from
-            int placeCx = dir > 0 ? System.Math.Max(baseCol + dir, rcol + 1) : System.Math.Min(baseCol + dir, lcol - 1);
-            int placeCy = footRow;
+            int placeCx = baseCol + dir, placeCy = footRow;
             int scy = footRow - 1;                              // standing (head) row above the support
             if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
             if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
@@ -1079,7 +1077,10 @@ namespace TerraBlind
             try
             {
                 var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
-                float targetCenterPx = placeCx * 16f + 8f;     // stop with player center over the new tile
+                // 走到【刚好不再压住 baseCol】,不是走到新砖格心:格心那个位置身体还骑在原来那列上,
+                // 落点标签没变被自环删掉,而 bridge 的意义正是脱离原列(腾出干净的头顶去 pillar/跳放)。
+                float standPxTarget = dir > 0 ? (baseCol + 1) * 16f : baseCol * 16f - PhysicsSimulator.PlayerW;
+                float targetCenterPx = standPxTarget + PhysicsSimulator.PlayerW / 2f;
                 var frames = new List<PhysicsSimulator.ControlInput>();
                 for (int f = 0; f < MaxSegFrames; f++)
                 {
@@ -1102,7 +1103,7 @@ namespace TerraBlind
                 var f0 = frames[0];                            // place on the first frame (before stepping over)
                 f0.Place = true; f0.PlaceCx = placeCx; f0.PlaceCy = placeCy;
                 frames[0] = f0;
-                float standPx = placeCx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                float standPx = standPxTarget;
                 float standPy = placeCy * 16f - PhysicsSimulator.PlayerH;   // feet on top of the new tile (row placeCy)
                 var node = new SSNode { Px = standPx, Py = standPy, Vx = 0f, Vy = 0f, Grounded = true };
                 return (node, frames);

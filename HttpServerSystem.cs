@@ -2561,6 +2561,34 @@ namespace TerraBlind
 					body = sb.ToString();
 				}
 			}
+			else if (path == "/body_cols")
+			{
+				// 玩家此刻压住哪几列 —— 20px 必跨 2 列,亚像素位置决定是 2 列还是 3 列。
+				// 每处自己 floor 一遍是坐标歧义的源头(往自己脚底下搭桥就是这么来的),统一从这里读。
+				var pl = Main.LocalPlayer;
+				if (pl == null || !pl.active) { body = "{\"error\":\"no_player\"}"; status = 400; }
+				else
+				{
+					var (bl, br) = Predicates.BodyCols(pl);
+					int feetRow = (int)((pl.position.Y + pl.height) / 16f);
+					var sb = new System.Text.StringBuilder();
+					sb.Append("{\"left\":").Append(bl).Append(",\"right\":").Append(br)
+					  .Append(",\"span\":").Append(br - bl + 1)
+					  .Append(",\"feet_row\":").Append(feetRow)
+					  .Append(",\"center_col\":").Append(Predicates.PillarCol(pl))
+					  .Append(",\"px\":").Append(pl.position.X.ToString("0.##"))
+					  .Append(",\"cols\":[");
+					for (int c = bl; c <= br; c++)
+					{
+						if (c > bl) sb.Append(',');
+						sb.Append("{\"x\":").Append(c)
+						  .Append(",\"support\":").Append(Predicates.IsGround(c, feetRow) ? "true" : "false")
+						  .Append('}');
+					}
+					sb.Append("]}");
+					body = sb.ToString();
+				}
+			}
 			else if (path == "/can_stand")
 			{
 				// Every geometric predicate for one cell at once: can_stand plus the measurements behind it, so a
