@@ -2008,15 +2008,17 @@ namespace TerraBlind
                     // 人一眼看出"左右是墙只能往下"靠的不是比 H,是【哪边没去过】。所以先在没去过的里挑,用完了才退回全体(排后面,不是禁止)。
                     bool anyFresh = false;
                     foreach (var c in jigglePool) if (!_visited.Contains(c.cell)) { anyFresh = true; break; }
+                    // 按 total 排,不按落点 H:H 里没有"这一步多贵",挖 11 格到 H441 就这么赢了走一步到 H453。
+                    // total=g+laH 含真实挖掘费,便宜的下降边自然靠前;真只剩挖掘时它还是唯一候选,选得中,卡不死。
                     var push = jigglePool[0];
                     bool have = false;
                     foreach (var c in jigglePool)
                     {
                         if (anyFresh && _visited.Contains(c.cell)) continue;
-                        if (!have || c.h < push.h) { push = c; have = true; }
+                        if (!have || c.total < push.total) { push = c; have = true; }
                     }
                     if (push.cell != bestCell)
-                        EventLog.W(Ev.Plan, $"PUSH ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})H{bestH} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h} fresh={anyFresh}");
+                        EventLog.W(Ev.Plan, $"PUSH ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh}");
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
