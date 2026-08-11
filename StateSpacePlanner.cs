@@ -1560,6 +1560,9 @@ namespace TerraBlind
         static bool _silentPath;   // suppress the full [ss-path] dump during replan (storms flood the log); the [ss-replan] summary line carries the delta instead
         const int MaxReplans = 40;
         static int _placeStall;
+        // 绕路允许 H 升这么多才算"没前进"。实测 35 次 PUSH 分两坨:+3~15 是绕路(11 次),
+        // +60 是 (2667,208) 同一格反复弹(18 次),中间是空的。取 20 把两者分开。
+        const int PushSlack = 20;
         static int _stallIdx = -1, _stallFrames;
         const int StallReport = 20;   // 1/3 秒推不动一帧 = 有问题,比 sentinel 的 30 tick 早发现
         const int PlaceStallMax = 60;
@@ -2002,7 +2005,7 @@ namespace TerraBlind
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
-                if (bestH >= curH)
+                if (bestH > curH + PushSlack)
                 {
                     // 管子里 H 最低的候选常常就是来路 —— (4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
                     // 人一眼看出"左右是墙只能往下"靠的不是比 H,是【哪边没去过】。所以先在没去过的里挑,用完了才退回全体(排后面,不是禁止)。
