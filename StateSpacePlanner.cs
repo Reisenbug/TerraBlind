@@ -1846,7 +1846,7 @@ namespace TerraBlind
         const int VisitedLen = 40;
         static readonly System.Collections.Generic.HashSet<(int, int)> _visited = new();
         static readonly System.Collections.Generic.Queue<(int, int)> _visitedQ = new();
-        public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); }
+        public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); _recent.Clear(); }
         public static void RequestJiggle() { }
 
         // 区域内累积的边罚分 —— 让循环无法复现的隐藏状态,也是"一条好边反而全场最贵"的原因。
@@ -2005,7 +2005,9 @@ namespace TerraBlind
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
-                if (bestH > curH + PushSlack)
+                // 升幅不是判据,A→B→A 才是:(1998,196)↔(1999,197) 弹 13 次,H 差只有 18,slack 放过去了。
+                bool bounce = _recent.Contains(bestCell);
+                if (bestH > curH + PushSlack || bounce)
                 {
                     // 管子里 H 最低的候选常常就是来路 —— (4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
                     // 人一眼看出"左右是墙只能往下"靠的不是比 H,是【哪边没去过】。所以先在没去过的里挑,用完了才退回全体(排后面,不是禁止)。
@@ -2018,10 +2020,14 @@ namespace TerraBlind
                     foreach (var c in jigglePool)
                     {
                         if (anyFresh && _visited.Contains(c.cell)) continue;
+                        if (bounce && c.cell == bestCell) continue;   // 别把刚判定为回头的那格又选回来
                         if (!have || c.total < push.total) { push = c; have = true; }
                     }
+                    // 一个替代都挑不出来(候选只剩回头那格):保持 greedy 的选择,别退回 jigglePool[0] ——
+                    // 那是任意一条边,可能比 greedy 差得多。走回去总比乱走强,下一轮 _recent 变了会重选。
+                    if (!have) push = (best.Value, bestCell, bestH, bestTotal);
                     if (push.cell != bestCell)
-                        EventLog.W(Ev.Plan, $"PUSH ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh}");
+                        EventLog.W(Ev.Plan, $"PUSH ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} {(bounce ? "回头" : "H涨")} fresh={anyFresh}");
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
