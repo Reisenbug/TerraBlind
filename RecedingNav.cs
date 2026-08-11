@@ -237,7 +237,16 @@ namespace TerraBlind
             {
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
-                EventLog.W(Ev.Exec, $"({f.Item1},{f.Item2})→({t.Item1},{t.Item2}) actual=({cell.Item1},{cell.Item2}) {(dxc == 0 && dyc == 0 ? "HIT" : $"MISS d=({dxc},{dyc})")}");
+                // 带上原始 px/py 和脚下踩的东西:格号是取整后的结论,差一行可能是真没到,也可能只是
+                // 两把尺子读数不同。今天四个误判有三个当场就能证伪 —— 如果日志里有这些原始值。
+                int feetRow = (int)((p.position.Y + p.height) / 16f);
+                var (bl, br) = Predicates.BodyCols(p);
+                string under = "";
+                for (int c = bl; c <= br; c++)
+                    if (Predicates.IsGround(c, feetRow)) under += $"{c}:{Main.tile[c, feetRow].TileType} ";
+                EventLog.W(Ev.Exec, $"({f.Item1},{f.Item2})→({t.Item1},{t.Item2}) actual=({cell.Item1},{cell.Item2}) "
+                    + $"{(StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2) ? "HIT" : $"MISS d=({dxc},{dyc})")} "
+                    + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2);
             }
             StateSpacePlanner.DecayMiss();

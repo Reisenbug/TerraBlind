@@ -1811,10 +1811,25 @@ namespace TerraBlind
             foreach (var k in keys) { float v = _miss[k] * MissDecayTick; if (v < 0.5f) _miss.Remove(k); else _miss[k] = v; }
         }
         // report the last edge's outcome: did the real landing match the cell the edge planned for?
+        // 踩的是不是同一块砖 —— 不受取整影响的那个客观事实。中间隔着砖就是两个落脚处,不是读数差异。
+        public static bool SameFooting(int cx, int ay, int by)
+        {
+            int hi = System.Math.Max(ay, by);
+            return Predicates.IsGround(cx, hi + 1) && !Predicates.IsGround(cx, hi);
+        }
+
+        // 到没到:格号差一行、同一列、踩同一块砖 = 到了。日志和罚分必须用同一个判据,否则日志说 MISS 罚分说 HIT。
+        public static bool Arrived(int planCx, int planCy, int realCx, int realCy)
+            => (planCx == realCx && planCy == realCy)
+            || (planCx == realCx && System.Math.Abs(planCy - realCy) == 1 && SameFooting(realCx, realCy, planCy));
+
         public static void ReportEdge(int fromCx, int fromCy, int planCx, int planCy, int realCx, int realCy)
         {
             var key = (fromCx, fromCy, planCx, planCy);
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
+            // 差一行但踩着同一块砖 = 到了,只是两把尺子读数不同(StandCell 取整 vs 物理落点)。
+            // 按格号判 miss 会把这种情况罚成失败,边被压价、下轮不选、换条边又是同样的偏差 —— (1998,196)→(1999,198) 13 次。
+            if (Arrived(planCx, planCy, realCx, realCy)) miss = 0;
             // 零位移地板:落回起点格是对边的承诺最彻底的违背 —— 模拟说"这步能推进",现实说"你压根没动"。
             // 曼哈顿只给它 1-2 分,比"超了两格"还轻,于是有点微弱优势的斜坡边被反复重试。给它一个地板价。
             if (miss > 0 && realCx == fromCx && realCy == fromCy) miss = System.Math.Max(miss, NoMoveMissFloor);
