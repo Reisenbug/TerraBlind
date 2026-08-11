@@ -6,6 +6,13 @@ namespace TerraBlind
 {
 	public class StateSnapshotPlayer : ModPlayer
 	{
+		// 每间房要一个火把,而火把合不出来(配方要凝胶,这世界不刷怪),只能开箱砸罐。
+		// 沿下丛林的路收会一路走到丛林深处,房子反而没盖成 —— 直接发,别让它成为流程的坎。
+		public override System.Collections.Generic.IEnumerable<Item> AddStartingItems(bool mediumCoreDeath)
+		{
+			yield return new Item(ItemID.Torch, 4);
+		}
+
 		private const int ControlTimeoutTicks = 60;
 		private const int JumpHoldFrames = 15;
 		private const int AutoJumpCooldownFrames = 10;
