@@ -2021,7 +2021,8 @@ namespace TerraBlind
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
                 // 升幅不是判据,A→B→A 才是:(1998,196)↔(1999,197) 弹 13 次,H 差只有 18,slack 放过去了。
-                bool bounce = _recent.Contains(bestCell);
+                // greedy 在降 H 就别拦 —— 窄地形里 _recent 覆盖了所有邻居,每步都判回头,PUSH 一路选更差的 (H 132→146→155→161)。
+                bool bounce = _recent.Contains(bestCell) && bestH >= curH;
                 if (bestH > curH + PushSlack || bounce)
                 {
                     // 管子里 H 最低的候选常常就是来路 —— (4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
