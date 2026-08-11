@@ -567,7 +567,7 @@ namespace TerraBlind
                 bool plat = anyPlat && !anySolid;
                 // 无条件打日志:SegDiag 只在【没有任何下降候选】时才开,而 (988,551) 那种平台蹭是有下降候选的,
                 // 于是"为什么没生成 drop 边"在全部 trace 里根本没有答案。
-                if (!plat) DiagLog.Write($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                if (!plat) DiagLog.Trc($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
                     // 人从平台上下来是按住 Down 加一个方向,一路滑到真正的地板,不是停在下面一格。
@@ -578,7 +578,7 @@ namespace TerraBlind
                         if (drop.HasValue)
                             yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
                         else
-                            DiagLog.Write($"[ss-drop] SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                            DiagLog.Trc($"[ss-drop] SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
                         if (drop.HasValue)
                             foreach (var sp in SplitFall(cur, drop.Value.frames, platformTile))
                                 yield return (sp.node, sp.frames, sp.cost, false, null);
@@ -717,7 +717,7 @@ namespace TerraBlind
             // (no floor under it) it's a GAP. matches what actually stopped the walk.
             bool isWall = DigSolid(obsX, ccy) || DigSolid(obsX, ccy - 1) || DigSolid(obsX, ccy - 2);
             bool isGap = !isWall && !PathPlanner.IsFloorPublic(obsX, ccy + 1);
-            DiagLog.Write($"[ss-bridge-dir] from=({ccx},{ccy}) gdir={gdir} targetDir={targetDir} obsX={obsX} wall={isWall} gap={isGap} maxScan={maxScan}");
+            DiagLog.Trc($"[ss-bridge-dir] from=({ccx},{ccy}) gdir={gdir} targetDir={targetDir} obsX={obsX} wall={isWall} gap={isGap} maxScan={maxScan}");
             if (!isWall && !isGap) yield break;          // walk can pass freely → plain walk/jump handles it
 
             if (isWall)
@@ -848,7 +848,7 @@ namespace TerraBlind
                 if (DigSolid(x, y))
                 {
                     int fc = DigTable.CostFrames(x, y);
-                    if (fc >= DigTable.Unmineable) { DiagLog.Write($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
+                    if (fc >= DigTable.Unmineable) { DiagLog.Trc($"[ss-digwall] from=({ccx},{ccy}) dir={dir} UNMINEABLE at ({x},{y}) → null"); return null; }
                     cost += fc;
                     tiles.Add((x, y));
                 }
@@ -1298,9 +1298,9 @@ namespace TerraBlind
                     if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
             }
-            if (frames.Count == 0) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
+            if (frames.Count == 0) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
-            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
+            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
             // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位 —— 拒掉,
             // 逼 A* 去放平台,而不是"走"过开阔水面然后循环。只管落地边,腾空的下落/跳跃边不受影响。
             if (node.Grounded)
@@ -1313,12 +1313,12 @@ namespace TerraBlind
                     if (SegDiag)
                     {
                         var bt = Main.tile[ncx, ncy + 1];
-                        DiagLog.Write($"[ss-seg] dir={dir} hold={hold} NULL: fake-stand at ({ncx},{ncy}); below ({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
+                        DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: fake-stand at ({ncx},{ncy}); below ({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
                     }
                     return null;
                 } // reported stand cell has no floor = fake
             }
-            if (SegDiag) DiagLog.Write($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
+            if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
             return (node, frames);
         }
 
@@ -1560,6 +1560,8 @@ namespace TerraBlind
         static bool _silentPath;   // suppress the full [ss-path] dump during replan (storms flood the log); the [ss-replan] summary line carries the delta instead
         const int MaxReplans = 40;
         static int _placeStall;
+        static int _stallIdx = -1, _stallFrames;
+        const int StallReport = 20;   // 1/3 秒推不动一帧 = 有问题,比 sentinel 的 30 tick 早发现
         const int PlaceStallMax = 60;
 
         public static bool IsActive => (_execFrames != null && _execIdx < _execFrames.Count) || _walkActive;
@@ -1647,7 +1649,7 @@ namespace TerraBlind
                 if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
-                    DiagLog.Write($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
+                    DiagLog.Trc($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
                 }
                 _ssStepIdx++;
                 _ssDispatched = false;
@@ -1873,7 +1875,7 @@ namespace TerraBlind
             {
                 var key = (e.fx, e.fy, e.tx, e.ty);
                 _miss[key] = _miss.GetValueOrDefault(key) + amount;
-                DiagLog.Write($"[recede-shock] edge ({e.fx},{e.fy})→({e.tx},{e.ty}) +{amount}");
+                DiagLog.Trc($"[recede-shock] edge ({e.fx},{e.fy})→({e.tx},{e.ty}) +{amount}");
             }
         }
 
@@ -1895,7 +1897,7 @@ namespace TerraBlind
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {
                 string sig = $"maxRun={ph.MaxRun:0.###} accRunSpd={ph.AccRunSpeed:0.###} accRun={ph.AccRun:0.####} sunflower={Main.SceneMetrics.HasSunflower}";
-                if (sig != _lastParamsSig) { _lastParamsSig = sig; DiagLog.Write($"[ss-params] {sig}"); }
+                if (sig != _lastParamsSig) { _lastParamsSig = sig; DiagLog.Trc($"[ss-params] {sig}"); }
             }
             int platformTile = -1;
             int slot = NavCoordinator.FindPlatformSlot(p);
@@ -2014,7 +2016,7 @@ namespace TerraBlind
                         if (!have || c.h < push.h) { push = c; have = true; }
                     }
                     if (push.cell != bestCell)
-                        DiagLog.Write($"[recede] PUSH at ({curCx},{curCy})H={curH}: greedy→({bestCell.Item1},{bestCell.Item2})H{bestH}t{bestTotal:0} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h}t{push.total:0} fresh={anyFresh} ({jigglePool.Count} cands)");
+                        EventLog.W(Ev.Plan, $"PUSH ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})H{bestH} 没前进,改走 ({push.cell.Item1},{push.cell.Item2})H{push.h} fresh={anyFresh}");
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
@@ -2022,7 +2024,7 @@ namespace TerraBlind
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
-            DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count} expandMs={_swCycle.Elapsed.TotalMilliseconds:0.0}:{_candLog}");
+            DiagLog.Trc($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count} expandMs={_swCycle.Elapsed.TotalMilliseconds:0.0}:{_candLog}");
 
             // 饥饿 Expand:没有任何下降候选时(正是静默拒绝的生成器要命的那些周期),开着 SegDiag 重跑一次 Expand,
             // 让每个 null 都说出理由。一次运行定罪,不用再考古 ((2959,262) 那次 n=1 只剩 place 的循环,走西边物理上存在却从没生成过)。
@@ -2031,13 +2033,13 @@ namespace TerraBlind
                 SegDiag = true;
                 var _swRe = System.Diagnostics.Stopwatch.StartNew();
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
-                DiagLog.Write($"[expand-cost] bare re-run at ({curCx},{curCy}) ms={_swRe.Elapsed.TotalMilliseconds:0.0}");
+                DiagLog.Trc($"[expand-cost] bare re-run at ({curCx},{curCy}) ms={_swRe.Elapsed.TotalMilliseconds:0.0}");
                 SegDiag = false;
             }
 
             if (best == null)   // Expand yielded no edge on the field at all
             {
-                DiagLog.Write($"[recede] EXPAND-EMPTY at ({curCx},{curCy}) H={curH}: no edge generated.");
+                EventLog.W(Ev.Fail, $"EXPAND-EMPTY ({curCx},{curCy})H{curH} 一条边都没生成");
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
                 SegDiag = false;
@@ -2065,7 +2067,7 @@ namespace TerraBlind
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
-            DiagLog.Write($"[recede] BELLMAN ({curCx},{curCy})H={curH} -> ({pickCell.Item1},{pickCell.Item2})H={landH} total={bestTotal:0} pillar={b.pillar} dig={(b.dig == null ? "-" : string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
+            EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {(b.pillar ? "pillar" : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}" : "move")}{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
             // 选了要挖的边就把左右两边的账一起打出来 —— "旁边明明能走却偏要挖"每次都得回答这个
             if (b.dig != null && b.dig.Count > 0)
                 DiagLog.Write($"[costcmp] 挖{b.dig.Count}格 vs 横向: 西({curCx - 1})cost={MazeWand.StepCostPublic(curCx - 1, curCy, curCx, curCy)}"
@@ -2684,11 +2686,18 @@ namespace TerraBlind
             if (_execIdx > 0)
             {
                 var pf = _execFrames[_execIdx - 1];
-                DiagLog.Write($"[ss-cmp] i={_execIdx - 1} plan(px={pf.Px:0.##} py={pf.Py:0.##} vx={pf.Vx:0.##} vy={pf.Vy:0.##} L={(pf.Left?1:0)}R={(pf.Right?1:0)}J={(pf.Jump?1:0)}) exec(px={p.position.X:0.##} py={p.position.Y:0.##} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##}) d(px={(p.position.X-pf.Px):0.##} py={(p.position.Y-pf.Py):0.##} vx={(p.velocity.X-pf.Vx):0.##} vy={(p.velocity.Y-pf.Vy):0.##})");
+                DiagLog.Trc($"[ss-cmp] i={_execIdx - 1} plan(px={pf.Px:0.##} py={pf.Py:0.##} vx={pf.Vx:0.##} vy={pf.Vy:0.##} L={(pf.Left?1:0)}R={(pf.Right?1:0)}J={(pf.Jump?1:0)}) exec(px={p.position.X:0.##} py={p.position.Y:0.##} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##}) d(px={(p.position.X-pf.Px):0.##} py={(p.position.Y-pf.Py):0.##} vx={(p.velocity.X-pf.Vx):0.##} vy={(p.velocity.Y-pf.Vy):0.##})");
             }
 
             if (_execIdx % 15 == 0)
-                DiagLog.Write($"[ss-exec] frame={_execIdx}/{_execFrames.Count} expect=({f.Px:0.#},{f.Py:0.#}) actual=({p.position.X:0.#},{p.position.Y:0.#}) drift={drift:0.#}");
+                DiagLog.Trc($"[ss-exec] frame={_execIdx}/{_execFrames.Count} expect=({f.Px:0.#},{f.Py:0.#}) actual=({p.position.X:0.#},{p.position.Y:0.#}) drift={drift:0.#}");
+
+            // 执行器自报没进展:同一帧号停住 = 推进条件永远满足不了(jumpPlace 放完人掉到新平台上,
+            // 却还在等放置【前】的位置,卡了 45 帧靠 sentinel 从外面救)。哨兵是兜底,不该是唯一的发现者。
+            if (_execIdx == _stallIdx) _stallFrames++;
+            else { _stallIdx = _execIdx; _stallFrames = 0; }
+            if (_stallFrames == StallReport)
+                EventLog.W(Ev.Fail, $"执行器卡在 frame {_execIdx}/{_execFrames.Count} 已 {StallReport} 帧 drift={drift:0.#} 人=({p.position.X:0.#},{p.position.Y:0.#}) 期望=({f.Px:0.#},{f.Py:0.#})");
 
             if (_replanCooldownLeft > 0) _replanCooldownLeft--;
             if (_rescueCooldownLeft > 0) _rescueCooldownLeft--;
@@ -2710,7 +2719,7 @@ namespace TerraBlind
             float belowPlan = p.position.Y - f.Py; // +ve = real player is lower than the plan
             bool falling = p.velocity.Y > RescueFallVy && belowPlan > PlungeBelowPx;
             if (mismatch > ProprioMismatchPx)
-                DiagLog.Write($"[ss-proprio] mismatch={mismatch:0.#} realVy={p.velocity.Y:0.#} predVy={predVy:0.#} falling={(falling?1:0)} pos=({(int)(p.Center.X/16f)},{(int)((p.position.Y+p.height)/16f)})");
+                DiagLog.Trc($"[ss-proprio] mismatch={mismatch:0.#} realVy={p.velocity.Y:0.#} predVy={predVy:0.#} falling={(falling?1:0)} pos=({(int)(p.Center.X/16f)},{(int)((p.position.Y+p.height)/16f)})");
             // 传送中止:一帧内的位移是任何物理都产生不了的(回忆药水/镜子/被拽走),说明这次导航从新位置看毫无意义。
             // 不救援不重规划(从出生点重规划到旧目标可能几百格,会把规划器撑爆),直接停死,人想去哪自己再下指令。
             if (_lastReal.Valid && mismatch > TeleportPx)
@@ -2750,7 +2759,7 @@ namespace TerraBlind
                 _stuckFrames = blocked ? _stuckFrames + 1 : 0;
                 if (_stuckFrames >= StuckFrames && _replanCooldownLeft == 0)
                 {
-                    DiagLog.Write($"[ss-dev] cls=stuck velDev={MathF.Abs(spf.Vx - p.velocity.X):0.#} planVx={spf.Vx:0.#} realVx={p.velocity.X:0.#} → replan");
+                    DiagLog.Trc($"[ss-dev] cls=stuck velDev={MathF.Abs(spf.Vx - p.velocity.X):0.#} planVx={spf.Vx:0.#} realVx={p.velocity.X:0.#} → replan");
                     _stuckFrames = 0;
                     if (Replan("stuck")) return;
                 }
@@ -2765,7 +2774,7 @@ namespace TerraBlind
 
             if (f.Place && !TilePlaced(f.PlaceCx, f.PlaceCy))
             {
-                if (_placeStall == 0) DiagLog.Write($"[ss-place] frame={_execIdx} tile=({f.PlaceCx},{f.PlaceCy})");
+                if (_placeStall == 0) DiagLog.Trc($"[ss-place] frame={_execIdx} tile=({f.PlaceCx},{f.PlaceCy})");
                 _placeStall++;
                 if (_placeStall <= PlaceStallMax)
                 {
@@ -2783,7 +2792,7 @@ namespace TerraBlind
                     int fcx = (int)((p.position.X + p.width / 2f) / 16f), fcy = (int)((p.position.Y + p.height - 1f) / 16f);
                     bool nbr = false;
                     for (int ax = -1; ax <= 1; ax++) for (int ay = -1; ay <= 1; ay++) if (Main.tile[f.PlaceCx + ax, f.PlaceCy + ay].HasTile) nbr = true;
-                    DiagLog.Write($"[ss-place] FAILED tile=({f.PlaceCx},{f.PlaceCy}) playerCell=({fcx},{fcy}) nbrSupport={nbr} targetHasTile={Main.tile[f.PlaceCx, f.PlaceCy].HasTile} itemTime={p.itemTime} → replan");
+                    EventLog.W(Ev.Place, $"FAILED ({f.PlaceCx},{f.PlaceCy}) from=({fcx},{fcy}) nbrSupport={nbr} hasTile={Main.tile[f.PlaceCx, f.PlaceCy].HasTile} → replan");
                 }
                 _placeStall = 0;
                 // greedy re-picks from real position next TickBlocks, so just abort this frame loop. edge-by-edge
@@ -2793,7 +2802,7 @@ namespace TerraBlind
                 StopExec();
                 return;
             }
-            if (f.Place) { DiagLog.Write($"[ss-place] done tile=({f.PlaceCx},{f.PlaceCy})"); _placeStall = 0; }
+            if (f.Place) { EventLog.W(Ev.Place, $"OK ({f.PlaceCx},{f.PlaceCy})"); _placeStall = 0; }
 
             if (f.Left) p.controlLeft = true;
             if (f.Right) p.controlRight = true;
@@ -2801,7 +2810,7 @@ namespace TerraBlind
             if (f.Down) p.controlDown = true;
             // full per-frame replay trace: every frame's intent vs reality. lets one run reveal jump edges,
             // drift, ground state, vx/vy without re-building to add more logging.
-            DiagLog.Write($"[ss-frame] idx={_execIdx}/{_execFrames.Count} J={(f.Jump ? 1 : 0)} L={(f.Left ? 1 : 0)} R={(f.Right ? 1 : 0)} P={(f.Place ? 1 : 0)} cJ={(p.controlJump ? 1 : 0)} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} gnd={(p.velocity.Y == 0f ? 1 : 0)} pos=({p.position.X:0.#},{p.position.Y:0.#}) exp=({f.Px:0.#},{f.Py:0.#}) drift={drift:0.#}");
+            DiagLog.Trc($"[ss-frame] idx={_execIdx}/{_execFrames.Count} J={(f.Jump ? 1 : 0)} L={(f.Left ? 1 : 0)} R={(f.Right ? 1 : 0)} P={(f.Place ? 1 : 0)} cJ={(p.controlJump ? 1 : 0)} vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} gnd={(p.velocity.Y == 0f ? 1 : 0)} pos=({p.position.X:0.#},{p.position.Y:0.#}) exp=({f.Px:0.#},{f.Py:0.#}) drift={drift:0.#}");
             _prevReplayJump = f.Jump;
             _execIdx++;
             _lastExecFrameCount++;
@@ -2823,7 +2832,7 @@ namespace TerraBlind
             int slot = NavCoordinator.FindPlatformSlot(p);
             if (slot < 0)
             {
-                if (_placeStall == 1) DiagLog.Write($"[ss-place] STALL-WHY tile=({cx},{cy}) no platform slot (out of platforms?)");
+                if (_placeStall == 1) EventLog.W(Ev.Place, $"STALL ({cx},{cy}) 热键栏没有平台");
                 return;
             }
             p.selectedItem = slot;

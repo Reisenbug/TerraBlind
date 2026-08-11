@@ -60,12 +60,20 @@ namespace TerraBlind
             }
         }
 
+        // 逐帧追踪默认关:候选表/邻居/分段每行几千字符,8370 行里 5000 行是它们,真正的事件淹在里面。
+        // 追某个具体 bug 时用 /trace 打开。事件走 EventLog,不受这个开关影响。
+        public static bool Trace = false;
+
         public static void Write(string msg)
         {
             string p = _runPath ?? LogPath;
             if (string.IsNullOrEmpty(p)) return;
             try { lock (_lock) { File.AppendAllText(p, $"{Main.GameUpdateCount} {msg}\n"); } } catch { }
         }
+
+        // 高频逐帧诊断走这个 —— Trace 关着就是一次布尔判断,零 IO、零字符串拼接(调用方用 interpolation 时仍会拼,
+        // 所以热点处要自己先判 if (DiagLog.Trace))。
+        public static void Trc(string msg) { if (Trace) Write(msg); }
 
         public static void JumpTrace(string msg) => Write(msg);
 

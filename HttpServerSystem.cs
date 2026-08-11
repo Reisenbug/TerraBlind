@@ -259,6 +259,19 @@ namespace TerraBlind
 			{
 				body = StateSerializer.ToJson(LatestSnapshot);
 			}
+			else if (path == "/trace")
+			{
+				// 逐帧追踪开关。默认关 —— 开着的时候候选表/邻居每行几千字符,真正的事件全被淹掉。
+				string rb = ReadBody(ctx).Replace(" ", "");
+				if (rb.Contains("\"on\":true")) DiagLog.Trace = true;
+				else if (rb.Contains("\"on\":false")) DiagLog.Trace = false;
+				body = "{\"trace\":" + (DiagLog.Trace ? "true" : "false") + "}";
+			}
+			else if (path == "/events_clear")
+			{
+				EventLog.Clear();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/digtable")
 			{
 				DigTableSystem.Pending = true;   // Dump runs on the main thread (PostUpdateEverything) to read tiles safely

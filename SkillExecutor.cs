@@ -330,7 +330,7 @@ namespace TerraBlind
                     int useT = (itNow != null && !itNow.IsAir) ? itNow.useTime : -1;
                     float ddx = (_pillarCol * 16f + 8f) - p.Center.X, ddy = (_anchorWy * 16f + 8f) - p.Center.Y;
                     float dPx = System.MathF.Sqrt(ddx * ddx + ddy * ddy) / 16f;
-                    DiagLog.Write($"[ptrace] f={_totalFrames} feetY={feetYNow} vy={p.velocity.Y:0.##} hold={_jumpFramesLeft} "
+                    DiagLog.Trc($"[ptrace] f={_totalFrames} feetY={feetYNow} vy={p.velocity.Y:0.##} hold={_jumpFramesLeft} "
                         + $"box=[{bl}..{br}]x[{bt}..{bb}] anchor=({_pillarCol},{_anchorWy}) dist={dPx:0.0}格 "
                         + $"itemTime={p.itemTime} useTime={useT} head={HeadClear(p, _pillarCol)} veto={(canPlace ? "OK" : _placeVeto)}");
                 }

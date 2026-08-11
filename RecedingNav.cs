@@ -157,7 +157,7 @@ namespace TerraBlind
                 try { MazeWand.GetField(gx, gy); RecedingVis.SetField(gx, gy); _fieldReady = true; }
                 catch (System.Exception e) { DiagLog.Write($"[recede] field build EXC {e.Message}"); _fieldReady = true; }
             });
-            DiagLog.Write($"[recede] start goal=({goalWx},{goalWy}) building field off-thread");
+            EventLog.W(Ev.Goal, $"new goal ({goalWx},{goalWy}) — building field");
             Main.NewText($"[TerraBlind] receding nav → ({goalWx},{goalWy}) (building field…)");
         }
 
@@ -211,7 +211,7 @@ namespace TerraBlind
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
             {
-                DiagLog.Write($"[recede] SENTINEL give-up at H-flatline goal=({_goalWx},{_goalWy})");
+                EventLog.W(Ev.Sentinel, $"GIVE-UP H平线 放弃这一段 goal=({_goalWx},{_goalWy})");
                 LastStop = "stuck"; Stop();
                 Main.NewText("[TerraBlind] receding: stuck (sentinel) — abandoning leg");
                 return;
@@ -237,7 +237,7 @@ namespace TerraBlind
             {
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
-                DiagLog.Write($"[recede-exec] from=({f.Item1},{f.Item2}) expected→({t.Item1},{t.Item2}) actual→({cell.Item1},{cell.Item2}) d=({dxc},{dyc}) {(dxc == 0 && dyc == 0 ? "HIT" : "MISS")}");
+                EventLog.W(Ev.Exec, $"({f.Item1},{f.Item2})→({t.Item1},{t.Item2}) actual=({cell.Item1},{cell.Item2}) {(dxc == 0 && dyc == 0 ? "HIT" : $"MISS d=({dxc},{dyc})")}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2);
             }
             StateSpacePlanner.DecayMiss();

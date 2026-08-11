@@ -340,7 +340,7 @@ namespace TerraBlind
             }
             catch { }
             bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
-            DiagLog.Write($"[ss-field] dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0} goal=({gx},{gy}) box=[{minX}..{maxX}]x[{minY}..{maxY}] {(mainThread ? "MAIN" : "bg")} by {who}");
+            EventLog.W(Ev.Field, $"goal=({gx},{gy}) {sw.Elapsed.TotalMilliseconds:0}ms cells={dist.Count} {(mainThread ? "MAIN" : "bg")}");
             return dist;
         }
 
@@ -592,9 +592,9 @@ namespace TerraBlind
                     int sc = StepCost(cxk, cyk, px, py);
                     int air = (!wall && !down) ? AirCost(cxk, cyk, cxk - px) : 0;
                     if (wall) dig++; else walk++;
-                    DiagLog.Write($"[maze-step] {i} {dir} ({cxk},{cyk}) {(wall ? "DIG" : "walk")} stepCost={sc} air={air} field={field[path[i]]}");
+                    DiagLog.Trc($"[maze-step] {i} {dir} ({cxk},{cyk}) {(wall ? "DIG" : "walk")} stepCost={sc} air={air} field={field[path[i]]}");
                 }
-                DiagLog.Write($"[maze-detail] len={path.Count} walk={walk} dig={dig} totalCost={(field.TryGetValue((sx, sy), out int tc) ? tc : -1)}");
+                DiagLog.Trc($"[maze-detail] len={path.Count} walk={walk} dig={dig} totalCost={(field.TryGetValue((sx, sy), out int tc) ? tc : -1)}");
             }
             return (path, breaks);
         }

@@ -241,7 +241,7 @@ namespace TerraBlind
                 _maze.TryGetValue((sx - 1, sy), out int mcl);
                 _maze.TryGetValue((sx + 1, sy), out int mcr);
                 _maze.TryGetValue((sx, sy), out int mc0);
-                DiagLog.Write($"[ag-mazenbr] here({sx},{sy})={mc0} left={mcl} right={mcr}");
+                DiagLog.Trc($"[ag-mazenbr] here({sx},{sy})={mc0} left={mcl} right={mcr}");
             }
 
             var g = new Dictionary<(int, int), float> { [(sx, sy)] = 0 };

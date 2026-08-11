@@ -69,7 +69,7 @@ namespace TerraBlind
 			_calm = 0;
 			_anomalies++;
 			if (_anomalies == 1) _hAtEpisode = h;
-			DiagLog.Write($"[sentinel] anomaly {_anomalies}/{GiveUpAnomalies} at ({cx},{cy}) H={h} moved={moved:0}px dig={dig} solids={solids}");
+			EventLog.W(Ev.Sentinel, $"anomaly {_anomalies}/{GiveUpAnomalies} at ({cx},{cy}) H={h} moved={moved:0}px dig={dig} solids={solids}");
 			if (_anomalies >= GiveUpAnomalies) return true;
 
 			// SAFE STEP: abort whatever the executor was doing and take one manual sideways hop; alternate the
