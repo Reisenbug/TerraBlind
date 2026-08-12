@@ -2692,10 +2692,39 @@ namespace TerraBlind
             if (_walkDir > 0) p.controlRight = true; else p.controlLeft = true;
         }
 
+        // 空中自救:像人往脚下拍一块平台一样,放一块止住,落地后再重规划。
+        // 脚下【两】格 —— 人 42px,vy 可达 10/帧,放在脚下一格会被一帧穿过去。
+        static bool TryPlungeRescue(Player p, string why)
+        {
+            if (_greedyActive || _rescueCooldownLeft != 0) return false;
+            int fcx = (int)((p.position.X + PhysicsSimulator.PlayerW / 2f) / 16f);
+            int feetCy = (int)((p.position.Y + PhysicsSimulator.PlayerH) / 16f);
+            int fcy = feetCy + 2;
+            if (!CanPlaceReal(fcx, fcy)) return false;
+            DiagLog.Write($"[ss-rescue] plunge {why} realVy={p.velocity.Y:0.#} feet={feetCy} → place ({fcx},{fcy})");
+            EmitPlace(p, fcx, fcy);
+            _rescueCooldownLeft = RescueCooldown;
+            return true;
+        }
+
+        // 计划管不到的自由落体也要有人看着:救援原先整段住在帧重放里,而 jumpPlace 放完平台帧就用尽了 ——
+        // 人没落上去就一路掉到底 (3186,502) 掉了 18 格无人过问。走闭环/无计划时同样是盲区。
+        static void WatchUnplannedFall()
+        {
+            var p = Main.LocalPlayer;
+            if (p == null || !p.active || !RecedingNav.Active) return;
+            if (_rescueCooldownLeft > 0) _rescueCooldownLeft--;
+            // 只在【已经掉得比一跳还深】时才拍砖:走路边故意从台阶上迈下去是正常的,不该拦。
+            _fallFrames = p.velocity.Y > RescueFallVy ? _fallFrames + 1 : 0;
+            if (_fallFrames >= UnplannedFallFrames) TryPlungeRescue(p, $"unplanned {_fallFrames}f");
+        }
+        static int _fallFrames;
+        const int UnplannedFallFrames = 14;   // ~14 帧自由落体 ≈ 4 格,超过一次跳跃的正常落差
+
         public static void ApplyControls()
         {
-            if (_walkActive) { WalkTick(); return; }
-            if (_execFrames == null) return;
+            if (_walkActive) { WatchUnplannedFall(); WalkTick(); return; }
+            if (_execFrames == null) { WatchUnplannedFall(); return; }
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopExec(); return; }
             if (_execIdx >= _execFrames.Count)
@@ -2704,6 +2733,7 @@ namespace TerraBlind
                 float gx = _execGoalWx * 16f + 8f, gy = (_execGoalWy + 1) * 16f;
                 DiagLog.Write($"[ss-land] goal=({_execGoalWx},{_execGoalWy}) actual_px=({cx:0.#},{fy:0.#}) dx={(cx-gx):0.#} dy={(fy-gy):0.#}");
                 StopExec();
+                WatchUnplannedFall();   // 帧用尽的那一刻人可能正在半空往下掉,别在这儿撒手
                 return;
             }
             var f = _execFrames[_execIdx];
@@ -2762,23 +2792,7 @@ namespace TerraBlind
             // record THIS frame's real state for next frame's prediction (before any early return below)
             _lastReal = new RealState { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0f, Valid = true };
 
-            // 空中自救:本体感觉说我下落得比输入该产生的更快 = 非计划的俯冲(平台放失败/踩空)。
-            // 像人往脚下拍一块平台一样,放一块止住,下面的落地重规划再从存下的位置重新规划。
-            if (!_greedyActive && falling && _rescueCooldownLeft == 0)
-            {
-                int fcx = (int)((p.position.X + PhysicsSimulator.PlayerW / 2f) / 16f);
-                // 人有 42px(~2.6 格),脚踩在格子中间,快速下落(vy 可达 10/帧)一帧就能穿过放在脚下那格甚至下一格的平台。
-                // 所以放在脚下【两】格,让下落有空间真正落在它上面而不是穿过去。
-                int feetCy = (int)((p.position.Y + PhysicsSimulator.PlayerH) / 16f);
-                int fcy = feetCy + 2;
-                if (CanPlaceReal(fcx, fcy))
-                {
-                    DiagLog.Write($"[ss-rescue] plunge belowPlan={belowPlan:0.#} realVy={p.velocity.Y:0.#} feet={feetCy} → place ({fcx},{fcy})");
-                    EmitPlace(p, fcx, fcy);
-                    _rescueCooldownLeft = RescueCooldown;
-                    return;
-                }
-            }
+            if (falling && TryPlungeRescue(p, $"belowPlan={belowPlan:0.#}")) return;
 
             // 卡住(速度偏差):计划要人这帧在动而真身被挡住(该有 |pf.Vx|,实际 |vx| ~0)—— 按位置距离判的检查看不见的那条轴。
             // 数连续被挡的帧,超过 StuckFrames 就从人真正所在的地方重规划。覆盖撞墙/卡坡这类否则会一路重规划风暴到 MaxReplans 的情况。
