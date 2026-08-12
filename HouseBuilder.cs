@@ -439,11 +439,68 @@ namespace TerraBlind
 						SettleAt.Start(Wx(4 + RoomWidth * _roomIdx), out _);
 						return;
 					}
+					// 验收:逐格看有没有东西。placed=4 只说明挥了四次工具,最后一张椅子没落地也照样报 4。
+					string missing = AuditHouse();
+					if (missing != null) { Fail($"验收不合格:{missing}"); return; }
 					Outcome = "done"; _ph = Ph.Done;
 					DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
 					Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
 					return;
 			}
+		}
+
+		// 那一格上有没有【指定类型】的东西。家具占多格,vanilla 只在原点记 TileType,所以按类型查而不是按 HasTile。
+		static bool HasType(int wx, int wy, int type)
+		{
+			if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+			var t = Main.tile[wx, wy];
+			return t.HasTile && t.TileType == type;
+		}
+
+		// 家具的原点可能落在相邻格(桌椅 2~3 格宽,放置时的对齐点不一定是我要的那格),所以左右各看一格。
+		static bool HasTypeNear(int wx, int wy, int type)
+		{
+			for (int d = -1; d <= 1; d++)
+				for (int dy = -1; dy <= 1; dy++)
+					if (HasType(wx + d, wy + dy, type)) return true;
+			return false;
+		}
+
+		// 完工验收:每一格都实地看过。缺什么报什么坐标 —— "placed=4" 是挥了四次工具,不是四张椅子落了地。
+		static string AuditHouse()
+		{
+			var bad = new List<string>();
+			for (int i = 0; i < ChairCount; i++)
+			{
+				int wx = Wx(2 + RoomWidth * i);
+				if (!HasTypeNear(wx, _floorRow, H_CHAIR)) bad.Add($"椅({wx},{_floorRow})");
+			}
+			for (int i = 0; i < TableCount; i++)
+			{
+				int wx = Wx(14 - RoomWidth * i);
+				if (!HasTypeNear(wx, _floorRow, H_TABLE)) bad.Add($"桌({wx},{_floorRow})");
+			}
+			for (int r = 0; r < _rooms; r++)
+			{
+				int col1 = 1 + RoomWidth * r;
+				foreach (var (dr, dc) in WallOrder)
+				{
+					int wx = Wx(col1 + (dc - 1)), wy = _roofRow + dr;
+					if (Main.tile[wx, wy].WallType == 0) bad.Add($"墙({wx},{wy})");
+				}
+				int tx = Wx(col1 + 2), ty = _roofRow + 2;
+				if (!HasTypeNear(tx, ty, H_TORCH)) bad.Add($"火把({tx},{ty})");
+			}
+			// 地板:柱子之间每一格都得踩得住,漏一格 NPC 判定就不认
+			for (int c = 1; c <= LocalMax; c++)
+			{
+				int wx = Wx(c);
+				if (!Main.tile[wx, _floorRow + 1].HasTile) bad.Add($"地板({wx},{_floorRow + 1})");
+			}
+			if (bad.Count == 0) return null;
+			string all = string.Join(" ", bad);
+			DiagLog.Write($"[house] AUDIT 缺 {bad.Count} 处: {all}");
+			return bad.Count > 6 ? $"缺{bad.Count}处 {string.Join(" ", bad.GetRange(0, 6))}…" : all;
 		}
 
 		// 第 r 间的内腔:两根柱子之间、地板上一行到屋顶下一行。
