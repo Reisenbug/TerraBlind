@@ -1686,10 +1686,11 @@ namespace TerraBlind
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
             }
-            else if (st.Frames != null && st.Frames.Count > 0 && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
+            // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
+            // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理 —— 闭环不会按下键。
+            else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
+                     && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
             {
-                // 纯 walk 边走闭环。排除 Down 是因为 WalkTick 只按左右 —— 穿平台下落的边需要按住 Down,
-                // 闭环不会按,结果原地左右横跳。那些走下面的开环重放(重放录下的 Down)。
                 _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
             }
             else if (st.Frames != null && st.Frames.Count > 0)
