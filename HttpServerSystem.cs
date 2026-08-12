@@ -2899,8 +2899,8 @@ namespace TerraBlind
 
 		// the last /descent_route hell-band field, retained so /descent_h can answer progress queries for free
 		// 宝藏值多少 = 它能撑起的【绕道格数】上限。水晶=金箱>>木箱。
-		// 用同一个单位记价值和代价,取舍就是一次比大小,不需要再调一个无量纲的比率。
-		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 40;
+		// 木箱 90:不值得为它专门绕路,但顺路(几十格内)必开 —— 40 的时候路过都不开,过分了。
+		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 90;
 		static int TreasureValue(string kind) => kind == "heart" ? ValueHeart
 			: kind == "wood_chest" ? ValueWoodChest : ValueChest;
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
