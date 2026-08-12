@@ -1927,7 +1927,6 @@ namespace TerraBlind
             bool hasPick = false;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
 
-            var laCache = new System.Collections.Generic.Dictionary<(int, int), int>();
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
@@ -1971,23 +1970,10 @@ namespace TerraBlind
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
-                // 铁律:g 必须就是定义 H 的那套代价,不能另编一套。手编的 per-action 价(place=120、pillar×9)是第二套、粒度还不同
-                // —— 坑循环的根。代价是 total≡H(s) 全场相等,排序交给下面的 align/dev 项。落点值用 laH,算 g 也必须用 laH,混用两道保险同时失效。
-                int laH = LookaheadH(field, ncx, ncy, nH, laCache);
-                // g 只装【这一步花了多少】,不再装 ΔH。原来 g=ΔH 让 total=g+laH≡H(s) 全场恒等 ——
-                // 落点值被约掉,收益完全不参与排序,只剩附加费在比。于是穿墙那一挖(降 120)和平地那一挖(降 3)同分。
-                float g = 0f;
-                bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);   // for kind label only
-                // 改造地形要【站着不动】耗时间,走过去不用。附加费就是这个时间,由边自带的真实帧数换算(0.5 H/帧)。
-                int altered = (digTiles?.Count ?? 0) + (pillar ? 1 : 0) + (isPlace ? 1 : 0);
-                // 按【推进的格数】摊薄,只给长边打折(≤2 格不变):否则 per-action 的固定费会让 2 格 pillar(≈21)永远赢过
-                // 4 格跳放梯(≈37),哪怕后者每格更快 —— 贪心那一步看不见紧随其后的第二根柱子。
-                if (altered > 0)
-                {
-                    // 不封顶:真实帧数直接定价。收益已经在 laH 里参与排序,厚墙该挖时收益压得过费用。
-                    float edgeCells = MathF.Abs(ncx - curCx) + MathF.Abs(ncy - curCy);
-                    g += cost * DigFramesToH * (2f / MathF.Max(2f, edgeCells));
-                }
+                // g+h 两段同尺(帧):g=走这条边的帧数,h=落点场值。弃用 LookaheadH —— 它取周围 18 格最小 H,
+                // 望得见走不到:(2581,318)H1097 旁边 H1141 被望成 t862,来回八趟 200 帧。
+                bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);
+                float g = cost * DigFramesToH;
                 // Bellman 基础分 g+V(落点),再加这条边的注意力失配权重:反复落空的乐观边被软性降权,可靠的替代就赢了。
                 // 纯 g+H 本来就允许 H 暂时升高(走进浅坑再爬出),罚分只针对物理反复不兑现的边。
                 float pen = _miss.GetValueOrDefault((curCx, curCy, ncx, ncy));
@@ -2007,12 +1993,12 @@ namespace TerraBlind
                 // 距离的超线性:贴着线蹭几乎不花钱,但陡增得快,离线很多格(跳进线在上方飘过的坑壁)会被重重压价。
                 // 同一项也把已经掉进去的人拉出来:越深距离越大罚得越狠,朝线爬(缩小距离)就赢过继续下钻。dist^1.5,比线性陡但不像平方那样爆。
                 float dev = DeviCost * devDist * MathF.Sqrt(devDist);
-                float total = g + laH + pen - AlignScale * align + dev;
+                float total = g + nH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
                     : isPlace ? "place"
                     : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
-                _candLog.Append($" {kind}→({ncx},{ncy})H{nH}{(laH < nH ? $"la{laH}" : "")}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
+                _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
