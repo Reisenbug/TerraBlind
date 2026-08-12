@@ -2270,49 +2270,41 @@ namespace TerraBlind
 									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
 									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
 								}
-								// 木箱不值得为它挖:挖一格 80~160,走一格才 3。额度分开卡(不折成一个 cost 池——
-								// 换算过来 15 格挖 = 400 格走,等于"只要不用挖多远都去"),只把挖那档收到 15。
-								int wcap = digM.Success ? digMax : System.Math.Min(digMax, WoodChestDigMax);
-								int wcap2 = digM2.Success ? digMax2 : System.Math.Min(digMax2, WoodChestDigMax);
-								int dCap = kind == "wood_chest" ? wcap : digMax;
-								int dCap2 = kind == "wood_chest" ? wcap2 : digMax2;
-								string tier = nDig <= dCap && nWalk <= walkMax ? "main"
-									: nDig <= dCap2 && nWalk <= walkMax2 ? "optional" : null;
-								if (tier == null) continue;
+								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了 ——
+								// 走到 199 那儿之后 201 明明变近了也回不来。这里只收进候选池,取舍留给下面按性价比排。
+								string tier = nDig <= digMax && nWalk <= walkMax ? "main" : "optional";
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
 									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
 							}
 						// ── STITCH THE TREASURES INTO ONE ITINERARY ────────────────────────────────────────────
-						// The tiers above price every treasure against THE LINE, and that verdict is frozen at plan
-						// time. It is wrong the moment the body leaves the line: standing at a treasure 19 tiles off
-						// the line, a second one 2 tiles further out was already written off as "too far" — measured
-						// from a line the player is no longer on.
-						//
-						// So order them as a CHAIN instead: from where the last pickup left us, the next stop is
-						// whichever remaining treasure is cheapest to reach FROM HERE, as long as it lies ahead
-						// (lower H = closer to hell — never walk back up the mountain for loot).
-						//
-						// The costs come out of the two fields already built — a treasure's own detour path (its
-						// dig/walk out to the junction) plus the line distance between junctions. No third field,
-						// no per-segment Dijkstra: stitching is arithmetic over data we already have.
-						// ORDERING NEVER DROPS A STOP. Whether a treasure is worth visiting was already decided by the
-						// tier test above; every "main" goes in the chain. All this does is choose the ORDER — and an
-						// earlier version that picked "cheapest next" each time quietly deleted six of thirteen stops:
-						// anything needing digging priced high, sank to the end of the queue, and by the time its turn
-						// came the body was already past it on a one-way descent, so it got dropped as "behind us".
-						//
-						// So: line order is the backbone (top to bottom, nothing skipped). The only rearranging is
-						// LOCAL — once we are standing off the line at a treasure, a later stop that is close TO US
-						// gets pulled forward, which is the whole point: the old code priced it against the line the
-						// body had already left, and abandoned a stop two tiles away for being "far from the line".
+						// 顺序 = 主线从上到下,一站不漏。早先"每次挑最便宜的下一站"会悄悄吞掉一半:要挖的定价高、
+						// 沉到队尾,轮到它时人已经单向下降过去了,于是被当成"在身后"丢掉。
 						// 线要穿过宝藏,不是挂在旁边。上面那条 line 只是脚手架(用来筛 tier / 定顺序),
 						// 真正走的路在这里重新规划:入口→宝1→…→宝N→地狱,每段一次两点寻路,
 						// 宝藏是段的端点所以必然穿过。排序改不了形状——绕道是几何,排序只是排列。
 						// 每段的场是局部的(BuildField 按起终点划盒子),不是脚手架那种全图 flood。
+						// 顺序仍按主线从上到下(下地狱是单向的,不折返)。要不要拿改成【性价比】:
+						// 价值 / 绕道代价,而不是阈值 —— 199 和 201 的比值几乎一样,不会一个进一个不进。
 						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
-						for (int i = 0; i < treasures.Count; i++)
-							if (treasures[i].tier != null) chain.Add(i);   // main + optional 都要
-						chain.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // down the line, top to bottom
+						{
+							var pool = new System.Collections.Generic.List<int>();
+							for (int i = 0; i < treasures.Count; i++) pool.Add(i);
+							pool.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));
+							// 全程绕路总预算:不能光顾着收集。按主线长度折算,用完了就只走主线。
+							int budget = (int)(line.Count * DetourBudgetFrac);
+							int spent = 0;
+							foreach (int ti in pool)
+							{
+								var tr = treasures[ti];
+								// 绕道是往返:走出去还得走回线上。挖过的隧道回程免费,所以挖只算单程。
+								int detour = tr.walk * 2 + tr.dig * DigWalkRatio;
+								int worth = TreasureValue(tr.kind);
+								if (detour > worth) continue;             // 性价比不够 —— 价值就是它能撑起的绕道上限
+								if (spent + detour > budget) continue;    // 预算见底,后面的只看不拿
+								spent += detour;
+								chain.Add(ti);
+							}
+						}
 						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
 						{
 							var stops = new System.Collections.Generic.List<(int x, int y)>();
@@ -2906,8 +2898,15 @@ namespace TerraBlind
 		}
 
 		// the last /descent_route hell-band field, retained so /descent_h can answer progress queries for free
-		// 木箱最多值得挖这么多格(走的额度不受影响,走路便宜)。main/optional 两档都收到这个数。
-		const int WoodChestDigMax = 15;
+		// 宝藏值多少 = 它能撑起的【绕道格数】上限。水晶=金箱>>木箱。
+		// 用同一个单位记价值和代价,取舍就是一次比大小,不需要再调一个无量纲的比率。
+		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 40;
+		static int TreasureValue(string kind) => kind == "heart" ? ValueHeart
+			: kind == "wood_chest" ? ValueWoodChest : ValueChest;
+		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
+		const int DigWalkRatio = 9;
+		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
+		const float DetourBudgetFrac = 0.30f;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
 		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
