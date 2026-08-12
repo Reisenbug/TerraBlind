@@ -2285,25 +2285,50 @@ namespace TerraBlind
 						// 每段的场是局部的(BuildField 按起终点划盒子),不是脚手架那种全图 flood。
 						// 顺序仍按主线从上到下(下地狱是单向的,不折返)。要不要拿改成【性价比】:
 						// 价值 / 绕道代价,而不是阈值 —— 199 和 201 的比值几乎一样,不会一个进一个不进。
+						// 这是带奖励的最短路(定向越野):点=宝藏,边=代价,给定预算求奖励最大的一条路。一般情况 NP-hard,
+						// 但下地狱是单向的 —— 按线序排完就是 DAG,DP 能求【精确最优】,几十个点几毫秒。
+						// 贪心会先吃掉路边两个木箱耗光预算,漏掉后面那个水晶;DP 看的是整趟的总回报。
 						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
 						{
 							var pool = new System.Collections.Generic.List<int>();
 							for (int i = 0; i < treasures.Count; i++) pool.Add(i);
 							pool.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));
-							// 全程绕路总预算:不能光顾着收集。按主线长度折算,用完了就只走主线。
+							int n = pool.Count;
+							// 预算离散成 BudgetSteps 档,DP 表才有界。档太粗会把小绕道全归零,太细算不动。
 							int budget = (int)(line.Count * DetourBudgetFrac);
-							int spent = 0;
-							foreach (int ti in pool)
+							int step = System.Math.Max(1, budget / BudgetSteps);
+							int B = budget / step + 1;
+							// 绕道是往返:走出去还得走回线上。挖过的隧道回程免费,所以挖只算单程。
+							var cost = new int[n];
+							var val = new int[n];
+							for (int i = 0; i < n; i++)
 							{
-								var tr = treasures[ti];
-								// 绕道是往返:走出去还得走回线上。挖过的隧道回程免费,所以挖只算单程。
-								int detour = tr.walk * 2 + tr.dig * DigWalkRatio;
-								int worth = TreasureValue(tr.kind);
-								if (detour > worth) continue;             // 性价比不够 —— 价值就是它能撑起的绕道上限
-								if (spent + detour > budget) continue;    // 预算见底,后面的只看不拿
-								spent += detour;
-								chain.Add(ti);
+								var tr = treasures[pool[i]];
+								cost[i] = System.Math.Max(1, (tr.walk * 2 + tr.dig * DigWalkRatio) / step);
+								val[i] = TreasureValue(tr.kind);
 							}
+							// f[i,b] = 拿了第 i 个、累计花掉 b 档预算时的最大总价值。线序保证 j>i 才可达(单向下降)。
+							var f = new int[n, B];
+							var from = new int[n, B];
+							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) { f[i, b] = int.MinValue; from[i, b] = -1; }
+							for (int i = 0; i < n; i++) if (cost[i] < B) { if (val[i] > f[i, cost[i]]) { f[i, cost[i]] = val[i]; from[i, cost[i]] = -1; } }
+							for (int i = 0; i < n; i++)
+								for (int b = 0; b < B; b++)
+								{
+									if (f[i, b] == int.MinValue) continue;
+									for (int j = i + 1; j < n; j++)
+									{
+										int nb = b + cost[j];
+										if (nb >= B) continue;
+										int nv = f[i, b] + val[j];
+										if (nv > f[j, nb]) { f[j, nb] = nv; from[j, nb] = i; }
+									}
+								}
+							int bi = -1, bb = -1, best = 0;
+							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) if (f[i, b] > best) { best = f[i, b]; bi = i; bb = b; }
+							while (bi >= 0) { chain.Add(pool[bi]); int pi = from[bi, bb]; bb -= cost[bi]; bi = pi; }
+							chain.Reverse();
+							DiagLog.Write($"[route] DP 候选{n} 预算{budget}({B}档) 选中{chain.Count} 总价值{best}");
 						}
 						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
 						{
@@ -2907,6 +2932,8 @@ namespace TerraBlind
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
 		const float DetourBudgetFrac = 0.30f;
+		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
+		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
 		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
