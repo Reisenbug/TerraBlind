@@ -168,6 +168,7 @@ namespace TerraBlind
             public bool Dig;
             public MineDir DigDir;
             public int TargetCx, TargetCy;
+            public float LandPx, LandPy;   // 规划落点的像素值:格号是取整后的结论,查落点偏差要看这个
             public List<PhysicsSimulator.ControlInput> Frames;
             public List<(int wx, int wy)> MineTiles;
         }
@@ -2171,7 +2172,7 @@ namespace TerraBlind
                 steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig });
             }
             else if (frames != null)
-                steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames) });
+                steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames), LandPx = to.Px, LandPy = to.Py });
             return steps;
         }
 

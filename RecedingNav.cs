@@ -30,6 +30,7 @@ namespace TerraBlind
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
         static bool _lastPillar;         // pillar 边只承诺往上,判到没到时要放宽行号
+        static float _lastLandPx, _lastLandPy;   // 上条边【规划】的像素落点,MISS 时和真实落点比
 
         // 打转由 StateSpacePlanner 的进度地板在选边时掐掉;这里只留 _bestH/_ring 供日志读
         static int _bestH;
@@ -245,9 +246,14 @@ namespace TerraBlind
                 string under = "";
                 for (int c = bl; c <= br; c++)
                     if (Predicates.IsGround(c, feetRow)) under += $"{c}:{Main.tile[c, feetRow].TileType} ";
+                bool hit = StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
+                // MISS 才带规划落点:差一格是取整的结论,像素差才说明是仿真偏了还是执行飘了。vx 是残余速度 ——
+                // 规划器用【空输入】沉降算落点,执行器走完不刹车,这两个假设不一样就会系统性差一行。
+                string gap = hit || _lastLandPx == 0f ? "" :
+                    $" plan={_lastLandPx:0.#},{_lastLandPy:0.#} d=({p.position.X - _lastLandPx:0.#},{p.position.Y - _lastLandPy:0.#}) vx={p.velocity.X:0.##}";
                 EventLog.W(Ev.Exec, $"({f.Item1},{f.Item2})→({t.Item1},{t.Item2}) actual=({cell.Item1},{cell.Item2}) "
-                    + $"{(StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar) ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
-                    + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}");
+                    + $"{(hit ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
+                    + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}{gap}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
             }
             StateSpacePlanner.DecayMiss();
@@ -268,6 +274,8 @@ namespace TerraBlind
                     _standTries = 0;
                     _lastFrom = cell; _lastTarget = (_goalWx, _goalWy); _haveLast = true;
                     _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
+                    _lastLandPx = ap.Steps.Count > 0 ? ap.Steps[0].LandPx : 0f;
+                    _lastLandPy = ap.Steps.Count > 0 ? ap.Steps[0].LandPy : 0f;
                     StateSpacePlanner.DispatchPlan(ap);
                     return;
                 }
@@ -278,6 +286,8 @@ namespace TerraBlind
                     _standTries = 0;
                     _lastFrom = cell; _lastTarget = (ap.GoalWx, ap.GoalWy); _haveLast = true;
                     _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
+                    _lastLandPx = ap.Steps.Count > 0 ? ap.Steps[0].LandPx : 0f;
+                    _lastLandPy = ap.Steps.Count > 0 ? ap.Steps[0].LandPy : 0f;
                     StateSpacePlanner.DispatchPlan(ap);
                     return;
                 }
@@ -308,6 +318,8 @@ namespace TerraBlind
 
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
+            _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;
+            _lastLandPy = res.Steps.Count > 0 ? res.Steps[0].LandPy : 0f;
             StateSpacePlanner.DispatchPlan(res);
         }
     }
