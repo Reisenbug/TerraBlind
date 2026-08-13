@@ -47,7 +47,6 @@ namespace TerraBlind
 		// 拿物品 ID 去比 TileType 会全部判缺 —— 房子明明盖好了却报验收不合格。
 		const int T_TABLE = Terraria.ID.TileID.Tables;
 		const int T_CHAIR = Terraria.ID.TileID.Chairs;
-		const int T_TORCH = Terraria.ID.TileID.Torches;
 		const int H_WALL = 93;        // 木墙
 		const int H_TORCH = 8;
 
@@ -493,8 +492,8 @@ namespace TerraBlind
 					int wx = Wx(col1 + (dc - 1)), wy = _roofRow + dr;
 					if (Main.tile[wx, wy].WallType == 0) bad.Add($"墙({wx},{wy})");
 				}
-				int tx = Wx(col1 + 2), ty = _roofRow + 2;
-				if (!HasTypeNear(tx, ty, T_TORCH)) bad.Add($"火把({tx},{ty})");
+				// 火把不在这儿验:每间放完当场就查过一次(Ph.Torch),那时候 _torchWx/_torchWy 还是那一间的。
+				// 事后按公式反推 _roofRow 算出来的是另一格,四间齐全的房子会被报成缺火把。
 			}
 			// 地板:柱子之间每一格都得踩得住,漏一格 NPC 判定就不认
 			for (int c = 1; c <= LocalMax; c++)
