@@ -2259,13 +2259,13 @@ namespace TerraBlind
 							for (int i = 0; i < treasures.Count; i++) cand.Add(i);
 							cand.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // 线序 = 深度序,单向下降
 							int n = cand.Count;
-							// 绕道:走要往返,挖过的隧道回程免费所以算单程。
+							// det = 单程离线代价(挖过的隧道回程免费,所以挖只算一次)。往返在 Extra 里配对收。
 							var det = new int[n];
 							var val = new int[n];
 							for (int i = 0; i < n; i++)
 							{
 								var tr = treasures[cand[i]];
-								det[i] = tr.walk * 2 + tr.dig * DigWalkRatio;
+								det[i] = tr.walk + tr.dig * DigWalkRatio;   // 单程:出去。回来那程在 Extra 里按需收
 								val[i] = TreasureValue(tr.kind);
 							}
 							// 预算只管【绕路】那部分:主线本来就要走,不该占额度。
@@ -2273,13 +2273,13 @@ namespace TerraBlind
 							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
 							int step = System.Math.Max(1, budget / BudgetSteps);
 							int B = budget / step + 2;
-							// i→j 的增量代价:离开 i 的绕道(回主线)+ 主线上走到 j 的挂点 + 进 j 的绕道。
-							// 主线那段本来就要走,不计进预算,所以增量里只剩两头的绕道 —— 挂点越近,共享得越多。
+							// i→j 只收【从 i 回到线上】+【从线上进 j】两个单程。原来 Extra 收 det[i]/2+det[j],
+							// 而 det 本身是往返 —— 每个中间站的回程被收了两遍,九个宝藏就把预算吃光了。
+							// 挂点隔得近时连线上那段都不用走完,回程按 gap 封顶,一窝宝藏自然共享进出。
 							int Extra(int i, int j)
 							{
 								int gap = System.Math.Abs(treasures[cand[j]].li - treasures[cand[i]].li);
-								int back = System.Math.Min(det[i] / 2, gap);   // 挂点隔得近就不用整个退回主线
-								return back + det[j];
+								return System.Math.Min(det[i], gap) + det[j];
 							}
 							var f = new int[n, B];
 							var from = new int[n, B];
@@ -2308,6 +2308,14 @@ namespace TerraBlind
 								bi = pi;
 							}
 							chain.Reverse();
+							// 选了谁、每个多贵,直接印出来:只报总数的话"为什么才 9 个"没法回答。
+							{
+								var sb2 = new System.Text.StringBuilder();
+								int cheap = 0, tot = 0;
+								for (int i = 0; i < n; i++) { tot += det[i]; if (det[i] <= budget / 10) cheap++; }
+								foreach (int ci in chain) sb2.Append($" {treasures[ci].kind[0]}({treasures[ci].x},{treasures[ci].y})w{treasures[ci].walk}d{treasures[ci].dig}");
+								DiagLog.Write($"[route] 候选均价{(n > 0 ? tot / n : 0)} 便宜的({budget / 10}以内){cheap}个 选中:{sb2}");
+							}
 							DiagLog.Write($"[route] DP 候选{n} 预算{budget}({B}档) 选中{chain.Count} 价值{best}");
 						}
 						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
