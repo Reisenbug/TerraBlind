@@ -2194,6 +2194,8 @@ namespace TerraBlind
 						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
 						for (int i = 0; i < line.Count; i++)
 							if (!lineIdx.ContainsKey(line[i])) lineIdx[line[i]] = i;
+						int rejOff = 0, rejFar = 0, rejNoLink = 0;
+						var rejLog = new System.Text.StringBuilder();
 						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int li, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
 						for (int x = bMinX; x <= bMaxX; x++)
 							for (int y = bMinY; y <= bMaxY; y++)
@@ -2216,7 +2218,10 @@ namespace TerraBlind
 								else if (t.TileType == Terraria.ID.TileID.Heart
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "heart";
 								if (kind == null) continue;
-								if (!lineField.TryGetValue((x, y), out int d0) || d0 > rejectBound) continue;   // quick reject
+									// 每一次淘汰都留下坐标和原因:(3667,655) 那两颗水晶人擦肩而过却没进池子,
+									// 而三条 continue 一条日志都没有,根本看不出是哪条把它扔了。
+									if (!lineField.TryGetValue((x, y), out int d0)) { rejOff++; rejLog.Append($" {kind[0]}({x},{y})场外"); continue; }
+									if (d0 > rejectBound) { rejFar++; rejLog.Append($" {kind[0]}({x},{y})远{d0}"); continue; }
 								// trace the detour path treasure→line by descending the line-field
 								var bpath = new System.Collections.Generic.List<(int, int)>();
 								var bc2 = (x, y);
@@ -2236,7 +2241,8 @@ namespace TerraBlind
 									bc2 = nb;
 								}
 								var junction = bpath[bpath.Count - 1];
-								if (!lineField.TryGetValue(junction, out int endH) || endH != 0) continue;   // never reached the line
+									if (!lineField.TryGetValue(junction, out int endH) || endH != 0)
+										{ rejNoLink++; rejLog.Append($" {kind[0]}({x},{y})接不上线"); continue; }
 								// 按 StepCost 分类:超过最贵的移动就是挖。回程走已挖开的隧道,
 								// 所以单向计数才是该设上限的那个单位。
 								int nDig = 0, nWalk = 0;
@@ -2251,6 +2257,7 @@ namespace TerraBlind
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
 									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
 							}
+						DiagLog.Write($"[route] 扫描:入池{treasures.Count} 淘汰 场外{rejOff}/太远{rejFar}/接不上线{rejNoLink} —{rejLog}");
 						// 定向越野:点=宝藏,边=两点代价,预算内求总价值最大。单向下降 → DAG → DP 出精确最优。
 						// 两点距离用算术估(零次额外 flood):扎堆的挂点相近,中间那段≈0,一窝只付一次进出路费。
 						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
