@@ -2273,9 +2273,8 @@ namespace TerraBlind
 							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
 							int step = System.Math.Max(1, budget / BudgetSteps);
 							int B = budget / step + 2;
-							// i→j 只收【从 i 回到线上】+【从线上进 j】两个单程。原来 Extra 收 det[i]/2+det[j],
-							// 而 det 本身是往返 —— 每个中间站的回程被收了两遍,九个宝藏就把预算吃光了。
-							// 挂点隔得近时连线上那段都不用走完,回程按 gap 封顶,一窝宝藏自然共享进出。
+							// i→j 只收【从 i 回线】+【从线进 j】两个单程,回程按 gap 封顶所以一窝宝藏共享进出。
+							// 原来收 det[i]/2+det[j] 而 det 本身是往返,中间站的回程被收两遍,九个就吃光预算。
 							int Extra(int i, int j)
 							{
 								int gap = System.Math.Abs(treasures[cand[j]].li - treasures[cand[i]].li);
@@ -2336,10 +2335,8 @@ namespace TerraBlind
 								legN++;
 								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
 								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable — skip to next
-								// bestN 从 int.MaxValue 起 = 只要邻居有 H 就收,不要求比脚下低。落进局部窝里就会挑
-								// "没那么差"的邻居,那个邻居再挑回来 → 原地弹,一轮加 2 格跑满 20000 步,
-								// 每段都这样 → /descent_route 90s 也回不来。改成从脚下的 H 起步(只收严格更低的),
-								// 再加 seen 兜住平地和环。
+								// 从脚下的 H 起步只收严格更低的邻居:起点若是 int.MaxValue,局部窝里两格会互相挑来挑去,
+								// 一轮加 2 格跑满 20000 步,每段都这样 /descent_route 90s 也回不来。seen 再兜住平地和环。
 								var lseen = new System.Collections.Generic.HashSet<(int, int)> { (cursor.x, cursor.y) };
 								for (int step = 0; step < 20000; step++)
 								{
@@ -2424,9 +2421,8 @@ namespace TerraBlind
 			}
 			else if (path == "/descent_h")
 			{
-				// POST {"x":..,"y":..} → H of the last /descent_route hell-band field at that cell (= cost-to-hell).
-				// The itinerary consumer compares H(junction) vs H(player): larger H = farther from hell = BEHIND us,
-				// so progress is judged by the real field, never by script position. h:-1 = cell outside the field.
+				// POST {"x":..,"y":..} → 上次 /descent_route 那张地狱带场在这一格的 H(=到地狱还要多少)。
+				// H 越大离地狱越远,所以"走过头了没"由真实的场判,不由脚本位置判。h:-1 = 不在场里。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -2442,9 +2438,8 @@ namespace TerraBlind
 			}
 			else if (path == "/tile_names")
 			{
-				// POST {"q":"heart"} → all vanilla TileID names containing the substring (case-insensitive), so the
-				// agent can resolve a fuzzy name ("生命水晶"→"Heart") before calling find_tiles instead of guessing.
-				// Omit q to list everything. The names here are exactly what find_tiles's TileID.Search accepts.
+				// POST {"q":"heart"} → 所有含这个子串的 vanilla TileID 名字,让 agent 先把模糊名字
+				// ("生命水晶"→"Heart")解析出来再调 find_tiles,而不是靠猜。省略 q 就列全部。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -2919,7 +2914,7 @@ namespace TerraBlind
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
-		const float DetourBudgetFrac = 1.00f;
+		const float DetourBudgetFrac = 10.0f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
