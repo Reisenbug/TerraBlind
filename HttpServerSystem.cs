@@ -849,10 +849,8 @@ namespace TerraBlind
 			}
 			else if (path == "/recipe")
 			{
-				// 查配方:要什么材料、要站在哪种工作台旁、我还差多少。
-				// craft 失败只说 not_available,不说缺什么 —— 凑"125木材/20绳子/4火把"这种账时
-				// LLM 问不到绳子火把要啥材料,只能去翻 wiki(慢且不一定对得上这个版本)。
-				// 不限于"当前可合成":没材料的照样能查,那才是查配方的意义。
+				// 查配方:要什么材料、站哪种台子、还差多少。craft 失败只说 not_available,不说缺什么。
+				// 不限于"当前可合成" —— 没材料的照样能查,那才是查配方的意义。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -1663,9 +1661,8 @@ namespace TerraBlind
 					}
 				}
 			}
-			// /place_at — SEMANTIC placement: say WHAT and WHERE, nothing else. Item by name (no slot numbers), cell
-			// relative to the origin cell, optional run of n. The completion condition is not the caller's business:
-			// a placement is done when the tile is there.
+			// /place_at — 语义放置:只说放什么、放哪。物品按名字(不是槽号),坐标相对原点格。
+			// 完成判据不归调用方管:砖在那儿了就是放好了。
 			else if (path == "/place_at")
 			{
 				string reqBody;
@@ -1923,9 +1920,8 @@ namespace TerraBlind
 				ActExecutor.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /origin — the anchor every relative coordinate resolves against. Returned so a caller can SEE the cell
-			// it is aiming from before it commits to an offset (the body spans 2-3 columns; which one counts is a rule,
-			// not a guess), and highlighted on screen for the same reason.
+			// /origin — 所有相对坐标的锚点。身体跨 2~3 列,哪一列算数是条规则不是猜 ——
+			// 所以让调用方在下偏移之前先看得见自己站在哪格,屏幕上也高亮。
 			else if (path == "/origin")
 			{
 				var op = Main.LocalPlayer;
@@ -2038,10 +2034,8 @@ namespace TerraBlind
 			}
 			else if (path == "/find_biome")
 			{
-				// POST {"name":"jungle"} → a standable coordinate at the biome's center of mass. The whole map is
-				// readable, so a biome is a query, not an exploration: scan for its signature tile, average the
-				// hits, snap down to a floor. Returns {found, x, y, count}. Supported: jungle, snow, desert, dungeon,
-				// corruption, crimson, hallow.
+				// POST {"name":"jungle"} → 那个生态一个能站的坐标。整张图都读得到,所以找生态是查询不是探索:
+				// 扫标志方块、取平均、往下贴到地面。支持 jungle/snow/desert/dungeon/corruption/crimson/hallow。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -2085,10 +2079,8 @@ namespace TerraBlind
 			}
 			else if (path == "/find_descent")
 			{
-				// POST {"name":"jungle"} → the surface entrance whose REAL route down to hell is cheapest.
-				// Not a per-column scan — descent cost is topological (an S-shaped cave entered from its top beats
-				// digging straight down anywhere), so flood a multi-source Dijkstra field UP from the whole hell
-				// band under the biome and read H at every open-sky surface candidate; minimum H wins.
+				// POST {"name":"jungle"} → 下地狱【真实路线】最便宜的那个地表入口。下降代价是拓扑的
+				// (S 形洞从顶上进比哪儿直挖都快),所以从整条地狱带往上 flood,取露天候选里 H 最小的。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -2106,11 +2098,8 @@ namespace TerraBlind
 			}
 			else if (path == "/descent_route")
 			{
-				// POST {"name":"jungle"} → the /find_descent entrance PLUS the traced route line down to hell and
-				// every treasure (chest / life crystal) within the corridor (±25 tiles of the line), each tied to
-				// its nearest line point. Also draws it in-world for 2 minutes: cyan main line, gold chests with a
-				// yellow branch, pink hearts with a magenta branch. The treasures' line_x/line_y are the junction
-				// points a collector would branch off from.
+				// POST {"name":"jungle"} → /find_descent 的入口 + 描出来的下地狱路线 + 走廊内的宝藏(箱子/生命水晶)。
+				// 顺便在世界里画两分钟:青色主线,金箱黄叉,水晶粉叉。line_x/line_y 是从主线拐出去的接驳点。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -2175,15 +2164,8 @@ namespace TerraBlind
 							if (best == cur) break;
 							cur = best;
 						}
-						// DETOUR-COST corridor, not geometric distance: walking a tile costs 3, digging one costs 120
-						// — "25 tiles away" says nothing about worth. Build a SECOND multi-source field seeded on the
-						// line itself (every line cell cost 0); descending it from a treasure traces the ACTUAL detour
-						// path, and summing StepCost along that path in each direction prices the round trip (falling
-						// in is cheap, climbing back out is not). A treasure qualifies when go+back <= budget.
-						// two separate allowances in natural units — a single cost budget conflates them (dig=120
-						// vs walk=3 in one currency meant "more dig headroom" flooded the walk range and vice versa).
-						// TWO TIERS: inside (dig_max, walk_max) → "main" (grab-worthy); inside the wider
-						// (dig_max2, walk_max2) → "optional" (only if the brain judges it worth it); beyond → ignored.
+						// 走廊按【绕道代价】划,不按直线距离:走一格 3、挖一格 26,"离 25 格"说明不了值不值。
+						// 第二张多源场种在主线上(线上每格 0),从宝藏往下降就描出真实绕道路径,沿途 StepCost 就是价钱。
 						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");
 						var wlkM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max\"\\s*:\\s*(\\d+)");
 						var digM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max2\"\\s*:\\s*(\\d+)");
@@ -2204,6 +2186,9 @@ namespace TerraBlind
 						}
 						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
 						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
+						// 往上不出线的起点:线从丛林地表开始,再放 80 格的余量就够到空岛了 ——
+						// 那是往上飞不是往下钻,绕道算得再便宜也不该进池子。
+						bMinY = System.Math.Max(bMinY, line[0].y);
 						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
 						// junction cell → its index along the line, so the executor can visit treasures in line order
 						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
@@ -2216,15 +2201,16 @@ namespace TerraBlind
 								var t = Main.tile[x, y];
 								if (!t.HasTile) continue;
 								string kind = null;
-								// 箱子种类在 TileFrameX/36 这个 style 里。Containers style 0 = 木箱(本地化叫"宝箱",
-								// 最常见、基本没好东西);红木箱 8、乌木 7、珍珠木 9 各自独立 style,不会混进来。
-								// 单独标出来,好在下面给木箱更紧的挖掘额度。
+								// 箱子种类看 TileFrameX/36 这个 style。style 0 = 木箱(最常见、基本没好东西),
+								// 单独标出来是为了给它更低的价值;红木/乌木/珍珠木各自独立 style,不会混进来。
 								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
 								{
 									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
 									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
 									if (Terraria.Chest.IsLocked(x, y)) continue;
+									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动 —— 进不去,别当目标。
+									if (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
 									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
 								}
 								else if (t.TileType == Terraria.ID.TileID.Heart
@@ -2265,19 +2251,8 @@ namespace TerraBlind
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
 									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
 							}
-						// ── STITCH THE TREASURES INTO ONE ITINERARY ────────────────────────────────────────────
-						// 顺序 = 主线从上到下,一站不漏。早先"每次挑最便宜的下一站"会悄悄吞掉一半:要挖的定价高、
-						// 沉到队尾,轮到它时人已经单向下降过去了,于是被当成"在身后"丢掉。
-						// 线要穿过宝藏,不是挂在旁边。上面那条 line 只是脚手架(用来筛 tier / 定顺序),
-						// 真正走的路在这里重新规划:入口→宝1→…→宝N→地狱,每段一次两点寻路,
-						// 宝藏是段的端点所以必然穿过。排序改不了形状——绕道是几何,排序只是排列。
-						// 每段的场是局部的(BuildField 按起终点划盒子),不是脚手架那种全图 flood。
-						// 顺序仍按主线从上到下(下地狱是单向的,不折返)。要不要拿改成【性价比】:
-						// 价值 / 绕道代价,而不是阈值 —— 199 和 201 的比值几乎一样,不会一个进一个不进。
 						// 定向越野:点=宝藏,边=两点代价,预算内求总价值最大。单向下降 → DAG → DP 出精确最优。
-						// 两点距离用算术估:i 的绕道 + 主线上两挂点的间距 + j 的绕道,零次额外 flood。
-						// (每点建一次真场是 26 次全图 flood = 50 秒,/descent_route 90s 都悬。)
-						// 扎堆的宝藏挂点相近,中间那段接近 0 —— 进去一趟把一窝端了,只付一次进出路费。
+						// 两点距离用算术估(零次额外 flood):扎堆的挂点相近,中间那段≈0,一窝只付一次进出路费。
 						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
 						{
 							var cand = new System.Collections.Generic.List<int>();
