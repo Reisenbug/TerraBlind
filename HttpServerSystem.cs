@@ -2522,9 +2522,8 @@ namespace TerraBlind
 			}
 			else if (path == "/probe_cell")
 			{
-				// Spatial query the brain can ask about ONE cell it's describing: is there a background wall here,
-				// can I put a block / platform here, is this cell open. Answers the "有背景墙吗 / 这儿能放平台吗"
-				// questions instead of leaving the bot blind on structure.
+				// 单格空间查询:有没有背景墙、能不能放方块/平台、这格通不通。
+				// 回答"有背景墙吗/这儿能放平台吗",省得对结构两眼一抹黑。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
@@ -2535,12 +2534,8 @@ namespace TerraBlind
 					body = ProbeCellJson(x, y);
 				}
 			}
-			// ── PREDICATES ── pure queries, no side effects. These answer the questions that used to be either burned
-			// into a script as a constant or handed to the LLM to guess at. See Predicates.cs.
-			// /nav_h — the planner's own H over a rectangle, with can_stand beside it. H is what every routing
-			// decision is made of, but it was only ever visible in log lines for cells already visited, so a stuck
-			// bot's surroundings could not be read at all. Returns null for cells outside the field — and which
-			// cells are OUTSIDE is itself the answer when a low-H cell sits next to unreachable ones.
+			// ── PREDICATES ── 纯查询无副作用。以前这些答案要么写死在脚本里,要么让 LLM 猜。见 Predicates.cs。
+			// /nav_h — 一片矩形里规划器自己的 H 和 can_stand。场外的格子返回 null,而"哪些格在场外"本身就是答案。
 			else if (path == "/nav_h")
 			{
 				string rb = ReadBody(ctx).Replace(" ", "");
@@ -2642,9 +2637,8 @@ namespace TerraBlind
 			}
 			else if (path == "/path_cost")
 			{
-				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格。
-				// find_tiles 的 max_dist 是直线距离 —— 直线 25 格的东西可能隔着山要绕几百格。
-				// 判断"值不值得绕过去"要看真实路径,和 descent_route 的 tier 同一套判据。
+				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格 —— 判断"值不值得绕过去"要看真实路径。
+				// find_tiles 的 max_dist 是直线距离,直线 25 格的东西可能隔着山要绕几百格。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
@@ -2812,10 +2806,8 @@ namespace TerraBlind
 		static bool CellInBounds(int x, int y) =>
 			x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
 
-		// Structure facts about one cell: background wall, whether it's open, and whether a block / platform could be
-		// placed here. Placement rule is the practical one the bot needs (not a full vanilla worldgen check):
-		// a platform can go in any open cell; a solid block needs an open cell with at least one solid/platform neighbour
-		// to attach to. Good enough for "这儿能放平台吗 / 有背景墙吗".
+		// 单格的结构事实:背景墙、通不通、能不能放方块/平台。放置判据取实用那版,不是完整的 worldgen 检查:
+		// 平台在任何空格都能放,实心方块要空格且至少一个邻居是实心/平台可以贴。
 		static string ProbeCellJson(int x, int y)
 		{
 			if (!CellInBounds(x, y)) return "{\"error\":\"out_of_bounds\"}";
@@ -2905,24 +2897,21 @@ namespace TerraBlind
 			public System.Collections.Generic.Dictionary<(int, int), int> Field;
 		}
 
-		// the last /descent_route hell-band field, retained so /descent_h can answer progress queries for free
 		// 宝藏值多少 = 它能撑起的【绕道格数】上限。水晶=金箱>>木箱。
-		// 木箱 90:不值得为它专门绕路,但顺路(几十格内)必开 —— 40 的时候路过都不开,过分了。
+		// 木箱 90:不值得为它专门绕路,但顺路必开 —— 40 的时候人贴着走过去都不开,过分了。
 		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 90;
 		static int TreasureValue(string kind) => kind == "heart" ? ValueHeart
 			: kind == "wood_chest" ? ValueWoodChest : ValueChest;
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
-		const float DetourBudgetFrac = 10.0f;
+		const float DetourBudgetFrac = 3.0f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
-		// Core of /find_descent and /descent_route. Surface line S(x): first SUPPORTED solid from the sky (>=15
-		// solid in the 20 cells below — thin shells like canopies/roofs are skipped), then a width-64 morphological
-		// closing so pit/shaft interiors can never pose as surface. Then a multi-source Dijkstra field UP from the
-		// hell band under the biome span; the surface stand cell with minimal H is the cheapest REAL entrance down.
+		// 地表线 S(x):从天上往下第一块【底下 20 格里有 ≥15 格实心】的砖(树冠屋顶那种薄壳跳过),
+		// 再做宽 64 的闭运算,免得坑底竖井内壁冒充地表。然后从地狱带往上 flood,H 最小的地表格就是最便宜的入口。
 		static DescentData ComputeDescent(ushort[] sigTypes, out string failReason)
 		{
 			failReason = "";
@@ -3098,10 +3087,8 @@ namespace TerraBlind
 			catch { return ""; }
 		}
 
-		// Chest sub-type name. frameX/36 IS the chest sub-id (Gold=1, Ivy=21, ...). Vanilla names them via
-		// Lang.chestType[] for Containers(21) and Lang.chestType2[] for Containers2(467) — NOT MapHelper's
-		// TileToLookup, whose "option" is a map-COLOR group (many chests share one color → wrong names, e.g. a gold
-		// chest resolving to a crimson-altar color slot). style here is frameX/36, passed by the caller.
+		// 箱子子类型名。frameX/36 就是子 id(金箱=1,常春藤=21…),名字查 Lang.chestType[]/chestType2[]。
+		// 别用 MapHelper.TileToLookup:它的 option 是地图【颜色】分组,多种箱子共用一色 → 名字全错。
 		static string ChestKindName(int tileType, int style)
 		{
 			try
