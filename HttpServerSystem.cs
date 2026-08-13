@@ -2052,10 +2052,8 @@ namespace TerraBlind
 				else
 				{
 					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
-					// NOT the centroid — that lands deep underground (a biome's signature tiles run from surface to
-					// caverns, so their average is a point no human would dig to). We want the SURFACE ENTRANCE: a
-					// signature tile whose head is open sky, nearest to the player. nav walks there over ground instead
-					// of tunneling down to the middle. "Open sky above" = a few empty cells overhead.
+					// 不取质心:标志方块从地表铺到洞穴层,平均下来是个没人会挖过去的地下点。
+					// 要的是【地表入口】——头顶露天、离人最近的那块,这样 nav 是走过去而不是往下打洞。
 					var pl0 = Main.LocalPlayer;
 					int px = pl0 != null ? (int)(pl0.Center.X / 16f) : Main.maxTilesX / 2;
 					int total = 0, bestX = -1, bestY = -1, bestDx = int.MaxValue;
@@ -2937,7 +2935,7 @@ namespace TerraBlind
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
-		const float DetourBudgetFrac = 0.60f;
+		const float DetourBudgetFrac = 1.00f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
