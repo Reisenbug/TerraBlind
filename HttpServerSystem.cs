@@ -2147,6 +2147,9 @@ namespace TerraBlind
 								}
 							}
 						}
+						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
+						// 算进去等于凭空多发一倍额度,而那些额度全花在地表 —— 空岛就是这么去的。
+						int surfaceLen = line.Count;
 						var cur = (dd.EntX, dd.EntY);
 						var seen = new System.Collections.Generic.HashSet<(int, int)>();
 						for (int step = 0; step < 20000; step++)
@@ -2186,9 +2189,6 @@ namespace TerraBlind
 						}
 						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
 						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
-						// 往上不出线的起点:线从丛林地表开始,再放 80 格的余量就够到空岛了 ——
-						// 那是往上飞不是往下钻,绕道算得再便宜也不该进池子。
-						bMinY = System.Math.Max(bMinY, line[0].y);
 						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
 						// junction cell → its index along the line, so the executor can visit treasures in line order
 						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
@@ -2269,7 +2269,8 @@ namespace TerraBlind
 								val[i] = TreasureValue(tr.kind);
 							}
 							// 预算只管【绕路】那部分:主线本来就要走,不该占额度。
-							int budget = (int)(line.Count * DetourBudgetFrac);
+							// 只按【入口→地狱】那段发预算,地表那段不算 —— 它不是下丛林的路,不该撑起绕道额度。
+							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
 							int step = System.Math.Max(1, budget / BudgetSteps);
 							int B = budget / step + 2;
 							// i→j 的增量代价:离开 i 的绕道(回主线)+ 主线上走到 j 的挂点 + 进 j 的绕道。
