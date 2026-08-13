@@ -43,6 +43,11 @@ namespace TerraBlind
 		const int H_WORKBENCH = 36;
 		const int H_TABLE = 32;
 		const int H_CHAIR = 34;
+		// 放下去之后地上是【方块 ID】,和上面那些物品 ID 是两套号:椅子 34→15、桌子 32→14。
+		// 拿物品 ID 去比 TileType 会全部判缺 —— 房子明明盖好了却报验收不合格。
+		const int T_TABLE = Terraria.ID.TileID.Tables;
+		const int T_CHAIR = Terraria.ID.TileID.Chairs;
+		const int T_TORCH = Terraria.ID.TileID.Torches;
 		const int H_WALL = 93;        // 木墙
 		const int H_TORCH = 8;
 
@@ -473,12 +478,12 @@ namespace TerraBlind
 			for (int i = 0; i < ChairCount; i++)
 			{
 				int wx = Wx(2 + RoomWidth * i);
-				if (!HasTypeNear(wx, _floorRow, H_CHAIR)) bad.Add($"椅({wx},{_floorRow})");
+				if (!HasTypeNear(wx, _floorRow, T_CHAIR)) bad.Add($"椅({wx},{_floorRow})");
 			}
 			for (int i = 0; i < TableCount; i++)
 			{
 				int wx = Wx(14 - RoomWidth * i);
-				if (!HasTypeNear(wx, _floorRow, H_TABLE)) bad.Add($"桌({wx},{_floorRow})");
+				if (!HasTypeNear(wx, _floorRow, T_TABLE)) bad.Add($"桌({wx},{_floorRow})");
 			}
 			for (int r = 0; r < _rooms; r++)
 			{
@@ -489,7 +494,7 @@ namespace TerraBlind
 					if (Main.tile[wx, wy].WallType == 0) bad.Add($"墙({wx},{wy})");
 				}
 				int tx = Wx(col1 + 2), ty = _roofRow + 2;
-				if (!HasTypeNear(tx, ty, H_TORCH)) bad.Add($"火把({tx},{ty})");
+				if (!HasTypeNear(tx, ty, T_TORCH)) bad.Add($"火把({tx},{ty})");
 			}
 			// 地板:柱子之间每一格都得踩得住,漏一格 NPC 判定就不认
 			for (int c = 1; c <= LocalMax; c++)

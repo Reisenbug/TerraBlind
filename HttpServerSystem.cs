@@ -25,11 +25,8 @@ namespace TerraBlind
 		public static volatile Snapshot LatestSnapshot;
 		public static volatile ControlInput PendingControl;
 
-		// EVENT PUSH (game ↔ agent) over WebSocket on /ws. WebSocket (not SSE) because the channel is bidirectional:
-		// the game pushes events (player chat, nav_done, took damage) AND the agent can push low-latency interrupts
-		// back without a request/response round-trip. Uses HttpListener's built-in WebSocket support (no third-party
-		// lib). PushEvent may be called from the game thread; WebSocket.SendAsync can't be called concurrently on one
-		// socket, so each client owns a send queue drained by its own async loop — PushEvent only enqueues.
+		// /ws 用 WebSocket 不用 SSE:通道是双向的,agent 要能低延迟推打断回来。
+		// 一个 socket 不能并发 SendAsync,所以每个客户端自带发送队列,PushEvent 只入队。
 		sealed class WsClient
 		{
 			public System.Net.WebSockets.WebSocket Sock;
@@ -91,9 +88,8 @@ namespace TerraBlind
 				if (Main.LocalPlayer.chest != -1) { LastInteract = "already_open"; continue; }
 				int idx = Chest.FindChest(tile.tx, tile.ty);
 				if (idx == -1) { LastInteract = "no_chest"; continue; }
-				// 开箱是直接写 Player.chest,绕过了 vanilla 右键那条路 —— 锁的判定就在那条路上,所以
-				// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)以前照开不误,是作弊。
-				// 用 vanilla 自己的判据,别自己抄 frameX 范围。IsLockedOrInUse 顺带覆盖了"别人正在用"。
+				// 开箱直接写 Player.chest 绕过了右键那条路,而锁的判定就在那条路上 —— 以前上锁的箱子照开,是作弊。
+				// 用 vanilla 自己的 IsLockedOrInUse,别抄 frameX 范围;它顺带覆盖了"别人正在用"。
 				var ch = Main.chest[idx];
 				if (ch == null) { LastInteract = "no_chest"; continue; }
 				// 用箱子自己的锚点格判锁,不用传进来的那格 —— 箱子占 2×2,判据看 frameX,点右下角会读错。
@@ -292,10 +288,8 @@ namespace TerraBlind
 			}
 			else if (path == "/mine_reach")
 			{
-				// Reachable-to-mine rectangle. tML dropped the public GetTileRegion, so use the vanilla per-tile
-				// predicate IsInTileInteractionRange (which the game itself uses to gate pick swings) and take the
-				// bounding box of the reachable cells around the player. Range = tileRangeX/Y + tileBoost + blockRange
-				// (NOT the pickaxe — the pick only decides if a tile can be dented).
+				// 能挖到的矩形。tML 去掉了 GetTileRegion,所以逐格用 vanilla 自己 gate 挥镐的 IsInTileInteractionRange,取包围盒。
+				// 范围来自 tileRangeX/Y+tileBoost+blockRange,和镐无关 —— 镐只决定挖不挖得动。
 				var pr = Main.LocalPlayer;
 				if (pr != null && pr.active)
 				{
@@ -737,9 +731,8 @@ namespace TerraBlind
 			}
 			else if (path == "/build_replay_start")
 			{
-				// POST {ax?,ay?} → kick off the mod-side frame replayer for build_rec.json, rebased at anchor
-				// (omitted = player's feet). Draws the faint overlay + conflict highlight, then drives the whole
-				// build itself (nav→place/mine→next). All logic is in BuildReplayer; Python only triggers + polls.
+				// POST {ax?,ay?} → 启动 build_rec.json 的帧重放,锚点缺省=玩家脚下。
+				// 整个建造(nav→place/mine→next)都在 BuildReplayer 里,Python 只负责触发和轮询。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -789,10 +782,8 @@ namespace TerraBlind
 					targetId = int.Parse(idMatch.Groups[1].Value);
 				else if (nameMatch.Success)
 				{
-					// 游戏是中文的,createItem.Name 返回中文;而 LLM 记忆里全是英文名("Work Bench")。
-					// 只认显示名的话英文一发必失败,还白烧一次调用。所以再认内部名(ItemID 的字段名,
-					// 如 WorkBench/Torch)——它不随语言变,是稳定的英文标识。空格去掉再查,
-					// "Work Bench" 就能落到 WorkBench 上。
+					// 游戏是中文的,createItem.Name 返回中文,而 LLM 只会说英文名 —— 只认显示名英文一发必失败。
+					// 所以再认 ItemID 的字段名(不随语言变),去掉空格,"Work Bench"→WorkBench。
 					string rawName = nameMatch.Groups[1].Value;
 					string targetName = rawName.ToLowerInvariant();
 					int byInternal = -1;
@@ -2946,7 +2937,7 @@ namespace TerraBlind
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
-		const float DetourBudgetFrac = 0.30f;
+		const float DetourBudgetFrac = 0.60f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
