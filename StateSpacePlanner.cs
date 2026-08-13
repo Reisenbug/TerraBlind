@@ -53,12 +53,15 @@ namespace TerraBlind
         {
             int cy = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
             int cx = (int)((px + PhysicsSimulator.PlayerW / 2f) / 16f);
-            if (BodyFits(cx, cy)) return (cx, cy);
-            // 只吸附到既放得下身体、脚下又有支撑的列。挖的落点(规划时砖还在,中心列判"放不下")要是被吸到
-            // 隔壁没地板的悬崖列就废了 —— 那种情况保留中心列。
             int leftCol = (int)(px / 16f);
             int rightCol = (int)((px + PhysicsSimulator.PlayerW - 1f) / 16f);
             int other = cx == leftCol ? rightCol : leftCol;
+            // 站在砖的边缘时中心列可能是悬空那一列:身体压在隔壁列的砖上,人站得住,可这个格号一报出去,
+            // 找支撑的代码全查空气,一条边都发不出来 → "walled in"((3082,805) 脚下的砖其实在 3081)。
+            if (BodyFits(cx, cy) && (HasSupport(cx, cy + 1) || other == cx || !HasSupport(other, cy + 1)))
+                return (cx, cy);
+            // 只吸附到既放得下身体、脚下又有支撑的列。挖的落点(规划时砖还在,中心列判"放不下")要是被吸到
+            // 隔壁没地板的悬崖列就废了 —— 那种情况保留中心列。
             if (other != cx && BodyFits(other, cy) && HasSupport(other, cy + 1)) return (other, cy);
             return (cx, cy);
         }
