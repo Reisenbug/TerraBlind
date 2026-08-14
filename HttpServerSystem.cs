@@ -2096,6 +2096,43 @@ namespace TerraBlind
 						: "{\"found\":true,\"x\":" + dd.EntX + ",\"y\":" + dd.EntY + ",\"cost\":" + dd.Cost + ",\"entrances\":" + dd.Cands + "}";
 				}
 			}
+			else if (path == "/hell_line")
+			{
+				// POST {"x":起点列} → 地狱 170 格桥线。方向按玩家在哪半边定,房子在近端。
+				// 只算只画不搭 —— 线对不对先用眼睛验。
+				string rb = ReadBody(ctx).Replace(" ", "");
+				var hxm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var pl = Main.LocalPlayer;
+				int bx = hxm.Success ? int.Parse(hxm.Groups[1].Value)
+					: (pl != null ? ActExecutor.OriginCx(pl) : Main.maxTilesX / 2);
+				int hdir = bx < Main.maxTilesX / 2 ? 1 : -1;
+				var hr = HellLine.Compute(bx, hdir);
+				if (!hr.Found) body = "{\"found\":false,\"reason\":\"" + JsonEsc(hr.Why) + "\"}";
+				else
+				{
+					var hv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+					var lc = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
+					var hc = new Microsoft.Xna.Framework.Color(255, 180, 0, 230);
+					foreach (var (lx, ly) in hr.Line) hv.Add((lx, ly, lc));
+					for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
+						hv.Add((hr.HouseX + hdir * k, hr.HouseY, hc));
+					PathVisSystem.SetTiles(hv, 7200);
+					var hsb = new StringBuilder();
+					hsb.Append("{\"found\":true,\"dir\":").Append(hdir)
+					   .Append(",\"start\":[").Append(hr.StartX).Append(',').Append(hr.StartY)
+					   .Append("],\"house\":[").Append(hr.HouseX).Append(',').Append(hr.HouseY)
+					   .Append("],\"dig_cells\":").Append(hr.DigCells).Append(",\"cost\":").Append(hr.Cost)
+					   .Append(",\"line\":[");
+					for (int i = 0; i < hr.Line.Count; i++)
+					{
+						if (i > 0) hsb.Append(',');
+						hsb.Append('[').Append(hr.Line[i].x).Append(',').Append(hr.Line[i].y).Append(']');
+					}
+					hsb.Append("]}");
+					body = hsb.ToString();
+					DiagLog.Write($"[hell-line] start=({hr.StartX},{hr.StartY}) dir={hdir} house=({hr.HouseX},{hr.HouseY}) dig={hr.DigCells} cost={hr.Cost}");
+				}
+			}
 			else if (path == "/descent_route")
 			{
 				// POST {"name":"jungle"} → /find_descent 的入口 + 描出来的下地狱路线 + 走廊内的宝藏(箱子/生命水晶)。
