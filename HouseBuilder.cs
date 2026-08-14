@@ -24,7 +24,7 @@ namespace TerraBlind
 			Idle, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
-			Done
+			Fix, Done
 		}
 
 		private static Ph _ph = Ph.Idle;
@@ -80,7 +80,7 @@ namespace TerraBlind
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
-			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0;
+			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 			_ph = Ph.Lift;
@@ -444,13 +444,44 @@ namespace TerraBlind
 						return;
 					}
 					// 验收:逐格看有没有东西。placed=4 只说明挥了四次工具,最后一张椅子没落地也照样报 4。
+					// 缺东西先自己补一遍再说 —— 少一张椅子就整栋报废太亏,而缺哪格、缺什么验收都已经知道了。
 					string missing = AuditHouse();
-					if (missing != null) { Fail($"验收不合格:{missing}"); return; }
-					Outcome = "done"; _ph = Ph.Done;
-					DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
-					Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
+					if (missing != null)
+					{
+						if (_fixTried || _fixList.Count == 0) { Fail($"验收不合格:{missing}"); return; }
+						_fixTried = true;
+						// 背包里没有就先合:上一轮放丢了的那件,东西已经从背包扣掉了。
+						foreach (var (_, _, item) in _fixList)
+							if (Predicates.Have(item) < 1)
+							{
+								CraftCoordinator.Craft(item, 1);
+								DiagLog.Write($"[house] 补合 {item} +{CraftCoordinator.LastCrafted} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(item)}");
+							}
+						DiagLog.Write($"[house] 验收缺 {missing} → 补放 {_fixList.Count} 件");
+						var ft = new List<(int, int, string)>();
+						foreach (var (fx, fy, item) in _fixList) ft.Add((fx, fy, item.ToString()));
+						Advance(Ph.Fix);
+						if (!Need(WalkPlace.Start(Wx(LocalMax - 2), ft, out string wf), "补家具", wf)) return;
+						return;
+					}
+					Done();
+					return;
+
+				// 补完再验一次。还缺就认输 —— _fixTried 挡着,不会来回补个没完。
+				case Ph.Fix:
+					if (WalkPlace.IsRunning) return;
+					string still = AuditHouse();
+					if (still != null) { Fail($"补过一轮还是缺:{still}"); return; }
+					Done();
 					return;
 			}
+		}
+
+		static void Done()
+		{
+			Outcome = "done"; _ph = Ph.Done;
+			DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
+			Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
 		}
 
 		// 那一格上有没有【指定类型】的东西。家具占多格,vanilla 只在原点记 TileType,所以按类型查而不是按 HasTile。
@@ -471,18 +502,23 @@ namespace TerraBlind
 		}
 
 		// 完工验收:每一格都实地看过。缺什么报什么坐标 —— "placed=4" 是挥了四次工具,不是四张椅子落了地。
+		// 缺的家具:补的时候要知道往哪放什么,所以和文字报告分开存
+		static readonly List<(int wx, int wy, int item)> _fixList = new();
+		static bool _fixTried;   // 只补一轮,补完还缺就认输,不来回补个没完
+
 		static string AuditHouse()
 		{
 			var bad = new List<string>();
+			_fixList.Clear();
 			for (int i = 0; i < ChairCount; i++)
 			{
 				int wx = Wx(2 + RoomWidth * i);
-				if (!HasTypeNear(wx, _floorRow, T_CHAIR)) bad.Add($"椅({wx},{_floorRow})");
+				if (!HasTypeNear(wx, _floorRow, T_CHAIR)) { bad.Add($"椅({wx},{_floorRow})"); _fixList.Add((wx, _floorRow, H_CHAIR)); }
 			}
 			for (int i = 0; i < TableCount; i++)
 			{
 				int wx = Wx(14 - RoomWidth * i);
-				if (!HasTypeNear(wx, _floorRow, T_TABLE)) bad.Add($"桌({wx},{_floorRow})");
+				if (!HasTypeNear(wx, _floorRow, T_TABLE)) { bad.Add($"桌({wx},{_floorRow})"); _fixList.Add((wx, _floorRow, H_TABLE)); }
 			}
 			for (int r = 0; r < _rooms; r++)
 			{
