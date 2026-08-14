@@ -8,8 +8,7 @@ namespace TerraBlind
 		// StateSnapshotPlayer.ProcessTriggers.
 		public static ModKeybind ToggleMazeNav;
 		public static ModKeybind ToggleRecedingNav;
-		public static ModKeybind ToggleBuildReplay;
-		public static ModKeybind ToggleBuildRecord;
+		public static ModKeybind ShowHellLine;
 		public static ModKeybind ShowHouseSite;
 		public static ModKeybind TestBridge;
 		public static ModKeybind TestRoom;
@@ -20,21 +19,19 @@ namespace TerraBlind
 			MazeWand.MarkMainThread();   // so field builds can report whether they froze the game thread
 			ToggleMazeNav = KeybindLoader.RegisterKeybind(this, "ToggleMazeNav", "J");
 			ToggleRecedingNav = KeybindLoader.RegisterKeybind(this, "ToggleRecedingNav", "K");
-			ToggleBuildReplay = KeybindLoader.RegisterKeybind(this, "ToggleBuildReplay", "I");
-			ToggleBuildRecord = KeybindLoader.RegisterKeybind(this, "ToggleBuildRecord", "U");
+			ShowHellLine = KeybindLoader.RegisterKeybind(this, "ShowHellLine", "U");
 			ShowHouseSite = KeybindLoader.RegisterKeybind(this, "ShowHouseSite", "H");
 			TestBridge = KeybindLoader.RegisterKeybind(this, "TestBridge", "B");
 			TestRoom = KeybindLoader.RegisterKeybind(this, "TestRoom", "N");
 			TestPillar = KeybindLoader.RegisterKeybind(this, "TestPillar", "P");
-			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ToggleBuildReplay=I, ToggleBuildRecord=U, ShowHouseSite=H, TestBridge=B, TestRoom=N, TestPillar=P registered (verify in Settings→Controls)");
+			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ShowHellLine=U, ShowHouseSite=H, TestBridge=B, TestRoom=N, TestPillar=P registered (verify in Settings→Controls)");
 		}
 
 		public override void Unload()
 		{
 			ToggleMazeNav = null;
 			ToggleRecedingNav = null;
-			ToggleBuildReplay = null;
-			ToggleBuildRecord = null;
+			ShowHellLine = null;
 			ShowHouseSite = null;
 			TestBridge = null;
 			TestRoom = null;

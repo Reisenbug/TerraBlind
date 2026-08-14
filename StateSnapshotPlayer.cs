@@ -166,32 +166,27 @@ namespace TerraBlind
 				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
 				_pillarTestFrom = 0;
 			}
-			// U toggles build RECORDING: capture place/mine intents (build_rec.json) while you build by hand.
-			if (TerraBlind.ToggleBuildRecord != null && TerraBlind.ToggleBuildRecord.JustPressed)
+			// U 画地狱桥线:从人所在列往地图中心方向算 170 格,青线=桥,金色=房子那 6 格。只算不搭。
+			if (TerraBlind.ShowHellLine != null && TerraBlind.ShowHellLine.JustPressed)
 			{
-				if (BuildRecorder.IsRecording)
-				{
-					BuildRecorder.Stop();
-					Main.NewText($"[TerraBlind] 停止建造录制（{BuildRecorder.LastEventCount} 事件）→ build_rec.json", 255, 120, 120);
-				}
+				var hp = Main.LocalPlayer;
+				int hbx = ActExecutor.OriginCx(hp);
+				int hdir = hbx < Main.maxTilesX / 2 ? 1 : -1;
+				var hres = HellLine.Compute(hbx, hdir);
+				if (!hres.Found)
+					Main.NewText($"[TerraBlind] 地狱线算不出来：{hres.Why}", 255, 120, 120);
 				else
 				{
-					BuildRecorder.Start();
-					Main.NewText("[TerraBlind] 开始建造录制（放置/挖掘意图）", 120, 255, 120);
+					var hvis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+					var hlc = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
+					var hhc = new Microsoft.Xna.Framework.Color(255, 180, 0, 230);
+					foreach (var (hlx, hly) in hres.Line) hvis.Add((hlx, hly, hlc));
+					for (int hk = 0; hk < HouseBuilder.RoomWidth + 1; hk++)
+						hvis.Add((hres.HouseX + hdir * hk, hres.HouseY, hhc));
+					PathVisSystem.SetTiles(hvis, 7200);
+					Main.NewText($"[TerraBlind] 桥线 起点({hres.StartX},{hres.StartY}) 房子({hres.HouseX},{hres.HouseY}) 要挖{hres.DigCells}格 代价{hres.Cost}", 120, 255, 120);
+					DiagLog.Write($"[hell-line] key start=({hres.StartX},{hres.StartY}) dir={hdir} house=({hres.HouseX},{hres.HouseY}) dig={hres.DigCells} cost={hres.Cost}");
 				}
-			}
-			// I toggles build REPLAY: start at the player's feet (anchor -1,-1) if idle, stop if running.
-			if (TerraBlind.ToggleBuildReplay != null && TerraBlind.ToggleBuildReplay.JustPressed)
-			{
-				if (BuildReplayer.Running)
-				{
-					BuildReplayer.Stop();
-					Main.NewText("[TerraBlind] 建造回放已停止");
-				}
-				else if (BuildReplayer.Start(-1, -1, out string why))
-					Main.NewText("[TerraBlind] 开始回放建造（锚点=脚下）");
-				else
-					Main.NewText($"[TerraBlind] 无法回放：{why}");
 			}
 		}
 
