@@ -53,6 +53,15 @@ namespace TerraBlind
 			return plan;
 		}
 
+		// 桥面认的"已经铺好"= 实心方块,且不是平台。平台要挖掉换成方块。
+		static bool IsDeckBlock(int x, int y)
+		{
+			if (!Predicates.InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			if (!t.HasTile || !Main.tileSolid[t.TileType]) return false;
+			return !Main.tileSolidTop[t.TileType];
+		}
+
 		public static bool Start(string itemName, List<(int x, int y)> line, out string why)
 		{
 			why = "";
@@ -79,12 +88,13 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > 60 * 900) { Fail("timeout"); return; }
-			// 物块替换要开着,不然桥面那格已经有别的东西时只能干挥。PlatformDown 里有这行,这儿漏了。
-			if (!p.TileReplacementEnabled) p.builderAccStatus[10] = 0;
+			// 这里【不】开物块替换:替换会把已有的方块也换掉,白费料。桥面要的是"方块留着、别的挖掉"。
+			if (p.TileReplacementEnabled) p.builderAccStatus[10] = 1;
 
-			// 走完了
-			while (_idx < _plan.Count && Predicates.IsSolid(_plan[_idx].X, _plan[_idx].Y))
-			{ _idx++; _cellFrames = 0; }   // 已经有方块的直接跳过,不重复铺
+			// 已经是【方块】的当已铺好跳过。平台不算 —— 平台 tileSolid 也是 true,
+			// 拿 IsSolid 判会把平台当成铺好的留在桥面上,而平台停不住雷管。
+			while (_idx < _plan.Count && IsDeckBlock(_plan[_idx].X, _plan[_idx].Y))
+			{ _idx++; _cellFrames = 0; }
 			if (_idx >= _plan.Count)
 			{
 				Outcome = "done"; _running = false;
@@ -133,6 +143,13 @@ namespace TerraBlind
 				if (away > 0) p.controlRight = true; else p.controlLeft = true;
 				return;
 			}
+			// 那格有东西(平台、家具、杂物)就先挖掉再铺。不用物块替换 —— 替换会把【已有的方块】
+			// 也换成我的料,白费材料;而这里要区分的恰恰是"方块留着、别的挖掉"。
+			if (Main.tile[cell.X, cell.Y].HasTile && Dig(p, cell.X, cell.Y, "桥面上的东西")) return;
+			// 桥面【上方 3 格】必须空,不然人走不过去 —— 顺手清掉,别等走到跟前才发现挡着
+			for (int r = 1; r <= 3; r++)
+				if (Predicates.IsSolid(cell.X, cell.Y - r) && Dig(p, cell.X, cell.Y - r, "净空")) return;
+
 			// 挥了半天没上去的话,把当时的现场打出来 —— 不然又是"一直挥"却不知道为什么
 			if (_cellFrames % 90 == 1)
 				DiagLog.Write($"[helldeck] 铺({cell.X},{cell.Y}){(cell.Anchor ? "锚" : "")} f={_cellFrames} " +
@@ -142,6 +159,24 @@ namespace TerraBlind
 			if (Predicates.IsSolid(cell.X, cell.Y)) { Placed++; _idx++; _cellFrames = 0; _skips = 0; }
 		}
 
+		// 挖一格。够得着且有镐才动手;开挖了返回 true,这一帧就交给它。
+		static bool Dig(Player p, int x, int y, string why)
+		{
+			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
+			int pk = -1;
+			for (int i = 0; i < 10; i++)
+			{ var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { pk = i; break; } }
+			if (pk < 0)
+			{
+				if (_cellFrames % 60 == 1) DiagLog.Write($"[helldeck] 要挖({x},{y}){why}但没镐");
+				return false;
+			}
+			if (ItemUseCoordinator.IsActive) return true;
+			ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = pk, Strict = true });
+			DiagLog.Write($"[helldeck] 挖({x},{y}) {why} type={Main.tile[x, y].TileType}");
+			return true;
+		}
+
 		// 前进方向那一列,身子占的 3 行里有实心就挖掉。挖到了返回 true(这一帧交给挖,别再按方向键)。
 		static bool DigWayForward(Player p, int dir)
 		{
@@ -149,25 +184,7 @@ namespace TerraBlind
 			int col = dir > 0 ? br + 1 : bl - 1;
 			int fy = ActExecutor.OriginCy(p);
 			for (int r = 0; r < 3; r++)
-			{
-				int y = fy - r;
-				if (!Predicates.IsSolid(col, y)) continue;
-				if (!p.IsInTileInteractionRange(col, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
-				int slot = -1;
-				for (int i = 0; i < 10; i++)
-				{ var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { slot = i; break; } }
-				if (slot < 0)
-				{
-					if (_cellFrames % 60 == 1) DiagLog.Write($"[helldeck] 墙挡着({col},{y})但没镐");
-					return false;
-				}
-				if (!ItemUseCoordinator.IsActive)
-				{
-					ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = col, TargetWy = y, Slot = slot, Strict = true });
-					DiagLog.Write($"[helldeck] 挖挡路的({col},{y}) 身{bl}..{br} 脚{fy}");
-				}
-				return true;
-			}
+				if (Predicates.IsSolid(col, fy - r) && Dig(p, col, fy - r, "挡路")) return true;
 			return false;
 		}
 
