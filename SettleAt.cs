@@ -35,6 +35,22 @@ namespace TerraBlind
 
 		public static bool Start(int col, out string why) => StartPx(col, col * 16f + 8f, HalfTile, out why);
 
+		// 精确到【占哪几列】。像素 tol=0 不可能:落点靠摩擦滑行,是亚像素值,永远等不到相等。
+		// 列是整数条件 —— 取合法像素窗口的中点、容差=半窗宽,于是列上零容差。
+		public static bool StartSpan(int leftCol, int rightCol, out string why)
+		{
+			why = "";
+			var p = Main.LocalPlayer;
+			if (p == null) { why = "no_player"; return false; }
+			float w = p.width;
+			// 占 l..r ⟺ px∈[l*16, l*16+15] 且 px+w-1∈[r*16, r*16+15],两个区间取交
+			float loPx = System.MathF.Max(leftCol * 16f, rightCol * 16f - w + 1f);
+			float hiPx = System.MathF.Min(leftCol * 16f + 15f, rightCol * 16f + 16f - w);
+			if (loPx > hiPx) { why = $"span_impossible {leftCol}..{rightCol} w={w}"; return false; }
+			float mid = (loPx + hiPx) / 2f;
+			return StartPx(leftCol, mid + w / 2f, (hiPx - loPx) / 2f + 0.4f, out why);
+		}
+
 		// 精确停位:身体中心停到 centerPx(容差 tol)。柱子放哪一列看身体中心,
 		// 半格容差下人可能跨 {col-1,col} 也可能跨 {col,col+1} —— 头顶哪一列有方块就撞哪列。
 		public static bool StartPx(int col, float centerPx, float tol, out string why)

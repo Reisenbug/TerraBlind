@@ -22,7 +22,6 @@ namespace TerraBlind
 		private static int _placed;
 		private static int _frames, _phaseFrames;
 		private static int _sinkFrom;
-		private static int _alignDir;         // 上一次往哪边让的,不满足就换一边
 
 		private const int MaxPhaseFrames = 240;
 
@@ -40,7 +39,7 @@ namespace TerraBlind
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 			_item = itemName;
 			_targetWy = targetWy;
-			_placed = 0; _frames = 0; _phaseFrames = 0; _alignDir = 0;
+			_placed = 0; _frames = 0; _phaseFrames = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[platdown] start feet={ActExecutor.OriginCy(p)} → {_targetWy}");
 			_ph = Ph.Stand;
@@ -90,8 +89,6 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
-				// 让开方块:20px 宽在 16px 格上必然跨 2~3 列,停列心时边上那列常是砖。
-				// 所以按边缘对齐,不按列心;这次不行就换一边,不报错。
 				case Ph.Align:
 					if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
 					_phaseFrames = 0; _ph = Ph.Stand;
@@ -101,7 +98,6 @@ namespace TerraBlind
 					if (p.velocity.Y != 0f) return;
 					if (Standable(p, out int sl, out int sr) && OnPlatform(p))
 					{ _phaseFrames = 0; _ph = Ph.Place; return; }
-					if (++_phaseFrames > MaxPhaseFrames) { _phaseFrames = 0; _alignDir = _alignDir >= 0 ? -1 : 1; }
 					StartAlign(p, sl, sr);
 					return;
 
@@ -127,20 +123,24 @@ namespace TerraBlind
 			}
 		}
 
-		// 往没有方块的那一侧让。左右都有就先试一边,下一轮 _alignDir 翻面再试另一边。
+		// 找一段合法占位并精确停进去:跨度里每一列脚下都不是方块,且至少一列踩得住。
+		// 20px 宽最少跨 2 列,所以从平台那列出发,往左往右各试一次两列跨度。
 		static void StartAlign(Player p, int l, int r)
 		{
 			if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
 			int fy = ActExecutor.OriginCy(p) + 1;
-			int keep = l;
-			for (int c = l; c <= r; c++)
-				if (!Predicates.IsSolid(c, fy) && Predicates.IsGround(c, fy)) { keep = c; break; }
-			bool blockRight = Predicates.IsSolid(keep + 1, fy);
-			int dir = _alignDir != 0 ? _alignDir : (blockRight ? -1 : 1);
-			float w = PhysicsSimulator.PlayerW;
-			float tpx = dir < 0 ? keep * 16f + 15f - (w - 1f) / 2f : keep * 16f + w / 2f;
-			SettleAt.StartPx(keep, tpx, 4f, out _);
-			_ph = Ph.Align;
+			int plat = -1;
+			for (int c = l - 2; c <= r + 2; c++)
+				if (Predicates.IsGround(c, fy) && !Predicates.IsSolid(c, fy)) { plat = c; break; }
+			if (plat < 0) { _ph = Ph.Stand; return; }
+			foreach (var (a, b) in new[] { (plat - 1, plat), (plat, plat + 1) })
+			{
+				bool ok = true;
+				for (int c = a; c <= b; c++) if (Predicates.IsSolid(c, fy)) { ok = false; break; }
+				if (!ok) continue;
+				if (SettleAt.StartSpan(a, b, out _)) { _ph = Ph.Align; return; }
+			}
+			_ph = Ph.Stand;
 		}
 
 		static int PlaceCol(Player p)
