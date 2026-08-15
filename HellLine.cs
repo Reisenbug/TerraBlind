@@ -81,6 +81,10 @@ namespace TerraBlind
 			int overLava = LavaGap - (floor - y);
 			if (overLava > 0) c += overLava * LavaW;
 			if (y > floor) c += (y - floor) * DigCell;
+			// 方块绝不进岩浆:这条是禁令不是价钱,再贵的价都可能被更贵的绕路盖过去。
+			// floor 是整列估出来的,桥面占的是具体那一格,所以直接问这一格。
+			if (Predicates.IsLava(x, y)) return Unreachable;
+			for (int r = 1; r < Body + 1; r++) if (Predicates.IsLava(x, y - r)) return Unreachable;
 			return c;
 		}
 
@@ -178,6 +182,9 @@ namespace TerraBlind
 			}
 			for (int i = 0; i < Length; i++)
 				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
+
+			for (int i = 0; i < Length; i++)
+				if (Predicates.IsLava(sx + dir * i, ys[i])) { res.Why = $"lava_on_deck@col{i}"; return res; }
 
 			int maxStep = 0;
 			for (int i = 1; i < Length; i++) maxStep = System.Math.Max(maxStep, System.Math.Abs(ys[i] - ys[i - 1]));
