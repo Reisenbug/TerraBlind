@@ -3,20 +3,21 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// HELL LINE — 地狱那条 170 格的桥走哪儿。
+	// HELL LINE — 地狱那条 170 格的桥铺在哪一行。
 	//
 	// 地狱是上下两个不规则表面夹出来的长通道:上表面是天花板底面(石头),
-	// 下表面是岩浆面或地面。要一条相对居中、平滑、处处站得住的线。
+	// 下表面是岩浆面或地面。桥是给人站、给雷管停的实心面,所以要连续 170 格。
 	//
-	// 一维 DP:逐列推进,|Δy|<=1(桥只能缓坡)。代价三项 —— 抖动、挖掘、偏离中心。
-	// 小坡跟着走只花 SlopeW,挖平要 DigSide*3,所以坡自己就跟上去了;
-	// 黑曜石砖房挡死时绕不出去,挖穿反而便宜,于是自己去挖。不写"如果是建筑就挖"。
+	// Dijkstra 不是逐列 DP:DP 一列一个状态就只能翻过去或挖过去,绕不开东西。
+	// 图上四邻走,能回头能上下,形状交给它自己找。
 	public static class HellLine
 	{
 		public const int Length = 170;      // 硬指标,不缩短
-		const int SlopeW = 4;               // 抖一格的钱。略高于 MoveSide=3,没约束时倾向水平
-		const int CenterW = 1;              // 轻微拉向中间,只在有余地时起作用
+		const int SlopeW = 4;               // 上下挪一格的钱。没约束时线自己走平
 		const int DigCell = 26;             // 和主线同价(MazeWand.DigSide),绝不另编一套
+		const int CenterW = 20;             // 偏离空腔中间的钱,按【比例】算不按格数
+		const int CeilW = 6;                // 贴天花板的钱,这个是绝对格数:人得塞进去
+		const int CeilNear = 5;             // 头顶 5 格以内开始罚
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 8;          // 起点 x 容差:正好落在闭合处就往旁边挪
 		const int Unreachable = int.MaxValue / 4;
@@ -31,7 +32,7 @@ namespace TerraBlind
 			public List<(int x, int y)> Line;
 		}
 
-		// 一列的空腔:天花板底面下一格 .. 第一个实心/岩浆。岩浆算下表面 —— 桥架它上面,脚下是空气。
+		// 一列的空腔:天花板底面 .. 第一个实心/岩浆。岩浆算下表面 —— 桥架它上面,脚下是空气。
 		static void Column(int x, out int ceil, out int floor)
 		{
 			ceil = Main.UnderworldLayer;
@@ -44,12 +45,27 @@ namespace TerraBlind
 			floor = y;
 		}
 
-		// 站在 (x,y):脚下那格是 y,身子占 y-1..y-Body+1。要挖几格?
+		// 桥面在 (x,y):人占 y-1..y-Body+1。这几格有实心就得挖。
 		static int Blocked(int x, int y)
 		{
 			int n = 0;
-			for (int r = 0; r < Body; r++) if (Predicates.IsSolid(x, y - r)) n++;
+			for (int r = 1; r < Body + 1; r++) if (Predicates.IsSolid(x, y - r)) n++;
 			return n;
+		}
+
+		// 一格待着值多少。居中按比例 —— 空腔 3 格高时"居中"就是离下表面 1 格,
+		// 60 格高时就是 30 格,同一个式子两种都对,所以下方永远不设格数阈值。
+		static int CellCost(int x, int y, int ceil, int floor)
+		{
+			int span = floor - ceil;
+			if (span < Body) return Unreachable;
+			if (y <= ceil || y > floor) return Unreachable;
+			int c = Blocked(x, y) * DigCell;
+			float rel = (float)(y - ceil) / span;
+			c += (int)(System.Math.Abs(rel - 0.5f) * 2f * CenterW);
+			int head = (y - Body) - ceil;
+			if (head < CeilNear) c += (CeilNear - head) * CeilW;
+			return c;
 		}
 
 		public static Result Compute(int bx, int dir)
@@ -57,79 +73,67 @@ namespace TerraBlind
 			var res = new Result { Line = new List<(int x, int y)>() };
 			dir = dir >= 0 ? 1 : -1;
 
-			// 起点列:bx 附近净空最好的一列。钉死 bx 的话正好赶上闭合处就一落地埋石头里。
 			int sx = bx, bestClear = -1;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
-				int x = bx + d;
-				Column(x, out int c, out int f);
-				int clear = f - c;
-				if (clear > bestClear) { bestClear = clear; sx = x; }
+				Column(bx + d, out int c0, out int f0);
+				if (f0 - c0 > bestClear) { bestClear = f0 - c0; sx = bx + d; }
 			}
-			if (bestClear < Body)
-			{
-				res.Why = $"start_too_tight clear={bestClear}";
-				return res;
-			}
+			if (bestClear < Body) { res.Why = $"start_too_tight clear={bestClear}"; return res; }
 
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
 
-			int yLo = Main.UnderworldLayer, yHi = Main.maxTilesY - 3;
+			int yLo = Main.UnderworldLayer + 1, yHi = Main.maxTilesY - 3;
 			int rows = yHi - yLo + 1;
-			var cost = new int[Length, rows];
-			var from = new int[Length, rows];
-
-			// 每列先量一次空腔,DP 里反复用
 			var ceilA = new int[Length];
 			var floorA = new int[Length];
 			for (int i = 0; i < Length; i++) Column(sx + dir * i, out ceilA[i], out floorA[i]);
 
+			var dist = new int[Length, rows];
+			var prev = new int[Length, rows];
 			for (int i = 0; i < Length; i++)
-				for (int r = 0; r < rows; r++) { cost[i, r] = Unreachable; from[i, r] = -1; }
+				for (int r = 0; r < rows; r++) { dist[i, r] = Unreachable; prev[i, r] = -1; }
 
-			// 一列的固有代价:挖 + 偏离中心。天花板/地板外面直接判死,别让线跑到实体层里去。
-			int Own(int i, int y)
-			{
-				int ceil = ceilA[i], floor = floorA[i];
-				if (y <= Main.UnderworldLayer || y >= Main.maxTilesY - 3) return Unreachable;
-				int mid = (ceil + floor) / 2;
-				int dig = Blocked(sx + dir * i, y);
-				return dig * DigCell + System.Math.Abs(y - mid) * CenterW;
-			}
-
+			var pq = new SortedSet<(int d, int i, int r)>();
 			for (int r = 0; r < rows; r++)
 			{
-				int own = Own(0, yLo + r);
-				if (own < Unreachable) cost[0, r] = own;
+				int c = CellCost(sx, yLo + r, ceilA[0], floorA[0]);
+				if (c >= Unreachable) continue;
+				dist[0, r] = c;
+				pq.Add((c, 0, r));
+			}
+			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
+
+			// 四邻:前后各一列 + 同列上下。能回头能上下,所以绕得开东西 —— DP 绕不开。
+			while (pq.Count > 0)
+			{
+				var (d, i, r) = pq.Min;
+				pq.Remove(pq.Min);
+				if (d > dist[i, r]) continue;
+				if (i == Length - 1) break;
+				foreach (var (di, dr) in new[] { (1, 0), (0, 1), (0, -1), (-1, 0) })
+				{
+					int ni = i + di, nr = r + dr;
+					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
+					int cc = CellCost(sx + dir * ni, yLo + nr, ceilA[ni], floorA[ni]);
+					if (cc >= Unreachable) continue;
+					int nd = d + cc + (dr != 0 ? SlopeW : 0);
+					if (nd >= dist[ni, nr]) continue;
+					pq.Remove((dist[ni, nr], ni, nr));
+					dist[ni, nr] = nd;
+					prev[ni, nr] = r;
+					pq.Add((nd, ni, nr));
+				}
 			}
 
-			for (int i = 1; i < Length; i++)
-				for (int r = 0; r < rows; r++)
-				{
-					int own = Own(i, yLo + r);
-					if (own >= Unreachable) continue;
-					int best = Unreachable, bestP = -1;
-					for (int d = -1; d <= 1; d++)
-					{
-						int pr = r + d;
-						if (pr < 0 || pr >= rows) continue;
-						if (cost[i - 1, pr] >= Unreachable) continue;
-						int c = cost[i - 1, pr] + System.Math.Abs(d) * SlopeW;
-						if (c < best) { best = c; bestP = pr; }
-					}
-					if (bestP < 0) continue;
-					int tot = best + own;
-					if (tot < cost[i, r]) { cost[i, r] = tot; from[i, r] = bestP; }
-				}
-
 			int endR = -1, endC = Unreachable;
-			for (int r = 0; r < rows; r++) if (cost[Length - 1, r] < endC) { endC = cost[Length - 1, r]; endR = r; }
+			for (int r = 0; r < rows; r++) if (dist[Length - 1, r] < endC) { endC = dist[Length - 1, r]; endR = r; }
 			if (endR < 0) { res.Why = "no_path"; return res; }
 
 			var ys = new int[Length];
 			int cr = endR;
-			for (int i = Length - 1; i >= 0; i--) { ys[i] = yLo + cr; cr = i > 0 ? from[i, cr] : cr; }
+			for (int i = Length - 1; i >= 0; i--) { ys[i] = yLo + cr; if (i > 0) cr = prev[i, cr]; if (cr < 0) { res.Why = "broken_trace"; return res; } }
 
 			int digTotal = 0;
 			for (int i = 0; i < Length; i++)
@@ -159,12 +163,10 @@ namespace TerraBlind
 				int dig = 0;
 				for (int k = 0; k < W; k++)
 				{
-					if (ys[i + k] != ys[i]) { flat = false; break; }
-					if (ys[i + k] - ceilA[i + k] < Head) { flat = false; break; }
+					if (ys[i + k] != ys[i] || ys[i + k] - ceilA[i + k] < Head) { flat = false; break; }
 					dig += Blocked(sx + dir * (i + k), ys[i + k]);
 				}
-				if (!flat) continue;
-				if (dig < best) { best = dig; bestI = i; }
+				if (flat && dig < best) { best = dig; bestI = i; }
 			}
 			if (bestI < 0) { res.HouseX = res.StartX; res.HouseY = res.StartY; return; }
 			res.HouseX = sx + dir * bestI;
