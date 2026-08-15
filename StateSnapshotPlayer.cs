@@ -284,6 +284,15 @@ namespace TerraBlind
 			// hellbridge: 只做编排(降→铺),真正干活的是 PlatformDown/BridgeBuilder,所以它先跑、不 return
 			if (HellBridge.IsRunning) HellBridge.Tick();
 
+			// helldeck: 照着线逐格铺桥面,放置走 PlaceAction,所以控制要跟着发
+			if (HellDeck.IsRunning)
+			{
+				HellDeck.Tick();
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
 			// platdown: 踩着平台一格一格往下降。放平台要用 PlaceAction,所以它的控制也得跟着发
 			if (PlatformDown.IsRunning)
 			{

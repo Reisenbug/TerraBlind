@@ -89,29 +89,29 @@ namespace TerraBlind
 			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
 			string block = p.inventory[bslot].type.ToString();
 			_lastBlock = block;
-			if (!BridgeBuilder.Start(block, _dir > 0 ? "right" : "left", HellLine.Length,
-				ActExecutor.OriginCx(p), fy, out why))
+			// 照着线铺,不是沿一行平推 —— 平推的话图上有坡有挖,实际是一条直线,两边永远对不上
+			if (!HellDeck.Start(block, _line, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
-			DiagLog.Write($"[hellbridge] 开铺 从({ActExecutor.OriginCx(p)},{fy}) 往{(_dir > 0 ? "右" : "左")} " +
-				$"{HellLine.Length}格 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
+			DiagLog.Write($"[hellbridge] 开铺 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
 			_ph = Ph.Lay;
 			return true;
 		}
 
-		// 铺好的绿、还没铺的青。看真实地块不看计数 —— 卡住时停在哪一格要一眼能看见。
+		// 绿=已铺、青=待铺、黄=拐角锚点。看真实地块不看计数 —— 卡在哪一格要一眼看见。
 		static void Repaint()
 		{
 			if (_line == null) return;
 			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 			var done = new Microsoft.Xna.Framework.Color(80, 255, 120, 190);
 			var todo = new Microsoft.Xna.Framework.Color(0, 200, 255, 120);
-			foreach (var (x, y) in _line)
-				vis.Add((x, y, Predicates.IsSolid(x, y) ? done : todo));
+			var anchor = new Microsoft.Xna.Framework.Color(255, 210, 0, 200);
+			foreach (var c in HellDeck.Expand(_line))
+				vis.Add((c.X, c.Y, Predicates.IsSolid(c.X, c.Y) ? done : c.Anchor ? anchor : todo));
 			PathVisSystem.SetTiles(vis, 240);
 		}
 
 		// 换一摞料继续铺。挑不出料/起不来就返回 false,让调用方去报错。
-		static bool Relay(int nx, int ny)
+		static bool Relay()
 		{
 			var p = Main.LocalPlayer;
 			int slot = FindBlockSlot(p, out int cnt);
@@ -120,16 +120,15 @@ namespace TerraBlind
 			// 挑出来还是刚才那摞就别重来了 —— 那说明停下另有原因(够不着、被挡),换料解决不了,重启只会死循环
 			if (it == _lastBlock) return false;
 			_lastBlock = it;
-			if (!BridgeBuilder.Start(it, _dir > 0 ? "right" : "left", HellLine.Length - _laid, nx, ny, out _))
-				return false;
-			DiagLog.Write($"[hellbridge] 换料 {p.inventory[slot].Name} 存量{cnt} 从({nx},{ny})续,已铺{_laid}/{HellLine.Length}");
+			if (!HellDeck.Start(it, _line, out _)) return false;
+			DiagLog.Write($"[hellbridge] 换料 {p.inventory[slot].Name} 存量{cnt},已铺{_laid}");
 			return true;
 		}
 
 		public static void Stop()
 		{
 			if (Outcome == "running") Outcome = "stopped";
-			RecedingNav.Stop(); BridgeBuilder.Stop();
+			RecedingNav.Stop(); HellDeck.Stop();
 			_ph = Ph.Idle;
 		}
 
@@ -150,17 +149,13 @@ namespace TerraBlind
 					return;
 
 				case Ph.Lay:
-					if (BridgeBuilder.IsRunning) return;
-					_laid += BridgeBuilder.Placed;
+					if (HellDeck.IsRunning) return;
+					_laid += HellDeck.Placed;
 					// 这摞用光了就换第二多的接着铺,从它停的那一格续 —— 2000 木材铺完还差的那截,
 					// 该由 150 泥块顶上,而不是在这儿报"铺不完"。
-					if (_laid < HellLine.Length && BridgeBuilder.Outcome != "done")
-					{
-						int nx = BridgeBuilder.NextWx, ny = BridgeBuilder.RowWy;
-						if (Relay(nx, ny)) return;
-					}
-					if (_laid < HellLine.Length)
-					{ Fail($"铺不完:{BridgeBuilder.Outcome} {BridgeBuilder.Reason} 已铺{_laid}/{HellLine.Length}"); return; }
+					if (HellDeck.Outcome != "done" && Relay()) return;
+					if (HellDeck.Outcome != "done")
+					{ Fail($"铺不完:{HellDeck.Outcome} {HellDeck.Reason} 已铺{_laid}"); return; }
 					Outcome = "done"; _ph = Ph.Done;
 					DiagLog.Write($"[hellbridge] DONE 铺了{_laid}格");
 					return;
