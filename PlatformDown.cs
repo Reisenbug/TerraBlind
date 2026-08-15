@@ -91,14 +91,31 @@ namespace TerraBlind
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Done("stuck", $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return; }
 					if (p.velocity.Y != 0f) return;
+					if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
+					// 砖挡着就沉不下去,所以【每一列】都不能是砖(平台不算砖),不是"找到一列平台就开工"
+					int plat = int.MinValue, brick = int.MinValue;
 					for (int c = bl; c <= br; c++)
-						if (IsPlat(c, feetY + 1))
-						{
-							_col = c; _platY = feetY + 1;
-							DiagLog.Write($"[platdown] 站位 col={_col} 平台在({_col},{_platY}) 身子{bl}..{br}");
-							_phaseFrames = 0; _ph = Ph.Place;
-							return;
-						}
+					{
+						if (IsPlat(c, feetY + 1)) { if (plat == int.MinValue) plat = c; }
+						else if (Predicates.IsSolid(c, feetY + 1)) brick = c;
+					}
+					if (plat != int.MinValue && brick == int.MinValue)
+					{
+						_col = plat; _platY = feetY + 1;
+						DiagLog.Write($"[platdown] 站位 col={_col} 平台在({_col},{_platY}) 身子{bl}..{br}");
+						_phaseFrames = 0; _ph = Ph.Place;
+						return;
+					}
+					if (plat == int.MinValue) return;
+					// 让开砖:往砖的反方向挪,让身子落在 [plat-1,plat] 或 [plat,plat+1] 里不含砖的那个
+					{
+						int a = brick > plat ? plat - 1 : plat, b = brick > plat ? plat : plat + 1;
+						if (!Predicates.IsSolid(a, feetY + 1) && !Predicates.IsSolid(b, feetY + 1)
+							&& SettleAt.StartSpan(a, b, out string swhy))
+							DiagLog.Write($"[platdown] 让开砖{brick} → 停到{a}..{b}");
+						else
+							Done("stuck", $"躲不开砖{brick} 平台{plat} 身子{bl}..{br}");
+					}
 					return;
 
 				// 放置:往那块平台的下面一格放
