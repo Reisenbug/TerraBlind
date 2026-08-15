@@ -56,18 +56,23 @@ namespace TerraBlind
 			return n;
 		}
 
-		// 一格待着值多少。居中按比例 —— 空腔 3 格高时"居中"就是离下表面 1 格,
-		// 60 格高时就是 30 格,同一个式子两种都对,所以下方永远不设格数阈值。
+		// 没有禁区:拿 ceil/floor 当硬墙时,相邻两列量到不同的腔就接不上 → no_path。挖得动就过得去。
+		// 居中按比例:腔 3 格高时"居中"=离下表面 1 格,60 格高时=30 格,一个式子两种都对。
 		static int CellCost(int x, int y, int ceil, int floor)
 		{
-			int span = floor - ceil;
-			if (span < Body) return Unreachable;
-			if (y <= ceil || y > floor) return Unreachable;
 			int c = Blocked(x, y) * DigCell;
-			float rel = (float)(y - ceil) / span;
-			c += (int)(System.Math.Abs(rel - 0.5f) * 2f * CenterW);
+			int span = floor - ceil;
+			if (span >= Body)
+			{
+				float rel = (float)(y - ceil) / span;
+				if (rel < 0f) rel = 0f; else if (rel > 1f) rel = 1f;
+				c += (int)(System.Math.Abs(rel - 0.5f) * 2f * CenterW);
+			}
 			int head = (y - Body) - ceil;
 			if (head < CeilNear) c += (CeilNear - head) * CeilW;
+			// 腔外面不是不能去,只是白挖 —— 给个明确的钱,别让它比腔里还便宜
+			if (y <= ceil) c += (ceil - y + 1) * CeilW;
+			if (y > floor) c += (y - floor) * DigCell;
 			return c;
 		}
 
