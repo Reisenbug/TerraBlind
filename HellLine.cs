@@ -38,14 +38,16 @@ namespace TerraBlind
 			ceil = Main.UnderworldLayer;
 			floor = Main.maxTilesY - 2;
 			if (x < 1 || x >= Main.maxTilesX - 1) { ceil = floor = 0; return; }
-			// UnderworldLayer 那一行通常是空气,天花板的石头在它【下面】。原来从这儿直接找"第一个实心"
-			// 就把天花板顶面当成了下表面,量出来的空腔是天花板上方那段空气 —— 于是每一格都判死,全图 no_path。
-			int y = Main.UnderworldLayer, lim = Main.maxTilesY - 2;
-			while (y < lim && !Predicates.IsSolid(x, y)) y++;
-			while (y < lim && Predicates.IsSolid(x, y)) y++;
-			ceil = y;
-			while (y < lim && !Predicates.IsSolid(x, y) && !Predicates.IsLava(x, y)) y++;
-			floor = y;
+			// 两个面的行号由生成器写死(WorldGen "Underworld" pass):天花板 num 夹在 -190..-160,
+			// 岩浆面 num2 夹在 -120..-60。带外的实心是浮空岛和建筑,认它们就把岛顶当了地板(报 1016,真值 1060)。
+			int lo = Main.maxTilesY - 145, hi = Main.maxTilesY - 50;
+			floor = Main.maxTilesY - 60;
+			for (int y = hi; y >= lo; y--)
+				if (!Predicates.IsSolid(x, y) && !Predicates.IsLava(x, y)) { floor = y; break; }
+			int clo = Main.maxTilesY - 200, chi = Main.maxTilesY - 150;
+			ceil = clo;
+			for (int y = System.Math.Min(floor, chi); y >= clo; y--)
+				if (Predicates.IsSolid(x, y)) { ceil = y + 1; break; }
 		}
 
 		// 桥面在 (x,y):人占 y-1..y-Body+1。这几格有实心就得挖。
@@ -169,6 +171,10 @@ namespace TerraBlind
 			}
 			for (int i = 0; i < Length; i++)
 				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
+
+			// 两个面量得对不对,一行就能看出来 —— 位置错过一次就是错在这儿
+			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
+				$"ceil={ceilA[Length / 2]} floor={floorA[Length / 2]} | 末 ceil={ceilA[Length - 1]} floor={floorA[Length - 1]}");
 
 			int digTotal = 0;
 			for (int i = 0; i < Length; i++)
