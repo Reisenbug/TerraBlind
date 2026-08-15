@@ -55,11 +55,13 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
+		// 平台(19)在 vanilla 里 tileSolid 和 tileSolidTop 【都是 true】(Main.cs:7752)。
+		// 原来加了 !tileSolid,于是每一块平台都判成不是平台,站位阶段永远找不到东西 → 超时。
 		static bool IsPlat(int x, int y)
 		{
 			if (!Predicates.InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
-			return t.HasTile && Main.tileSolidTop[t.TileType] && !Main.tileSolid[t.TileType];
+			return t.HasTile && Main.tileSolidTop[t.TileType];
 		}
 
 		public static void Tick()
@@ -78,9 +80,14 @@ namespace TerraBlind
 				case Ph.Stand:
 					// 每 30 帧报一次现场,不然"什么都没发生"就只能靠猜
 					if ((_frames % 30) == 1)
-						DiagLog.Write($"[platdown] 找平台中 f={_frames} feet={feetY} vy={p.velocity.Y:0.##} " +
-							$"身子{bl}..{br} 脚下[{(IsPlat(bl, feetY + 1) ? "平台" : Predicates.IsSolid(bl, feetY + 1) ? "砖" : "空")}," +
-							$"{(IsPlat(br, feetY + 1) ? "平台" : Predicates.IsSolid(br, feetY + 1) ? "砖" : "空")}]");
+					{
+						// 逐列打全:上一版只打首尾两列,人跨三列时中间那列(真正踩着的)恰好没打出来
+						var sb = new System.Text.StringBuilder();
+						for (int c = bl; c <= br; c++)
+							sb.Append(c).Append('=').Append(IsPlat(c, feetY + 1) ? "平台"
+								: Predicates.IsSolid(c, feetY + 1) ? "砖" : "空").Append(' ');
+						DiagLog.Write($"[platdown] 找平台中 f={_frames} feet={feetY} vy={p.velocity.Y:0.##} 脚下 {sb}");
+					}
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Done("stuck", $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return; }
 					if (p.velocity.Y != 0f) return;
