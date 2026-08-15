@@ -166,6 +166,12 @@ namespace TerraBlind
 				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
 				_pillarTestFrom = 0;
 			}
+			// I 预览全程:主道→地狱的线 + 桥 + 房子,一次画完。人不动,纯看位置对不对。
+			if (TerraBlind.PreviewDescent != null && TerraBlind.PreviewDescent.JustPressed)
+			{
+				bool pok = HttpServerSystem.PreviewDescentAndBridge("jungle", out string pmsg);
+				Main.NewText("[TerraBlind] " + pmsg, pok ? (byte)120 : (byte)255, pok ? (byte)255 : (byte)120, 120);
+			}
 			// U 画地狱桥线:从人所在列往地图中心方向算 170 格,青线=桥,金色=房子那 6 格。只算不搭。
 			if (TerraBlind.ShowHellLine != null && TerraBlind.ShowHellLine.JustPressed)
 			{

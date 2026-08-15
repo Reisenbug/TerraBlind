@@ -23,6 +23,7 @@ Keybinds: {
 	ToggleMazeNav.DisplayName: Toggle Maze Nav
 	ToggleRecedingNav.DisplayName: Toggle Receding Nav
 	ShowHellLine.DisplayName: Show Hell Bridge Line
+	PreviewDescent.DisplayName: Preview Descent And Bridge
 	ShowHouseSite.DisplayName: Show House Site
 	TestBridge.DisplayName: Test Bridge
 	TestRoom.DisplayName: Test Room

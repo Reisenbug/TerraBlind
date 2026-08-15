@@ -2941,6 +2941,87 @@ namespace TerraBlind
 			public System.Collections.Generic.Dictionary<(int, int), int> Field;
 		}
 
+		// I 键预览:主道 → 地狱的线 + 桥 + 房子,只画不走。ComputeDescent 和描线逻辑都在这个类里,
+		// 所以调用方在外面重写一遍毫无意义 —— 那样两份代码必然漂移。
+		public static bool PreviewDescentAndBridge(string biome, out string msg)
+		{
+			msg = "";
+			var sig = BiomeSig(biome);
+			if (sig == null) { msg = $"不认识的群系 {biome}"; return false; }
+			var dd = ComputeDescent(sig, out string why);
+			if (dd == null) { msg = $"找不到主道:{why}"; return false; }
+
+			var line = new System.Collections.Generic.List<(int x, int y)>();
+			var pl = Main.LocalPlayer;
+			if (pl != null)
+			{
+				int pcx = ActExecutor.OriginCx(pl), pcy = ActExecutor.OriginCy(pl);
+				if (System.Math.Abs(pcx - dd.EntX) + System.Math.Abs(pcy - dd.EntY) > 4)
+				{
+					var af = MazeWand.BuildField(dd.EntX, dd.EntY, pcx, pcy);
+					var ac = (x: pcx, y: pcy);
+					var aseen = new System.Collections.Generic.HashSet<(int, int)>();
+					for (int step = 0; step < 20000; step++)
+					{
+						line.Add(ac);
+						if (!aseen.Add(ac)) break;
+						if (ac.x == dd.EntX && ac.y == dd.EntY) break;
+						if (!af.TryGetValue((ac.x, ac.y), out int ah)) break;
+						int bn = ah; var bc = ac; bool moved = false;
+						foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+						{
+							var n = (x: ac.x + dx2, y: ac.y + dy2);
+							if (af.TryGetValue((n.x, n.y), out int nh) && nh < bn) { bn = nh; bc = n; moved = true; }
+						}
+						if (!moved) break;
+						ac = bc;
+					}
+				}
+			}
+			var cur = (dd.EntX, dd.EntY);
+			var seen = new System.Collections.Generic.HashSet<(int, int)>();
+			for (int step = 0; step < 20000; step++)
+			{
+				line.Add(cur);
+				if (!seen.Add(cur)) break;
+				if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
+				int bestN = int.MaxValue; var best = cur;
+				foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+				{
+					var n = (cur.Item1 + dx2, cur.Item2 + dy2);
+					if (!dd.Field.TryGetValue(n, out int dn)) continue;
+					if (dn < bestN) { bestN = dn; best = n; }
+				}
+				if (best == cur) break;
+				cur = best;
+			}
+
+			var tail = line[line.Count - 1];
+			int hdir = tail.Item1 < Main.maxTilesX / 2 ? 1 : -1;
+			var hl = HellLine.Compute(tail.Item1, hdir);
+
+			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+			var routeC = new Microsoft.Xna.Framework.Color(0, 200, 255, 120);
+			foreach (var (lx, ly) in line) vis.Add((lx, ly, routeC));
+			if (hl.Found)
+			{
+				var bridgeC = new Microsoft.Xna.Framework.Color(120, 255, 120, 200);
+				var houseC = new Microsoft.Xna.Framework.Color(255, 180, 0, 240);
+				var anchorC = new Microsoft.Xna.Framework.Color(255, 60, 255, 240);
+				foreach (var (lx, ly) in hl.Line) vis.Add((lx, ly, bridgeC));
+				for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
+					vis.Add((hl.HouseX + hdir * k, hl.HouseY, houseC));
+				for (int k = 0; k < 3; k++) vis.Add((hl.AnchorX, hl.AnchorY + k, anchorC));
+			}
+			PathVisSystem.SetTiles(vis, 7200);
+
+			msg = hl.Found
+				? $"主道{line.Count}格→落点({tail.Item1},{tail.Item2}) | 导航终点({hl.AnchorX},{hl.AnchorY}) 房子({hl.HouseX},{hl.HouseY}) 岩浆{hl.HouseLavaCols}/6 挖{hl.DigCells}"
+				: $"主道{line.Count}格→落点({tail.Item1},{tail.Item2}) | 桥算不出来:{hl.Why}";
+			DiagLog.Write($"[preview] {msg}");
+			return true;
+		}
+
 		// 宝藏值多少 = 它能撑起的【绕道格数】上限。水晶=金箱>>木箱。
 		// 木箱 90:不值得为它专门绕路,但顺路必开 —— 40 的时候人贴着走过去都不开,过分了。
 		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 90;

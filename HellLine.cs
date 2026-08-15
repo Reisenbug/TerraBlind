@@ -37,6 +37,7 @@ namespace TerraBlind
 			public int DigCells, Cost;
 			public bool HouseOnLava;
 			public int HouseLavaCols;
+			public int AnchorX, AnchorY;   // 导航终点:桥头正上方、天花板底下那一格
 			public List<(int x, int y)> Line;
 		}
 
@@ -280,6 +281,9 @@ namespace TerraBlind
 			res.Found = true;
 			res.StartX = sx; res.StartY = ys[0];
 			res.Cost = endC; res.DigCells = digTotal;
+			// 导航终点在桥头正上方、贴着天花板:那儿脚下是天花板的石头,人站得住;
+			// 桥头本身悬在半空(底下要岩浆),走过去没法落脚,只能从这儿往下铺。
+			res.AnchorX = sx; res.AnchorY = ceilA[0];
 			PickHouse(ref res, sx, dir, ys, ceilA);
 			return res;
 		}
