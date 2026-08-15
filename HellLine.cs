@@ -121,13 +121,14 @@ namespace TerraBlind
 			}
 			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
 
-			// 四邻:前后各一列 + 同列上下。能回头能上下,所以绕得开东西 —— DP 绕不开。
+			// 只能斜着走:进一列、同时升降至多一格。同列上下原来是独立一步,于是能在一列里爬十几格
+			// 再横跨,相邻 x 差一大截 —— 那种台阶搭不了。爬升只能拿推进换,坡度天然 <=1。
 			while (pq.Count > 0)
 			{
 				var (d, i, r) = pq.Min;
 				pq.Remove(pq.Min);
 				if (d > dist[i, r]) continue;
-				foreach (var (di, dr) in new[] { (1, 0), (0, 1), (0, -1), (-1, 0) })
+				foreach (var (di, dr) in new[] { (1, 0), (1, 1), (1, -1) })
 				{
 					int ni = i + di, nr = r + dr;
 					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
@@ -177,6 +178,10 @@ namespace TerraBlind
 			}
 			for (int i = 0; i < Length; i++)
 				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
+
+			int maxStep = 0;
+			for (int i = 1; i < Length; i++) maxStep = System.Math.Max(maxStep, System.Math.Abs(ys[i] - ys[i - 1]));
+			if (maxStep > 1) DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} —— 边集出问题了");
 
 			// 两个面量得对不对,一行就能看出来 —— 位置错过一次就是错在这儿
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
