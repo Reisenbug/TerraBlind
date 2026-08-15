@@ -18,6 +18,8 @@ namespace TerraBlind
 		const int CenterW = 20;             // 偏离空腔中间的钱,按【比例】算不按格数
 		const int CeilW = 6;                // 贴天花板的钱,这个是绝对格数:人得塞进去
 		const int CeilNear = 5;             // 头顶 5 格以内开始罚
+		const int LavaGap = 4;              // 离岩浆面 4 格以内开始罚
+		const int LavaW = 30;               // 贴岩浆比贴石头贵:掉下去是死,蹭天花板只是难受
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 8;          // 起点 x 容差:正好落在闭合处就往旁边挪
 		const int Unreachable = int.MaxValue / 4;
@@ -74,6 +76,10 @@ namespace TerraBlind
 			if (head < CeilNear) c += (CeilNear - head) * CeilW;
 			// 腔外面不是不能去,只是白挖 —— 给个明确的钱,别让它比腔里还便宜
 			if (y <= ceil) c += (ceil - y + 1) * CeilW;
+			// 桥面贴着岩浆面就等于把方块插进岩浆里。|rel-0.5| 两头一样贵,分不出"蹭石头"和"蹭岩浆",
+			// 而 y>floor 才收钱,y==floor 白送 —— 于是线专挑岩浆面走。离下表面近本身就得涨价。
+			int overLava = LavaGap - (floor - y);
+			if (overLava > 0) c += overLava * LavaW;
 			if (y > floor) c += (y - floor) * DigCell;
 			return c;
 		}
