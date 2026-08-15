@@ -22,7 +22,6 @@ namespace TerraBlind
 		private static string _lastBlock = "";
 		private static System.Collections.Generic.List<(int x, int y)> _line;
 		private static int _visTick;
-		private const int DeckTol = 3;   // 落点和桥面差几行还能接受
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -63,11 +62,12 @@ namespace TerraBlind
 			Repaint();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
-			// 桥头就在半空 —— 那正是 stand 模式的活:A* 会自己搭平台梯、pillar、挖过去。
-			// 之前退回 Snap 是因为它总 fail,但那是 goalSnapCap 的实现 bug,不是它做不到。
-			if (ActExecutor.OriginCy(p) == _deckY - 1 && ActExecutor.OriginCx(p) == _startX)
-				return BeginLay(out why);
-			RecedingNav.Start(_startX, _deckY - 1, RecedingNav.Mode.Stand);
+			// 桥头下面是岩浆,人站不到那儿,也不能要求他站到那儿 —— 只要【够得着】就能把第一格放出来。
+			// 过去的路自己搭:bridge 管横向、PlatformDown 管往下、PillarUp 管往上。
+			int bslot0 = FindBlockSlot(p, out _);
+			string blk = bslot0 >= 0 ? p.inventory[bslot0].type.ToString() : itemName;
+			if (!ReachCell.Start(itemName, blk, _startX, _deckY, out why))
+			{ Outcome = "stuck"; Reason = why; return false; }
 			_ph = Ph.Down;
 			return true;
 		}
@@ -75,12 +75,11 @@ namespace TerraBlind
 		static bool BeginLay(out string why)
 		{
 			var p = Main.LocalPlayer;
-			int fy = ActExecutor.OriginCy(p) + 1;
-			// 差太远就别铺:上一版拿人脚下那行当桥面,寻路没到位时就在 1014 铺了 17 格才 walk_blocked,
-			// 而桥面本该在 1050。错的位置铺出来的桥比铺不出来更难收拾。
-			if (System.Math.Abs(fy - _deckY) > DeckTol)
-			{ Outcome = "stuck"; Reason = $"没到桥面:人在{fy},桥面{_deckY}"; why = Reason; _ph = Ph.Idle;
-			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
+			// 只要够得着桥头就能开工 —— 人站在它旁边,不是站在它上面(那儿是岩浆)。
+			// 不能再拿"人脚下那行"当桥面:桥面由 HellLine 定死,人站哪儿不改变它。
+			if (!p.IsInTileInteractionRange(_startX, _deckY, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			{ Outcome = "stuck"; Reason = $"够不着桥头({_startX},{_deckY}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})";
+			  why = Reason; _ph = Ph.Idle; DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
 			int bslot = FindBlockSlot(p, out int bcount);
 			if (bslot < 0)
 			{ Outcome = "stuck"; Reason = "背包里没有能铺桥的方块"; why = Reason; _ph = Ph.Idle;
@@ -126,7 +125,7 @@ namespace TerraBlind
 		public static void Stop()
 		{
 			if (Outcome == "running") Outcome = "stopped";
-			RecedingNav.Stop(); HellDeck.Stop();
+			ReachCell.Stop(); HellDeck.Stop();
 			_ph = Ph.Idle;
 		}
 
@@ -140,9 +139,9 @@ namespace TerraBlind
 			switch (_ph)
 			{
 				case Ph.Down:
-					if (RecedingNav.Active) return;
-					if (RecedingNav.LastStop != "done")
-					{ Fail($"到不了桥头({_startX},{_deckY - 1}):{RecedingNav.LastStop}"); return; }
+					if (ReachCell.IsRunning) return;
+					if (ReachCell.Outcome != "done")
+					{ Fail($"够不到桥头({_startX},{_deckY}):{ReachCell.Reason}"); return; }
 					BeginLay(out _);
 					return;
 

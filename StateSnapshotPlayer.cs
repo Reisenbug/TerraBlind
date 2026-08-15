@@ -281,8 +281,9 @@ namespace TerraBlind
 				return;
 			}
 
-			// hellbridge: 只做编排(降→铺),真正干活的是 PlatformDown/BridgeBuilder,所以它先跑、不 return
+			// hellbridge/reach: 只做编排,真正干活的是下面那些原语,所以它们先跑、不 return
 			if (HellBridge.IsRunning) HellBridge.Tick();
+			if (ReachCell.IsRunning) ReachCell.Tick();
 
 			// helldeck: 照着线逐格铺桥面,放置走 PlaceAction,所以控制要跟着发
 			if (HellDeck.IsRunning)
