@@ -2,28 +2,29 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// PLATFORM DOWN — 踩着平台一格一格往下降,直到脚下到达 targetWy。
+	// PLATFORM DOWN — 踩着平台一格一格往下降。
 	//
-	// 一格的循环:
-	//   1 站位   玩家压住的【每一列】下方都不能有方块(平台不算方块)。不满足就往左或往右对齐
-	//   2 放置   在脚下那格的下面一格放平台
-	//   3 下沉   按下键穿过去
-	//   4 计数   脚比出发那行低了就算一格,回 1
+	//   1 站位:人站的格子里有一格是平台,记下它的列和行
+	//   2 放置:往那块平台的【下面一格】放平台
+	//   3 下移:按【一下】S,y+1
+	//   重复 2、3
 	//
-	// 没有失败出口:对不齐就换个方向对,穿不下去就再对一次。唯一的终止是到达 targetWy。
+	// 水平位置全程不变,所以对齐只在第 1 步做一次,循环里不再动身体。
 	public static class PlatformDown
 	{
-		private enum Ph { Idle, Align, Stand, Place, Sink, Done }
+		private enum Ph { Idle, Stand, Place, Tap, Settle, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _item = "";
 		private static int _slot = -1;
 		private static int _targetWy;
+		private static int _col;              // 站住的那一列,开工定死
+		private static int _platY;            // 人现在踩着的那块平台在哪一行
 		private static int _placed;
 		private static int _frames, _phaseFrames;
-		private static int _sinkFrom;
+		private static bool _tapped;          // S 已经按过一下了,松开才能再按
 
-		private const int MaxPhaseFrames = 240;
+		private const int MaxPhaseFrames = 300;
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -39,9 +40,11 @@ namespace TerraBlind
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 			_item = itemName;
 			_targetWy = targetWy;
-			_placed = 0; _frames = 0; _phaseFrames = 0;
+			_placed = 0; _frames = 0; _phaseFrames = 0; _tapped = false;
+			_col = int.MinValue; _platY = int.MinValue;
 			Outcome = "running"; Reason = "";
-			DiagLog.Write($"[platdown] start feet={ActExecutor.OriginCy(p)} → {_targetWy}");
+			var (l0, r0) = Predicates.BodyCols(p);
+			DiagLog.Write($"[platdown] START feet={ActExecutor.OriginCy(p)} cols={l0}..{r0} → 目标{_targetWy}");
 			_ph = Ph.Stand;
 			return true;
 		}
@@ -52,104 +55,78 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 站位合格 = 玩家压住的每一列,脚下那格都不是方块。平台不是方块(IsSolid 对平台为 false)。
-		static bool Standable(Player p, out int l, out int r)
+		static bool IsPlat(int x, int y)
 		{
-			(l, r) = Predicates.BodyCols(p);
-			int fy = ActExecutor.OriginCy(p) + 1;
-			for (int c = l; c <= r; c++)
-				if (Predicates.IsSolid(c, fy)) return false;
-			return true;
-		}
-
-		// 踩着的是不是平台:每一列都不是方块之后,至少得有一列脚下有平台,否则人是悬空的
-		static bool OnPlatform(Player p)
-		{
-			var (l, r) = Predicates.BodyCols(p);
-			int fy = ActExecutor.OriginCy(p) + 1;
-			for (int c = l; c <= r; c++)
-				if (Predicates.IsGround(c, fy)) return true;
-			return false;
+			if (!Predicates.InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && Main.tileSolidTop[t.TileType] && !Main.tileSolid[t.TileType];
 		}
 
 		public static void Tick()
 		{
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
-			if (p == null || !p.active) { Outcome = "stuck"; Reason = "no_player"; _ph = Ph.Idle; return; }
-			if (++_frames > 60 * 180) { Outcome = "stuck"; Reason = "timeout"; _ph = Ph.Idle; return; }
+			if (p == null || !p.active) { Done("stuck", "no_player"); return; }
+			if (++_frames > 60 * 180) { Done("stuck", "timeout"); return; }
 
 			int feetY = ActExecutor.OriginCy(p);
-			if (feetY >= _targetWy)
-			{
-				Outcome = "done"; _ph = Ph.Done;
-				DiagLog.Write($"[platdown] done feet={feetY} placed={_placed}");
-				return;
-			}
+			var (bl, br) = Predicates.BodyCols(p);
 
 			switch (_ph)
 			{
-				case Ph.Align:
-					if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
-					_phaseFrames = 0; _ph = Ph.Stand;
-					return;
-
+				// 站位:人压住的列里找一列脚下是平台。找到就把列和行都钉死,之后不再动身体。
 				case Ph.Stand:
 					if (p.velocity.Y != 0f) return;
-					if (Standable(p, out int sl, out int sr) && OnPlatform(p))
-					{ _phaseFrames = 0; _ph = Ph.Place; return; }
-					StartAlign(p, sl, sr);
+					for (int c = bl; c <= br; c++)
+						if (IsPlat(c, feetY + 1))
+						{
+							_col = c; _platY = feetY + 1;
+							DiagLog.Write($"[platdown] 站位 col={_col} 平台在({_col},{_platY}) 身子{bl}..{br}");
+							_phaseFrames = 0; _ph = Ph.Place;
+							return;
+						}
+					if (++_phaseFrames > MaxPhaseFrames)
+					{ Done("stuck", $"站不到平台上 身子{bl}..{br} 脚下{feetY + 1}"); return; }
 					return;
 
+				// 放置:往那块平台的下面一格放
 				case Ph.Place:
-					if (++_phaseFrames > MaxPhaseFrames) { _phaseFrames = 0; _ph = Ph.Stand; return; }
-					int pc = PlaceCol(p);
-					if (Predicates.IsGround(pc, feetY + 2))
-					{ _sinkFrom = feetY; _phaseFrames = 0; _ph = Ph.Sink; return; }
+					if (++_phaseFrames > MaxPhaseFrames)
+					{ Done("stuck", $"放不出来 ({_col},{_platY + 1})"); return; }
+					if (IsPlat(_col, _platY + 1))
+					{
+						DiagLog.Write($"[platdown] 放好 ({_col},{_platY + 1})");
+						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
+						return;
+					}
 					if (!PlaceAction.IsRunning)
-						PlaceAction.Start(_item, pc, feetY + 2, 1, 0, 0, true, out _);
+						PlaceAction.Start(_item, _col, _platY + 1, 1, 0, 0, true, out _);
 					return;
 
-				case Ph.Sink:
-					if (++_phaseFrames > MaxPhaseFrames) { _phaseFrames = 0; _ph = Ph.Stand; return; }
-					p.controlDown = true;
-					if (feetY > _sinkFrom)
+				// 下移:按【一下】S。按住的话人会一路穿到底 —— 之前掉 12 格就是这么来的。
+				case Ph.Tap:
+					if (++_phaseFrames > MaxPhaseFrames)
+					{ Done("stuck", $"穿不下去 站在({_col},{_platY})"); return; }
+					if (!_tapped) { p.controlDown = true; _tapped = true; return; }
+					// 落稳了再记账:下落途中 feetY 也在变,那时候记等于把没踩住的位置当成了新起点
+					if (p.velocity.Y == 0f && feetY + 1 > _platY)
 					{
+						_platY = feetY + 1;
 						_placed++;
-						DiagLog.Write($"[platdown] 降 {_sinkFrom}→{feetY} 第{_placed}格");
-						_phaseFrames = 0; _ph = Ph.Stand;
+						DiagLog.Write($"[platdown] 降1格 → 现在踩({_col},{_platY}) 第{_placed}格 vy={p.velocity.Y:0.##}");
+						if (_platY - 1 >= _targetWy) { Done("done", ""); return; }
+						_phaseFrames = 0; _ph = Ph.Place;
+						return;
 					}
 					return;
 			}
 		}
 
-		// 找一段合法占位并精确停进去:跨度里每一列脚下都不是方块,且至少一列踩得住。
-		// 20px 宽最少跨 2 列,所以从平台那列出发,往左往右各试一次两列跨度。
-		static void StartAlign(Player p, int l, int r)
+		static void Done(string outcome, string reason)
 		{
-			if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
-			int fy = ActExecutor.OriginCy(p) + 1;
-			int plat = -1;
-			for (int c = l - 2; c <= r + 2; c++)
-				if (Predicates.IsGround(c, fy) && !Predicates.IsSolid(c, fy)) { plat = c; break; }
-			if (plat < 0) { _ph = Ph.Stand; return; }
-			foreach (var (a, b) in new[] { (plat - 1, plat), (plat, plat + 1) })
-			{
-				bool ok = true;
-				for (int c = a; c <= b; c++) if (Predicates.IsSolid(c, fy)) { ok = false; break; }
-				if (!ok) continue;
-				if (SettleAt.StartSpan(a, b, out _)) { _ph = Ph.Align; return; }
-			}
-			_ph = Ph.Stand;
-		}
-
-		static int PlaceCol(Player p)
-		{
-			var (l, r) = Predicates.BodyCols(p);
-			int fy = ActExecutor.OriginCy(p) + 1;
-			for (int c = l; c <= r; c++)
-				if (Predicates.IsGround(c, fy)) return c;
-			return l;
+			Outcome = outcome; Reason = reason;
+			DiagLog.Write($"[platdown] {outcome.ToUpperInvariant()} {reason} placed={_placed} 踩({_col},{_platY})");
+			_ph = outcome == "done" ? Ph.Done : Ph.Idle;
 		}
 	}
 }
