@@ -5,7 +5,7 @@ namespace TerraBlind
 	// HELL BRIDGE — 从人现在站的地方,把 170 格桥建出来。
 	//
 	//   1 算线   HellLine 定桥面高度和方向
-	//   2 竖降   PlatformDown 降到桥面那一行
+	//   2 下去   寻路(stand 模式)走到桥头 —— 它自己绕岩浆、搭梯子、挖穿
 	//   3 横铺   BridgeBuilder 往 dir 铺满 170 格
 	//
 	// 先竖后横:横向那段并进桥里,不用在半空单独解决走位。
@@ -37,9 +37,11 @@ namespace TerraBlind
 			_frames = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
-			// 已经在桥面高度就不用降
-			if (ActExecutor.OriginCy(p) >= _deckY - 1) return BeginLay(out why);
-			if (!PlatformDown.Start(itemName, _deckY - 1, out why)) { Outcome = "stuck"; Reason = why; return false; }
+			// 交给寻路下去,不用 PlatformDown:岩浆在场里是 LavaCost=100000,小池子它自己就绕开了;
+			// 桥头悬在半空 → stand 模式(A* 会自己搭平台梯/挖穿),这正是当初为房子左下角写的那个。
+			if (ActExecutor.OriginCy(p) == _deckY - 1 && ActExecutor.OriginCx(p) == _startX)
+				return BeginLay(out why);
+			RecedingNav.Start(_startX, _deckY - 1, RecedingNav.Mode.Stand);
 			_ph = Ph.Down;
 			return true;
 		}
@@ -60,7 +62,7 @@ namespace TerraBlind
 		public static void Stop()
 		{
 			if (Outcome == "running") Outcome = "stopped";
-			PlatformDown.Stop(); BridgeBuilder.Stop();
+			RecedingNav.Stop(); BridgeBuilder.Stop();
 			_ph = Ph.Idle;
 		}
 
@@ -72,14 +74,9 @@ namespace TerraBlind
 			switch (_ph)
 			{
 				case Ph.Down:
-					if (PlatformDown.IsRunning) return;
-					if (PlatformDown.Outcome != "done")
-					{
-						// 降到岩浆就算到底了,那本来就是桥该在的高度,不是失败
-						if (PlatformDown.Reason.StartsWith("下面是岩浆"))
-							DiagLog.Write($"[hellbridge] 降到岩浆面,就地开铺");
-						else { Fail($"降不下去:{PlatformDown.Outcome} {PlatformDown.Reason}"); return; }
-					}
+					if (RecedingNav.Active) return;
+					if (RecedingNav.LastStop != "done")
+					{ Fail($"到不了桥头({_startX},{_deckY - 1}):{RecedingNav.LastStop}"); return; }
 					BeginLay(out _);
 					return;
 
