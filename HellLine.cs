@@ -38,10 +38,13 @@ namespace TerraBlind
 			ceil = Main.UnderworldLayer;
 			floor = Main.maxTilesY - 2;
 			if (x < 1 || x >= Main.maxTilesX - 1) { ceil = floor = 0; return; }
-			int y = Main.UnderworldLayer;
-			while (y < Main.maxTilesY - 2 && Predicates.IsSolid(x, y)) y++;
+			// UnderworldLayer 那一行通常是空气,天花板的石头在它【下面】。原来从这儿直接找"第一个实心"
+			// 就把天花板顶面当成了下表面,量出来的空腔是天花板上方那段空气 —— 于是每一格都判死,全图 no_path。
+			int y = Main.UnderworldLayer, lim = Main.maxTilesY - 2;
+			while (y < lim && !Predicates.IsSolid(x, y)) y++;
+			while (y < lim && Predicates.IsSolid(x, y)) y++;
 			ceil = y;
-			while (y < Main.maxTilesY - 2 && !Predicates.IsSolid(x, y) && !Predicates.IsLava(x, y)) y++;
+			while (y < lim && !Predicates.IsSolid(x, y) && !Predicates.IsLava(x, y)) y++;
 			floor = y;
 		}
 
@@ -111,7 +114,6 @@ namespace TerraBlind
 				var (d, i, r) = pq.Min;
 				pq.Remove(pq.Min);
 				if (d > dist[i, r]) continue;
-				if (i == Length - 1) break;
 				foreach (var (di, dr) in new[] { (1, 0), (0, 1), (0, -1), (-1, 0) })
 				{
 					int ni = i + di, nr = r + dr;
@@ -120,20 +122,48 @@ namespace TerraBlind
 					if (cc >= Unreachable) continue;
 					int nd = d + cc + (dr != 0 ? SlopeW : 0);
 					if (nd >= dist[ni, nr]) continue;
-					pq.Remove((dist[ni, nr], ni, nr));
+					if (dist[ni, nr] < Unreachable) pq.Remove((dist[ni, nr], ni, nr));
 					dist[ni, nr] = nd;
-					prev[ni, nr] = r;
+					prev[ni, nr] = i * rows + r;   // 存整个前驱:竖直移动的前驱在【同一列】,只存行号回溯必错位
 					pq.Add((nd, ni, nr));
 				}
 			}
 
 			int endR = -1, endC = Unreachable;
 			for (int r = 0; r < rows; r++) if (dist[Length - 1, r] < endC) { endC = dist[Length - 1, r]; endR = r; }
-			if (endR < 0) { res.Why = "no_path"; return res; }
+			if (endR < 0)
+			{
+				// 断在哪一列比"no_path"有用得多:列号一报出来就知道是地形挡死还是我的判据把整层判死了
+				int reached = 0;
+				for (int i = 0; i < Length; i++)
+				{
+					bool any = false;
+					for (int r = 0; r < rows; r++) if (dist[i, r] < Unreachable) { any = true; break; }
+					if (!any) break;
+					reached = i;
+				}
+				int ok0 = 0;
+				for (int r = 0; r < rows; r++) if (CellCost(sx, yLo + r, ceilA[0], floorA[0]) < Unreachable) ok0++;
+				DiagLog.Write($"[hell-line] no_path 断在第{reached}列 x={sx + dir * reached} " +
+					$"ceil={ceilA[reached]} floor={floorA[reached]} span={floorA[reached] - ceilA[reached]} " +
+					$"起点列可用行={ok0} yLo={yLo} rows={rows}");
+				res.Why = $"no_path@col{reached}";
+				return res;
+			}
 
+			// 路径会在同一列上下挪,所以回溯是走前驱链,不是每列退一格。同列多次经过取最后落的那行。
 			var ys = new int[Length];
-			int cr = endR;
-			for (int i = Length - 1; i >= 0; i--) { ys[i] = yLo + cr; if (i > 0) cr = prev[i, cr]; if (cr < 0) { res.Why = "broken_trace"; return res; } }
+			for (int i = 0; i < Length; i++) ys[i] = -1;
+			int ci = Length - 1, cr2 = endR;
+			for (int guard = 0; guard < Length * rows + 16; guard++)
+			{
+				if (ys[ci] < 0) ys[ci] = yLo + cr2;
+				int p = prev[ci, cr2];
+				if (p < 0) break;
+				ci = p / rows; cr2 = p % rows;
+			}
+			for (int i = 0; i < Length; i++)
+				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
 
 			int digTotal = 0;
 			for (int i = 0; i < Length; i++)
