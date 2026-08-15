@@ -3007,16 +3007,14 @@ namespace TerraBlind
 			{
 				var bridgeC = new Microsoft.Xna.Framework.Color(120, 255, 120, 200);
 				var houseC = new Microsoft.Xna.Framework.Color(255, 180, 0, 240);
-				var anchorC = new Microsoft.Xna.Framework.Color(255, 60, 255, 240);
 				foreach (var (lx, ly) in hl.Line) vis.Add((lx, ly, bridgeC));
 				for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
 					vis.Add((hl.HouseX + hdir * k, hl.HouseY, houseC));
-				for (int k = 0; k < 3; k++) vis.Add((hl.AnchorX, hl.AnchorY + k, anchorC));
 			}
 			PathVisSystem.SetTiles(vis, 7200);
 
 			msg = hl.Found
-				? $"主道{line.Count}格→落点({tail.Item1},{tail.Item2}) | 导航终点({hl.AnchorX},{hl.AnchorY}) 房子({hl.HouseX},{hl.HouseY}) 岩浆{hl.HouseLavaCols}/6 挖{hl.DigCells}"
+				? $"主道{line.Count}格→落点({tail.Item1},{tail.Item2}) | 房子({hl.HouseX},{hl.HouseY}) 岩浆{hl.HouseLavaCols}/6 挖{hl.DigCells}"
 				: $"主道{line.Count}格→落点({tail.Item1},{tail.Item2}) | 桥算不出来:{hl.Why}";
 			DiagLog.Write($"[preview] {msg}");
 			return true;
@@ -3086,14 +3084,18 @@ namespace TerraBlind
 				for (int k = System.Math.Max(0, i - r); k <= System.Math.Min(w - 1, i + r); k++) if (ero[k] > m) m = ero[k];
 				surf[i] = m;
 			}
+			// 终点必须【脚下有方块】:原来只要是空格就算到,而这一带正是天花板层,
+			// 于是线停在半空,人导航完悬着。人占 3 格高,所以上面两格也得是空的。
 			var sources = new System.Collections.Generic.List<(int x, int y)>();
-			int hellTop = Main.maxTilesY - 190, hellBot = Main.maxTilesY - 160;
+			int hellTop = Main.maxTilesY - 190, hellBot = Main.maxTilesY - 150;
 			for (int x = sMinX; x <= sMaxX; x += 2)
-				for (int y = hellTop; y <= hellBot; y += 2)
+				for (int y = hellTop; y <= hellBot; y++)
 				{
-					var t = Main.tile[x, y];
-					if (t.HasTile && Main.tileSolid[t.TileType]) continue;
-					if (t.LiquidAmount > 0) continue;
+					if (!Predicates.IsGround(x, y + 1)) continue;
+					bool room = true;
+					for (int br = 0; br < 3; br++)
+						if (Predicates.IsSolid(x, y - br) || Predicates.IsAnyLiquid(x, y - br)) { room = false; break; }
+					if (!room) continue;
 					sources.Add((x, y));
 				}
 			if (sources.Count == 0) { failReason = "no_hell_sources"; return null; }
