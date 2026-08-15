@@ -18,7 +18,7 @@
 | 跳到某一行(可先对齐列) | `/hop_up {row, col}` | `col` 可选,给了就先横向走到那列再跳。内部有 Align 相位 |
 | 走到平台边缘 | `/walk_to_edge {direction, extra_tiles}` | |
 | 从平台掉下去 | `/drop` | 按住 `controlDown` 穿过脚下平台,落到实心地面 |
-| **踩平台一格格下降** | `PlatformDown` (键 O) | 站干净→在 `feetY+2` 放平台→下键穿过→重复。列钉死在**平台**那列(`IsPlat`,砖不算),对不齐调 `SettleAt` |
+| **踩平台竖直下降** | `PlatformDown.Start(item, targetWy)` (键 O) | 铺→按一下S→重复,降到 targetWy。**人占的每一列都要铺**(只铺一列会被隔壁砖顶住);砖靠**物块替换**直接换成平台(`builderAccStatus[10]=0`),厚砖层一格格啃;S 是**按一下**不是按住;到岩浆停 |
 | 单次跳跃 | `/jump` `/exec_jump_to` | |
 
 ## 2. 建造
