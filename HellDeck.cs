@@ -25,6 +25,8 @@ namespace TerraBlind
 		private static bool _running;
 
 		private const int MaxCellFrames = 240;
+		private const int MaxSkips = 4;
+		private static int _skips;
 
 		public static bool IsRunning => _running;
 		public static string Outcome = "idle";
@@ -57,7 +59,7 @@ namespace TerraBlind
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_item = itemName;
 			_plan = Expand(line);
-			_idx = 0; _frames = 0; _cellFrames = 0; Placed = 0;
+			_idx = 0; _frames = 0; _cellFrames = 0; Placed = 0; _skips = 0;
 			_running = true; Outcome = "running"; Reason = "";
 			int have = 0;
 			foreach (var c in _plan) if (Predicates.IsSolid(c.X, c.Y)) have++;
@@ -96,22 +98,44 @@ namespace TerraBlind
 				_idx++; _cellFrames = 0; return;
 			}
 
+			// 跳过会在桥面上留洞,雷管从那儿掉下去 —— 连着跳几格就说明有系统性原因,别闷头跳完 170 格
 			if (++_cellFrames > MaxCellFrames)
 			{
-				DiagLog.Write($"[helldeck] ({cell.X},{cell.Y})铺不上,跳过 已铺{Placed}");
-				_idx++; _cellFrames = 0; return;
+				DiagLog.Write($"[helldeck] ({cell.X},{cell.Y})铺不上,跳过 已铺{Placed} 连跳{_skips + 1}");
+				_idx++; _cellFrames = 0;
+				if (++_skips >= MaxSkips) { Fail($"连着{_skips}格铺不上,停在({cell.X},{cell.Y})"); }
+				return;
 			}
 
 			// 够不着就先走过去:BridgeBuilder 那套"手够不着就挪脚"这里同样需要
 			if (!p.IsInTileInteractionRange(cell.X, cell.Y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
 				int cx = ActExecutor.OriginCx(p);
+				if (_cellFrames % 60 == 1)
+					DiagLog.Write($"[helldeck] 够不着({cell.X},{cell.Y}) 人在{cx} f={_cellFrames}");
 				if (cx < cell.X) p.controlRight = true; else if (cx > cell.X) p.controlLeft = true;
 				return;
 			}
+			// 方块放不进碰撞箱 —— 站在目标格上往自己脚下放,永远放不出来,只会一直挥。
+			// 挪开是唯一的解法,不是等:让开一格再放。
+			var (bl, br) = Predicates.BodyCols(p);
+			int fy = ActExecutor.OriginCy(p);
+			bool inBody = cell.X >= bl && cell.X <= br && cell.Y >= fy - 2 && cell.Y <= fy + 1;
+			if (inBody)
+			{
+				int away = cell.X <= (bl + br) / 2 ? 1 : -1;
+				if (_cellFrames % 60 == 1)
+					DiagLog.Write($"[helldeck] ({cell.X},{cell.Y})在身子里(身{bl}..{br} 脚{fy}),往{(away > 0 ? "右" : "左")}让");
+				if (away > 0) p.controlRight = true; else p.controlLeft = true;
+				return;
+			}
+			// 挥了半天没上去的话,把当时的现场打出来 —— 不然又是"一直挥"却不知道为什么
+			if (_cellFrames % 90 == 1)
+				DiagLog.Write($"[helldeck] 铺({cell.X},{cell.Y}){(cell.Anchor ? "锚" : "")} f={_cellFrames} " +
+					$"人{bl}..{br}脚{fy} 那格={(Predicates.IsSolid(cell.X, cell.Y) ? "实心" : "空")} 进度{_idx}/{_plan.Count}");
 			if (!PlaceAction.IsRunning)
 				PlaceAction.Start(_item, cell.X, cell.Y, 1, 0, 0, true, out _);
-			if (Predicates.IsSolid(cell.X, cell.Y)) { Placed++; _idx++; _cellFrames = 0; }
+			if (Predicates.IsSolid(cell.X, cell.Y)) { Placed++; _idx++; _cellFrames = 0; _skips = 0; }
 		}
 
 		static void Fail(string reason)
