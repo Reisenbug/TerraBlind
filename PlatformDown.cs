@@ -128,7 +128,8 @@ namespace TerraBlind
 					}
 					return;
 
-				// 放置:往那块平台的下面一格放
+				// 放置:往那块平台的下面一格放。下面是砖就靠物块替换换掉 —— 厚砖层这样一格一格啃,
+				// 每一步人都站在平台上,不用先挖穿再铺。
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Done("stuck", $"放不出来 ({_col},{_platY + 1})"); return; }
@@ -138,6 +139,10 @@ namespace TerraBlind
 						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
 						return;
 					}
+					// 空格子里有岩浆时放不进去(vanilla PlaceThing_Tiles_IsBlockedByLava,只管空格子;
+					// 砖照样能替换)。在这儿死等没意义 —— 到岩浆面就是该停的地方。
+					if (!Predicates.IsSolid(_col, _platY + 1) && Predicates.IsLava(_col, _platY + 1))
+					{ Done("stuck", $"下面是岩浆 ({_col},{_platY + 1})"); return; }
 					if (!PlaceAction.IsRunning)
 						PlaceAction.Start(_item, _col, _platY + 1, 1, 0, 0, true, out _);
 					return;
