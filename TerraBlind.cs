@@ -14,6 +14,7 @@ namespace TerraBlind
 		public static ModKeybind TestBridge;
 		public static ModKeybind TestRoom;
 		public static ModKeybind TestPillar;
+		public static ModKeybind TestPlatDown;
 
 		public override void Load()
 		{
@@ -26,6 +27,7 @@ namespace TerraBlind
 			TestBridge = KeybindLoader.RegisterKeybind(this, "TestBridge", "B");
 			TestRoom = KeybindLoader.RegisterKeybind(this, "TestRoom", "N");
 			TestPillar = KeybindLoader.RegisterKeybind(this, "TestPillar", "P");
+			TestPlatDown = KeybindLoader.RegisterKeybind(this, "TestPlatDown", "O");
 			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ShowHellLine=U, PreviewDescent=I, ShowHouseSite=H, TestBridge=B, TestRoom=N, TestPillar=P registered (verify in Settings→Controls)");
 		}
 
@@ -39,6 +41,7 @@ namespace TerraBlind
 			TestBridge = null;
 			TestRoom = null;
 			TestPillar = null;
+			TestPlatDown = null;
 		}
 	}
 }

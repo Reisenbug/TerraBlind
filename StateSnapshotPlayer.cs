@@ -166,6 +166,18 @@ namespace TerraBlind
 				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
 				_pillarTestFrom = 0;
 			}
+			// O 测试:从脚下往下降 12 格,一路铺平台
+			if (TerraBlind.TestPlatDown != null && TerraBlind.TestPlatDown.JustPressed)
+			{
+				if (PlatformDown.IsRunning) { PlatformDown.Stop(); Main.NewText("[TerraBlind] 下降停止"); }
+				else
+				{
+					int tgt = ActExecutor.OriginCy(Main.LocalPlayer) + 12;
+					if (PlatformDown.Start("94", tgt, out string dwhy))
+						Main.NewText($"[TerraBlind] 往下铺平台 → {tgt}", 120, 255, 120);
+					else Main.NewText($"[TerraBlind] 下不去:{dwhy}", 255, 120, 120);
+				}
+			}
 			// I 预览全程:主道→地狱的线 + 桥 + 房子,一次画完。人不动,纯看位置对不对。
 			if (TerraBlind.PreviewDescent != null && TerraBlind.PreviewDescent.JustPressed)
 			{
@@ -257,6 +269,15 @@ namespace TerraBlind
 			if (PillarUp.IsRunning)
 			{
 				PillarUp.Tick();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
+
+			// platdown: 踩着平台一格一格往下降。放平台要用 PlaceAction,所以它的控制也得跟着发
+			if (PlatformDown.IsRunning)
+			{
+				PlatformDown.Tick();
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
 				RecordSystem.CaptureFrame(Player);
 				return;
 			}
