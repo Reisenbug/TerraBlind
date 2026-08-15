@@ -76,6 +76,13 @@ namespace TerraBlind
 			{
 				// 站位:人压住的列里找一列脚下是平台。找到就把列和行都钉死,之后不再动身体。
 				case Ph.Stand:
+					// 每 30 帧报一次现场,不然"什么都没发生"就只能靠猜
+					if ((_frames % 30) == 1)
+						DiagLog.Write($"[platdown] 找平台中 f={_frames} feet={feetY} vy={p.velocity.Y:0.##} " +
+							$"身子{bl}..{br} 脚下[{(IsPlat(bl, feetY + 1) ? "平台" : Predicates.IsSolid(bl, feetY + 1) ? "砖" : "空")}," +
+							$"{(IsPlat(br, feetY + 1) ? "平台" : Predicates.IsSolid(br, feetY + 1) ? "砖" : "空")}]");
+					if (++_phaseFrames > MaxPhaseFrames)
+					{ Done("stuck", $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return; }
 					if (p.velocity.Y != 0f) return;
 					for (int c = bl; c <= br; c++)
 						if (IsPlat(c, feetY + 1))
@@ -85,8 +92,6 @@ namespace TerraBlind
 							_phaseFrames = 0; _ph = Ph.Place;
 							return;
 						}
-					if (++_phaseFrames > MaxPhaseFrames)
-					{ Done("stuck", $"站不到平台上 身子{bl}..{br} 脚下{feetY + 1}"); return; }
 					return;
 
 				// 放置:往那块平台的下面一格放
