@@ -40,12 +40,12 @@ namespace TerraBlind
 			ceil = Main.UnderworldLayer;
 			floor = Main.maxTilesY - 2;
 			if (x < 1 || x >= Main.maxTilesX - 1) { ceil = floor = 0; return; }
-			// 两个面的行号由生成器写死(WorldGen "Underworld" pass):天花板 num 夹在 -190..-160,
-			// 岩浆面 num2 夹在 -120..-60。带外的实心是浮空岛和建筑,认它们就把岛顶当了地板(报 1016,真值 1060)。
+			// 两个面的行号由生成器夹死(WorldGen "Underworld"):天花板 -190..-160,岩浆面 -120..-60。
+			// 必须【从底往上】找:从上往下扫会撞见岩浆上方那片空腔,floor 报成扫描起点,线就去挖天花板了。
 			int lo = Main.maxTilesY - 145, hi = Main.maxTilesY - 50;
-			floor = Main.maxTilesY - 60;
+			floor = lo;
 			for (int y = hi; y >= lo; y--)
-				if (!Predicates.IsSolid(x, y) && !Predicates.IsLava(x, y)) { floor = y; break; }
+				if (Predicates.IsSolid(x, y) || Predicates.IsLava(x, y)) { floor = y; break; }
 			int clo = Main.maxTilesY - 200, chi = Main.maxTilesY - 150;
 			ceil = clo;
 			for (int y = System.Math.Min(floor, chi); y >= clo; y--)
