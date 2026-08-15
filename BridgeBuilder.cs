@@ -43,6 +43,8 @@ namespace TerraBlind
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
 		public static string Reason = "";
 		public static int Placed => _placed;
+		public static int NextWx => _targetWx;   // 停在哪一格没铺 —— 换料续铺要从这儿接上
+		public static int RowWy => _rowWy;
 
 		public static bool Start(string itemName, string dir, int n, out string why)
 			=> Start(itemName, dir, n, int.MinValue, int.MinValue, out why);

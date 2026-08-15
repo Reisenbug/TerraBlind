@@ -18,6 +18,8 @@ namespace TerraBlind
 		private static int _dir = 1;
 		private static int _deckY, _startX;
 		private static int _frames;
+		private static int _laid;        // 累计铺了多少格(跨换料)
+		private static string _lastBlock = "";
 		private const int DeckTol = 3;   // 落点和桥面差几行还能接受
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -55,7 +57,7 @@ namespace TerraBlind
 			if (!hl.Found) { why = hl.Why; Outcome = "stuck"; Reason = hl.Why; return false; }
 			_item = itemName;
 			_deckY = hl.StartY; _startX = hl.StartX;
-			_frames = 0;
+			_frames = 0; _laid = 0; _lastBlock = "";
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
 			// 桥头是【要建的东西】,不是能走到的地方 —— 桥面底下一路空到十几格外,stand 模式
@@ -83,12 +85,29 @@ namespace TerraBlind
 			{ Outcome = "stuck"; Reason = "背包里没有能铺桥的方块"; why = Reason; _ph = Ph.Idle;
 			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
 			string block = p.inventory[bslot].type.ToString();
+			_lastBlock = block;
 			if (!BridgeBuilder.Start(block, _dir > 0 ? "right" : "left", HellLine.Length,
 				ActExecutor.OriginCx(p), fy, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
 			DiagLog.Write($"[hellbridge] 开铺 从({ActExecutor.OriginCx(p)},{fy}) 往{(_dir > 0 ? "右" : "左")} " +
 				$"{HellLine.Length}格 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
 			_ph = Ph.Lay;
+			return true;
+		}
+
+		// 换一摞料继续铺。挑不出料/起不来就返回 false,让调用方去报错。
+		static bool Relay(int nx, int ny)
+		{
+			var p = Main.LocalPlayer;
+			int slot = FindBlockSlot(p, out int cnt);
+			if (slot < 0) return false;
+			string it = p.inventory[slot].type.ToString();
+			// 挑出来还是刚才那摞就别重来了 —— 那说明停下另有原因(够不着、被挡),换料解决不了,重启只会死循环
+			if (it == _lastBlock) return false;
+			_lastBlock = it;
+			if (!BridgeBuilder.Start(it, _dir > 0 ? "right" : "left", HellLine.Length - _laid, nx, ny, out _))
+				return false;
+			DiagLog.Write($"[hellbridge] 换料 {p.inventory[slot].Name} 存量{cnt} 从({nx},{ny})续,已铺{_laid}/{HellLine.Length}");
 			return true;
 		}
 
@@ -115,10 +134,18 @@ namespace TerraBlind
 
 				case Ph.Lay:
 					if (BridgeBuilder.IsRunning) return;
-					if (BridgeBuilder.Outcome != "done")
-					{ Fail($"铺不完:{BridgeBuilder.Outcome} {BridgeBuilder.Reason} 已铺{BridgeBuilder.Placed}"); return; }
+					_laid += BridgeBuilder.Placed;
+					// 这摞用光了就换第二多的接着铺,从它停的那一格续 —— 2000 木材铺完还差的那截,
+					// 该由 150 泥块顶上,而不是在这儿报"铺不完"。
+					if (_laid < HellLine.Length && BridgeBuilder.Outcome != "done")
+					{
+						int nx = BridgeBuilder.NextWx, ny = BridgeBuilder.RowWy;
+						if (Relay(nx, ny)) return;
+					}
+					if (_laid < HellLine.Length)
+					{ Fail($"铺不完:{BridgeBuilder.Outcome} {BridgeBuilder.Reason} 已铺{_laid}/{HellLine.Length}"); return; }
 					Outcome = "done"; _ph = Ph.Done;
-					DiagLog.Write($"[hellbridge] DONE 铺了{BridgeBuilder.Placed}格");
+					DiagLog.Write($"[hellbridge] DONE 铺了{_laid}格");
 					return;
 			}
 		}
