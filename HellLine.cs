@@ -20,6 +20,9 @@ namespace TerraBlind
 		const int CeilNear = 5;             // 头顶 5 格以内开始罚
 		const int LavaGap = 4;              // 离岩浆面 4 格以内开始罚
 		const int LavaW = 30;               // 贴岩浆比贴石头贵:掉下去是死,蹭天花板只是难受
+		const int ThinOk = 2;               // 这么薄的壳随便挖
+		const int ThickW = 40;              // 超出部分按平方涨价
+		const int ThickMax = 24;            // 量到这么厚就够贵了,再往前数没意义
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 8;          // 起点 x 容差:正好落在闭合处就往旁边挪
 		const int Unreachable = int.MaxValue / 4;
@@ -60,11 +63,31 @@ namespace TerraBlind
 			return n;
 		}
 
+		// 这一格挡着的话,往前还要连挖几列。薄壳挖穿就通了,厚墙是一路挖到底 ——
+		// 按格数线性收钱两者一样贵(20 列×3 格 = 60,和 20 处薄壳同价),所以厚度必须自己涨价。
+		static int Thickness(int x, int y, int dir)
+		{
+			int t = 0;
+			for (int k = 0; k < ThickMax; k++)
+			{
+				if (Blocked(x + dir * k, y) == 0) break;
+				t++;
+			}
+			return t;
+		}
+
 		// 没有禁区:拿 ceil/floor 当硬墙时,相邻两列量到不同的腔就接不上 → no_path。挖得动就过得去。
 		// 居中按比例:腔 3 格高时"居中"=离下表面 1 格,60 格高时=30 格,一个式子两种都对。
 		static int CellCost(int x, int y, int ceil, int floor)
 		{
-			int c = Blocked(x, y) * DigCell;
+			int blk = Blocked(x, y);
+			int c = blk * DigCell;
+			// 越挖不到头越贵:薄壳(1~2 列)照旧,厚墙按平方涨,绕多远都比硬凿划算
+			if (blk > 0)
+			{
+				int th = Thickness(x, y, 1) + Thickness(x, y, -1) - 1;
+				if (th > ThinOk) c += (th - ThinOk) * (th - ThinOk) * ThickW;
+			}
 			int span = floor - ceil;
 			if (span >= Body)
 			{
