@@ -24,6 +24,26 @@ namespace TerraBlind
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
+		// 桥面要用【方块】不是平台:平台踩得住但雷管停不住。会掉的沙子类不行(TileID.Sets.Falling),
+		// 剩下的实心方块都行,背包里挑数量最多的那摞。
+		public static int FindBlockSlot(Player p, out int count)
+		{
+			count = 0;
+			int best = -1;
+			var falling = Terraria.ID.TileID.Sets.Falling;
+			for (int i = 0; i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.createTile < 0) continue;
+				int t = it.createTile;
+				if (t >= Main.tileSolid.Length || !Main.tileSolid[t]) continue;
+				if (Terraria.ID.TileID.Sets.Platforms[t]) continue;
+				if (falling != null && t < falling.Length && falling[t]) continue;
+				if (it.stack > count) { count = it.stack; best = i; }
+			}
+			return best;
+		}
+
 		public static bool Start(string itemName, out string why)
 		{
 			why = "";
@@ -58,10 +78,16 @@ namespace TerraBlind
 			if (System.Math.Abs(fy - _deckY) > DeckTol)
 			{ Outcome = "stuck"; Reason = $"没到桥面:人在{fy},桥面{_deckY}"; why = Reason; _ph = Ph.Idle;
 			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
-			if (!BridgeBuilder.Start(_item, _dir > 0 ? "right" : "left", HellLine.Length,
+			int bslot = FindBlockSlot(p, out int bcount);
+			if (bslot < 0)
+			{ Outcome = "stuck"; Reason = "背包里没有能铺桥的方块"; why = Reason; _ph = Ph.Idle;
+			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
+			string block = p.inventory[bslot].type.ToString();
+			if (!BridgeBuilder.Start(block, _dir > 0 ? "right" : "left", HellLine.Length,
 				ActExecutor.OriginCx(p), fy, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
-			DiagLog.Write($"[hellbridge] 开铺 从({ActExecutor.OriginCx(p)},{fy}) 往{(_dir > 0 ? "右" : "左")} {HellLine.Length}格");
+			DiagLog.Write($"[hellbridge] 开铺 从({ActExecutor.OriginCx(p)},{fy}) 往{(_dir > 0 ? "右" : "左")} " +
+				$"{HellLine.Length}格 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
 			_ph = Ph.Lay;
 			return true;
 		}
