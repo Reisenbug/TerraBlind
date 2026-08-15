@@ -20,6 +20,8 @@ namespace TerraBlind
 		private static int _frames;
 		private static int _laid;        // 累计铺了多少格(跨换料)
 		private static string _lastBlock = "";
+		private static System.Collections.Generic.List<(int x, int y)> _line;
+		private static int _visTick;
 		private const int DeckTol = 3;   // 落点和桥面差几行还能接受
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -57,7 +59,8 @@ namespace TerraBlind
 			if (!hl.Found) { why = hl.Why; Outcome = "stuck"; Reason = hl.Why; return false; }
 			_item = itemName;
 			_deckY = hl.StartY; _startX = hl.StartX;
-			_frames = 0; _laid = 0; _lastBlock = "";
+			_frames = 0; _laid = 0; _lastBlock = ""; _line = hl.Line; _visTick = 0;
+			Repaint();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
 			// 桥头是【要建的东西】,不是能走到的地方 —— 桥面底下一路空到十几格外,stand 模式
@@ -95,6 +98,18 @@ namespace TerraBlind
 			return true;
 		}
 
+		// 铺好的绿、还没铺的青。看真实地块不看计数 —— 卡住时停在哪一格要一眼能看见。
+		static void Repaint()
+		{
+			if (_line == null) return;
+			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+			var done = new Microsoft.Xna.Framework.Color(80, 255, 120, 190);
+			var todo = new Microsoft.Xna.Framework.Color(0, 200, 255, 120);
+			foreach (var (x, y) in _line)
+				vis.Add((x, y, Predicates.IsSolid(x, y) ? done : todo));
+			PathVisSystem.SetTiles(vis, 240);
+		}
+
 		// 换一摞料继续铺。挑不出料/起不来就返回 false,让调用方去报错。
 		static bool Relay(int nx, int ny)
 		{
@@ -122,6 +137,8 @@ namespace TerraBlind
 		{
 			if (!IsRunning) return;
 			if (++_frames > 60 * 600) { Fail("timeout"); return; }
+			// 半秒刷一次:ttl 给 240 帧,所以停下之后那张图还留 4 秒,失败现场不会立刻消失
+			if (++_visTick % 30 == 0) Repaint();
 
 			switch (_ph)
 			{
@@ -154,6 +171,7 @@ namespace TerraBlind
 		{
 			Outcome = "stuck"; Reason = reason;
 			DiagLog.Write($"[hellbridge] STUCK {reason}");
+			Repaint();   // 停在哪儿断的,图上留着
 			_ph = Ph.Idle;
 		}
 	}
