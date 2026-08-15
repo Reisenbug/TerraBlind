@@ -74,6 +74,8 @@ namespace TerraBlind
 
 			int feetY = ActExecutor.OriginCy(p);
 			var (bl, br) = Predicates.BodyCols(p);
+			// 物块替换必须开着:关着的话对准砖用平台是"放不下",开着才是"换掉"
+			if (!p.TileReplacementEnabled) p.builderAccStatus[10] = 0;
 
 			switch (_ph)
 			{
@@ -93,7 +95,6 @@ namespace TerraBlind
 					if (++_phaseFrames > MaxStandFrames)
 					{ Done("stuck", $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return; }
 					if (p.velocity.Y != 0f) return;
-					if (SettleAt.IsRunning) { SettleAt.Tick(); return; }
 					// 砖挡着就沉不下去,所以【每一列】都不能是砖(平台不算砖),不是"找到一列平台就开工"
 					int plat = int.MinValue, brick = int.MinValue;
 					for (int c = bl; c <= br; c++)
@@ -108,41 +109,22 @@ namespace TerraBlind
 						_phaseFrames = 0; _ph = Ph.Place;
 						return;
 					}
-					// 脚下全是砖 —— 从主道下来就是这样,是常态不是意外。自己在旁边造一块平台再走过去,
-					// 不能在这儿等死:要求"脚下必须已经有平台"等于要求别人先把活干好。
+					// 脚下全是砖(从主道下来就是这样)→ 直接【物块替换】成平台:对着那格用平台就换掉了。
+					// 挖掉再放会有一帧没落脚点,替换没有这个空窗,人原地就站到平台上。
 					if (plat == int.MinValue)
 					{
-						for (int d = 1; d <= 3; d++)
-							foreach (int c in new[] { br + d, bl - d })
-							{
-								if (Predicates.IsSolid(c, feetY) || Predicates.IsSolid(c, feetY - 1)) continue;
-								if (IsPlat(c, feetY + 1))
-								{
-									// 造好了就走过去站上,身子跨 [c-1,c] 或 [c,c+1] 里没砖的那个
-									int a2 = c > br ? c - 1 : c, b2 = c > br ? c : c + 1;
-									if (!Predicates.IsSolid(a2, feetY + 1) && !Predicates.IsSolid(b2, feetY + 1)
-										&& SettleAt.StartSpan(a2, b2, out _))
-										DiagLog.Write($"[platdown] 走上落脚点 {a2}..{b2}");
-									return;
-								}
-								if (Predicates.IsSolid(c, feetY + 1)) continue;
-								if (!PlaceAction.IsRunning)
-								{
-									PlaceAction.Start(_item, c, feetY + 1, 1, 0, 0, true, out _);
-									DiagLog.Write($"[platdown] 脚下全砖 → 在({c},{feetY + 1})造落脚点");
-								}
-								return;
-							}
+						if (!PlaceAction.IsRunning)
+						{
+							PlaceAction.Start(_item, bl, feetY + 1, 1, 0, 0, true, out _);
+							DiagLog.Write($"[platdown] 脚下全砖 → 替换({bl},{feetY + 1})成平台");
+						}
 						return;
 					}
-					// 让开砖:往砖的反方向挪,让身子落在 [plat-1,plat] 或 [plat,plat+1] 里不含砖的那个
+					// 旁边那列有砖挡着沉不下去 —— 一样替换掉,不用绕路走位
+					if (!PlaceAction.IsRunning)
 					{
-						int a = brick > plat ? plat - 1 : plat, b = brick > plat ? plat : plat + 1;
-						if (!Predicates.IsSolid(a, feetY + 1) && !Predicates.IsSolid(b, feetY + 1)
-							&& SettleAt.StartSpan(a, b, out string swhy))
-							DiagLog.Write($"[platdown] 让开砖{brick} → 停到{a}..{b}");
-						else
-							Done("stuck", $"躲不开砖{brick} 平台{plat} 身子{bl}..{br}");
+						PlaceAction.Start(_item, brick, feetY + 1, 1, 0, 0, true, out _);
+						DiagLog.Write($"[platdown] 砖{brick}挡着 → 替换成平台");
 					}
 					return;
 
