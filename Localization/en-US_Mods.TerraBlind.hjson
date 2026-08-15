@@ -25,6 +25,7 @@ Keybinds: {
 	ShowHellLine.DisplayName: Show Hell Bridge Line
 	PreviewDescent.DisplayName: Preview Descent And Bridge
 	TestPlatDown.DisplayName: Test Platform Descent
+	BuildHellBridge.DisplayName: Build Hell Bridge
 	ShowHouseSite.DisplayName: Show House Site
 	TestBridge.DisplayName: Test Bridge
 	TestRoom.DisplayName: Test Room

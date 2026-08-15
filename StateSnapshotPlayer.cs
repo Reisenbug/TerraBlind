@@ -166,6 +166,14 @@ namespace TerraBlind
 				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
 				_pillarTestFrom = 0;
 			}
+			// L 一键建桥:算线 → 竖降到桥面 → 横铺 170 格
+			if (TerraBlind.BuildHellBridge != null && TerraBlind.BuildHellBridge.JustPressed)
+			{
+				if (HellBridge.IsRunning) { HellBridge.Stop(); Main.NewText("[TerraBlind] 建桥停止"); }
+				else if (HellBridge.Start("94", out string hbwhy))
+					Main.NewText("[TerraBlind] 开始建地狱桥", 120, 255, 120);
+				else Main.NewText($"[TerraBlind] 建不了:{hbwhy}", 255, 120, 120);
+			}
 			// O 测试:从脚下往下降 12 格,一路铺平台
 			if (TerraBlind.TestPlatDown != null && TerraBlind.TestPlatDown.JustPressed)
 			{
@@ -272,6 +280,9 @@ namespace TerraBlind
 				RecordSystem.CaptureFrame(Player);
 				return;
 			}
+
+			// hellbridge: 只做编排(降→铺),真正干活的是 PlatformDown/BridgeBuilder,所以它先跑、不 return
+			if (HellBridge.IsRunning) HellBridge.Tick();
 
 			// platdown: 踩着平台一格一格往下降。放平台要用 PlaceAction,所以它的控制也得跟着发
 			if (PlatformDown.IsRunning)
