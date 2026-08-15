@@ -18,6 +18,7 @@ namespace TerraBlind
 		private static int _dir = 1;
 		private static int _deckY, _startX;
 		private static int _frames;
+		private const int DeckTol = 3;   // 落点和桥面差几行还能接受
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -37,11 +38,13 @@ namespace TerraBlind
 			_frames = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
-			// 交给寻路下去,不用 PlatformDown:岩浆在场里是 LavaCost=100000,小池子它自己就绕开了;
-			// 桥头悬在半空 → stand 模式(A* 会自己搭平台梯/挖穿),这正是当初为房子左下角写的那个。
-			if (ActExecutor.OriginCy(p) == _deckY - 1 && ActExecutor.OriginCx(p) == _startX)
+			// 桥头是【要建的东西】,不是能走到的地方 —— 桥面底下一路空到十几格外,stand 模式
+			// goalSnapCap=0 直接 fail fast。所以走到那一列脚踏实地处,桥从那儿往外铺。
+			int landY = StateSpacePlanner.SnapGoalToStandable(_startX, _deckY - 1);
+			DiagLog.Write($"[hellbridge] 落脚点({_startX},{landY}) 桥面{_deckY}");
+			if (ActExecutor.OriginCy(p) == landY && ActExecutor.OriginCx(p) == _startX)
 				return BeginLay(out why);
-			RecedingNav.Start(_startX, _deckY - 1, RecedingNav.Mode.Stand);
+			RecedingNav.Start(_startX, landY, RecedingNav.Mode.Snap);
 			_ph = Ph.Down;
 			return true;
 		}
@@ -50,7 +53,11 @@ namespace TerraBlind
 		{
 			var p = Main.LocalPlayer;
 			int fy = ActExecutor.OriginCy(p) + 1;
-			// 从人脚下那一行铺,不是从规划的 deckY —— 降下来差一两格是常态,按真实落点铺才接得上
+			// 差太远就别铺:上一版拿人脚下那行当桥面,寻路没到位时就在 1014 铺了 17 格才 walk_blocked,
+			// 而桥面本该在 1050。错的位置铺出来的桥比铺不出来更难收拾。
+			if (System.Math.Abs(fy - _deckY) > DeckTol)
+			{ Outcome = "stuck"; Reason = $"没到桥面:人在{fy},桥面{_deckY}"; why = Reason; _ph = Ph.Idle;
+			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
 			if (!BridgeBuilder.Start(_item, _dir > 0 ? "right" : "left", HellLine.Length,
 				ActExecutor.OriginCx(p), fy, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
