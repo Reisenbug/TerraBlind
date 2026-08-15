@@ -25,7 +25,7 @@ namespace TerraBlind
 		const int ThickMax = 24;            // 量到这么厚就够贵了,再往前数没意义
 		const int LavaProbe = 30;           // 桥面往下探这么多格找岩浆
 		const int Body = 3;                 // 人 42px 高 = 3 行
-		const int StartWindow = 8;          // 起点 x 容差:正好落在闭合处就往旁边挪
+		const int StartWindow = 60;         // 起点 x 容差。房子底下要岩浆,±8 那点余地根本挑不着
 		const int Unreachable = int.MaxValue / 4;
 
 		public struct Result
@@ -65,8 +65,6 @@ namespace TerraBlind
 			for (int r = 1; r < Body + 1; r++) if (Predicates.IsSolid(x, y - r)) n++;
 			return n;
 		}
-
-		static int floorRow(int x) { Column(x, out _, out int f); return f; }
 
 		// 桥面底下一路往下是不是岩浆。中间隔着石头就不算 —— 那是地,不是悬在岩浆上。
 		static bool LavaBelow(int x, int y)
@@ -132,19 +130,33 @@ namespace TerraBlind
 			var res = new Result { Line = new List<(int x, int y)>() };
 			dir = dir >= 0 ? 1 : -1;
 
-			// 房子那 6 列底下要是岩浆,所以起点先挑【下面是岩浆】的列,同样满足时才比空腔高矮。
-			// 岩浆面在哪一行是列自己的事,和线走多高无关,所以这一步用 floor 判,不用 ys。
-			int sx = bx, bestClear = -1, bestLava = -1;
+			// 每列只量一次:候选 121 个、每个查 6 列,现算的话 Column() 要跑八百多趟,比 Dijkstra 本身还贵
+			int span0 = StartWindow + HouseBuilder.RoomWidth + 2;
+			var cCeil = new int[span0 * 2 + 1];
+			var cFloor = new int[span0 * 2 + 1];
+			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
+			bool LavaAt(int off2)
+			{
+				int idx = off2 + span0;
+				if (idx < 0 || idx >= cFloor.Length) return false;
+				return Predicates.IsLava(bx + off2, cFloor[idx]);
+			}
+
+			// 排序:岩浆列数 → 离 bx 近 → 空腔高。没有第二判据的话,同样 6/6 也会白跑 60 格。
+			int sx = bx, bestClear = -1, bestLava = -1, bestOff = int.MaxValue;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
 				int x = bx + d;
-				Column(x, out int c0, out int f0);
+				int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
 				if (f0 - c0 < Body) continue;
 				int lv = 0;
 				for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
-					if (Predicates.IsLava(x + dir * k, floorRow(x + dir * k))) lv++;
-				if (lv > bestLava || (lv == bestLava && f0 - c0 > bestClear))
-				{ bestLava = lv; bestClear = f0 - c0; sx = x; }
+					if (LavaAt(d + dir * k)) lv++;
+				int off = System.Math.Abs(d);
+				bool better = lv > bestLava
+					|| (lv == bestLava && off < bestOff)
+					|| (lv == bestLava && off == bestOff && f0 - c0 > bestClear);
+				if (better) { bestLava = lv; bestOff = off; bestClear = f0 - c0; sx = x; }
 			}
 			if (bestClear < Body) { res.Why = $"start_too_tight clear={bestClear}"; return res; }
 
