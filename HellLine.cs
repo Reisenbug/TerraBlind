@@ -125,20 +125,27 @@ namespace TerraBlind
 			}
 			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
 
-			// 只能斜着走:进一列、同时升降至多一格。同列上下原来是独立一步,于是能在一列里爬十几格
-			// 再横跨,相邻 x 差一大截 —— 那种台阶搭不了。爬升只能拿推进换,坡度天然 <=1。
+			// 升降一格必须占【两列】:先平一格再抬,坡度上限 0.5。一列一抬(斜率 1)的台阶不好搭。
+			// 中间那列的钱也要算,不然抬升会白蹭一格免费的地。
 			while (pq.Count > 0)
 			{
 				var (d, i, r) = pq.Min;
 				pq.Remove(pq.Min);
 				if (d > dist[i, r]) continue;
-				foreach (var (di, dr) in new[] { (1, 0), (1, 1), (1, -1) })
+				foreach (var (di, dr) in new[] { (1, 0), (2, 1), (2, -1) })
 				{
 					int ni = i + di, nr = r + dr;
 					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
 					int cc = CellCost(sx + dir * ni, yLo + nr, ceilA[ni], floorA[ni]);
 					if (cc >= Unreachable) continue;
-					int nd = d + cc + (dr != 0 ? SlopeW : 0);
+					int mid = 0;
+					if (di == 2)
+					{
+						// 跨两列时中间那列留在原高度,它的钱照付、岩浆照否决,不然抬升白蹭一格
+						mid = CellCost(sx + dir * (i + 1), yLo + r, ceilA[i + 1], floorA[i + 1]);
+						if (mid >= Unreachable) continue;
+					}
+					int nd = d + cc + mid + (dr != 0 ? SlopeW : 0);
 					if (nd >= dist[ni, nr]) continue;
 					if (dist[ni, nr] < Unreachable) pq.Remove((dist[ni, nr], ni, nr));
 					dist[ni, nr] = nd;
@@ -169,7 +176,7 @@ namespace TerraBlind
 				return res;
 			}
 
-			// 路径会在同一列上下挪,所以回溯是走前驱链,不是每列退一格。同列多次经过取最后落的那行。
+			// 回溯走前驱链。抬升那一步跨了两列,中间那列没进过 prev —— 它留在【前驱的高度】,补上。
 			var ys = new int[Length];
 			for (int i = 0; i < Length; i++) ys[i] = -1;
 			int ci = Length - 1, cr2 = endR;
@@ -178,7 +185,9 @@ namespace TerraBlind
 				if (ys[ci] < 0) ys[ci] = yLo + cr2;
 				int p = prev[ci, cr2];
 				if (p < 0) break;
-				ci = p / rows; cr2 = p % rows;
+				int pi = p / rows, pr = p % rows;
+				if (ci - pi == 2) ys[pi + 1] = yLo + pr;
+				ci = pi; cr2 = pr;
 			}
 			for (int i = 0; i < Length; i++)
 				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
@@ -186,9 +195,16 @@ namespace TerraBlind
 			for (int i = 0; i < Length; i++)
 				if (Predicates.IsLava(sx + dir * i, ys[i])) { res.Why = $"lava_on_deck@col{i}"; return res; }
 
-			int maxStep = 0;
-			for (int i = 1; i < Length; i++) maxStep = System.Math.Max(maxStep, System.Math.Abs(ys[i] - ys[i - 1]));
-			if (maxStep > 1) DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} —— 边集出问题了");
+			// 坡度 0.5 = 每变一次高度前必须先平至少一格。连续两列都变高就是边集坏了
+			int maxStep = 0, backToBack = 0;
+			for (int i = 1; i < Length; i++)
+			{
+				int st = System.Math.Abs(ys[i] - ys[i - 1]);
+				maxStep = System.Math.Max(maxStep, st);
+				if (st > 0 && i >= 2 && ys[i - 1] != ys[i - 2]) backToBack++;
+			}
+			if (maxStep > 1 || backToBack > 0)
+				DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} 连抬={backToBack} —— 边集出问题了");
 
 			// 两个面量得对不对,一行就能看出来 —— 位置错过一次就是错在这儿
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
