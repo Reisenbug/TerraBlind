@@ -1357,7 +1357,11 @@ namespace TerraBlind
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 在同一列里按距离【双向】找最近可站格:向上是从块里爬到表面,向下是把悬空目标落到地板。
         const int GoalSnapMaxDrop = 40;
-        static bool Standable(int gx, int gy) => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy);
+        // 岩浆里放不了任何东西,人去了也白去 —— 所以"能站"必须排除泡在岩浆里和踩在岩浆面上。
+        // 原来只问地板和方块,于是空中目标一路下落、落进岩浆池就当成落脚点,等于主动往岩浆里导航。
+        static bool Standable(int gx, int gy)
+            => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy)
+               && !Predicates.IsLava(gx, gy) && !Predicates.IsLava(gx, gy - 1) && !Predicates.IsLava(gx, gy + 1);
         public static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;
