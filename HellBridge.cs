@@ -63,13 +63,11 @@ namespace TerraBlind
 			Repaint();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 桥面行={_deckY} 桥头列={_startX} dir={_dir} 挖{hl.DigCells}");
-			// 桥头是【要建的东西】,不是能走到的地方 —— 桥面底下一路空到十几格外,stand 模式
-			// goalSnapCap=0 直接 fail fast。所以走到那一列脚踏实地处,桥从那儿往外铺。
-			int landY = StateSpacePlanner.SnapGoalToStandable(_startX, _deckY - 1);
-			DiagLog.Write($"[hellbridge] 落脚点({_startX},{landY}) 桥面{_deckY}");
-			if (ActExecutor.OriginCy(p) == landY && ActExecutor.OriginCx(p) == _startX)
+			// 桥头就在半空 —— 那正是 stand 模式的活:A* 会自己搭平台梯、pillar、挖过去。
+			// 之前退回 Snap 是因为它总 fail,但那是 goalSnapCap 的实现 bug,不是它做不到。
+			if (ActExecutor.OriginCy(p) == _deckY - 1 && ActExecutor.OriginCx(p) == _startX)
 				return BeginLay(out why);
-			RecedingNav.Start(_startX, landY, RecedingNav.Mode.Snap);
+			RecedingNav.Start(_startX, _deckY - 1, RecedingNav.Mode.Stand);
 			_ph = Ph.Down;
 			return true;
 		}

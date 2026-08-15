@@ -240,14 +240,17 @@ namespace TerraBlind
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
-            // goalSnapCap:向下无限扫是 navwand 点击语义("点空中=点它下面的地"),内部重规划不能继承。
-            // 世界变了以后那一扫能把目标传送到深渊 —— (2907,223) 变成 (2907,349),规划器老老实实规划了 126 格俯冲。
+            // 向下无限扫是 navwand 的点击语义,内部重规划不能继承:世界一变能把目标传送到深渊。
+            // cap=0 = 【不吸附】,不是"吸附完不许变" —— 空中目标必然吸得远,stand 模式会永远进不了门。
             int requestedWy = goalWy;
-            goalWy = SnapGoalToStandable(goalWx, goalWy);
-            if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
+            if (goalSnapCap > 0)
             {
-                DiagLog.Write($"[ss-plan] goal snap ({goalWx},{requestedWy})→({goalWx},{goalWy}) exceeds cap {goalSnapCap} → fail fast");
-                return res;
+                goalWy = SnapGoalToStandable(goalWx, goalWy);
+                if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
+                {
+                    DiagLog.Write($"[ss-plan] goal snap ({goalWx},{requestedWy})→({goalWx},{goalWy}) exceeds cap {goalSnapCap} → fail fast");
+                    return res;
+                }
             }
             res.GoalWx = goalWx; res.GoalWy = goalWy;
             float goalCx = goalWx * 16f + 8f;
