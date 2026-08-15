@@ -133,24 +133,40 @@ namespace TerraBlind
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Done("stuck", $"放不出来 ({_col},{_platY + 1})"); return; }
-					if (IsPlat(_col, _platY + 1))
+					// 人占的【每一列】都要处理:只管 _col 的话,隔壁列那块砖会把人顶住,S 按不下去。
+					// 第一格是 Stand 逐列办的所以能过,第二格开始只办一列 —— 人就停在第二格。
+					int need = int.MinValue;
+					for (int c = bl; c <= br; c++)
+						if (!IsPlat(c, _platY + 1)) { need = c; break; }
+					if (need == int.MinValue)
 					{
-						DiagLog.Write($"[platdown] 放好 ({_col},{_platY + 1})");
+						DiagLog.Write($"[platdown] 放好 {bl}..{br} 行{_platY + 1}");
 						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
 						return;
 					}
 					// 空格子里有岩浆时放不进去(vanilla PlaceThing_Tiles_IsBlockedByLava,只管空格子;
 					// 砖照样能替换)。在这儿死等没意义 —— 到岩浆面就是该停的地方。
-					if (!Predicates.IsSolid(_col, _platY + 1) && Predicates.IsLava(_col, _platY + 1))
-					{ Done("stuck", $"下面是岩浆 ({_col},{_platY + 1})"); return; }
+					if (!Predicates.IsSolid(need, _platY + 1) && Predicates.IsLava(need, _platY + 1))
+					{ Done("stuck", $"下面是岩浆 ({need},{_platY + 1})"); return; }
 					if (!PlaceAction.IsRunning)
-						PlaceAction.Start(_item, _col, _platY + 1, 1, 0, 0, true, out _);
+						PlaceAction.Start(_item, need, _platY + 1, 1, 0, 0, true, out _);
 					return;
 
 				// 下移:按【一下】S。按住的话人会一路穿到底 —— 之前掉 12 格就是这么来的。
 				case Ph.Tap:
+					// 沉的过程中身子可能挪列,新压住的那列没铺就又被顶住 —— 回 Place 补上,别在这儿干等
 					if (++_phaseFrames > MaxPhaseFrames)
-					{ Done("stuck", $"穿不下去 站在({_col},{_platY})"); return; }
+					{
+						for (int c = bl; c <= br; c++)
+							if (!IsPlat(c, _platY + 1))
+							{
+								DiagLog.Write($"[platdown] 穿不下去,列{c}行{_platY + 1}还没铺 → 回去补");
+								_phaseFrames = 0; _ph = Ph.Place;
+								return;
+							}
+						Done("stuck", $"穿不下去 站在({_col},{_platY}) 身子{bl}..{br}");
+						return;
+					}
 					if (!_tapped) { p.controlDown = true; _tapped = true; return; }
 					// 落稳了再记账:下落途中 feetY 也在变,那时候记等于把没踩住的位置当成了新起点
 					if (p.velocity.Y == 0f && feetY + 1 > _platY)
