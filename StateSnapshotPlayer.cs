@@ -184,8 +184,9 @@ namespace TerraBlind
 					for (int hk = 0; hk < HouseBuilder.RoomWidth + 1; hk++)
 						hvis.Add((hres.HouseX + hdir * hk, hres.HouseY, hhc));
 					PathVisSystem.SetTiles(hvis, 7200);
-					Main.NewText($"[TerraBlind] 桥线 起点({hres.StartX},{hres.StartY}) 房子({hres.HouseX},{hres.HouseY}) 要挖{hres.DigCells}格 代价{hres.Cost}", 120, 255, 120);
-					DiagLog.Write($"[hell-line] key start=({hres.StartX},{hres.StartY}) dir={hdir} house=({hres.HouseX},{hres.HouseY}) dig={hres.DigCells} cost={hres.Cost}");
+					string lavaTag = hres.HouseOnLava ? "岩浆上" : $"只有{hres.HouseLavaCols}/6列在岩浆上";
+					Main.NewText($"[TerraBlind] 桥线 起点({hres.StartX},{hres.StartY}) 房子({hres.HouseX},{hres.HouseY}) {lavaTag} 要挖{hres.DigCells}格 代价{hres.Cost}", 120, 255, 120);
+					DiagLog.Write($"[hell-line] key start=({hres.StartX},{hres.StartY}) dir={hdir} house=({hres.HouseX},{hres.HouseY}) 岩浆列={hres.HouseLavaCols}/6 dig={hres.DigCells} cost={hres.Cost}");
 				}
 			}
 		}

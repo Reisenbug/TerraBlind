@@ -23,6 +23,7 @@ namespace TerraBlind
 		const int ThinOk = 2;               // 这么薄的壳随便挖
 		const int ThickW = 40;              // 超出部分按平方涨价
 		const int ThickMax = 24;            // 量到这么厚就够贵了,再往前数没意义
+		const int LavaProbe = 30;           // 桥面往下探这么多格找岩浆
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 8;          // 起点 x 容差:正好落在闭合处就往旁边挪
 		const int Unreachable = int.MaxValue / 4;
@@ -34,6 +35,8 @@ namespace TerraBlind
 			public int StartX, StartY;
 			public int HouseX, HouseY;
 			public int DigCells, Cost;
+			public bool HouseOnLava;
+			public int HouseLavaCols;
 			public List<(int x, int y)> Line;
 		}
 
@@ -61,6 +64,19 @@ namespace TerraBlind
 			int n = 0;
 			for (int r = 1; r < Body + 1; r++) if (Predicates.IsSolid(x, y - r)) n++;
 			return n;
+		}
+
+		static int floorRow(int x) { Column(x, out _, out int f); return f; }
+
+		// 桥面底下一路往下是不是岩浆。中间隔着石头就不算 —— 那是地,不是悬在岩浆上。
+		static bool LavaBelow(int x, int y)
+		{
+			for (int k = 1; k <= LavaProbe; k++)
+			{
+				if (Predicates.IsLava(x, y + k)) return true;
+				if (Predicates.IsSolid(x, y + k)) return false;
+			}
+			return false;
 		}
 
 		// 这一格挡着的话,往前还要连挖几列。薄壳挖穿就通了,厚墙是一路挖到底 ——
@@ -116,11 +132,19 @@ namespace TerraBlind
 			var res = new Result { Line = new List<(int x, int y)>() };
 			dir = dir >= 0 ? 1 : -1;
 
-			int sx = bx, bestClear = -1;
+			// 房子那 6 列底下要是岩浆,所以起点先挑【下面是岩浆】的列,同样满足时才比空腔高矮。
+			// 岩浆面在哪一行是列自己的事,和线走多高无关,所以这一步用 floor 判,不用 ys。
+			int sx = bx, bestClear = -1, bestLava = -1;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
-				Column(bx + d, out int c0, out int f0);
-				if (f0 - c0 > bestClear) { bestClear = f0 - c0; sx = bx + d; }
+				int x = bx + d;
+				Column(x, out int c0, out int f0);
+				if (f0 - c0 < Body) continue;
+				int lv = 0;
+				for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
+					if (Predicates.IsLava(x + dir * k, floorRow(x + dir * k))) lv++;
+				if (lv > bestLava || (lv == bestLava && f0 - c0 > bestClear))
+				{ bestLava = lv; bestClear = f0 - c0; sx = x; }
 			}
 			if (bestClear < Body) { res.Why = $"start_too_tight clear={bestClear}"; return res; }
 
@@ -253,22 +277,15 @@ namespace TerraBlind
 		static void PickHouse(ref Result res, int sx, int dir, int[] ys, int[] ceilA)
 		{
 			const int W = HouseBuilder.RoomWidth + 1;
-			const int Head = HouseBuilder.PillarH + 1;
-			int best = int.MaxValue, bestI = -1;
-			for (int i = 0; i + W <= Length; i++)
-			{
-				bool flat = true;
-				int dig = 0;
-				for (int k = 0; k < W; k++)
-				{
-					if (ys[i + k] != ys[i] || ys[i + k] - ceilA[i + k] < Head) { flat = false; break; }
-					dig += Blocked(sx + dir * (i + k), ys[i + k]);
-				}
-				if (flat && dig < best) { best = dig; bestI = i; }
-			}
-			if (bestI < 0) { res.HouseX = res.StartX; res.HouseY = res.StartY; return; }
-			res.HouseX = sx + dir * bestI;
-			res.HouseY = ys[bestI];
+			// 房子钉在桥的最边缘:起点那 6 列,不再满桥找便宜地方。桥是从房子往外铺的,
+			// 房子跑到中间就等于把桥截成两段。下方必须是岩浆 —— NPC 房要悬在岩浆上。
+			res.HouseX = sx;
+			res.HouseY = ys[0];
+			int lavaCols = 0;
+			for (int k = 0; k < W && k < Length; k++)
+				if (LavaBelow(sx + dir * k, ys[k])) lavaCols++;
+			res.HouseOnLava = lavaCols == W;
+			res.HouseLavaCols = lavaCols;
 		}
 	}
 }
