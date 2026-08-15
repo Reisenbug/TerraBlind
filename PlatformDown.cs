@@ -164,10 +164,18 @@ namespace TerraBlind
 								_phaseFrames = 0; _ph = Ph.Place;
 								return;
 							}
-						Done("stuck", $"穿不下去 站在({_col},{_platY}) 身子{bl}..{br}");
+						// 穿不下去时把周围摊开:身子那 3 行 + 脚下两行,逐列报,别再猜是哪一格顶着
+						var dbg = new System.Text.StringBuilder();
+						for (int c = bl; c <= br; c++)
+							for (int y2 = feetY - 2; y2 <= _platY + 1; y2++)
+								dbg.Append($"({c},{y2})=").Append(IsPlat(c, y2) ? "平台"
+									: Predicates.IsSolid(c, y2) ? "砖" : Predicates.IsLava(c, y2) ? "岩浆" : "空").Append(' ');
+						Done("stuck", $"穿不下去 站({_col},{_platY}) 身子{bl}..{br} vy={p.velocity.Y:0.##} | {dbg}");
 						return;
 					}
-					if (!_tapped) { p.controlDown = true; _tapped = true; return; }
+					// 一次按不动就隔 20 帧再按一次。按住会一路穿到底,所以是"重按"不是"按住";
+					// 只按一次的话,那一帧要是被 vanilla 忽略,就白等满 300 帧。
+					if (!_tapped || (_phaseFrames % 20) == 0) { p.controlDown = true; _tapped = true; return; }
 					// 落稳了再记账:下落途中 feetY 也在变,那时候记等于把没踩住的位置当成了新起点
 					if (p.velocity.Y == 0f && feetY + 1 > _platY)
 					{
