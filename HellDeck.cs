@@ -79,6 +79,8 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > 60 * 900) { Fail("timeout"); return; }
+			// 物块替换要开着,不然桥面那格已经有别的东西时只能干挥。PlatformDown 里有这行,这儿漏了。
+			if (!p.TileReplacementEnabled) p.builderAccStatus[10] = 0;
 
 			// 走完了
 			while (_idx < _plan.Count && Predicates.IsSolid(_plan[_idx].X, _plan[_idx].Y))
@@ -113,6 +115,8 @@ namespace TerraBlind
 				int cx = ActExecutor.OriginCx(p);
 				if (_cellFrames % 60 == 1)
 					DiagLog.Write($"[helldeck] 够不着({cell.X},{cell.Y}) 人在{cx} f={_cellFrames}");
+				// 地狱要塞的墙横在路上,人过不去桥就停在墙前 —— 挡身位的挖掉,这是唯一的解法
+				if (DigWayForward(p, cx < cell.X ? 1 : -1)) return;
 				if (cx < cell.X) p.controlRight = true; else if (cx > cell.X) p.controlLeft = true;
 				return;
 			}
@@ -136,6 +140,35 @@ namespace TerraBlind
 			if (!PlaceAction.IsRunning)
 				PlaceAction.Start(_item, cell.X, cell.Y, 1, 0, 0, true, out _);
 			if (Predicates.IsSolid(cell.X, cell.Y)) { Placed++; _idx++; _cellFrames = 0; _skips = 0; }
+		}
+
+		// 前进方向那一列,身子占的 3 行里有实心就挖掉。挖到了返回 true(这一帧交给挖,别再按方向键)。
+		static bool DigWayForward(Player p, int dir)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int col = dir > 0 ? br + 1 : bl - 1;
+			int fy = ActExecutor.OriginCy(p);
+			for (int r = 0; r < 3; r++)
+			{
+				int y = fy - r;
+				if (!Predicates.IsSolid(col, y)) continue;
+				if (!p.IsInTileInteractionRange(col, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
+				int slot = -1;
+				for (int i = 0; i < 10; i++)
+				{ var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { slot = i; break; } }
+				if (slot < 0)
+				{
+					if (_cellFrames % 60 == 1) DiagLog.Write($"[helldeck] 墙挡着({col},{y})但没镐");
+					return false;
+				}
+				if (!ItemUseCoordinator.IsActive)
+				{
+					ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = col, TargetWy = y, Slot = slot, Strict = true });
+					DiagLog.Write($"[helldeck] 挖挡路的({col},{y}) 身{bl}..{br} 脚{fy}");
+				}
+				return true;
+			}
+			return false;
 		}
 
 		static void Fail(string reason)
