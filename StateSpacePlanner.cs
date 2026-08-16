@@ -573,9 +573,11 @@ namespace TerraBlind
                 }
         }
 
-        // 边的 cost 单位是【帧】(走/跳边传的是 frames.Count),不是我自己编的分数。
-        // 和 EstStepFrames 用同一个式子 —— 一个动作只能有一套代价。
-        static float BridgeFrames(int n) => n * 45f + 120f;
+        // 单位是【帧】,和走/跳边的 frames.Count 同尺。定贵了贪心就永远拆成单格做。
+        static float BridgeFrames(int n) => n * BridgeFramesPerCell + BridgeStartFrames;
+
+        const float BridgeFramesPerCell = 11.25f;   // 实测 5.33 格/秒(连续铺)
+        const float BridgeStartFrames = 20f;        // 起手:对齐、掏料、第一次挥
 
         // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
         public static bool OverLavaVoid(int cx, int cy)
