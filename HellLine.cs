@@ -30,10 +30,8 @@ namespace TerraBlind
 		const int LavaProbe = 30;           // 桥面往下探这么多格找岩浆
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 60;         // 起点 x 容差。房子底下要岩浆,±8 那点余地根本挑不着
-		const int StartAnchorW = 20;        // ×18 封顶 = 360,压过居中:放不出第一格的话整条桥开不了工
 		const int StartCenterW = 240;       // 居中,大加分。满分给足,和锚点(6列×60)同量级
 		const int StartNearW = 3;           // 离人近只是小优势,不该盖过前两项
-		const int AnchorCap = 18;           // 6 列 × 贴身满分 3,封顶免得一堵墙把分刷爆
 		const int AnchorR = 3;              // 这么多格以内有实心就算够得着
 		const int Unreachable = int.MaxValue / 4;
 
@@ -160,13 +158,6 @@ namespace TerraBlind
 			return 0;
 		}
 
-		static int AnchorsNear(int x, int y, int dir)
-		{
-			int n = 0;
-			for (int k = 0; k < HouseW; k++) n += AnchorScore(x + dir * k, y);
-			return n;
-		}
-
 		// by = 人脚下那行。开工点要选【离人最近】的,不知道人在哪一行就只能比列,差几十行也算近。
 		public static Result Compute(int bx, int dir, int by = int.MinValue)
 		{
@@ -179,9 +170,8 @@ namespace TerraBlind
 			var cCeil = new int[span0 * 2 + 1];
 			var cFloor = new int[span0 * 2 + 1];
 			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
-			// 起点只管把线放在【开工点附近】:锚点好不好留给线算完之后在真格子上挑(WorkI),
-			// 这里再用预估行去数锚点就是在没人去的行上打分,量到过一次 6/6 对 0/8。
-			int sx = bx, bestScore = int.MinValue, bestAnchor = -1, bestClear = -1, bestRow = 0;
+			// 锚不进打分:悬空处处都是,人自己造锚(EnsureAnchor)。留下的判据只有居中和离人近。
+			int sx = bx, bestScore = int.MinValue, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
@@ -189,16 +179,15 @@ namespace TerraBlind
 				int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
 				if (f0 - c0 < Body) continue;
 				int y0 = StartRow(x, c0, f0);
-				int anc = AnchorsNear(x, y0, dir);
 				float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
 				int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
-				int score = System.Math.Min(anc, AnchorCap) * StartAnchorW + centerPts - System.Math.Abs(d) * StartNearW;
+				int score = centerPts - System.Math.Abs(d) * StartNearW;
 				if (score > bestScore)
-				{ bestScore = score; sx = x; bestAnchor = anc; bestClear = f0 - c0; bestRel = rel; bestRow = y0; }
+				{ bestScore = score; sx = x; bestClear = f0 - c0; bestRel = rel; bestRow = y0; }
 			}
 			if (bestScore == int.MinValue) { res.Why = "start_too_tight"; return res; }
 			// 预估行要和线上真实的 ys[0] 对得上,对不上就说明打分打在了没人去的行上
-			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 锚={bestAnchor} 预估行={bestRow} 居中rel={bestRel:0.00} 空腔={bestClear}");
+			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 预估行={bestRow} 居中rel={bestRel:0.00} 空腔={bestClear}");
 
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
@@ -329,21 +318,17 @@ namespace TerraBlind
 				digTotal += Blocked(x, ys[i]);
 			}
 
-			// 【离人最近】的那一格,不是最好的那一格。地狱里除了桥,每多走一步都是掉岩浆的机会,
-			// 人站在哪儿就从哪儿开工。锚只当门槛用(放得出第一格就行),不参与排名。
-			res.WorkI = 0; res.WorkAnchor = -1;
+			// 【离人最近】的那一格。锚不当门槛 —— 悬空是常态(整条线大半悬空),
+			// 放不出第一格是 EnsureAnchor 的活(BFS 找最近可贴处铺回来),不是算不出线。
+			res.WorkI = 0; res.WorkAnchor = 0;
 			int bestD = int.MaxValue;
 			for (int i = 0; i < Length; i++)
 			{
 				int x = sx + dir * i, y = ys[i];
-				int a = AnchorScore(x, y);
-				if (a <= 0) continue;
 				int d2 = System.Math.Abs(x - bx) + System.Math.Abs(y - by);
 				if (d2 < bestD)
-				{ bestD = d2; res.WorkAnchor = a; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
+				{ bestD = d2; res.WorkAnchor = AnchorScore(x, y); res.WorkI = i; res.WorkX = x; res.WorkY = y; }
 			}
-			if (res.WorkAnchor <= 0)
-			{ res.Why = "no_anchor_on_line"; DiagLog.Write("[hell-line] 整条线没有一格贴得住,放不出第一格"); return res; }
 			// 离人多远是关键指标:大了就说明人要在地狱里徒步过去,那正是掉岩浆的机会
 			DiagLog.Write($"[hell-line] 开工点 i={res.WorkI} ({res.WorkX},{res.WorkY}) 锚={res.WorkAnchor} " +
 				$"离人{bestD}格 往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");

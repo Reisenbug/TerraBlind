@@ -21,7 +21,6 @@ namespace TerraBlind
 		// 放不上的格子记下来,重搜时绕开 —— 不然每次搜出同一条路,原地循环到超时
 		private static readonly HashSet<(int, int)> _bad = new();
 
-		private const int MaxRadius = 12;
 		private const int MaxFrames = 60 * 60;
 		private const int MaxCellFrames = 180;
 		private const int MaxRepaths = 6;
@@ -66,7 +65,7 @@ namespace TerraBlind
 				return true;
 			}
 			if (!FindPath(out _path))
-			{ why = $"({tx},{ty})周围{MaxRadius}格内没有能贴住的地方"; Outcome = "stuck"; Reason = why;
+			{ why = $"({tx},{ty})够得着的范围里没有能贴住的地方"; Outcome = "stuck"; Reason = why;
 			  DiagLog.Write($"[anchor] STUCK {why}"); return false; }
 			var (fx, fy) = _path[0];
 			DiagLog.Write($"[anchor] ({tx},{ty})四周全空 → 从({fx},{fy})起铺{_path.Count}格接回来");
@@ -83,10 +82,11 @@ namespace TerraBlind
 			var seen = new HashSet<(int, int)> { (_tx, _ty) };
 			var q = new Queue<(int x, int y)>();
 			q.Enqueue((_tx, _ty));
+			// 人脚下那格永远是实处 —— 所以"够得着的范围里必有可贴处"这件事是结构性成立的,
+			// BFS 最差也会走到人身边接上。搜不到只可能是被熔岩或已有方块封死。
 			while (q.Count > 0)
 			{
 				var (cx, cy) = q.Dequeue();
-				if (System.Math.Abs(cx - _tx) + System.Math.Abs(cy - _ty) > MaxRadius) continue;
 				// 找到一个自己就贴得住的空格 —— 从它起手,顺着来路铺回目标
 				if ((cx != _tx || cy != _ty) && HasAnchor(cx, cy))
 				{
