@@ -26,6 +26,7 @@ namespace TerraBlind
 		private const int MaxFrames = 60 * 90;
 		private const int MaxCellFrames = 150;
 		private const int MaxRebuilds = 8;
+		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -100,8 +101,10 @@ namespace TerraBlind
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
 			if (x < bl || x > br || y > fy || y < fy - 2) { why = ""; return false; }
-			int away = x <= (bl + br) / 2 ? 1 : -1;
-			int col = away > 0 ? bl + 1 : br - 1;
+			// 让到【身子完全不盖住 x】为止。挪一格不够:目标在边缘时,新位置还是盖着它,
+			// 于是每帧重来一次 —— 日志里 (3315,1052) 身3313..3315 让到 3314,一直循环。
+			int span = br - bl;                     // 人跨 1~2 列(20px 宽)
+			int col = x <= (bl + br) / 2 ? x + span + 1 : x - span - 1;
 			DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}");
 			return SettleAt.Start(col, out why);
 		}
@@ -136,12 +139,14 @@ namespace TerraBlind
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
 
-			// 够不着就走过去。BridgeBuilder 的原则:够不着不是失败,是该往前走了。
+			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
+			// 那时横向走一辈子也够不着 —— 行差得多就当链失效,从人现在的位置重接一条。
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
-				if (_cellFrames % 60 == 1)
-					DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-				int cx = ActExecutor.OriginCx(p);
+				int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
+				if (System.Math.Abs(cy - y) > RowGap)
+				{ DiagLog.Write($"[placeany] 人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向走不过去"); Retry("行差太大"); return; }
+				if (_cellFrames % 60 == 1) DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({cx},{cy})");
 				if (cx < x) p.controlRight = true; else if (cx > x) p.controlLeft = true;
 				return;
 			}
@@ -149,6 +154,9 @@ namespace TerraBlind
 			if (PlaceAction.Outcome == "blocked")
 			{
 				DiagLog.Write($"[placeany] ({x},{y})放不上:{PlaceAction.Reason}");
+				// out_of_reach 是【人站错了】不是这格不行 —— 拉黑它会把好格子一个个丢掉,
+				// 链越重算越远(日志里连丢 8 格)。这种只等下一帧,让上面的走位去解决。
+				if (PlaceAction.Reason != null && PlaceAction.Reason.Contains("out_of_reach")) return;
 				_bad.Add((x, y));
 				Retry($"({x},{y}){PlaceAction.Reason}");
 				return;
