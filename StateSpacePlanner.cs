@@ -627,7 +627,9 @@ namespace TerraBlind
             // 先发普通 walk/jump,记录有没有哪条真降低了(带竖直权重的)启发值。朝墙横向蹭能降 x 距离但降不了 h,
             // 不算真进展。放置很贵,只有走跳都卡住时才建。
             bool anyProgress = false;
-            bool vertProgress = false; // a plain jump that lands the player on a HIGHER cell (climbs a natural ledge)
+            // 升多少格,不是"升没升"。原来只要升 1 格就把 pillar 关掉,而"原地跳一格一格上"
+            // 每次都升 1 格 —— 于是爬得动就永远不搭柱子,只能继续一格一格爬,自锁。
+            int vertRise = 0;
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
             var (_, dcy) = StandCell(cur.Px, cur.Py);
             // dir 0 = 原地竖直跳:直接跳上头顶正上方的台阶,人在走不上去的坎前就这么干。
@@ -643,7 +645,7 @@ namespace TerraBlind
                     // 于是普通跳能过的矮坎也会触发挖掘。
                     if (RawProgress(ctx, cur, seg.Value.node)) anyProgress = true;
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
-                    if (segFeetCy < dcy) vertProgress = true;
+                    if (dcy - segFeetCy > vertRise) vertRise = dcy - segFeetCy;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
                     foreach (var sp in SplitFall(cur, seg.Value.frames, platformTile))
                         yield return (sp.node, sp.frames, sp.cost, false, null);
@@ -685,7 +687,7 @@ namespace TerraBlind
             // 平台不是到处枚举的,只在"场想去但物理挡住"的地方生成:沿梯度找第一个障碍,朝它另一侧发【一条】平台边。
             // pillar 是最末选择 —— 普通跳够得着的自然台阶(vertProgress)绝不该生柱子,人是徒手爬上去的。
             if (platformTile >= 0 || hasPickaxe)
-                foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertProgress, hasPickaxe, anyProgress))
+                foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertRise, hasPickaxe, anyProgress))
                     yield return pe;
         }
 
@@ -698,7 +700,7 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
-            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, bool vertProgress, bool hasPickaxe, bool anyProgress)
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, int vertRise, bool hasPickaxe, bool anyProgress)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
             int curH = ctx.DistField != null && ctx.DistField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
@@ -724,7 +726,9 @@ namespace TerraBlind
                 }
                 // 只发【爬到顶】这一条,不再按"每跳 2 格"铺一串中间落点:一跳升几格由地形定(1~3),
                 // 承诺了就兑现不了 —— 上一轮 50 条 pillar 边 45 条 MISS,31 条差的正是 ±2 行。
-                if (!anyVertJumpPlace && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                // 跳得慢就让 pillar 一起进候选,由代价决定谁赢 —— 门只筛"根本不必搭",不替代价做选择
+                if (!anyVertJumpPlace && vertRise < PillarBeatsJumpRise
+                    && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (topFeetY + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -820,10 +824,10 @@ namespace TerraBlind
                 // 墙:跳放候选上面已经无条件发过了,这里只剩兜底 —— 一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
-                    if (!anyLateralJp && !vertProgress && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                    if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(ccx, ccy, out int wallTopFeetY) && wallTopFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                        for (int fy = ccy - 2; fy >= topFeetY; fy -= 2)
+                        for (int fy = ccy - 2; fy >= wallTopFeetY; fy -= 2)
                         {
                             float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
                             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
@@ -957,6 +961,7 @@ namespace TerraBlind
         }
 
         const float VerticalJumpVxMax = 0.5f;
+        const int   PillarBeatsJumpRise = 2;  // 一跳升不到这么多格,pillar 就该参与竞争
         const int   VertPlaceMinRise = 3;   // vertical jump-place below this many tiles isn't worth it → pillar instead
         const int   PlatformMaxDropTiles = 4; // scan this many tiles below the arc apex for a placeable+landable spot
         const float HProgressEps = 1.5f;
