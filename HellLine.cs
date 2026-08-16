@@ -269,6 +269,18 @@ namespace TerraBlind
 			if (maxStep > 1 || backToBack > 0)
 				DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} 连抬={backToBack} —— 边集出问题了");
 
+			// 第一格放不出来的话整条线都白算 —— 所以把起点这一带【每一列】的锚点情况打全。
+			// 放方块要正交邻居:上下左右任一格有实心就贴得住。四周全空 = 悬在岩浆上,放不出来。
+			for (int i = 0; i < HouseW + 2 && i < Length; i++)
+			{
+				int x = sx + dir * i, y = ys[i];
+				bool up = Predicates.IsSolid(x, y - 1), dn = Predicates.IsSolid(x, y + 1);
+				bool lf = Predicates.IsSolid(x - 1, y), rt = Predicates.IsSolid(x + 1, y);
+				DiagLog.Write($"[hell-line] 锚 i={i} ({x},{y}) 上{(up ? '#' : '.')}下{(dn ? '#' : '.')}" +
+					$"左{(lf ? '#' : '.')}右{(rt ? '#' : '.')} 本格={(Predicates.IsSolid(x, y) ? "实心" : Predicates.IsLava(x, y) ? "岩浆" : "空")} " +
+					$"下面={(Predicates.IsLava(x, y + 1) ? "岩浆" : dn ? "地" : "空")} 贴得住={(up || dn || lf || rt)}");
+			}
+
 			// 两个面量得对不对,一行就能看出来 —— 位置错过一次就是错在这儿
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
 				$"ceil={ceilA[Length / 2]} floor={floorA[Length / 2]} | 末 ceil={ceilA[Length - 1]} floor={floorA[Length - 1]}");
