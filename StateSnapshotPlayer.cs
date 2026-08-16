@@ -202,11 +202,13 @@ namespace TerraBlind
 					{
 						var rv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 						foreach (var (rlx, rly) in rr.Line) rv.Add((rlx, rly, new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
-						rv.Add((rr.WorkX, rr.WorkY, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
+						// 起点 = 线的第一格 = 房子那一头。人在右半图它就是最右那格,桥从这儿往另一头铺。
+						var (rsx, rsy) = rr.Line[0];
+						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 						PathVisSystem.SetTiles(rv, 7200);
-						RecedingNav.Start(rr.WorkX, rr.WorkY, RecedingNav.Mode.Reach);
-						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 白点({rr.WorkX},{rr.WorkY}) i={rr.WorkI} 锚={rr.WorkAnchor}");
-						Main.NewText($"[TerraBlind] 去白点({rr.WorkX},{rr.WorkY}) 锚{rr.WorkAnchor}", 120, 255, 120);
+						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
+						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
+						Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
 					}
 				}
 			}
