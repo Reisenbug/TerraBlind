@@ -198,7 +198,7 @@ namespace TerraBlind
             {
                 int feet = (int)((p.position.Y + p.height) / 16f);
                 int cells = System.Math.Max(2, feet - st.TargetCy);
-                return cells * 21.5f + 45f;
+                return cells * PillarFramesPerCell + 45f;   // 和边的代价共用一个速率,别再有第二套
             }
             if (st.Dig)
             {
@@ -735,10 +735,21 @@ namespace TerraBlind
                 }
                 if (!anyVertJumpPlace && vertRise < PillarBeatsJumpRise && canPil && topFeetY < ccy)
                 {
+                    // CanPillarFrom 给的是【最高能爬到哪】,不是【该爬到哪】—— 只发它就等于
+                    // 需要 11 格时报价 38 格,必然输给单步。所以按几档高度各发一条,让代价去挑。
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    float npy = (topFeetY + 1) * 16f - PhysicsSimulator.PlayerH;
-                    var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                    yield return (node, null, ((ccy - topFeetY) / 2f) * 43f, true, null);
+                    foreach (int want in PillarRises)
+                    {
+                        int fy = ccy - want;
+                        if (fy < topFeetY) break;          // 超过能爬到的高度
+                        float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
+                        var n2 = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
+                        yield return (n2, null, want * PillarFramesPerCell, true, null);
+                    }
+                    // 顶点那条也留着:上面几档都够不到时它是唯一的
+                    float npyTop = (topFeetY + 1) * 16f - PhysicsSimulator.PlayerH;
+                    var node = new SSNode { Px = npx, Py = npyTop, Vx = 0f, Vy = 0f, Grounded = true };
+                    yield return (node, null, (ccy - topFeetY) * PillarFramesPerCell, true, null);
                 }
             }
 
@@ -836,7 +847,7 @@ namespace TerraBlind
                         {
                             float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
                             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
-                            yield return (node, null, ((ccy - fy) / 2) * 43f, true, null);
+                            yield return (node, null, (ccy - fy) * PillarFramesPerCell, true, null);
                         }
                     }
                 }
@@ -967,6 +978,8 @@ namespace TerraBlind
 
         const float VerticalJumpVxMax = 0.5f;
         static (int, int) _pilLogCell = (int.MinValue, int.MinValue);
+        static readonly int[] PillarRises = { 4, 8, 16 };   // 中间高度,和 bridge 的档位同思路
+        const float PillarFramesPerCell = 17f;   // 实测:22 格 371 帧
         const int   PillarBeatsJumpRise = 2;  // 一跳升不到这么多格,pillar 就该参与竞争
         const int   VertPlaceMinRise = 3;   // vertical jump-place below this many tiles isn't worth it → pillar instead
         const int   PlatformMaxDropTiles = 4; // scan this many tiles below the arc apex for a placeable+landable spot
