@@ -327,15 +327,21 @@ namespace TerraBlind
 				digTotal += Blocked(x, ys[i]);
 			}
 
-			// 开工点在【线算完之后】挑:锚点是这一格真实的四邻,不再赌预估行准不准。
-			// 它不必是桥头 —— 从这儿放出第一格,再往两头长,所以只对"动得了手"负责。
+			// 线算完之后在真格子上挑,不赌预估行。锚封顶 3 分,满分一大把,
+			// 只比锚的话第 0 格拿到 3 就锁死,平手得用"离中点近"再分。
 			res.WorkI = 0; res.WorkAnchor = -1;
+			int half = Length / 2, bestMid = int.MaxValue;
 			for (int i = 0; i < Length; i++)
 			{
 				int x = sx + dir * i, y = ys[i];
 				int a = AnchorScore(x, y);
-				if (a > res.WorkAnchor) { res.WorkAnchor = a; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
+				if (a <= 0) continue;
+				int md = System.Math.Abs(i - half);
+				if (a > res.WorkAnchor || (a == res.WorkAnchor && md < bestMid))
+				{ res.WorkAnchor = a; bestMid = md; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
 			}
+			if (res.WorkAnchor <= 0)
+			{ res.Why = "no_anchor_on_line"; DiagLog.Write("[hell-line] 整条线没有一格贴得住,放不出第一格"); return res; }
 			DiagLog.Write($"[hell-line] 开工点 i={res.WorkI} ({res.WorkX},{res.WorkY}) 锚={res.WorkAnchor} " +
 				$"往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
 
