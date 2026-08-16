@@ -727,8 +727,13 @@ namespace TerraBlind
                 // 只发【爬到顶】这一条,不再按"每跳 2 格"铺一串中间落点:一跳升几格由地形定(1~3),
                 // 承诺了就兑现不了 —— 上一轮 50 条 pillar 边 45 条 MISS,31 条差的正是 ±2 行。
                 // 跳得慢就让 pillar 一起进候选,由代价决定谁赢 —— 门只筛"根本不必搭",不替代价做选择
-                if (!anyVertJumpPlace && vertRise < PillarBeatsJumpRise
-                    && SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY) && topFeetY < ccy)
+                bool canPil = SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY);
+                if (_pilLogCell != (ccx, ccy))
+                {
+                    _pilLogCell = (ccx, ccy);
+                    DiagLog.Write($"[ss-pillar] ({ccx},{ccy}) 跳放={anyVertJumpPlace} 跳升={vertRise} 能搭={canPil} 顶={topFeetY} 发={!anyVertJumpPlace && vertRise < PillarBeatsJumpRise && canPil && topFeetY < ccy}");
+                }
+                if (!anyVertJumpPlace && vertRise < PillarBeatsJumpRise && canPil && topFeetY < ccy)
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (topFeetY + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -961,6 +966,7 @@ namespace TerraBlind
         }
 
         const float VerticalJumpVxMax = 0.5f;
+        static (int, int) _pilLogCell = (int.MinValue, int.MinValue);
         const int   PillarBeatsJumpRise = 2;  // 一跳升不到这么多格,pillar 就该参与竞争
         const int   VertPlaceMinRise = 3;   // vertical jump-place below this many tiles isn't worth it → pillar instead
         const int   PlatformMaxDropTiles = 4; // scan this many tiles below the arc apex for a placeable+landable spot
@@ -2172,6 +2178,12 @@ namespace TerraBlind
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
             RecedingVis.SetDecision(curCx, curCy, curH, goalWx, goalWy, cands, best != null ? bestCell : ((int, int)?)null, best != null ? curH - bestTotal : 0f, dS, dM, dL);
+            // 只打【上升类】候选:全打太长,而"该 pillar 却在一格一格跳"要看的正是这些
+            {
+                string up = _candLog.ToString();
+                if (up.Contains("pillar") || up.Contains("place→"))
+                    DiagLog.Write($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count}:{_candLog}");
+            }
             DiagLog.Trc($"[recede-cands] from=({curCx},{curCy})H={curH} n={cands.Count} expandMs={_swCycle.Elapsed.TotalMilliseconds:0.0}:{_candLog}");
 
             // 饥饿 Expand:没有任何下降候选时(正是静默拒绝的生成器要命的那些周期),开着 SegDiag 重跑一次 Expand,
