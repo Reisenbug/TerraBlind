@@ -230,7 +230,7 @@ namespace TerraBlind
 
         // startOverride:从给定状态起规划(lookahead 用 —— 边走边算下一段,到点零停顿)。
         // goalWx/Wy 是 A* 搜的格(滚动时是近子目标),fieldGoal 是缓存罗盘场的键(最终目标),分开才不会每段重建百万格场(卡死)。
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, bool reachGoal = false)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -243,8 +243,7 @@ namespace TerraBlind
             // 向下无限扫是 navwand 的点击语义,内部重规划不能继承:世界一变能把目标传送到深渊。
             // cap=0 = 【不吸附】,不是"吸附完不许变" —— 空中目标必然吸得远,stand 模式会永远进不了门。
             int requestedWy = goalWy;
-            // 够得着模式绝不能吸附:目标本来就悬空,吸到地上等于换了个目标去
-            if (goalSnapCap > 0 && !reachGoal)
+            if (goalSnapCap > 0)
             {
                 goalWy = SnapGoalToStandable(goalWx, goalWy);
                 if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
@@ -326,7 +325,7 @@ namespace TerraBlind
                     }
                 }
 
-                if (reachGoal ? CanReachGoal(cur, goalWx, goalWy) : ReachedGoal(cur, goalCx, goalFeetY))
+                if (ReachedGoal(cur, goalCx, goalFeetY))
                 {
                     found = true; goalNode = cur; break;
                 }
@@ -1437,23 +1436,6 @@ namespace TerraBlind
                 DiagLog.Write($"[ss-map] {y,5} {sb}");
             }
         }
-
-        // 原版 GetTileRegion 的判据:以人【占的格】为基准的矩形框,不是半径。
-        // 抄 Player.cs 的算式,因为它读的是活玩家的 position,搜索里的节点用不了。
-        static bool CanReachGoal(SSNode s, int goalWx, int goalWy)
-        {
-            if (!s.Grounded) return false;
-            int rx = Player.tileRangeX, ry = Player.tileRangeY;
-            if (rx > ReachLimit) rx = ReachLimit;
-            if (ry > ReachLimit) ry = ReachLimit;
-            int lx = (int)(s.Px / 16f) - rx + 1;
-            int hx = (int)((s.Px + PhysicsSimulator.PlayerW) / 16f) + rx - 1;
-            int ly = (int)(s.Py / 16f) - ry + 1;
-            int hy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f) + ry - 2;
-            return goalWx >= lx && goalWx <= hx && goalWy >= ly && goalWy <= hy;
-        }
-
-        const int ReachLimit = 20;   // TileReachCheckSettings.Simple.TileReachLimit
 
         static bool ReachedGoal(SSNode s, float goalCx, float goalFeetY)
         {

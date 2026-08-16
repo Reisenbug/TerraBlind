@@ -270,13 +270,13 @@ namespace TerraBlind
             StateSpacePlanner.DecayMiss();
 
             // STAND 末段交给 A*:H 场是格子 Dijkstra,不知道悬空格竖直跳不上去,梯度会把人吸到正下方打转
-            if ((_mode == Mode.Stand || _mode == Mode.Reach)
-                && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
-                && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
+            // Reach 不走这条:"先变差再变好"主体的 PUSH 已经在做,不需要第二套会搜索的选边逻辑
+            if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
+                                    && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
             {
                 // goalSnapCap:0 —— 目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
                 // 建房整套坐标全错。宁可 fail fast。
-                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0, reachGoal: _mode == Mode.Reach);
+                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
                 if (ap.Found && ap.Steps.Count > 0)
                 {
                     DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
