@@ -11,13 +11,14 @@ namespace TerraBlind
 	// 先竖后横:横向那段并进桥里,不用在半空单独解决走位。
 	public static class HellBridge
 	{
-		private enum Ph { Idle, Down, House, Lay, Done }
+		private enum Ph { Idle, Down, LayFar, LayNear, House, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _item = "";
 		private static int _dir = 1;
 		private static int _deckY, _startX;
 		private static int _houseX, _houseY;
+		private static int _workI, _workX, _workY;
 		private static int _frames;
 		private static int _laid;        // 累计铺了多少格(跨换料)
 		private static string _lastBlock = "";
@@ -60,28 +61,25 @@ namespace TerraBlind
 			_item = itemName;
 			_deckY = hl.StartY; _startX = hl.StartX;
 			_houseX = hl.HouseX; _houseY = hl.HouseY;
+			_workI = hl.WorkI; _workX = hl.WorkX; _workY = hl.WorkY;
 			_frames = 0; _laid = 0; _lastBlock = ""; _line = hl.Line; _visTick = 0;
 			Repaint();
 			Outcome = "running"; Reason = "";
-			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 房子=({_houseX},{_houseY}) 岩浆列{hl.HouseLavaCols}/{HellLine.HouseW} " +
-				$"桥面行={_deckY} 桥起点列={_startX} dir={_dir} 挖{hl.DigCells}");
-			// 先去房子的左下角。它是【放出来的】不是走上去的,所以人只要站旁边够得着。
+			DiagLog.Write($"[hellbridge] START 人({bx},{ActExecutor.OriginCy(p)}) 房子=({_houseX},{_houseY}) " +
+				$"开工点 i={_workI}({_workX},{_workY}) 锚={hl.WorkAnchor} 桥面行={_deckY} dir={_dir} 挖{hl.DigCells}");
+			// 去【开工点】不是去桥头:那一格有锚放得出来,铺完再往两头长。
 			int bslot0 = FindBlockSlot(p, out _);
 			string blk = bslot0 >= 0 ? p.inventory[bslot0].type.ToString() : itemName;
-			if (!ReachCell.Start(itemName, blk, _houseX, _houseY, out why))
+			if (!ReachCell.Start(itemName, blk, _workX, _workY, out why))
 			{ Outcome = "stuck"; Reason = why; return false; }
 			_ph = Ph.Down;
 			return true;
 		}
 
-		static bool BeginLay(out string why)
+		static bool BeginLay(System.Collections.Generic.List<(int x, int y)> seg, out string why)
 		{
 			var p = Main.LocalPlayer;
-			// 只要够得着桥头就能开工 —— 人站在它旁边,不是站在它上面(那儿是岩浆)。
-			// 不能再拿"人脚下那行"当桥面:桥面由 HellLine 定死,人站哪儿不改变它。
-			if (!p.IsInTileInteractionRange(_startX, _deckY, Terraria.DataStructures.TileReachCheckSettings.Simple))
-			{ Outcome = "stuck"; Reason = $"够不着桥起点({_startX},{_deckY}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})";
-			  why = Reason; _ph = Ph.Idle; DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
+			why = "";
 			int bslot = FindBlockSlot(p, out int bcount);
 			if (bslot < 0)
 			{ Outcome = "stuck"; Reason = "背包里没有能铺桥的方块"; why = Reason; _ph = Ph.Idle;
@@ -89,16 +87,23 @@ namespace TerraBlind
 			string block = p.inventory[bslot].type.ToString();
 			_lastBlock = block;
 			// 照着线铺,不是沿一行平推 —— 平推的话图上有坡有挖,实际是一条直线,两边永远对不上
-			if (!HellDeck.Start(block, BridgePart(), out why))
+			if (!HellDeck.Start(block, seg, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
-			DiagLog.Write($"[hellbridge] 开铺 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
-			_ph = Ph.Lay;
+			DiagLog.Write($"[hellbridge] 开铺 {seg.Count}格 从({seg[0].x},{seg[0].y}) 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
 			return true;
 		}
 
-		// 线的头 HouseW 列是房子地板,归 HouseBuilder 铺;桥只管剩下那 170 格。
-		static System.Collections.Generic.List<(int x, int y)> BridgePart()
-			=> _line.GetRange(HellLine.HouseW, _line.Count - HellLine.HouseW);
+		// 从开工点往远端:i=WorkI..末尾。开工点未必是桥头,它只负责"这一格放得出来"。
+		static System.Collections.Generic.List<(int x, int y)> FarPart()
+			=> _line.GetRange(_workI, _line.Count - _workI);
+
+		// 从开工点往房子那头倒着铺。倒序是必须的:每一格都要贴着【上一格】,顺序反了就悬空。
+		static System.Collections.Generic.List<(int x, int y)> NearPart()
+		{
+			var seg = _line.GetRange(HellLine.HouseW, System.Math.Max(0, _workI - HellLine.HouseW + 1));
+			seg.Reverse();
+			return seg;
+		}
 
 		// 绿=已铺、青=待铺、黄=拐角锚点、金=房子那几列。看真实地块不看计数 —— 卡在哪一格要一眼看见。
 		static void Repaint()
@@ -111,13 +116,17 @@ namespace TerraBlind
 			var house = new Microsoft.Xna.Framework.Color(255, 180, 0, 230);
 			for (int i = 0; i < HellLine.HouseW && i < _line.Count; i++)
 				vis.Add((_line[i].x, _line[i].y, house));
-			foreach (var c in HellDeck.Expand(BridgePart()))
+			foreach (var c in HellDeck.Expand(FarPart()))
 				vis.Add((c.X, c.Y, Predicates.IsSolid(c.X, c.Y) ? done : c.Anchor ? anchor : todo));
+			foreach (var c in HellDeck.Expand(NearPart()))
+				vis.Add((c.X, c.Y, Predicates.IsSolid(c.X, c.Y) ? done : c.Anchor ? anchor : todo));
+			// 开工点画白的:第一格从哪儿放出来,图上要能一眼找到
+			vis.Add((_workX, _workY, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 			PathVisSystem.SetTiles(vis, 240);
 		}
 
 		// 换一摞料继续铺。挑不出料/起不来就返回 false,让调用方去报错。
-		static bool Relay()
+		static bool Relay(System.Collections.Generic.List<(int x, int y)> seg)
 		{
 			var p = Main.LocalPlayer;
 			int slot = FindBlockSlot(p, out int cnt);
@@ -126,7 +135,7 @@ namespace TerraBlind
 			// 挑出来还是刚才那摞就别重来了 —— 那说明停下另有原因(够不着、被挡),换料解决不了,重启只会死循环
 			if (it == _lastBlock) return false;
 			_lastBlock = it;
-			if (!HellDeck.Start(it, BridgePart(), out _)) return false;
+			if (!HellDeck.Start(it, seg, out _)) return false;
 			DiagLog.Write($"[hellbridge] 换料 {p.inventory[slot].Name} 存量{cnt},已铺{_laid}");
 			return true;
 		}
@@ -150,11 +159,34 @@ namespace TerraBlind
 				case Ph.Down:
 					if (ReachCell.IsRunning) return;
 					if (ReachCell.Outcome != "done")
-					{ Fail($"够不到房址({_houseX},{_houseY}):{ReachCell.Reason}"); return; }
-					// 房子先盖:桥是从房子边上往外接的,房子的地板行就是桥面行
+					{ Fail($"够不到开工点({_workX},{_workY}):{ReachCell.Reason}"); return; }
+					DiagLog.Write($"[hellbridge] 到开工点,先往远端铺 {HellLine.Length - 1 - _workI} 格");
+					if (!BeginLay(FarPart(), out _)) return;
+					_ph = Ph.LayFar;
+					return;
+
+				case Ph.LayFar:
+					if (HellDeck.IsRunning) return;
+					_laid += HellDeck.Placed;
+					if (HellDeck.Outcome != "done" && Relay(FarPart())) return;
+					if (HellDeck.Outcome != "done")
+					{ Fail($"远端铺不完:{HellDeck.Outcome} {HellDeck.Reason} 已铺{_laid}"); return; }
+					DiagLog.Write($"[hellbridge] 远端好了,回头铺房子那侧 {_workI - HellLine.HouseW + 1} 格");
+					if (!BeginLay(NearPart(), out _)) return;
+					_ph = Ph.LayNear;
+					return;
+
+				case Ph.LayNear:
+					if (HellDeck.IsRunning) return;
+					_laid += HellDeck.Placed;
+					// 这摞用光了就换第二多的接着铺 —— 2000 木材铺完还差的那截该由 150 泥块顶上
+					if (HellDeck.Outcome != "done" && Relay(NearPart())) return;
+					if (HellDeck.Outcome != "done")
+					{ Fail($"近端铺不完:{HellDeck.Outcome} {HellDeck.Reason} 已铺{_laid}"); return; }
+					// 桥铺完了房子才动工:房子钉在最边缘,地板行就是桥面行
 					if (!HouseBuilder.Start(1, _dir, _houseX, _houseY, out string hw))
 					{ Fail($"房子起不来:{hw}"); return; }
-					DiagLog.Write($"[hellbridge] 盖房子 角=({_houseX},{_houseY}) dir={_dir}");
+					DiagLog.Write($"[hellbridge] 桥好了({_laid}格),盖房子 角=({_houseX},{_houseY}) dir={_dir}");
 					_ph = Ph.House;
 					return;
 
@@ -162,20 +194,8 @@ namespace TerraBlind
 					if (HouseBuilder.IsRunning) return;
 					if (HouseBuilder.Outcome != "done")
 					{ Fail($"房子没盖成:{HouseBuilder.Outcome}/{HouseBuilder.Reason}"); return; }
-					DiagLog.Write($"[hellbridge] 房子好了,开始铺桥 {_startX} 起 {HellLine.Bridge} 格");
-					BeginLay(out _);
-					return;
-
-				case Ph.Lay:
-					if (HellDeck.IsRunning) return;
-					_laid += HellDeck.Placed;
-					// 这摞用光了就换第二多的接着铺,从它停的那一格续 —— 2000 木材铺完还差的那截,
-					// 该由 150 泥块顶上,而不是在这儿报"铺不完"。
-					if (HellDeck.Outcome != "done" && Relay()) return;
-					if (HellDeck.Outcome != "done")
-					{ Fail($"铺不完:{HellDeck.Outcome} {HellDeck.Reason} 已铺{_laid}"); return; }
 					Outcome = "done"; _ph = Ph.Done;
-					DiagLog.Write($"[hellbridge] DONE 铺了{_laid}格");
+					DiagLog.Write($"[hellbridge] DONE 桥{_laid}格 + 房子");
 					return;
 			}
 		}

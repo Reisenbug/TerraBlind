@@ -43,6 +43,8 @@ namespace TerraBlind
 			public string Why;
 			public int StartX, StartY;
 			public int HouseX, HouseY;
+			public int WorkX, WorkY, WorkI;   // 开工点:线上锚点最好的一格,从这儿往两头铺
+			public int WorkAnchor;
 			public int DigCells, Cost;
 			public bool HouseOnLava;
 			public int HouseLavaCols;
@@ -147,22 +149,21 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 锚点 = 这一列附近有实心可以贴。放方块要正交邻居,四周全空就放不出来;
-		// AnchorR 以内的实心虽然不能直接贴,但能从它接过来,所以按距离给分,贴身的最值钱。
+		// 一格的锚:贴身(r=1)最值钱,远的只是"能接过去"。四周全空就放不出来。
+		static int AnchorScore(int x, int y)
+		{
+			for (int r = 1; r <= AnchorR; r++)
+				for (int dy = -r; dy <= r; dy++)
+					for (int dx = -r; dx <= r; dx++)
+						if (System.Math.Abs(dx) + System.Math.Abs(dy) == r
+							&& Predicates.IsSolid(x + dx, y + dy)) return AnchorR + 1 - r;
+			return 0;
+		}
+
 		static int AnchorsNear(int x, int y, int dir)
 		{
 			int n = 0;
-			for (int k = 0; k < HouseW; k++)
-			{
-				int cx = x + dir * k;
-				int near = 0;
-				for (int r = 1; r <= AnchorR && near == 0; r++)
-					for (int dy = -r; dy <= r && near == 0; dy++)
-						for (int dx = -r; dx <= r; dx++)
-							if (System.Math.Abs(dx) + System.Math.Abs(dy) == r
-								&& Predicates.IsSolid(cx + dx, y + dy)) { near = AnchorR + 1 - r; break; }
-				n += near;
-			}
+			for (int k = 0; k < HouseW; k++) n += AnchorScore(x + dir * k, y);
 			return n;
 		}
 
@@ -176,7 +177,8 @@ namespace TerraBlind
 			var cCeil = new int[span0 * 2 + 1];
 			var cFloor = new int[span0 * 2 + 1];
 			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
-			// 以前岩浆列数字典序排第一,选出来的起点悬在半空四周全空,第一格根本放不出来
+			// 起点只管把线放在【开工点附近】:锚点好不好留给线算完之后在真格子上挑(WorkI),
+			// 这里再用预估行去数锚点就是在没人去的行上打分,量到过一次 6/6 对 0/8。
 			int sx = bx, bestScore = int.MinValue, bestAnchor = -1, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
 			for (int d = -StartWindow; d <= StartWindow; d++)
@@ -324,6 +326,18 @@ namespace TerraBlind
 				res.Line.Add((x, ys[i]));
 				digTotal += Blocked(x, ys[i]);
 			}
+
+			// 开工点在【线算完之后】挑:锚点是这一格真实的四邻,不再赌预估行准不准。
+			// 它不必是桥头 —— 从这儿放出第一格,再往两头长,所以只对"动得了手"负责。
+			res.WorkI = 0; res.WorkAnchor = -1;
+			for (int i = 0; i < Length; i++)
+			{
+				int x = sx + dir * i, y = ys[i];
+				int a = AnchorScore(x, y);
+				if (a > res.WorkAnchor) { res.WorkAnchor = a; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
+			}
+			DiagLog.Write($"[hell-line] 开工点 i={res.WorkI} ({res.WorkX},{res.WorkY}) 锚={res.WorkAnchor} " +
+				$"往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
 
 			res.Found = true;
 			// 起点 = 桥的第一格,在房子【外面】。房子占头 HouseW 列,人先盖房子再从房子边上往外铺。

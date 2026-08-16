@@ -209,9 +209,11 @@ namespace TerraBlind
 					foreach (var (hlx, hly) in hres.Line) hvis.Add((hlx, hly, hlc));
 					for (int hk = 0; hk < HouseBuilder.RoomWidth + 1; hk++)
 						hvis.Add((hres.HouseX + hdir * hk, hres.HouseY, hhc));
+					// 白色=开工点。它未必是桥头,只是最好放出第一格的地方
+					hvis.Add((hres.WorkX, hres.WorkY, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 					PathVisSystem.SetTiles(hvis, 7200);
 					string lavaTag = hres.HouseOnLava ? "岩浆上" : $"只有{hres.HouseLavaCols}/6列在岩浆上";
-					Main.NewText($"[TerraBlind] 桥线 起点({hres.StartX},{hres.StartY}) 房子({hres.HouseX},{hres.HouseY}) {lavaTag} 要挖{hres.DigCells}格 代价{hres.Cost}", 120, 255, 120);
+					Main.NewText($"[TerraBlind] 桥线 房子({hres.HouseX},{hres.HouseY}) 开工点({hres.WorkX},{hres.WorkY})锚{hres.WorkAnchor} {lavaTag} 要挖{hres.DigCells}格 代价{hres.Cost}", 120, 255, 120);
 					DiagLog.Write($"[hell-line] key start=({hres.StartX},{hres.StartY}) dir={hdir} house=({hres.HouseX},{hres.HouseY}) 岩浆列={hres.HouseLavaCols}/6 dig={hres.DigCells} cost={hres.Cost}");
 				}
 			}
