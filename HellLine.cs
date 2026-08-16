@@ -30,10 +30,10 @@ namespace TerraBlind
 		const int LavaProbe = 30;           // 桥面往下探这么多格找岩浆
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 60;         // 起点 x 容差。房子底下要岩浆,±8 那点余地根本挑不着
-		const int StartAnchorW = 60;        // 有东西可贴,大加分:第一格放不出来的话整条桥都开不了工
+		const int StartAnchorW = 20;        // ×18 封顶 = 360,压过居中:放不出第一格的话整条桥开不了工
 		const int StartCenterW = 240;       // 居中,大加分。满分给足,和锚点(6列×60)同量级
 		const int StartNearW = 3;           // 离人近只是小优势,不该盖过前两项
-		const int AnchorCap = 6;            // 6 列各算一次,封顶免得一堵墙把分刷爆
+		const int AnchorCap = 18;           // 6 列 × 贴身满分 3,封顶免得一堵墙把分刷爆
 		const int AnchorR = 3;              // 这么多格以内有实心就算够得着
 		const int Unreachable = int.MaxValue / 4;
 
@@ -134,19 +134,34 @@ namespace TerraBlind
 			return c;
 		}
 
-		// 起点那一格预估落在哪一行:居中。Dijkstra 会自己微调,这里只要够准来打分
-		static int StartRow(int ceil, int floor) => ceil + (floor - ceil) / 2;
+		// 预估行必须【用 CellCost 挑】。自己编一套"取中点"会和 Dijkstra 差几十行,
+		// 于是在没人去的行上数锚点,分数全是假的(量到:打分说锚 6/6,线上实测 0/8)。
+		static int StartRow(int x, int ceil, int floor)
+		{
+			int best = ceil + 1, bc = Unreachable;
+			for (int y = ceil + 1; y <= floor; y++)
+			{
+				int c = CellCost(x, y, ceil, floor);
+				if (c < bc) { bc = c; best = y; }
+			}
+			return best;
+		}
 
-		// 锚点 = 起点这几列附近有实心可以贴。放方块要正交邻居,四周全空就放不出来。
+		// 锚点 = 这一列附近有实心可以贴。放方块要正交邻居,四周全空就放不出来;
+		// AnchorR 以内的实心虽然不能直接贴,但能从它接过来,所以按距离给分,贴身的最值钱。
 		static int AnchorsNear(int x, int y, int dir)
 		{
 			int n = 0;
 			for (int k = 0; k < HouseW; k++)
 			{
 				int cx = x + dir * k;
-				for (int dy = -AnchorR; dy <= AnchorR; dy++)
-					for (int dx = -AnchorR; dx <= AnchorR; dx++)
-						if (Predicates.IsSolid(cx + dx, y + dy)) { n++; dy = AnchorR + 1; break; }
+				int near = 0;
+				for (int r = 1; r <= AnchorR && near == 0; r++)
+					for (int dy = -r; dy <= r && near == 0; dy++)
+						for (int dx = -r; dx <= r; dx++)
+							if (System.Math.Abs(dx) + System.Math.Abs(dy) == r
+								&& Predicates.IsSolid(cx + dx, y + dy)) { near = AnchorR + 1 - r; break; }
+				n += near;
 			}
 			return n;
 		}
@@ -162,23 +177,24 @@ namespace TerraBlind
 			var cFloor = new int[span0 * 2 + 1];
 			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
 			// 以前岩浆列数字典序排第一,选出来的起点悬在半空四周全空,第一格根本放不出来
-			int sx = bx, bestScore = int.MinValue, bestAnchor = -1, bestClear = -1;
+			int sx = bx, bestScore = int.MinValue, bestAnchor = -1, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
 				int x = bx + d;
 				int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
 				if (f0 - c0 < Body) continue;
-				int y0 = StartRow(c0, f0);
+				int y0 = StartRow(x, c0, f0);
 				int anc = AnchorsNear(x, y0, dir);
 				float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
 				int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
 				int score = System.Math.Min(anc, AnchorCap) * StartAnchorW + centerPts - System.Math.Abs(d) * StartNearW;
 				if (score > bestScore)
-				{ bestScore = score; sx = x; bestAnchor = anc; bestClear = f0 - c0; bestRel = rel; }
+				{ bestScore = score; sx = x; bestAnchor = anc; bestClear = f0 - c0; bestRel = rel; bestRow = y0; }
 			}
 			if (bestScore == int.MinValue) { res.Why = "start_too_tight"; return res; }
-			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 锚={bestAnchor} 居中rel={bestRel:0.00} 空腔={bestClear}");
+			// 预估行要和线上真实的 ys[0] 对得上,对不上就说明打分打在了没人去的行上
+			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 锚={bestAnchor} 预估行={bestRow} 居中rel={bestRel:0.00} 空腔={bestClear}");
 
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
