@@ -230,7 +230,7 @@ namespace TerraBlind
 
         // startOverride:从给定状态起规划(lookahead 用 —— 边走边算下一段,到点零停顿)。
         // goalWx/Wy 是 A* 搜的格(滚动时是近子目标),fieldGoal 是缓存罗盘场的键(最终目标),分开才不会每段重建百万格场(卡死)。
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, bool reachGoal = false)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -243,7 +243,8 @@ namespace TerraBlind
             // 向下无限扫是 navwand 的点击语义,内部重规划不能继承:世界一变能把目标传送到深渊。
             // cap=0 = 【不吸附】,不是"吸附完不许变" —— 空中目标必然吸得远,stand 模式会永远进不了门。
             int requestedWy = goalWy;
-            if (goalSnapCap > 0)
+            // 够得着模式绝不能吸附:目标本来就悬空,吸到地上等于换了个目标去
+            if (goalSnapCap > 0 && !reachGoal)
             {
                 goalWy = SnapGoalToStandable(goalWx, goalWy);
                 if (System.Math.Abs(goalWy - requestedWy) > goalSnapCap)
@@ -325,7 +326,7 @@ namespace TerraBlind
                     }
                 }
 
-                if (ReachedGoal(cur, goalCx, goalFeetY))
+                if (reachGoal ? CanReachGoal(cur, goalWx, goalWy) : ReachedGoal(cur, goalCx, goalFeetY))
                 {
                     found = true; goalNode = cur; break;
                 }
@@ -1351,6 +1352,9 @@ namespace TerraBlind
             }
             if (!everAirborne || !s.Grounded) return null;          // no cliff, or never landed
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
+            // 掉进岩浆这把就完了,得重开 —— 所以这条边【不发】。物理 Step 把岩浆当空气,
+            // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
+            if (FallHitsLava(frames)) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
             // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
@@ -1358,6 +1362,20 @@ namespace TerraBlind
         }
 
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
+        // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
+        static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames)
+        {
+            foreach (var f in frames)
+            {
+                int x0 = (int)(f.Px / 16f), x1 = (int)((f.Px + PhysicsSimulator.PlayerW - 1) / 16f);
+                int y0 = (int)(f.Py / 16f), y1 = (int)((f.Py + PhysicsSimulator.PlayerH - 1) / 16f);
+                for (int x = x0; x <= x1; x++)
+                    for (int y = y0; y <= y1; y++)
+                        if (Predicates.IsLava(x, y)) return true;
+            }
+            return false;
+        }
+
         // 在同一列里按距离【双向】找最近可站格:向上是从块里爬到表面,向下是把悬空目标落到地板。
         const int GoalSnapMaxDrop = 40;
         // 岩浆里放不了任何东西,人去了也白去 —— 所以"能站"必须排除泡在岩浆里和踩在岩浆面上。
@@ -1419,6 +1437,23 @@ namespace TerraBlind
                 DiagLog.Write($"[ss-map] {y,5} {sb}");
             }
         }
+
+        // 原版 GetTileRegion 的判据:以人【占的格】为基准的矩形框,不是半径。
+        // 抄 Player.cs 的算式,因为它读的是活玩家的 position,搜索里的节点用不了。
+        static bool CanReachGoal(SSNode s, int goalWx, int goalWy)
+        {
+            if (!s.Grounded) return false;
+            int rx = Player.tileRangeX, ry = Player.tileRangeY;
+            if (rx > ReachLimit) rx = ReachLimit;
+            if (ry > ReachLimit) ry = ReachLimit;
+            int lx = (int)(s.Px / 16f) - rx + 1;
+            int hx = (int)((s.Px + PhysicsSimulator.PlayerW) / 16f) + rx - 1;
+            int ly = (int)(s.Py / 16f) - ry + 1;
+            int hy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f) + ry - 2;
+            return goalWx >= lx && goalWx <= hx && goalWy >= ly && goalWy <= hy;
+        }
+
+        const int ReachLimit = 20;   // TileReachCheckSettings.Simple.TileReachLimit
 
         static bool ReachedGoal(SSNode s, float goalCx, float goalFeetY)
         {

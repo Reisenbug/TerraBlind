@@ -186,6 +186,30 @@ namespace TerraBlind
 					else Main.NewText($"[TerraBlind] 下不去:{dwhy}", 255, 120, 120);
 				}
 			}
+			// [ 单测"够得着就算到":算地狱线,导航去白点(开工点)。它悬空、站不上去,正是要试的情形。
+			if (TerraBlind.TestReachWork != null && TerraBlind.TestReachWork.JustPressed)
+			{
+				if (RecedingNav.Active) { RecedingNav.Stop(); Main.NewText("[TerraBlind] 导航停止", 255, 200, 120); }
+				else
+				{
+					var rp = Main.LocalPlayer;
+					int rbx = ActExecutor.OriginCx(rp);
+					int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
+					var rr = HellLine.Compute(rbx, rdir);
+					if (!rr.Found)
+						Main.NewText($"[TerraBlind] 算不出线:{rr.Why}", 255, 120, 120);
+					else
+					{
+						var rv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+						foreach (var (rlx, rly) in rr.Line) rv.Add((rlx, rly, new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
+						rv.Add((rr.WorkX, rr.WorkY, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
+						PathVisSystem.SetTiles(rv, 7200);
+						RecedingNav.Start(rr.WorkX, rr.WorkY, RecedingNav.Mode.Reach);
+						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 白点({rr.WorkX},{rr.WorkY}) i={rr.WorkI} 锚={rr.WorkAnchor}");
+						Main.NewText($"[TerraBlind] 去白点({rr.WorkX},{rr.WorkY}) 锚{rr.WorkAnchor}", 120, 255, 120);
+					}
+				}
+			}
 			// I 预览全程:主道→地狱的线 + 桥 + 房子,一次画完。人不动,纯看位置对不对。
 			if (TerraBlind.PreviewDescent != null && TerraBlind.PreviewDescent.JustPressed)
 			{

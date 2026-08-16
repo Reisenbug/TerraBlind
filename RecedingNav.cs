@@ -19,7 +19,8 @@ namespace TerraBlind
         //   Snap  — 悬空目标掉到下面的地面,到达=人站在那格上。走路默认。
         //   Mine  — 不 snap,到达=目标格被挖空。挖矿:目标是岩石里的矿,身体(2x3)根本站不上去。
         //   Stand — 不 snap,到达=人站在那格上。房址:目标本来就悬空,必须真站上去。
-        public enum Mode { Snap, Mine, Stand }
+        // Reach = 目标悬空,站不上去也放不了东西,人挨着它伸手就算到
+        public enum Mode { Snap, Mine, Stand, Reach }
         static Mode _mode;
         const float GoalDistPx = 24f;
         const float StandDistPx = 8f;    // 建房契约要求脚踩准那一格,±24px 会站到隔壁列
@@ -195,6 +196,16 @@ namespace TerraBlind
                 if (!gt.HasTile || !Main.tileSolid[gt.TileType])
                 { DiagLog.Write("[recede] exact goal mined out"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done (mined)"); return; }
             }
+            else if (_mode == Mode.Reach)
+            {
+                // 够得着就算到 —— 用原版的交互距离,和"放得出方块"同一个判据,不另编格数
+                if (p.velocity.Y == 0f
+                    && p.IsInTileInteractionRange(_goalWx, _goalWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+                {
+                    DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+                    LastStop = "done"; Stop(); Main.NewText("[TerraBlind] 够到目标了"); return;
+                }
+            }
             else
             {
                 float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
@@ -259,12 +270,13 @@ namespace TerraBlind
             StateSpacePlanner.DecayMiss();
 
             // STAND 末段交给 A*:H 场是格子 Dijkstra,不知道悬空格竖直跳不上去,梯度会把人吸到正下方打转
-            if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
-                                    && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
+            if ((_mode == Mode.Stand || _mode == Mode.Reach)
+                && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
+                && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
             {
                 // goalSnapCap:0 —— 目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
                 // 建房整套坐标全错。宁可 fail fast。
-                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
+                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0, reachGoal: _mode == Mode.Reach);
                 if (ap.Found && ap.Steps.Count > 0)
                 {
                     DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
