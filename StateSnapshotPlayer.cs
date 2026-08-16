@@ -32,6 +32,8 @@ namespace TerraBlind
 		private static int _houseNavTries;
 		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
 		private static (int x, int y)? _pendingAnchor;
+		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
+		private static (int x, int y)? _pendingStand;
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -63,10 +65,25 @@ namespace TerraBlind
 			{
 				var (ax, ay) = _pendingAnchor.Value;
 				_pendingAnchor = null;
+				_pendingStand = (ax, ay);
 				if (PlaceAnywhere.Start("94", ax, ay, out string awhy))
 					Main.NewText($"[TerraBlind] 在桥起点({ax},{ay})放第一格…", 120, 255, 120);
 				else
-					Main.NewText($"[TerraBlind] 放不了:{awhy}", 255, 120, 120);
+				{ _pendingStand = null; Main.NewText($"[TerraBlind] 放不了:{awhy}", 255, 120, 120); }
+			}
+			// 第一格放好了 → 站上去。Stand 的目标是【人占的那一格】,所以是桥面上面一格。
+			if (_pendingStand.HasValue && !PlaceAnywhere.IsRunning && !RecedingNav.Active)
+			{
+				var (sx2, sy2) = _pendingStand.Value;
+				_pendingStand = null;
+				if (PlaceAnywhere.Outcome != "done")
+					Main.NewText($"[TerraBlind] 第一格没放成:{PlaceAnywhere.Reason}", 255, 120, 120);
+				else
+				{
+					DiagLog.Write($"[reach-test] 第一格好了,去站在({sx2},{sy2 - 1}) 桥面({sx2},{sy2})");
+					RecedingNav.Start(sx2, sy2 - 1, RecedingNav.Mode.Stand);
+					Main.NewText($"[TerraBlind] 去站到桥起点上({sx2},{sy2 - 1})", 120, 255, 120);
+				}
 			}
 			var site = _site;
 			if (site != null)

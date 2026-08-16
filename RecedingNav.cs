@@ -142,8 +142,9 @@ namespace TerraBlind
         {
             StateSpacePlanner.StopNav();
             _mode = mode;
-            // 精确模式跟着 Reach 走 —— 目前只有地狱那条路用它,掉熔岩=重开
-            StateSpacePlanner.PreciseMode = mode == Mode.Reach;
+            // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
+            StateSpacePlanner.PreciseMode = goalWy >= Main.UnderworldLayer
+                || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
             _standTries = 0;
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
