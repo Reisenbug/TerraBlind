@@ -1,81 +1,114 @@
+using System.Collections.Generic;
 using Terraria;
 
 namespace TerraBlind
 {
-	// 让某一格【放得出方块】。放置要正交邻居,四周全空就只能挥空手。
-	// 起点悬在半空是常态(地狱那条线大半都悬空),所以不是换个起点,是自己把锚造出来。
+	// 让某一格【放得出东西】。悬空是常态,所以不换位置,自己把锚造出来。
+	//
+	// 在纯空气里放第一块是不可能的 —— 目标的邻居往往也四周全空,一样放不出来。
+	// 所以 BFS 从目标往外找【最近的能贴住的空格】(靠着某个实处),再沿路径一格格铺回来。
+	// 平台按 3×3 算邻居(原版 framing 读了 8 邻,斜着也贴),比方块的 4 邻好接得多。
 	public static class EnsureAnchor
 	{
-		private enum Ph { Idle, Place, Verify, Done }
+		private enum Ph { Idle, Lay, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _item = "";
 		private static int _tx, _ty;
-		private static int _ax, _ay;      // 正在放的那一格(锚)
-		private static int _frames, _tries;
-		// 试过放不上的格子记下来,不然 Pick 每次都挑回同一格,原地挥到超时
-		private static readonly System.Collections.Generic.HashSet<(int, int)> _tried = new();
+		private static List<(int x, int y)> _path = new();   // 从远处的锚点铺回目标,顺序就是铺的顺序
+		private static int _idx;
+		private static int _frames, _cellFrames, _repaths;
+		// 放不上的格子记下来,重搜时绕开 —— 不然每次搜出同一条路,原地循环到超时
+		private static readonly HashSet<(int, int)> _bad = new();
 
-		private const int MaxTries = 4;
-		private const int MaxFrames = 60 * 30;
+		private const int MaxRadius = 12;
+		private const int MaxFrames = 60 * 60;
+		private const int MaxCellFrames = 180;
+		private const int MaxRepaths = 6;
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
-		// 四邻有实心就贴得住。和 HellLine.AnchorScore 同一个判据,别再编第二套。
+		// 平台贴 3×3:原版 platform framing 读 (i±1,j)、(i,j±1) 和四个斜角。
 		public static bool HasAnchor(int x, int y)
-			=> Predicates.IsSolid(x - 1, y) || Predicates.IsSolid(x + 1, y)
-			|| Predicates.IsSolid(x, y - 1) || Predicates.IsSolid(x, y + 1);
-
-		// 【不预测】能不能放 —— 放置眼会观测目标格有没有长出东西(PlaceAction 的 blocked/placed)。
-		// 这里只排除物理上不可能的:界外、已经有东西、熔岩(放不进去)。挡不挡得住交给眼去报。
-		static bool Worth(int x, int y)
 		{
-			if (!Predicates.InBounds(x, y)) return false;
-			if (Predicates.IsSolid(x, y)) return false;
-			return !Predicates.IsLava(x, y);
+			for (int dy = -1; dy <= 1; dy++)
+				for (int dx = -1; dx <= 1; dx++)
+				{
+					if (dx == 0 && dy == 0) continue;
+					if (Predicates.IsSolid(x + dx, y + dy)) return true;
+				}
+			return false;
+		}
+
+		// 能考虑的空格:界内、空着、不是熔岩,而且【人现在就够得着】——
+		// 够不着的格子放不了,BFS 把它算进路径只会规划出一条走不通的路。
+		static bool Free(int x, int y)
+		{
+			if (!Predicates.InBounds(x, y) || Predicates.IsSolid(x, y) || Predicates.IsLava(x, y)) return false;
+			if (_bad.Contains((x, y))) return false;
+			var p = Main.LocalPlayer;
+			return p != null && p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple);
 		}
 
 		public static bool Start(string itemName, int tx, int ty, out string why)
 		{
 			why = "";
-			var p = Main.LocalPlayer;
-			if (p == null) { why = "no_player"; return false; }
+			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
-			_frames = 0; _tries = 0; _tried.Clear();
+			_frames = 0; _cellFrames = 0; _idx = 0; _repaths = 0; _bad.Clear();
 			Outcome = "running"; Reason = "";
 			if (HasAnchor(tx, ty))
 			{
 				Outcome = "done"; _ph = Ph.Done;
-				DiagLog.Write($"[anchor] ({tx},{ty}) 本来就贴得住,不用造");
+				DiagLog.Write($"[anchor] ({tx},{ty}) 本来就贴得住");
 				return true;
 			}
-			if (!Pick(out _ax, out _ay))
-			{ why = $"({tx},{ty})四邻都放不了锚"; Outcome = "stuck"; Reason = why;
-			  DiagLog.Write($"[anchor] STUCK {why} " + Dump()); return false; }
-			DiagLog.Write($"[anchor] ({tx},{ty})四周全空 → 先放({_ax},{_ay}) " + Dump());
-			_ph = Ph.Place;
+			if (!FindPath(out _path))
+			{ why = $"({tx},{ty})周围{MaxRadius}格内没有能贴住的地方"; Outcome = "stuck"; Reason = why;
+			  DiagLog.Write($"[anchor] STUCK {why}"); return false; }
+			var (fx, fy) = _path[0];
+			DiagLog.Write($"[anchor] ({tx},{ty})四周全空 → 从({fx},{fy})起铺{_path.Count}格接回来");
+			_ph = Ph.Lay;
 			return true;
 		}
 
-		// 桥面【下面】优先:它既当锚又当人的落脚点,而且不挡桥上的净空。
-		// 左右次之(桥自己要往那边长)。正上方最后 —— 那是人要走的 3 格净空,放了还得挖。
-		static bool Pick(out int ax, out int ay)
+		// BFS:从目标往外扩,找最近的"已经贴得住"的空格,然后把路径反过来 —— 从那儿铺回目标。
+		// 扩展用 3×3,因为铺的是平台,斜着也能接上。
+		static bool FindPath(out List<(int x, int y)> path)
 		{
-			foreach (var (dx, dy) in new[] { (0, 1), (-1, 0), (1, 0), (0, -1) })
+			path = new List<(int x, int y)>();
+			var prev = new Dictionary<(int, int), (int, int)>();
+			var seen = new HashSet<(int, int)> { (_tx, _ty) };
+			var q = new Queue<(int x, int y)>();
+			q.Enqueue((_tx, _ty));
+			while (q.Count > 0)
 			{
-				int x = _tx + dx, y = _ty + dy;
-				if (Worth(x, y) && !_tried.Contains((x, y))) { ax = x; ay = y; return true; }
+				var (cx, cy) = q.Dequeue();
+				if (System.Math.Abs(cx - _tx) + System.Math.Abs(cy - _ty) > MaxRadius) continue;
+				// 找到一个自己就贴得住的空格 —— 从它起手,顺着来路铺回目标
+				if ((cx != _tx || cy != _ty) && HasAnchor(cx, cy))
+				{
+					var cur = (cx, cy);
+					while (true)
+					{
+						path.Add(cur);
+						if (cur == (_tx, _ty)) break;
+						cur = prev[cur];
+					}
+					return true;
+				}
+				for (int dy = -1; dy <= 1; dy++)
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						if (dx == 0 && dy == 0) continue;
+						var n = (cx + dx, cy + dy);
+						if (seen.Contains(n) || !Free(n.Item1, n.Item2)) continue;
+						seen.Add(n); prev[n] = (cx, cy); q.Enqueue(n);
+					}
 			}
-			ax = ay = 0;
 			return false;
-		}
-
-		static string Dump()
-		{
-			string S(int x, int y) => Predicates.IsLava(x, y) ? "浆" : Predicates.IsSolid(x, y) ? "实" : "空";
-			return $"上{S(_tx, _ty - 1)}下{S(_tx, _ty + 1)}左{S(_tx - 1, _ty)}右{S(_tx + 1, _ty)}";
 		}
 
 		public static void Stop()
@@ -86,53 +119,46 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
-			if (!IsRunning) return;
+			if (_ph != Ph.Lay) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
-			if (++_frames > MaxFrames) { Fail($"超时 停在({_ax},{_ay})"); return; }
+			if (++_frames > MaxFrames) { Fail($"超时 铺到第{_idx}/{_path.Count}格"); return; }
 
-			switch (_ph)
+			// 目标贴得住了就收工 —— 路径可能还没铺完,但锚已经有了,不用铺满
+			if (HasAnchor(_tx, _ty))
 			{
-				case Ph.Place:
-					if (HasAnchor(_tx, _ty))
-					{
-						Outcome = "done"; _ph = Ph.Done;
-						DiagLog.Write($"[anchor] DONE ({_tx},{_ty}) 现在贴得住了 " + Dump());
-						return;
-					}
-					if (!p.IsInTileInteractionRange(_ax, _ay, Terraria.DataStructures.TileReachCheckSettings.Simple))
-					{
-						if (_frames % 60 == 1) DiagLog.Write($"[anchor] 够不着({_ax},{_ay}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-						int cx = ActExecutor.OriginCx(p);
-						if (cx < _ax) p.controlRight = true; else if (cx > _ax) p.controlLeft = true;
-						return;
-					}
-					if (PlaceAction.IsRunning) return;
-					// 眼说话:blocked = 这一格放不上,别再挥了,记下来换一格
-					if (PlaceAction.Outcome == "blocked")
-					{
-						_tried.Add((_ax, _ay));
-						DiagLog.Write($"[anchor] ({_ax},{_ay})放不上:{PlaceAction.Reason}");
-						_ph = Ph.Verify; _frames = 0; return;
-					}
-					if (Predicates.IsSolid(_ax, _ay)) { _ph = Ph.Verify; _frames = 0; return; }
-					PlaceAction.Start(_item, _ax, _ay, 1, 0, 0, true, out _);
-					return;
-
-				case Ph.Verify:
-					// 放上了但目标还是贴不住 = 挑错了格子,换下一个再来。挑不出来才算真失败。
-					if (HasAnchor(_tx, _ty))
-					{
-						Outcome = "done"; _ph = Ph.Done;
-						DiagLog.Write($"[anchor] DONE ({_tx},{_ty}) 靠({_ax},{_ay}) " + Dump());
-						return;
-					}
-					if (++_tries >= MaxTries || !Pick(out _ax, out _ay))
-					{ Fail($"放了{_tries}格还是贴不住 " + Dump()); return; }
-					DiagLog.Write($"[anchor] 换一格试:({_ax},{_ay}) 第{_tries}次");
-					_ph = Ph.Place; _frames = 0;
-					return;
+				Outcome = "done"; _ph = Ph.Done;
+				DiagLog.Write($"[anchor] DONE ({_tx},{_ty}) 铺了{_idx}格");
+				return;
 			}
+			if (_idx >= _path.Count) { Fail($"整条路铺完了({_path.Count}格)目标还是贴不住"); return; }
+
+			var (x, y) = _path[_idx];
+			// 铺到目标自己那格就停:要的是给目标当锚,不是把目标占掉
+			if ((x, y) == (_tx, _ty)) { Fail("路径只剩目标本身,锚没造出来"); return; }
+			if (Predicates.IsSolid(x, y)) { _idx++; _cellFrames = 0; return; }
+
+			if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})铺不上,卡了{_cellFrames}帧"); return; }
+			// 不自己走位:路径是在【当前够得着的范围】里搜出来的,人不动就够得着。
+			// 人被推开导致够不着,那是路径失效,重搜一条,别硬推(硬推没有"走不动"判据,会推到超时)。
+			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			{
+				DiagLog.Write($"[anchor] 够不着({x},{y}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}),重新找路");
+				if (++_repaths > MaxRepaths) { Fail($"重找{_repaths}次还是够不着({x},{y})"); return; }
+				if (!FindPath(out _path)) { Fail($"人挪位后够不着({x},{y}),也没别的路"); return; }
+				_idx = 0; _cellFrames = 0; return;
+			}
+			if (PlaceAction.IsRunning) return;
+			// 眼说 blocked 就别再挥了 —— 这一格放不上,整条路径作废,重新找一条
+			if (PlaceAction.Outcome == "blocked")
+			{
+				DiagLog.Write($"[anchor] ({x},{y})放不上:{PlaceAction.Reason},重新找路");
+				_bad.Add((x, y));
+				if (++_repaths > MaxRepaths) { Fail($"重找{_repaths}次都放不上,最后卡在({x},{y})"); return; }
+				if (!FindPath(out _path)) { Fail($"重找也没路:{PlaceAction.Reason}"); return; }
+				_idx = 0; _cellFrames = 0; return;
+			}
+			PlaceAction.Start(_item, x, y, 1, 0, 0, true, out _);
 		}
 
 		static void Fail(string reason)
