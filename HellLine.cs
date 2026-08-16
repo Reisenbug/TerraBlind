@@ -30,6 +30,11 @@ namespace TerraBlind
 		const int LavaProbe = 30;           // 桥面往下探这么多格找岩浆
 		const int Body = 3;                 // 人 42px 高 = 3 行
 		const int StartWindow = 60;         // 起点 x 容差。房子底下要岩浆,±8 那点余地根本挑不着
+		const int StartAnchorW = 60;        // 有东西可贴,大加分:第一格放不出来的话整条桥都开不了工
+		const int StartCenterW = 240;       // 居中,大加分。满分给足,和锚点(6列×60)同量级
+		const int StartNearW = 3;           // 离人近只是小优势,不该盖过前两项
+		const int AnchorCap = 6;            // 6 列各算一次,封顶免得一堵墙把分刷爆
+		const int AnchorR = 3;              // 这么多格以内有实心就算够得着
 		const int Unreachable = int.MaxValue / 4;
 
 		public struct Result
@@ -129,6 +134,23 @@ namespace TerraBlind
 			return c;
 		}
 
+		// 起点那一格预估落在哪一行:居中。Dijkstra 会自己微调,这里只要够准来打分
+		static int StartRow(int ceil, int floor) => ceil + (floor - ceil) / 2;
+
+		// 锚点 = 起点这几列附近有实心可以贴。放方块要正交邻居,四周全空就放不出来。
+		static int AnchorsNear(int x, int y, int dir)
+		{
+			int n = 0;
+			for (int k = 0; k < HouseW; k++)
+			{
+				int cx = x + dir * k;
+				for (int dy = -AnchorR; dy <= AnchorR; dy++)
+					for (int dx = -AnchorR; dx <= AnchorR; dx++)
+						if (Predicates.IsSolid(cx + dx, y + dy)) { n++; dy = AnchorR + 1; break; }
+			}
+			return n;
+		}
+
 		public static Result Compute(int bx, int dir)
 		{
 			var res = new Result { Line = new List<(int x, int y)>() };
@@ -139,30 +161,24 @@ namespace TerraBlind
 			var cCeil = new int[span0 * 2 + 1];
 			var cFloor = new int[span0 * 2 + 1];
 			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
-			bool LavaAt(int off2)
-			{
-				int idx = off2 + span0;
-				if (idx < 0 || idx >= cFloor.Length) return false;
-				return Predicates.IsLava(bx + off2, cFloor[idx]);
-			}
-
-			// 排序:岩浆列数 → 离 bx 近 → 空腔高。没有第二判据的话,同样 6/6 也会白跑 60 格。
-			int sx = bx, bestClear = -1, bestLava = -1, bestOff = int.MaxValue;
+			// 以前岩浆列数字典序排第一,选出来的起点悬在半空四周全空,第一格根本放不出来
+			int sx = bx, bestScore = int.MinValue, bestAnchor = -1, bestClear = -1;
+			float bestRel = -1f;
 			for (int d = -StartWindow; d <= StartWindow; d++)
 			{
 				int x = bx + d;
 				int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
 				if (f0 - c0 < Body) continue;
-				int lv = 0;
-				for (int k = 0; k < HouseBuilder.RoomWidth + 1; k++)
-					if (LavaAt(d + dir * k)) lv++;
-				int off = System.Math.Abs(d);
-				bool better = lv > bestLava
-					|| (lv == bestLava && off < bestOff)
-					|| (lv == bestLava && off == bestOff && f0 - c0 > bestClear);
-				if (better) { bestLava = lv; bestOff = off; bestClear = f0 - c0; sx = x; }
+				int y0 = StartRow(c0, f0);
+				int anc = AnchorsNear(x, y0, dir);
+				float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
+				int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
+				int score = System.Math.Min(anc, AnchorCap) * StartAnchorW + centerPts - System.Math.Abs(d) * StartNearW;
+				if (score > bestScore)
+				{ bestScore = score; sx = x; bestAnchor = anc; bestClear = f0 - c0; bestRel = rel; }
 			}
-			if (bestClear < Body) { res.Why = $"start_too_tight clear={bestClear}"; return res; }
+			if (bestScore == int.MinValue) { res.Why = "start_too_tight"; return res; }
+			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 锚={bestAnchor} 居中rel={bestRel:0.00} 空腔={bestClear}");
 
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
