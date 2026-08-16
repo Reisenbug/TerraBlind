@@ -260,7 +260,7 @@ namespace TerraBlind
 		}
 
 		// 绳子只能从已有绳子或天花板往下接,对着半空放是静默失败 —— 以前这种情况会误报成功
-		private static bool HasAnchor(int x, int y)
+		public static bool HasAnchor(int x, int y)
 		{
 			(int, int)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
 			foreach (var (dx, dy) in n)

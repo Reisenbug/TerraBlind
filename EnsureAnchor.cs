@@ -29,17 +29,9 @@ namespace TerraBlind
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
-		// 平台贴 3×3:原版 platform framing 读 (i±1,j)、(i,j±1) 和四个斜角。
-		public static bool HasAnchor(int x, int y)
-		{
-			for (int dy = -1; dy <= 1; dy++)
-				for (int dx = -1; dx <= 1; dx++)
-				{
-					if (dx == 0 && dy == 0) continue;
-					if (Predicates.IsSolid(x + dx, y + dy)) return true;
-				}
-			return false;
-		}
+		// 用眼那一份判据,不另写。我写过一个查 3×3 的版本(照 WorldGen 的 platform framing 抄的),
+		// 结果 7 格全判 true 而游戏 7 格全拒 —— framing 是"长什么样",不是"能不能放"。
+		public static bool HasAnchor(int x, int y) => ItemUseCoordinator.HasAnchor(x, y);
 
 		// 能考虑的空格:界内、空着、不是熔岩,而且【人现在就够得着】——
 		// 够不着的格子放不了,BFS 把它算进路径只会规划出一条走不通的路。
@@ -48,7 +40,12 @@ namespace TerraBlind
 			if (!Predicates.InBounds(x, y) || Predicates.IsSolid(x, y) || Predicates.IsLava(x, y)) return false;
 			if (_bad.Contains((x, y))) return false;
 			var p = Main.LocalPlayer;
-			return p != null && p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			if (p == null) return false;
+			// 身子占的格子放不进东西 —— 日志里 BFS 把人自己站的那格当候选,当然放不上
+			var (bl, br) = Predicates.BodyCols(p);
+			int fy = ActExecutor.OriginCy(p);
+			if (x >= bl && x <= br && y <= fy && y >= fy - 2) return false;
+			return p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple);
 		}
 
 		public static bool Start(string itemName, int tx, int ty, out string why)
@@ -73,8 +70,8 @@ namespace TerraBlind
 			return true;
 		}
 
-		// BFS:从目标往外扩,找最近的"已经贴得住"的空格,然后把路径反过来 —— 从那儿铺回目标。
-		// 扩展用 3×3,因为铺的是平台,斜着也能接上。
+		// BFS:从目标往外扩,找最近的"已经贴得住"的空格,把路径反过来铺回目标。
+		// 扩展只走四邻 —— 锚也只认四邻,斜着接不上。
 		static bool FindPath(out List<(int x, int y)> path)
 		{
 			path = new List<(int x, int y)>();
@@ -99,14 +96,12 @@ namespace TerraBlind
 					}
 					return true;
 				}
-				for (int dy = -1; dy <= 1; dy++)
-					for (int dx = -1; dx <= 1; dx++)
-					{
-						if (dx == 0 && dy == 0) continue;
-						var n = (cx + dx, cy + dy);
-						if (seen.Contains(n) || !Free(n.Item1, n.Item2)) continue;
-						seen.Add(n); prev[n] = (cx, cy); q.Enqueue(n);
-					}
+				foreach (var (dx, dy) in new[] { (0, 1), (0, -1), (-1, 0), (1, 0) })
+				{
+					var n = (cx + dx, cy + dy);
+					if (seen.Contains(n) || !Free(n.Item1, n.Item2)) continue;
+					seen.Add(n); prev[n] = (cx, cy); q.Enqueue(n);
+				}
 			}
 			return false;
 		}
