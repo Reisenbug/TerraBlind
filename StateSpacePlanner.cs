@@ -555,9 +555,12 @@ namespace TerraBlind
                     for (int k = 1; k <= n; k++)
                     {
                         int x = ccx + dir * k;
-                        // 头顶要能过人,脚下那行要铺得进去(已经是实心就当已铺好)
+                        // 挡路的是【身子那 3 行】有实心 —— 桥面那格有没有东西不管,
+                        // 有就是现成的地,BridgeBuilder 本来就跳过已经铺好的格子。
                         for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
-                        if (Predicates.IsLava(x, ccy + 1)) blocked = true;   // 桥面那格是熔岩,放不进去
+                        // 熔岩里放不进方块,人也不能踩过去
+                        for (int r = 0; r < 3 && !blocked; r++) if (Predicates.IsLava(x, ccy - r)) blocked = true;
+                        if (Predicates.IsLava(x, ccy + 1)) blocked = true;
                         if (blocked) break;
                     }
                     if (blocked) continue;
@@ -581,6 +584,7 @@ namespace TerraBlind
         }
 
         const int LavaVoidProbe = 40;
+        static (int, int) _gateLogCell = (int.MinValue, int.MinValue);
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
@@ -589,11 +593,26 @@ namespace TerraBlind
 
             // 悬在熔岩上:只准 bridge。跳/走/掉出去都可能落进熔岩,而落进去=重开。
             var (lcx, lcy) = StandCell(cur.Px, cur.Py);
-            if (PreciseMode && platformTile >= 0 && OverLavaVoid(lcx, lcy))
+            if (PreciseMode)
             {
-                foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
-                    yield return be;
-                yield break;
+                bool overLava = OverLavaVoid(lcx, lcy);
+                // 三个门缺一条都发不出 bridge —— 缺哪个要一眼看见,别再靠"零条日志"倒推
+                if (_gateLogCell != (lcx, lcy))
+                {
+                    _gateLogCell = (lcx, lcy);
+                    DiagLog.Write($"[ss-gate] ({lcx},{lcy}) 精确=on 平台料={platformTile} 悬熔岩={overLava}");
+                }
+                // 悬熔岩上是【只准】bridge:别的边都可能落进去。
+                if (platformTile >= 0 && overLava)
+                {
+                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
+                        yield return be;
+                    yield break;
+                }
+                // 不悬熔岩时 bridge 只是【多一个选项】:横向走远路一次铺一长条,比一格一格跳放快得多
+                if (platformTile >= 0)
+                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
+                        yield return be;
             }
 
             float curH = Heuristic(ctx, cur, goalCx, goalFeetY, ph);
