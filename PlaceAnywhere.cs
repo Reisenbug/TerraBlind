@@ -70,6 +70,8 @@ namespace TerraBlind
 		{
 			why = "";
 			_chain.Clear();
+			// 目标本身被拉黑 = 它反复放不上,再找路也是绕回它,直接认输
+			if (_bad.Contains((_tx, _ty))) { why = $"({_tx},{_ty})自己就放不上"; return false; }
 			if (HasAnchor(_tx, _ty)) { _chain.Add((_tx, _ty)); return true; }
 			var prev = new Dictionary<(int, int), (int, int)>();
 			var seen = new HashSet<(int, int)> { (_tx, _ty) };
@@ -101,12 +103,21 @@ namespace TerraBlind
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
 			if (x < bl || x > br || y > fy || y < fy - 2) { why = ""; return false; }
-			// 让到【身子完全不盖住 x】为止。挪一格不够:目标在边缘时,新位置还是盖着它,
-			// 于是每帧重来一次 —— 日志里 (3315,1052) 身3313..3315 让到 3314,一直循环。
+			// 让到【身子完全不盖住 x】为止。挪一格不够:目标在边缘时新位置还盖着它,每帧重来。
 			int span = br - bl;                     // 人跨 1~2 列(20px 宽)
-			int col = x <= (bl + br) / 2 ? x + span + 1 : x - span - 1;
-			DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}");
-			return SettleAt.Start(col, out why);
+			// 两个方向都试,而且【必须那一列有地可站】—— 让到悬空处人会掉下去。
+			// 日志:让到列3487 之后人从 1042 掉到 1050,目标反而在头顶 8 行外,横向再也够不着。
+			foreach (int col in new[] { x + span + 1, x - span - 1 })
+			{
+				if (!Predicates.IsSolid(col, fy + 1)) continue;
+				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}(脚下有地)");
+				return SettleAt.Start(col, out why);
+			}
+			// 两边都悬空:让不了,就别让 —— 把这一格从链里排掉,重新找一条绕开身子的路
+			DiagLog.Write($"[placeany] ({x},{y})在身子里,但两侧都悬空,改走别的链");
+			_bad.Add((x, y));
+			why = "";
+			return false;
 		}
 
 		public static void Tick()
@@ -138,14 +149,18 @@ namespace TerraBlind
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
+			// 让不了但已经拉黑了这一格:必须重算,不然下一帧还挑中它
+			if (_bad.Contains((x, y))) { Retry($"({x},{y})让不开,绕路"); return; }
 
 			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
 			// 那时横向走一辈子也够不着 —— 行差得多就当链失效,从人现在的位置重接一条。
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
 				int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
+				// 行差太大:重算链没有意义(人没挪窝,算出来还是同一条),直接认输交给上层。
+				// 上层有寻路/pillar/平台梯,那才是改变行的手段。
 				if (System.Math.Abs(cy - y) > RowGap)
-				{ DiagLog.Write($"[placeany] 人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向走不过去"); Retry("行差太大"); return; }
+				{ Fail($"人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向够不着"); return; }
 				if (_cellFrames % 60 == 1) DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({cx},{cy})");
 				if (cx < x) p.controlRight = true; else if (cx > x) p.controlLeft = true;
 				return;
