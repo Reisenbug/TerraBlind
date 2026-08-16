@@ -167,10 +167,12 @@ namespace TerraBlind
 			return n;
 		}
 
-		public static Result Compute(int bx, int dir)
+		// by = 人脚下那行。开工点要选【离人最近】的,不知道人在哪一行就只能比列,差几十行也算近。
+		public static Result Compute(int bx, int dir, int by = int.MinValue)
 		{
 			var res = new Result { Line = new List<(int x, int y)>() };
 			dir = dir >= 0 ? 1 : -1;
+			if (by == int.MinValue) by = Main.LocalPlayer != null ? ActExecutor.OriginCy(Main.LocalPlayer) : 0;
 
 			// 每列只量一次:候选 121 个、每个查 6 列,现算的话 Column() 要跑八百多趟,比 Dijkstra 本身还贵
 			int span0 = StartWindow + HouseBuilder.RoomWidth + 2;
@@ -327,23 +329,24 @@ namespace TerraBlind
 				digTotal += Blocked(x, ys[i]);
 			}
 
-			// 线算完之后在真格子上挑,不赌预估行。锚封顶 3 分,满分一大把,
-			// 只比锚的话第 0 格拿到 3 就锁死,平手得用"离中点近"再分。
+			// 【离人最近】的那一格,不是最好的那一格。地狱里除了桥,每多走一步都是掉岩浆的机会,
+			// 人站在哪儿就从哪儿开工。锚只当门槛用(放得出第一格就行),不参与排名。
 			res.WorkI = 0; res.WorkAnchor = -1;
-			int half = Length / 2, bestMid = int.MaxValue;
+			int bestD = int.MaxValue;
 			for (int i = 0; i < Length; i++)
 			{
 				int x = sx + dir * i, y = ys[i];
 				int a = AnchorScore(x, y);
 				if (a <= 0) continue;
-				int md = System.Math.Abs(i - half);
-				if (a > res.WorkAnchor || (a == res.WorkAnchor && md < bestMid))
-				{ res.WorkAnchor = a; bestMid = md; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
+				int d2 = System.Math.Abs(x - bx) + System.Math.Abs(y - by);
+				if (d2 < bestD)
+				{ bestD = d2; res.WorkAnchor = a; res.WorkI = i; res.WorkX = x; res.WorkY = y; }
 			}
 			if (res.WorkAnchor <= 0)
 			{ res.Why = "no_anchor_on_line"; DiagLog.Write("[hell-line] 整条线没有一格贴得住,放不出第一格"); return res; }
+			// 离人多远是关键指标:大了就说明人要在地狱里徒步过去,那正是掉岩浆的机会
 			DiagLog.Write($"[hell-line] 开工点 i={res.WorkI} ({res.WorkX},{res.WorkY}) 锚={res.WorkAnchor} " +
-				$"往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
+				$"离人{bestD}格 往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
 
 			res.Found = true;
 			// 起点 = 桥的第一格,在房子【外面】。房子占头 HouseW 列,人先盖房子再从房子边上往外铺。
