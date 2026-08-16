@@ -59,16 +59,14 @@ namespace TerraBlind
 						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
 			}
-			if (_pendingAnchor.HasValue && !RecedingNav.Active && !EnsureAnchor.IsRunning)
+			if (_pendingAnchor.HasValue && !RecedingNav.Active && !PlaceAnywhere.IsRunning)
 			{
 				var (ax, ay) = _pendingAnchor.Value;
 				_pendingAnchor = null;
-				if (EnsureAnchor.HasAnchor(ax, ay))
-					Main.NewText($"[TerraBlind] 桥起点({ax},{ay})本来就放得出来", 120, 255, 120);
-				else if (EnsureAnchor.Start("94", ax, ay, out string awhy))
-					Main.NewText($"[TerraBlind] 桥起点四周全空,造锚点…", 120, 255, 120);
+				if (PlaceAnywhere.Start("94", ax, ay, out string awhy))
+					Main.NewText($"[TerraBlind] 在桥起点({ax},{ay})放第一格…", 120, 255, 120);
 				else
-					Main.NewText($"[TerraBlind] 造不了锚:{awhy}", 255, 120, 120);
+					Main.NewText($"[TerraBlind] 放不了:{awhy}", 255, 120, 120);
 			}
 			var site = _site;
 			if (site != null)
@@ -327,10 +325,12 @@ namespace TerraBlind
 			if (HellBridge.IsRunning) HellBridge.Tick();
 			if (ReachCell.IsRunning) ReachCell.Tick();
 
-			// 造锚点:也走 PlaceAction,控制同样要跟着发
-			if (EnsureAnchor.IsRunning)
+			// 放第一格:走 PlaceAction,控制要跟着发;让位用 SettleAt,它的 Tick 在下面,
+			// 所以这里必须替它跑一次 —— 直接 return 的话让位永远走不完。
+			if (PlaceAnywhere.IsRunning)
 			{
-				EnsureAnchor.Tick();
+				PlaceAnywhere.Tick();
+				if (SettleAt.IsRunning) SettleAt.Tick();
 				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
 				RecordSystem.CaptureFrame(Player);
 				return;

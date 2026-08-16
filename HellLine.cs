@@ -170,7 +170,7 @@ namespace TerraBlind
 			var cCeil = new int[span0 * 2 + 1];
 			var cFloor = new int[span0 * 2 + 1];
 			for (int d = -span0; d <= span0; d++) Column(bx + d, out cCeil[d + span0], out cFloor[d + span0]);
-			// 锚不进打分:悬空处处都是,人自己造锚(EnsureAnchor)。留下的判据只有居中和离人近。
+			// 锚不进打分:悬空处处都是,人自己造锚(PlaceAnywhere)。留下的判据只有居中和离人近。
 			int sx = bx, bestScore = int.MinValue, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
 			for (int d = -StartWindow; d <= StartWindow; d++)
@@ -319,7 +319,7 @@ namespace TerraBlind
 			}
 
 			// 【离人最近】的那一格。锚不当门槛 —— 悬空是常态(整条线大半悬空),
-			// 放不出第一格是 EnsureAnchor 的活(BFS 找最近可贴处铺回来),不是算不出线。
+			// 放不出第一格是 PlaceAnywhere 的活,不是算不出线。
 			res.WorkI = 0; res.WorkAnchor = 0;
 			int bestD = int.MaxValue;
 			for (int i = 0; i < Length; i++)
