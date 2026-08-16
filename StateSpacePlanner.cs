@@ -168,6 +168,7 @@ namespace TerraBlind
         public class ExecStep
         {
             public bool Pillar;
+            public bool Bridge;   // 长 bridge:沿脚下那行铺到 TargetCx
             public bool Dig;
             public MineDir DigDir;
             public int TargetCx, TargetCy;
@@ -179,6 +180,7 @@ namespace TerraBlind
         // edge type for per-edge偏离 grouping in logs (move/jump/jumpPlace/dig/pillar): grep one label, awk by kind.
         static string EdgeKind(ExecStep st)
         {
+            if (st.Bridge) return "bridge";
             if (st.Pillar) return "pillar";
             if (st.Dig) return $"dig{st.DigDir}";
             if (st.Frames == null || st.Frames.Count == 0) return "empty";
@@ -190,6 +192,12 @@ namespace TerraBlind
         // 给执行看门狗的耗时估计。常数一律往宽了取 —— 余量交给看门狗自己的 margin。
         static float EstStepFrames(ExecStep st, Player p)
         {
+            if (st.Bridge)
+            {
+                // 边走边放,实测 ~2 格/秒 起,往宽了取:铺不完被看门狗掐掉比等久了更难查
+                int cells = System.Math.Max(1, System.Math.Abs(st.TargetCx - (int)((p.position.X + p.width / 2f) / 16f)));
+                return cells * 45f + 120f;
+            }
             if (st.Pillar)
             {
                 int feet = (int)((p.position.Y + p.height) / 16f);
@@ -528,10 +536,65 @@ namespace TerraBlind
             catch { }
         }
 
+        // 地狱模式:掉进熔岩这把就完了,所以宁可慢也不发有风险的边。挖掘不受影响。
+        public static bool PreciseMode;
+
+        static readonly int[] BridgeSpans = { 4, 8, 16 };
+
+        // 长 bridge:照 BridgeBuilder 的语义 —— 铺在【人脚下那一行】,人边走边放,所以落点是
+        // 同一行的目标列,不用跳也不用掉。几档定长,档少了贪心才比得动;铺短了下一轮接着铺不亏。
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> BridgeEdges(
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile)
+        {
+            var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            foreach (int dir in new[] { 1, -1 })
+                foreach (int n in BridgeSpans)
+                {
+                    int tx = ccx + dir * n;
+                    bool blocked = false;
+                    for (int k = 1; k <= n; k++)
+                    {
+                        int x = ccx + dir * k;
+                        // 头顶要能过人,脚下那行要铺得进去(已经是实心就当已铺好)
+                        for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
+                        if (Predicates.IsLava(x, ccy + 1)) blocked = true;   // 桥面那格是熔岩,放不进去
+                        if (blocked) break;
+                    }
+                    if (blocked) continue;
+                    float npx = tx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
+                    yield return (node, null, n * BridgeCellCost, false, null);
+                }
+        }
+
+        const float BridgeCellCost = 26f;   // 和 MazeWand.DigSide 同价,不另编一套
+
+        // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
+        public static bool OverLavaVoid(int cx, int cy)
+        {
+            for (int y = cy + 1; y <= cy + LavaVoidProbe; y++)
+            {
+                if (Predicates.IsLava(cx, y)) return true;
+                if (DigSolid(cx, y) || PathPlanner.IsFloorPublic(cx, y)) return false;
+            }
+            return false;
+        }
+
+        const int LavaVoidProbe = 40;
+
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
             if (!cur.Grounded) yield break;
+
+            // 悬在熔岩上:只准 bridge。跳/走/掉出去都可能落进熔岩,而落进去=重开。
+            var (lcx, lcy) = StandCell(cur.Px, cur.Py);
+            if (PreciseMode && platformTile >= 0 && OverLavaVoid(lcx, lcy))
+            {
+                foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
+                    yield return be;
+                yield break;
+            }
 
             float curH = Heuristic(ctx, cur, goalCx, goalFeetY, ph);
 
@@ -1646,7 +1709,7 @@ namespace TerraBlind
             if (!StepsActive) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopSteps(); return; }
-            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive;
+            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning;
 
             // 看门狗:每个动作都有死线。所有计划层的免疫机制(miss/revisit/shock/循环检测)都活在重规划周期里,而重规划要等 ExecRunning 清零
             // —— 一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
@@ -1707,7 +1770,17 @@ namespace TerraBlind
             _execGoalWx = st.TargetCx; _execGoalWy = st.TargetCy;
 
             // 列必须传下去:边的落点写死在 TargetCx,执行器不传就每跳按脚下现找,两边能差一列。
-            if (st.Pillar)
+            if (st.Bridge)
+            {
+                int span = System.Math.Abs(st.TargetCx - ccx);
+                int slot = NavCoordinator.FindPlatformSlot(p);
+                string it = slot >= 0 ? p.inventory[slot].type.ToString() : "94";
+                if (!BridgeBuilder.Start(it, st.TargetCx >= ccx ? "right" : "left", span, out string bw))
+                    DiagLog.Write($"[ss-bridge] 起不来 span={span} → {bw}");
+                else
+                    DiagLog.Write($"[ss-bridge] 铺{span}格 {ccx}→{st.TargetCx} 脚下行{ActExecutor.OriginCy(p) + 1}");
+            }
+            else if (st.Pillar)
                 SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
             else if (st.Dig)
             {
@@ -2186,6 +2259,9 @@ namespace TerraBlind
             }
             else if (frames != null)
                 steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames), LandPx = to.Px, LandPy = to.Py });
+            // 没帧、不挖、不是柱 = 长 bridge。这个组合本来不可能出现,拿它当标记不用把元组加宽一列。
+            else
+                steps.Add(new ExecStep { Bridge = true, TargetCx = tcx, TargetCy = tcy, Frames = null, LandPx = to.Px, LandPy = to.Py });
             return steps;
         }
 
