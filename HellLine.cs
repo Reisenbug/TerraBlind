@@ -12,7 +12,11 @@ namespace TerraBlind
 	// 图上四邻走,能回头能上下,形状交给它自己找。
 	public static class HellLine
 	{
-		public const int Length = 170;      // 硬指标,不缩短
+		public const int Bridge = 170;      // 硬指标,不缩短。这是【桥】的长度,不含房子
+		public const int HouseW = HouseBuilder.RoomWidth + 1;
+		// 线要连房子一起算:头 6 列是房子地板,后面 170 格才是桥。
+		// 只算 170 的话房子会吃掉桥的前 6 格,雷管站的地方就短了。
+		public const int Length = HouseW + Bridge;
 		const int SlopeW = 4;               // 上下挪一格的钱。没约束时线自己走平
 		const int DigCell = 26;             // 和主线同价(MazeWand.DigSide),绝不另编一套
 		const int CenterW = 20;             // 偏离空腔中间的钱,按【比例】算不按格数
@@ -278,7 +282,8 @@ namespace TerraBlind
 			}
 
 			res.Found = true;
-			res.StartX = sx; res.StartY = ys[0];
+			// 起点 = 桥的第一格,在房子【外面】。房子占头 HouseW 列,人先盖房子再从房子边上往外铺。
+			res.StartX = sx + dir * HouseW; res.StartY = ys[HouseW];
 			res.Cost = endC; res.DigCells = digTotal;
 			PickHouse(ref res, sx, dir, ys, ceilA);
 			return res;
@@ -288,7 +293,7 @@ namespace TerraBlind
 		// 桥可以有坡,房子不行 —— 所以只认窗口内 y 恒定的位置,挖得最少的那个。
 		static void PickHouse(ref Result res, int sx, int dir, int[] ys, int[] ceilA)
 		{
-			const int W = HouseBuilder.RoomWidth + 1;
+			const int W = HouseW;
 			// 房子钉在桥的最边缘:起点那 6 列,不再满桥找便宜地方。桥是从房子往外铺的,
 			// 房子跑到中间就等于把桥截成两段。下方必须是岩浆 —— NPC 房要悬在岩浆上。
 			res.HouseX = sx;
