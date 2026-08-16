@@ -71,8 +71,10 @@ namespace TerraBlind
 				else
 				{ _pendingStand = null; Main.NewText($"[TerraBlind] 放不了:{awhy}", 255, 120, 120); }
 			}
-			// 第一格放好了 → 站上去。Stand 的目标是【人占的那一格】,所以是桥面上面一格。
-			if (_pendingStand.HasValue && !PlaceAnywhere.IsRunning && !RecedingNav.Active)
+			// 第一格放好了 → 直接开工盖房子。HouseBuilder 的 Ph.Lift 本来就是"站到那个悬空的
+			// 左下角上":对齐列 → 爬过头就 DropDown → 挑头顶干净的半边 → pillar 上去。
+			// 通用寻路不知道这些约束,扔给 Mode.Stand 会在目标附近来回弹(1036↔1037↔1039)。
+			if (_pendingStand.HasValue && !PlaceAnywhere.IsRunning && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
 				var (sx2, sy2) = _pendingStand.Value;
 				_pendingStand = null;
@@ -80,9 +82,12 @@ namespace TerraBlind
 					Main.NewText($"[TerraBlind] 第一格没放成:{PlaceAnywhere.Reason}", 255, 120, 120);
 				else
 				{
-					DiagLog.Write($"[reach-test] 第一格好了,去站在({sx2},{sy2 - 1}) 桥面({sx2},{sy2})");
-					RecedingNav.Start(sx2, sy2 - 1, RecedingNav.Mode.Stand);
-					Main.NewText($"[TerraBlind] 去站到桥起点上({sx2},{sy2 - 1})", 120, 255, 120);
+					int hdir2 = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
+					DiagLog.Write($"[reach-test] 第一格好了({sx2},{sy2}),盖房子 dir={hdir2}");
+					if (HouseBuilder.Start(1, hdir2, sx2, sy2, out string hw2))
+						Main.NewText($"[TerraBlind] 爬上桥起点并盖房 ({sx2},{sy2})", 120, 255, 120);
+					else
+						Main.NewText($"[TerraBlind] 开不了工:{hw2}", 255, 120, 120);
 				}
 			}
 			var site = _site;
