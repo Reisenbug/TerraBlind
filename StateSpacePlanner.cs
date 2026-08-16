@@ -193,11 +193,7 @@ namespace TerraBlind
         static float EstStepFrames(ExecStep st, Player p)
         {
             if (st.Bridge)
-            {
-                // 边走边放,实测 ~2 格/秒 起,往宽了取:铺不完被看门狗掐掉比等久了更难查
-                int cells = System.Math.Max(1, System.Math.Abs(st.TargetCx - (int)((p.position.X + p.width / 2f) / 16f)));
-                return cells * 45f + 120f;
-            }
+                return BridgeFrames(System.Math.Max(1, System.Math.Abs(st.TargetCx - (int)((p.position.X + p.width / 2f) / 16f))));
             if (st.Pillar)
             {
                 int feet = (int)((p.position.Y + p.height) / 16f);
@@ -552,6 +548,7 @@ namespace TerraBlind
                 {
                     int tx = ccx + dir * n;
                     bool blocked = false;
+                    int blockAt = 0;
                     for (int k = 1; k <= n; k++)
                     {
                         int x = ccx + dir * k;
@@ -561,16 +558,24 @@ namespace TerraBlind
                         // 熔岩里放不进方块,人也不能踩过去
                         for (int r = 0; r < 3 && !blocked; r++) if (Predicates.IsLava(x, ccy - r)) blocked = true;
                         if (Predicates.IsLava(x, ccy + 1)) blocked = true;
-                        if (blocked) break;
+                        if (blocked) { blockAt = x; break; }
                     }
-                    if (blocked) continue;
+                    if (blocked)
+                    {
+                        // 生成阶段就被拦下 vs 生成了没被选中,是两个完全不同的病,日志必须分得清
+                        DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} 挡在x={blockAt}");
+                        continue;
+                    }
+                    DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} → ({tx},{ccy}) 帧={BridgeFrames(n):0}");
                     float npx = tx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
-                    yield return (node, null, n * BridgeCellCost, false, null);
+                    yield return (node, null, BridgeFrames(n), false, null);
                 }
         }
 
-        const float BridgeCellCost = 26f;   // 和 MazeWand.DigSide 同价,不另编一套
+        // 边的 cost 单位是【帧】(走/跳边传的是 frames.Count),不是我自己编的分数。
+        // 和 EstStepFrames 用同一个式子 —— 一个动作只能有一套代价。
+        static float BridgeFrames(int n) => n * 45f + 120f;
 
         // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
         public static bool OverLavaVoid(int cx, int cy)
@@ -2083,7 +2088,7 @@ namespace TerraBlind
             {
                 // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
                 // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降 —— 它们的砖还没挖/放。
-                bool alters = digTiles != null || pillar || (frames != null && frames.Exists(f => f.Place));
+                bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
                 var landed = alters ? next : SettleNode(next, ph);
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
@@ -2114,8 +2119,9 @@ namespace TerraBlind
                 float dev = DeviCost * devDist * MathF.Sqrt(devDist);
                 float total = g + nH + pen - AlignScale * align + dev;
                 string kind = pillar ? "pillar" : digTiles != null ? "dig"
+                    : frames == null ? "bridge"          // 没帧、不挖、不是柱 = 长 bridge
                     : isPlace ? "place"
-                    : (frames != null && frames.Exists(f => f.Jump)) ? "jump" : "walk";
+                    : frames.Exists(f => f.Jump) ? "jump" : "walk";
                 cands.Add(new Cand { Cx = ncx, Cy = ncy, H = nH, Cost = (int)g, Kind = kind, Descends = nH < curH });
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
