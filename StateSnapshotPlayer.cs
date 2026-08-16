@@ -30,6 +30,8 @@ namespace TerraBlind
 		private static (int x, int y)? _pendingHouse;
 		private static int _pillarTestFrom, _pillarTestTarget;
 		private static int _houseNavTries;
+		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
+		private static (int x, int y)? _pendingAnchor;
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -56,6 +58,17 @@ namespace TerraBlind
 					else
 						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
+			}
+			if (_pendingAnchor.HasValue && !RecedingNav.Active && !EnsureAnchor.IsRunning)
+			{
+				var (ax, ay) = _pendingAnchor.Value;
+				_pendingAnchor = null;
+				if (EnsureAnchor.HasAnchor(ax, ay))
+					Main.NewText($"[TerraBlind] 桥起点({ax},{ay})本来就放得出来", 120, 255, 120);
+				else if (EnsureAnchor.Start("94", ax, ay, out string awhy))
+					Main.NewText($"[TerraBlind] 桥起点四周全空,造锚点…", 120, 255, 120);
+				else
+					Main.NewText($"[TerraBlind] 造不了锚:{awhy}", 255, 120, 120);
 			}
 			var site = _site;
 			if (site != null)
@@ -207,6 +220,7 @@ namespace TerraBlind
 						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 						PathVisSystem.SetTiles(rv, 7200);
 						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
+						_pendingAnchor = (rsx, rsy);
 						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
 						Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
 					}
@@ -312,6 +326,15 @@ namespace TerraBlind
 			// hellbridge/reach: 只做编排,真正干活的是下面那些原语,所以它们先跑、不 return
 			if (HellBridge.IsRunning) HellBridge.Tick();
 			if (ReachCell.IsRunning) ReachCell.Tick();
+
+			// 造锚点:也走 PlaceAction,控制同样要跟着发
+			if (EnsureAnchor.IsRunning)
+			{
+				EnsureAnchor.Tick();
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
+				RecordSystem.CaptureFrame(Player);
+				return;
+			}
 
 			// helldeck: 照着线逐格铺桥面,放置走 PlaceAction,所以控制要跟着发
 			if (HellDeck.IsRunning)
