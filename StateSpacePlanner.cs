@@ -540,11 +540,17 @@ namespace TerraBlind
         // 长 bridge:照 BridgeBuilder 的语义 —— 铺在【人脚下那一行】,人边走边放,所以落点是
         // 同一行的目标列,不用跳也不用掉。几档定长,档少了贪心才比得动;铺短了下一轮接着铺不亏。
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> BridgeEdges(
-            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile)
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, float goalCx)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            // 和 pillar 同样的毛病:只有固定档位就会冲过头/差一截。目标列已知,就补上"正好到"那一档。
+            int goalCol = (int)(goalCx / 16f);
             foreach (int dir in new[] { 1, -1 })
-                foreach (int n in BridgeSpans)
+            {
+                var spans = new List<int>(BridgeSpans);
+                int exact = (goalCol - ccx) * dir;
+                if (exact > 0 && !spans.Contains(exact)) spans.Add(exact);
+                foreach (int n in spans)
                 {
                     int tx = ccx + dir * n;
                     bool blocked = false;
@@ -571,6 +577,7 @@ namespace TerraBlind
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
                     yield return (node, null, BridgeFrames(n), false, null);
                 }
+            }
         }
 
         // 单位是【帧】,和走/跳边的 frames.Count 同尺。定贵了贪心就永远拆成单格做。
@@ -612,13 +619,13 @@ namespace TerraBlind
                 // 悬熔岩上是【只准】bridge:别的边都可能落进去。
                 if (platformTile >= 0 && overLava)
                 {
-                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
+                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile, goalCx))
                         yield return be;
                     yield break;
                 }
                 // 不悬熔岩时 bridge 只是【多一个选项】:横向走远路一次铺一长条,比一格一格跳放快得多
                 if (platformTile >= 0)
-                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile))
+                    foreach (var be in BridgeEdges(ctx, cur, ph, platformTile, goalCx))
                         yield return be;
             }
 
@@ -687,7 +694,7 @@ namespace TerraBlind
             // 平台不是到处枚举的,只在"场想去但物理挡住"的地方生成:沿梯度找第一个障碍,朝它另一侧发【一条】平台边。
             // pillar 是最末选择 —— 普通跳够得着的自然台阶(vertProgress)绝不该生柱子,人是徒手爬上去的。
             if (platformTile >= 0 || hasPickaxe)
-                foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertRise, hasPickaxe, anyProgress))
+                foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertRise, hasPickaxe, anyProgress, goalFeetY))
                     yield return pe;
         }
 
@@ -700,7 +707,7 @@ namespace TerraBlind
         }
 
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
-            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, int vertRise, bool hasPickaxe, bool anyProgress)
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, int vertRise, bool hasPickaxe, bool anyProgress, float goalFeetY)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
             int curH = ctx.DistField != null && ctx.DistField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
@@ -738,10 +745,16 @@ namespace TerraBlind
                     // CanPillarFrom 给的是【最高能爬到哪】,不是【该爬到哪】—— 只发它就等于
                     // 需要 11 格时报价 38 格,必然输给单步。所以按几档高度各发一条,让代价去挑。
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    foreach (int want in PillarRises)
+                    // 目标行是已知的,所以【直接发"升到目标那一行"】这一档 —— 固定档位(4/8/16)
+                    // 逼着它在 8 和 16 之间二选一:要升 10 格时选了 16,冲过头 6 格。
+                    int goalRow = (int)(goalFeetY / 16f) - 1;
+                    var wants = new List<int>(PillarRises);
+                    int exact = ccy - goalRow;
+                    if (exact > 0 && !wants.Contains(exact)) wants.Add(exact);
+                    foreach (int want in wants)
                     {
                         int fy = ccy - want;
-                        if (fy < topFeetY) break;          // 超过能爬到的高度
+                        if (fy < topFeetY) continue;       // 超过能爬到的高度
                         float npy = (fy + 1) * 16f - PhysicsSimulator.PlayerH;
                         var n2 = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
                         yield return (n2, null, want * PillarFramesPerCell, true, null);
