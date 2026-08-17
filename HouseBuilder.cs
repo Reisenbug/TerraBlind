@@ -24,7 +24,7 @@ namespace TerraBlind
 			Idle, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
-			Fix, Done
+			Fix, Reclaim, Done
 		}
 
 		private static Ph _ph = Ph.Idle;
@@ -81,6 +81,7 @@ namespace TerraBlind
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
+			_reclaimTries = 0; ThrowItems.Forget();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 			_ph = Ph.Lift;
@@ -172,7 +173,12 @@ namespace TerraBlind
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
-			if (++_waited > StepTimeout) { Fail($"timeout_at_{_ph}"); return; }
+			// 捡东西超时不算盖房失败:房子已经成了,东西在地上也丢不了
+			if (++_waited > StepTimeout)
+			{
+				if (_ph == Ph.Reclaim) { DiagLog.Write("[house] 捡回超时,东西留在地上"); ThrowItems.Forget(); Done(); return; }
+				Fail($"timeout_at_{_ph}"); return;
+			}
 
 			switch (_ph)
 			{
@@ -471,8 +477,22 @@ namespace TerraBlind
 					if (WalkPlace.IsRunning) return;
 					string still = AuditHouse();
 					if (still != null) { Fail($"补过一轮还是缺:{still}"); return; }
-					Done();
+					Advance(Ph.Reclaim);
 					return;
+
+				// 为腾位置扔掉的东西都还在地上,走过去捡回来。捡不回来不算盖房失败:
+				// 房子已经成了,东西还在地上,下次经过照样能捡。
+				case Ph.Reclaim:
+				{
+					if (RecedingNav.Active) return;
+					if (!ThrowItems.AnyOnGround(out int ix, out int iy)) { ThrowItems.Forget(); Done(); return; }
+					if (++_reclaimTries > MaxReclaim)
+					{ DiagLog.Write($"[house] 捡不回来,剩{ThrowItems.Thrown.Count}件在地上"); ThrowItems.Forget(); Done(); return; }
+					DiagLog.Write($"[house] 去捡回扔掉的东西 ({ix},{iy})");
+					RecedingNav.Start(ix, iy, RecedingNav.Mode.Reach);
+					_waited = 0;
+					return;
+				}
 			}
 		}
 
@@ -504,6 +524,8 @@ namespace TerraBlind
 		// 缺的家具:补的时候要知道往哪放什么,所以和文字报告分开存
 		static readonly List<(int wx, int wy, int item)> _fixList = new();
 		static bool _fixTried;   // 只补一轮,补完还缺就认输,不来回补个没完
+		static int _reclaimTries;
+		const int MaxReclaim = 6;
 
 		static string AuditHouse()
 		{

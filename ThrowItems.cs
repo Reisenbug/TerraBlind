@@ -1,0 +1,107 @@
+using System.Collections.Generic;
+using Terraria;
+
+namespace TerraBlind
+{
+	// 背包满了就合不出东西 —— 游戏连配方都不算 available。腾位置的办法是把东西【暂时】
+	// 扔到地上,合成/放置完再捡回来。不是 trash,扔出去的还要。
+	//
+	// 不随机挑:随机会扔掉镐子、平台、或者这次合成正要用的材料。挑"最不要紧"的那格。
+	public static class ThrowItems
+	{
+		// 扔出去的东西记在这儿,捡回来之前别再扔第二遍
+		public static readonly List<int> Thrown = new();
+		public static string LastNote = "";
+
+		// 原版手动丢弃给 noGrabDelay=100(≈1.7秒)。不改它:刚扔就被吸回来等于没扔,
+		// 而合成只要一帧,这个窗口足够。
+		const int InvEnd = 50;      // 50..57 是钱币/弹药格,不动
+
+		// 这些扔了就回不来:工具没了挖不动,平台/木材是正在盖的房子的料
+		static bool Protected(Item it)
+		{
+			if (it == null || it.IsAir) return true;
+			if (it.favorited) return true;
+			if (it.pick > 0 || it.axe > 0 || it.hammer > 0) return true;
+			if (it.type == 94 || it.type == 9) return true;
+			return false;
+		}
+
+		// 越"不要紧"分越低:能放置的方块类留着,纯杂物先走
+		static int Junk(Item it)
+		{
+			int s = it.stack;
+			if (it.createTile >= 0 || it.createWall >= 0) s += 1000;
+			if (it.damage > 0 || it.healLife > 0 || it.potion) s += 500;
+			return s;
+		}
+
+		public static int FreeSlots()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return 0;
+			int n = 0;
+			for (int i = 0; i < InvEnd && i < p.inventory.Length; i++)
+				if (p.inventory[i] == null || p.inventory[i].IsAir) n++;
+			return n;
+		}
+
+		// 腾出 want 个空格。返回真正腾出来的数量。扔的东西记进 Thrown,等着 PickBack。
+		public static int MakeRoom(int want)
+		{
+			var p = Main.LocalPlayer;
+			LastNote = "";
+			if (p == null) return 0;
+			int free = FreeSlots();
+			if (free >= want) return free;
+
+			var cands = new List<(int junk, int slot)>();
+			for (int i = 10; i < InvEnd && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (Protected(it)) continue;
+				cands.Add((Junk(it), i));
+			}
+			cands.Sort((a, b) => a.junk.CompareTo(b.junk));
+
+			int thrown = 0;
+			foreach (var (_, slot) in cands)
+			{
+				if (free + thrown >= want) break;
+				var it = p.inventory[slot];
+				if (it == null || it.IsAir) continue;
+				var drop = p.QuickSpawnItemDirect(p.GetSource_Misc("terrablind_throw"), it, it.stack);
+				if (drop == null) continue;
+				drop.noGrabDelay = 100;
+				Thrown.Add(drop.whoAmI);
+				DiagLog.Write($"[throw] 扔出 {it.Name}x{it.stack} (槽{slot}) 腾位置");
+				p.inventory[slot] = new Item();
+				thrown++;
+			}
+			Recipe.FindRecipes();
+			int now = FreeSlots();
+			LastNote = thrown == 0
+				? $"背包满但没有可扔的(全是工具/收藏/建材) 空格={now}"
+				: $"扔了{thrown}件,空格 {free}→{now}";
+			DiagLog.Write($"[throw] {LastNote}");
+			return now;
+		}
+
+		// 还在地上、且是我们扔的那些。捡回来靠走过去:原版吸取范围约 2.6 格。
+		public static bool AnyOnGround(out int wx, out int wy)
+		{
+			wx = wy = 0;
+			foreach (int who in Thrown)
+			{
+				if (who < 0 || who >= Main.maxItems) continue;
+				var it = Main.item[who];
+				if (it == null || !it.active || it.IsAir) continue;
+				wx = (int)(it.position.X / 16f); wy = (int)(it.position.Y / 16f);
+				return true;
+			}
+			return false;
+		}
+
+		public static void Forget() { Thrown.Clear(); }
+	}
+}

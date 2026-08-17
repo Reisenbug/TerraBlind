@@ -31,6 +31,8 @@ namespace TerraBlind
         {
             LastCrafted = 0; LastOverflow = 0; LastStop = "";
             int remaining = amount;
+            // 满包时游戏连配方都不算 available,合成必失败。先扔两格出来,合完由调用方捡回。
+            if (ThrowItems.FreeSlots() < 2) ThrowItems.MakeRoom(2);
             if (Trace) DiagLog.Write($"[craft] 合成前 当前数={Count(targetItemId)} 要合={amount}");
             int round = 0;
             while (remaining > 0)
