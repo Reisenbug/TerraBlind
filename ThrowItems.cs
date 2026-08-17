@@ -36,6 +36,34 @@ namespace TerraBlind
 			return s;
 		}
 
+		// 掉落物会弹、会滑,所以要的不是"脚下这一格有地",是【一整段】连续的地。
+		// 少了这段,东西滚下悬崖或者掉进岩浆就再也捡不回来了。
+		const int SafeRun = 7;
+
+		// 往 dir 方向数:每一列脚下都得是实处,而且那一列本身不能是岩浆
+		static int SafeLen(int fx, int fy, int dir)
+		{
+			for (int n = 0; n < SafeRun; n++)
+			{
+				int x = fx + dir * n;
+				if (!Predicates.InBounds(x, fy)) return n;
+				if (Predicates.IsLava(x, fy) || Predicates.IsLava(x, fy + 1)) return n;
+				if (!Predicates.IsSolid(x, fy + 1)) return n;
+			}
+			return SafeRun;
+		}
+
+		// 挑一边扔。两边都不安全就挑长的那边 —— 宁可扔出去也不能卡住合成。
+		static int PickSide(Player p, out bool safe)
+		{
+			int fx = ActExecutor.OriginCx(p), fy = ActExecutor.OriginCy(p);
+			int r = SafeLen(fx, fy, 1), l = SafeLen(fx, fy, -1);
+			safe = r >= SafeRun || l >= SafeRun;
+			if (r >= SafeRun) return 1;
+			if (l >= SafeRun) return -1;
+			return r >= l ? 1 : -1;
+		}
+
 		public static int FreeSlots()
 		{
 			var p = Main.LocalPlayer;
@@ -64,6 +92,9 @@ namespace TerraBlind
 			}
 			cands.Sort((a, b) => a.junk.CompareTo(b.junk));
 
+			int dir = PickSide(p, out bool safe);
+			if (!safe) DiagLog.Write($"[throw] 两边都没有{SafeRun}格实地,照扔不误(可能捡不回来)");
+
 			int thrown = 0;
 			foreach (var (_, slot) in cands)
 			{
@@ -72,9 +103,13 @@ namespace TerraBlind
 				if (it == null || it.IsAir) continue;
 				var drop = p.QuickSpawnItemDirect(p.GetSource_Misc("terrablind_throw"), it, it.stack);
 				if (drop == null) continue;
+				// 落在挑好的那一边、贴着人,速度清零 —— 不清会继承人的速度飞出去
+				drop.position.X = p.position.X + dir * 16f;
+				drop.position.Y = p.position.Y;
+				drop.velocity = Microsoft.Xna.Framework.Vector2.Zero;
 				drop.noGrabDelay = 100;
 				Thrown.Add(drop.whoAmI);
-				DiagLog.Write($"[throw] 扔出 {it.Name}x{it.stack} (槽{slot}) 腾位置");
+				DiagLog.Write($"[throw] 扔出 {it.Name}x{it.stack} (槽{slot}) 往{(dir > 0 ? "右" : "左")} 安全={safe}");
 				p.inventory[slot] = new Item();
 				thrown++;
 			}
@@ -96,7 +131,10 @@ namespace TerraBlind
 				if (who < 0 || who >= Main.maxItems) continue;
 				var it = Main.item[who];
 				if (it == null || !it.active || it.IsAir) continue;
-				wx = (int)(it.position.X / 16f); wy = (int)(it.position.Y / 16f);
+				int x = (int)(it.position.X / 16f), y = (int)(it.position.Y / 16f);
+				// 掉进岩浆的别去捡 —— 那是把人也送进去,而人掉岩浆这把就完了
+				if (Predicates.IsLava(x, y)) { DiagLog.Write($"[throw] ({x},{y})那件掉岩浆里了,不去捡"); continue; }
+				wx = x; wy = y;
 				return true;
 			}
 			return false;

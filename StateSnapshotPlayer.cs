@@ -34,6 +34,7 @@ namespace TerraBlind
 		private static (int x, int y)? _pendingAnchor;
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
 		private static (int x, int y)? _pendingStand;
+		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -88,6 +89,22 @@ namespace TerraBlind
 						Main.NewText($"[TerraBlind] 爬上桥起点并盖房 ({sx2},{sy2})", 120, 255, 120);
 					else
 						Main.NewText($"[TerraBlind] 开不了工:{hw2}", 255, 120, 120);
+				}
+			}
+			// 房子盖完 → 沿着线把桥铺出去。桥面从房子那一头往外接,所以跳过房子占的那几列。
+			if (_pendingDeck != null && !HouseBuilder.IsRunning && !PlaceAnywhere.IsRunning
+			    && !RecedingNav.Active && !DeckBuilder.IsRunning)
+			{
+				var line = _pendingDeck;
+				_pendingDeck = null;
+				if (HouseBuilder.Outcome == "done")
+				{
+					int from = HouseBuilder.RoomWidth + 1;
+					DiagLog.Write($"[reach-test] 房子好了,开始铺桥 从i={from}/{line.Count}");
+					if (DeckBuilder.Start("94", line, from, out string dw))
+						Main.NewText($"[TerraBlind] 铺桥 {line.Count - from}格", 120, 255, 120);
+					else
+						Main.NewText($"[TerraBlind] 铺不了:{dw}", 255, 120, 120);
 				}
 			}
 			var site = _site;
@@ -241,6 +258,7 @@ namespace TerraBlind
 						PathVisSystem.SetTiles(rv, 7200);
 						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
 						_pendingAnchor = (rsx, rsy);
+							_pendingDeck = rr.Line;
 						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
 						Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
 					}
@@ -419,6 +437,7 @@ namespace TerraBlind
 			// house: pure orchestration over the other primitives. Ticked BEFORE them so a step it starts
 			// this frame is driven immediately; it writes no controls itself.
 			if (HouseBuilder.IsRunning) HouseBuilder.Tick();
+			if (DeckBuilder.IsRunning) DeckBuilder.Tick();
 
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)
