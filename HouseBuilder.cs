@@ -36,6 +36,9 @@ namespace TerraBlind
 		private static int _roomIdx;              // 正在处理第几间(支柱/铺墙都按间走)
 		private static int _roofRow;              // python: roof_row = 上到柱顶后实际站位的 cy+1
 		private static int _torchWx, _torchWy;
+		// 房间内的一格,用来给 NPC 指派住房(moveRoom 要房间【里面】的坐标,火把那格正好)
+		public static int TorchWx => _torchWx;
+		public static int TorchWy => _torchWy;
 
 		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
 		const int H_FLOOR = 94;       // 木平台
@@ -538,6 +541,13 @@ namespace TerraBlind
 			Outcome = "done"; _ph = Ph.Done;
 			DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
 			Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
+			// 盖完就把爆破专家指过来。房子合不合格由原版判,失败信息说明差什么
+			if (_rooms == 1)
+			{
+				bool ok = AssignHome.Try(Terraria.ID.NPCID.Demolitionist, _torchWx, _torchWy, out string awhy);
+				Main.NewText(ok ? $"[TerraBlind] {AssignHome.LastNote}" : $"[TerraBlind] 指派住房失败:{awhy}",
+					ok ? (byte)120 : (byte)255, ok ? (byte)255 : (byte)200, 120);
+			}
 		}
 
 		// 那一格上有没有【指定类型】的东西。家具占多格,vanilla 只在原点记 TileType,所以按类型查而不是按 HasTile。
