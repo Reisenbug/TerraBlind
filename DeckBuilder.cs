@@ -20,11 +20,13 @@ namespace TerraBlind
 		private static bool _tried;   // 这一格我们动过手,用来分清 Placed / Already
 		private static int _recovers;
 		private static int _skipped;   // 连着放不上的格数,断了就清零
+		private static int _runAt = -1;   // 已经在这个下标起过一趟连铺
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
 		private const int StandSlack = 1;
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
+		private const int MinRun = 3;   // 短于这个不值得起一趟 BridgeBuilder,直接单格放
 
 		private const int MaxFrames = 60 * 600;
 		private const int MaxCellFrames = 180;
@@ -34,8 +36,20 @@ namespace TerraBlind
 		public static string Reason = "";
 		public static int Placed, Already;
 
-		// 桥面用【任何方块】都行。所以不锁死某个 id:每一格现挑,挑背包里最多的那种,
-		// 一种铺光了自动换下一种。平台不算 —— 桥面要的是实心方块。
+		// 从 i 起【同一行、列连着走】有多少格。桥面有起伏,变行处就断段
+		static int RunLen(int i)
+		{
+			if (i + 1 >= _line.Count) return 1;
+			int dir = System.Math.Sign(_line[i + 1].x - _line[i].x);
+			if (dir == 0) return 1;
+			int n = 1;
+			while (i + n < _line.Count
+			       && _line[i + n].y == _line[i].y
+			       && _line[i + n].x == _line[i].x + dir * n) n++;
+			return n;
+		}
+
+		// 桥面用任何方块都行:挑存量最多的那种,一种铺光自动换下一种(平台不算,要站得住)
 		public static int PickBlock()
 		{
 			var p = Main.LocalPlayer;
@@ -59,7 +73,7 @@ namespace TerraBlind
 			if (line == null || line.Count == 0) { why = "空线"; return false; }
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
-			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0;
+			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
 			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
@@ -99,20 +113,41 @@ namespace TerraBlind
 				return;
 			}
 
-			// 人得站在【已经铺好的那一段】上。掉下去了先爬回来:日志里人从 1040 掉到 1045,
-			// 再横着走一辈子也够不到桥面(差5行直接 STUCK)。
+			// 人得站在【已经铺好的那一段】上。低了就跳:Reach 判的是"够得着"不是"站上去",
+			// 人在桥面下方也够得着 → 立刻 done → 下一帧又低 → 又 Start,于是刷屏且没爬上去
 			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
 			if (py > y - 1 + StandSlack)
 			{
-				if (RecedingNav.Active) return;
-				// 线往上走一格时人还站在旧行上,这不是掉下去,跳一下就上去了。
-				// 之前一律叫 nav,而 nav 判"已经到了"就立刻返回,于是每帧重来 —— 日志里 8 帧 8 次。
-				if (py - (y - 1) <= 1 && !p.controlJump) { p.controlJump = true; _cellFrames = 0; return; }
-				if (++_recovers > MaxRecovers) { Fail($"掉下桥{_recovers}次,爬不回来 (人{py} 桥面{y})"); return; }
-				DiagLog.Write($"[deck] 人掉到{py}了,桥面在{y},爬回去");
-				RecedingNav.Start(_line[_idx > 0 ? _idx - 1 : 0].x, y - 1, RecedingNav.Mode.Reach);
+				if (++_recovers > MaxRecovers) { Fail($"爬不回桥面 (人{py} 桥面{y})"); return; }
+				if (_recovers % 30 == 1) DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去");
+				p.controlJump = true;
 				_cellFrames = 0;
 				return;
+			}
+			_recovers = 0;
+
+			// 同一行的连续段一次铺完:房子的 base 就是这么干的 —— BridgeBuilder 锁一个槽连着放,
+			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
+			if (BridgeBuilder.IsRunning) return;
+			// 同一格只让连铺试一次:它铺不动时 _idx 不变、RunLen 不变,会每帧重起一趟,
+			// 永远轮不到下面的单格放置。试过就记下,这一格改走单格
+			if (PlaceAnywhere.Outcome != "stuck" && _runAt != _idx)
+			{
+				int run = RunLen(_idx);
+				if (run >= MinRun)
+				{
+					_runAt = _idx;
+					int rdir = System.Math.Sign(_line[_idx + 1].x - x);
+					int bid = _item.Length > 0 ? int.Parse(_item) : PickBlock();
+					// 不在这儿 _idx += run:铺没铺满由上面那道 IsGround 逐格认账,
+					// 乐观推进会把没铺上的格子当成铺好了,桥上留洞
+					if (bid > 0 && BridgeBuilder.Start(bid.ToString(), rdir > 0 ? "right" : "left", run, x, y, out _))
+					{
+						DiagLog.Write($"[deck] 连铺{run}格 从({x},{y}) 料={bid}");
+						_tried = true; _cellFrames = 0;
+						return;
+					}
+				}
 			}
 
 			// 走到够得着再交给 PlaceAnywhere。不然它每一格都要"启动→发现够不着→走→放→收摊",
