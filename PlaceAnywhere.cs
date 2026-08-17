@@ -40,7 +40,7 @@ namespace TerraBlind
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
 			Outcome = "running"; Reason = "";
-			if (Predicates.IsSolid(tx, ty))
+			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
 			if (Predicates.IsLava(tx, ty))
 			{ why = $"({tx},{ty})是熔岩,放不进去"; Outcome = "stuck"; Reason = why;
@@ -60,8 +60,13 @@ namespace TerraBlind
 		// 锚就用眼那一份判据,绝不另写(写过一次 3×3 的,7 格全判反)
 		static bool HasAnchor(int x, int y) => ItemUseCoordinator.HasAnchor(x, y);
 
+		// 判空要跟游戏一致:它 occupied 看 HasTile,不看 tileSolid。草/藤/火把不 solid 但占位,
+		// 用 IsSolid 判空会反复选中同一格然后报 occupied(日志里连着 9 次)
+		static bool Occupied(int x, int y)
+			=> Predicates.InBounds(x, y) && Main.tile[x, y].HasTile;
+
 		static bool Free(int x, int y)
-			=> Predicates.InBounds(x, y) && !Predicates.IsSolid(x, y)
+			=> Predicates.InBounds(x, y) && !Occupied(x, y)
 			   && !Predicates.IsLava(x, y) && !_bad.Contains((x, y));
 
 		// 从目标往回 BFS 到【任何一个已经有锚的空格】,得到一串要依次放的格子。
@@ -146,7 +151,7 @@ namespace TerraBlind
 				return;
 			}
 
-			if (Predicates.IsSolid(_tx, _ty))
+			if (Occupied(_tx, _ty))
 			{
 				Outcome = "done"; _ph = Ph.Done;
 				DiagLog.Write($"[placeany] DONE ({_tx},{_ty}) 接了{_idx}格");
@@ -155,7 +160,7 @@ namespace TerraBlind
 			if (_idx >= _chain.Count) { Fail($"链铺完了({_chain.Count}格)目标还是空的"); return; }
 
 			var (x, y) = _chain[_idx];
-			if (Predicates.IsSolid(x, y)) { _idx++; _cellFrames = 0; return; }
+			if (Occupied(x, y)) { _idx++; _cellFrames = 0; return; }
 			if (++_cellFrames > MaxCellFrames) { Retry($"({x},{y})卡了{_cellFrames}帧"); return; }
 
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西

@@ -90,8 +90,9 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
-			// 有东西就算这一格过了。_tried 分得清是我们放的还是本来就有的
-			if (Predicates.IsSolid(x, y))
+			// 桥面必须站得住,所以只认 IsGround。非实心占位物(草/藤)放不进去也站不住,
+			// 交给下面的 skip 跳过 —— 判 HasTile 会把它当铺好了,人走上去直接掉下去
+			if (Predicates.IsGround(x, y))
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
