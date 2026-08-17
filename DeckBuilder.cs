@@ -104,12 +104,20 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
-			// 桥面必须站得住,所以只认 IsGround。非实心占位物(草/藤)放不进去也站不住,
-			// 交给下面的 skip 跳过 —— 判 HasTile 会把它当铺好了,人走上去直接掉下去
+			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
 			if (Predicates.IsGround(x, y))
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				return;
+			}
+			// HasTile 但站不住(草/藤):放置那边判"已经有东西"直接 done,这边判"还没好",
+			// 于是每帧对撞死循环(日志:(684,1049) 刷 181 帧)。这一格谁也放不上,跳过
+			if (Predicates.InBounds(x, y) && Main.tile[x, y].HasTile)
+			{
+				DiagLog.Write($"[deck] ({x},{y})有占位物但站不住,跳过");
+				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格站不住,最后({x},{y})"); return; }
+				_idx++; _cellFrames = 0; _tried = false;
 				return;
 			}
 
