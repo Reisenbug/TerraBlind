@@ -371,7 +371,7 @@ namespace TerraBlind
 			int x = OriginCx(p) + dx, y = OriginCy(p) + dy;
 			if (!InBounds(x, y)) return true;
 			var t = Main.tile[x, y];
-			return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+			return Predicates.IsWall(x, y);
 		}
 
 		private static int StackOf(Player p, int type)

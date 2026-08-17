@@ -47,6 +47,14 @@ namespace TerraBlind
 		// 挡路的:实心且【不是】平台。平台横在面前直接走过去/跳上去,挖它纯属浪费
 		public static bool IsWall(int x, int y) => IsSolid(x, y) && !IsPlatform(x, y);
 
+		// 占着格子但站不住也放不进去:树干/藤/草。放置那边会报 occupied,桥面认它就是留洞
+		public static bool IsClutter(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && !Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+		}
+
 		// GROUND = something you can stand ON TOP of: a full solid block or a platform.
 		public static bool IsGround(int x, int y)
 		{

@@ -127,7 +127,7 @@ namespace TerraBlind
 			}
 			// HasTile 但站不住(草/藤):放置那边判"已经有东西"直接 done,这边判"还没好",
 			// 于是每帧对撞死循环(日志:(684,1049) 刷 181 帧)。这一格谁也放不上,跳过
-			if (Predicates.InBounds(x, y) && Main.tile[x, y].HasTile)
+			if (Predicates.IsClutter(x, y))
 			{
 				DiagLog.Write($"[deck] ({x},{y})有占位物但站不住,跳过");
 				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格站不住,最后({x},{y})"); return; }

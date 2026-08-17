@@ -114,7 +114,7 @@ namespace TerraBlind
                     {
                         if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
                         var t = Main.tile[x, y];
-                        if (t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType])
+                        if (Predicates.IsWall(x, y))
                             nowSolid.Add((x, y));
                     }
                 // a cell counts as MINED only if it vanished while still inside the watch box; cells that left the

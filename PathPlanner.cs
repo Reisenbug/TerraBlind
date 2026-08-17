@@ -259,10 +259,7 @@ namespace TerraBlind
         // tile exists but cannot be placed on/through (tree trunks, vines, etc.)
         private static bool Occupied(int wx, int wy)
         {
-            if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
-            var t = Main.tile[wx, wy];
-            if (t == null || !t.HasTile) return false;
-            return !Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+            return Predicates.IsClutter(wx, wy);
         }
 
         private static bool Standable(int wx, int wy)

@@ -70,7 +70,7 @@ namespace TerraBlind
 			if (p.velocity.Y == 0f && cy > _startCy)
 			{
 				var below = InBounds(cx, cy + 1) ? Main.tile[cx, cy + 1] : default;
-				bool onSolid = below.HasTile && Main.tileSolid[below.TileType] && !Main.tileSolidTop[below.TileType];
+				bool onSolid = Predicates.IsWall(cx, cy + 1);
 				if (onSolid)
 				{
 					Outcome = "done"; _running = false;

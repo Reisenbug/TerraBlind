@@ -484,9 +484,9 @@ namespace TerraBlind
         // solid of ANY shape (full, slope, half-brick) — what the body envelope collides with above the feet row
         static bool SolidAnyShape(int x, int y)
         {
+            // 越界当实心(和别处相反):场的边界外不许走
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return true;
-            var t = Main.tile[x, y];
-            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+            return Predicates.IsWall(x, y);
         }
 
         // slope/half-brick in the feet cell: standable, but the feet ride 6-16px up inside the row
@@ -494,7 +494,7 @@ namespace TerraBlind
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
             var t = Main.tile[x, y];
-            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]
+            return Predicates.IsWall(x, y)
                 && ((int)t.Slope != 0 || t.IsHalfBlock);
         }
 

@@ -1584,7 +1584,7 @@ namespace TerraBlind
 						if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) { sb2.Append('?'); continue; }
 						var t = Main.tile[wx, wy];
 						if (t == null || !t.HasTile) { sb2.Append('.'); continue; }
-						if (Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]) sb2.Append('#');
+						if (Predicates.IsWall(wx, wy)) sb2.Append('#');
 						else if (Main.tileSolidTop[t.TileType]) sb2.Append('-');
 						else sb2.Append('+');
 					}

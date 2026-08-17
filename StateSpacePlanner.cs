@@ -455,7 +455,7 @@ namespace TerraBlind
                             {
                                 if (xx < 0 || yy < 0 || xx >= Main.maxTilesX || yy >= Main.maxTilesY) continue;
                                 var t = Main.tile[xx, yy];
-                                if (t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType]) { clip = true; bx = xx; by = yy; }
+                                if (Predicates.IsWall(xx, yy)) { clip = true; bx = xx; by = yy; }
                             }
                         if (clip)
                         {
@@ -894,7 +894,7 @@ namespace TerraBlind
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
             var t = Main.tile[x, y];
-            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+            return Predicates.IsWall(x, y);
         }
 
         // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。

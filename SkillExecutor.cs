@@ -185,7 +185,7 @@ namespace TerraBlind
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
             var t = Main.tile[x, y];
-            return t.HasTile && Main.tileSolid[t.TileType] && !Main.tileSolidTop[t.TileType];
+            return Predicates.IsWall(x, y);
         }
 
         // a tile the platform can't be placed into: HasTile and not cuttable (trees, vines etc. are non-solid so
