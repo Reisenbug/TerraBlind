@@ -98,16 +98,28 @@ namespace TerraBlind
 				return;
 			}
 
-			// 人得站在【已经铺好的那一段】上,也就是桥面上一行。掉下去了就先爬回来:
-			// 日志里人从 1040 掉到 1045,再横着走一辈子也够不到桥面(差5行直接 STUCK)。
-			int py = ActExecutor.OriginCy(p);
+			// 人得站在【已经铺好的那一段】上。掉下去了先爬回来:日志里人从 1040 掉到 1045,
+			// 再横着走一辈子也够不到桥面(差5行直接 STUCK)。
+			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
 			if (py > y - 1 + StandSlack)
 			{
-				if (SettleAt.IsRunning || RecedingNav.Active) return;
+				if (RecedingNav.Active) return;
+				// 线往上走一格时人还站在旧行上,这不是掉下去,跳一下就上去了。
+				// 之前一律叫 nav,而 nav 判"已经到了"就立刻返回,于是每帧重来 —— 日志里 8 帧 8 次。
+				if (py - (y - 1) <= 1 && !p.controlJump) { p.controlJump = true; _cellFrames = 0; return; }
 				if (++_recovers > MaxRecovers) { Fail($"掉下桥{_recovers}次,爬不回来 (人{py} 桥面{y})"); return; }
 				DiagLog.Write($"[deck] 人掉到{py}了,桥面在{y},爬回去");
 				RecedingNav.Start(_line[_idx > 0 ? _idx - 1 : 0].x, y - 1, RecedingNav.Mode.Reach);
 				_cellFrames = 0;
+				return;
+			}
+
+			// 走到够得着再交给 PlaceAnywhere。不然它每一格都要"启动→发现够不着→走→放→收摊",
+			// 日志里每格 6 列远、13 帧;BridgeBuilder 连续铺是 5.93 格/秒。
+			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			{
+				if (PlaceAnywhere.IsRunning) return;
+				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
 				return;
 			}
 
