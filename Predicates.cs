@@ -35,6 +35,18 @@ namespace TerraBlind
 			return t.HasTile && Main.tileSolid[t.TileType];
 		}
 
+		// 平台:tileSolid[19] 也是 true,所以 IsSolid 分不出它 —— 认平台只能靠 tileSolidTop。
+		// 平台能穿过去(不用挖),但站不住桥面的活(要替换成方块),两处都得先认出它
+		public static bool IsPlatform(int x, int y)
+		{
+			if (!InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			return t.HasTile && Main.tileSolidTop[t.TileType];
+		}
+
+		// 挡路的:实心且【不是】平台。平台横在面前直接走过去/跳上去,挖它纯属浪费
+		public static bool IsWall(int x, int y) => IsSolid(x, y) && !IsPlatform(x, y);
+
 		// GROUND = something you can stand ON TOP of: a full solid block or a platform.
 		public static bool IsGround(int x, int y)
 		{

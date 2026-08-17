@@ -106,10 +106,23 @@ namespace TerraBlind
 			var (x, y) = _line[_idx];
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
-			if (Predicates.IsGround(x, y))
+			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y))
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				return;
+			}
+			// 桥面这一格是平台:挖掉换成方块。平台会被踩空/穿下去,当桥面不合格
+			if (Predicates.IsPlatform(x, y))
+			{
+				if (ItemUseCoordinator.IsActive) return;
+				int ppk = ClearWay.PickSlot(p);
+				if (ppk < 0) { Fail($"({x},{y})是平台要换成方块,但没镐"); return; }
+				if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				{ if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
+				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
+				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });
+				DiagLog.Write($"[deck] ({x},{y})是平台,挖掉换方块");
 				return;
 			}
 			// HasTile 但站不住(草/藤):放置那边判"已经有东西"直接 done,这边判"还没好",
@@ -174,7 +187,7 @@ namespace TerraBlind
 				// 我新写这个时漏了,于是同一堵墙老路径过得去、新路径卡死
 				if (ClearWay.Forward(p, px < x ? 1 : -1)) return;
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
-				if (!ClearWay.HasPick(p) && Predicates.IsSolid(px + (px < x ? 1 : -1), py))
+				if (!ClearWay.HasPick(p) && Predicates.IsWall(px + (px < x ? 1 : -1), py))
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
 				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
 				return;

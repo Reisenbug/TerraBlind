@@ -23,7 +23,8 @@ namespace TerraBlind
 		// 挖一格。够得着且有镐才动手;开挖了返回 true,这一帧就交给它
 		public static bool Dig(Player p, int x, int y, string why)
 		{
-			if (!Predicates.InBounds(x, y) || !Predicates.IsSolid(x, y)) return false;
+			// 平台不挖:能直接穿过去/跳上去,挖它是白费镐和时间
+			if (!Predicates.IsWall(x, y)) return false;
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
 			int pk = PickSlot(p);
 			if (pk < 0) return false;
