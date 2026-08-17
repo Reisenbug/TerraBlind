@@ -731,9 +731,8 @@ namespace TerraBlind
                     anyVertJumpPlace = true;
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                 }
-                // 只发【爬到顶】这一条,不再按"每跳 2 格"铺一串中间落点:一跳升几格由地形定(1~3),
-                // 承诺了就兑现不了 —— 上一轮 50 条 pillar 边 45 条 MISS,31 条差的正是 ±2 行。
-                // 跳得慢就让 pillar 一起进候选,由代价决定谁赢 —— 门只筛"根本不必搭",不替代价做选择
+                // 只发【爬到顶】这一条:一跳升几格由地形定,铺中间落点兑现不了(50条45条MISS)。
+                // 跳得慢就让 pillar 进候选,由代价决定谁赢 —— 门只筛"根本不必搭"
                 bool canPil = SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY);
                 if (_pilLogCell != (ccx, ccy))
                 {
@@ -1431,6 +1430,12 @@ namespace TerraBlind
                 }
             }
             if (frames.Count == 0) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
+            // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
+            if (FallHitsLava(frames))
+            {
+                if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
+                return null;
+            }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
             // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位 —— 拒掉,
