@@ -27,7 +27,7 @@ namespace TerraBlind
 		private const int MaxFrames = 300;
 		private const int StableNeeded = 5;      // frames centered & ~stopped to call it settled
 		private const float HalfTile = 8f;       // half a tile — the target tolerance (geometry, not mobility)
-		private const float VxDead = 0.05f;      // treat |vx| below this as stopped
+		public const float VxDead = 0.05f;       // treat |vx| below this as stopped(到达判定共用这一份)
 
 		public static bool IsRunning => _running;
 		public static string Outcome = "idle";   // idle running done timeout

@@ -27,6 +27,7 @@ namespace TerraBlind
         const int StandSwitch = 20;      // 离目标这么近就把最后一段交给 A*
         const int StandMaxTries = 3;     // A* 连着搜不到就认输,别让 greedy 在这地形上空转
         static int _standTries;
+        static bool _braking;   // 位置到了,正在刹停
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
@@ -146,6 +147,7 @@ namespace TerraBlind
             StateSpacePlanner.PreciseMode = goalWy >= Main.UnderworldLayer
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
             _standTries = 0;
+            _braking = false;
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
@@ -169,6 +171,8 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            // 刹车没停稳就被外部叫停:别让 SettleAt 留在后台继续抢控制
+            if (_braking) { SettleAt.Stop(); _braking = false; }
             if (Active && LastStop == null) LastStop = "stopped";
             if (Active)   // only fire on an actual running→stopped transition
                 HttpServerSystem.PushEvent("nav_done", "{\"result\":\"" + (LastStop ?? "stopped") + "\"}");
@@ -201,11 +205,22 @@ namespace TerraBlind
             }
             else if (_mode == Mode.Reach)
             {
+                // 位置到了先【刹停】再交班:直接 Stop 是撒手,残余横速会把人冲出桥面掉下去,
+                // 而掉下去之后 SettleAt 只能左右挪、救不回来。刹车期间 Active 仍为真,调用方不会插队
+                if (_braking)
+                {
+                    if (SettleAt.IsRunning) return;
+                    DiagLog.Write($"[recede] 停稳了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+                    _braking = false; LastStop = "done"; Stop(); Main.NewText("[TerraBlind] 够到目标了"); return;
+                }
                 // 够得着就算到 —— 用原版的交互距离,和"放得出方块"同一个判据,不另编格数
                 if (p.velocity.Y == 0f
                     && p.IsInTileInteractionRange(_goalWx, _goalWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
                 {
-                    DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+                    DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) vx={p.velocity.X:0.##}");
+                    if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead
+                        && SettleAt.Start(Predicates.PillarCol(p), out _))
+                    { _braking = true; return; }
                     LastStop = "done"; Stop(); Main.NewText("[TerraBlind] 够到目标了"); return;
                 }
             }
