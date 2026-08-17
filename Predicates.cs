@@ -27,9 +27,7 @@ namespace TerraBlind
 			=> ((int)(px / 16f), (int)((px + w - 1f) / 16f));
 		public static (int left, int right) BodyCols(Player p) => BodyCols(p.position.X, p.width);
 
-		// SOLID = a tile the player rests on and cannot walk through. Platforms are solid-top: they hold you up, so
-		// they count as ground. Trees/vines/grass have HasTile but are not solid — walking into them is fine, which is
-		// exactly why "HasTile" was the wrong question all along.
+		// SOLID = 踩得住且走不过去。平台是 solidTop 也算地。树/藤/草 HasTile 但不 solid
 		public static bool IsSolid(int x, int y)
 		{
 			if (!InBounds(x, y)) return false;
@@ -168,8 +166,9 @@ namespace TerraBlind
 		}
 
 		// 向外扫最近的房址:(x,y)=左下角,往右 w 列往上 h 行(含自己)必须全空,外加左下角要够得着
+		// needLadder=false:地狱起点悬空,底下常是岩浆,要梯子就一个候选都选不出(锚是人造的)
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
-			out int hitX, out int hitY, out int scanned)
+			out int hitX, out int hitY, out int scanned, bool needLadder = true)
 		{
 			hitX = hitY = -1; scanned = 0;
 			for (int d = 0; d <= range; d++)
@@ -185,7 +184,7 @@ namespace TerraBlind
 							if (!InBounds(x, y) || !InBounds(x + w - 1, y - h + 1)) continue;
 							scanned++;
 							// 房址可以悬空:平台梯从下面的地一路搭上来。要求那一列 L 格全空、L<=20、底下是地
-							if (LadderLen(x, y) < 0) continue;
+							if (needLadder && LadderLen(x, y) < 0) continue;
 							bool ok = true;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)

@@ -35,6 +35,7 @@ namespace TerraBlind
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
 		private static (int x, int y)? _pendingStand;
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
+		private static int _deckFrom;   // 房子沿线挪过之后,桥要从房子右端接着铺
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -99,7 +100,7 @@ namespace TerraBlind
 				_pendingDeck = null;
 				if (HouseBuilder.Outcome == "done")
 				{
-					int from = HouseBuilder.RoomWidth + 1;
+					int from = _deckFrom;
 					DiagLog.Write($"[reach-test] 房子好了,开始铺桥 从i={from}/{line.Count}");
 					if (DeckBuilder.Start("", line, from, out string dw))
 						Main.NewText($"[TerraBlind] 铺桥 {line.Count - from}格", 120, 255, 120);
@@ -253,7 +254,38 @@ namespace TerraBlind
 						var rv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 						foreach (var (rlx, rly) in rr.Line) rv.Add((rlx, rly, new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
 						// 起点 = 线的第一格 = 房子那一头。人在右半图它就是最右那格,桥从这儿往另一头铺。
+						// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
+						// 复用地表选址找块干净的,再【从那儿重算整条线】—— 房子和桥就天然对齐
+						if (Predicates.ScanHouse(rr.HouseX, rr.HouseY, HouseBuilder.RoomWidth + 1, 10, 24,
+						        out int cx0, out int cy0, out int sc0, false)
+						    && (cx0 != rr.HouseX || cy0 != rr.HouseY))
+						{
+							DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
+							var rr2 = HellLine.Compute(cx0, rdir, cy0);
+							if (rr2.Found) rr = rr2;
+							else DiagLog.Write($"[reach-test] 新房址算不出线({rr2.Why}),用原来那条");
+						}
 						var (rsx, rsy) = rr.Line[0];
+						// 树和旧平台都占着格子,直接拿 Line[0] 开工必然撞上(日志:房子被挡)。
+						// 复用地表那套选址,只是不要求梯子 —— 地狱起点悬空,锚自己造
+						// 房子只能沿【线】挪,不能挪到线外:挪走了桥就和房子接不上。
+						// 所以沿 Line 往前找第一处 6x10 干净的地方,桥也从那儿往后铺
+						int hw0 = HouseBuilder.RoomWidth + 1;
+						int hi0 = 0;
+						while (hi0 + hw0 < rr.Line.Count)
+						{
+							var (qx, qy) = rr.Line[hi0];
+							bool clean = true;
+							for (int ix = 0; ix < hw0 && clean; ix++)
+								for (int iy = 0; iy < 10 && clean; iy++)
+									if (!Predicates.Vacant(qx + rdir * ix, qy - iy)) clean = false;
+							if (clean) break;
+							hi0++;
+						}
+						if (hi0 > 0) DiagLog.Write($"[reach-test] 起点那块被占(树/旧平台),沿线挪 {hi0} 格");
+						if (hi0 + hw0 >= rr.Line.Count) { hi0 = 0; DiagLog.Write("[reach-test] 整条线都找不到干净的,就用原起点"); }
+						_deckFrom = hi0 + hw0;
+						(rsx, rsy) = rr.Line[hi0];
 						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 						PathVisSystem.SetTiles(rv, 7200);
 						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
