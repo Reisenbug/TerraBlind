@@ -18,6 +18,13 @@ namespace TerraBlind
 		private static string _item = "";
 		private static int _frames, _cellFrames;
 		private static bool _tried;   // 这一格我们动过手,用来分清 Placed / Already
+		private static int _recovers;
+		private static int _skipped;   // 连着放不上的格数,断了就清零
+
+		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
+		private const int StandSlack = 1;
+		private const int MaxRecovers = 8;
+		private const int MaxSkips = 6;
 
 		private const int MaxFrames = 60 * 600;
 		private const int MaxCellFrames = 180;
@@ -52,7 +59,7 @@ namespace TerraBlind
 			if (line == null || line.Count == 0) { why = "空线"; return false; }
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
-			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false;
+			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
 			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
@@ -87,13 +94,34 @@ namespace TerraBlind
 			if (Predicates.IsSolid(x, y))
 			{
 				if (_tried) Placed++; else Already++;
-				_idx++; _cellFrames = 0; _tried = false;
+				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				return;
+			}
+
+			// 人得站在【已经铺好的那一段】上,也就是桥面上一行。掉下去了就先爬回来:
+			// 日志里人从 1040 掉到 1045,再横着走一辈子也够不到桥面(差5行直接 STUCK)。
+			int py = ActExecutor.OriginCy(p);
+			if (py > y - 1 + StandSlack)
+			{
+				if (SettleAt.IsRunning || RecedingNav.Active) return;
+				if (++_recovers > MaxRecovers) { Fail($"掉下桥{_recovers}次,爬不回来 (人{py} 桥面{y})"); return; }
+				DiagLog.Write($"[deck] 人掉到{py}了,桥面在{y},爬回去");
+				RecedingNav.Start(_line[_idx > 0 ? _idx - 1 : 0].x, y - 1, RecedingNav.Mode.Reach);
+				_cellFrames = 0;
 				return;
 			}
 
 			if (PlaceAnywhere.IsRunning) return;
-			if (PlaceAnywhere.Outcome == "stuck")
-			{ Fail($"第{_idx}格({x},{y})放不上:{PlaceAnywhere.Reason}"); return; }
+			// 一格放不上不该毁掉整条桥:跳过它接着铺,人走到那儿会掉一下但桥还在往前长。
+			// 全线放不上才算真失败 —— 那时 _skipped 会一路涨上去。
+			if (PlaceAnywhere.Outcome == "stuck" && _tried)
+			{
+				DiagLog.Write($"[deck] 第{_idx}格({x},{y})跳过:{PlaceAnywhere.Reason}");
+				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格放不上,最后({x},{y}):{PlaceAnywhere.Reason}"); return; }
+				PlaceAnywhere.Outcome = "idle";
+				_idx++; _cellFrames = 0; _tried = false;
+				return;
+			}
 			if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})卡了{_cellFrames}帧"); return; }
 			// 空名字 = 用任何方块。现挑,所以一种用光了下一格自动换别的
 			string item = _item;

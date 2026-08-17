@@ -97,12 +97,20 @@ namespace TerraBlind
 			return false;
 		}
 
+		// 判据只有这一份:StepAside 和 Tick 用同一个,不然一边以为让开了一边还在等
+		static bool InBody(Player p, int x, int y)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int fy = ActExecutor.OriginCy(p);
+			return x >= bl && x <= br && y <= fy && y >= fy - 2;
+		}
+
 		// 目标格在人身子里 → 往远离它的方向让一格。让开由 SettleAt 精确落位。
 		static bool StepAside(Player p, int x, int y, out string why)
 		{
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
-			if (x < bl || x > br || y > fy || y < fy - 2) { why = ""; return false; }
+			if (!InBody(p, x, y)) { why = ""; return false; }
 			// 让到【身子完全不盖住 x】为止。挪一格不够:目标在边缘时新位置还盖着它,每帧重来。
 			int span = br - bl;                     // 人跨 1~2 列(20px 宽)
 			// 两个方向都试,而且【必须那一列有地可站】—— 让到悬空处人会掉下去。
@@ -113,9 +121,13 @@ namespace TerraBlind
 				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}(脚下有地)");
 				return SettleAt.Start(col, out why);
 			}
-			// 两边都悬空:让不了,就别让 —— 把这一格从链里排掉,重新找一条绕开身子的路
-			DiagLog.Write($"[placeany] ({x},{y})在身子里,但两侧都悬空,改走别的链");
-			_bad.Add((x, y));
+			// 两边都悬空:站着不动让不开。往上跳一格就能把身子挪出去 —— 悬空处跳比走安全。
+			// 【绝不拉黑】:"现在在身子里"是暂时的,拉黑等于永久判死,目标自己被拉黑就直接 STUCK。
+			if (y >= fy - 2 && y <= fy)
+			{
+				p.controlJump = true;
+				if (_cellFrames % 30 == 1) DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),两侧悬空,跳起来让开");
+			}
 			why = "";
 			return false;
 		}
@@ -149,7 +161,8 @@ namespace TerraBlind
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
-			// 让不了但已经拉黑了这一格:必须重算,不然下一帧还挑中它
+			// 还在身子里(上面在跳):等跳开,别往下走去放 —— 放不进自己的碰撞箱
+			if (InBody(p, x, y)) return;
 			if (_bad.Contains((x, y))) { Retry($"({x},{y})让不开,绕路"); return; }
 
 			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
