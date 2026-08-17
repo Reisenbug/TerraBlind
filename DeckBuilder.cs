@@ -118,9 +118,14 @@ namespace TerraBlind
 			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
 			if (py > y - 1 + StandSlack)
 			{
+				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
+				if (p.velocity.Y != 0f)
+				{ if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
 				if (++_recovers > MaxRecovers) { Fail($"爬不回桥面 (人{py} 桥面{y})"); return; }
-				if (_recovers % 30 == 1) DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去");
+				DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去({_recovers}/{MaxRecovers})");
+				// 光按跳是原地起跳,上不去斜前方那一格 —— 得朝目标列一起推
 				p.controlJump = true;
+				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
 				_cellFrames = 0;
 				return;
 			}
@@ -129,9 +134,10 @@ namespace TerraBlind
 			// 同一行的连续段一次铺完:房子的 base 就是这么干的 —— BridgeBuilder 锁一个槽连着放,
 			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
 			if (BridgeBuilder.IsRunning) return;
-			// 同一格只让连铺试一次:它铺不动时 _idx 不变、RunLen 不变,会每帧重起一趟,
-			// 永远轮不到下面的单格放置。试过就记下,这一格改走单格
-			if (PlaceAnywhere.Outcome != "stuck" && _runAt != _idx)
+			// 连铺必须从有锚的格子起步:BridgeBuilder 不造锚,第一格悬空就整段 no_anchor(日志 20格 placed=0)。
+			// 换行处新行头一格和上一段是斜对角不是四邻 —— 那一格交给 PlaceAnywhere 造
+			if (PlaceAnywhere.Outcome != "stuck" && _runAt != _idx
+			    && ItemUseCoordinator.HasAnchor(x, y))
 			{
 				int run = RunLen(_idx);
 				if (run >= MinRun)
