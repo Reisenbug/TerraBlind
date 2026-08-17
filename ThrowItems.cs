@@ -23,15 +23,15 @@ namespace TerraBlind
 			if (it == null || it.IsAir) return true;
 			if (it.favorited) return true;
 			if (it.pick > 0 || it.axe > 0 || it.hammer > 0) return true;
-			if (it.type == 94 || it.type == 9) return true;
+			// 能放置的一律留着:桥面用任何方块,扔掉的可能正是下一格要铺的
+			if (it.createTile >= 0 || it.createWall >= 0) return true;
 			return false;
 		}
 
-		// 越"不要紧"分越低:能放置的方块类留着,纯杂物先走
+		// 越"不要紧"分越低。能放置的进不来(Protected 挡了),这里只排剩下的杂物
 		static int Junk(Item it)
 		{
 			int s = it.stack;
-			if (it.createTile >= 0 || it.createWall >= 0) s += 1000;
 			if (it.damage > 0 || it.healLife > 0 || it.potion) s += 500;
 			return s;
 		}

@@ -27,6 +27,25 @@ namespace TerraBlind
 		public static string Reason = "";
 		public static int Placed, Already;
 
+		// 桥面用【任何方块】都行。所以不锁死某个 id:每一格现挑,挑背包里最多的那种,
+		// 一种铺光了自动换下一种。平台不算 —— 桥面要的是实心方块。
+		public static int PickBlock()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return -1;
+			int best = -1, bestStack = 0;
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.favorited) continue;
+				if (it.createTile < 0 || it.stack <= 0) continue;
+				if (Main.tileFrameImportant[it.createTile]) continue;   // 家具/门那些不是方块
+				if (!Main.tileSolid[it.createTile] || Main.tileSolidTop[it.createTile]) continue;
+				if (it.stack > bestStack) { bestStack = it.stack; best = it.type; }
+			}
+			return best;
+		}
+
 		public static bool Start(string itemName, List<(int x, int y)> line, int from, out string why)
 		{
 			why = "";
@@ -36,7 +55,7 @@ namespace TerraBlind
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
-			DiagLog.Write($"[deck] start {itemName} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
+			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
 			return true;
 		}
 
@@ -76,9 +95,17 @@ namespace TerraBlind
 			if (PlaceAnywhere.Outcome == "stuck")
 			{ Fail($"第{_idx}格({x},{y})放不上:{PlaceAnywhere.Reason}"); return; }
 			if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})卡了{_cellFrames}帧"); return; }
+			// 空名字 = 用任何方块。现挑,所以一种用光了下一格自动换别的
+			string item = _item;
+			if (item.Length == 0)
+			{
+				int id = PickBlock();
+				if (id < 0) { Fail($"第{_idx}格({x},{y}):背包里没有方块了"); return; }
+				item = id.ToString();
+			}
 			// 放置的全部麻烦(够不着/人挡着/没锚)都在 PlaceAnywhere 里,这里只管要结果。
 			// 别在这儿 _idx++:它是异步的,这一格要等上面 IsSolid 判真才算完
-			if (!PlaceAnywhere.Start(_item, x, y, out string pw))
+			if (!PlaceAnywhere.Start(item, x, y, out string pw))
 			{ Fail($"第{_idx}格({x},{y}):{pw}"); return; }
 			_tried = true;
 		}

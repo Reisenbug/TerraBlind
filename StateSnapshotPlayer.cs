@@ -101,7 +101,7 @@ namespace TerraBlind
 				{
 					int from = HouseBuilder.RoomWidth + 1;
 					DiagLog.Write($"[reach-test] 房子好了,开始铺桥 从i={from}/{line.Count}");
-					if (DeckBuilder.Start("9", line, from, out string dw))
+					if (DeckBuilder.Start("", line, from, out string dw))
 						Main.NewText($"[TerraBlind] 铺桥 {line.Count - from}格", 120, 255, 120);
 					else
 						Main.NewText($"[TerraBlind] 铺不了:{dw}", 255, 120, 120);
