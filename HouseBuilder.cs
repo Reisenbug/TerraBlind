@@ -235,7 +235,13 @@ namespace TerraBlind
 					// 只扫落脚后身子占的 3 行:扫到 lcy-3 会把脚下的梯子和左下角自己算成障碍
 					float wantPx = ClearStandPx(_x0, _ay - 1, _ay - 3);
 					if (float.IsNaN(wantPx))
-					{ Fail($"({_x0}) 那一列爬不上去:{_ay - 1}→{_ay - 3} 头顶有方块 {ColDump(_x0 - 1, _ay - 1, _ay - 3)} {ColDump(_x0, _ay - 1, _ay - 3)} {ColDump(_x0 + 1, _ay - 1, _ay - 3)}"); return; }
+					{
+						// 真实地形挡着不是失败,是挖开:选址躲不掉的(要塞墙/矿脉)只能清出来
+						for (int c = _x0 - 1; c <= _x0 + 1; c++)
+							for (int ry = _ay - 1; ry >= _ay - 3; ry--)
+								if (ClearWay.Dig(p, c, ry, "房址被挡")) { _waited = 0; return; }
+						Fail($"({_x0}) 那一列爬不上去:{_ay - 1}→{_ay - 3} 头顶有方块 {ColDump(_x0 - 1, _ay - 1, _ay - 3)} {ColDump(_x0, _ay - 1, _ay - 3)} {ColDump(_x0 + 1, _ay - 1, _ay - 3)}{(ClearWay.HasPick(p) ? "(够不着)" : "(没镐)")}"); return;
+					}
 					float curPx = p.position.X + p.width / 2f;
 					if (System.Math.Abs(curPx - wantPx) > 3f)
 					{ SettleAt.StartPx(_x0, wantPx, 3f, out _); _waited = 0; return; }

@@ -126,7 +126,7 @@ namespace TerraBlind
 				if (_cellFrames % 60 == 1)
 					DiagLog.Write($"[helldeck] 够不着({cell.X},{cell.Y}) 人在{cx} f={_cellFrames}");
 				// 地狱要塞的墙横在路上,人过不去桥就停在墙前 —— 挡身位的挖掉,这是唯一的解法
-				if (DigWayForward(p, cx < cell.X ? 1 : -1)) return;
+				if (ClearWay.Forward(p, cx < cell.X ? 1 : -1)) return;
 				if (cx < cell.X) p.controlRight = true; else if (cx > cell.X) p.controlLeft = true;
 				return;
 			}
@@ -145,10 +145,10 @@ namespace TerraBlind
 			}
 			// 那格有东西(平台、家具、杂物)就先挖掉再铺。不用物块替换 —— 替换会把【已有的方块】
 			// 也换成我的料,白费材料;而这里要区分的恰恰是"方块留着、别的挖掉"。
-			if (Main.tile[cell.X, cell.Y].HasTile && Dig(p, cell.X, cell.Y, "桥面上的东西")) return;
+			if (Main.tile[cell.X, cell.Y].HasTile && ClearWay.Dig(p, cell.X, cell.Y, "桥面上的东西")) return;
 			// 桥面【上方 3 格】必须空,不然人走不过去 —— 顺手清掉,别等走到跟前才发现挡着
 			for (int r = 1; r <= 3; r++)
-				if (Predicates.IsSolid(cell.X, cell.Y - r) && Dig(p, cell.X, cell.Y - r, "净空")) return;
+				if (Predicates.IsSolid(cell.X, cell.Y - r) && ClearWay.Dig(p, cell.X, cell.Y - r, "净空")) return;
 
 			// 挥了半天没上去的话,把当时的现场打出来 —— 不然又是"一直挥"却不知道为什么
 			if (_cellFrames % 90 == 1)
@@ -157,35 +157,6 @@ namespace TerraBlind
 			if (!PlaceAction.IsRunning)
 				PlaceAction.Start(_item, cell.X, cell.Y, 1, 0, 0, true, out _);
 			if (Predicates.IsSolid(cell.X, cell.Y)) { Placed++; _idx++; _cellFrames = 0; _skips = 0; }
-		}
-
-		// 挖一格。够得着且有镐才动手;开挖了返回 true,这一帧就交给它。
-		static bool Dig(Player p, int x, int y, string why)
-		{
-			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
-			int pk = -1;
-			for (int i = 0; i < 10; i++)
-			{ var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { pk = i; break; } }
-			if (pk < 0)
-			{
-				if (_cellFrames % 60 == 1) DiagLog.Write($"[helldeck] 要挖({x},{y}){why}但没镐");
-				return false;
-			}
-			if (ItemUseCoordinator.IsActive) return true;
-			ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = pk, Strict = true });
-			DiagLog.Write($"[helldeck] 挖({x},{y}) {why} type={Main.tile[x, y].TileType}");
-			return true;
-		}
-
-		// 前进方向那一列,身子占的 3 行里有实心就挖掉。挖到了返回 true(这一帧交给挖,别再按方向键)。
-		static bool DigWayForward(Player p, int dir)
-		{
-			var (bl, br) = Predicates.BodyCols(p);
-			int col = dir > 0 ? br + 1 : bl - 1;
-			int fy = ActExecutor.OriginCy(p);
-			for (int r = 0; r < 3; r++)
-				if (Predicates.IsSolid(col, fy - r) && Dig(p, col, fy - r, "挡路")) return true;
-			return false;
 		}
 
 		static void Fail(string reason)

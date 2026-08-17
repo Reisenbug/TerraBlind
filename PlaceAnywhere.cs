@@ -180,6 +180,8 @@ namespace TerraBlind
 				if (System.Math.Abs(cy - y) > RowGap)
 				{ Fail($"人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向够不着"); return; }
 				if (_cellFrames % 60 == 1) DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({cx},{cy})");
+				// 地形挡着就挖开,不然横向走一辈子也过不去(卡满 MaxCellFrames 才报错)
+				if (ClearWay.Forward(p, cx < x ? 1 : -1)) return;
 				if (cx < x) p.controlRight = true; else if (cx > x) p.controlLeft = true;
 				return;
 			}

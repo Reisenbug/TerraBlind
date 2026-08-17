@@ -170,6 +170,12 @@ namespace TerraBlind
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
 				if (PlaceAnywhere.IsRunning) return;
+				// 真实地形横在路上(要塞墙/矿脉/山体)就挖开 —— 老的 HellDeck 早有这一手,
+				// 我新写这个时漏了,于是同一堵墙老路径过得去、新路径卡死
+				if (ClearWay.Forward(p, px < x ? 1 : -1)) return;
+				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
+				if (!ClearWay.HasPick(p) && Predicates.IsSolid(px + (px < x ? 1 : -1), py))
+				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
 				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
 				return;
 			}
