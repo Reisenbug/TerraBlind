@@ -98,6 +98,7 @@ namespace TerraBlind
 			if (_idx >= _line.Count)
 			{
 				Outcome = "done"; _ph = Ph.Done;
+				PathVisSystem.ClearDeck();
 				DiagLog.Write($"[deck] DONE 放了{Placed}格 本来就有{Already}格");
 				return;
 			}

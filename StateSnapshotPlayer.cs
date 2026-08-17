@@ -276,7 +276,7 @@ namespace TerraBlind
 								: new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
 						}
 						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
-						PathVisSystem.SetTiles(rv, 60 * 60 * 12);
+						PathVisSystem.SetDeck(rv, 60 * 60 * 20);
 						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
 						_pendingAnchor = (rsx, rsy);
 							_pendingDeck = rr.Line;

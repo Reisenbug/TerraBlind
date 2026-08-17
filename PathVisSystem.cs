@@ -14,6 +14,18 @@ namespace TerraBlind
         private static List<(int wx, int wy, string text, Color color)> _labels = new();
         private static int _ttl = 0;
 
+        // 独立槽:SetTiles 是全局单槽,谁调谁独占。地狱桥那条线要显示十几分钟,
+        // 而 PillarUp/NavCoordinator 每帧都用一两格覆盖它 —— 长期图层不能和一次性提示抢
+        private static List<(int wx, int wy, Color color)> _deck = new();
+        private static int _deckTtl = 0;
+
+        public static void SetDeck(List<(int wx, int wy, Color color)> tiles, int ttlFrames)
+        {
+            lock (_lock) { _deck = tiles; _deckTtl = ttlFrames; }
+        }
+
+        public static void ClearDeck() { lock (_lock) { _deck = new List<(int, int, Color)>(); _deckTtl = 0; } }
+
         // GHOST TILES: draw a recorded structure as faint real-tile sprites (the actual block's look, half-transparent
         // "air version"), not solid debug squares. Each entry carries the tile type + frame so the correct sprite +
         // orientation renders. mineGhost cells (recorded removals) draw as a faint red outline instead.
@@ -88,7 +100,7 @@ namespace TerraBlind
 
         public override void PostUpdateEverything()
         {
-            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; }
+            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; if (_deckTtl > 0) _deckTtl--; }
         }
 
         public override void PostDrawTiles()
@@ -160,6 +172,10 @@ namespace TerraBlind
             List<(int wx, int wy, string text, Color color)> extraLabels;
             int extraTtl;
             lock (_lock) { extraTiles = new List<(int, int, Color)>(_tiles); extraLabels = new List<(int, int, string, Color)>(_labels); extraTtl = _ttl; }
+            List<(int wx, int wy, Color color)> deckTiles; int deckTtl;
+            lock (_lock) { deckTiles = new List<(int, int, Color)>(_deck); deckTtl = _deckTtl; }
+            if (deckTtl > 0)
+                foreach (var (tx, ty, tc) in deckTiles) DrawTile(spriteBatch, tx, ty, tc);
             if (extraTtl > 0)
             {
                 foreach (var (tx, ty, tc) in extraTiles)
