@@ -70,6 +70,37 @@ namespace TerraBlind
 		// 每间一个火把。合不出来:配方要凝胶,不刷怪就只能开箱砸罐捡 —— 是进屋前该备好的料
 		static int TorchCount => _rooms;
 
+		// 火把不挑种类:原版判房间要光源看的是 TileID.Sets.RoomNeeds.CountsAsTorch,
+		// 里面是 tile 4,而所有火把(蓝/骨/丛林/暗影…)放出来的都是 tile 4。
+		static bool IsTorch(Item it)
+			=> it != null && !it.IsAir && it.type < Terraria.ID.ItemID.Sets.Torches.Length
+			   && Terraria.ID.ItemID.Sets.Torches[it.type];
+
+		static int HaveTorch()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return 0;
+			int n = 0;
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+				if (IsTorch(p.inventory[i])) n += p.inventory[i].stack;
+			return n;
+		}
+
+		// 手头存量最多的那种火把。没有就退回普通火把 id,让合成那步去补
+		static int TorchId()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return H_TORCH;
+			int best = -1, bestStack = 0;
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (!IsTorch(it) || it.stack <= bestStack) continue;
+				bestStack = it.stack; best = it.type;
+			}
+			return best < 0 ? H_TORCH : best;
+		}
+
 		// (ax,ay)=左下角=地板第一格,是放出来的不是走上去的:站旁边放出它 → 跳上去踩着 → 往外铺
 		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
 		{
@@ -373,8 +404,8 @@ namespace TerraBlind
 					{ Fail($"椅子只有 {Predicates.Have(H_CHAIR)}/{ChairCount}"); return; }
 					if (Predicates.Have(H_WALL) < WallCount)
 					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
-					if (Predicates.Have(H_TORCH) < TorchCount)
-					{ Fail($"火把只有 {Predicates.Have(H_TORCH)}/{TorchCount},进屋前得先攒够(开箱砸罐)"); return; }
+					if (HaveTorch() < TorchCount)
+					{ Fail($"火把只有 {HaveTorch()}/{TorchCount},进屋前得先攒够(开箱砸罐)"); return; }
 
 					// 单间:工作台就在脚下,合完椅子直接原地放,不走来走去。
 					// 多间才需要 walk_place —— 桌 wx(14,9,4) 走到 wx(3),椅 wx(2,7,12,17) 走回 wx(19)。
@@ -434,7 +465,7 @@ namespace TerraBlind
 					// python 每间铺完墙紧接着放一个火把:place_at wx(col1+2), roof_row+2
 					_torchWx = Wx(1 + RoomWidth * _roomIdx + 2); _torchWy = _roofRow + 2;
 					Advance(Ph.Torch);
-					PlaceAction.Start(H_TORCH.ToString(), _torchWx, _torchWy, 1, 0, 0, true, out _);
+					PlaceAction.Start(TorchId().ToString(), _torchWx, _torchWy, 1, 0, 0, true, out _);
 					return;
 
 				case Ph.Torch:
