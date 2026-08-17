@@ -18,6 +18,10 @@ namespace TerraBlind
 		// 只算 170 的话房子会吃掉桥的前 6 格,雷管站的地方就短了。
 		public const int Length = HouseW + Bridge;
 		const int SlopeW = 4;               // 上下挪一格的钱。没约束时线自己走平
+		// 连着爬第 k 段额外加这么多:陡坡不禁止,但连成一串会越来越贵,于是"能分散就分散"。
+		// 只加 SlopeW 是线性的 —— 连爬10段和分散爬10段一样贵,Dijkstra 没理由避开陡坡
+		const int RunSlopeW = 26;           // 一段连爬 ≈ 一格挖掘的钱
+		const int MaxRun = 3;               // 连爬段数封顶(状态维度),再陡也不再涨价
 		const int DigCell = 26;             // 和主线同价(MazeWand.DigSide),绝不另编一套
 		const int CenterW = 20;             // 偏离空腔中间的钱,按【比例】算不按格数
 		const int CeilW = 6;                // 贴天花板的钱,这个是绝对格数:人得塞进去
@@ -198,18 +202,21 @@ namespace TerraBlind
 			var floorA = new int[Length];
 			for (int i = 0; i < Length; i++) Column(sx + dir * i, out ceilA[i], out floorA[i]);
 
-			var dist = new int[Length, rows];
-			var prev = new int[Length, rows];
+			// 第三维 = 到这里为止【连着爬了几段】。没有它就记不住"刚才是不是也在爬",
+			// 连续陡坡和分散陡坡的总价就永远相等
+			var dist = new int[Length, rows, MaxRun + 1];
+			var prev = new int[Length, rows, MaxRun + 1];
 			for (int i = 0; i < Length; i++)
-				for (int r = 0; r < rows; r++) { dist[i, r] = Unreachable; prev[i, r] = -1; }
+				for (int r = 0; r < rows; r++)
+					for (int k = 0; k <= MaxRun; k++) { dist[i, r, k] = Unreachable; prev[i, r, k] = -1; }
 
-			var pq = new SortedSet<(int d, int i, int r)>();
+			var pq = new SortedSet<(int d, int i, int r, int k)>();
 			for (int r = 0; r < rows; r++)
 			{
 				int c = CellCost(sx, yLo + r, ceilA[0], floorA[0]);
 				if (c >= Unreachable) continue;
-				dist[0, r] = c;
-				pq.Add((c, 0, r));
+				dist[0, r, 0] = c;
+				pq.Add((c, 0, r, 0));
 			}
 			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
 
@@ -217,9 +224,9 @@ namespace TerraBlind
 			// 中间那列的钱也要算,不然抬升会白蹭一格免费的地。
 			while (pq.Count > 0)
 			{
-				var (d, i, r) = pq.Min;
+				var (d, i, r, k) = pq.Min;
 				pq.Remove(pq.Min);
-				if (d > dist[i, r]) continue;
+				if (d > dist[i, r, k]) continue;
 				foreach (var (di, dr) in new[] { (1, 0), (2, 1), (2, -1) })
 				{
 					int ni = i + di, nr = r + dr;
@@ -233,17 +240,22 @@ namespace TerraBlind
 						mid = CellCost(sx + dir * (i + 1), yLo + r, ceilA[i + 1], floorA[i + 1]);
 						if (mid >= Unreachable) continue;
 					}
-					int nd = d + cc + mid + (dr != 0 ? SlopeW : 0);
-					if (nd >= dist[ni, nr]) continue;
-					if (dist[ni, nr] < Unreachable) pq.Remove((dist[ni, nr], ni, nr));
-					dist[ni, nr] = nd;
-					prev[ni, nr] = i * rows + r;   // 存整个前驱:竖直移动的前驱在【同一列】,只存行号回溯必错位
-					pq.Add((nd, ni, nr));
+					// 平走清零,爬一段就 +1(封顶)。罚款按【已经连爬了几段】收,越连越贵
+					int nk = dr != 0 ? System.Math.Min(k + 1, MaxRun) : 0;
+					int slope = dr != 0 ? SlopeW + k * RunSlopeW : 0;
+					int nd = d + cc + mid + slope;
+					if (nd >= dist[ni, nr, nk]) continue;
+					if (dist[ni, nr, nk] < Unreachable) pq.Remove((dist[ni, nr, nk], ni, nr, nk));
+					dist[ni, nr, nk] = nd;
+					prev[ni, nr, nk] = (i * rows + r) * (MaxRun + 1) + k;   // 存整个前驱:竖直移动的前驱在【同一列】,只存行号回溯必错位
+					pq.Add((nd, ni, nr, nk));
 				}
 			}
 
-			int endR = -1, endC = Unreachable;
-			for (int r = 0; r < rows; r++) if (dist[Length - 1, r] < endC) { endC = dist[Length - 1, r]; endR = r; }
+			int endR = -1, endC = Unreachable, endK = 0;
+			for (int r = 0; r < rows; r++)
+				for (int k = 0; k <= MaxRun; k++)
+					if (dist[Length - 1, r, k] < endC) { endC = dist[Length - 1, r, k]; endR = r; endK = k; }
 			if (endR < 0)
 			{
 				// 断在哪一列比"no_path"有用得多:列号一报出来就知道是地形挡死还是我的判据把整层判死了
@@ -251,7 +263,8 @@ namespace TerraBlind
 				for (int i = 0; i < Length; i++)
 				{
 					bool any = false;
-					for (int r = 0; r < rows; r++) if (dist[i, r] < Unreachable) { any = true; break; }
+					for (int r = 0; r < rows && !any; r++)
+						for (int k = 0; k <= MaxRun; k++) if (dist[i, r, k] < Unreachable) { any = true; break; }
 					if (!any) break;
 					reached = i;
 				}
@@ -267,15 +280,16 @@ namespace TerraBlind
 			// 回溯走前驱链。抬升那一步跨了两列,中间那列没进过 prev —— 它留在【前驱的高度】,补上。
 			var ys = new int[Length];
 			for (int i = 0; i < Length; i++) ys[i] = -1;
-			int ci = Length - 1, cr2 = endR;
-			for (int guard = 0; guard < Length * rows + 16; guard++)
+			int ci = Length - 1, cr2 = endR, ck = endK;
+			for (int guard = 0; guard < Length * rows * (MaxRun + 1) + 16; guard++)
 			{
 				if (ys[ci] < 0) ys[ci] = yLo + cr2;
-				int p = prev[ci, cr2];
+				int p = prev[ci, cr2, ck];
 				if (p < 0) break;
-				int pi = p / rows, pr = p % rows;
+				int pk = p % (MaxRun + 1), pcell = p / (MaxRun + 1);
+				int pi = pcell / rows, pr = pcell % rows;
 				if (ci - pi == 2) ys[pi + 1] = yLo + pr;
-				ci = pi; cr2 = pr;
+				ci = pi; cr2 = pr; ck = pk;
 			}
 			for (int i = 0; i < Length; i++)
 				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
@@ -291,8 +305,16 @@ namespace TerraBlind
 				maxStep = System.Math.Max(maxStep, st);
 				if (st > 0 && i >= 2 && ys[i - 1] != ys[i - 2]) backToBack++;
 			}
-			if (maxStep > 1 || backToBack > 0)
-				DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} 连抬={backToBack} —— 边集出问题了");
+			if (maxStep > 1)
+				DiagLog.Write($"[hell-line] 坡度越界 maxStep={maxStep} —— 边集出问题了");
+			// 连爬有多长要看得见:改了 RunSlopeW 之后靠这个判断陡坡是不是真的分散开了
+			int runNow = 0, runMax = 0, steps = 0;
+			for (int i = 1; i < Length; i++)
+			{
+				if (ys[i] != ys[i - 1]) { steps++; runNow++; if (runNow > runMax) runMax = runNow; }
+				else runNow = 0;
+			}
+			DiagLog.Write($"[hell-line] 坡 抬升{steps}次/{Length}列 最长连爬={runMax}段 背靠背={backToBack}");
 
 			// 第一格放不出来的话整条线都白算 —— 所以把起点这一带【每一列】的锚点情况打全。
 			// 放方块要正交邻居:上下左右任一格有实心就贴得住。四周全空 = 悬在岩浆上,放不出来。
