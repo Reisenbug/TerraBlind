@@ -39,10 +39,28 @@ namespace TerraBlind
 		// 房间内的一格,用来给 NPC 指派住房(moveRoom 要房间【里面】的坐标,火把那格正好)
 		public static int TorchWx => _torchWx;
 		public static int TorchWy => _torchWy;
-		// 第 i 张椅子在哪一列 —— 放置和验收共用这一份。
-		// 以前放的是 Wx(LocalMax-3)、验的是 Wx(2+RoomWidth*i),单间差一格,靠 HasTypeNear 的
-		// ±1 容差才没报错;坐标算两遍迟早对不上
-		static int ChairCol(int i) => _rooms == 1 ? Wx(LocalMax - 3) : Wx(2 + RoomWidth * i);
+		// 第 i 张椅子在哪一列 —— 放置和验收共用这一份,别算两遍。
+		// 单间只有椅子+工作台,而工作台占【两列】、朝哪边展开要看当时的地形,写死哪一列迟早撞上
+		// (日志:占地=.../##./###/ reason=occupied,挥了半天放不上)。
+		// 所以实时扫 Wx(2..5),挑第一个空着的;都占了就退回 Wx(2) 让它照常报缺
+		static int ChairCol(int i)
+		{
+			if (_rooms != 1) return Wx(2 + RoomWidth * i);
+			for (int c = 2; c <= 5; c++)
+			{
+				int wx = Wx(c);
+				// 椅子自己已经在那儿了也算数,不然验收时会挑到别的空列
+				if (HasType(wx, _floorRow, T_CHAIR)) return wx;
+			}
+			// 判空只看有没有 tile:Vacant 还要求没背景墙,而椅子是【铺完墙】之后才验的,
+			// 用它会四列全判不空。椅子 1x1,但上面那格也得空着才立得住
+			for (int c = 2; c <= 5; c++)
+			{
+				int wx = Wx(c);
+				if (!Main.tile[wx, _floorRow].HasTile && !Main.tile[wx, _floorRow - 1].HasTile) return wx;
+			}
+			return Wx(2);
+		}
 		// 椅子那一列:晚上 NPC 坐在这儿,要把他捅下去就得挖【这一列】的地板
 		public static int ChairWx => ChairCol(0);
 		public static int ChairWy => _floorRow;
