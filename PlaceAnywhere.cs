@@ -27,6 +27,7 @@ namespace TerraBlind
 		private const int MaxCellFrames = 150;
 		private const int MaxRebuilds = 8;
 		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
+		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -69,12 +70,25 @@ namespace TerraBlind
 			=> Predicates.InBounds(x, y) && !Occupied(x, y)
 			   && !Predicates.IsLava(x, y) && !_bad.Contains((x, y));
 
-		// 从目标往回 BFS 到【任何一个已经有锚的空格】,得到一串要依次放的格子。
-		// 只走四邻 —— 锚也只认四邻。人身子占的格子不排除:放到跟前时人会让开。
+		// 先试【绕开身子】的一条,不行再退回原来那条。
+		// 原来一律不排除身体格,靠"到跟前人会让开" —— 可两侧悬空时根本让不开:
+		// 人跳上去 2 格,链上更高的格子又进了身体,于是跳→等151帧→重算,循环不停(日志里就是这样)
 		static bool Build(out string why)
+		{
+			if (BuildAvoid(true, out why)) return true;
+			return BuildAvoid(false, out why);
+		}
+
+		static bool BuildAvoid(bool avoidBody, out string why)
 		{
 			why = "";
 			_chain.Clear();
+			var pl = Main.LocalPlayer;
+			int bl0 = 0, br0 = -1, fy0 = 0;
+			if (avoidBody && pl != null)
+			{ var bc = Predicates.BodyCols(pl); bl0 = bc.left; br0 = bc.right; fy0 = ActExecutor.OriginCy(pl); }
+			bool InBodyCell(int x, int y)
+				=> avoidBody && x >= bl0 && x <= br0 && y <= fy0 && y >= fy0 - 2;
 			// 目标本身被拉黑 = 它反复放不上,再找路也是绕回它,直接认输
 			if (_bad.Contains((_tx, _ty))) { why = $"({_tx},{_ty})自己就放不上"; return false; }
 			if (HasAnchor(_tx, _ty)) { _chain.Add((_tx, _ty)); return true; }
@@ -95,6 +109,7 @@ namespace TerraBlind
 				{
 					var n = (cx + dx, cy + dy);
 					if (seen.Contains(n) || !Free(n.Item1, n.Item2)) continue;
+					if (InBodyCell(n.Item1, n.Item2)) continue;
 					seen.Add(n); prev[n] = (cx, cy); q.Enqueue(n);
 				}
 			}
@@ -166,8 +181,14 @@ namespace TerraBlind
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
-			// 还在身子里(上面在跳):等跳开,别往下走去放 —— 放不进自己的碰撞箱
-			if (InBody(p, x, y)) return;
+			// 还在身子里(上面在跳):落地了就立刻重算一条绕开身子的链,别干等到 MaxCellFrames。
+			// 日志里每次都白等 151 帧才 Retry —— 那就是"每爬2格停几秒"的来源
+			if (InBody(p, x, y))
+			{
+				if (p.velocity.Y == 0f && _cellFrames > JumpSettleFrames)
+				{ Retry($"({x},{y})跳完还在身子里,换条绕开的链"); return; }
+				return;
+			}
 			if (_bad.Contains((x, y))) { Retry($"({x},{y})让不开,绕路"); return; }
 
 			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
