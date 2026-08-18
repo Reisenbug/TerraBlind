@@ -335,6 +335,18 @@ namespace TerraBlind
 		{
 			if (Player != Main.LocalPlayer) return;
 
+			// 光标压在任何 UI 上(背包、别的模组的界面)时,原版把 mouseInterface 置真,
+			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410) ——
+			// 我们的动作全靠 controlUseItem,于是"用物品偶尔失效"。自动化在跑时清掉它
+			if (ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
+			    || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning)
+			{
+				if (Player.mouseInterface || Player.delayUseItem)
+					DiagLog.Write($"[ui-block] 光标压着UI,清掉拦截 mouseInterface={Player.mouseInterface} delayUse={Player.delayUseItem}");
+				Player.mouseInterface = false;
+				Player.delayUseItem = false;
+			}
+
 			if (JumpPlaceEnabled)
 			{
 				bool atPeak = _prevVy < 0f && Player.velocity.Y >= 0f;
