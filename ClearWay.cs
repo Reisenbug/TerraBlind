@@ -35,12 +35,16 @@ namespace TerraBlind
 		}
 
 		// 前进方向那一列,身子占的 3 行里有实心就挖掉。挖了返回 true(这一帧别再按方向键)
+		// 【不挖脚那一行】:一格高的台阶就在 fy,跳一下就上去,挖它等于把路拆了。
+		// 日志:刚放好的衔接方块(910,1037) 40帧后被当"挡路"挖掉,桥就断在那儿
 		public static bool Forward(Player p, int dir, string why = "挡路")
 		{
 			var (bl, br) = Predicates.BodyCols(p);
 			int col = dir > 0 ? br + 1 : bl - 1;
 			int fy = ActExecutor.OriginCy(p);
-			for (int r = 0; r < 3; r++)
+			// 台阶只有一格高就别动它;两格及以上人跳不过去,那才是真挡路
+			bool step = Predicates.IsWall(col, fy) && !Predicates.IsWall(col, fy - 1);
+			for (int r = step ? 1 : 0; r < 3; r++)
 				if (Dig(p, col, fy - r, why)) return true;
 			return false;
 		}

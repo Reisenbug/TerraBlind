@@ -157,6 +157,17 @@ namespace TerraBlind
 			{
 				// 走不动的头号原因是地形挡着 —— 当场挖开,别等 WalkStallLimit(120帧)超时退出
 				// 再由上层去挖。日志里那 163 帧的停顿就是这么来的
+				// 前面是一格高的台阶(桥面抬升处)就跳上去 —— 那是路,不是障碍。
+				// BridgeBuilder 原本完全不会跳,只能干等到超时,所以"挖掉"才成了唯一出路
+				var (jl, jr) = Predicates.BodyCols(p);
+				int fcol = _dir > 0 ? jr + 1 : jl - 1;
+				int fy2 = ActExecutor.OriginCy(p);
+				if (Predicates.IsGround(fcol, fy2) && !Predicates.IsWall(fcol, fy2 - 1))
+				{
+					p.controlJump = true;
+					if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
+					return;
+				}
 				// 挖归挖,但不能靠它无限续命:挖了也清零 _walkStall 的话,挖不穿就永远不超时
 				if (++_digStall < DigStallLimit && ClearWay.Forward(p, _dir)) return;
 				if (advance && ++_walkStall >= WalkStallLimit) { Reason = "walk_blocked"; Finish("stuck"); return; }
