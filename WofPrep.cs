@@ -207,7 +207,9 @@ namespace TerraBlind
 						return;
 					}
 					if (_frames > 60 * 300) { Fail("走不开"); return; }
-					RecedingNav.Start(_houseWx + _bridgeDir * WalkAwayTiles, _houseWy, RecedingNav.Mode.Reach);
+					// 只要求 x 走够 80 格,y 不管 —— 站在桥上就行。
+					// 原来传 _houseWy(火把那一行,在房子里面),桥面比它低几行,等于让寻路去够一个用不着的高度
+					RecedingNav.Start(_houseWx + _bridgeDir * WalkAwayTiles, ActExecutor.OriginCy(p), RecedingNav.Mode.Reach);
 					return;
 				}
 
