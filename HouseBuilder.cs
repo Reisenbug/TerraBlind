@@ -504,9 +504,10 @@ namespace TerraBlind
 						_fixTried = true;
 						// 先补结构:地板/屋顶/柱子缺一格,NPC 判定就不认。
 						// 补法和铺桥面完全一样 —— PlaceAnywhere 够不着会自己走、没锚会自己造
-						if (_fixTiles.Count > 0 || _fixWalls.Count > 0)
+						if (_fixTiles.Count > 0 || _fixWalls.Count > 0 || _fixDig.Count > 0)
 						{
-							DiagLog.Write($"[house] 验收缺 {missing} → 补结构 方块{_fixTiles.Count}格 墙{_fixWalls.Count}格");
+							_digTries = 0;
+							DiagLog.Write($"[house] 验收缺 {missing} → 补结构 方块{_fixTiles.Count}格 墙{_fixWalls.Count}格 挖{_fixDig.Count}格");
 							_fixTileIdx = 0;
 							Advance(Ph.FixStruct);
 							return;
@@ -532,7 +533,24 @@ namespace TerraBlind
 				// 结构补格:一格一格交给 PlaceAnywhere(和铺桥面同一套),补完再补墙,然后回去重验
 				case Ph.FixStruct:
 				{
-					if (PlaceAnywhere.IsRunning || PlaceWalls.IsRunning) return;
+					if (PlaceAnywhere.IsRunning || PlaceWalls.IsRunning || ItemUseCoordinator.IsActive) return;
+					// 先挖通内腔:里面堵着石头,墙铺上去也没用,原版 CheckRoom 照样不认
+					while (_fixDig.Count > 0)
+					{
+						var (dx4, dy4) = _fixDig[_fixDig.Count - 1];
+						if (!Predicates.IsWall(dx4, dy4))
+						{ _fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0; continue; }
+						// 没镐/挖不动就别死磕这一格,记一笔跳过去,不然每帧卡在同一格
+						if (++_digTries > MaxDigTries)
+						{
+							DiagLog.Write($"[house] ({dx4},{dy4})挖不掉,跳过");
+							_fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0; continue;
+						}
+						if (ClearWay.Dig(p, dx4, dy4, "房内堵着")) return;
+						// 够不着就走过去 —— 房子就这么大,横向挪一挪必定能够着
+						if (ActExecutor.OriginCx(p) < dx4) p.controlRight = true; else p.controlLeft = true;
+						return;
+					}
 					while (_fixTileIdx < _fixTiles.Count)
 					{
 						var (fx2, fy2) = _fixTiles[_fixTileIdx];
@@ -636,7 +654,10 @@ namespace TerraBlind
 		// 结构缺格分两类:方块类(地板/屋顶/柱子)交给 PlaceAnywhere,背景墙交给 PlaceWalls
 		static readonly List<(int wx, int wy)> _fixTiles = new();
 		static readonly List<(int wx, int wy)> _fixWalls = new();
+		static readonly List<(int wx, int wy)> _fixDig = new();   // 内腔里不该有的块,要挖掉
 		static int _fixTileIdx;
+		static int _digTries;
+		const int MaxDigTries = 60 * 10;   // 一格挖 10 秒还不掉,那就是挖不动
 		static bool _fixTried;   // 只补一轮,补完还缺就认输,不来回补个没完
 		static int _reclaimTries;
 		const int MaxReclaim = 6;
@@ -664,7 +685,7 @@ namespace TerraBlind
 		static string AuditHouse()
 		{
 			var bad = new List<string>();
-			_fixList.Clear(); _fixTiles.Clear(); _fixWalls.Clear(); _fixTileIdx = 0;
+			_fixList.Clear(); _fixTiles.Clear(); _fixWalls.Clear(); _fixDig.Clear(); _fixTileIdx = 0;
 			for (int i = 0; i < ChairCount; i++)
 			{
 				int wx = ChairCol(i);
@@ -679,15 +700,24 @@ namespace TerraBlind
 			// 不然一间缺 20 格就刷 20 行
 			for (int r = 0; r < _rooms; r++)
 			{
-				int col1 = 1 + RoomWidth * r, wmiss = 0;
+				int col1 = 1 + RoomWidth * r, wmiss = 0, cmiss = 0;
 				foreach (var (dr, dc) in WallOrder)
 				{
 					int wx = Wx(col1 + (dc - 1)), wy = _roofRow + dr;
+					// 内腔里【不该有】的东西也要查:原版 StartRoomCheck 从这儿洪泛,
+					// 起点是实心直接判死(RoomCheckStartedInASolidTile),中间有块会把空间切碎。
+					// 家具是 tileFrameImportant,不算堵;平台也不挡,所以只认 IsWall
+					if (Predicates.IsWall(wx, wy) && !Main.tileFrameImportant[Main.tile[wx, wy].TileType])
+					{
+						if (++cmiss <= 3) bad.Add($"堵({wx},{wy})");
+						_fixDig.Add((wx, wy));
+					}
 					if (Main.tile[wx, wy].WallType != 0) continue;
 					if (++wmiss <= 3) bad.Add($"墙({wx},{wy})");
 					_fixWalls.Add((wx, wy));
 				}
 				if (wmiss > 3) bad.Add($"第{r + 1}间墙还缺{wmiss - 3}处");
+				if (cmiss > 3) bad.Add($"第{r + 1}间还堵{cmiss - 3}处");
 				// 火把不在这儿验:每间放完当场就查过一次(Ph.Torch),那时候 _torchWx/_torchWy 还是那一间的。
 				// 事后按公式反推 _roofRow 算出来的是另一格,四间齐全的房子会被报成缺火把。
 			}
@@ -704,7 +734,7 @@ namespace TerraBlind
 			// 结构缺了没法补(_fixList 只装家具),但也不该把整栋判死 —— 房子合不合格
 			// 最终由原版 moveRoom 说了算。所以只在【有家具可补】时才当作失败去补,否则只警告
 			// 家具没缺、只缺结构:也别放着不管,走 FixStruct 用 PlaceAnywhere/PlaceWalls 补
-			if (_fixList.Count == 0 && (_fixTiles.Count > 0 || _fixWalls.Count > 0)) return all;
+			if (_fixList.Count == 0 && (_fixTiles.Count > 0 || _fixWalls.Count > 0 || _fixDig.Count > 0)) return all;
 			return bad.Count > 6 ? $"缺{bad.Count}处 {string.Join(" ", bad.GetRange(0, 6))}…" : all;
 		}
 
