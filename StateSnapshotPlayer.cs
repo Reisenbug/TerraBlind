@@ -36,6 +36,7 @@ namespace TerraBlind
 		private static (int x, int y)? _pendingStand;
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
 		private static int _deckFrom;   // 房子沿线挪过之后,桥要从房子右端接着铺
+		private static bool _wofAfterDeck;   // 桥铺完接着走肉山那一套
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -103,7 +104,10 @@ namespace TerraBlind
 					int from = _deckFrom;
 					DiagLog.Write($"[reach-test] 房子好了,开始铺桥 从i={from}/{line.Count}");
 					if (DeckBuilder.Start("", line, from, out string dw))
+					{
 						Main.NewText($"[TerraBlind] 铺桥 {line.Count - from}格", 120, 255, 120);
+						_wofAfterDeck = true;
+					}
 					else
 						Main.NewText($"[TerraBlind] 铺不了:{dw}", 255, 120, 120);
 				}
@@ -253,9 +257,18 @@ namespace TerraBlind
 					{
 						// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
 						// 复用地表选址找块干净的,再从那儿重算整条线 —— 房子和桥就天然对齐
-						if (Predicates.ScanHouse(rr.HouseX, rr.HouseY, HouseBuilder.RoomWidth + 1, 10, 24,
-						        out int cx0, out int cy0, out int sc0, false)
-						    && (cx0 != rr.HouseX || cy0 != rr.HouseY))
+						// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
+						// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
+						int hw1 = HouseBuilder.RoomWidth + 1;
+						bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+							out int cx0, out int cy0, out int sc0, false, true);
+						if (!got)
+						{
+							DiagLog.Write($"[reach-test] 附近没有【岩浆上】的干净房址(扫了{sc0}),退回不要求岩浆");
+							got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+								out cx0, out cy0, out sc0, false);
+						}
+						if (got && (cx0 != rr.HouseX || cy0 != rr.HouseY))
 						{
 							DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
 							var rr2 = HellLine.Compute(cx0, rdir, cy0);
@@ -459,6 +472,19 @@ namespace TerraBlind
 			// this frame is driven immediately; it writes no controls itself.
 			if (HouseBuilder.IsRunning) HouseBuilder.Tick();
 			if (DeckBuilder.IsRunning) DeckBuilder.Tick();
+			// 桥铺完 → 肉山那一套(等天黑→买雷管→换向导→捅进岩浆)
+			if (_wofAfterDeck && !DeckBuilder.IsRunning && !WofPrep.IsRunning)
+			{
+				_wofAfterDeck = false;
+				if (DeckBuilder.Outcome == "done")
+				{
+					int wdir = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
+					if (WofPrep.Start(HouseBuilder.TorchWx, HouseBuilder.TorchWy, wdir, out string ww))
+						Main.NewText("[TerraBlind] 桥好了,开始肉山流程", 120, 255, 120);
+					else Main.NewText($"[TerraBlind] 起不了:{ww}", 255, 120, 120);
+				}
+			}
+			if (WofPrep.IsRunning) WofPrep.Tick();
 
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)

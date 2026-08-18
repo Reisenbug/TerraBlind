@@ -185,10 +185,24 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// 脚下一路往下是不是岩浆(中间隔着石头就不算 —— 那是地,不是悬空在岩浆上)。
+		// 杀向导要靠这个:挖开他脚下他才掉得进去
+		public const int LavaProbeDepth = 30;
+		public static bool LavaBelow(int x, int y)
+		{
+			for (int k = 1; k <= LavaProbeDepth; k++)
+			{
+				if (IsLava(x, y + k)) return true;
+				if (IsSolid(x, y + k)) return false;
+			}
+			return false;
+		}
+
 		// 向外扫最近的房址:(x,y)=左下角,往右 w 列往上 h 行(含自己)必须全空,外加左下角要够得着
 		// needLadder=false:地狱起点悬空,底下常是岩浆,要梯子就一个候选都选不出(锚是人造的)
+		// needLava=true:整排底下必须是岩浆 —— 肉山那套要把向导从房里捅下去
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
-			out int hitX, out int hitY, out int scanned, bool needLadder = true)
+			out int hitX, out int hitY, out int scanned, bool needLadder = true, bool needLava = false)
 		{
 			hitX = hitY = -1; scanned = 0;
 			for (int d = 0; d <= range; d++)
@@ -210,6 +224,13 @@ namespace TerraBlind
 								for (int iy = 0; iy < h && ok; iy++)
 									if (!Vacant(x + ix, y - iy)) ok = false;
 							if (!ok) continue;
+							if (needLava)
+							{
+								bool allLava = true;
+								for (int ix = 0; ix < w && allLava; ix++)
+									if (!LavaBelow(x + ix, y)) allLava = false;
+								if (!allLava) continue;
+							}
 							// 最后再查邪恶:要扫 71x60,比前面几条贵得多,让便宜的先筛
 							if (EvilNearby(x, y, w, h, EvilClearR)) continue;
 							hitX = x; hitY = y;
