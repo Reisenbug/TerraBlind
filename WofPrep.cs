@@ -44,13 +44,16 @@ namespace TerraBlind
 		// 挖掉的格子,存【完整坐标】。原来只存行号、列共用一个 _dugCol,
 		// 而向导每挖一格就移位,三格挖在三列上(日志:3931/3930/3929),补回来的只有一格
 		static readonly System.Collections.Generic.List<(int x, int y)> _dug = new();
+		// 站定挖洞时脚下那一行。向导掉下去之后【绝不能跟着他往下走】——
+		// 日志:向导落到 1062,寻路算出 jump→(3470,1059) H=0 代价-4.6,人就跟着跳进坑里上不来了
+		static int _deckRow = -1;
 
 		public static bool Start(int houseWx, int houseWy, int bridgeDir, out string why)
 		{
 			why = "";
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
-			_frames = 0; _dug.Clear();
+			_frames = 0; _dug.Clear(); _deckRow = -1;
 			Outcome = "running"; Reason = "";
 			Phase = Ph.WaitNight;
 			DiagLog.Write($"[wof] start 房间({houseWx},{houseWy}) 桥方向={_bridgeDir}");
@@ -218,6 +221,9 @@ namespace TerraBlind
 					{
 						if (!AtHome(NPCID.Guide))
 						{ if (_frames % 300 == 1) DiagLog.Write("[wof] 已走远,等向导传送回家"); return; }
+						if (p.velocity.Y != 0f) return;               // 落地了才记桥面,半空记的是错的
+						_deckRow = ActExecutor.OriginCy(p);
+						DiagLog.Write($"[wof] 桥面记作{_deckRow}行,再往下不去");
 						Go(Ph.BackToGuide);
 						return;
 					}
@@ -239,6 +245,10 @@ namespace TerraBlind
 					var gn0 = Main.npc[g0];
 					int fx = (int)(gn0.Center.X / 16f);
 					int fy0 = (int)((gn0.position.Y + gn0.height + 2f) / 16f);
+					// 向导已经掉到桥面以下 = 活儿干完了,他正在往岩浆里落。
+					// 【绝不跟下去】:下面没有回得来的路,人一跳就出不来
+					if (_deckRow >= 0 && fy0 > _deckRow + 1)
+					{ DiagLog.Write($"[wof] 向导掉到{fy0}行(桥面{_deckRow}),不追了,去补洞"); Go(Ph.Patch); return; }
 					// 够得着【而且脚踏实地】才开工。只判够得着的话人会停在半空,一飘就出range,
 					// 于是 DigUnder↔BackToGuide 来回跳(日志:8243/8332/8601)
 					if (p.velocity.Y == 0f
@@ -263,10 +273,23 @@ namespace TerraBlind
 					int gx = (int)(gn.Center.X / 16f);
 					int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
 					if (Predicates.IsLava(gx, gy) || gn.life <= 0) { Go(Ph.Patch); return; }
+					if (_deckRow >= 0 && gy > _deckRow + 1)
+					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
 					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥
 					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 					{ Go(Ph.BackToGuide); return; }
+					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
+					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
+					var (mbl, mbr) = Predicates.BodyCols(p);
+					if (gx >= mbl && gx <= mbr)
+					{
+						if (SettleAt.IsRunning) return;
+						int away = gx - _bridgeDir * 2;
+						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导({gx})在人脚下(身{mbl}..{mbr}),先让到{away}");
+						SettleAt.Start(away, out _);
+						return;
+					}
 					if (ItemUseCoordinator.IsActive) return;
 					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
 					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
