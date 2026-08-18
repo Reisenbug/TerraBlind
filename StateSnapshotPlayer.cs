@@ -66,7 +66,8 @@ namespace TerraBlind
 						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
 			}
-			if (_pendingAnchor.HasValue && !RecedingNav.Active && !PlaceAnywhere.IsRunning)
+			// ReachCell 也要等 —— 换了执行器却只等 RecedingNav 的话,人还在铺路就被当成到位了
+			if (_pendingAnchor.HasValue && !RecedingNav.Active && !ReachCell.IsRunning && !PlaceAnywhere.IsRunning)
 			{
 				var (ax, ay) = _pendingAnchor.Value;
 				_pendingAnchor = null;
@@ -292,7 +293,17 @@ namespace TerraBlind
 						}
 						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 						PathVisSystem.SetDeck(rv, 60 * 60 * 20);
-						RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
+						// 地狱里目标几乎全悬空,通用寻路到不了 —— 它只会在【已有的地】上走跳,
+						// 于是爬过头再也下不来(日志:目标1044,人爬到1026卡死)。
+						// ReachCell 用三个自造落脚点的原语一次消一个方向:升 pillar、降 platdown、
+						// 横向 bridge。悬空天然可达,而且不可能爬过目标行
+						int rbslot = HellBridge.FindBlockSlot(rp, out _);
+						string rblk = rbslot >= 0 ? rp.inventory[rbslot].type.ToString() : "9";
+						if (!ReachCell.Start("94", rblk, rsx, rsy, out string rcw))
+						{
+							DiagLog.Write($"[reach-test] ReachCell 起不来({rcw}),退回通用寻路");
+							RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
+						}
 						_pendingAnchor = (rsx, rsy);
 							_pendingDeck = rr.Line;
 						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
