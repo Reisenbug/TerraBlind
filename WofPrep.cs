@@ -40,15 +40,16 @@ namespace TerraBlind
 		static int _houseWx, _houseWy;   // 房间内一格(火把那格)
 		static int _bridgeDir;           // 桥往哪边延伸
 		static int _frames;
-		static int[] _dug = new int[3];  // 挖掉的格子(补回来用)
-		static int _dugN, _dugCol;
+		// 挖掉的格子,存【完整坐标】。原来只存行号、列共用一个 _dugCol,
+		// 而向导每挖一格就移位,三格挖在三列上(日志:3931/3930/3929),补回来的只有一格
+		static readonly System.Collections.Generic.List<(int x, int y)> _dug = new();
 
 		public static bool Start(int houseWx, int houseWy, int bridgeDir, out string why)
 		{
 			why = "";
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
-			_frames = 0; _dugN = 0;
+			_frames = 0; _dug.Clear();
 			Outcome = "running"; Reason = "";
 			Phase = Ph.WaitNight;
 			DiagLog.Write($"[wof] start 房间({houseWx},{houseWy}) 桥方向={_bridgeDir}");
@@ -243,14 +244,13 @@ namespace TerraBlind
 					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 					{ Go(Ph.BackToGuide); return; }
 					if (ItemUseCoordinator.IsActive) return;
-                    // 记下挖了哪些,等下要原样补回去
-					if (_dugN == 0) _dugCol = gx;
+					// 挖了就记,一格都不能漏 —— 漏掉的就是桥面上永远补不回的洞
 					for (int k = 0; k < 3; k++)
 					{
 						int dy = gy + k;
 						if (!Predicates.IsSolid(gx, dy)) continue;
 						if (!ClearWay.Dig(p, gx, dy, "捅向导")) return;
-						if (_dugN < 3) _dug[_dugN++] = dy;
+						if (!_dug.Contains((gx, dy))) _dug.Add((gx, dy));
 						return;
 					}
 					return;
@@ -260,13 +260,22 @@ namespace TerraBlind
 				case Ph.Patch:
 				{
 					if (PlaceAnywhere.IsRunning) return;
-					if (_dugN == 0) { Go(Ph.WaitWof); return; }
-					int dy2 = _dug[_dugN - 1];
-					if (Predicates.IsSolid(_dugCol, dy2)) { _dugN--; return; }
-					if (_frames > 60 * 300) { Fail($"补不回({_dugCol},{dy2})"); return; }
+					if (_dug.Count == 0) { Go(Ph.WaitWof); return; }
+					// 先补【离人最近】的那格:从最远的补起,人得走过去,而脚下的洞还没补,容易掉下去
+					int pick = 0, pbest = int.MaxValue;
+					int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
+					for (int i = 0; i < _dug.Count; i++)
+					{
+						int d2 = System.Math.Abs(_dug[i].x - pcx) + System.Math.Abs(_dug[i].y - pcy);
+						if (d2 < pbest) { pbest = d2; pick = i; }
+					}
+					var (px2, py2) = _dug[pick];
+					if (Predicates.IsSolid(px2, py2)) { _dug.RemoveAt(pick); return; }
+					if (_frames > 60 * 300) { Fail($"补不回({px2},{py2}),还剩{_dug.Count}格"); return; }
+					if (_dug.Count > 0 && _frames % 120 == 1) DiagLog.Write($"[wof] 补洞({px2},{py2}) 还剩{_dug.Count}格");
 					int bid = DeckBuilder.PickBlock();
 					if (bid < 0) { DiagLog.Write("[wof] 没方块补洞了,先放着"); Go(Ph.WaitWof); return; }
-					PlaceAnywhere.Start(bid.ToString(), _dugCol, dy2, out _);
+					PlaceAnywhere.Start(bid.ToString(), px2, py2, out _);
 					return;
 				}
 
