@@ -39,6 +39,10 @@ namespace TerraBlind
 		// 房间内的一格,用来给 NPC 指派住房(moveRoom 要房间【里面】的坐标,火把那格正好)
 		public static int TorchWx => _torchWx;
 		public static int TorchWy => _torchWy;
+		// 椅子那一列:晚上 NPC 坐在这儿,要把他捅下去就得挖【这一列】的地板。
+		// 单间椅子放在 Wx(LocalMax-3),地板在它下面一行
+		public static int ChairWx => Wx(LocalMax - 3);
+		public static int ChairWy => _floorRow;
 
 		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
 		const int H_FLOOR = 94;       // 木平台
@@ -541,6 +545,15 @@ namespace TerraBlind
 			Outcome = "done"; _ph = Ph.Done;
 			DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
 			Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
+			// 椅子底下必须是岩浆:晚上 NPC 坐椅子上,捅他就是挖【椅子这一列】的地板。
+			// 不合格不算盖房失败,但要当场说 —— 否则要等到最后一步才发现白忙
+			if (_rooms == 1)
+			{
+				bool chairLava = Predicates.LavaBelow(ChairWx, ChairWy + 1);
+				DiagLog.Write($"[house] 椅子({ChairWx},{ChairWy}) 底下是岩浆={chairLava}");
+				if (!chairLava)
+					Main.NewText($"[TerraBlind] 注意:椅子({ChairWx},{ChairWy})底下不是岩浆,捅不下去", 255, 200, 120);
+			}
 			// 盖完就把爆破专家指过来。房子合不合格由原版判,失败信息说明差什么
 			if (_rooms == 1)
 			{
