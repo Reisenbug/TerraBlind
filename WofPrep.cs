@@ -59,6 +59,19 @@ namespace TerraBlind
 
 		public static void Stop() { if (Outcome == "running") Outcome = "stopped"; Phase = Ph.Idle; }
 
+		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
+		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
+		const int DeckScan = 12;
+		static int DeckRow(int cx, int fromCy)
+		{
+			for (int y = fromCy; y < fromCy + DeckScan; y++)
+			{
+				if (Predicates.IsLava(cx, y)) return -1;
+				if (Predicates.IsGround(cx, y)) return y - 1;
+			}
+			return -1;
+		}
+
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 		static void Go(Ph next) { Phase = next; _frames = 0; DiagLog.Write($"[wof] → {next}"); }
 
@@ -209,9 +222,12 @@ namespace TerraBlind
 						return;
 					}
 					if (_frames > 60 * 300) { Fail("走不开"); return; }
-					// 只要求 x 走够 80 格,y 不管 —— 站在桥上就行。
-					// 原来传 _houseWy(火把那一行,在房子里面),桥面比它低几行,等于让寻路去够一个用不着的高度
-					RecedingNav.Start(_houseWx + _bridgeDir * WalkAwayTiles, ActExecutor.OriginCy(p), RecedingNav.Mode.Reach);
+					// 【必须真站上桥面】。Reach 只要伸手够得着就算到,人常停在桥面上方三四行的
+					// 空中(日志:goal=(3466,1049) 人=(3463,1046)),接下来挖向导脚下就够不着了。
+					int dstCx = _houseWx + _bridgeDir * WalkAwayTiles;
+					int deck = DeckRow(dstCx, ActExecutor.OriginCy(p));
+					if (deck < 0) { Fail($"列{dstCx}底下找不到桥面"); return; }
+					RecedingNav.Start(dstCx, deck, RecedingNav.Mode.Stand);
 					return;
 				}
 
@@ -223,11 +239,18 @@ namespace TerraBlind
 					var gn0 = Main.npc[g0];
 					int fx = (int)(gn0.Center.X / 16f);
 					int fy0 = (int)((gn0.position.Y + gn0.height + 2f) / 16f);
-					if (p.IsInTileInteractionRange(fx, fy0, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					// 够得着【而且脚踏实地】才开工。只判够得着的话人会停在半空,一飘就出range,
+					// 于是 DigUnder↔BackToGuide 来回跳(日志:8243/8332/8601)
+					if (p.velocity.Y == 0f
+						&& p.IsInTileInteractionRange(fx, fy0, Terraria.DataStructures.TileReachCheckSettings.Simple))
 					{ RecedingNav.Stop(); Go(Ph.DigUnder); return; }
 					if (RecedingNav.Active) return;
 					if (_frames > 60 * 300) { Fail("回不到向导跟前"); return; }
-					RecedingNav.Start(fx, fy0 - 1, RecedingNav.Mode.Reach);
+					// 站到向导【旁边】那一列的桥面上:站他自己那列的话挖脚下会把自己也带下去
+					int side = fx - _bridgeDir * 2;
+					int sdeck = DeckRow(side, ActExecutor.OriginCy(p));
+					if (sdeck < 0) { RecedingNav.Start(fx, fy0 - 1, RecedingNav.Mode.Reach); return; }
+					RecedingNav.Start(side, sdeck, RecedingNav.Mode.Stand);
 					return;
 				}
 
