@@ -195,8 +195,9 @@ namespace TerraBlind
 					for (int k = 0; k < HouseW; k++) if (LavaBelow(x + dir * k, y0)) lav++;
 					if (pass == 0 && lav < HouseW) continue;   // 头一遍只要整排都在岩浆上的
 					float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
-					int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
-					int score = centerPts - System.Math.Abs(d) * StartNearW;
+					// 就近不就价:只按离人远近挑。居中分再高也没用 —— 人得先徒步走过去,
+					// 而在地狱里每多走一格都是掉岩浆的机会
+					int score = -System.Math.Abs(d);
 					if (score > bestScore)
 					{ bestScore = score; sx = x; bestClear = f0 - c0; bestRel = rel; bestRow = y0; bestLava = lav; }
 				}
@@ -372,8 +373,10 @@ namespace TerraBlind
 				$"离人{bestD}格 往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
 
 			res.Found = true;
-			// 起点 = 桥的第一格,在房子【外面】。房子占头 HouseW 列,人先盖房子再从房子边上往外铺。
-			res.StartX = sx + dir * HouseW; res.StartY = ys[HouseW];
+			// 起点 = 房子【靠玩家】那一角(Line[0])。从右往左依次是:玩家、房子、桥。
+			// 原来指到 sx+dir*HouseW(房子外侧,桥那头),人得先穿过房子那 6 列才能开工,
+			// 等于踩在桥的位置上,把桥下方的岩浆挡住
+			res.StartX = sx; res.StartY = ys[0];
 			res.Cost = endC; res.DigCells = digTotal;
 			PickHouse(ref res, sx, dir, ys, ceilA);
 			return res;

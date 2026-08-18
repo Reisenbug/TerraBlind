@@ -21,6 +21,8 @@ namespace TerraBlind
 		private float _prevVy;
 		private static int _bridgeStartTick;   // 测铺路用时:开工那一帧,铺完报一次
 		public static bool JumpPlaceEnabled = false;
+		static bool _uiBlocking;
+		static uint _uiBlockFrom;
 		public static bool WalkTraceEnabled = false;
 		private bool _jumpPlaceFired;
 		// 后台扫房址的结果。画图和 nav 都只能在主线程碰,所以后台只放结论,下一帧再消费。
@@ -357,8 +359,15 @@ namespace TerraBlind
 			// 所以这里清掉的正是那些门本帧要读的值
 			if (TbAutoActive())
 			{
-				if (Player.delayUseItem || Player.mouseInterface)
-					DiagLog.Write($"[ui-block] 清拦截 delayUse={Player.delayUseItem} mouseIface={Player.mouseInterface}");
+				// 只在【开始拦】和【拦完了】各记一行。原来每帧一行,光标往背包上一放就是几百行,
+				// 895 行日志里 670 行是它,真正的事件全被冲掉了
+				bool blocking = Player.delayUseItem || Player.mouseInterface;
+				if (blocking != _uiBlocking)
+				{
+					_uiBlocking = blocking;
+					if (blocking) { _uiBlockFrom = Main.GameUpdateCount; DiagLog.Write($"[ui-block] 开始拦 delayUse={Player.delayUseItem} mouseIface={Player.mouseInterface}"); }
+					else DiagLog.Write($"[ui-block] 拦完了 共{Main.GameUpdateCount - _uiBlockFrom}帧");
+				}
 				Player.delayUseItem = false;
 				Player.mouseInterface = false;
 				Main.HoveringOverAnNPC = false;         // 也拦 controlUseTile(29679)

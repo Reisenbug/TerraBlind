@@ -600,7 +600,25 @@ namespace TerraBlind
         const int LavaVoidProbe = 40;
         static (int, int) _gateLogCell = (int.MinValue, int.MinValue);
 
+        // 每条边的【落点】都要能站人。模拟器把岩浆当空气,所以落进岩浆的边看起来一切正常 ——
+        // 20 处 yield return 逐个判会漏,统一在出口拦一次。
+        // 判据是"站不住【而且】底下悬着岩浆":地狱里桥面本来就悬在岩浆上方,
+        // 只判"底下有岩浆"的话人连自己的桥和房子都上不去
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
+            PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
+        {
+            foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
+            {
+                var (ex, ey) = StandCell(e.next.Px, e.next.Py);
+                if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
+                // pillar/place 是【自己造落脚点】,落点当然还没有地 —— 它们不受这条限制。
+                // 真正要拦的是 walk/jump/fall 这种"指望那儿本来就有地"的边
+                if (!e.pillar && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
+                yield return e;
+            }
+        }
+
+        static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> ExpandRaw(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
             if (!cur.Grounded) yield break;
