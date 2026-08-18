@@ -37,6 +37,8 @@ namespace TerraBlind
 		private static int _reachStall;          // 手够不着、脚又走不动 = 真卡住了
 
 		private const int WalkStallLimit = 120;
+		private static int _digStall;
+		private const int DigStallLimit = 60 * 20;   // 挖 20 秒还没通,那就是真过不去
 		private const int ReachStallLimit = 240;
 
 		public static bool IsRunning => _ph == Ph.Lay;
@@ -69,7 +71,7 @@ namespace TerraBlind
 			// needs no drop or jump.
 			_rowWy = startWy != int.MinValue ? startWy : ActExecutor.OriginCy(p) + 1;
 			_targetWx = startWx != int.MinValue ? startWx : ActExecutor.OriginCx(p) + _dir;
-			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0;
+			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0; _digStall = 0;
 			DiagLog.Write($"[bridge] start {itemName} dir={dir} n={_want} slot={_slot} row={_rowWy} from={_targetWx}");
 			return true;
 		}
@@ -150,9 +152,13 @@ namespace TerraBlind
 
 			// 卡死:手够不着、脚又没挪窝,才是真卡住。
 			int cx = ActExecutor.OriginCx(p);
-			if (cx != _lastOriginCx) { _lastOriginCx = cx; _walkStall = 0; _reachStall = 0; }
+			if (cx != _lastOriginCx) { _lastOriginCx = cx; _walkStall = 0; _reachStall = 0; _digStall = 0; }
 			else
 			{
+				// 走不动的头号原因是地形挡着 —— 当场挖开,别等 WalkStallLimit(120帧)超时退出
+				// 再由上层去挖。日志里那 163 帧的停顿就是这么来的
+				// 挖归挖,但不能靠它无限续命:挖了也清零 _walkStall 的话,挖不穿就永远不超时
+				if (++_digStall < DigStallLimit && ClearWay.Forward(p, _dir)) return;
 				if (advance && ++_walkStall >= WalkStallLimit) { Reason = "walk_blocked"; Finish("stuck"); return; }
 				if (!inReach && ++_reachStall >= ReachStallLimit) { Reason = "cant_reach_edge"; Finish("stuck"); return; }
 			}
