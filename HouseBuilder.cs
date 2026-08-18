@@ -39,9 +39,12 @@ namespace TerraBlind
 		// 房间内的一格,用来给 NPC 指派住房(moveRoom 要房间【里面】的坐标,火把那格正好)
 		public static int TorchWx => _torchWx;
 		public static int TorchWy => _torchWy;
-		// 椅子那一列:晚上 NPC 坐在这儿,要把他捅下去就得挖【这一列】的地板。
-		// 单间椅子放在 Wx(LocalMax-3),地板在它下面一行
-		public static int ChairWx => Wx(LocalMax - 3);
+		// 第 i 张椅子在哪一列 —— 放置和验收共用这一份。
+		// 以前放的是 Wx(LocalMax-3)、验的是 Wx(2+RoomWidth*i),单间差一格,靠 HasTypeNear 的
+		// ±1 容差才没报错;坐标算两遍迟早对不上
+		static int ChairCol(int i) => _rooms == 1 ? Wx(LocalMax - 3) : Wx(2 + RoomWidth * i);
+		// 椅子那一列:晚上 NPC 坐在这儿,要把他捅下去就得挖【这一列】的地板
+		public static int ChairWx => ChairCol(0);
 		public static int ChairWy => _floorRow;
 
 		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
@@ -434,7 +437,7 @@ namespace TerraBlind
 					}
 					// 椅子放在工作台旁边那格(人现在就站这儿)
 					Advance(Ph.Chairs);
-					if (!Need(PlaceAction.Start(H_CHAIR.ToString(), Wx(LocalMax - 3), _floorRow, 1, 0, 0, true, out string wc0),
+					if (!Need(PlaceAction.Start(H_CHAIR.ToString(), ChairCol(0), _floorRow, 1, 0, 0, true, out string wc0),
 						"放椅子", wc0)) return;
 					return;
 				}
@@ -587,13 +590,31 @@ namespace TerraBlind
 		static int _reclaimTries;
 		const int MaxReclaim = 6;
 
+		// 结构验收就这一份:所有部件都是"一条线段上每一格都得有东西"。
+		// 地板/屋顶是横线,主柱/支柱是竖线,判据只差 solid 还是 wall。
+		// 各写一套的下场已经见过:椅子放 Wx(3) 验 Wx(2),靠 ±1 容差才没炸
+		static int CheckLine(List<string> bad, string name, int x0, int y0, int dx, int dy, int n, bool wall)
+		{
+			int miss = 0;
+			for (int k = 0; k < n; k++)
+			{
+				int wx = x0 + dx * k, wy = y0 + dy * k;
+				bool ok = wall ? Main.tile[wx, wy].WallType != 0 : Predicates.IsGround(wx, wy);
+				if (ok) continue;
+				miss++;
+				if (miss <= 3) bad.Add($"{name}({wx},{wy})");
+			}
+			if (miss > 3) bad.Add($"{name}还缺{miss - 3}处");
+			return miss;
+		}
+
 		static string AuditHouse()
 		{
 			var bad = new List<string>();
 			_fixList.Clear();
 			for (int i = 0; i < ChairCount; i++)
 			{
-				int wx = Wx(2 + RoomWidth * i);
+				int wx = ChairCol(i);
 				if (!HasTypeNear(wx, _floorRow, T_CHAIR)) { bad.Add($"椅({wx},{_floorRow})"); _fixList.Add((wx, _floorRow, H_CHAIR)); }
 			}
 			for (int i = 0; i < TableCount; i++)
@@ -601,26 +622,39 @@ namespace TerraBlind
 				int wx = Wx(14 - RoomWidth * i);
 				if (!HasTypeNear(wx, _floorRow, T_TABLE)) { bad.Add($"桌({wx},{_floorRow})"); _fixList.Add((wx, _floorRow, H_TABLE)); }
 			}
+			// 墙:清单还是 WallOrder(它是放置的权威顺序),但报告走和结构件同一套限流,
+			// 不然一间缺 20 格就刷 20 行
 			for (int r = 0; r < _rooms; r++)
 			{
-				int col1 = 1 + RoomWidth * r;
+				int col1 = 1 + RoomWidth * r, wmiss = 0;
 				foreach (var (dr, dc) in WallOrder)
 				{
 					int wx = Wx(col1 + (dc - 1)), wy = _roofRow + dr;
-					if (Main.tile[wx, wy].WallType == 0) bad.Add($"墙({wx},{wy})");
+					if (Main.tile[wx, wy].WallType != 0) continue;
+					if (++wmiss <= 3) bad.Add($"墙({wx},{wy})");
 				}
+				if (wmiss > 3) bad.Add($"第{r + 1}间墙还缺{wmiss - 3}处");
 				// 火把不在这儿验:每间放完当场就查过一次(Ph.Torch),那时候 _torchWx/_torchWy 还是那一间的。
 				// 事后按公式反推 _roofRow 算出来的是另一格,四间齐全的房子会被报成缺火把。
 			}
-			// 地板:柱子之间每一格都得踩得住,漏一格 NPC 判定就不认
-			for (int c = 1; c <= LocalMax; c++)
-			{
-				int wx = Wx(c);
-				if (!Main.tile[wx, _floorRow + 1].HasTile) bad.Add($"地板({wx},{_floorRow + 1})");
-			}
+			// 结构五件套,全走同一个方法:地板/屋顶/主柱/每间支柱
+			CheckLine(bad, "地板", Wx(1), _floorRow + 1, _dir, 0, LocalMax, false);
+			if (_roofRow > 0)
+				CheckLine(bad, "屋顶", Wx(1), _roofRow, _dir, 0, LocalMax, false);
+			CheckLine(bad, "主柱", MainCol, _floorRow, 0, -1, PillarH, false);
+			for (int r = 0; r < _rooms; r++)
+				CheckLine(bad, $"支柱{r + 1}", Wx(1 + RoomWidth * r), _floorRow, 0, -1, SupportH, false);
 			if (bad.Count == 0) return null;
 			string all = string.Join(" ", bad);
 			DiagLog.Write($"[house] AUDIT 缺 {bad.Count} 处: {all}");
+			// 结构缺了没法补(_fixList 只装家具),但也不该把整栋判死 —— 房子合不合格
+			// 最终由原版 moveRoom 说了算。所以只在【有家具可补】时才当作失败去补,否则只警告
+			if (_fixList.Count == 0)
+			{
+				Main.NewText($"[TerraBlind] 房子结构有缺:{all}", 255, 200, 120);
+				DiagLog.Write("[house] 结构缺失但无从补,继续 —— 由原版判房能不能住");
+				return null;
+			}
 			return bad.Count > 6 ? $"缺{bad.Count}处 {string.Join(" ", bad.GetRange(0, 6))}…" : all;
 		}
 
@@ -658,7 +692,7 @@ namespace TerraBlind
 		{
 			var cc = new List<(int, int, string)>();
 			for (int i = 0; i < ChairCount; i++)
-				cc.Add((Wx(2 + RoomWidth * i), _floorRow, H_CHAIR.ToString()));
+				cc.Add((ChairCol(i), _floorRow, H_CHAIR.ToString()));
 			int dest = (_hopTries % 2 == 0) ? Wx(LocalMax - 2) : Wx(2);
 			return WalkPlace.Start(dest, cc, out why);
 		}
