@@ -177,19 +177,33 @@ namespace TerraBlind
 			// 锚不进打分:悬空处处都是,人自己造锚(PlaceAnywhere)。留下的判据只有居中和离人近。
 			int sx = bx, bestScore = int.MinValue, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
-			for (int d = -StartWindow; d <= StartWindow; d++)
+			// 【房子底下必须是岩浆】,所以先按"够不够岩浆"分档,再在同档里比居中/离人近。
+			// 原来只按居中打分,岩浆只在最后 PickHouse 里数一数就报出去,选址等于没管过它 ——
+			// 日志:ScanHouse 明明挪到了岩浆上的 1091 行,Compute 一重算又跑回 1047
+			int bestLava = -1;
+			for (int pass = 0; pass < 2; pass++)
 			{
-				int x = bx + d;
-				int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
-				if (f0 - c0 < Body) continue;
-				int y0 = StartRow(x, c0, f0);
-				float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
-				int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
-				int score = centerPts - System.Math.Abs(d) * StartNearW;
-				if (score > bestScore)
-				{ bestScore = score; sx = x; bestClear = f0 - c0; bestRel = rel; bestRow = y0; }
+				for (int d = -StartWindow; d <= StartWindow; d++)
+				{
+					int x = bx + d;
+					int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
+					if (f0 - c0 < Body) continue;
+					int y0 = StartRow(x, c0, f0);
+					int lav = 0;
+					for (int k = 0; k < HouseW; k++) if (LavaBelow(x + dir * k, y0)) lav++;
+					if (pass == 0 && lav < HouseW) continue;   // 头一遍只要整排都在岩浆上的
+					float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
+					int centerPts = (int)((1f - System.Math.Abs(rel - 0.5f) * 2f) * StartCenterW);
+					int score = centerPts - System.Math.Abs(d) * StartNearW;
+					if (score > bestScore)
+					{ bestScore = score; sx = x; bestClear = f0 - c0; bestRel = rel; bestRow = y0; bestLava = lav; }
+				}
+				// 整排岩浆的位置一个都没有才放宽 —— 那时后面捅向导那套做不了,但房子还能盖
+				if (bestScore != int.MinValue) break;
+				DiagLog.Write("[hell-line] 附近没有整排悬在岩浆上的起点,放宽岩浆要求");
 			}
 			if (bestScore == int.MinValue) { res.Why = "start_too_tight"; return res; }
+			DiagLog.Write($"[hell-line] 起点岩浆列={bestLava}/{HouseW}");
 			// 预估行要和线上真实的 ys[0] 对得上,对不上就说明打分打在了没人去的行上
 			DiagLog.Write($"[hell-line] 起点 x={sx}(离人{sx - bx}) 分={bestScore} 预估行={bestRow} 居中rel={bestRel:0.00} 空腔={bestClear}");
 
@@ -377,6 +391,10 @@ namespace TerraBlind
 				if (LavaBelow(sx + dir * k, ys[k])) lavaCols++;
 			res.HouseOnLava = lavaCols == W;
 			res.HouseLavaCols = lavaCols;
+			// 选起点时是按【预估行】算的岩浆,这里是线上真实的 ys[0]。两者该一致,
+			// 不一致就说明打分打在了没人去的行上 —— 报出来,别让"房子不在岩浆上"再无声溜过去
+			if (lavaCols < W)
+				DiagLog.Write($"[hell-line] 房子({res.HouseX},{res.HouseY})只有{lavaCols}/{W}列在岩浆上");
 		}
 	}
 }
