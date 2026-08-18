@@ -40,6 +40,11 @@ namespace TerraBlind
 		private static int _digStall;
 		private const int DigStallLimit = 60 * 20;   // 挖 20 秒还没通,那就是真过不去
 		private const int ReachStallLimit = 240;
+		// 上面那几个计数器只在【人没挪列】时才涨,人来回蹭两列就全被清零 —— 于是整套一格
+		// 没铺也永远不超时。所以另记两笔:总帧数,和"上次铺成到现在过了多久"
+		private static int _frames, _sinceProgress, _lastDone;
+		private const int MaxFrames = 60 * 120;
+		private const int NoProgressLimit = 60 * 15;
 
 		public static bool IsRunning => _ph == Ph.Lay;
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
@@ -72,6 +77,7 @@ namespace TerraBlind
 			_rowWy = startWy != int.MinValue ? startWy : ActExecutor.OriginCy(p) + 1;
 			_targetWx = startWx != int.MinValue ? startWx : ActExecutor.OriginCx(p) + _dir;
 			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0; _digStall = 0;
+			_frames = 0; _sinceProgress = 0; _lastDone = 0;
 			DiagLog.Write($"[bridge] start {itemName} dir={dir} n={_want} slot={_slot} row={_rowWy} from={_targetWx}");
 			return true;
 		}
@@ -122,6 +128,15 @@ namespace TerraBlind
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Reason = "no_player"; Finish("stuck"); return; }
+
+			// 卡死判据和"人在哪一列"无关:只看【有没有真铺出格子来】。
+			// 铺出一格就清零,长时间没进展就是卡住了,不管人这会儿在原地还是来回走
+			if (++_frames > MaxFrames)
+			{ Reason = $"超时 铺了{_placed + _already}/{_want}"; Finish("stuck"); return; }
+			int doneNow = _placed + _already;
+			if (doneNow != _lastDone) { _lastDone = doneNow; _sinceProgress = 0; }
+			else if (++_sinceProgress > NoProgressLimit)
+			{ Reason = $"{_sinceProgress}帧没铺出一格,停在({_targetWx},{_rowWy})"; Finish("stuck"); return; }
 
 			// 1) 收上一次挥的结果(可能把边缘往前推一格,也可能判定失败直接结束)
 			if (!HarvestSwing()) return;

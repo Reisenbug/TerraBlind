@@ -71,11 +71,13 @@ namespace TerraBlind
 				if (Predicates.IsSolid(x, y)) { ceil = y + 1; break; }
 		}
 
-		// 桥面在 (x,y):人占 y-1..y-Body+1。这几格有实心就得挖。
+		// 桥面在 (x,y):人占 y-1..y-Body。再往上多留一格 = Head 行全要空。
+		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话,第 4 行那块石头就是卡死的地方
+		const int Head = Body + 1;
 		static int Blocked(int x, int y)
 		{
 			int n = 0;
-			for (int r = 1; r < Body + 1; r++) if (Predicates.IsSolid(x, y - r)) n++;
+			for (int r = 1; r <= Head; r++) if (Predicates.IsSolid(x, y - r)) n++;
 			return n;
 		}
 
@@ -122,7 +124,7 @@ namespace TerraBlind
 				if (rel < 0f) rel = 0f; else if (rel > 1f) rel = 1f;
 				c += (int)(System.Math.Abs(rel - 0.5f) * 2f * CenterW);
 			}
-			int head = (y - Body) - ceil;
+			int head = (y - Head) - ceil;
 			if (head < CeilNear) c += (CeilNear - head) * CeilW;
 			// 腔外面不是不能去,只是白挖 —— 给个明确的钱,别让它比腔里还便宜
 			if (y <= ceil) c += (ceil - y + 1) * CeilW;
@@ -134,7 +136,7 @@ namespace TerraBlind
 			// 方块绝不进岩浆:这条是禁令不是价钱,再贵的价都可能被更贵的绕路盖过去。
 			// floor 是整列估出来的,桥面占的是具体那一格,所以直接问这一格。
 			if (Predicates.IsLava(x, y)) return Unreachable;
-			for (int r = 1; r < Body + 1; r++) if (Predicates.IsLava(x, y - r)) return Unreachable;
+			for (int r = 1; r <= Head; r++) if (Predicates.IsLava(x, y - r)) return Unreachable;
 			return c;
 		}
 
@@ -187,7 +189,7 @@ namespace TerraBlind
 				{
 					int x = bx + d;
 					int c0 = cCeil[d + span0], f0 = cFloor[d + span0];
-					if (f0 - c0 < Body) continue;
+					if (f0 - c0 < Head) continue;   // 腔子得塞得下人 + 头顶那一格
 					int y0 = StartRow(x, c0, f0);
 					int lav = 0;
 					for (int k = 0; k < HouseW; k++) if (LavaBelow(x + dir * k, y0)) lav++;
