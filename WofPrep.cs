@@ -33,6 +33,7 @@ namespace TerraBlind
 		// 5金34银 = 5*100*100 + 34*100(铜)
 		const long DynamitePrice = 5L * 10000 + 34L * 100;
 		const int WalkAwayTiles = 80;
+		const int DigDepth = 6;   // 往下最多挖这么深;再深人就够不着,也补不回来
 
 		// 夜里 19:30~4:30 才回家。原版时间:白天 0~54000(4:30~19:30),夜里 0~32400
 		public static bool IsNight() => !Main.dayTime;
@@ -244,12 +245,27 @@ namespace TerraBlind
 					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 					{ Go(Ph.BackToGuide); return; }
 					if (ItemUseCoordinator.IsActive) return;
-					// 挖了就记,一格都不能漏 —— 漏掉的就是桥面上永远补不回的洞
-					for (int k = 0; k < 3; k++)
+					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
+					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
+					for (int k = 0; k < DigDepth; k++)
 					{
 						int dy = gy + k;
-						if (!Predicates.IsSolid(gx, dy)) continue;
-						if (!ClearWay.Dig(p, gx, dy, "捅向导")) return;
+						if (Predicates.IsLava(gx, dy)) break;          // 到岩浆了,下面不用管
+						if (!Main.tile[gx, dy].HasTile) continue;      // 空的跳过,继续往下找
+						if (!p.IsInTileInteractionRange(gx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						{
+							if (_frames % 120 == 1) DiagLog.Write($"[wof] ({gx},{dy})够不着,不挖了 —— 再深就补不回来");
+							break;
+						}
+						// 平台也要挖:ClearWay.Dig 认为平台不挡路,但它挡得住掉下去的向导
+						if (Predicates.IsPlatform(gx, dy))
+						{
+							int pk2 = ClearWay.PickSlot(p);
+							if (pk2 < 0) { Fail("要挖平台但没镐"); return; }
+							ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = gx, TargetWy = dy, Slot = pk2, Strict = true });
+							DiagLog.Write($"[wof] 挖({gx},{dy}) 平台挡着向导");
+						}
+						else if (!ClearWay.Dig(p, gx, dy, "捅向导")) return;
 						if (!_dug.Contains((gx, dy))) _dug.Add((gx, dy));
 						return;
 					}
@@ -275,6 +291,14 @@ namespace TerraBlind
 					if (_dug.Count > 0 && _frames % 120 == 1) DiagLog.Write($"[wof] 补洞({px2},{py2}) 还剩{_dug.Count}格");
 					int bid = DeckBuilder.PickBlock();
 					if (bid < 0) { DiagLog.Write("[wof] 没方块补洞了,先放着"); Go(Ph.WaitWof); return; }
+					// PlaceAnywhere 够不着会自己走过去,但行差太大它会认输 —— 那种洞补不回来,
+					// 与其卡在这儿不如放掉,桥面已经通了(挖的是向导脚下那一列)
+					if (System.Math.Abs(ActExecutor.OriginCy(p) - py2) > 4)
+					{
+						DiagLog.Write($"[wof] ({px2},{py2})太深补不回来,放掉");
+						_dug.RemoveAt(pick);
+						return;
+					}
 					PlaceAnywhere.Start(bid.ToString(), px2, py2, out _);
 					return;
 				}
