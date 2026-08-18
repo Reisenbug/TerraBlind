@@ -331,6 +331,13 @@ namespace TerraBlind
 			}
 		}
 
+		// 我们自己的动作在不在跑。判据只有这一份,别在各处各写一套
+		static bool TbAutoActive()
+			=> ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
+			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
+			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
+			   || PlaceWalls.IsRunning || WalkPlace.IsRunning;
+
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
@@ -338,12 +345,14 @@ namespace TerraBlind
 			// 光标压在任何 UI 上(背包、别的模组的界面)时,原版把 mouseInterface 置真,
 			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410) ——
 			// 我们的动作全靠 controlUseItem,于是"用物品偶尔失效"。自动化在跑时清掉它
-			if (ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
-			    || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning)
+			// delayUseItem 一旦被置真就【自锁】:原版只在 !controlUseItem 时才清它(Player.cs:23969),
+			// 而我们每帧都按着 controlUseItem —— 所以它永远不清,不是偶发失效是永久失效。
+			// 上一版把清除挂在 mouseInterface 上,而那个标志此刻还没被置真(24410 在 23956 之后),
+			// 于是一次都没触发。这里只认"我们自己在挥",玩家手动时不动
+			if (TbAutoActive())
 			{
-				if (Player.mouseInterface || Player.delayUseItem)
-					DiagLog.Write($"[ui-block] 光标压着UI,清掉拦截 mouseInterface={Player.mouseInterface} delayUse={Player.delayUseItem}");
-				Player.mouseInterface = false;
+				if (Player.delayUseItem)
+					DiagLog.Write($"[ui-block] 清掉 delayUseItem(光标压着UI) 挥={ItemUseCoordinator.IsActive}");
 				Player.delayUseItem = false;
 			}
 
