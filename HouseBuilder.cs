@@ -24,7 +24,7 @@ namespace TerraBlind
 			Idle, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
-			Fix, Reclaim, Done
+			FixStruct, Fix, Reclaim, Done
 		}
 
 		private static Ph _ph = Ph.Idle;
@@ -500,8 +500,18 @@ namespace TerraBlind
 					string missing = AuditHouse();
 					if (missing != null)
 					{
-						if (_fixTried || _fixList.Count == 0) { Fail($"验收不合格:{missing}"); return; }
+						if (_fixTried) { Fail($"验收不合格:{missing}"); return; }
 						_fixTried = true;
+						// 先补结构:地板/屋顶/柱子缺一格,NPC 判定就不认。
+						// 补法和铺桥面完全一样 —— PlaceAnywhere 够不着会自己走、没锚会自己造
+						if (_fixTiles.Count > 0 || _fixWalls.Count > 0)
+						{
+							DiagLog.Write($"[house] 验收缺 {missing} → 补结构 方块{_fixTiles.Count}格 墙{_fixWalls.Count}格");
+							_fixTileIdx = 0;
+							Advance(Ph.FixStruct);
+							return;
+						}
+						if (_fixList.Count == 0) { Fail($"验收不合格:{missing}"); return; }
 						// 背包里没有就先合:上一轮放丢了的那件,东西已经从背包扣掉了。
 						foreach (var (_, _, item) in _fixList)
 							if (Predicates.Have(item) < 1)
@@ -518,6 +528,43 @@ namespace TerraBlind
 					}
 					Done();
 					return;
+
+				// 结构补格:一格一格交给 PlaceAnywhere(和铺桥面同一套),补完再补墙,然后回去重验
+				case Ph.FixStruct:
+				{
+					if (PlaceAnywhere.IsRunning || PlaceWalls.IsRunning) return;
+					while (_fixTileIdx < _fixTiles.Count)
+					{
+						var (fx2, fy2) = _fixTiles[_fixTileIdx];
+						if (Predicates.IsGround(fx2, fy2)) { _fixTileIdx++; continue; }
+						int bid2 = DeckBuilder.PickBlock();
+						if (bid2 < 0) { DiagLog.Write("[house] 没方块补结构了"); break; }
+						_fixTileIdx++;
+						if (PlaceAnywhere.Start(bid2.ToString(), fx2, fy2, out _)) return;
+					}
+					if (_fixWalls.Count > 0)
+					{
+						var wcells = new List<(int, int)>(_fixWalls);
+						_fixWalls.Clear();
+						if (Predicates.Have(H_WALL) < wcells.Count) CraftCoordinator.Craft(H_WALL, wcells.Count);
+						if (PlaceWalls.Start(H_WALL.ToString(), wcells, out _)) return;
+					}
+					// 结构补过了,家具还缺就接着走原来那条
+					if (_fixList.Count > 0)
+					{
+						var ft2 = new List<(int, int, string)>();
+						foreach (var (fx3, fy3, item3) in _fixList)
+						{
+							if (Predicates.Have(item3) < 1) CraftCoordinator.Craft(item3, 1);
+							ft2.Add((fx3, fy3, item3.ToString()));
+						}
+						Advance(Ph.Fix);
+						if (!Need(WalkPlace.Start(Wx(LocalMax - 2), ft2, out string wf2), "补家具", wf2)) return;
+						return;
+					}
+					Advance(Ph.Fix);
+					return;
+				}
 
 				// 补完再验一次。还缺就认输 —— _fixTried 挡着,不会来回补个没完。
 				case Ph.Fix:
@@ -586,6 +633,10 @@ namespace TerraBlind
 		// 完工验收:每一格都实地看过。缺什么报什么坐标 —— "placed=4" 是挥了四次工具,不是四张椅子落了地。
 		// 缺的家具:补的时候要知道往哪放什么,所以和文字报告分开存
 		static readonly List<(int wx, int wy, int item)> _fixList = new();
+		// 结构缺格分两类:方块类(地板/屋顶/柱子)交给 PlaceAnywhere,背景墙交给 PlaceWalls
+		static readonly List<(int wx, int wy)> _fixTiles = new();
+		static readonly List<(int wx, int wy)> _fixWalls = new();
+		static int _fixTileIdx;
 		static bool _fixTried;   // 只补一轮,补完还缺就认输,不来回补个没完
 		static int _reclaimTries;
 		const int MaxReclaim = 6;
@@ -603,6 +654,8 @@ namespace TerraBlind
 				if (ok) continue;
 				miss++;
 				if (miss <= 3) bad.Add($"{name}({wx},{wy})");
+				// 缺的格子记下来:结构补格和铺桥面是同一件事,交给 PlaceAnywhere 就行
+				(wall ? _fixWalls : _fixTiles).Add((wx, wy));
 			}
 			if (miss > 3) bad.Add($"{name}还缺{miss - 3}处");
 			return miss;
@@ -611,7 +664,7 @@ namespace TerraBlind
 		static string AuditHouse()
 		{
 			var bad = new List<string>();
-			_fixList.Clear();
+			_fixList.Clear(); _fixTiles.Clear(); _fixWalls.Clear(); _fixTileIdx = 0;
 			for (int i = 0; i < ChairCount; i++)
 			{
 				int wx = ChairCol(i);
@@ -632,6 +685,7 @@ namespace TerraBlind
 					int wx = Wx(col1 + (dc - 1)), wy = _roofRow + dr;
 					if (Main.tile[wx, wy].WallType != 0) continue;
 					if (++wmiss <= 3) bad.Add($"墙({wx},{wy})");
+					_fixWalls.Add((wx, wy));
 				}
 				if (wmiss > 3) bad.Add($"第{r + 1}间墙还缺{wmiss - 3}处");
 				// 火把不在这儿验:每间放完当场就查过一次(Ph.Torch),那时候 _torchWx/_torchWy 还是那一间的。
@@ -649,12 +703,8 @@ namespace TerraBlind
 			DiagLog.Write($"[house] AUDIT 缺 {bad.Count} 处: {all}");
 			// 结构缺了没法补(_fixList 只装家具),但也不该把整栋判死 —— 房子合不合格
 			// 最终由原版 moveRoom 说了算。所以只在【有家具可补】时才当作失败去补,否则只警告
-			if (_fixList.Count == 0)
-			{
-				Main.NewText($"[TerraBlind] 房子结构有缺:{all}", 255, 200, 120);
-				DiagLog.Write("[house] 结构缺失但无从补,继续 —— 由原版判房能不能住");
-				return null;
-			}
+			// 家具没缺、只缺结构:也别放着不管,走 FixStruct 用 PlaceAnywhere/PlaceWalls 补
+			if (_fixList.Count == 0 && (_fixTiles.Count > 0 || _fixWalls.Count > 0)) return all;
 			return bad.Count > 6 ? $"缺{bad.Count}处 {string.Join(" ", bad.GetRange(0, 6))}…" : all;
 		}
 
