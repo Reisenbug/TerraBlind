@@ -60,6 +60,27 @@ namespace TerraBlind
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 		static void Go(Ph next) { Phase = next; _frames = 0; DiagLog.Write($"[wof] → {next}"); }
 
+		// Main.OpenShop 是 private 实例方法,照它做一遍(Main.cs:52557):
+		// 爆破专家(type 38)对应 shopIndex 4(Main.cs:52218 那串分发)
+		const int DemoShopIndex = 4;
+		static void OpenShop(Player p, int npcIndex)
+		{
+			p.SetTalkNPC(npcIndex);
+			Main.playerInventory = true;
+			Main.npcChatText = "";
+			Main.SetNPCShopIndex(1);
+			Main.instance.shop[Main.npcShop].SetupShop(DemoShopIndex);
+			DiagLog.Write($"[wof] 开爆破专家的商店 shopIndex={DemoShopIndex}");
+		}
+
+		// 买到的东西在鼠标上,得塞回背包才腾得出手继续买
+		static bool StashMouse(Player p)
+		{
+			if (Main.mouseItem.IsAir) return true;
+			Main.mouseItem = p.GetItem(Main.myPlayer, Main.mouseItem, Terraria.GetItemSettings.InventoryEntityToPlayerInventorySettings);
+			return Main.mouseItem.IsAir;
+		}
+
 		// 那只 NPC 在不在家里(判"传送回来了没有")
 		static bool AtHome(int type)
 		{
@@ -99,19 +120,48 @@ namespace TerraBlind
 					return;
 				}
 
+				// 严格走商店:跟 NPC 对话 → 开他的货架 → 从货架上一件件买。
+				// 价格问游戏要(GetItemExpectedPrice),不自己写死 —— 写死的数迟早和版本对不上
 				case Ph.Buy:
 				{
 					int have = Predicates.Have(DynamiteId);
-					if (have >= WantDynamite) { Go(Ph.SwapGuide); return; }
-					if (ThrowItems.FreeSlots() < 1) ThrowItems.MakeRoom(1);
-					if (!p.CanAfford(DynamitePrice))
-					{ Fail($"钱不够买{WantDynamite}雷管(要 5金34银),卖东西那套还没做"); return; }
-					if (!p.BuyItem(DynamitePrice)) { Fail("扣钱失败"); return; }
-					var it = new Item();
-					it.SetDefaults(DynamiteId);
-					it.stack = WantDynamite;
-					p.QuickSpawnClonedItem(p.GetSource_Misc("terrablind_buy"), it, WantDynamite);
-					DiagLog.Write($"[wof] 买了{WantDynamite}雷管,原有{have}");
+					if (have >= WantDynamite)
+					{ if (!Main.mouseItem.IsAir) return; Main.playerInventory = false; p.SetTalkNPC(-1); Go(Ph.SwapGuide); return; }
+					if (_frames > 60 * 120) { Fail($"买不到雷管,现有{have}/{WantDynamite}"); return; }
+
+					int dn = NPC.FindFirstNPC(NPCID.Demolitionist);
+					if (dn < 0) { Fail("爆破专家不见了"); return; }
+					// 对话要够得着 —— 原版按距离判,离远了 talkNPC 会被清掉
+					if (p.talkNPC != dn) { OpenShop(p, dn); return; }
+
+					var shop = Main.instance.shop[Main.npcShop];
+					if (shop == null || shop.item == null) { OpenShop(p, dn); return; }
+					int slot = -1;
+					for (int i = 0; i < shop.item.Length; i++)
+						if (shop.item[i] != null && shop.item[i].type == DynamiteId && shop.item[i].stack > 0) { slot = i; break; }
+					if (slot < 0) { Fail("爆破专家货架上没有雷管"); return; }
+
+					// 鼠标上攒着的先塞进背包,不然买到 maxStack 就卡住
+					if (!Main.mouseItem.IsAir)
+					{
+						if (ThrowItems.FreeSlots() < 1 && !StashMouse(p)) { Fail("背包满了,放不下买到的雷管"); return; }
+						if (!StashMouse(p)) return;
+						return;
+					}
+					p.GetItemExpectedPrice(shop.item[slot], out _, out long buyPrice);
+					if (!p.CanAfford(buyPrice, shop.item[slot].shopSpecialCurrency))
+					{ Fail($"钱不够(还差买第{have + 1}根雷管的钱),卖东西那套还没做"); return; }
+					if (!p.BuyItem(buyPrice, shop.item[slot].shopSpecialCurrency)) { Fail("扣钱失败"); return; }
+
+					// 照抄 ItemSlot.HandleShopSlot:复制一件、清掉商店标记、走 OnCreated
+					var bought = shop.item[slot].Clone();
+					bought.buyOnce = false; bought.isAShopItem = false;
+					if (bought.shopSpecialCurrency != -1) { bought.shopSpecialCurrency = -1; bought.shopCustomPrice = null; }
+					bought.stack = 1;
+					bought.OnCreated(new Terraria.DataStructures.BuyItemCreationContext(Main.mouseItem, p.TalkNPC));
+					if (Main.mouseItem.IsAir) Main.mouseItem = bought;
+					else Main.mouseItem.stack++;
+					if ((have + 1) % 10 == 0) DiagLog.Write($"[wof] 买到第{have + 1}根雷管 单价={buyPrice}");
 					return;
 				}
 
