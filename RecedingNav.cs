@@ -211,7 +211,7 @@ namespace TerraBlind
                 {
                     if (SettleAt.IsRunning) return;
                     DiagLog.Write($"[recede] 停稳了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-                    _braking = false; LastStop = "done"; Stop(); Main.NewText("[TerraBlind] 够到目标了"); return;
+                    _braking = false; LastStop = "done"; Stop(); return;
                 }
                 // 够得着就算到 —— 用原版的交互距离,和"放得出方块"同一个判据,不另编格数
                 if (p.velocity.Y == 0f
@@ -221,7 +221,8 @@ namespace TerraBlind
                     if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead
                         && SettleAt.Start(Predicates.PillarCol(p), out _))
                     { _braking = true; return; }
-                    LastStop = "done"; Stop(); Main.NewText("[TerraBlind] 够到目标了"); return;
+                    // 不弹聊天框:Reach 会被调用方反复重启(每次都"到了"),弹一次就刷一次屏
+                    LastStop = "done"; Stop(); return;
                 }
             }
             else

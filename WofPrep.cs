@@ -60,6 +60,19 @@ namespace TerraBlind
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 		static void Go(Ph next) { Phase = next; _frames = 0; DiagLog.Write($"[wof] → {next}"); }
 
+		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
+		// 和 NPC 碰撞箱相交。够不着的话 SetTalkNPC 当帧就被原版清掉,商店根本开不起来
+		public static bool CanTalkTo(Player p, NPC npc)
+		{
+			var box = new Microsoft.Xna.Framework.Rectangle(
+				(int)(p.position.X + p.width / 2 - Player.tileRangeX * 16),
+				(int)(p.position.Y + p.height / 2 - Player.tileRangeY * 16),
+				Player.tileRangeX * 16 * 2, Player.tileRangeY * 16 * 2);
+			var nb = new Microsoft.Xna.Framework.Rectangle(
+				(int)npc.position.X, (int)npc.position.Y, npc.width, npc.height);
+			return box.Intersects(nb);
+		}
+
 		// Main.OpenShop 是 private 实例方法,照它做一遍(Main.cs:52557):
 		// 爆破专家(type 38)对应 shopIndex 4(Main.cs:52218 那串分发)
 		const int DemoShopIndex = 4;
@@ -110,13 +123,19 @@ namespace TerraBlind
 					Go(Ph.GoToNpc);
 					return;
 
+				// 走到【NPC 跟前】,不是走到火把那格 —— 火把在房顶,NPC 站地板上,
+				// 够得着火把不等于够得着他,于是商店开不起来、Reach 又反复重启刷屏
 				case Ph.GoToNpc:
 				{
+					int dn0 = NPC.FindFirstNPC(NPCID.Demolitionist);
+					if (dn0 < 0) { Fail("爆破专家不见了"); return; }
+					if (CanTalkTo(p, Main.npc[dn0])) { RecedingNav.Stop(); Go(Ph.Buy); return; }
 					if (RecedingNav.Active) return;
-					int px = ActExecutor.OriginCx(p);
-					if (System.Math.Abs(px - _houseWx) <= 3) { Go(Ph.Buy); return; }
-					if (_frames > 60 * 300) { Fail("走不到房子那头"); return; }
-					RecedingNav.Start(_houseWx, _houseWy + 1, RecedingNav.Mode.Reach);
+					if (_frames > 60 * 300) { Fail("走不到爆破专家跟前"); return; }
+					int tx = (int)(Main.npc[dn0].Center.X / 16f);
+					int ty = (int)((Main.npc[dn0].position.Y + Main.npc[dn0].height - 2f) / 16f);
+					DiagLog.Write($"[wof] 去找爆破专家({tx},{ty}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+					RecedingNav.Start(tx, ty, RecedingNav.Mode.Reach);
 					return;
 				}
 
@@ -131,7 +150,8 @@ namespace TerraBlind
 
 					int dn = NPC.FindFirstNPC(NPCID.Demolitionist);
 					if (dn < 0) { Fail("爆破专家不见了"); return; }
-					// 对话要够得着 —— 原版按距离判,离远了 talkNPC 会被清掉
+					// 走远了就回去 —— 原版每帧会把够不着的 talkNPC 清掉
+					if (!CanTalkTo(p, Main.npc[dn])) { DiagLog.Write("[wof] 离商人太远,回去"); Go(Ph.GoToNpc); return; }
 					if (p.talkNPC != dn) { OpenShop(p, dn); return; }
 
 					var shop = Main.instance.shop[Main.npcShop];
@@ -191,12 +211,19 @@ namespace TerraBlind
 					return;
 				}
 
+				// 同样朝【向导本人】走:等下要挖他脚下,得先够得着那一格
 				case Ph.BackToGuide:
 				{
+					int g0 = NPC.FindFirstNPC(NPCID.Guide);
+					if (g0 < 0) { Go(Ph.WaitWof); return; }
+					var gn0 = Main.npc[g0];
+					int fx = (int)(gn0.Center.X / 16f);
+					int fy0 = (int)((gn0.position.Y + gn0.height + 2f) / 16f);
+					if (p.IsInTileInteractionRange(fx, fy0, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					{ RecedingNav.Stop(); Go(Ph.DigUnder); return; }
 					if (RecedingNav.Active) return;
-					if (System.Math.Abs(ActExecutor.OriginCx(p) - _houseWx) <= 3) { Go(Ph.DigUnder); return; }
-					if (_frames > 60 * 300) { Fail("回不到房子"); return; }
-					RecedingNav.Start(_houseWx, _houseWy + 1, RecedingNav.Mode.Reach);
+					if (_frames > 60 * 300) { Fail("回不到向导跟前"); return; }
+					RecedingNav.Start(fx, fy0 - 1, RecedingNav.Mode.Reach);
 					return;
 				}
 
@@ -210,6 +237,9 @@ namespace TerraBlind
 					int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
 					if (Predicates.IsLava(gx, gy) || gn.life <= 0) { Go(Ph.Patch); return; }
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
+					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥
+					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					{ Go(Ph.BackToGuide); return; }
 					if (ItemUseCoordinator.IsActive) return;
                     // 记下挖了哪些,等下要原样补回去
 					if (_dugN == 0) _dugCol = gx;
