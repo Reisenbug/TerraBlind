@@ -349,11 +349,20 @@ namespace TerraBlind
 			// 而我们每帧都按着 controlUseItem —— 所以它永远不清,不是偶发失效是永久失效。
 			// 上一版把清除挂在 mouseInterface 上,而那个标志此刻还没被置真(24410 在 23956 之后),
 			// 于是一次都没触发。这里只认"我们自己在挥",玩家手动时不动
+			// 【所有】鼠标动作都被这两个标志拦,不只是用物品:
+			//   delayUseItem — 吃掉 controlUseItem(Player.cs:23969),而且会自锁
+			//   mouseInterface — 拦 controlUseTile(29679,开箱/对话/开门)、拦挥动(46962/45495)、
+			//                    拦智能光标(16188)
+			// mouseInterface 每帧在 Main.Update 里重置、UI 绘制时再置真,而 SetControls 在两者之间,
+			// 所以这里清掉的正是那些门本帧要读的值
 			if (TbAutoActive())
 			{
-				if (Player.delayUseItem)
-					DiagLog.Write($"[ui-block] 清掉 delayUseItem(光标压着UI) 挥={ItemUseCoordinator.IsActive}");
+				if (Player.delayUseItem || Player.mouseInterface)
+					DiagLog.Write($"[ui-block] 清拦截 delayUse={Player.delayUseItem} mouseIface={Player.mouseInterface}");
 				Player.delayUseItem = false;
+				Player.mouseInterface = false;
+				Main.HoveringOverAnNPC = false;         // 也拦 controlUseTile(29679)
+				Main.SmartInteractShowingGenuine = false;
 			}
 
 			if (JumpPlaceEnabled)
