@@ -125,6 +125,23 @@ namespace TerraBlind
 			return x >= bl && x <= br && y <= fy && y >= fy - 2;
 		}
 
+		// 够得着又不压住目标的最近落脚列。伸手 tileRangeX=5,身子占 1~2 列,
+		// 所以离目标 2~4 列的地方两个条件都能满足 —— 朝它走,而不是朝目标走。
+		static int ApproachCol(Player p, int x, int y)
+		{
+			int cx = ActExecutor.OriginCx(p);
+			int span = Predicates.BodyCols(p).right - Predicates.BodyCols(p).left;
+			int best = cx, bestD = int.MaxValue;
+			for (int off = span + 1; off <= 4; off++)
+				foreach (int col in new[] { x - off, x + off })
+				{
+					if (!Predicates.IsSolid(col, y + 1) && !Predicates.IsSolid(col, y)) continue;
+					int d = System.Math.Abs(col - cx);
+					if (d < bestD) { bestD = d; best = col; }
+				}
+			return best;
+		}
+
 		// 目标格在人身子里 → 往远离它的方向让一格。让开由 SettleAt 精确落位。
 		static bool StepAside(Player p, int x, int y, out string why)
 		{
@@ -201,9 +218,14 @@ namespace TerraBlind
 				if (System.Math.Abs(cy - y) > RowGap)
 				{ Fail($"人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向够不着"); return; }
 				if (_cellFrames % 60 == 1) DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({cx},{cy})");
+				// 【别朝目标走】:走到目标头上,StepAside 又把人赶开,两边互相推翻。
+				// 日志:settle 到 3508 → 这里往右推回 3511 → 让开 → 再推回,190帧全是 out_of_reach
+				int dst = ApproachCol(p, x, y);
+				if (dst == cx) { Retry($"够不着({x},{y})但没有能站的落脚列"); return; }
+				int dir = dst > cx ? 1 : -1;
 				// 地形挡着就挖开,不然横向走一辈子也过不去(卡满 MaxCellFrames 才报错)
-				if (ClearWay.Forward(p, cx < x ? 1 : -1)) return;
-				if (cx < x) p.controlRight = true; else if (cx > x) p.controlLeft = true;
+				if (ClearWay.Forward(p, dir)) return;
+				if (dir > 0) p.controlRight = true; else p.controlLeft = true;
 				return;
 			}
 			if (PlaceAction.IsRunning) return;
