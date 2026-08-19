@@ -37,11 +37,12 @@ namespace TerraBlind
 		const int Tol = 2;
 
 		static int _thrown;
+		static bool _engaged;   // 开打了没。开打前等距离,开打后一直扔
 
 		public static void Toggle()
 		{
 			On = !On;
-			if (On) { _thrown = 0; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
+			if (On) { _thrown = 0; _engaged = false; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
 			else { DiagLog.Write($"[wof-fight] OFF 扔了{_thrown}根"); Main.NewText("[打肉山] 关", 255, 200, 120); }
 		}
 
@@ -81,6 +82,20 @@ namespace TerraBlind
 			int dist = (int)System.Math.Abs(p.Center.X - wof.Center.X) / 16;
 			int want = WantDist(wof.life, wof.lifeMax);
 
+			// 开打之前:肉山刚召唤出来在 60 格外,那么远扔出去纯属浪费,站着等它进来。
+			// 【但只等这一次】—— 一旦开打就再不停手
+			if (!_engaged)
+			{
+				if (dist > want + Tol)
+				{
+					if (Main.GameUpdateCount % 120 == 0)
+						DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 想要{want}");
+					return;
+				}
+				_engaged = true;
+				DiagLog.Write($"[wof-fight] 进范围了,开打 距离={dist}");
+			}
+
 			// 规则只有一条:【雷管冷却好了就扔】。距离不是扔的条件 ——
 			// 上一版把距离当成必须命中的靶心,于是"不到位就不扔、不扔 want 就不涨、
 			// 涨不动就永远不扔",第2根之后卡死一直走(日志 5201 之后再无投掷)。
@@ -98,14 +113,6 @@ namespace TerraBlind
 				// 只有挡路才跳。跳【不会】让人横向更快 —— maxRunSpeed 是硬上限
 				// (Player.cs:19361 每帧钳),空中照样受它约束
 				if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
-			}
-			// 太远就站着等它靠近,【这段时间不扔】—— 肉山刚召唤出来在 60 格外,
-			// 那么远扔出去纯属浪费。【绝不往回走】:肉山只会推进,迎上去纯属危险
-			if (dist > want + Tol)
-			{
-				if (Main.GameUpdateCount % 120 == 0)
-					DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 想要{want}");
-				return;
 			}
 
 			int slot = DynamiteSlot(p);
