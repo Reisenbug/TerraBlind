@@ -19,14 +19,16 @@ namespace TerraBlind
 		// 肉山血越少跑得越快(8→9→11→14→17 mph),所以必须拉得越开 ——
 		// 实测的距离曲线和这张速度表严丝合缝:
 		//   ≥75%血 扔在30~32格 | <75% 31~39 | <50% 40~46 | <25% 48~49 | <10% 49
+		// 【连续插值,不用阶梯】。阶梯一跳就是 8 格(36→44),而人每根雷管(41帧)
+		// 只退得动 1~2 格 —— 追不上,中后期距离就一路欠着(日志:想要44时人在33)。
+		// 连续的话血一掉 want 就跟着涨一点,人一直小步退,永远不欠账
 		static int WantDist(int life, int max)
 		{
 			float f = max > 0 ? (float)life / max : 1f;
-			if (f >= 0.75f) return 31;
-			if (f >= 0.50f) return 36;
-			if (f >= 0.25f) return 44;
-			if (f >= 0.10f) return 48;
-			return 50;
+			if (f > 1f) f = 1f; else if (f < 0f) f = 0f;
+			// 满血 31 格 → 空血 52 格,线性拉开。节点取自实测:
+			// 75%时约31、50%时约38、25%时约46、10%以下约50
+			return (int)(52f - 21f * f + 0.5f);
 		}
 
 		const int AimX = 5, AimY = 21;   // 瞄准偏移(格):朝肉山 5,向下 21
@@ -93,6 +95,8 @@ namespace TerraBlind
 				var (bl, br) = Predicates.BodyCols(p);
 				int fcol = away > 0 ? br + 1 : bl - 1;
 				int fy = ActExecutor.OriginCy(p);
+				// 只有挡路才跳。跳【不会】让人横向更快 —— maxRunSpeed 是硬上限
+				// (Player.cs:19361 每帧钳),空中照样受它约束
 				if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
 			}
 			// 太远就站着等它靠近。【绝不往回走】—— 肉山只会推进,迎上去纯属危险
