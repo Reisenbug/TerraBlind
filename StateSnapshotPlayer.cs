@@ -349,7 +349,7 @@ namespace TerraBlind
 			=> ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
 			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
-			   || PlaceWalls.IsRunning || WalkPlace.IsRunning;
+			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On;
 
 		public override void SetControls()
 		{
@@ -384,6 +384,10 @@ namespace TerraBlind
 				Main.HoveringOverAnNPC = false;         // 也拦 controlUseTile(29679)
 				Main.SmartInteractShowingGenuine = false;
 			}
+
+			// 打肉山:方向键和 controlUseItem 都要在 SetControls 这条线上发才算数。
+			// 【必须在清拦截之后】—— delayUseItem 会自锁,先发 controlUseItem 就再也清不掉了
+			WofFight.Tick();
 
 			if (JumpPlaceEnabled)
 			{
