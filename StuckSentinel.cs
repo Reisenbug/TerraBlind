@@ -98,8 +98,7 @@ namespace TerraBlind
 				{
 					int x = c, y = cy - r;
 					if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
-					var t = Main.tile[x, y];
-					if (!t.HasTile || !Main.tileSolid[t.TileType]) n++;
+					if (!Predicates.IsSolid(x, y)) n++;
 				}
 				return n;
 			}
@@ -129,7 +128,7 @@ namespace TerraBlind
 					int x = cx + dx, y = cy + dy;
 					if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 					var t = Main.tile[x, y];
-					if (t.HasTile && Main.tileSolid[t.TileType]) n++;
+					if (Predicates.IsSolid(x, y)) n++;
 				}
 			return n;
 		}

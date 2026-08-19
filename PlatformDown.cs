@@ -62,7 +62,7 @@ namespace TerraBlind
 		{
 			if (!Predicates.InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
-			return t.HasTile && Main.tileSolidTop[t.TileType];
+			return Predicates.IsPlatform(x, y);
 		}
 
 		public static void Tick()

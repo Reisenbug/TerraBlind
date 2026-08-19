@@ -94,9 +94,7 @@ namespace TerraBlind
         // support includes platforms (solidTop), unlike DigSolid
         static bool HasSupport(int x, int y)
         {
-            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
-            var t = Main.tile[x, y];
-            return t.HasTile && Main.tileSolid[t.TileType];
+            return Predicates.IsSolid(x, y);
         }
 
         static CellKey Cell(SSNode s)
@@ -3048,7 +3046,7 @@ namespace TerraBlind
         {
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
             var t = Main.tile[cx, cy];
-            return t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]);
+            return Predicates.IsGround(cx, cy);
         }
 
         static void EmitPlace(Player p, int cx, int cy)

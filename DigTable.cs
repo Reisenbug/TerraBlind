@@ -178,7 +178,7 @@ namespace TerraBlind
                 {
                     if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
                     var t = Main.tile[x, y];
-                    if (t.HasTile && Main.tileSolid[t.TileType])
+                    if (Predicates.IsSolid(x, y))
                         seen[t.TileType] = seen.TryGetValue(t.TileType, out var e) ? (e.x, e.y, e.cnt + 1) : (x, y, 1);
                 }
 

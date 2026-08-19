@@ -197,8 +197,7 @@ namespace TerraBlind
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
             if (_mode == Mode.Mine)
             {
-                var gt = Main.tile[_goalWx, _goalWy];
-                if (!gt.HasTile || !Main.tileSolid[gt.TileType])
+                if (!Predicates.IsSolid(_goalWx, _goalWy))
                 { DiagLog.Write("[recede] exact goal mined out"); LastStop = "done"; Stop(); Main.NewText("[TerraBlind] receding nav done (mined)"); return; }
             }
             else if (_mode == Mode.Reach)

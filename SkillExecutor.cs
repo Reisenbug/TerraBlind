@@ -129,7 +129,7 @@ namespace TerraBlind
                 int a = x + dx, b = y + dy;
                 if (!Predicates.InBounds(a, b)) continue;
                 var t = Main.tile[a, b];
-                if (t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType])) return true;
+                if (Predicates.IsGround(x, y)) return true;
             }
             return false;
         }

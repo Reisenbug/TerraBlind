@@ -56,10 +56,7 @@ namespace TerraBlind
 		// 桥面认的"已经铺好"= 实心方块,且不是平台。平台要挖掉换成方块。
 		static bool IsDeckBlock(int x, int y)
 		{
-			if (!Predicates.InBounds(x, y)) return false;
-			var t = Main.tile[x, y];
-			if (!t.HasTile || !Main.tileSolid[t.TileType]) return false;
-			return !Main.tileSolidTop[t.TileType];
+			return Predicates.IsWall(x, y);
 		}
 
 		public static bool Start(string itemName, List<(int x, int y)> line, out string why)

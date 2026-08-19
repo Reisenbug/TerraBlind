@@ -119,8 +119,7 @@ namespace TerraBlind
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return true;
             var t = Main.tile[wx, wy];
-            if (t == null || !t.HasTile) return false;
-            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
+            if (t == null || !Predicates.IsWall(wx, wy)) return false;
             return (int)t.Slope == 0 && !t.IsHalfBlock;
         }
 
@@ -128,16 +127,14 @@ namespace TerraBlind
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
             var t = Main.tile[wx, wy];
-            if (t == null || !t.HasTile) return false;
-            if (!Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return false;
+            if (t == null || !Predicates.IsWall(wx, wy)) return false;
             return (int)t.Slope != 0 || t.IsHalfBlock;
         }
 
         private static bool Platform(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
-            var t = Main.tile[wx, wy];
-            return t != null && t.HasTile && Main.tileSolidTop[t.TileType];
+            return Predicates.IsPlatform(wx, wy);
         }
 
         private static bool IsFloor(int wx, int wy) => IsBlock(wx, wy) || Platform(wx, wy) || IsHalfBrick(wx, wy);

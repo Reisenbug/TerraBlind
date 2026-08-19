@@ -335,7 +335,7 @@ namespace TerraBlind
 					_why.Add("target_occupied");
 				// a placed tile needs something to attach to: any solid/rope/platform neighbour. Rope in particular
 				// only extends from an existing rope or a ceiling, so a mid-air target silently does nothing.
-				if (!HasAnchor(_curWx, _curWy)) _why.Add("no_anchor");
+				if (!ItemUseCoordinator.HasAnchor(_curWx, _curWy)) _why.Add("no_anchor");
 			}
 			if (held == null || held.IsAir) _why.Add("empty_hand");
 			else
@@ -349,19 +349,6 @@ namespace TerraBlind
 			if (s.UntilKind == "moved" && p.velocity.X == 0f && p.velocity.Y == 0f) _why.Add("player_not_moving");
 			if (s.Up && Blocked(p, 0, -1)) _why.Add("blocked_above");
 			if ((s.Left || s.Right) && Blocked(p, s.Left ? -1 : 1, 0)) _why.Add("blocked_sideways");
-		}
-
-		private static bool HasAnchor(int x, int y)
-		{
-			(int, int)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
-			foreach (var (dx, dy) in n)
-			{
-				int a = x + dx, b = y + dy;
-				if (!InBounds(a, b)) continue;
-				var t = Main.tile[a, b];
-				if (t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType] || Main.tileRope[t.TileType])) return true;
-			}
-			return false;
 		}
 
 		private static bool Blocked(Player p, int dx, int dy)
@@ -420,7 +407,7 @@ namespace TerraBlind
 					var t = Main.tile[_curWx, _curWy];
 					sb.Append(",\"target_tile\":{\"has_tile\":").Append(t.HasTile ? "true" : "false")
 					  .Append(",\"type\":").Append(t.HasTile ? t.TileType : -1)
-					  .Append(",\"anchored\":").Append(HasAnchor(_curWx, _curWy) ? "true" : "false").Append('}');
+					  .Append(",\"anchored\":").Append(ItemUseCoordinator.HasAnchor(_curWx, _curWy) ? "true" : "false").Append('}');
 				}
 
 				sb.Append(",\"player\":{\"origin_cell\":[").Append(OriginCx(p)).Append(',').Append(OriginCy(p))
