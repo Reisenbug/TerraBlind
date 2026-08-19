@@ -29,9 +29,9 @@ namespace TerraBlind
 		public static bool IsRunning => Phase != Ph.Idle && Phase != Ph.Done;
 
 		const int DynamiteId = ItemID.Dynamite;
-		const int WantDynamite = 30;
-		// 5金34银 = 5*100*100 + 34*100(铜)
-		const long DynamitePrice = 5L * 10000 + 34L * 100;
+		// 实测 34 根刚好打死(日志:第34根时剩35血),30 根必然打不完。
+		// 45 根留出余量 —— 单价 1780 铜,合 8 金 1 银
+		const int WantDynamite = 45;
 		const int WalkAwayTiles = 80;
 		const int DigDepth = 6;   // 往下最多挖这么深;再深人就够不着,也补不回来
 
@@ -351,7 +351,14 @@ namespace TerraBlind
 
 				case Ph.WaitWof:
 					if (NPC.AnyNPCs(NPCID.WallofFlesh))
-					{ Outcome = "done"; Phase = Ph.Done; DiagLog.Write("[wof] 肉山出来了"); Main.NewText("[TerraBlind] 肉山出来了", 120, 255, 120); return; }
+					{
+						// 肉山一出来就交给 WofFight:它自己会先等肉山进射程再开扔
+						if (!WofFight.On) WofFight.Toggle();
+						Outcome = "done"; Phase = Ph.Done;
+						DiagLog.Write("[wof] 肉山出来了,交给 WofFight");
+						Main.NewText("[TerraBlind] 肉山出来了,开打", 120, 255, 120);
+						return;
+					}
 					if (_frames % 300 == 1) DiagLog.Write("[wof] 等肉山");
 					if (_frames > 60 * 120) { Fail("等了2分钟没出肉山 —— 向导可能没死在岩浆里"); return; }
 					return;
