@@ -18,7 +18,7 @@ namespace TerraBlind
 		static int _lastLife = -1, _lastMax;
 		static int _hits;
 		static long _dmgSum;
-		static int _bestDist, _worstDist, _bestDmg, _worstDmg;
+		static int _bestDmg, _worstDmg;
 		static int _thrown, _lastCount = -1;
 
 		static bool ReadWof(out int life, out int max, out float cx)
@@ -49,7 +49,7 @@ namespace TerraBlind
 			if (On)
 			{
 				_hits = 0; _dmgSum = 0; _thrown = 0;
-				_bestDmg = 0; _worstDmg = int.MaxValue; _bestDist = 0; _worstDist = 0;
+				_bestDmg = 0; _worstDmg = int.MaxValue;
 				Main.NewText("[雷管表] 开。盯血量,炸一次记一行", 120, 255, 120);
 				DiagLog.Write("[dyn] ON");
 			}
@@ -62,12 +62,23 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) return;
 
-			// 扔了几根还是要数,但它只是个计数,不再触发记录
+			bool live = ReadWof(out int life, out int max, out float wcx);
+
+			// 【扔】这条线:数量一少就记,带距离。和爆炸各记各的 ——
+			// 引信隔着好几秒,拿一条去触发另一条就是上一版掉血恒等于0的原因
 			int cnt = CountDynamite(p);
-			if (_lastCount >= 0 && cnt < _lastCount) _thrown += _lastCount - cnt;
+			if (_lastCount >= 0 && cnt < _lastCount)
+			{
+				_thrown += _lastCount - cnt;
+				string tl = live
+					? $"第{_thrown}根雷管 x距离={(int)System.Math.Abs(p.Center.X - wcx) / 16}格 肉山血量:{life}/{max}"
+					: $"第{_thrown}根雷管 肉山不在场";
+				Main.NewText("[扔] " + tl, 180, 220, 255);
+				DiagLog.Write("[dyn-throw] " + tl);
+			}
 			_lastCount = cnt;
 
-			if (!ReadWof(out int life, out int max, out float wcx))
+			if (!live)
 			{
 				// 肉山没了。血条上一帧还剩多少,如实记下来 —— 死亡那一瞬 active 就没了,
 				// 不补这一行的话日志永远停在"还剩一千多血"
@@ -85,13 +96,12 @@ namespace TerraBlind
 			if (life < _lastLife)
 			{
 				int dmg = _lastLife - life;
-				int dx = (int)System.Math.Abs(p.Center.X - wcx) / 16;
 				_hits++; _dmgSum += dmg;
-				if (dmg > _bestDmg) { _bestDmg = dmg; _bestDist = dx; }
-				if (dmg < _worstDmg) { _worstDmg = dmg; _worstDist = dx; }
-				string line = $"第{_hits}次 x距离={dx}格 掉血={dmg} 剩{life}/{max} 已扔{_thrown}根";
-				Main.NewText("[雷管] " + line, 255, 220, 120);
-				DiagLog.Write("[dyn] " + line);
+				if (dmg > _bestDmg) _bestDmg = dmg;
+				if (dmg < _worstDmg) _worstDmg = dmg;
+				string line = $"第{_hits}次爆炸 肉山血量:{life}/{max} 掉血={dmg}";
+				Main.NewText("[炸] " + line, 255, 220, 120);
+				DiagLog.Write("[dyn-hit] " + line);
 			}
 			_lastLife = life; _lastMax = max;
 		}
@@ -99,8 +109,8 @@ namespace TerraBlind
 		static void Report()
 		{
 			if (_hits <= 0) { DiagLog.Write("[dyn] OFF 没记到掉血"); return; }
-			string s = $"{_hits}次掉血 共{_dmgSum} 平均{_dmgSum / _hits}/次 " +
-				$"最狠{_bestDmg}@{_bestDist}格 最弱{_worstDmg}@{_worstDist}格 扔了{_thrown}根";
+			string s = $"扔了{_thrown}根,{_hits}次爆炸 共掉血{_dmgSum} " +
+				$"平均{_dmgSum / _hits}/次 最狠{_bestDmg} 最弱{_worstDmg}";
 			Main.NewText("[雷管表] " + s, 120, 255, 120);
 			DiagLog.Write("[dyn] OFF " + s);
 		}
