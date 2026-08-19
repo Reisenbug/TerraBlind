@@ -100,7 +100,14 @@ namespace TerraBlind
 			// 上一版把距离当成必须命中的靶心,于是"不到位就不扔、不扔 want 就不涨、
 			// 涨不动就永远不扔",第2根之后卡死一直走(日志 5201 之后再无投掷)。
 			// 距离只用来决定【要不要退】。
-			bool tooClose = dist < want - Tol;
+			// 【提前起跑】。门槛固定在 want-2 的话,永远是被追近了才动 ——
+			// 前段肉山慢(8mph)这点余量够用,中后段它 14~17mph,等反应过来已经晚了。
+			// 所以提前量随血量下降而变大:满血还是 2 格,空血提到 -4(没被追上就先跑),
+			// 也就是中后段提前约 6 格 ≈ 0.6~0.8 秒
+			float hf = wof.lifeMax > 0 ? (float)wof.life / wof.lifeMax : 1f;
+			if (hf > 1f) hf = 1f; else if (hf < 0f) hf = 0f;
+			int lead = (int)(6f * hf - 4f + 0.5f);      // 满血 +2 → 空血 -4
+			bool tooClose = dist < want - lead;
 			if (tooClose)
 			{
 				int away = -side;
