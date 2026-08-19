@@ -709,6 +709,8 @@ namespace TerraBlind
 			// speed fields are baked (×moveSpeed) LATE in Player.Update — only here are they trustworthy for planning
 			PhysicsSimulator.CaptureBaked(Player);
 			PlatformStock.Tick();
+			// 手动开的观测工具,和自动化无关 —— 所以挂在这条无条件的更新上
+			DynamiteMeter.Tick();
 
 			var snap = new Snapshot
 			{
