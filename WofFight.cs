@@ -38,11 +38,12 @@ namespace TerraBlind
 
 		static int _thrown;
 		static bool _engaged;   // 开打了没。开打前等距离,开打后一直扔
+		static bool _running;   // 正在持续后退(全速跑)
 
 		public static void Toggle()
 		{
 			On = !On;
-			if (On) { _thrown = 0; _engaged = false; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
+			if (On) { _thrown = 0; _engaged = false; _running = false; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
 			else { DiagLog.Write($"[wof-fight] OFF 扔了{_thrown}根"); Main.NewText("[打肉山] 关", 255, 200, 120); }
 		}
 
@@ -101,6 +102,15 @@ namespace TerraBlind
 			// 涨不动就永远不扔",第2根之后卡死一直走(日志 5201 之后再无投掷)。
 			// 距离只用来决定【要不要退】。
 			bool tooClose = dist < want - Tol;
+			// 什么时候开始一直跑、什么时候又停下来,各记一行 —— 光看投掷记录
+			// 看不出人是在退还是在等,而"跑起来了还是被追上"正是成败的关键
+			if (tooClose != _running)
+			{
+				_running = tooClose;
+				DiagLog.Write(_running
+					? $"[wof-fight] 开始跑 距离={dist} 想要{want} 肉山{wof.life}/{wof.lifeMax} 已扔{_thrown}根"
+					: $"[wof-fight] 停下 距离={dist} 想要{want} 肉山{wof.life}/{wof.lifeMax} 已扔{_thrown}根");
+			}
 			if (tooClose)
 			{
 				int away = -side;
