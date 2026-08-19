@@ -26,9 +26,9 @@ namespace TerraBlind
 		{
 			float f = max > 0 ? (float)life / max : 1f;
 			if (f > 1f) f = 1f; else if (f < 0f) f = 0f;
-			// 满血 31 格 → 空血 52 格,线性拉开。节点取自实测:
-			// 75%时约31、50%时约38、25%时约46、10%以下约50
-			return (int)(52f - 21f * f + 0.5f);
+			// 满血 31 格 → 空血 58 格。原来到 52,实测跑起来【差一点来不及】,
+			// 所以把斜率再抬一档:起点不动(前期本来就够),后期多留 6 格余量
+			return (int)(58f - 27f * f + 0.5f);
 		}
 
 		const int AimX = 5, AimY = 21;   // 瞄准偏移(格):朝肉山 5,向下 21
@@ -99,9 +99,14 @@ namespace TerraBlind
 				// (Player.cs:19361 每帧钳),空中照样受它约束
 				if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
 			}
-			// 太远就站着等它靠近。【绝不往回走】—— 肉山只会推进,迎上去纯属危险
-			if (dist > want + Tol && Main.GameUpdateCount % 120 == 0)
-				DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 想要{want}");
+			// 太远就站着等它靠近,【这段时间不扔】—— 肉山刚召唤出来在 60 格外,
+			// 那么远扔出去纯属浪费。【绝不往回走】:肉山只会推进,迎上去纯属危险
+			if (dist > want + Tol)
+			{
+				if (Main.GameUpdateCount % 120 == 0)
+					DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 想要{want}");
+				return;
+			}
 
 			int slot = DynamiteSlot(p);
 			if (slot < 0)
