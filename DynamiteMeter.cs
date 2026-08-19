@@ -21,21 +21,17 @@ namespace TerraBlind
 		static int _bestDist, _worstDist, _bestDmg, _worstDmg;
 		static int _thrown, _lastCount = -1;
 
-		// 血条按【本体+眼睛】一起算:两边共用一条命,只认本体的话最后一段会漏掉
 		static bool ReadWof(out int life, out int max, out float cx)
 		{
 			life = 0; max = 0; cx = 0f;
-			bool any = false;
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var n = Main.npc[i];
-				if (!n.active) continue;
-				if (n.type != NPCID.WallofFlesh && n.type != NPCID.WallofFleshEye) continue;
-				life += n.life; max += n.lifeMax;
-				if (!any) cx = n.Center.X;      // 横坐标取先碰到的那个,本体和眼睛在同一列
-				any = true;
+				if (!n.active || n.type != NPCID.WallofFlesh) continue;
+				life = n.life; max = n.lifeMax; cx = n.Center.X;
+				return true;
 			}
-			return any;
+			return false;
 		}
 
 		static int CountDynamite(Player p)
