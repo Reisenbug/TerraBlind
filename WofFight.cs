@@ -15,14 +15,19 @@ namespace TerraBlind
 	{
 		public static bool On;
 
-		// 第 n 根雷管该在离肉山多远时扔出(x 轴,格)。索引 0 = 第1根
-		static readonly int[] Dist =
+		// 该和肉山保持多远(格),【按血量查】不按第几根。
+		// 肉山血越少跑得越快(8→9→11→14→17 mph),所以必须拉得越开 ——
+		// 实测的距离曲线和这张速度表严丝合缝:
+		//   ≥75%血 扔在30~32格 | <75% 31~39 | <50% 40~46 | <25% 48~49 | <10% 49
+		static int WantDist(int life, int max)
 		{
-			29, 31, 33, 32, 33, 32, 32, 32, 33, 34, 32, 33,
-			36, 39, 41, 42, 43, 46, 48, 50, 50, 51, 51
-		};
-		// 表用完之后一直按最后一格退 —— 肉山只会越来越快
-		static int WantDist(int n) => n < Dist.Length ? Dist[n] : Dist[Dist.Length - 1];
+			float f = max > 0 ? (float)life / max : 1f;
+			if (f >= 0.75f) return 31;
+			if (f >= 0.50f) return 36;
+			if (f >= 0.25f) return 44;
+			if (f >= 0.10f) return 48;
+			return 50;
+		}
 
 		const int AimX = 5, AimY = 21;   // 瞄准偏移(格):朝肉山 5,向下 21
 		// 容差从实测量出来:前12根扔在 27~32 格(去掉起手那根是 29~32),抖动就是 ±2。
@@ -72,22 +77,14 @@ namespace TerraBlind
 			// 肉山在人的哪一侧:退是往【背对它】的方向,瞄是往【朝着它】的方向
 			int side = wof.Center.X > p.Center.X ? 1 : -1;
 			int dist = (int)System.Math.Abs(p.Center.X - wof.Center.X) / 16;
-			int want = WantDist(_thrown);
+			int want = WantDist(wof.life, wof.lifeMax);
 
-			// 太远:站着等它过来。肉山出生在 60 格外而第 1 根要在 29 格扔,
-			// 这段时间往回走会撞上、往前走是主动送。后期退过头了也走这一支 ——
-			// 【绝不往回走】,肉山自己会追上来
-			if (dist > want + Tol)
-			{
-				if (Main.GameUpdateCount % 120 == 0)
-					DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 要{want}±{Tol}");
-				return;
-			}
-
-			// 【停停走走,不全速跑】。全速走扔出去的雷管会空 —— 人带着横向速度,
-			// 雷管跟着飞出去就过头了。实测前12根距离几乎不变(30格上下)正是这个:
-			// 走一段 → 停下扔 → 肉山追近 → 再走,而不是匀速后退
-			if (dist < want - Tol)
+			// 规则只有一条:【雷管冷却好了就扔】。距离不是扔的条件 ——
+			// 上一版把距离当成必须命中的靶心,于是"不到位就不扔、不扔 want 就不涨、
+			// 涨不动就永远不扔",第2根之后卡死一直走(日志 5201 之后再无投掷)。
+			// 距离只用来决定【要不要退】。
+			bool tooClose = dist < want - Tol;
+			if (tooClose)
 			{
 				int away = -side;
 				if (away > 0) p.controlRight = true; else p.controlLeft = true;
@@ -97,11 +94,10 @@ namespace TerraBlind
 				int fcol = away > 0 ? br + 1 : bl - 1;
 				int fy = ActExecutor.OriginCy(p);
 				if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
-				return;                      // 退的这一帧不扔:带着速度扔必空
 			}
-
-			// 站定了才扔。横向还在滑就再等一帧 —— 停下的判据只有这一份
-			if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead) return;
+			// 太远就站着等它靠近。【绝不往回走】—— 肉山只会推进,迎上去纯属危险
+			if (dist > want + Tol && Main.GameUpdateCount % 120 == 0)
+				DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 想要{want}");
 
 			int slot = DynamiteSlot(p);
 			if (slot < 0)
@@ -121,7 +117,7 @@ namespace TerraBlind
 
 			p.controlUseItem = true;
 			_thrown++;
-			DiagLog.Write($"[wof-fight] 扔第{_thrown}根 距离={dist}(要{want}) 肉山{wof.life}/{wof.lifeMax}");
+			DiagLog.Write($"[wof-fight] 扔第{_thrown}根 距离={dist}(想要{want}) 肉山{wof.life}/{wof.lifeMax}");
 		}
 	}
 
