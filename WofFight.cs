@@ -25,6 +25,9 @@ namespace TerraBlind
 		static int WantDist(int n) => n < Dist.Length ? Dist[n] : Dist[Dist.Length - 1];
 
 		const int AimX = 5, AimY = 21;   // 瞄准偏移(格):朝肉山 5,向下 21
+		// 容差从实测量出来:前12根扔在 27~32 格(去掉起手那根是 29~32),抖动就是 ±2。
+		// 再大就超过单次后退的跨度(后段每次退 2~3 格),会一步跨过整个窗口扔不出去
+		const int Tol = 2;
 
 		static int _thrown;
 
@@ -71,20 +74,34 @@ namespace TerraBlind
 			int dist = (int)System.Math.Abs(p.Center.X - wof.Center.X) / 16;
 			int want = WantDist(_thrown);
 
-			// 【一直退,永不回头】。肉山只会推进,dist 自己就会缩小;往回走是主动迎上去,
-			// 白费时间还危险。表里的距离是【下限】不是靶心 —— 退过头了照扔不误
-			int away = -side;
-			if (away > 0) p.controlRight = true; else p.controlLeft = true;
-			// 桥面有起伏就跳过去。光按方向键的话撞上一格台阶就停在那儿,
-			// dist 再也拉不开,肉山直接贴脸
-			var (bl, br) = Predicates.BodyCols(p);
-			int fcol = away > 0 ? br + 1 : bl - 1;
-			int fy = ActExecutor.OriginCy(p);
-			if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
+			// 太远:站着等它过来。肉山出生在 60 格外而第 1 根要在 29 格扔,
+			// 这段时间往回走会撞上、往前走是主动送。后期退过头了也走这一支 ——
+			// 【绝不往回走】,肉山自己会追上来
+			if (dist > want + Tol)
+			{
+				if (Main.GameUpdateCount % 120 == 0)
+					DiagLog.Write($"[wof-fight] 等肉山靠近 距离={dist} 要{want}±{Tol}");
+				return;
+			}
 
-			// 【边退边扔,不停下等距离】。实测前12根距离几乎不变(30格上下)却一直在扔,
-			// 说明手感是匀速后退、扔满为止,不是每根都精确停在某个位置
-			if (dist < want) return;      // 还没退够就先只退不扔
+			// 【停停走走,不全速跑】。全速走扔出去的雷管会空 —— 人带着横向速度,
+			// 雷管跟着飞出去就过头了。实测前12根距离几乎不变(30格上下)正是这个:
+			// 走一段 → 停下扔 → 肉山追近 → 再走,而不是匀速后退
+			if (dist < want - Tol)
+			{
+				int away = -side;
+				if (away > 0) p.controlRight = true; else p.controlLeft = true;
+				// 桥面有起伏就跳过去。光按方向键的话撞上一格台阶就停在那儿,
+				// dist 再也拉不开,肉山直接贴脸
+				var (bl, br) = Predicates.BodyCols(p);
+				int fcol = away > 0 ? br + 1 : bl - 1;
+				int fy = ActExecutor.OriginCy(p);
+				if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
+				return;                      // 退的这一帧不扔:带着速度扔必空
+			}
+
+			// 站定了才扔。横向还在滑就再等一帧 —— 停下的判据只有这一份
+			if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead) return;
 
 			int slot = DynamiteSlot(p);
 			if (slot < 0)
