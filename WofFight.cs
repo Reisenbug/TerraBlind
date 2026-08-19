@@ -25,15 +25,13 @@ namespace TerraBlind
 		static int WantDist(int n) => n < Dist.Length ? Dist[n] : Dist[Dist.Length - 1];
 
 		const int AimX = 5, AimY = 21;   // 瞄准偏移(格):朝肉山 5,向下 21
-		const int ThrowGap = 20;         // 两根之间至少隔这么多帧,不然一帧连按会连扔好几根
-		const int Tol = 1;               // 距离容差,到位就扔
 
-		static int _thrown, _cool;
+		static int _thrown;
 
 		public static void Toggle()
 		{
 			On = !On;
-			if (On) { _thrown = 0; _cool = 0; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
+			if (On) { _thrown = 0; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
 			else { DiagLog.Write($"[wof-fight] OFF 扔了{_thrown}根"); Main.NewText("[打肉山] 关", 255, 200, 120); }
 		}
 
@@ -73,22 +71,21 @@ namespace TerraBlind
 			int dist = (int)System.Math.Abs(p.Center.X - wof.Center.X) / 16;
 			int want = WantDist(_thrown);
 
-			if (_cool > 0) _cool--;
+			// 【一直退,永不回头】。肉山只会推进,dist 自己就会缩小;往回走是主动迎上去,
+			// 白费时间还危险。表里的距离是【下限】不是靶心 —— 退过头了照扔不误
+			int away = -side;
+			if (away > 0) p.controlRight = true; else p.controlLeft = true;
+			// 桥面有起伏就跳过去。光按方向键的话撞上一格台阶就停在那儿,
+			// dist 再也拉不开,肉山直接贴脸
+			var (bl, br) = Predicates.BodyCols(p);
+			int fcol = away > 0 ? br + 1 : bl - 1;
+			int fy = ActExecutor.OriginCy(p);
+			if (p.velocity.Y == 0f && Predicates.IsWall(fcol, fy)) p.controlJump = true;
 
-			// 太近就退。肉山会加速,所以退这件事优先于扔 —— 被贴上就没得打了
-			if (dist < want - Tol)
-			{
-				if (side > 0) p.controlLeft = true; else p.controlRight = true;
-				return;
-			}
-			// 退过头了就靠回去:表里的距离是命中率最高的位置,离太远白扔
-			if (dist > want + Tol)
-			{
-				if (side > 0) p.controlRight = true; else p.controlLeft = true;
-				return;
-			}
+			// 【边退边扔,不停下等距离】。实测前12根距离几乎不变(30格上下)却一直在扔,
+			// 说明手感是匀速后退、扔满为止,不是每根都精确停在某个位置
+			if (dist < want) return;      // 还没退够就先只退不扔
 
-			if (_cool > 0) return;
 			int slot = DynamiteSlot(p);
 			if (slot < 0)
 			{
@@ -101,11 +98,12 @@ namespace TerraBlind
 			float ay = p.Center.Y + AimY * 16f;
 			Cursor.AimPx(ax, ay);
 			p.selectedItem = slot;
+			// 雷管 useTime=useAnimation=40(Item.cs:3386),原版自己把节奏卡死在40帧,
+			// 再加一层冷却纯属多余 —— 实测相邻两根间隔40~56帧,正是这个下限
 			if (p.itemTime != 0 || p.itemAnimation != 0) return;
 
 			p.controlUseItem = true;
 			_thrown++;
-			_cool = ThrowGap;
 			DiagLog.Write($"[wof-fight] 扔第{_thrown}根 距离={dist}(要{want}) 肉山{wof.life}/{wof.lifeMax}");
 		}
 	}
