@@ -158,9 +158,7 @@ namespace TerraBlind
 				return;
 			}
 
-			Main.mouseX = (int)(tx * 16f + 8f - Main.screenPosition.X);
-			Main.mouseY = (int)(ty * 16f + 8f - Main.screenPosition.Y);
-			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimTile(tx, ty);
 			p.selectedItem = slot;
 			if (p.itemTime == 0)
 				p.controlUseItem = true;

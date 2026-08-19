@@ -167,9 +167,7 @@ namespace TerraBlind
 				{
 					// t.Slot is this item's permanent hotbar home (assigned at Start) — just select it, never swap.
 					p.selectedItem = t.Slot;
-					Main.mouseX = (int)(t.Wx * 16f + 8f - Main.screenPosition.X);
-					Main.mouseY = (int)(t.Wy * 16f + 8f - Main.screenPosition.Y);
-					Main.SmartCursorWanted_Mouse = false;
+					Cursor.AimTile(t.Wx, t.Wy);
 					p.controlUseItem = true;
 					swungThisFrame = true;
 				}

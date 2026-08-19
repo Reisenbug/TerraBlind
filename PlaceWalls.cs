@@ -101,9 +101,7 @@ namespace TerraBlind
 
 			// in reach → aim and swing. Placement judged by the map (WallHere) next frame.
 			p.selectedItem = _slot;
-			Main.mouseX = (int)(wx * 16f + 8f - Main.screenPosition.X);
-			Main.mouseY = (int)(wy * 16f + 8f - Main.screenPosition.Y);
-			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimTile(wx, wy);
 			if (p.itemTime == 0) p.controlUseItem = true;
 		}
 

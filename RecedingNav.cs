@@ -105,8 +105,7 @@ namespace TerraBlind
                     if (slot < 0) return;
                     p.selectedItem = slot;
                     Main.SmartCursorWanted_Mouse = false;
-                    Main.mouseX = (int)(x * 16f + 8f - Main.screenPosition.X);
-                    Main.mouseY = (int)(y * 16f + 8f - Main.screenPosition.Y);
+                    Cursor.AimTile(x, y);
                     if (p.itemTime == 0) p.controlUseItem = true;
                     return;
                 }
@@ -128,8 +127,7 @@ namespace TerraBlind
                     if (slot < 0) return;
                     p.selectedItem = slot;
                     Main.SmartCursorWanted_Mouse = false;
-                    Main.mouseX = (int)(x * 16f + 8f - Main.screenPosition.X);
-                    Main.mouseY = (int)(y * 16f + 8f - Main.screenPosition.Y);
+                    Cursor.AimTile(x, y);
                     if (p.itemTime == 0) p.controlUseItem = true;
                     return;
                 }

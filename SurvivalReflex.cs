@@ -45,8 +45,7 @@ namespace TerraBlind
 				if (ws >= 0)
 				{
 					p.selectedItem = ws;
-					Main.mouseX = (int)(foe.Center.X - Main.screenPosition.X);
-					Main.mouseY = (int)(foe.Center.Y - Main.screenPosition.Y);
+					Cursor.AimPx(foe.Center.X, foe.Center.Y);
 					if (p.itemTime == 0)
 						p.controlUseItem = true;
 				}

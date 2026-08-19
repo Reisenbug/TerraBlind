@@ -165,9 +165,7 @@ namespace TerraBlind
 				int ox = s.CursorFrozen ? _frozenCx : OriginCx(p);
 				int oy = s.CursorFrozen ? _frozenCy : OriginCy(p);
 				_curWx = ox + s.CurDx; _curWy = oy + s.CurDy;
-				Main.mouseX = (int)(_curWx * 16f + 8f - Main.screenPosition.X);
-				Main.mouseY = (int)(_curWy * 16f + 8f - Main.screenPosition.Y);
-				Main.SmartCursorWanted_Mouse = false;
+				Cursor.AimTile(_curWx, _curWy);
 			}
 
 			// KEYS — written raw into the vanilla control fields. controlDown here is the real platform fall-through

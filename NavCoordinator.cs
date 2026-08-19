@@ -1245,8 +1245,7 @@ namespace TerraBlind
                             p.selectedItem = slot;
                             p.controlUseItem = true;
                             Main.SmartCursorWanted_Mouse = false;
-                            Main.mouseX = (int)(aheadX * 16f + 8f - Main.screenPosition.X);
-                            Main.mouseY = (int)((feetY + 1) * 16f + 8f - Main.screenPosition.Y);
+                            Cursor.AimTile(aheadX, feetY + 1);
                             DiagLog.Write($"[nav] platform_walk place ({aheadX},{feetY+1}) player=({pcx},{feetY})");
                         }
                     }
@@ -1497,14 +1496,12 @@ namespace TerraBlind
                     if (mineRight)
                     {
                         p.controlRight = true;
-                        Main.mouseX = (int)(centerX + 160f - Main.screenPosition.X);
-                        Main.mouseY = (int)(midY - Main.screenPosition.Y);
+                        Cursor.AimPx(centerX + 160f, midY);
                     }
                     else if (mineLeft)
                     {
                         p.controlLeft = true;
-                        Main.mouseX = (int)(centerX - 160f - Main.screenPosition.X);
-                        Main.mouseY = (int)(midY - Main.screenPosition.Y);
+                        Cursor.AimPx(centerX - 160f, midY);
                     }
                     else if (mineDown || mineUp)
                     {
@@ -1515,11 +1512,10 @@ namespace TerraBlind
                                 _mineTileIdx++;
                             var mt = _target.MineTiles[_mineTileIdx];
                             Main.SmartCursorWanted_Mouse = false;
-                            Main.mouseX = (int)(mt.wx * 16f + 8f - Main.screenPosition.X);
-                            Main.mouseY = (int)(mt.wy * 16f + 8f - Main.screenPosition.Y);
+                            Cursor.AimTile(mt.wx, mt.wy);
                         }
-                        else if (mineDown) { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y + p.height + 160f - Main.screenPosition.Y); }
-                        else { Main.mouseX = (int)(centerX - Main.screenPosition.X); Main.mouseY = (int)(p.position.Y - 160f - Main.screenPosition.Y); }
+                        else if (mineDown) Cursor.AimPx(centerX, p.position.Y + p.height + 160f);
+                        else Cursor.AimPx(centerX, p.position.Y - 160f);
                     }
 
                     bool done = false;

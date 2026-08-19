@@ -43,8 +43,7 @@ namespace TerraBlind
 
 			float worldX = tileX * 16f + 8f;
 			float worldY = tileY * 16f + 8f;
-			Main.mouseX = (int)(worldX - Main.screenPosition.X);
-			Main.mouseY = (int)(worldY - Main.screenPosition.Y);
+			Cursor.AimPx(worldX, worldY);
 
 			if (r.Slot >= 0 && r.Slot <= 9)
 				p.selectedItem = r.Slot;

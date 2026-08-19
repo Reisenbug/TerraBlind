@@ -409,8 +409,7 @@ namespace TerraBlind
 						// place at feet+1 tile so player lands on it
 						int tileX = (int)((Player.position.X + Player.width / 2f) / 16f);
 						int tileY = (int)((Player.position.Y + Player.height) / 16f) + 1;
-						Main.mouseX = (int)(tileX * 16f + 8f - Main.screenPosition.X);
-						Main.mouseY = (int)(tileY * 16f + 8f - Main.screenPosition.Y);
+						Cursor.AimTile(tileX, tileY);
 						PathVisSystem.SetTiles(new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>
 						{
 							(tileX, tileY, new Microsoft.Xna.Framework.Color(255, 220, 0, 200))
@@ -691,8 +690,7 @@ namespace TerraBlind
 				Player.selectedItem = ci.SelectedSlot;
 			if (!float.IsNaN(ci.Mx) && !float.IsNaN(ci.My))
 			{
-				Main.mouseX = (int)(Player.position.X + Player.width / 2f + ci.Mx * 16f - Main.screenPosition.X);
-				Main.mouseY = (int)(Player.position.Y + Player.height / 2f + ci.My * 16f - Main.screenPosition.Y);
+				Cursor.AimOffset(Player, ci.Mx, ci.My);
 			}
 
 			if (placeActive || ciJumpIn || jumpFromAuto || jumpFromCi || jflBefore != 0)

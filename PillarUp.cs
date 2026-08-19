@@ -85,9 +85,7 @@ namespace TerraBlind
 		private static void Aim(Player p)
 		{
 			p.selectedItem = _slot <= 9 ? _slot : p.selectedItem;
-			Main.mouseX = (int)(_colCx * 16f + 8f - Main.screenPosition.X);
-			Main.mouseY = (int)(_wy * 16f + 8f - Main.screenPosition.Y);
-			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimTile(_colCx, _wy);
 
 			// DEBUG: paint the cell the cursor is swinging at, so it's visible on screen exactly where we're aiming.
 			// Green once the cell holds our platform, yellow while we're still trying to place it.

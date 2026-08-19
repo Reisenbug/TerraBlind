@@ -99,9 +99,7 @@ namespace TerraBlind
 			// 瞄准:朝肉山 AimX 格、向下 AimY 格。这个角度是量出来的
 			float ax = p.Center.X + side * AimX * 16f;
 			float ay = p.Center.Y + AimY * 16f;
-			Main.mouseX = (int)(ax - Main.screenPosition.X);
-			Main.mouseY = (int)(ay - Main.screenPosition.Y);
-			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimPx(ax, ay);
 			p.selectedItem = slot;
 			if (p.itemTime != 0 || p.itemAnimation != 0) return;
 

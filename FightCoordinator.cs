@@ -42,8 +42,7 @@ namespace TerraBlind
 
             float ncx = target.position.X + target.width / 2f;
             float ncy = target.position.Y + target.height / 2f;
-            Main.mouseX = (int)(ncx - Main.screenPosition.X);
-            Main.mouseY = (int)(ncy - Main.screenPosition.Y);
+            Cursor.AimPx(ncx, ncy);
 
             p.selectedItem = weaponSlot;
             p.controlUseItem = true;

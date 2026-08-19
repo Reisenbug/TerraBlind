@@ -3069,8 +3069,7 @@ namespace TerraBlind
                 return; // mid-swing; wait for cooldown before re-firing
             }
             if (_placeStall == 1) DiagLog.Write($"[ss-place] emit tile=({cx},{cy}) slot={slot} stack={p.inventory[slot].stack} item={p.inventory[slot].Name}");
-            Main.mouseX = (int)(cx * 16f + 8f - Main.screenPosition.X);
-            Main.mouseY = (int)(cy * 16f + 8f - Main.screenPosition.Y);
+            Cursor.AimTile(cx, cy);
             p.controlUseItem = true;
         }
     }

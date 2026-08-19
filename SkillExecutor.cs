@@ -343,8 +343,7 @@ namespace TerraBlind
                 {
                     p.selectedItem = platformSlot;
                     Main.SmartCursorWanted_Mouse = false;
-                    Main.mouseX = (int)(_pillarCol * 16f + 8f - Main.screenPosition.X);
-                    Main.mouseY = (int)(_anchorWy * 16f + 8f - Main.screenPosition.Y);
+                    Cursor.AimTile(_pillarCol, _anchorWy);
                     if (p.itemTime == 0) { p.controlUseItem = true; _cyclesDone++; }
                 }
                 return;
@@ -436,9 +435,7 @@ namespace TerraBlind
 
         private static void SetMouse(Player p, float worldX, float worldY)
         {
-            Main.mouseX = (int)(worldX - Main.screenPosition.X);
-            Main.mouseY = (int)(worldY - Main.screenPosition.Y);
-            Main.SmartCursorWanted_Mouse = false;
+            Cursor.AimPx(worldX, worldY);
         }
     }
 }

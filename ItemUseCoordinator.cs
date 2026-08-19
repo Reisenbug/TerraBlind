@@ -229,9 +229,7 @@ namespace TerraBlind
 
 			float worldX = req.TargetWx * 16f + 8f;
 			float worldY = req.TargetWy * 16f + 8f;
-			Main.mouseX = (int)(worldX - Main.screenPosition.X);
-			Main.mouseY = (int)(worldY - Main.screenPosition.Y);
-			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimPx(worldX, worldY);
 			p.selectedItem = slot;
 
 			// 数 itemAnimation 的下降沿:数"按了几帧"会把一次挥舞重复计数(动画启动前有好几帧是 0)
