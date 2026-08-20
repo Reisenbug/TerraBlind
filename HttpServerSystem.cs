@@ -50,6 +50,10 @@ namespace TerraBlind
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
+		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒 —— 绝不能在 HTTP 线程上干。
+		// 排队交给主线程,和开箱/换位是同一套路子
+		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();
+		public static string HellRunStart = "";   // 主线程跑完写这里,给 /hell_run_status 读
 		// 上一次开箱的结果,给 /interact 的调用方看。以前拒绝是静默 continue,外面只知道"没开",不知道为什么。
 		public static volatile string LastInteract = "idle";
 		private static volatile bool _lootAllRequested;
@@ -83,6 +87,8 @@ namespace TerraBlind
 				var inv = Main.LocalPlayer.inventory;
 				(inv[src], inv[dst]) = (inv[dst], inv[src]);
 			}
+			while (_hellRunQueue.TryDequeue(out _))
+				HellRunStart = StateSnapshotPlayer.StartHellRun(out string hrw) ? "" : hrw;
 			while (_interactQueue.TryDequeue(out var tile))
 			{
 				if (Main.LocalPlayer.chest != -1) { LastInteract = "already_open"; continue; }
@@ -2719,6 +2725,29 @@ namespace TerraBlind
 						body = "{\"ok\":true,\"dig\":" + dig + ",\"walk\":" + walk + "}";
 					}
 				}
+			}
+			else if (path == "/hell_run")
+			{
+				// 地狱那一整套:算线 → 选址 → 去桥起点 → 盖房 → 铺桥 → 肉山准备 → 开打。
+				// 全部编排在 mod 里,python 只管触发和轮询 —— 和 /build_house 一个路子。
+				// 真正的活在主线程做(要读地形算线),这里只入队
+				HellRunStart = "";
+				_hellRunQueue.Enqueue(true);
+				body = "{\"accepted\":true,\"note\":\"poll /hell_run_status\"}";
+			}
+			else if (path == "/hell_run_status")
+			{
+				string ph = StateSnapshotPlayer.HellRunPhase();
+				body = "{\"phase\":\"" + JsonEsc(ph) + "\""
+					 + ",\"running\":" + (ph != "idle" ? "true" : "false")
+					 + ",\"start_error\":\"" + JsonEsc(HellRunStart) + "\""
+					 + ",\"wof_outcome\":\"" + JsonEsc(WofPrep.Outcome) + "\""
+					 + ",\"wof_reason\":\"" + JsonEsc(WofPrep.Reason) + "\"}";
+			}
+			else if (path == "/hell_run_stop")
+			{
+				StateSnapshotPlayer.StopHellRun();
+				body = "{\"ok\":true}";
 			}
 			else if (path == "/build_house")
 			{

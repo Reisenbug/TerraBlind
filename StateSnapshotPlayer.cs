@@ -247,70 +247,10 @@ namespace TerraBlind
 			// [ 单测"够得着就算到":算地狱线,导航去白点(开工点)。它悬空、站不上去,正是要试的情形。
 			if (TerraBlind.TestReachWork != null && TerraBlind.TestReachWork.JustPressed)
 			{
-				if (RecedingNav.Active) { RecedingNav.Stop(); Main.NewText("[TerraBlind] 导航停止", 255, 200, 120); }
-				else
-				{
-					var rp = Main.LocalPlayer;
-					int rbx = ActExecutor.OriginCx(rp);
-					int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
-					var rr = HellLine.Compute(rbx, rdir);
-					if (!rr.Found)
-						Main.NewText($"[TerraBlind] 算不出线:{rr.Why}", 255, 120, 120);
-					else
-					{
-						// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
-						// 复用地表选址找块干净的,再从那儿重算整条线 —— 房子和桥就天然对齐
-						// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
-						// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
-						int hw1 = HouseBuilder.RoomWidth + 1;
-						bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
-							out int cx0, out int cy0, out int sc0, false, true);
-						if (!got)
-						{
-							DiagLog.Write($"[reach-test] 附近没有【岩浆上】的干净房址(扫了{sc0}),退回不要求岩浆");
-							got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
-								out cx0, out cy0, out sc0, false);
-						}
-						if (got && (cx0 != rr.HouseX || cy0 != rr.HouseY))
-						{
-							DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
-							var rr2 = HellLine.Compute(cx0, rdir, cy0);
-							if (rr2.Found) rr = rr2;
-							else DiagLog.Write($"[reach-test] 新房址算不出线({rr2.Why}),用原来那条");
-						}
-						_deckFrom = HouseBuilder.RoomWidth + 1;
-						var (rsx, rsy) = rr.Line[0];
-						// 画线必须在重算【之后】:画早了显示的是旧线,和实际铺的对不上。
-						// 蓝=要铺 绿=现成地形能用上 白=起点。时长按 176 格铺完估,别中途消失
-						var rv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
-						for (int li = 0; li < rr.Line.Count; li++)
-						{
-							var (rlx, rly) = rr.Line[li];
-							bool have = Predicates.IsGround(rlx, rly);
-							rv.Add((rlx, rly, have
-								? new Microsoft.Xna.Framework.Color(60, 230, 90, 110)
-								: new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
-						}
-						rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
-						PathVisSystem.SetDeck(rv, 60 * 60 * 20);
-						// 地狱里目标几乎全悬空,通用寻路到不了 —— 它只会在【已有的地】上走跳,
-						// 于是爬过头再也下不来(日志:目标1044,人爬到1026卡死)。
-						// ReachCell 用三个自造落脚点的原语一次消一个方向:升 pillar、降 platdown、
-						// 横向 bridge。悬空天然可达,而且不可能爬过目标行
-						int rbslot = HellBridge.FindBlockSlot(rp, out _);
-						string rblk = rbslot >= 0 ? rp.inventory[rbslot].type.ToString() : "9";
-						if (!ReachCell.Start("94", rblk, rsx, rsy, out string rcw))
-						{
-							DiagLog.Write($"[reach-test] ReachCell 起不来({rcw}),退回通用寻路");
-							RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
-						}
-						_pendingAnchor = (rsx, rsy);
-							_pendingDeck = rr.Line;
-						DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
-						Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
-					}
-				}
+				if (RecedingNav.Active || ReachCell.IsRunning) { StopHellRun(); Main.NewText("[TerraBlind] 停止", 255, 200, 120); }
+				else if (!StartHellRun(out string hrw)) Main.NewText($"[TerraBlind] {hrw}", 255, 120, 120);
 			}
+
 			// I 预览全程:主道→地狱的线 + 桥 + 房子,一次画完。人不动,纯看位置对不对。
 			if (TerraBlind.PreviewDescent != null && TerraBlind.PreviewDescent.JustPressed)
 			{
@@ -342,6 +282,94 @@ namespace TerraBlind
 					DiagLog.Write($"[hell-line] key start=({hres.StartX},{hres.StartY}) dir={hdir} house=({hres.HouseX},{hres.HouseY}) 岩浆列={hres.HouseLavaCols}/6 dig={hres.DigCells} cost={hres.Cost}");
 				}
 			}
+		}
+
+		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
+		// 后面几步由 _pendingAnchor/_pendingDeck/_wofAfterDeck 接力,不在这儿等。
+		// 键盘([ 键)和 HTTP(/hell_run)都走这里 —— 两套入口各写一遍是老毛病了
+		public static bool StartHellRun(out string why)
+		{
+			why = "";
+			var rp = Main.LocalPlayer;
+			if (rp == null || !rp.active) { why = "no_player"; return false; }
+			int rbx = ActExecutor.OriginCx(rp);
+			int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
+			var rr = HellLine.Compute(rbx, rdir);
+			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
+
+			// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
+			// 复用地表选址找块干净的,再从那儿重算整条线 —— 房子和桥就天然对齐
+			// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
+			// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
+			int hw1 = HouseBuilder.RoomWidth + 1;
+			bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+				out int cx0, out int cy0, out int sc0, false, true);
+			if (!got)
+			{
+				DiagLog.Write($"[reach-test] 附近没有【岩浆上】的干净房址(扫了{sc0}),退回不要求岩浆");
+				got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+					out cx0, out cy0, out sc0, false);
+			}
+			if (got && (cx0 != rr.HouseX || cy0 != rr.HouseY))
+			{
+				DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
+				var rr2 = HellLine.Compute(cx0, rdir, cy0);
+				if (rr2.Found) rr = rr2;
+				else DiagLog.Write($"[reach-test] 新房址算不出线({rr2.Why}),用原来那条");
+			}
+			_deckFrom = HouseBuilder.RoomWidth + 1;
+			var (rsx, rsy) = rr.Line[0];
+			// 画线必须在重算【之后】:画早了显示的是旧线,和实际铺的对不上。
+			// 蓝=要铺 绿=现成地形能用上 白=起点。时长按 176 格铺完估,别中途消失
+			var rv = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+			for (int li = 0; li < rr.Line.Count; li++)
+			{
+				var (rlx, rly) = rr.Line[li];
+				bool have = Predicates.IsGround(rlx, rly);
+				rv.Add((rlx, rly, have
+					? new Microsoft.Xna.Framework.Color(60, 230, 90, 110)
+					: new Microsoft.Xna.Framework.Color(0, 200, 255, 100)));
+			}
+			rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
+			PathVisSystem.SetDeck(rv, 60 * 60 * 20);
+			// 地狱里目标几乎全悬空,通用寻路到不了 —— 它只会在【已有的地】上走跳,
+			// 于是爬过头再也下不来(日志:目标1044,人爬到1026卡死)。
+			// ReachCell 用三个自造落脚点的原语一次消一个方向:升 pillar、降 platdown、
+			// 横向 bridge。悬空天然可达,而且不可能爬过目标行
+			int rbslot = HellBridge.FindBlockSlot(rp, out _);
+			string rblk = rbslot >= 0 ? rp.inventory[rbslot].type.ToString() : "9";
+			if (!ReachCell.Start("94", rblk, rsx, rsy, out string rcw))
+			{
+				DiagLog.Write($"[reach-test] ReachCell 起不来({rcw}),退回通用寻路");
+				RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
+			}
+			_pendingAnchor = (rsx, rsy);
+			_pendingDeck = rr.Line;
+			DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
+			Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
+			return true;
+		}
+
+		public static void StopHellRun()
+		{
+			ReachCell.Stop(); RecedingNav.Stop();
+			HouseBuilder.Stop(); DeckBuilder.Stop(); WofPrep.Stop();
+			if (WofFight.On) WofFight.Toggle();
+			_pendingAnchor = null; _pendingStand = null; _pendingDeck = null; _wofAfterDeck = false;
+			DiagLog.Write("[reach-test] 地狱流程停止");
+		}
+
+		// 跑到哪一步了。给 /hell_run_status 用 —— Python 靠它判断该不该继续等
+		public static string HellRunPhase()
+		{
+			if (WofFight.On) return "fight";
+			if (WofPrep.IsRunning) return "wof:" + WofPrep.Phase;
+			if (DeckBuilder.IsRunning) return "deck";
+			if (HouseBuilder.IsRunning) return "house";
+			if (PlaceAnywhere.IsRunning) return "anchor";
+			if (ReachCell.IsRunning || RecedingNav.Active) return "goto";
+			if (_pendingAnchor.HasValue || _pendingStand.HasValue || _pendingDeck != null || _wofAfterDeck) return "handoff";
+			return "idle";
 		}
 
 		// 我们自己的动作在不在跑。判据只有这一份,别在各处各写一套
