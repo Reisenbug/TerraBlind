@@ -2726,6 +2726,57 @@ namespace TerraBlind
 					}
 				}
 			}
+			else if (path == "/shop_list")
+			{
+				// 商店开着时:背包里每一格值多少钱(【卖价】=原价/5,不是 item.value),
+				// 外加身上有多少钱。卖东西凑钱要先看这个
+				var sp = Main.LocalPlayer;
+				var sb3 = new System.Text.StringBuilder();
+				sb3.Append("{\"open\":").Append(sp != null && sp.talkNPC >= 0 ? "true" : "false");
+				sb3.Append(",\"money\":").Append(sp != null ? Shop.Money(sp) : 0);
+				sb3.Append(",\"money_text\":\"").Append(JsonEsc(sp != null ? Shop.Coins(Shop.Money(sp)) : "")).Append("\"");
+				sb3.Append(",\"items\":[");
+				bool first3 = true;
+				if (sp != null)
+					for (int i = 0; i < sp.inventory.Length; i++)
+					{
+						var it = sp.inventory[i];
+						if (it == null || it.IsAir) continue;
+						long unit = Shop.SellUnit(sp, it);
+						if (unit <= 0) continue;              // 卖不掉的不列,省得上层再筛一遍
+						if (!first3) sb3.Append(',');
+						first3 = false;
+						sb3.Append("{\"slot\":").Append(i)
+						   .Append(",\"name\":\"").Append(JsonEsc(it.Name)).Append("\"")
+						   .Append(",\"type\":").Append(it.type)
+						   .Append(",\"stack\":").Append(it.stack)
+						   .Append(",\"unit\":").Append(unit)
+						   .Append(",\"total\":").Append(unit * it.stack)
+						   .Append(",\"text\":\"").Append(JsonEsc(Shop.Coins(unit * it.stack))).Append("\"}");
+					}
+				sb3.Append("]}");
+				body = sb3.ToString();
+			}
+			else if (path == "/shop_sell")
+			{
+				// {"slot":N} 卖掉那一格。整格一起卖 —— 原版 SellItem 就是这个粒度,
+				// 而且它塞不下钱时会把整个背包回滚,不会东西没了钱也没拿到
+				string rss = ReadBody(ctx).Replace(" ", "");
+				var mss = System.Text.RegularExpressions.Regex.Match(rss, "\"slot\"\\s*:\\s*(\\d+)");
+				var sp2 = Main.LocalPlayer;
+				if (!mss.Success) body = "{\"ok\":false,\"reason\":\"need_slot\"}";
+				else if (sp2 == null) body = "{\"ok\":false,\"reason\":\"no_player\"}";
+				else
+				{
+					long before = Shop.Money(sp2);
+					bool oks = Shop.Sell(sp2, int.Parse(mss.Groups[1].Value), out string whys);
+					long after = Shop.Money(sp2);
+					body = oks
+						? "{\"ok\":true,\"gained\":" + (after - before) + ",\"money\":" + after
+							+ ",\"money_text\":\"" + JsonEsc(Shop.Coins(after)) + "\"}"
+						: "{\"ok\":false,\"reason\":\"" + JsonEsc(whys) + "\"}";
+				}
+			}
 			else if (path == "/hell_run")
 			{
 				// 地狱那一整套:算线 → 选址 → 去桥起点 → 盖房 → 铺桥 → 肉山准备 → 开打。
