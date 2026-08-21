@@ -326,6 +326,9 @@ namespace TerraBlind
 		}
 
 		// HAVE — how many of an item id the player holds, across hotbar and backpack.
+		// 【鼠标上拿着的那件也算】。放置/合成中途物品会悬在 Main.mouseItem 上,它不在
+		// inventory 里 —— 只数背包就会少一个,于是"以为够了"不再补合,摆到最后一张时
+		// 背包空了报 no_item。当年桌子"合成报成功却只出2张"就是这个,当时靠换合成顺序绕开了
 		public static int Have(int id)
 		{
 			var p = Main.LocalPlayer;
@@ -336,6 +339,8 @@ namespace TerraBlind
 				var it = p.inventory[i];
 				if (it != null && !it.IsAir && it.type == id) n += it.stack;
 			}
+			var m = Main.mouseItem;
+			if (m != null && !m.IsAir && m.type == id) n += m.stack;
 			return n;
 		}
 

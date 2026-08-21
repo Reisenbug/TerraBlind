@@ -48,7 +48,22 @@ namespace TerraBlind
 		public static int ResolveSlot(string spec)
 		{
 			if (string.IsNullOrEmpty(spec)) return -1;
+			StashMouseItem();
 			return int.TryParse(spec, out int id) ? FindSlotById(id) : FindSlotByName(spec);
+		}
+
+		// 鼠标上拿着的那一叠【不在 inventory 里】,查槽位查不到,于是明明有东西却报 no_item。
+		// 上一次放置/合成结束后物品常常就悬在那儿。所有放置都经过 ResolveSlot,所以塞在这儿一处就够
+		public static void StashMouseItem()
+		{
+			var p = Main.LocalPlayer;
+			var m = Main.mouseItem;
+			if (p == null || m == null || m.IsAir) return;
+			// 用原版的 ReturnItemFromSlot —— 语义就是"把手上这件退回格子里",而且 NoText 不弹提示。
+			// 能并叠就并叠,不然找空位;收不下就原样留在手上
+			var left = p.GetItem(Main.myPlayer, m, GetItemSettings.ReturnItemFromSlot);
+			Main.mouseItem = left == null ? new Item() : left;
+			DiagLog.Write($"[place] 鼠标上的 {m.Name} 放回背包,剩 {(Main.mouseItem.IsAir ? 0 : Main.mouseItem.stack)}");
 		}
 
 		// Resolve an item by NAME (exact, then contains) anywhere in the inventory — hotbar or backpack, since
