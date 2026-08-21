@@ -47,18 +47,31 @@ namespace TerraBlind
 			return u < 1 ? 1 : u;
 		}
 
-		// 卖掉一格。原版 SellItem 自己处理"刚买的原价退"和把钱塞进背包
+		// 卖掉一格。【照抄原版右键那条路】(ItemSlot.cs:772) —— 光调 SellItem 只是把钱
+		// 塞进背包,货架不会多出这件东西,也就没法反悔买回来。原版还会出声、发界面提示。
+		// 0 价的东西原版照收(只是没钱),不能当失败
 		public static bool Sell(Player p, int slot, out string why)
 		{
 			why = "";
 			if (slot < 0 || slot >= p.inventory.Length) { why = "slot_out_of_range"; return false; }
 			var it = p.inventory[slot];
 			if (it == null || it.IsAir) { why = "empty"; return false; }
-			if (p.talkNPC < 0) { why = "shop_not_open"; return false; }
+			if (p.talkNPC < 0 || Main.npcShop <= 0) { why = "shop_not_open"; return false; }
+			var chest = Main.instance.shop[Main.npcShop];
+			if (chest == null) { why = "no_shop_chest"; return false; }
+
 			long got = SellUnit(p, it) * it.stack;
-			if (!p.SellItem(it)) { why = "worthless"; return false; }
-			DiagLog.Write($"[shop] 卖 {it.Name}x{it.stack} 得 {Coins(got)}");
-			p.inventory[slot] = new Item();
+			bool paid = p.SellItem(it);
+			// SellItem 失败只有两种:一分不值(那是原版的 value==0 分支,照收),
+			// 或者钱塞不下 —— 后者原版会把整个背包回滚,东西还在,直接报出去
+			if (!paid && it.value != 0) { why = "no_room_for_coins"; return false; }
+
+			chest.AddItemToShop(it);                 // 放上货架,能原价买回来
+			it.TurnToAir();                          // 原版用这个清,不是 new Item()
+			// 18=Coins 卖出去了,7=Grab 白送(0价物品)。AnnounceTransfer 不调 ——
+			// 那是鼠标操作的浮动提示,ItemSlot 的嵌套类型,对功能没影响
+			Terraria.Audio.SoundEngine.PlaySound(paid ? SoundID.Coins : SoundID.Grab);
+			DiagLog.Write($"[shop] 卖 {it.Name} 得 {Coins(paid ? got : 0)}");
 			return true;
 		}
 	}
