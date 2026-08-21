@@ -124,13 +124,10 @@ namespace TerraBlind
         static bool PlatAnchor(int x, int y)
         {
             (int dx, int dy)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
+            // 问的是【邻居】(a,b) 是不是地,不是自己(x,y) —— 自己当然是空的,
+            // 不然也不用放东西了。写成 (x,y) 会让所有平台都放不出来
             foreach (var (dx, dy) in n)
-            {
-                int a = x + dx, b = y + dy;
-                if (!Predicates.InBounds(a, b)) continue;
-                var t = Main.tile[a, b];
-                if (Predicates.IsGround(x, y)) return true;
-            }
+                if (Predicates.IsGround(x + dx, y + dy)) return true;
             return false;
         }
 
