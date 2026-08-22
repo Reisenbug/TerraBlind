@@ -1178,7 +1178,7 @@ namespace TerraBlind
 			float halfH = TileWindowHeight / 2f * 16f;
 			for (int i = 0; i < Main.maxItems; i++)
 			{
-				Item item = Main.item[i];
+				WorldItem item = Main.item[i];
 				if (item == null || !item.active || item.IsAir) continue;
 				float ix = item.position.X + item.width / 2f;
 				float iy = item.position.Y + item.height / 2f;
