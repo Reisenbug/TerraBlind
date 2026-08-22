@@ -595,7 +595,7 @@ namespace TerraBlind
             return false;
         }
 
-        const int LavaVoidProbe = 40;
+        const int LavaVoidProbe = 200;   // 40 行探不到 121 行深的竖井底,探不到就当安全 —— 掉下去才发现
         static (int, int) _gateLogCell = (int.MinValue, int.MinValue);
 
         // 每条边的【落点】都要能站人。模拟器把岩浆当空气,所以落进岩浆的边看起来一切正常 ——
@@ -913,6 +913,22 @@ namespace TerraBlind
             return Predicates.IsWall(x, y);
         }
 
+        const int FallProbe = 200;   // 竖井实测 121 行,40 行的老探深探不到底,一律当"安全"放行
+        const int LandLava = -1, LandVoid = -2;
+
+        // 把 dug 里的格当成已经挖空,从 (x,fromY) 往下找人会停在哪一行。
+        // 返回落脚行 / LandLava / LandVoid(探不到底)。
+        static int FallLanding(int x, int fromY, System.Collections.Generic.List<(int, int)> dug)
+        {
+            for (int y = fromY; y <= fromY + FallProbe; y++)
+            {
+                if (Predicates.IsLava(x, y)) return LandLava;
+                if (dug.Contains((x, y))) continue;
+                if (DigSolid(x, y) || PathPlanner.IsFloorPublic(x, y)) return y - 1;
+            }
+            return LandVoid;
+        }
+
         // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。
         // 竖井版有 "12 格内没落点就 null" 的死角,厚墙前把人钉住过。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
@@ -931,6 +947,14 @@ namespace TerraBlind
                     tiles.Add((c, y));
                 }
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
+            // 挖开脚下之后人会掉到哪 —— 出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
+            // 实心岩石,门槛必然短路放行。挖开才是竖井盖子的情况只能在这儿自己模拟。
+            foreach (int c in new[] { ccx, c2 })
+            {
+                int land = FallLanding(c, y, tiles);
+                if (land == LandLava) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆"); return null; }
+                if (land == LandVoid) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})下方{FallProbe}行探不到底"); return null; }
+            }
             // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
             // it if that cell is lower H (toward goal). If ccy+2 is ALSO open, the next cycle's free-fall/dig continues.
             bool hasH = ctx.DistField.TryGetValue((ccx, y), out int lh);
