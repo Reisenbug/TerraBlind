@@ -44,7 +44,7 @@ namespace TerraBlind
             float ncy = target.position.Y + target.height / 2f;
             Cursor.AimPx(ncx, ncy);
 
-            p.selectedItem = weaponSlot;
+            p.selectedItemState.Select(weaponSlot);
             p.controlUseItem = true;
         }
 

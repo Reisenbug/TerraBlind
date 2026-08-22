@@ -133,7 +133,7 @@ namespace TerraBlind
 			float ax = p.Center.X + side * AimX * 16f;
 			float ay = p.Center.Y + AimY * 16f;
 			Cursor.AimPx(ax, ay);
-			p.selectedItem = slot;
+			p.selectedItemState.Select(slot);
 			// 雷管 useTime=useAnimation=40(Item.cs:3386),原版自己把节奏卡死在40帧,
 			// 再加一层冷却纯属多余 —— 实测相邻两根间隔40~56帧,正是这个下限
 			if (p.itemTime != 0 || p.itemAnimation != 0) return;

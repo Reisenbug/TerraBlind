@@ -338,7 +338,7 @@ namespace TerraBlind
                 }
                 if (canPlace)
                 {
-                    p.selectedItem = platformSlot;
+                    p.selectedItemState.Select(platformSlot);
                     Main.SmartCursorWanted_Mouse = false;
                     Cursor.AimTile(_pillarCol, _anchorWy);
                     if (p.itemTime == 0) { p.controlUseItem = true; _cyclesDone++; }
@@ -380,7 +380,7 @@ namespace TerraBlind
                     if (Main.tile[col, feetTileY].HasTile) { targetX = col; break; }
                 if (targetX < 0) return;
                 SetMouse(p, targetX * 16f + 8f, feetTileY * 16f + 8f);
-                p.selectedItem = slot;
+                p.selectedItemState.Select(slot);
                 if (p.itemTime == 0) p.controlUseItem = true;
             }
 
@@ -401,7 +401,7 @@ namespace TerraBlind
                 }
                 if (targetY < 0) return;
                 SetMouse(p, sideTileX * 16f + 8f, targetY * 16f + 8f);
-                p.selectedItem = slot;
+                p.selectedItemState.Select(slot);
                 if (p.itemTime == 0) p.controlUseItem = true;
             }
 
@@ -425,7 +425,7 @@ namespace TerraBlind
                 else
                     targetX = rightTileX;
                 SetMouse(p, targetX * 16f + 8f, targetRow * 16f + 8f);
-                p.selectedItem = slot;
+                p.selectedItemState.Select(slot);
                 if (p.itemTime == 0) p.controlUseItem = true;
             }
         }

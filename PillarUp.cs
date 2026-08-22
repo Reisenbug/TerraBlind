@@ -84,7 +84,7 @@ namespace TerraBlind
 		// aim the cursor at the current target cell and hold the item selected.
 		private static void Aim(Player p)
 		{
-			p.selectedItem = _slot <= 9 ? _slot : p.selectedItem;
+			if (_slot <= 9) p.selectedItemState.Select(_slot);
 			Cursor.AimTile(_colCx, _wy);
 
 			// DEBUG: paint the cell the cursor is swinging at, so it's visible on screen exactly where we're aiming.

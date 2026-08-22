@@ -103,7 +103,7 @@ namespace TerraBlind
                     for (int i = 0; i < 10; i++)
                     { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > bp) { bp = it.pick; slot = i; } }
                     if (slot < 0) return;
-                    p.selectedItem = slot;
+                    p.selectedItemState.Select(slot);
                     Main.SmartCursorWanted_Mouse = false;
                     Cursor.AimTile(x, y);
                     if (p.itemTime == 0) p.controlUseItem = true;
@@ -125,7 +125,7 @@ namespace TerraBlind
                     for (int i = 0; i < 10; i++)
                     { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > bp) { bp = it.pick; slot = i; } }
                     if (slot < 0) return;
-                    p.selectedItem = slot;
+                    p.selectedItemState.Select(slot);
                     Main.SmartCursorWanted_Mouse = false;
                     Cursor.AimTile(x, y);
                     if (p.itemTime == 0) p.controlUseItem = true;

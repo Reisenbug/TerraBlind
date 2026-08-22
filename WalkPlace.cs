@@ -196,7 +196,7 @@ namespace TerraBlind
 						else { t.Slot = re; _targets[i] = t; }
 						DiagLog.Write($"[walkplace] 物品{t.ItemType} 槽位漂了,重新定位到 {t.Slot}");
 					}
-					p.selectedItem = t.Slot;
+					p.selectedItemState.Select(t.Slot);
 					Cursor.AimTile(t.Wx, t.Wy);
 					p.controlUseItem = true;
 					swungThisFrame = true;

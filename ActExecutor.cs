@@ -155,7 +155,7 @@ namespace TerraBlind
 				slot = hb;
 				s.Slot = hb;
 			}
-			if (slot >= 0 && slot <= 9) p.selectedItem = slot;
+			if (slot >= 0 && slot <= 9) p.selectedItemState.Select(slot);
 
 			// CURSOR — resolve the target cell and point the mouse at its centre. "rel" recomputes the origin every
 			// frame (the aim follows the player, e.g. always 4 above the feet while climbing); "at" uses the origin

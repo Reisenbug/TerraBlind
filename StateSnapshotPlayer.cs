@@ -432,7 +432,7 @@ namespace TerraBlind
 					}
 					if (slot >= 0)
 					{
-						Player.selectedItem = slot;
+						Player.selectedItemState.Select(slot);
 						Player.controlUseItem = true;
 						// place at feet+1 tile so player lands on it
 						int tileX = (int)((Player.position.X + Player.width / 2f) / 16f);
@@ -715,7 +715,7 @@ namespace TerraBlind
 			if (ci.UseTile) Player.controlUseTile = true;
 			if (ci.SmartCursor >= 0) Main.SmartCursorWanted_Mouse = ci.SmartCursor == 1;
 			if (ci.SelectedSlot >= 0 && ci.SelectedSlot <= 9)
-				Player.selectedItem = ci.SelectedSlot;
+				Player.selectedItemState.Select(ci.SelectedSlot);
 			if (!float.IsNaN(ci.Mx) && !float.IsNaN(ci.My))
 			{
 				Cursor.AimOffset(Player, ci.Mx, ci.My);

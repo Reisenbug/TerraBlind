@@ -3083,7 +3083,7 @@ namespace TerraBlind
                 if (_placeStall == 1) EventLog.W(Ev.Place, $"STALL ({cx},{cy}) 热键栏没有平台");
                 return;
             }
-            p.selectedItem = slot;
+            p.selectedItemState.Select(slot);
             Main.SmartCursorWanted_Mouse = false; // SmartCursor would retarget the cursor away from PlaceCx/Cy
             if (p.itemTime > 0)
             {

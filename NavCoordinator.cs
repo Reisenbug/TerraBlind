@@ -1242,7 +1242,7 @@ namespace TerraBlind
                         int aheadX = pcx + pwSign;
                         if (slot >= 0 && !PathPlanner.IsFloorPublic(aheadX, feetY + 1) && PathPlanner.CanPlacePlatformAt(aheadX, feetY + 1))
                         {
-                            p.selectedItem = slot;
+                            p.selectedItemState.Select(slot);
                             p.controlUseItem = true;
                             Main.SmartCursorWanted_Mouse = false;
                             Cursor.AimTile(aheadX, feetY + 1);
@@ -1488,7 +1488,7 @@ namespace TerraBlind
                     bool mineDown  = mineAction == "mine_down";
 
                     Main.SmartCursorWanted_Mouse = true;
-                    p.selectedItem = slot;
+                    p.selectedItemState.Select(slot);
                     if (p.itemTime == 0) p.controlUseItem = true;
 
                     float midY = p.position.Y + p.height / 2f;

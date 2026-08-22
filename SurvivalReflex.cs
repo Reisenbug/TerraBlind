@@ -44,7 +44,7 @@ namespace TerraBlind
 				int ws = BestWeaponSlot(p);
 				if (ws >= 0)
 				{
-					p.selectedItem = ws;
+					p.selectedItemState.Select(ws);
 					Cursor.AimPx(foe.Center.X, foe.Center.Y);
 					if (p.itemTime == 0)
 						p.controlUseItem = true;

@@ -100,7 +100,7 @@ namespace TerraBlind
 			}
 
 			// in reach → aim and swing. Placement judged by the map (WallHere) next frame.
-			p.selectedItem = _slot;
+			p.selectedItemState.Select(_slot);
 			Cursor.AimTile(wx, wy);
 			if (p.itemTime == 0) p.controlUseItem = true;
 		}

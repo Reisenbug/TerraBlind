@@ -53,7 +53,7 @@ namespace TerraBlind
             if (frame.UseAlt) p.altFunctionUse = 2;
             if (frame.UseTile) p.controlUseTile = true;
             if (frame.Mount) p.controlMount = true;
-            if (frame.SelectedSlot >= 0) p.selectedItem = frame.SelectedSlot;
+            if (frame.SelectedSlot >= 0) p.selectedItemState.Select(frame.SelectedSlot);
             if (frame.SmartCursor >= 0) Main.SmartCursorWanted_Mouse = frame.SmartCursor == 1;
             int mx = (int)(p.position.X + p.width / 2f + frame.Mx * 16f - Main.screenPosition.X);
             int my = (int)(p.position.Y + p.height / 2f + frame.My * 16f - Main.screenPosition.Y);

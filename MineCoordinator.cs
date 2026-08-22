@@ -159,7 +159,7 @@ namespace TerraBlind
 			}
 
 			Cursor.AimTile(tx, ty);
-			p.selectedItem = slot;
+			p.selectedItemState.Select(slot);
 			if (p.itemTime == 0)
 				p.controlUseItem = true;
 		}

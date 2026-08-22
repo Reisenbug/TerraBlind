@@ -46,7 +46,7 @@ namespace TerraBlind
 			Cursor.AimPx(worldX, worldY);
 
 			if (r.Slot >= 0 && r.Slot <= 9)
-				p.selectedItem = r.Slot;
+				p.selectedItemState.Select(r.Slot);
 			p.controlUseItem = true;
 
 			r.RemainingFrames--;
