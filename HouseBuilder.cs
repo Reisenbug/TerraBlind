@@ -792,6 +792,7 @@ namespace TerraBlind
 			for (int i = 0; i < ChairCount; i++)
 				cc.Add((ChairCol(i), _floorRow, H_CHAIR.ToString()));
 			int dest = (_hopTries % 2 == 0) ? Wx(LocalMax - 2) : Wx(2);
+			DiagLog.Write($"[house] 摆椅前 背包椅子={Predicates.Have(H_CHAIR)} 目标{cc.Count}个 mouseItem={(Main.mouseItem != null && !Main.mouseItem.IsAir ? Main.mouseItem.type + "x" + Main.mouseItem.stack : "空")} 分布={SlotDump(H_CHAIR)}");
 			return WalkPlace.Start(dest, cc, out why);
 		}
 

@@ -94,6 +94,23 @@ namespace TerraBlind
 			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
 		}
 
+		// 挤掉哪个热键位:本轮用不到的那种物品优先。挤掉正在用的会让它的 t.Slot 失效。
+		static int FreeHome(Player p, Dictionary<int, int> homeOf)
+		{
+			for (int i = 0; i < 10; i++)
+			{
+				bool claimed = false;
+				foreach (var v in homeOf.Values) if (v == i) { claimed = true; break; }
+				if (claimed) continue;
+				var it = p.inventory[i];
+				bool needed = false;
+				if (it != null && !it.IsAir)
+					foreach (var t in _targets) if (!t.Done && t.ItemType == it.type) { needed = true; break; }
+				if (!needed) return i;
+			}
+			return 0;
+		}
+
 		// 每种物品占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉。
 		// 只在手空闲时调用 —— 冷却里换槽会被原版补一次消耗。
 		static void Arm(Player p)
@@ -118,8 +135,11 @@ namespace TerraBlind
 							var hbItem = p.inventory[nextHb];
 							if (hbItem == null || hbItem.IsAir) { home = nextHb; break; }
 						}
-						if (home < 0) home = 0;
+						// 热键位全满时旧代码 home=0 硬挤:把 0 号原来的东西换到 slot 去。
+						// 换出去的要是【本轮还要用的另一种料】,它的 t.Slot 就指向了别人的格子。
+						if (home < 0) home = FreeHome(p, homeOf);
 						var tmp = p.inventory[home]; p.inventory[home] = p.inventory[slot]; p.inventory[slot] = tmp;
+						DiagLog.Write($"[walkplace] arm 物品{t.ItemType} 槽{slot}→热键{home} 换出={(tmp == null || tmp.IsAir ? "空" : tmp.type + "x" + tmp.stack)}");
 					}
 					homeOf[t.ItemType] = home;
 				}
@@ -165,7 +185,17 @@ namespace TerraBlind
 
 				if (!swungThisFrame && p.itemTime == 0)
 				{
-					// t.Slot is this item's permanent hotbar home (assigned at Start) — just select it, never swap.
+					// t.Slot 是 Arm 分的热键位,但中途别的动作可能把料挪走了 —— 按【物品类型】认,
+					// 不认下标。认错下标 = 拿着别的东西挥一下,料没少但也没放上。
+					var held = p.inventory[t.Slot];
+					if (held == null || held.IsAir || held.type != t.ItemType)
+					{
+						int re = PlaceAction.FindSlotById(t.ItemType);
+						if (re < 0) { DiagLog.Write($"[walkplace] 物品{t.ItemType} 没了,({t.Wx},{t.Wy}) 放不了"); continue; }
+						if (re > 9) { var sw = p.inventory[t.Slot]; p.inventory[t.Slot] = p.inventory[re]; p.inventory[re] = sw; }
+						else { t.Slot = re; _targets[i] = t; }
+						DiagLog.Write($"[walkplace] 物品{t.ItemType} 槽位漂了,重新定位到 {t.Slot}");
+					}
 					p.selectedItem = t.Slot;
 					Cursor.AimTile(t.Wx, t.Wy);
 					p.controlUseItem = true;
