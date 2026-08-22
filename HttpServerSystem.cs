@@ -2699,7 +2699,21 @@ namespace TerraBlind
 				{
 					int tx = int.Parse(xm.Groups[1].Value), ty = int.Parse(ym.Groups[1].Value);
 					int scx = ActExecutor.OriginCx(pc), scy = ActExecutor.OriginCy(pc);
-					var fld = MazeWand.BuildField(tx, ty, scx, scy);
+					// 箱子/矿是【实心格】,人永远站不进去。以它本身为种子建场,种子那格不可通行,
+					// 场铺不出来,玩家格永远没值 → 每个箱子都报 unreachable。要的是"够得着",不是"站进去"。
+					var seeds = new System.Collections.Generic.List<(int x, int y)>();
+					for (int dx = -1; dx <= 1; dx++)
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							if (dx == 0 && dy == 0) continue;
+							int ax = tx + dx, ay = ty + dy;
+							if (!Predicates.IsSolid(ax, ay)) seeds.Add((ax, ay));
+						}
+					if (seeds.Count == 0) seeds.Add((tx, ty));
+					int pad = 120;
+					var fld = MazeWand.BuildFieldMulti(seeds,
+						System.Math.Min(tx, scx) - pad, System.Math.Max(tx, scx) + pad,
+						System.Math.Min(ty, scy) - pad, System.Math.Max(ty, scy) + pad);
 					if (!fld.ContainsKey((scx, scy)))
 						body = "{\"ok\":false,\"reason\":\"unreachable\"}";
 					else
@@ -2709,7 +2723,7 @@ namespace TerraBlind
 						var seen = new System.Collections.Generic.HashSet<(int, int)> { cur };
 						for (int step = 0; step < 4000; step++)
 						{
-							if (cur.x == tx && cur.y == ty) break;
+							if (seeds.Contains((cur.x, cur.y))) break;
 							if (!fld.TryGetValue((cur.x, cur.y), out int hc) || hc == 0) break;
 							int bn = hc; var best = cur;
 							foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
