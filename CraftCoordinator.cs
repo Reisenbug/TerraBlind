@@ -90,7 +90,7 @@ namespace TerraBlind
                 result.stack = stackPerCraft;
                 // 返回的是"没收下的部分"(空/stack=0 = 全收了)。原来这个返回值被丢掉,
                 // 于是背包满时东西掉地上,计数照样加。
-                var left = Main.LocalPlayer.GetItem(Main.myPlayer, result, GetItemSettings.ItemCreatedFromItemUsage);
+                var left = Main.LocalPlayer.GetItem(result, GetItemSettings.ItemCreatedFromItemUsage);
                 int refused = (left == null || left.IsAir) ? 0 : left.stack;
                 LastCrafted += stackPerCraft - refused;
                 remaining -= stackPerCraft;

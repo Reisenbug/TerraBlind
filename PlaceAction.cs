@@ -60,7 +60,7 @@ namespace TerraBlind
 			var m = Main.mouseItem;
 			if (p == null || m == null || m.IsAir) return;
 			// 能并叠就并叠,不然找空位;收不下就原样留在手上。
-			var left = p.GetItem(Main.myPlayer, m, GetItemSettings.ReturnItemFromSlot);
+			var left = p.GetItem(m, GetItemSettings.ReturnItemFromSlot);
 			Main.mouseItem = left == null ? new Item() : left;
 			DiagLog.Write($"[place] 鼠标上的 {m.Name} 放回背包,剩 {(Main.mouseItem.IsAir ? 0 : Main.mouseItem.stack)}");
 		}

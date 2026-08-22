@@ -108,7 +108,7 @@ namespace TerraBlind
 		static bool StashMouse(Player p)
 		{
 			if (Main.mouseItem.IsAir) return true;
-			Main.mouseItem = p.GetItem(Main.myPlayer, Main.mouseItem, Terraria.GetItemSettings.ReturnItemFromSlot);
+			Main.mouseItem = p.GetItem(Main.mouseItem, Terraria.GetItemSettings.ReturnItemFromSlot);
 			return Main.mouseItem.IsAir;
 		}
 
