@@ -60,8 +60,7 @@ namespace TerraBlind
 			var m = Main.mouseItem;
 			if (p == null || m == null || m.IsAir) return;
 			// 能并叠就并叠,不然找空位;收不下就原样留在手上。
-			// (原版 1.4.5.4 里有个语义更贴的 ReturnItemFromSlot,但 tModLoader 没有这个预设)
-			var left = p.GetItem(Main.myPlayer, m, GetItemSettings.InventoryEntityToPlayerInventorySettings);
+			var left = p.GetItem(Main.myPlayer, m, GetItemSettings.ReturnItemFromSlot);
 			Main.mouseItem = left == null ? new Item() : left;
 			DiagLog.Write($"[place] 鼠标上的 {m.Name} 放回背包,剩 {(Main.mouseItem.IsAir ? 0 : Main.mouseItem.stack)}");
 		}
