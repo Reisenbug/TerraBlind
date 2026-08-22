@@ -33,7 +33,7 @@ namespace TerraBlind
         const int AirSpanProbe = 40;  // how far ahead to measure the continuous air span
 
         // 踩进岩浆就是死。大到实际不可达,但仍是有限数 —— 万不得已跨一格岩浆桥还是允许的。
-        const int LavaCost = 100000;
+        const int PlateCost = 400;   // 绕得开就绕(≈130格横走的代价),绕不开还是让它过 —— 禁行会把人困死
         // 挖不动的砖(神庙)必须真不可达。有限数的话 Dijkstra 照样穿墙算出墙后的 H,
         // 墙后看着又近又好,上层挑中它一头撞上去开挖。Impassable 让边根本不入队。
         const int Impassable = int.MaxValue;
@@ -364,7 +364,19 @@ namespace TerraBlind
 
         static int StepCost(int cx, int cy, int nx, int ny)
         {
-            if (IsLava(cx, cy)) return LavaCost;   // entering lava = death; treat as impassable
+            // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
+            // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
+            for (int r = 0; r < 3; r++)
+                if (IsLava(cx, cy - r)) return Impassable;
+            // 压力板踩下去就触发,有的连着岩浆陷阱 —— 能绕就绕,绕不开也别当免费。
+            for (int r = 0; r < 3; r++)
+            {
+                int py2 = cy - r;
+                if (py2 < 0 || py2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
+                var pt = Main.tile[cx, py2];
+                if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
+                    return PlateCost;
+            }
             // BODY CLEARANCE: the player is 3 tiles tall — "standing in cell (cx,cy)" occupies rows cy..cy-2 of the
             // column. Judging wall-ness by the feet cell alone priced a chimney whose feet-row is air but whose head
             // rows are rock as a FREE climb (MoveUp=9) when the body actually has to mine its way up — the field

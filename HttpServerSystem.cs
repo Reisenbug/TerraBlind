@@ -1954,7 +1954,10 @@ namespace TerraBlind
 					// stand=true:目标是悬空格,要求真站上去(盖房)。不 snap 到地面,近处交给 A*。
 					bool exact = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"exact\":true");
 					bool stand = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"stand\":true");
-					var nmode = stand ? RecedingNav.Mode.Stand : exact ? RecedingNav.Mode.Mine : RecedingNav.Mode.Snap;
+					// reach=true:开箱子这种,够得着就行,不用站到那一格上。
+					bool reach = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"reach\":true");
+					var nmode = stand ? RecedingNav.Mode.Stand : reach ? RecedingNav.Mode.Reach
+						: exact ? RecedingNav.Mode.Mine : RecedingNav.Mode.Snap;
 					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), nmode);
 					body = "{\"ok\":true}";
 				}
