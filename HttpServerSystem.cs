@@ -908,11 +908,9 @@ namespace TerraBlind
 							   .Append(",\"have\":").Append(have).Append('}');
 						}
 						sbr.Append("],\"stations\":[");
-						for (int k = 0; k < r.requiredTile.Count; k++)
+						if (r.requiredTile >= 0)
 						{
-							int tt = r.requiredTile[k];
-							if (tt < 0) continue;
-							if (k > 0) sbr.Append(',');
+							int tt = r.requiredTile;
 							string tnm = Terraria.ID.TileID.Search.ContainsId(tt)
 								? Terraria.ID.TileID.Search.GetName(tt) : tt.ToString();
 							sbr.Append('"').Append(JsonEsc(tnm)).Append('"');

@@ -101,8 +101,9 @@ namespace TerraBlind
 				if (free + thrown >= want) break;
 				var it = p.inventory[slot];
 				if (it == null || it.IsAir) continue;
-				var drop = p.QuickSpawnItemDirect(p.GetSource_Misc("terrablind_throw"), it, it.stack);
-				if (drop == null) continue;
+				int dropIdx = Terraria.Item.NewItem(p.GetSource_Misc("terrablind_throw"), (int)p.position.X, (int)p.position.Y, p.width, p.height, it.type, it.stack, noBroadcast: false, 0, noGrabDelay: true);
+				if (dropIdx < 0 || dropIdx >= Main.item.Length) continue;
+				var drop = Main.item[dropIdx];
 				// 落在挑好的那一边、贴着人,速度清零 —— 不清会继承人的速度飞出去
 				drop.position.X = p.position.X + dir * 16f;
 				drop.position.Y = p.position.Y;
@@ -113,7 +114,7 @@ namespace TerraBlind
 				p.inventory[slot] = new Item();
 				thrown++;
 			}
-			Recipe.FindRecipes();
+			Recipe.UpdateRecipeList();
 			int now = FreeSlots();
 			LastNote = thrown == 0
 				? $"背包满但没有可扔的(全是工具/收藏/建材) 空格={now}"
