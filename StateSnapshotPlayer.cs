@@ -925,7 +925,7 @@ namespace TerraBlind
 			if (item.createTile >= 0)
 			{
 				if (TileID.Sets.Platforms[item.createTile]) return "platform";
-				if (TileID.Sets.Torch[item.createTile]) return "torch";
+				if (TileID.Sets.Torches[item.createTile]) return "torch";
 				return "block";
 			}
 			if (item.createWall >= 0) return "wall";
@@ -1142,7 +1142,7 @@ namespace TerraBlind
 			if (TileID.Sets.BasicChest[type]) return "chest";
 			if (TileID.Sets.BasicDresser[type]) return "dresser";
 			if (TileID.Sets.IsATreeTrunk[type]) return "tree";
-			if (TileID.Sets.Torch[type]) return "torch";
+			if (TileID.Sets.Torches[type]) return "torch";
 			if (TileID.Sets.Platforms[type]) return null;
 			switch (type)
 			{

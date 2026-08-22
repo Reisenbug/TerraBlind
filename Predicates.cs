@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Terraria;
@@ -277,7 +278,7 @@ namespace TerraBlind
 
 		// 用原版的房屋判定(不自己重写):传【房间内部】一点,报缺哪一项 —— "NPC 没入住"不算诊断,"没门"才算。
 		// roomDoor/roomTable 那几个是 private,所以从公开的 houseTile[] 反推
-		private static bool HasAny(int[] types)
+		private static bool HasAny(ReadOnlySpan<int> types)
 		{
 			for (int i = 0; i < types.Length; i++)
 			{
