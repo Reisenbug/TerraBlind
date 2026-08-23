@@ -2257,12 +2257,19 @@ namespace TerraBlind
 									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
 									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
 									if (Terraria.Chest.IsLocked(x, y)) continue;
-									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动 —— 进不去,别当目标。
+									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动,进不去,别当目标。
 									if (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
+									// 蜂巢里的不捡:蜂巢块难挖,进去容易被蜂群围,出来那一段一直卡。
+									// 判据用【墙】不用方块:宝藏就贴在蜂巢墙上,查方块会漏。
+									if (InHive(x, y)) continue;
 									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
 								}
 								else if (t.TileType == Terraria.ID.TileID.Heart
-									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0) kind = "heart";
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
+								{
+									if (InHive(x, y)) continue;
+									kind = "heart";
+								}
 								if (kind == null) continue;
 									// 每一次淘汰都留下坐标和原因:(3667,655) 那两颗水晶人擦肩而过却没进池子,
 									// 而三条 continue 一条日志都没有,根本看不出是哪条把它扔了。
@@ -2550,11 +2557,14 @@ namespace TerraBlind
 								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 								var t = Main.tile[x, y];
 								if (!t.HasTile || t.TileType != wantType) continue;
-								// Containers are 2x2, one TileID; only the top-left tile (frameX%36==0 && frameY%36==0)
-								// anchors a chest. Dedup to it and derive the chest sub-type from frameX.
+								if (InHive(x, y)) continue;   // 蜂巢里的不捡,进去出不来
+								// 箱子是 2x2 一个 TileID,只有左上角那格(frameX%36==0 && frameY%36==0)算锚点。
+								// 去重到它,顺便用 frameX 认出是哪种箱子。
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
 								{
 									if (t.TileFrameX % 36 != 0 || t.TileFrameY % 36 != 0) continue;
+									if (Terraria.Chest.IsLocked(x, y)) continue;
+									if (wantType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
 									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
 								}
 								else found.Add((x, y, null));
@@ -3313,6 +3323,21 @@ namespace TerraBlind
 
 		// 箱子子类型名。frameX/36 就是子 id(金箱=1,常春藤=21…),名字查 Lang.chestType[]/chestType2[]。
 		// 别用 MapHelper.TileToLookup:它的 option 是地图【颜色】分组,多种箱子共用一色 → 名字全错。
+		// 蜂巢墙(HiveUnsafe=86 自然生成 / Hive=108 玩家放的)。宝藏贴在墙上,自己那格
+		// 可能没墙,所以连邻格一起看。
+		static bool InHive(int x, int y)
+		{
+			for (int dx = -1; dx <= 1; dx++)
+				for (int dy = -1; dy <= 1; dy++)
+				{
+					int ax = x + dx, ay = y + dy;
+					if (!Predicates.InBounds(ax, ay)) continue;
+					int w = Main.tile[ax, ay].WallType;
+					if (w == Terraria.ID.WallID.HiveUnsafe || w == Terraria.ID.WallID.Hive) return true;
+				}
+			return false;
+		}
+
 		static string ChestKindName(int tileType, int style)
 		{
 			try
