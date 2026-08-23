@@ -142,6 +142,9 @@ namespace TerraBlind
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
 			_reclaimTries = 0; ThrowItems.Forget();
 			Unstick.Reset();
+			// 这几样后面几步都要用,换热键位时别把它们挤出去
+			WalkPlace.Protected.Clear();
+			WalkPlace.Protected.AddRange(new[] { H_CHAIR, H_TABLE, H_WALL, H_WORKBENCH });
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 			_ph = Ph.Lift;
@@ -589,6 +592,20 @@ namespace TerraBlind
 					// 结构补过了,家具还缺就接着走原来那条
 					if (_fixList.Count > 0)
 					{
+						// 补合【必须站在工作台旁边】:椅子要工作台才有配方,而验收时人在房子另一头,
+						// 原地 Craft 只会得到 no_recipe(日志:补合 34 +0 stop=no_recipe)
+						bool needCraft = false;
+						foreach (var (_, _, itc) in _fixList) if (Predicates.Have(itc) < 1) needCraft = true;
+						if (needCraft)
+						{
+							int bx = Wx(LocalMax - 2);
+							if (System.Math.Abs(ActExecutor.OriginCx(p) - bx) > 2)
+							{
+								if (!SettleAt.IsRunning) SettleAt.Start(bx, out _);
+								return;
+							}
+							Main.playerInventory = true;   // 不开背包 adjTile 是空的,要工作台的配方不出现
+						}
 						var ft2 = new List<(int, int, string)>();
 						foreach (var (fx3, fy3, item3) in _fixList)
 						{

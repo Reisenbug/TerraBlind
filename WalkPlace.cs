@@ -18,6 +18,8 @@ namespace TerraBlind
 		private static bool _running;
 		private static int _destCx, _dir;
 		private static readonly List<Target> _targets = new();
+		private static readonly List<(int wx, int wy, string item)> _pending = new();
+		private static bool _resolved;
 		private static int _frames, _pendingFrames;
 		private static bool _armed;
 
@@ -36,15 +38,14 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 
+			// 【手没收干净之前不碰背包】。ResolveSlot 会 StashMouseItem(动背包),而这里常常
+			// 紧接着上一个动作(合成/放置)的同一帧 —— 原版在冷却归零那帧会拿手上那格补一次消耗,
+			// 于是物品扣了却没落地。桌子丢一张、椅子丢一把,都是这个窗口。
+			// 只记名字,真正解析推迟到 Tick 里手空闲之后。
+			_pending.Clear();
+			foreach (var (wx, wy, item) in targets) _pending.Add((wx, wy, item));
 			_targets.Clear();
-			foreach (var (wx, wy, item) in targets)
-			{
-				int slot = PlaceAction.ResolveSlot(item);
-				if (slot < 0) { why = "no_item:" + item; Outcome = "no_item"; Reason = item; return false; }
-				var it = p.inventory[slot];
-				_targets.Add(new Target { Wx = wx, Wy = wy, Slot = slot, TileType = it.createTile, ItemType = it.type, Done = false });
-			}
-			_armed = false;
+			_armed = false; _resolved = false;
 			_destCx = destCx;
 			_dir = destCx >= ActExecutor.OriginCx(p) ? 1 : -1;
 			_frames = 0; PlacedCount = 0; _pendingFrames = 0;
@@ -94,21 +95,29 @@ namespace TerraBlind
 			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
 		}
 
-		// 挤掉哪个热键位:本轮用不到的那种物品优先。挤掉正在用的会让它的 t.Slot 失效。
+		// 别动这些:盖房后面几步还要用。只看本轮 _targets 是不够的 —— 摆桌子那轮把热键0
+		// 的椅子换到槽48,换出来就少了一把(日志:arm 物品32 槽48→热键0 换出=34x3,原本4把)
+		public static readonly List<int> Protected = new();
+
+		// 挤掉哪个热键位:本轮用不到、后面也不用的优先。挤掉正在用的会让它的 t.Slot 失效。
 		static int FreeHome(Player p, Dictionary<int, int> homeOf)
 		{
+			int spare = -1;
 			for (int i = 0; i < 10; i++)
 			{
 				bool claimed = false;
 				foreach (var v in homeOf.Values) if (v == i) { claimed = true; break; }
 				if (claimed) continue;
 				var it = p.inventory[i];
+				if (it == null || it.IsAir) return i;   // 空位最好,谁都不动
 				bool needed = false;
-				if (it != null && !it.IsAir)
-					foreach (var t in _targets) if (!t.Done && t.ItemType == it.type) { needed = true; break; }
-				if (!needed) return i;
+				foreach (var t in _targets) if (!t.Done && t.ItemType == it.type) { needed = true; break; }
+				if (needed) continue;
+				if (Protected.Contains(it.type)) { if (spare < 0) spare = i; continue; }
+				return i;
 			}
-			return 0;
+			// 实在只剩受保护的,才动它 —— 总比 home=0 硬挤强
+			return spare >= 0 ? spare : 0;
 		}
 
 		// 每种物品占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉。
@@ -168,6 +177,27 @@ namespace TerraBlind
 			if (!_armed)
 			{
 				if (p.itemTime > 0 || p.itemAnimation > 0) return;
+				// 手空了才解析槽位 —— Start 那会儿动背包会把物品吃掉
+				if (!_resolved)
+				{
+					foreach (var (wx, wy, item) in _pending)
+					{
+						int slot = PlaceAction.ResolveSlot(item);
+						if (slot < 0)
+						{
+							Outcome = "no_item"; Reason = item; _running = false;
+							DiagLog.Write($"[walkplace] 解析不到 {item},背包里没有");
+							return;
+						}
+						var it0 = p.inventory[slot];
+						_targets.Add(new Target { Wx = wx, Wy = wy, Slot = slot, TileType = it0.createTile, ItemType = it0.type, Done = false });
+					}
+					_resolved = true;
+					var sd = new StringBuilder();
+					foreach (var t0 in _targets) sd.Append($"({t0.Wx},{t0.Wy})槽{t0.Slot} ");
+					DiagLog.Write($"[walkplace] 手空了才解析:{sd.ToString().Trim()}");
+					return;   // 解析这一帧不动手,让背包稳一帧
+				}
 				Arm(p);
 				_armed = true;
 			}
