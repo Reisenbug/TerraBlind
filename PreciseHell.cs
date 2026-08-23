@@ -36,6 +36,21 @@ namespace TerraBlind
 		public static bool Standable(int x, int y)
 			=> !Predicates.IsLava(x, y) && !Predicates.IsWall(x, y) && Predicates.IsGround(x, y + 1);
 
+		// 直接跳下去能落在哪:身子那两列一起看,先撞到岩浆就是不能跳。
+		// 返回落脚行,不能跳返回 -1。平台梯慢且吃料,能白掉下去就别铺。
+		public static int DropLanding(int bl, int br, int feetY, int maxDrop)
+		{
+			for (int y = feetY + 1; y <= feetY + maxDrop; y++)
+				for (int c = bl; c <= br; c++)
+				{
+					if (Predicates.IsLava(c, y)) return -1;
+					// 落脚点要能站住,而且头顶两行得容得下人
+					if (Predicates.IsGround(c, y))
+						return (Standable(c, y - 1) && !Predicates.IsWall(c, y - 2)) ? y - 1 : -1;
+				}
+			return -1;
+		}
+
 		// 规则 2:落点合格吗。build=true 表示这条边自己会把落脚点造出来,不要求现成的地
 		public static bool LandingOk(int x, int y, bool build)
 		{

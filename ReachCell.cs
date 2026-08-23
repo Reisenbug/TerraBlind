@@ -10,7 +10,7 @@ namespace TerraBlind
 	// 一次消一个方向,不交替,所以不会来回震荡。
 	public static class ReachCell
 	{
-		private enum Ph { Idle, Walk, Bridge, Down, Up, Done }
+		private enum Ph { Idle, Walk, Bridge, Down, Drop, Up, Done }
 		private static Ph _ph = Ph.Idle;
 
 		private static string _plat = "", _block = "";
@@ -71,12 +71,12 @@ namespace TerraBlind
 			if (++_frames > 60 * 900) { Fail("timeout"); return; }
 
 			// 子动作在跑就等它,但别无限等
-			if (BridgeBuilder.IsRunning || PlatformDown.IsRunning || PillarUp.IsRunning || RecedingNav.Active)
+			if (BridgeBuilder.IsRunning || PlatformDown.IsRunning || PillarUp.IsRunning || DropDown.IsRunning || RecedingNav.Active)
 			{
 				if (++_phaseFrames > MaxPhaseFrames)
 				{
 					DiagLog.Write($"[reach] 相位{_ph}超时{_phaseFrames}帧,掐掉");
-					BridgeBuilder.Stop(); PlatformDown.Stop(); PillarUp.Stop(); RecedingNav.Stop();
+					BridgeBuilder.Stop(); PlatformDown.Stop(); PillarUp.Stop(); DropDown.Stop(); RecedingNav.Stop();
 					_phaseFrames = 0; Blame(_ph, "超时");
 				}
 				return;
@@ -88,11 +88,13 @@ namespace TerraBlind
 			{
 				string oc = _ph == Ph.Bridge ? BridgeBuilder.Outcome
 					: _ph == Ph.Down ? PlatformDown.Outcome
+					: _ph == Ph.Drop ? DropDown.Outcome
 					: _ph == Ph.Up ? PillarUp.Outcome : "";
 				string rs = _ph == Ph.Bridge ? BridgeBuilder.Reason
 					: _ph == Ph.Down ? PlatformDown.Reason
+					: _ph == Ph.Drop ? DropDown.Reason
 					: _ph == Ph.Up ? PillarUp.Reason : "";
-				if (oc == "stuck" || oc == "blocked" || oc == "no_item")
+				if (oc == "stuck" || oc == "blocked" || oc == "no_item" || oc == "timeout")
 				{
 					DiagLog.Write($"[reach] {_ph} 失败 {oc}:{rs}");
 					Blame(_ph, oc + ":" + rs);
@@ -130,6 +132,16 @@ namespace TerraBlind
 				// 但一路铺下去的过程中身子不能碰到岩浆 —— 那是规则1,碰了就是任务失败
 				if (_precise && PreciseHell.PathHitsLava(cx, cy, cx, _ty))
 				{ Fail($"从({cx},{cy})降到{_ty}会碰岩浆"); return; }
+				// 下面本来就有能站的地方就【直接跳下去】,平台梯又慢又吃料。
+				// 探不到落点(全是悬空或岩浆)才铺梯子 —— 那是自造落脚点,不要求下面有地。
+				var (dbl, dbr) = Predicates.BodyCols(p);
+				int land = PreciseHell.DropLanding(dbl, dbr, cy, dy);
+				if (land > cy)
+				{
+					DiagLog.Write($"[reach] 轮{_rounds} 下方{land}行能站 → 直接跳,不铺梯");
+					if (DropDown.Start(land, out string jw)) { _ph = Ph.Drop; return; }
+					DiagLog.Write($"[reach] 跳不成({jw}),改铺梯");
+				}
 				DiagLog.Write($"[reach] 轮{_rounds} 降 {cy}→{_ty} (差{dy})");
 				if (PlatformDown.Start(_plat, _ty, out string dw)) { _ph = Ph.Down; return; }
 				Fail($"降不了:{dw}"); return;
