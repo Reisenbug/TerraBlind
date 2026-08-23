@@ -102,24 +102,6 @@ namespace TerraBlind
 						if (IsPlat(c, feetY + 1)) { if (plat == int.MinValue) plat = c; }
 						else if (Predicates.IsSolid(c, feetY + 1)) brick = c;
 					}
-					// 身体【自己那几行】里卡着平台时,S 是穿不下去的:vanilla 只让人穿过完全在脚底下的平台
-					// (vector3.Y+Height <= 平台顶),和身体重叠的那块就是普通落脚点。多降几次栈起来就这样。
-					for (int c = bl; c <= br; c++)
-						for (int r = 0; r < 3; r++)
-							if (IsPlat(c, feetY - r))
-							{
-								// ClearWay.Dig 明确不挖平台(平时穿过去就行),这里要的正是拆掉它
-								if (!ItemUseCoordinator.IsActive)
-								{
-									int pk = ClearWay.PickSlot(p);
-									if (pk < 0) { Done("stuck", $"身体里卡着平台({c},{feetY - r}) 但没镐"); return; }
-									if (!p.IsInTileInteractionRange(c, feetY - r, Terraria.DataStructures.TileReachCheckSettings.Simple))
-									{ Done("stuck", $"身体里卡着平台({c},{feetY - r}) 够不着"); return; }
-									DiagLog.Write($"[platdown] 身体里卡着平台({c},{feetY - r}) → 敲掉再降");
-									ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = c, TargetWy = feetY - r, Slot = pk, Strict = true });
-								}
-								return;
-							}
 					if (plat != int.MinValue && brick == int.MinValue)
 					{
 						_col = plat; _platY = feetY + 1;
