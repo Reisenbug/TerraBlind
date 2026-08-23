@@ -92,6 +92,10 @@ namespace TerraBlind
 			while (_interactQueue.TryDequeue(out var tile))
 			{
 				if (Main.LocalPlayer.chest != -1) { LastInteract = "already_open"; continue; }
+				// 陷阱箱(FakeContainers 441/468)在 Main.chest 里也有条目,FindChest 照样找得到,
+				// 于是直接写 Player.chest 就开了 --- 而这条路绕过右键,引线根本不触发,是作弊。
+				// 一律不开,连线的陷阱我们也处理不了。
+				if (IsFakeChest(tile.tx, tile.ty)) { LastInteract = "trapped_chest"; continue; }
 				int idx = Chest.FindChest(tile.tx, tile.ty);
 				if (idx == -1) { LastInteract = "no_chest"; continue; }
 				// 开箱直接写 Player.chest 绕过了右键那条路,而锁的判定就在那条路上 —— 以前上锁的箱子照开,是作弊。
@@ -3323,6 +3327,23 @@ namespace TerraBlind
 
 		// 箱子子类型名。frameX/36 就是子 id(金箱=1,常春藤=21…),名字查 Lang.chestType[]/chestType2[]。
 		// 别用 MapHelper.TileToLookup:它的 option 是地图【颜色】分组,多种箱子共用一色 → 名字全错。
+		// 陷阱箱:和普通箱子是不同的 TileID(BasicChestFake = 441/468),外观一模一样。
+		// 箱子占 2x2,四个格都查一遍,点哪个角都认得出来。
+		static bool IsFakeChest(int x, int y)
+		{
+			for (int dx = 0; dx <= 1; dx++)
+				for (int dy = 0; dy <= 1; dy++)
+				{
+					int ax = x - dx, ay = y - dy;
+					if (!Predicates.InBounds(ax, ay)) continue;
+					var t = Main.tile[ax, ay];
+					if (!t.HasTile) continue;
+					if (t.TileType == Terraria.ID.TileID.FakeContainers
+						|| t.TileType == Terraria.ID.TileID.FakeContainers2) return true;
+				}
+			return false;
+		}
+
 		// 蜂巢墙(HiveUnsafe=86 自然生成 / Hive=108 玩家放的)。宝藏贴在墙上,自己那格
 		// 可能没墙,所以连邻格一起看。
 		static bool InHive(int x, int y)
