@@ -1555,9 +1555,8 @@ namespace TerraBlind
         const int GoalSnapMaxDrop = 40;
         // 岩浆里放不了任何东西,人去了也白去 —— 所以"能站"必须排除泡在岩浆里和踩在岩浆面上。
         // 原来只问地板和方块,于是空中目标一路下落、落进岩浆池就当成落脚点,等于主动往岩浆里导航。
-        static bool Standable(int gx, int gy)
-            => PathPlanner.IsFloorPublic(gx, gy + 1) && !PathPlanner.IsBlockPublic(gx, gy)
-               && !Predicates.IsLava(gx, gy) && !Predicates.IsLava(gx, gy - 1) && !Predicates.IsLava(gx, gy + 1);
+        // 判据只此一份。原来这里只查 2 行岩浆(身子有 3 行),而 PathPlanner 那份还认为平台不算站得住
+        static bool Standable(int gx, int gy) => CellKind.Stands(gx, gy);
         public static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;

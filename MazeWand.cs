@@ -242,18 +242,13 @@ namespace TerraBlind
 
         public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
         {
-            // the field must only price digs the CURRENT pick can actually perform — a flat DigSide/DigDown for every
-            // wall routed the line straight through the Lihzahrd temple (pick damage 0 before Picksaw): Expand's
-            // generators correctly refuse the unmineable dig, only backward edges remain, loop. Capture the pick
-            // power once per build; StepCost prices undiggable walls like lava (impassable-expensive, still finite
-            // so a genuinely sealed goal degrades to "walled in" instead of a broken field).
+            // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
+            // 边全被拒,只剩回头路,循环。
             _fieldPickPower = 0;
             var pl = Main.LocalPlayer;
             if (pl != null)
                 for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
-            // 边距 = 让路线有绕开障碍的余地。固定 120 是按长途定的:两个相隔 10 格的宝藏之间也要 flood
-            // 250×250,一趟 80-160ms,穿宝线上二十几段串起来就是好几秒(/descent_route 10s 超时的主因)。
-            // 按段长缩放:短段给小盒子,长段照旧。下限 40 够绕开一般地形。
+            // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
             int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
             int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
@@ -289,9 +284,7 @@ namespace TerraBlind
                     pq.Add((nc, nx, ny));
                 }
             }
-            // WHO built this, and was it on the main thread? Field builds are ~500ms over ~650k cells; several
-            // callers reach BuildField by different routes and the log recorded none of them, so a rebuild storm
-            // could be seen but not attributed.
+            // 谁建的、在不在主线程:一次 ~500ms,重建风暴看得见却归不了因。
             string who = "?";
             try
             {
@@ -312,9 +305,8 @@ namespace TerraBlind
             return dist;
         }
 
-        // Multi-source Dijkstra: every source seeds cost 0. /find_descent floods UP from the whole hell band at
-        // once — the surface cell with the lowest H then marks the cheapest REAL route down. Descent cost is
-        // topological, not per-column: an S-shaped cave entered from its top beats digging straight anywhere.
+        // 多源 Dijkstra,每个源 cost 0。下地狱的代价是拓扑的不是逐列的:S 形洞穴从顶上进,
+        // 比任何一处直挖都便宜。
         public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
         {
             _fieldPickPower = 0;
@@ -377,19 +369,9 @@ namespace TerraBlind
                 if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
                     return PlateCost;
             }
-            // BODY CLEARANCE: the player is 3 tiles tall — "standing in cell (cx,cy)" occupies rows cy..cy-2 of the
-            // column. Judging wall-ness by the feet cell alone priced a chimney whose feet-row is air but whose head
-            // rows are rock as a FREE climb (MoveUp=9) when the body actually has to mine its way up — the field
-            // loved tight shafts it couldn't fit through, the line threaded them, and the bot obediently dug upward
-            // where pillar/bridge routes were genuinely cheaper. A move is a dig if ANY of the 3 body rows is solid,
-            // and every solid row must be mineable with the current pick.
-            // SLOPES/HALF-BRICKS: the 48px 3-row envelope holds the 42px body with only 6px of slack. IsBlock exempts
-            // sloped/half tiles (walkable FOOTING via StepUp), but that exemption is a lie anywhere else: a diagonal at
-            // chest/head level eats the slack ~6px into the tile (real SlopeCollision jams the walk), and PARTIAL FOOTING
-            // (feet standing 6-8px up a slope/half-brick) pushes the head into the 4th row (42+6 > 48). So: feet row
-            // keeps the exemption, upper rows count ANY solid shape, and partial footing extends the envelope to cy-3.
-            // 上锁的门(神庙门)身体3行里有一个就过不去:钥匙没有、砸也砸不开。
-            // MineableWith 对门返回 true(门本身能挖),所以不特判的话线会直接穿过去。
+            // 人 3 行高,只看脚下那格会把"脚下空、头顶是石"的烟囱当免费爬(场爱钻它钻不过去的缝)。
+            // 斜砖只在脚那行豁免:48px 的壳装 42px 的身子只剩 6px 余量,胸口一块斜砖就卡住。
+            // 上锁的门另判:MineableWith 说门能挖,可神庙门没钥匙砸不开,不特判线就直接穿过去。
             for (int r = 0; r < 3; r++)
             {
                 int dy2 = cy - r;
@@ -429,37 +411,31 @@ namespace TerraBlind
             // 取左右里实心行少的那侧 —— 人可以站偏,挑便宜的那半边走。
             if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
             bool horizontal = cx != nx;
+            // 进这一格要不要自己造落脚点,由 CellKind 一处说了算。原来三个方向各判各的
+            // (往下 DropLands、往上 nearSupport、横向不判),同一格在不同方向价钱不一样。
+            var kind = wall ? Cell.Solid : CellKind.Of(cx, cy);
+            // 造落脚点的价和方向无关:铺一块平台就是一块平台的钱
+            int buildCost = kind == Cell.Build ? JPlaceUp : kind == Cell.Pillar ? PillarUp : 0;
+
             int baseCost;
-            if (horizontal) baseCost = wall ? DigSide * digCells : MoveSide;
+            if (horizontal) baseCost = wall ? DigSide * digCells : MoveSide + buildCost;
             else if (cy > ny)
             {
-                // y+ is down
+                // y+ is down。掉下去便宜的【前提是掉得到底】:落得住才是 MoveDown,
+                // 落不住就得自己铺一路下去,那是平台梯/柱子的价。
                 if (wall) baseCost = DigDown * digCells;
-                // 【往下进空气不是免费的】。原来一律 MoveDown=1,全场最便宜,而且从不问"落得住吗" ——
-                // 于是任何一条悬空竖直通道(自己铺的平台梯、竖井、岩浆上方)在场里都是一条 H 单调递减
-                // 的高速路。人照着走到底,发现 nothing solid underfoot,只能弹回来,H 又把它拉下去:
-                // 就是那个"下平台→跳上去→再下平台"的死循环。
-                // 掉下去便宜的【前提是掉得到底】。落得住才算走,落不住就得自己铺,那是 pillar/跳放的价。
-                else baseCost = DropLands(cx, cy) ? MoveDown
-                    : PlatformAnchor(cx, cy) ? JPlaceUp : PillarUp;
+                else baseCost = DropLands(cx, cy) ? MoveDown : MoveDown + buildCost;
             }
             else if (wall) baseCost = DigUp * digCells + DigUpLift;
             else
             {
-                // ascending into open air: a jump only reaches ~JumpReach cells above support — beyond that the body
-                // can't climb air, it can only PILLAR (slow, consumes platforms). Pricing all vertical air at MoveUp=9
-                // made the open sky the cheapest highway on the map the moment ground routes got honest body-clearance
-                // pricing: the line went skyward and the bot built a tower at (823,283→257). Price beyond-jump ascent
-                // as the pillar it really is (also sits well below DigUp=160, so pillar beats digging up — as it should).
+                // 往上:一跳只能上 JumpReach 格,且要有东西垫脚。超出跳跃范围就只能自己搭,
+                // 价按锚不锚得住分档。不加这条,天空就是全图最便宜的高速路(曾在 823,283 砌塔)
                 baseCost = MoveUp;
                 bool nearSupport = false;
                 for (int d = 1; d <= JumpReach + 1; d++)
                     if (PathPlanner.IsFloorPublic(cx, cy + d)) { nearSupport = true; break; }
-                // PLATFORMS ARE POWERFUL: they anchor to nearly anything — grass, vines, rubble, tree trunks, back
-                // walls. Air beyond jump reach that has an anchor nearby supports a jump-place LADDER (one jump gains
-                // 4-6 cells), ~3× faster than the anchorless pillar cycle — price it as the ladder, not the pillar.
-                // One rate for all unsupported air made a bare cliff column beat the tree-side ladder next to it.
-                if (!nearSupport) baseCost = PlatformAnchor(cx, cy) ? JPlaceUp : PillarUp;
+                if (!nearSupport) baseCost = MoveUp + buildCost;
             }
             // air penalty ONLY on HORIZONTAL entry into open air — that's "flying sideways", which doesn't exist.
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a

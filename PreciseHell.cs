@@ -32,9 +32,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 站得住 = 那一格空着(人能占)且脚下有实处。这是【不造任何东西】就能站的判据
-		public static bool Standable(int x, int y)
-			=> !Predicates.IsLava(x, y) && !Predicates.IsWall(x, y) && Predicates.IsGround(x, y + 1);
+		public static bool Standable(int x, int y) => CellKind.Stands(x, y);
 
 		// 直接跳下去能落在哪:身子那两列一起看,先撞到岩浆就是不能跳。
 		// 返回落脚行,不能跳返回 -1。平台梯慢且吃料,能白掉下去就别铺。
