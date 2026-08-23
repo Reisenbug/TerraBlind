@@ -431,7 +431,18 @@ namespace TerraBlind
             bool horizontal = cx != nx;
             int baseCost;
             if (horizontal) baseCost = wall ? DigSide * digCells : MoveSide;
-            else if (cy > ny) baseCost = wall ? DigDown * digCells : MoveDown;    // y+ is down
+            else if (cy > ny)
+            {
+                // y+ is down
+                if (wall) baseCost = DigDown * digCells;
+                // 【往下进空气不是免费的】。原来一律 MoveDown=1,全场最便宜,而且从不问"落得住吗" ——
+                // 于是任何一条悬空竖直通道(自己铺的平台梯、竖井、岩浆上方)在场里都是一条 H 单调递减
+                // 的高速路。人照着走到底,发现 nothing solid underfoot,只能弹回来,H 又把它拉下去:
+                // 就是那个"下平台→跳上去→再下平台"的死循环。
+                // 掉下去便宜的【前提是掉得到底】。落得住才算走,落不住就得自己铺,那是 pillar/跳放的价。
+                else baseCost = DropLands(cx, cy) ? MoveDown
+                    : PlatformAnchor(cx, cy) ? JPlaceUp : PillarUp;
+            }
             else if (wall) baseCost = DigUp * digCells + DigUpLift;
             else
             {
@@ -457,6 +468,21 @@ namespace TerraBlind
             if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost + MediumExtra(cx, cy);
         }
+
+        // 从 (x,y) 掉下去,落不落得住。探到实处/平台=落得住;先碰到岩浆=不算(掉进去就是重开);
+        // 探完 DropProbe 还没底=也不算,那是无底洞。
+        static bool DropLands(int x, int y)
+        {
+            for (int k = 1; k <= DropProbe; k++)
+            {
+                int yy = y + k;
+                if (yy >= Main.maxTilesY) return false;
+                if (IsLava(x, yy)) return false;
+                if (PathPlanner.IsFloorPublic(x, yy) || SolidAnyShape(x, yy)) return true;
+            }
+            return false;
+        }
+        const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
         // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
