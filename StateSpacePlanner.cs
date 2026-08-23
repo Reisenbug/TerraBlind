@@ -559,9 +559,11 @@ namespace TerraBlind
                         // 挡路的是【身子那 3 行】有实心 —— 桥面那格有没有东西不管,
                         // 有就是现成的地,BridgeBuilder 本来就跳过已经铺好的格子。
                         for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
-                        // 熔岩里放不进方块,人也不能踩过去
+                        // 熔岩里放不进方块,人也不能踩过去 —— 只查【身子那 3 行】。
+                        // 桥【下面】是岩浆恰恰是该搭桥的地方(人踩桥面,岩浆在脚下一格,碰不到身子);
+                        // 原来把 ccy+1 也算挡路,于是到了岩浆岸边一条 bridge 边都发不出来,
+                        // 人只能按 H 来回震荡,最后掉进去。悬空不是障碍,是要架桥的地方。
                         for (int r = 0; r < 3 && !blocked; r++) if (Predicates.IsLava(x, ccy - r)) blocked = true;
-                        if (Predicates.IsLava(x, ccy + 1)) blocked = true;
                         if (blocked) { blockAt = x; break; }
                     }
                     if (blocked)
@@ -609,9 +611,12 @@ namespace TerraBlind
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
-                // pillar/place 是【自己造落脚点】,落点当然还没有地 —— 它们不受这条限制。
-                // 真正要拦的是 walk/jump/fall 这种"指望那儿本来就有地"的边
-                if (!e.pillar && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
+                // 自造落脚点的边(pillar / 长bridge / 跳放)落点当然还没有地,不受这条限制;
+                // 真正要拦的是 walk/jump/fall 那种"指望那儿本来就有地"的边。
+                // pillar 那个布尔只标竖直柱 —— 长 bridge 的标记是"没帧、不挖、不是柱"
+                // (EdgeToSteps 也靠这个组合认桥),借 pillar 表示会让执行器改去竖着搭。
+                bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
+                if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
                 yield return e;
             }
         }
