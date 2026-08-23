@@ -70,7 +70,8 @@ namespace TerraBlind
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Done("stuck", "no_player"); return; }
-			if (++_frames > 60 * 180) { Done("stuck", "timeout"); return; }
+			if (++_frames > 60 * 180)
+			{ Stuck(new Blocker(BlockKind.OutOfReach, _col, _platY, "总超时"), "timeout"); return; }
 
 			int feetY = ActExecutor.OriginCy(p);
 			var (bl, br) = Predicates.BodyCols(p);
@@ -93,7 +94,12 @@ namespace TerraBlind
 					}
 					// 站位可能要先造落脚点再走过去,比其他相位慢得多,给它单独的预算
 					if (++_phaseFrames > MaxStandFrames)
-					{ Done("stuck", $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return; }
+					{
+						// 脚下有砖就是地形,没砖就是够不着(悬空)
+						var sb2 = Predicates.IsWall(bl, feetY + 1) ? new Blocker(BlockKind.Terrain, bl, feetY + 1, "脚下被占")
+							: new Blocker(BlockKind.OutOfReach, bl, feetY + 1, "站不住");
+						Stuck(sb2, $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return;
+					}
 					if (p.velocity.Y != 0f) return;
 					// 砖挡着就沉不下去,所以【每一列】都不能是砖(平台不算砖),不是"找到一列平台就开工"
 					int plat = int.MinValue, brick = int.MinValue;
@@ -132,7 +138,7 @@ namespace TerraBlind
 				// 每一步人都站在平台上,不用先挖穿再铺。
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
-					{ Done("stuck", $"放不出来 ({_col},{_platY + 1})"); return; }
+					{ Stuck(new Blocker(BlockKind.Terrain, _col, _platY + 1, "放不出来"), $"放不出来 ({_col},{_platY + 1})"); return; }
 					// 人占的【每一列】都要处理:只管 _col 的话,隔壁列那块砖会把人顶住,S 按不下去。
 					// 第一格是 Stand 逐列办的所以能过,第二格开始只办一列 —— 人就停在第二格。
 					int need = int.MinValue;
@@ -147,7 +153,7 @@ namespace TerraBlind
 					// 空格子里有岩浆时放不进去(vanilla PlaceThing_Tiles_IsBlockedByLava,只管空格子;
 					// 砖照样能替换)。在这儿死等没意义 —— 到岩浆面就是该停的地方。
 					if (!Predicates.IsSolid(need, _platY + 1) && Predicates.IsLava(need, _platY + 1))
-					{ Done("stuck", $"下面是岩浆 ({need},{_platY + 1})"); return; }
+					{ Stuck(new Blocker(BlockKind.Hopeless, need, _platY + 1, "岩浆"), $"下面是岩浆 ({need},{_platY + 1})"); return; }
 					if (!PlaceAction.IsRunning)
 						PlaceAction.Start(_item, need, _platY + 1, 1, 0, 0, true, out _);
 					return;
@@ -170,7 +176,14 @@ namespace TerraBlind
 							for (int y2 = feetY - 2; y2 <= _platY + 1; y2++)
 								dbg.Append($"({c},{y2})=").Append(IsPlat(c, y2) ? "平台"
 									: Predicates.IsSolid(c, y2) ? "砖" : Predicates.IsLava(c, y2) ? "岩浆" : "空").Append(' ');
-						Done("stuck", $"穿不下去 站({_col},{_platY}) 身子{bl}..{br} vy={p.velocity.Y:0.##} | {dbg}");
+						// 身体自己那 3 行里卡着平台/砖时 S 是穿不下去的(vanilla 只让人穿完全在脚底下的)。
+						// 找出是哪一格,交给 Unstick 拆
+						var hit = new Blocker(BlockKind.OutOfReach, _col, _platY, "穿不下去");
+						for (int c2 = bl; c2 <= br && hit.Kind == BlockKind.OutOfReach; c2++)
+							for (int r2 = 0; r2 < 3; r2++)
+								if (IsPlat(c2, feetY - r2) || Predicates.IsWall(c2, feetY - r2))
+								{ hit = new Blocker(BlockKind.Terrain, c2, feetY - r2, "卡在身体里"); break; }
+						Stuck(hit, $"穿不下去 站({_col},{_platY}) 身子{bl}..{br} vy={p.velocity.Y:0.##} | {dbg}");
 						return;
 					}
 					// 一次按不动就隔 20 帧再按一次。按住会一路穿到底,所以是"重按"不是"按住";
@@ -188,6 +201,14 @@ namespace TerraBlind
 					}
 					return;
 			}
+		}
+
+		// stuck 的唯一出口。救得动就救,救完清计时重来
+		static void Stuck(Blocker b, string reason)
+		{
+			Reason = reason;
+			if (Unstick.Handle("platdown", b)) { _phaseFrames = 0; _frames = 0; return; }
+			Done("stuck", reason);
 		}
 
 		static void Done(string outcome, string reason)

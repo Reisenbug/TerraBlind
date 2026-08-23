@@ -117,7 +117,7 @@ namespace TerraBlind
 			// the feet are on the ground, THEN take the ground row as the column's first cell.
 			if (!_grounded)
 			{
-				if (p.velocity.Y != 0f) { if (_phaseFrames > MaxPhaseFrames) { Reason = "no_landing"; Finish("stuck"); return; } return; }
+				if (p.velocity.Y != 0f) { if (_phaseFrames > MaxPhaseFrames) { Reason = "no_landing"; Stuck(new Blocker(BlockKind.OutOfReach, ActExecutor.OriginCx(p), ActExecutor.OriginCy(p), "落不了地")); return; } return; }
 				_grounded = true;
 				_wy = ActExecutor.OriginCy(p);
 				_baseWy = _wy;
@@ -126,7 +126,7 @@ namespace TerraBlind
 			// GLOBAL no-progress guard, immune to the per-jump reset. If the cursor cell (_wy) hasn't changed for
 			// NoProgressFrames, the pillar cannot advance — bail instead of jumping forever.
 			if (_wy != _lastWy) { _lastWy = _wy; _wyStuckFrames = 0; }
-			else if (++_wyStuckFrames > NoProgressFrames) { Reason = "unreachable"; Finish("stuck"); return; }
+			else if (++_wyStuckFrames > NoProgressFrames) { Reason = "unreachable"; Stuck(Diagnose("光标不动")); return; }
 
 			// (item already homed in the hotbar at Start — _slot is a stable 0-9 slot, no per-frame swapping.)
 
@@ -137,7 +137,7 @@ namespace TerraBlind
 			{
 				int bodyL = (int)(p.position.X / 16f);
 				int bodyR = (int)((p.position.X + p.width - 1) / 16f);
-				if (_phaseFrames > MaxPhaseFrames) { Reason = "cant_position"; Finish("stuck"); return; }
+				if (_phaseFrames > MaxPhaseFrames) { Reason = "cant_position"; Stuck(Diagnose("站不到位")); return; }
 
 				if (bodyR >= _colCx)         // body overlaps or is right of the column → step left off it
 				{
@@ -161,7 +161,7 @@ namespace TerraBlind
 			{
 				// standing reach ran out → the rest is reached by jumping.
 				if (!inReach) { _ph = Ph.JumpRise; _phaseFrames = 0; return; }
-				if (_phaseFrames > MaxPhaseFrames) { Reason = "fill_stall"; Finish("stuck"); return; }
+				if (_phaseFrames > MaxPhaseFrames) { Reason = "fill_stall"; Stuck(Diagnose("填不上")); return; }
 
 				Aim(p);
 				// CONTINUOUS placement: keep pressing use, and advance the cursor THE MOMENT the tile appears on the
@@ -176,7 +176,7 @@ namespace TerraBlind
 			// JUMP RISE — hold jump. Each frame: is the target in reach yet? If so, place (continuous, same as fill).
 			// If a whole jump goes by without reaching it, land and jump again — never hang in the air.
 			p.controlJump = true;
-			if (_phaseFrames > MaxPhaseFrames) { Reason = "jump_unreached"; Finish("stuck"); return; }
+			if (_phaseFrames > MaxPhaseFrames) { Reason = "jump_unreached"; Stuck(Diagnose("跳着也够不到")); return; }
 
 			if (inReach)
 			{
@@ -189,6 +189,29 @@ namespace TerraBlind
 			// not in reach this frame. If we've landed again (a full jump elapsed without reaching), start a fresh
 			// jump; otherwise keep rising.
 			if (p.velocity.Y == 0f && _phaseFrames > 4) { _phaseFrames = 0; }   // grounded → next jump begins
+		}
+
+		// 停滞属于哪一类:光标那格被砖占着=地形(挖),被自己身子压着=让开,其余=够不着
+		private static Blocker Diagnose(string detail)
+		{
+			var p = Main.LocalPlayer;
+			if (Predicates.IsWall(_colCx, _wy))
+				return new Blocker(BlockKind.Terrain, _colCx, _wy, detail);
+			if (p != null)
+			{
+				var (bl, br) = Predicates.BodyCols(p);
+				int fy = ActExecutor.OriginCy(p);
+				if (_colCx >= bl && _colCx <= br && _wy >= fy - 2 && _wy <= fy)
+					return new Blocker(BlockKind.SelfInWay, _colCx, _wy, detail);
+			}
+			return new Blocker(BlockKind.OutOfReach, _colCx, _wy, detail);
+		}
+
+		// stuck 的唯一出口。能救就救,救完把各相位的计时清零重来
+		private static void Stuck(Blocker b)
+		{
+			if (Unstick.Handle("pillar", b)) { _phaseFrames = 0; _wyStuckFrames = 0; return; }
+			Finish("stuck");
 		}
 
 		private static void Finish(string outcome)

@@ -132,11 +132,11 @@ namespace TerraBlind
 			// 卡死判据和"人在哪一列"无关:只看【有没有真铺出格子来】。
 			// 铺出一格就清零,长时间没进展就是卡住了,不管人这会儿在原地还是来回走
 			if (++_frames > MaxFrames)
-			{ Reason = $"超时 铺了{_placed + _already}/{_want}"; Finish("stuck"); return; }
+			{ Reason = $"超时 铺了{_placed + _already}/{_want}"; Stuck(new Blocker(BlockKind.OutOfReach, _targetWx, _rowWy, "超时")); return; }
 			int doneNow = _placed + _already;
 			if (doneNow != _lastDone) { _lastDone = doneNow; _sinceProgress = 0; }
 			else if (++_sinceProgress > NoProgressLimit)
-			{ Reason = $"{_sinceProgress}帧没铺出一格,停在({_targetWx},{_rowWy})"; Finish("stuck"); return; }
+			{ Reason = $"{_sinceProgress}帧没铺出一格,停在({_targetWx},{_rowWy})"; Stuck(Diagnose()); return; }
 
 			// 1) 收上一次挥的结果(可能把边缘往前推一格,也可能判定失败直接结束)
 			if (!HarvestSwing()) return;
@@ -185,9 +185,28 @@ namespace TerraBlind
 				}
 				// 挖归挖,但不能靠它无限续命:挖了也清零 _walkStall 的话,挖不穿就永远不超时
 				if (++_digStall < DigStallLimit && ClearWay.Forward(p, _dir)) return;
-				if (advance && ++_walkStall >= WalkStallLimit) { Reason = "walk_blocked"; Finish("stuck"); return; }
-				if (!inReach && ++_reachStall >= ReachStallLimit) { Reason = "cant_reach_edge"; Finish("stuck"); return; }
+				if (advance && ++_walkStall >= WalkStallLimit)
+				{ Reason = "walk_blocked"; Stuck(new Blocker(BlockKind.Terrain, fcol, fy2, "走不过去")); return; }
+				if (!inReach && ++_reachStall >= ReachStallLimit)
+				{ Reason = "cant_reach_edge"; Stuck(new Blocker(BlockKind.OutOfReach, _targetWx, _rowWy, "够不着边缘")); return; }
 			}
+		}
+
+		// 停滞了到底属于哪一类:要放的那格被砖占着=地形,被自己身子压着=让开,
+		// 都不是就是够不着。判定只此一处,免得每个失败点各猜一套
+		private static Blocker Diagnose()
+		{
+			var p = Main.LocalPlayer;
+			if (Predicates.IsWall(_targetWx, _rowWy))
+				return new Blocker(BlockKind.Terrain, _targetWx, _rowWy, "目标格被占");
+			if (p != null)
+			{
+				var (bl, br) = Predicates.BodyCols(p);
+				int fy = ActExecutor.OriginCy(p);
+				if (_targetWx >= bl && _targetWx <= br && _rowWy >= fy - 2 && _rowWy <= fy)
+					return new Blocker(BlockKind.SelfInWay, _targetWx, _rowWy, "人压着目标格");
+			}
+			return new Blocker(BlockKind.OutOfReach, _targetWx, _rowWy, "没进展");
 		}
 
 		private static void Finish(string outcome)
@@ -195,6 +214,14 @@ namespace TerraBlind
 			Outcome = outcome;
 			_ph = Ph.Done;
 			DiagLog.Write($"[bridge] {outcome} placed={_placed} already={_already}/{_want} reason={Reason}");
+		}
+
+		// stuck 的唯一出口,签名逼着交出【卡在哪一格、哪一类】。能救就地救,救不了才真失败 ——
+		// 以前 5 处 stuck 各自 return,现场只剩一句给人看的话,代码没法据此补救
+		private static void Stuck(Blocker b)
+		{
+			if (Unstick.Handle("bridge", b)) { _frames = 0; _sinceProgress = 0; _walkStall = 0; _reachStall = 0; _digStall = 0; return; }
+			Finish("stuck");
 		}
 
 		public static string StatusJson()

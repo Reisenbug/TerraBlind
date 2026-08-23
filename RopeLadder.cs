@@ -177,7 +177,10 @@ namespace TerraBlind
 			else if (++_climbStall >= ClimbStallLimit)
 			{
 				Reason = OnRope(p) ? "climb_blocked" : "not_on_rope";
-				Finish("stuck");
+				// 爬不动:在绳上就是头顶挡着(挖),不在绳上就是够不着绳(先靠过去)
+				int hy = ActExecutor.OriginCy(p) - 3;
+				Stuck(OnRope(p) ? new Blocker(BlockKind.Terrain, ActExecutor.OriginCx(p), hy, "头顶挡着")
+					: new Blocker(BlockKind.OutOfReach, ActExecutor.OriginCx(p), _climbToCy, "不在绳上"));
 				return;
 			}
 
@@ -186,6 +189,13 @@ namespace TerraBlind
 				_ph = Ph.Place;
 				BeginPlace();
 			}
+		}
+
+		// stuck 的唯一出口。能救就救,救完清停滞计数重来
+		private static void Stuck(Blocker b)
+		{
+			if (Unstick.Handle("rope", b)) { _climbStall = 0; return; }
+			Finish("stuck");
 		}
 
 		private static void Finish(string outcome)

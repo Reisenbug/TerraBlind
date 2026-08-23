@@ -41,6 +41,7 @@ namespace TerraBlind
 			_standX = ActExecutor.OriginCx(p) <= tx ? tx - 1 : tx + 1;
 			_frames = 0; _phaseFrames = 0; _rounds = 0; _fails = 0;
 			_precise = PreciseHell.Active(ty);
+			Unstick.Reset();   // 上一段任务的救援次数别算到这一段头上
 			_lastX = int.MinValue; _lastY = int.MinValue;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[reach] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 够到({tx},{ty}),站位列{_standX}");

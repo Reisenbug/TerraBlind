@@ -9,3 +9,5 @@
 # code into the running game is still `/build TerraBlind` in chat.
 cd "$(dirname "$0")" || exit 1
 dotnet build -t:Compile -v q --nologo -nowarn:ChangeMagicNumberToID 2>&1 | grep -Ev "^$" | tail -20
+# 编译过了不代表原语交了失败现场 —— 那个只能靠这个查
+./stuck_contract.sh || exit 1

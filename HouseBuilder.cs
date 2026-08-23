@@ -141,6 +141,7 @@ namespace TerraBlind
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
 			_reclaimTries = 0; ThrowItems.Forget();
+			Unstick.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 			_ph = Ph.Lift;
