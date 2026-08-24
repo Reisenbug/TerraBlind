@@ -31,7 +31,10 @@ namespace TerraBlind
 		static int _sinceProgress;
 
 		const int MinDrop = 20;        // target must beat here by this much — below that it is basin noise
-		const int MaxRadius = 60;      // how far out to look for one
+		// 远处那些 H 极低的格【隔着走不通的墙】:承诺 (1292,238) 54 格外,人在 1344..1348 弹了
+		// 10 轮,dist 55→60 从没靠近。承诺的意义是"跨出当前这个坑",不是"直奔全场最低点" ---
+		// 跨出去之后场自然会重新指路。所以只在近处找。
+		const int MaxRadius = 14;
 		// A target that cannot be reached shows itself fast: distance oscillated 14→10→14→10 for twenty cycles
 		// against the first commitment, closing to 10 and bouncing back every time. Ten cycles of no new best is
 		// already conclusive — the point of committing is to stop dithering, not to keep failing longer.
@@ -76,14 +79,30 @@ namespace TerraBlind
 				if (dx > MaxRadius || dx < -MaxRadius || dy > MaxRadius || dy < -MaxRadius) continue;
 				int d = System.Math.Abs(dx) + System.Math.Abs(dy);
 				if (d == 0) continue;
-				// cost per cell travelled: a big H drop over a short hop beats a small drop far away. Lower is
-				// better, so negate the drop.
-				float score = -(curH - kv.Value) / (float)d;
+				// 【近的优先】。原来按"每格 H 降幅"打分,于是永远挑最远那个 --- 它 H 最低,
+				// 但隔着这个坑的墙,一步都靠近不了。近的才走得到,走到了坑就跨出去了。
+				float score = d;
 				if (score >= bestScore) continue;
 				if (!CellKind.Stands(kv.Key.Item1, kv.Key.Item2)) continue;
 				bestScore = score; bestD = d; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
 			}
 			bool found = bestScore != float.MaxValue;
+			// 近处一个 H 更低的都没有 --- 这个坑就是这样(人 H713,唯一出口 H815)。
+			// 那就退而求其次:挑【没去过的】最近落脚点。去过的都是死路,没去过的才可能是活路,
+			// 哪怕它 H 更高 --- "先变差"本来就是承诺的全部意义。
+			if (!found)
+				foreach (var kv in field)
+				{
+					if (_failed.Contains(kv.Key)) continue;
+					int dx2 = kv.Key.Item1 - curCx, dy2 = kv.Key.Item2 - curCy;
+					if (dx2 > MaxRadius || dx2 < -MaxRadius || dy2 > MaxRadius || dy2 < -MaxRadius) continue;
+					int d2 = System.Math.Abs(dx2) + System.Math.Abs(dy2);
+					if (d2 == 0 || d2 >= bestScore) continue;
+					if (StateSpacePlanner.WasVisited(kv.Key.Item1, kv.Key.Item2)) continue;
+					if (!CellKind.Stands(kv.Key.Item1, kv.Key.Item2)) continue;
+					bestScore = d2; bestD = d2; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
+					found = true;
+				}
 			if (!found)
 			{
 				DiagLog.Write($"[commit] no target within {MaxRadius} of ({curCx},{curCy})H={curH}");
@@ -94,7 +113,7 @@ namespace TerraBlind
 			_cycles = 0; _sinceProgress = 0; _bestDist = bestD;
 			// budget scales with distance: a target 8 cells off should not get the same allowance as one 40 away
 			_budget = 20 + bestD * 6;
-			DiagLog.Write($"[commit] BEGIN ({curCx},{curCy})H={curH} → ({Gx},{Gy})H={bestH} dist={bestD} drop={curH - bestH} perCell={-bestScore:0.0} budget={_budget}");
+			DiagLog.Write($"[commit] BEGIN ({curCx},{curCy})H={curH} → ({Gx},{Gy})H={bestH} dist={bestD} drop={curH - bestH} budget={_budget}");
 			return true;
 		}
 

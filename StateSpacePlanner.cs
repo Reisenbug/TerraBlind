@@ -2076,6 +2076,8 @@ namespace TerraBlind
         // 最近站过的格子。只用来在 PUSH 时把"去过的"排到后面,不做循环判定、不禁止重访。
         const int VisitedLen = 40;
         static readonly System.Collections.Generic.HashSet<(int, int)> _visited = new();
+        // 承诺要靠它区分"去过的死路"和"没去过的活路"
+        public static bool WasVisited(int x, int y) => _visited.Contains((x, y));
         static readonly System.Collections.Generic.Queue<(int, int)> _visitedQ = new();
         public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); _recent.Clear(); }
         public static void RequestJiggle() { }
