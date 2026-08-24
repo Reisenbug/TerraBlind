@@ -77,10 +77,14 @@ namespace TerraBlind
 				int dx = kv.Key.Item1 - curCx, dy = kv.Key.Item2 - curCy;
 				if (dx > MaxRadius || dx < -MaxRadius || dy > MaxRadius || dy < -MaxRadius) continue;
 				int d = System.Math.Abs(dx) + System.Math.Abs(dy);
-				if (d == 0 || d >= bestScore) continue;
-				if (StateSpacePlanner.WasVisited(kv.Key.Item1, kv.Key.Item2)) continue;
+				if (d == 0) continue;
+				// 去过【不是】排除条件 --- 唯一的出口 (1345,230) 正好去过,加这条就把它筛没了,
+				// 于是承诺把整条走廊 1284..1346 试了个遍,全在坑外,一个都到不了。
+				// 去过只作同分时的次选。
+				float sc = d + (StateSpacePlanner.WasVisited(kv.Key.Item1, kv.Key.Item2) ? 0.5f : 0f);
+				if (sc >= bestScore) continue;
 				if (!CellKind.Stands(kv.Key.Item1, kv.Key.Item2)) continue;
-				bestScore = d; bestD = d; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
+				bestScore = sc; bestD = d; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
 			}
 			bool found = bestScore != float.MaxValue;
 			if (!found)
