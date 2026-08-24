@@ -151,6 +151,7 @@ namespace TerraBlind
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
+            Commitment.Reset();               // 承诺和它的失败记录属于这一趟,别带进下一趟
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             _altered = 0;

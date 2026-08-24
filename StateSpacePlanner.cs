@@ -2218,7 +2218,35 @@ namespace TerraBlind
             }
             // 原判据是"落点 H 有没有低于历史最低",错的:人为绕路离开最低点后,之后每一步都 ≥ 历史最低,PUSH 就永久触发。
             // 改成跟【脚下】比:greedy 挑的落点不比现在近才算没进展。绕路(H 暂时升高)允许,只有真原地弹才触发。
+            // 【承诺】:四周没有一条降 H 的路时,贪心只会在原地弹。真出口往往要先变差
+            // (腐化区:人 H713,唯一出口 H815,要先爬 6 格)。所以认准一个确实更好的格,
+            // 一路走过去,期间【不看 H】,只看离它近没近 --- 这就是承诺。
             if (jigglePool.Count > 0 && best != null)
+            {
+                if (Commitment.Active && !Commitment.Tick(curCx, curCy)) { }
+                if (!Commitment.Active)
+                {
+                    bool anyDrop = false;
+                    foreach (var c in jigglePool) if (c.h < curH) { anyDrop = true; break; }
+                    if (!anyDrop) Commitment.Begin(curCx, curCy, curH);
+                }
+                if (Commitment.Active)
+                {
+                    // 按【离承诺终点的曼哈顿距离】挑,H 涨多少都不管
+                    var pick = jigglePool[0];
+                    int pd = int.MaxValue;
+                    foreach (var c in jigglePool)
+                    {
+                        int d = System.Math.Abs(c.cell.Item1 - Commitment.Gx)
+                              + System.Math.Abs(c.cell.Item2 - Commitment.Gy);
+                        if (d < pd) { pd = d; pick = c; }
+                    }
+                    if (pick.cell != bestCell)
+                        EventLog.W(Ev.Plan, $"COMMIT ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2}) 改走 ({pick.cell.Item1},{pick.cell.Item2}) 朝承诺点({Commitment.Gx},{Commitment.Gy}) 距{pd}");
+                    best = pick.edge; bestCell = pick.cell; bestTotal = pick.total;
+                }
+            }
+            if (!Commitment.Active && jigglePool.Count > 0 && best != null)
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
