@@ -15,7 +15,6 @@ namespace TerraBlind
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 26, DigSide = 26, DigUp = 26;   // 【每格】挖价,要乘实际挖的格数
         const int DigUpLift = 19;   // 向上挖额外一次性的垫脚钱:凿开还得砌东西站上去,和挖几格无关
-        const int SlotSqueeze = 30;   // 挤进挖不开的一格宽缝:站得住但横向出不来,贵但不是不通
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
@@ -279,7 +278,12 @@ namespace TerraBlind
                     if (closed.Contains((nx, ny))) continue;
                     int sc = StepCost(cx, cy, nx, ny);
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
-                    int nc = cost + sc;
+                    // H 的意思是【站在 (nx,ny) 还要多少】,所以先问人站不站得住那一格。
+                    // 悬空格照发 H,就在空中连成一条 H 递减的假路,把人吸进死角:腐化区那次西边
+                    // 1341..1343 脚下全空,场却给了 411..433 递减,而唯一的真出口要先爬高,H 反被标成 462。
+                    int stand = StandPenalty(nx, ny);
+                    if (stand == Impassable) continue;
+                    int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
                     pq.Add((nc, nx, ny));
@@ -337,7 +341,10 @@ namespace TerraBlind
                     if (closed.Contains((nx, ny))) continue;
                     int sc = StepCost(cx, cy, nx, ny);
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
-                    int nc = cost + sc;
+                    // 和 BuildField 同一条:站不住的格不该发 H
+                    int stand = StandPenalty(nx, ny);
+                    if (stand == Impassable) continue;
+                    int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
                     pq.Add((nc, nx, ny));
@@ -353,6 +360,20 @@ namespace TerraBlind
 
         // forward cost of moving FROM (nx,ny) TO (cx,cy): direction is (cx,cy)-(nx,ny), price set by the cell
         // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
+        // 人要【站在】这一格得先付多少。站得住=0;站不住就得自己造落脚点,那是真代价。
+        // 判据只此一份(CellKind),不在这儿另编。
+        static int StandPenalty(int x, int y)
+        {
+            switch (CellKind.Of(x, y))
+            {
+                case Cell.Stand: return 0;
+                case Cell.Build: return JPlaceUp;
+                case Cell.Pillar: return PillarUp;
+                case Cell.Lava: return Impassable;
+                default: return 0;   // Solid 归 StepCost 按挖掘算,别重复收费
+            }
+        }
+
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
 
         static int StepCost(int cx, int cy, int nx, int ny)
@@ -413,8 +434,9 @@ namespace TerraBlind
                 if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy))
                 {
                     if (!CellKind.Stands(cx, cy)) return Impassable;
+                    // 【按普通格收费】。挤进去本身不慢,慢的是出来 --- 而出来是下一格的事,
+                    // StepCost 到那一格自然会按 pillar/跳放定价。在这儿再加价等于同一件事收两次钱。
                     wall = false; digCells = 0;
-                    return SlotSqueeze + MediumExtra(cx, cy);
                 }
             }
             // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
