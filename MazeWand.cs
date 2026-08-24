@@ -15,6 +15,7 @@ namespace TerraBlind
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 26, DigSide = 26, DigUp = 26;   // 【每格】挖价,要乘实际挖的格数
         const int DigUpLift = 19;   // 向上挖额外一次性的垫脚钱:凿开还得砌东西站上去,和挖几格无关
+        const int SlotSqueeze = 30;   // 挤进挖不开的一格宽缝:站得住但横向出不来,贵但不是不通
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
@@ -405,7 +406,16 @@ namespace TerraBlind
             {
                 wall = true;
                 digCells = 1;   // 拓宽一格宽的缝:至少凿掉一侧的一格
-                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy)) return Impassable;
+                // 挖不开【不等于】进不去:人 20px 站在 16px 格心时左右各只探出 2px,
+                // 一格宽的缝站得住,只是横着走不动,得靠竖直动作进出。
+                // 一律 Impassable 会把这种格从场里整个抹掉 --- 腐化区被困死就是这样:
+                // 唯一的出口 (1343,232) 探针说 can_stand=True,场却说不可达。
+                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy))
+                {
+                    if (!CellKind.Stands(cx, cy)) return Impassable;
+                    wall = false; digCells = 0;
+                    return SlotSqueeze + MediumExtra(cx, cy);
+                }
             }
             // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
             // 取左右里实心行少的那侧 —— 人可以站偏,挑便宜的那半边走。
