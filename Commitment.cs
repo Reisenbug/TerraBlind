@@ -34,6 +34,7 @@ namespace TerraBlind
 		// 10 轮,dist 55→60 从没靠近。承诺的意义是"跨出当前这个坑",不是"直奔全场最低点" ---
 		// 跨出去之后场自然会重新指路。所以只在近处找。
 		const int MaxRadius = 14;
+		const int MinDist = 4;         // 比这近的不算换方向,不值得承诺
 		const int FailRadius = 3;      // 一个目标到不了,它周围这一圈也别再试了
 		// A target that cannot be reached shows itself fast: distance oscillated 14→10→14→10 for twenty cycles
 		// against the first commitment, closing to 10 and bouncing back every time. Ten cycles of no new best is
@@ -77,7 +78,10 @@ namespace TerraBlind
 				int dx = kv.Key.Item1 - curCx, dy = kv.Key.Item2 - curCy;
 				if (dx > MaxRadius || dx < -MaxRadius || dy > MaxRadius || dy < -MaxRadius) continue;
 				int d = System.Math.Abs(dx) + System.Math.Abs(dy);
-				if (d == 0) continue;
+				// 太近的不值得承诺:脚边那格永远 dist=1、永远最近,选它一步就"到达",
+				// 到达又清空黑名单,下一轮再选它 --- 19 轮全在 (1345,236) 上原地打转。
+				// 承诺是为了【换个方向走一段】,不是挪一格。
+				if (d < MinDist) continue;
 				// 去过【不是】排除条件 --- 唯一的出口 (1345,230) 正好去过,加这条就把它筛没了,
 				// 于是承诺把整条走廊 1284..1346 试了个遍,全在坑外,一个都到不了。
 				// 去过只作同分时的次选。
