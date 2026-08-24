@@ -98,7 +98,13 @@ namespace TerraBlind
 				HellRunStart = StateSnapshotPlayer.StartHellRun(out string hrw) ? "" : hrw;
 			while (_interactQueue.TryDequeue(out var tile))
 			{
-				if (Main.LocalPlayer.chest != -1) { LastInteract = "already_open"; continue; }
+				// 上一个箱子还开着就先关掉再开新的。原来直接拒绝,于是只要有箱子没关,
+				// 后面每一个都开不了(vanilla 关箱就是 chest=-1 + FindRecipes)。
+				if (Main.LocalPlayer.chest != -1)
+				{
+					Main.LocalPlayer.chest = -1;
+					Recipe.FindRecipes();
+				}
 				// 陷阱箱(FakeContainers 441/468)在 Main.chest 里也有条目,FindChest 照样找得到,
 				// 于是直接写 Player.chest 就开了 --- 而这条路绕过右键,引线根本不触发,是作弊。
 				// 一律不开,连线的陷阱我们也处理不了。
