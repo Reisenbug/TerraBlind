@@ -50,6 +50,13 @@ namespace TerraBlind
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
+
+		// mod 内部也要开箱(Unstick 采集),别再写第二条开箱路径
+		public static void QueueInteract(int tx, int ty)
+		{
+			LastInteract = "pending";
+			_interactQueue.Enqueue((tx, ty));
+		}
 		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒 —— 绝不能在 HTTP 线程上干。
 		// 排队交给主线程,和开箱/换位是同一套路子
 		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();

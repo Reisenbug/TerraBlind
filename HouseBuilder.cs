@@ -24,7 +24,7 @@ namespace TerraBlind
 			Idle, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
-			FixStruct, Fix, Reclaim, Done
+			FixStruct, FixCraft, Fix, Reclaim, Done
 		}
 
 		private static Ph _ph = Ph.Idle;
@@ -140,6 +140,7 @@ namespace TerraBlind
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
+			_fixRounds = 0; _fixStall = 0; _lastLack = int.MaxValue;
 			_reclaimTries = 0; ThrowItems.Forget();
 			Unstick.Reset();
 			// 这几样后面几步都要用,换热键位时别把它们挤出去
@@ -522,8 +523,13 @@ namespace TerraBlind
 					string missing = AuditHouse();
 					if (missing != null)
 					{
-						if (_fixTried) { Fail($"验收不合格:{missing}"); return; }
-						_fixTried = true;
+						// 只补一轮太少:合料/走位/放置每轮各可能失败一次,一次机会就等于把
+						// "第一轮没成"直接判死。改成【还在减少就接着补】,卡住不动才认输。
+						int lack = _fixList.Count + _fixTiles.Count + _fixWalls.Count + _fixDig.Count;
+						if (lack < _lastLack) { _lastLack = lack; _fixStall = 0; }
+						else if (++_fixStall > FixStallMax)
+						{ Fail($"补了{_fixRounds}轮没进展,还缺:{missing}"); return; }
+						if (++_fixRounds > FixRoundsMax) { Fail($"补{FixRoundsMax}轮还缺:{missing}"); return; }
 						// 先补结构:地板/屋顶/柱子缺一格,NPC 判定就不认。
 						// 补法和铺桥面完全一样 —— PlaceAnywhere 够不着会自己走、没锚会自己造
 						if (_fixTiles.Count > 0 || _fixWalls.Count > 0 || _fixDig.Count > 0)
@@ -535,22 +541,33 @@ namespace TerraBlind
 							return;
 						}
 						if (_fixList.Count == 0) { Fail($"验收不合格:{missing}"); return; }
-						// 背包里没有就先合:上一轮放丢了的那件,东西已经从背包扣掉了。
-						foreach (var (_, _, item) in _fixList)
-							if (Predicates.Have(item) < 1)
-							{
-								CraftCoordinator.Craft(item, 1);
-								DiagLog.Write($"[house] 补合 {item} +{CraftCoordinator.LastCrafted} stop={CraftCoordinator.LastStop} 现有={Predicates.Have(item)}");
-							}
 						DiagLog.Write($"[house] 验收缺 {missing} → 补放 {_fixList.Count} 件");
-						var ft = new List<(int, int, string)>();
-						foreach (var (fx, fy, item) in _fixList) ft.Add((fx, fy, item.ToString()));
-						Advance(Ph.Fix);
-						if (!Need(WalkPlace.Start(Wx(LocalMax - 2), ft, out string wf), "补家具", wf)) return;
+						Advance(Ph.FixCraft);
 						return;
 					}
 					Done();
 					return;
+
+				// 补家具前先把料备齐。【必须站在工作台旁边合】:椅子要工作台才有配方,
+				// 而验收时人在房子另一头,原地 Craft 只会 no_recipe(日志:补合 34 +0 stop=no_recipe)
+				case Ph.FixCraft:
+				{
+					// 补料整个交给 Unstick:走回工作台、开背包、合成、材料不够再往下递归,
+					// 那一套本来就在栈里。这里只等它跑完。
+					if (SettleAt.IsRunning || ItemUseCoordinator.IsActive || RecedingNav.Active) return;
+					if (++_waited > StepTimeout * 4) { Fail($"补料超时:{Unstick.FailChain}"); return; }
+					foreach (var (_, _, item) in _fixList)
+						if (Predicates.Have(item) < 1)
+						{
+							if (Unstick.Handle("house", Blocker.Item(item, 1, "补家具缺料"))) return;
+							Fail($"补料弄不到 {item}:{Unstick.FailChain}"); return;
+						}
+					var ftc = new List<(int, int, string)>();
+					foreach (var (fx, fy, item) in _fixList) ftc.Add((fx, fy, item.ToString()));
+					Advance(Ph.Fix);
+					if (!Need(WalkPlace.Start(Wx(LocalMax - 2), ftc, out string wfc), "补家具", wfc)) return;
+					return;
+				}
 
 				// 结构补格:一格一格交给 PlaceAnywhere(和铺桥面同一套),补完再补墙,然后回去重验
 				case Ph.FixStruct:
@@ -590,32 +607,7 @@ namespace TerraBlind
 						if (PlaceWalls.Start(H_WALL.ToString(), wcells, out _)) return;
 					}
 					// 结构补过了,家具还缺就接着走原来那条
-					if (_fixList.Count > 0)
-					{
-						// 补合【必须站在工作台旁边】:椅子要工作台才有配方,而验收时人在房子另一头,
-						// 原地 Craft 只会得到 no_recipe(日志:补合 34 +0 stop=no_recipe)
-						bool needCraft = false;
-						foreach (var (_, _, itc) in _fixList) if (Predicates.Have(itc) < 1) needCraft = true;
-						if (needCraft)
-						{
-							int bx = Wx(LocalMax - 2);
-							if (System.Math.Abs(ActExecutor.OriginCx(p) - bx) > 2)
-							{
-								if (!SettleAt.IsRunning) SettleAt.Start(bx, out _);
-								return;
-							}
-							Main.playerInventory = true;   // 不开背包 adjTile 是空的,要工作台的配方不出现
-						}
-						var ft2 = new List<(int, int, string)>();
-						foreach (var (fx3, fy3, item3) in _fixList)
-						{
-							if (Predicates.Have(item3) < 1) CraftCoordinator.Craft(item3, 1);
-							ft2.Add((fx3, fy3, item3.ToString()));
-						}
-						Advance(Ph.Fix);
-						if (!Need(WalkPlace.Start(Wx(LocalMax - 2), ft2, out string wf2), "补家具", wf2)) return;
-						return;
-					}
+					if (_fixList.Count > 0) { Advance(Ph.FixCraft); return; }
 					Advance(Ph.Fix);
 					return;
 				}
@@ -623,8 +615,8 @@ namespace TerraBlind
 				// 补完再验一次。还缺就认输 —— _fixTried 挡着,不会来回补个没完。
 				case Ph.Fix:
 					if (WalkPlace.IsRunning) return;
-					string still = AuditHouse();
-					if (still != null) { Fail($"补过一轮还是缺:{still}"); return; }
+					// 回去重验,不在这儿判死 —— 缺没缺、还有没有进展,统一由 Audit 那道门说了算
+					if (AuditHouse() != null) { _ph = Ph.Torch; _waited = 0; return; }
 					Advance(Ph.Reclaim);
 					return;
 
@@ -694,7 +686,10 @@ namespace TerraBlind
 		static int _fixTileIdx;
 		static int _digTries;
 		const int MaxDigTries = 60 * 10;   // 一格挖 10 秒还不掉,那就是挖不动
-		static bool _fixTried;   // 只补一轮,补完还缺就认输,不来回补个没完
+		static bool _fixTried;   // 保留给 Start 清零用
+		static int _fixRounds, _fixStall, _lastLack;
+		const int FixRoundsMax = 12;   // 一间房最多缺几处就补几轮,给足余量
+		const int FixStallMax = 2;     // 连着两轮一处都没补上=真卡住了
 		static int _reclaimTries;
 		const int MaxReclaim = 6;
 
