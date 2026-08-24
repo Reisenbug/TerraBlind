@@ -34,6 +34,7 @@ namespace TerraBlind
 		// 10 轮,dist 55→60 从没靠近。承诺的意义是"跨出当前这个坑",不是"直奔全场最低点" ---
 		// 跨出去之后场自然会重新指路。所以只在近处找。
 		const int MaxRadius = 14;
+		const int FailRadius = 3;      // 一个目标到不了,它周围这一圈也别再试了
 		// A target that cannot be reached shows itself fast: distance oscillated 14→10→14→10 for twenty cycles
 		// against the first commitment, closing to 10 and bouncing back every time. Ten cycles of no new best is
 		// already conclusive — the point of committing is to stop dithering, not to keep failing longer.
@@ -117,7 +118,12 @@ namespace TerraBlind
 			if (_sinceProgress >= StaleCycles || _cycles >= _budget)
 			{
 				DiagLog.Write($"[commit] ABANDON ({Gx},{Gy}) dist={d} best={_bestDist} cycles={_cycles}/{_budget} stale={_sinceProgress}");
-				_failed.Add((Gx, Gy));
+				// 【连片拉黑】。只黑一个点没用:到不了的是整片区域,下一轮就挑隔壁一格,
+				// 同一个方向再耗 10 轮 --- 日志里十个目标九个都在西南那一带,轮着来把预算耗光,
+				// 而唯一的出口只因为远 1 格,一次都没轮上。
+				for (int fx = -FailRadius; fx <= FailRadius; fx++)
+					for (int fy = -FailRadius; fy <= FailRadius; fy++)
+						_failed.Add((Gx + fx, Gy + fy));
 				Clear();
 				return false;
 			}
