@@ -156,6 +156,25 @@ namespace TerraBlind
 			}
 		}
 
+		// 这个目标为什么没放上。占位/支撑/锚点全问 PlaceSpot(它问的是 vanilla 自己的表),
+		// 不在这儿硬编"桌子 3x2"
+		static Blocker Diagnose(Player p, Target t)
+		{
+			if (Predicates.Have(t.ItemType) < 1)
+				return Blocker.Item(t.ItemType, 1, "要放但背包没有");
+			// 人压着目标格要先让开,不然清占位会把自己算进去
+			var (bl, br) = Predicates.BodyCols(p);
+			int fy = ActExecutor.OriginCy(p);
+			var (tw, th) = PlaceSpot.Size(t.ItemType);
+			if (t.Wx + tw > bl && t.Wx <= br && t.Wy >= fy - 2 && t.Wy - th < fy)
+				return new Blocker(BlockKind.SelfInWay, t.Wx, t.Wy, "人压着占位");
+			if (!p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				return new Blocker(BlockKind.OutOfReach, t.Wx, t.Wy, "够不着");
+			// 房子里补支撑用方块
+			if (!PlaceSpot.Check(t.ItemType, t.Wx, t.Wy, PlaceSpot.Fill.Block, out var why)) return why;
+			return new Blocker(BlockKind.OutOfReach, t.Wx, t.Wy, "都满足却没放上");
+		}
+
 		private static bool Filled(Target t)
 		{
 			if (!InBounds(t.Wx, t.Wy)) return false;
@@ -247,7 +266,17 @@ namespace TerraBlind
 
 			if (arrived)
 			{
-				Outcome = "incomplete"; _running = false; Dump("incomplete");
+				Dump("incomplete");
+				// 走到头还有没放上的:先问 Unstick 能不能救(没料就去合、够不着就走过去、被占就挖)。
+				// 以前直接判 incomplete,上层只能整个盖房失败 --- 而缺一张桌子明明是能补的。
+				foreach (var t in _targets)
+				{
+					if (t.Done || Filled(t)) continue;
+					if (Unstick.Handle("walkplace", Diagnose(p, t)))
+					{ _frames = 0; _pendingFrames = 0; return; }
+					break;
+				}
+				Outcome = "incomplete"; _running = false;
 				return;
 			}
 			if (_dir > 0) p.controlRight = true; else p.controlLeft = true;

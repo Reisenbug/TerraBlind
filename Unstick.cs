@@ -144,11 +144,25 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 没地方站:造一个。往上 pillar,往下平台梯,同高搭桥
+		// 没地方站:造一个。
+		// 先看是不是【就差这一格】--- 家具下面缺一块支撑就属于这种,补一格就完事,
+		// 用不着搭桥搭柱子。够得着且四周有锚点就直接放。
 		static bool MakeFooting(Player p, Blocker b)
 		{
-			if (PillarUp.IsRunning || PlatformDown.IsRunning || BridgeBuilder.IsRunning)
+			if (PillarUp.IsRunning || PlatformDown.IsRunning || BridgeBuilder.IsRunning || PlaceAction.IsRunning)
 			{ LastAction = "造落脚点中"; return true; }
+			if (!Main.tile[b.Wx, b.Wy].HasTile
+				&& p.IsInTileInteractionRange(b.Wx, b.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			{
+				bool wantPlat = b.Detail.Contains("平台");
+				int fillId = wantPlat ? PlatformItem(p) : BlockItem(p);
+				if (fillId < 0)
+					return Handle("unstick", Blocker.Item(wantPlat ? ItemID.WoodPlatform : ItemID.DirtBlock, 20, "补支撑没料"));
+				if (!MazeWand.PlatformAnchor(b.Wx, b.Wy))
+					return Handle("unstick", new Blocker(BlockKind.NoFooting, b.Wx, b.Wy + 1, "补这格前得先有锚点"));
+				if (PlaceAction.Start(fillId.ToString(), b.Wx, b.Wy, 1, 0, 0, true, out _))
+				{ LastAction = $"补一格({b.Wx},{b.Wy})"; return true; }
+			}
 			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
 			int plat = PlatformItem(p);
 			if (plat < 0) return Handle("unstick", Blocker.Item(Terraria.ID.ItemID.WoodPlatform, 20, "造落脚点没平台"));
@@ -331,6 +345,19 @@ namespace TerraBlind
 				var it = p.inventory[i];
 				if (it != null && !it.IsAir && it.createTile >= 0
 					&& Main.tileSolidTop[it.createTile] && it.stack > 0) return it.type;
+			}
+			return -1;
+		}
+
+		// 背包里第一样能当方块放的东西
+		static int BlockItem(Player p)
+		{
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.stack <= 0) continue;
+				if (it.createTile >= 0 && Main.tileSolid[it.createTile] && !Main.tileSolidTop[it.createTile])
+					return it.type;
 			}
 			return -1;
 		}

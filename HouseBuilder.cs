@@ -436,13 +436,20 @@ namespace TerraBlind
 					int walls = Predicates.Have(H_WALL);
 					if (walls < WallCount) CraftCoordinator.Craft(H_WALL, WallCount - walls);
 
-					// 桌子当初漏了验,少一张就静默过去,摆的时候挥空到超时
-					if (TableCount > 0 && Predicates.Have(H_TABLE) < TableCount)
-					{ Fail($"木桌只有 {Predicates.Have(H_TABLE)}/{TableCount}:{CraftCoordinator.LastStop}"); return; }
-					if (Predicates.Have(H_CHAIR) < ChairCount)
-					{ Fail($"椅子只有 {Predicates.Have(H_CHAIR)}/{ChairCount}"); return; }
-					if (Predicates.Have(H_WALL) < WallCount)
-					{ Fail($"木墙只有 {Predicates.Have(H_WALL)}/{WallCount}"); return; }
+					// 缺料不是失败,是让栈去弄:合不出就查来源表去采/去开箱。
+					// 火把例外 --- 要凝胶,这个阶段弄不到,直接说清楚
+					if (ItemUseCoordinator.IsActive || RecedingNav.Active || SettleAt.IsRunning
+						|| PlaceAction.IsRunning) return;
+					var want = new (int id, int n)[]
+					{
+						(H_TABLE, TableCount), (H_CHAIR, ChairCount), (H_WALL, WallCount)
+					};
+					foreach (var (id, n) in want)
+					{
+						if (n <= 0 || Predicates.Have(id) >= n) continue;
+						if (Unstick.Handle("house", Blocker.Item(id, n, "盖房缺料"))) return;
+						Fail($"弄不到 物品{id} {Predicates.Have(id)}/{n}:{Unstick.FailChain}"); return;
+					}
 					if (HaveTorch() < TorchCount)
 					{ Fail($"火把只有 {HaveTorch()}/{TorchCount},进屋前得先攒够(开箱砸罐)"); return; }
 
