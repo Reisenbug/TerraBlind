@@ -30,7 +30,6 @@ namespace TerraBlind
 		static int _bestDist;          // closest we have come to the target
 		static int _sinceProgress;
 
-		const int MinDrop = 20;        // target must beat here by this much — below that it is basin noise
 		// 远处那些 H 极低的格【隔着走不通的墙】:承诺 (1292,238) 54 格外,人在 1344..1348 弹了
 		// 10 轮,dist 55→60 从没靠近。承诺的意义是"跨出当前这个坑",不是"直奔全场最低点" ---
 		// 跨出去之后场自然会重新指路。所以只在近处找。
@@ -66,43 +65,23 @@ namespace TerraBlind
 			// while scanning rings visits every coordinate in a 121×121 box — ~900k lookups on the main thread,
 			// each calling CanStand, which is its own three tile reads. Iterate what is there and keep the nearest
 			// qualifying cell. CanStand is checked LAST, only for cells that already pass the cheap tests.
+			// 【完全不看 H】。H 在这个坑里指的就是死方向 --- 承诺再拿 H 选目标,
+			// 等于继承同一个错误:上一版挑了 (1342,239)(H 更低,西南),而唯一出口在西北、H 更高。
+			// 承诺要的是"跨出这个坑",判据只有三条:没去过、站得住、近。
 			int bestX = 0, bestY = 0, bestD = 0, bestH = 0;
 			float bestScore = float.MaxValue;
 			foreach (var kv in field)
 			{
-				if (kv.Value > curH - MinDrop) continue;
-				// skip targets we just failed to reach, so the next commitment is a DIFFERENT one — otherwise the
-				// same unreachable cell is chosen again the moment it is abandoned. Not a ban: _failed is cleared
-				// whenever a commitment succeeds or nav restarts, so it can be tried again later.
 				if (_failed.Contains(kv.Key)) continue;
 				int dx = kv.Key.Item1 - curCx, dy = kv.Key.Item2 - curCy;
 				if (dx > MaxRadius || dx < -MaxRadius || dy > MaxRadius || dy < -MaxRadius) continue;
 				int d = System.Math.Abs(dx) + System.Math.Abs(dy);
-				if (d == 0) continue;
-				// 【近的优先】。原来按"每格 H 降幅"打分,于是永远挑最远那个 --- 它 H 最低,
-				// 但隔着这个坑的墙,一步都靠近不了。近的才走得到,走到了坑就跨出去了。
-				float score = d;
-				if (score >= bestScore) continue;
+				if (d == 0 || d >= bestScore) continue;
+				if (StateSpacePlanner.WasVisited(kv.Key.Item1, kv.Key.Item2)) continue;
 				if (!CellKind.Stands(kv.Key.Item1, kv.Key.Item2)) continue;
-				bestScore = score; bestD = d; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
+				bestScore = d; bestD = d; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
 			}
 			bool found = bestScore != float.MaxValue;
-			// 近处一个 H 更低的都没有 --- 这个坑就是这样(人 H713,唯一出口 H815)。
-			// 那就退而求其次:挑【没去过的】最近落脚点。去过的都是死路,没去过的才可能是活路,
-			// 哪怕它 H 更高 --- "先变差"本来就是承诺的全部意义。
-			if (!found)
-				foreach (var kv in field)
-				{
-					if (_failed.Contains(kv.Key)) continue;
-					int dx2 = kv.Key.Item1 - curCx, dy2 = kv.Key.Item2 - curCy;
-					if (dx2 > MaxRadius || dx2 < -MaxRadius || dy2 > MaxRadius || dy2 < -MaxRadius) continue;
-					int d2 = System.Math.Abs(dx2) + System.Math.Abs(dy2);
-					if (d2 == 0 || d2 >= bestScore) continue;
-					if (StateSpacePlanner.WasVisited(kv.Key.Item1, kv.Key.Item2)) continue;
-					if (!CellKind.Stands(kv.Key.Item1, kv.Key.Item2)) continue;
-					bestScore = d2; bestD = d2; bestX = kv.Key.Item1; bestY = kv.Key.Item2; bestH = kv.Value;
-					found = true;
-				}
 			if (!found)
 			{
 				DiagLog.Write($"[commit] no target within {MaxRadius} of ({curCx},{curCy})H={curH}");
