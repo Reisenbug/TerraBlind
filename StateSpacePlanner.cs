@@ -578,9 +578,14 @@ namespace TerraBlind
                     int tx = ccx + dir * n;
                     bool blocked = false;
                     int blockAt = 0;
+                    // 真正要【新铺】几格。BridgeBuilder 会跳过桥面上本来就有的地(_already),
+                    // 而代价一直按整段 n 格收 —— 于是走在实地上也会发桥边、也收全价,
+                    // 便宜到能压过 walk。数清楚才不会"有方块的地方也 bridge"。
+                    int lay = 0;
                     for (int k = 1; k <= n; k++)
                     {
                         int x = ccx + dir * k;
+                        if (!Predicates.IsGround(x, ccy + 1)) lay++;
                         // 挡路的是【身子那 3 行】有实心 —— 桥面那格有没有东西不管,
                         // 有就是现成的地,BridgeBuilder 本来就跳过已经铺好的格子。
                         for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
@@ -597,10 +602,17 @@ namespace TerraBlind
                         DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} 挡在x={blockAt}");
                         continue;
                     }
-                    DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} → ({tx},{ccy}) 帧={BridgeFrames(n):0}");
+                    // 一格都不用铺 = 这段本来就是实地,走过去就行。发桥边只会重复 walk 还更贵
+                    if (lay == 0)
+                    {
+                        DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} 全是实地,不发桥边");
+                        continue;
+                    }
+                    DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} 铺{lay}格 → ({tx},{ccy}) 帧={BridgeFrames(lay):0}");
                     float npx = tx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
-                    yield return (node, null, BridgeFrames(n), false, null);
+                    // 代价按【要铺的格数】,不是跨度。跨 16 格但只缺 2 格的桥,本来就该便宜
+                    yield return (node, null, BridgeFrames(lay), false, null);
                 }
             }
         }
