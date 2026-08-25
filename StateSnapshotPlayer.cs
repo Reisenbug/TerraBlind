@@ -143,13 +143,8 @@ namespace TerraBlind
 			// M 画出【贪心一定卡死的地方】:红=局部极小,橙=会被吸进去的盆地。按住 Shift 清图层
 			if (TerraBlind.ShowMinima != null && TerraBlind.ShowMinima.JustPressed)
 			{
-				if (Main.keyState.PressingShift()) MinimaVis.Clear();
-				else
-				{
-					var g = MazeWand.Point2;
-					if (g.HasValue) MinimaVis.Toggle(g.Value.x, g.Value.y);
-					else Main.NewText("[TerraBlind] 先右键设个目标点(point2)");
-				}
+				if (Main.keyState.PressingShift()) { Trap.Reset(); Main.NewText("[TerraBlind] 卡点记录已清"); }
+				else Trap.Report();
 			}
 			// H 找一次房址并画出来:绿=空,红=被占。找不到就画脚下那个框,直接看出被什么挡的。
 			if (TerraBlind.ShowHouseSite != null && TerraBlind.ShowHouseSite.JustPressed)

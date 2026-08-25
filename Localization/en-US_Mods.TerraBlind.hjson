@@ -31,4 +31,5 @@ Keybinds: {
 	TestRoom.DisplayName: Test Room
 	TestPillar.DisplayName: Test Pillar
 	TestReachWork.DisplayName: Test Reach Work
+	ShowMinima.DisplayName: Show Minima
 }

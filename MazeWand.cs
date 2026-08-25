@@ -194,6 +194,14 @@ namespace TerraBlind
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
+        // 只读地问缓存,【绝不】就地建场。后台预扫要用 —— 建场是秒级的,不能顺手触发
+        public static Dictionary<(int, int), int> PeekFieldOrNull(int gx, int gy)
+        {
+            if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
+            if (_prevField != null && _prevGoal == (gx, gy)) return _prevField;
+            return null;
+        }
+
         public static void InvalidateField()
         {
             _cachedField = null; _cachedGoal = (int.MinValue, int.MinValue);

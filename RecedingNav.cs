@@ -152,6 +152,7 @@ namespace TerraBlind
             _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
             Commitment.Reset();               // 承诺和它的失败记录属于这一趟,别带进下一趟
+            Trap.Reset();                     // 卡点记录也是按趟算的
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             _altered = 0;
@@ -331,6 +332,8 @@ namespace TerraBlind
                 return;
             }
 
+            // 顺手往前探 200 格,提前知道哪儿会卡(后台,几百 ms,人照走不停)
+            Trap.ScanAhead(cell.Item1, cell.Item2, _goalWx, _goalWy);
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }

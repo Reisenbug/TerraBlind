@@ -2122,6 +2122,34 @@ namespace TerraBlind
             return t.LiquidAmount > 0 && t.LiquidType == Terraria.ID.LiquidID.Lava;
         }
 
+        // 站在 (cx,cy) 静止时,物理候选里有没有一个 H 更低。没有 = 贪心到这儿就走不动。
+        // 这是 Trap.Hit 那个判据的【离线版】,用来提前探路,不用等人真走过去撞上。
+        public static bool WouldTrap(Dictionary<(int, int), int> field, int cx, int cy,
+                                     PhysicsSimulator.Params ph, int platformTile, bool hasPick,
+                                     float goalCx, float goalFeetY)
+        {
+            if (!field.TryGetValue((cx, cy), out int curH)) return false;   // 不在场里,无从判断
+            if (!CellKind.Stands(cx, cy)) return false;                     // 站不住的格,人本来也不会停在这儿
+            var ctx = new PlanCtx { DistField = field };
+            // 构造"站在这一格、静止"的状态。StandCell 的逆:格 → 像素
+            var node = new SSNode
+            {
+                Px = cx * 16f + 8f - PhysicsSimulator.PlayerW / 2f,
+                Py = (cy + 1) * 16f - PhysicsSimulator.PlayerH,
+                Vx = 0f, Vy = 0f, Grounded = true,
+            };
+            foreach (var (next, frames, cost, pillar, dig) in
+                     Expand(ctx, node, ph, goalCx, goalFeetY, BuildHoldOptions(), platformTile, hasPick))
+            {
+                bool alters = dig != null || pillar || frames == null || frames.Exists(f => f.Place);
+                var landed = alters ? next : SettleNode(next, ph);
+                var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
+                if (nx == cx && ny == cy) continue;
+                if (field.TryGetValue((nx, ny), out int nH) && nH < curH) return false;   // 有降 H 的路,不卡
+            }
+            return true;   // 一条降 H 的物理边都没有
+        }
+
         public static SSResult StepAlongField(int goalWx, int goalWy)
         {
             var p = Main.LocalPlayer;
@@ -2230,7 +2258,9 @@ namespace TerraBlind
                 {
                     bool anyDrop = false;
                     foreach (var c in jigglePool) if (c.h < curH) { anyDrop = true; break; }
-                    if (!anyDrop) Commitment.Begin(curCx, curCy, curH);
+                    // 这一刻就是"贪心走不动了"的【定义】:物理候选里没有一个 H 更低。
+                    // 不是"弹了几次才发现",是当场。报出来,并记进 Trap 表供画图和预警
+                    if (!anyDrop) { Trap.Hit(curCx, curCy, curH, jigglePool.Count); Commitment.Begin(curCx, curCy, curH); }
                 }
                 if (Commitment.Active)
                 {
