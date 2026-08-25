@@ -1395,18 +1395,33 @@ namespace TerraBlind
 
         // 硬规则:放置必须在弧顶【或之后】(vy >= 0),绝不在上升段 —— 上升时人还在穿过那一行,砖要么没支撑要么被穿过。
         // 弧顶常常够不到远/低的落点(够不着 → UseItem 静默失败 → 腾空僵住 → 摔),所以等下降把人带进射程再放。
+        // 放置从发起到平台真的出现要多少帧:切物品栏 + 起手 + useTime。实测跳放那次等了 13 帧。
+        // 规划必须把它算进去,否则弹道和现实差这么多帧的下落。
+        const int PlaceLeadFrames = 14;
+
         static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
         {
             int apex = 0;
             float minPy = float.MaxValue;
             for (int i = 0; i < frames.Count; i++)
                 if (frames[i].Py < minPy) { minPy = frames[i].Py; apex = i; }
+            // 挑【最早】够得着的那一帧,不是随便一帧 —— 放置在执行端要切物品栏+挥手,实测 13 帧,
+            // 而模拟器把 Place 当零耗时(ignored by Step)。标晚了平台就来不及出现:人已经掉到
+            // 平台下方,而平台是 solidTop 只有顶面接人,于是穿过去自由落体 109 格。
+            // 从弧顶开始正向扫,第一个够得着的就用 —— 那给执行留下的余量最大。
             for (int i = apex; i < frames.Count; i++)
             {
                 if (!CanReachTile(frames[i].Px, frames[i].Py, cx, cy)) continue;
                 var fr = frames[i];
                 fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
                 frames[i] = fr;
+                // 留给执行的帧数。不够就说明这条边在物理上根本来不及放,别发它
+                int slack = frames.Count - i;
+                if (slack < PlaceLeadFrames)
+                {
+                    DiagLog.Trc($"[ss-place-lead] ({cx},{cy}) 只剩 {slack} 帧,不够放置的 {PlaceLeadFrames} 帧 → 拒边");
+                    return false;
+                }
                 return true;
             }
             return false;
@@ -3268,6 +3283,22 @@ namespace TerraBlind
             {
                 if (_placeStall == 0) DiagLog.Trc($"[ss-place] frame={_execIdx} tile=({f.PlaceCx},{f.PlaceCy})");
                 _placeStall++;
+                // 【空中不许 stall】。下面那段是给地面写的:刹住残速、原地等平台。人在空中刹不住,
+                // 每等一帧就多掉一帧 —— 实测跳放等了 13 帧,人掉了 2.3 格,从平台【下面】穿过去
+                // (平台是 solidTop,只有顶面接人),然后一路自由落体 109 格。
+                // 空中就照常重放帧,挥手的事交给 ItemUseCoordinator 在后台完成;放不上就当次失败重规划。
+                bool airborne = p.velocity.Y != 0f;
+                if (airborne)
+                {
+                    EmitPlace(p, f.PlaceCx, f.PlaceCy);
+                    if (f.Left) p.controlLeft = true;
+                    if (f.Right) p.controlRight = true;
+                    if (f.Jump) p.controlJump = true;
+                    if (f.Down) p.controlDown = true;
+                    _execIdx++;
+                    _lastExecFrameCount++;
+                    return;
+                }
                 if (_placeStall <= PlaceStallMax)
                 {
                     // pin the player while waiting for the platform: do NOT press the frame's move keys (they'd
