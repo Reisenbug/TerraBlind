@@ -14,11 +14,10 @@ namespace TerraBlind
     {
         // 逃生目标要比当前 H 低这么多才算"真出去了"。低太少可能还在同一个坑里
         const int MinDrop = 60;
-        // 预算只当【最后的保险】。真正管早停的是 f 判据(FCut):没路时几十次展开就停,
-        // 有路时爱搜多久搜多久。所以这个数可以给得宽 —— 它不再是"每次都会烧满"的那种上限。
+        // 预算只当【最后的保险】,正常情况碰不到。
+        // 真正的终止条件是 open 表空 —— 搜索空间穷尽,数学上确定不可达,不含任何拍脑袋的阈值。
+        // 它能空掉的前提是 coarseStates(一格只留一个状态);带速度时同一格囤几百个变体,open 永远不空。
         const int Budget = 20000;
-        // f 超过起点估计的这个倍数就判不可达。2.5 = 允许绕两倍半的路,再多就不是"出坑"了
-        const float FCut = 2.5f;
 
         static int _fails;
         const int MaxFails = 3;
@@ -44,7 +43,7 @@ namespace TerraBlind
             // 场目标传【最终目标】:复用已建好的大罗盘当启发式,别为出坑另建一张场
             var res = StateSpacePlanner.Plan(target.x, target.y,
                                              fieldGoalWx: goalWx, fieldGoalWy: goalWy,
-                                             maxExp: Budget, goalSnapCap: 0, fCutoffMul: FCut);
+                                             maxExp: Budget, goalSnapCap: 0, coarseStates: true);
             // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
             // 派发出去人绕一圈回原地,下一周期一模一样 —— 那是把贪心的死循环换成 A* 的死循环。
             if (!res.Found || res.Steps.Count == 0)

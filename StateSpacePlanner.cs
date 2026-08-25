@@ -235,7 +235,7 @@ namespace TerraBlind
         // fCutoffMul:放弃判据。A* 取出的 f=g+h 单调不减,所以它就是"最乐观的估计"。
         // 起点的 f0 ≈ 直线过去的代价;当取出的 f > f0*倍数,说明连最乐观的路都已经贵到不可能 —— 目标不可达。
         // 这比"搜够 N 次就停"准:死胡同里几十次就停(open 很快空/f 爆涨),真有路的大坑爱搜多久搜多久。
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -353,8 +353,18 @@ namespace TerraBlind
                     float ng = curG + cost;
                     var ck = Cell(next);
                     if (!labels.TryGetValue(ck, out var list)) { list = new List<Label>(); labels[ck] = list; }
-                    if (F_Dominance && Dominated(list, ng, next.Vx, next.Vy)) continue;
-                    list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
+                    // coarseStates:一个格只留【一个】标签,丢掉速度变体。
+                    // 正常规划不能这么干 —— 斜坡连滑要靠上一步的残速接力,压掉会断链(注释见 Dominated)。
+                    // 但"出不出得去这片区域"跟残速无关,而带速度时同一格能囤几百个变体,
+                    // 五六格的死胡同就能产出几千个状态,open 永远不空 → 只能靠预算上限硬停。
+                    // 粗化之后 open 会真的空,那才是数学上确定的"不可达",不用拍任何阈值。
+                    if (coarseStates)
+                    {
+                        if (list.Count > 0 && list[0].G <= ng + 0.01f) continue;
+                        list.Clear();
+                    }
+                    else if (F_Dominance && Dominated(list, ng, next.Vx, next.Vy)) continue;
+                    if (!coarseStates) list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
                     came[next] = (cur, frames, ng, pillar, digTiles);
                     open.Enqueue(next, ng + HeuristicWeight * Heuristic(ctx, next, goalCx, goalFeetY, ph));
