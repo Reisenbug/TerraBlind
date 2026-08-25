@@ -14,10 +14,11 @@ namespace TerraBlind
     {
         // 逃生目标要比当前 H 低这么多才算"真出去了"。低太少可能还在同一个坑里
         const int MinDrop = 60;
-        // 找目标的搜索半径(格)。坑通常很小,超出这个距离就不是"出坑"而是"走完全程"了
-        const int Radius = 40;
-        // 出坑用的展开预算。坑小,不需要 2 万 —— 给多了反而在失败时白烧几百 ms
-        const int Budget = 4000;
+        // 预算只当【最后的保险】。真正管早停的是 f 判据(FCut):没路时几十次展开就停,
+        // 有路时爱搜多久搜多久。所以这个数可以给得宽 —— 它不再是"每次都会烧满"的那种上限。
+        const int Budget = 20000;
+        // f 超过起点估计的这个倍数就判不可达。2.5 = 允许绕两倍半的路,再多就不是"出坑"了
+        const float FCut = 2.5f;
 
         static int _fails;
         const int MaxFails = 3;
@@ -34,23 +35,22 @@ namespace TerraBlind
             if (_lastH != int.MinValue && curH < _lastH - MinDrop) _fails = 0;
             if (_fails >= MaxFails) return false;
 
+            // PickTarget 里已经打了具体原因(可达区多大、区内最低 H 多少),这儿不再重复
             var t = PickTarget(field, curCx, curCy, curH);
-            if (t == null)
-            {
-                DiagLog.Write($"[escape] ({curCx},{curCy})H{curH} 半径{Radius}内找不到低 {MinDrop} 的落脚点");
-                return false;
-            }
+            if (t == null) return false;
             var target = t.Value;
             int tH = field[(target.x, target.y)];
 
             // 场目标传【最终目标】:复用已建好的大罗盘当启发式,别为出坑另建一张场
             var res = StateSpacePlanner.Plan(target.x, target.y,
                                              fieldGoalWx: goalWx, fieldGoalWy: goalWy,
-                                             maxExp: Budget, goalSnapCap: 0);
-            if ((!res.Found && !res.Partial) || res.Steps.Count == 0)
+                                             maxExp: Budget, goalSnapCap: 0, fCutoffMul: FCut);
+            // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
+            // 派发出去人绕一圈回原地,下一周期一模一样 —— 那是把贪心的死循环换成 A* 的死循环。
+            if (!res.Found || res.Steps.Count == 0)
             {
                 _fails++;
-                DiagLog.Write($"[escape] A* 搜不出 ({curCx},{curCy})→({target.x},{target.y}) exp={res.Expansions} 失败{_fails}/{MaxFails}");
+                DiagLog.Write($"[escape] A* 搜不出 ({curCx},{curCy})→({target.x},{target.y}) exp={res.Expansions} partial={res.Partial} 失败{_fails}/{MaxFails}");
                 return false;
             }
 
@@ -62,24 +62,72 @@ namespace TerraBlind
             return true;
         }
 
-        // 找一个"确实在坑外"的落脚点:H 比现在低 MinDrop 以上,人站得住,离得最近的那个。
-        // 按 H 降幅挑会挑到很远的地方 —— 那等于让 A* 走完全程,失去"只出坑"的意义。
+        // 目标不能用 H 挑 —— H 正是骗人的那个东西。死胡同里 H 一路降到底,岔路口在回头方向 H 更高,
+        // 按"H 比现在低"选永远选不中真出口;而墙对面 H 更低的格物理上根本到不了,选中了也白搭。
+        //
+        // 改成按【可达性】挑:从人站的格泛洪,只走物理走得通的边,完全不看 H。
+        // 这片区域就是"这个坑"。区内 H 最低的格一定能到 —— A* 不会白搜。
         static (int x, int y)? PickTarget(Dictionary<(int, int), int> field, int cx, int cy, int curH)
         {
+            var region = Flood(cx, cy);
             (int x, int y)? best = null;
-            int bestDist = int.MaxValue;
-            for (int dx = -Radius; dx <= Radius; dx++)
-                for (int dy = -Radius; dy <= Radius; dy++)
+            int bestH = curH;
+            foreach (var c in region)
+            {
+                if (!field.TryGetValue(c, out int h)) continue;
+                if (h < bestH) { bestH = h; best = c; }
+            }
+            if (best != null && curH - bestH >= MinDrop)
+            {
+                DiagLog.Write($"[escape] 可达区 {region.Count} 格,区内最低 ({best.Value.x},{best.Value.y})H{bestH} 降{curH - bestH}");
+                return best;
+            }
+            // 整片可达区都不比现在好 = 真死胡同,原路返回也出不去(泛洪已经含了回头路)。
+            // 这时候没有"走一段就好"的解,交给调用方去做别的(挖墙/搭桥/放弃这一段)
+            DiagLog.Write($"[escape] 可达区 {region.Count} 格,最低 H{bestH} vs 现在 H{curH} — 整片都不比现在好");
+            return null;
+        }
+
+        // 物理可达泛洪。用 CellKind 那套【便宜】判据(纯 tile 查询),不用 Expand(0.82ms/格,几百格就半秒)。
+        // 近似的地方:横走只认同高度和 ±1 阶,跳只认正上方 —— 宁可少算(可达区偏小),不能多算,
+        // 多算会给出一个 A* 到不了的目标,又回到白烧预算。
+        static HashSet<(int x, int y)> Flood(int sx, int sy)
+        {
+            var seen = new HashSet<(int x, int y)> { (sx, sy) };
+            var q = new Queue<(int x, int y)>();
+            q.Enqueue((sx, sy));
+            while (q.Count > 0 && seen.Count < MaxRegion)
+            {
+                var (x, y) = q.Dequeue();
+                // 横走:同高、上一阶、下一阶
+                for (int dx = -1; dx <= 1; dx += 2)
+                    for (int dy = -1; dy <= 1; dy++)
+                        Push(seen, q, x + dx, y + dy);
+                // 跳:正上方 JumpReach 格内,中途不能有挡的
+                for (int d = 1; d <= JumpUp; d++)
                 {
-                    int d = System.Math.Abs(dx) + System.Math.Abs(dy);
-                    if (d == 0 || d > Radius || d >= bestDist) continue;
-                    int x = cx + dx, y = cy + dy;
-                    if (!field.TryGetValue((x, y), out int h)) continue;
-                    if (curH - h < MinDrop) continue;
-                    if (!CellKind.Stands(x, y)) continue;
-                    best = (x, y); bestDist = d;
+                    if (!CellKind.Passable(x, y - d)) break;
+                    Push(seen, q, x, y - d);
                 }
-            return best;
+                // 掉:正下方一直到落地
+                for (int d = 1; d <= FallDown; d++)
+                {
+                    if (CellKind.Of(x, y + d) == Cell.Solid) break;
+                    if (CellKind.Stands(x, y + d)) { Push(seen, q, x, y + d); break; }
+                }
+            }
+            return seen;
+        }
+
+        const int MaxRegion = 3000;   // 泛洪上限。坑再大也就这么大,超了说明本来就不是"坑"
+        const int JumpUp = 6;         // 和 MazeWand.JumpReach 一致
+        const int FallDown = 30;
+
+        static void Push(HashSet<(int x, int y)> seen, Queue<(int x, int y)> q, int x, int y)
+        {
+            if (!CellKind.Stands(x, y)) return;
+            if (!seen.Add((x, y))) return;
+            q.Enqueue((x, y));
         }
     }
 }

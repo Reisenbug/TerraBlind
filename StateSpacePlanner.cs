@@ -232,7 +232,10 @@ namespace TerraBlind
 
         // startOverride:从给定状态起规划(lookahead 用 —— 边走边算下一段,到点零停顿)。
         // goalWx/Wy 是 A* 搜的格(滚动时是近子目标),fieldGoal 是缓存罗盘场的键(最终目标),分开才不会每段重建百万格场(卡死)。
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue)
+        // fCutoffMul:放弃判据。A* 取出的 f=g+h 单调不减,所以它就是"最乐观的估计"。
+        // 起点的 f0 ≈ 直线过去的代价;当取出的 f > f0*倍数,说明连最乐观的路都已经贵到不可能 —— 目标不可达。
+        // 这比"搜够 N 次就停"准:死胡同里几十次就停(open 很快空/f 爆涨),真有路的大坑爱搜多久搜多久。
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f)
         {
             var ctx = new PlanCtx();
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -306,9 +309,20 @@ namespace TerraBlind
             // 必须落地:一段路以站定结束,下一段才有合法起点。
             SSNode bestGroundedNode = start; bool haveBestGrounded = false; float bestGroundedDist = float.MaxValue;
 
+            // f0 = 起点的乐观估计。cutoff 是它的倍数,不是一个绝对帧数 —— 近目标和远目标要的余量差很多倍
+            float f0 = Heuristic(ctx, start, goalCx, goalFeetY, ph);
+            float fCut = fCutoffMul > 0f && f0 < float.MaxValue / 4f ? f0 * fCutoffMul : float.MaxValue;
+            bool gaveUp = false;
             while (open.Count > 0 && expansions < maxExp)
             {
-                var cur = open.Dequeue();
+                if (!open.TryDequeue(out var cur, out float curF)) break;
+                // 最乐观的候选都超过阈值了 = 没路。死胡同在这里几十次展开就停,不用烧满预算
+                if (curF > fCut)
+                {
+                    gaveUp = true;
+                    DiagLog.Write($"[ss-cut] f={curF:0} > {fCut:0}(f0={f0:0}x{fCutoffMul:0.#}) exp={expansions} → 判定不可达");
+                    break;
+                }
                 float curG = came.TryGetValue(cur, out var ce) ? ce.g : float.MaxValue;
 
                 {
@@ -353,7 +367,8 @@ namespace TerraBlind
             res.Found = found;
             // 目标超出本次预算 → 退回最近的落地节点当部分段。haveBestGrounded 防的是"根本没动"(起点是唯一落地点 = 真卡住)。
             bool retrace = found;
-            if (!found && haveBestGrounded)
+            if (!found && gaveUp) { DiagLog.Write($"[ss-cut] 放弃,不退 partial(落点多半还在原地)"); }
+            else if (!found && haveBestGrounded)
             {
                 goalNode = bestGroundedNode;
                 res.Partial = true;
