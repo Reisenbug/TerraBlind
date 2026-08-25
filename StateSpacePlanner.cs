@@ -2933,6 +2933,71 @@ namespace TerraBlind
             return (px, py, 0f);
         }
 
+        // 用【人真正站的像素】重跑放置边,确认还落得上去。
+        //
+        // 规划时边是从某个具体像素模拟出来的,派发时人在另一个像素。走路边差几px无所谓(走到哪算哪),
+        // 跳放边不行:落点是一块 16px 宽的平台,起点偏 5px 落点就偏 5px,擦过边缘就是自由落体。
+        // 原来的做法是把帧的位置整体平移,物理【没有】重跑 —— 那等于假装偏差不存在。
+        //
+        // 重跑之后落点还在同一格就放行(顺便把帧换成真实弹道);落不上去就不派发,交回上层重规划。
+        // 验不过一次记多少分。要够大才压得过它原本的优势,但别大到永久拉黑 —— DecayMiss 每周期在衰减
+        const float ResimMissPenalty = 200f;
+
+        static bool ReSimPlaceSteps(SSResult res, Player p)
+        {
+            if (res.Steps == null || p == null) return true;
+            var ph = PhysicsSimulator.Params.FromPlayer(p);
+            for (int si = 0; si < res.Steps.Count; si++)
+            {
+                var st = res.Steps[si];
+                if (st.Frames == null || st.Frames.Count == 0) continue;
+                bool hasPlace = false;
+                foreach (var f in st.Frames) if (f.Place) { hasPlace = true; break; }
+                if (!hasPlace) continue;                 // 只有放置边对起点像素敏感
+                if (si > 0) break;                       // 只重验第一条:后面那些的起点本来就是预测值
+
+                var stt = new PhysicsSimulator.State
+                {
+                    Px = p.position.X, Py = p.position.Y,
+                    Vx = p.velocity.X, Vy = p.velocity.Y,
+                    Grounded = true,
+                };
+                var fresh = new List<PhysicsSimulator.ControlInput>(st.Frames.Count);
+                for (int i = 0; i < st.Frames.Count; i++)
+                {
+                    var src = st.Frames[i];
+                    var input = new PhysicsSimulator.ControlInput
+                    { Left = src.Left, Right = src.Right, Jump = src.Jump, Down = src.Down };
+                    stt = PhysicsSimulator.Step(stt, input, ph);
+                    input.Px = stt.Px; input.Py = stt.Py; input.Vx = stt.Vx; input.Vy = stt.Vy;
+                    // 放置格【不】跟着漂:那是绝对格坐标,平台就该放在规划说的那一格。
+                    // 但要确认这一帧真的够得着 —— 够不着就是挥空,人腾空僵住然后摔
+                    input.Place = src.Place; input.PlaceCx = src.PlaceCx; input.PlaceCy = src.PlaceCy;
+                    if (src.Place && !CanReachTile(stt.Px, stt.Py, src.PlaceCx, src.PlaceCy))
+                    {
+                        DiagLog.Write($"[ss-resim] 第{i}帧够不到放置格({src.PlaceCx},{src.PlaceCy}) 人=({stt.Px:0.#},{stt.Py:0.#})");
+                        return false;
+                    }
+                    fresh.Add(input);
+                }
+                var landed = new SSNode { Px = stt.Px, Py = stt.Py, Vx = stt.Vx, Vy = stt.Vy, Grounded = stt.Grounded };
+                var (lcx, lcy) = StandCell(landed.Px, landed.Py);
+                if (lcx != st.TargetCx || lcy != st.TargetCy)
+                {
+                    DiagLog.Write($"[ss-resim] 落点变了:计划({st.TargetCx},{st.TargetCy}) 真实起点跑出来({lcx},{lcy}) "
+                        + $"起点=({p.position.X:0.#},{p.position.Y:0.#}) 规划起点=({res.StartPx:0.#},{res.StartPy:0.#})");
+                    return false;
+                }
+                // 落点一致 —— 把帧换成真实弹道,重对齐那步就不用再平移它了
+                st.Frames.Clear();
+                st.Frames.AddRange(fresh);
+                st.LandPx = landed.Px; st.LandPy = landed.Py;
+                res.StartPx = p.position.X; res.StartPy = p.position.Y;
+                break;
+            }
+            return true;
+        }
+
         // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划 —— 调用方已经验证过真实位置匹配。
         public static void DispatchPlan(SSResult res)
         {
@@ -2940,8 +3005,26 @@ namespace TerraBlind
             _execDone = false; _execFailCode = null;
             var pStart = Main.LocalPlayer;
 
+            // 放置边(跳放)必须用【真实起点】重跑物理,不能只平移帧。
+            // 落点是一块 1 格宽(16px)的平台,起点差 5px 弹道就偏 5px,人擦着边缘落空 —— 实测
+            // 同一条 (2080,178)→(2082,177) 跳放边,起点 33282.4 时落点只差 1.3px,
+            // 起点 33287.7(差 5.3px)时人直接掉了 109 格。
+            // 下面那句"Place 的格坐标是格对齐的,亚格平移不影响"是错的:格坐标确实不用改,
+            // 但【能不能落上去】完全取决于那几个像素。
+            if (!ReSimPlaceSteps(res, pStart))
+            {
+                // 只是不派发的话,下一周期从同一个位置会再选中同一条边,再验不过 —— 原地死循环。
+                // 记一笔失配,让选边自己偏向别的候选(这就是 _miss 存在的意义,不用另造黑名单)。
+                var (fx, fy) = StandCell(pStart.position.X, pStart.position.Y);
+                PenalizeEdges(new[] { (fx, fy, res.GoalWx, res.GoalWy) }, ResimMissPenalty);
+                DiagLog.Write($"[ss-resim] 真实起点跑不出这条放置边 ({fx},{fy})→({res.GoalWx},{res.GoalWy}) → 记失配,交回重规划");
+                _execFailCode = "resim_fail";
+                StopSteps();
+                return;
+            }
+
             // 重对齐:计划是从上一段的【预测】落点算的,真人差几像素。开环重放会把整段平移那个差值(恒定 dPy=-8 的接缝)。
-            // 把每帧的绝对位置整体平移到人真正所在处。速度与位置无关(不动),Place 的格坐标是格对齐的(亚格平移不影响)。
+            // 把每帧的绝对位置整体平移到人真正所在处。速度与位置无关(不动)。
             float offX = pStart.position.X - res.StartPx;
             float offY = pStart.position.Y - res.StartPy;
             if (res.Steps != null && (MathF.Abs(offX) > 0.01f || MathF.Abs(offY) > 0.01f))
