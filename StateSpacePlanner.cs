@@ -227,6 +227,10 @@ namespace TerraBlind
         {
             public Dictionary<(int, int), int> DistField;
             public Dictionary<(int, int), int> BlockH;
+            // 每个节点【走到这儿为止】已经铺出来的桥面。桥边的落点是凭空构造的,
+            // 而世界里那一行还是空的 —— 不记下来,从桥头起跳的模拟会认为脚下没地,
+            // "铺一段再跳过去"这条链就永远搜不出来。
+            public Dictionary<SSNode, List<(int, int)>> Laid;
             public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
         }
 
@@ -278,6 +282,7 @@ namespace TerraBlind
             else
                 ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
             ctx.BlockH = null;
+            ctx.Laid = new Dictionary<SSNode, List<(int, int)>>();
 
             // DIAGNOSTIC: dump the maze-field H up the start column to answer "why does A* go DOWN into the pit". if a
             // lower cell has LOWER H than a higher one, the field itself rewards descending. x = cell not in field.
@@ -367,6 +372,10 @@ namespace TerraBlind
                     if (!coarseStates) list.RemoveAll(l => l.G >= ng - 0.01f && MathF.Abs(l.Vx) <= MathF.Abs(next.Vx) + 0.01f && MathF.Sign(l.Vx) == MathF.Sign(next.Vx) && MathF.Abs(l.Vy - next.Vy) < VxQuant);
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
                     came[next] = (cur, frames, ng, pillar, digTiles);
+                    // 桥是累积的:走过它、在它上面跳,它都还在。BridgeEdges 自己已经写过落点了,
+                    // 这里只补其他边 —— 不继承的话,过了桥再走一步,桥就"消失"了
+                    if (ctx.Laid != null && ctx.Laid.TryGetValue(cur, out var carry) && !ctx.Laid.ContainsKey(next))
+                        ctx.Laid[next] = carry;
                     open.Enqueue(next, ng + HeuristicWeight * Heuristic(ctx, next, goalCx, goalFeetY, ph));
                 }
             }
@@ -582,10 +591,11 @@ namespace TerraBlind
                     // 而代价一直按整段 n 格收 —— 于是走在实地上也会发桥边、也收全价,
                     // 便宜到能压过 walk。数清楚才不会"有方块的地方也 bridge"。
                     int lay = 0;
+                    var layCells = new List<(int, int)>();
                     for (int k = 1; k <= n; k++)
                     {
                         int x = ccx + dir * k;
-                        if (!Predicates.IsGround(x, ccy + 1)) lay++;
+                        if (!Predicates.IsGround(x, ccy + 1)) { lay++; layCells.Add((x, ccy + 1)); }
                         // 挡路的是【身子那 3 行】有实心 —— 桥面那格有没有东西不管,
                         // 有就是现成的地,BridgeBuilder 本来就跳过已经铺好的格子。
                         for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
@@ -611,6 +621,15 @@ namespace TerraBlind
                     DiagLog.Trc($"[ss-bridge-gen] ({ccx},{ccy}) dir={dir} n={n} 铺{lay}格 → ({tx},{ccy}) 帧={BridgeFrames(lay):0}");
                     float npx = tx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
+                    // 记下这条桥铺出来的格子:A* 从桥头继续展开时要把它们当成真的地,
+                    // 否则"铺一段再跳过去"永远搜不出来 —— 模拟会认为桥头脚下是空的。
+                    // 父节点已经铺过的也一起带上,一条路上的桥是累积的。
+                    if (ctx.Laid != null)
+                    {
+                        var acc = new List<(int, int)>(layCells);
+                        if (ctx.Laid.TryGetValue(cur, out var prev)) acc.AddRange(prev);
+                        ctx.Laid[node] = acc;
+                    }
                     // 代价按【要铺的格数】,不是跨度。跨 16 格但只缺 2 格的桥,本来就该便宜
                     yield return (node, null, BridgeFrames(lay), false, null);
                 }
@@ -644,6 +663,20 @@ namespace TerraBlind
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
+            // 把这个节点一路铺出来的桥面【临时】写进世界再展开,展开完还原。
+            // 和 SimulateWithPlatform 同一个手法,只是那个只铺一块,这个铺一整段。
+            var laid = ctx.Laid != null && ctx.Laid.TryGetValue(cur, out var lz) ? lz : null;
+            var saved = laid == null ? null : new List<(bool had, ushort type, bool half, Terraria.ID.SlopeType slope)>();
+            if (laid != null)
+                foreach (var (lx, ly) in laid)
+                {
+                    var t = Main.tile[lx, ly];
+                    saved.Add((t.HasTile, t.TileType, t.IsHalfBlock, t.Slope));
+                    t.HasTile = true; t.TileType = (ushort)(platformTile >= 0 ? platformTile : 19);
+                    t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
+                }
+            try
+            {
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
@@ -655,6 +688,17 @@ namespace TerraBlind
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
                 if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
                 yield return e;
+            }
+            }
+            finally
+            {
+                if (laid != null)
+                    for (int i = 0; i < laid.Count; i++)
+                    {
+                        var t = Main.tile[laid[i].Item1, laid[i].Item2];
+                        t.HasTile = saved[i].had; t.TileType = saved[i].type;
+                        t.IsHalfBlock = saved[i].half; t.Slope = saved[i].slope;
+                    }
             }
         }
 
@@ -2402,7 +2446,14 @@ namespace TerraBlind
             res.Steps = EdgeToSteps(cur, b.node, b.frames, b.pillar, b.dig);
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
-            EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {(b.pillar ? "pillar" : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}" : "move")}{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
+            // 边的【真名】,和候选表用同一套判据。原来只分 pillar/dig/move,把 walk/jump/跳放/桥
+            // 全归成 "move" —— 事后看日志根本不知道这一步干了什么(十步全写 move,可跨了 9 格)
+            string pickKind = b.pillar ? "pillar"
+                : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}"
+                : b.frames == null ? "bridge"
+                : b.frames.Exists(f => f.Place) ? (b.frames[0].Jump ? "jumpPlace" : "place")
+                : b.frames.Exists(f => f.Jump) ? "jump" : "walk";
+            EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {pickKind} {b.cost:0}f{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
             // 选了要挖的边就把左右两边的账一起打出来 —— "旁边明明能走却偏要挖"每次都得回答这个
             if (b.dig != null && b.dig.Count > 0)
                 DiagLog.Write($"[costcmp] 挖{b.dig.Count}格 vs 横向: 西({curCx - 1})cost={MazeWand.StepCostPublic(curCx - 1, curCy, curCx, curCy)}"
