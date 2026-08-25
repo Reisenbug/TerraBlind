@@ -49,22 +49,38 @@ namespace TerraBlind
 
         // 站哪一格 = 脚占的那个空气格。中心列得身体真放得下才算数:0.7px 探进头顶实心的那列就被标成站在里面,
         // 而那格 H 是按挖算的,跳跃白嫖了它 → (800,937)↔(801,937) 边界震荡。
-        internal static (int cx, int cy) StandCell(float px, float py)
+        // 人占哪一格 —— 【纯几何】,不读世界。
+        //
+        // StandCell 会按"脚下有没有支撑"吸附到隔壁列,而支撑是读 Main.tile 的:
+        // 规划时平台还没铺 → 走中心列那条分支;执行完平台在了 → 走吸附分支 → 同一个像素位置
+        // 前后标成两个格。今天十步里三步报 MISS(d=1.3px,占的列一模一样)全是这么来的。
+        // 在坑边这是致命的:系统以为人在坑沿那列,据此规划下一跳,人实际在旁边一列。
+        //
+        // 所以标签必须只由位置决定。"支撑在哪一列"是另一个问题,谁需要谁自己去问 SupportCol。
+        internal static (int cx, int cy) BodyCell(float px, float py)
         {
             int cy = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
             int cx = (int)((px + PhysicsSimulator.PlayerW / 2f) / 16f);
-            int leftCol = (int)(px / 16f);
-            int rightCol = (int)((px + PhysicsSimulator.PlayerW - 1f) / 16f);
-            int other = cx == leftCol ? rightCol : leftCol;
-            // 站在砖的边缘时中心列可能是悬空那一列:身体压在隔壁列的砖上,人站得住,可这个格号一报出去,
-            // 找支撑的代码全查空气,一条边都发不出来 → "walled in"((3082,805) 脚下的砖其实在 3081)。
-            if (BodyFits(cx, cy) && (HasSupport(cx, cy + 1) || other == cx || !HasSupport(other, cy + 1)))
-                return (cx, cy);
-            // 只吸附到既放得下身体、脚下又有支撑的列。挖的落点(规划时砖还在,中心列判"放不下")要是被吸到
-            // 隔壁没地板的悬崖列就废了 —— 那种情况保留中心列。
-            if (other != cx && BodyFits(other, cy) && HasSupport(other, cy + 1)) return (other, cy);
             return (cx, cy);
         }
+
+        // 脚下的实心在哪一列(没有就返回 cx)。原来揉在 StandCell 里当吸附,现在单独问 ——
+        // (3082,805) 那个"中心列悬空、身体压在 3081 的砖上"要的就是这个,不是要改标签。
+        internal static int SupportCol(float px, float py)
+        {
+            var (cx, cy) = BodyCell(px, py);
+            if (HasSupport(cx, cy + 1)) return cx;
+            int leftCol = (int)(px / 16f);
+            int rightCol = (int)((px + PhysicsSimulator.PlayerW - 1f) / 16f);
+            if (leftCol != cx && HasSupport(leftCol, cy + 1)) return leftCol;
+            if (rightCol != cx && HasSupport(rightCol, cy + 1)) return rightCol;
+            return cx;
+        }
+
+        // StandCell 已删。它按"脚下有没有支撑"把标签吸附到隔壁列,而支撑读的是 Main.tile —— 
+        // 规划时平台没铺走中心列、执行后平台在了走吸附列,同一个位置前后标成两个格,每步都报 MISS。
+        // 需要"人在哪一格"用 BodyCell(纯几何),需要"支撑在哪一列"用 SupportCol。
+        // 真正靠支撑做判断的地方(drop 边、pillar)本来就自己查两个碰撞箱列,从不依赖这个吸附。
 
         // 和场的 StepCost 用同一套身体包络:脚那行可以是斜坡/半砖(DigSolid 曾把每次站斜坡都误判成不合身),
         // 上面几行任何实心都挡,脚陷进斜坡 6-16px 时头会顶到第 4 行(42+6 > 48)。
@@ -99,7 +115,9 @@ namespace TerraBlind
 
         static CellKey Cell(SSNode s)
         {
-            var (cx, cy) = StandCell(s.Px, s.Py);
+            // 去重 key 必须只由状态决定。用 StandCell 的话,同一个节点在世界改变前后
+            // 会落进两个不同的 key,A* 的 labels/came 表就对不上了
+            var (cx, cy) = BodyCell(s.Px, s.Py);
             return new CellKey { Cx = cx, Cy = cy, G = s.Grounded };
         }
 
@@ -274,7 +292,7 @@ namespace TerraBlind
             float startPy = startOverride?.py ?? p.position.Y;
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
-            var (spx, spy) = StandCell(startPx, startPy);
+            var (spx, spy) = BodyCell(startPx, startPy);
             // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
             // 单点绝不能走大场 —— 那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
@@ -392,11 +410,11 @@ namespace TerraBlind
                 goalNode = bestGroundedNode;
                 res.Partial = true;
                 retrace = true;
-                DiagLog.Write($"[ss-partial] exp={expansions}/{MaxExpansions} → leg to grounded best {StandCell(bestGroundedNode.Px, bestGroundedNode.Py)} (goal still {bestDist:0.#}px away)");
+                DiagLog.Write($"[ss-partial] exp={expansions}/{MaxExpansions} → leg to grounded best {BodyCell(bestGroundedNode.Px, bestGroundedNode.Py)} (goal still {bestDist:0.#}px away)");
             }
             if (!found && !haveBestGrounded)
             {
-                DiagLog.Write($"[ss-fail] exp={expansions}/{MaxExpansions} openLeft={open.Count} bestCell={StandCell(res.BestPx, res.BestPy)} bestDx={res.BestDx:0.#} bestDy={res.BestDy:0.#}");
+                DiagLog.Write($"[ss-fail] exp={expansions}/{MaxExpansions} openLeft={open.Count} bestCell={BodyCell(res.BestPx, res.BestPy)} bestDx={res.BestDx:0.#} bestDy={res.BestDy:0.#}");
                 DumpTerrain(start, goalWx, goalWy, res.Explored);
             }
             if (retrace)
@@ -408,12 +426,12 @@ namespace TerraBlind
                 while (came.TryGetValue(k, out var e) && !e.prev.Equals(k))
                 {
                     revPts.Add((k.Px, k.Py));
-                    var (kcx, kcy) = StandCell(k.Px, k.Py);
+                    var (kcx, kcy) = BodyCell(k.Px, k.Py);
                     if (e.pillar && e.digTiles != null)
                     {
                         // dig-up composite: expand into alternating "mine up 2 rows" / "pillar +2" sub-steps.
                         // revSteps is reversed afterwards, so append the forward sequence backwards.
-                        var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
+                        var (prevCx, prevCy) = BodyCell(e.prev.Px, e.prev.Py);
                         var sub = new List<ExecStep>();
                         for (int feetY = prevCy - 2; feetY >= kcy; feetY -= 2)
                         {
@@ -428,7 +446,7 @@ namespace TerraBlind
                     }
                     else if (e.digTiles != null)
                     {
-                        var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
+                        var (prevCx, prevCy) = BodyCell(e.prev.Px, e.prev.Py);
                         MineDir d = kcy > prevCy ? MineDir.Down
                                   : kcx > prevCx ? MineDir.Right : MineDir.Left;
                         revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles });
@@ -508,7 +526,7 @@ namespace TerraBlind
         {
             try
             {
-                var (sx, sy) = StandCell(start.Px, start.Py);
+                var (sx, sy) = BodyCell(start.Px, start.Py);
                 int minX = Math.Min(sx, goalWx) - 8, maxX = Math.Max(sx, goalWx) + 8;
                 int minY = Math.Min(sy, goalWy) - 8, maxY = Math.Max(sy, goalWy) + 8;
 
@@ -574,7 +592,7 @@ namespace TerraBlind
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> BridgeEdges(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, float goalCx)
         {
-            var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            var (ccx, ccy) = BodyCell(cur.Px, cur.Py);
             // 和 pillar 同样的毛病:只有固定档位就会冲过头/差一截。目标列已知,就补上"正好到"那一档。
             int goalCol = (int)(goalCx / 16f);
             foreach (int dir in new[] { 1, -1 })
@@ -679,7 +697,7 @@ namespace TerraBlind
             {
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
-                var (ex, ey) = StandCell(e.next.Px, e.next.Py);
+                var (ex, ey) = BodyCell(e.next.Px, e.next.Py);
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
                 // 自造落脚点的边(pillar / 长bridge / 跳放)落点当然还没有地,不受这条限制;
                 // 真正要拦的是 walk/jump/fall 那种"指望那儿本来就有地"的边。
@@ -708,7 +726,7 @@ namespace TerraBlind
             if (!cur.Grounded) yield break;
 
             // 悬在熔岩上:只准 bridge。跳/走/掉出去都可能落进熔岩,而落进去=重开。
-            var (lcx, lcy) = StandCell(cur.Px, cur.Py);
+            var (lcx, lcy) = BodyCell(cur.Px, cur.Py);
             if (PreciseMode)
             {
                 bool overLava = OverLavaVoid(lcx, lcy);
@@ -740,7 +758,7 @@ namespace TerraBlind
             // 每次都升 1 格 —— 于是爬得动就永远不搭柱子,只能继续一格一格爬,自锁。
             int vertRise = 0;
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
-            var (_, dcy) = StandCell(cur.Px, cur.Py);
+            var (_, dcy) = BodyCell(cur.Px, cur.Py);
             // dir 0 = 原地竖直跳:直接跳上头顶正上方的台阶,人在走不上去的坎前就这么干。
             // 对位还没做,身体本来就对齐时才成;没对齐时模拟自己会失败,边被跳过,无害。
             foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
@@ -753,7 +771,7 @@ namespace TerraBlind
                     // 进展用【原始逐格】场判,不用块粗化的 Heuristic:8x8 块内部 H 是平的,块内任何移动都读成"没进展",
                     // 于是普通跳能过的矮坎也会触发挖掘。
                     if (RawProgress(ctx, cur, seg.Value.node)) anyProgress = true;
-                    var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+                    var (_, segFeetCy) = BodyCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (dcy - segFeetCy > vertRise) vertRise = dcy - segFeetCy;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
                     foreach (var sp in SplitFall(cur, seg.Value.frames, platformTile))
@@ -766,7 +784,7 @@ namespace TerraBlind
             {
                 // 支撑判据看【两个碰撞箱列】,不是中心格:20px 的身体能踩在平台边缘而中心列悬空
                 // ((3393,700) 神庙竖井卡死:中心支撑=空气 → 不生成 drop 边 → 只剩 H 上升的边 → 被 shock 打死)。
-                var (fcx, fcy) = StandCell(cur.Px, cur.Py);
+                var (fcx, fcy) = BodyCell(cur.Px, cur.Py);
                 int dropLc = (int)(cur.Px / 16f);
                 int dropRc = (int)((cur.Px + PhysicsSimulator.PlayerW - 1f) / 16f);
                 bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
@@ -811,7 +829,7 @@ namespace TerraBlind
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> OnDemandPlatformEdges(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, int vertRise, bool hasPickaxe, bool anyProgress, float goalFeetY)
         {
-            var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            var (ccx, ccy) = BodyCell(cur.Px, cur.Py);
             int curH = ctx.DistField != null && ctx.DistField.TryGetValue((ccx, ccy), out int h0) ? h0 : int.MaxValue;
             int hl = ctx.DistField != null && ctx.DistField.TryGetValue((ccx - 1, ccy), out int a) ? a : int.MaxValue;
             int hr = ctx.DistField != null && ctx.DistField.TryGetValue((ccx + 1, ccy), out int b) ? b : int.MaxValue;
@@ -828,7 +846,7 @@ namespace TerraBlind
                 {
                     var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
                     if (!jp.HasValue) continue;
-                    var (jcx, jcy) = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                    var (jcx, jcy) = BodyCell(jp.Value.node.Px, jp.Value.node.Py);
                     if (ccy - jcy < VertPlaceMinRise) continue; // too short → pillar does it cheaper
                     anyVertJumpPlace = true;
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
@@ -919,7 +937,7 @@ namespace TerraBlind
             int obsX;
             {
                 var walk = Prof("walkprobe", () => SimulateSegment(cur, gdir, 0, ph));
-                int walkCx = walk.HasValue ? StandCell(walk.Value.node.Px, walk.Value.node.Py).cx : ccx;
+                int walkCx = walk.HasValue ? BodyCell(walk.Value.node.Px, walk.Value.node.Py).cx : ccx;
                 // if the plain walk advanced past where the maze wants (toward goal), there's no blocking obstacle
                 if ((gdir > 0 && walkCx > ccx) || (gdir < 0 && walkCx < ccx))
                 {
@@ -1139,7 +1157,7 @@ namespace TerraBlind
         // 放置的砖【不】存进节点(节点保持纯物理),落点只是站在新平台顶上。纯空中垒柱交给宏。
         static bool AnyPlaceableInReach(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
-            var (ccx, cfy) = StandCell(cur.Px, cur.Py);
+            var (ccx, cfy) = BodyCell(cur.Px, cur.Py);
             int reach = MaxScan(ph);
             int apex = (Player.jumpHeight > 0 ? Player.jumpHeight : 15) + 1;
             for (int dx = 0; dx <= reach; dx++)
@@ -1257,7 +1275,7 @@ namespace TerraBlind
                 if (!CanPlaceReal(fcx, fcy)) continue;
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
-                var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+                var (lcx, lcy) = BodyCell(seg.Value.node.Px, seg.Value.node.Py);
                 if (!(ctx.DistField != null && ctx.DistField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
                 if (!MarkPlaceFrame(seg.Value.frames, fcx, fcy)) continue; // unreachable placement → try a different landing
                 return seg.Value;
@@ -1547,7 +1565,7 @@ namespace TerraBlind
                 {
                     // 脚悬在空中时别结束走路边(比如刚走下一格宽的平台):模拟器还会读到一帧 Grounded,
                     // 在这儿结束会产出被拒的假站位,把"走下崖"这条边杀掉。继续模拟,让人真的落到下面的地板。
-                    var (wcx, wcy) = StandCell(s.Px, s.Py);
+                    var (wcx, wcy) = BodyCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
                     // 走满一个完整步幅再结束,不是 24px。24px 时边死在加速斜坡里(0.08/帧,要 37 帧才到 maxRun),
                     // 于是每条走路边平均 ~1px/帧,看起来比跳慢得多,A* 在平地上就一路跳。步幅取一次跳的射程,两者才可比。
@@ -1568,7 +1586,7 @@ namespace TerraBlind
             // 逼 A* 去放平台,而不是"走"过开阔水面然后循环。只管落地边,腾空的下落/跳跃边不受影响。
             if (node.Grounded)
             {
-                var (ncx, ncy) = StandCell(node.Px, node.Py);
+                var (ncx, ncy) = BodyCell(node.Px, node.Py);
                 // 斜坡/半砖撑得住人但 IsFloorPublic 不认 → 被误判成假站位,把每一条从半砖起跳/起步的边都杀了(EXPAND-EMPTY 死穴)。
                 // DigSolid 认斜坡半砖为支撑,所以两者取其一即可。
                 if (!PathPlanner.IsFloorPublic(ncx, ncy + 1) && !DigSolid(ncx, ncy + 1))
@@ -1581,7 +1599,7 @@ namespace TerraBlind
                     return null;
                 } // reported stand cell has no floor = fake
             }
-            if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
+            if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} OK -> ({BodyCell(node.Px,node.Py).Item1},{BodyCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
             return (node, frames);
         }
 
@@ -1658,7 +1676,7 @@ namespace TerraBlind
         // '@'=起点 'G'=目标 '#'=实心 '='=平台 '/'=斜坡半砖 '*'=已探索空气 '.'=空气
         static void DumpTerrain(SSNode start, int goalWx, int goalWy, List<(float px, float py)> explored)
         {
-            var (sx, sy) = StandCell(start.Px, start.Py);
+            var (sx, sy) = BodyCell(start.Px, start.Py);
             int minX = Math.Min(sx, goalWx) - 6, maxX = Math.Max(sx, goalWx) + 6;
             int minY = Math.Min(sy, goalWy) - 4, maxY = Math.Max(sy, goalWy) + 4;
             if (maxX - minX > 80) maxX = minX + 80;
@@ -1666,7 +1684,7 @@ namespace TerraBlind
 
             var exp = new HashSet<(int, int)>();
             foreach (var (px, py) in explored)
-                exp.Add(StandCell(px, py));
+                exp.Add(BodyCell(px, py));
 
             DiagLog.Write($"[ss-map] FAIL start=({sx},{sy}) goal=({goalWx},{goalWy}) region x[{minX},{maxX}] y[{minY},{maxY}]");
             for (int y = minY; y <= maxY; y++)
@@ -1740,8 +1758,8 @@ namespace TerraBlind
         static bool RawProgress(PlanCtx ctx, SSNode from, SSNode to)
         {
             if (ctx.DistField == null) return false;
-            var (fcx, fcy) = StandCell(from.Px, from.Py);
-            var (tcx, tcy) = StandCell(to.Px, to.Py);
+            var (fcx, fcy) = BodyCell(from.Px, from.Py);
+            var (tcx, tcy) = BodyCell(to.Px, to.Py);
             if (!ctx.DistField.TryGetValue((fcx, fcy), out int fh)) return false;
             if (!ctx.DistField.TryGetValue((tcx, tcy), out int th)) return false;
             return th < fh;
@@ -1751,7 +1769,7 @@ namespace TerraBlind
         {
             if (ctx.DistField != null)
             {
-                var (cx, cy) = StandCell(s.Px, s.Py);
+                var (cx, cy) = BodyCell(s.Px, s.Py);
                 int h = HBlockSize <= 1
                     ? (ctx.DistField.TryGetValue((cx, cy), out int d0) ? d0 : int.MaxValue)
                     : BlockMinH(ctx, cx, cy);
@@ -1982,7 +2000,7 @@ namespace TerraBlind
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
             // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理 —— 闭环不会按下键。
-            else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
+            else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != BodyCell(p.position.X, p.position.Y).cx
                      && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
             {
                 _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
@@ -2026,7 +2044,7 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return;
             goalWy = SnapGoalToStandable(goalWx, goalWy);
-            var (spx, spy) = StandCell(p.position.X, p.position.Y);
+            var (spx, spy) = BodyCell(p.position.X, p.position.Y);
             _greedyCtx = new PlanCtx();
             _greedyCtx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
             _greedyCtx.BlockH = null;
@@ -2062,7 +2080,7 @@ namespace TerraBlind
             int platformSlot = NavCoordinator.FindPlatformSlot(p);
             if (platformSlot >= 0) platformTile = p.inventory[platformSlot].createTile;
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
-            var (scx, scy) = StandCell(cur.Px, cur.Py);
+            var (scx, scy) = BodyCell(cur.Px, cur.Py);
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? r = name switch
             {
@@ -2075,7 +2093,7 @@ namespace TerraBlind
 
             if (r == null) { DiagLog.Write($"[ss-test] {name} dir={dir} from=({scx},{scy}) → NULL (action produced nothing)"); return; }
             var (node, frames) = r.Value;
-            var (ncx, ncy) = StandCell(node.Px, node.Py);
+            var (ncx, ncy) = BodyCell(node.Px, node.Py);
             DiagLog.Write($"[ss-test] {name} dir={dir} from=({scx},{scy}) -> ({ncx},{ncy}) frames={frames.Count} place={(frames.Exists(fr => fr.Place))}");
 
             var trail = new List<(float, float, bool)>();
@@ -2224,7 +2242,7 @@ namespace TerraBlind
             {
                 bool alters = dig != null || pillar || frames == null || frames.Exists(f => f.Place);
                 var landed = alters ? next : SettleNode(next, ph);
-                var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
+                var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : BodyCell(landed.Px, landed.Py);
                 if (nx == cx && ny == cy) continue;
                 if (field.TryGetValue((nx, ny), out int nH) && nH < curH) return false;   // 有降 H 的路,不卡
             }
@@ -2251,7 +2269,7 @@ namespace TerraBlind
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
 
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
-            var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            var (curCx, curCy) = BodyCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
             // 四邻真相行:场想从这儿往哪降,那里物理上到底是什么。Dijkstra 保证必有一个邻居 H 更低;
@@ -2289,7 +2307,7 @@ namespace TerraBlind
                 // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降 —— 它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
                 var landed = alters ? next : SettleNode(next, ph);
-                var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
+                var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : BodyCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
@@ -2429,7 +2447,7 @@ namespace TerraBlind
                     {
                         var esc = SimulateSegment(cur, edir, ehold, ph);
                         if (!esc.HasValue) continue;
-                        var (ecx, ecy) = StandCell(esc.Value.node.Px, esc.Value.node.Py);
+                        var (ecx, ecy) = BodyCell(esc.Value.node.Px, esc.Value.node.Py);
                         if (IsLavaCell(ecx, ecy)) continue;
                         DiagLog.Write($"[recede] ESCAPE-STEP dir={edir} hold={ehold} -> ({ecx},{ecy})");
                         var eres = new SSResult { Found = true, GoalWx = ecx, GoalWy = ecy, StartPx = cur.Px, StartPy = cur.Py, CostFrames = esc.Value.frames.Count, CurH = curH };
@@ -2509,8 +2527,8 @@ namespace TerraBlind
         {
             // 挖/放/柱的 to 节点描述的是【改造后】的世界:StandCell 的合身吸附会拿还没改的砖去判它,把它relabel 回当前格
             // —— 那次翻转了挖掘方向(往东挖变成"往左挖到自己",第二次 (981,435) 循环)。这些用 RawCell,from 用真实的。
-            var (tcx, tcy) = (dig != null || pillar) ? RawCell(to.Px, to.Py) : StandCell(to.Px, to.Py);
-            var (fcx, fcy) = StandCell(from.Px, from.Py);
+            var (tcx, tcy) = (dig != null || pillar) ? RawCell(to.Px, to.Py) : BodyCell(to.Px, to.Py);
+            var (fcx, fcy) = BodyCell(from.Px, from.Py);
             var steps = new List<ExecStep>();
             if (pillar && dig != null)
             {
@@ -2577,7 +2595,7 @@ namespace TerraBlind
             if (platformSlot >= 0) platformTile = p.inventory[platformSlot].createTile;
 
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
-            var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            var (curCx, curCy) = BodyCell(cur.Px, cur.Py);
             int curCost = _greedyCtx.DistField.TryGetValue((curCx, curCy), out int cc) ? cc : int.MaxValue;
 
             _greedyVisited.Add((curCx, curCy));
@@ -2592,7 +2610,7 @@ namespace TerraBlind
             foreach (var (next, frames, _, _, _) in Expand(_greedyCtx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, false))
             {
                 if (frames == null) continue; // greedy can't drive the pillar macro; skip those edges
-                var (ncx, ncy) = StandCell(next.Px, next.Py);
+                var (ncx, ncy) = BodyCell(next.Px, next.Py);
                 bool inField = _greedyCtx.DistField.TryGetValue((ncx, ncy), out int ncost);
                 bool plc = frames.Count > 0 && frames[frames.Count - 1].Place;
                 if (candN++ < 16) cand.Append($" [{ncx},{ncy}{(plc ? "P" : "")}c{(inField ? ncost.ToString() : "∞")}f{frames.Count}]");
@@ -2657,7 +2675,7 @@ namespace TerraBlind
             _blockGoalWx = goalWx; _blockGoalWy = goalWy;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return;
-            var (sx, sy) = StandCell(p.position.X, p.position.Y);
+            var (sx, sy) = BodyCell(p.position.X, p.position.Y);
             var field = MazeWand.GetField(goalWx, goalWy);
             if (!field.ContainsKey((sx, sy))) { DiagLog.Write($"[block] start ({sx},{sy}) off field → abort"); Main.NewText("[TerraBlind] start off nav field"); return; }
 
@@ -2733,7 +2751,7 @@ namespace TerraBlind
             _rollPrevDist = float.MaxValue; _rollStuckLegs = 0;
             _rollBgResult = null;
             var pStart = Main.LocalPlayer;
-            var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
+            var (rsx, rsy) = BodyCell(pStart.position.X, pStart.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
             DiagLog.Write($"[run] ss_exec start=({rsx},{rsy}) goal=({goalWx},{goalWy}) rolling={rolling}");
 
@@ -2794,7 +2812,7 @@ namespace TerraBlind
             _asyncGoalWx = goalWx; _asyncGoalWy = goalWy;
             int seq = ++_asyncSeq;
             _asyncRes = null; _asyncPending = true; _asyncExecMode = true;
-            var (rsx, rsy) = StandCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
+            var (rsx, rsy) = BodyCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{goalWx}_{goalWy}");
             DiagLog.Write($"[run] ss_exec_async start=({rsx},{rsy}) goal=({goalWx},{goalWy})");
             System.Threading.Tasks.Task.Run(() =>
@@ -2812,7 +2830,7 @@ namespace TerraBlind
             int seq = ++_asyncSeq;
             _asyncGoalWx = goalWx; _asyncGoalWy = goalWy;
             _asyncRes = null; _asyncPending = true; _asyncExecMode = false;
-            var (rsx, rsy) = StandCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
+            var (rsx, rsy) = BodyCell(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y);
             DiagLog.StartRun($"preview_{rsx}_{rsy}__{goalWx}_{goalWy}");   // own run file so "latest left-click log" is unique
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -2845,7 +2863,7 @@ namespace TerraBlind
 
             // GUARDRAIL: the cached field only covers a box around the goal. If the player has drifted/run outside it
             // (no field value at the current cell) we can't steer — stop instead of rebuilding a giant field or guessing.
-            var fcell = StandCell(p.position.X, p.position.Y);
+            var fcell = BodyCell(p.position.X, p.position.Y);
             if (!MazeWand.GetField(_rollFinalWx, _rollFinalWy).ContainsKey(fcell))
             {
                 DiagLog.Write($"[ss-roll] off-field at {fcell} → stop (player left the cached field box)");
@@ -2869,7 +2887,7 @@ namespace TerraBlind
             // LOOKAHEAD HIT: the bg task already planned this leg from the predicted landing; if the real landing
             // matches, dispatch it with realign (zero synchronous Plan). Otherwise fall through and plan fresh.
             var cached = _rollBgResult; _rollBgResult = null;
-            var (rcx, rcy) = StandCell(p.position.X, p.position.Y);
+            var (rcx, rcy) = BodyCell(p.position.X, p.position.Y);
             if (cached != null && (cached.Found || cached.Partial) && cached.Steps.Count > 0
                 && System.Math.Abs(rcx - _rollBgFromCx) <= RollLandMatchTol && System.Math.Abs(rcy - _rollBgFromCy) <= RollLandMatchTol)
             {
@@ -2959,7 +2977,7 @@ namespace TerraBlind
                 DiagLog.Write($"[ss-realign] lookahead leg shifted by ({offX:0.##},{offY:0.##}) to match real start");
             }
             _lastExecResult = res;
-            var (rsx, rsy) = StandCell(pStart.position.X, pStart.position.Y);
+            var (rsx, rsy) = BodyCell(pStart.position.X, pStart.position.Y);
             DiagLog.StartRun($"{rsx}_{rsy}__{res.GoalWx}_{res.GoalWy}");
             DiagLog.Write($"[run] ss_exec(lookahead) start=({rsx},{rsy}) goal=({res.GoalWx},{res.GoalWy}) steps={res.Steps.Count}");
             Visualize(res, res.GoalWx, res.GoalWy);
@@ -3007,7 +3025,7 @@ namespace TerraBlind
                     SSResult res;
                     if (rolling)
                     {
-                        var (rcx, rcy) = StandCell(sx, sy);
+                        var (rcx, rcy) = BodyCell(sx, sy);
                         var (sgx, sgy) = SubgoalToward(rcx, rcy, rollWx, rollWy);
                         res = Plan(sgx, sgy, (sx, sy, 0f), rollWx, rollWy);
                     }

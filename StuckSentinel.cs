@@ -49,7 +49,7 @@ namespace TerraBlind
 			_sampleAge = 0;
 
 			var field = MazeWand.GetField(goalWx, goalWy);
-			var (cx, cy) = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
+			var (cx, cy) = StateSpacePlanner.BodyCell(p.position.X, p.position.Y);
 			int h = field != null && field.TryGetValue((cx, cy), out int hv) ? hv : int.MaxValue;
 			int dig = DigSum(p);
 			int solids = SolidsNear(p);

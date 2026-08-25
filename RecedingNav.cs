@@ -254,7 +254,9 @@ namespace TerraBlind
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled
 
             // one label function everywhere: same rounding AND same body-fit snap as the planner's landing labels.
-            var cell = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
+            // BodyCell 不是 StandCell:后者按脚下支撑吸附到隔壁列,而支撑读的是世界。
+            // 规划前后世界一变,同一个位置就标成两个格 —— 那正是每步 MISS 的来源。
+            var cell = StateSpacePlanner.BodyCell(p.position.X, p.position.Y);
             // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap — no compass here, and
             // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
             if (MazeWand.FieldPickStale())
