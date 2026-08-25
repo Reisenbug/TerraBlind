@@ -333,8 +333,6 @@ namespace TerraBlind
                 return;
             }
 
-            // 顺手往前探 200 格,提前知道哪儿会卡(后台,几百 ms,人照走不停)
-            Trap.ScanAhead(cell.Item1, cell.Item2, _goalWx, _goalWy);
             Trap.JustTrapped = false;
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             // 贪心当场承认走不动(物理候选没一个降 H) —— 这是它的理论缺陷,补丁修不好。

@@ -55,63 +55,12 @@ namespace TerraBlind
             PathVisSystem.SetDeck(tiles, 60 * 60 * 30);
         }
 
-        // ===== 提前预警 =====
-        // 沿场推荐的路线往前探 AheadCells 格,逐格问 WouldTrap。人还没走到就知道前面哪儿会卡。
-        // 全场扫不现实(231 万格 x 0.82ms = 32 分钟),但一条线上几百格只要几百毫秒,丢后台无感。
-        const int AheadCells = 200;
-        static volatile bool _scanning;
-        static readonly HashSet<(int, int)> _predicted = new();
-
-        public static void ScanAhead(int curCx, int curCy, int goalWx, int goalWy)
-        {
-            if (_scanning) return;
-            var p = Main.LocalPlayer;
-            if (p == null || !p.active) return;
-            var field = MazeWand.PeekFieldOrNull(goalWx, goalWy);
-            if (field == null) return;
-            // 玩家相关的东西必须在【主线程】读完再传进去,后台读会撕裂
-            var ph = PhysicsSimulator.Params.FromPlayer(p);
-            int slot = NavCoordinator.FindPlatformSlot(p);
-            int platformTile = slot >= 0 ? p.inventory[slot].createTile : -1;
-            bool hasPick = false;
-            for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
-            float gcx = goalWx * 16f + 8f, gfy = (goalWy + 1) * 16f;
-            _scanning = true;
-            System.Threading.Tasks.Task.Run(() =>
-            {
-                try
-                {
-                    var line = MazeWand.TraceFrom(field, curCx, curCy, goalWx, goalWy);
-                    var found = new List<(int, int)>();
-                    int n = System.Math.Min(line.Count, AheadCells);
-                    for (int i = 0; i < n; i++)
-                    {
-                        var (x, y) = line[i];
-                        if (StateSpacePlanner.WouldTrap(field, x, y, ph, platformTile, hasPick, gcx, gfy))
-                            found.Add((x, y));
-                    }
-                    lock (_predicted)
-                    {
-                        _predicted.Clear();
-                        foreach (var f in found) _predicted.Add(f);
-                    }
-                    if (found.Count > 0)
-                    {
-                        DiagLog.Write($"[trap] 前方 {n} 格里有 {found.Count} 个卡点:" +
-                                      string.Join(" ", found.ConvertAll(f => $"({f.Item1},{f.Item2})")));
-                        EventLog.W(Ev.Plan, $"AHEAD 前方 {n} 格预测到 {found.Count} 个卡点,第一个 ({found[0].Item1},{found[0].Item2})");
-                    }
-                }
-                catch (System.Exception e) { DiagLog.Write($"[trap] scan EXC {e.Message}"); }
-                finally { _scanning = false; }
-            });
-        }
-
-        // 预测到的卡点(黄),和已经撞过的(红)一起画
-        public static List<(int, int)> Predicted()
-        {
-            lock (_predicted) return new List<(int, int)>(_predicted);
-        }
+        // 提前预扫【已删除】。它在后台线程遍历 MazeWand 的 H 场,而主线程同时在建/换那张 Dictionary,
+        // 于是每帧都抛 "A concurrent update was performed on this collection and corrupted its state" ——
+        // 整个寻路的依据被这个诊断功能搞坏了,人第一步就掉进 109 格深的坑。
+        // 预警是诊断,寻路是主线,不值得为它冒并发风险。要重做的话:主线程同步跑,或者给场加锁/传副本。
+        public static System.Collections.Generic.List<(int, int)> Predicted()
+            => new System.Collections.Generic.List<(int, int)>();
 
         public static void Report()
         {
