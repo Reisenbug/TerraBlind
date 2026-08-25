@@ -17,6 +17,7 @@ namespace TerraBlind
 		public static ModKeybind TestPlatDown;
 		public static ModKeybind BuildHellBridge;
 		public static ModKeybind TestReachWork;
+		public static ModKeybind ShowMinima;
 
 		public override void Load()
 		{
@@ -32,7 +33,8 @@ namespace TerraBlind
 			TestPlatDown = KeybindLoader.RegisterKeybind(this, "TestPlatDown", "O");
 			BuildHellBridge = KeybindLoader.RegisterKeybind(this, "BuildHellBridge", "L");
 			TestReachWork = KeybindLoader.RegisterKeybind(this, "TestReachWork", "OemOpenBrackets");
-			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ShowHellLine=U, PreviewDescent=I, ShowHouseSite=H, TestBridge=B, TestRoom=N, TestPillar=P, TestReachWork=[ registered (verify in Settings→Controls)");
+			ShowMinima = KeybindLoader.RegisterKeybind(this, "ShowMinima", "M");
+			DiagLog.Write("[keybind] ToggleMazeNav=J, ToggleRecedingNav=K, ShowHellLine=U, PreviewDescent=I, ShowHouseSite=H, TestBridge=B, TestRoom=N, TestPillar=P, TestReachWork=[, ShowMinima=M registered (verify in Settings→Controls)");
 		}
 
 		public override void Unload()
@@ -48,6 +50,7 @@ namespace TerraBlind
 			TestPlatDown = null;
 			BuildHellBridge = null;
 			TestReachWork = null;
+			ShowMinima = null;
 		}
 	}
 }

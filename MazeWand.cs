@@ -85,6 +85,8 @@ namespace TerraBlind
         // 调试工具:左键设 point1(目标)并清空,右键设 point2(起点),两个都有就跑场画线。
         // static 是因为这是单实例手动探针,不走 nav 管线。
         static (int x, int y)? _p1, _p2;
+        // 极小点工具要知道当前这张场是朝哪个目标建的
+        public static (int x, int y)? Point2 => _p2;
         static volatile bool _mazeBusy;
 
         // J 开关朝 point2 的 receding nav,拿大场当罗盘。从玩家【当前】位置起步 ——
