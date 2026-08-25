@@ -2946,6 +2946,13 @@ namespace TerraBlind
         static bool ReSimPlaceSteps(SSResult res, Player p)
         {
             if (res.Steps == null || p == null) return true;
+            // 起点就是规划时那个像素 → 帧本来就有效,不用验。
+            // 这条必须在最前面:重跑一遍【不等于】SimulateSegment —— 那个函数有走满步幅就停、
+            // 撞墙就停、落地后追加刹车帧等一堆终止逻辑,照抄一份必然对不齐。
+            // 实测 26 次拦截,起点全是 33262.8 对 33262.8,差值为零,却因为我这份重跑跑出低 1-5 行的落点,
+            // 把 26 条完全有效的边全否了,人钉在原地反复重规划。
+            if (MathF.Abs(p.position.X - res.StartPx) < 0.01f && MathF.Abs(p.position.Y - res.StartPy) < 0.01f)
+                return true;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             for (int si = 0; si < res.Steps.Count; si++)
             {
@@ -2956,42 +2963,41 @@ namespace TerraBlind
                 if (!hasPlace) continue;                 // 只有放置边对起点像素敏感
                 if (si > 0) break;                       // 只重验第一条:后面那些的起点本来就是预测值
 
-                var stt = new PhysicsSimulator.State
+                // 【调同一个函数】,不自己再跑一遍循环。SimulateSegment 有走满步幅就停、撞墙就停、
+                // 落地后滑一帧、AppendBrake 追加刹车等一整套终止逻辑 —— 照抄必然对不齐,
+                // 上一版就是这么把 26 条有效边全否掉的。dir/hold 从帧里还原。
+                int dir = st.Frames[0].Right ? 1 : st.Frames[0].Left ? -1 : 0;
+                int hold = 0;
+                while (hold < st.Frames.Count && st.Frames[hold].Jump) hold++;
+                var from = new SSNode
                 {
                     Px = p.position.X, Py = p.position.Y,
-                    Vx = p.velocity.X, Vy = p.velocity.Y,
-                    Grounded = true,
+                    Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = true,
                 };
-                var fresh = new List<PhysicsSimulator.ControlInput>(st.Frames.Count);
-                for (int i = 0; i < st.Frames.Count; i++)
+                var re = SimulateSegment(from, dir, hold, ph);
+                if (re == null)
                 {
-                    var src = st.Frames[i];
-                    var input = new PhysicsSimulator.ControlInput
-                    { Left = src.Left, Right = src.Right, Jump = src.Jump, Down = src.Down };
-                    stt = PhysicsSimulator.Step(stt, input, ph);
-                    input.Px = stt.Px; input.Py = stt.Py; input.Vx = stt.Vx; input.Vy = stt.Vy;
-                    // 放置格【不】跟着漂:那是绝对格坐标,平台就该放在规划说的那一格。
-                    // 但要确认这一帧真的够得着 —— 够不着就是挥空,人腾空僵住然后摔
-                    input.Place = src.Place; input.PlaceCx = src.PlaceCx; input.PlaceCy = src.PlaceCy;
-                    if (src.Place && !CanReachTile(stt.Px, stt.Py, src.PlaceCx, src.PlaceCy))
-                    {
-                        DiagLog.Write($"[ss-resim] 第{i}帧够不到放置格({src.PlaceCx},{src.PlaceCy}) 人=({stt.Px:0.#},{stt.Py:0.#})");
-                        return false;
-                    }
-                    fresh.Add(input);
+                    DiagLog.Write($"[ss-resim] 真实起点跑不出这条边 dir={dir} hold={hold}");
+                    return false;
                 }
-                var landed = new SSNode { Px = stt.Px, Py = stt.Py, Vx = stt.Vx, Vy = stt.Vy, Grounded = stt.Grounded };
-                var (lcx, lcy) = StandCell(landed.Px, landed.Py);
+                var (lcx, lcy) = StandCell(re.Value.node.Px, re.Value.node.Py);
                 if (lcx != st.TargetCx || lcy != st.TargetCy)
                 {
                     DiagLog.Write($"[ss-resim] 落点变了:计划({st.TargetCx},{st.TargetCy}) 真实起点跑出来({lcx},{lcy}) "
                         + $"起点=({p.position.X:0.#},{p.position.Y:0.#}) 规划起点=({res.StartPx:0.#},{res.StartPy:0.#})");
                     return false;
                 }
-                // 落点一致 —— 把帧换成真实弹道,重对齐那步就不用再平移它了
+                // 放置帧要重新标 —— 弹道变了,原来那一帧未必还够得着
+                int pcx = 0, pcy = 0; bool found = false;
+                foreach (var f in st.Frames) if (f.Place) { pcx = f.PlaceCx; pcy = f.PlaceCy; found = true; break; }
+                if (found && !MarkPlaceFrame(re.Value.frames, pcx, pcy))
+                {
+                    DiagLog.Write($"[ss-resim] 新弹道上够不到放置格({pcx},{pcy})");
+                    return false;
+                }
                 st.Frames.Clear();
-                st.Frames.AddRange(fresh);
-                st.LandPx = landed.Px; st.LandPy = landed.Py;
+                st.Frames.AddRange(re.Value.frames);
+                st.LandPx = re.Value.node.Px; st.LandPy = re.Value.node.Py;
                 res.StartPx = p.position.X; res.StartPy = p.position.Y;
                 break;
             }
