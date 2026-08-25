@@ -2260,7 +2260,10 @@ namespace TerraBlind
                     foreach (var c in jigglePool) if (c.h < curH) { anyDrop = true; break; }
                     // 这一刻就是"贪心走不动了"的【定义】:物理候选里没有一个 H 更低。
                     // 不是"弹了几次才发现",是当场。报出来,并记进 Trap 表供画图和预警
-                    if (!anyDrop) { Trap.Hit(curCx, curCy, curH, jigglePool.Count); Commitment.Begin(curCx, curCy, curH); }
+                    // 只报告,【不】启动承诺 —— 承诺是给贪心用的补丁,而这一刻 A* 要接手。
+                    // 两套同时动的话,A* 拿到的已经是承诺选过的边了。A* 失败时 RecedingNav 会退回来,
+                    // 那时 JustTrapped 仍为真,下一周期照样能启动承诺兜底。
+                    if (!anyDrop) Trap.Hit(curCx, curCy, curH, jigglePool.Count);
                 }
                 if (Commitment.Active)
                 {

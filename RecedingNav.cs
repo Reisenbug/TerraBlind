@@ -153,6 +153,7 @@ namespace TerraBlind
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
             Commitment.Reset();               // 承诺和它的失败记录属于这一趟,别带进下一趟
             Trap.Reset();                     // 卡点记录也是按趟算的
+            TrapEscape.Reset();
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             _altered = 0;
@@ -334,7 +335,23 @@ namespace TerraBlind
 
             // 顺手往前探 200 格,提前知道哪儿会卡(后台,几百 ms,人照走不停)
             Trap.ScanAhead(cell.Item1, cell.Item2, _goalWx, _goalWy);
+            Trap.JustTrapped = false;
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
+            // 贪心当场承认走不动(物理候选没一个降 H) —— 这是它的理论缺陷,补丁修不好。
+            // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
+            if (Trap.JustTrapped)
+            {
+                var escField = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
+                if (escField != null
+                    && TrapEscape.TryEscape(escField, Trap.JustAt.x, Trap.JustAt.y, Trap.JustH, _goalWx, _goalWy))
+                {
+                    StuckSentinel.Reset();   // A* 爬平台时 H 不降、横移也少,正是 sentinel 判卡死的特征
+                    _haveLast = false;       // 这一段不是贪心选的边,别拿它去算失配权重
+                    return;
+                }
+                // A* 也出不去 → 退回承诺兜底。res 是贪心这一周期选的边,照常派发
+                if (!Commitment.Active) Commitment.Begin(Trap.JustAt.x, Trap.JustAt.y, Trap.JustH);
+            }
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
 

@@ -17,9 +17,15 @@ namespace TerraBlind
 
         public static int Count => _hits.Count;
 
+        // 最近一次 StepAlongField 是不是卡住了。RecedingNav 读它决定要不要叫 A* 脱困
+        public static bool JustTrapped;
+        public static (int x, int y) JustAt;
+        public static int JustH;
+
         // 卡住的那一帧调这里。立即报告,不等累积
         public static void Hit(int cx, int cy, int h, int cands)
         {
+            JustTrapped = true; JustAt = (cx, cy); JustH = h;
             _hits.TryGetValue((cx, cy), out int n);
             _hits[(cx, cy)] = ++n;
             // 同一格连着撞不刷屏,换了格子或第一次就报
@@ -32,7 +38,7 @@ namespace TerraBlind
             Draw();
         }
 
-        public static void Reset() { _hits.Clear(); _lastReported = (int.MinValue, int.MinValue); }
+        public static void Reset() { _hits.Clear(); _lastReported = (int.MinValue, int.MinValue); JustTrapped = false; }
 
         // 撞过的点画红,撞得越多越亮
         static void Draw()
