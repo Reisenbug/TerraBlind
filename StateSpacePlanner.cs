@@ -1518,7 +1518,11 @@ namespace TerraBlind
             }
         }
 
-        static bool SegDiag;   // temp: when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)
+        static bool SegDiag;   // when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)
+
+        // SegDiag 只在【饥饿】和【一条边都没有】这两刻开,不会刷屏 —— 所以它的输出必须走 EventLog,
+        // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
+        static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph)
         {
@@ -1563,15 +1567,15 @@ namespace TerraBlind
                     if (footSupported && MathF.Abs(s.Px - prevPx) < 0.05f && f >= 2) break; // wall: not advancing
                 }
             }
-            if (frames.Count == 0) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no frames"); return null; }
+            if (frames.Count == 0) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 一帧都没有"); return null; }
             // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
             if (FallHitsLava(frames))
             {
-                if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
+                SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
                 return null;
             }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
-            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: no move (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
+            if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 没动 (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
             // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位 —— 拒掉,
             // 逼 A* 去放平台,而不是"走"过开阔水面然后循环。只管落地边,腾空的下落/跳跃边不受影响。
             if (node.Grounded)
@@ -1584,12 +1588,12 @@ namespace TerraBlind
                     if (SegDiag)
                     {
                         var bt = Main.tile[ncx, ncy + 1];
-                        DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} NULL: fake-stand at ({ncx},{ncy}); below ({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
+                        SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 假站位 ({ncx},{ncy}); 下面({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
                     }
                     return null;
                 } // reported stand cell has no floor = fake
             }
-            if (SegDiag) DiagLog.Trc($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
+            SegLog($"[ss-seg] dir={dir} hold={hold} OK -> ({StandCell(node.Px,node.Py).Item1},{StandCell(node.Px,node.Py).Item2}) gnd={node.Grounded}");
             return (node, frames);
         }
 
