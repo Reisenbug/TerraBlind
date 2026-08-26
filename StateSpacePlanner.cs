@@ -1065,6 +1065,18 @@ namespace TerraBlind
             float cost = 0f;
             // 挖满 [feetY-2, ccy-3] 整段,不跳着挖:pillar 一跳升几格是随地形变的(1~3格),
             // 按"每跳2格"只挖 ccy-1-2k/ccy-2-2k,人升 3 格时 ccy-5 没挖 → 撞上没挖的天花板卡死。
+            // 砌柱子要跳,跳起来脚下就空了。人本来站在薄地板/平台边缘时落回来会踩空 ——
+            // (962,705) 那次挖完头顶掉了 39 行到 742,而 pillar 边不带 frames,FallHitsLava 那道防线查不到它。
+            // 所以发边前先问:这两列往下掉会掉到哪。碰岩浆或探不到底就不发。
+            foreach (int c in new[] { leftCol, rightCol })
+            {
+                // 身体跨的【每一列】脚下都要有地。少一列就是跳起来落回时踩空的那一列。
+                if (!PathPlanner.IsFloorPublic(c, ccy + 1) && !DigSolid(c, ccy + 1))
+                { SegLog($"[ss-digup] NULL: 脚下({c},{ccy + 1})悬空,砌柱跳起来会踩空掉下去"); return null; }
+                int land = FallLanding(c, ccy + 1, new List<(int, int)>());
+                if (land == LandLava) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆"); return null; }
+            }
+
             int prevTop = ccy - 2;
             for (int k = 1; k * 2 <= DigMaxScan; k++)
             {
