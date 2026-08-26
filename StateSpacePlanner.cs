@@ -1397,32 +1397,17 @@ namespace TerraBlind
 
         // 硬规则:放置必须在弧顶【或之后】(vy >= 0),绝不在上升段 —— 上升时人还在穿过那一行,砖要么没支撑要么被穿过。
         // 弧顶常常够不到远/低的落点(够不着 → UseItem 静默失败 → 腾空僵住 → 摔),所以等下降把人带进射程再放。
-        // 放置从发起到平台真的出现要多少帧:切物品栏 + 起手 + useTime。实测跳放那次等了 13 帧。
-        // 规划必须把它算进去,否则弹道和现实差这么多帧的下落。
-        const int PlaceLeadFrames = 14;
-
-        // 放一块平台真正要几帧:切物品栏 1 帧 + useTime(手上那把平台自己的属性)+ 落块 1 帧。
-        // 硬编 14 是照着某一把平台实测出来的,换把慢的就不够 —— 蜂蜜地形上空中帧本来就少,差几帧就放不出来。
-        static int PlaceFramesNeeded(Player p)
-        {
-            if (p == null) return PlaceLeadFrames;
-            int slot = NavCoordinator.FindPlatformSlot(p);
-            if (slot < 0) return PlaceLeadFrames;
-            var it = p.inventory[slot];
-            if (it == null || it.IsAir) return PlaceLeadFrames;
-            return System.Math.Max(PlaceLeadFrames, it.useTime + 2);
-        }
-
+        // 曾经在这儿卡过一道"帧数够不够放置"的门(14 帧)。那个数来自【空中 stall 时代】——
+        // 那会儿执行器会停下等平台出现。现在空中不 stall,放置和飞行并行,门的依据已经不成立,
+        // 却把差 1-2 帧的跳放成片砍掉(一处连拒 24 条),所以删了。
         static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
         {
             int apex = 0;
             float minPy = float.MaxValue;
             for (int i = 0; i < frames.Count; i++)
                 if (frames[i].Py < minPy) { minPy = frames[i].Py; apex = i; }
-            // 挑【最早】够得着的那一帧,不是随便一帧 —— 放置在执行端要切物品栏+挥手,实测 13 帧,
-            // 而模拟器把 Place 当零耗时(ignored by Step)。标晚了平台就来不及出现:人已经掉到
-            // 平台下方,而平台是 solidTop 只有顶面接人,于是穿过去自由落体 109 格。
-            // 从弧顶开始正向扫,第一个够得着的就用 —— 那给执行留下的余量最大。
+            // 挑【最早】够得着的那一帧:标晚了平台来不及出现,人掉到平台下方,而平台是 solidTop
+            // 只有顶面接人,于是穿过去自由落体 109 格。从弧顶正向扫,第一个够得着的余量最大。
             for (int i = apex; i < frames.Count; i++)
             {
                 if (!CanReachTile(frames[i].Px, frames[i].Py, cx, cy)) continue;
@@ -1430,13 +1415,6 @@ namespace TerraBlind
                 fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
                 frames[i] = fr;
                 // 留给执行的帧数。不够就说明这条边在物理上根本来不及放,别发它
-                int slack = frames.Count - i;
-                int need = PlaceFramesNeeded(Main.LocalPlayer);
-                if (slack < need)
-                {
-                    EventLog.W(Ev.Place, $"LEAD ({cx},{cy}) 只剩 {slack} 帧,放置要 {need} 帧 → 拒边");
-                    return false;
-                }
                 return true;
             }
             return false;
