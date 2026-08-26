@@ -155,7 +155,19 @@ namespace TerraBlind
 			foreach (int col in new[] { x + span + 1, x - span - 1 })
 			{
 				if (!Predicates.IsSolid(col, fy + 1)) continue;
-				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}(脚下有地)");
+				// 终点有地不够,【沿途每一列】都要有地:750 和 753 都踩得住,中间 751/752 是空的,
+				// 人走过去就从缺口掉下 39 行((755,1092)),目标反而够不着了。
+				int from = col > br ? br : bl;
+				int step = col > from ? 1 : -1;
+				bool gap = false;
+				for (int c = from; c != col + step; c += step)
+					if (!Predicates.IsSolid(c, fy + 1)) { gap = true; break; }
+				if (gap)
+				{
+					DiagLog.Write($"[placeany] ({x},{y})在身子里,想让到列{col} 但 {(col > br ? br : bl)}→{col} 途中有缺口,换方向");
+					continue;
+				}
+				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}(全程脚下有地)");
 				return SettleAt.Start(col, out why);
 			}
 			// 两边都悬空:站着不动让不开。往上跳一格就能把身子挪出去 —— 悬空处跳比走安全。
