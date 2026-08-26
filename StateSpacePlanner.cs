@@ -424,7 +424,9 @@ namespace TerraBlind
                     }
                     else if (e.pillar)
                     {
-                        revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null });
+                        // DigUp 那条边同时是 pillar 又带 tiles(先挖头顶再砌上去)。丢了 MineTiles 就只砌不挖,
+                        // 头顶那几格挡着柱子砌不上去,人原地不动 —— (1585,218) 反复选同一条边 4 次全 MISS 就是这样。
+                        revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null, MineTiles = e.digTiles });
                     }
                     else if (e.digTiles != null)
                     {
@@ -2002,7 +2004,19 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-bridge] 铺{span}格 {ccx}→{st.TargetCx} 脚下行{ActExecutor.OriginCy(p) + 1}");
             }
             else if (st.Pillar)
-                SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
+            {
+                // 带 MineTiles 的 pillar 边(DigUp):头顶还堵着就先挖,挖完这一步重新派发才砌。
+                bool blocked = st.MineTiles != null && st.MineTiles.Exists(t => Predicates.IsWall(t.wx, t.wy));
+                if (blocked)
+                {
+                    int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
+                    DiagLog.Write($"[ss-pillar-dig] 头顶还堵着 {st.MineTiles.Count} 格,先挖再砌柱到 {st.TargetCy}");
+                    MineCoordinator.Start(new MineRequest { Dir = MineDir.Up, StartWx = ccx, StartWy = sfeet,
+                        TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
+                }
+                else
+                    SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
+            }
             else if (st.Dig)
             {
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
