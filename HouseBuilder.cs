@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, LiftStep, Floor,
+			Idle, Lift, LiftStep, Floor, PillarClear,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			FixStruct, FixCraft, Fix, Reclaim, Done
@@ -296,7 +296,14 @@ namespace TerraBlind
 				case Ph.Floor:
 					if (BridgeBuilder.IsRunning) return;
 					if (BridgeBuilder.Outcome != "done") { Fail($"地板:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
-					// 砌柱子前【不要】站到那一列:传了 col 的 PillarUp 不会 StepAside,身体占着就砌不上
+					// 砌柱子前【不要】站到那一列:传了 col 的 PillarUp 不会 StepAside,身体占着就砌不上。
+					// 铺完地板人正停在桥的最远端 = 柱列,所以这里必须先挪开。人 20px 跨两列,退 3 列才彻底让开。
+					Advance(Ph.PillarClear);
+					SettleAt.Start(MainCol - _dir * 3, out _);
+					return;
+
+				case Ph.PillarClear:
+					if (SettleAt.IsRunning) return;
 					Advance(Ph.MainPillar);
 					if (!Need(PillarUp.Start(Plat(), PillarH, MainCol, out string ws4), "砌主柱", ws4)) return;
 					return;
