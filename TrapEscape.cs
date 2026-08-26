@@ -40,9 +40,10 @@ namespace TerraBlind
             var target = t.Value;
             int tH = field[(target.x, target.y)];
 
-            // 场目标传【最终目标】:复用已建好的大罗盘当启发式,别为出坑另建一张场
+            // 【不传 fieldGoal】,走 navwand 那条小盒场分支:在 start↔goal 周围建场,几十 ms。
+            // 传大罗盘的后果是 A* 拿着覆盖全世界的 H 场自由展开 —— 起终点只隔 7 格,却搜到 800 格外,
+            // 20000 次预算烧尽也搜不到。盒外没有 H,启发式取不到值,搜索自然收敛在坑里。
             var res = StateSpacePlanner.Plan(target.x, target.y,
-                                             fieldGoalWx: goalWx, fieldGoalWy: goalWy,
                                              maxExp: Budget, goalSnapCap: 0, coarseStates: true);
             // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
             // 派发出去人绕一圈回原地,下一周期一模一样 —— 那是把贪心的死循环换成 A* 的死循环。
