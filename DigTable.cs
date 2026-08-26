@@ -115,12 +115,14 @@ namespace TerraBlind
 
         public const int Unmineable = 100000;
 
-        // 挖开的【后果】,不是挖它要多久。蜂巢又软又快,纯按耗时算规划器专挑它走 —— 但捅破了
-        // 蜂蜜流出来拖慢移动、放出小蜜蜂、还可能招来蜂王。有别的路就绕开,只有无路可走才付这个价。
+        // 蜂巢块和神庙砖一个待遇:根本不许挖。以前给个大罚分当"贵但能走",无路可走时照样捅破,
+        // 蜂蜜流一地、小蜜蜂满天、还招蜂王。见 MineableWith。
+        public static bool IsForbidden(int type) => type == TileID.Hive;
+
+        // 挖开的【后果】,不是挖它要多久。蜂蜜块软,纯按耗时算规划器专挑它走 —— 但踩上去移动力暴跌。
         private const int HivePenalty = 3000;
         private static int Trouble(int type)
         {
-            if (type == TileID.Hive) return HivePenalty;
             if (type == TileID.HoneyBlock || type == TileID.CrispyHoneyBlock) return HivePenalty / 3;
             return 0;
         }
@@ -133,6 +135,7 @@ namespace TerraBlind
             if (pickPower <= 0) return false;
             var tile = Main.tile[x, y];
             if (!tile.HasTile) return true;
+            if (IsForbidden(tile.TileType)) return false;
             int dmg = GetPickaxeDamage(x, y, pickPower, tile);
             if (Main.getGoodWorld) dmg *= 2;
             return dmg > 0 && Terraria.WorldGen.CanKillTile(x, y);
@@ -149,6 +152,7 @@ namespace TerraBlind
             if (slot < 0) return Unmineable;
             var pick = p.inventory[slot];
             var tile = Main.tile[x, y];
+            if (IsForbidden(tile.TileType)) return Unmineable;
             int dmg = GetPickaxeDamage(x, y, pick.pick, tile);
             if (Main.getGoodWorld) dmg *= 2;
             if (dmg <= 0 || !Terraria.WorldGen.CanKillTile(x, y)) return Unmineable;

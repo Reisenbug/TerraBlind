@@ -1399,6 +1399,18 @@ namespace TerraBlind
         // 规划必须把它算进去,否则弹道和现实差这么多帧的下落。
         const int PlaceLeadFrames = 14;
 
+        // 放一块平台真正要几帧:切物品栏 1 帧 + useTime(手上那把平台自己的属性)+ 落块 1 帧。
+        // 硬编 14 是照着某一把平台实测出来的,换把慢的就不够 —— 蜂蜜地形上空中帧本来就少,差几帧就放不出来。
+        static int PlaceFramesNeeded(Player p)
+        {
+            if (p == null) return PlaceLeadFrames;
+            int slot = NavCoordinator.FindPlatformSlot(p);
+            if (slot < 0) return PlaceLeadFrames;
+            var it = p.inventory[slot];
+            if (it == null || it.IsAir) return PlaceLeadFrames;
+            return System.Math.Max(PlaceLeadFrames, it.useTime + 2);
+        }
+
         static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
         {
             int apex = 0;
@@ -1417,9 +1429,10 @@ namespace TerraBlind
                 frames[i] = fr;
                 // 留给执行的帧数。不够就说明这条边在物理上根本来不及放,别发它
                 int slack = frames.Count - i;
-                if (slack < PlaceLeadFrames)
+                int need = PlaceFramesNeeded(Main.LocalPlayer);
+                if (slack < need)
                 {
-                    DiagLog.Trc($"[ss-place-lead] ({cx},{cy}) 只剩 {slack} 帧,不够放置的 {PlaceLeadFrames} 帧 → 拒边");
+                    EventLog.W(Ev.Place, $"LEAD ({cx},{cy}) 只剩 {slack} 帧,放置要 {need} 帧 → 拒边");
                     return false;
                 }
                 return true;
@@ -2156,10 +2169,15 @@ namespace TerraBlind
             {
                 // 递增:每圈固定 +12 要 ~3 轮 shock(+10s)才压过一条只赢几分的蹭边(树台阶陷阱:蹭 t404 vs 跳放 t411)。
                 // 每次至少加上它【当前】的罚分 = 每重复一次翻倍(12→24→48…),第二圈就完成了原来要靠 shock 磨出来的修正。
-                var ekey = (fromCx, fromCy, realCx, realCy);
-                float cur = _miss.GetValueOrDefault(ekey);
-                float inc = System.MathF.Max(RevisitPenalty * (_recent.Count - recency), cur);
-                _miss[ekey] = System.MathF.Min(cur + inc, RevisitCap);
+                float inc0 = RevisitPenalty * (_recent.Count - recency);
+                // 罚【真去的】那条边,也罚【选的】那条边。只罚前者时罚分挂在 (from→real) 上,
+                // 而下一轮选的键是 (from→plan) —— 罚分永远压不到真正被反复挑中的那条边。
+                // 蜂蜜坑里 3070↔3072 弹了 9 个周期就是这么来的:每轮都重选 (…,608)→(3071,604)。
+                foreach (var ekey in new[] { (fromCx, fromCy, realCx, realCy), (fromCx, fromCy, planCx, planCy) })
+                {
+                    float cur = _miss.GetValueOrDefault(ekey);
+                    _miss[ekey] = System.MathF.Min(cur + System.MathF.Max(inc0, cur), RevisitCap);
+                }
             }
             _recent.Add(landed);
             if (_recent.Count > RecentLen) _recent.RemoveAt(0);
@@ -3362,7 +3380,9 @@ namespace TerraBlind
             Main.SmartCursorWanted_Mouse = false; // SmartCursor would retarget the cursor away from PlaceCx/Cy
             if (p.itemTime > 0)
             {
-                if (_placeStall == 1) DiagLog.Write($"[ss-place] STALL-WHY tile=({cx},{cy}) itemTime={p.itemTime} slot={slot} stack={p.inventory[slot].stack}");
+                // 空中每帧都撞在这里直接 return,帧却照常推进 —— 手没挥完平台就永远不出现。
+                // 静默返回让它看起来像"根本没试过"(死循环 9 个周期,[place] 一条没有)。
+                if (_placeStall == 1) EventLog.W(Ev.Place, $"WAIT ({cx},{cy}) itemTime={p.itemTime} 挥手中");
                 return; // mid-swing; wait for cooldown before re-firing
             }
             if (_placeStall == 1) DiagLog.Write($"[ss-place] emit tile=({cx},{cy}) slot={slot} stack={p.inventory[slot].stack} item={p.inventory[slot].Name}");
