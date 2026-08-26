@@ -52,6 +52,10 @@ namespace TerraBlind
         const int RebuildAltered = 40;      // our altered tiles before a background re-flood (coarse; big-方向 shifts need dozens of tiles)
         static int _altered;
         static volatile bool _rebuilding;
+        // 同一格重建过还在场外 = 那格 Dijkstra 根本到不了(不是场旧了)。再建多少次都一样,
+        // 而 off-field 分支直接 return,人连安全逃逸步都跑不到 —— 每 50 帧烧 420ms 建场,永不停。
+        static (int, int) _offFieldCell = (int.MinValue, int.MinValue);
+        static int _offFieldTries;
         // 换目标=换场,建一次 ~500ms/70万格。GetField 会在主线程内联建 → 每周期一次可见卡顿,所以丢后台
         static void SwitchFieldAsync(int gx, int gy, string why)
         {
@@ -261,9 +265,17 @@ namespace TerraBlind
                 RebuildFieldAsync("pick change");
             if (!MazeWand.GetField(_goalWx, _goalWy).ContainsKey(cell))
             {
-                RebuildFieldAsync("off-field");
-                return;
+                if (cell != _offFieldCell) { _offFieldCell = cell; _offFieldTries = 0; }
+                if (++_offFieldTries <= 1)
+                {
+                    RebuildFieldAsync("off-field");
+                    return;
+                }
+                // 建过了还在场外:不再建,放行下去。StepAlongField 会报 EXPAND-EMPTY 然后走安全逃逸步,
+                // 人挪一格就可能回到场里 —— 停在这儿等一张永远不会包含这格的场才是真死锁。
+                EventLog.W(Ev.Fail, $"OFF-FIELD {cell} 重建后仍不在场里 → 交给逃逸步");
             }
+            else if (cell == _offFieldCell) { _offFieldCell = (int.MinValue, int.MinValue); _offFieldTries = 0; }
             // 上一条边真落到哪了 → 变成连续的失配权重,软性压低老是落空的边。随后整表衰减:不做黑名单、不禁回头
             if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
