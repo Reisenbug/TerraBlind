@@ -31,8 +31,6 @@ namespace TerraBlind
 		private static int _slot = -1;
 		private static int _dir = 1;           // +1 right, -1 left
 		private static int _want, _placed, _already;
-		private static int _walkOutTicks;          // 铺完之后走向目标列花了几帧
-		private const int WalkOutLimit = 180;      // 3 秒还没走到就别等了,交回上层重规划
 		private static int _targetWx, _rowWy;  // cell being placed into; the row the bridge runs along
 		private static int _lastOriginCx, _walkStall;
 		private static bool _swingIssued;
@@ -69,7 +67,7 @@ namespace TerraBlind
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 
 			_item = itemName; _dir = dir == "left" ? -1 : 1;
-			_want = n < 1 ? 1 : n; _placed = 0; _already = 0; _walkOutTicks = 0;
+			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Lay;
@@ -149,24 +147,7 @@ namespace TerraBlind
 			{
 				_already++; _targetWx += _dir;
 			}
-			// 铺完了,但人还在起点 —— 跳过已有格只推进了 _targetWx,脚一步没动。
-			// 整段大半是实地时 while 会一口气推到终点然后 Finish,人原地傻站等下一轮重规划。
-			// 所以铺够了还要【走到】目标列才算完。
-			if (_placed + _already >= _want)
-			{
-				int here = ActExecutor.OriginCx(p);
-				int endCol = _targetWx - _dir;
-				if (_dir > 0 ? here < endCol : here > endCol)
-				{
-					// 走不动也不能无限等:_sinceProgress 那个看门狗只在【铺】没进展时才累加,
-					// 这会儿已经铺够了,它永远不会再响
-					if (++_walkOutTicks > WalkOutLimit)
-					{ Reason = $"铺完走不到目标列 {here}→{endCol}"; Finish("done"); return; }
-					if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
-					return;
-				}
-				Finish("done"); return;
-			}
+			if (_placed + _already >= _want) { Finish("done"); return; }
 
 			// 3) 手空着且够得着 → 这一帧就挥
 			bool inReach = p.IsInTileInteractionRange(_targetWx, _rowWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
