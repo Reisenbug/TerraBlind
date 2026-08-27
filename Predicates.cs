@@ -130,13 +130,15 @@ namespace TerraBlind
 
 		// 把一个 w×h 的框画到游戏里:绿=空(放得下),红=被占。选址对不对,看一眼比读坐标可靠。
 		// 键盘 H 和 /scan_house 共用这一份 —— 画的必须和判的是同一套 Vacant。
-		public static int VisualizeBox(int bx, int by, int w, int h, string label, int ttlFrames = 3600)
+		// dir=-1 时房子往左建,框也要往左画 —— 否则地狱那种 dir=-1 的房子框和实际位置对不上。
+		public static int VisualizeBox(int bx, int by, int w, int h, string label, int ttlFrames = 3600, int dir = 1)
 		{
 			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 			int blocked = 0;
-			for (int ix = 0; ix < w; ix++)
+			for (int ix0 = 0; ix0 < w; ix0++)
 				for (int iy = 0; iy < h; iy++)
 				{
+					int ix = dir > 0 ? ix0 : -ix0;
 					int cx = bx + ix, cy = by - iy;
 					bool bad = !Vacant(cx, cy);
 					if (bad) blocked++;

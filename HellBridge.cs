@@ -186,6 +186,10 @@ namespace TerraBlind
 					// 桥铺完了房子才动工:房子钉在最边缘,地板行就是桥面行
 					if (!HouseBuilder.Start(1, _dir, _houseX, _houseY, out string hw))
 					{ Fail($"房子起不来:{hw}"); return; }
+					// 地表选址会画 21x10 的房址框(VisualizeBox),地狱这条路径以前只画了地板那一行,
+					// 所以地狱房子看不到轮廓。这里补上,尺寸按实际房间数算。
+					Predicates.VisualizeBox(_houseX, _houseY, HouseBuilder.RoomWidth + 1,
+						HouseBuilder.PillarH + 1, $"hell house {HouseBuilder.RoomWidth + 1}x{HouseBuilder.PillarH + 1}", 7200, _dir);
 					DiagLog.Write($"[hellbridge] 桥好了({_laid}格),盖房子 角=({_houseX},{_houseY}) dir={_dir}");
 					_ph = Ph.House;
 					return;
