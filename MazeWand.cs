@@ -157,6 +157,10 @@ namespace TerraBlind
         static int _mainThreadId;
         public static void MarkMainThread() => _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
 
+        // 现在是不是游戏线程。凡是要【写】玩家状态(搬背包/换槽)的地方都得先问这个 --
+        // 后台线程动 p.inventory 会和主线程撞车。IsBackground 判的是线程池属性,不是这个语义。
+        public static bool OnMainThread => System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
+
         static (int gx, int gy) _cachedGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _cachedField;
 

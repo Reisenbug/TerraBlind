@@ -8,7 +8,9 @@ namespace TerraBlind
 	// 于是同样的墙在老路径上能过、新路径上卡死。所有"被地形挡住"都该调这里。
 	public static class ClearWay
 	{
-		// 手上最好的镐。没镐返回 -1 —— 那是真的过不去,得让调用方报出来
+		// 手上最好的镐。没镐返回 -1 -- 那是真的过不去,得让调用方报出来。
+		// 【背包里的也算】:只扫热键栏的话,镐在背包里就等于"没镐",挖掘边一条都不生成,
+		// 人明明带着镐却被判成过不去。找到就用 HomeSlot 搬上热键栏(和放置料同一套搬运)。
 		public static int PickSlot(Player p)
 		{
 			int slot = -1, best = 0;
@@ -17,7 +19,25 @@ namespace TerraBlind
 				var it = p.inventory[i];
 				if (it != null && !it.IsAir && it.pick > best) { best = it.pick; slot = i; }
 			}
-			return slot;
+			if (slot >= 0) return slot;
+			// 热键栏没有 -> 翻背包(10..53),搬最好的那把上来
+			int bagSlot = -1, bagBest = 0;
+			for (int i = 10; i < 54 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir && it.pick > bagBest) { bagBest = it.pick; bagSlot = i; }
+			}
+			if (bagSlot < 0) return -1;
+			// 【只在主线程搬】。规划器(含后台的 ExploreCoordinator)也调这个函数,
+			// 后台线程动 p.inventory 会和主线程撞车 -- Trap.ScanAhead 那次并发损坏就是这么来的。
+			// 后台只需要知道"有没有镐",返回背包里那个槽号就够。
+			if (MazeWand.OnMainThread)
+			{
+				int hb = PlaceAction.HomeSlot(bagSlot);
+				DiagLog.Write($"[clearway] 镐在背包槽{bagSlot}(pick={bagBest}),搬到热键{hb}");
+				return hb;
+			}
+			return bagSlot;
 		}
 
 		// 挖一格。够得着且有镐才动手;开挖了返回 true,这一帧就交给它

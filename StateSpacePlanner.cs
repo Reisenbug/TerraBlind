@@ -267,8 +267,9 @@ namespace TerraBlind
 
             int platformSlot = NavCoordinator.FindPlatformSlot(p);
             int platformTile = platformSlot >= 0 ? p.inventory[platformSlot].createTile : -1;
-            bool hasPickaxe = false;
-            for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPickaxe = true; break; } }
+            // 走 ClearWay.PickSlot:它连背包一起找,找到会搬上热键栏。
+            // 只扫热键栏 10 格的话,镐在背包里就等于没镐,整棵挖掘边全不生成。
+            bool hasPickaxe = ClearWay.PickSlot(p) >= 0;
 
             float startPx = startOverride?.px ?? p.position.X;
             float startPy = startOverride?.py ?? p.position.Y;
