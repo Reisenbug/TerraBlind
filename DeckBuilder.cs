@@ -24,6 +24,8 @@ namespace TerraBlind
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
 		// 竖直差这么多就不是走两步能解决的,交栈。够得着的判据本身有几行余量,所以要比它松
+		// 低这么多以内自己跳一下就上去了,再多就不是跳能解决的,交寻路
+		private const int JumpBackSlack = 2;
 		private const int VertSlack = 4;
 		private const int StandSlack = 1;
 		private const int MaxRecovers = 8;
@@ -145,6 +147,14 @@ namespace TerraBlind
 				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
 				if (p.velocity.Y != 0f)
 				{ if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
+				// 差一格就自己跳(比启动整套寻路便宜)。差得多【交给寻路】——
+				// 它会挖会搭会跳,而这儿硬按方向键只会在坎前蹭,8 次蹭不上去就整条桥失败
+				if (py - (y - 1) > JumpBackSlack)
+				{
+					if (!Unstick.Handle("deck", new Blocker(BlockKind.OutOfReach, x, y - 1, "回桥面")))
+						Fail($"回不了桥面 (人{py} 桥面{y})");
+					return;
+				}
 				if (++_recovers > MaxRecovers) { Fail($"爬不回桥面 (人{py} 桥面{y})"); return; }
 				DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去({_recovers}/{MaxRecovers})");
 				// 光按跳是原地起跳,上不去斜前方那一格 —— 得朝目标列一起推

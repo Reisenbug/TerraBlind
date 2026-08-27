@@ -41,6 +41,11 @@ namespace TerraBlind
 			for (int i = 0; i < _stack.Count; i++)
 				if (Same(_stack[i].B, b) && _stack[i].Who == who)
 				{
+					// 【上一次的解法还在跑就不算一次重试】。Tries 的本意是"试了 3 次都没用",
+					// 但调用方是【每帧】调的 —— 寻路刚启动 3 帧就被判死,人还没走两步。
+					// (2431,1045) 那次:寻路启动 → "靠近中" ×2 → 放弃,而 RecedingNav
+					// 手上有 37 条候选、walk 一步就能把 H 从 181 降到 82。
+					if (Working()) { Solve(who, b); return true; }
 					var f = _stack[i];
 					f.Tries++;
 					_stack[i] = f;
@@ -54,6 +59,13 @@ namespace TerraBlind
 			_stack.Add(new Frame { B = b, Who = who, Tries = 1 });
 			return Solve(who, b);
 		}
+
+		// 上一次派出去的解法还在执行中吗。在跑就别数重试 —— 数的该是"试过几次没用",
+		// 不是"问过几帧"。这几样都是自带终止条件的原语,跑完自然停
+		static bool Working()
+			=> SettleAt.IsRunning || RecedingNav.Active || PillarUp.IsRunning || PlatformDown.IsRunning
+			   || BridgeBuilder.IsRunning || PlaceAction.IsRunning || MineCoordinator.IsActive
+			   || ItemUseCoordinator.IsActive;
 
 		// 这一层解决了,弹栈
 		public static void Done(string who, Blocker b)
