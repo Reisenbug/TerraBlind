@@ -240,7 +240,14 @@ namespace TerraBlind
 			{
 				// 按下去的【同一帧】抹掉目标格的岩浆。早抹邻格会流回来,门重新关上;
 				// 只对放置的东西做(_placeType>=0),挖掘不碰液体
-				if (_placeType >= 0) Concessions.ClearLavaForPlacement(req.TargetWx, req.TargetWy);
+				if (_placeType >= 0)
+				{
+					Concessions.ClearLavaForPlacement(req.TargetWx, req.TargetWy);
+					// 目标格和人自己重叠时 vanilla 会拒(Collision.EmptyTile)。
+					// 这里【只挂旗】,真正缩碰撞箱在 PreItemCheck -- 我们跑在 PostUpdateEverything,
+					// 这一帧的 ItemCheck 早跑完了,旗子给的是下一帧那次
+					Concessions.ShrinkHitboxThisFrame = true;
+				}
 				p.controlUseItem = true;
 			}
 		}

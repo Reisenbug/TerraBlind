@@ -60,6 +60,39 @@ namespace TerraBlind
 			return Main.tileLavaDeath[it.createTile];
 		}
 
+		// 人自己的碰撞箱挡着放不了东西 —— 掉进岩浆时这是【致命】的:
+		// 要填的那格正是人泡着的那格,人不挪开就永远填不上,而挪不开正是被困住的原因。
+		//
+		// vanilla 判据 Collision.EmptyTile(Collision.cs:1418):拿 16x16 的格矩形去和
+		// player.position/width/height 做 Intersects。读的是【玩家字段】,不是常量 --
+		// 所以放置那一刻把碰撞箱缩掉,相交为假,门自己就开了。
+		//
+		// 挂 PreItemCheck/PostItemCheck:它俩正好夹住 ItemCheck_Inner(Player.cs:42334/42338),
+		// PlaceThing 就在中间。挂在 PostUpdateEverything 没用 —— 那时 ItemCheck 早跑完了。
+		// 只在【我们自己要放东西】的那一帧缩,别的时候一律原样,免得影响碰撞/受击。
+		public static bool ShrinkHitboxThisFrame;
+		static int _savedW, _savedH;
+		static bool _shrunk;
+
+		public override bool PreItemCheck()
+		{
+			if (!Enabled || !ShrinkHitboxThisFrame || Player.whoAmI != Main.myPlayer) return true;
+			_savedW = Player.width; _savedH = Player.height;
+			// 缩到 0 而不是挪走:挪坐标会让这一帧的放置瞄准/够得着判据跟着漂
+			Player.width = 0; Player.height = 0;
+			_shrunk = true;
+			return true;
+		}
+
+		public override void PostItemCheck()
+		{
+			// 旗子【一帧有效】。不在这儿清的话碰撞箱会一直是 0,人从此穿墙掉出世界
+			ShrinkHitboxThisFrame = false;
+			if (!_shrunk) return;
+			Player.width = _savedW; Player.height = _savedH;
+			_shrunk = false;
+		}
+
 		public override void PostUpdateEquips()
 		{
 			if (!Enabled) return;

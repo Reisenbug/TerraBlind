@@ -23,7 +23,11 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { _firedThisEmergency = false; return; }
 
-			bool inLava = p.lavaWet;
+			// 【不能只看 lavaWet】。零点几格的岩浆照样把人困住(行为和满格岩浆没区别),
+			// 而那种深度下 lavaWet 可能已经是假的 -- 堤会提前停手,人还泡在里面出不来。
+			// 判据改成:碰撞箱盖到的格子里【一滴岩浆都不许有】。
+			bool touchingLava = TouchesLava(p);
+			bool inLava = p.lavaWet || touchingLava;
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
 			bool emergency = inLava || lowHp;
 
@@ -32,7 +36,7 @@ namespace TerraBlind
 				p.controlJump = true;
 			// 光跳出不来:竖井里四面都是岩浆,跳多高都落回原处。要【往脚下堤方块】一格格垫上去。
 			// 只能用方块 -- 平台放进岩浆当场烧没,人以为踩上了其实还在往下沉。
-			if (inLava) LavaLevee(p); else _leveeCol = int.MinValue;
+			if (touchingLava) LavaLevee(p); else _leveeCol = int.MinValue;
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
@@ -77,6 +81,50 @@ namespace TerraBlind
 		static int _leveeCol = int.MinValue;   // 认准一列往上堤;每帧重挑列会左右横跳堤不起来
 		static int _leveeWait;
 
+		// 碰撞箱碰到岩浆没有。【一滴都算】 -- 零点几格的岩浆和满格一样能困住人,
+		// 而 lavaWet 在那种深度下会是假的。扫碰撞箱盖到的每一格,LiquidAmount>0 就算碰上。
+		static bool TouchesLava(Player p)
+		{
+			int x0 = (int)(p.position.X / 16f);
+			int x1 = (int)((p.position.X + p.width - 1) / 16f);
+			int y0 = (int)(p.position.Y / 16f);
+			int y1 = (int)((p.position.Y + p.height - 1) / 16f);
+			for (int x = x0; x <= x1; x++)
+				for (int y = y0; y <= y1; y++)
+				{
+					if (!Predicates.InBounds(x, y)) continue;
+					var t = Main.tile[x, y];
+					if (t.LiquidAmount > 0 && t.LiquidType == Terraria.ID.LiquidID.Lava) return true;
+				}
+			return false;
+		}
+
+		// 碰着人的岩浆格里【最低的那一格】。填它而不是填脚下那一列:
+		// 碰上人的岩浆可能在隔壁列,只顾自己那列永远清不掉
+		static (int x, int y)? NearestLavaCell(Player p)
+		{
+			int x0 = (int)(p.position.X / 16f);
+			int x1 = (int)((p.position.X + p.width - 1) / 16f);
+			int y0 = (int)(p.position.Y / 16f);
+			int y1 = (int)((p.position.Y + p.height - 1) / 16f);
+			float ccx = (p.position.X + p.width / 2f) / 16f;
+			(int, int)? best = null; float bd = float.MinValue;
+			for (int x = x0; x <= x1; x++)
+				for (int y = y0; y <= y1; y++)
+				{
+					if (!Predicates.InBounds(x, y)) continue;
+					var t = Main.tile[x, y];
+					if (t.LiquidAmount == 0 || t.LiquidType != Terraria.ID.LiquidID.Lava) continue;
+					if (t.HasTile) continue;   // 已经有东西还带液体的格填不进去,跳过
+					// 【从下往上填】。把身子四周的岩浆格全填实等于把自己砌进砖里,
+					// 而目标是"人不碰岩浆"不是"周围没岩浆" -- 填低处,人踩上去自然抬高脱离。
+					// 所以排序先比行(越低越优先),同一行再比横向距离
+					float d = (y * 1000f) - System.Math.Abs(x - ccx);
+					if (best == null || d > bd) { bd = d; best = (x, y); }
+				}
+			return best;
+		}
+
 		static void LavaLevee(Player p)
 		{
 			// 别和正在跑的放置抢:PlaceAction 一次只服务一个目标,抢了两边都放不成
@@ -84,19 +132,15 @@ namespace TerraBlind
 			// 放完到方块真正出现之间有几帧,不等就会对着同一格连开好几枪
 			if (_leveeWait > 0) { _leveeWait--; return; }
 
-			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
-			if (_leveeCol == int.MinValue) _leveeCol = cx;
-			// 人沉下去/被冲开时跟着走,不然会对着够不着的老列一直放
-			if (System.Math.Abs(cx - _leveeCol) > 1) _leveeCol = cx;
-
-			// 【一块不够】。堤上 cy+1 之后人浮起来一格,新的 cy+1 还是岩浆,
-			// 得接着堤到 lavaWet 消失为止 -- 只放一块的话人就泡在液面下不动了。
-			// 脚下那格已经实了就往上找第一格空的:那才是这一轮该填的
-			int fy = cy + 1;
-			while (Predicates.InBounds(_leveeCol, fy) && Main.tile[_leveeCol, fy].HasTile) fy--;
-			if (!Predicates.InBounds(_leveeCol, fy)) return;
+			// 【填有岩浆的那一格,不是脚下那一格】。碰着人的岩浆可能在隔壁列,
+			// 只顾自己这列会一直填不到点子上;而一格填满(方块占位)那格就再也没有液体了。
+			// 从人身上往外挑最近的一格有岩浆的,由近及远
+			var target = NearestLavaCell(p);
+			if (target == null) return;
+			int tx = target.Value.x, fy = target.Value.y;
+			_leveeCol = tx;
 			// 只在够得着的范围里堤。够不着说明人已经浮上来了,交给跳
-			if (!p.IsInTileInteractionRange(_leveeCol, fy, Terraria.DataStructures.TileReachCheckSettings.Simple)) return;
+			if (!p.IsInTileInteractionRange(tx, fy, Terraria.DataStructures.TileReachCheckSettings.Simple)) return;
 
 			int block = Unstick.BlockItem(p);
 			if (block < 0)
@@ -109,13 +153,13 @@ namespace TerraBlind
 				return;
 			}
 			_leveeNoItem = false;
-			if (PlaceAction.Start(block.ToString(), _leveeCol, fy, 1, 0, 0, true, out string why))
+			if (PlaceAction.Start(block.ToString(), tx, fy, 1, 0, 0, true, out string why))
 			{
 				_leveeWait = LeveeCooldown;
-				DiagLog.Write($"[lava-levee] 往脚下({_leveeCol},{fy})堤一块 item={block}");
+				DiagLog.Write($"[lava-levee] 填岩浆格({tx},{fy}) item={block}");
 			}
 			else
-				DiagLog.Write($"[lava-levee] 堤({_leveeCol},{fy})开不了工: {why}");
+				DiagLog.Write($"[lava-levee] 填({tx},{fy})开不了工: {why}");
 		}
 		const int LeveeCooldown = 6;    // 放下到方块出现的间隔,比一次挥舞略长
 		static bool _leveeNoItem;       // 没料只报一次,别每帧刷屏
