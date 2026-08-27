@@ -2344,9 +2344,6 @@ namespace TerraBlind
             if (!field.TryGetValue((cx, cy), out int curH)) return false;   // 不在场里,无从判断
             if (!CellKind.Stands(cx, cy)) return false;                     // 站不住的格,人本来也不会停在这儿
             var ctx = new PlanCtx { DistField = field };
-            // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
-            // 一周期一次,不在边上,不贵
-            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             // 构造"站在这一格、静止"的状态。StandCell 的逆:格 → 像素
             var node = new SSNode
             {
@@ -2373,6 +2370,9 @@ namespace TerraBlind
             var field = MazeWand.GetField(goalWx, goalWy);
             var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
+            // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
+            // 一周期一次,不在边上,不贵
+            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {
