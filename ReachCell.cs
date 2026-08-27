@@ -35,6 +35,9 @@ namespace TerraBlind
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
+			// 人在空中时 OriginCx 取到的是半路坐标,_standX 会算歪,而整套原语
+			// (platdown/pillar/bridge)都从"人站在哪"起步 —— 起点错了后面全错
+			if (p.velocity.Y != 0f) { why = $"人还在空中(vy={p.velocity.Y:0.##})"; return false; }
 			_plat = platItem; _block = blockItem;
 			_tx = tx; _ty = ty;
 			// 站目标【靠人这一侧】的那一列:桥从人这边接过去,站过头就等于白铺一段

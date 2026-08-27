@@ -301,6 +301,11 @@ namespace TerraBlind
 			why = "";
 			var rp = Main.LocalPlayer;
 			if (rp == null || !rp.active) { why = "no_player"; return false; }
+			// 【人得先站稳】。整条线是按"人现在在哪"算的,而人在空中时那个坐标是半路的:
+			// 落地后位置早变了,算出来的线和房址全对不上。
+			// 实测(2559,1005)正在执行一条下落边,70 帧后这里切进来取到(2552,1012) —— 半空中,
+			// 然后 ReachCell→PlatformDown 一路等落地,人却掉穿目标行 40 格进了岩浆。
+			if (rp.velocity.Y != 0f) { why = $"人还在空中(vy={rp.velocity.Y:0.##}),等落地再开工"; return false; }
 			int rbx = ActExecutor.OriginCx(rp);
 			int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
 			var rr = HellLine.Compute(rbx, rdir);

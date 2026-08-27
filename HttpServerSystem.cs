@@ -95,7 +95,12 @@ namespace TerraBlind
 				(inv[src], inv[dst]) = (inv[dst], inv[src]);
 			}
 			while (_hellRunQueue.TryDequeue(out _))
+			{
 				HellRunStart = StateSnapshotPlayer.StartHellRun(out string hrw) ? "" : hrw;
+				// 【人在空中就重新排队,别把请求丢了】。整条线按人当前位置算,空中那个坐标是半路的;
+				// 等落地(通常几十帧)再算一次就对了。只对这一种原因重排 —— 别的失败是真失败
+				if (HellRunStart.Contains("还在空中")) { _hellRunQueue.Enqueue(true); break; }
+			}
 			while (_interactQueue.TryDequeue(out var tile))
 			{
 				// 上一个箱子还开着就先关掉再开新的。原来直接拒绝,于是只要有箱子没关,

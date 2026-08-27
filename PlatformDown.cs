@@ -27,6 +27,8 @@ namespace TerraBlind
 		private const int MaxPhaseFrames = 300;
 		private const int MaxStandFrames = 900;
 
+		// 掉过目标这么多行就认账。给几行余量:落地那一下本来就会过冲一点
+		const int PastTargetSlack = 3;
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
 		public static string Reason = "";
@@ -99,6 +101,16 @@ namespace TerraBlind
 						var sb2 = Predicates.IsWall(bl, feetY + 1) ? new Blocker(BlockKind.Terrain, bl, feetY + 1, "脚下被占")
 							: new Blocker(BlockKind.OutOfReach, bl, feetY + 1, "站不住");
 						Stuck(sb2, $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return;
+					}
+					// 【掉过目标行就别再等了】。这一相位只服务"站着往下铺梯子",人悬空时原样 return
+					// 等落地 —— 而等的过程中人一直在掉:(2552,1012)那次 61 帧掉到目标行 1044、
+					// 241 帧掉到 1084,穿过去 40 行进了岩浆,全程一句话没报。
+					// 掉过了就当场报出来,让上层重算(人落地后位置本来就变了,原来那条线也不对了)
+					if (feetY > _targetWy + PastTargetSlack)
+					{
+						Stuck(new Blocker(BlockKind.OutOfReach, _col == int.MinValue ? bl : _col, _targetWy, "掉过头了"),
+							$"自由落体掉过目标行:现在{feetY} 目标{_targetWy} vy={p.velocity.Y:0.##}");
+						return;
 					}
 					if (p.velocity.Y != 0f) return;
 					// 砖挡着就沉不下去,所以【每一列】都不能是砖(平台不算砖),不是"找到一列平台就开工"
