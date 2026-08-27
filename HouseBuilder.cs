@@ -78,9 +78,6 @@ namespace TerraBlind
 		const int H_WALL = 93;        // 木墙
 		const int H_TORCH = 8;
 
-		// true = 一次生成整座房子(HouseFab),false = 走手工建造那 30 个相位
-		public static bool Fab = true;
-
 		public const int RoomWidth = 5;           // 每间宽度
 		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
 		public const int SupportH = 8;            // 支柱高 (H_SUP):顶到屋顶【下面】一行,9 会和屋顶撞在同一行
@@ -173,17 +170,6 @@ namespace TerraBlind
 			WalkPlace.Protected.AddRange(new[] { H_CHAIR, H_TABLE, H_WALL, H_WORKBENCH });
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-			// 直接生成:一次把整座房子放出来,不走位不挥手。手工建造那 30 个相位全部跳过 ——
-			// 走位/让位/清场/停位/搬料那一整类问题跟着消失。Fab=false 时回到手工流程。
-			if (Fab)
-			{
-				HouseFab.Build(_rooms, _dir, ax, ay, out _);
-				_roofRow = _floorRow - PillarH;
-				_ph = Ph.Idle;
-				Outcome = "done"; Reason = HouseFab.LastReport;
-				DiagLog.Write($"[house] 直接生成完成:{HouseFab.LastReport}");
-				return true;
-			}
 			_ph = Ph.Clear;
 			ScanSite();
 			return true;
@@ -915,8 +901,7 @@ namespace TerraBlind
 
 		// 第 r 间的内腔:两根柱子之间、地板上一行到屋顶下一行。
 		// 顺序照抄 _build_house 的 H_WALL_ORDER —— vanilla 的墙体合并依赖放置顺序。
-		// public:HouseFab 生成整座房子时用【同一份】墙形状,两边错开就会生成完自己验不过
-		public static readonly (int dr, int dc)[] WallOrder =
+		static readonly (int dr, int dc)[] WallOrder =
 		{
 			(1,2),(2,2),(3,2),(4,2),(5,2),(6,2),
 			(6,3),(6,4),(6,5),
