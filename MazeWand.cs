@@ -225,10 +225,7 @@ namespace TerraBlind
         public static bool FieldPickStale()
         {
             if (_cachedField == null) return false;
-            int best = 0; var pl = Main.LocalPlayer;
-            if (pl != null)
-                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > best) best = it.pick; }
-            return best != _fieldPickPower;
+            return BestPickPower() != _fieldPickPower;
         }
 
         // 无状态:每次调用从给定格现描,不缓存。所以摔一跤/被击退/传送之后,下次重规划的线
@@ -258,10 +255,7 @@ namespace TerraBlind
         {
             // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
             // 边全被拒,只剩回头路,循环。
-            _fieldPickPower = 0;
-            var pl = Main.LocalPlayer;
-            if (pl != null)
-                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
+            _fieldPickPower = BestPickPower();
             // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
             int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
@@ -328,10 +322,7 @@ namespace TerraBlind
         // 比任何一处直挖都便宜。
         public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
         {
-            _fieldPickPower = 0;
-            var pl = Main.LocalPlayer;
-            if (pl != null)
-                for (int i = 0; i < 10; i++) { var it = pl.inventory[i]; if (it != null && !it.IsAir && it.pick > _fieldPickPower) _fieldPickPower = it.pick; }
+            _fieldPickPower = BestPickPower();
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
@@ -389,6 +380,22 @@ namespace TerraBlind
         }
 
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
+
+        // 全身上下最好的镐力。【背包也算】-- 只扫热键栏 10 格的话,镐在背包里就等于 pickPower=0,
+        // MineableWith 一律 false,所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"。
+        // 三处建场/失效判定原本各抄一遍这段循环,现在共用这一份。
+        static int BestPickPower()
+        {
+            var pl = Main.LocalPlayer;
+            if (pl == null) return 0;
+            int best = 0;
+            for (int i = 0; i < 54 && i < pl.inventory.Length; i++)
+            {
+                var it = pl.inventory[i];
+                if (it != null && !it.IsAir && it.pick > best) best = it.pick;
+            }
+            return best;
+        }
 
         static int StepCost(int cx, int cy, int nx, int ny)
         {
