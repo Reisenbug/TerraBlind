@@ -80,7 +80,7 @@ namespace TerraBlind
 
 		public const int RoomWidth = 5;           // 每间宽度
 		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
-		public const int SupportH = 8;            // 支柱高 (H_SUP)
+		public const int SupportH = 8;            // 支柱高 (H_SUP):顶到屋顶【下面】一行,9 会和屋顶撞在同一行
 		private const int MaxHopTries = 12;
 		private const int MaxRetry = 3;           // 同一相位的原语失败重试几次
 		private static Ph _retryPh = Ph.Idle;
@@ -280,7 +280,10 @@ namespace TerraBlind
 		static int Wx(int local) => _x0 + _dir * (local - 1);
 		static int MainCol => Wx(LocalMax);                // = end_x
 		static int LocalMax => RoomWidth * _rooms + 1;     // 4间→21, 1间→6
-		static int PillarTop => _floorRow - (PillarH - 1); // 照抄 _build_house
+		// 柱子砌 PillarH 格,最上面那格实心在 _floorRow-PillarH。HopUp 要的是【站上去踩的那个面】,
+		// 就是这一行;人停在它上面一行,_roofRow = cy+1 正好落回 _floorRow-PillarH = 第9格。
+		// 写成 -(PillarH-1) 时整个链条矮一格:人停 _floorRow-9,屋顶铺在第8格。
+		static int PillarTop => _floorRow - PillarH;
 
 		public static void Tick()
 		{
@@ -301,7 +304,9 @@ namespace TerraBlind
 				// bridge 只会把它当成"已经有了"(already=1/5),结构里就留着别人的平台。
 				case Ph.Clear:
 				{
-					if (ItemUseCoordinator.IsActive || SettleAt.IsRunning) return;
+					// RecedingNav 也要挡:栈的 Approach 会派它去够远处那格,没挡住的话
+					// 清场每帧重进循环、反复交同一个 Blocker,栈会把它算成"救了N次还卡着"
+					if (ItemUseCoordinator.IsActive || SettleAt.IsRunning || RecedingNav.Active) return;
 					while (_clearList.Count > 0)
 					{
 						var (cdx, cdy) = _clearList[_clearList.Count - 1];
@@ -312,8 +317,17 @@ namespace TerraBlind
 							DiagLog.Write($"[house] 清场({cdx},{cdy})弄不掉,跳过");
 							_clearList.RemoveAt(_clearList.Count - 1); _digTries = 0; continue;
 						}
+						// 够不着 → 交栈。Unstick.Approach 分两档:同高横挪两格,差得远走 RecedingNav
+						// (会挖会搭平台,能上下)。裸 SettleAt 只会横移,而这框有 10 行高,
+						// 顶上几格和人差 8~9 行 —— 横挪到同一列还是够不着,死循环 200+ 帧。
 						if (!p.IsInTileInteractionRange(cdx, cdy, Terraria.DataStructures.TileReachCheckSettings.Simple))
-						{ SettleAt.Start(cdx, out _); return; }
+						{
+							if (Unstick.Handle("house-clear", new Blocker(BlockKind.OutOfReach, cdx, cdy, "清房址够不着")))
+								return;
+							DiagLog.Write($"[house] 清场({cdx},{cdy})够不着且靠不过去,跳过");
+							_clearList.RemoveAt(_clearList.Count - 1); _digTries = 0; continue;
+						}
+						Unstick.Done("house-clear", new Blocker(BlockKind.OutOfReach, cdx, cdy, "清房址够不着"));
 						// 平台不归 ClearWay 管(平时穿过去就行),得单独拆
 						if (plat)
 						{
