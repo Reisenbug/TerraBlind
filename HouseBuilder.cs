@@ -99,6 +99,13 @@ namespace TerraBlind
 
 		// 原语没做成【不等于房子失败】。原语内部已经走过 unstick 栈了(Stuck→Unstick.Handle),
 		// 栈放弃才回到这儿 —— 世界已经被栈改过(补了料/挖开了/让了位),同一步第二次往往就成。
+		// 换相位时清点一次椅子:每帧打会刷屏,而少一把只可能发生在某两个相位之间
+		static void TraceOnAdvance(Ph to)
+		{
+			if (to == Ph.Bench || to == Ph.Craft || to == Ph.Tables || to == Ph.Chairs)
+				TraceItem(to.ToString(), H_CHAIR, "椅子");
+		}
+
 		static bool Retry(Ph ph, string what, string detail)
 		{
 			if (_retryPh != ph) { _retryPh = ph; _retryN = 0; }
@@ -215,13 +222,29 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) return "?";
 			var sb = new System.Text.StringBuilder();
+			int total = 0;
 			for (int i = 0; i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.type == id) sb.Append($"[{i}]x{it.stack} ");
+				if (it != null && !it.IsAir && it.type == id) { sb.Append($"[{i}]x{it.stack} "); total += it.stack; }
 			}
-			return sb.Length == 0 ? "无" : sb.ToString().Trim();
+			// 光标上那一件不在 inventory 里 —— 换槽/丢东西都经过它,少的那一把最可能就挂在这
+			if (Main.mouseItem != null && !Main.mouseItem.IsAir && Main.mouseItem.type == id)
+			{ sb.Append($"[鼠标]x{Main.mouseItem.stack} "); total += Main.mouseItem.stack; }
+			// 掉在地上的也算:ThrowItems 扔出去没捡回来就是这种
+			int ground = 0;
+			for (int i = 0; i < Main.item.Length; i++)
+			{
+				var gi = Main.item[i];
+				if (gi != null && gi.active && gi.type == id) ground += gi.stack;
+			}
+			if (ground > 0) sb.Append($"[地上]x{ground} ");
+			return (sb.Length == 0 ? "无" : sb.ToString().Trim()) + $" 共{total}(+地{ground})";
 		}
+
+		// 追一件东西数量变化的锚点:每个可能动背包的相位前后各打一次,一次跑完就能定位少在哪一步
+		static void TraceItem(string at, int id, string name)
+			=> DiagLog.Write($"[house] 清点{name}@{at} {SlotDump(id)}");
 
 		static string ColDump(int col, int fromCy, int toCy)
 		{
@@ -470,8 +493,13 @@ namespace TerraBlind
 				{
 					if (SettleAt.IsRunning) return;
 					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					// 停位失败时【绝不】拿人实际站位去校准地板行 —— 人还在错的地方,
+					// 而 _floorRow 是家具/墙/火把全部坐标的基准,一歪整间房都歪。
+					if (SettleAt.Outcome == "gap")
+						DiagLog.Write($"[house] 停位失败({SettleAt.Reason}),地板行保持 {_floorRow} 不按站位校准");
+					else
+						_floorRow = ActExecutor.OriginCy(p);
 					_reSettleN = 0;
-					_floorRow = ActExecutor.OriginCy(p);
 					// 先合成再放:椅子和墙要工作台才能合,而工作台本身只要木材,徒手就能合。
 					// 之前直接去放,背包里没有 → WalkPlace.Start 立刻 return false,一帧就"失败"。
 					if (Predicates.Have(H_WORKBENCH) < 1)
@@ -585,6 +613,17 @@ namespace TerraBlind
 				case Ph.WallSettle:
 					if (SettleAt.IsRunning) return;
 					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					// 停位重试用完【不能】继续往下走:人还在原地,HopUp 会从错的列起跳,
+					// 一路跳到屋顶上去铺墙(日志:目标列2113,人在2118,hop 落在 251 行的屋顶)。
+					// 原地铺就好 —— PlaceWalls 够不着的格子自己会跳过,人至少还在地板层。
+					if (SettleAt.Outcome == "gap")
+					{
+						_reSettleN = 0;
+						DiagLog.Write($"[house] 第{_roomIdx}间停位失败({SettleAt.Reason}),原地铺墙,够不着的跳过");
+						Advance(Ph.Walls);
+						StartWalls(_roomIdx);
+						return;
+					}
 					_reSettleN = 0;
 					Advance(Ph.WallHop);
 					HopUp.Start(_floorRow, Wx(4 + RoomWidth * _roomIdx), out _);
@@ -928,6 +967,7 @@ namespace TerraBlind
 		{
 			_ph = next; _waited = 0;
 			DiagLog.Write($"[house] → {next}" + (_rooms > 1 ? $" room={_roomIdx}" : ""));
+			TraceOnAdvance(next);
 		}
 
 		static void Fail(string why)

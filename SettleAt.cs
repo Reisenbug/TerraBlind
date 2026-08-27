@@ -140,7 +140,13 @@ namespace TerraBlind
 					Unstick.Done("settle", new Blocker(BlockKind.NoFooting, _gapPending.Value.Item1, _gapPending.Value.Item2, "走过去的路上缺一格:补平台"));
 					_gapPending = null;
 				}
-				if (p.velocity.Y == 0f && !Predicates.IsGround(aheadCol, feetRow))
+				// 判据【不能】用 IsGround:桌子/工作台是 tileFrameImportant,tileSolid 为 false,
+				// 可人就站在桌面上 —— 摆完家具后每一次横移都会被误报成 gap,重试用完直接跳走
+				// (日志:(2116,257)是桌子,人被逼着 hop 到 251 行的屋顶上铺墙)。
+				// 只有【真空气】才算缺口:格子里有东西就当踩得住,踩不住也是走两步掉一格的事,
+				// 远好过把能走的路判死。
+				bool aheadEmpty = !Main.tile[aheadCol, feetRow].HasTile;
+				if (p.velocity.Y == 0f && Predicates.InBounds(aheadCol, feetRow) && aheadEmpty)
 				{
 					// 【不失败】:缺口交给 unstick 栈补一格,补完这一帧不推进,下一帧路就通了。
 					// 栈自己管递归(没料去拿料、没锚点先造锚点)和放弃,这里只负责把现场交出去。
