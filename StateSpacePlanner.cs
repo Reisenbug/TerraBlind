@@ -232,6 +232,9 @@ namespace TerraBlind
             // "铺一段再跳过去"这条链就永远搜不出来。
             public Dictionary<SSNode, List<(int, int)>> Laid;
             public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
+            // coarseStates 那条路线(TrapEscape 脱困)只问"出不出得去",残速无所谓 --
+            // 落点同格的边可以只留最便宜的一条。正常规划【不能】开:斜坡连滑要靠残速接力
+            public bool Coarse;
         }
 
         // startOverride:从给定状态起规划(lookahead 用 —— 边走边算下一段,到点零停顿)。
@@ -241,7 +244,7 @@ namespace TerraBlind
         // 这比"搜够 N 次就停"准:死胡同里几十次就停(open 很快空/f 爆涨),真有路的大坑爱搜多久搜多久。
         public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
         {
-            var ctx = new PlanCtx();
+            var ctx = new PlanCtx { Coarse = coarseStates };
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var res = new SSResult();
             var p = Main.LocalPlayer;
@@ -761,6 +764,9 @@ namespace TerraBlind
             var (_, dcy) = StandCell(cur.Px, cur.Py);
             // dir 0 = 原地竖直跳:直接跳上头顶正上方的台阶,人在走不上去的坎前就这么干。
             // 对位还没做,身体本来就对齐时才成;没对齐时模拟自己会失败,边被跳过,无害。
+            // Coarse 时同一落点只发最便宜的一条:9 档 hold 里大半落在同一格,
+            // 重复的进 open 之后各自再展开一遍 —— 20000 预算就是这么烧光的
+            var segSeen = ctx.Coarse ? new HashSet<(int, int)>() : null;
             foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
             {
                 foreach (int hold in holdOptions)
@@ -768,6 +774,7 @@ namespace TerraBlind
                     if (dir == 0 && hold == 0) continue;   // standing still, not a move
                     var seg = Prof(hold == 0 ? "walk" : "jump", () => SimulateSegment(cur, dir, hold, ph));
                     if (!seg.HasValue) continue;
+                    if (segSeen != null && !segSeen.Add(StandCell(seg.Value.node.Px, seg.Value.node.Py))) continue;
                     // 进展用【原始逐格】场判,不用块粗化的 Heuristic:8x8 块内部 H 是平的,块内任何移动都读成"没进展",
                     // 于是普通跳能过的矮坎也会触发挖掘。
                     if (RawProgress(ctx, cur, seg.Value.node)) anyProgress = true;
@@ -889,12 +896,23 @@ namespace TerraBlind
             // 于是"朝坡面跳一下垫一级"这个人类爬坡动作从来没生成过,唯一的上升手段只剩挖上去。
             bool anyLateralJp = false;
             if (platformTile >= 0 && ctx.DistField != null)
+            {
+                // 【同一落点只发一条】。9 档 hold × 2 方向 = 18 次模拟,而实测落点只有 7 个不同的格
+                // (一格占 5 条)。重复的那些进 open 之后各自又展开一遍,正是烧满 20000 的来源。
+                // 不能改砍 hold 档数 —— 落点确实不全一样,砍档会丢真边;砍的是重复。
+                var jpSeen = new HashSet<(int, int)>();
                 foreach (int ldir in new[] { gdir, -gdir })
                     foreach (int hold in BuildHoldOptions())
                     {
                         var jp = Prof("jplaceL", () => JumpPlace(ctx, cur, ldir, hold, ph, platformTile));
-                        if (jp.HasValue) { anyLateralJp = true; yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null); }
+                        if (!jp.HasValue) continue;
+                        var lc = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                        // hold 是从小到大排的,先到的那条帧数最少 = 最便宜,后面同格的一律丢
+                        if (!jpSeen.Add(lc)) continue;
+                        anyLateralJp = true;
+                        yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                     }
+            }
 
             // 从崖边自由落体:脚下那列是空的(悬崖/竖井而非墙)就一路掉到真地板,和人一样(mined=0)。
             // DigDown 只探 DigMaxScan 深且必须挖,24 格的崖探不到底就作废;这条边覆盖任意深度,且排在 DigDown 前面。

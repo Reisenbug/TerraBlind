@@ -23,7 +23,42 @@ namespace TerraBlind
         const int MaxFails = 3;
         static int _lastH = int.MinValue;   // 上次脱困时的 H,用来判断"是不是真出去了"
 
-        public static void Reset() { _fails = 0; _lastH = int.MinValue; }
+        // 后台搜索的状态。_pending 由后台线程写、主线程读 —— 用 volatile 保证可见性,
+        // 而它只在写完【整个结果】后才赋值一次,读到非 null 就是完整的
+        static volatile bool _busy;
+        static volatile StateSpacePlanner.SSResult _pending;
+        static (int x, int y) _reqAt, _reqTo;
+        static int _reqH, _reqTH;
+
+        public static bool Busy => _busy || _pending != null;
+
+        public static void Reset()
+        {
+            _fails = 0; _lastH = int.MinValue;
+            _pending = null;   // 换目标了,旧结果作废(它是按旧地形/旧起点算的)
+        }
+
+        // 主线程每帧调:后台搜完了就在这儿派发。派发必须在主线程 —— DispatchPlan 会动执行器
+        public static bool Poll()
+        {
+            var res = _pending;
+            if (res == null) return false;
+            _pending = null;
+            // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
+            // 派发出去人绕一圈回原地,下一周期一模一样 —— 那是把贪心的死循环换成 A* 的死循环。
+            if (!res.Found || res.Steps.Count == 0)
+            {
+                _fails++;
+                DiagLog.Write($"[escape] A* 搜不出 ({_reqAt.x},{_reqAt.y})→({_reqTo.x},{_reqTo.y}) exp={res.Expansions} partial={res.Partial} 失败{_fails}/{MaxFails}");
+                return false;
+            }
+            _fails = 0;
+            _lastH = _reqH;
+            EventLog.W(Ev.Plan, $"ESCAPE ({_reqAt.x},{_reqAt.y})H{_reqH} 贪心走不动 → A* 带到 ({_reqTo.x},{_reqTo.y})H{_reqTH} 降{_reqH - _reqTH} steps={res.Steps.Count} exp={res.Expansions}");
+            Main.NewText($"[TerraBlind] 卡点脱困:A* → ({_reqTo.x},{_reqTo.y}) 降 H {_reqH - _reqTH}", 120, 220, 255);
+            StateSpacePlanner.DispatchPlan(res);
+            return true;
+        }
 
         // 卡住的那一帧调。成功派发了一段 A* 路就返回 true,调用方直接 return
         public static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
@@ -40,26 +75,25 @@ namespace TerraBlind
             var target = t.Value;
             int tH = field[(target.x, target.y)];
 
-            // 【不传 fieldGoal】,走 navwand 那条小盒场分支:在 start↔goal 周围建场,几十 ms。
-            // 传大罗盘的后果是 A* 拿着覆盖全世界的 H 场自由展开 —— 起终点只隔 7 格,却搜到 800 格外,
-            // 20000 次预算烧尽也搜不到。盒外没有 H,启发式取不到值,搜索自然收敛在坑里。
-            var res = StateSpacePlanner.Plan(target.x, target.y,
-                                             maxExp: Budget, goalSnapCap: 0, coarseStates: true);
-            // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
-            // 派发出去人绕一圈回原地,下一周期一模一样 —— 那是把贪心的死循环换成 A* 的死循环。
-            if (!res.Found || res.Steps.Count == 0)
+            // 【搜索不许在主线程跑】。这一段最坏 20000 次展开 = 十几秒,同步跑就是整局卡死。
+            // 照建场那条的样子扔后台(RecedingNav.Start 的 Task.Run),主线程立刻返回。
+            // 结果下一帧由 Poll() 取,期间人走 Commitment 兜底,不会干站着。
+            //
+            // 后台只读地形和 H 场,不碰玩家 —— Plan() 开头就把位置/速度/物理参数取好了,
+            // 之后整个搜索只查 Main.tile。人在等结果时没有动作,地形不会变。
+            if (_busy) return false;                 // 上一次还在搜,别叠第二个
+            if (_pending != null) return false;      // 结果还没取走
+            _busy = true;
+            _reqAt = (curCx, curCy); _reqTo = (target.x, target.y); _reqH = curH; _reqTH = tH;
+            int tx = target.x, ty = target.y;
+            System.Threading.Tasks.Task.Run(() =>
             {
-                _fails++;
-                DiagLog.Write($"[escape] A* 搜不出 ({curCx},{curCy})→({target.x},{target.y}) exp={res.Expansions} partial={res.Partial} 失败{_fails}/{MaxFails}");
-                return false;
-            }
-
-            _fails = 0;
-            _lastH = curH;
-            EventLog.W(Ev.Plan, $"ESCAPE ({curCx},{curCy})H{curH} 贪心走不动 → A* 带到 ({target.x},{target.y})H{tH} 降{curH - tH} steps={res.Steps.Count} exp={res.Expansions}");
-            Main.NewText($"[TerraBlind] 卡点脱困:A* → ({target.x},{target.y}) 降 H {curH - tH}", 120, 220, 255);
-            StateSpacePlanner.DispatchPlan(res);
-            return true;
+                try { _pending = StateSpacePlanner.Plan(tx, ty, maxExp: Budget, goalSnapCap: 0, coarseStates: true); }
+                catch (System.Exception e) { DiagLog.Write($"[escape] A* EXC {e.Message}"); _pending = new StateSpacePlanner.SSResult(); }
+                finally { _busy = false; }
+            });
+            DiagLog.Write($"[escape] A* 后台开搜 ({curCx},{curCy})→({tx},{ty})");
+            return false;   // 这一帧没有路可派;调用方走 Commitment 兜底
         }
 
         // 目标不能用 H 挑 —— H 正是骗人的那个东西。死胡同里 H 一路降到底,岔路口在回头方向 H 更高,

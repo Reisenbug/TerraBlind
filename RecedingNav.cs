@@ -345,6 +345,10 @@ namespace TerraBlind
                 return;
             }
 
+            // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
+            // 这一帧只是取结果 —— 主线程一次展开都不做
+            if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }
+
             Trap.JustTrapped = false;
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             // 贪心当场承认走不动(物理候选没一个降 H) —— 这是它的理论缺陷,补丁修不好。
@@ -361,6 +365,9 @@ namespace TerraBlind
                 }
                 // A* 也出不去 → 退回承诺兜底。res 是贪心这一周期选的边,照常派发
                 if (!Commitment.Active) Commitment.Begin(Trap.JustAt.x, Trap.JustAt.y, Trap.JustH);
+                // 后台还在搜的这十几秒里 H 不降、位移也小,正是 sentinel 判卡死的特征。
+                // 搜索本身就是"正在想办法",别在这期间把整段导航毙掉
+                if (TrapEscape.Busy) StuckSentinel.Reset();
             }
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Main.NewText("[TerraBlind] receding: walled in"); return; }
