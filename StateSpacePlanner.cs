@@ -1395,15 +1395,24 @@ namespace TerraBlind
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
-        // Vanilla placement reach (Player tileRangeX/Y, static). A tile (cx,cy) is reachable from a player whose
-        // top-left is at (px,py) iff it lies in this rectangle. Used to pick the placement frame.
-        const int TileRangeX = 5, TileRangeY = 4;
+        // Vanilla placement reach. 底数是 static 的 tileRangeX/Y,但 blockRange(饰品/让步加成)是
+        // 每帧算的玩家字段 —— 硬编 5/4 会让规划器以为够不着,白拒掉执行端明明能放的边。
+        // 执行端用的是 IsInTileInteractionRange,那边自动含 blockRange,两边必须读同一个数。
+        static int ReachX
+        {
+            get { var p = Main.LocalPlayer; return Player.tileRangeX + (p != null ? p.blockRange : 0); }
+        }
+        static int ReachY
+        {
+            get { var p = Main.LocalPlayer; return Player.tileRangeY + (p != null ? p.blockRange : 0); }
+        }
         static bool CanReachTile(float px, float py, int cx, int cy)
         {
-            int loX = (int)(px / 16f) - TileRangeX;
-            int hiX = (int)((px + PhysicsSimulator.PlayerW) / 16f) + TileRangeX - 1;
-            int loY = (int)(py / 16f) - TileRangeY;
-            int hiY = (int)((py + PhysicsSimulator.PlayerH) / 16f) + TileRangeY - 2;
+            int rx = ReachX, ry = ReachY;
+            int loX = (int)(px / 16f) - rx;
+            int hiX = (int)((px + PhysicsSimulator.PlayerW) / 16f) + rx - 1;
+            int loY = (int)(py / 16f) - ry;
+            int hiY = (int)((py + PhysicsSimulator.PlayerH) / 16f) + ry - 2;
             return cx >= loX && cx <= hiX && cy >= loY && cy <= hiY;
         }
 
