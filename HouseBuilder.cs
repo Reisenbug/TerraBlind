@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, LiftStep, Floor,
+			Idle, Clear, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			FixStruct, FixCraft, Fix, Reclaim, Done
@@ -148,7 +148,8 @@ namespace TerraBlind
 			WalkPlace.Protected.AddRange(new[] { H_CHAIR, H_TABLE, H_WALL, H_WORKBENCH });
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-			_ph = Ph.Lift;
+			_ph = Ph.Clear;
+			ScanSite();
 			return true;
 		}
 
@@ -246,6 +247,37 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
+				// 开工先清场:房子范围内的方块【和平台】都得挖掉。平台梯常常正好落在地板/屋顶那几行,
+				// bridge 会把它当成"已经有了"(already=1/5),结构里就留着别人的平台。
+				case Ph.Clear:
+				{
+					if (ItemUseCoordinator.IsActive || SettleAt.IsRunning) return;
+					while (_fixDig.Count > 0)
+					{
+						var (cdx, cdy) = _fixDig[_fixDig.Count - 1];
+						if (!Predicates.IsWall(cdx, cdy) && !Predicates.IsPlatform(cdx, cdy))
+						{ _fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0; continue; }
+						if (++_digTries > MaxDigTries)
+						{
+							DiagLog.Write($"[house] 清场({cdx},{cdy})挖不掉,跳过");
+							_fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0; continue;
+						}
+						if (ClearWay.Dig(p, cdx, cdy, "清房址")) return;
+						if (!p.IsInTileInteractionRange(cdx, cdy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						{ SettleAt.Start(cdx, out _); return; }
+						// 平台不归 ClearWay 管,单独拆
+						if (Predicates.IsPlatform(cdx, cdy) && ClearWay.PickSlot(p) >= 0)
+						{
+							ItemUseCoordinator.Start(new ItemUseRequest
+							{ TargetWx = cdx, TargetWy = cdy, Slot = ClearWay.PickSlot(p), Strict = true });
+							return;
+						}
+						_fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0;
+					}
+					_ph = Ph.Lift; _waited = 0;
+					return;
+				}
+
 				// 站到 (_standCx, _ay+1) —— 左下角隔两列。站正下方不行:(_x0,_ay) 会在身体里。
 				case Ph.Lift:
 				{
@@ -332,10 +364,14 @@ namespace TerraBlind
 						return;
 					}
 					_hopTries = 0;
-					// 照抄 roof_row = o["cy"] + 1:屋顶行按实际站位记下来,后面铺墙/放火把都用它
-					_roofRow = ActExecutor.OriginCy(p) + 1;
+					// 屋顶行是【几何量】,不能取人实际站位:门只要求 cy <= PillarTop-1,跳高了照样过 ——
+					// HopUp 冲过头 5 行(目标1038 停在1033),屋顶就跟着铺到 1034,整间房歪 5 格。
+					_roofRow = PillarTop;
 					Advance(Ph.Roof);
-					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width, out string ws5), "铺屋顶", ws5)) return;
+					// 起点必须显式传:不传就从人脚下那行铺,而人可能停得比 PillarTop 更高,屋顶跟着歪。
+					// 地板那条(Ph.Lift)本来就传了显式起点,这里跟它一致。
+					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width,
+						MainCol - _dir, _roofRow, out string ws5), "铺屋顶", ws5)) return;
 					return;
 
 				case Ph.Roof:
@@ -690,6 +726,20 @@ namespace TerraBlind
 		static readonly List<(int wx, int wy)> _fixTiles = new();
 		static readonly List<(int wx, int wy)> _fixWalls = new();
 		static readonly List<(int wx, int wy)> _fixDig = new();   // 内腔里不该有的块,要挖掉
+
+		// 开工前扫房址:地板行到屋顶行、左下角到主柱列,凡是方块或平台都记下来清掉。
+		// 平台也算 —— 平台梯落在地板行上时 bridge 只会报 already,结构里就留着它。
+		static void ScanSite()
+		{
+			_fixDig.Clear(); _digTries = 0;
+			int c0 = System.Math.Min(_x0, MainCol), c1 = System.Math.Max(_x0, MainCol);
+			int r0 = System.Math.Min(PillarTop, _ay), r1 = System.Math.Max(PillarTop, _ay);
+			for (int x = c0; x <= c1; x++)
+				for (int y = r0; y <= r1; y++)
+					if (Predicates.IsWall(x, y) || Predicates.IsPlatform(x, y))
+						_fixDig.Add((x, y));
+			DiagLog.Write($"[house] 清场扫描 x{c0}..{c1} y{r0}..{r1} → {_fixDig.Count} 格要清");
+		}
 		static int _fixTileIdx;
 		static int _digTries;
 		const int MaxDigTries = 60 * 10;   // 一格挖 10 秒还不掉,那就是挖不动
