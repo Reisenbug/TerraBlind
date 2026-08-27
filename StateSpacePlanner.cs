@@ -246,6 +246,8 @@ namespace TerraBlind
             var res = new SSResult();
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return res;
+            // 地形在【两次搜索之间】会变(挖了/放了),所以每次进来清一次;搜索【内部】不变
+            ClearPlaceCache();
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
@@ -1165,7 +1167,21 @@ namespace TerraBlind
 
         // 跳起来放一块:扫弧线找第一个"脚下格空 + 紧邻真支撑"的帧,放平台,落上去。
         // 放置的砖【不】存进节点(节点保持纯物理),落点只是站在新平台顶上。纯空中垒柱交给宏。
+        // 【按 (站立格, dir) 缓存】。这个判据跟 hold 无关,而同一格的 18 个 hold 变体各调一次,
+        // 每次扫 189 格 —— 17/18 是纯重复。缓存跟着 _placeCache 一起在 Plan() 开头清。
+        static readonly Dictionary<(int, int, int), bool> _reachCache = new();
+
         static bool AnyPlaceableInReach(SSNode cur, int dir, PhysicsSimulator.Params ph)
+        {
+            var (ccx0, cfy0) = StandCell(cur.Px, cur.Py);
+            var key = (ccx0, cfy0, dir);
+            if (_reachCache.TryGetValue(key, out bool hit)) return hit;
+            bool r = AnyPlaceableInReachUncached(cur, dir, ph);
+            _reachCache[key] = r;
+            return r;
+        }
+
+        static bool AnyPlaceableInReachUncached(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
             var (ccx, cfy) = StandCell(cur.Px, cur.Py);
             int reach = MaxScan(ph);
@@ -1322,7 +1338,22 @@ namespace TerraBlind
             return wy > bodyBottomRow + 1;
         }
 
+        // 纯地形判据的缓存。一次搜索里地形不变,而同一格会被问【上百次】:
+        // 每个节点 18 个 hold 变体各扫一遍 AnyPlaceableInReach(189 格),相邻节点的盒子还大量重叠。
+        // 实测 jplaceL 350064 次/21925ms = 每次 0.063ms,20000 节点就是 22 秒一帧。
+        // Plan() 开头清一次即可 -- 期间不会有人改地形(改地形的边只记账,不落地)。
+        static readonly Dictionary<(int, int), bool> _placeCache = new();
+        internal static void ClearPlaceCache() { _placeCache.Clear(); _reachCache.Clear(); }
+
         static bool CanPlaceReal(int wx, int wy)
+        {
+            if (_placeCache.TryGetValue((wx, wy), out bool hit)) return hit;
+            bool r = CanPlaceRealUncached(wx, wy);
+            _placeCache[(wx, wy)] = r;
+            return r;
+        }
+
+        static bool CanPlaceRealUncached(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
             var t = Main.tile[wx, wy];
@@ -1405,6 +1436,8 @@ namespace TerraBlind
             // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升 —— 人永远够不到,落回原地成自环。
             // 真平台是 solidTop:上升穿过去,下降接住。
             t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
+            // 【这个窗口里绝不能查地形】。_placeCache/_reachCache 会把"平台在场"的答案存下来,
+            // 还原之后缓存就是错的。SimulateSegment 是纯物理,不碰 CanPlaceReal -- 保持这样。
             try { return SimulateSegment(cur, dir, hold, ph); }
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
