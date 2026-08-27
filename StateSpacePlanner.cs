@@ -2534,6 +2534,24 @@ namespace TerraBlind
                         foreach (var st in eres.Steps) if (st.Frames != null) eres.ExecFrames.AddRange(st.Frames);
                         return eres;
                     }
+                // 走和跳都出不去,但【手上有料】就还没到头:往脚下/身侧垫一格,下一周期就有落脚点。
+                // (2848,907) 那次 26 连 walled_in 就死在这儿:东边是空气但下面是岩浆,四种走跳全废,
+                // 而人身上带着平台 —— 从来没人试过"放一块再说"。
+                if (platformTile >= 0)
+                    foreach (var (pcx, pcy) in new[] { (curCx, curCy + 1), (curCx + 1, curCy + 1), (curCx - 1, curCy + 1) })
+                    {
+                        if (!CanPlaceReal(pcx, pcy) || IsLavaCell(pcx, pcy)) continue;
+                        if (!CanReachTile(cur.Px, cur.Py, pcx, pcy)) continue;
+                        // 站着不动放一格:一帧带 Place 就够,人不用位移。下一周期脚下有东西了,
+                        // 场会重新定价,走跳自然长得出边来
+                        var pf = new PhysicsSimulator.ControlInput { Place = true, PlaceCx = pcx, PlaceCy = pcy };
+                        var pframes = new List<PhysicsSimulator.ControlInput> { pf };
+                        DiagLog.Write($"[recede] ESCAPE-PLACE ({pcx},{pcy}) 走跳都出不去,先垫一格");
+                        var pres = new SSResult { Found = true, GoalWx = curCx, GoalWy = curCy, StartPx = cur.Px, StartPy = cur.Py, CostFrames = 1, CurH = curH, Altered = 1 };
+                        pres.Steps = EdgeToSteps(cur, cur, pframes, false, null);
+                        foreach (var st in pres.Steps) if (st.Frames != null) pres.ExecFrames.AddRange(st.Frames);
+                        return pres;
+                    }
                 return null;   // cannot move a single pixel either way → true seal (a human couldn't either)
             }
             var pickCell = bestCell;
