@@ -97,8 +97,11 @@ namespace TerraBlind
 				}
 			}
 			// 房子盖完 → 沿着线把桥铺出去。桥面从房子那一头往外接,所以跳过房子占的那几列。
+			// 【还得等下降结束】。人在桥面上方 39 行时开工,DeckBuilder 每格都够不着,
+			// 而它够不着只会横着走 -- 列号一格格往右爬(702->726),桥一格没铺。
 			if (_pendingDeck != null && !HouseBuilder.IsRunning && !PlaceAnywhere.IsRunning
-			    && !RecedingNav.Active && !DeckBuilder.IsRunning)
+			    && !RecedingNav.Active && !DeckBuilder.IsRunning
+			    && !ReachCell.IsRunning && !PlatformDown.IsRunning)
 			{
 				var line = _pendingDeck;
 				_pendingDeck = null;

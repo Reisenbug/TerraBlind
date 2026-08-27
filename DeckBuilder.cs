@@ -23,6 +23,8 @@ namespace TerraBlind
 		private static int _runAt = -1;   // 已经在这个下标起过一趟连铺
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
+		// 竖直差这么多就不是走两步能解决的,交栈。够得着的判据本身有几行余量,所以要比它松
+		private const int VertSlack = 4;
 		private const int StandSlack = 1;
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
@@ -189,6 +191,15 @@ namespace TerraBlind
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
 				if (!ClearWay.HasPick(p) && Predicates.IsWall(px + (px < x ? 1 : -1), py))
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
+				// 【竖直够不着不能靠横移】。人在桥面上方 39 行时往右走一辈子也够不着,
+				// 而每走一列 x 跟着推进 -> 列号一路爬(702->726),全是 out_of_reach 一格没铺。
+				// 差得多就交栈(它会寻路/造落脚点),横移只管同高度的小偏差
+				if (System.Math.Abs(py - y) > VertSlack)
+				{
+					if (!Unstick.Handle("deck", new Blocker(BlockKind.OutOfReach, x, y, "桥面够不着")))
+						Fail($"人在{py},桥面{y},差{System.Math.Abs(py - y)}行,够不着又救不回来");
+					return;
+				}
 				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
 				return;
 			}
