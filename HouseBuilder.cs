@@ -21,7 +21,7 @@ namespace TerraBlind
 	{
 		private enum Ph
 		{
-			Idle, Lift, LiftStep, Floor,
+			Idle, Clear, Lift, LiftStep, Floor,
 			MainPillar, SettleBelow, HopTop, SettleTop, Roof, MoveOver, Drop,
 			SupportSettle, Support, BenchSettle, Bench, Craft, Tables, Chairs, WallSettle, WallHop, Walls, Torch,
 			FixStruct, FixCraft, Fix, Reclaim, Done
@@ -174,7 +174,8 @@ namespace TerraBlind
 			WalkPlace.Protected.AddRange(new[] { H_CHAIR, H_TABLE, H_WALL, H_WORKBENCH });
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-			_ph = Ph.Lift;
+			_ph = Ph.Clear;
+			ScanSite();
 			return true;
 		}
 
@@ -272,6 +273,40 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
+				// 开工先清场:绿框(VisualizeBox 画的那个矩形)里的方块和【平台】全挖掉。
+				// 平台是重点 —— platdown 往下搭梯子时会在地板/屋顶那几行留下平台,
+				// bridge 只会把它当成"已经有了"(already=1/5),结构里就留着别人的平台。
+				case Ph.Clear:
+				{
+					if (ItemUseCoordinator.IsActive || SettleAt.IsRunning) return;
+					while (_clearList.Count > 0)
+					{
+						var (cdx, cdy) = _clearList[_clearList.Count - 1];
+						bool blk = Predicates.IsWall(cdx, cdy), plat = Predicates.IsPlatform(cdx, cdy);
+						if (!blk && !plat) { _clearList.RemoveAt(_clearList.Count - 1); _digTries = 0; continue; }
+						if (++_digTries > MaxDigTries)
+						{
+							DiagLog.Write($"[house] 清场({cdx},{cdy})弄不掉,跳过");
+							_clearList.RemoveAt(_clearList.Count - 1); _digTries = 0; continue;
+						}
+						if (!p.IsInTileInteractionRange(cdx, cdy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						{ SettleAt.Start(cdx, out _); return; }
+						// 平台不归 ClearWay 管(平时穿过去就行),得单独拆
+						if (plat)
+						{
+							int ps = ClearWay.PickSlot(p);
+							if (ps < 0) { _clearList.RemoveAt(_clearList.Count - 1); _digTries = 0; continue; }
+							ItemUseCoordinator.Start(new ItemUseRequest
+							{ TargetWx = cdx, TargetWy = cdy, Slot = ps, Strict = true });
+							return;
+						}
+						if (ClearWay.Dig(p, cdx, cdy, "清房址")) return;
+						_clearList.RemoveAt(_clearList.Count - 1); _digTries = 0;
+					}
+					_ph = Ph.Lift; _waited = 0;
+					return;
+				}
+
 				// 站到 (_standCx, _ay+1) —— 左下角隔两列。站正下方不行:(_x0,_ay) 会在身体里。
 				case Ph.Lift:
 				{
@@ -745,6 +780,23 @@ namespace TerraBlind
 		static readonly List<(int wx, int wy)> _fixTiles = new();
 		static readonly List<(int wx, int wy)> _fixWalls = new();
 		static readonly List<(int wx, int wy)> _fixDig = new();   // 内腔里不该有的块,要挖掉
+		static readonly List<(int wx, int wy)> _clearList = new();  // 开工前要清掉的格(绿框范围内)
+
+		// 扫绿框:和 VisualizeBox(_x0,_ay, RoomWidth*_rooms+1, PillarH+1, dir) 画的【完全同一个矩形】。
+		// 上次写成 PillarTop.._ay 少了一行、列也没跟 _dir 走,地表 20 格宽的房子把实地挖了。
+		static void ScanSite()
+		{
+			_clearList.Clear(); _digTries = 0;
+			int w = RoomWidth * _rooms + 1, h = PillarH + 1;
+			for (int ix = 0; ix < w; ix++)
+				for (int iy = 0; iy < h; iy++)
+				{
+					int cx = _x0 + _dir * ix, cy = _ay - iy;
+					if (Predicates.IsWall(cx, cy) || Predicates.IsPlatform(cx, cy))
+						_clearList.Add((cx, cy));
+				}
+			DiagLog.Write($"[house] 清场扫描 角({_x0},{_ay}) {w}x{h} dir={_dir} → {_clearList.Count} 格要清");
+		}
 
 		static int _fixTileIdx;
 		static int _digTries;
