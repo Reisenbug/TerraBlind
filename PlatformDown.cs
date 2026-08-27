@@ -150,8 +150,9 @@ namespace TerraBlind
 						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
 						return;
 					}
-					// 空格子里有岩浆时放不进去(vanilla PlaceThing_Tiles_IsBlockedByLava,只管空格子;
-					// 砖照样能替换)。在这儿死等没意义 —— 到岩浆面就是该停的地方。
+					// 到岩浆面就是该停的地方。放【得】进去(按下去那帧会抹掉液体),
+					// 但平台放进岩浆会立即烧毁,而这套下降靠踩平台按 S 穿 -- 平台一没人就直接掉下去。
+					// 所以这里停住往上报,让上层改用方块或者绕开,别在这儿死等。
 					if (!Predicates.IsSolid(need, _platY + 1) && Predicates.IsLava(need, _platY + 1))
 					{ Stuck(new Blocker(BlockKind.Hopeless, need, _platY + 1, "岩浆"), $"下面是岩浆 ({need},{_platY + 1})"); return; }
 					if (!PlaceAction.IsRunning)

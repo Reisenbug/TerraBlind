@@ -25,6 +25,41 @@ namespace TerraBlind
 
 		public static bool Enabled = true;
 
+		// 沾到岩浆就放不下东西 = 掉进去出不来。自救要靠【方块】向上堤,
+		// 不能靠平台 -- 平台放进岩浆会立即被烧毁。
+		//
+		// vanilla 的门(Player.cs:40728 CheckLavaBlocking)对两者判据不同:
+		//   方块是 tileSolid -> 第一行无条件 return true,根本问不到 tileLavaDeath
+		//   平台是 tileSolidTop -> 才走 CheckLiquidPlacement 问 tileLavaDeath[19]
+		// 所以改 tileLavaDeath 对方块完全无效。而那个函数是 private,tML 没给 hook。
+		//
+		// 但它只在【目标格有岩浆】时才触发。所以放之前把那一格的液体抹掉,
+		// 门的前提就没了,vanilla 自己就放行。那格本来就要被方块填掉,
+		// 岩浆消失和被填掉结果一样。
+		public static void ClearLavaForPlacement(int wx, int wy)
+		{
+			if (!Enabled) return;
+			if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return;
+			var t = Main.tile[wx, wy];
+			if (t.LiquidAmount == 0 || t.LiquidType != LiquidID.Lava) return;
+			t.LiquidAmount = 0;
+			// 不叫 Liquid.LiquidUpdate:邻格的岩浆会立马流回来把门重新关上。
+			// 放完方块占住这格,自然就流不进来了。
+			NetMessage.SendTileSquare(-1, wx, wy, 1);
+		}
+
+		// 这东西放进岩浆会不会当场烧没。平台会(tileLavaDeath[19]=true),方块不会。
+		// 抹掉岩浆能让它【放得下】,但烧不烧是放下【之后】的事,抹岩浆管不着 --
+		// 所以自救向上堤只能用方块。判据问 vanilla 的表,不硬编"平台会烧"。
+		public static bool BurnsInLava(string itemSpec)
+		{
+			int slot = PlaceAction.ResolveSlot(itemSpec);
+			if (slot < 0) return false;
+			var it = Main.LocalPlayer?.inventory[slot];
+			if (it == null || it.IsAir || it.createTile < 0) return false;
+			return Main.tileLavaDeath[it.createTile];
+		}
+
 		public override void PostUpdateEquips()
 		{
 			if (!Enabled) return;

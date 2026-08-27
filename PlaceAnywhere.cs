@@ -43,8 +43,10 @@ namespace TerraBlind
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
-			if (Predicates.IsLava(tx, ty))
-			{ why = $"({tx},{ty})是熔岩,放不进去"; Outcome = "stuck"; Reason = why;
+			// 岩浆格现在放得下 -- 按下去那一帧会先抹掉液体(Concessions.ClearLavaForPlacement)。
+			// 只有【会被烧掉】的东西还得拦:平台放进去当场没,人以为搭上了其实还在往下掉
+			if (Predicates.IsLava(tx, ty) && Concessions.BurnsInLava(_item))
+			{ why = $"({tx},{ty})是熔岩,{_item}放进去会被烧掉"; Outcome = "stuck"; Reason = why;
 			  DiagLog.Write($"[placeany] STUCK {why}"); return false; }
 			if (!Build(out why)) { Outcome = "stuck"; Reason = why; DiagLog.Write($"[placeany] STUCK {why}"); return false; }
 			DiagLog.Write($"[placeany] ({tx},{ty}) 要接{_chain.Count}格,从({_chain[0].x},{_chain[0].y})起");
@@ -68,7 +70,8 @@ namespace TerraBlind
 
 		static bool Free(int x, int y)
 			=> Predicates.InBounds(x, y) && !Occupied(x, y)
-			   && !Predicates.IsLava(x, y) && !_bad.Contains((x, y));
+			   && !(Predicates.IsLava(x, y) && Concessions.BurnsInLava(_item))
+			   && !_bad.Contains((x, y));
 
 		// 先试【绕开身子】的一条,不行再退回原来那条。
 		// 原来一律不排除身体格,靠"到跟前人会让开" —— 可两侧悬空时根本让不开:

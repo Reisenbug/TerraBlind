@@ -349,8 +349,8 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// 背包里第一样能当方块放的东西
-		static int BlockItem(Player p)
+		// 背包里第一样能当方块放的东西。岩浆自救也用这一份(方块不怕烧,平台怕)
+		public static int BlockItem(Player p)
 		{
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{

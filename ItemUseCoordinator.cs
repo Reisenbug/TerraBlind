@@ -237,7 +237,12 @@ namespace TerraBlind
 			_prevAnim = p.itemAnimation;
 
 			if (p.itemTime == 0)
+			{
+				// 按下去的【同一帧】抹掉目标格的岩浆。早抹邻格会流回来,门重新关上;
+				// 只对放置的东西做(_placeType>=0),挖掘不碰液体
+				if (_placeType >= 0) Concessions.ClearLavaForPlacement(req.TargetWx, req.TargetWy);
 				p.controlUseItem = true;
+			}
 		}
 
 		// 只报【观测到的事实】,绝不预判原版会不会接受 —— 眼睛报发生了什么,不判断能不能发生。
