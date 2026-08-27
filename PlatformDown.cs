@@ -139,14 +139,19 @@ namespace TerraBlind
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Stuck(new Blocker(BlockKind.Terrain, _col, _platY + 1, "放不出来"), $"放不出来 ({_col},{_platY + 1})"); return; }
-					// 人占的【每一列】都要处理:只管 _col 的话,隔壁列那块砖会把人顶住,S 按不下去。
-					// 第一格是 Stand 逐列办的所以能过,第二格开始只办一列 —— 人就停在第二格。
+					// 【挡路的才办,空的不铺】。以前人占几列就铺几列,理由是"隔壁那块砖会顶住人,
+					// S 按不下去" —— 那个理由只在隔壁【真是砖】时成立。隔壁是空气时多铺的那一格
+					// 纯属浪费,而且它自己会变成下一步卡住身子的东西(日志:铺完 704..705,
+					// 转头就 unstick 挖(705,1012))。
+					// 所以:实心的必须换成平台(不然沉不下去),空的只办站着的那一列。
 					int need = int.MinValue;
 					for (int c = bl; c <= br; c++)
-						if (!IsPlat(c, _platY + 1)) { need = c; break; }
+						if (!IsPlat(c, _platY + 1) && Predicates.IsSolid(c, _platY + 1)) { need = c; break; }
+					// 没有砖挡着 → 只要脚下这一列有平台就能往下沉
+					if (need == int.MinValue && !IsPlat(_col, _platY + 1)) need = _col;
 					if (need == int.MinValue)
 					{
-						DiagLog.Write($"[platdown] 放好 {bl}..{br} 行{_platY + 1}");
+						DiagLog.Write($"[platdown] 放好 列{_col} 行{_platY + 1}(身子{bl}..{br})");
 						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
 						return;
 					}
@@ -164,10 +169,12 @@ namespace TerraBlind
 					// 沉的过程中身子可能挪列,新压住的那列没铺就又被顶住 —— 回 Place 补上,别在这儿干等
 					if (++_phaseFrames > MaxPhaseFrames)
 					{
+						// 判据必须和 Ph.Place 【一模一样】,否则两个相位互相踢皮球:
+						// Tap 说"这列没铺,回去补",Place 说"这列是空的不用铺",来回不停
 						for (int c = bl; c <= br; c++)
-							if (!IsPlat(c, _platY + 1))
+							if (!IsPlat(c, _platY + 1) && Predicates.IsSolid(c, _platY + 1))
 							{
-								DiagLog.Write($"[platdown] 穿不下去,列{c}行{_platY + 1}还没铺 → 回去补");
+								DiagLog.Write($"[platdown] 穿不下去,列{c}行{_platY + 1}还有砖 → 回去换");
 								_phaseFrames = 0; _ph = Ph.Place;
 								return;
 							}
