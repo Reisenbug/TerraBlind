@@ -31,6 +31,7 @@ namespace TerraBlind
 		public const float VxDead = 0.05f;       // treat |vx| below this as stopped(到达判定共用这一份)
 
 		public static bool IsRunning => _running;
+		public static int Col => _col;          // 上一次的目标列 —— gap 之后要按同一个列重开
 		public static string Outcome = "idle";   // idle running done timeout gap
 		public static string Reason = "";
 

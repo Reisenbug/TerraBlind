@@ -82,6 +82,32 @@ namespace TerraBlind
 		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
 		public const int SupportH = 8;            // 支柱高 (H_SUP)
 		private const int MaxHopTries = 12;
+		private const int MaxRetry = 3;           // 同一相位的原语失败重试几次
+		private static Ph _retryPh = Ph.Idle;
+		private static int _retryN;
+
+		// 原语没做成【不等于房子失败】。原语内部已经走过 unstick 栈了(Stuck→Unstick.Handle),
+		// 栈放弃才回到这儿 —— 这一层要做的是重来一遍:世界已经被栈改过(补了料/挖开了/让了位),
+		// 同一步第二次往往就成了。次数用完才真失败。
+		// settle 报 gap:缺口已经交给 unstick 栈补过了,这里重开同一个目标列再走一次。
+		// 【必须重开】—— 只把 _ph 设回自己不重启 SettleAt,下一帧 Outcome 还是 gap,等于空转到失败。
+		private static int _reSettleN;
+		static bool ReSettle()
+		{
+			if (++_reSettleN > MaxRetry) { _reSettleN = 0; return false; }
+			DiagLog.Write($"[house] 停位第{_reSettleN}/{MaxRetry}次重来:{SettleAt.Reason}");
+			SettleAt.Start(SettleAt.Col, out _);
+			return true;
+		}
+
+		static bool Retry(Ph ph, string what, string detail)
+		{
+			if (_retryPh != ph) { _retryPh = ph; _retryN = 0; }
+			if (++_retryN > MaxRetry) return false;
+			DiagLog.Write($"[house] {what} 第{_retryN}/{MaxRetry}次重来:{detail}");
+			_ph = ph; _waited = 0;
+			return true;
+		}
 		private const int MaxLift = 40;
 		private const int StepTimeout = 60 * 120;
 
@@ -140,6 +166,7 @@ namespace TerraBlind
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
+			_retryPh = Ph.Idle; _retryN = 0; _reSettleN = 0;
 			_fixRounds = 0; _fixStall = 0; _lastLack = int.MaxValue;
 			_reclaimTries = 0; ThrowItems.Forget();
 			Unstick.Reset();
@@ -327,7 +354,11 @@ namespace TerraBlind
 
 				case Ph.Floor:
 					if (BridgeBuilder.IsRunning) return;
-					if (BridgeBuilder.Outcome != "done") { Fail($"地板:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
+					if (BridgeBuilder.Outcome != "done")
+					{
+						if (Retry(Ph.Lift, "地板", $"{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}")) return;
+						Fail($"地板:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return;
+					}
 					// 砌柱子前【不要】站到那一列:传了 col 的 PillarUp 不会 StepAside,身体占着就砌不上
 					Advance(Ph.MainPillar);
 					if (!Need(PillarUp.Start(Plat(), PillarH, MainCol, out string ws4), "砌主柱", ws4)) return;
@@ -335,13 +366,19 @@ namespace TerraBlind
 
 				case Ph.MainPillar:
 					if (PillarUp.IsRunning) return;
-					if (PillarUp.Outcome != "done") { Fail($"主柱:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					if (PillarUp.Outcome != "done")
+					{
+						if (Retry(Ph.Floor, "主柱", $"{PillarUp.Outcome}/{PillarUp.Reason}")) return;
+						Fail($"主柱:{PillarUp.Outcome}/{PillarUp.Reason}"); return;
+					}
 					Advance(Ph.SettleBelow);
 					SettleAt.Start(MainCol, out _);
 					return;
 
 				case Ph.SettleBelow:
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					Advance(Ph.HopTop);
 					HopUp.Start(PillarTop, MainCol, out _);
 					return;
@@ -354,6 +391,8 @@ namespace TerraBlind
 
 				case Ph.SettleTop:
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					// 判据照抄 _build_house:cx == 柱列 且 cy <= pillar_top-1
 					if (ActExecutor.OriginCx(p) != MainCol || ActExecutor.OriginCy(p) > PillarTop - 1)
 					{
@@ -376,7 +415,11 @@ namespace TerraBlind
 
 				case Ph.Roof:
 					if (BridgeBuilder.IsRunning) return;
-					if (BridgeBuilder.Outcome != "done") { Fail($"屋顶:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return; }
+					if (BridgeBuilder.Outcome != "done")
+					{
+						if (Retry(Ph.SettleTop, "屋顶", $"{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}")) return;
+						Fail($"屋顶:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return;
+					}
 					// 铺完屋顶横移 2 格再掉下去 —— 落点就在支柱附近,而且不会站进要砌的那一格
 					Advance(Ph.MoveOver);
 					SettleAt.Start(ActExecutor.OriginCx(p) - _dir * 2, out _);
@@ -384,6 +427,8 @@ namespace TerraBlind
 
 				case Ph.MoveOver:
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					Advance(Ph.Drop);
 					if (!Need(DropDown.Start(out string ws6), "掉下来", ws6)) return;
 					return;
@@ -398,13 +443,19 @@ namespace TerraBlind
 
 				case Ph.SupportSettle:
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					Advance(Ph.Support);
 					if (!Need(PillarUp.Start(Plat(), SupportH, Wx(1 + RoomWidth * _roomIdx), out string ws7), "砌支柱", ws7)) return;
 					return;
 
 				case Ph.Support:
 					if (PillarUp.IsRunning) return;
-					if (PillarUp.Outcome != "done") { Fail($"支柱{_roomIdx}:{PillarUp.Outcome}/{PillarUp.Reason}"); return; }
+					if (PillarUp.Outcome != "done")
+					{
+						if (Retry(Ph.SupportSettle, $"支柱{_roomIdx}", $"{PillarUp.Outcome}/{PillarUp.Reason}")) return;
+						Fail($"支柱{_roomIdx}:{PillarUp.Outcome}/{PillarUp.Reason}"); return;
+					}
 					if (++_roomIdx < _rooms)
 					{
 						Advance(Ph.SupportSettle);
@@ -419,6 +470,8 @@ namespace TerraBlind
 				case Ph.BenchSettle:
 				{
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					_floorRow = ActExecutor.OriginCy(p);
 					// 先合成再放:椅子和墙要工作台才能合,而工作台本身只要木材,徒手就能合。
 					// 之前直接去放,背包里没有 → WalkPlace.Start 立刻 return false,一帧就"失败"。
@@ -532,6 +585,8 @@ namespace TerraBlind
 				// ── 一间一间铺墙:站到那一间中间,跳回地板层,铺 ──────────────────
 				case Ph.WallSettle:
 					if (SettleAt.IsRunning) return;
+					if (SettleAt.Outcome == "gap" && ReSettle()) return;
+					_reSettleN = 0;
 					Advance(Ph.WallHop);
 					HopUp.Start(_floorRow, Wx(4 + RoomWidth * _roomIdx), out _);
 					return;
