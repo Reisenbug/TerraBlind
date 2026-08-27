@@ -251,6 +251,7 @@ namespace TerraBlind
             if (p == null || !p.active) return res;
             // 地形在【两次搜索之间】会变(挖了/放了),所以每次进来清一次;搜索【内部】不变
             ClearPlaceCache();
+            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
@@ -707,7 +708,7 @@ namespace TerraBlind
                 // pillar 那个布尔只标竖直柱 —— 长 bridge 的标记是"没帧、不挖、不是柱"
                 // (EdgeToSteps 也靠这个组合认桥),借 pillar 表示会让执行器改去竖着搭。
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
-                if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
+                if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey) && !LavaSurvivable) continue;
                 yield return e;
             }
             }
@@ -1074,7 +1075,7 @@ namespace TerraBlind
             foreach (int c in new[] { ccx, c2 })
             {
                 int land = FallLanding(c, y, tiles);
-                if (land == LandLava) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆"); return null; }
+                if (land == LandLava && !LavaSurvivable) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆,而身上没方块堤不出来"); return null; }
                 if (land == LandVoid) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})下方{FallProbe}行探不到底"); return null; }
             }
             // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
@@ -1108,7 +1109,7 @@ namespace TerraBlind
                 if (!PathPlanner.IsFloorPublic(c, ccy + 1) && !DigSolid(c, ccy + 1))
                 { SegLog($"[ss-digup] NULL: 脚下({c},{ccy + 1})悬空,砌柱跳起来会踩空掉下去"); return null; }
                 int land = FallLanding(c, ccy + 1, new List<(int, int)>());
-                if (land == LandLava) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆"); return null; }
+                if (land == LandLava && !LavaSurvivable) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆,而身上没方块堤不出来"); return null; }
             }
 
             int prevTop = ccy - 2;
@@ -1655,9 +1656,9 @@ namespace TerraBlind
             }
             if (frames.Count == 0) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 一帧都没有"); return null; }
             // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
-            if (FallHitsLava(frames))
+            if (FallHitsLava(frames) && !LavaSurvivable)
             {
-                SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
+                SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆,而身上没方块堤不出来");
                 return null;
             }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
@@ -1713,7 +1714,7 @@ namespace TerraBlind
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
             // 掉进岩浆这把就完了,得重开 —— 所以这条边【不发】。物理 Step 把岩浆当空气,
             // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
-            if (FallHitsLava(frames)) return null;
+            if (FallHitsLava(frames) && !LavaSurvivable) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
             // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
@@ -1722,6 +1723,17 @@ namespace TerraBlind
 
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
+        // 掉进岩浆还有救吗。身上有方块就有 —— SurvivalReflex.LavaLevee 会往碰着人的
+        // 岩浆格里填方块,一格格把人抬出来(Concessions 那边让方块放得进岩浆)。
+        //
+        // 【只管"掉进去",不管"当路走"】。这个判据只用在下落类的门上:落点是岩浆时
+        // 从"这条边不存在"放宽成"能走"。H 场那边照旧把岩浆记 Impassable --
+        // 松了的话贪心会主动领着人趟岩浆湖,每趟一次就要填一路方块,那是另一个坑。
+        // 每次 Plan() 开头取一次。写成属性的话它会在【每条边】上扫 58 格背包 --
+        // jplaceL 一次搜索就调 35 万次,那是又一个 20 秒
+        static bool _lavaSurvivable;
+        static bool LavaSurvivable => _lavaSurvivable;
+
         static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames)
         {
             foreach (var f in frames)
@@ -2332,6 +2344,9 @@ namespace TerraBlind
             if (!field.TryGetValue((cx, cy), out int curH)) return false;   // 不在场里,无从判断
             if (!CellKind.Stands(cx, cy)) return false;                     // 站不住的格,人本来也不会停在这儿
             var ctx = new PlanCtx { DistField = field };
+            // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
+            // 一周期一次,不在边上,不贵
+            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             // 构造"站在这一格、静止"的状态。StandCell 的逆:格 → 像素
             var node = new SSNode
             {
