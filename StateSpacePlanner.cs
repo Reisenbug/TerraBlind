@@ -1656,7 +1656,12 @@ namespace TerraBlind
                     if (SegDiag)
                     {
                         var bt = Main.tile[ncx, ncy + 1];
-                        SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 假站位 ({ncx},{ncy}); 下面({ncx},{ncy + 1}) type={bt.TileType} hasTile={bt.HasTile} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}");
+                        // hasTile=False 时 TileType 是 0(泥土),tileSolid[0] 恒真 --
+                        // 照打会输出 "hasTile=False solid=True" 这种自相矛盾的行,查日志时被它带偏过
+                        string btDesc = bt.HasTile
+                            ? $"type={bt.TileType} slope={(int)bt.Slope} half={bt.IsHalfBlock} solid={Main.tileSolid[bt.TileType]} solidTop={Main.tileSolidTop[bt.TileType]}"
+                            : "空的(没有tile)";
+                        SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 假站位 ({ncx},{ncy}); 下面({ncx},{ncy + 1}) {btDesc}");
                     }
                     return null;
                 } // reported stand cell has no floor = fake
@@ -2528,6 +2533,10 @@ namespace TerraBlind
                         if (!esc.HasValue) continue;
                         var (ecx, ecy) = StandCell(esc.Value.node.Px, esc.Value.node.Py);
                         if (IsLavaCell(ecx, ecy)) continue;
+                        // 【落回原格不算逃逸】。(692,860) 那次 18 条边全 OK 但落点都是自己那格
+                        // (像素上动了几格不到一格),派发出去人原地抽搐,而且它排在放置前面,
+                        // 垫一格那条永远轮不到 —— 死循环就是这么来的
+                        if (ecx == curCx && ecy == curCy) continue;
                         DiagLog.Write($"[recede] ESCAPE-STEP dir={edir} hold={ehold} -> ({ecx},{ecy})");
                         var eres = new SSResult { Found = true, GoalWx = ecx, GoalWy = ecy, StartPx = cur.Px, StartPy = cur.Py, CostFrames = esc.Value.frames.Count, CurH = curH };
                         eres.Steps = EdgeToSteps(cur, esc.Value.node, esc.Value.frames, false, null);
