@@ -319,6 +319,7 @@ namespace TerraBlind
             float f0 = Heuristic(ctx, start, goalCx, goalFeetY, ph);
             float fCut = fCutoffMul > 0f && f0 < float.MaxValue / 4f ? f0 * fCutoffMul : float.MaxValue;
             bool gaveUp = false;
+            var closedCoarse = new Dictionary<CellKey, float>();
             while (open.Count > 0 && expansions < maxExp)
             {
                 if (!open.TryDequeue(out var cur, out float curF)) break;
@@ -330,6 +331,18 @@ namespace TerraBlind
                     break;
                 }
                 float curG = came.TryGetValue(cur, out var ce) ? ce.g : float.MaxValue;
+
+                // CLOSED:这一格已经用更优的 G 展开过就别再展开。
+                // 入队的是完整 SSNode(含像素/速度),去重键却是格 —— 同一格的十几个像素变体
+                // 各自都进过队,而 coarseStates 只挡"入队",挡不住【已经排在 open 里】的那些。
+                // 于是一格被完整展开十几次(每次 18 次 jplaceL + 22 次 jump),5 格的坑烧满 20000。
+                if (coarseStates)
+                {
+                    var ck0 = Cell(cur);
+                    if (closedCoarse.TryGetValue(ck0, out float doneG) && doneG <= curG + 0.01f)
+                        continue;
+                    closedCoarse[ck0] = curG;
+                }
 
                 {
                     float ccx = cur.Px + PhysicsSimulator.PlayerW / 2f;
