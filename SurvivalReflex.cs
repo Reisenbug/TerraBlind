@@ -89,11 +89,14 @@ namespace TerraBlind
 			// 人沉下去/被冲开时跟着走,不然会对着够不着的老列一直放
 			if (System.Math.Abs(cx - _leveeCol) > 1) _leveeCol = cx;
 
+			// 【一块不够】。堤上 cy+1 之后人浮起来一格,新的 cy+1 还是岩浆,
+			// 得接着堤到 lavaWet 消失为止 -- 只放一块的话人就泡在液面下不动了。
+			// 脚下那格已经实了就往上找第一格空的:那才是这一轮该填的
 			int fy = cy + 1;
+			while (Predicates.InBounds(_leveeCol, fy) && Main.tile[_leveeCol, fy].HasTile) fy--;
 			if (!Predicates.InBounds(_leveeCol, fy)) return;
-			// 脚下已经实了还在岩浆里 = 埋在液面下,得往上爬而不是继续往下堆。
-			// 跳那一帧身子会抬起来,下一帧的 cy 就变了,自然堤到新的一格
-			if (Main.tile[_leveeCol, fy].HasTile) return;
+			// 只在够得着的范围里堤。够不着说明人已经浮上来了,交给跳
+			if (!p.IsInTileInteractionRange(_leveeCol, fy, Terraria.DataStructures.TileReachCheckSettings.Simple)) return;
 
 			int block = Unstick.BlockItem(p);
 			if (block < 0)

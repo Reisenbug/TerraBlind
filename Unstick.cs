@@ -352,6 +352,7 @@ namespace TerraBlind
 		// 背包里第一样能当方块放的东西。岩浆自救也用这一份(方块不怕烧,平台怕)
 		public static int BlockItem(Player p)
 		{
+			if (p == null || p.inventory == null) return -1;
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
