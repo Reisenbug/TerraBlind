@@ -22,7 +22,6 @@ namespace TerraBlind
 		public override void Load()
 		{
 			MazeWand.MarkMainThread();   // so field builds can report whether they froze the game thread
-			Concessions.DropAnchorRequirements();
 			ToggleMazeNav = KeybindLoader.RegisterKeybind(this, "ToggleMazeNav", "J");
 			ToggleRecedingNav = KeybindLoader.RegisterKeybind(this, "ToggleRecedingNav", "K");
 			ShowHellLine = KeybindLoader.RegisterKeybind(this, "ShowHellLine", "U");

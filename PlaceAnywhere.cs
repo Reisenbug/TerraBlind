@@ -60,11 +60,8 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 锚就用眼那一份判据,绝不另写(写过一次 3×3 的,7 格全判反)。
-		// 【锚点让步之后这里永远真】:Concessions.DropAnchorRequirements 清空了 vanilla 的
-		// 锚点声明,悬空也放得下,于是下面那趟 BFS 接链每次都在第一格就返回 -- 等于直接放。
-		// 不删 BFS:收回让步时它还得用,而且 Free()/避身体那些判据是接链和直放共用的。
-		static bool HasAnchor(int x, int y) => MazeWand.PlatformAnchor(x, y) || ItemUseCoordinator.HasAnchor(x, y);
+		// 锚就用眼那一份判据,绝不另写(写过一次 3×3 的,7 格全判反)
+		static bool HasAnchor(int x, int y) => ItemUseCoordinator.HasAnchor(x, y);
 
 		// 判空要跟游戏一致:它 occupied 看 HasTile,不看 tileSolid。草/藤/火把不 solid 但占位,
 		// 用 IsSolid 判空会反复选中同一格然后报 occupied(日志里连着 9 次)

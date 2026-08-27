@@ -513,16 +513,20 @@ namespace TerraBlind
         }
         const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
-        // 放在 (x,y) 的东西有没有东西可依附。
-        //
-        // 【现在永远是 true】:Concessions.DropAnchorRequirements 把 vanilla 所有
-        // TileObjectData 的锚点声明清空了(TileObject.CanPlace 那几段全短路),游戏侧
-        // 已经不要求支撑。这份判据再说"没锚点"就是场在撒谎 -- 而撒谎的 H 会让上层
-        // 绕开明明放得下的格子,去砌根本不需要的柱子。
-        //
-        // 留着这个函数不内联:四处调用点(CellKind/PlaceSpot/Unstick/PlaceAnywhere)
-        // 共用这一份判据,将来要收回让步,改这里一处就够。
-        public static bool PlatformAnchor(int x, int y) => true;
+        // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
+        // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
+        public static bool PlatformAnchor(int x, int y)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                    var t = Main.tile[nx, ny];
+                    if (t.HasTile || t.WallType > 0) return true;
+                }
+            return false;
+        }
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
         static bool ColumnOpen(int c, int cy)

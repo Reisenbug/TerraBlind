@@ -1,7 +1,5 @@
 using Terraria;
-using Terraria.DataStructures;
 using Terraria.ID;
-using Terraria.ObjectData;
 using Terraria.ModLoader;
 
 namespace TerraBlind
@@ -61,51 +59,6 @@ namespace TerraBlind
 			if (it == null || it.IsAir || it.createTile < 0) return false;
 			return Main.tileLavaDeath[it.createTile];
 		}
-
-		// 锚点:放东西要求四周/底下有支撑。这是【卡住我们最多】的一道门 --
-		// 悬空处放不出第一格,于是要先砌柱子造锚(Cell.Pillar,价 45 vs Build 的 15),
-		// 而造锚本身又要锚点,Unstick.MakeFooting 那条递归就是这么来的(房子里那块野方块)。
-		//
-		// vanilla 判据在 TileObject.CanPlace(TileObject.cs:176),问的是 TileObjectData 的
-		// AnchorTop/Bottom/Left/Right/Wall。每一段都长这样:
-		//     if (tileData.AnchorBottom.tileCount != 0) { ...检查... }
-		// 所以把 tileCount 清零 = 那段整个短路 = 锚点检查形同不存在。
-		// 改的是数据不是代码,不用 IL 补丁。
-		//
-		// 【为什么在 Load 里做】:WriteCheck 在 readOnlyData 时抛 FieldAccessException。
-		// 那个标志只在 LockWrites 里置 true,而 LockWrites 全代码没人调 -- 现在写哪儿都行,
-		// 但仍然放在启动期,免得哪天 vanilla 真去调它。
-		public static void DropAnchorRequirements()
-		{
-			if (!Enabled) return;
-			int cleared = 0;
-			for (int type = 0; type < TileID.Count; type++)
-			{
-				// style/alternate 各有自己的一份 TileObjectData(GetTileData 会逐层下钻),
-				// 只清 style 0 的话门/床那些多态的东西照旧要锚点
-				for (int style = 0; style < MaxStyleScan; style++)
-					for (int alt = 0; alt <= MaxAltScan; alt++)
-					{
-						TileObjectData d;
-						try { d = TileObjectData.GetTileData(type, style, alt); }
-						catch { continue; }
-						if (d == null) continue;
-						if (d.AnchorTop.tileCount == 0 && d.AnchorBottom.tileCount == 0
-							&& d.AnchorLeft.tileCount == 0 && d.AnchorRight.tileCount == 0
-							&& !d.AnchorWall) continue;
-						d.AnchorTop = AnchorData.Empty;
-						d.AnchorBottom = AnchorData.Empty;
-						d.AnchorLeft = AnchorData.Empty;
-						d.AnchorRight = AnchorData.Empty;
-						d.AnchorWall = false;
-						cleared++;
-					}
-			}
-			DiagLog.Write($"[concession] 清掉 {cleared} 份锚点声明,放置不再要求支撑");
-		}
-		// GetTileData 对越界的 style 不抛异常,返回的是同一份基础数据,多扫几轮只是白跑。
-		// 32/4 够覆盖 vanilla 最多态的那几个(门/床/王座)
-		const int MaxStyleScan = 32, MaxAltScan = 4;
 
 		public override void PostUpdateEquips()
 		{
