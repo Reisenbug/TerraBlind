@@ -23,7 +23,6 @@ namespace TerraBlind
 		private static float _targetPx;          // world-x of the target column's CENTER
 		private static float _tol = HalfTile;
 		private static int _frames, _stableFrames;
-		private static (int, int)? _gapPending;   // 交给栈去补的那一格,填上了要弹栈
 
 		private const int MaxFrames = 300;
 		private const int StableNeeded = 5;      // frames centered & ~stopped to call it settled
@@ -31,8 +30,7 @@ namespace TerraBlind
 		public const float VxDead = 0.05f;       // treat |vx| below this as stopped(到达判定共用这一份)
 
 		public static bool IsRunning => _running;
-		public static int Col => _col;          // 上一次的目标列 —— gap 之后要按同一个列重开
-		public static string Outcome = "idle";   // idle running done timeout gap
+		public static string Outcome = "idle";   // idle running done timeout
 		public static string Reason = "";
 
 		public static bool Start(int col, out string why) => StartPx(col, col * 16f + 8f, HalfTile, out why);
@@ -63,7 +61,7 @@ namespace TerraBlind
 			_col = col;
 			_targetPx = centerPx;
 			_tol = tol;
-			_frames = 0; _stableFrames = 0; _gapPending = null;
+			_frames = 0; _stableFrames = 0;
 			_running = true;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[settle] start col={col} from_cx={ActExecutor.OriginCx(p)}");
@@ -127,36 +125,6 @@ namespace TerraBlind
 			else
 			{
 				// not enough momentum to reach the target → push toward it.
-				// 推之前先看【下一列】踩不踩得住。SettleAt 本来是纯一维的,只算 x 上的误差和滑行,
-				// 一格地形都不读 —— 调用方也没验,于是路上一个缺口就把人送下去
-				// ((3539→3543) 中间少放了一格,人掉了 24 行,pillar 花 415 帧才爬回来)。
-				int dir = err > 0f ? 1 : -1;
-				var (bl, br) = Predicates.BodyCols(p);
-				int aheadCol = dir > 0 ? br + 1 : bl - 1;
-				int feetRow = ActExecutor.OriginCy(p) + 1;
-				// 上一帧交出去的那个缺口现在填上了 → 弹栈,不然同一个坎再来会被算成"救过没用"
-				if (_gapPending.HasValue && Predicates.IsGround(_gapPending.Value.Item1, _gapPending.Value.Item2))
-				{
-					Unstick.Done("settle", new Blocker(BlockKind.NoFooting, _gapPending.Value.Item1, _gapPending.Value.Item2, "走过去的路上缺一格:补平台"));
-					_gapPending = null;
-				}
-				// 判据【不能】用 IsGround:桌子/工作台是 tileFrameImportant,tileSolid 为 false,
-				// 可人就站在桌面上 —— 摆完家具后每一次横移都会被误报成 gap,重试用完直接跳走
-				// (日志:(2116,257)是桌子,人被逼着 hop 到 251 行的屋顶上铺墙)。
-				// 只有【真空气】才算缺口:格子里有东西就当踩得住,踩不住也是走两步掉一格的事,
-				// 远好过把能走的路判死。
-				bool aheadEmpty = !Main.tile[aheadCol, feetRow].HasTile;
-				if (p.velocity.Y == 0f && Predicates.InBounds(aheadCol, feetRow) && aheadEmpty)
-				{
-					// 【不失败】:缺口交给 unstick 栈补一格,补完这一帧不推进,下一帧路就通了。
-					// 栈自己管递归(没料去拿料、没锚点先造锚点)和放弃,这里只负责把现场交出去。
-					if (Unstick.Handle("settle", new Blocker(BlockKind.NoFooting, aheadCol, feetRow, "走过去的路上缺一格:补平台")))
-					{ _gapPending = (aheadCol, feetRow); return; }
-					Outcome = "gap"; Reason = $"({aheadCol},{feetRow})悬空且补不上";
-					_running = false;
-					DiagLog.Write($"[settle] GAP 去 col={_col} 途中 ({aheadCol},{feetRow}) 悬空,栈也补不上");
-					return;
-				}
 				if (err > 0f) p.controlRight = true; else p.controlLeft = true;
 			}
 		}

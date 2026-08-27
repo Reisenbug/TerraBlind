@@ -78,6 +78,9 @@ namespace TerraBlind
 		const int H_WALL = 93;        // 木墙
 		const int H_TORCH = 8;
 
+		// true = 一次生成整座房子(HouseFab),false = 走手工建造那 30 个相位
+		public static bool Fab = true;
+
 		public const int RoomWidth = 5;           // 每间宽度
 		public const int PillarH = 9;             // 主柱高 (H_PILLAR)
 		public const int SupportH = 8;            // 支柱高 (H_SUP):顶到屋顶【下面】一行,9 会和屋顶撞在同一行
@@ -85,17 +88,6 @@ namespace TerraBlind
 		private const int MaxRetry = 3;           // 同一相位的原语失败重试几次
 		private static Ph _retryPh = Ph.Idle;
 		private static int _retryN;
-
-		// settle 报 gap:缺口已经交给 unstick 栈补过了,这里重开同一个目标列再走一次。
-		// 【必须重开】—— 只把 _ph 设回自己不重启 SettleAt,下一帧 Outcome 还是 gap,等于空转到失败。
-		private static int _reSettleN;
-		static bool ReSettle()
-		{
-			if (++_reSettleN > MaxRetry) { _reSettleN = 0; return false; }
-			DiagLog.Write($"[house] 停位第{_reSettleN}/{MaxRetry}次重来:{SettleAt.Reason}");
-			SettleAt.Start(SettleAt.Col, out _);
-			return true;
-		}
 
 		// 原语没做成【不等于房子失败】。原语内部已经走过 unstick 栈了(Stuck→Unstick.Handle),
 		// 栈放弃才回到这儿 —— 世界已经被栈改过(补了料/挖开了/让了位),同一步第二次往往就成。
@@ -172,7 +164,7 @@ namespace TerraBlind
 			_x0 = ax; _ay = ay;
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
-			_retryPh = Ph.Idle; _retryN = 0; _reSettleN = 0;
+			_retryPh = Ph.Idle; _retryN = 0;
 			_fixRounds = 0; _fixStall = 0; _lastLack = int.MaxValue;
 			_reclaimTries = 0; ThrowItems.Forget();
 			Unstick.Reset();
@@ -181,6 +173,17 @@ namespace TerraBlind
 			WalkPlace.Protected.AddRange(new[] { H_CHAIR, H_TABLE, H_WALL, H_WORKBENCH });
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[house] start rooms={_rooms} dir={_dir} corner=({ax},{ay}) width={Width} 现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+			// 直接生成:一次把整座房子放出来,不走位不挥手。手工建造那 30 个相位全部跳过 ——
+			// 走位/让位/清场/停位/搬料那一整类问题跟着消失。Fab=false 时回到手工流程。
+			if (Fab)
+			{
+				HouseFab.Build(_rooms, _dir, ax, ay, out _);
+				_roofRow = _floorRow - PillarH;
+				_ph = Ph.Idle;
+				Outcome = "done"; Reason = HouseFab.LastReport;
+				DiagLog.Write($"[house] 直接生成完成:{HouseFab.LastReport}");
+				return true;
+			}
 			_ph = Ph.Clear;
 			ScanSite();
 			return true;
@@ -416,8 +419,6 @@ namespace TerraBlind
 
 				case Ph.SettleBelow:
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					_reSettleN = 0;
 					Advance(Ph.HopTop);
 					HopUp.Start(PillarTop, MainCol, out _);
 					return;
@@ -430,8 +431,6 @@ namespace TerraBlind
 
 				case Ph.SettleTop:
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					_reSettleN = 0;
 					// 判据照抄 _build_house:cx == 柱列 且 cy <= pillar_top-1
 					if (ActExecutor.OriginCx(p) != MainCol || ActExecutor.OriginCy(p) > PillarTop - 1)
 					{
@@ -463,8 +462,6 @@ namespace TerraBlind
 
 				case Ph.MoveOver:
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					_reSettleN = 0;
 					Advance(Ph.Drop);
 					if (!Need(DropDown.Start(out string ws6), "掉下来", ws6)) return;
 					return;
@@ -479,8 +476,6 @@ namespace TerraBlind
 
 				case Ph.SupportSettle:
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					_reSettleN = 0;
 					Advance(Ph.Support);
 					if (!Need(PillarUp.Start(Plat(), SupportH, Wx(1 + RoomWidth * _roomIdx), out string ws7), "砌支柱", ws7)) return;
 					return;
@@ -506,14 +501,8 @@ namespace TerraBlind
 				case Ph.BenchSettle:
 				{
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					// 停位失败时【绝不】拿人实际站位去校准地板行 —— 人还在错的地方,
-					// 而 _floorRow 是家具/墙/火把全部坐标的基准,一歪整间房都歪。
-					if (SettleAt.Outcome == "gap")
-						DiagLog.Write($"[house] 停位失败({SettleAt.Reason}),地板行保持 {_floorRow} 不按站位校准");
-					else
-						_floorRow = ActExecutor.OriginCy(p);
-					_reSettleN = 0;
+					_floorRow = ActExecutor.OriginCy(p);
+
 					// 先合成再放:椅子和墙要工作台才能合,而工作台本身只要木材,徒手就能合。
 					// 之前直接去放,背包里没有 → WalkPlace.Start 立刻 return false,一帧就"失败"。
 					if (Predicates.Have(H_WORKBENCH) < 1)
@@ -626,19 +615,6 @@ namespace TerraBlind
 				// ── 一间一间铺墙:站到那一间中间,跳回地板层,铺 ──────────────────
 				case Ph.WallSettle:
 					if (SettleAt.IsRunning) return;
-					if (SettleAt.Outcome == "gap" && ReSettle()) return;
-					// 停位重试用完【不能】继续往下走:人还在原地,HopUp 会从错的列起跳,
-					// 一路跳到屋顶上去铺墙(日志:目标列2113,人在2118,hop 落在 251 行的屋顶)。
-					// 原地铺就好 —— PlaceWalls 够不着的格子自己会跳过,人至少还在地板层。
-					if (SettleAt.Outcome == "gap")
-					{
-						_reSettleN = 0;
-						DiagLog.Write($"[house] 第{_roomIdx}间停位失败({SettleAt.Reason}),原地铺墙,够不着的跳过");
-						Advance(Ph.Walls);
-						StartWalls(_roomIdx);
-						return;
-					}
-					_reSettleN = 0;
 					Advance(Ph.WallHop);
 					HopUp.Start(_floorRow, Wx(4 + RoomWidth * _roomIdx), out _);
 					return;
@@ -939,7 +915,8 @@ namespace TerraBlind
 
 		// 第 r 间的内腔:两根柱子之间、地板上一行到屋顶下一行。
 		// 顺序照抄 _build_house 的 H_WALL_ORDER —— vanilla 的墙体合并依赖放置顺序。
-		static readonly (int dr, int dc)[] WallOrder =
+		// public:HouseFab 生成整座房子时用【同一份】墙形状,两边错开就会生成完自己验不过
+		public static readonly (int dr, int dc)[] WallOrder =
 		{
 			(1,2),(2,2),(3,2),(4,2),(5,2),(6,2),
 			(6,3),(6,4),(6,5),
