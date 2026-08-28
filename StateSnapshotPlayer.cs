@@ -455,6 +455,10 @@ namespace TerraBlind
 			}
 			_prevVy = Player.velocity.Y;
 
+			// 锁的清算点:所有 Tick 都从这条链上走,所以在链头收回死持有者的锁。
+			// 锁本身【跨帧】,这里不清活着的那些
+			AxisLock.Sweep();
+
 			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
 			// below so a cell it starts this frame gets swung at immediately.
 			PlaceAction.Tick();

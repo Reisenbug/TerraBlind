@@ -36,7 +36,10 @@ namespace TerraBlind
 				p.controlJump = true;
 			// 光跳出不来:竖井里四面都是岩浆,跳多高都落回原处。要【往脚下堤方块】一格格垫上去。
 			// 只能用方块 -- 平台放进岩浆当场烧没,人以为踩上了其实还在往下沉。
-			if (touchingLava) LavaLevee(p); else _leveeCol = int.MinValue;
+			// 脱离岩浆就立刻放锁 —— 拿着不放的话寻路一步都走不了。
+			// alive 回调(TouchesLava)是兜底,正常路径靠这一行
+			if (touchingLava) LavaLevee(p);
+			else { _leveeCol = int.MinValue; AxisLock.Release(Owner); }
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
@@ -125,10 +128,25 @@ namespace TerraBlind
 			return best;
 		}
 
+		const string Owner = "lava-levee";
+
 		static void LavaLevee(Player p)
 		{
 			// 别和正在跑的放置抢:PlaceAction 一次只服务一个目标,抢了两边都放不成
 			if (PlaceAction.IsRunning) { _leveeWait = 0; return; }
+			// 【要 Use 也要 Move】。放一格要 90 帧,期间寻路把人挪走就 out_of_reach 作废 --
+			// 日志 29503 开填、29625 报"被挪开了",列号 1171<->1175 来回跳一块没放成。
+			// 所以连人的位置一起锁住,锁不到就这一帧不堤(下一帧再看,反正人无敌不怕泡着)
+			if (!AxisLock.Take(Owner, Ax.Use | Ax.Move, () => TouchesLava(Main.LocalPlayer)))
+			{
+				if (_leveeBlocked != AxisLock.Held(Ax.Move))
+				{
+					_leveeBlocked = AxisLock.Held(Ax.Move);
+					DiagLog.Write($"[lava-levee] 等 {_leveeBlocked} 放开控制权 ({AxisLock.Dump()})");
+				}
+				return;
+			}
+			_leveeBlocked = "";
 			// 放完到方块真正出现之间有几帧,不等就会对着同一格连开好几枪
 			if (_leveeWait > 0) { _leveeWait--; return; }
 
@@ -163,6 +181,7 @@ namespace TerraBlind
 		}
 		const int LeveeCooldown = 6;    // 放下到方块出现的间隔,比一次挥舞略长
 		static bool _leveeNoItem;       // 没料只报一次,别每帧刷屏
+		static string _leveeBlocked = "";   // 上一次是被谁挡的,变了才打日志
 
 		static NPC ClosestFoe(Player p, float rangePx)
 		{

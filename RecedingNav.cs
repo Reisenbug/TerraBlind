@@ -14,6 +14,8 @@ namespace TerraBlind
         // outcome of the last run, for the HTTP bridge: null while running/never-ran,
         // "done" | "walled_in" | "loop_unresolved" | "stopped" after it ends.
         public static string LastStop;
+        const string Owner = "recede";
+        static string _waitOn = "";   // 上一次被谁挡的,变了才打日志
         static int _goalWx, _goalWy;
         // 三种目标语义:
         //   Snap  — 悬空目标掉到下面的地面,到达=人站在那格上。走路默认。
@@ -182,6 +184,7 @@ namespace TerraBlind
             if (Active)   // only fire on an actual running→stopped transition
                 HttpServerSystem.PushEvent("nav_done", "{\"result\":\"" + (LastStop ?? "stopped") + "\"}");
             Active = false;
+            AxisLock.Release(Owner);   // 停了就放锁,别让下一个动作等一个已经不跑的持有者
             StateSpacePlanner.StopNav();
             RecedingVis.Clear();
         }
@@ -194,6 +197,20 @@ namespace TerraBlind
             if (!_fieldReady) return;          // field still building off-thread → wait (player stands a moment)
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
+
+            // 【别人正拿着控制权就这一帧不动】。岩浆堤放一格要 90 帧,期间寻路把人挪走
+            // 就 out_of_reach 作废(日志 29503 开填、29625"被挪开了"),两边都白干。
+            // 不 Stop 自己:导航是长期状态,停了整段就没了;等它放开接着走。
+            if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => Active))
+            {
+                if (_waitOn != AxisLock.Held(Ax.Move))
+                {
+                    _waitOn = AxisLock.Held(Ax.Move);
+                    DiagLog.Write($"[recede] 等 {_waitOn} 放开控制权 ({AxisLock.Dump()})");
+                }
+                return;
+            }
+            _waitOn = "";
 
             // 蜘蛛网压身体会把移动拖到爬(原版要 20-100 tick 才顶开),一镐就没,所以主动砸
             SmashWeb(p);
