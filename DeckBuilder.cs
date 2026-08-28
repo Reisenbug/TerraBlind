@@ -169,9 +169,11 @@ namespace TerraBlind
 			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
 			if (BridgeBuilder.IsRunning) return;
 			// 连铺必须从有锚的格子起步:BridgeBuilder 不造锚,第一格悬空就整段 no_anchor(日志 20格 placed=0)。
-			// 换行处新行头一格和上一段是斜对角不是四邻 —— 那一格交给 PlaceAnywhere 造
+			// 换行处新行头一格和上一段是斜对角不是四邻 —— 那一格交给 PlaceAnywhere 造。
+			// 【用方块的判据】:这条桥铺的是方块,而原来借的是绳子那份(不认背景墙),
+			// 在地狱要塞那种有墙的地方会把能起步的格判成没锚,整段连铺退化成一格一格慢铺
 			if (PlaceAnywhere.Outcome != "stuck" && _runAt != _idx
-			    && ItemUseCoordinator.HasAnchor(x, y))
+			    && MazeWand.BlockAnchor(x, y))
 			{
 				int run = RunLen(_idx);
 				if (run >= MinRun)

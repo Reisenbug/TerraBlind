@@ -523,14 +523,36 @@ namespace TerraBlind
         const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
         // 放得住吗。【判据跟着料走】:
-        //   平台 -> 3x3 邻域,任何 tile 或背景墙都锚得住(宽松,地表几乎处处能放)
-        //   方块 -> 只认【四邻】(不含斜角)的实心,不认墙(严格)
-        // 岩浆格只能用方块(平台放进去当场烧没),所以那些格必须按方块的规则判 --
+        //   平台 -> PlatformAnchor:3x3 邻域(含斜角),任何 tile 或背景墙(宽松)
+        //   方块 -> BlockAnchor:只认【四邻】的实心,背景墙【也认】(严格在邻域,不在墙)
+        // 岩浆格只能用方块(平台放进去当场烧没),所以那些格按方块的规则判 --
         // 按平台判的话场说能放、执行放不上,人对着同一格反复挥手。
-        // 两份判据本来就存在(PlatformAnchor / ItemUseCoordinator.HasAnchor),
-        // 这里只是让它们【按料分派】,不新造第三份。
         public static bool AnchorFor(int x, int y)
-            => IsLava(x, y) ? ItemUseCoordinator.HasAnchor(x, y) : PlatformAnchor(x, y);
+            => IsLava(x, y) ? BlockAnchor(x, y) : PlatformAnchor(x, y);
+
+        // 方块放得住吗。四邻(不含斜角)有实心,【或者本格有背景墙】。
+        //
+        // 【墙这一条是必须的】。原来借用 ItemUseCoordinator.HasAnchor,可那份是给【绳子】
+        // 写的(注释写着"绳子只能从已有绳子或天花板往下接"),绳子不认墙 —— 拿它当方块的判据,
+        // 在有墙的地方会把放得下的格判成放不下。地狱要塞(Ruined Houses)就是【有墙又有岩浆】的
+        // 地形,正好踩中:场说不可达,人却明明能在那儿架方块过去。
+        public static bool BlockAnchor(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
+            // 本格有背景墙就锚得住 —— 墙是贴在这一格上的,不用看邻居
+            if (Main.tile[x, y].WallType > 0) return true;
+            int[] dx = { 0, 0, -1, 1 }, dy = { -1, 1, 0, 0 };
+            for (int i = 0; i < 4; i++)
+            {
+                int nx = x + dx[i], ny = y + dy[i];
+                if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+                var t = Main.tile[nx, ny];
+                if (!t.HasTile) continue;
+                // 实心和平台都撑得住方块;草/藤那些 tileCut 的撑不住
+                if (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]) return true;
+            }
+            return false;
+        }
 
         // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.

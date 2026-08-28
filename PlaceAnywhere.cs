@@ -60,8 +60,20 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 锚就用眼那一份判据,绝不另写(写过一次 3×3 的,7 格全判反)
-		static bool HasAnchor(int x, int y) => ItemUseCoordinator.HasAnchor(x, y);
+		// 锚点【跟着料走】:这个原语放什么由调用方给(94 平台 / 9 木头 / 任意方块 ID),
+		// 判据也得跟着变 —— 平台是 3x3 含斜角认墙,方块是四邻认墙。
+		// 绝不另写第三份(写过一次 3x3 的,7 格全判反)
+		static bool HasAnchor(int x, int y)
+			=> PlacingPlatform() ? MazeWand.PlatformAnchor(x, y) : MazeWand.BlockAnchor(x, y);
+
+		static bool PlacingPlatform()
+		{
+			int slot = PlaceAction.ResolveSlot(_item);
+			if (slot < 0) return false;
+			var it = Main.LocalPlayer?.inventory[slot];
+			if (it == null || it.IsAir || it.createTile < 0) return false;
+			return Main.tileSolidTop[it.createTile];
+		}
 
 		// 判空要跟游戏一致:它 occupied 看 HasTile,不看 tileSolid。草/藤/火把不 solid 但占位,
 		// 用 IsSolid 判空会反复选中同一格然后报 occupied(日志里连着 9 次)

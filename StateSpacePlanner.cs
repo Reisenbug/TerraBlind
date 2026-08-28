@@ -1379,7 +1379,7 @@ namespace TerraBlind
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
             // 岩浆格只能放方块(平台会被烧),而方块的锚点比平台严:只认四邻实心,不认斜角也不认墙。
             // 用平台那套 3x3 判的话,场说能放、手放不上,人对着同一格反复挥
-            if (Predicates.IsLava(wx, wy)) return ItemUseCoordinator.HasAnchor(wx, wy);
+            if (Predicates.IsLava(wx, wy)) return MazeWand.BlockAnchor(wx, wy);
             for (int dx = -1; dx <= 1; dx++)
                 for (int dy = -1; dy <= 1; dy++)
                 {

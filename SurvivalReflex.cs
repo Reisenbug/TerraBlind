@@ -133,7 +133,7 @@ namespace TerraBlind
 			if (Main.tile[cx, fy].HasTile) { AxisLock.Release(Owner); return; }
 			// 方块的锚点比平台严(只认四邻实心)。没锚就放不上,与其对着空气挥手,
 			// 不如放开控制权让寻路去找有锚的地方
-			if (!ItemUseCoordinator.HasAnchor(cx, fy)) { AxisLock.Release(Owner); return; }
+			if (!MazeWand.BlockAnchor(cx, fy)) { AxisLock.Release(Owner); return; }
 
 			int block = Unstick.BlockItem(p);
 			if (block < 0)
