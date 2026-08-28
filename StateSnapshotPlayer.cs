@@ -283,6 +283,37 @@ namespace TerraBlind
 			}
 		}
 
+		// 地狱里一个站得住的落脚点。【只测地狱那一段】时传送用 —— 不用每次都从地表
+		// 跑一遍丛林和下降。
+		//
+		// 挑法和 HellLine 一致:从人所在半边往中间扫,找【天花板到岩浆面之间空腔够高】
+		// 且脚下是实地的列。找不到返回 (-1,-1),调用方自己报。
+		public static (int x, int y) HellLanding()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) return (-1, -1);
+			int from = ActExecutor.OriginCx(p);
+			int dir = from < Main.maxTilesX / 2 ? 1 : -1;
+			// 从人这一侧往里扫,第一个站得住的就用 —— 桥线自己会从这儿往远端算
+			for (int step = 0; step < 400; step++)
+			{
+				int x = from + dir * step;
+				if (x < 4 || x >= Main.maxTilesX - 4) break;
+				// 从岩浆面往上找第一格能站人的:脚下实、身子那 3 行空、不沾岩浆
+				for (int y = Main.maxTilesY - 15; y > Main.UnderworldLayer + 3; y--)
+				{
+					if (!Predicates.IsGround(x, y + 1)) continue;
+					bool clear = true;
+					for (int r = 0; r < 3 && clear; r++)
+						if (Predicates.IsWall(x, y - r) || Predicates.IsLava(x, y - r)) clear = false;
+					if (!clear || Predicates.IsLava(x, y + 1)) continue;
+					DiagLog.Write($"[teleport] 地狱落脚点 ({x},{y}) 离人{step}列");
+					return (x, y);
+				}
+			}
+			return (-1, -1);
+		}
+
 		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
 		// 后面几步由 _pendingStand/_pendingDeck/_wofAfterDeck 接力,不在这儿等。
 		// 键盘([ 键)和 HTTP(/hell_run)都走这里 —— 两套入口各写一遍是老毛病了

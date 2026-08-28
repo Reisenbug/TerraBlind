@@ -49,6 +49,10 @@ namespace TerraBlind
 		public static readonly ConcurrentQueue<string> WsInbound = new();
 
 		private static readonly ConcurrentQueue<(int src, int dst)> _swapQueue = new();
+		// 传送:动玩家位置得在主线程做,HTTP 线程只入队
+		private static readonly ConcurrentQueue<(int x, int y)> _tpQueue = new();
+		// /hell_run {"teleport":true} 用:先落地狱再开跑
+		private static readonly ConcurrentQueue<bool> _hellTpQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
 
 		// mod 内部也要开箱(Unstick 采集),别再写第二条开箱路径
@@ -87,6 +91,25 @@ namespace TerraBlind
 			PerceptionDiff.Tick();   // eye B-path: push salient world-change events to the agent (silent otherwise)
 			SurvivalReflex.Tick();   // hand reflex: stay alive (jump out of lava / quick-heal) while any action runs
 
+			// 【必须排在 _tpQueue 前面】:它往 _tpQueue 里塞坐标,排后面的话传送要等下一帧,
+			// 而 StartHellRun 这一帧就按【传送前】的位置算线了
+			while (_hellTpQueue.TryDequeue(out _))
+			{
+				var (htx, hty) = StateSnapshotPlayer.HellLanding();
+				if (htx > 0) _tpQueue.Enqueue((htx, hty));
+				else DiagLog.Write("[teleport] 地狱找不到落脚点");
+			}
+			while (_tpQueue.TryDequeue(out var tp))
+			{
+				var tpp = Main.LocalPlayer;
+				if (tpp == null) continue;
+				// 站在 (x,y) 这一格上:格心对齐,脚底贴着这一格的下沿
+				tpp.position.X = tp.x * 16f + 8f - tpp.width / 2f;
+				tpp.position.Y = (tp.y + 1) * 16f - tpp.height;
+				tpp.velocity = Microsoft.Xna.Framework.Vector2.Zero;
+				tpp.fallStart = (int)(tpp.position.Y / 16f);   // 不清的话落地按"从出发点掉下来"算摔伤
+				DiagLog.Write($"[teleport] → ({tp.x},{tp.y})");
+			}
 			while (_swapQueue.TryDequeue(out var swap))
 			{
 				int src = swap.src, dst = swap.dst;
@@ -2830,10 +2853,33 @@ namespace TerraBlind
 			{
 				// 地狱那一整套:算线 → 选址 → 去桥起点 → 盖房 → 铺桥 → 肉山准备 → 开打。
 				// 全部编排在 mod 里,python 只管触发和轮询 —— 和 /build_house 一个路子。
-				// 真正的活在主线程做(要读地形算线),这里只入队
+				// 真正的活在主线程做(要读地形算线),这里只入队。
+				//
+				// POST {"teleport":true} → 先把人放到地狱再开跑。【只测地狱这一段】时用:
+				// 不用每次都从地表跑一遍丛林+下降。传哪由 mod 算(TeleportToHell),
+				// python 照旧只是一次触发
+				string hrb = ReadBody(ctx).Replace(" ", "");
+				if (hrb.Contains("\"teleport\":true")) _hellTpQueue.Enqueue(true);
 				HellRunStart = "";
 				_hellRunQueue.Enqueue(true);
 				body = "{\"accepted\":true,\"note\":\"poll /hell_run_status\"}";
+			}
+			else if (path == "/teleport")
+			{
+				// POST {"x":列,"y":行} → 把人放到那一格上站着。
+				// 只为【跳过前面的环节单独测后面】用:比如只测地狱那一段,不想每次都从地表跑一遍
+				string tb = ReadBody(ctx).Replace(" ", "");
+				var txm = System.Text.RegularExpressions.Regex.Match(tb, "\"x\"\\s*:\\s*(-?\\d+)");
+				var tym = System.Text.RegularExpressions.Regex.Match(tb, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (!txm.Success || !tym.Success)
+					body = "{\"ok\":false,\"reason\":\"need x and y\"}";
+				else
+				{
+					int tx = int.Parse(txm.Groups[1].Value), ty = int.Parse(tym.Groups[1].Value);
+					if (tx < 1 || ty < 1 || tx >= Main.maxTilesX - 1 || ty >= Main.maxTilesY - 1)
+						body = "{\"ok\":false,\"reason\":\"out of world\"}";
+					else { _tpQueue.Enqueue((tx, ty)); body = "{\"ok\":true,\"x\":" + tx + ",\"y\":" + ty + "}"; }
+				}
 			}
 			else if (path == "/hell_run_status")
 			{
