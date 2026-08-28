@@ -93,6 +93,93 @@ namespace TerraBlind
 			_shrunk = false;
 		}
 
+		// 【人要碰到岩浆之前,把液面那一层就地变成方块】,人稳稳站上去,根本不进岩浆。
+		//
+		// 比"掉进去再堤出来"简单得多:掉进去之后人是浮的、四周都是液体、放置要跟浮力赛跑,
+		// 而深岩浆池根本堤不出来。接触前凝固只需要改一格,而且那一格【本来就要被填】。
+		//
+		// 判据是【下一帧会不会碰到】:拿当前位置加速度外推一帧,看碰撞箱会盖到哪几格。
+		// 只在【往下掉】时做 —— 横着走进岩浆是寻路的错,该让寻路自己绕(不然一路走一路凝固)。
+		public const int FreezeLookahead = 2;   // 往前看几帧。1 帧太紧(放置有延迟),太多会提前凝固没必要的格
+
+		public static void FreezeLavaBeneath(Player p)
+		{
+			if (!Enabled || p == null || !p.active || p.dead) return;
+			if (p.velocity.Y <= 0f) return;   // 没在下落
+			int bid = Unstick.BlockItem(p);
+			if (bid < 0) return;              // 没方块可用,凝固不了
+			int btile = ItemToTile(bid);      // 循环外算一次:里面 new Item() 每列一个太浪费
+			if (btile < 0) return;
+
+			// 外推:下落速度乘前瞻帧数,看脚会走到哪一行
+			float futureFeet = p.position.Y + p.height + p.velocity.Y * FreezeLookahead;
+			int lc = (int)(p.position.X / 16f);
+			int rc = (int)((p.position.X + p.width - 1) / 16f);
+			int nowFeetRow = (int)((p.position.Y + p.height - 1) / 16f);
+			int futFeetRow = (int)(futureFeet / 16f);
+			if (futFeetRow <= nowFeetRow) return;
+
+			// 从现在的脚下【逐行】往下扫,先遇到什么就是什么:
+			//   整行都有实地 -> 人落在那儿,岩浆轮不到,收工
+			//   有岩浆       -> 这就是液面,凝固它
+			// 【必须整行判完再决定】。原来在列循环里遇到 HasTile 就 return,
+			// 左列有砖右列是岩浆时会漏 —— 人半只脚踩砖半只脚陷进去
+			for (int y = nowFeetRow; y <= futFeetRow + 1; y++)
+			{
+				bool anyLava = false, allSolid = true;
+				for (int x = lc; x <= rc; x++)
+				{
+					if (!Predicates.InBounds(x, y)) continue;
+					var t = Main.tile[x, y];
+					if (!t.HasTile) allSolid = false;
+					if (!t.HasTile && t.LiquidAmount > 0 && t.LiquidType == LiquidID.Lava) anyLava = true;
+				}
+				if (allSolid) return;      // 整行是地,人落这儿,不用管下面的岩浆
+				if (!anyLava) continue;    // 这一行还是空气,接着往下看
+				{
+					// 找到液面了。人跨几列就凝固几列 —— 只凝一列的话另一列还是液体,人会歪着陷进去
+					for (int c = lc; c <= rc; c++)
+					{
+						if (!Predicates.InBounds(c, y)) continue;
+						var ct = Main.tile[c, y];
+						if (ct.HasTile) continue;
+						if (ct.LiquidAmount == 0 || ct.LiquidType != LiquidID.Lava) continue;
+						if (!TakeBlock(p, bid)) break;   // 料用完了,能凝几列凝几列
+						ct.LiquidAmount = 0;
+						ct.HasTile = true;
+						ct.TileType = (ushort)btile;
+						ct.Slope = SlopeType.Solid;
+						ct.IsHalfBlock = false;
+						WorldGen.SquareTileFrame(c, y);
+						NetMessage.SendTileSquare(-1, c, y, 1);
+					}
+					DiagLog.Write($"[lava-freeze] 落点({lc}..{rc},{y})是岩浆面,vy={p.velocity.Y:0.##} → 就地凝成方块");
+				}
+				return;   // 凝好一层就够,人站上去了
+			}
+		}
+
+		// 从背包扣一个。扣不出来返回 false —— 凭空造方块会让"料够不够"这件事永远查不出问题
+		static bool TakeBlock(Player p, int itemId)
+		{
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.type != itemId || it.stack <= 0) continue;
+				it.stack--;
+				if (it.stack <= 0) p.inventory[i].TurnToAir();
+				return true;
+			}
+			return false;
+		}
+
+		static int ItemToTile(int itemId)
+		{
+			var probe = new Item();
+			probe.SetDefaults(itemId);
+			return probe.createTile;
+		}
+
 		public override void PostUpdateEquips()
 		{
 			if (!Enabled) return;

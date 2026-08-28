@@ -26,6 +26,11 @@ namespace TerraBlind
 			// 【不能只看 lavaWet】。零点几格的岩浆照样把人困住(行为和满格岩浆没区别),
 			// 而那种深度下 lavaWet 可能已经是假的 -- 堤会提前停手,人还泡在里面出不来。
 			// 判据改成:碰撞箱盖到的格子里【一滴岩浆都不许有】。
+			// 【碰到之前先凝固液面】。排在所有岩浆处理【最前面】:人还没进岩浆时
+			// 只要改一格就站住了,进去之后就得跟浮力赛跑,深池根本出不来。
+			// 不抢锁 —— 它不碰控制键也不走 PlaceAction,只改一格地形
+			Concessions.FreezeLavaBeneath(p);
+
 			bool touchingLava = TouchesLava(p);
 			bool inLava = p.lavaWet || touchingLava;
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
