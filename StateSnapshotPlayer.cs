@@ -33,7 +33,6 @@ namespace TerraBlind
 		private static int _pillarTestFrom, _pillarTestTarget;
 		private static int _houseNavTries;
 		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
-		private static (int x, int y)? _pendingAnchor;
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
 		private static (int x, int y)? _pendingStand;
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
@@ -66,26 +65,17 @@ namespace TerraBlind
 						Main.NewText($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
 			}
-			// ReachCell 也要等 —— 换了执行器却只等 RecedingNav 的话,人还在铺路就被当成到位了
-			if (_pendingAnchor.HasValue && !RecedingNav.Active && !ReachCell.IsRunning && !PlaceAnywhere.IsRunning)
-			{
-				var (ax, ay) = _pendingAnchor.Value;
-				_pendingAnchor = null;
-				_pendingStand = (ax, ay);
-				if (PlaceAnywhere.Start("94", ax, ay, out string awhy))
-					Main.NewText($"[TerraBlind] 在桥起点({ax},{ay})放第一格…", 120, 255, 120);
-				else
-				{ _pendingStand = null; Main.NewText($"[TerraBlind] 放不了:{awhy}", 255, 120, 120); }
-			}
 			// 第一格放好了 → 直接开工盖房子。HouseBuilder 的 Ph.Lift 本来就是"站到那个悬空的
 			// 左下角上":对齐列 → 爬过头就 DropDown → 挑头顶干净的半边 → pillar 上去。
 			// 通用寻路不知道这些约束,扔给 Mode.Stand 会在目标附近来回弹(1036↔1037↔1039)。
-			if (_pendingStand.HasValue && !PlaceAnywhere.IsRunning && !RecedingNav.Active && !HouseBuilder.IsRunning)
+			if (_pendingStand.HasValue && !BridgeStart.IsRunning && !PlaceAnywhere.IsRunning
+			    && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
 				var (sx2, sy2) = _pendingStand.Value;
 				_pendingStand = null;
-				if (PlaceAnywhere.Outcome != "done")
-					Main.NewText($"[TerraBlind] 第一格没放成:{PlaceAnywhere.Reason}", 255, 120, 120);
+				// BridgeStart 已经把"放第一格 + 站上去 + 站稳60帧"全办了,这里只看它的结论
+				if (BridgeStart.Outcome != "done")
+					Main.NewText($"[TerraBlind] 没站上桥起点:{BridgeStart.Reason}", 255, 120, 120);
 				else
 				{
 					int hdir2 = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
@@ -101,7 +91,7 @@ namespace TerraBlind
 			// 而它够不着只会横着走 -- 列号一格格往右爬(702->726),桥一格没铺。
 			if (_pendingDeck != null && !HouseBuilder.IsRunning && !PlaceAnywhere.IsRunning
 			    && !RecedingNav.Active && !DeckBuilder.IsRunning
-			    && !ReachCell.IsRunning && !PlatformDown.IsRunning)
+			    && !BridgeStart.IsRunning && !PlatformDown.IsRunning)
 			{
 				var line = _pendingDeck;
 				_pendingDeck = null;
@@ -256,7 +246,7 @@ namespace TerraBlind
 			// [ 单测"够得着就算到":算地狱线,导航去白点(开工点)。它悬空、站不上去,正是要试的情形。
 			if (TerraBlind.TestReachWork != null && TerraBlind.TestReachWork.JustPressed)
 			{
-				if (RecedingNav.Active || ReachCell.IsRunning) { StopHellRun(); Main.NewText("[TerraBlind] 停止", 255, 200, 120); }
+				if (RecedingNav.Active || BridgeStart.IsRunning) { StopHellRun(); Main.NewText("[TerraBlind] 停止", 255, 200, 120); }
 				else if (!StartHellRun(out string hrw)) Main.NewText($"[TerraBlind] {hrw}", 255, 120, 120);
 			}
 
@@ -294,7 +284,7 @@ namespace TerraBlind
 		}
 
 		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
-		// 后面几步由 _pendingAnchor/_pendingDeck/_wofAfterDeck 接力,不在这儿等。
+		// 后面几步由 _pendingStand/_pendingDeck/_wofAfterDeck 接力,不在这儿等。
 		// 键盘([ 键)和 HTTP(/hell_run)都走这里 —— 两套入口各写一遍是老毛病了
 		public static bool StartHellRun(out string why)
 		{
@@ -346,18 +336,15 @@ namespace TerraBlind
 			}
 			rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 			PathVisSystem.SetDeck(rv, 60 * 60 * 20);
-			// 地狱里目标几乎全悬空,通用寻路到不了 —— 它只会在【已有的地】上走跳,
-			// 于是爬过头再也下不来(日志:目标1044,人爬到1026卡死)。
-			// ReachCell 用三个自造落脚点的原语一次消一个方向:升 pillar、降 platdown、
-			// 横向 bridge。悬空天然可达,而且不可能爬过目标行
+			// 【去桥起点这一段整个重写过】。老的 ReachCell 是"先降到目标行再横过去",
+			// 实测一路铺平台梯、回头拆自己刚铺的平台、身子飘了 _col 还锁在原列。
+			// 现在走路交给寻路,BridgeStart 只管三件寻路不管的事:放出那一格、站上去、
+			// 【站住 60 帧才算到】。放第一格也归它了,所以不再走 _pendingAnchor。
 			int rbslot = HellBridge.FindBlockSlot(rp, out _);
 			string rblk = rbslot >= 0 ? rp.inventory[rbslot].type.ToString() : "9";
-			if (!ReachCell.Start("94", rblk, rsx, rsy, out string rcw))
-			{
-				DiagLog.Write($"[reach-test] ReachCell 起不来({rcw}),退回通用寻路");
-				RecedingNav.Start(rsx, rsy, RecedingNav.Mode.Reach);
-			}
-			_pendingAnchor = (rsx, rsy);
+			if (!BridgeStart.Start(rblk, rsx, rsy, out string rcw))
+			{ why = $"去不了桥起点:{rcw}"; return false; }
+			_pendingStand = (rsx, rsy);
 			_pendingDeck = rr.Line;
 			DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
 			Main.NewText($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
@@ -366,10 +353,10 @@ namespace TerraBlind
 
 		public static void StopHellRun()
 		{
-			ReachCell.Stop(); RecedingNav.Stop();
+			BridgeStart.Stop(); RecedingNav.Stop();
 			HouseBuilder.Stop(); DeckBuilder.Stop(); WofPrep.Stop();
 			if (WofFight.On) WofFight.Toggle();
-			_pendingAnchor = null; _pendingStand = null; _pendingDeck = null; _wofAfterDeck = false;
+			_pendingStand = null; _pendingDeck = null; _wofAfterDeck = false;
 			DiagLog.Write("[reach-test] 地狱流程停止");
 		}
 
@@ -381,8 +368,8 @@ namespace TerraBlind
 			if (DeckBuilder.IsRunning) return "deck";
 			if (HouseBuilder.IsRunning) return "house";
 			if (PlaceAnywhere.IsRunning) return "anchor";
-			if (ReachCell.IsRunning || RecedingNav.Active) return "goto";
-			if (_pendingAnchor.HasValue || _pendingStand.HasValue || _pendingDeck != null || _wofAfterDeck) return "handoff";
+			if (BridgeStart.IsRunning || RecedingNav.Active) return "goto";
+			if (_pendingStand.HasValue || _pendingDeck != null || _wofAfterDeck) return "handoff";
 			return "idle";
 		}
 
@@ -492,7 +479,7 @@ namespace TerraBlind
 
 			// hellbridge/reach: 只做编排,真正干活的是下面那些原语,所以它们先跑、不 return
 			if (HellBridge.IsRunning) HellBridge.Tick();
-			if (ReachCell.IsRunning) ReachCell.Tick();
+			if (BridgeStart.IsRunning) BridgeStart.Tick();
 
 			// 放第一格:走 PlaceAction,控制要跟着发;让位用 SettleAt,它的 Tick 在下面,
 			// 所以这里必须替它跑一次 —— 直接 return 的话让位永远走不完。

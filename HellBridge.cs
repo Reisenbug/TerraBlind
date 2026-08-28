@@ -70,7 +70,7 @@ namespace TerraBlind
 			// 去【开工点】不是去桥头:那一格有锚放得出来,铺完再往两头长。
 			int bslot0 = FindBlockSlot(p, out _);
 			string blk = bslot0 >= 0 ? p.inventory[bslot0].type.ToString() : itemName;
-			if (!ReachCell.Start(itemName, blk, _workX, _workY, out why))
+			if (!BridgeStart.Start(blk, _workX, _workY, out why))
 			{ Outcome = "stuck"; Reason = why; return false; }
 			_ph = Ph.Down;
 			return true;
@@ -143,7 +143,7 @@ namespace TerraBlind
 		public static void Stop()
 		{
 			if (Outcome == "running") Outcome = "stopped";
-			ReachCell.Stop(); HouseBuilder.Stop(); HellDeck.Stop();
+			BridgeStart.Stop(); HouseBuilder.Stop(); HellDeck.Stop();
 			_ph = Ph.Idle;
 		}
 
@@ -157,9 +157,9 @@ namespace TerraBlind
 			switch (_ph)
 			{
 				case Ph.Down:
-					if (ReachCell.IsRunning) return;
-					if (ReachCell.Outcome != "done")
-					{ Fail($"够不到开工点({_workX},{_workY}):{ReachCell.Reason}"); return; }
+					if (BridgeStart.IsRunning) return;
+					if (BridgeStart.Outcome != "done")
+					{ Fail($"站不上开工点({_workX},{_workY}):{BridgeStart.Reason}"); return; }
 					DiagLog.Write($"[hellbridge] 到开工点,先往远端铺 {HellLine.Length - 1 - _workI} 格");
 					if (!BeginLay(FarPart(), out _)) return;
 					_ph = Ph.LayFar;
