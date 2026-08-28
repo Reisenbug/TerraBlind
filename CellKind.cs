@@ -38,7 +38,8 @@ namespace TerraBlind
 				if (Predicates.IsPlatform(x, y - r)) return Cell.Solid;
 
 			if (Predicates.IsGround(x, y + 1)) return Cell.Stand;
-			return MazeWand.PlatformAnchor(x, y) ? Cell.Build : Cell.Pillar;
+			// 锚点判据【跟着料走】:岩浆格只能用方块(平台会被烧),而方块的锚点比平台严
+			return MazeWand.AnchorFor(x, y) ? Cell.Build : Cell.Pillar;
 		}
 
 		// 通行吗。Lava 之外全通,只是价钱不同

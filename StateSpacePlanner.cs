@@ -1377,6 +1377,9 @@ namespace TerraBlind
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
             var t = Main.tile[wx, wy];
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
+            // 岩浆格只能放方块(平台会被烧),而方块的锚点比平台严:只认四邻实心,不认斜角也不认墙。
+            // 用平台那套 3x3 判的话,场说能放、手放不上,人对着同一格反复挥
+            if (Predicates.IsLava(wx, wy)) return ItemUseCoordinator.HasAnchor(wx, wy);
             for (int dx = -1; dx <= 1; dx++)
                 for (int dy = -1; dy <= 1; dy++)
                 {
@@ -1592,7 +1595,7 @@ namespace TerraBlind
                 int cy = feetCy + 2;                          // 脚下第二格
                 if (cx < 1 || cy < 1 || cx >= Main.maxTilesX - 1 || cy >= Main.maxTilesY - 1) break;
                 if (!Predicates.Vacant(cx, cy)) continue;
-                if (!MazeWand.PlatformAnchor(cx, cy)) continue;
+                if (!MazeWand.AnchorFor(cx, cy)) continue;   // 岩浆格按方块的锚点规则判
                 var take = frames.GetRange(0, i + 1);
                 if (!MarkPlaceFrame(take, cx, cy)) continue;
                 var node = new SSNode
@@ -3494,10 +3497,21 @@ namespace TerraBlind
         {
             // the two silent-return paths made a never-materializing platform undiagnosable (the (2959,262) 16-leg
             // stall: 60 ticks/leg of TilePlaced=false with zero telemetry). Log the reason once per stall period.
-            int slot = NavCoordinator.FindPlatformSlot(p);
+            // 【岩浆格改放方块】。平台放得进去(按键那帧 Concessions 会抹掉液体),
+            // 但放完当场被烧没(tileLavaDeath[19]=true) -- 人以为踩上了,其实还在往下掉。
+            // 方块不烧,所以岩浆里一律用方块。锚点照旧要,这里只换料。
+            bool lavaCell = Predicates.IsLava(cx, cy);
+            // BlockItem 给的是【物品 type】不是槽位,得先搬上热键栏换成槽位
+            int slot = -1;
+            if (lavaCell)
+            {
+                int bid = Unstick.BlockItem(p);
+                if (bid >= 0) slot = PlaceAction.HomeInHotbar(bid.ToString());
+            }
+            if (slot < 0) slot = NavCoordinator.FindPlatformSlot(p);
             if (slot < 0)
             {
-                if (_placeStall == 1) EventLog.W(Ev.Place, $"STALL ({cx},{cy}) 热键栏没有平台");
+                if (_placeStall == 1) EventLog.W(Ev.Place, $"STALL ({cx},{cy}) 热键栏没有{(lavaCell ? "方块也没平台" : "平台")}");
                 return;
             }
             p.selectedItem = slot;

@@ -31,15 +31,13 @@ namespace TerraBlind
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
 			bool emergency = inLava || lowHp;
 
-			// LAVA: jump to climb out. controlJump each frame while submerged pushes the player upward.
-			if (inLava)
+			// 泡着就按跳:岩浆里跳能抵消下沉,给放置争取时间。
+			// 【只在自己拿着 Jump 时按】-- 不然会和寻路派发的跳跃边打架
+			if (inLava && AxisLock.Take(Owner, Ax.Jump, () => TouchesLava(Main.LocalPlayer)))
 				p.controlJump = true;
-			// 光跳出不来:竖井里四面都是岩浆,跳多高都落回原处。要【往脚下堤方块】一格格垫上去。
-			// 只能用方块 -- 平台放进岩浆当场烧没,人以为踩上了其实还在往下沉。
-			// 脱离岩浆就立刻放锁 —— 拿着不放的话寻路一步都走不了。
-			// alive 回调(TouchesLava)是兜底,正常路径靠这一行
+			// 垫脚下一格,别再往下沉。脱离岩浆就立刻放锁 —— 拿着不放寻路一步都走不了
 			if (touchingLava) LavaLevee(p);
-			else { _leveeCol = int.MinValue; AxisLock.Release(Owner); }
+			else AxisLock.Release(Owner);
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
@@ -81,7 +79,6 @@ namespace TerraBlind
 		// 放置本身走 PlaceAction(它管选槽/搬到热键栏/瞄准),按下去那一帧
 		// Concessions.ClearLavaForPlacement 会抹掉目标格的液体 -- 没有它 vanilla 的
 		// CheckLavaBlocking 会一路拒到底(方块是 tileSolid,连 tileLavaDeath 都问不到)。
-		static int _leveeCol = int.MinValue;   // 认准一列往上堤;每帧重挑列会左右横跳堤不起来
 		static int _leveeWait;
 
 		// 碰撞箱碰到岩浆没有。【一滴都算】 -- 零点几格的岩浆和满格一样能困住人,
@@ -102,41 +99,22 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 碰着人的岩浆格里【最低的那一格】。填它而不是填脚下那一列:
-		// 碰上人的岩浆可能在隔壁列,只顾自己那列永远清不掉
-		static (int x, int y)? NearestLavaCell(Player p)
-		{
-			int x0 = (int)(p.position.X / 16f);
-			int x1 = (int)((p.position.X + p.width - 1) / 16f);
-			int y0 = (int)(p.position.Y / 16f);
-			int y1 = (int)((p.position.Y + p.height - 1) / 16f);
-			float ccx = (p.position.X + p.width / 2f) / 16f;
-			(int, int)? best = null; float bd = float.MinValue;
-			for (int x = x0; x <= x1; x++)
-				for (int y = y0; y <= y1; y++)
-				{
-					if (!Predicates.InBounds(x, y)) continue;
-					var t = Main.tile[x, y];
-					if (t.LiquidAmount == 0 || t.LiquidType != Terraria.ID.LiquidID.Lava) continue;
-					if (t.HasTile) continue;   // 已经有东西还带液体的格填不进去,跳过
-					// 【从下往上填】。把身子四周的岩浆格全填实等于把自己砌进砖里,
-					// 而目标是"人不碰岩浆"不是"周围没岩浆" -- 填低处,人踩上去自然抬高脱离。
-					// 所以排序先比行(越低越优先),同一行再比横向距离
-					float d = (y * 1000f) - System.Math.Abs(x - ccx);
-					if (best == null || d > bd) { bd = d; best = (x, y); }
-				}
-			return best;
-		}
-
 		const string Owner = "lava-levee";
 
+		// 泡在岩浆里时【只做一件事:别再往下沉】--- 往脚下那一格放一块方块,踩住。
+		//
+		// 【不再填一片】。上一版扫碰撞箱盖到的所有岩浆格挨个填,人升一格、碰撞箱又盖到新的一格、
+		// 接着填 --- 填出一个 5 列宽 6 行高的实心坨把自己封在里面(日志 57696~57735 连填 14 块)。
+		// 封住之后寻路的边全被自己的砖挡死,泛洪只剩 1 格,A* 无目标,Commitment 在 1057<->1065
+		// 之间无限往返。
+		//
+		// 现在只垫脚下一列:人踩住就不沉了,四周和头顶保持空的,剩下的交给寻路 ---
+		// 规划器现在能在岩浆里放方块(EmitPlace 按格选料),岩浆和普通地形没区别了。
 		static void LavaLevee(Player p)
 		{
-			// 别和正在跑的放置抢:PlaceAction 一次只服务一个目标,抢了两边都放不成
 			if (PlaceAction.IsRunning) { _leveeWait = 0; return; }
-			// 【要 Use 也要 Move】。放一格要 90 帧,期间寻路把人挪走就 out_of_reach 作废 --
-			// 日志 29503 开填、29625 报"被挪开了",列号 1171<->1175 来回跳一块没放成。
-			// 所以连人的位置一起锁住,锁不到就这一帧不堤(下一帧再看,反正人无敌不怕泡着)
+			// 要 Use 也要 Move:放一格要 90 帧,期间寻路把人挪走就 out_of_reach 作废
+			// (日志 29503 开填、29625 报"被挪开了",一块没放成)
 			if (!AxisLock.Take(Owner, Ax.Use | Ax.Move, () => TouchesLava(Main.LocalPlayer)))
 			{
 				if (_leveeBlocked != AxisLock.Held(Ax.Move))
@@ -147,18 +125,15 @@ namespace TerraBlind
 				return;
 			}
 			_leveeBlocked = "";
-			// 放完到方块真正出现之间有几帧,不等就会对着同一格连开好几枪
 			if (_leveeWait > 0) { _leveeWait--; return; }
 
-			// 【填有岩浆的那一格,不是脚下那一格】。碰着人的岩浆可能在隔壁列,
-			// 只顾自己这列会一直填不到点子上;而一格填满(方块占位)那格就再也没有液体了。
-			// 从人身上往外挑最近的一格有岩浆的,由近及远
-			var target = NearestLavaCell(p);
-			if (target == null) return;
-			int tx = target.Value.x, fy = target.Value.y;
-			_leveeCol = tx;
-			// 只在够得着的范围里堤。够不着说明人已经浮上来了,交给跳
-			if (!p.IsInTileInteractionRange(tx, fy, Terraria.DataStructures.TileReachCheckSettings.Simple)) return;
+			int cx = ActExecutor.OriginCx(p), fy = ActExecutor.OriginCy(p) + 1;
+			// 脚下已经踩实了就不用垫 --- 人不沉了,接下来是寻路的事
+			if (!Predicates.InBounds(cx, fy)) return;
+			if (Main.tile[cx, fy].HasTile) { AxisLock.Release(Owner); return; }
+			// 方块的锚点比平台严(只认四邻实心)。没锚就放不上,与其对着空气挥手,
+			// 不如放开控制权让寻路去找有锚的地方
+			if (!ItemUseCoordinator.HasAnchor(cx, fy)) { AxisLock.Release(Owner); return; }
 
 			int block = Unstick.BlockItem(p);
 			if (block < 0)
@@ -166,22 +141,22 @@ namespace TerraBlind
 				if (!_leveeNoItem)
 				{
 					_leveeNoItem = true;
-					DiagLog.Write("[lava-levee] 泡在岩浆里但身上一块方块都没有,堤不起来");
+					DiagLog.Write("[lava-levee] 泡在岩浆里但身上一块方块都没有");
 				}
 				return;
 			}
 			_leveeNoItem = false;
-			if (PlaceAction.Start(block.ToString(), tx, fy, 1, 0, 0, true, out string why))
+			if (PlaceAction.Start(block.ToString(), cx, fy, 1, 0, 0, true, out string why))
 			{
 				_leveeWait = LeveeCooldown;
-				DiagLog.Write($"[lava-levee] 填岩浆格({tx},{fy}) item={block}");
+				DiagLog.Write($"[lava-levee] 垫脚下({cx},{fy}) item={block}");
 			}
 			else
-				DiagLog.Write($"[lava-levee] 填({tx},{fy})开不了工: {why}");
+				DiagLog.Write($"[lava-levee] 垫({cx},{fy})开不了工: {why}");
 		}
-		const int LeveeCooldown = 6;    // 放下到方块出现的间隔,比一次挥舞略长
-		static bool _leveeNoItem;       // 没料只报一次,别每帧刷屏
-		static string _leveeBlocked = "";   // 上一次是被谁挡的,变了才打日志
+		const int LeveeCooldown = 6;
+		static bool _leveeNoItem;
+		static string _leveeBlocked = "";
 
 		static NPC ClosestFoe(Player p, float rangePx)
 		{

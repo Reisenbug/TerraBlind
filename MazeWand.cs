@@ -522,6 +522,16 @@ namespace TerraBlind
         }
         const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
+        // 放得住吗。【判据跟着料走】:
+        //   平台 -> 3x3 邻域,任何 tile 或背景墙都锚得住(宽松,地表几乎处处能放)
+        //   方块 -> 只认【四邻】(不含斜角)的实心,不认墙(严格)
+        // 岩浆格只能用方块(平台放进去当场烧没),所以那些格必须按方块的规则判 --
+        // 按平台判的话场说能放、执行放不上,人对着同一格反复挥手。
+        // 两份判据本来就存在(PlatformAnchor / ItemUseCoordinator.HasAnchor),
+        // 这里只是让它们【按料分派】,不新造第三份。
+        public static bool AnchorFor(int x, int y)
+            => IsLava(x, y) ? ItemUseCoordinator.HasAnchor(x, y) : PlatformAnchor(x, y);
+
         // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
         public static bool PlatformAnchor(int x, int y)
