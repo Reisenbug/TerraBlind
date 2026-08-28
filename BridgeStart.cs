@@ -86,19 +86,27 @@ namespace TerraBlind
 					{ Fail($"放不了({_tx},{_ty}):{pw}"); return; }
 					return;
 
-				// 站上去。这一格现在是实的,爬上去的活交给现成的原语
+				// 站上去。这一格现在是实的,【走过去的活交给寻路】
 				case Ph.Stand:
-					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
+					if (RecedingNav.Active || SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
 					{
 						int cx = Predicates.PillarCol(p), cy = ActExecutor.OriginCy(p);
 						// 踩在目标头顶那一行 = 到位,进验收
 						if (cx == _tx && cy == _ty - 1 && p.velocity.Y == 0f)
 						{ _phaseFrames = 0; _held = 0; _ph = Ph.Verify; return; }
 						if (++_tries > MaxTries) { Fail($"站不上桥起点({_tx},{_ty}),现在({cx},{cy})"); return; }
-						// 先对列再对高度:横着走在地上安全,爬上去之后横移是悬空的
-						if (cx != _tx) { SettleAt.Start(_tx, out _); return; }
-						if (cy < _ty - 1) { DropDown.Start(_ty - 1, out _); return; }
-						HopUp.Start(_ty - 1, _tx, out _);
+						// 【差一格才自己挪,差得多交寻路】。原来一律"先对列再对高度",
+						// 而 SettleAt 只会横移 —— 人在(2068,1057)、目标(2067,1054)差3行时
+						// 横移一辈子也上不去,三次重试全打在同一个位置然后 STUCK。
+						// 寻路会跳会搭会挖,这种一跳的事它自己就办了
+						int dx = System.Math.Abs(cx - _tx), dy = System.Math.Abs(cy - (_ty - 1));
+						if (dx <= 1 && dy == 0) { SettleAt.Start(_tx, out _); return; }
+						DiagLog.Write($"[bstart] 站位差({dx},{dy}) → 交寻路 ({_tx},{_ty - 1}) 第{_tries}次");
+						// 上一轮寻路怎么结束的要报出来,不然三次失败之后只知道"站不上",
+						// 不知道是走不到还是走到了没站稳
+						if (_tries > 1 && RecedingNav.LastStop != null && RecedingNav.LastStop != "done")
+							DiagLog.Write($"[bstart] 上一轮寻路结果={RecedingNav.LastStop}");
+						RecedingNav.Start(_tx, _ty - 1, RecedingNav.Mode.Stand);
 					}
 					return;
 
@@ -111,7 +119,9 @@ namespace TerraBlind
 						if (!onSpot)
 						{
 							DiagLog.Write($"[bstart] 站了{_held}帧就掉了:现在({cx},{cy}) vy={p.velocity.Y:0.##} → 重站");
-							_held = 0; _phaseFrames = 0; _ph = Ph.Place;   // 那一格可能也没了,回去重放
+							// 【滑落不算"站不上去"】,重试配额得还回去 —— 不然掉两次就把
+							// Ph.Stand 的三次机会吃光,而它一次都还没真正试过
+							_held = 0; _phaseFrames = 0; _tries = 0; _ph = Ph.Place;   // 那一格可能也没了,回去重放
 							return;
 						}
 						if (++_held < HoldFrames) return;
