@@ -389,7 +389,7 @@ namespace TerraBlind
         // 全身上下最好的镐力。【背包也算】-- 只扫热键栏 10 格的话,镐在背包里就等于 pickPower=0,
         // MineableWith 一律 false,所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"。
         // 三处建场/失效判定原本各抄一遍这段循环,现在共用这一份。
-        static int BestPickPower()
+        public static int BestPickPower()
         {
             var pl = Main.LocalPlayer;
             if (pl == null) return 0;

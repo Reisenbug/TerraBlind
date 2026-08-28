@@ -112,6 +112,11 @@ namespace TerraBlind
 		static bool Dig(Player p, Blocker b)
 		{
 			if (ClearWay.Dig(p, b.Wx, b.Wy, "unstick")) { LastAction = $"挖({b.Wx},{b.Wy})"; return true; }
+			// 【这把镐挖不动】(地狱熔炉/祭坛/神庙砖)。得如实说,不然会被下面两条误诊成
+			// "够不着"或"没镐" —— 那两条都会去做无用功,而真相是这格永远挖不开,只能绕
+			if (Predicates.IsWall(b.Wx, b.Wy) && DigTable.CostFrames(b.Wx, b.Wy) >= DigTable.Unmineable)
+				return Handle("unstick", new Blocker(BlockKind.Hopeless, b.Wx, b.Wy,
+					$"tile{Main.tile[b.Wx, b.Wy].TileType}这把镐挖不动,得绕"));
 			if (!p.IsInTileInteractionRange(b.Wx, b.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, b.Wx, b.Wy, "要挖但够不着"));
 			if (ClearWay.PickSlot(p) < 0)

@@ -74,6 +74,9 @@ namespace TerraBlind
 		// 桥面在 (x,y):人占 y-1..y-Body。再往上多留一格 = Head 行全要空。
 		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话,第 4 行那块石头就是卡死的地方
 		const int Head = Body + 1;
+		// 这一趟的镐力。算线前取一次 —— CellCost 是 DP 里逐格调的,不能每次去翻背包
+		static int _pick;
+
 		static int Blocked(int x, int y)
 		{
 			int n = 0;
@@ -109,6 +112,16 @@ namespace TerraBlind
 		// 居中按比例:腔 3 格高时"居中"=离下表面 1 格,60 格高时=30 格,一个式子两种都对。
 		static int CellCost(int x, int y, int ceil, int floor)
 		{
+			// 【挖不动的一律不许穿】。地狱熔炉(tile 77,镐力<65)、地狱祭坛这些伤害恒 0,
+			// 线大大方方从中间穿过去、代价按普通石头算,执行时人对着它挥一辈子也开不了。
+			// 这是真禁行不是"贵":给有限价的话绕路一长就还是选择硬凿。
+			//
+			// 用 MineableWith 不用 CostFrames:这里是 176 列 x 190 行的 DP,每格要问 4 次。
+			// CostFrames 每次 new Item() 还扫一遍热键栏,13 万次会把算线拖垮 ——
+			// 而镐力一趟不变,循环外取一次就够
+			for (int r = 0; r <= Head; r++)
+				if (Predicates.IsSolid(x, y - r) && !DigTable.MineableWith(x, y - r, _pick))
+					return Unreachable;
 			int blk = Blocked(x, y);
 			int c = blk * DigCell;
 			// 越挖不到头越贵:薄壳(1~2 列)照旧,厚墙按平方涨,绕多远都比硬凿划算
@@ -213,6 +226,8 @@ namespace TerraBlind
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
 
+			// 镐力取一次,给 CellCost 判"挖不挖得动"用。DP 里逐格翻背包会拖垮算线
+			_pick = MazeWand.BestPickPower();
 			int yLo = Main.UnderworldLayer + 1, yHi = Main.maxTilesY - 3;
 			int rows = yHi - yLo + 1;
 			var ceilA = new int[Length];

@@ -45,6 +45,19 @@ namespace TerraBlind
 		{
 			// 平台不挖:能直接穿过去/跳上去,挖它是白费镐和时间
 			if (!Predicates.IsWall(x, y)) return false;
+			// 【挖不动的当场认账】。地狱熔炉(tile 77)镐力不够 65 时伤害恒 0,
+			// 地狱祭坛/神庙砖同理。原来这儿不查,Dig 照样开挥并返回 true("我在处理"),
+			// 调用方每帧 return —— 人对着炉子挥一辈子。
+			// 判据用 DigTable 那一份(它抄的是 vanilla 的伤害表),不另写第二套
+			if (DigTable.CostFrames(x, y) >= DigTable.Unmineable)
+			{
+				if (_lastHard != (x, y))
+				{
+					_lastHard = (x, y);
+					DiagLog.Write($"[clearway] ({x},{y}) type={Main.tile[x, y].TileType} 这把镐挖不动,不挥了 —— 绕开它");
+				}
+				return false;   // false = "我处理不了",让调用方去走别的路(绕/跳/搭)
+			}
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
 			int pk = PickSlot(p);
 			if (pk < 0) return false;
@@ -57,6 +70,8 @@ namespace TerraBlind
 		// 前进方向那一列,身子占的 3 行里有实心就挖掉。挖了返回 true(这一帧别再按方向键)
 		// 【不挖脚那一行】:一格高的台阶就在 fy,跳一下就上去,挖它等于把路拆了。
 		// 日志:刚放好的衔接方块(910,1037) 40帧后被当"挡路"挖掉,桥就断在那儿
+		static (int, int) _lastHard = (int.MinValue, int.MinValue);   // 挖不动的那一格只报一次,别每帧刷屏
+
 		public static bool Forward(Player p, int dir, string why = "挡路")
 		{
 			var (bl, br) = Predicates.BodyCols(p);
