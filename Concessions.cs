@@ -60,38 +60,10 @@ namespace TerraBlind
 			return Main.tileLavaDeath[it.createTile];
 		}
 
-		// 人自己的碰撞箱挡着放不了东西 —— 掉进岩浆时这是【致命】的:
-		// 要填的那格正是人泡着的那格,人不挪开就永远填不上,而挪不开正是被困住的原因。
-		//
-		// vanilla 判据 Collision.EmptyTile(Collision.cs:1418):拿 16x16 的格矩形去和
-		// player.position/width/height 做 Intersects。读的是【玩家字段】,不是常量 --
-		// 所以放置那一刻把碰撞箱缩掉,相交为假,门自己就开了。
-		//
-		// 挂 PreItemCheck/PostItemCheck:它俩正好夹住 ItemCheck_Inner(Player.cs:42334/42338),
-		// PlaceThing 就在中间。挂在 PostUpdateEverything 没用 —— 那时 ItemCheck 早跑完了。
-		// 只在【我们自己要放东西】的那一帧缩,别的时候一律原样,免得影响碰撞/受击。
-		public static bool ShrinkHitboxThisFrame;
-		static int _savedW, _savedH;
-		static bool _shrunk;
-
-		public override bool PreItemCheck()
-		{
-			if (!Enabled || !ShrinkHitboxThisFrame || Player.whoAmI != Main.myPlayer) return true;
-			_savedW = Player.width; _savedH = Player.height;
-			// 缩到 0 而不是挪走:挪坐标会让这一帧的放置瞄准/够得着判据跟着漂
-			Player.width = 0; Player.height = 0;
-			_shrunk = true;
-			return true;
-		}
-
-		public override void PostItemCheck()
-		{
-			// 旗子【一帧有效】。不在这儿清的话碰撞箱会一直是 0,人从此穿墙掉出世界
-			ShrinkHitboxThisFrame = false;
-			if (!_shrunk) return;
-			Player.width = _savedW; Player.height = _savedH;
-			_shrunk = false;
-		}
+		// 【人碰撞箱内不能放东西 —— 这条走原版逻辑,不绕】。
+		// 试过在 PreItemCheck 里把 width/height 临时缩成 0 骗过 Collision.EmptyTile,
+		// 结果是人一旦被封在方块里,vanilla 的挤出算炸:一帧飞几千格到地图边缘
+		// (DragonLens 传送进石头里也复现)。人要放东西就自己让开。
 
 		// 【人要碰到岩浆之前,把液面那一层就地变成方块】,人稳稳站上去,根本不进岩浆。
 		//
@@ -144,6 +116,9 @@ namespace TerraBlind
 						var ct = Main.tile[c, y];
 						if (ct.HasTile) continue;
 						if (ct.LiquidAmount == 0 || ct.LiquidType != LiquidID.Lava) continue;
+						// 【绝不凝在人身体里】。把人封进方块之后 vanilla 的挤出会把他弹走 --
+						// 一帧几千格飞到地图边缘。重叠就跳过,下一帧人落低了再凝也来得及
+						if (BodyOverlaps(p, c, y)) continue;
 						if (!TakeBlock(p, bid)) break;   // 料用完了,能凝几列凝几列
 						ct.LiquidAmount = 0;
 						ct.HasTile = true;
@@ -157,6 +132,14 @@ namespace TerraBlind
 				}
 				return;   // 凝好一层就够,人站上去了
 			}
+		}
+
+		// 这一格和人的碰撞箱重叠吗。判据和 vanilla 的 Collision.EmptyTile 一致
+		static bool BodyOverlaps(Player p, int x, int y)
+		{
+			float l = x * 16f, r = l + 16f, t = y * 16f, b = t + 16f;
+			return p.position.X < r && p.position.X + p.width > l
+				&& p.position.Y < b && p.position.Y + p.height > t;
 		}
 
 		// 从背包扣一个。扣不出来返回 false —— 凭空造方块会让"料够不够"这件事永远查不出问题

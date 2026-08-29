@@ -17,15 +17,35 @@ namespace TerraBlind
 		// enemy handling deserves better than a slapdash reflex.
 		private const bool MeleeReflexEnabled = false;
 		private static bool _firedThisEmergency;   // one interrupt per danger episode, not per frame
+		static float _prevPx = float.NaN, _prevPy;   // 上一帧位置,用来抓"一帧动了几百格"
 
 		public static void Tick()
 		{
 			var p = Main.LocalPlayer;
-			if (p == null || !p.active || p.dead) { _firedThisEmergency = false; return; }
+			if (p == null || !p.active || p.dead) { _firedThisEmergency = false; _prevPx = float.NaN; return; }
+
+			// 【一帧动了几百格 = 不是物理,是传送或者碰撞崩了】。DragonLens 右键地图传送之后
+			// 人以巨大速度往左飞,这里把那一帧的真实数字打出来:到底是坐标被写了,
+			// 还是速度被写了,还是碰撞箱是 0 导致推出量算炸。猜不出来就量。
+			if (!float.IsNaN(_prevPx))
+			{
+				float dpx = p.position.X - _prevPx, dpy = p.position.Y - _prevPy;
+				if (System.MathF.Abs(dpx) > 160f || System.MathF.Abs(dpy) > 160f)
+					DiagLog.Write($"[warp] 一帧位移 dx={dpx:0.#}px({dpx / 16f:0.#}格) dy={dpy:0.#}px "
+						+ $"vx={p.velocity.X:0.##} vy={p.velocity.Y:0.##} "
+						+ $"w={p.width} h={p.height} "
+						+ $"→({(int)(p.position.X / 16f)},{(int)(p.position.Y / 16f)})");
+			}
+			_prevPx = p.position.X; _prevPy = p.position.Y;
 
 			// 【不能只看 lavaWet】。零点几格的岩浆照样把人困住(行为和满格岩浆没区别),
 			// 而那种深度下 lavaWet 可能已经是假的 -- 堤会提前停手,人还泡在里面出不来。
 			// 判据改成:碰撞箱盖到的格子里【一滴岩浆都不许有】。
+			// 【人被封在方块里就先刨出来】。卡在实心里时 vanilla 的挤出逻辑会把人弹走 ——
+			// 实测一帧几千格飞到地图边缘(DragonLens 传送进石头里也一样)。
+			// 这比岩浆更优先:人一旦被弹飞,后面所有判据读到的位置都是错的。
+			UnstickFromBlock(p);
+
 			// 【碰到之前先凝固液面】。排在所有岩浆处理【最前面】:人还没进岩浆时
 			// 只要改一格就站住了,进去之后就得跟浮力赛跑,深池根本出不来。
 			// 不抢锁 —— 它不碰控制键也不走 PlaceAction,只改一格地形
@@ -162,6 +182,45 @@ namespace TerraBlind
 		const int LeveeCooldown = 6;
 		static bool _leveeNoItem;
 		static string _leveeBlocked = "";
+
+		// 人的碰撞箱里有实心方块 = 被封住了。直接把那些格【清掉】(不是挖,来不及挥镐),
+		// 因为下一帧 vanilla 就会拿零厚度的重叠去算挤出方向,把人弹到几千格外。
+		//
+		// 【只清真正重叠的那几格】,不扩大范围 —— 这是保命反射不是清场。
+		static void UnstickFromBlock(Player p)
+		{
+			int x0 = (int)(p.position.X / 16f);
+			int x1 = (int)((p.position.X + p.width - 1) / 16f);
+			int y0 = (int)(p.position.Y / 16f);
+			int y1 = (int)((p.position.Y + p.height - 1) / 16f);
+			int freed = 0;
+			for (int x = x0; x <= x1; x++)
+				for (int y = y0; y <= y1; y++)
+				{
+					if (!Predicates.InBounds(x, y)) continue;
+					var t = Main.tile[x, y];
+					if (!t.HasTile) continue;
+					// 平台不算封住:人能穿过去,而拆掉它反而会踩空
+					if (Main.tileSolidTop[t.TileType] || !Main.tileSolid[t.TileType]) continue;
+					// 挖不动的(熔炉/祭坛)拆不了,但也不该在这儿硬拆 —— 人是被传送进去的,
+					// 报出来让上层挪人,别把地图拆了
+					if (!DigTable.MineableWith(x, y, MazeWand.BestPickPower()))
+					{
+						if (_encaseWarn != (x, y))
+						{
+							_encaseWarn = (x, y);
+							DiagLog.Write($"[unstick-body] ({x},{y}) type={t.TileType} 挖不动,人被封在里面出不来");
+						}
+						continue;
+					}
+					WorldGen.KillTile(x, y);
+					NetMessage.SendTileSquare(-1, x, y, 1);
+					freed++;
+				}
+			if (freed > 0)
+				DiagLog.Write($"[unstick-body] 人被封在方块里,刨掉{freed}格 ({x0}..{x1},{y0}..{y1})");
+		}
+		static (int, int) _encaseWarn = (int.MinValue, int.MinValue);
 
 		static NPC ClosestFoe(Player p, float rangePx)
 		{
