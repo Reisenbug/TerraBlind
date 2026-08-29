@@ -1511,6 +1511,10 @@ namespace TerraBlind
         }
 
         // 人从平台上下来:按住 Down 直到离开起始平台(这样才能落在下面的平台/地板而不是一路穿过去),方向键全程按住。
+        // 穿平台时 Down 按到脚底比出发面低这么多就松手。要比平台间距(16px)【小】,
+        // 不然下一层也被穿掉;又要够人真的脱离出发那层,所以取 1px
+        const float DropReleasePx = 1f;
+
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateDrop(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
@@ -1519,7 +1523,12 @@ namespace TerraBlind
             bool leftStart = false; // must clear the start platform before a grounded frame counts as landing
             for (int f = 0; f < MaxSegFrames; f++)
             {
-                bool stillOnStart = (s.Py + PhysicsSimulator.PlayerH) < startFeetY + 16f;
+                // 【Down 只按到刚离开起始那层】。原来按满 16px:而下一层平台面就在 +16px,
+                // 等于人是【带着 Down】穿过下一层的 -- fallThrough 让它也接不住,于是一路穿到底。
+                // 后果是"下降一格"这条边根本产不出来:drop 边的落点永远在很深的地方,H 巨大,
+                // A* 只好绕"跳上去再掉下来",而那条落回原地 -> 每 38 帧重规划一次,循环 3700 帧。
+                // 松开之后是普通自由落体,下一层平台会正常接住。
+                bool stillOnStart = (s.Py + PhysicsSimulator.PlayerH) < startFeetY + DropReleasePx;
                 var input = new PhysicsSimulator.ControlInput { Down = stillOnStart, Left = dir < 0, Right = dir > 0 };
                 s = PhysicsSimulator.Step(s, input, ph);
                 input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
