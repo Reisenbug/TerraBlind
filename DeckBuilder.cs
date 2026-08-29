@@ -86,6 +86,9 @@ namespace TerraBlind
 
 		public static void Stop()
 		{
+			// 【无声 Stop 是查不动的】:铺到一半被谁停掉,日志和"正常铺完"一模一样。
+			// 2768 帧那次就是这样 —— 422 帧没有任何一行,分不出死了还是在走路
+			if (IsRunning) DiagLog.Write($"[deck] STOP 停在第{_idx}/{_line.Count}格 已放{Placed}");
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
 			PlaceAnywhere.Stop();
@@ -114,6 +117,9 @@ namespace TerraBlind
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
+				if (_idx % 20 == 0)
+					DiagLog.Write($"[deck] 进度{_idx}/{_line.Count} 放了{Placed} 本来就有{Already}");
 				return;
 			}
 			// 桥面这一格是平台:挖掉换成方块。平台会被踩空/穿下去,当桥面不合格

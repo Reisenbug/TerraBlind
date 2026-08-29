@@ -56,6 +56,7 @@ namespace TerraBlind
 
 		public static void Stop()
 		{
+			if (IsRunning) DiagLog.Write($"[placeany] STOP 停在({_tx},{_ty}) 链第{_idx}/{_chain.Count}格");
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
 		}
