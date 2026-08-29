@@ -289,8 +289,8 @@ namespace TerraBlind
 		// 挑法和 HellLine 一致:从人所在半边往中间扫,找【天花板到岩浆面之间空腔够高】
 		// 且脚下是实地的列。找不到返回 (-1,-1),调用方自己报。
 		// 选址:算线 → 找块干净的(底下要有岩浆)→ 从新房址重算线。
-		// 【tb 1 和 tb 2 共用这一份】。原来 HellLanding 自己另扫一套"第一个站得住的格",
-		// 传送落点和真正的房址毫无关系,于是 tb 2 每次从一个瞎选的地方开跑
+		// 人【已经在地狱】之后才跑这一步 —— tb 1 是走下来的,tb 2 是传到 A 点的,
+		// 两条路到这儿汇合,后面完全一样
 		public static HellLine.Result PickHellSite(int bx, int dir)
 		{
 			var rr = HellLine.Compute(bx, dir);
@@ -318,22 +318,35 @@ namespace TerraBlind
 
 		// tb 2 的传送落点。【必须和 tb 1 选的房址是同一处】—— 传到别处等于测的不是那条流程。
 		// 落在桥起点上:那本来就是 BridgeStart 要站的第一格,人一到就能接着往下跑
+		// tb 2 的落点 = 【A 点】= tb 1 下丛林走完、刚到地狱时人站的那一格。
+		// 就是下降路线的终点,和 /descent_route 描的是同一条线。
+		//
+		// 【别在这儿算房址/桥线】。写过一版是"算出桥起点再传过去",那是流程更后面好几步的位置,
+		// 传到那儿测的就不是"从地狱开始"这一段了。到了 A 点之后的事全归 StartHellRun。
+		const int LandScan = 30;   // A 点被埋住时往上找几行
+
 		public static (int x, int y) HellLanding()
 		{
-			var p = Main.LocalPlayer;
-			if (p == null) return (-1, -1);
-			int from = ActExecutor.OriginCx(p);
-			int dir = from < Main.maxTilesX / 2 ? 1 : -1;
-			var rr = PickHellSite(from, dir);
-			if (!rr.Found || rr.Line == null || rr.Line.Count == 0)
+			var (ax, ay) = HttpServerSystem.DescentEnd("jungle", out string why);
+			if (ax <= 0)
 			{
-				DiagLog.Write($"[teleport] 选不出地狱房址:{rr.Why}");
+				DiagLog.Write($"[teleport] 算不出下降终点:{why}");
 				return (-1, -1);
 			}
-			// 站在桥起点【上面】那一格:Line[0] 是要铺方块的格,人站它头顶
-			var (sx, sy) = rr.Line[0];
-			DiagLog.Write($"[teleport] 地狱落脚点 桥起点({sx},{sy}) 房子({rr.HouseX},{rr.HouseY})");
-			return (sx, sy - 1);
+			// 【必须落在人放得下的地方】。A 点是 H 场描出来的线上一格,线是允许穿实心的
+			// (下降路上本来就要挖),直接把人塞进方块 = vanilla 的挤出算炸,一帧飞几千格。
+			// 从 A 点往上找第一处身子那 3 行都空、且不沾岩浆的落脚行
+			for (int y = ay; y > ay - LandScan && y > 1; y--)
+			{
+				bool clear = true;
+				for (int r = 0; r < 3 && clear; r++)
+					if (Predicates.IsWall(ax, y - r) || Predicates.IsLava(ax, y - r)) clear = false;
+				if (!clear) continue;
+				DiagLog.Write($"[teleport] A点(下降终点)=({ax},{ay}) 落脚({ax},{y - 1}) 往上让了{ay - y}行");
+				return (ax, y - 1);
+			}
+			DiagLog.Write($"[teleport] A点({ax},{ay})往上{LandScan}行都塞不下人");
+			return (-1, -1);
 		}
 
 		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
@@ -352,8 +365,8 @@ namespace TerraBlind
 			int rbx = ActExecutor.OriginCx(rp);
 			int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
 			// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
-			// 选址那一套挪进 PickHellSite —— tb 2 的传送落点要用【同一份】,
-			// 各写一套的结果就是传到一个和房址无关的地方
+			// 选址那一套单独拆成 PickHellSite,读起来清楚些。
+			// 【传送落点不走这儿】:那是 A 点(下降终点),在这一步【之前】
 			var rr = PickHellSite(rbx, rdir);
 			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
 			_deckFrom = HouseBuilder.RoomWidth + 1;

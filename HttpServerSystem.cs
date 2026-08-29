@@ -3123,6 +3123,39 @@ namespace TerraBlind
 			public System.Collections.Generic.Dictionary<(int, int), int> Field;
 		}
 
+		// 【A 点】= tb 1 下丛林走完、刚到地狱时人站的那一格。
+		//
+		// 就是下降路线的终点:从入口沿 H 场一路下降,H 到 0 就是地狱源点。和 /descent_route
+		// 描线用的是【同一份】ComputeDescent + 同一套梯度下降,所以 tb 2 传过去 = tb 1 走到那儿。
+		//
+		// 【绝不在这儿算房址/桥线】。那是到了地狱【之后】的事(StartHellRun 自己会算),
+		// 把它塞进落点等于把 tb 2 传到流程更后面的位置,测的就不是同一段了。
+		public static (int x, int y) DescentEnd(string biome, out string why)
+		{
+			why = "";
+			ushort[] sig = BiomeSig(biome);
+			if (sig == null) { why = "unknown_biome:" + biome; return (-1, -1); }
+			var dd = ComputeDescent(sig, out string dw);
+			if (dd == null) { why = dw; return (-1, -1); }
+			var cur = (dd.EntX, dd.EntY);
+			var seen = new System.Collections.Generic.HashSet<(int, int)>();
+			for (int step = 0; step < 20000; step++)
+			{
+				if (!seen.Add(cur)) break;
+				if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;   // 到地狱了
+				int bestN = int.MaxValue; var best = cur;
+				foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+				{
+					var n = (cur.Item1 + dx, cur.Item2 + dy);
+					if (!dd.Field.TryGetValue(n, out int dn)) continue;
+					if (dn < bestN) { bestN = dn; best = n; }
+				}
+				if (best == cur) break;
+				cur = best;
+			}
+			return cur;
+		}
+
 		// I 键预览:主道 → 地狱的线 + 桥 + 房子,只画不走。ComputeDescent 和描线逻辑都在这个类里,
 		// 所以调用方在外面重写一遍毫无意义 —— 那样两份代码必然漂移。
 		public static bool PreviewDescentAndBridge(string biome, out string msg)
