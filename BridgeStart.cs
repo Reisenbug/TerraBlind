@@ -38,8 +38,12 @@ namespace TerraBlind
 			_phaseFrames = 0; _held = 0; _tries = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[bstart] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 桥起点({tx},{ty})");
-			// 站到目标【上面】那一格:目标格自己要被方块占掉,人站它头顶
-			RecedingNav.Start(tx, ty, RecedingNav.Mode.Reach);
+			// 【走到要站的那一格,不是走到够得着】。原来用 Mode.Reach:手够到就算到,
+			// 而 ReachBoost=8 让人停在目标下方 6 行 —— 接着 PlaceAnywhere 从那么低的地方
+			// 往上接锚点链,9 块方块沿着人左边砌一堵墙再横盖到头顶,把人封死在里面
+			// (现场:人(2096,1055) 跳升=0 能搭=False 顶=1055,自己的方块盖住了自己)。
+			// 走到 _ty-1 就在目标正上方,方块直接放在脚下,根本不需要链
+			RecedingNav.Start(tx, ty - 1, RecedingNav.Mode.Stand);
 			_ph = Ph.Goto;
 			return true;
 		}

@@ -32,7 +32,9 @@ namespace TerraBlind
 		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
 		private static bool _asideNav;   // 这次让位是不是起了寻路(决定要不要看 LastStop)
 		private const int MaxAsideCols = 5;   // 让位最多往外找几列。再远就够不着了(tileRangeX=5)
-		private const int AsideRows = 3;      // 上下找几行。半砖/坡地上落脚点未必和目标同高
+		private const int AsideRows = 3;
+		// 人头顶留几行不许砌。跳一下约 3 行,留够跳出去的空间
+		private const int HeadRoom = 3;      // 上下找几行。半砖/坡地上落脚点未必和目标同高
 		private const int BlockedAt = 20;   // 朝目标推了这么多帧还没换列 = 被顶住了
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -99,6 +101,9 @@ namespace TerraBlind
 		static bool Build(out string why)
 		{
 			if (BuildAvoid(true, out why)) return true;
+			// 放宽【身体格】重试:人到跟前会让开,所以链穿过身体是可以的。
+			// 但"不许封住头顶"那条【永远不放宽】—— 那不是让一让能解决的,
+			// 砌完人就出不来了,A* 也搜不出路,只能整趟重开
 			return BuildAvoid(false, out why);
 		}
 
@@ -112,6 +117,18 @@ namespace TerraBlind
 			{ var bc = Predicates.BodyCols(pl); bl0 = bc.left; br0 = bc.right; fy0 = ActExecutor.OriginCy(pl); }
 			bool InBodyCell(int x, int y)
 				=> avoidBody && x >= bl0 && x <= br0 && y <= fy0 && y >= fy0 - 2;
+			// 【绝不把自己封在里面】。链只是"接到锚点"的最短路,它不知道人站在哪 ——
+			// 现场:人在(2097,1055),链沿 2095 列从 1056 砌到 1052 再横盖到 (2097,1050),
+			// 人头顶和左边全被自己的方块堵死(跳升=0 能搭=False 顶=1055),A* 再也搜不出路。
+			// 判据只管【人头顶那一列】:身子上方 3 行内不许有链上的格,那是跳出去的唯一出口
+			bool SealsPlayer(int x, int y)
+			{
+				if (pl == null) return false;
+				var bc2 = Predicates.BodyCols(pl);
+				if (x < bc2.left || x > bc2.right) return false;
+				int top = Predicates.BodyRows(pl).top;
+				return y < top && y >= top - HeadRoom;
+			}
 			// 目标本身被拉黑 = 它反复放不上,再找路也是绕回它,直接认输
 			if (_bad.Contains((_tx, _ty))) { why = $"({_tx},{_ty})自己就放不上"; return false; }
 			if (HasAnchor(_tx, _ty)) { _chain.Add((_tx, _ty)); return true; }
@@ -133,10 +150,13 @@ namespace TerraBlind
 					var n = (cx + dx, cy + dy);
 					if (seen.Contains(n) || !Free(n.Item1, n.Item2)) continue;
 					if (InBodyCell(n.Item1, n.Item2)) continue;
+					if (SealsPlayer(n.Item1, n.Item2)) continue;
 					seen.Add(n); prev[n] = (cx, cy); q.Enqueue(n);
 				}
 			}
-			why = $"({_tx},{_ty})一路被熔岩/实心隔断,接不到任何有锚的地方";
+			// 别一律说"被熔岩隔断":头顶那几行是我们自己不许砌的,那是【人站错地方】,
+			// 挪一步就有路,和真被岩浆封死完全是两回事
+			why = $"({_tx},{_ty})接不到任何有锚的地方(要么被熔岩/实心隔断,要么绕不开人头顶那{HeadRoom}行)";
 			return false;
 		}
 
