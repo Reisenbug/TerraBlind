@@ -288,30 +288,52 @@ namespace TerraBlind
 		//
 		// 挑法和 HellLine 一致:从人所在半边往中间扫,找【天花板到岩浆面之间空腔够高】
 		// 且脚下是实地的列。找不到返回 (-1,-1),调用方自己报。
+		// 选址:算线 → 找块干净的(底下要有岩浆)→ 从新房址重算线。
+		// 【tb 1 和 tb 2 共用这一份】。原来 HellLanding 自己另扫一套"第一个站得住的格",
+		// 传送落点和真正的房址毫无关系,于是 tb 2 每次从一个瞎选的地方开跑
+		public static HellLine.Result PickHellSite(int bx, int dir)
+		{
+			var rr = HellLine.Compute(bx, dir);
+			if (!rr.Found) return rr;
+			// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
+			// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
+			int hw1 = HouseBuilder.RoomWidth + 1;
+			bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+				out int cx0, out int cy0, out int sc0, false, true);
+			if (!got)
+			{
+				DiagLog.Write($"[reach-test] 附近没有【岩浆上】的干净房址(扫了{sc0}),退回不要求岩浆");
+				got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
+					out cx0, out cy0, out sc0, false);
+			}
+			if (got && (cx0 != rr.HouseX || cy0 != rr.HouseY))
+			{
+				DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
+				var rr2 = HellLine.Compute(cx0, dir, cy0);
+				if (rr2.Found) rr = rr2;
+				else DiagLog.Write($"[reach-test] 新房址算不出线({rr2.Why}),用原来那条");
+			}
+			return rr;
+		}
+
+		// tb 2 的传送落点。【必须和 tb 1 选的房址是同一处】—— 传到别处等于测的不是那条流程。
+		// 落在桥起点上:那本来就是 BridgeStart 要站的第一格,人一到就能接着往下跑
 		public static (int x, int y) HellLanding()
 		{
 			var p = Main.LocalPlayer;
 			if (p == null) return (-1, -1);
 			int from = ActExecutor.OriginCx(p);
 			int dir = from < Main.maxTilesX / 2 ? 1 : -1;
-			// 从人这一侧往里扫,第一个站得住的就用 —— 桥线自己会从这儿往远端算
-			for (int step = 0; step < 400; step++)
+			var rr = PickHellSite(from, dir);
+			if (!rr.Found || rr.Line == null || rr.Line.Count == 0)
 			{
-				int x = from + dir * step;
-				if (x < 4 || x >= Main.maxTilesX - 4) break;
-				// 从岩浆面往上找第一格能站人的:脚下实、身子那 3 行空、不沾岩浆
-				for (int y = Main.maxTilesY - 15; y > Main.UnderworldLayer + 3; y--)
-				{
-					if (!Predicates.IsGround(x, y + 1)) continue;
-					bool clear = true;
-					for (int r = 0; r < 3 && clear; r++)
-						if (Predicates.IsWall(x, y - r) || Predicates.IsLava(x, y - r)) clear = false;
-					if (!clear || Predicates.IsLava(x, y + 1)) continue;
-					DiagLog.Write($"[teleport] 地狱落脚点 ({x},{y}) 离人{step}列");
-					return (x, y);
-				}
+				DiagLog.Write($"[teleport] 选不出地狱房址:{rr.Why}");
+				return (-1, -1);
 			}
-			return (-1, -1);
+			// 站在桥起点【上面】那一格:Line[0] 是要铺方块的格,人站它头顶
+			var (sx, sy) = rr.Line[0];
+			DiagLog.Write($"[teleport] 地狱落脚点 桥起点({sx},{sy}) 房子({rr.HouseX},{rr.HouseY})");
+			return (sx, sy - 1);
 		}
 
 		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
@@ -329,29 +351,11 @@ namespace TerraBlind
 			if (rp.velocity.Y != 0f) { why = $"人还在空中(vy={rp.velocity.Y:0.##}),等落地再开工"; return false; }
 			int rbx = ActExecutor.OriginCx(rp);
 			int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
-			var rr = HellLine.Compute(rbx, rdir);
-			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
-
 			// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
-			// 复用地表选址找块干净的,再从那儿重算整条线 —— 房子和桥就天然对齐
-			// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
-			// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
-			int hw1 = HouseBuilder.RoomWidth + 1;
-			bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
-				out int cx0, out int cy0, out int sc0, false, true);
-			if (!got)
-			{
-				DiagLog.Write($"[reach-test] 附近没有【岩浆上】的干净房址(扫了{sc0}),退回不要求岩浆");
-				got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
-					out cx0, out cy0, out sc0, false);
-			}
-			if (got && (cx0 != rr.HouseX || cy0 != rr.HouseY))
-			{
-				DiagLog.Write($"[reach-test] 房址({rr.HouseX},{rr.HouseY})被占(树/旧平台),挪到({cx0},{cy0}) 扫了{sc0}");
-				var rr2 = HellLine.Compute(cx0, rdir, cy0);
-				if (rr2.Found) rr = rr2;
-				else DiagLog.Write($"[reach-test] 新房址算不出线({rr2.Why}),用原来那条");
-			}
+			// 选址那一套挪进 PickHellSite —— tb 2 的传送落点要用【同一份】,
+			// 各写一套的结果就是传到一个和房址无关的地方
+			var rr = PickHellSite(rbx, rdir);
+			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
 			_deckFrom = HouseBuilder.RoomWidth + 1;
 			var (rsx, rsy) = rr.Line[0];
 			// 画线必须在重算【之后】:画早了显示的是旧线,和实际铺的对不上。
