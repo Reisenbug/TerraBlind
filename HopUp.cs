@@ -22,6 +22,8 @@ namespace TerraBlind
 		private static bool _wasFalling;  // to detect the moment we land, so a multi-hop can push off again
 
 		private const int MaxFrames = 300;
+		// 连着这么多帧行号没变 = 跳不上去。一次跳约 20 帧,给两跳的余量
+		private const int StallDig = 45;
 
 		public static bool IsRunning => _running;
 		public static string Outcome = "idle";   // idle running done timeout
@@ -60,7 +62,9 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _running = false; Outcome = "timeout"; return; }
 
-			_frames++;
+			// 挖头顶的帧不算进超时:预算是给"跳"的,挖掘另有 ClearWay 自己的失败判据。
+			// 不排除的话挖几格就吃掉大半预算,人还没开始跳就超时了
+			if (!ItemUseCoordinator.IsActive) _frames++;
 			if (_frames > MaxFrames) { Outcome = "timeout"; _running = false; return; }
 
 			int cx = ActExecutor.OriginCx(p);
@@ -95,10 +99,32 @@ namespace TerraBlind
 				// landed below the target → skip jump this one frame so the next is a new press.
 				return;
 			}
+			// 正在挖头顶就别跳:跳起来人离开原地,镐的目标格立刻够不着,挖一半又落回来
+			if (ItemUseCoordinator.IsActive) return;
 			p.controlJump = true;
 
 			if (cy != _lastCy) { _lastCy = cy; _stall = 0; }
 			else _stall++;
+
+			// 【跳不上去就是头顶被挡 -- 挖掉它】。原来 _stall 只累加、没有任何分支读它,
+			// 于是人对着天花板跳满 300 帧超时,调用方重启,再跳满,无限循环
+			// (现场:hop target_row=1041 from=(2100,1042) 连着三轮都停在 1042)。
+			// 从人头顶往上挖到目标行:身子那 3 行之上、目标行之下的都可能挡着
+			if (_stall > StallDig && p.velocity.Y == 0f)
+			{
+				_stall = 0;
+				var (bl, br) = Predicates.BodyCols(p);
+				for (int ry = cy - 3; ry >= _targetCy - 1; ry--)
+					for (int c = bl; c <= br; c++)
+						if (ClearWay.Dig(p, c, ry, "挡着爬柱子"))
+						{
+							DiagLog.Write($"[hop] 卡在{cy}行上不去,挖({c},{ry})");
+							return;
+						}
+				// 挖不动(没镐/挖不掉的砖)就别再耗满 300 帧,当场认账
+				if (!ClearWay.HasPick(p))
+				{ DiagLog.Write($"[hop] 卡在{cy}行,要到{_targetCy},头顶挡着但没镐"); Outcome = "timeout"; _running = false; }
+			}
 		}
 
 		public static string StatusJson()

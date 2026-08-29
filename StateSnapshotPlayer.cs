@@ -585,6 +585,9 @@ namespace TerraBlind
 			if (HopUp.IsRunning)
 			{
 				HopUp.Tick();
+				// hop 卡住时会挖头顶那几格。挖走 ItemUseCoordinator,而这里直接 return,
+				// 不替它发控制帧的话镐永远挥不动 -- 指令发了、人不动、还是跳满 300 帧
+				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
 				RecordSystem.CaptureFrame(Player);
 				return;
 			}
