@@ -21,6 +21,8 @@ namespace TerraBlind
 		private static int _recovers;
 		private static int _skipped;   // 连着放不上的格数,断了就清零
 		private static int _runAt = -1;   // 已经在这个下标起过一趟连铺
+		private static int _lastPx = int.MinValue;   // 上一帧人在哪一列。判"推了却没动"= 被顶住
+		private static int _blockedFrames;           // 连着几帧没挪窝
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
 		// 竖直差这么多就不是走两步能解决的,交栈。够得着的判据本身有几行余量,所以要比它松
@@ -31,6 +33,8 @@ namespace TerraBlind
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
 		private const int MinRun = 3;   // 短于这个不值得起一趟 BridgeBuilder,直接单格放
+		// 朝目标推了这么多帧还没换列 = 被顶住了。太小会把"起跳前的一帧"误判成卡住
+		private const int BlockedAt = 20;
 
 		private const int MaxFrames = 60 * 600;
 		private const int MaxCellFrames = 180;
@@ -78,6 +82,7 @@ namespace TerraBlind
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
+			_lastPx = int.MinValue; _blockedFrames = 0;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
 			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
@@ -148,6 +153,34 @@ namespace TerraBlind
 			// 人得站在【已经铺好的那一段】上。低了就跳:Reach 判的是"够得着"不是"站上去",
 			// 人在桥面下方也够得着 → 立刻 done → 下一帧又低 → 又 Start,于是刷屏且没爬上去
 			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
+			// 【挡路的挖掉 —— 不管够不够得着】。原来这句只挂在下面"够不着"那条分支里,
+			// 而挡的是【身子】不是【手】:ReachBoost 让手能隔着墙够到 8 格外,于是够得着 →
+			// 跳过整条分支 → 交给 PlaceAnywhere → 它那份挖同样只在够不着时跑 → 两边都不挖。
+			// 现场:2768 帧铺完(2064,1047)后 422 帧一行日志都没有,墙就在人前面。
+			//
+			// 判据是【推了却没挪窝】,不是"前面有方块":桥面本来就贴着地形,见方块就挖会把
+			// 整条线两侧刨空。人朝目标推了 BlockedAt 帧列号还没变,那才是真被顶住。
+			// 判"横着推不动"要看 velocity.X,不看 Y:人低于桥面时下面那段会一直让他跳,
+			// 腾空占了大半帧数,拿 Y==0 当门会几乎数不上去 —— 而墙挡着恰恰就是这个场面
+			if (px != _lastPx) { _blockedFrames = 0; _lastPx = px; }
+			else if (px != x && System.Math.Abs(p.velocity.X) < 0.1f) _blockedFrames++;
+			if (_blockedFrames >= BlockedAt)
+			{
+				int bdir = px < x ? 1 : -1;
+				if (ClearWay.Forward(p, bdir, "挡着桥面的路"))
+				{
+					DiagLog.Write($"[deck] 人卡在{px}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
+					_blockedFrames = 0;
+					return;
+				}
+				// 挖不动(没镐/挖不掉的砖)就别再数了,让下面的超时把现场交出去
+				if (_blockedFrames > BlockedAt * 3)
+				{
+					DiagLog.Write($"[deck] 人卡在{px}列{_blockedFrames}帧但挖不开,前面={(Predicates.IsWall(px + bdir, py) ? "墙" : "空")}");
+					_blockedFrames = 0;
+				}
+			}
+
 			if (py > y - 1 + StandSlack)
 			{
 				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
@@ -203,9 +236,6 @@ namespace TerraBlind
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
 				if (PlaceAnywhere.IsRunning) return;
-				// 真实地形横在路上(要塞墙/矿脉/山体)就挖开 —— 老的 HellDeck 早有这一手,
-				// 我新写这个时漏了,于是同一堵墙老路径过得去、新路径卡死
-				if (ClearWay.Forward(p, px < x ? 1 : -1)) return;
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
 				if (!ClearWay.HasPick(p) && Predicates.IsWall(px + (px < x ? 1 : -1), py))
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }

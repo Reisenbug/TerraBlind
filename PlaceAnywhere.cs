@@ -22,12 +22,15 @@ namespace TerraBlind
 		private static int _frames, _cellFrames;
 		private static readonly HashSet<(int, int)> _bad = new();
 		private static int _rebuilds;
+		private static int _lastPx = int.MinValue;   // 上一帧人在哪一列,判"推了却没挪窝"
+		private static int _blockedFrames;
 
 		private const int MaxFrames = 60 * 90;
 		private const int MaxCellFrames = 150;
 		private const int MaxRebuilds = 8;
 		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
 		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
+		private const int BlockedAt = 20;   // 朝目标推了这么多帧还没换列 = 被顶住了
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static string Outcome = "idle";
@@ -40,6 +43,7 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
+			_lastPx = int.MinValue; _blockedFrames = 0;
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
@@ -222,6 +226,30 @@ namespace TerraBlind
 			var (x, y) = _chain[_idx];
 			if (Occupied(x, y)) { _idx++; _cellFrames = 0; return; }
 			if (++_cellFrames > MaxCellFrames) { Retry($"({x},{y})卡了{_cellFrames}帧"); return; }
+
+			// 【挡路的挖掉 —— 不管够不够得着】。下面那份挖只在"够不着"分支里,
+			// 而手能隔着墙够到 8 格外(ReachBoost),脚过不去 —— 于是够得着就永远不挖。
+			// 判据是【推了却没挪窝】,不是"前面有方块":见方块就挖会把路两侧刨空
+			{
+				int bpx = ActExecutor.OriginCx(p);
+				if (bpx != _lastPx) { _blockedFrames = 0; _lastPx = bpx; }
+				else if (bpx != x && System.Math.Abs(p.velocity.X) < 0.1f) _blockedFrames++;
+				if (_blockedFrames >= BlockedAt)
+				{
+					int bdir = bpx < x ? 1 : -1;
+					if (ClearWay.Forward(p, bdir, "挡着放置的路"))
+					{
+						DiagLog.Write($"[placeany] 人卡在{bpx}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
+						_blockedFrames = 0;
+						return;
+					}
+					if (_blockedFrames > BlockedAt * 3)
+					{
+						DiagLog.Write($"[placeany] 人卡在{bpx}列{_blockedFrames}帧但挖不开,前面={(Predicates.IsWall(bpx + bdir, ActExecutor.OriginCy(p)) ? "墙" : "空")}");
+						_blockedFrames = 0;
+					}
+				}
+			}
 
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
