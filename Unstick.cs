@@ -95,7 +95,8 @@ namespace TerraBlind
 			{
 				BlockKind.Terrain => Dig(p, b),
 				BlockKind.SelfInWay => StepAside(p, b),
-				BlockKind.OutOfReach => Approach(p, b),
+				BlockKind.OutOfReach => Approach(p, b, stand: false),
+				BlockKind.NotStanding => Approach(p, b, stand: true),
 				BlockKind.NoFooting => MakeFooting(p, b),
 				BlockKind.NoItem => GetItem(p, b),
 				BlockKind.NoTool => GetItem(p, b),
@@ -146,18 +147,25 @@ namespace TerraBlind
 		}
 
 		// 够不着:走过去。同高就横着靠,高低差大就先造落脚点上下去
-		static bool Approach(Player p, Blocker b)
+		// stand=false: 够得着就算到(放置/挖掘要的是手够到)。
+		// stand=true : 脚必须真踩在那一格(回桥面/爬上去要的是站上去)。
+		// 【两者绝不能混】。ReachBoost=8 让手隔 3 行就够得着,拿 Reach 去救"站上去"
+		// 会每帧"到了"→Stop→调用方一看没站上→再交栈,人一步不动(vx=0),三轮耗尽 STUCK
+		static bool Approach(Player p, Blocker b, bool stand)
 		{
 			if (SettleAt.IsRunning || RecedingNav.Active) { LastAction = "靠近中"; return true; }
 			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
-			if (System.Math.Abs(b.Wy - cy) <= 1)
+			// 同高只差几列才横着挪。要"站上去"的时候【不能】走这条:SettleAt 只改列不改行,
+			// 人低一行照样横移到位,然后还是没站上去
+			if (!stand && System.Math.Abs(b.Wy - cy) <= 1)
 			{
 				int want = b.Wx + (cx <= b.Wx ? -2 : 2);
 				if (SettleAt.Start(want, out _)) { LastAction = $"靠到{want}列"; return true; }
 			}
 			// 差得远就交给寻路,它自己会挖会搭
-			RecedingNav.Start(b.Wx, b.Wy, RecedingNav.Mode.Reach);
-			LastAction = $"寻路去({b.Wx},{b.Wy})";
+			var mode = stand ? RecedingNav.Mode.Stand : RecedingNav.Mode.Reach;
+			RecedingNav.Start(b.Wx, b.Wy, mode);
+			LastAction = $"寻路去({b.Wx},{b.Wy}) {(stand ? "站上" : "够到")}";
 			return true;
 		}
 

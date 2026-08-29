@@ -190,7 +190,9 @@ namespace TerraBlind
 				// 它会挖会搭会跳,而这儿硬按方向键只会在坎前蹭,8 次蹭不上去就整条桥失败
 				if (py - (y - 1) > JumpBackSlack)
 				{
-					if (!Unstick.Handle("deck", new Blocker(BlockKind.OutOfReach, x, y - 1, "回桥面")))
+					// 【NotStanding 不是 OutOfReach】:要的是脚踩上去,不是手够到。
+					// 用 OutOfReach 会走 Mode.Reach,而手隔 3 行就够得着 —— 每帧"到了"却一步不动
+					if (!Unstick.Handle("deck", new Blocker(BlockKind.NotStanding, x, y - 1, "回桥面")))
 						Fail($"回不了桥面 (人{py} 桥面{y})");
 					return;
 				}

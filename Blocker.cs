@@ -12,6 +12,10 @@ namespace TerraBlind
 		Terrain,      // 目标格被占着 -> 挖掉
 		SelfInWay,    // 人自己压着要动的格子 -> 让开
 		OutOfReach,   // 够不着 -> 走过去;走不过去就先造落脚点
+		// 【够得着但没站上去】。和 OutOfReach 分开是因为救法不同:那个用 Mode.Reach(够得着就算到),
+		// 这个必须 Mode.Stand(脚真踩在那一格)。ReachBoost=8 让手隔 3 行就够得着,
+		// 拿 Reach 去救"回桥面"会每帧报"到了"却一步没动 —— deck 就是这么死循环三轮的
+		NotStanding,
 		NoFooting,    // 没地方站 -> 造:平台/pillar/桥
 		NoItem,       // 背包没料 -> 合成(递归:材料+工作台)
 		NoTool,       // 没镐/斧 -> 合成工具(递归)

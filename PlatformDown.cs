@@ -99,7 +99,8 @@ namespace TerraBlind
 					{
 						// 脚下有砖就是地形,没砖就是够不着(悬空)
 						var sb2 = Predicates.IsWall(bl, feetY + 1) ? new Blocker(BlockKind.Terrain, bl, feetY + 1, "脚下被占")
-							: new Blocker(BlockKind.OutOfReach, bl, feetY + 1, "站不住");
+							// 要的是【站上去】不是够得着 —— 用 OutOfReach 会走 Mode.Reach,手够到就报到达
+							: new Blocker(BlockKind.NotStanding, bl, feetY, "站不住");
 						Stuck(sb2, $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return;
 					}
 					// 【掉过目标行就别再等了】。这一相位只服务"站着往下铺梯子",人悬空时原样 return
