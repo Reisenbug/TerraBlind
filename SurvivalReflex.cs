@@ -41,10 +41,11 @@ namespace TerraBlind
 			// 【不能只看 lavaWet】。零点几格的岩浆照样把人困住(行为和满格岩浆没区别),
 			// 而那种深度下 lavaWet 可能已经是假的 -- 堤会提前停手,人还泡在里面出不来。
 			// 判据改成:碰撞箱盖到的格子里【一滴岩浆都不许有】。
-			// 【人被封在方块里就先刨出来】。卡在实心里时 vanilla 的挤出逻辑会把人弹走 ——
-			// 实测一帧几千格飞到地图边缘(DragonLens 传送进石头里也一样)。
-			// 这比岩浆更优先:人一旦被弹飞,后面所有判据读到的位置都是错的。
-			UnstickFromBlock(p);
+			// 【人卡进方块里一律不管】。写过一个"刨掉身体里的方块"的反射,后果是:
+			// 人传送进石头 -> 每帧刨 -> 人往下掉一点又进新方块 -> 又刨,
+			// vanilla 的碰撞在"方块突然消失"和"人还在里面"之间反复解算,
+			// 速度每帧被放大约 1.75 倍 -> 一帧几百格飞出地图。
+			// 卡进方块是原版自己会处理的事(它有挤出逻辑),别插手。
 
 			// 【碰到之前先凝固液面】。排在所有岩浆处理【最前面】:人还没进岩浆时
 			// 只要改一格就站住了,进去之后就得跟浮力赛跑,深池根本出不来。
@@ -183,44 +184,6 @@ namespace TerraBlind
 		static bool _leveeNoItem;
 		static string _leveeBlocked = "";
 
-		// 人的碰撞箱里有实心方块 = 被封住了。直接把那些格【清掉】(不是挖,来不及挥镐),
-		// 因为下一帧 vanilla 就会拿零厚度的重叠去算挤出方向,把人弹到几千格外。
-		//
-		// 【只清真正重叠的那几格】,不扩大范围 —— 这是保命反射不是清场。
-		static void UnstickFromBlock(Player p)
-		{
-			int x0 = (int)(p.position.X / 16f);
-			int x1 = (int)((p.position.X + p.width - 1) / 16f);
-			int y0 = (int)(p.position.Y / 16f);
-			int y1 = (int)((p.position.Y + p.height - 1) / 16f);
-			int freed = 0;
-			for (int x = x0; x <= x1; x++)
-				for (int y = y0; y <= y1; y++)
-				{
-					if (!Predicates.InBounds(x, y)) continue;
-					var t = Main.tile[x, y];
-					if (!t.HasTile) continue;
-					// 平台不算封住:人能穿过去,而拆掉它反而会踩空
-					if (Main.tileSolidTop[t.TileType] || !Main.tileSolid[t.TileType]) continue;
-					// 挖不动的(熔炉/祭坛)拆不了,但也不该在这儿硬拆 —— 人是被传送进去的,
-					// 报出来让上层挪人,别把地图拆了
-					if (!DigTable.MineableWith(x, y, MazeWand.BestPickPower()))
-					{
-						if (_encaseWarn != (x, y))
-						{
-							_encaseWarn = (x, y);
-							DiagLog.Write($"[unstick-body] ({x},{y}) type={t.TileType} 挖不动,人被封在里面出不来");
-						}
-						continue;
-					}
-					WorldGen.KillTile(x, y);
-					NetMessage.SendTileSquare(-1, x, y, 1);
-					freed++;
-				}
-			if (freed > 0)
-				DiagLog.Write($"[unstick-body] 人被封在方块里,刨掉{freed}格 ({x0}..{x1},{y0}..{y1})");
-		}
-		static (int, int) _encaseWarn = (int.MinValue, int.MinValue);
 
 		static NPC ClosestFoe(Player p, float rangePx)
 		{
