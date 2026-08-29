@@ -27,6 +27,24 @@ namespace TerraBlind
 			=> ((int)(px / 16f), (int)((px + w - 1f) / 16f));
 		public static (int left, int right) BodyCols(Player p) => BodyCols(p.position.X, p.width);
 
+		// 这一格和人的碰撞箱重叠吗 —— 重叠就【放不下任何东西】(vanilla Collision.EmptyTile
+		// 拿 position/width/height 做矩形相交,没有别的判据)。
+		//
+		// 【绝不拿 OriginCy±N 近似】。站在半砖上脚底下沉 8px,身子从 3 行变成跨 4 行,
+		// 而 OriginCy 自己也跟着降一行:[fy-2,fy] 会把头顶那行漏掉、又把脚下那行多算进来。
+		// 现场:桥第一格和碰撞箱重合,放不出来 → 跳起来让开 → 落回半砖 → 还是重合 → STUCK
+		public static bool BodyOverlaps(Player p, int x, int y)
+		{
+			if (p == null) return false;
+			float l = x * 16f, r = l + 16f, t = y * 16f, b = t + 16f;
+			return p.position.X < r && p.position.X + p.width > l
+				&& p.position.Y < b && p.position.Y + p.height > t;
+		}
+
+		// 人身子盖住的【行】区间。半砖/斜砖上会是 4 行,平地上 3 行
+		public static (int top, int bottom) BodyRows(Player p)
+			=> ((int)(p.position.Y / 16f), (int)((p.position.Y + p.height - 1f) / 16f));
+
 		// SOLID = 踩得住且走不过去。平台是 solidTop 也算地。树/藤/草 HasTile 但不 solid
 		public static bool IsSolid(int x, int y)
 		{

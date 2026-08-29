@@ -30,6 +30,9 @@ namespace TerraBlind
 		private const int MaxRebuilds = 8;
 		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
 		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
+		private static bool _asideNav;   // 这次让位是不是起了寻路(决定要不要看 LastStop)
+		private const int MaxAsideCols = 5;   // 让位最多往外找几列。再远就够不着了(tileRangeX=5)
+		private const int AsideRows = 3;      // 上下找几行。半砖/坡地上落脚点未必和目标同高
 		private const int BlockedAt = 20;   // 朝目标推了这么多帧还没换列 = 被顶住了
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -43,7 +46,7 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
-			_lastPx = int.MinValue; _blockedFrames = 0;
+			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false;
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
@@ -137,68 +140,119 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 判据只有这一份:StepAside 和 Tick 用同一个,不然一边以为让开了一边还在等
-		static bool InBody(Player p, int x, int y)
-		{
-			var (bl, br) = Predicates.BodyCols(p);
-			int fy = ActExecutor.OriginCy(p);
-			return x >= bl && x <= br && y <= fy && y >= fy - 2;
-		}
+		// 判据只有这一份:StepAside 和 Tick 用同一个,不然一边以为让开了一边还在等。
+		// 【走 vanilla 的矩形相交】,不拿 OriginCy±2 近似 —— 半砖上身子跨 4 行,近似会判错
+		static bool InBody(Player p, int x, int y) => Predicates.BodyOverlaps(p, x, y);
 
 		// 够得着又不压住目标的最近落脚列。伸手 tileRangeX=5,身子占 1~2 列,
 		// 所以离目标 2~4 列的地方两个条件都能满足 —— 朝它走,而不是朝目标走。
 		static int ApproachCol(Player p, int x, int y)
 		{
-			int cx = ActExecutor.OriginCx(p);
-			int span = Predicates.BodyCols(p).right - Predicates.BodyCols(p).left;
-			int best = cx, bestD = int.MaxValue;
-			for (int off = span + 1; off <= 4; off++)
-				foreach (int col in new[] { x - off, x + off })
-				{
-					if (!Predicates.IsSolid(col, y + 1) && !Predicates.IsSolid(col, y)) continue;
-					int d = System.Math.Abs(col - cx);
-					if (d < bestD) { bestD = d; best = col; }
-				}
-			return best;
+			var (c, _) = ApproachSpot(p, x, y);
+			return c < 0 ? ActExecutor.OriginCx(p) : c;
 		}
 
-		// 目标格在人身子里 → 往远离它的方向让一格。让开由 SettleAt 精确落位。
+		// 【站哪儿才能放 (x,y)】—— 一格都不压住它,而且够得着。返回那一格(脚站的格),
+		// 找不到返回 (-1,-1) 让调用方交栈。
+		//
+		// 判据全部按【真碰撞箱】算,不拿 OriginCy±N 近似:站半砖上脚底下沉 8px,
+		// 身子跨 4 行而不是 3 行,近似会把"其实压着"判成"没压着",于是放不出来又不知道为什么
+		static (int col, int row) ApproachSpot(Player p, int x, int y)
+		{
+			int cx = ActExecutor.OriginCx(p);
+			int span = Predicates.BodyCols(p).right - Predicates.BodyCols(p).left;
+			int best = -1, bestRow = -1, bestD = int.MaxValue;
+			// 只找【站得住】的:脚下那格实心。悬空的列不算落脚点 —— 走过去就掉下去
+			for (int off = span + 1; off <= MaxAsideCols; off++)
+				foreach (int col in new[] { x - off, x + off })
+				{
+					if (col < 1 || col >= Main.maxTilesX - 1) continue;
+					// 站在目标同一行、或者高一点低一点都行,逐行找踩得住的
+					for (int row = y - AsideRows; row <= y + AsideRows; row++)
+					{
+						if (!Predicates.IsSolid(col, row + 1)) continue;   // 脚下要有地
+						if (WouldOverlap(p, col, row, x, y)) continue;     // 站上去还压着目标就白搭
+						if (!ReachesFrom(p, col, row, x, y)) continue;     // 站上去够不着也白搭
+						int d = System.Math.Abs(col - cx) + System.Math.Abs(row - y);
+						if (d < bestD) { bestD = d; best = col; bestRow = row; }
+					}
+				}
+			return (best, bestRow);
+		}
+
+		// 人【站在 (col,row) 上】的话,碰撞箱会不会盖住 (x,y)。
+		// 按 vanilla 的矩形相交算,和 Collision.EmptyTile 同一把尺子
+		static bool WouldOverlap(Player p, int col, int row, int x, int y)
+		{
+			float px = col * 16f + 8f - p.width / 2f;
+			float py = (row + 1) * 16f - p.height;
+			float l = x * 16f, r = l + 16f, t = y * 16f, b = t + 16f;
+			return px < r && px + p.width > l && py < b && py + p.height > t;
+		}
+
+		// 站在 (col,row) 上够不够得着 (x,y)。用 vanilla 自己的判据,不自己数格数
+		static bool ReachesFrom(Player p, int col, int row, int x, int y)
+		{
+			var save = p.position;
+			p.position.X = col * 16f + 8f - p.width / 2f;
+			p.position.Y = (row + 1) * 16f - p.height;
+			bool ok = p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			p.position = save;
+			return ok;
+		}
+
+		// 目标格在人身子里 → 挪到一个【放得出来】的位置。
+		//
+		// 挪多远、要不要爬、路上有没有坑,这一律【交给寻路】,不在这儿自己试两个候选列:
+		//   * 让一格就够   -> ApproachSpot 找到的就在隔壁,寻路两步走完
+		//   * 让不了一格   -> ApproachSpot 会往外找到 5 列、上下 3 行,总共几十个候选
+		//   * 让开会掉下去 -> 候选本来就只收"脚下实心"的格,悬空的进不来
+		//   * 要爬 100 格  -> 寻路的事。它会挖会搭,到不了会明确报 unreachable
+		//   * 跳不起来     -> 不靠跳了。跳只在原地起跳能解决时用,别的一律走寻路
+		//
+		// 一个候选都没有 = 这一格谁站着都放不出来,交栈(它还有挖/搭/换目标那几手)
 		static bool StepAside(Player p, int x, int y, out string why)
 		{
+			why = "";
+			if (!InBody(p, x, y)) return false;
 			var (bl, br) = Predicates.BodyCols(p);
-			int fy = ActExecutor.OriginCy(p);
-			if (!InBody(p, x, y)) { why = ""; return false; }
-			// 让到【身子完全不盖住 x】为止。挪一格不够:目标在边缘时新位置还盖着它,每帧重来。
-			int span = br - bl;                     // 人跨 1~2 列(20px 宽)
-			// 两个方向都试,而且【必须那一列有地可站】—— 让到悬空处人会掉下去。
-			// 日志:让到列3487 之后人从 1042 掉到 1050,目标反而在头顶 8 行外,横向再也够不着。
-			foreach (int col in new[] { x + span + 1, x - span - 1 })
+
+			var (col, row) = ApproachSpot(p, x, y);
+			if (col < 0)
 			{
-				if (!Predicates.IsSolid(col, fy + 1)) continue;
-				// 终点有地不够,【沿途每一列】都要有地:750 和 753 都踩得住,中间 751/752 是空的,
-				// 人走过去就从缺口掉下 39 行((755,1092)),目标反而够不着了。
-				int from = col > br ? br : bl;
-				int step = col > from ? 1 : -1;
-				bool gap = false;
-				for (int c = from; c != col + step; c += step)
-					if (!Predicates.IsSolid(c, fy + 1)) { gap = true; break; }
-				if (gap)
-				{
-					DiagLog.Write($"[placeany] ({x},{y})在身子里,想让到列{col} 但 {(col > br ? br : bl)}→{col} 途中有缺口,换方向");
-					continue;
-				}
-				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),让到列{col}(全程脚下有地)");
+				// 一个能站的地方都没有。这不是"再试一次"能解决的 —— 交栈,让它去挖/搭
+				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br}),周围{MaxAsideCols}列内没有能放它的落脚点,交栈");
+				if (!Unstick.Handle("placeany", new Blocker(BlockKind.NoFooting, x, y + 1, "让不开:没有能放这格的落脚点")))
+					why = $"({x},{y})在身子里,周围没有能站的地方";
+				return false;
+			}
+
+			// 就在隔壁同一行 -> SettleAt 横移就够,不值得起一趟寻路(它要建 110 万格的场)
+			int fy = ActExecutor.OriginCy(p);
+			if (row == fy && System.Math.Abs(col - (col > br ? br : bl)) <= 2 && NoGapTo(p, col, fy))
+			{
+				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),横移到列{col}");
 				return SettleAt.Start(col, out why);
 			}
-			// 两边都悬空:站着不动让不开。往上跳一格就能把身子挪出去 —— 悬空处跳比走安全。
-			// 【绝不拉黑】:"现在在身子里"是暂时的,拉黑等于永久判死,目标自己被拉黑就直接 STUCK。
-			if (y >= fy - 2 && y <= fy)
-			{
-				p.controlJump = true;
-				if (_cellFrames % 30 == 1) DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),两侧悬空,跳起来让开");
-			}
-			why = "";
-			return false;
+
+			// 要换行、要绕、要爬 —— 【精准一格】的寻路。Mode.Stand 会跳会搭会挖,
+			// 到不了会报 unreachable,不会像原来那样跳一下落回原地无限循环
+			DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),寻路去({col},{row})站住");
+			RecedingNav.Start(col, row, RecedingNav.Mode.Stand);
+			_asideNav = true;
+			return true;
+		}
+
+		// 从身子边缘走到 col,沿途每一列脚下都得有地 —— 中间有缺口人会掉下去。
+		// 日志:750 和 753 都踩得住,751/752 是空的,人走过去掉了 39 行
+		static bool NoGapTo(Player p, int col, int fy)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int from = col > br ? br : bl;
+			int step = col > from ? 1 : -1;
+			for (int c = from; c != col + step; c += step)
+				if (!Predicates.IsSolid(c, fy + 1)) return false;
+			return true;
 		}
 
 		public static void Tick()
@@ -210,7 +264,18 @@ namespace TerraBlind
 
 			if (_ph == Ph.Move)
 			{
-				if (SettleAt.IsRunning) return;
+				// 【寻路也要等】。原来只等 SettleAt,让位改走寻路之后一帧就当"让完了"回到 Step,
+				// 而人还在半路 —— 又判在身子里,又发一次寻路,永远走不完
+				if (SettleAt.IsRunning || RecedingNav.Active) return;
+				// 寻路认输了就别装作让开了:它挖过搭过都到不了,这一格得换条链。
+				// 只在【这次让位真的起了寻路】时才看 LastStop —— 横移那条路不碰它,
+				// 读到的会是上一趟寻路留下的旧值
+				if (_asideNav)
+				{
+					_asideNav = false;
+					string ls = RecedingNav.LastStop;
+					if (ls != null && ls != "done") { Retry($"让位寻路没到({ls}),换条链"); return; }
+				}
 				_ph = Ph.Step; _cellFrames = 0;
 				return;
 			}
@@ -254,12 +319,12 @@ namespace TerraBlind
 			// 人挡着就让开 —— 碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
-			// 还在身子里(上面在跳):落地了就立刻重算一条绕开身子的链,别干等到 MaxCellFrames。
-			// 日志里每次都白等 151 帧才 Retry —— 那就是"每爬2格停几秒"的来源
+			// StepAside 交栈之后还在身子里:栈那边在挖/搭,等它。落了地还没让开就换条链,
+			// 别干等到 MaxCellFrames —— 日志里每次白等 151 帧,那就是"每爬2格停几秒"的来源
 			if (InBody(p, x, y))
 			{
 				if (p.velocity.Y == 0f && _cellFrames > JumpSettleFrames)
-				{ Retry($"({x},{y})跳完还在身子里,换条绕开的链"); return; }
+				{ Retry($"({x},{y})让位没让开,换条绕开的链"); return; }
 				return;
 			}
 			if (_bad.Contains((x, y))) { Retry($"({x},{y})让不开,绕路"); return; }
