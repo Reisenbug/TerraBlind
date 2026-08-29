@@ -322,7 +322,7 @@ namespace TerraBlind
 				if (_blockedFrames >= BlockedAt)
 				{
 					int bdir = bpx < x ? 1 : -1;
-					if (ClearWay.Forward(p, bdir, "挡着放置的路"))
+					if (ClearWay.Forward(p, bdir, "挡着放置的路", stuck: true))
 					{
 						DiagLog.Write($"[placeany] 人卡在{bpx}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
 						_blockedFrames = 0;

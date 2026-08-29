@@ -45,6 +45,8 @@ namespace TerraBlind
 		{
 			// 平台不挖:能直接穿过去/跳上去,挖它是白费镐和时间
 			if (!Predicates.IsWall(x, y)) return false;
+			// 【正在铺的桥面不挖】。卡住时挖身前那格是对的,但上升段身前那格正是下一块桥面
+			if (DeckBuilder.OnLine(x, y)) return false;
 			// 【挖不动的当场认账】。地狱熔炉(tile 77)镐力不够 65 时伤害恒 0,
 			// 地狱祭坛/神庙砖同理。原来这儿不查,Dig 照样开挥并返回 true("我在处理"),
 			// 调用方每帧 return —— 人对着炉子挥一辈子。
@@ -72,13 +74,16 @@ namespace TerraBlind
 		// 日志:刚放好的衔接方块(910,1037) 40帧后被当"挡路"挖掉,桥就断在那儿
 		static (int, int) _lastHard = (int.MinValue, int.MinValue);   // 挖不动的那一格只报一次,别每帧刷屏
 
-		public static bool Forward(Player p, int dir, string why = "挡路")
+		// stuck=true:调用方【已经确认人推不动了】。这时"一格高的台阶跳一下就过去"不成立 ——
+		// 卡住本身就是跳不过去的证据,那一格照挖。
+		// stuck=false:只是顺手清一下路,一格高的台阶留着(挖了会把刚铺好的桥面拆断)
+		public static bool Forward(Player p, int dir, string why = "挡路", bool stuck = false)
 		{
 			var (bl, br) = Predicates.BodyCols(p);
 			int col = dir > 0 ? br + 1 : bl - 1;
 			int fy = ActExecutor.OriginCy(p);
 			// 台阶只有一格高就别动它;两格及以上人跳不过去,那才是真挡路
-			bool step = Predicates.IsWall(col, fy) && !Predicates.IsWall(col, fy - 1);
+			bool step = !stuck && Predicates.IsWall(col, fy) && !Predicates.IsWall(col, fy - 1);
 			for (int r = step ? 1 : 0; r < 3; r++)
 				if (Dig(p, col, fy - r, why)) return true;
 			return false;

@@ -14,6 +14,11 @@ namespace TerraBlind
 		private static Ph _ph = Ph.Idle;
 
 		private static List<(int x, int y)> _line = new();
+		// 桥线上的格【绝不挖】。卡住时挖身前那一格是对的,但上升段身前那格正是下一块桥面,
+		// 挖了等于把刚铺的桥拆断(ClearWay 那条"一格高台阶不挖"的规则本来就是为这个)。
+		// 铺桥期间对外公开这份线,让挖的那一侧问一句
+		static readonly HashSet<(int, int)> _lineSet = new();
+		public static bool OnLine(int x, int y) => _lineSet.Contains((x, y));
 		private static int _idx;
 		private static string _item = "";
 		private static int _frames, _cellFrames;
@@ -83,6 +88,8 @@ namespace TerraBlind
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
 			_lastPx = int.MinValue; _blockedFrames = 0;
+			_lineSet.Clear();
+			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
 			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
@@ -96,6 +103,7 @@ namespace TerraBlind
 			if (IsRunning) DiagLog.Write($"[deck] STOP 停在第{_idx}/{_line.Count}格 已放{Placed}");
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
+			_lineSet.Clear();   // 不铺桥了就别再拦着挖
 			PlaceAnywhere.Stop();
 		}
 
@@ -110,6 +118,8 @@ namespace TerraBlind
 			if (_idx >= _line.Count)
 			{
 				Outcome = "done"; _ph = Ph.Done;
+				// 【铺完就放开】。不清的话 WofPrep 捅向导时要挖他脚下那格桥面,会被这条拦住
+				_lineSet.Clear();
 				PathVisSystem.ClearDeck();
 				DiagLog.Write($"[deck] DONE 放了{Placed}格 本来就有{Already}格");
 				return;
@@ -167,7 +177,7 @@ namespace TerraBlind
 			if (_blockedFrames >= BlockedAt)
 			{
 				int bdir = px < x ? 1 : -1;
-				if (ClearWay.Forward(p, bdir, "挡着桥面的路"))
+				if (ClearWay.Forward(p, bdir, "挡着桥面的路", stuck: true))
 				{
 					DiagLog.Write($"[deck] 人卡在{px}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
 					_blockedFrames = 0;
@@ -284,6 +294,7 @@ namespace TerraBlind
 		static void Fail(string reason)
 		{
 			Outcome = "stuck"; Reason = reason; _ph = Ph.Idle;
+			_lineSet.Clear();   // 桥不铺了,别再拦着别人挖
 			DiagLog.Write($"[deck] STUCK {reason}");
 		}
 	}
