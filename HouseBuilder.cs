@@ -807,6 +807,11 @@ namespace TerraBlind
 				for (int iy = 0; iy < h; iy++)
 				{
 					int cx = _x0 + _dir * ix, cy = _ay - iy;
+					// 【左下角那一格留着 —— 那是人的落脚点】。绿框宽 w=Width+1 是为了把地板【框住】,
+					// 而地板只从 _x0+_dir 起铺 Width 格:_x0 这一列清了永远不铺回来。
+					// Ph.Lift 要求人站在 (_x0,_ay) 上面(lcx==_x0 && lcy==_ay-1),挖了它人就踩空,
+					// 上不到左下角。只保这一格,上方照清 —— 墙和柱子还要占那一列
+					if (ix == 0 && iy == 0) continue;
 					if (Predicates.IsWall(cx, cy) || Predicates.IsPlatform(cx, cy))
 						_clearList.Add((cx, cy));
 				}
