@@ -68,6 +68,8 @@ namespace TerraBlind
 		// 上一次开箱的结果,给 /interact 的调用方看。以前拒绝是静默 continue,外面只知道"没开",不知道为什么。
 		public static volatile string LastInteract = "idle";
 		private static volatile bool _lootAllRequested;
+		// 掏箱子前要腾几格。箱子 40 格但大多是零头,腾太多等于把建材白删了
+		const int LootRoom = 8;
 		private static volatile bool _quickHealRequested;
 
 		private const string Prefix = "http://127.0.0.1:17878/";
@@ -157,7 +159,12 @@ namespace TerraBlind
 			{
 				_lootAllRequested = false;
 				if (Main.LocalPlayer.chest != -1)
+				{
+					// 背包满了 LootAll 会把塞不下的【原样写回箱子】—— 人走了,东西还在里面。
+					// 掏之前先按清单删掉没用的:一箱最多 40 件,腾够就不会漏
+					KeepList.MakeRoom(LootRoom);
 					Terraria.UI.ChestUI.LootAll();
+				}
 			}
 			if (_quickHealRequested)
 			{
