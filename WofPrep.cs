@@ -41,6 +41,9 @@ namespace TerraBlind
 		static int _houseWx, _houseWy;   // 房间内一格(火把那格)
 		static int _bridgeDir;           // 桥往哪边延伸
 		static int _frames;
+		static int _nightAt;   // 天黑那一帧。等天黑不计时,天黑之后等 NPC 才计时
+		// 原版 NPC 传送回家要"玩家看不见 + 不在好休息点",几秒一次判定;给足一分钟
+		const int NightWaitFrames = 60 * 60;
 		// 挖掉的格子,存【完整坐标】。原来只存行号、列共用一个 _dugCol,
 		// 而向导每挖一格就移位,三格挖在三列上(日志:3931/3930/3929),补回来的只有一格
 		static readonly System.Collections.Generic.List<(int x, int y)> _dug = new();
@@ -53,7 +56,7 @@ namespace TerraBlind
 			why = "";
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
-			_frames = 0; _dug.Clear(); _deckRow = -1;
+			_frames = 0; _nightAt = 0; _dug.Clear(); _deckRow = -1;
 			Outcome = "running"; Reason = "";
 			Phase = Ph.WaitNight;
 			DiagLog.Write($"[wof] start 房间({houseWx},{houseWy}) 桥方向={_bridgeDir}");
@@ -76,7 +79,7 @@ namespace TerraBlind
 		}
 
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
-		static void Go(Ph next) { Phase = next; _frames = 0; DiagLog.Write($"[wof] → {next}"); }
+		static void Go(Ph next) { Phase = next; _frames = 0; _nightAt = 0; DiagLog.Write($"[wof] → {next}"); }
 
 		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
 		// 和 NPC 碰撞箱相交。够不着的话 SetTalkNPC 当帧就被原版清掉,商店根本开不起来
@@ -135,9 +138,33 @@ namespace TerraBlind
 				// 不自己搬 NPC:原版每帧判"不在好休息点 + 玩家看不见"就把他传送回家。
 				// 我们只要满足条件然后等 —— 人此刻在桥的远端,本来就离得远
 				case Ph.WaitNight:
-					if (!IsNight()) { if (_frames % 300 == 1) DiagLog.Write("[wof] 等天黑"); return; }
+					// 【等天黑不设上限】。NPC 只在夜里传送回家,白天等多久都是白等 ——
+					// 这是流程本身要等的时间,不是卡住。计时从天黑那一刻才起算
+					if (!IsNight())
+					{
+						_nightAt = 0;
+						if (_frames % 300 == 1) DiagLog.Write("[wof] 等天黑");
+						return;
+					}
+					if (_nightAt == 0) { _nightAt = _frames; DiagLog.Write("[wof] 天黑了,开始等爆破专家回家"); }
 					if (!AtHome(NPCID.Demolitionist))
-					{ if (_frames % 300 == 1) DiagLog.Write("[wof] 天黑了,等爆破专家自己回家"); return; }
+					{
+						// 【天黑之后才计时】。等不到有两种,原因完全不同,别混成一句"超时":
+						//   NPC 不在世界里  -> 等一辈子也不会有,当场认账
+						//   有 NPC 但 homeless -> 房子不合格(家具/光源不齐),他没家可传
+						int dn1 = NPC.FindFirstNPC(NPCID.Demolitionist);
+						if (dn1 < 0) { Fail("世界里没有爆破专家,他不会自己出现"); return; }
+						if (_frames - _nightAt > NightWaitFrames)
+						{
+							Fail(Main.npc[dn1].homeless
+								? "爆破专家没家(房子不合格:家具或光源不齐),传不回来"
+								: $"天黑{NightWaitFrames / 60}秒了爆破专家还没回家(他在{(int)(Main.npc[dn1].Center.X / 16f)},{(int)(Main.npc[dn1].Center.Y / 16f)},家在{Main.npc[dn1].homeTileX},{Main.npc[dn1].homeTileY})");
+							return;
+						}
+						if (_frames % 300 == 1)
+							DiagLog.Write($"[wof] 天黑了,等爆破专家回家 {(_frames - _nightAt) / 60}/{NightWaitFrames / 60}秒 homeless={Main.npc[dn1].homeless}");
+						return;
+					}
 					Go(Ph.GoToNpc);
 					return;
 
