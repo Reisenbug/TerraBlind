@@ -127,6 +127,12 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
+			// 【铺到之前先把上方净空挖出来】。人走桥面时身子要占 3 行,头顶还得留出跳的余量;
+			// 等走到跟前被顶住再救就晚了 —— 那时人卡在桥面下一行,跳 8 次全撞天花板然后整条桥失败
+			// (现场:人1051 桥面1050 只差一行,连报 8 次"跳上去"然后 STUCK)。
+			// 往前看几格一起清,免得刚清完当前格、下一格的天花板又把人拦住
+            if (ClearAhead(p)) return;
+
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
 			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y))
 			{
@@ -289,6 +295,28 @@ namespace TerraBlind
 			if (!PlaceAnywhere.Start(item, x, y, out string pw))
 			{ Fail($"第{_idx}格({x},{y}):{pw}"); return; }
 			_tried = true;
+		}
+
+		// 桥面【上方 HeadClear 行】必须是空的,从当前格往前看 LookAhead 格。
+		// 挖了返回 true(这一帧交给挖,别再往下走)
+		const int HeadClear = 5;   // 用户定的:上方 5 格
+		const int LookAhead = 4;   // 往前看几格。太少会走到跟前才发现,太多会挖到用不上的地方
+
+		static bool ClearAhead(Player p)
+		{
+			for (int k = 0; k < LookAhead && _idx + k < _line.Count; k++)
+			{
+				var (cx, cy) = _line[_idx + k];
+				for (int r = 1; r <= HeadClear; r++)
+				{
+					// 平台不算挡路(穿得过去),ClearWay.Dig 自己会判;这里只挑实心的问
+					if (!Predicates.IsWall(cx, cy - r)) continue;
+					if (!ClearWay.Dig(p, cx, cy - r, $"桥面净空(第{_idx + k}格上方{r})")) continue;
+					DiagLog.Write($"[deck] 清第{_idx + k}格({cx},{cy})上方{r}行的方块");
+					return true;
+				}
+			}
+			return false;
 		}
 
 		static void Fail(string reason)
