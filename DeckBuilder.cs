@@ -120,6 +120,18 @@ namespace TerraBlind
 				Outcome = "done"; _ph = Ph.Done;
 				// 【铺完就放开】。不清的话 WofPrep 捅向导时要挖他脚下那格桥面,会被这条拦住
 				_lineSet.Clear();
+				// 【铺完必须把罗盘作废】。场是按 goal 缓存的,地形变了它不知道 —— 而这一趟
+				// 刚往地狱里填了上百格方块。留着旧场的后果:走桥面时 H 还是"这里全是空的",
+				// 于是贪心选出一条 bridge 边(一步跨 84 格把 H 从 564 打到 23),在已经铺好的
+				// 桥上再铺一层平台,把方块全换掉。作废之后下一趟 RecedingNav.Start 会在
+				// 后台重建(1.5s,不卡主线程)
+				// 【先停寻路再作废】。RecedingNav.cs:284 是主线程直接 GetField 的,
+				// 缓存没了而寻路还活着的话,它会当场同步建场(110万格,1.5秒)= 可见卡顿。
+				// 桥都铺完了,那趟"回桥面"的寻路没有继续的理由,停掉正好;
+				// 下一趟 Start 会在后台把新场建起来
+				if (RecedingNav.Active) RecedingNav.Stop();
+				MazeWand.InvalidateField();
+				DiagLog.Write("[deck] 桥铺完了,作废旧罗盘");
 				PathVisSystem.ClearDeck();
 				DiagLog.Write($"[deck] DONE 放了{Placed}格 本来就有{Already}格");
 				return;
