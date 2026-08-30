@@ -2014,6 +2014,37 @@ namespace TerraBlind
 					body = "{\"ok\":true}";
 				}
 			}
+			else if (path == "/field_warm")
+			{
+				// 【只建场,不导航】。建场是 110 万格 Dijkstra ~1.5 秒,盖房那几十秒里它白闲着。
+				// 提前按目标格建好,盖完房子 RecedingNav.Start 走 GetField 直接命中缓存,人立刻动身。
+				// 场按【目标格】缓存(两个槽),跟出发位置无关,所以这时候人在哪都不影响。
+				string wbody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					wbody = sr.ReadToEnd();
+				var wb = wbody.Replace(" ", "");
+				var wxM = System.Text.RegularExpressions.Regex.Match(wb, "\"gx\":(-?\\d+)");
+				var wyM = System.Text.RegularExpressions.Regex.Match(wb, "\"gy\":(-?\\d+)");
+				if (!wxM.Success || !wyM.Success) { body = "{\"ok\":false,\"reason\":\"bad_request\"}"; status = 400; }
+				else
+				{
+					int wgx = int.Parse(wxM.Groups[1].Value), wgy = int.Parse(wyM.Groups[1].Value);
+					// 已经有了就别重建 --- 重建会把另一个槽挤掉,反而害了下一段
+					if (MazeWand.PeekFieldOrNull(wgx, wgy) != null)
+						body = "{\"ok\":true,\"cached\":true}";
+					else
+					{
+						// 后台跑。主线程同步建场 = 整局卡 1.5 秒,照 RecedingNav.Start 那条的样子扔 Task.Run
+						System.Threading.Tasks.Task.Run(() =>
+						{
+							try { MazeWand.GetField(wgx, wgy); DiagLog.Write($"[warm] 场建好 ({wgx},{wgy})"); }
+							catch (System.Exception e) { DiagLog.Write($"[warm] 建场 EXC {e.Message}"); }
+						});
+						DiagLog.Write($"[warm] 后台开建 ({wgx},{wgy})");
+						body = "{\"ok\":true,\"cached\":false}";
+					}
+				}
+			}
 			else if (path == "/nav_recede_done")
 			{
 				if (RecedingNav.Active)
