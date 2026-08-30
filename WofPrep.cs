@@ -470,8 +470,10 @@ namespace TerraBlind
 						if (Predicates.IsLava(gx, dy)) break;          // 到岩浆了,下面不用管
 						for (int dx = gbl; dx <= gbr; dx++)
 						{
-							// 【人自己站的列不挖】—— 挖了人跟着一起掉进岩浆
-							if (dx >= pbl && dx <= pbr) continue;
+							// 【和人相交的那一列照挖】。人跨 2~3 列,挖掉其中一列剩下的还撑着他,
+							// 人不会掉;而向导少一列支撑就可能掉下去,不挖等于白等。
+							// 只有【人所有的列都在要挖的范围里】才留手 —— 那才是把自己的地拆光
+							if (pbl >= gbl && pbr <= gbr) continue;
 							if (!Main.tile[dx, dy].HasTile) continue;   // 空的跳过
 							if (!p.IsInTileInteractionRange(dx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 							{
