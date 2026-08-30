@@ -653,7 +653,11 @@ namespace TerraBlind
                         ctx.Laid[node] = acc;
                     }
                     // 代价按【要铺的格数】,不是跨度。跨 16 格但只缺 2 格的桥,本来就该便宜
-                    yield return (node, null, BridgeFrames(lay), false, null);
+                    // 【跨度也要收钱】。BridgeFrames 只算铺那几格的时间,人走完这一段的时间算了 0 ——
+                    // 于是"铺 1 格、跨 16 格"只花 32.5 帧,而老老实实走 16 格要好几步、每步 g≈19,
+                    // bridge 就在平地上赢了 walk(现场:bridge→(1136,1053) t355.5 对 walk 的 358)。
+                    // 人铺完还是得走过去,那段时间和 walk 一样,必须算进来
+                    yield return (node, null, BridgeFrames(lay) + n * WalkFramesPerCell, false, null);
                 }
             }
         }
@@ -662,6 +666,9 @@ namespace TerraBlind
         static float BridgeFrames(int n) => n * BridgeFramesPerCell + BridgeStartFrames;
 
         const float BridgeFramesPerCell = 11.25f;   // 实测 5.33 格/秒(连续铺)
+        // 走一格要几帧。实测:walk 边跨 7 格 g=19.5 → 2.8 帧/格。
+        // bridge 边跨完那段路的时间按这个收,不然"铺一格跨十六格"是白送的传送
+        const float WalkFramesPerCell = 2.8f;
         const float BridgeStartFrames = 20f;        // 起手:对齐、掏料、第一次挥
 
         // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
