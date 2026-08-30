@@ -38,6 +38,7 @@ namespace TerraBlind
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
 		private static int _deckFrom;   // 房子沿线挪过之后,桥要从房子右端接着铺
 		private static bool _wofAfterDeck;   // 桥铺完接着走肉山那一套
+		private static int _deckStarve;      // 铺桥期间 DeckBuilder.Tick 连着几帧没轮到
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
@@ -513,6 +514,17 @@ namespace TerraBlind
 			// 锁本身【跨帧】,这里不清活着的那些
 			AxisLock.Sweep();
 
+			// 【铺桥时这一帧被谁吃掉了】。下面那一串原语只要有一个在跑就 return,
+			// DeckBuilder.Tick 一帧都轮不到 —— 那时它自己的心跳也不响,整段全黑,
+			// 人站着不动而日志几百帧一片空白。必须埋在链头(所有 return 之前),
+			// 真跑到 DeckBuilder.Tick 时清零;连着不清零就是被上游截了
+			if (DeckBuilder.IsRunning && ++_deckStarve % 120 == 0)
+				DiagLog.Write($"[deck] Tick连{_deckStarve}帧没轮到 占着的:place={PlaceAnywhere.IsRunning} " +
+					$"settle={SettleAt.IsRunning} hop={HopUp.IsRunning} drop={DropDown.IsRunning} " +
+					$"walk={WalkPlace.IsRunning} rope={RopeLadder.IsRunning} pillar={PillarUp.IsRunning} " +
+					$"platdown={PlatformDown.IsRunning} walls={PlaceWalls.IsRunning} " +
+					$"helldeck={HellDeck.IsRunning} nav={RecedingNav.Active} mine={MineCoordinator.IsActive}");
+
 			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
 			// below so a cell it starts this frame gets swung at immediately.
 			PlaceAction.Tick();
@@ -614,7 +626,7 @@ namespace TerraBlind
 			// house: pure orchestration over the other primitives. Ticked BEFORE them so a step it starts
 			// this frame is driven immediately; it writes no controls itself.
 			if (HouseBuilder.IsRunning) HouseBuilder.Tick();
-			if (DeckBuilder.IsRunning) DeckBuilder.Tick();
+			if (DeckBuilder.IsRunning) { DeckBuilder.Tick(); _deckStarve = 0; }
 			// 桥铺完 → 肉山那一套(等天黑→买雷管→换向导→捅进岩浆)
 			if (_wofAfterDeck && !DeckBuilder.IsRunning && !WofPrep.IsRunning)
 			{

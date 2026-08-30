@@ -31,6 +31,10 @@ namespace TerraBlind
 		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
 		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
 		private static bool _asideNav;   // 这次让位是不是起了寻路(决定要不要看 LastStop)
+		// 每条无声 return 留个名字,60 帧汇报一次 —— 人不动时唯一能查的就是"卡在哪一条"
+		private static string _where = "";
+		private static int _heartbeat;
+		const int HeartbeatEvery = 60;
 		private const int MaxAsideCols = 5;   // 让位最多往外找几列。再远就够不着了(tileRangeX=5)
 		private const int AsideRows = 3;
 		// 人头顶留几行不许砌。跳一下约 3 行,留够跳出去的空间
@@ -48,7 +52,7 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
-			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false;
+			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false; _where = ""; _heartbeat = 0;
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
@@ -275,6 +279,17 @@ namespace TerraBlind
 			return true;
 		}
 
+		static void Mark(string where)
+		{
+			if (where != _where) { _where = where; _heartbeat = 0; return; }
+			if (++_heartbeat % HeartbeatEvery != 0) return;
+			var p = Main.LocalPlayer;
+			int cx = p != null ? ActExecutor.OriginCx(p) : -1, cy = p != null ? ActExecutor.OriginCy(p) : -1;
+			var (lx, ly) = _idx < _chain.Count ? _chain[_idx] : (-1, -1);
+			DiagLog.Write($"[placeany] 心跳 {_heartbeat}帧都在\"{where}\" 目标({_tx},{_ty}) " +
+				$"链{_idx}/{_chain.Count}=({lx},{ly}) 人({cx},{cy}) blocked={_blockedFrames} cell={_cellFrames}");
+		}
+
 		public static void Tick()
 		{
 			if (_ph != Ph.Step && _ph != Ph.Move) return;
@@ -286,7 +301,7 @@ namespace TerraBlind
 			{
 				// 【寻路也要等】。原来只等 SettleAt,让位改走寻路之后一帧就当"让完了"回到 Step,
 				// 而人还在半路 —— 又判在身子里,又发一次寻路,永远走不完
-				if (SettleAt.IsRunning || RecedingNav.Active) return;
+				if (SettleAt.IsRunning || RecedingNav.Active) { Mark("让位中"); return; }
 				// 寻路认输了就别装作让开了:它挖过搭过都到不了,这一格得换条链。
 				// 只在【这次让位真的起了寻路】时才看 LastStop —— 横移那条路不碰它,
 				// 读到的会是上一趟寻路留下的旧值
@@ -365,17 +380,17 @@ namespace TerraBlind
 				if (dst == cx) { Retry($"够不着({x},{y})但没有能站的落脚列"); return; }
 				int dir = dst > cx ? 1 : -1;
 				// 地形挡着就挖开,不然横向走一辈子也过不去(卡满 MaxCellFrames 才报错)
-				if (ClearWay.Forward(p, dir)) return;
+				if (ClearWay.Forward(p, dir)) { Mark("挖挡路"); return; }
 				if (dir > 0) p.controlRight = true; else p.controlLeft = true;
 				return;
 			}
-			if (PlaceAction.IsRunning) return;
+			if (PlaceAction.IsRunning) { Mark("挥手放置中"); return; }
 			if (PlaceAction.Outcome == "blocked")
 			{
 				DiagLog.Write($"[placeany] ({x},{y})放不上:{PlaceAction.Reason}");
 				// out_of_reach 是【人站错了】不是这格不行 —— 拉黑它会把好格子一个个丢掉,
 				// 链越重算越远(日志里连丢 8 格)。这种只等下一帧,让上面的走位去解决。
-				if (PlaceAction.Reason != null && PlaceAction.Reason.Contains("out_of_reach")) return;
+				if (PlaceAction.Reason != null && PlaceAction.Reason.Contains("out_of_reach")) { Mark("放置报够不着"); return; }
 				_bad.Add((x, y));
 				Retry($"({x},{y}){PlaceAction.Reason}");
 				return;

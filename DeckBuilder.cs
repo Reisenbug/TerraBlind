@@ -29,6 +29,10 @@ namespace TerraBlind
 		private static int _lastDx = int.MaxValue;   // 离目标最近到过几列。判"推了却没靠近"= 被顶住
 		private static int _blockedFrames;           // 连着几帧没挪窝
 		private static int _sameColFrames;           // 同列却够不着,连着几帧
+		// 【每条无声的 return 都留个名字】。人站着不动、日志 500 帧全空的时候,
+		// 唯一能查的就是"每帧走到哪一条就退出了"。60 帧汇报一次,不刷屏
+		private static string _where = "";
+		private static int _heartbeat;
 		private const int SameColStuck = 30;         // 同列够不着这么多帧 = 横移解决不了,交栈
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
@@ -89,7 +93,7 @@ namespace TerraBlind
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
-			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0;
+			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0;
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -145,7 +149,7 @@ namespace TerraBlind
 			// 等走到跟前被顶住再救就晚了 —— 那时人卡在桥面下一行,跳 8 次全撞天花板然后整条桥失败
 			// (现场:人1051 桥面1050 只差一行,连报 8 次"跳上去"然后 STUCK)。
 			// 往前看几格一起清,免得刚清完当前格、下一格的天花板又把人拦住
-            if (ClearAhead(p)) return;
+            if (ClearAhead(p)) { Mark("清净空"); return; }
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
 			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y))
@@ -161,11 +165,11 @@ namespace TerraBlind
 			// 桥面这一格是平台:挖掉换成方块。平台会被踩空/穿下去,当桥面不合格
 			if (Predicates.IsPlatform(x, y))
 			{
-				if (ItemUseCoordinator.IsActive) return;
+				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);
 				if (ppk < 0) { Fail($"({x},{y})是平台要换成方块,但没镐"); return; }
 				if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
-				{ if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
+				{ Mark("走去换平台"); if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
 				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });
 				DiagLog.Write($"[deck] ({x},{y})是平台,挖掉换方块");
@@ -221,7 +225,7 @@ namespace TerraBlind
 			{
 				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
 				if (p.velocity.Y != 0f)
-				{ if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
+				{ Mark("腾空中横推"); if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
 				// 差一格就自己跳(比启动整套寻路便宜)。差得多【交给寻路】——
 				// 它会挖会搭会跳,而这儿硬按方向键只会在坎前蹭,8 次蹭不上去就整条桥失败
 				if (py - (y - 1) > JumpBackSlack)
@@ -244,7 +248,7 @@ namespace TerraBlind
 
 			// 同一行的连续段一次铺完:房子的 base 就是这么干的 —— BridgeBuilder 锁一个槽连着放,
 			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
-			if (BridgeBuilder.IsRunning) return;
+			if (BridgeBuilder.IsRunning) { Mark("连铺中"); return; }
 			// 连铺必须从有锚的格子起步:BridgeBuilder 不造锚,第一格悬空就整段 no_anchor(日志 20格 placed=0)。
 			// 换行处新行头一格和上一段是斜对角不是四邻 —— 那一格交给 PlaceAnywhere 造。
 			// 【用方块的判据】:这条桥铺的是方块,而原来借的是绳子那份(不认背景墙),
@@ -273,7 +277,7 @@ namespace TerraBlind
 			// 日志里每格 6 列远、13 帧;BridgeBuilder 连续铺是 5.93 格/秒。
 			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
 			{
-				if (PlaceAnywhere.IsRunning) return;
+				if (PlaceAnywhere.IsRunning) { Mark("够不着+放置中"); return; }
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
 				if (!ClearWay.HasPick(p) && Predicates.IsWall(px + (px < x ? 1 : -1), py))
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
@@ -305,7 +309,7 @@ namespace TerraBlind
 				return;
 			}
 
-			if (PlaceAnywhere.IsRunning) return;
+			if (PlaceAnywhere.IsRunning) { Mark("放置中"); return; }
 			// 一格放不上不该毁掉整条桥:跳过它接着铺,人走到那儿会掉一下但桥还在往前长。
 			// 全线放不上才算真失败 —— 那时 _skipped 会一路涨上去。
 			if (PlaceAnywhere.Outcome == "stuck" && _tried)
@@ -373,6 +377,21 @@ namespace TerraBlind
 				return true;
 			}
 			return false;
+		}
+
+		// 记下这一帧走到哪条分支就退出了。同一条连着走 HeartbeatEvery 帧就汇报一次 ——
+		// 不打的话"人不动"和"正常干活"在日志里长得一模一样
+		const int HeartbeatEvery = 60;
+		static void Mark(string where)
+		{
+			if (where != _where) { _where = where; _heartbeat = 0; return; }
+			if (++_heartbeat % HeartbeatEvery != 0) return;
+			var p = Main.LocalPlayer;
+			var (gx, gy) = _idx < _line.Count ? _line[_idx] : (-1, -1);
+			int cx = p != null ? ActExecutor.OriginCx(p) : -1, cy = p != null ? ActExecutor.OriginCy(p) : -1;
+			DiagLog.Write($"[deck] 心跳 {_heartbeat}帧都在\"{where}\" 第{_idx}/{_line.Count}格({gx},{gy}) " +
+				$"人({cx},{cy}) blocked={_blockedFrames} sameCol={_sameColFrames} cell={_cellFrames} " +
+				$"placeany={PlaceAnywhere.Outcome}/{(PlaceAnywhere.IsRunning ? "跑" : "停")}");
 		}
 
 		static void Fail(string reason)
