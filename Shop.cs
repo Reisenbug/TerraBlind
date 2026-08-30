@@ -88,7 +88,9 @@ namespace TerraBlind
 		public const long BandLo = 1 * 10000;          // 1 金
 		public const long BandHi = 10 * 10000;         // 10 金
 
-		public static bool SellOneFor(Player p, long needCopper, out string note)
+		// keep = 【绝不卖】的物品 id(调用方传)。买雷管时要把雷管本身传进来 ——
+		// 不然刚买的转手又卖掉,钱和货来回换,永远凑不齐
+		public static bool SellOneFor(Player p, long needCopper, out string note, params int[] keep)
 		{
 			note = "";
 			if (p == null) return false;
@@ -101,6 +103,7 @@ namespace TerraBlind
 				if (it == null || it.IsAir || it.stack <= 0) continue;
 				if (it.favorited) continue;
 				if (it.type == ItemID.LifeCrystal) continue;
+				if (keep != null && System.Array.IndexOf(keep, it.type) >= 0) continue;
 				// 硬币本身不是货 —— 卖它等于把钱换成钱
 				if (it.type == ItemID.CopperCoin || it.type == ItemID.SilverCoin
 					|| it.type == ItemID.GoldCoin || it.type == ItemID.PlatinumCoin) continue;

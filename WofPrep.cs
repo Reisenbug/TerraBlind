@@ -32,6 +32,9 @@ namespace TerraBlind
 		// 实测 34 根刚好打死(日志:第34根时剩35血),30 根必然打不完。
 		// 45 根留出余量 —— 单价 1780 铜,合 8 金 1 银
 		const int WantDynamite = 45;
+		// 【买不够就有几根用几根】,但少于这个数一定打不死 —— 那就别往下走了,
+		// 换向导捅岩浆那一整套白干,还得重来。20 以上是有概率的,值得试
+		const int MinDynamite = 20;
 		const int WalkAwayTiles = 80;
 		const int DigDepth = 6;   // 往下最多挖这么深;再深人就够不着,也补不回来
 
@@ -82,6 +85,18 @@ namespace TerraBlind
 		}
 
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
+
+		// 买完的收尾:鼠标上还攥着东西就等一帧(不然那件会掉地上),关背包、结束对话、进下一相位。
+		// 【买够了】和【钱花光了】都走这一条 —— 各写一遍必然漂移
+		static bool DoneBuying(Player p)
+		{
+			if (!Main.mouseItem.IsAir) return false;
+			Main.playerInventory = false;
+			p.SetTalkNPC(-1);
+			DiagLog.Write($"[wof] 买完了,共{Predicates.Have(DynamiteId)}根雷管");
+			Go(Ph.SwapGuide);
+			return true;
+		}
 		static void Go(Ph next) { Phase = next; _frames = 0; _nightAt = 0; DiagLog.Write($"[wof] → {next}"); }
 
 		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
@@ -192,8 +207,7 @@ namespace TerraBlind
 				case Ph.Buy:
 				{
 					int have = Predicates.Have(DynamiteId);
-					if (have >= WantDynamite)
-					{ if (!Main.mouseItem.IsAir) return; Main.playerInventory = false; p.SetTalkNPC(-1); Go(Ph.SwapGuide); return; }
+					if (have >= WantDynamite) { if (!DoneBuying(p)) return; return; }
 					// 有进展就把计时清零:45 根一帧一根、卖东西也是一帧一件,
 					// 固定 2 分钟会在"正常干活"中途判死。卡住 30 秒才是真卡住
 					if (have != _lastHave || Shop.Money(p) != _lastMoney)
@@ -234,8 +248,16 @@ namespace TerraBlind
 						{ Fail($"第{have + 1}根雷管要特殊货币,买不了"); return; }
 						// 还要买 (WantDynamite-have) 根,一次把总账算够,省得卖一件买一根来回折腾
 						long need = buyPrice * (WantDynamite - have);
-						if (Shop.SellOneFor(p, need, out string sn)) { DiagLog.Write($"[wof] {sn}"); return; }
-						Fail($"钱不够买第{have + 1}根雷管:{sn}"); return;
+						if (Shop.SellOneFor(p, need, out string sn, DynamiteId)) { DiagLog.Write($"[wof] {sn}"); return; }
+						// 【卖不出更多了 —— 有几根用几根】。够门槛就往下走,不够就当场认账:
+						// 少于 MinDynamite 一定打不死,换向导捅岩浆那一套白干还得重来
+						if (have >= MinDynamite)
+						{
+							DiagLog.Write($"[wof] 钱凑不齐了,只买到{have}根(想要{WantDynamite}),够{MinDynamite}根门槛,接着打");
+							if (!DoneBuying(p)) return;
+							return;
+						}
+						Fail($"只买到{have}根雷管(至少要{MinDynamite}根才打得死),{sn}"); return;
 					}
 					if (!p.BuyItem(buyPrice, shop.item[slot].shopSpecialCurrency)) { Fail("扣钱失败"); return; }
 
