@@ -29,6 +29,7 @@ namespace TerraBlind
 		static int _budget;            // give up after this many
 		static int _bestDist;          // closest we have come to the target
 		static int _sinceProgress;
+		static (int, int)? _prev1, _prev2;   // 上一步、上上步站的格,用来抓 A→B→A
 
 		// 远处那些 H 极低的格【隔着走不通的墙】:承诺 (1292,238) 54 格外,人在 1344..1348 弹了
 		// 10 轮,dist 55→60 从没靠近。承诺的意义是"跨出当前这个坑",不是"直奔全场最低点" ---
@@ -46,7 +47,7 @@ namespace TerraBlind
 		public static void Clear()
 		{
 			if (Active) DiagLog.Write($"[commit] cleared (was →({Gx},{Gy}))");
-			Active = false; _cycles = 0; _sinceProgress = 0;
+			Active = false; _cycles = 0; _sinceProgress = 0; _prev1 = null; _prev2 = null;
 		}
 
 		public static void Reset() { Clear(); _failed.Clear(); }
@@ -121,6 +122,23 @@ namespace TerraBlind
 				DiagLog.Write($"[commit] REACHED ({Gx},{Gy}) in {_cycles} cycles H {_startH}→{curH}{(worse ? " 更差,拉黑这一片" : "")}");
 				if (worse) BlacklistAround();
 				else _failed.Clear();   // 真的变好了才清疑虑 --- 从这儿看地形是另一个样子
+				Clear();
+				return false;
+			}
+			// 【A→B→A 当场判死】。距离在 7↔8 之间摆时 d 永远破不了纪录,_sinceProgress 要数满
+			// StaleCycles 才放手 --- 实测在 (1109,402)↔(1109,403) 蹦了 90 帧。回到两步前那一格
+			// 就是打转,不是赶路,第一个来回就该死心。
+			// 【不误伤】:只认"人真的回到了两步前站的格"。一路走新格的绕路不会触发;
+			// 连着两次同一格(prev==cur)是这一步还没执行完,那种放过。
+			var cell = (curCx, curCy);
+			bool pingpong = _prev2.HasValue && _prev1.HasValue
+				&& _prev2.Value == cell && _prev1.Value != cell;
+			var other = _prev1;
+			_prev2 = _prev1; _prev1 = cell;
+			if (pingpong)
+			{
+				DiagLog.Write($"[commit] ABANDON ({Gx},{Gy}) 在 ({curCx},{curCy})↔({other.Value.Item1},{other.Value.Item2}) 之间打转,不是在赶路");
+				BlacklistAround();
 				Clear();
 				return false;
 			}
