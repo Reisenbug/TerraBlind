@@ -117,16 +117,26 @@ namespace TerraBlind
 		{
 			if (where != _digWhere) { _digWhere = where; _digBeat = 0; return; }
 			if (++_digBeat % 60 != 0) return;
+			// 【三列都要报】。只报中心那列的话,"中心全空了他还不掉"看着像见鬼,
+			// 其实是左右两列还撑着他
 			var sb = new System.Text.StringBuilder();
-			for (int k = 0; k < DigDepth; k++)
+			int bg = NPC.FindFirstNPC(NPCID.Guide);
+			int cl = gx, cr = gx;
+			if (bg >= 0) { var bc = Predicates.BodyCols(Main.npc[bg].position.X, Main.npc[bg].width); cl = bc.left; cr = bc.right; }
+			for (int dx = cl; dx <= cr; dx++)
 			{
-				int dy = gy + k;
-				var t = Main.tile[gx, dy];
-				sb.Append($" {dy}:{(t.HasTile ? t.TileType.ToString() : "空")}");
-				if (t.HasTile && !p.IsInTileInteractionRange(gx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple)) sb.Append("(够不着)");
+				sb.Append($" 列{dx}:");
+				for (int k = 0; k < DigDepth; k++)
+				{
+					int dy = gy + k;
+					var t = Main.tile[dx, dy];
+					sb.Append($"{(t.HasTile ? t.TileType.ToString() : "空")}");
+					if (t.HasTile && !p.IsInTileInteractionRange(dx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple)) sb.Append("!");
+					sb.Append(',');
+				}
 			}
 			DiagLog.Write($"[wof] 挖洞心跳 {_digBeat}帧都在\"{where}\" 向导({gx},{gy}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) " +
-				$"已挖{_dug.Count}格 talk={p.talkNPC} 列:{sb}");
+				$"已挖{_dug.Count}格 talk={p.talkNPC}{sb}");
 		}
 
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
@@ -432,47 +442,61 @@ namespace TerraBlind
 					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
 					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
+					// 【按两个碰撞箱有没有重叠判,不是只看向导中心列】。要挖的是他【整个箱子】
+					// 压住的每一列,只要有一列和人重合,那列就永远跳过、永远挖不掉,他也就掉不下去
 					var (mbl, mbr) = Predicates.BodyCols(p);
-					if (gx >= mbl && gx <= mbr)
+					var (ggl, ggr) = Predicates.BodyCols(gn.position.X, gn.width);
+					if (ggl <= mbr && ggr >= mbl)
 					{
 						if (SettleAt.IsRunning) { DigBeat(p, gx, gy, "让位中"); return; }
-						int away = gx - _bridgeDir * 2;
-						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导({gx})在人脚下(身{mbl}..{mbr}),先让到{away}");
+						// 让到【他整个箱子之外】再多两列,免得挪完还压着他的边缘列
+						int away = _bridgeDir > 0 ? ggl - 3 : ggr + 3;
+						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导箱{ggl}..{ggr}和人{mbl}..{mbr}重叠,先让到{away}");
 						SettleAt.Start(away, out _);
 						return;
 					}
 					if (ItemUseCoordinator.IsActive) { DigBeat(p, gx, gy, "挥镐中"); return; }
+					// 【他碰撞箱压住的每一列都要挖】。NPC 和人一样跨 2~3 列 ——
+					// 只挖中心那列,两边还各有半只脚踩着地,他就站在洞上不动
+					// (现场:向导(1082,1052) 那一列 1052..1057 全空了,人却 960 帧一动不动)。
+					// 列的算法和判人一样,不另写一套
+					var (gbl, gbr) = Predicates.BodyCols(gn.position.X, gn.width);
+					var (pbl, pbr) = Predicates.BodyCols(p);
 					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
 					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
 					for (int k = 0; k < DigDepth; k++)
 					{
 						int dy = gy + k;
 						if (Predicates.IsLava(gx, dy)) break;          // 到岩浆了,下面不用管
-						if (!Main.tile[gx, dy].HasTile) continue;      // 空的跳过,继续往下找
-						if (!p.IsInTileInteractionRange(gx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						for (int dx = gbl; dx <= gbr; dx++)
 						{
-							if (_frames % 120 == 1) DiagLog.Write($"[wof] ({gx},{dy})够不着,不挖了 —— 再深就补不回来");
-							break;
+							// 【人自己站的列不挖】—— 挖了人跟着一起掉进岩浆
+							if (dx >= pbl && dx <= pbr) continue;
+							if (!Main.tile[dx, dy].HasTile) continue;   // 空的跳过
+							if (!p.IsInTileInteractionRange(dx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+							{
+								if (_frames % 120 == 1) DiagLog.Write($"[wof] ({dx},{dy})够不着,跳过 —— 再深就补不回来");
+								continue;
+							}
+							// 平台也要挖:ClearWay.Dig 认为平台不挡路,但它挡得住掉下去的向导
+							if (Predicates.IsPlatform(dx, dy))
+							{
+								int pk2 = ClearWay.PickSlot(p);
+								if (pk2 < 0) { Fail("要挖平台但没镐"); return; }
+								ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = dx, TargetWy = dy, Slot = pk2, Strict = true });
+								DiagLog.Write($"[wof] 挖({dx},{dy}) 平台挡着向导");
+							}
+							// 【挖不动就换下一格,别整个退出】。原来是 `if (!Dig(...)) return;` ——
+							// Dig 在够不着/挖不动/被 OnLine 拦时返回 false,一 false 整个循环就没了
+							else if (!ClearWay.Dig(p, dx, dy, "捅向导"))
+							{
+								if (_frames % 120 == 1)
+									DiagLog.Write($"[wof] ({dx},{dy}) type={Main.tile[dx, dy].TileType} 挖不动,换一格");
+								continue;
+							}
+							if (!_dug.Contains((dx, dy))) _dug.Add((dx, dy));
+							return;
 						}
-						// 平台也要挖:ClearWay.Dig 认为平台不挡路,但它挡得住掉下去的向导
-						if (Predicates.IsPlatform(gx, dy))
-						{
-							int pk2 = ClearWay.PickSlot(p);
-							if (pk2 < 0) { Fail("要挖平台但没镐"); return; }
-							ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = gx, TargetWy = dy, Slot = pk2, Strict = true });
-							DiagLog.Write($"[wof] 挖({gx},{dy}) 平台挡着向导");
-						}
-						// 【挖不动就往下一格,别整个退出】。原来是 `if (!Dig(...)) return;` ——
-						// Dig 在够不着/挖不动/被 OnLine 拦时返回 false,一 false 整个循环就没了,
-						// 于是"挖掉他脚下所有方块"变成"挖了第一格就再也不挖"
-						else if (!ClearWay.Dig(p, gx, dy, "捅向导"))
-						{
-							if (_frames % 120 == 1)
-								DiagLog.Write($"[wof] ({gx},{dy}) type={Main.tile[gx, dy].TileType} 挖不动,试下一格");
-							continue;
-						}
-						if (!_dug.Contains((gx, dy))) _dug.Add((gx, dy));
-						return;
 					}
 					DigBeat(p, gx, gy, "一格都挖不动");
 					return;
