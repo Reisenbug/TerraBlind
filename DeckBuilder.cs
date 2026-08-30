@@ -26,8 +26,10 @@ namespace TerraBlind
 		private static int _recovers;
 		private static int _skipped;   // 连着放不上的格数,断了就清零
 		private static int _runAt = -1;   // 已经在这个下标起过一趟连铺
-		private static int _lastPx = int.MinValue;   // 上一帧人在哪一列。判"推了却没动"= 被顶住
+		private static int _lastDx = int.MaxValue;   // 离目标最近到过几列。判"推了却没靠近"= 被顶住
 		private static int _blockedFrames;           // 连着几帧没挪窝
+		private static int _sameColFrames;           // 同列却够不着,连着几帧
+		private const int SameColStuck = 30;         // 同列够不着这么多帧 = 横移解决不了,交栈
 
 		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
 		// 竖直差这么多就不是走两步能解决的,交栈。够得着的判据本身有几行余量,所以要比它松
@@ -87,7 +89,7 @@ namespace TerraBlind
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
-			_lastPx = int.MinValue; _blockedFrames = 0;
+			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0;
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -150,6 +152,7 @@ namespace TerraBlind
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				_lastDx = int.MaxValue; _blockedFrames = 0;   // 换目标了,离目标多远重新算
 				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
 				if (_idx % 20 == 0)
 					DiagLog.Write($"[deck] 进度{_idx}/{_line.Count} 放了{Placed} 本来就有{Already}");
@@ -175,6 +178,7 @@ namespace TerraBlind
 				DiagLog.Write($"[deck] ({x},{y})有占位物但站不住,跳过");
 				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格站不住,最后({x},{y})"); return; }
 				_idx++; _cellFrames = 0; _tried = false;
+				_lastDx = int.MaxValue; _blockedFrames = 0;
 				return;
 			}
 
@@ -190,8 +194,12 @@ namespace TerraBlind
 			// 整条线两侧刨空。人朝目标推了 BlockedAt 帧列号还没变,那才是真被顶住。
 			// 判"横着推不动"要看 velocity.X,不看 Y:人低于桥面时下面那段会一直让他跳,
 			// 腾空占了大半帧数,拿 Y==0 当门会几乎数不上去 —— 而墙挡着恰恰就是这个场面
-			if (px != _lastPx) { _blockedFrames = 0; _lastPx = px; }
-			else if (px != x && System.Math.Abs(p.velocity.X) < 0.1f) _blockedFrames++;
+			// 【判据是"离目标近了没有",不是"列号变没变"】。人顶着墙时会原地跳、左右蹭,
+			// 列号来回变 —— 拿"变了就清零"当门,计数永远攒不到,挖的那条路一次都轮不上。
+			// 真正的卡住是【推了半天离目标还是那么远】
+			int dxNow = System.Math.Abs(px - x);
+			if (dxNow < _lastDx) { _blockedFrames = 0; _lastDx = dxNow; }
+			else if (dxNow > 0) _blockedFrames++;
 			if (_blockedFrames >= BlockedAt)
 			{
 				int bdir = px < x ? 1 : -1;
@@ -278,7 +286,22 @@ namespace TerraBlind
 						Fail($"人在{py},桥面{y},差{System.Math.Abs(py - y)}行,够不着又救不回来");
 					return;
 				}
-				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
+				// 【同列还够不着 = 竖直问题,横移救不了】。原来这两个 if 都不成立时直接空转:
+				// 不按键、不计数、不打日志 —— 人站着不动,日志 500 帧全空,连卡在哪都看不出来。
+				// 现场:人在(3123,1054)一动不动,手不挥,玩家按方向键都被这条每帧盖掉
+				if (px == x)
+				{
+					if (++_sameColFrames > SameColStuck)
+					{
+						_sameColFrames = 0;
+						DiagLog.Write($"[deck] 人({px},{py})和桥面({x},{y})同列却够不着,差{System.Math.Abs(py - y)}行,交栈");
+						if (!Unstick.Handle("deck", new Blocker(BlockKind.NotStanding, x, y - 1, "同列够不着")))
+							Fail($"人({px},{py})和桥面({x},{y})同列够不着,救不回来");
+					}
+					return;
+				}
+				_sameColFrames = 0;
+				if (px < x) p.controlRight = true; else p.controlLeft = true;
 				return;
 			}
 
@@ -291,6 +314,7 @@ namespace TerraBlind
 				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格放不上,最后({x},{y}):{PlaceAnywhere.Reason}"); return; }
 				PlaceAnywhere.Outcome = "idle";
 				_idx++; _cellFrames = 0; _tried = false;
+				_lastDx = int.MaxValue; _blockedFrames = 0;
 				return;
 			}
 			if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})卡了{_cellFrames}帧"); return; }
@@ -329,6 +353,24 @@ namespace TerraBlind
 					DiagLog.Write($"[deck] 清第{_idx + k}格({cx},{cy})上方{r}行的方块");
 					return true;
 				}
+			}
+			// 【人身前那一列也要清】。上面只管【桥线格的正上方】,而挡住人的墙常常在
+			// 人和桥线格【之间】—— 它不在任何桥线格头顶,于是一格都不清,人顶着墙站到死。
+			// 人脚那一行到上面 HeadClear 行,就是走过去要占的空间。
+			//
+			// 【只在真走不动时才挖】:无条件挖身前会把上升段那块刚铺好的桥面也刨了
+			// (桥往上走时,身前那一格正是下一块桥面)。人推了半天没挪窝才是真被挡
+			if (_blockedFrames < BlockedAt) return false;
+			var (bl, br) = Predicates.BodyCols(p);
+			int fy = ActExecutor.OriginCy(p);
+			int fwd = _idx < _line.Count && _line[_idx].x < bl ? -1 : 1;
+			int col = fwd > 0 ? br + 1 : bl - 1;
+			for (int r = 0; r <= HeadClear; r++)
+			{
+				if (!Predicates.IsWall(col, fy - r)) continue;
+				if (!ClearWay.Dig(p, col, fy - r, $"挡在身前(往{(fwd > 0 ? "右" : "左")})")) continue;
+				DiagLog.Write($"[deck] 清身前({col},{fy - r}) 人({bl}..{br},{fy})");
+				return true;
 			}
 			return false;
 		}
