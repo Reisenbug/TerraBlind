@@ -388,8 +388,17 @@ namespace TerraBlind
 			// 实测一路铺平台梯、回头拆自己刚铺的平台、身子飘了 _col 还锁在原列。
 			// 现在走路交给寻路,BridgeStart 只管三件寻路不管的事:放出那一格、站上去、
 			// 【站住 60 帧才算到】。放第一格也归它了,所以不再走 _pendingAnchor。
+			// 【桥起点优先用平台】。方块的锚点只认【四邻】,平台认 3x3【含斜角】——
+			// 桥起点常常只有斜下方那一格有东西,方块判"没锚"直接 STUCK,平台放得上去
+			// (现场:(857,1032)左下角明明有方块,却报"接不到任何有锚的地方")。
+			// 那一格是岩浆时退回方块:平台放进岩浆会当场烧掉。
 			int rbslot = HellBridge.FindBlockSlot(rp, out _);
 			string rblk = rbslot >= 0 ? rp.inventory[rbslot].type.ToString() : "9";
+			if (!Predicates.IsLava(rsx, rsy))
+			{
+				int rplat = Unstick.PlatformItem(rp);
+				if (rplat > 0) rblk = rplat.ToString();
+			}
 			if (!BridgeStart.Start(rblk, rsx, rsy, out string rcw))
 			{ why = $"去不了桥起点:{rcw}"; return false; }
 			_pendingStand = (rsx, rsy);

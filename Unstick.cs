@@ -363,7 +363,7 @@ namespace TerraBlind
 
 		// --- 小工具 ---
 
-		static int PlatformItem(Player p)
+		public static int PlatformItem(Player p)
 		{
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
