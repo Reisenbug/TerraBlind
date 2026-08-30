@@ -410,16 +410,25 @@ namespace TerraBlind
 					// 不拉住他的话人一边挖他一边溜达,挖开的洞永远不在他脚下。
 					// vanilla 每帧会把够不着的 talkNPC 清掉,所以要每帧重设。
 					// 他掉下去之后原版自己会断对话,不用我们收尾
-					if (CanTalkTo(p, gn))
+					if (CanTalkTo(p, gn) && p.talkNPC != g)
 					{
-						if (p.talkNPC != g)
-						{
-							p.SetTalkNPC(g);
-							DiagLog.Write($"[wof] 拉住向导说话,免得他乱走");
-						}
-						// 对话框会吃掉输入,但挖是我们自己发的控制帧,不受影响。
-						// 【别开 playerInventory】—— 那是商店才要的,开了鼠标会被 UI 抢走
-						Main.npcChatText = "";
+						// 【照抄右键那条路】(Main.cs:56173 那一段)。光调 SetTalkNPC 只设了个字段,
+						// 对话框根本不弹 —— 而让 NPC 站住不动的正是【弹出来的对话框】。
+						// npcChatText 必须是 GetChat() 的真台词,给空串等于没开
+						Main.CancelHairWindow();
+						Main.SetNPCShopIndex(0);
+						Main.InGuideCraftMenu = false;
+						p.dropItemCheck();
+						Main.npcChatCornerItem = 0;
+						p.sign = -1;
+						Main.editSign = false;
+						p.SetTalkNPC(g);
+						Main.playerInventory = false;
+						p.chest = -1;
+						Recipe.FindRecipes();
+						Main.npcChatText = gn.GetChat();
+						Terraria.Audio.SoundEngine.PlaySound(SoundID.Chat);
+						DiagLog.Write($"[wof] 拉住向导说话(talk={p.talkNPC}),免得他乱走");
 					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
 					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
