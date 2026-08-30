@@ -666,9 +666,11 @@ namespace TerraBlind
         static float BridgeFrames(int n) => n * BridgeFramesPerCell + BridgeStartFrames;
 
         const float BridgeFramesPerCell = 11.25f;   // 实测 5.33 格/秒(连续铺)
-        // 走一格要几帧。实测:walk 边跨 7 格 g=19.5 → 2.8 帧/格。
-        // bridge 边跨完那段路的时间按这个收,不然"铺一格跨十六格"是白送的传送
-        const float WalkFramesPerCell = 2.8f;
+        // bridge 边【跨过那段路】按每格收这么多帧。走路实测 2.8 帧/格 ——
+        // 这里要的不是"打平",是让 bridge 在平地上【差一个数量级】地输掉:
+        // 铺桥要停下来一格格挥手,还会把已有的地形替换掉,本来就该是走不过去才用的最后手段。
+        // 有洞的地方 walk 边根本发不出来(脚下没地),bridge 照旧是唯一选择,不受这个数影响
+        const float WalkFramesPerCell = 30f;
         const float BridgeStartFrames = 20f;        // 起手:对齐、掏料、第一次挥
 
         // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
