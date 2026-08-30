@@ -395,10 +395,6 @@ namespace TerraBlind
 						int dy = gy + k;
 						if (Predicates.IsLava(gx, dy)) break;          // 到岩浆了,下面不用管
 						if (!Main.tile[gx, dy].HasTile) continue;      // 空的跳过,继续往下找
-						// 【家具撑不住人,挖了白挖】。向导【坐在椅子上】时 gy 就是椅子那一格,
-						// 而椅子 tileSolid=false —— 挖掉他只是站到地板上,一格没往下掉,
-						// 循环却已经用掉了这一轮。撑着他的是【实心方块或平台】,只挖那些
-						if (!Predicates.IsSolid(gx, dy) && !Predicates.IsPlatform(gx, dy)) continue;
 						if (!p.IsInTileInteractionRange(gx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
 						{
 							if (_frames % 120 == 1) DiagLog.Write($"[wof] ({gx},{dy})够不着,不挖了 —— 再深就补不回来");
