@@ -442,16 +442,17 @@ namespace TerraBlind
 					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
 					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
-					// 【按两个碰撞箱有没有重叠判,不是只看向导中心列】。要挖的是他【整个箱子】
-					// 压住的每一列,只要有一列和人重合,那列就永远跳过、永远挖不掉,他也就掉不下去
+					// 【只有一方被另一方完全盖住才让位】。部分相交照挖:人跨 2~3 列,
+					// 挖掉相交的那一列剩下的还撑着人,而向导少一列支撑就可能掉下去。
+					// 完全包含才是死结 —— 向导⊆人挖不到他,人⊆向导挖了自己没地站
 					var (mbl, mbr) = Predicates.BodyCols(p);
 					var (ggl, ggr) = Predicates.BodyCols(gn.position.X, gn.width);
-					if (ggl <= mbr && ggr >= mbl)
+					if ((ggl >= mbl && ggr <= mbr) || (mbl >= ggl && mbr <= ggr))
 					{
 						if (SettleAt.IsRunning) { DigBeat(p, gx, gy, "让位中"); return; }
-						// 让到【他整个箱子之外】再多两列,免得挪完还压着他的边缘列
+						// 让到【他整个箱子之外】再多两列,免得挪完还盖着他
 						int away = _bridgeDir > 0 ? ggl - 3 : ggr + 3;
-						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导箱{ggl}..{ggr}和人{mbl}..{mbr}重叠,先让到{away}");
+						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导箱{ggl}..{ggr}和人{mbl}..{mbr}完全重合,先让到{away}");
 						SettleAt.Start(away, out _);
 						return;
 					}
