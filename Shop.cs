@@ -74,5 +74,55 @@ namespace TerraBlind
 			DiagLog.Write($"[shop] 卖 {it.Name} 得 {Coins(paid ? got : 0)}");
 			return true;
 		}
+
+		// 钱不够就卖东西。【一帧只卖一格】—— Sell 走的是原版右键那条路,会动背包和货架,
+		// 一帧连卖十几件的话中途任何一件失败,前面的状态已经改了没法回滚。
+		// 返回 true = 这一帧卖了一件(调用方该 return 等下一帧再看够没够)。
+		//
+		// 挑哪一件(用户定的规矩):
+		//   * 单价低于 50 银的不卖 —— 卖一堆零碎凑不出几个钱,还把背包翻乱
+		//   * 【优先 1 金到 10 金】的,由高到低;这一档卖光了才动 10 金以上和 50 银~1 金
+		//   * 收藏(favorited)的不卖
+		//   * 生命水晶不卖 —— 那是血上限,卖了这把就白打
+		public const long SellFloor = 50 * 100;        // 50 银
+		public const long BandLo = 1 * 10000;          // 1 金
+		public const long BandHi = 10 * 10000;         // 10 金
+
+		public static bool SellOneFor(Player p, long needCopper, out string note)
+		{
+			note = "";
+			if (p == null) return false;
+			if (Money(p) >= needCopper) return false;
+
+			int best = -1; long bestUnit = 0; int bestBand = -1;
+			for (int i = 0; i < 50 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.stack <= 0) continue;
+				if (it.favorited) continue;
+				if (it.type == ItemID.LifeCrystal) continue;
+				// 硬币本身不是货 —— 卖它等于把钱换成钱
+				if (it.type == ItemID.CopperCoin || it.type == ItemID.SilverCoin
+					|| it.type == ItemID.GoldCoin || it.type == ItemID.PlatinumCoin) continue;
+				long unit = SellUnit(p, it);
+				if (unit < SellFloor) continue;
+				// 档位:1 = 用户点名优先的 1~10 金,0 = 其余(10金以上 / 50银~1金)
+				int band = (unit >= BandLo && unit <= BandHi) ? 1 : 0;
+				// 先比档,同档比单价【由高到低】
+				if (band > bestBand || (band == bestBand && unit > bestUnit))
+				{ bestBand = band; bestUnit = unit; best = i; }
+			}
+			if (best < 0)
+			{
+				note = $"没有能卖的(要单价≥{Coins(SellFloor)},收藏和生命水晶不卖) 现有{Coins(Money(p))}/需要{Coins(needCopper)}";
+				return false;
+			}
+			string nm = p.inventory[best].Name;
+			int stk = p.inventory[best].stack;
+			if (!Sell(p, best, out string sw)) { note = $"卖{nm}失败:{sw}"; return false; }
+			note = $"卖了{nm}x{stk} 单价{Coins(bestUnit)} 现有{Coins(Money(p))}/需要{Coins(needCopper)}";
+			DiagLog.Write($"[shop] {note}");
+			return true;
+		}
 	}
 }

@@ -42,6 +42,8 @@ namespace TerraBlind
 		static int _bridgeDir;           // 桥往哪边延伸
 		static int _frames;
 		static int _nightAt;   // 天黑那一帧。等天黑不计时,天黑之后等 NPC 才计时
+		static int _lastHave = -1, _buyIdle;   // 买雷管的进展:根数或钱变了就算有进展
+		static long _lastMoney = -1;
 		// 原版 NPC 传送回家要"玩家看不见 + 不在好休息点",几秒一次判定;给足一分钟
 		const int NightWaitFrames = 60 * 60;
 		// 挖掉的格子,存【完整坐标】。原来只存行号、列共用一个 _dugCol,
@@ -57,6 +59,7 @@ namespace TerraBlind
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
 			_frames = 0; _nightAt = 0; _dug.Clear(); _deckRow = -1;
+			_lastHave = -1; _lastMoney = -1; _buyIdle = 0;
 			Outcome = "running"; Reason = "";
 			Phase = Ph.WaitNight;
 			DiagLog.Write($"[wof] start 房间({houseWx},{houseWy}) 桥方向={_bridgeDir}");
@@ -191,7 +194,13 @@ namespace TerraBlind
 					int have = Predicates.Have(DynamiteId);
 					if (have >= WantDynamite)
 					{ if (!Main.mouseItem.IsAir) return; Main.playerInventory = false; p.SetTalkNPC(-1); Go(Ph.SwapGuide); return; }
-					if (_frames > 60 * 120) { Fail($"买不到雷管,现有{have}/{WantDynamite}"); return; }
+					// 有进展就把计时清零:45 根一帧一根、卖东西也是一帧一件,
+					// 固定 2 分钟会在"正常干活"中途判死。卡住 30 秒才是真卡住
+					if (have != _lastHave || Shop.Money(p) != _lastMoney)
+					{ _lastHave = have; _lastMoney = Shop.Money(p); _buyIdle = 0; }
+					else _buyIdle++;
+					if (_buyIdle > 60 * 30)
+					{ Fail($"买雷管卡住30秒,现有{have}/{WantDynamite} 钱{Shop.Coins(Shop.Money(p))}"); return; }
 
 					int dn = NPC.FindFirstNPC(NPCID.Demolitionist);
 					if (dn < 0) { Fail("爆破专家不见了"); return; }
@@ -209,13 +218,25 @@ namespace TerraBlind
 					// 鼠标上攒着的先塞进背包,不然买到 maxStack 就卡住
 					if (!Main.mouseItem.IsAir)
 					{
+						// 满了先按清单删掉没用的(草药/矿石那些)。原来直接 Fail,而背包里
+						// 多半全是一路捡的杂物 —— 45 根雷管就卡在这儿买不成
+						if (ThrowItems.FreeSlots() < 1) KeepList.MakeRoom(2);
 						if (ThrowItems.FreeSlots() < 1 && !StashMouse(p)) { Fail("背包满了,放不下买到的雷管"); return; }
 						if (!StashMouse(p)) return;
 						return;
 					}
 					p.GetItemExpectedPrice(shop.item[slot], out _, out long buyPrice);
 					if (!p.CanAfford(buyPrice, shop.item[slot].shopSpecialCurrency))
-					{ Fail($"钱不够(还差买第{have + 1}根雷管的钱),卖东西那套还没做"); return; }
+					{
+						// 钱不够就【当场卖东西】—— 商店已经开着,不用另走一趟。
+						// 一帧只卖一格,卖完 return 等下一帧重新算够不够
+						if (shop.item[slot].shopSpecialCurrency != -1)
+						{ Fail($"第{have + 1}根雷管要特殊货币,买不了"); return; }
+						// 还要买 (WantDynamite-have) 根,一次把总账算够,省得卖一件买一根来回折腾
+						long need = buyPrice * (WantDynamite - have);
+						if (Shop.SellOneFor(p, need, out string sn)) { DiagLog.Write($"[wof] {sn}"); return; }
+						Fail($"钱不够买第{have + 1}根雷管:{sn}"); return;
+					}
 					if (!p.BuyItem(buyPrice, shop.item[slot].shopSpecialCurrency)) { Fail("扣钱失败"); return; }
 
 					// 照抄 ItemSlot.HandleShopSlot:复制一件、清掉商店标记、走 OnCreated
