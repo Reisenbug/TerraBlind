@@ -2045,25 +2045,27 @@ namespace TerraBlind
 					}
 				}
 			}
-			else if (path == "/descent_warm")
+			else if (path == "/descent_route_async")
 			{
-				// 【盖房那几十秒里把下降场算好】。/descent_route 里最贵的就是 ComputeDescent(全图扫 + Dijkstra),
-				// 正式那次直接命中缓存,人不用干站着等。只读地形,不碰玩家,所以后台跑安全。
-				string dwBody;
+				// 【盖房那几十秒里把整条路线算完】。/descent_route 一趟约 4 秒(入口场 + 走廊场 + 每个宝藏一次
+				// BuildField),放主线程就是人干站着等。这里扔后台,盖完房子那次同步调用直接取结果。
+				string arBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					dwBody = sr.ReadToEnd();
-				var dwM = System.Text.RegularExpressions.Regex.Match(dwBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
-				string dwBiome = dwM.Success ? dwM.Groups[1].Value.ToLowerInvariant() : "";
-				ushort[] dwSig = BiomeSig(dwBiome);
-				if (dwSig == null) { body = "{\"ok\":false,\"reason\":\"unknown_biome\"}"; status = 400; }
+					arBody = sr.ReadToEnd();
+				var arM = System.Text.RegularExpressions.Regex.Match(arBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
+				string arBiome = arM.Success ? arM.Groups[1].Value.ToLowerInvariant() : "";
+				ushort[] arSig = BiomeSig(arBiome);
+				if (arSig == null) { body = "{\"ok\":false,\"reason\":\"unknown_biome\"}"; status = 400; }
+				else if (!StartRouteWarm(arBiome, arBody))
+					body = "{\"ok\":true,\"already\":true}";
 				else
 				{
 					System.Threading.Tasks.Task.Run(() =>
 					{
-						try { var d = ComputeDescent(dwSig, out string w); DiagLog.Write($"[warm] 下降场算好 found={d != null} {w}"); }
-						catch (System.Exception e) { DiagLog.Write($"[warm] 下降场 EXC {e.Message}"); }
+						try { FinishRouteWarm(DescentRouteJson(arSig, arBody)); DiagLog.Write($"[warm] 路线算好 {arBiome}"); }
+						catch (System.Exception e) { FinishRouteWarm(null); DiagLog.Write($"[warm] 路线 EXC {e.Message}"); }
 					});
-					DiagLog.Write($"[warm] 后台开算下降场 {dwBiome}");
+					DiagLog.Write($"[warm] 后台开算路线 {arBiome}");
 					body = "{\"ok\":true}";
 				}
 			}
@@ -2260,328 +2262,10 @@ namespace TerraBlind
 				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
 				else
 				{
-					var dd = ComputeDescent(sigTypes, out string why);
-					if (dd == null) body = "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
-					else
-					{
-						_descentField = dd.Field;   // kept for /descent_h progress queries
-						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
-						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
-						var line = new System.Collections.Generic.List<(int x, int y)>();
-						// 先接一段「玩家现在的位置 → 入口」。脚手架原来从入口起,而搜索盒子是脚手架的包围盒,
-						// 所以人在出生点跑"去地狱"时,出生点到丛林入口这一路完全在盒子外——那一路的箱子一个都看不见。
-						{
-							var pl = Main.LocalPlayer;
-							if (pl != null)
-							{
-								int pcx = ActExecutor.OriginCx(pl), pcy = ActExecutor.OriginCy(pl);
-								if (System.Math.Abs(pcx - dd.EntX) + System.Math.Abs(pcy - dd.EntY) > 4)
-								{
-									var af = MazeWand.BuildField(dd.EntX, dd.EntY, pcx, pcy);
-									var ac = (x: pcx, y: pcy);
-									var aseen = new System.Collections.Generic.HashSet<(int, int)>();
-									for (int step = 0; step < 20000; step++)
-									{
-										line.Add(ac);
-										if (!aseen.Add(ac)) break;
-										if (ac.x == dd.EntX && ac.y == dd.EntY) break;
-										if (!af.TryGetValue((ac.x, ac.y), out int ah)) break;
-										int bn = ah; var bc = ac; bool moved = false;
-										foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-										{
-											var n = (x: ac.x + dx2, y: ac.y + dy2);
-											if (af.TryGetValue((n.x, n.y), out int nh) && nh < bn) { bn = nh; bc = n; moved = true; }
-										}
-										if (!moved) break;
-										ac = bc;
-									}
-								}
-							}
-						}
-						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
-						// 算进去等于凭空多发一倍额度,而那些额度全花在地表 —— 空岛就是这么去的。
-						int surfaceLen = line.Count;
-						var cur = (dd.EntX, dd.EntY);
-						var seen = new System.Collections.Generic.HashSet<(int, int)>();
-						for (int step = 0; step < 20000; step++)
-						{
-							line.Add(cur);
-							if (!seen.Add(cur)) break;
-							if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
-							int bestN = int.MaxValue; var best = cur;
-							foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-							{
-								var n = (cur.Item1 + dx2, cur.Item2 + dy2);
-								if (!dd.Field.TryGetValue(n, out int dn)) continue;
-								if (dn < bestN) { bestN = dn; best = n; }
-							}
-							if (best == cur) break;
-							cur = best;
-						}
-						// 走廊按【绕道代价】划,不按直线距离:走一格 3、挖一格 26,"离 25 格"说明不了值不值。
-						// 第二张多源场种在主线上(线上每格 0),从宝藏往下降就描出真实绕道路径,沿途 StepCost 就是价钱。
-						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");
-						var wlkM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max\"\\s*:\\s*(\\d+)");
-						var digM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max2\"\\s*:\\s*(\\d+)");
-						var wlkM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max2\"\\s*:\\s*(\\d+)");
-						int digMax = digM.Success ? int.Parse(digM.Groups[1].Value) : 20;
-						int walkMax = wlkM.Success ? int.Parse(wlkM.Groups[1].Value) : 60;
-						int digMax2 = digM2.Success ? int.Parse(digM2.Groups[1].Value) : 50;
-						int walkMax2 = wlkM2.Success ? int.Parse(wlkM2.Groups[1].Value) : 120;
-						int rejectBound = digMax2 * 160 + walkMax2 * 12;   // loose upper bound for the quick reject
-						const int margin = 80;
-						int bMinX = int.MaxValue, bMaxX = int.MinValue, bMinY = int.MaxValue, bMaxY = int.MinValue;
-						foreach (var (lx, ly) in line)
-						{
-							if (lx < bMinX) bMinX = lx;
-							if (lx > bMaxX) bMaxX = lx;
-							if (ly < bMinY) bMinY = ly;
-							if (ly > bMaxY) bMaxY = ly;
-						}
-						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
-						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
-						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
-						// junction cell → its index along the line, so the executor can visit treasures in line order
-						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
-						for (int i = 0; i < line.Count; i++)
-							if (!lineIdx.ContainsKey(line[i])) lineIdx[line[i]] = i;
-						int rejOff = 0, rejFar = 0, rejNoLink = 0;
-						var rejLog = new System.Text.StringBuilder();
-						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int li, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
-						for (int x = bMinX; x <= bMaxX; x++)
-							for (int y = bMinY; y <= bMaxY; y++)
-							{
-								var t = Main.tile[x, y];
-								if (!t.HasTile) continue;
-								string kind = null;
-								// 箱子种类看 TileFrameX/36 这个 style。style 0 = 木箱(最常见、基本没好东西),
-								// 单独标出来是为了给它更低的价值;红木/乌木/珍珠木各自独立 style,不会混进来。
-								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
-									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
-								{
-									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
-									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
-									if (Terraria.Chest.IsLocked(x, y)) continue;
-									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动,进不去,别当目标。
-									if (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
-									// 蜂巢里的不捡:蜂巢块难挖,进去容易被蜂群围,出来那一段一直卡。
-									// 判据用【墙】不用方块:宝藏就贴在蜂巢墙上,查方块会漏。
-									if (InHive(x, y)) continue;
-									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
-								}
-								else if (t.TileType == Terraria.ID.TileID.Heart
-									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
-								{
-									if (InHive(x, y)) continue;
-									kind = "heart";
-								}
-								if (kind == null) continue;
-									// 每一次淘汰都留下坐标和原因:(3667,655) 那两颗水晶人擦肩而过却没进池子,
-									// 而三条 continue 一条日志都没有,根本看不出是哪条把它扔了。
-									if (!lineField.TryGetValue((x, y), out int d0)) { rejOff++; rejLog.Append($" {kind[0]}({x},{y})场外"); continue; }
-									if (d0 > rejectBound) { rejFar++; rejLog.Append($" {kind[0]}({x},{y})远{d0}"); continue; }
-								// trace the detour path treasure→line by descending the line-field
-								var bpath = new System.Collections.Generic.List<(int, int)>();
-								var bc2 = (x, y);
-								var bseen = new System.Collections.Generic.HashSet<(int, int)>();
-								while (bpath.Count < 4000)
-								{
-									bpath.Add(bc2);
-									if (!bseen.Add(bc2)) break;
-									if (lineField.TryGetValue(bc2, out int bh) && bh == 0) break;
-									int bestN = int.MaxValue; var nb = bc2;
-									foreach (var (dx3, dy3) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-									{
-										var n = (bc2.Item1 + dx3, bc2.Item2 + dy3);
-										if (lineField.TryGetValue(n, out int dn) && dn < bestN) { bestN = dn; nb = n; }
-									}
-									if (nb == bc2) break;
-									bc2 = nb;
-								}
-								var junction = bpath[bpath.Count - 1];
-									if (!lineField.TryGetValue(junction, out int endH) || endH != 0)
-										{ rejNoLink++; rejLog.Append($" {kind[0]}({x},{y})接不上线"); continue; }
-								// 按 StepCost 分类:超过最贵的移动就是挖。回程走已挖开的隧道,
-								// 所以单向计数才是该设上限的那个单位。
-								int nDig = 0, nWalk = 0;
-								for (int i = 1; i < bpath.Count; i++)
-								{
-									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
-									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
-								}
-								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了 ——
-								// 走到 199 那儿之后 201 明明变近了也回不来。这里只收进候选池,取舍留给下面按性价比排。
-								string tier = nDig <= digMax && nWalk <= walkMax ? "main" : "optional";
-								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
-									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
-							}
-						DiagLog.Write($"[route] 扫描:入池{treasures.Count} 淘汰 场外{rejOff}/太远{rejFar}/接不上线{rejNoLink} —{rejLog}");
-						// 定向越野:点=宝藏,边=两点代价,预算内求总价值最大。单向下降 → DAG → DP 出精确最优。
-						// 两点距离用算术估(零次额外 flood):扎堆的挂点相近,中间那段≈0,一窝只付一次进出路费。
-						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
-						{
-							var cand = new System.Collections.Generic.List<int>();
-							for (int i = 0; i < treasures.Count; i++) cand.Add(i);
-							cand.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // 线序 = 深度序,单向下降
-							int n = cand.Count;
-							// det = 单程离线代价(挖过的隧道回程免费,所以挖只算一次)。往返在 Extra 里配对收。
-							var det = new int[n];
-							var val = new int[n];
-							for (int i = 0; i < n; i++)
-							{
-								var tr = treasures[cand[i]];
-								det[i] = tr.walk + tr.dig * DigWalkRatio;   // 单程:出去。回来那程在 Extra 里按需收
-								val[i] = TreasureValue(tr.kind);
-							}
-							// 预算只管【绕路】那部分:主线本来就要走,不该占额度。
-							// 只按【入口→地狱】那段发预算,地表那段不算 —— 它不是下丛林的路,不该撑起绕道额度。
-							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
-							int step = System.Math.Max(1, budget / BudgetSteps);
-							int B = budget / step + 2;
-							// i→j 只收【从 i 回线】+【从线进 j】两个单程,回程按 gap 封顶所以一窝宝藏共享进出。
-							// 原来收 det[i]/2+det[j] 而 det 本身是往返,中间站的回程被收两遍,九个就吃光预算。
-							int Extra(int i, int j)
-							{
-								int gap = System.Math.Abs(treasures[cand[j]].li - treasures[cand[i]].li);
-								return System.Math.Min(det[i], gap) + det[j];
-							}
-							var f = new int[n, B];
-							var from = new int[n, B];
-							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) { f[i, b] = int.MinValue; from[i, b] = -2; }
-							for (int i = 0; i < n; i++) { int c = det[i] / step; if (c < B && val[i] > f[i, c]) { f[i, c] = val[i]; from[i, c] = -1; } }
-							for (int i = 0; i < n; i++)
-								for (int b = 0; b < B; b++)
-								{
-									if (f[i, b] == int.MinValue) continue;
-									for (int j = i + 1; j < n; j++)
-									{
-										int nb = b + Extra(i, j) / step;
-										if (nb >= B) continue;
-										int nv = f[i, b] + val[j];
-										if (nv > f[j, nb]) { f[j, nb] = nv; from[j, nb] = i; }
-									}
-								}
-							int bi = -1, bb = -1, best = 0;
-							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) if (f[i, b] > best) { best = f[i, b]; bi = i; bb = b; }
-							while (bi >= 0)
-							{
-								chain.Add(cand[bi]);
-								int pi = from[bi, bb];
-								if (pi < 0) break;
-								bb -= Extra(pi, bi) / step;
-								bi = pi;
-							}
-							chain.Reverse();
-							// 选了谁、每个多贵,直接印出来:只报总数的话"为什么才 9 个"没法回答。
-							{
-								var sb2 = new System.Text.StringBuilder();
-								int cheap = 0, tot = 0;
-								for (int i = 0; i < n; i++) { tot += det[i]; if (det[i] <= budget / 10) cheap++; }
-								foreach (int ci in chain) sb2.Append($" {treasures[ci].kind[0]}({treasures[ci].x},{treasures[ci].y})w{treasures[ci].walk}d{treasures[ci].dig}");
-								DiagLog.Write($"[route] 候选均价{(n > 0 ? tot / n : 0)} 便宜的({budget / 10}以内){cheap}个 选中:{sb2}");
-							}
-							DiagLog.Write($"[route] DP 候选{n} 预算{budget}({B}档) 选中{chain.Count} 价值{best}");
-						}
-						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
-						{
-							var stops = new System.Collections.Generic.List<(int x, int y)>();
-							foreach (int ti in chain) stops.Add((treasures[ti].x, treasures[ti].y));
-							stops.Add((line[line.Count - 1].x, line[line.Count - 1].y));    // finish at hell
-							// 从玩家现在站的地方起,不是从入口起——不然前半程(走去入口那段)不在路线里
-							var pl0 = Main.LocalPlayer;
-							var cursor = pl0 != null
-								? (x: ActExecutor.OriginCx(pl0), y: ActExecutor.OriginCy(pl0))
-								: (x: dd.EntX, y: dd.EntY);
-							threaded.Add(cursor);
-							var swAll = System.Diagnostics.Stopwatch.StartNew();
-							int legN = 0, legFail = 0;
-							foreach (var goal in stops)
-							{
-								legN++;
-								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
-								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable — skip to next
-								// 从脚下的 H 起步只收严格更低的邻居:起点若是 int.MaxValue,局部窝里两格会互相挑来挑去,
-								// 一轮加 2 格跑满 20000 步,每段都这样 /descent_route 90s 也回不来。seen 再兜住平地和环。
-								var lseen = new System.Collections.Generic.HashSet<(int, int)> { (cursor.x, cursor.y) };
-								for (int step = 0; step < 20000; step++)
-								{
-									if (cursor.x == goal.x && cursor.y == goal.y) break;
-									if (!f.TryGetValue((cursor.x, cursor.y), out int hc0)) break;
-									if (hc0 == 0) break;
-									int bestN = hc0; var best = cursor;
-									foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-									{
-										var n = (x: cursor.x + dx2, y: cursor.y + dy2);
-										if (f.TryGetValue((n.x, n.y), out int dn) && dn < bestN) { bestN = dn; best = n; }
-									}
-									if (best.x == cursor.x && best.y == cursor.y) break;
-									if (!lseen.Add((best.x, best.y))) break;
-									cursor = best;
-									threaded.Add((cursor.x, cursor.y));
-								}
-							}
-							DiagLog.Write($"[descent-thread] legs={legN} unroutable={legFail} cells={threaded.Count} ms={swAll.ElapsedMilliseconds}");
-						}
-
-						// 只画穿宝线。所有 tier(main+optional)现在都在线上,所以一根分叉都不画。
-						// 原来那条 hell-only 主线也不画——它已经不是路线,只是量代价的脚手架。
-						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
-						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
-						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
-						foreach (var tr in treasures)
-						{
-							bool opt = tr.tier == "optional";
-							var mc = tr.kind == "chest"
-								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 160 : 230)
-								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 160 : 230);
-							vis.Add((tr.x, tr.y, mc)); vis.Add((tr.x + 1, tr.y, mc));
-							vis.Add((tr.x, tr.y + 1, mc)); vis.Add((tr.x + 1, tr.y + 1, mc));
-						}
-						PathVisSystem.SetTiles(vis, 7200);
-						var rsb = new StringBuilder();
-						var tail = threaded.Count > 0 ? threaded[threaded.Count - 1] : (line[line.Count - 1].x, line[line.Count - 1].y);
-						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
-						   .Append("},\"hell_x\":").Append(tail.Item1).Append(",\"hell_y\":").Append(tail.Item2)
-						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(threaded.Count)
-						   .Append(",\"scaffold_len\":").Append(line.Count)
-						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax);
-						// the threaded line's own cells, so its SHAPE can be inspected outside the game instead of
-						// judged by eye through a tile overlay
-						rsb.Append(",\"line\":[");
-						for (int i = 0; i < threaded.Count; i++)
-						{
-							if (i > 0) rsb.Append(',');
-							rsb.Append('[').Append(threaded[i].Item1).Append(',').Append(threaded[i].Item2).Append(']');
-						}
-						rsb.Append(']');
-						rsb.Append(",\"treasures\":[");
-						// stop number = position in the stitched chain (-1 for treasures not on it)
-						var stopOf = new System.Collections.Generic.Dictionary<int, int>();
-						for (int i = 0; i < chain.Count; i++) stopOf[chain[i]] = i;
-						for (int i = 0; i < treasures.Count; i++)
-						{
-							var tr = treasures[i];
-							if (i > 0) rsb.Append(',');
-							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y).Append(",\"kind\":\"").Append(tr.kind)
-							   .Append("\",\"tier\":\"").Append(tr.tier).Append("\",\"line_x\":").Append(tr.jx).Append(",\"line_y\":").Append(tr.jy)
-							   .Append(",\"line_i\":").Append(tr.li)
-							   .Append(",\"stop\":").Append(stopOf.TryGetValue(i, out int sn) ? sn : -1)
-							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
-						}
-						rsb.Append(']');
-						// ITINERARY — the visit order, already stitched. The executor walks this and nothing else:
-						// go to each stop in turn, collect, continue. No re-deciding what is worth a detour mid-run.
-						rsb.Append(",\"itinerary\":[");
-						for (int i = 0; i < chain.Count; i++)
-						{
-							var tr = treasures[chain[i]];
-							if (i > 0) rsb.Append(',');
-							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y)
-							   .Append(",\"kind\":\"").Append(tr.kind).Append("\",\"line_i\":").Append(tr.li).Append('}');
-						}
-						rsb.Append("]}");
-						body = rsb.ToString();
-					}
+					// 后台预算过同一份请求就直接用 --- 盖房那几十秒里算好的,这时候一分钱不用再花
+					string cached = TakeRouteCache(biome, reqBody);
+					body = cached ?? DescentRouteJson(sigTypes, reqBody);
+					if (cached != null) DiagLog.Write($"[warm] 路线直接用后台算好的 {biome}");
 				}
 			}
 			else if (path == "/descent_h")
@@ -3305,7 +2989,7 @@ namespace TerraBlind
 		// 再做宽 64 的闭运算,免得坑底竖井内壁冒充地表。然后从地狱带往上 flood,H 最小的地表格就是最便宜的入口。
 		// 【下降场也要缓存】。全图扫描 + Dijkstra 和建场同量级(秒级),而 /descent_route 一趟就调它一次,
 		// 盖房前后各一次就是两次同步卡顿。地形在这期间只多了一栋房子(不在下降走廊上),结果通用。
-		// 按 biome 签名缓存,/descent_warm 提前在后台算好,正式那次直接命中。
+		// 按 biome 签名缓存。/descent_route_async 整趟后台跑时也走这里,重复调用不会重算。
 		static ushort[] _ddKey;
 		static DescentData _ddCache;
 		static string _ddWhy = "";
@@ -3318,6 +3002,368 @@ namespace TerraBlind
 			return true;
 		}
 
+		// 后台算好的路线结果,按【biome + 原始请求体】认领 --- 请求体带着 dig_max 这些参数,
+		// 参数不同就是另一条路线,不能混用。取走即清:地形会变,一份结果只服务一次。
+		static string _rwKey, _rwJson;
+		static bool _rwBusy;
+		static readonly object _rwLock = new object();
+
+		static bool StartRouteWarm(string biome, string reqBody)
+		{
+			lock (_rwLock)
+			{
+				if (_rwBusy) return false;          // 上一趟还在算
+				_rwBusy = true; _rwKey = biome + "\u0001" + reqBody; _rwJson = null;
+				return true;
+			}
+		}
+
+		static void FinishRouteWarm(string json)
+		{
+			lock (_rwLock) { _rwJson = json; _rwBusy = false; }
+		}
+
+		static string TakeRouteCache(string biome, string reqBody)
+		{
+			lock (_rwLock)
+			{
+				if (_rwBusy || _rwJson == null) return null;
+				if (_rwKey != biome + "\u0001" + reqBody) return null;
+				var j = _rwJson; _rwJson = null; _rwKey = null;
+				return j;
+			}
+		}
+
+		// 【整段可后台跑】。这一趟里有三个秒级搜索:ComputeDescent(入口)、走廊多源场、
+		// 每个宝藏一次 BuildField(实测 22 段 1.5 秒) --- 合起来约 4 秒。放主线程就是盖房前干卡 4 秒,
+		// 所以抽出来:同步端点直接调,/descent_route_async 扔 Task.Run 让它和盖房并行。
+		// 只读地形和玩家位置,写的只有 _descentField 和 PathVis(自带锁)。
+		static string DescentRouteJson(ushort[] sigTypes, string reqBody)
+		{
+					var dd = ComputeDescent(sigTypes, out string why);
+					if (dd == null) return "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
+					else
+					{
+						_descentField = dd.Field;   // kept for /descent_h progress queries
+						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
+						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
+						var line = new System.Collections.Generic.List<(int x, int y)>();
+						// 先接一段「玩家现在的位置 → 入口」。脚手架原来从入口起,而搜索盒子是脚手架的包围盒,
+						// 所以人在出生点跑"去地狱"时,出生点到丛林入口这一路完全在盒子外——那一路的箱子一个都看不见。
+						{
+							var pl = Main.LocalPlayer;
+							if (pl != null)
+							{
+								int pcx = ActExecutor.OriginCx(pl), pcy = ActExecutor.OriginCy(pl);
+								if (System.Math.Abs(pcx - dd.EntX) + System.Math.Abs(pcy - dd.EntY) > 4)
+								{
+									var af = MazeWand.BuildField(dd.EntX, dd.EntY, pcx, pcy);
+									var ac = (x: pcx, y: pcy);
+									var aseen = new System.Collections.Generic.HashSet<(int, int)>();
+									for (int step = 0; step < 20000; step++)
+									{
+										line.Add(ac);
+										if (!aseen.Add(ac)) break;
+										if (ac.x == dd.EntX && ac.y == dd.EntY) break;
+										if (!af.TryGetValue((ac.x, ac.y), out int ah)) break;
+										int bn = ah; var bc = ac; bool moved = false;
+										foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+										{
+											var n = (x: ac.x + dx2, y: ac.y + dy2);
+											if (af.TryGetValue((n.x, n.y), out int nh) && nh < bn) { bn = nh; bc = n; moved = true; }
+										}
+										if (!moved) break;
+										ac = bc;
+									}
+								}
+							}
+						}
+						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
+						// 算进去等于凭空多发一倍额度,而那些额度全花在地表 —— 空岛就是这么去的。
+						int surfaceLen = line.Count;
+						var cur = (dd.EntX, dd.EntY);
+						var seen = new System.Collections.Generic.HashSet<(int, int)>();
+						for (int step = 0; step < 20000; step++)
+						{
+							line.Add(cur);
+							if (!seen.Add(cur)) break;
+							if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
+							int bestN = int.MaxValue; var best = cur;
+							foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+							{
+								var n = (cur.Item1 + dx2, cur.Item2 + dy2);
+								if (!dd.Field.TryGetValue(n, out int dn)) continue;
+								if (dn < bestN) { bestN = dn; best = n; }
+							}
+							if (best == cur) break;
+							cur = best;
+						}
+						// 走廊按【绕道代价】划,不按直线距离:走一格 3、挖一格 26,"离 25 格"说明不了值不值。
+						// 第二张多源场种在主线上(线上每格 0),从宝藏往下降就描出真实绕道路径,沿途 StepCost 就是价钱。
+						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");
+						var wlkM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max\"\\s*:\\s*(\\d+)");
+						var digM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max2\"\\s*:\\s*(\\d+)");
+						var wlkM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"walk_max2\"\\s*:\\s*(\\d+)");
+						int digMax = digM.Success ? int.Parse(digM.Groups[1].Value) : 20;
+						int walkMax = wlkM.Success ? int.Parse(wlkM.Groups[1].Value) : 60;
+						int digMax2 = digM2.Success ? int.Parse(digM2.Groups[1].Value) : 50;
+						int walkMax2 = wlkM2.Success ? int.Parse(wlkM2.Groups[1].Value) : 120;
+						int rejectBound = digMax2 * 160 + walkMax2 * 12;   // loose upper bound for the quick reject
+						const int margin = 80;
+						int bMinX = int.MaxValue, bMaxX = int.MinValue, bMinY = int.MaxValue, bMaxY = int.MinValue;
+						foreach (var (lx, ly) in line)
+						{
+							if (lx < bMinX) bMinX = lx;
+							if (lx > bMaxX) bMaxX = lx;
+							if (ly < bMinY) bMinY = ly;
+							if (ly > bMaxY) bMaxY = ly;
+						}
+						bMinX = System.Math.Max(0, bMinX - margin); bMaxX = System.Math.Min(Main.maxTilesX - 1, bMaxX + margin);
+						bMinY = System.Math.Max(0, bMinY - margin); bMaxY = System.Math.Min(Main.maxTilesY - 1, bMaxY + margin);
+						var lineField = MazeWand.BuildFieldMulti(line, bMinX, bMaxX, bMinY, bMaxY);
+						// junction cell → its index along the line, so the executor can visit treasures in line order
+						var lineIdx = new System.Collections.Generic.Dictionary<(int, int), int>();
+						for (int i = 0; i < line.Count; i++)
+							if (!lineIdx.ContainsKey(line[i])) lineIdx[line[i]] = i;
+						int rejOff = 0, rejFar = 0, rejNoLink = 0;
+						var rejLog = new System.Text.StringBuilder();
+						var treasures = new System.Collections.Generic.List<(int x, int y, string kind, int jx, int jy, int li, int dig, int walk, string tier, System.Collections.Generic.List<(int, int)> path)>();
+						for (int x = bMinX; x <= bMaxX; x++)
+							for (int y = bMinY; y <= bMaxY; y++)
+							{
+								var t = Main.tile[x, y];
+								if (!t.HasTile) continue;
+								string kind = null;
+								// 箱子种类看 TileFrameX/36 这个 style。style 0 = 木箱(最常见、基本没好东西),
+								// 单独标出来是为了给它更低的价值;红木/乌木/珍珠木各自独立 style,不会混进来。
+								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
+								{
+									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
+									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
+									if (Terraria.Chest.IsLocked(x, y)) continue;
+									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动,进不去,别当目标。
+									if (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
+									// 蜂巢里的不捡:蜂巢块难挖,进去容易被蜂群围,出来那一段一直卡。
+									// 判据用【墙】不用方块:宝藏就贴在蜂巢墙上,查方块会漏。
+									if (InHive(x, y)) continue;
+									kind = (t.TileType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 0) ? "wood_chest" : "chest";
+								}
+								else if (t.TileType == Terraria.ID.TileID.Heart
+									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
+								{
+									if (InHive(x, y)) continue;
+									kind = "heart";
+								}
+								if (kind == null) continue;
+									// 每一次淘汰都留下坐标和原因:(3667,655) 那两颗水晶人擦肩而过却没进池子,
+									// 而三条 continue 一条日志都没有,根本看不出是哪条把它扔了。
+									if (!lineField.TryGetValue((x, y), out int d0)) { rejOff++; rejLog.Append($" {kind[0]}({x},{y})场外"); continue; }
+									if (d0 > rejectBound) { rejFar++; rejLog.Append($" {kind[0]}({x},{y})远{d0}"); continue; }
+								// trace the detour path treasure→line by descending the line-field
+								var bpath = new System.Collections.Generic.List<(int, int)>();
+								var bc2 = (x, y);
+								var bseen = new System.Collections.Generic.HashSet<(int, int)>();
+								while (bpath.Count < 4000)
+								{
+									bpath.Add(bc2);
+									if (!bseen.Add(bc2)) break;
+									if (lineField.TryGetValue(bc2, out int bh) && bh == 0) break;
+									int bestN = int.MaxValue; var nb = bc2;
+									foreach (var (dx3, dy3) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+									{
+										var n = (bc2.Item1 + dx3, bc2.Item2 + dy3);
+										if (lineField.TryGetValue(n, out int dn) && dn < bestN) { bestN = dn; nb = n; }
+									}
+									if (nb == bc2) break;
+									bc2 = nb;
+								}
+								var junction = bpath[bpath.Count - 1];
+									if (!lineField.TryGetValue(junction, out int endH) || endH != 0)
+										{ rejNoLink++; rejLog.Append($" {kind[0]}({x},{y})接不上线"); continue; }
+								// 按 StepCost 分类:超过最贵的移动就是挖。回程走已挖开的隧道,
+								// 所以单向计数才是该设上限的那个单位。
+								int nDig = 0, nWalk = 0;
+								for (int i = 1; i < bpath.Count; i++)
+								{
+									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
+									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
+								}
+								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了 ——
+								// 走到 199 那儿之后 201 明明变近了也回不来。这里只收进候选池,取舍留给下面按性价比排。
+								string tier = nDig <= digMax && nWalk <= walkMax ? "main" : "optional";
+								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
+									lineIdx.TryGetValue(junction, out int li0) ? li0 : 0, nDig, nWalk, tier, bpath));
+							}
+						DiagLog.Write($"[route] 扫描:入池{treasures.Count} 淘汰 场外{rejOff}/太远{rejFar}/接不上线{rejNoLink} —{rejLog}");
+						// 定向越野:点=宝藏,边=两点代价,预算内求总价值最大。单向下降 → DAG → DP 出精确最优。
+						// 两点距离用算术估(零次额外 flood):扎堆的挂点相近,中间那段≈0,一窝只付一次进出路费。
+						var chain = new System.Collections.Generic.List<int>();       // visit order, indices into `treasures`
+						{
+							var cand = new System.Collections.Generic.List<int>();
+							for (int i = 0; i < treasures.Count; i++) cand.Add(i);
+							cand.Sort((a, b) => treasures[a].li.CompareTo(treasures[b].li));   // 线序 = 深度序,单向下降
+							int n = cand.Count;
+							// det = 单程离线代价(挖过的隧道回程免费,所以挖只算一次)。往返在 Extra 里配对收。
+							var det = new int[n];
+							var val = new int[n];
+							for (int i = 0; i < n; i++)
+							{
+								var tr = treasures[cand[i]];
+								det[i] = tr.walk + tr.dig * DigWalkRatio;   // 单程:出去。回来那程在 Extra 里按需收
+								val[i] = TreasureValue(tr.kind);
+							}
+							// 预算只管【绕路】那部分:主线本来就要走,不该占额度。
+							// 只按【入口→地狱】那段发预算,地表那段不算 —— 它不是下丛林的路,不该撑起绕道额度。
+							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
+							int step = System.Math.Max(1, budget / BudgetSteps);
+							int B = budget / step + 2;
+							// i→j 只收【从 i 回线】+【从线进 j】两个单程,回程按 gap 封顶所以一窝宝藏共享进出。
+							// 原来收 det[i]/2+det[j] 而 det 本身是往返,中间站的回程被收两遍,九个就吃光预算。
+							int Extra(int i, int j)
+							{
+								int gap = System.Math.Abs(treasures[cand[j]].li - treasures[cand[i]].li);
+								return System.Math.Min(det[i], gap) + det[j];
+							}
+							var f = new int[n, B];
+							var from = new int[n, B];
+							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) { f[i, b] = int.MinValue; from[i, b] = -2; }
+							for (int i = 0; i < n; i++) { int c = det[i] / step; if (c < B && val[i] > f[i, c]) { f[i, c] = val[i]; from[i, c] = -1; } }
+							for (int i = 0; i < n; i++)
+								for (int b = 0; b < B; b++)
+								{
+									if (f[i, b] == int.MinValue) continue;
+									for (int j = i + 1; j < n; j++)
+									{
+										int nb = b + Extra(i, j) / step;
+										if (nb >= B) continue;
+										int nv = f[i, b] + val[j];
+										if (nv > f[j, nb]) { f[j, nb] = nv; from[j, nb] = i; }
+									}
+								}
+							int bi = -1, bb = -1, best = 0;
+							for (int i = 0; i < n; i++) for (int b = 0; b < B; b++) if (f[i, b] > best) { best = f[i, b]; bi = i; bb = b; }
+							while (bi >= 0)
+							{
+								chain.Add(cand[bi]);
+								int pi = from[bi, bb];
+								if (pi < 0) break;
+								bb -= Extra(pi, bi) / step;
+								bi = pi;
+							}
+							chain.Reverse();
+							// 选了谁、每个多贵,直接印出来:只报总数的话"为什么才 9 个"没法回答。
+							{
+								var sb2 = new System.Text.StringBuilder();
+								int cheap = 0, tot = 0;
+								for (int i = 0; i < n; i++) { tot += det[i]; if (det[i] <= budget / 10) cheap++; }
+								foreach (int ci in chain) sb2.Append($" {treasures[ci].kind[0]}({treasures[ci].x},{treasures[ci].y})w{treasures[ci].walk}d{treasures[ci].dig}");
+								DiagLog.Write($"[route] 候选均价{(n > 0 ? tot / n : 0)} 便宜的({budget / 10}以内){cheap}个 选中:{sb2}");
+							}
+							DiagLog.Write($"[route] DP 候选{n} 预算{budget}({B}档) 选中{chain.Count} 价值{best}");
+						}
+						var threaded = new System.Collections.Generic.List<(int, int)>();   // the single line, entrance→hell
+						{
+							var stops = new System.Collections.Generic.List<(int x, int y)>();
+							foreach (int ti in chain) stops.Add((treasures[ti].x, treasures[ti].y));
+							stops.Add((line[line.Count - 1].x, line[line.Count - 1].y));    // finish at hell
+							// 从玩家现在站的地方起,不是从入口起——不然前半程(走去入口那段)不在路线里
+							var pl0 = Main.LocalPlayer;
+							var cursor = pl0 != null
+								? (x: ActExecutor.OriginCx(pl0), y: ActExecutor.OriginCy(pl0))
+								: (x: dd.EntX, y: dd.EntY);
+							threaded.Add(cursor);
+							var swAll = System.Diagnostics.Stopwatch.StartNew();
+							int legN = 0, legFail = 0;
+							foreach (var goal in stops)
+							{
+								legN++;
+								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
+								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable — skip to next
+								// 从脚下的 H 起步只收严格更低的邻居:起点若是 int.MaxValue,局部窝里两格会互相挑来挑去,
+								// 一轮加 2 格跑满 20000 步,每段都这样 /descent_route 90s 也回不来。seen 再兜住平地和环。
+								var lseen = new System.Collections.Generic.HashSet<(int, int)> { (cursor.x, cursor.y) };
+								for (int step = 0; step < 20000; step++)
+								{
+									if (cursor.x == goal.x && cursor.y == goal.y) break;
+									if (!f.TryGetValue((cursor.x, cursor.y), out int hc0)) break;
+									if (hc0 == 0) break;
+									int bestN = hc0; var best = cursor;
+									foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+									{
+										var n = (x: cursor.x + dx2, y: cursor.y + dy2);
+										if (f.TryGetValue((n.x, n.y), out int dn) && dn < bestN) { bestN = dn; best = n; }
+									}
+									if (best.x == cursor.x && best.y == cursor.y) break;
+									if (!lseen.Add((best.x, best.y))) break;
+									cursor = best;
+									threaded.Add((cursor.x, cursor.y));
+								}
+							}
+							DiagLog.Write($"[descent-thread] legs={legN} unroutable={legFail} cells={threaded.Count} ms={swAll.ElapsedMilliseconds}");
+						}
+
+						// 只画穿宝线。所有 tier(main+optional)现在都在线上,所以一根分叉都不画。
+						// 原来那条 hell-only 主线也不画——它已经不是路线,只是量代价的脚手架。
+						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
+						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
+						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
+						foreach (var tr in treasures)
+						{
+							bool opt = tr.tier == "optional";
+							var mc = tr.kind == "chest"
+								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 160 : 230)
+								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 160 : 230);
+							vis.Add((tr.x, tr.y, mc)); vis.Add((tr.x + 1, tr.y, mc));
+							vis.Add((tr.x, tr.y + 1, mc)); vis.Add((tr.x + 1, tr.y + 1, mc));
+						}
+						PathVisSystem.SetTiles(vis, 7200);
+						var rsb = new StringBuilder();
+						var tail = threaded.Count > 0 ? threaded[threaded.Count - 1] : (line[line.Count - 1].x, line[line.Count - 1].y);
+						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
+						   .Append("},\"hell_x\":").Append(tail.Item1).Append(",\"hell_y\":").Append(tail.Item2)
+						   .Append(",\"cost\":").Append(dd.Cost).Append(",\"line_len\":").Append(threaded.Count)
+						   .Append(",\"scaffold_len\":").Append(line.Count)
+						   .Append(",\"dig_max\":").Append(digMax).Append(",\"walk_max\":").Append(walkMax);
+						// the threaded line's own cells, so its SHAPE can be inspected outside the game instead of
+						// judged by eye through a tile overlay
+						rsb.Append(",\"line\":[");
+						for (int i = 0; i < threaded.Count; i++)
+						{
+							if (i > 0) rsb.Append(',');
+							rsb.Append('[').Append(threaded[i].Item1).Append(',').Append(threaded[i].Item2).Append(']');
+						}
+						rsb.Append(']');
+						rsb.Append(",\"treasures\":[");
+						// stop number = position in the stitched chain (-1 for treasures not on it)
+						var stopOf = new System.Collections.Generic.Dictionary<int, int>();
+						for (int i = 0; i < chain.Count; i++) stopOf[chain[i]] = i;
+						for (int i = 0; i < treasures.Count; i++)
+						{
+							var tr = treasures[i];
+							if (i > 0) rsb.Append(',');
+							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y).Append(",\"kind\":\"").Append(tr.kind)
+							   .Append("\",\"tier\":\"").Append(tr.tier).Append("\",\"line_x\":").Append(tr.jx).Append(",\"line_y\":").Append(tr.jy)
+							   .Append(",\"line_i\":").Append(tr.li)
+							   .Append(",\"stop\":").Append(stopOf.TryGetValue(i, out int sn) ? sn : -1)
+							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
+						}
+						rsb.Append(']');
+						// ITINERARY — the visit order, already stitched. The executor walks this and nothing else:
+						// go to each stop in turn, collect, continue. No re-deciding what is worth a detour mid-run.
+						rsb.Append(",\"itinerary\":[");
+						for (int i = 0; i < chain.Count; i++)
+						{
+							var tr = treasures[chain[i]];
+							if (i > 0) rsb.Append(',');
+							rsb.Append("{\"x\":").Append(tr.x).Append(",\"y\":").Append(tr.y)
+							   .Append(",\"kind\":\"").Append(tr.kind).Append("\",\"line_i\":").Append(tr.li).Append('}');
+						}
+						rsb.Append("]}");
+						return rsb.ToString();
+					}
+			return "{\"found\":false,\"reason\":\"no_route\"}";
+		}
 		static DescentData ComputeDescent(ushort[] sigTypes, out string failReason)
 		{
 			lock (_ddLock)
