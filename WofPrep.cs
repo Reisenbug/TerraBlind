@@ -37,6 +37,9 @@ namespace TerraBlind
 		const int MinDynamite = 20;
 		const int WalkAwayTiles = 80;
 		const int DigDepth = 6;   // 往下最多挖这么深;再深人就够不着,也补不回来
+		// 向导要掉过洞口这么多行才开始补。补早了等于给他垫块地,他就再也下不去了
+		const int PatchClear = 8;
+		const int PatchWait = 60 * 10;   // 最多等他掉 10 秒。再不掉就照补,别把窟窿永远留着
 
 		// 夜里 19:30~4:30 才回家。原版时间:白天 0~54000(4:30~19:30),夜里 0~32400
 		public static bool IsNight() => !Main.dayTime;
@@ -79,13 +82,21 @@ namespace TerraBlind
 		// 在【那边】记的行号,而桥是有坡的:房子在 1042、远处的桥面在 1040,差 2 行。
 		// 于是向导好端端站在自家地板上(1042)就被当成"掉下去了",DigUnder 整个跳过,
 		// 人干等肉山永远不出(现场:5787 向导掉到1042行(桥面1040),不追了)。
+		// 向导是不是【真的在往下掉】。
+		//
+		// 【必须看他本人在不在动,不能只看地板还在不在】。挖开的那一帧他那一列往下全空,
+		// DeckRow 返回 -1 —— 当帧就判"掉了"转去补洞,而向导还稳稳站在原地(vanilla 要
+		// 下一帧才给他重力),洞一补上他就再也掉不下去了,人干等一个永远不来的肉山。
+		//
+		// 判据:他在下落(velocity.Y > 0) 或者 已经落到桥面以下。两个都不成立就是还没走。
 		static bool GuideFell(NPC gn)
 		{
+			if (gn.velocity.Y > 0.1f) return true;   // 正在往下掉 = 活儿成了
 			int gx = (int)(gn.Center.X / 16f);
 			int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
-			// 从他头顶往下找他那一列的桥面。找不到(下面是岩浆/空)就是真掉出去了
 			int deck = DeckRow(gx, gy - DeckScan / 2 > 0 ? gy - DeckScan / 2 : 1);
-            if (deck < 0) return true;
+			// 脚下没地【而且】人还没动 = 刚挖开、他还没反应过来,别当成掉了
+			if (deck < 0) return false;
 			return gy > deck + 1;
 		}
 
@@ -420,6 +431,26 @@ namespace TerraBlind
 				{
 					if (PlaceAnywhere.IsRunning) return;
 					if (_dug.Count == 0) { Go(Ph.WaitWof); return; }
+					// 【等他掉远了再补】。补洞是为了把桥面还原,可他刚开始掉的时候洞就在他脚下,
+					// 这时补上等于给他垫了块地,人白挖一场。掉够 PatchClear 行才算走远了
+					{
+						int pg = NPC.FindFirstNPC(NPCID.Guide);
+						if (pg >= 0)
+						{
+							var pgn = Main.npc[pg];
+							int pgy = (int)((pgn.position.Y + pgn.height + 2f) / 16f);
+							int topDug = int.MaxValue;
+							foreach (var d in _dug) if (d.y < topDug) topDug = d.y;
+							// 等他掉远。但【只等 PatchWait 帧】—— 他要是卡在洞口不动,
+							// 一直等下去就是把洞永远留着,桥面有个窟窿人后面还要走
+							if (pgy < topDug + PatchClear && _frames < PatchWait)
+							{
+								if (_frames % 60 == 1)
+									DiagLog.Write($"[wof] 向导还在{pgy}行(洞口{topDug}),等他掉过{topDug + PatchClear}再补 {_frames}/{PatchWait}");
+								return;
+							}
+						}
+					}
 					// 先补【离人最近】的那格:从最远的补起,人得走过去,而脚下的洞还没补,容易掉下去
 					int pick = 0, pbest = int.MaxValue;
 					int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
