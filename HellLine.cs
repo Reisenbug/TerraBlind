@@ -72,8 +72,17 @@ namespace TerraBlind
 		}
 
 		// 桥面在 (x,y):人占 y-1..y-Body。再往上多留一格 = Head 行全要空。
-		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话,第 4 行那块石头就是卡死的地方
+		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话,第 4 行那块石头就是卡死的地方。
+		//
+		// 【和 DeckBuilder.HeadClear 必须是同一个数】。算线按 4 行禁、铺桥按 5 行清的话,
+		// 第 5 行的地狱熔炉算线时放行、铺桥时挖不掉,人走到那儿被顶住 —— 线保证不了的事
+		// 执行期补不回来。所以两处都读这一份
 		const int Head = Body + 1;
+		// 【挖不动的东西要按铺桥真正会清的高度禁】。DeckBuilder 铺到一格之前会清它上方
+		// HeadClear 行,清不掉(地狱熔炉 tile 77)人就被顶住。算线只按 Head=4 禁的话,
+		// 第 5 行那个熔炉算线时放行、铺桥时挖不掉 —— 线保证不了的事执行期补不回来。
+		// 【不和 Head 合并】:Head 还管着"头顶不许有岩浆",那条按 5 行禁会把线掐得太窄
+		const int DigHead = DeckBuilder.HeadClear;
 		// 这一趟的镐力。算线前取一次 —— CellCost 是 DP 里逐格调的,不能每次去翻背包
 		static int _pick;
 
@@ -119,7 +128,7 @@ namespace TerraBlind
 			// 用 MineableWith 不用 CostFrames:这里是 176 列 x 190 行的 DP,每格要问 4 次。
 			// CostFrames 每次 new Item() 还扫一遍热键栏,13 万次会把算线拖垮 ——
 			// 而镐力一趟不变,循环外取一次就够
-			for (int r = 0; r <= Head; r++)
+			for (int r = 0; r <= DigHead; r++)
 				if (Predicates.IsSolid(x, y - r) && !DigTable.MineableWith(x, y - r, _pick))
 					return Unreachable;
 			int blk = Blocked(x, y);

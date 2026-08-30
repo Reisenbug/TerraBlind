@@ -299,7 +299,9 @@ namespace TerraBlind
 
 		// 桥面【上方 HeadClear 行】必须是空的,从当前格往前看 LookAhead 格。
 		// 挖了返回 true(这一帧交给挖,别再往下走)
-		const int HeadClear = 5;   // 用户定的:上方 5 格
+		// 桥面上方要空几行。【HellLine.Head 读的就是这一份】—— 算线按它禁掉
+		// "上方有挖不动的东西"的列,铺桥按它清障,两边必须是同一个数
+		public const int HeadClear = 5;
 		const int LookAhead = 4;   // 往前看几格。太少会走到跟前才发现,太多会挖到用不上的地方
 
 		static bool ClearAhead(Player p)
