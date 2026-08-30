@@ -113,8 +113,14 @@ namespace TerraBlind
 			int d = System.Math.Abs(curCx - Gx) + System.Math.Abs(curCy - Gy);
 			if (d <= 1)
 			{
-				DiagLog.Write($"[commit] REACHED ({Gx},{Gy}) in {_cycles} cycles");
-				_failed.Clear();   // getting somewhere clears the doubts — the terrain reads differently from here
+				// 【到了要验收】。挑目标时不看 H 是对的(出口常常先上坡),但走完一趟总得回头看一眼:
+				// 比出发时还高,这趟就是从一个坑爬进另一个坑 --- 实测承诺 (1418,319) 让 H 从 1020
+				// 涨到 1503,A* 再把人原路送回 1020,460 帧白跑。这种目标要连片拉黑,不能再挑。
+				int curH = CurH(curCx, curCy);
+				bool worse = curH >= _startH;
+				DiagLog.Write($"[commit] REACHED ({Gx},{Gy}) in {_cycles} cycles H {_startH}→{curH}{(worse ? " 更差,拉黑这一片" : "")}");
+				if (worse) BlacklistAround();
+				else _failed.Clear();   // 真的变好了才清疑虑 --- 从这儿看地形是另一个样子
 				Clear();
 				return false;
 			}
@@ -126,16 +132,29 @@ namespace TerraBlind
 			if (_sinceProgress >= StaleCycles || _cycles >= _budget)
 			{
 				DiagLog.Write($"[commit] ABANDON ({Gx},{Gy}) dist={d} best={_bestDist} cycles={_cycles}/{_budget} stale={_sinceProgress}");
-				// 【连片拉黑】。只黑一个点没用:到不了的是整片区域,下一轮就挑隔壁一格,
-				// 同一个方向再耗 10 轮 --- 日志里十个目标九个都在西南那一带,轮着来把预算耗光,
-				// 而唯一的出口只因为远 1 格,一次都没轮上。
-				for (int fx = -FailRadius; fx <= FailRadius; fx++)
-					for (int fy = -FailRadius; fy <= FailRadius; fy++)
-						_failed.Add((Gx + fx, Gy + fy));
+				BlacklistAround();
 				Clear();
 				return false;
 			}
 			return true;
+		}
+
+		// 【连片拉黑】。只黑一个点没用:到不了的是整片区域,下一轮就挑隔壁一格,
+		// 同一个方向再耗 10 轮 --- 日志里十个目标九个都在西南那一带,轮着来把预算耗光,
+		// 而唯一的出口只因为远 1 格,一次都没轮上。
+		static void BlacklistAround()
+		{
+			for (int fx = -FailRadius; fx <= FailRadius; fx++)
+				for (int fy = -FailRadius; fy <= FailRadius; fy++)
+					_failed.Add((Gx + fx, Gy + fy));
+		}
+
+		// 场里查不到这格就退回承诺时记的目标 H:验收宁可放过,不能拿 0 当"变好了"
+		static int CurH(int cx, int cy)
+		{
+			var field = MazeWand.PeekField();
+			if (field != null && field.TryGetValue((cx, cy), out int h)) return h;
+			return _targetH;
 		}
 	}
 }
