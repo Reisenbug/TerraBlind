@@ -2524,7 +2524,11 @@ namespace TerraBlind
                     best = pick.edge; bestCell = pick.cell; bestTotal = pick.total;
                 }
             }
-            if (!Commitment.Active && jigglePool.Count > 0 && best != null)
+            // 【A* 在搜的时候 PUSH 让路】。PUSH 按 total 挑"最便宜的坏选择",不问方向:实测三次 TRAP
+            // 各推出 9 行((1114,410)/(1113,410)/(1115,410),_visited 标了就挑隔壁),而 A* 三次都算出
+            // 同一个正确答案 (1114,395),每次刚回来人已经被推走了 --- 260 帧全耗在拉锯上。
+            // 搜索期间保持贪心原选择,人小步挪动等结果就行。
+            if (!Commitment.Active && !TrapEscape.Busy && jigglePool.Count > 0 && best != null)
             {
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
