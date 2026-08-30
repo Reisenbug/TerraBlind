@@ -2045,6 +2045,28 @@ namespace TerraBlind
 					}
 				}
 			}
+			else if (path == "/descent_warm")
+			{
+				// 【盖房那几十秒里把下降场算好】。/descent_route 里最贵的就是 ComputeDescent(全图扫 + Dijkstra),
+				// 正式那次直接命中缓存,人不用干站着等。只读地形,不碰玩家,所以后台跑安全。
+				string dwBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					dwBody = sr.ReadToEnd();
+				var dwM = System.Text.RegularExpressions.Regex.Match(dwBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
+				string dwBiome = dwM.Success ? dwM.Groups[1].Value.ToLowerInvariant() : "";
+				ushort[] dwSig = BiomeSig(dwBiome);
+				if (dwSig == null) { body = "{\"ok\":false,\"reason\":\"unknown_biome\"}"; status = 400; }
+				else
+				{
+					System.Threading.Tasks.Task.Run(() =>
+					{
+						try { var d = ComputeDescent(dwSig, out string w); DiagLog.Write($"[warm] 下降场算好 found={d != null} {w}"); }
+						catch (System.Exception e) { DiagLog.Write($"[warm] 下降场 EXC {e.Message}"); }
+					});
+					DiagLog.Write($"[warm] 后台开算下降场 {dwBiome}");
+					body = "{\"ok\":true}";
+				}
+			}
 			else if (path == "/nav_recede_done")
 			{
 				if (RecedingNav.Active)
@@ -3281,7 +3303,32 @@ namespace TerraBlind
 
 		// 地表线 S(x):从天上往下第一块【底下 20 格里有 ≥15 格实心】的砖(树冠屋顶那种薄壳跳过),
 		// 再做宽 64 的闭运算,免得坑底竖井内壁冒充地表。然后从地狱带往上 flood,H 最小的地表格就是最便宜的入口。
+		// 【下降场也要缓存】。全图扫描 + Dijkstra 和建场同量级(秒级),而 /descent_route 一趟就调它一次,
+		// 盖房前后各一次就是两次同步卡顿。地形在这期间只多了一栋房子(不在下降走廊上),结果通用。
+		// 按 biome 签名缓存,/descent_warm 提前在后台算好,正式那次直接命中。
+		static ushort[] _ddKey;
+		static DescentData _ddCache;
+		static string _ddWhy = "";
+		static readonly object _ddLock = new object();
+
+		static bool SameSig(ushort[] a, ushort[] b)
+		{
+			if (a == null || b == null || a.Length != b.Length) return false;
+			for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+			return true;
+		}
+
 		static DescentData ComputeDescent(ushort[] sigTypes, out string failReason)
+		{
+			lock (_ddLock)
+				if (SameSig(_ddKey, sigTypes)) { failReason = _ddWhy; return _ddCache; }
+			var r = ComputeDescentRaw(sigTypes, out string why);
+			lock (_ddLock) { _ddKey = sigTypes; _ddCache = r; _ddWhy = why; }
+			failReason = why;
+			return r;
+		}
+
+		static DescentData ComputeDescentRaw(ushort[] sigTypes, out string failReason)
 		{
 			failReason = "";
 			var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
