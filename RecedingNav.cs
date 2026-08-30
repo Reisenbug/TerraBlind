@@ -388,8 +388,10 @@ namespace TerraBlind
                     _haveLast = false;       // 这一段不是贪心选的边,别拿它去算失配权重
                     return;
                 }
-                // A* 也出不去 → 退回承诺兜底。res 是贪心这一周期选的边,照常派发
-                if (!Commitment.Active) Commitment.Begin(Trap.JustAt.x, Trap.JustAt.y, Trap.JustH);
+                // A* 也出不去 → 退回承诺兜底。res 是贪心这一周期选的边,照常派发。
+                // 【但 A* 还在搜的时候不许建承诺】。TryEscape 刚开搜也返回 false,和"A* 失败"
+                // 长得一样 --- 那几十帧建了承诺,它就把人往别处拽,等结果回来人已经不在原地了。
+                if (!Commitment.Active && !TrapEscape.Busy) Commitment.Begin(Trap.JustAt.x, Trap.JustAt.y, Trap.JustH);
                 // 后台还在搜的这十几秒里 H 不降、位移也小,正是 sentinel 判卡死的特征。
                 // 搜索本身就是"正在想办法",别在这期间把整段导航毙掉
                 if (TrapEscape.Busy) StuckSentinel.Reset();

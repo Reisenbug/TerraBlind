@@ -2508,7 +2508,10 @@ namespace TerraBlind
                     // 那时 JustTrapped 仍为真,下一周期照样能启动承诺兜底。
                     if (!anyDrop) Trap.Hit(curCx, curCy, curH, jigglePool.Count);
                 }
-                if (Commitment.Active)
+                // 【A* 在工作时,方向盘归它】。承诺是给贪心用的补丁,而这几十帧 A* 正在算一整段路:
+                // 补丁把人往承诺点拽,结果回来时人已经不在原地,那段路白算 --- 和 PUSH 同一个病。
+                // 等结果期间保持贪心的默认选择,人照样在走,只是走它自己认为对的方向。
+                if (Commitment.Active && !TrapEscape.Busy)
                 {
                     // 按【离承诺终点的曼哈顿距离】挑,H 涨多少都不管
                     var pick = jigglePool[0];
