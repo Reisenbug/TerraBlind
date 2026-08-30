@@ -38,12 +38,15 @@ namespace TerraBlind
 			_phaseFrames = 0; _held = 0; _tries = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[bstart] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 桥起点({tx},{ty})");
-			// 【走到要站的那一格,不是走到够得着】。原来用 Mode.Reach:手够到就算到,
-			// 而 ReachBoost=8 让人停在目标下方 6 行 —— 接着 PlaceAnywhere 从那么低的地方
-			// 往上接锚点链,9 块方块沿着人左边砌一堵墙再横盖到头顶,把人封死在里面
-			// (现场:人(2096,1055) 跳升=0 能搭=False 顶=1055,自己的方块盖住了自己)。
-			// 走到 _ty-1 就在目标正上方,方块直接放在脚下,根本不需要链
-			RecedingNav.Start(tx, ty - 1, RecedingNav.Mode.Stand);
+			// 【Goto 这一步只要够得着 —— 站上去是 Ph.Stand 的事,而且要等方块放好之后】。
+			// 桥起点此刻【还是空气】(整个原语就是为了"先放一块再站上去"存在的),
+			// 这时要求 Mode.Stand 等于让 A* 去站一个不存在的落脚点:它只能垫平台去够,
+			// 搜不出来就报 unreachable(现场:人已到(784,1050),目标(788,1050)同行差4列,
+			// 却连报 3 次 no plan)。方块放好之后 Ph.Stand 再用 Mode.Stand,那时它是实的。
+			//
+			// 之前改成 Stand 是为了躲另一个坑:Reach 停得远 → PlaceAnywhere 接 9 格锚点链 →
+			// 把人砌在墙里。那个坑已在 PlaceAnywhere 单独堵了(SealsPlayer:链绝不砌进头顶 3 行)。
+			RecedingNav.Start(tx, ty, RecedingNav.Mode.Reach);
 			_ph = Ph.Goto;
 			return true;
 		}

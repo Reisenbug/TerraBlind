@@ -29,6 +29,7 @@ namespace TerraBlind
         const int StandSwitch = 20;      // 离目标这么近就把最后一段交给 A*
         const int StandMaxTries = 3;     // A* 连着搜不到就认输,别让 greedy 在这地形上空转
         static int _standTries;
+        static (int, int)? _standCell;   // 上次搜不出路时人在哪。同一格不重复计次
         static bool _braking;   // 位置到了,正在刹停
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
@@ -352,6 +353,13 @@ namespace TerraBlind
                     return;
                 }
                 // 一步都给不出来。别退回 greedy —— 它在这地形上只会打转到 sentinel 报卡死。
+                //
+                // 【同一个位置只算一次尝试】。原来每帧 +1,三帧就烧完 —— 而这三帧人一步没动,
+                // 搜的是同一个局面,结果必然一样,等于只试了一次就判死
+                // (现场:675/676/677 三个连续帧报完 1/3 2/3 3/3,然后 unreachable)。
+                // 人挪过窝才是真的"换个角度再试"。
+                if (_standCell != cell) { _standCell = cell; _standTries = 0; }
+                else { DiagLog.Write($"[recede] STAND A* no plan at {cell} → ({_goalWx},{_goalWy}) exp={ap.Expansions} 原地不动,不计次"); return; }
                 DiagLog.Write($"[recede] STAND A* no plan at {cell} → ({_goalWx},{_goalWy}) exp={ap.Expansions} try={_standTries + 1}/{StandMaxTries}");
                 if (++_standTries >= StandMaxTries)
                 {
