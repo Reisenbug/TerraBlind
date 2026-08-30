@@ -54,14 +54,13 @@ namespace TerraBlind
 		static readonly System.Collections.Generic.List<(int x, int y)> _dug = new();
 		// 站定挖洞时脚下那一行。向导掉下去之后【绝不能跟着他往下走】——
 		// 日志:向导落到 1062,寻路算出 jump→(3470,1059) H=0 代价-4.6,人就跟着跳进坑里上不来了
-		static int _deckRow = -1;
 
 		public static bool Start(int houseWx, int houseWy, int bridgeDir, out string why)
 		{
 			why = "";
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
-			_frames = 0; _nightAt = 0; _dug.Clear(); _deckRow = -1;
+			_frames = 0; _nightAt = 0; _dug.Clear();
 			_lastHave = -1; _lastMoney = -1; _buyIdle = 0;
 			Outcome = "running"; Reason = "";
 			Phase = Ph.WaitNight;
@@ -74,6 +73,22 @@ namespace TerraBlind
 		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
 		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
 		const int DeckScan = 12;
+		// 向导是不是【真的掉到桥面以下】了。
+		//
+		// 【必须按他自己那一列的桥面判】。原来用 _deckRow —— 那是人走远 80 格之后
+		// 在【那边】记的行号,而桥是有坡的:房子在 1042、远处的桥面在 1040,差 2 行。
+		// 于是向导好端端站在自家地板上(1042)就被当成"掉下去了",DigUnder 整个跳过,
+		// 人干等肉山永远不出(现场:5787 向导掉到1042行(桥面1040),不追了)。
+		static bool GuideFell(NPC gn)
+		{
+			int gx = (int)(gn.Center.X / 16f);
+			int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
+			// 从他头顶往下找他那一列的桥面。找不到(下面是岩浆/空)就是真掉出去了
+			int deck = DeckRow(gx, gy - DeckScan / 2 > 0 ? gy - DeckScan / 2 : 1);
+            if (deck < 0) return true;
+			return gy > deck + 1;
+		}
+
 		static int DeckRow(int cx, int fromCy)
 		{
 			for (int y = fromCy; y < fromCy + DeckScan; y++)
@@ -305,8 +320,7 @@ namespace TerraBlind
 						if (!AtHome(NPCID.Guide))
 						{ if (_frames % 300 == 1) DiagLog.Write("[wof] 已走远,等向导传送回家"); return; }
 						if (p.velocity.Y != 0f) return;               // 落地了才记桥面,半空记的是错的
-						_deckRow = ActExecutor.OriginCy(p);
-						DiagLog.Write($"[wof] 桥面记作{_deckRow}行,再往下不去");
+						DiagLog.Write($"[wof] 走开到{ActExecutor.OriginCy(p)}行,向导已回家,回去捅他");
 						Go(Ph.BackToGuide);
 						return;
 					}
@@ -330,8 +344,8 @@ namespace TerraBlind
 					int fy0 = (int)((gn0.position.Y + gn0.height + 2f) / 16f);
 					// 向导已经掉到桥面以下 = 活儿干完了,他正在往岩浆里落。
 					// 【绝不跟下去】:下面没有回得来的路,人一跳就出不来
-					if (_deckRow >= 0 && fy0 > _deckRow + 1)
-					{ DiagLog.Write($"[wof] 向导掉到{fy0}行(桥面{_deckRow}),不追了,去补洞"); Go(Ph.Patch); return; }
+					if (GuideFell(gn0))
+					{ DiagLog.Write($"[wof] 向导掉到{fy0}行(他那列的桥面在下面没了),不追了,去补洞"); Go(Ph.Patch); return; }
 					// 够得着【而且脚踏实地】才开工。只判够得着的话人会停在半空,一飘就出range,
 					// 于是 DigUnder↔BackToGuide 来回跳(日志:8243/8332/8601)
 					if (p.velocity.Y == 0f
@@ -356,7 +370,7 @@ namespace TerraBlind
 					int gx = (int)(gn.Center.X / 16f);
 					int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
 					if (Predicates.IsLava(gx, gy) || gn.life <= 0) { Go(Ph.Patch); return; }
-					if (_deckRow >= 0 && gy > _deckRow + 1)
+					if (GuideFell(gn))
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
 					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥
