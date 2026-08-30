@@ -122,7 +122,7 @@ namespace TerraBlind
 			var sb = new System.Text.StringBuilder();
 			int bg = NPC.FindFirstNPC(NPCID.Guide);
 			int cl = gx, cr = gx;
-			if (bg >= 0) { var bc = Predicates.BodyCols(Main.npc[bg].position.X, Main.npc[bg].width); cl = bc.left; cr = bc.right; }
+			if (bg >= 0) { var bc = Predicates.TouchCols(Main.npc[bg].position.X, Main.npc[bg].width); cl = bc.left; cr = bc.right; }
 			for (int dx = cl; dx <= cr; dx++)
 			{
 				sb.Append($" 列{dx}:");
@@ -445,8 +445,8 @@ namespace TerraBlind
 					// 【只有一方被另一方完全盖住才让位】。部分相交照挖:人跨 2~3 列,
 					// 挖掉相交的那一列剩下的还撑着人,而向导少一列支撑就可能掉下去。
 					// 完全包含才是死结 —— 向导⊆人挖不到他,人⊆向导挖了自己没地站
-					var (mbl, mbr) = Predicates.BodyCols(p);
-					var (ggl, ggr) = Predicates.BodyCols(gn.position.X, gn.width);
+					var (mbl, mbr) = Predicates.TouchCols(p.position.X, p.width);
+					var (ggl, ggr) = Predicates.TouchCols(gn.position.X, gn.width);
 					if ((ggl >= mbl && ggr <= mbr) || (mbl >= ggl && mbr <= ggr))
 					{
 						if (SettleAt.IsRunning) { DigBeat(p, gx, gy, "让位中"); return; }
@@ -461,8 +461,11 @@ namespace TerraBlind
 					// 只挖中心那列,两边还各有半只脚踩着地,他就站在洞上不动
 					// (现场:向导(1082,1052) 那一列 1052..1057 全空了,人却 960 帧一动不动)。
 					// 列的算法和判人一样,不另写一套
-					var (gbl, gbr) = Predicates.BodyCols(gn.position.X, gn.width);
-					var (pbl, pbr) = Predicates.BodyCols(p);
+					// 【用 TouchCols 不是 BodyCols】。BodyCols 减 1px 会少报最右那列 ——
+					// 向导实际压着 3 列却只报 2 列,挖完两列他往右一滑就被第 3 列接住
+					// (现场:1081/1082 全空了,他 840 帧一动不动)
+					var (gbl, gbr) = Predicates.TouchCols(gn.position.X, gn.width);
+					var (pbl, pbr) = Predicates.TouchCols(p.position.X, p.width);
 					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
 					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
 					for (int k = 0; k < DigDepth; k++)

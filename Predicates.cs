@@ -27,6 +27,13 @@ namespace TerraBlind
 			=> ((int)(px / 16f), (int)((px + w - 1f) / 16f));
 		public static (int left, int right) BodyCols(Player p) => BodyCols(p.position.X, p.width);
 
+		// 碰撞箱【左右边界各自落在哪一格】—— 不减那 1px。
+		// BodyCols 减 1 是为了"贴着格边时别多算一列"(往自己脚下搭桥那个坑),
+		// 但要问"他踩着哪几列"时那 1px 会漏掉最右那列:向导明明压着 3 列,
+		// BodyCols 只报 2 列,挖完他往旁边一滑就被第 3 列接住,永远掉不下去
+		public static (int left, int right) TouchCols(float px, float w)
+			=> ((int)(px / 16f), (int)((px + w) / 16f));
+
 		// 这一格和人的碰撞箱重叠吗 —— 重叠就【放不下任何东西】(vanilla Collision.EmptyTile
 		// 拿 position/width/height 做矩形相交,没有别的判据)。
 		//
