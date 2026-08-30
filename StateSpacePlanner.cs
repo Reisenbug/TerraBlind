@@ -955,7 +955,7 @@ namespace TerraBlind
             // 仍然要 platformTile —— 那是物理必需(得有砖垫脚),不是启发式的门。
             if (hasPickaxe && platformTile >= 0 && ctx.DistField != null)
             {
-                var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy, curH));
+                var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy));
                 if (du.HasValue)
                     yield return (du.Value.node, null, du.Value.cost, true, du.Value.tiles);
             }
@@ -1099,7 +1099,7 @@ namespace TerraBlind
 
         // 挖穿封死的天花板:每周期挖头顶两行(两列,和 DigDown 同样的身体宽度理由),再 pillar 跳两格上去。
         // 只在天花板真封死(第一周期挖到东西)且突破格 H 更低时才产出 —— 头顶本来就空的归跳跃/跳放/pillar 管。
-        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH)
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy)
         {
             // 必须和 SkillExecutor 实时检查的列【完全一致】,否则 DigUp 挖的是执行器根本不看的格,
             // 而执行器要看的没挖 → 爬到一半撞上"已挖过"的天花板 ((3242,299)↔(3242,300) 卡死:一个按格心偏移取列,一个按实时像素取列)。
@@ -1138,13 +1138,19 @@ namespace TerraBlind
                 if (k == 1 && tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digup] NULL: ceiling already open"); return null; }
                 int feetY = ccy - 2 * k;
                 cost += 43f;
-                if (ctx.DistField.TryGetValue((ccx, feetY), out int lh) && lh < curH)
+                // 【不问 H 降不降】。凿子的活儿是"头顶挖得动、脚下站得稳就报价",值不值由 cost 比。
+                // 原来要求爬上去 H 更低,而人站在坑底时【往上每一层 H 必然更高】--- 这个问题在最低点
+                // 永远答不出,六层全否决,整条向上的路当作不存在。现场:(1127,395)H1021 是这一带最低,
+                // 出口在正上方 12 行,候选只剩 4 个,人在下面来回蹭几百帧。
+                // 场里查不到 = 那格真不可达(不是"贵"),继续往上找。
+                if (ctx.DistField.ContainsKey((ccx, feetY)))
                 {
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     float npy = (feetY + 1) * 16f - PhysicsSimulator.PlayerH;
                     return (new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true }, tiles, cost);
                 }
             }
+            SegLog($"[ss-digup] NULL: 往上 {DigMaxScan} 行没有一层在场里(全不可达)");
             return null;
         }
 
