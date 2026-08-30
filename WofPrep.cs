@@ -90,7 +90,20 @@ namespace TerraBlind
 		// 【买够了】和【钱花光了】都走这一条 —— 各写一遍必然漂移
 		static bool DoneBuying(Player p)
 		{
-			if (!Main.mouseItem.IsAir) return false;
+			// 【最后一根还在鼠标上就把它收进背包】。Predicates.Have 是算鼠标那份的,
+			// 所以买到第 45 根(44 在背包 + 1 在手上)当帧就判"够了"进这里 —— 而上面
+			// 那段 StashMouse 在 have>=Want 时根本走不到。原来这里只 return false 不干活,
+			// 于是每帧进来一次、每帧退回去,买也不买、走也不走,要人手动把那根拖回背包才继续
+			if (!Main.mouseItem.IsAir)
+			{
+				if (ThrowItems.FreeSlots() < 1) KeepList.MakeRoom(2);
+				if (!StashMouse(p))
+				{
+					if (_frames % 120 == 1)
+						DiagLog.Write($"[wof] 最后一根雷管收不进背包(空格{ThrowItems.FreeSlots()}),等腾位置");
+					return false;
+				}
+			}
 			Main.playerInventory = false;
 			p.SetTalkNPC(-1);
 			DiagLog.Write($"[wof] 买完了,共{Predicates.Have(DynamiteId)}根雷管");
@@ -207,14 +220,14 @@ namespace TerraBlind
 				case Ph.Buy:
 				{
 					int have = Predicates.Have(DynamiteId);
-					if (have >= WantDynamite) { if (!DoneBuying(p)) return; return; }
-					// 有进展就把计时清零:45 根一帧一根、卖东西也是一帧一件,
-					// 固定 2 分钟会在"正常干活"中途判死。卡住 30 秒才是真卡住
+					// 【超时判据要排在"买够了"前面】。收尾那步(把最后一根从鼠标收回背包)
+					// 也可能卡住,排后面的话它每帧 return,超时永远轮不到,又是无声死循环
 					if (have != _lastHave || Shop.Money(p) != _lastMoney)
 					{ _lastHave = have; _lastMoney = Shop.Money(p); _buyIdle = 0; }
 					else _buyIdle++;
 					if (_buyIdle > 60 * 30)
-					{ Fail($"买雷管卡住30秒,现有{have}/{WantDynamite} 钱{Shop.Coins(Shop.Money(p))}"); return; }
+					{ Fail($"买雷管卡住30秒,现有{have}/{WantDynamite} 钱{Shop.Coins(Shop.Money(p))} 鼠标={(Main.mouseItem.IsAir ? "空" : Main.mouseItem.Name)} 空格{ThrowItems.FreeSlots()}"); return; }
+					if (have >= WantDynamite) { if (!DoneBuying(p)) return; return; }
 
 					int dn = NPC.FindFirstNPC(NPCID.Demolitionist);
 					if (dn < 0) { Fail("爆破专家不见了"); return; }
