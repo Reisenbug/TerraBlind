@@ -29,6 +29,8 @@ namespace TerraBlind
 		private static int _lastDx = int.MaxValue;   // 离目标最近到过几列。判"推了却没靠近"= 被顶住
 		private static int _blockedFrames;           // 连着几帧没挪窝
 		private static int _sameColFrames;           // 同列却够不着,连着几帧
+		private static int _lastRecoverAt = -1000;   // 上一次起跳是第几帧
+		private const int RecoverGap = 25;           // 一跳约 20 帧落地,隔这么久才算下一次
 		// 【每条无声的 return 都留个名字】。人站着不动、日志 500 帧全空的时候,
 		// 唯一能查的就是"每帧走到哪一条就退出了"。60 帧汇报一次,不刷屏
 		private static string _where = "";
@@ -93,7 +95,7 @@ namespace TerraBlind
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
-			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0;
+			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0; _lastRecoverAt = -1000;
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -236,6 +238,15 @@ namespace TerraBlind
 						Fail($"回不了桥面 (人{py} 桥面{y})");
 					return;
 				}
+				// 【跳不起来就是头顶挡着 —— 先挖了再跳】。现场:人1058 桥面1057 只差一行,
+				// 而 (1170,1056)(1170,1058) 是地狱石砖,人一动不动连跳 8 次然后 STUCK
+				if (ClearWay.Above(p, "挡着跳回桥面"))
+				{ Mark("挖头顶"); return; }
+				// 【计次要隔开】。原来每帧 +1:按下 controlJump 之后 vanilla 要下一帧才把
+				// velocity.Y 变负,这一帧读到的还是 0 —— 于是"腾空不计次"那道门形同虚设,
+				// 8 次机会在 9 帧里烧光(日志 3398→3406),人连跳都没跳起来就判死
+				if (_frames - _lastRecoverAt < RecoverGap) { Mark("等上一跳落地"); return; }
+				_lastRecoverAt = _frames;
 				if (++_recovers > MaxRecovers) { Fail($"爬不回桥面 (人{py} 桥面{y})"); return; }
 				DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去({_recovers}/{MaxRecovers})");
 				// 光按跳是原地起跳,上不去斜前方那一格 —— 得朝目标列一起推

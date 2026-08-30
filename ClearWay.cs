@@ -84,7 +84,9 @@ namespace TerraBlind
 			int fy = ActExecutor.OriginCy(p);
 			// 台阶只有一格高就别动它;两格及以上人跳不过去,那才是真挡路
 			bool step = !stuck && Predicates.IsWall(col, fy) && !Predicates.IsWall(col, fy - 1);
-			for (int r = step ? 1 : 0; r < 3; r++)
+			// 【挖 4 行,不是 3 行】。人走过去要占 3 行,头顶还得留一格跳的余量 ——
+			// 只挖 3 行的话第 4 行那块砖照样把人顶住,跳不起来
+			for (int r = step ? 1 : 0; r <= DeckBuilder.HeadClear; r++)
 				if (Dig(p, col, fy - r, why)) return true;
 			return false;
 		}
@@ -94,8 +96,11 @@ namespace TerraBlind
 		{
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
-			for (int c = bl; c <= br; c++)
-				if (Dig(p, c, fy - 3, why)) return true;
+			// 身子占 fy..fy-2,从头顶那行往上挖到留出跳的余量为止。
+			// 只挖 fy-3 一行的话,连着几行的砖挖掉一层还是跳不动
+			for (int r = 3; r <= DeckBuilder.HeadClear; r++)
+				for (int c = bl; c <= br; c++)
+					if (Dig(p, c, fy - r, why)) return true;
 			return false;
 		}
 
