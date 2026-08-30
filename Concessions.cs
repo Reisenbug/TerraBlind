@@ -206,10 +206,15 @@ namespace TerraBlind
 	// 这里一次覆盖所有物品,挖和放都在内
 	public class ConcessionSpeed : GlobalItem
 	{
+		// 【雷管不加速】。原版 useTime=useAnimation=40,把投掷节奏卡死在 40 帧 ——
+		// 这是打肉山那套距离表的基准。加速到 1/8 会让雷管连珠炮一样出去,
+		// 距离/血量全对不上,打起来会出大问题
+		static bool NoSpeedup(Item it) => it != null && it.type == ItemID.Dynamite;
+
 		public override float UseTimeMultiplier(Item item, Player player)
-			=> Concessions.Enabled ? Concessions.UseTimeMul : 1f;
+			=> Concessions.Enabled && !NoSpeedup(item) ? Concessions.UseTimeMul : 1f;
 
 		public override float UseAnimationMultiplier(Item item, Player player)
-			=> Concessions.Enabled ? Concessions.UseTimeMul : 1f;
+			=> Concessions.Enabled && !NoSpeedup(item) ? Concessions.UseTimeMul : 1f;
 	}
 }

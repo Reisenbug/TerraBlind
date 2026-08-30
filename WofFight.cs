@@ -53,12 +53,21 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// 雷管在哪个【热键栏】格。selectedItem 只认 0~9,所以背包里那摞得先搬上来 ——
+		// 原来只扫 0~9,雷管买完躺在背包第 20 格时这里直接报"没雷管了",一根都扔不出去
 		static int DynamiteSlot(Player p)
 		{
 			for (int i = 0; i < 10; i++)
 			{
 				var it = p.inventory[i];
 				if (it != null && !it.IsAir && it.type == ItemID.Dynamite) return i;
+			}
+			// 热键栏没有就从背包搬一摞上来。HomeInHotbar 会挑空格,没空格就占 0 号
+			int slot = PlaceAction.HomeInHotbar(ItemID.Dynamite.ToString());
+			if (slot >= 0 && slot <= 9)
+			{
+				DiagLog.Write($"[wof-fight] 雷管搬进热键栏第{slot}格");
+				return slot;
 			}
 			return -1;
 		}

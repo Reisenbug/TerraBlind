@@ -386,7 +386,22 @@ namespace TerraBlind
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
 					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥
 					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
-					{ Go(Ph.BackToGuide); return; }
+					{ p.SetTalkNPC(-1); Go(Ph.BackToGuide); return; }
+					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动 ——
+					// 不拉住他的话人一边挖他一边溜达,挖开的洞永远不在他脚下。
+					// vanilla 每帧会把够不着的 talkNPC 清掉,所以要每帧重设。
+					// 他掉下去之后原版自己会断对话,不用我们收尾
+					if (CanTalkTo(p, gn))
+					{
+						if (p.talkNPC != g)
+						{
+							p.SetTalkNPC(g);
+							DiagLog.Write($"[wof] 拉住向导说话,免得他乱走");
+						}
+						// 对话框会吃掉输入,但挖是我们自己发的控制帧,不受影响。
+						// 【别开 playerInventory】—— 那是商店才要的,开了鼠标会被 UI 抢走
+						Main.npcChatText = "";
+					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
 					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
 					var (mbl, mbr) = Predicates.BodyCols(p);
