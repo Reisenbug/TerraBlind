@@ -110,6 +110,25 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// 挖向导脚下时的心跳:每帧无声 return 的话,日志里只剩一片空白,连卡在哪都看不出来
+		static string _digWhere = "";
+		static int _digBeat;
+		static void DigBeat(Player p, int gx, int gy, string where)
+		{
+			if (where != _digWhere) { _digWhere = where; _digBeat = 0; return; }
+			if (++_digBeat % 60 != 0) return;
+			var sb = new System.Text.StringBuilder();
+			for (int k = 0; k < DigDepth; k++)
+			{
+				int dy = gy + k;
+				var t = Main.tile[gx, dy];
+				sb.Append($" {dy}:{(t.HasTile ? t.TileType.ToString() : "空")}");
+				if (t.HasTile && !p.IsInTileInteractionRange(gx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple)) sb.Append("(够不着)");
+			}
+			DiagLog.Write($"[wof] 挖洞心跳 {_digBeat}帧都在\"{where}\" 向导({gx},{gy}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) " +
+				$"已挖{_dug.Count}格 talk={p.talkNPC} 列:{sb}");
+		}
+
 		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 
 		// 买完的收尾:鼠标上还攥着东西就等一帧(不然那件会掉地上),关背包、结束对话、进下一相位。
@@ -136,7 +155,7 @@ namespace TerraBlind
 			Go(Ph.SwapGuide);
 			return true;
 		}
-		static void Go(Ph next) { Phase = next; _frames = 0; _nightAt = 0; DiagLog.Write($"[wof] → {next}"); }
+		static void Go(Ph next) { Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0; DiagLog.Write($"[wof] → {next}"); }
 
 		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
 		// 和 NPC 碰撞箱相交。够不着的话 SetTalkNPC 当帧就被原版清掉,商店根本开不起来
@@ -407,13 +426,13 @@ namespace TerraBlind
 					var (mbl, mbr) = Predicates.BodyCols(p);
 					if (gx >= mbl && gx <= mbr)
 					{
-						if (SettleAt.IsRunning) return;
+						if (SettleAt.IsRunning) { DigBeat(p, gx, gy, "让位中"); return; }
 						int away = gx - _bridgeDir * 2;
 						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导({gx})在人脚下(身{mbl}..{mbr}),先让到{away}");
 						SettleAt.Start(away, out _);
 						return;
 					}
-					if (ItemUseCoordinator.IsActive) return;
+					if (ItemUseCoordinator.IsActive) { DigBeat(p, gx, gy, "挥镐中"); return; }
 					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
 					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
 					for (int k = 0; k < DigDepth; k++)
@@ -434,10 +453,19 @@ namespace TerraBlind
 							ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = gx, TargetWy = dy, Slot = pk2, Strict = true });
 							DiagLog.Write($"[wof] 挖({gx},{dy}) 平台挡着向导");
 						}
-						else if (!ClearWay.Dig(p, gx, dy, "捅向导")) return;
+						// 【挖不动就往下一格,别整个退出】。原来是 `if (!Dig(...)) return;` ——
+						// Dig 在够不着/挖不动/被 OnLine 拦时返回 false,一 false 整个循环就没了,
+						// 于是"挖掉他脚下所有方块"变成"挖了第一格就再也不挖"
+						else if (!ClearWay.Dig(p, gx, dy, "捅向导"))
+						{
+							if (_frames % 120 == 1)
+								DiagLog.Write($"[wof] ({gx},{dy}) type={Main.tile[gx, dy].TileType} 挖不动,试下一格");
+							continue;
+						}
 						if (!_dug.Contains((gx, dy))) _dug.Add((gx, dy));
 						return;
 					}
+					DigBeat(p, gx, gy, "一格都挖不动");
 					return;
 				}
 
