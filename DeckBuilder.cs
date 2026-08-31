@@ -173,7 +173,20 @@ namespace TerraBlind
 				// 【这一步是挖,按挖的尺子量】。CanPlace 宽出一个 blockRange(让步的 8 格),
 				// 于是在挖不到的地方放行,每帧发起一次挖、每帧挖不动,181 帧后报 STUCK
 				if (!Reach.CanMine(p, x, y))
-				{ Mark("走去换平台"); if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
+				{
+					// 【这条 return 也要计卡住】。它只按左右键横移,人推着墙原地踏步时列号不变,
+					// 而累加 _blockedFrames 的代码排在下面 —— 每帧从这儿返回就永远跑不到,
+					// blocked 恒为 0,ClearAhead 清身前那段(要 blocked 攒够)一次都不触发,
+					// 于是墙不挖、走不过去、平台永远够不着,4200 帧原地不动。
+					int pdx = System.Math.Abs(ActExecutor.OriginCx(p) - x);
+					if (pdx < _lastDx) { _blockedFrames = 0; _lastDx = pdx; }
+					else _blockedFrames++;
+					Mark("走去换平台");
+					if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true;
+					// 推不动就先把身前那面墙清了 —— ClearAhead 里那段正是干这个的
+					if (_blockedFrames >= BlockedAt && ClearAhead(p)) { _blockedFrames = 0; Mark("清身前的墙"); }
+					return;
+				}
 				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });
 				DiagLog.Write($"[deck] ({x},{y})是平台,挖掉换方块");
