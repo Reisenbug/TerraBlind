@@ -401,6 +401,14 @@ namespace TerraBlind
                     _haveLast = false;       // 这一段不是贪心选的边,别拿它去算失配权重
                     return;
                 }
+                // 【脚下有挖不动的列】排在承诺前面:这是有明确解法的具体障碍(挪一格就行),
+                // 而承诺是"没别的办法了"才用的瞎猜。日志现场:黑曜石卡住后承诺把人往西推 8 格,
+                // 正对着一整片黑曜石,东边一格就能挖。
+                if (Trap.FootBlockCol >= 0 && !Commitment.Active && !TrapEscape.Busy
+                    && Unstick.Handle("digdown", new Blocker(BlockKind.FootColUnmineable,
+                        Trap.FootBlockCol, Trap.FootBlockRow,
+                        $"tile{Main.tile[Trap.FootBlockCol, Trap.FootBlockRow].TileType}挖不动,往下的边发不出来")))
+                { Trap.FootBlockCol = -1; return; }
                 // A* 也出不去 → 退回承诺兜底。res 是贪心这一周期选的边,照常派发。
                 // 【但 A* 还在搜的时候不许建承诺】。TryEscape 刚开搜也返回 false,和"A* 失败"
                 // 长得一样 --- 那几十帧建了承诺,它就把人往别处拽,等结果回来人已经不在原地了。

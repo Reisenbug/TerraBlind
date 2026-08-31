@@ -1075,7 +1075,14 @@ namespace TerraBlind
                 if (DigSolid(c, y))
                 {
                     int fc = DigTable.CostFrames(c, y);
-                    if (fc >= DigTable.Unmineable) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})"); return null; }   // unbreakable (attached object / pick too weak) → route around
+                    if (fc >= DigTable.Unmineable)
+                    {
+                        // 【报出去,不是烂在这儿】。两列全空才掉得下去,一列黑曜石整条边就没了 ——
+                        // 而旁边挪一格两列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
+                        Trap.FootBlockCol = c; Trap.FootBlockRow = y;
+                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})");
+                        return null;   // unbreakable (attached object / pick too weak) → route around
+                    }
                     cost += fc;
                     tiles.Add((c, y));
                 }
@@ -2431,6 +2438,7 @@ namespace TerraBlind
             bool hasPick = false;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
 
+            Trap.FootBlockCol = -1;   // 这一周期重新算 —— 留着上一周期的会在早就走开的地方触发换站位
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;

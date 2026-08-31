@@ -97,6 +97,7 @@ namespace TerraBlind
 				BlockKind.SelfInWay => StepAside(p, b),
 				BlockKind.OutOfReach => Approach(p, b, stand: false),
 				BlockKind.NotStanding => Approach(p, b, stand: true),
+				BlockKind.FootColUnmineable => ShiftOffUnmineable(p, b),
 				BlockKind.NoFooting => MakeFooting(p, b),
 				BlockKind.NoItem => GetItem(p, b),
 				BlockKind.NoTool => GetItem(p, b),
@@ -108,6 +109,41 @@ namespace TerraBlind
 		}
 
 		// --- 六类解法 ---
+
+		// 脚下那一列挖不动 -> 换个站位。往两边找最近一处【身体压的每一列脚下都挖得动】的落脚点,
+		// 走过去就行 —— 判据只用 DigTable.MineableWith 那一份,不另编。
+		const int ShiftScan = 12;   // 找这么远。再远就不是"挪一格"而是重新规划了,交回场
+
+		static bool ShiftOffUnmineable(Player p, Blocker b)
+		{
+			int cy = ActExecutor.OriginCy(p);
+			int pick = ClearWay.PickSlot(p) >= 0 ? p.inventory[ClearWay.PickSlot(p)].pick : 0;
+			// 从近到远,两边交替 —— 哪边先找到走哪边,不预设方向
+			for (int d = 1; d <= ShiftScan; d++)
+				foreach (int dir in new[] { 1, -1 })
+				{
+					int cx = b.Wx + dir * d;
+					if (!DiggableFooting(cx, cy, pick)) continue;
+					if (!CellKind.Stands(cx, cy)) continue;
+					DiagLog.Write($"[unstick] 脚下({b.Wx})挖不动,挪到({cx},{cy}) 距{d}");
+					RecedingNav.Start(cx, cy, RecedingNav.Mode.Stand);
+					LastAction = $"换站位({cx},{cy})";
+					return true;
+				}
+			DiagLog.Write($"[unstick] ({b.Wx},{b.Wy})左右{ShiftScan}格内没有脚下挖得动的站位");
+			return false;
+		}
+
+		// 站在 cx 上时身体压的每一列,脚下那格都挖得动吗。两列都得成 —— 少一列就掉不下去
+		static bool DiggableFooting(int cx, int cy, int pick)
+		{
+			var pl = Main.LocalPlayer;
+			float px = cx * 16f + 8f - pl.width / 2f;
+			var (lc, rc) = Predicates.TouchCols(px, pl.width);
+			for (int c = lc; c <= rc; c++)
+				if (!DigTable.MineableWith(c, cy + 1, pick)) return false;
+			return true;
+		}
 
 		// 目标格被占:挖掉
 		static bool Dig(Player p, Blocker b)

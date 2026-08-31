@@ -22,6 +22,12 @@ namespace TerraBlind
         public static (int x, int y) JustAt;
         public static int JustH;
 
+        // 【脚下哪一列挖不动】。DigDown 每周期都会算这个,算出来就记在这儿;
+        // TRAP 那一刻 RecedingNav 读它,交给 Unstick 换站位 —— 别让"挖不动"这个结论烂在生成器里。
+        // -1 = 这一周期没撞上不可挖的列
+        public static int FootBlockCol = -1;
+        public static int FootBlockRow = -1;
+
         // 卡住的那一帧调这里。立即报告,不等累积
         public static void Hit(int cx, int cy, int h, int cands)
         {
