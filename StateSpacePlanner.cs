@@ -1434,6 +1434,7 @@ namespace TerraBlind
                 float standPxTarget = dir > 0 ? (baseCol + 1) * 16f : baseCol * 16f - PhysicsSimulator.PlayerW;
                 float targetCenterPx = standPxTarget + PhysicsSimulator.PlayerW / 2f;
                 var frames = new List<PhysicsSimulator.ControlInput>();
+                bool settled = false;
                 for (int f = 0; f < MaxSegFrames; f++)
                 {
                     float centerNow = s.Px + PhysicsSimulator.PlayerW / 2f;
@@ -1447,9 +1448,14 @@ namespace TerraBlind
                     s = PhysicsSimulator.Step(s, input, ph);
                     input.Px = s.Px; input.Py = s.Py;
                     frames.Add(input);
-                    if (past && MathF.Abs(s.Vx) < 0.1f) break; // settled on the new tile
+                    if (past && MathF.Abs(s.Vx) < 0.1f) { settled = true; break; } // settled on the new tile
                 }
                 if (frames.Count == 0) return null;
+                // 【刹不停就跑满 1200 帧,而这 1200 帧全进了价签】。落点是几何确定的(见下),
+                // 刹车那段只是凑帧数,凑不出来边照样对 --- 实测这条边定价 1230 帧,执行只花 7 帧。
+                // 先记下来定罪是哪条边、刹到多少停不下,别急着毙边:它是好边,坏的是价钱。
+                if (!settled)
+                    EventLog.W(Ev.Fail, $"BRIDGE-FUSE ({placeCx},{placeCy}) dir={dir} 刹不停跑满{frames.Count}帧 vx={s.Vx:0.###} 目标px={targetCenterPx:0.#} 现在={s.Px + PhysicsSimulator.PlayerW / 2f:0.#}");
                 // 落点是【几何上确定】的:平台放在 (placeCx,placeCy),人就站在它上面,不需要相信近似模拟器的 Grounded。
                 // 老的 "!s.Grounded → null" 会在模拟器把某帧误读成腾空时,杀掉坑边一条完全好用的桥。
                 var f0 = frames[0];                            // place on the first frame (before stepping over)
