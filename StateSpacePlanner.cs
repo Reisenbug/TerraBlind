@@ -1066,19 +1066,20 @@ namespace TerraBlind
         // 竖井版有 "12 格内没落点就 null" 的死角,厚墙前把人钉住过。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
-            float centerPx = cur.Px + PhysicsSimulator.PlayerW / 2f;
-            int c2 = centerPx > ccx * 16f + 8f ? ccx + 1 : ccx - 1;
+            // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列 —— 而 20px 的身子
+            // 跨 3 列是常态,漏掉的那一列照样撑着人,挖完两列人掉不下去。用 TouchCols 问真话。
             int y = ccy + 1;   // the single row directly under the feet
+            var (footL, footR) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
             var tiles = new List<(int, int)>();
             float cost = 0f;
-            foreach (int c in new[] { ccx, c2 })
+            for (int c = footL; c <= footR; c++)
                 if (DigSolid(c, y))
                 {
                     int fc = DigTable.CostFrames(c, y);
                     if (fc >= DigTable.Unmineable)
                     {
-                        // 【报出去,不是烂在这儿】。两列全空才掉得下去,一列黑曜石整条边就没了 ——
-                        // 而旁边挪一格两列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
+                        // 【报出去,不是烂在这儿】。身体压的每一列都空了才掉得下去,一列黑曜石整条边就没了
+                        // —— 而旁边挪一格,压的那几列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
                         Trap.FootBlockCol = c; Trap.FootBlockRow = y;
                         if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})");
                         return null;   // unbreakable (attached object / pick too weak) → route around
@@ -1089,7 +1090,7 @@ namespace TerraBlind
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
             // 挖开脚下之后人会掉到哪 —— 出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
             // 实心岩石,门槛必然短路放行。挖开才是竖井盖子的情况只能在这儿自己模拟。
-            foreach (int c in new[] { ccx, c2 })
+            for (int c = footL; c <= footR; c++)
             {
                 int land = FallLanding(c, y, tiles);
                 if (land == LandLava && !LavaSurvivable) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆,而身上没方块堤不出来"); return null; }

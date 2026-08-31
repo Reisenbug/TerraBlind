@@ -134,7 +134,8 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 站在 cx 上时身体压的每一列,脚下那格都挖得动吗。两列都得成 —— 少一列就掉不下去
+		// 站在 cx 上时身体压的每一列(TouchCols,可能 2 列也可能 3 列),脚下那格都挖得动吗。
+		// 每一列都得成 —— 少一列那列就还撑着人,掉不下去
 		static bool DiggableFooting(int cx, int cy, int pick)
 		{
 			var pl = Main.LocalPlayer;
