@@ -192,7 +192,20 @@ namespace TerraBlind
 
         // per-frame driver (called from SetControls). When the current window finishes (or none running), plan the
         // next window from the real position and dispatch it. The existing TickSteps/ApplyControls execute it.
+        // 【异常不许静默】。SetControls 外层会把抛出来的东西吞掉,现象就是人每帧重试同一条边、
+        // 一个像素不动、plan 日志一片空白,而看日志的人以为是选边逻辑的毛病(现场 2000 帧)。
         public static void Tick()
+        {
+            try { TickInner(); }
+            catch (System.Exception e)
+            {
+                EventLog.W(Ev.Fail, $"TICK EXC {e.GetType().Name}: {e.Message} @ {e.StackTrace?.Split('\n')[0]?.Trim()}");
+                Stop();   // 抛了就别装作还在导航 --- 上游据此换别的办法,总比每帧重试同一下强
+                LastStop = "exception";
+            }
+        }
+
+        static void TickInner()
         {
             if (!Active) return;
             if (!_fieldReady) return;          // field still building off-thread → wait (player stands a moment)

@@ -2579,7 +2579,11 @@ namespace TerraBlind
             {
                 SegDiag = true;
                 var _swRe = System.Diagnostics.Stopwatch.StartNew();
-                foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
+                // 【诊断用的重跑不许弄死主流程】。现场:(1129,393) 每帧 31 条 ss-seg(=SegDiag 开着)、
+                // best 明明不是 null,却一条 plan 都不写 --- 只可能是这个 foreach 抛了,异常被
+                // SetControls 外层吞掉,于是人每帧重试同一条边、一个像素不动,2000 帧。
+                try { foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { } }
+                catch (System.Exception ex) { EventLog.W(Ev.Fail, $"STARVE-EXPAND EXC at ({curCx},{curCy}) {ex.GetType().Name}: {ex.Message}"); }
                 DiagLog.Trc($"[expand-cost] bare re-run at ({curCx},{curCy}) ms={_swRe.Elapsed.TotalMilliseconds:0.0}");
                 SegDiag = false;
             }
