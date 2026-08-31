@@ -162,6 +162,15 @@ namespace TerraBlind
 				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
 				if (_idx % 20 == 0)
 					DiagLog.Write($"[deck] 进度{_idx}/{_line.Count} 放了{Placed} 本来就有{Already}");
+				// 【铺好一格就跟着往前一步】。连铺(BridgeBuilder)自带走位,而斜坡上同一行常常
+				// 不足 MinRun 格,全走 PlaceAnywhere —— 那条是站着放的,一次换行落后一两格,
+				// 几次累积到 14 格,桥头比人低三四行,于是判"回不了桥面"叫寻路,来回折腾。
+				if (_idx < _line.Count)
+				{
+					int npx = ActExecutor.OriginCx(p), nx = _line[_idx].x;
+					if (nx > npx) p.controlRight = true;
+					else if (nx < npx) p.controlLeft = true;
+				}
 				return;
 			}
 			// 桥面这一格是平台:挖掉换成方块。平台会被踩空/穿下去,当桥面不合格
