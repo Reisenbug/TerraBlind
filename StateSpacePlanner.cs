@@ -1111,11 +1111,17 @@ namespace TerraBlind
             // 砌柱子要跳,跳起来脚下就空了。人本来站在薄地板/平台边缘时落回来会踩空 ——
             // (962,705) 那次挖完头顶掉了 39 行到 742,而 pillar 边不带 frames,FallHitsLava 那道防线查不到它。
             // 所以发边前先问:这两列往下掉会掉到哪。碰岩浆或探不到底就不发。
+            // 【一列有地就站得住】。原来要求身体跨的每一列脚下都有地,而踩着边缘站是常态 ——
+            // 人在 (1117,392) 左脚那列(1116,393)悬空,凿子一票否决,往上的路(头顶就是空气、H 更低)
+            // 全断,只好往下掉 19 行绕 1800 帧回到同一格才上去。
+            bool anyFooting = false;
+            foreach (int c in new[] { leftCol, rightCol })
+                if (PathPlanner.IsFloorPublic(c, ccy + 1) || DigSolid(c, ccy + 1)) { anyFooting = true; break; }
+            if (!anyFooting)
+            { SegLog($"[ss-digup] NULL: 脚下({leftCol}/{rightCol},{ccy + 1})两列都悬空,砌柱跳起来会踩空掉下去"); return null; }
+            // 岩浆那条【仍然按每一列查】:真踩空了,任意一列落进岩浆都是死。
             foreach (int c in new[] { leftCol, rightCol })
             {
-                // 身体跨的【每一列】脚下都要有地。少一列就是跳起来落回时踩空的那一列。
-                if (!PathPlanner.IsFloorPublic(c, ccy + 1) && !DigSolid(c, ccy + 1))
-                { SegLog($"[ss-digup] NULL: 脚下({c},{ccy + 1})悬空,砌柱跳起来会踩空掉下去"); return null; }
                 int land = FallLanding(c, ccy + 1, new List<(int, int)>());
                 if (land == LandLava && !LavaSurvivable) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆,而身上没方块堤不出来"); return null; }
             }
