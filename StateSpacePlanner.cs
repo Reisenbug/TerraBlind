@@ -808,7 +808,9 @@ namespace TerraBlind
                 bool plat = anyPlat && !anySolid;
                 // 无条件打日志:SegDiag 只在【没有任何下降候选】时才开,而 (988,551) 那种平台蹭是有下降候选的,
                 // 于是"为什么没生成 drop 边"在全部 trace 里根本没有答案。
-                if (!plat) DiagLog.Trc($"[ss-drop] NULL: support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                // 【说了无条件就得无条件】。原来写的是 Trc(要 /trace 才打),于是这条注释想解决的问题
+                // 原样还在:(1097,390) 脚下是平台、plat=true,三条 drop 全 null,日志里一个字都没有。
+                if (!plat) EventLog.W(Ev.Fail, $"DROP-NULL support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
                     // 人从平台上下来是按住 Down 加一个方向,一路滑到真正的地板,不是停在下面一格。
@@ -819,7 +821,7 @@ namespace TerraBlind
                         if (drop.HasValue)
                             yield return (drop.Value.node, drop.Value.frames, drop.Value.frames.Count, false, null);
                         else
-                            DiagLog.Trc($"[ss-drop] SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                            EventLog.W(Ev.Fail, $"DROP-SIM-NULL dir={ddir} from cols[{dropLc}..{dropRc}] row={fcy + 1}");
                         if (drop.HasValue)
                             foreach (var sp in SplitFall(cur, drop.Value.frames, platformTile))
                                 yield return (sp.node, sp.frames, sp.cost, false, null);
