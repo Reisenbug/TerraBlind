@@ -118,7 +118,7 @@ namespace TerraBlind
 			if (Predicates.IsWall(b.Wx, b.Wy) && DigTable.CostFrames(b.Wx, b.Wy) >= DigTable.Unmineable)
 				return Handle("unstick", new Blocker(BlockKind.Hopeless, b.Wx, b.Wy,
 					$"tile{Main.tile[b.Wx, b.Wy].TileType}这把镐挖不动,得绕"));
-			if (!p.IsInTileInteractionRange(b.Wx, b.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanMine(p, b.Wx, b.Wy))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, b.Wx, b.Wy, "要挖但够不着"));
 			if (ClearWay.PickSlot(p) < 0)
 				return Handle("unstick", Blocker.Tool(Terraria.ID.ItemID.CopperPickaxe, "挖需要镐"));
@@ -177,7 +177,7 @@ namespace TerraBlind
 			if (PillarUp.IsRunning || PlatformDown.IsRunning || BridgeBuilder.IsRunning || PlaceAction.IsRunning)
 			{ LastAction = "造落脚点中"; return true; }
 			if (!Main.tile[b.Wx, b.Wy].HasTile
-				&& p.IsInTileInteractionRange(b.Wx, b.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				&& Reach.CanPlace(p, b.Wx, b.Wy))
 			{
 				bool wantPlat = b.Detail.Contains("平台");
 				int fillId = wantPlat ? PlatformItem(p) : BlockItem(p);
@@ -249,7 +249,7 @@ namespace TerraBlind
 			var at = FindTile(p, s.Id, 80);
 			if (!at.HasValue) { DiagLog.Write($"[unstick] 80格内没找到 tile {s.Id}"); return false; }
 			var (tx, ty) = at.Value;
-			if (!p.IsInTileInteractionRange(tx, ty, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanMine(p, tx, ty))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, tx, ty, $"要采 tile {s.Id}"));
 			int slot = ToolFor(p, s.Id);
 			if (slot < 0)
@@ -266,7 +266,7 @@ namespace TerraBlind
 			var at = FindChest(p, 80);
 			if (!at.HasValue) { DiagLog.Write("[unstick] 附近没有没开过的箱子"); return false; }
 			var (cx2, cy2) = at.Value;
-			if (!p.IsInTileInteractionRange(cx2, cy2, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanMine(p, cx2, cy2))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, cx2, cy2, "要开箱子"));
 			_looted.Add((cx2, cy2));
 			HttpServerSystem.QueueInteract(cx2, cy2);

@@ -76,6 +76,10 @@ namespace TerraBlind
 			_active = null;
 		}
 
+		// 这一趟是挖还是放,自己知道 —— 两者 vanilla 的距离公式不同(放多一项 blockRange)
+		static bool InReachNow(Player p)
+			=> _placeType >= 0 ? Reach.CanPlace(p, SnappedWx, SnappedWy) : Reach.CanMine(p, SnappedWx, SnappedWy);
+
 		public static void ApplyControls()
 		{
 			var req = _active;
@@ -103,7 +107,7 @@ namespace TerraBlind
 					// IsTargetTileInItemRange(tileRangeX + 手上那件的 tileBoost,不封顶) --- 判据不是同一个。
 					// 人往前挪一格就挖成了,所以要么是距离、要么是 tileTarget 没落在这一格,一次打全定案。
 					var _hi = p.HeldItem;
-					bool _simple = p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+					bool _simple = Reach.CanMine(p, SnappedWx, SnappedWy);
 					bool _vanilla = _hi != null && p.IsTargetTileInItemRange(_hi);
 					DiagLog.Write($"[item_use] no_progress at ({SnappedWx},{SnappedWy}) type={wt.TileType} reason={Reason} elapsed={_elapsed}"
 						+ $" 人({(int)(p.position.X / 16f)},{(int)((p.position.Y + p.height) / 16f) - 1}) px={p.position.X:0.#}"
@@ -216,8 +220,7 @@ namespace TerraBlind
 					}
 
 					// 够不着就是挥空(原版会把目标钳回来),挖脚下还会把人挪走让批量作废 —— 直接报,别耗宽限窗口
-					if ((_watchType >= 0 || _placeType >= 0)
-						&& !p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					if ((_watchType >= 0 || _placeType >= 0) && !InReachNow(p))
 					{
 						Outcome = _placeType >= 0 ? "no_swing" : "no_progress";
 						Reason = "out_of_reach"; _active = null; return;
@@ -229,7 +232,7 @@ namespace TerraBlind
 			// 每帧复查,但给宽限 —— 挖矿本来就会小幅位移,一出界就放弃太脆。
 			if ((_watchType >= 0 || _placeType >= 0) && SnappedWx >= 0)
 			{
-				if (p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				if (InReachNow(p))
 					_outOfReachFrames = 0;
 				else if (++_outOfReachFrames >= ReachLostGrace)
 				{
@@ -271,7 +274,7 @@ namespace TerraBlind
 			if (it == null || it.IsAir) return "empty_hand";
 			if (it.createTile != _placeType) return "wrong_item";
 			if (it.stack <= 0) return "out_of_stock";
-			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return "out_of_reach";
+			if (!Reach.CanPlace(p, x, y)) return "out_of_reach";
 			var t = Main.tile[x, y];
 			if (t.HasTile) return "occupied";
 			// 挥了、格子空、够得着、东西对、有货,却没出现 —— 原版自己拒的。如实报,附个不具约束力的提示

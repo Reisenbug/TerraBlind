@@ -300,7 +300,7 @@ namespace TerraBlind
 				case "on_rope": return OnRope(p);
 				case "on_ground": return p.velocity.Y == 0f;
 				case "cursor_in_reach":
-					return _curWx >= 0 && p.IsInTileInteractionRange(_curWx, _curWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+					return _curWx >= 0 && Reach.CanPlace(p, _curWx, _curWy);
 				default: return true;
 			}
 		}
@@ -329,7 +329,7 @@ namespace TerraBlind
 
 			if (s.HasCursor && _curWx >= 0)
 			{
-				if (!p.IsInTileInteractionRange(_curWx, _curWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				if (!Reach.CanPlace(p, _curWx, _curWy))
 					_why.Add("cursor_out_of_reach");
 				if (InBounds(_curWx, _curWy) && Main.tile[_curWx, _curWy].HasTile)
 					_why.Add("target_occupied");
@@ -398,7 +398,7 @@ namespace TerraBlind
 
 			if (p != null && p.active)
 			{
-				bool reach = _curWx >= 0 && p.IsInTileInteractionRange(_curWx, _curWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+				bool reach = _curWx >= 0 && Reach.CanPlace(p, _curWx, _curWy);
 				sb.Append(",\"cursor\":{\"world\":[").Append(_curWx).Append(',').Append(_curWy)
 				  .Append("],\"in_reach\":").Append(reach ? "true" : "false").Append('}');
 

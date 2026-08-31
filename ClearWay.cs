@@ -60,7 +60,7 @@ namespace TerraBlind
 				}
 				return false;   // false = "我处理不了",让调用方去走别的路(绕/跳/搭)
 			}
-			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) return false;
+			if (!Reach.CanMine(p, x, y)) return false;
 			int pk = PickSlot(p);
 			if (pk < 0) return false;
 			if (ItemUseCoordinator.IsActive) return true;

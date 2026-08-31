@@ -1492,16 +1492,22 @@ namespace TerraBlind
             finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
-        // Vanilla placement reach. 底数是 static 的 tileRangeX/Y,但 blockRange(饰品/让步加成)是
-        // 每帧算的玩家字段 —— 硬编 5/4 会让规划器以为够不着,白拒掉执行端明明能放的边。
-        // 执行端用的是 IsInTileInteractionRange,那边自动含 blockRange,两边必须读同一个数。
+        // Vanilla placement reach = tileRangeX + 手上那件的 tileBoost + blockRange(Player.cs:38990)。
+        // 三项都得算:底数是 static 的,blockRange 是每帧的玩家字段(饰品/让步加成),tileBoost 跟着手上那件走
+        // (镐子会是 -1)。执行端读 Reach.CanPlace,两边必须是同一个公式。
+        // 【原注释说 IsInTileInteractionRange 自动含 blockRange —— 那是错的】,它一项都不含,
+        // 规划器照那个前提算了很久。
+        static int HeldBoost
+        {
+            get { var it = Main.LocalPlayer?.HeldItem; return it == null || it.IsAir ? 0 : it.tileBoost; }
+        }
         static int ReachX
         {
-            get { var p = Main.LocalPlayer; return Player.tileRangeX + (p != null ? p.blockRange : 0); }
+            get { var p = Main.LocalPlayer; return Player.tileRangeX + HeldBoost + (p != null ? p.blockRange : 0); }
         }
         static int ReachY
         {
-            get { var p = Main.LocalPlayer; return Player.tileRangeY + (p != null ? p.blockRange : 0); }
+            get { var p = Main.LocalPlayer; return Player.tileRangeY + HeldBoost + (p != null ? p.blockRange : 0); }
         }
         static bool CanReachTile(float px, float py, int cx, int cy)
         {

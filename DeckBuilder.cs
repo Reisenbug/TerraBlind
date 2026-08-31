@@ -170,7 +170,7 @@ namespace TerraBlind
 				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);
 				if (ppk < 0) { Fail($"({x},{y})是平台要换成方块,但没镐"); return; }
-				if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+				if (!Reach.CanPlace(p, x, y))
 				{ Mark("走去换平台"); if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
 				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });
@@ -286,7 +286,7 @@ namespace TerraBlind
 
 			// 走到够得着再交给 PlaceAnywhere。不然它每一格都要"启动→发现够不着→走→放→收摊",
 			// 日志里每格 6 列远、13 帧;BridgeBuilder 连续铺是 5.93 格/秒。
-			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanPlace(p, x, y))
 			{
 				if (PlaceAnywhere.IsRunning) { Mark("够不着+放置中"); return; }
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"

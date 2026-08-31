@@ -150,7 +150,7 @@ namespace TerraBlind
 			if (_placed + _already >= _want) { Finish("done"); return; }
 
 			// 3) 手空着且够得着 → 这一帧就挥
-			bool inReach = p.IsInTileInteractionRange(_targetWx, _rowWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			bool inReach = Reach.CanPlace(p, _targetWx, _rowWy);
 			if (!ItemUseCoordinator.IsActive && !_swingIssued && inReach)
 			{
 				ItemUseCoordinator.Start(new ItemUseRequest

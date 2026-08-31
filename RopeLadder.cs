@@ -83,7 +83,7 @@ namespace TerraBlind
 
 			// ARM CHECK against vanilla's own range test — the authority on what the player can touch. Out of reach is
 			// not a failure, it is simply the moment to climb: the ropes already placed are the way up.
-			if (!p.IsInTileInteractionRange(cx, _targetWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanPlace(p, cx, _targetWy))
 			{
 				BeginClimb();
 				return;

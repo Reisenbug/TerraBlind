@@ -105,7 +105,7 @@ namespace TerraBlind
                     if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
                     var t = Main.tile[x, y];
                     if (!t.HasTile || t.TileType != Terraria.ID.TileID.Pots) continue;
-                    if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
+                    if (!Reach.CanMine(p, x, y)) continue;
                     int slot = -1, bp = 0;
                     for (int i = 0; i < 10; i++)
                     { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > bp) { bp = it.pick; slot = i; } }
@@ -250,7 +250,7 @@ namespace TerraBlind
                 }
                 // 够得着就算到 —— 用原版的交互距离,和"放得出方块"同一个判据,不另编格数
                 if (p.velocity.Y == 0f
-                    && p.IsInTileInteractionRange(_goalWx, _goalWy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+                    && Reach.CanPlace(p, _goalWx, _goalWy))
                 {
                     DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) vx={p.velocity.X:0.##}");
                     if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead

@@ -145,7 +145,7 @@ namespace TerraBlind
 					return;
 				}
 				// body is entirely left of the column. Close the gap so the ground cell is reachable, then fill.
-				if (!p.IsInTileInteractionRange(_colCx, _baseWy, Terraria.DataStructures.TileReachCheckSettings.Simple)
+				if (!Reach.CanPlace(p, _colCx, _baseWy)
 					&& bodyR < _colCx - 1)
 				{
 					p.controlRight = true;
@@ -155,7 +155,7 @@ namespace TerraBlind
 				return;
 			}
 
-			bool inReach = p.IsInTileInteractionRange(_colCx, _wy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			bool inReach = Reach.CanPlace(p, _colCx, _wy);
 
 			if (_ph == Ph.Fill)
 			{

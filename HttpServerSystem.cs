@@ -358,7 +358,7 @@ namespace TerraBlind
 					int lx = int.MaxValue, ly = int.MaxValue, hx = int.MinValue, hy = int.MinValue;
 					for (int x = cx - scan; x <= cx + scan; x++)
 						for (int y = cy - scan; y <= cy + scan; y++)
-							if (pr.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+							if (Reach.CanMine(pr, x, y))
 							{
 								if (x < lx) lx = x; if (x > hx) hx = x;
 								if (y < ly) ly = y; if (y > hy) hy = y;

@@ -117,7 +117,7 @@ namespace TerraBlind
 			}
 
 			// 够不着就先走过去:BridgeBuilder 那套"手够不着就挪脚"这里同样需要
-			if (!p.IsInTileInteractionRange(cell.X, cell.Y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanPlace(p, cell.X, cell.Y))
 			{
 				int cx = ActExecutor.OriginCx(p);
 				if (_cellFrames % 60 == 1)

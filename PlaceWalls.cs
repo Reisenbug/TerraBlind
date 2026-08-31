@@ -90,7 +90,7 @@ namespace TerraBlind
 				_i++; _cellFrames = 0; return;
 			}
 
-			bool inReach = p.IsInTileInteractionRange(wx, wy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			bool inReach = Reach.CanPlace(p, wx, wy);
 			if (!inReach)
 			{
 				// too high to reach standing (short furniture / top row) → hop for it. controlDown never — that would

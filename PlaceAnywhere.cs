@@ -220,7 +220,7 @@ namespace TerraBlind
 			var save = p.position;
 			p.position.X = col * 16f + 8f - p.width / 2f;
 			p.position.Y = (row + 1) * 16f - p.height;
-			bool ok = p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple);
+			bool ok = Reach.CanPlace(p, x, y);
 			p.position = save;
 			return ok;
 		}
@@ -366,7 +366,7 @@ namespace TerraBlind
 
 			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
 			// 那时横向走一辈子也够不着 —— 行差得多就当链失效,从人现在的位置重接一条。
-			if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanPlace(p, x, y))
 			{
 				int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
 				// 行差太大:重算链没有意义(人没挪窝,算出来还是同一条),直接认输交给上层。

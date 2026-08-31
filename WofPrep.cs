@@ -131,7 +131,7 @@ namespace TerraBlind
 					int dy = gy + k;
 					var t = Main.tile[dx, dy];
 					sb.Append($"{(t.HasTile ? t.TileType.ToString() : "空")}");
-					if (t.HasTile && !p.IsInTileInteractionRange(dx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple)) sb.Append("!");
+					if (t.HasTile && !Reach.CanMine(p, dx, dy)) sb.Append("!");
 					sb.Append(',');
 				}
 			}
@@ -389,7 +389,7 @@ namespace TerraBlind
 					// 够得着【而且脚踏实地】才开工。只判够得着的话人会停在半空,一飘就出range,
 					// 于是 DigUnder↔BackToGuide 来回跳(日志:8243/8332/8601)
 					if (p.velocity.Y == 0f
-						&& p.IsInTileInteractionRange(fx, fy0, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						&& Reach.CanMine(p, fx, fy0))
 					{ RecedingNav.Stop(); Go(Ph.DigUnder); return; }
 					if (RecedingNav.Active) return;
 					if (_frames > 60 * 300) { Fail("回不到向导跟前"); return; }
@@ -414,7 +414,7 @@ namespace TerraBlind
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
 					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥
-					if (!p.IsInTileInteractionRange(gx, gy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+					if (!Reach.CanMine(p, gx, gy))
 					{ p.SetTalkNPC(-1); Go(Ph.BackToGuide); return; }
 					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动 ——
 					// 不拉住他的话人一边挖他一边溜达,挖开的洞永远不在他脚下。
@@ -479,7 +479,7 @@ namespace TerraBlind
 							// 只有【人所有的列都在要挖的范围里】才留手 —— 那才是把自己的地拆光
 							if (pbl >= gbl && pbr <= gbr) continue;
 							if (!Main.tile[dx, dy].HasTile) continue;   // 空的跳过
-							if (!p.IsInTileInteractionRange(dx, dy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+							if (!Reach.CanMine(p, dx, dy))
 							{
 								if (_frames % 120 == 1) DiagLog.Write($"[wof] ({dx},{dy})够不着,跳过 —— 再深就补不回来");
 								continue;

@@ -276,8 +276,7 @@ namespace TerraBlind
 					var t = Main.tile[_stopWx, _stopWy];
 					sb.Append(",\"stopped_cell\":{\"has_tile\":").Append(t.HasTile ? "true" : "false")
 					  .Append(",\"type\":").Append(t.HasTile ? t.TileType : -1)
-					  .Append(",\"in_reach\":").Append(p != null && p.IsInTileInteractionRange(_stopWx, _stopWy,
-						  Terraria.DataStructures.TileReachCheckSettings.Simple) ? "true" : "false").Append('}');
+					  .Append(",\"in_reach\":").Append(p != null && Reach.CanPlace(p, _stopWx, _stopWy) ? "true" : "false").Append('}');
 				}
 			}
 			if (p != null)

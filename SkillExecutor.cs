@@ -96,7 +96,7 @@ namespace TerraBlind
             int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
             int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
             if (x >= bl && x <= br && y >= bt && y <= bb) { _placeVeto = $"in_body[{bl}..{br}]x[{bt}..{bb}]"; return false; }
-            if (!p.IsInTileInteractionRange(x, y, Terraria.DataStructures.TileReachCheckSettings.Simple)) { _placeVeto = "out_of_reach"; return false; }
+            if (!Reach.CanPlace(p, x, y)) { _placeVeto = "out_of_reach"; return false; }
             if (!PlatAnchor(x, y)) { _placeVeto = "no_anchor"; return false; }
             _placeVeto = ""; return true;
         }

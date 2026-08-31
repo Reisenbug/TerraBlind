@@ -83,7 +83,7 @@ namespace TerraBlind
 			foreach (var t in _targets)
 			{
 				if (t.Done) continue;
-				bool reach = p != null && p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+				bool reach = p != null && Reach.CanPlace(p, t.Wx, t.Wy);
 				string occ = "oob";
 				if (InBounds(t.Wx, t.Wy))
 				{
@@ -168,7 +168,7 @@ namespace TerraBlind
 			var (tw, th) = PlaceSpot.Size(t.ItemType);
 			if (t.Wx + tw > bl && t.Wx <= br && t.Wy >= fy - 2 && t.Wy - th < fy)
 				return new Blocker(BlockKind.SelfInWay, t.Wx, t.Wy, "人压着占位");
-			if (!p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+			if (!Reach.CanPlace(p, t.Wx, t.Wy))
 				return new Blocker(BlockKind.OutOfReach, t.Wx, t.Wy, "够不着");
 			// 房子里补支撑用方块
 			if (!PlaceSpot.Check(t.ItemType, t.Wx, t.Wy, PlaceSpot.Fill.Block, out var why)) return why;
@@ -229,7 +229,7 @@ namespace TerraBlind
 				var t = _targets[i];
 				if (t.Done) continue;
 				if (Filled(t)) { t.Done = true; _targets[i] = t; PlacedCount++; continue; }
-				if (!p.IsInTileInteractionRange(t.Wx, t.Wy, Terraria.DataStructures.TileReachCheckSettings.Simple)) continue;
+				if (!Reach.CanPlace(p, t.Wx, t.Wy)) continue;
 				pending = true;
 
 				if (!swungThisFrame && p.itemTime == 0)

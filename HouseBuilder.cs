@@ -309,7 +309,7 @@ namespace TerraBlind
 						// 够不着 → 交栈。Unstick.Approach 分两档:同高横挪两格,差得远走 RecedingNav
 						// (会挖会搭平台,能上下)。裸 SettleAt 只会横移,而这框有 10 行高,
 						// 顶上几格和人差 8~9 行 —— 横挪到同一列还是够不着,死循环 200+ 帧。
-						if (!p.IsInTileInteractionRange(cdx, cdy, Terraria.DataStructures.TileReachCheckSettings.Simple))
+						if (!Reach.CanPlace(p, cdx, cdy))
 						{
 							if (Unstick.Handle("house-clear", new Blocker(BlockKind.OutOfReach, cdx, cdy, "清房址够不着")))
 								return;
