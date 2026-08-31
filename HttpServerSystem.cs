@@ -138,9 +138,21 @@ namespace TerraBlind
 				// 陷阱箱(FakeContainers 441/468)在 Main.chest 里也有条目,FindChest 照样找得到,
 				// 于是直接写 Player.chest 就开了 --- 而这条路绕过右键,引线根本不触发,是作弊。
 				// 一律不开,连线的陷阱我们也处理不了。
-				if (IsFakeChest(tile.tx, tile.ty)) { LastInteract = "trapped_chest"; continue; }
-				int idx = Chest.FindChest(tile.tx, tile.ty);
-				if (idx == -1) { LastInteract = "no_chest"; continue; }
+				// 【先归一到左上角】。箱子占 2x2,而 Chest.FindChest 只认锚点那一格 ——
+				// 宝藏坐标是扫地形扫出来的,扫到右上/左下/右下都可能,不是锚点就报 no_chest,
+				// 人走到跟前却没开成。vanilla 自己的注释就写了要配 TileObjectData.TopLeft 用。
+				// 陷阱箱那条也要用锚点判:它同样看 frameX,点错格会漏判。
+				var anchor = Terraria.ObjectData.TileObjectData.TopLeft(tile.tx, tile.ty);
+				int ax = anchor.X >= 0 ? anchor.X : tile.tx;
+				int ay = anchor.Y >= 0 ? anchor.Y : tile.ty;
+				if (IsFakeChest(ax, ay)) { LastInteract = "trapped_chest"; continue; }
+				int idx = Chest.FindChest(ax, ay);
+				if (idx == -1)
+				{
+					LastInteract = "no_chest";
+					DiagLog.Write($"[interact] ({tile.tx},{tile.ty}) 归一到({ax},{ay}) 仍找不到箱子 tile={(Main.tile[tile.tx, tile.ty].HasTile ? Main.tile[tile.tx, tile.ty].TileType.ToString() : "空")}");
+					continue;
+				}
 				// 开箱直接写 Player.chest 绕过了右键那条路,而锁的判定就在那条路上 —— 以前上锁的箱子照开,是作弊。
 				// 用 vanilla 自己的 IsLockedOrInUse,别抄 frameX 范围;它顺带覆盖了"别人正在用"。
 				var ch = Main.chest[idx];
@@ -150,8 +162,8 @@ namespace TerraBlind
 				if (Chest.UsingChest(idx) != -1) { LastInteract = "in_use"; continue; }
 				LastInteract = "opened";
 				Main.LocalPlayer.chest = idx;
-				Main.LocalPlayer.chestX = tile.tx;
-				Main.LocalPlayer.chestY = tile.ty;
+				Main.LocalPlayer.chestX = ax;
+				Main.LocalPlayer.chestY = ay;
 				Main.playerInventory = true;
 				Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuOpen);
 			}
