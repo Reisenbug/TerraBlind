@@ -76,6 +76,41 @@ namespace TerraBlind
 			if (p != null && p.chest != -1) { p.chest = -1; Recipe.FindRecipes(); }
 		}
 
+		// 【开箱只有这一份】。/interact 那条路(LLM 直接编排动作时用)也调它 —— 原来那边自己
+		// 抄了一遍归一/陷阱箱/锁/占用,两份判据各改各的迟早分叉。
+		// 返回 Main.chest 下标,失败返回 -1 并把原因写进 why。
+		public static int OpenAt(int tx, int ty, out string why)
+		{
+			why = "";
+			var p = Main.LocalPlayer;
+			if (p == null || !p.active) { why = "no_player"; return -1; }
+			// 箱子占 2x2 而 Chest.FindChest 只认锚点。坐标是扫地形来的,扫到哪一格都可能
+			var a = TileObjectData.TopLeft(tx, ty);
+			int ax = a.X >= 0 ? a.X : tx, ay = a.Y >= 0 ? a.Y : ty;
+			// 陷阱箱(FakeContainers)在 Main.chest 里也有条目,直接写 Player.chest 就开了 ——
+			// 而那条路绕过右键,引线根本不触发,是作弊。一律不开。按锚点判:它同样看 frameX
+			if (HttpServerSystem.IsFakeChestPublic(ax, ay)) { why = "trapped_chest"; return -1; }
+			// 上一个还开着就先关,否则这个开不了(vanilla 关箱就是 chest=-1 + FindRecipes)
+			if (p.chest != -1) { p.chest = -1; Recipe.FindRecipes(); }
+			int idx = Chest.FindChest(ax, ay);
+			if (idx == -1)
+			{
+				var t = Main.tile[tx, ty];
+				why = "no_chest";
+				DiagLog.Write($"[grab] ({tx},{ty}) 归一到({ax},{ay}) 仍找不到箱子 tile={(t.HasTile ? t.TileType.ToString() : "空")}");
+				return -1;
+			}
+			var ch = Main.chest[idx];
+			if (ch == null) { why = "no_chest"; return -1; }
+			// 锁和占用用 vanilla 自己的判据,别抄 frameX 范围。用箱子自己的锚点格判
+			if (Chest.IsLocked(ch.x, ch.y)) { why = "locked"; return -1; }
+			if (Chest.UsingChest(idx) != -1) { why = "in_use"; return -1; }
+			p.chest = idx; p.chestX = ax; p.chestY = ay;
+			Main.playerInventory = true;
+			Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuOpen);
+			return idx;
+		}
+
 		// 箱子还剩几件。全空 = 真掏干净了,这是唯一算数的验收
 		static int ItemsLeft()
 		{
@@ -107,26 +142,10 @@ namespace TerraBlind
 				case Ph.Open:
 					{
 						if (!Reach.CanMine(p, _ax, _ay)) { Fail("到了却够不着"); return; }
-						// 陷阱箱按锚点判 —— 它看 frameX,点错格会漏判
-						if (HttpServerSystem.IsFakeChestPublic(_ax, _ay)) { Fail("陷阱箱,不开"); return; }
-						CloseChest();   // 上一个还开着就先关,否则这个开不了
-						_idx = Chest.FindChest(_ax, _ay);
-						if (_idx == -1)
-						{
-							var t = Main.tile[_tx, _ty];
-							Fail($"({_ax},{_ay})没有箱子 tile={(t.HasTile ? t.TileType.ToString() : "空")}");
-							return;
-						}
-						var ch = Main.chest[_idx];
-						if (ch == null) { Fail("箱子条目是空的"); return; }
-						// 锁和占用都用 vanilla 自己的判据,别抄 frameX 范围
-						if (Chest.IsLocked(ch.x, ch.y)) { Fail("上锁了,没钥匙"); return; }
-						if (Chest.UsingChest(_idx) != -1) { Fail("别人正在用"); return; }
+						_idx = OpenAt(_tx, _ty, out string ow);
+						if (_idx < 0) { Fail(ow); return; }
 						int before = ItemsLeft();
 						if (before == 0) { Done("本来就是空的"); return; }
-						p.chest = _idx; p.chestX = _ax; p.chestY = _ay;
-						Main.playerInventory = true;
-						Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuOpen);
 						DiagLog.Write($"[grab] 开了 idx={_idx} 里面{before}件");
 						// 掏之前腾格子:背包满了 LootAll 会把塞不下的原样写回箱子
 						KeepList.MakeRoom(LootRoom);

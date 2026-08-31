@@ -55,12 +55,6 @@ namespace TerraBlind
 		private static readonly ConcurrentQueue<bool> _hellTpQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
 
-		// mod 内部也要开箱(Unstick 采集),别再写第二条开箱路径
-		public static void QueueInteract(int tx, int ty)
-		{
-			LastInteract = "pending";
-			_interactQueue.Enqueue((tx, ty));
-		}
 		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒 —— 绝不能在 HTTP 线程上干。
 		// 排队交给主线程,和开箱/换位是同一套路子
 		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();
@@ -128,44 +122,9 @@ namespace TerraBlind
 			}
 			while (_interactQueue.TryDequeue(out var tile))
 			{
-				// 上一个箱子还开着就先关掉再开新的。原来直接拒绝,于是只要有箱子没关,
-				// 后面每一个都开不了(vanilla 关箱就是 chest=-1 + FindRecipes)。
-				if (Main.LocalPlayer.chest != -1)
-				{
-					Main.LocalPlayer.chest = -1;
-					Recipe.FindRecipes();
-				}
-				// 陷阱箱(FakeContainers 441/468)在 Main.chest 里也有条目,FindChest 照样找得到,
-				// 于是直接写 Player.chest 就开了 --- 而这条路绕过右键,引线根本不触发,是作弊。
-				// 一律不开,连线的陷阱我们也处理不了。
-				// 【先归一到左上角】。箱子占 2x2,而 Chest.FindChest 只认锚点那一格 ——
-				// 宝藏坐标是扫地形扫出来的,扫到右上/左下/右下都可能,不是锚点就报 no_chest,
-				// 人走到跟前却没开成。vanilla 自己的注释就写了要配 TileObjectData.TopLeft 用。
-				// 陷阱箱那条也要用锚点判:它同样看 frameX,点错格会漏判。
-				var anchor = Terraria.ObjectData.TileObjectData.TopLeft(tile.tx, tile.ty);
-				int ax = anchor.X >= 0 ? anchor.X : tile.tx;
-				int ay = anchor.Y >= 0 ? anchor.Y : tile.ty;
-				if (IsFakeChest(ax, ay)) { LastInteract = "trapped_chest"; continue; }
-				int idx = Chest.FindChest(ax, ay);
-				if (idx == -1)
-				{
-					LastInteract = "no_chest";
-					DiagLog.Write($"[interact] ({tile.tx},{tile.ty}) 归一到({ax},{ay}) 仍找不到箱子 tile={(Main.tile[tile.tx, tile.ty].HasTile ? Main.tile[tile.tx, tile.ty].TileType.ToString() : "空")}");
-					continue;
-				}
-				// 开箱直接写 Player.chest 绕过了右键那条路,而锁的判定就在那条路上 —— 以前上锁的箱子照开,是作弊。
-				// 用 vanilla 自己的 IsLockedOrInUse,别抄 frameX 范围;它顺带覆盖了"别人正在用"。
-				var ch = Main.chest[idx];
-				if (ch == null) { LastInteract = "no_chest"; continue; }
-				// 用箱子自己的锚点格判锁,不用传进来的那格 —— 箱子占 2×2,判据看 frameX,点右下角会读错。
-				if (Chest.IsLocked(ch.x, ch.y)) { LastInteract = "locked"; continue; }
-				if (Chest.UsingChest(idx) != -1) { LastInteract = "in_use"; continue; }
-				LastInteract = "opened";
-				Main.LocalPlayer.chest = idx;
-				Main.LocalPlayer.chestX = ax;
-				Main.LocalPlayer.chestY = ay;
-				Main.playerInventory = true;
-				Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuOpen);
+				// 开箱那一套(归一锚点/陷阱箱/锁/占用)只有 TreasureGrab.OpenAt 一份 ——
+				// 这儿原来自己抄了一遍,两份判据各改各的迟早分叉。
+				LastInteract = TreasureGrab.OpenAt(tile.tx, tile.ty, out string iw) >= 0 ? "opened" : iw;
 			}
 			if (_lootAllRequested)
 			{

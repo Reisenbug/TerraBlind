@@ -306,7 +306,10 @@ namespace TerraBlind
 			if (!Reach.CanMine(p, cx2, cy2))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, cx2, cy2, "要开箱子"));
 			_looted.Add((cx2, cy2));
-			HttpServerSystem.QueueInteract(cx2, cy2);
+			// 【开箱到掏空走同一份】。原来只 QueueInteract 就完事 —— 箱子开着,东西一件没拿,
+			// 而这条路存在的意义正是"缺料了去箱子里找"。TreasureGrab 会归一锚点、腾格子、
+			// 掏空、验收箱子真空了。
+			if (!TreasureGrab.Start(cx2, cy2, out string gw)) { DiagLog.Write($"[unstick] 开箱起不来:{gw}"); return false; }
 			LastAction = $"开箱({cx2},{cy2})";
 			return true;
 		}
