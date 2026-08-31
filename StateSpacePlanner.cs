@@ -579,8 +579,7 @@ namespace TerraBlind
                     }
                 sb.Append("]}");
 
-                string dir = System.IO.Path.Combine(Main.SavePath, "TerraBlindLogs");
-                System.IO.Directory.CreateDirectory(dir);
+                string dir = LogRoot.Dir;
                 System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "ss_trace.json"), sb.ToString());
             }
             catch { }

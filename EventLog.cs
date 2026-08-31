@@ -28,6 +28,8 @@ namespace TerraBlind
         private static string _dir;
         private static readonly Dictionary<Ev, string> _paths = new();
 
+        internal static void ResetPaths() { lock (_lock) { _dir = null; _paths.Clear(); } }
+
         private static string Dir
         {
             get
@@ -35,7 +37,7 @@ namespace TerraBlind
                 if (_dir != null) return _dir;
                 try
                 {
-                    _dir = Path.Combine(Main.SavePath, "TerraBlindLogs", "events");
+                    _dir = Path.Combine(LogRoot.Dir, "events");
                     Directory.CreateDirectory(_dir);
                 }
                 catch { _dir = ""; }

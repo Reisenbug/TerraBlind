@@ -43,6 +43,9 @@ namespace TerraBlind
         private static readonly string[] _ring = new string[RingSize];
         private static int _ringHead = 0;
 
+        // 换目录了就把缓存的路径丢掉,下次写日志重新取 --- 不清的话第二局还写第一局的文件
+        internal static void ResetPaths() { _logPath = null; _eventsPath = null; _runsDir = null; _runPath = null; }
+
         private static string LogPath
         {
             get
@@ -50,8 +53,8 @@ namespace TerraBlind
                 if (_logPath != null) return _logPath;
                 try
                 {
-                    string dir = System.IO.Path.Combine(Main.SavePath, "TerraBlindLogs");
-                    Directory.CreateDirectory(dir);
+                    string dir = LogRoot.Dir;
+                    if (string.IsNullOrEmpty(dir)) { _logPath = ""; return _logPath; }
                     _logPath = System.IO.Path.Combine(dir, "jump_trace.log");
                     _eventsPath = System.IO.Path.Combine(dir, "nav_events.jsonl");
                 }

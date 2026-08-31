@@ -69,7 +69,7 @@ namespace TerraBlind
 				sb.Append(",\"pen\":[").Append(StateSpacePlanner.PenaltyJson(x0, y0, x1, y1)).Append(']');
 				sb.Append(",\"trail\":\"").Append(Esc(trail)).Append("\"}");
 
-				string dir = System.IO.Path.Combine(Main.SavePath, "TerraBlindLogs", "stuck");
+				string dir = System.IO.Path.Combine(LogRoot.Dir, "stuck");
 				System.IO.Directory.CreateDirectory(dir);
 				string path = System.IO.Path.Combine(dir, $"stuck_{System.DateTime.Now:HHmmss}_{_seq++}.json");
 				System.IO.File.WriteAllText(path, sb.ToString());
