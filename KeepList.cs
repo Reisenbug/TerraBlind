@@ -22,6 +22,9 @@ namespace TerraBlind
 			ItemID.PortableStool,     // 梯凳
 			ItemID.JungleGrassSeeds,  // 丛林草种子
 			ItemID.VineRopeCoil,      // 植物纤维绳索宝典
+			// 【留着会招错人】。带枪会让军火商满足入住条件先来占位,爆破专家就可能不来了 ——
+			// 而整条线全指望爆破专家卖雷管
+			ItemID.Boomstick,         // 三发猎枪
 		};
 
 		// 草药 + 草药种子,全扔。vanilla 没有草药集合(ItemID.Sets.GrassSeeds 是草皮种子,不是这个),
