@@ -19,7 +19,10 @@ namespace TerraBlind
 		static int _idx = -1;       // Main.chest 下标
 		static int _frames, _lootFrames;
 
-		const int MaxGoto = 60 * 30;   // 走过去最多 30 秒
+		// 【调用方已经走到跟前了】。远路那一段归 python 的 nav_to(它带顺路采集),这儿只兜住
+		// "到了之后被怪挤开几格"这种小位移。原来设 60*30 当【全程】超时,而宝藏常在几百格外,
+		// 443 格的目标 30 秒判失败,整趟一个都没拿到。
+		const int MaxGoto = 60 * 30;
 		const int LootWait = 30;       // LootAll 之后等几帧再验收 —— 掏空是当帧做的,给点余量
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
