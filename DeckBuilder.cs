@@ -170,7 +170,9 @@ namespace TerraBlind
 				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);
 				if (ppk < 0) { Fail($"({x},{y})是平台要换成方块,但没镐"); return; }
-				if (!Reach.CanPlace(p, x, y))
+				// 【这一步是挖,按挖的尺子量】。CanPlace 宽出一个 blockRange(让步的 8 格),
+				// 于是在挖不到的地方放行,每帧发起一次挖、每帧挖不动,181 帧后报 STUCK
+				if (!Reach.CanMine(p, x, y))
 				{ Mark("走去换平台"); if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true; return; }
 				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });

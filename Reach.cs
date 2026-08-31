@@ -28,6 +28,15 @@ namespace TerraBlind
 				&& ccy >= ty - Player.tileRangeY && ccy <= ty + Player.tileRangeY + 1;
 		}
 
+		// 【手上拿什么就按什么量】。通用光标动作(ActExecutor)挖和放都可能,写死一把尺子必错一半:
+		// 用 CanPlace 会在挖不到的地方放行(宽出 blockRange),用 CanMine 又会把够得着的放置判成够不着。
+		public static bool CanUse(Player p, int tx, int ty)
+		{
+			var it = p.HeldItem;
+			bool placing = it != null && !it.IsAir && it.createTile >= 0;
+			return placing ? CanPlace(p, tx, ty) : CanMine(p, tx, ty);
+		}
+
 		// 挖:vanilla Player.cs:46562 IsTargetTileInItemRange
 		public static bool CanMine(Player p, int tx, int ty) => Box(p, tx, ty, HeldBoost(p), 0);
 
