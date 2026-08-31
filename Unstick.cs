@@ -303,7 +303,9 @@ namespace TerraBlind
 			var at = FindChest(p, 80);
 			if (!at.HasValue) { DiagLog.Write("[unstick] 附近没有没开过的箱子"); return false; }
 			var (cx2, cy2) = at.Value;
-			if (!Reach.CanMine(p, cx2, cy2))
+			// 开箱按【交互】那把尺子量(只有 tileRangeX,不含 blockRange) —— 挖的那把更宽,
+			// 用它会判"够得着"然后开不了箱
+			if (!Reach.CanInteract(p, cx2, cy2))
 				return Handle("unstick", new Blocker(BlockKind.OutOfReach, cx2, cy2, "要开箱子"));
 			_looted.Add((cx2, cy2));
 			// 【开箱到掏空走同一份】。原来只 QueueInteract 就完事 —— 箱子开着,东西一件没拿,

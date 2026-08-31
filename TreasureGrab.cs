@@ -134,14 +134,15 @@ namespace TerraBlind
 				case Ph.Goto:
 					if (_frames > MaxGoto) { Fail($"走了{_frames}帧还没到"); return; }
 					if (RecedingNav.Active) return;
-					if (RecedingNav.LastStop != "done" && !Reach.CanMine(p, _ax, _ay))
+					if (RecedingNav.LastStop != "done" && !Reach.CanInteract(p, _ax, _ay))
 					{ Fail($"走不过去:{RecedingNav.LastStop}"); return; }
 					_ph = Ph.Open;
 					return;
 
 				case Ph.Open:
 					{
-						if (!Reach.CanMine(p, _ax, _ay)) { Fail("到了却够不着"); return; }
+						// 开箱查【交互】那把尺子(只有 tileRangeX),不是挖的那把 —— 用错会在够不着处开箱
+						if (!Reach.CanInteract(p, _ax, _ay)) { Fail("到了却够不着(交互距离)"); return; }
 						_idx = OpenAt(_tx, _ty, out string ow);
 						if (_idx < 0) { Fail(ow); return; }
 						int before = ItemsLeft();
