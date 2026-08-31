@@ -171,7 +171,10 @@ namespace TerraBlind
 
 		public override void PostUpdate()
 		{
-			if (!Enabled || Player.whoAmI != Main.myPlayer) return;
+			if (Player.whoAmI != Main.myPlayer) return;
+			// 清垃圾和让步无关 —— 关了让步照样得扔,所以排在 Enabled 之前
+			KeepList.Sweep();
+			if (!Enabled) return;
 			TopUpWood();
 		}
 

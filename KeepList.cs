@@ -51,6 +51,26 @@ namespace TerraBlind
 			return Junk.Contains(it.type) || Herb(it) || Ore(it);
 		}
 
+		// 【拿到就扔】。人的做法是 ctrl+左键丢垃圾桶,不等背包满 —— 名单上的东西留着本身就是问题:
+		// 三发猎枪会让军火商满足入住条件先来占房,爆破专家就不来了,而整条线全指望他卖雷管。
+		// MakeRoom 只在"腾地方"时才动手,背包有空格就一件不删,盖不住这个语义。
+		public static void Sweep()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null || !p.active) return;
+			int n = 0;
+			// 热键栏也扫:枪进了 0..9 照样招人。HomeInHotbar 钉的是镐/平台,不在名单上,不会被误删
+			for (int i = 0; i < InvEnd && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (!Drop(it)) continue;
+				DiagLog.Write($"[keep] 拿到就扔 {it.Name}x{it.stack} (槽{i})");
+				p.inventory[i] = new Item();
+				n++;
+			}
+			if (n > 0) Recipe.FindRecipes();
+		}
+
 		// 删到有 want 个空格。返回真正的空格数。
 		public static int MakeRoom(int want)
 		{
