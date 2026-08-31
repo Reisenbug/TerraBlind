@@ -414,6 +414,30 @@ namespace TerraBlind
 			{
 				body = "{\"active\":" + (FightCoordinator.IsActive ? "true" : "false") + "}";
 			}
+			else if (path == "/collect_treasure")
+			{
+				// 【一条龙:走过去→开箱→掏空→验收】。python 只发这一次,再轮询 /collect_treasure_status。
+				// 原来这套编排在 python 里(nav_to + interact + 轮询 last_interact + loot_all + 记账),
+				// 而 last_interact 是【不带坐标的全局字符串】—— 读到的 opened 可能是上一个箱子留下的,
+				// 而且"拿到了"只等于"发过 loot_all",箱子空没空从来没人查。
+				string ctBody = ReadBody(ctx).Replace(" ", "");
+				var ctX = System.Text.RegularExpressions.Regex.Match(ctBody, "\"x\"\\s*:\\s*(-?\\d+)");
+				var ctY = System.Text.RegularExpressions.Regex.Match(ctBody, "\"y\"\\s*:\\s*(-?\\d+)");
+				if (!ctX.Success || !ctY.Success) { body = "{\"ok\":false,\"reason\":\"bad_params\"}"; status = 400; }
+				else if (TreasureGrab.Start(int.Parse(ctX.Groups[1].Value), int.Parse(ctY.Groups[1].Value), out string ctw))
+					body = "{\"ok\":true}";
+				else
+					body = "{\"ok\":false,\"reason\":\"" + JsonEsc(ctw) + "\"}";
+			}
+			else if (path == "/collect_treasure_status")
+			{
+				body = TreasureGrab.StatusJson();
+			}
+			else if (path == "/collect_treasure_stop")
+			{
+				TreasureGrab.Stop();
+				body = "{\"ok\":true}";
+			}
 			else if (path == "/loot_all")
 			{
 				_lootAllRequested = true;
@@ -3569,6 +3593,8 @@ namespace TerraBlind
 		// 别用 MapHelper.TileToLookup:它的 option 是地图【颜色】分组,多种箱子共用一色 → 名字全错。
 		// 陷阱箱:和普通箱子是不同的 TileID(BasicChestFake = 441/468),外观一模一样。
 		// 箱子占 2x2,四个格都查一遍,点哪个角都认得出来。
+		public static bool IsFakeChestPublic(int x, int y) => IsFakeChest(x, y);
+
 		static bool IsFakeChest(int x, int y)
 		{
 			for (int dx = 0; dx <= 1; dx++)

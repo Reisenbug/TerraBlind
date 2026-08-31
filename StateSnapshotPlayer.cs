@@ -667,6 +667,7 @@ namespace TerraBlind
 			// 必须在 RecedingNav.Tick 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			BuildReplayer.Tick();
 
+			TreasureGrab.Tick();  // 必须在 RecedingNav 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it
 			StateSpacePlanner.TickBlocks();
 			StateSpacePlanner.BlockNavTick();   // block-nav driver: advance to next chunk when current single-point leg finishes
