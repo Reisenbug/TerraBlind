@@ -312,6 +312,18 @@ namespace TerraBlind
 				// 差得多就交栈(它会寻路/造落脚点),横移只管同高度的小偏差
 				if (System.Math.Abs(py - y) > VertSlack)
 				{
+					// 【人在桥面【上方】而且桥面在前方 = 往前走一步就掉下去了】。
+					// 铺出来的桥是往下走的台阶,铺完一段人留在高的那一级,下一格在下方几行 ——
+					// 而这条分支直接交栈,横移那条永远轮不到。Unstick 只会叫导航"站到那格",
+					// 可那格还是空气,站不上去,于是递归 8 层全在"回桥面"上打转然后放弃。
+					// 交栈留给【桥面在上方】(要爬)和【同列】(纯竖直)那两种。
+					int fdir = x > px ? 1 : -1;
+					if (y > py && px != x && !Predicates.IsWall(px + fdir, py))
+					{
+						if (fdir > 0) p.controlRight = true; else p.controlLeft = true;
+						Mark("往桥面那边走,走过去就掉下去了");
+						return;
+					}
 					if (!Unstick.Handle("deck", new Blocker(BlockKind.OutOfReach, x, y, "桥面够不着")))
 						Fail($"人在{py},桥面{y},差{System.Math.Abs(py - y)}行,够不着又救不回来");
 					return;
