@@ -90,12 +90,25 @@ namespace TerraBlind
 			{
 				var wt = Main.tile[SnappedWx, SnappedWy];
 				if (!wt.HasTile || wt.TileType != _watchType)
-				{ Outcome = "removed"; _active = null; return; }
+				{ DiagLog.Write($"[item_use] removed ({SnappedWx},{SnappedWy}) after {_elapsed}f"); Outcome = "removed"; _active = null; return; }
 
 				if (_elapsed >= ProgressGrace && TileMineDamage(p, SnappedWx, SnappedWy) <= 0)
 				{
 					// 零伤害要分清原因:上面压着树/箱子是结构问题(换镐没用),否则才是镐不够硬
 					Reason = WorldGen.CanKillTile(SnappedWx, SnappedWy) ? "tool_weak" : "blocked";
+					// 【挖掉了要说,挖不掉更要说】。原来只有放置那条打日志,挖掘两个出口都是哑的 ——
+					// 现场:桥面净空每 45 帧发起一次挖 (1136,1055) type=30,挖了 2400 帧方块还在,
+					// 而 Reason 早就算出来了,只是从没写进日志,调用方每帧 return true 一直转。
+					// 【两把尺子一起量】。mod 放行用 IsInTileInteractionRange(Simple),而原版挖掘真正查的是
+					// IsTargetTileInItemRange(tileRangeX + 手上那件的 tileBoost,不封顶) --- 判据不是同一个。
+					// 人往前挪一格就挖成了,所以要么是距离、要么是 tileTarget 没落在这一格,一次打全定案。
+					var _hi = p.HeldItem;
+					bool _simple = p.IsInTileInteractionRange(SnappedWx, SnappedWy, Terraria.DataStructures.TileReachCheckSettings.Simple);
+					bool _vanilla = _hi != null && p.IsTargetTileInItemRange(_hi);
+					DiagLog.Write($"[item_use] no_progress at ({SnappedWx},{SnappedWy}) type={wt.TileType} reason={Reason} elapsed={_elapsed}"
+						+ $" 人({(int)(p.position.X / 16f)},{(int)((p.position.Y + p.height) / 16f) - 1}) px={p.position.X:0.#}"
+						+ $" tileTarget=({Player.tileTargetX},{Player.tileTargetY}) simple={_simple} vanilla={_vanilla}"
+						+ $" tileRangeX={Player.tileRangeX} boost={_hi?.tileBoost} pick={_hi?.pick}");
 					Outcome = "no_progress"; _active = null; return;
 				}
 			}
