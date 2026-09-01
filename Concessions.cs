@@ -19,6 +19,28 @@ namespace TerraBlind
 		// (改 static 会让所有读 tileRangeX 的地方跟着变,包括规划器自己的判据)
 		public const int ReachBoost = 8;
 
+		// 捅向导那一段专用的【超长手臂】。ReachBoost 只加 blockRange,只有放置吃得到;
+		// 挖和对话都以 static tileRangeX 为底,所以要够到向导脚下的每一列,只能动这个 static。
+		// 【动了就必须还回去】—— 它是全局的,规划器的判据也读它,留着不还会让整个寻路以为
+		// 手能伸 30 格。开关成对出现在 WofPrep:BackToGuide 开,Patch 收尾关
+		public const int LongArm = 30;
+		static int _savedRangeX = -1, _savedRangeY = -1;
+		public static bool LongArmOn => _savedRangeX >= 0;
+		public static void LongArmBegin()
+		{
+			if (_savedRangeX >= 0) return;   // 已经开着,别把加长后的值当原值存下来
+			_savedRangeX = Player.tileRangeX; _savedRangeY = Player.tileRangeY;
+			Player.tileRangeX = LongArm; Player.tileRangeY = LongArm;
+			DiagLog.Write($"[reach] 手臂加长到{LongArm}格(原{_savedRangeX}/{_savedRangeY})");
+		}
+		public static void LongArmEnd()
+		{
+			if (_savedRangeX < 0) return;
+			Player.tileRangeX = _savedRangeX; Player.tileRangeY = _savedRangeY;
+			DiagLog.Write($"[reach] 手臂还原到{_savedRangeX}/{_savedRangeY}");
+			_savedRangeX = _savedRangeY = -1;
+		}
+
 		// 放置/挖掘用时倍率。1/8 让一次放置从十几帧压到一两帧,
 		// 空中放置来不来得及、放置和飞行的时序竞争,这一整类问题就消失了
 		public const float UseTimeMul = 0.125f;

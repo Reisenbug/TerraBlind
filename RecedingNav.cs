@@ -146,6 +146,15 @@ namespace TerraBlind
 
         public static void Start(int goalWx, int goalWy, Mode mode)
         {
+            // 【同一个目标已经在跑就别重来】。Start 会作废建场任务、清掉 Commitment/Trap
+            // 的全部记录 —— 每帧调一次的话场永远建不完,人一步不动,屏幕刷满 building field
+            // (现场:WofPrep 的兜底每帧调,日志 6413~6857 连着几百条)。
+            // 调用方少写一个 if 就会这样,所以守在这里,不指望每个调用点都记得
+            // 【先落地再比】。Snap 会把 goalWy 改写成真正站得住的那一行,存下来的是改写后的值;
+            // 拿原始值去比永远不相等,守卫等于没写
+            if (mode == Mode.Snap)
+                goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
+            if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
             StateSpacePlanner.StopNav();
             _mode = mode;
             // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
@@ -153,8 +162,6 @@ namespace TerraBlind
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
             _standTries = 0;
             _braking = false;
-            if (mode == Mode.Snap)
-                goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判

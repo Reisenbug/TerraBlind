@@ -65,6 +65,11 @@ namespace TerraBlind
 		public static int ChairWx => ChairCol(0);
 		public static int ChairWy => _floorRow;
 
+		// 房间【靠桥那一头】的最里面一格。捅向导站这儿:离他最近,而且脚下是地板不是他压着的列。
+		// 局部列 1..RoomWidth 是房间内部,_dir 指着桥延伸的方向
+		public static int FarWx => Wx(RoomWidth);
+		public static int FarWy => _floorRow - 1;
+
 		// 一律用数字 id:ResolveSlot 匹配不上就去比 it.Name,那是本地化名(中文),内部名永远不匹配
 		const int H_FLOOR = 94;       // 木平台
 		const int H_WOOD = 9;         // 木材

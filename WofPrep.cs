@@ -71,13 +71,12 @@ namespace TerraBlind
 			return true;
 		}
 
-		public static void Stop() { if (Outcome == "running") Outcome = "stopped"; Phase = Ph.Idle; }
+		// 外部叫停也要还手臂 —— 不然停在 DigUnder 那一刻,30 格就永远留在全局里了
+		public static void Stop() { Concessions.LongArmEnd(); if (Outcome == "running") Outcome = "stopped"; Phase = Ph.Idle; }
 
 		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
 		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
 		const int DeckScan = 12;
-		// 找站位时往两边各扫这么多列。伸手只有 4 格,扫太远也够不着,纯浪费
-		const int StanceScan = 6;
 		// 向导是不是【真的掉到桥面以下】了。
 		//
 		// 【必须按他自己那一列的桥面判】。原来用 _deckRow —— 那是人走远 80 格之后
@@ -116,58 +115,6 @@ namespace TerraBlind
 		// 所以站位和"够不够得着"的判据也必须按这几列算,不能只看中心列
 		static (int l, int r) GuideCols(NPC gn) => Predicates.TouchCols(gn.position.X, gn.width);
 
-		// 站在这里,向导那几列【全部】挖得动吗。
-		// 【绝不能只量中心列】:只量中心列的话,人站在刚好够到中心的位置就开工,
-		// 最外那列差一格永远够不着 —— 挖开两列他还有一只脚踩着第三列,站着不掉
-		// (日志 29644:列1081/1082 全空,列1083 是 30!,人 360 帧不动)
-		static bool CanMineAllCols(Player p, NPC gn, int gy)
-		{
-			var (l, r) = GuideCols(gn);
-			for (int c = l; c <= r; c++)
-				if (!Reach.CanMine(p, c, gy)) return false;
-			return true;
-		}
-
-		// 人的脚站在 cx 列、cy 行时够不够得着 l..r 这几列的 gy 行。
-		// 【要按站定之后的身位算,不是现在的身位】—— 现在还在半路上。
-		// 公式照抄 Reach.CanMine 的盒子,只是把玩家坐标换成假设的站位:
-		// OriginCy 是 (position.Y+height-2)/16,反过来推 position.Y
-		static bool ColsInReachFrom(Player p, int cx, int cy, int l, int r, int gy)
-		{
-			var it = p.HeldItem;
-			int boost = it == null || it.IsAir ? 0 : it.tileBoost;
-			float rx = Player.tileRangeX + boost, ry = Player.tileRangeY + boost;
-			float px = cx * 16f, py = cy * 16f + 2f - p.height;
-			for (int c = l; c <= r; c++)
-			{
-				if (px / 16f - rx > c) return false;
-				if ((px + p.width) / 16f + rx - 1f < c) return false;
-			}
-			if (py / 16f - ry > gy) return false;
-			if ((py + p.height) / 16f + ry - 2f < gy) return false;
-			return true;
-		}
-
-		// 找一个能同时够到向导那几列的桥面站位。
-		// 【不能站他自己压着的列】:挖脚下会把自己也带下去。所以从他箱子外面一列起往两边扫,
-		// 近的优先 —— 站得越近越不容易被他走动甩出范围
-		static bool FindDigStance(Player p, NPC gn, int gy, out int sx, out int sy)
-		{
-			sx = sy = -1;
-			var (l, r) = GuideCols(gn);
-			for (int off = 1; off <= StanceScan; off++)
-			{
-				foreach (int cx in new[] { l - off, r + off })
-				{
-					int deck = DeckRow(cx, ActExecutor.OriginCy(p));
-					if (deck < 0) continue;
-					if (!ColsInReachFrom(p, cx, deck, l, r, gy)) continue;
-					sx = cx; sy = deck; return true;
-				}
-			}
-			return false;
-		}
-
 		// 挖向导脚下时的心跳:每帧无声 return 的话,日志里只剩一片空白,连卡在哪都看不出来
 		static string _digWhere = "";
 		static int _digBeat;
@@ -197,7 +144,7 @@ namespace TerraBlind
 				$"已挖{_dug.Count}格 talk={p.talkNPC}{sb}");
 		}
 
-		static void Fail(string r) { Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
+		static void Fail(string r) { Concessions.LongArmEnd(); Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 
 		// 买完的收尾:鼠标上还攥着东西就等一帧(不然那件会掉地上),关背包、结束对话、进下一相位。
 		// 【买够了】和【钱花光了】都走这一条 —— 各写一遍必然漂移
@@ -223,7 +170,15 @@ namespace TerraBlind
 			Go(Ph.SwapGuide);
 			return true;
 		}
-		static void Go(Ph next) { Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0; DiagLog.Write($"[wof] → {next}"); }
+		// 【超长手臂只属于 DigUnder+Patch】。它改的是 static tileRangeX,全局都读得到,
+		// 漏还一次整个寻路就以为手能伸 30 格。所以在这里统一还 —— 出口有六个,
+		// 一个个加迟早漏,以后再添分支也不用记得这回事
+		static void Go(Ph next)
+		{
+			if (next != Ph.DigUnder && next != Ph.Patch) Concessions.LongArmEnd();
+			Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0;
+			DiagLog.Write($"[wof] → {next}");
+		}
 
 		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
 		// 和 NPC 碰撞箱相交。够不着的话 SetTalkNPC 当帧就被原版清掉,商店根本开不起来
@@ -432,39 +387,33 @@ namespace TerraBlind
 					return;
 				}
 
-				// 同样朝【向导本人】走:等下要挖他脚下,得先够得着那一格
+				// 走到【单间房靠桥那头的最里面一格】站定,然后把手臂加长到 30 格。
+				// 不再算站位:30 格的手臂从这儿够得着向导脚下的每一列,
+				// 原来那套"扫一圈找能覆盖三列的桥面格"是给 4 格手臂擦屁股的,已经删了
 				case Ph.BackToGuide:
 				{
 					int g0 = NPC.FindFirstNPC(NPCID.Guide);
 					if (g0 < 0) { Go(Ph.WaitWof); return; }
 					var gn0 = Main.npc[g0];
-					int fx = (int)(gn0.Center.X / 16f);
 					int fy0 = (int)((gn0.position.Y + gn0.height + 2f) / 16f);
 					// 向导已经掉到桥面以下 = 活儿干完了,他正在往岩浆里落。
 					// 【绝不跟下去】:下面没有回得来的路,人一跳就出不来
 					if (GuideFell(gn0))
 					{ DiagLog.Write($"[wof] 向导掉到{fy0}行(他那列的桥面在下面没了),不追了,去补洞"); Go(Ph.Patch); return; }
-					// 【他压着的每一列都够得着】才开工,不是只够到中心列 ——
-					// 够到中心就开工的话最外那列永远差一格,挖不完他就不掉。
-					// 【而且脚踏实地】:只判够得着的话人会停在半空,一飘就出range,
-					// 于是 DigUnder↔BackToGuide 来回跳(日志:8243/8332/8601)
-					if (p.velocity.Y == 0f
-						&& CanMineAllCols(p, gn0, fy0))
-					{ RecedingNav.Stop(); Go(Ph.DigUnder); return; }
-					if (RecedingNav.Active) return;
-					if (_frames > 60 * 300) { Fail("回不到向导跟前"); return; }
-					// 站到向导【旁边】的桥面上:站他自己压着的列的话,挖脚下会把自己也带下去。
-					// 站位由 FindDigStance 按"这几列全够得着"挑,不能写死偏移两列 ——
-					// 写死的那个位置常常刚好够不到最外那列
-					if (FindDigStance(p, gn0, fy0, out int sx, out int sy))
-					{ RecedingNav.Start(sx, sy, RecedingNav.Mode.Stand); return; }
-					// 附近找不到能覆盖全部列的桥面,就先凑到他跟前,下一帧地形变了再挑
-					if (_frames % 120 == 1)
+					int sx = HouseBuilder.FarWx, sy = HouseBuilder.FarWy;
+					// 【站稳了才算到】。半空中量距离,一落地就变了
+					if (p.velocity.Y == 0f && ActExecutor.OriginCx(p) == sx)
 					{
-						var (bl0, br0) = GuideCols(gn0);
-						DiagLog.Write($"[wof] 找不到能同时够到列{bl0}..{br0}的桥面站位,先凑近");
+						RecedingNav.Stop();
+						Concessions.LongArmBegin();
+						Go(Ph.DigUnder); return;
 					}
-					RecedingNav.Start(fx, fy0 - 1, RecedingNav.Mode.Reach);
+					if (RecedingNav.Active) return;
+					if (_frames > 60 * 300) { Fail($"走不到房子最右格({sx},{sy})"); return; }
+					// 【只在没跑的时候发一次】。每帧无条件 Start 会把建场任务每帧撕掉重建,
+					// 屏幕刷满 building field,人一步不动(日志 6413~6857 每帧一条)
+					if (_frames % 120 == 1) DiagLog.Write($"[wof] 去房子最右格({sx},{sy}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+					RecedingNav.Start(sx, sy, RecedingNav.Mode.Stand);
 					return;
 				}
 
@@ -480,9 +429,8 @@ namespace TerraBlind
 					if (GuideFell(gn))
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
-					// 他会走动,走出伸手范围就先追上去,别对着够不着的格子空挥。
-					// 【这里仍然只判中心列】—— 三列的严判排在拉住他说话【之后】,
-					// 不然人一走近就掉对话,他又开始溜达,永远拉不住
+					// 手臂 30 格,站在房子最右格够得着向导脚下的每一列 —— 正常不会够不着。
+					// 真够不着说明他走出去很远了,回去重新站位(顺手把手臂还回去,别让它漏出这一段)
 					if (!Reach.CanMine(p, gx, gy))
 					{ p.SetTalkNPC(-1); Go(Ph.BackToGuide); return; }
 					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动 ——
@@ -508,16 +456,6 @@ namespace TerraBlind
 						Main.npcChatText = gn.GetChat();
 						Terraria.Audio.SoundEngine.PlaySound(SoundID.Chat);
 						DiagLog.Write($"[wof] 拉住向导说话(talk={p.talkNPC}),免得他乱走");
-					}
-					// 【够不着就去够,不是跳过】。他压着的列里只要有一列够不着,
-					// 挖完剩下的他照样有只脚踩着地不掉 —— 那就回去换个站得住的位置。
-					// 排在拉住他之后:说着话他不动,这时候算出来的站位才不会算完就作废
-					if (p.talkNPC == g && !CanMineAllCols(p, gn, gy))
-					{
-						var (nl, nr) = GuideCols(gn);
-						if (_frames % 120 == 1)
-							DiagLog.Write($"[wof] 列{nl}..{nr}里有够不着的,回去换站位");
-						p.SetTalkNPC(-1); Go(Ph.BackToGuide); return;
 					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
 					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
