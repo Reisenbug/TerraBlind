@@ -2031,7 +2031,9 @@ namespace TerraBlind
         static bool _walkActive;
         static int _walkTargetCx, _walkDir;
 
-        public static void StopExec() { _execFrames = null; _execIdx = 0; _walkActive = false; }
+        static int _jpWaitFrames;
+        const int JpWaitCap = 60;
+        public static void StopExec() { _execFrames = null; _execIdx = 0; _walkActive = false; _jpWaitFrames = 0; }
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
@@ -3445,6 +3447,26 @@ namespace TerraBlind
 
             if (_execIdx % 15 == 0)
                 DiagLog.Trc($"[ss-exec] frame={_execIdx}/{_execFrames.Count} expect=({f.Px:0.#},{f.Py:0.#}) actual=({p.position.X:0.#},{p.position.Y:0.#}) drift={drift:0.#}");
+
+            // 【起跳前把手空出来】。跳放的放置窗口只有弧线上的那一帧,而 itemTime 是上一次用物品的冷却:
+            // 用时倍率还原成原版后一次放置要 15 帧,人跳到窗口那一帧手还在挥,EmitPlace 直接 return,
+            // 平台永远不出现 —— 人从平台位置穿过去摔回起点,下一轮又选中同一条边,再摔。
+            // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,连一条 [place] 都没有;
+            // 而 itemTime=1 的那几次(提速时代)全是 OK。这就是"跳两三下才前进"的由来。
+            // 在【地上】等冷却是免费的:弧线一模一样,只是整体后移几帧,落点/H/cost 全不变。
+            // 空中不能等 —— 每等一帧多掉一帧,那是另一个坑,下面 _placeStall 那段已经写明。
+            // 等也要有上限:itemTime 万一因为别的东西一直不归零,这条 return 会把人无声钉死。
+            // 原版最慢的东西也就几十帧,60 帧还没空说明不是在等冷却,照常起跳(大不了这次跳放失败重规划)
+            if (_execIdx == 0 && p.itemTime > 0 && p.velocity.Y == 0f
+                && _jpWaitFrames < JpWaitCap && _execFrames.Exists(fr => fr.Place))
+            {
+                if (_jpWaitFrames++ == 0)
+                    EventLog.W(Ev.Place, $"HOLD 起跳前等手空 itemTime={p.itemTime}");
+                return;
+            }
+            if (_jpWaitFrames >= JpWaitCap)
+                EventLog.W(Ev.Place, $"HOLD 等了{JpWaitCap}帧手还没空 itemTime={p.itemTime},照常起跳");
+            _jpWaitFrames = 0;
 
             // 执行器自报没进展:同一帧号停住 = 推进条件永远满足不了(jumpPlace 放完人掉到新平台上,
             // 却还在等放置【前】的位置,卡了 45 帧靠 sentinel 从外面救)。哨兵是兜底,不该是唯一的发现者。
