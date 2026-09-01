@@ -252,6 +252,18 @@ namespace TerraBlind
 				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
 				if (p.velocity.Y != 0f)
 				{ Mark("腾空中横推"); if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
+				// 【人在桥上就只按左右键,别叫寻路】。桥面是自己刚铺的,连着一路通到目标格,
+				// 走过去就是了 —— 而寻路会重建整张场、绕大圈、递归好几层"回桥面"。
+				// 判据:脚下踩的就是这条桥线上的格子。
+				var (tl, tr) = Predicates.TouchCols(p.position.X, p.width);
+				bool onDeck = false;
+				for (int c = tl; c <= tr && !onDeck; c++) onDeck = OnLine(c, py + 1);
+				if (onDeck)
+				{
+					Mark("在桥上,走过去");
+					if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
+					return;
+				}
 				// 差一格就自己跳(比启动整套寻路便宜)。差得多【交给寻路】——
 				// 它会挖会搭会跳,而这儿硬按方向键只会在坎前蹭,8 次蹭不上去就整条桥失败
 				if (py - (y - 1) > JumpBackSlack)
@@ -333,6 +345,15 @@ namespace TerraBlind
 						Mark("往桥面那边走,走过去就掉下去了");
 						return;
 					}
+					// 【脚下就是这条桥,走过去就行】。同上:桥面连着一路通到目标,叫寻路是绕远
+					var (rl, rr) = Predicates.TouchCols(p.position.X, p.width);
+					for (int c = rl; c <= rr; c++)
+						if (OnLine(c, py + 1))
+						{
+							Mark("在桥上,走过去(横)");
+							if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
+							return;
+						}
 					if (!Unstick.Handle("deck", new Blocker(BlockKind.OutOfReach, x, y, "桥面够不着")))
 						Fail($"人在{py},桥面{y},差{System.Math.Abs(py - y)}行,够不着又救不回来");
 					return;
