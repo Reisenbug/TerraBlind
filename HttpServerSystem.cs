@@ -830,6 +830,11 @@ namespace TerraBlind
 				var nameMatch = System.Text.RegularExpressions.Regex.Match(reqBody, "\"item_name\"\\s*:\\s*\"([^\"]+)\"");
 				var amtMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"amount\":(\\d+)");
 				int amount = amtMatch.Success ? int.Parse(amtMatch.Groups[1].Value) : 1;
+				// 【先刷一次配方表】。Main.availableRecipe 是 vanilla 在背包 UI 那条路上刷的,
+				// 而 tb 2 传送直达地狱,一次都没刷过 —— 表是空的,于是木平台报 item_not_found
+				// (available_count=0 而 free_slots=45,材料明明够)。tb 1 只是碰巧在路上
+				// 删垃圾/开箱子时顺带刷过。合成本来就在这个线程做,加这一句不多担风险。
+				Recipe.FindRecipes();
 				int targetId = -1;
 				if (idMatch.Success)
 					targetId = int.Parse(idMatch.Groups[1].Value);
