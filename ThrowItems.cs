@@ -9,8 +9,14 @@ namespace TerraBlind
 	// 不随机挑:随机会扔掉镐子、平台、或者这次合成正要用的材料。挑"最不要紧"的那格。
 	public static class ThrowItems
 	{
-		// 扔出去的东西记在这儿,捡回来之前别再扔第二遍
-		public static readonly List<int> Thrown = new();
+		// 扔出去的东西记在这儿,捡回来之前别再扔第二遍。
+		// 【只存 whoAmI 不够】。Main.item[] 是全局数组,索引会回收复用 ——
+		// 我们扔的那件被捡走/消失之后,同一个槽会被【世界里任何地方】新掉的东西占用,
+		// 于是捡回来时读到的是一件毫不相干的掉落物的坐标,人就往几百格外跑
+		// (现场:房子在地狱 1081 行,Reclaim 却导航去地表 (1429,533),玩家从没到过那儿)。
+		// 所以连身份和扔出时的位置一起记,取回来先核对是不是同一件
+		public struct Mark { public int Who, Type, Wx, Wy; }
+		public static readonly List<Mark> Thrown = new();
 		public static string LastNote = "";
 
 		// 原版手动丢弃给 noGrabDelay=100(≈1.7秒)。不改它:刚扔就被吸回来等于没扔,
@@ -108,7 +114,8 @@ namespace TerraBlind
 				drop.position.Y = p.position.Y;
 				drop.velocity = Microsoft.Xna.Framework.Vector2.Zero;
 				drop.noGrabDelay = 100;
-				Thrown.Add(drop.whoAmI);
+				Thrown.Add(new Mark { Who = drop.whoAmI, Type = drop.type,
+					Wx = (int)(drop.position.X / 16f), Wy = (int)(drop.position.Y / 16f) });
 				DiagLog.Write($"[throw] 扔出 {it.Name}x{it.stack} (槽{slot}) 往{(dir > 0 ? "右" : "左")} 安全={safe}");
 				p.inventory[slot] = new Item();
 				thrown++;
@@ -122,16 +129,26 @@ namespace TerraBlind
 			return now;
 		}
 
-		// 还在地上、且是我们扔的那些。捡回来靠走过去:原版吸取范围约 2.6 格。
+		// 扔出去的东西落点【永远在人身边几格】(MakeRoom 把它放在 position.X ± 16px)。
+		// 它会弹会滑,但滑不出这个数 —— 超了就一定不是我们那件,是索引被复用了
+		const int MaxDrift = 30;
+
+		// 还在地上、且【确实是我们扔的那件】。捡回来靠走过去:原版吸取范围约 2.6 格。
 		public static bool AnyOnGround(out int wx, out int wy)
 		{
 			wx = wy = 0;
-			foreach (int who in Thrown)
+			foreach (var m in Thrown)
 			{
-				if (who < 0 || who >= Main.maxItems) continue;
-				var it = Main.item[who];
+				if (m.Who < 0 || m.Who >= Main.maxItems) continue;
+				var it = Main.item[m.Who];
 				if (it == null || !it.active || it.IsAir) continue;
+				// 【身份要对得上】。槽位复用之后类型多半就变了,这一条挡掉绝大部分冒名顶替
+				if (it.type != m.Type) continue;
 				int x = (int)(it.position.X / 16f), y = (int)(it.position.Y / 16f);
+				// 类型碰巧也一样的话还有这道:掉落物滑不了几十格,漂太远的一定不是同一件
+				int drift = System.Math.Abs(x - m.Wx) + System.Math.Abs(y - m.Wy);
+				if (drift > MaxDrift)
+				{ DiagLog.Write($"[throw] ({x},{y})离扔出点({m.Wx},{m.Wy}){drift}格,不是我们那件,不去捡"); continue; }
 				// 掉进岩浆的别去捡 —— 那是把人也送进去,而人掉岩浆这把就完了
 				if (Predicates.IsLava(x, y)) { DiagLog.Write($"[throw] ({x},{y})那件掉岩浆里了,不去捡"); continue; }
 				wx = x; wy = y;
