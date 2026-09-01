@@ -1356,6 +1356,17 @@ namespace TerraBlind
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+                // 【必须真的落在那块平台上】。JumpPlace 早就有这条,横穿版漏了 ——
+                // 平台是 solidTop 只有顶面接人,人从它旁边穿过去继续往下掉,照样 Grounded、H 照样更低,
+                // 于是这条"放了但没接住"的边发得出来。执行时人一路掉回起点,下一轮又选中它,再掉。
+                // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,d=(8.1,96):横向只差 8px,
+                // 竖直差整整 6 行 —— 正是穿过去的形状。这就是换了地方的"跳三下"。
+                if (F_LandOnPlat && lcy != fcy)
+                {
+                    if (ctx.JpFellThrough < 12)
+                        DiagLog.Write($"[ss-ftx] place=({fcx},{fcy}) hold={hold} dir={dir} landFeetCy={lcy} → 穿过去了,不发这条边");
+                    ctx.JpFellThrough++; continue;
+                }
                 if (!(ctx.DistField != null && ctx.DistField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
                 if (!MarkPlaceFrame(seg.Value.frames, fcx, fcy)) continue; // unreachable placement → try a different landing
                 return seg.Value;
