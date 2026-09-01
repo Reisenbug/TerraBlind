@@ -126,8 +126,13 @@ namespace TerraBlind
         }
 
         // 物理可达泛洪。用 CellKind 那套【便宜】判据(纯 tile 查询),不用 Expand(0.82ms/格,几百格就半秒)。
-        // 近似的地方:横走只认同高度和 ±1 阶,跳只认正上方 —— 宁可少算(可达区偏小),不能多算,
-        // 多算会给出一个 A* 到不了的目标,又回到白烧预算。
+        // 近似的地方:横走只认同高度和 ±1 阶,跳只认正上方。
+        //
+        // 【落脚点算"造得出来"的,不只算"现成的"】。原来 Push 只收 Cell.Stand,
+        // 而这套系统的本事恰恰是改地形:贪心在 (1102,742) 列出 64 个候选(全是 jump/place
+        // 到 Build/Pillar 格),泛洪一个都不收,于是报"可达区 1 格,整片都不比现在好",
+        // A* 直接不搜 —— 两套判据对同一个坑给出相反的答案,人就在 1101↔1102 之间来回摆。
+        // 改成也收 Build(铺一块平台就站得住):那正是 A* 自己能走的边,给它当目标不会白烧。
         static HashSet<(int x, int y)> Flood(int sx, int sy)
         {
             var seen = new HashSet<(int x, int y)> { (sx, sy) };
@@ -146,7 +151,9 @@ namespace TerraBlind
                     if (!CellKind.Passable(x, y - d)) break;
                     Push(seen, q, x, y - d);
                 }
-                // 掉:正下方一直到落地
+                // 掉:正下方一直到落地。【这一条必须用 Stands】——
+                // 掉是被动的,人停在真有地的那行;用 CanStandAfterBuild 的话正下方第一格空气
+                // 就算"到了",等于原地悬空,再也找不到底
                 for (int d = 1; d <= FallDown; d++)
                 {
                     if (CellKind.Of(x, y + d) == Cell.Solid) break;
@@ -160,9 +167,18 @@ namespace TerraBlind
         const int JumpUp = 6;         // 和 MazeWand.JumpReach 一致
         const int FallDown = 30;
 
+        // 【收 Build 不收 Pillar】。Build 是"旁边锚得住,铺一块平台就站得上",那是坑壁边上
+        // 实实在在的落脚点;Pillar 是"四周没锚点,只能从底下砌塔上来" —— 空中每一格都算 Pillar,
+        // 收了它泛洪会顺着天空铺到 MaxRegion,挑出一个几十格外的目标,又回到白烧预算
+        static bool FloodOk(int x, int y)
+        {
+            var k = CellKind.Of(x, y);
+            return k == Cell.Stand || k == Cell.Build;
+        }
+
         static void Push(HashSet<(int x, int y)> seen, Queue<(int x, int y)> q, int x, int y)
         {
-            if (!CellKind.Stands(x, y)) return;
+            if (!FloodOk(x, y)) return;
             if (!seen.Add((x, y))) return;
             q.Enqueue((x, y));
         }
