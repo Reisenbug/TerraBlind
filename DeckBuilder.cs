@@ -236,6 +236,10 @@ namespace TerraBlind
 				if (ClearWay.Forward(p, bdir, "挡着桥面的路", stuck: true))
 				{
 					DiagLog.Write($"[deck] 人卡在{px}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
+					// 【这一列没挖干净就别清零】。Forward 一帧只挖一格,清零要重新攒 BlockedAt 帧;
+					// 挖到第三格口子够钻了人就挤进去,dxNow 一变小计数器也清零 ——
+					// 剩下的一两格再没人管,人头顶留着方块,走到那儿被顶住。
+					if (!ClearWay.ForwardClear(p, bdir)) return;   // 还有活儿,保住计数
 					_blockedFrames = 0;
 					return;
 				}

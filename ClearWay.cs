@@ -91,6 +91,18 @@ namespace TerraBlind
 			return false;
 		}
 
+		// 前进方向那一列的 HeadClear+1 行都空了吗。Forward 一帧只挖一格,调用方靠这个
+		// 判断"还要不要接着挖" —— 挖开三格人就挤过去了,剩下的头顶那两格会被漏掉
+		public static bool ForwardClear(Player p, int dir)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int col = dir > 0 ? br + 1 : bl - 1;
+			int fy = ActExecutor.OriginCy(p);
+			for (int r = 0; r <= DeckBuilder.HeadClear; r++)
+				if (Predicates.IsWall(col, fy - r) && !DeckBuilder.OnLine(col, fy - r)) return false;
+			return true;
+		}
+
 		// 头顶挡着(跳不上去/柱子顶不上去)。身子跨两列,两列都要清
 		public static bool Above(Player p, string why = "头顶挡着")
 		{
