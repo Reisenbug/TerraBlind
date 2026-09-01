@@ -1185,8 +1185,13 @@ namespace TerraBlind
                     tiles.Add((x, y));
                 }
             if (tiles.Count == 0) return null;   // adjacent column already clear → plain walk handles it, not a dig
-            bool toward = ctx.DistField != null && ctx.DistField.TryGetValue((x, ccy), out int hx) && hx < curH;
-            if (!toward) return null;
+            // 【不问挖开之后 H 降不降】。原来有一道 hx < curH 的门,等于要求"一步就得见效",
+            // 于是凡是【先横向让开、再往下走】的地形整条路都发不出来:
+            // (1102,742) 脚下 1101 列是黑曜石挖不动,往下的边 NULL;而东西两边 H 都比脚下高 58,
+            // 横挖两个方向又都被这道门毙掉 —— 68 个候选里一条 dig 都没有,人就在两格之间弹了几千帧。
+            // 第一步单独看永远是亏的,亏不亏该由 total=g+H 去算总账,不是门替它决定。
+            // 挖不动(Unmineable)仍然 return null —— 那是物理不可能,不是贵。
+            if (ctx.DistField == null || !ctx.DistField.ContainsKey((x, ccy))) return null;
             float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
             float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
