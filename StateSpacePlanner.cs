@@ -2468,6 +2468,9 @@ namespace TerraBlind
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
+            // 单独记一份【降 H 的】最优:平地走的 g 比跳便宜太多,不单记的话上坡边会靠 g 赢下来
+            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? bestDrop = null;
+            float bestDropTotal = float.MaxValue; (int, int) bestDropCell = (curCx, curCy);
             var cands = new List<Cand>();
             // 所有候选,连 total 一起留着 —— 选边要按 total 采样,不是取最小(见下面的 softmax)
             var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
@@ -2515,7 +2518,22 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
+                if (nH < curH && total < bestDropTotal)
+                { bestDropTotal = total; bestDrop = (next, frames, cost, pillar, digTiles); bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
+            }
+            // 【有降 H 的路就别选升 H 的】。total=g+H 里,一步平地走的 g 只有 3.5,一次跳要 19 —— 
+            // 于是"走一格上坡"能靠 g 便宜赢过"跳一下下坡",人就在两格之间来回弹:
+            // (1421,311)H1044 走去 (1422,311)H1047,到了那儿最便宜的又是跳回 1044,一趟白费 58 帧。
+            // 防回头那道闸拦不住:去程落点是新格(不算回头),回程 H 在降(bestH>=curH 为假),两头都放行。
+            // 一整局抓到 13 次,(1113,395)↔(1114,395) 连弹四轮。
+            // 只在【确实有降 H 的候选】时改判,一条都没有时照旧 —— 那种情况归 Trap/承诺管,不在这儿抢戏
+            bool bestCellDescends = false;
+            foreach (var c in jigglePool) if (c.cell == bestCell) { bestCellDescends = c.h < curH; break; }
+            if (best != null && bestDrop != null && !bestCellDescends)
+            {
+                EventLog.W(Ev.Plan, $"NOUP ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})t{bestTotal:0} 不降H,改走 ({bestDropCell.Item1},{bestDropCell.Item2})t{bestDropTotal:0}");
+                best = bestDrop; bestCell = bestDropCell; bestTotal = bestDropTotal;
             }
             // 原判据是"落点 H 有没有低于历史最低",错的:人为绕路离开最低点后,之后每一步都 ≥ 历史最低,PUSH 就永久触发。
             // 改成跟【脚下】比:greedy 挑的落点不比现在近才算没进展。绕路(H 暂时升高)允许,只有真原地弹才触发。
