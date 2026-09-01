@@ -414,7 +414,12 @@ namespace TerraBlind
 
 		static bool ClearAhead(Player p)
 		{
-			for (int k = 0; k < LookAhead && _idx + k < _line.Count; k++)
+			// 【挖得到的桥线格,上方 HeadClear 行一律清空】。原来只看前 LookAhead(4) 格,
+			// 手明明够得到第 5 格头顶的方块也不清,等走到跟前才发现被顶住。
+			// 扫多远由【挖掘距离】定,不由一个写死的数定:Dig 自己会用 Reach.CanMine 挡够不着的,
+			// 这儿多扫几格只是多几次判断。上限取 tileRangeX 的两倍,够覆盖手能碰到的全部。
+			int scan = System.Math.Max(LookAhead, (Player.tileRangeX + 1) * 2);
+			for (int k = 0; k < scan && _idx + k < _line.Count; k++)
 			{
 				var (cx, cy) = _line[_idx + k];
 				for (int r = 1; r <= HeadClear; r++)
