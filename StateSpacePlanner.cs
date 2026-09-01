@@ -806,11 +806,13 @@ namespace TerraBlind
                 bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
                 bool anySolid = DigSolid(dropLc, fcy + 1) || DigSolid(dropRc, fcy + 1);
                 bool plat = anyPlat && !anySolid;
-                // 无条件打日志:SegDiag 只在【没有任何下降候选】时才开,而 (988,551) 那种平台蹭是有下降候选的,
-                // 于是"为什么没生成 drop 边"在全部 trace 里根本没有答案。
-                // 【说了无条件就得无条件】。原来写的是 Trc(要 /trace 才打),于是这条注释想解决的问题
-                // 原样还在:(1097,390) 脚下是平台、plat=true,三条 drop 全 null,日志里一个字都没有。
-                if (!plat) EventLog.W(Ev.Fail, $"DROP-NULL support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
+                // 【只报脚下真有平台却仍不生成 drop 边的那一种】。当初要抓的就是这个
+                // ((1097,390) 脚下是平台、plat=true,三条 drop 全 null,日志里一个字都没有)。
+                // 原来 !plat 全打,而 plat=false 恰恰是【理应不生成】的情况:脚踩实地(9514 条)、
+                // 或者下落弧线上脚下本来就是空的(7477 条,自由落体归 FreeFall 管,不归 drop)。
+                // 这些是 A* 一次搜索里几十个虚拟节点各记一条,一帧几十行 —— 真正要抓的 plat=true
+                // 只有 40 条,被 17000 条正确判断的噪音淹掉了。
+                if (anyPlat && anySolid) EventLog.W(Ev.Fail, $"DROP-NULL support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
                     // 人从平台上下来是按住 Down 加一个方向,一路滑到真正的地板,不是停在下面一格。
