@@ -14,10 +14,10 @@ namespace TerraBlind
 		// "椅子从4变3、walkplace 卡在物品34没了"这种查不动的现场
 		public const int WoodKeep = 9999;
 
-		// 伸手范围加成。vanilla tileRangeX=5 tileRangeY=4,每帧 ResetEffects 清零 blockRange
-		// 再由饰品累加,所以这里每帧加,和饰品是同一条路,不动 static 字段
-		// (改 static 会让所有读 tileRangeX 的地方跟着变,包括规划器自己的判据)
-		public const int ReachBoost = 8;
+		// 伸手范围加成。【已归零】—— 全流程跑通之后回到原版距离,只剩捅向导那一段
+		// 单独开 LongArm。留着这个常量是因为好几处判据的注释拿它举例(隔墙够得着但脚过不去),
+		// 归零之后那些分支自然不再触发,但代码路径还在
+		public const int ReachBoost = 0;
 
 		// 捅向导那一段专用的【超长手臂】。ReachBoost 只加 blockRange,只有放置吃得到;
 		// 挖和对话都以 static tileRangeX 为底,所以要够到向导脚下的每一列,只能动这个 static。
@@ -41,9 +41,10 @@ namespace TerraBlind
 			_savedRangeX = _savedRangeY = -1;
 		}
 
-		// 放置/挖掘用时倍率。1/8 让一次放置从十几帧压到一两帧,
-		// 空中放置来不来得及、放置和飞行的时序竞争,这一整类问题就消失了
-		public const float UseTimeMul = 0.125f;
+		// 放置/挖掘用时倍率。【已还原成 1】—— 全流程跑通了,回到原版速度。
+		// 提速当初是为了绕开"空中放置来不来得及""放置和飞行的时序竞争"这一类时序问题,
+		// 还原之后这些会重新露头:一次放置回到十几帧,ItemUseCoordinator 要等更久
+		public const float UseTimeMul = 1f;
 
 		public static bool Enabled = true;
 
