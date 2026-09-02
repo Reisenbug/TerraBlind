@@ -2161,7 +2161,7 @@ namespace TerraBlind
                 string clock = hardOut ? "hard" : "soft";
                 long ran = Main.GameUpdateCount - _stepDispatchTick;
                 DiagLog.Write($"[timeout] {clock} step {tkind} →({(tst?.TargetCx ?? -1)},{(tst?.TargetCy ?? -1)}) est={_stepEstFrames:0}f soft={_stepTimeoutTicks}f hard={_stepHardTicks}f ran={ran}f — abort, back to closed loop");
-                Main.NewText($"[TerraBlind] TIMEOUT({clock}) {tkind}→({tst?.TargetCx},{tst?.TargetCy}) est {_stepEstFrames:0}f ran {ran}f — replanning");
+                Chatter.Say($"[TerraBlind] TIMEOUT({clock}) {tkind}→({tst?.TargetCx},{tst?.TargetCy}) est {_stepEstFrames:0}f ran {ran}f — replanning");
                 SkillExecutor.Stop(); MineCoordinator.Stop(); StopExec(); StopSteps();
                 DiagLog.EndRun();
                 return;
@@ -2992,7 +2992,7 @@ namespace TerraBlind
             if (p == null || !p.active) return;
             var (sx, sy) = StandCell(p.position.X, p.position.Y);
             var field = MazeWand.GetField(goalWx, goalWy);
-            if (!field.ContainsKey((sx, sy))) { DiagLog.Write($"[block] start ({sx},{sy}) off field → abort"); Main.NewText("[TerraBlind] start off nav field"); return; }
+            if (!field.ContainsKey((sx, sy))) { DiagLog.Write($"[block] start ({sx},{sy}) off field → abort"); Chatter.Say("[TerraBlind] start off nav field"); return; }
 
             // walk the gradient from start to goal, emitting a waypoint every BlockCells cells (and the final goal).
             var cur = (x: sx, y: sy);
@@ -3045,7 +3045,7 @@ namespace TerraBlind
             if (ExecDone)
             {
                 _blockIdx++;
-                if (_blockIdx >= _blockQueue.Count) { _blockActive = false; DiagLog.Write("[block] reached goal"); Main.NewText("[TerraBlind] block nav done"); return; }
+                if (_blockIdx >= _blockQueue.Count) { _blockActive = false; DiagLog.Write("[block] reached goal"); Chatter.Say("[TerraBlind] block nav done"); return; }
                 DispatchBlock();
             }
             else
@@ -3182,7 +3182,7 @@ namespace TerraBlind
             if (!MazeWand.GetField(_rollFinalWx, _rollFinalWy).ContainsKey(fcell))
             {
                 DiagLog.Write($"[ss-roll] off-field at {fcell} → stop (player left the cached field box)");
-                Main.NewText("[TerraBlind] left nav field — stopped");
+                Chatter.Say("[TerraBlind] left nav field — stopped");
                 _execFailCode = "off_field"; _rolling = false; return false;
             }
 

@@ -77,7 +77,7 @@ namespace TerraBlind
 			StateSpacePlanner.StopNav();
 			_nudgeDir = _nudgeDir == 0 ? OpenDir(p, cx, cy) : -_nudgeDir;
 			_nudgeLeft = NudgeTicks;
-			Main.NewText($"[TerraBlind] sentinel: flat {FlatWindow} ticks — safe step {(_nudgeDir > 0 ? "right" : "left")} ({_anomalies}/{GiveUpAnomalies})");
+			Chatter.Say($"[TerraBlind] sentinel: flat {FlatWindow} ticks — safe step {(_nudgeDir > 0 ? "right" : "left")} ({_anomalies}/{GiveUpAnomalies})");
 			return false;
 		}
 

@@ -583,7 +583,7 @@ namespace TerraBlind
 						if (!WofFight.On) WofFight.Toggle();
 						Outcome = "done"; Phase = Ph.Done;
 						DiagLog.Write("[wof] 肉山出来了,交给 WofFight");
-						Main.NewText("[TerraBlind] 肉山出来了,开打", 120, 255, 120);
+						Chatter.Say("[TerraBlind] 肉山出来了,开打", 120, 255, 120);
 						return;
 					}
 					if (_frames % 300 == 1) DiagLog.Write("[wof] 等肉山");

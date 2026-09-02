@@ -39,7 +39,7 @@ namespace TerraBlind
             {
                 _lastReported = (cx, cy);
                 EventLog.W(Ev.Plan, $"TRAP ({cx},{cy}) H={h} 候选{cands}个全都不降H — 贪心在这儿走不动了(第{n}次)");
-                Main.NewText($"[TerraBlind] 卡点 ({cx},{cy}) H={h}:{cands} 个候选没一个降 H", 255, 90, 90);
+                Chatter.Say($"[TerraBlind] 卡点 ({cx},{cy}) H={h}:{cands} 个候选没一个降 H", 255, 90, 90);
             }
             Draw();
         }
@@ -70,10 +70,10 @@ namespace TerraBlind
 
         public static void Report()
         {
-            if (_hits.Count == 0) { Main.NewText("[TerraBlind] 这一趟还没卡过"); return; }
-            Main.NewText($"[TerraBlind] 卡点 {_hits.Count} 个:", 255, 90, 90);
+            if (_hits.Count == 0) { Chatter.Say("[TerraBlind] 这一趟还没卡过"); return; }
+            Chatter.Say($"[TerraBlind] 卡点 {_hits.Count} 个:", 255, 90, 90);
             foreach (var kv in _hits)
-                Main.NewText($"  ({kv.Key.Item1},{kv.Key.Item2}) x{kv.Value}");
+                Chatter.Say($"  ({kv.Key.Item1},{kv.Key.Item2}) x{kv.Value}");
             Draw();
         }
     }

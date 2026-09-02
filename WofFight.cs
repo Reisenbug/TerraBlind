@@ -42,8 +42,8 @@ namespace TerraBlind
 		public static void Toggle()
 		{
 			On = !On;
-			if (On) { _thrown = 0; _engaged = false; DiagLog.Write("[wof-fight] ON"); Main.NewText("[打肉山] 开", 120, 255, 120); }
-			else { DiagLog.Write($"[wof-fight] OFF 扔了{_thrown}根"); Main.NewText("[打肉山] 关", 255, 200, 120); }
+			if (On) { _thrown = 0; _engaged = false; DiagLog.Write("[wof-fight] ON"); Chatter.Say("[打肉山] 开", 120, 255, 120); }
+			else { DiagLog.Write($"[wof-fight] OFF 扔了{_thrown}根"); Chatter.Say("[打肉山] 关", 255, 200, 120); }
 		}
 
 		static int FindWof()

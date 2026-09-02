@@ -154,7 +154,7 @@ namespace TerraBlind
 				slot = FindAxeSlot(p);
 				if (slot < 0)
 				{
-					Terraria.Main.NewText("[item_use] no axe in hotbar, stopping");
+					Chatter.Say("[item_use] no axe in hotbar, stopping");
 					_active = null;
 					return;
 				}

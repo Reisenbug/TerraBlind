@@ -78,7 +78,7 @@ namespace TerraBlind
 			{
 				if (Main.netMode == 2) { _announced = true; return; }
 				if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
-				Main.NewText("[TerraBlind] HTTP server listening on " + Prefix, Color.LightGreen);
+				Chatter.Say("[TerraBlind] HTTP server listening on " + Prefix, Color.LightGreen);
 				_announced = true;
 			}
 

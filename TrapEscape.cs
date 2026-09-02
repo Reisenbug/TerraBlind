@@ -55,7 +55,7 @@ namespace TerraBlind
             _fails = 0;
             _lastH = _reqH;
             EventLog.W(Ev.Plan, $"ESCAPE ({_reqAt.x},{_reqAt.y})H{_reqH} 贪心走不动 → A* 带到 ({_reqTo.x},{_reqTo.y})H{_reqTH} 降{_reqH - _reqTH} steps={res.Steps.Count} exp={res.Expansions}");
-            Main.NewText($"[TerraBlind] 卡点脱困:A* → ({_reqTo.x},{_reqTo.y}) 降 H {_reqH - _reqTH}", 120, 220, 255);
+            Chatter.Say($"[TerraBlind] 卡点脱困:A* → ({_reqTo.x},{_reqTo.y}) 降 H {_reqH - _reqTH}", 120, 220, 255);
             // 【A* 说话时承诺闭嘴】。承诺是贪心走不动时的兜底,A* 一旦给出真路线它就过期了:
             // 实测 A* 把人带到 H1020,旧承诺没清,接着每帧覆盖贪心把人推回 H1567,A* 再原路捞回来。
             Commitment.Clear();

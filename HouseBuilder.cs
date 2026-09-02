@@ -758,7 +758,7 @@ namespace TerraBlind
 		{
 			Outcome = "done"; _ph = Ph.Done;
 			DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
-			Main.NewText($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
+			Chatter.Say($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
 			// 椅子底下必须是岩浆:晚上 NPC 坐椅子上,捅他就是挖【椅子这一列】的地板。
 			// 不合格不算盖房失败,但要当场说 —— 否则要等到最后一步才发现白忙
 			if (_rooms == 1)
@@ -766,13 +766,13 @@ namespace TerraBlind
 				bool chairLava = Predicates.LavaBelow(ChairWx, ChairWy + 1);
 				DiagLog.Write($"[house] 椅子({ChairWx},{ChairWy}) 底下是岩浆={chairLava}");
 				if (!chairLava)
-					Main.NewText($"[TerraBlind] 注意:椅子({ChairWx},{ChairWy})底下不是岩浆,捅不下去", 255, 200, 120);
+					Chatter.Say($"[TerraBlind] 注意:椅子({ChairWx},{ChairWy})底下不是岩浆,捅不下去", 255, 200, 120);
 			}
 			// 盖完就把爆破专家指过来。房子合不合格由原版判,失败信息说明差什么
 			if (_rooms == 1)
 			{
 				bool ok = AssignHome.Try(Terraria.ID.NPCID.Demolitionist, _torchWx, _torchWy, out string awhy);
-				Main.NewText(ok ? $"[TerraBlind] {AssignHome.LastNote}" : $"[TerraBlind] 指派住房失败:{awhy}",
+				Chatter.Say(ok ? $"[TerraBlind] {AssignHome.LastNote}" : $"[TerraBlind] 指派住房失败:{awhy}",
 					ok ? (byte)120 : (byte)255, ok ? (byte)255 : (byte)200, 120);
 			}
 		}
@@ -961,7 +961,7 @@ namespace TerraBlind
 		{
 			Reason = why; Outcome = "stuck"; _ph = Ph.Done;
 			DiagLog.Write($"[house] FAIL {why}");
-			Main.NewText($"[TerraBlind] 盖房失败: {why}", 255, 120, 120);
+			Chatter.Say($"[TerraBlind] 盖房失败: {why}", 255, 120, 120);
 		}
 
 		public static string StatusJson()

@@ -117,7 +117,7 @@ namespace TerraBlind
             }
             _st = St.Done;
             DiagLog.Write($"[build-replay] done placed={Placed} mined={Mined} skipped={Skipped}");
-            Main.NewText($"[TerraBlind] 建造回放完成：放{Placed} 挖{Mined} 跳过{Skipped}");
+            Chatter.Say($"[TerraBlind] 建造回放完成：放{Placed} 挖{Mined} 跳过{Skipped}");
         }
 
         // choose the k-th standable cell near the current event's target (returns false if it's solid/out of bounds).
@@ -153,7 +153,7 @@ namespace TerraBlind
                 if (slot < 0)
                 {
                     DiagLog.Write($"[build-replay] place {_i} item id={ev.Type} not in inventory — skip");
-                    Main.NewText($"[TerraBlind] 背包没有 id={ev.Type}，跳过");
+                    Chatter.Say($"[TerraBlind] 背包没有 id={ev.Type}，跳过");
                     Skipped++; Advance(); return;   // Advance→BeginEvent re-sets the state
                 }
                 ItemUseCoordinator.Start(new ItemUseRequest

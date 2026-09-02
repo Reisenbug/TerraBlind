@@ -34,12 +34,12 @@ namespace TerraBlind
                 if (RecordSystem.IsRecording)
                 {
                     RecordSystem.Stop();
-                    Main.NewText($"■ 停止帧录制 ({RecordSystem.LastFrameCount} 帧)", 255, 120, 120);
+                    Chatter.Say($"■ 停止帧录制 ({RecordSystem.LastFrameCount} 帧)", 255, 120, 120);
                 }
                 else
                 {
                     RecordSystem.Start();
-                    Main.NewText("● 开始帧录制", 120, 255, 120);
+                    Chatter.Say("● 开始帧录制", 120, 255, 120);
                 }
                 return true;
             }
@@ -47,12 +47,12 @@ namespace TerraBlind
             if (BuildRecorder.IsRecording)
             {
                 BuildRecorder.Stop();
-                Main.NewText($"■ 停止建造录制 ({BuildRecorder.LastEventCount} 事件) → build_rec.json", 255, 120, 120);
+                Chatter.Say($"■ 停止建造录制 ({BuildRecorder.LastEventCount} 事件) → build_rec.json", 255, 120, 120);
             }
             else
             {
                 BuildRecorder.Start();
-                Main.NewText("● 开始建造录制（放置/挖掘意图）", 120, 255, 120);
+                Chatter.Say("● 开始建造录制（放置/挖掘意图）", 120, 255, 120);
             }
             return true;
         }
