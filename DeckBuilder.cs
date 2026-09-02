@@ -115,6 +115,13 @@ namespace TerraBlind
 			PlaceAnywhere.Stop();
 		}
 
+		// 地狱石砖:废墟自带,踩上去烧人 --- 桥面不能留它
+		static bool IsHellBrick(int x, int y)
+		{
+			var t = Main.tile[x, y];
+			return t.HasTile && t.TileType == Terraria.ID.TileID.HellstoneBrick;
+		}
+
 		public static void Tick()
 		{
 			if (!IsRunning) return;
@@ -154,7 +161,8 @@ namespace TerraBlind
             if (ClearAhead(p)) { Mark("清净空"); return; }
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
-			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y))
+			// 地狱石砖(76)是废墟自带的,踩上去烧人 --- 当成不合格,照平台那条挖掉换方块
+			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHellBrick(x, y))
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
@@ -173,12 +181,12 @@ namespace TerraBlind
 				}
 				return;
 			}
-			// 桥面这一格是平台:挖掉换成方块。平台会被踩空/穿下去,当桥面不合格
-			if (Predicates.IsPlatform(x, y))
+			// 桥面这一格是平台或地狱石砖:挖掉换成方块。平台会被踩空/穿下去,石砖烧人
+			if (Predicates.IsPlatform(x, y) || IsHellBrick(x, y))
 			{
 				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);
-				if (ppk < 0) { Fail($"({x},{y})是平台要换成方块,但没镐"); return; }
+				if (ppk < 0) { Fail($"({x},{y})要换成方块,但没镐"); return; }
 				// 【这一步是挖,按挖的尺子量】。CanPlace 宽出一个 blockRange(让步的 8 格),
 				// 于是在挖不到的地方放行,每帧发起一次挖、每帧挖不动,181 帧后报 STUCK
 				if (!Reach.CanMine(p, x, y))
