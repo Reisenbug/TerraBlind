@@ -129,6 +129,8 @@ namespace TerraBlind
 		static (int l, int r) GuideCols(NPC gn) => Predicates.TouchCols(gn.position.X, gn.width);
 
 		// 挖向导脚下时的心跳:每帧无声 return 的话,日志里只剩一片空白,连卡在哪都看不出来
+		static int _overlapFrames;
+		const int OverlapWait = 60;   // 重合满 1 秒才让位
 		static string _digWhere = "";
 		static int _digBeat;
 		static void DigBeat(Player p, int gx, int gy, string where)
@@ -192,7 +194,7 @@ namespace TerraBlind
 			// 的中间站 --- 一转过去手臂就收了,人站 1180、剩下那格 (1185,1051) 差 5 列,
 			// 5 格手臂正好够不着,那格永远挖不掉。捅向导整段都该开着
 			if (next == Ph.WaitWof || next == Ph.Done || next == Ph.Idle) Concessions.LongArmEnd();
-			Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0;
+			Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0; _overlapFrames = 0;
 			DiagLog.Write($"[wof] → {next}");
 		}
 
@@ -506,12 +508,17 @@ namespace TerraBlind
 					// 完全包含才是死结 —— 向导⊆人挖不到他,人⊆向导挖了自己没地站
 					var (mbl, mbr) = Predicates.TouchCols(p.position.X, p.width);
 					var (ggl, ggr) = Predicates.TouchCols(gn.position.X, gn.width);
-					if ((ggl >= mbl && ggr <= mbr) || (mbl >= ggl && mbr <= ggr))
+					bool overlap = (ggl >= mbl && ggr <= mbr) || (mbl >= ggl && mbr <= ggr);
+					// 【重合满 1 秒才让】。他跳来跳去时会有瞬时的完全重合,当帧就让位等于
+					// 人被他推着走,一格都挖不成
+					if (!overlap) _overlapFrames = 0;
+					else if (++_overlapFrames >= OverlapWait)
 					{
 						if (SettleAt.IsRunning) { DigBeat(p, gx, gy, "让位中"); return; }
-						// 让到【他整个箱子之外】再多两列,免得挪完还盖着他
-						int away = _bridgeDir > 0 ? ggl - 3 : ggr + 3;
-						if (_frames % 60 == 1) DiagLog.Write($"[wof] 向导箱{ggl}..{ggr}和人{mbl}..{mbr}完全重合,先让到{away}");
+						// 【往桥延展那头让】,不是背着桥走 --- 背着走会离桥面越来越远,
+						// 最后站到桥外够不着。只要走到不完全重合就够,不用让出整个箱子
+						int away = _bridgeDir > 0 ? ggr + 1 : ggl - 1;
+						if (_overlapFrames % 60 == 1) DiagLog.Write($"[wof] 向导箱{ggl}..{ggr}和人{mbl}..{mbr}重合{_overlapFrames}帧,往桥那头让到{away}");
 						SettleAt.Start(away, out _);
 						return;
 					}
