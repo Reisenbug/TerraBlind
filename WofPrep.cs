@@ -101,6 +101,18 @@ namespace TerraBlind
 			return gy > deck + 1;
 		}
 
+		// 上下各扫 DeckWide 行,取离 nearCy 最近的那个桥面
+		static int DeckRowNear(int cx, int nearCy)
+		{
+			for (int d = 0; d <= DeckWide; d++)
+			{
+				if (Predicates.IsGround(cx, nearCy + d) && !Predicates.IsLava(cx, nearCy + d)) return nearCy + d - 1;
+				if (d > 0 && Predicates.IsGround(cx, nearCy - d) && !Predicates.IsLava(cx, nearCy - d)) return nearCy - d - 1;
+			}
+			return -1;
+		}
+		const int DeckWide = 40;
+
 		static int DeckRow(int cx, int fromCy)
 		{
 			for (int y = fromCy; y < fromCy + DeckScan; y++)
@@ -381,8 +393,10 @@ namespace TerraBlind
 					// 【必须真站上桥面】。Reach 只要伸手够得着就算到,人常停在桥面上方三四行的
 					// 空中(日志:goal=(3466,1049) 人=(3463,1046)),接下来挖向导脚下就够不着了。
 					int dstCx = _houseWx + _bridgeDir * WalkAwayTiles;
-					int deck = DeckRow(dstCx, ActExecutor.OriginCy(p));
-					if (deck < 0) { Fail($"列{dstCx}底下找不到桥面"); return; }
+					// 【桥不是平的】。这一趟桥从 1056 一路爬到 1043,走开 80 格那一列的桥面
+					// 比人所在的行高 6 行 --- 只往下扫永远扫不到,当场判死。以人为中心上下都扫。
+					int deck = DeckRowNear(dstCx, ActExecutor.OriginCy(p));
+					if (deck < 0) { Fail($"列{dstCx}附近找不到桥面"); return; }
 					RecedingNav.Start(dstCx, deck, RecedingNav.Mode.Stand);
 					return;
 				}
