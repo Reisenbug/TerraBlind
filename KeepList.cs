@@ -89,12 +89,33 @@ namespace TerraBlind
 				p.inventory[i] = new Item();
 				dropped++;
 			}
+			// 【名单是给顺手清垃圾用的,不该当成腾位置的唯一许可】。背包 40 格全是名单外的
+			// 建材时一件都删不掉,买雷管当场判死。没栏位就扔:保护名单外的一律扔,从后往前。
+			for (int i = InvEnd - 1; i >= HotbarEnd && free + dropped < want; i--)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || Protected(it)) continue;
+				DiagLog.Write($"[keep] 腾位置,扔 {it.Name}x{it.stack} (槽{i})");
+				p.inventory[i] = new Item();
+				dropped++;
+			}
 			int now = Free(p);
 			if (dropped > 0) Recipe.FindRecipes();
 			DiagLog.Write(dropped == 0
-				? $"[keep] 要{want}格但名单上的一件都没有,空格={now}"
+				? $"[keep] 要{want}格但全是要保的,空格={now}"
 				: $"[keep] 删了{dropped}件,空格 {free}→{now}");
 			return now;
+		}
+
+		// 【要保的】。这一路真正还要用的东西 --- 保护名单外的都可以为腾位置扔掉
+		static bool Protected(Item it)
+		{
+			if (it.favorited) return true;
+			int t = it.type;
+			if (t == ItemID.Wood || t == ItemID.Torch || t == ItemID.Dynamite) return true;
+			if (it.pick > 0 || it.axe > 0 || it.hammer > 0) return true;
+			if (it.createTile >= 0 && it.createTile < TileID.Sets.Platforms.Length && TileID.Sets.Platforms[it.createTile]) return true;
+			return false;
 		}
 
 		const int InvEnd = 50;      // 50..57 是钱币/弹药格,不动
