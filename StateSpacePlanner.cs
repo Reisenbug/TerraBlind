@@ -169,6 +169,9 @@ namespace TerraBlind
             public bool Bridge;   // 长 bridge:沿脚下那行铺到 TargetCx
             public bool Dig;
             public MineDir DigDir;
+            // 挖之前先站到这一列(-1=就地挖)。脚下有一列挖不动时,侧身一格压着的列常常就全挖得动了 ——
+            // 那一步是这条边的一部分,不站过去就等于站在原地挖旁边的洞,白挖
+            public int DigStandCx = -1;
             public int TargetCx, TargetCy;
             public float LandPx, LandPy;   // 规划落点的像素值:格号是取整后的结论,查落点偏差要看这个
             public List<PhysicsSimulator.ControlInput> Frames;
@@ -251,6 +254,7 @@ namespace TerraBlind
             if (p == null || !p.active) return res;
             // 地形在【两次搜索之间】会变(挖了/放了),所以每次进来清一次;搜索【内部】不变
             ClearPlaceCache();
+            _digStandAt.Clear();   // 侧身站位只属于这一次搜索,留着会串到下一次
             _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
@@ -453,7 +457,8 @@ namespace TerraBlind
                         var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
                         MineDir d = kcy > prevCy ? MineDir.Down
                                   : kcx > prevCx ? MineDir.Right : MineDir.Left;
-                        revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles });
+                        int standCx = e.digTiles.Count > 0 && _digStandAt.TryGetValue(e.digTiles[0], out int sc) ? sc : -1;
+                        revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles, DigStandCx = standCx });
                     }
                     else if (e.frames != null)
                     {
@@ -1066,12 +1071,49 @@ namespace TerraBlind
 
         // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。
         // 竖井版有 "12 格内没落点就 null" 的死角,厚墙前把人钉住过。
+        // 【挖不动就换个站位再问一遍,别把这件事外包出去】。人 20px 宽跨 2~3 列,脚下有一列挖不动时
+        // 往左/右挪一格,压着的列常常就全挖得动了 —— (1151,516) 身体跨 1150/1151,1150 是挖不动的
+        // 地狱石,往下的边整条 NULL;而站到 1152 上两列都是 45 帧的普通石头,一挖就下去了。
+        // 原来这里只记一个 Trap.FootBlockCol 等 Unstick 那个特例来救,而特例的判据(只肯挪到现成空格)
+        // 和真实解法对不上,于是报"没招了",人转头砌柱子往上爬 —— 白挖一路头顶的方块。
+        // 挪一格本来就是规划器该表达的一条边,不该是外面打的补丁。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
+        {
+            var r0 = DigDownFrom(ctx, cur.Px, ccx, ccy, curH);
+            if (r0.HasValue) return r0;
+            // 原地不行:按【格】往两边试,近的优先。偏移后人站在那一格的格心
+            for (int off = 1; off <= DigShiftScan; off++)
+                foreach (int sdir in new[] { 1, -1 })
+                {
+                    int scx = ccx + sdir * off;
+                    float spx = scx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    // 挪过去得站得住,而且一路上不能被墙挡住 —— 挪不过去的站位等于没有
+                    if (!CellKind.Stands(scx, ccy)) continue;
+                    var r = DigDownFrom(ctx, spx, scx, ccy, curH);
+                    if (!r.HasValue) continue;
+                    // 走过去那几格的帧数要算进价里,不然"挪 6 格再挖"会白白便宜过"就地挖"
+                    var seg = SimulateSegment(cur, sdir, 0, ph: PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer));
+                    float walkCost = seg.HasValue ? seg.Value.frames.Count : off * 8f;
+                    if (SegDiag) DiagLog.Write($"[ss-digdown] 原地挖不动,挪到({scx},{ccy})可以挖 走{walkCost:0}帧");
+                    // 站位跟着【要挖的格】走 —— 建 ExecStep 时按 MineTiles 第一格反查,
+                    // 不用改 Expand 那一长串元组的签名
+                    if (r.Value.tiles.Count > 0) _digStandAt[r.Value.tiles[0]] = scx;
+                    return (r.Value.node, r.Value.tiles, r.Value.cost + walkCost);
+                }
+            return null;
+        }
+
+        const int DigShiftScan = 4;   // 挪这么多格以内找得到就挪;再远就不是"侧个身"了,交给场重新规划
+        // 哪条挖掘边要求先侧身到哪一列。键是那条边要挖的第一格 —— 边本身在元组里传,
+        // 加一个字段要改十几处签名,而这张表只在同一次规划内有效,规划开始时清空
+        static readonly Dictionary<(int, int), int> _digStandAt = new();
+
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDownFrom(PlanCtx ctx, float px, int ccx, int ccy, int curH)
         {
             // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列 —— 而 20px 的身子
             // 跨 3 列是常态,漏掉的那一列照样撑着人,挖完两列人掉不下去。用 TouchCols 问真话。
             int y = ccy + 1;   // the single row directly under the feet
-            var (footL, footR) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
+            var (footL, footR) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
             var tiles = new List<(int, int)>();
             float cost = 0f;
             for (int c = footL; c <= footR; c++)
@@ -2178,6 +2220,15 @@ namespace TerraBlind
             }
             else if (st.Dig)
             {
+                // 【先站过去,再挖】。这条边算价时就假定人站在 DigStandCx 上,站不过去这条边不成立。
+                // SettleAt 跑完这一步会重新派发,那时人已经在位,走下面的开挖分支
+                if (st.DigStandCx >= 0 && st.DigStandCx != ccx)
+                {
+                    if (SettleAt.IsRunning) return;
+                    if (SettleAt.Start(st.DigStandCx, out string sw))
+                    { DiagLog.Write($"[ss-dig] 先挪到列{st.DigStandCx}(现在{ccx})再挖"); return; }
+                    DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw} —— 就地挖");
+                }
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
             }
@@ -2447,6 +2498,7 @@ namespace TerraBlind
             // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
             // 一周期一次,不在边上,不贵
             _lavaSurvivable = Unstick.BlockItem(p) >= 0;
+            _digStandAt.Clear();   // 侧身站位只属于这一周期,留着会串到下一周期
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {
