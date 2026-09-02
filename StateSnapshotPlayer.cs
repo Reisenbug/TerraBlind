@@ -34,6 +34,7 @@ namespace TerraBlind
 		private static int _houseNavTries;
 		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
+		private static bool _hellHouseStarted;
 		private static (int x, int y)? _pendingStand;
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
 		private static int _deckFrom;   // 房子沿线挪过之后,桥要从房子右端接着铺
@@ -76,15 +77,23 @@ namespace TerraBlind
 				_pendingStand = null;
 				// BridgeStart 已经把"放第一格 + 站上去 + 站稳60帧"全办了,这里只看它的结论
 				if (BridgeStart.Outcome != "done")
+				{
+					// 【必须写日志】。原来只 Chatter.Say,而录视频时 Diag=false ---
+					// 房子没开工、屏幕和日志都一个字没有,只能靠猜
+					DiagLog.Write($"[reach-test] 没站上桥起点({sx2},{sy2}):{BridgeStart.Outcome}/{BridgeStart.Reason},房子起不了");
 					Chatter.Say($"[TerraBlind] 没站上桥起点:{BridgeStart.Reason}", 255, 120, 120);
+				}
 				else
 				{
 					int hdir2 = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
 					DiagLog.Write($"[reach-test] 第一格好了({sx2},{sy2}),盖房子 dir={hdir2}");
 					if (HouseBuilder.Start(1, hdir2, sx2, sy2, out string hw2))
-						Chatter.Say($"[TerraBlind] 爬上桥起点并盖房 ({sx2},{sy2})", 120, 255, 120);
+					{ _hellHouseStarted = true; Chatter.Say($"[TerraBlind] 爬上桥起点并盖房 ({sx2},{sy2})", 120, 255, 120); }
 					else
+					{
+						DiagLog.Write($"[reach-test] 开不了工:{hw2}");
 						Chatter.Say($"[TerraBlind] 开不了工:{hw2}", 255, 120, 120);
+					}
 				}
 			}
 			// 房子盖完 → 沿着线把桥铺出去。桥面从房子那一头往外接,所以跳过房子占的那几列。
@@ -96,7 +105,11 @@ namespace TerraBlind
 			{
 				var line = _pendingDeck;
 				_pendingDeck = null;
-				if (HouseBuilder.Outcome == "done")
+				// 【Outcome 是上一栋房子留下的】。这一趟房子压根没开工时它还是 "done",
+				// 于是照样铺桥 --- 得看这一趟到底起没起
+				if (!_hellHouseStarted)
+					DiagLog.Write("[reach-test] 这一趟房子没开工,不铺桥");
+				else if (HouseBuilder.Outcome == "done")
 				{
 					int from = _deckFrom;
 					DiagLog.Write($"[reach-test] 房子好了,开始铺桥 从i={from}/{line.Count}");
@@ -399,6 +412,7 @@ namespace TerraBlind
 			string rblk = rplat.ToString();
 			if (!BridgeStart.Start(rblk, rsx, rsy, out string rcw))
 			{ why = $"去不了桥起点:{rcw}"; return false; }
+			_hellHouseStarted = false;
 			_pendingStand = (rsx, rsy);
 			_pendingDeck = rr.Line;
 			DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
@@ -411,7 +425,7 @@ namespace TerraBlind
 			BridgeStart.Stop(); RecedingNav.Stop();
 			HouseBuilder.Stop(); DeckBuilder.Stop(); WofPrep.Stop();
 			if (WofFight.On) WofFight.Toggle();
-			_pendingStand = null; _pendingDeck = null; _wofAfterDeck = false;
+			_pendingStand = null; _pendingDeck = null; _wofAfterDeck = false; _hellHouseStarted = false;
 			DiagLog.Write("[reach-test] 地狱流程停止");
 		}
 
