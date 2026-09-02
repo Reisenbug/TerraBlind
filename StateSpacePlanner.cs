@@ -1357,12 +1357,14 @@ namespace TerraBlind
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,
             // 放进来还会用廉价空操作淹没搜索(指数爆炸),而且执行时人一路掉回起点,下轮又选中它。
-            // 脚所在的格用 StandCell(和别处同一把尺子);站在平台 placeCy 上时它是 placeCy-1
+            // 【实测:落在平台上时 StandCell 返回的就是平台那一格本身】,不是它上面一格 ——
+            // 模拟里人的脚 py 落在 placeCy*16 之内。我先前按"上面一格"写,把每条好边都判成穿过去
+            // (日志:站立格=303 应为302,全是差这一格),那正是当初关掉这个开关的原因。
             var (_, landStandCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
-            if (F_LandOnPlat && landStandCy != placeCy - 1)
+            if (F_LandOnPlat && landStandCy != placeCy)
             {
                 if (ctx.JpFellThrough < 12)
-                    DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} 站立格={landStandCy} 应为{placeCy - 1} → 穿过去了");
+                    DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} 站立格={landStandCy} 应为{placeCy} → 穿过去了");
                 ctx.JpFellThrough++; return null;
             }
             if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
@@ -1410,10 +1412,12 @@ namespace TerraBlind
                 // 于是这条"放了但没接住"的边发得出来。执行时人一路掉回起点,下一轮又选中它,再掉。
                 // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,d=(8.1,96):横向只差 8px,
                 // 竖直差整整 6 行 —— 正是穿过去的形状。这就是换了地方的"跳三下"。
-                if (F_LandOnPlat && lcy != fcy - 1)
+                // 横穿版的 fcy 来自 (Py+PlayerH+1f)/16,本来就是脚下那格,落点站立格应当等于它。
+                // 【别和竖直版共用一把尺子】:那边的 placeCy 是平台格,两者差一格
+                if (F_LandOnPlat && lcy != fcy)
                 {
                     if (ctx.JpFellThrough < 12)
-                        DiagLog.Write($"[ss-ftx] place=({fcx},{fcy}) hold={hold} dir={dir} 站立格={lcy} 应为{fcy - 1} → 穿过去了,不发这条边");
+                        DiagLog.Write($"[ss-ftx] place=({fcx},{fcy}) hold={hold} dir={dir} 站立格={lcy} 应为{fcy} → 穿过去了,不发这条边");
                     ctx.JpFellThrough++; continue;
                 }
                 if (!(ctx.DistField != null && ctx.DistField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
