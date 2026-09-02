@@ -188,7 +188,10 @@ namespace TerraBlind
 		// 一个个加迟早漏,以后再添分支也不用记得这回事
 		static void Go(Ph next)
 		{
-			if (next != Ph.DigUnder && next != Ph.Patch) Concessions.LongArmEnd();
+			// 【等向导死了再收手臂】。原来只留 DigUnder/Patch,而 BackToGuide 是"回去站好接着挖"
+			// 的中间站 --- 一转过去手臂就收了,人站 1180、剩下那格 (1185,1051) 差 5 列,
+			// 5 格手臂正好够不着,那格永远挖不掉。捅向导整段都该开着
+			if (next == Ph.WaitWof || next == Ph.Done || next == Ph.Idle) Concessions.LongArmEnd();
 			Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0;
 			DiagLog.Write($"[wof] → {next}");
 		}
@@ -460,11 +463,18 @@ namespace TerraBlind
 					if (Predicates.IsLava(gx, gy) || gn.life <= 0) { Go(Ph.Patch); return; }
 					if (GuideFell(gn))
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
-					if (_frames > 60 * 300) { Fail($"挖不动向导脚下({gx},{gy})"); return; }
-					// 手臂 30 格,站在房子最右格够得着向导脚下的每一列 —— 正常不会够不着。
-					// 真够不着说明他走出去很远了,回去重新站位(顺手把手臂还回去,别让它漏出这一段)
+					// 【挖不动不判死】。挖不掉一般是狱岩,向导容易自己走下去 --- 报一嘴接着等
+					if (_frames > 60 * 300 && _frames % 600 == 1)
+						DiagLog.Write($"[wof] 挖不动向导脚下({gx},{gy}),多半是狱岩,等他自己走下去");
+					// 手臂 30 格(横竖都是),站在房子最右格够得着向导脚下的每一列。
+					// 真够不着说明他走出去 30 格以外了,才回去重新站位 —— 【别一够不着就退】:
+					// 他跳回人身边那一帧也会瞬时判不够,一退手臂就被收,剩下的格子再也挖不到
 					if (!Reach.CanMine(p, gx, gy))
-					{ p.SetTalkNPC(-1); Go(Ph.BackToGuide); return; }
+					{
+						if (_frames % 120 == 1)
+							DiagLog.Write($"[wof] 向导({gx},{gy})在30格外,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}),回去重新站位");
+						p.SetTalkNPC(-1); Go(Ph.BackToGuide); return;
+					}
 					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动 ——
 					// 不拉住他的话人一边挖他一边溜达,挖开的洞永远不在他脚下。
 					// vanilla 每帧会把够不着的 talkNPC 清掉,所以要每帧重设。
