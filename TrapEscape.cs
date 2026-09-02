@@ -135,6 +135,8 @@ namespace TerraBlind
         // 改成也收 Build(铺一块平台就站得住):那正是 A* 自己能走的边,给它当目标不会白烧。
         static HashSet<(int x, int y)> Flood(int sx, int sy)
         {
+            // 镐力取一次就够 —— 逐格问会把泛洪拖慢好几倍,而一次泛洪期间背包不会变
+            _floodPick = MazeWand.BestPickPower();
             var seen = new HashSet<(int x, int y)> { (sx, sy) };
             var q = new Queue<(int x, int y)>();
             q.Enqueue((sx, sy));
@@ -169,12 +171,21 @@ namespace TerraBlind
 
         // 【收 Build 不收 Pillar】。Build 是"旁边锚得住,铺一块平台就站得上",那是坑壁边上
         // 实实在在的落脚点;Pillar 是"四周没锚点,只能从底下砌塔上来" —— 空中每一格都算 Pillar,
-        // 收了它泛洪会顺着天空铺到 MaxRegion,挑出一个几十格外的目标,又回到白烧预算
+        // 收了它泛洪会顺着天空铺到 MaxRegion,挑出一个几十格外的目标,又回到白烧预算。
+        //
+        // 【Solid 里挖得动的也收】。A* 自己是会挖的(DigThroughWall/DigDown/DigUp 都在它的边生成里),
+        // 可挑目标这一步原来只认"不动地形就能站"的格 —— 人卡在黑曜石坑里,出去的唯一办法是挖穿墙,
+        // 泛洪里没有这条边,于是铺满 3000 格上限全在坑内绕,报"整片都不比现在好",A* 连搜都不搜。
+        // 现场:(1040,953) 一带 H 全在 2064~2186,五次 escape 全是这句。
+        // 挖不动的(黑曜石/蜂巢)照旧不收 —— 那是物理不可能,不是贵
         static bool FloodOk(int x, int y)
         {
             var k = CellKind.Of(x, y);
-            return k == Cell.Stand || k == Cell.Build;
+            if (k == Cell.Stand || k == Cell.Build) return true;
+            if (k != Cell.Solid) return false;
+            return DigTable.MineableWith(x, y, _floodPick);
         }
+        static int _floodPick;
 
         static void Push(HashSet<(int x, int y)> seen, Queue<(int x, int y)> q, int x, int y)
         {
