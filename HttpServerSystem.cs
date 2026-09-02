@@ -2980,7 +2980,7 @@ namespace TerraBlind
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
 		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
-		const float DetourBudgetFrac = 3.0f;
+		const float DetourBudgetFrac = 2.55f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
