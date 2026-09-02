@@ -2257,6 +2257,13 @@ namespace TerraBlind
             }
             else
                 DiagLog.Write("[ss-steps] step has no frames — skip");
+            // 【每次派发都说清进了哪条分支】。贪心选中 bridge/place 边之后人一格没动、
+            // 日志里一个字都没有 —— 派发在哪儿走丢的靠读代码推了两次都推错。
+            // 现场:(1059,1054)→(1063,1054) bridge 连发两次 moved=0px;
+            // (1075,1023)→(1076,1023) place 之后 100 帧掉进地狱,[place] 一条没有。
+            DiagLog.Write($"[ss-dispatch] kind={EdgeKind(st)} bridge={st.Bridge} pillar={st.Pillar} dig={st.Dig} "
+                + $"frames={(st.Frames?.Count ?? -1)} standCx={st.DigStandCx} target=({st.TargetCx},{st.TargetCy}) "
+                + $"walkActive={_walkActive} execFrames={(_execFrames?.Count ?? -1)}");
         }
 
         // 贪心单步驱动:场给全局趋势,每步只前向模拟几个候选动作,按落点格的场代价打分,执行最好的那一个。
