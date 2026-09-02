@@ -3366,6 +3366,17 @@ namespace TerraBlind
         // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划 —— 调用方已经验证过真实位置匹配。
         public static void DispatchPlan(SSResult res)
         {
+            // 【入口无条件打一条】。贪心选中的 bridge/place/dig 边派发之后什么都没发生 ——
+            // 桥没铺、平台没放、镐没挥,而 [ss-steps]/[mine] 一条日志都没有。
+            // 断在 DispatchPlan 到执行器之间,推了三次都推错(BridgeBuilder/TickSteps/MineCoordinator),
+            // 所以在这儿把 Steps 的真实内容打出来,别再猜
+            {
+                var sb0 = new System.Text.StringBuilder($"[ss-dispatch] in steps={(res?.Steps?.Count ?? -1)} exec={(res?.ExecFrames?.Count ?? -1)} goal=({res?.GoalWx},{res?.GoalWy})");
+                if (res?.Steps != null)
+                    foreach (var st0 in res.Steps)
+                        sb0.Append($" | {EdgeKind(st0)}→({st0.TargetCx},{st0.TargetCy}) frames={(st0.Frames?.Count ?? -1)} mine={(st0.MineTiles?.Count ?? -1)}");
+                DiagLog.Write(sb0.ToString());
+            }
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
             var pStart = Main.LocalPlayer;
