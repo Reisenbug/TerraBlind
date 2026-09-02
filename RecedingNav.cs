@@ -287,6 +287,25 @@ namespace TerraBlind
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
             {
+                // 【判死之前先叫一次 A*】。sentinel 数满四次说的正是"贪心蹭不动了",
+                // 而那恰恰是 A* 该接手的时刻 —— 可 A* 的唯一入口是 Trap(候选里没有一条降 H),
+                // 黑曜石那种"每步降 3 分却走不出去"的局面够不上 Trap,A* 从头到尾没被叫过。
+                // 现场:(1040,953) 下面一整片黑曜石,场知道要绕(往右挖穿几格或从左边走),
+                // 可那收益要走十几格才兑现,贪心只看下一步,在 1036~1044 来回蹭到判死。
+                var scell = ActExecutor.OriginCx(p);
+                var sfield = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
+                int scy = ActExecutor.OriginCy(p);
+                int sh = sfield != null && sfield.TryGetValue((scell, scy), out int h0) ? h0 : int.MaxValue;
+                if (sfield != null && !TrapEscape.Busy
+                    && TrapEscape.TryEscape(sfield, scell, scy, sh, _goalWx, _goalWy))
+                {
+                    EventLog.W(Ev.Sentinel, $"卡住了先叫 A* ({scell},{scy})H{sh} 而不是直接放弃");
+                    StuckSentinel.Reset();
+                    _haveLast = false;
+                    return;
+                }
+                // A* 还在后台搜的时候别判死 —— TryEscape 刚开搜也返回 false,和"搜不出来"长得一样
+                if (TrapEscape.Busy) { StuckSentinel.Reset(); return; }
                 EventLog.W(Ev.Sentinel, $"GIVE-UP H平线 放弃这一段 goal=({_goalWx},{_goalWy})");
                 LastStop = "stuck"; Stop();
                 Chatter.Say("[TerraBlind] receding: stuck (sentinel) — abandoning leg");
