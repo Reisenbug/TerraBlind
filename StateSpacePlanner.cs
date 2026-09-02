@@ -2606,7 +2606,11 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
-                if (nH < curH && total < bestDropTotal)
+                // 【刚站过的格不算"更好的降 H 选择"】。平原上左右横跳时,每一格都比隔壁低几分,
+                // NOUP 每次都能找到一个"更低"的邻格,于是把 PUSH 该打破的僵局变成永动机 ——
+                // 现场:(1414..1420,335) 那一条线上,贪心每次想上 334 行,NOUP 每次拽回 335,
+                // 蹭了 1000 多帧、22 次 TRAP。防回头这件事 PUSH 早就在做,NOUP 不能绕过它。
+                if (nH < curH && total < bestDropTotal && !_recent.Contains((ncx, ncy)))
                 { bestDropTotal = total; bestDrop = (next, frames, cost, pillar, digTiles); bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
