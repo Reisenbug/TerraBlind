@@ -7,11 +7,12 @@ namespace TerraBlind
 	// 【/tb 1 的全流程,搬进 mod】。原来这一整套编排在 python 的 _run_from_zero 里,
 	// 而它每一步都要 HTTP 往返 --- 发布时想把 python 切掉就得连流程一起丢。
 	//
-	// 相位链和 python 那份一一对应:砍树 → 收火把 → 选址 → 走过去 → 盖房 → 下地狱 → 地狱全套。
+	// 相位链:收火把 → 选址 → 走过去 → 盖房 → 下地狱 → 地狱全套。
+	// 【不砍树】:木头 9999 常驻,那一段没意义了
 	// 失败即停,原因写进 Reason,和 python 的 say(...) + return 一个意思。
 	public static class StartRun
 	{
-		public enum Ph { Idle, Chop, Torch, Site, GotoSite, House, Descend, Hell, Done }
+		public enum Ph { Idle, Torch, Site, GotoSite, House, Descend, Hell, Done }
 
 		public static Ph Phase = Ph.Idle;
 		public static bool IsRunning => Phase != Ph.Idle && Phase != Ph.Done;
@@ -19,25 +20,12 @@ namespace TerraBlind
 		public static string Reason = "";
 
 		// 和 python 那份保持一致 (RUN1_BUILD_WOOD / RUN1_ROAD_WOOD / RUN1_NEED)
-		const int BuildWood = 125;
-		const int RoadWood = 75;
-		const int NeedWood = BuildWood + RoadWood;
 		const int NeedTorch = 4;
-		// 挑树:cost = 砍的固定耗时 + 走过去的时间,bonus = 树高折成的木头
-		const int MinTrunkH = 6;
-		const float ChopFrames = 60f;
-		const float WalkFramesPerTile = 4f;
-		const float WoodPerTrunk = 1.6f;
-		const float TowardBonus = 25f;
-		const int ChopScanDist = 400;
 		const int HouseW = 21, HouseH = 10;
 
 		static int _frames;
-		static int _jungleDir;                     // 丛林在东(+1)还是西(-1),砍树往那边偏
 		static int _siteX, _siteY;
-		static (int x, int y) _target;             // 这一轮要砍的树 / 要开的箱
 		static bool _haveTarget;
-		static readonly HashSet<(int, int)> _skip = new();
 		static List<(int x, int y, string kind)> _route = new();
 		static int _routeIdx;
 
@@ -47,11 +35,11 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_skip.Clear(); _route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
-			Chatter.Say("[TerraBlind] 开工:砍木头 → 收火把 → 盖房子 → 下地狱", 120, 255, 120);
-			Go(Ph.Chop);
+			Chatter.Say("[TerraBlind] 开工:收火把 → 盖房子 → 下地狱", 120, 255, 120);
+			Go(Ph.Torch);
 			return true;
 		}
 
@@ -78,64 +66,6 @@ namespace TerraBlind
 
 		static int Have(int id) => Predicates.Have(id);
 
-		// 砍树用的斧子。照 ClearWay.PickSlot 的样子,热键栏没有就从背包搬一把上来
-		static int AxeSlot(Player p)
-		{
-			int slot = -1, best = 0;
-			for (int i = 0; i < 10 && i < p.inventory.Length; i++)
-			{
-				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.axe > best) { best = it.axe; slot = i; }
-			}
-			if (slot >= 0) return slot;
-			int bagSlot = -1, bagBest = 0;
-			for (int i = 10; i < 54 && i < p.inventory.Length; i++)
-			{
-				var it = p.inventory[i];
-				if (it != null && !it.IsAir && it.axe > bagBest) { bagBest = it.axe; bagSlot = i; }
-			}
-			if (bagSlot < 0) return -1;
-			return PlaceAction.HomeSlot(bagSlot);
-		}
-
-		// 【挑哪棵树】。照抄 python 的 _tallest_trunks:按 cost-bonus 排,
-		// cost = 砍的固定耗时 + 走过去的时间,bonus = 树高折成的木头。
-		// 只按高度排会为了远处一棵大树跑穿半张图;只按距离排又会一直啃小树苗
-		static (int x, int y)? BestTrunk()
-		{
-			var p = Main.LocalPlayer;
-			if (p == null) return null;
-			var tiles = TileScan.Nearest(TileID.Trees, 400, ChopScanDist);
-			var byCol = new Dictionary<int, List<int>>();
-			foreach (var (x, y) in tiles)
-			{
-				if (!byCol.TryGetValue(x, out var ys)) { ys = new List<int>(); byCol[x] = ys; }
-				ys.Add(y);
-			}
-			int px = ActExecutor.OriginCx(p);
-			float bestScore = float.MaxValue;
-			(int x, int y)? best = null;
-			foreach (var kv in byCol)
-			{
-				var ys = kv.Value;
-				ys.Sort();
-				int st = 0;
-				for (int i = 1; i <= ys.Count; i++)
-				{
-					// 一段连续的 y 就是一根树干
-					if (i != ys.Count && ys[i] == ys[i - 1] + 1) continue;
-					int h = i - st, baseY = ys[i - 1];
-					st = i;
-					if (h < MinTrunkH) continue;
-					if (_skip.Contains((kv.Key, baseY))) continue;
-					int dist = TileScan.Dist(kv.Key, baseY);
-					float score = ChopFrames + dist * WalkFramesPerTile - h * WoodPerTrunk * ChopFrames / 10f;
-					if (_jungleDir != 0 && (kv.Key - px) * _jungleDir > 0) score -= TowardBonus;
-					if (score < bestScore) { bestScore = score; best = (kv.Key, baseY); }
-				}
-			}
-			return best;
-		}
 		public static void Tick()
 		{
 			if (!IsRunning) return;
@@ -145,33 +75,6 @@ namespace TerraBlind
 
 			switch (Phase)
 			{
-				// 砍树凑木材。顺着丛林那头砍:等量的木头,砍完顺带也走近了
-				case Ph.Chop:
-				{
-					if (Have(ItemID.Wood) >= NeedWood)
-					{ DiagLog.Write($"[start] 木材够了({Have(ItemID.Wood)}/{NeedWood})"); Go(Ph.Torch); return; }
-					if (_frames > 60 * 600) { Fail($"砍了10分钟木材还是只有{Have(ItemID.Wood)}/{NeedWood}"); return; }
-					if (RecedingNav.Active || ItemUseCoordinator.IsActive) return;
-					if (_haveTarget)
-					{
-						// 上一趟的结果:没砍掉就拉黑,免得对着同一棵砍到天荒地老
-						if (RecedingNav.LastStop != null && RecedingNav.LastStop != "done")
-							_skip.Add(_target);
-						else if (Main.tile[_target.x, _target.y].HasTile)
-							_skip.Add(_target);
-						_haveTarget = false;
-						return;   // 空一帧让掉落物落地被捡
-					}
-					var tr = BestTrunk();
-					if (tr == null) { Fail($"附近{ChopScanDist}格内没有 h>={MinTrunkH} 的树,木材{Have(ItemID.Wood)}/{NeedWood}"); return; }
-					int ax = AxeSlot(p);
-					if (ax < 0) { Fail("背包里没有斧子"); return; }
-					_target = tr.Value; _haveTarget = true;
-					DiagLog.Write($"[start] 砍树({_target.x},{_target.y}) 木材{Have(ItemID.Wood)}/{NeedWood}");
-					RecedingNav.Start(_target.x, _target.y, RecedingNav.Mode.Reach);
-					return;
-				}
-
 				// 火把合不出来(要凝胶,这世界不刷怪),只能开箱;顺着下丛林的路收,够了就停
 				case Ph.Torch:
 				{
