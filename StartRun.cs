@@ -36,7 +36,8 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false;
+			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
 			Chatter.Say("[TerraBlind] 开工:收火把 → 盖房子 → 下地狱", 120, 255, 120);
@@ -82,6 +83,7 @@ namespace TerraBlind
 					if (Have(ItemID.Torch) >= NeedTorch)
 					{ DiagLog.Write($"[start] 火把够了({Have(ItemID.Torch)}/{NeedTorch})"); Go(Ph.Site); return; }
 					if (_frames > 60 * 900) { Fail($"收火把超时,只有{Have(ItemID.Torch)}/{NeedTorch}"); return; }
+					if (!RecedingNav.Active && !TreasureGrab.IsRunning && GreedSideTrip()) return;
 					if (RecedingNav.Active || TreasureGrab.IsRunning) return;
 					if (_route.Count == 0)
 					{
@@ -151,6 +153,10 @@ namespace TerraBlind
 				// 下地狱。走 itinerary 链,逐站导航 + 顺手收
 				case Ph.Descend:
 				{
+					// 【顺路采集】。itinerary 只列了几个大目标,路上贴着走过去的箱子靠这一层。
+					// 【只在主链空档拐】:主链正朝某个目标走时抢过方向盘,那个目标就丢了 ---
+					// _routeIdx 已经推进过,回来不会重走。空档拐,回来接着取下一站,不丢东西
+					if (!RecedingNav.Active && !TreasureGrab.IsRunning && GreedSideTrip()) return;
 					if (RecedingNav.Active || TreasureGrab.IsRunning) return;
 					if (_frames > 60 * 60 * 30) { Fail("下地狱超时"); return; }
 					if (!_haveTarget)
@@ -180,6 +186,7 @@ namespace TerraBlind
 						if (!Main.tile[stop.x, stop.y].HasTile)
 						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 那儿已经空了"); return; }
 						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
+						GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
 						if (!TreasureGrab.Start(stop.x, stop.y, out _))
 							RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 						return;
@@ -233,6 +240,27 @@ namespace TerraBlind
 			foreach (System.Text.RegularExpressions.Match m in rx.Matches(json.Substring(at)))
 				outp.Add((int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), m.Groups[3].Value));
 			return outp;
+		}
+
+		// 身边有值得捡的就拐一趟。返回 true = 这一帧归顺路采集管,主链先让开。
+		// 【捡完自己回来】:TreasureGrab 跑完,主链下一帧照旧从人当前位置继续
+		static bool _sideTrip;
+		static bool GreedSideTrip()
+		{
+			if (_sideTrip)
+			{
+				_sideTrip = false;
+				DiagLog.Write($"[greed] 顺路那趟完了:{TreasureGrab.Outcome}/{TreasureGrab.Reason}");
+				return false;
+			}
+			var hit = GreedPickup.Poll();
+			if (hit == null) return false;
+			var (gx, gy) = hit.Value;
+			GreedPickup.MarkDone(gx, gy);
+			if (!TreasureGrab.Start(gx, gy, out string gw))
+			{ DiagLog.Write($"[greed] ({gx},{gy})开不了:{gw}"); return false; }
+			_sideTrip = true;
+			return true;
 		}
 
 		public static string StatusJson()

@@ -3073,6 +3073,50 @@ namespace TerraBlind
 			DiagLog.Write($"[warm] 后台开算路线 {biome}");
 		}
 
+		// 【走到 (x,y) 要挖几格、走几格】。抽出来给 StartRun 的顺路采集用 ---
+		// find_tiles 的 max_dist 是直线距离,直线 25 格的东西可能隔着山要绕几百格。
+		// 【秒级操作】:里面是 BuildFieldMulti,绝不能每帧调,调用方自己降频/扔后台
+		public static bool PathCost(int tx, int ty, out int dig, out int walk)
+		{
+			dig = walk = 0;
+			var pc = Main.LocalPlayer;
+			if (pc == null) return false;
+			int scx = ActExecutor.OriginCx(pc), scy = ActExecutor.OriginCy(pc);
+			// 箱子/矿是实心格,人站不进去 --- 以它本身为种子场铺不出来,每个箱子都报 unreachable。
+			// 要的是"够得着",不是"站进去"
+			var seeds = new System.Collections.Generic.List<(int x, int y)>();
+			for (int dx = -1; dx <= 1; dx++)
+				for (int dy = -1; dy <= 1; dy++)
+				{
+					if (dx == 0 && dy == 0) continue;
+					if (!Predicates.IsSolid(tx + dx, ty + dy)) seeds.Add((tx + dx, ty + dy));
+				}
+			if (seeds.Count == 0) seeds.Add((tx, ty));
+			const int pad = 120;
+			var fld = MazeWand.BuildFieldMulti(seeds,
+				System.Math.Min(tx, scx) - pad, System.Math.Max(tx, scx) + pad,
+				System.Math.Min(ty, scy) - pad, System.Math.Max(ty, scy) + pad);
+			if (!fld.ContainsKey((scx, scy))) return false;
+			var cur = (x: scx, y: scy);
+			var seen = new System.Collections.Generic.HashSet<(int, int)> { cur };
+			for (int step = 0; step < 4000; step++)
+			{
+				if (seeds.Contains((cur.x, cur.y))) break;
+				if (!fld.TryGetValue((cur.x, cur.y), out int hc) || hc == 0) break;
+				int bn = hc; var best = cur;
+				foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+				{
+					var n = (x: cur.x + dx, y: cur.y + dy);
+					if (fld.TryGetValue((n.x, n.y), out int dn) && dn < bn) { bn = dn; best = n; }
+				}
+				if (best.x == cur.x && best.y == cur.y) break;
+				if (!seen.Add((best.x, best.y))) break;
+				if (MazeWand.StepCostPublic(cur.x, cur.y, best.x, best.y) >= 80) dig++; else walk++;
+				cur = best;
+			}
+			return true;
+		}
+
 		// 下降场的 H:离地狱还有多远。StartRun 用它判"这一站是不是在身后"
 		public static int DescentH(int x, int y)
 		{
