@@ -1255,7 +1255,11 @@ namespace TerraBlind
         const bool F_Gate = true;        // anyProgress gating of placement
         const bool F_Dominance = true;   // velocity dominance pruning
         const bool F_Brake = false;      // reject jump-place when brake can't settle
-        const bool F_LandOnPlat = false; // true killed ~all jump-place (fellThrough) → pillar overuse; 6/2 working ver had no such check
+        // 【判据修对了才敢开】。原来写的是 landFeetCy != placeCy,而 landFeetCy 用 (Py+PlayerH)/16
+        // 算的是"脚底那个像素落在哪格",人站在平台顶面上时它恰好等于平台【上面】那格,
+        // 于是每条好边都被判成穿过去 —— 关掉它是对症状动手,病在判据。
+        // 正确的是:人站在平台 placeCy 上时,脚所在的格(StandCell,带 -1f)是 placeCy-1。
+        const bool F_LandOnPlat = true;
         const bool F_DescentOnly = true; // place only during descent (vy>0)
         const bool F_Trend = true;       // two-phase up-then-left heuristic bias
         const bool F_PillarNeedNoLateral = true; // pillar only when no lateral walk-out exists (false = old behavior)
@@ -1351,13 +1355,14 @@ namespace TerraBlind
                 if (placeCx != int.MinValue) break;
             }
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
-            float probeVy = 0f, probeFootPy = 0f;
-            // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,放进来还会用廉价空操作淹没搜索(指数爆炸)。
-            int landFeetCy = (int)((seg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
-            if (F_LandOnPlat && landFeetCy != placeCy)
+            // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,
+            // 放进来还会用廉价空操作淹没搜索(指数爆炸),而且执行时人一路掉回起点,下轮又选中它。
+            // 脚所在的格用 StandCell(和别处同一把尺子);站在平台 placeCy 上时它是 placeCy-1
+            var (_, landStandCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
+            if (F_LandOnPlat && landStandCy != placeCy - 1)
             {
                 if (ctx.JpFellThrough < 12)
-                    DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} probeVy={probeVy:0.#} probeFootPy={probeFootPy:0.#} platTopPy={placeCy * 16} landFeetCy={landFeetCy}");
+                    DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} 站立格={landStandCy} 应为{placeCy - 1} → 穿过去了");
                 ctx.JpFellThrough++; return null;
             }
             if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
@@ -1405,10 +1410,10 @@ namespace TerraBlind
                 // 于是这条"放了但没接住"的边发得出来。执行时人一路掉回起点,下一轮又选中它,再掉。
                 // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,d=(8.1,96):横向只差 8px,
                 // 竖直差整整 6 行 —— 正是穿过去的形状。这就是换了地方的"跳三下"。
-                if (F_LandOnPlat && lcy != fcy)
+                if (F_LandOnPlat && lcy != fcy - 1)
                 {
                     if (ctx.JpFellThrough < 12)
-                        DiagLog.Write($"[ss-ftx] place=({fcx},{fcy}) hold={hold} dir={dir} landFeetCy={lcy} → 穿过去了,不发这条边");
+                        DiagLog.Write($"[ss-ftx] place=({fcx},{fcy}) hold={hold} dir={dir} 站立格={lcy} 应为{fcy - 1} → 穿过去了,不发这条边");
                     ctx.JpFellThrough++; continue;
                 }
                 if (!(ctx.DistField != null && ctx.DistField.TryGetValue((lcx, lcy), out int lh) && lh < curH)) return null;
