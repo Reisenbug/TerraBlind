@@ -112,6 +112,16 @@ namespace TerraBlind
 		}
 
 		// 手是瓶颈:边缘比"放完这块的功夫脚能走的距离"还近就停下等手,不然会走到没铺的地方掉下去
+		// 往前迈那一列脚下有没有地。桥面是平台,平台也算 --- IsGround 两个都认
+		private static bool NextStepStandable(Player p)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int col = _dir > 0 ? br + 1 : bl - 1;
+			int fy = ActExecutor.OriginCy(p);
+			// 脚下这一行、或再下一行有地都算(桥面会抬升/下沉一格)
+			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
+		}
+
 		private static bool ShouldAdvance(Player p)
 		{
 			float edgePx = _targetWx * 16f + 8f;
@@ -159,7 +169,10 @@ namespace TerraBlind
 			}
 
 			// 4) 同一帧里决定脚走不走 —— 手在挥的时候脚照样能走,这正是省下来的时间。
-			bool advance = !inReach || ShouldAdvance(p);
+			// 【但绝不迈进空里】。原来 !inReach 直接放行,而"够不着"最常见的原因正是
+			// 前面那格还没铺出来 --- 人一步跨出桥面边缘就掉下去(现场:桥面1051,人掉到1073)。
+			// 踩不住就站着挥,铺出来了自然走得过去
+			bool advance = (!inReach || ShouldAdvance(p)) && NextStepStandable(p);
 			if (advance)
 			{
 				if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
