@@ -124,6 +124,10 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
+			// 【心跳在 241 帧断了但人还在走】= 要么 IsRunning 变假,要么这个函数没被调用。
+			// 分不出来就没法修,所以在最外层先记一笔
+			if (_ph != Ph.Idle && _ph != Ph.Done && Main.GameUpdateCount % 120 == 0)
+				DiagLog.Write($"[grab] tick进来了 ph={_ph} frames={_frames}");
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
