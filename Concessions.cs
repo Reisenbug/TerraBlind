@@ -33,6 +33,13 @@ namespace TerraBlind
 			Player.tileRangeX = LongArm; Player.tileRangeY = LongArm;
 			DiagLog.Write($"[reach] 手臂加长到{LongArm}格(原{_savedRangeX}/{_savedRangeY})");
 		}
+		// vanilla 每帧 ResetEffects 把 tileRangeX/Y 打回 5/4,所以加长期间要每帧重写
+		public static void LongArmKeep()
+		{
+			if (_savedRangeX < 0) return;
+			Player.tileRangeX = LongArm; Player.tileRangeY = LongArm;
+		}
+
 		public static void LongArmEnd()
 		{
 			if (_savedRangeX < 0) return;

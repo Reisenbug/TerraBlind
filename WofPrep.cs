@@ -467,7 +467,7 @@ namespace TerraBlind
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					// 【挖不动不判死】。挖不掉一般是狱岩,向导容易自己走下去 --- 报一嘴接着等
 					if (_frames > 60 * 300 && _frames % 600 == 1)
-						DiagLog.Write($"[wof] 挖不动向导脚下({gx},{gy}),多半是狱岩,等他自己走下去");
+						DiagLog.Write($"[wof] 挖不动向导脚下({gx},{gy}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 手臂{Player.tileRangeX}/{Player.tileRangeY},等他自己走下去");
 					// 手臂 30 格(横竖都是),站在房子最右格够得着向导脚下的每一列。
 					// 真够不着说明他走出去 30 格以外了,才回去重新站位 —— 【别一够不着就退】:
 					// 他跳回人身边那一帧也会瞬时判不够,一退手臂就被收,剩下的格子再也挖不到
