@@ -288,6 +288,23 @@ namespace TerraBlind
 					if (CanTalkTo(p, Main.npc[dn0])) { RecedingNav.Stop(); Go(Ph.Buy); return; }
 					if (RecedingNav.Active) return;
 					if (_frames > 60 * 300) { Fail("走不到爆破专家跟前"); return; }
+					// 【寻路那把尺子不是搭话那把】。Mode.Reach 按方块的交互距离判"够到了"就停,
+					// 而搭话判的是人和 NPC 两个矩形相交 --- 停在刚好差一点的位置时,
+					// 重发寻路会被同目标守卫挡掉,原地耗到超时。停下了就自己朝他走,判据用 CanTalkTo
+					if (p.velocity.Y == 0f && RecedingNav.LastStop == "done")
+					{
+						float pcx = p.position.X + p.width / 2f, ncx = Main.npc[dn0].Center.X;
+						if (System.MathF.Abs(pcx - ncx) > 8f)
+						{
+							if (ncx > pcx) p.controlRight = true; else p.controlLeft = true;
+							if (_frames % 60 == 1)
+								DiagLog.Write($"[wof] 寻路到了但搭不上话,朝爆破专家挪 人x={pcx:0} 他x={ncx:0}");
+							return;
+						}
+						// 横着已经贴上了还搭不上话 = 差在竖直方向,横走救不了,交回寻路重来一趟
+						if (_frames % 120 == 1)
+							DiagLog.Write($"[wof] 横向贴上了仍搭不上话(差在高度) 人y={p.Center.Y:0} 他y={Main.npc[dn0].Center.Y:0}");
+					}
 					int tx = (int)(Main.npc[dn0].Center.X / 16f);
 					int ty = (int)((Main.npc[dn0].position.Y + Main.npc[dn0].height - 2f) / 16f);
 					DiagLog.Write($"[wof] 去找爆破专家({tx},{ty}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
