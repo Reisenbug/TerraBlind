@@ -962,6 +962,19 @@ namespace TerraBlind
                         yield return (dw.Value.node, null, dw.Value.cost, false, dw.Value.tiles);
                 }
 
+            // 【身体自己占的那几格被堵住 → 挖开它】。人 42px 高占 3 行,而斜半砖会把人往上顶 6px,
+            // 于是需要 48px 净空 —— 头顶那格一有方块就卡死,一个像素都推不动
+            // (现场:(1459,228) 往西所有 hold 都 dpx=0,候选只剩往东和 pillar,sentinel 放弃整段)。
+            // DigUp 从 ccy-3 起挖,正好跳过身体占的 ccy-1/ccy-2;横挖只看旁边那一列。
+            // 谁都不管这几格,于是"人被卡住"这件事在候选表里没有任何一条边能表达。
+            // 挖一格就重规划一次:走得动了自然选别的边,还堵着就再发一条,不用在这儿写循环。
+            if (hasPickaxe && ctx.DistField != null)
+            {
+                var db = Prof("digbody", () => DigBodyBlock(ctx, cur, ccx, ccy, gdir));
+                if (db.HasValue)
+                    yield return (db.Value.node, null, db.Value.cost, false, db.Value.tiles);
+            }
+
             // 向上挖也改成无条件(原先门在 !anyProgress && Vx<max,别扭姿势下会把它压掉)。
             // 仍然要 platformTile —— 那是物理必需(得有砖垫脚),不是启发式的门。
             if (hasPickaxe && platformTile >= 0 && ctx.DistField != null)
@@ -1070,6 +1083,31 @@ namespace TerraBlind
                 if (DigSolid(x, y) || PathPlanner.IsFloorPublic(x, y)) return y - 1;
             }
             return LandVoid;
+        }
+
+        // 身体占的 3 行里,前进方向那一侧有实心 → 挖【最近的一格】。一次只挖一格:
+        // 挖完重规划,能走就走,还堵着下一周期再发一条 —— 这就是"挖一格试一格"
+        static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigBodyBlock(PlanCtx ctx, SSNode cur, int ccx, int ccy, int gdir)
+        {
+            // 【落点是前进方向那一格,不是原地】。挖开头顶就是为了走过去,而原地会被
+            // "self-loop (no real move)" 当场丢掉,这条边永远进不了候选表。
+            // 挖完还走不动的话,下一周期会再发一条挖下一格 —— 这就是挖一格试一格
+            int nx = ccx + gdir;
+            if (ctx.DistField == null || !ctx.DistField.ContainsKey((nx, ccy))) return null;
+            var (bl, br) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
+            // 从头往脚扫:头顶那格最常是元凶(斜半砖顶高 6px),而且挖它人不会掉下去
+            for (int y = ccy - 2; y <= ccy; y++)
+                for (int c = bl; c <= br; c++)
+                {
+                    if (!DigSolid(c, y)) continue;
+                    int fc = DigTable.CostFrames(c, y);
+                    if (fc >= DigTable.Unmineable) continue;   // 这格挖不动,看下一格
+                    SegLog($"[ss-digbody] 身体压着的({c},{y})是实心,挖开它 {fc}帧");
+                    float npx = nx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+                    var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
+                    return (node, new List<(int, int)> { (c, y) }, fc);
+                }
+            return null;
         }
 
         // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。
