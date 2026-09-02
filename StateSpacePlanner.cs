@@ -2557,7 +2557,6 @@ namespace TerraBlind
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             // 单独记一份【降 H 的】最优:平地走的 g 比跳便宜太多,不单记的话上坡边会靠 g 赢下来
-            (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? bestDrop = null;
             float bestDropTotal = float.MaxValue; (int, int) bestDropCell = (curCx, curCy);
             var cands = new List<Cand>();
             // 所有候选,连 total 一起留着 —— 选边要按 total 采样,不是取最小(见下面的 softmax)
@@ -2606,27 +2605,24 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
-                // 【刚站过的格不算"更好的降 H 选择"】。平原上左右横跳时,每一格都比隔壁低几分,
-                // NOUP 每次都能找到一个"更低"的邻格,于是把 PUSH 该打破的僵局变成永动机 ——
-                // 现场:(1414..1420,335) 那一条线上,贪心每次想上 334 行,NOUP 每次拽回 335,
-                // 蹭了 1000 多帧、22 次 TRAP。防回头这件事 PUSH 早就在做,NOUP 不能绕过它。
-                if (nH < curH && total < bestDropTotal && !_recent.Contains((ncx, ncy)))
-                { bestDropTotal = total; bestDrop = (next, frames, cost, pillar, digTiles); bestDropCell = (ncx, ncy); }
+                // 最便宜的【降 H】候选。只用来对照记账,不参与选边 —— 见下面 NOUP 那段
+                if (nH < curH && total < bestDropTotal)
+                { bestDropTotal = total; bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
-            // 【有降 H 的路就别选升 H 的】。total=g+H 里,一步平地走的 g 只有 3.5,一次跳要 19 —— 
-            // 于是"走一格上坡"能靠 g 便宜赢过"跳一下下坡",人就在两格之间来回弹:
-            // (1421,311)H1044 走去 (1422,311)H1047,到了那儿最便宜的又是跳回 1044,一趟白费 58 帧。
-            // 防回头那道闸拦不住:去程落点是新格(不算回头),回程 H 在降(bestH>=curH 为假),两头都放行。
-            // 一整局抓到 13 次,(1113,395)↔(1114,395) 连弹四轮。
-            // 只在【确实有降 H 的候选】时改判,一条都没有时照旧 —— 那种情况归 Trap/承诺管,不在这儿抢戏
+            // 【只记账,不改判】。这里曾经按"有降 H 的路就别选升 H 的"直接改判,那是在
+            // total=g+H 这套价之外【另开一套判据】—— 而 cost 只能有一套。
+            // 后果:335 行那片平地上每格 H 只差 3~6 分,"还有更低的邻格"永远成立,
+            // 于是它永远否决往上,而往上才是出口(正上方 H1895 最低),人蹭了 1100 帧 22 次 TRAP。
+            //
+            // 真正失衡的是价本身:一步平地走 g=3.5,一次跳 g=19,于是"走一格上坡"能赢过
+            // "跳一下下坡"((1421,311) 走去 1047 再跳回 1044,白费 58 帧,一局 13 次)。
+            // 要治就去查跳的 g 为什么贵成这样,别在选边处加否决权。
+            // 这行日志留着当证据:greedy 选的和最便宜的降 H 候选差多少。
             bool bestCellDescends = false;
             foreach (var c in jigglePool) if (c.cell == bestCell) { bestCellDescends = c.h < curH; break; }
-            if (best != null && bestDrop != null && !bestCellDescends)
-            {
-                EventLog.W(Ev.Plan, $"NOUP ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})t{bestTotal:0} 不降H,改走 ({bestDropCell.Item1},{bestDropCell.Item2})t{bestDropTotal:0}");
-                best = bestDrop; bestCell = bestDropCell; bestTotal = bestDropTotal;
-            }
+            if (best != null && bestDropCell != (curCx, curCy) && !bestCellDescends)
+                EventLog.W(Ev.Plan, $"NOUP ({curCx},{curCy})H{curH} greedy→({bestCell.Item1},{bestCell.Item2})t{bestTotal:0} 不降H,最便宜的降H候选是 ({bestDropCell.Item1},{bestDropCell.Item2})t{bestDropTotal:0}");
             // 原判据是"落点 H 有没有低于历史最低",错的:人为绕路离开最低点后,之后每一步都 ≥ 历史最低,PUSH 就永久触发。
             // 改成跟【脚下】比:greedy 挑的落点不比现在近才算没进展。绕路(H 暂时升高)允许,只有真原地弹才触发。
             // 【承诺】:四周没有一条降 H 的路时,贪心只会在原地弹。真出口往往要先变差
