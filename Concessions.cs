@@ -36,8 +36,7 @@ namespace TerraBlind
 		// vanilla 每帧 ResetEffects 把 tileRangeX/Y 打回 5/4,所以加长期间要每帧重写
 		public static void LongArmKeep()
 		{
-			// 【临时:常驻 30 格】。用来验证"每帧重写 tileRangeX 到底能不能加长挖掘距离"。
-			// 验完要改回 if (_savedRangeX < 0) return;
+			if (_savedRangeX < 0) return;
 			Player.tileRangeX = LongArm; Player.tileRangeY = LongArm;
 		}
 
