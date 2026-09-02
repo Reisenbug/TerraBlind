@@ -3389,6 +3389,7 @@ namespace TerraBlind
 					if (x > sMaxX) sMaxX = x;
 				}
 			if (sMinX > sMaxX) { failReason = "no_surface_biome"; return null; }
+			DiagLog.Write($"[descent-win] 签名窗口 x={sMinX}..{sMaxX} 宽{sMaxX - sMinX + 1}");
 
 			int w = sMaxX - sMinX + 1;
 			int hellCap = Main.maxTilesY - 200;
@@ -3455,6 +3456,7 @@ namespace TerraBlind
 				if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
 			}
 			if (bestX < 0) { failReason = "no_route"; return null; }
+			DiagLog.Write($"[descent-ent] 入口({bestX},{bestY})H{bestH} 候选{cands} 窗口{sMinX}..{sMaxX}");
 			return new DescentData { EntX = bestX, EntY = bestY, Cost = bestH, Cands = cands, Field = field };
 		}
 
