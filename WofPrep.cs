@@ -94,13 +94,12 @@ namespace TerraBlind
 		// 判据:他在下落(velocity.Y > 0) 或者 已经落到桥面以下。两个都不成立就是还没走。
 		static bool GuideFell(NPC gn)
 		{
-			if (gn.velocity.Y > 0.1f) return true;   // 正在往下掉 = 活儿成了
 			int gx = (int)(gn.Center.X / 16f);
 			int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
-			int deck = DeckRow(gx, gy - DeckScan / 2 > 0 ? gy - DeckScan / 2 : 1);
-			// 脚下没地【而且】人还没动 = 刚挖开、他还没反应过来,别当成掉了
-			if (deck < 0) return false;
-			return gy > deck + 1;
+			// 【有向下速度不算掉下去】。挖开那一帧他必然有向下的速度,而脚下常常还有第二层平台:
+			// 现场他从1052掉到1053就踩住了(1053那格是平台19),代码却判"成了"收手去补洞,
+			// 肉山永远不来。成功只有一种:他到岩浆了
+			return Predicates.IsLava(gx, gy);
 		}
 
 		// 上下各扫 DeckWide 行,取离 nearCy 最近的那个桥面
