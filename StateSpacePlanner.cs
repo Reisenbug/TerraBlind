@@ -254,7 +254,6 @@ namespace TerraBlind
             if (p == null || !p.active) return res;
             // 地形在【两次搜索之间】会变(挖了/放了),所以每次进来清一次;搜索【内部】不变
             ClearPlaceCache();
-            _digStandAt.Clear();   // 侧身站位只属于这一次搜索,留着会串到下一次
             _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
@@ -457,7 +456,11 @@ namespace TerraBlind
                         var (prevCx, prevCy) = StandCell(e.prev.Px, e.prev.Py);
                         MineDir d = kcy > prevCy ? MineDir.Down
                                   : kcx > prevCx ? MineDir.Right : MineDir.Left;
-                        int standCx = e.digTiles.Count > 0 && _digStandAt.TryGetValue(e.digTiles[0], out int sc) ? sc : -1;
+                        // 【站位就是落点那一列】。DigDown 侧身时落点由挪过去的列算出,
+                        // 所以 kcx 本身就是要站的列,不必另存一份 —— 原来那张 static 字典是
+                        // A* 后台线程写、主线程读,两边还各自 Clear,撞上就是
+                        // "non-concurrent collections must have exclusive access",整个 tick 挂掉
+                        int standCx = d == MineDir.Down && kcx != prevCx ? kcx : -1;
                         revSteps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = kcx, TargetCy = kcy, MineTiles = e.digTiles, DigStandCx = standCx });
                     }
                     else if (e.frames != null)
@@ -1095,18 +1098,12 @@ namespace TerraBlind
                     var seg = SimulateSegment(cur, sdir, 0, ph: PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer));
                     float walkCost = seg.HasValue ? seg.Value.frames.Count : off * 8f;
                     if (SegDiag) DiagLog.Write($"[ss-digdown] 原地挖不动,挪到({scx},{ccy})可以挖 走{walkCost:0}帧");
-                    // 站位跟着【要挖的格】走 —— 建 ExecStep 时按 MineTiles 第一格反查,
-                    // 不用改 Expand 那一长串元组的签名
-                    if (r.Value.tiles.Count > 0) _digStandAt[r.Value.tiles[0]] = scx;
                     return (r.Value.node, r.Value.tiles, r.Value.cost + walkCost);
                 }
             return null;
         }
 
         const int DigShiftScan = 4;   // 挪这么多格以内找得到就挪;再远就不是"侧个身"了,交给场重新规划
-        // 哪条挖掘边要求先侧身到哪一列。键是那条边要挖的第一格 —— 边本身在元组里传,
-        // 加一个字段要改十几处签名,而这张表只在同一次规划内有效,规划开始时清空
-        static readonly Dictionary<(int, int), int> _digStandAt = new();
 
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDownFrom(PlanCtx ctx, float px, int ccx, int ccy, int curH)
         {
@@ -2505,7 +2502,6 @@ namespace TerraBlind
             // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
             // 一周期一次,不在边上,不贵
             _lavaSurvivable = Unstick.BlockItem(p) >= 0;
-            _digStandAt.Clear();   // 侧身站位只属于这一周期,留着会串到下一周期
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {
