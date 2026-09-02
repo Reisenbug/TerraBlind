@@ -3073,6 +3073,13 @@ namespace TerraBlind
 			DiagLog.Write($"[warm] 后台开算路线 {biome}");
 		}
 
+		// 下降场的 H:离地狱还有多远。StartRun 用它判"这一站是不是在身后"
+		public static int DescentH(int x, int y)
+		{
+			var f = _descentField;
+			return f != null && f.TryGetValue((x, y), out int h) ? h : -1;
+		}
+
 		public static string RouteJsonFor(string biome, string reqBody)
 		{
 			var sig = BiomeSig(biome);

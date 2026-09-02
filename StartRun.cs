@@ -22,6 +22,7 @@ namespace TerraBlind
 		// 和 python 那份保持一致 (RUN1_BUILD_WOOD / RUN1_ROAD_WOOD / RUN1_NEED)
 		const int NeedTorch = 4;
 		const int HouseW = 21, HouseH = 10;
+		const int SkipNearCells = 60;   // 这么近的宝藏不判"在身后",直接去拿
 
 		static int _frames;
 		static int _siteX, _siteY;
@@ -94,7 +95,9 @@ namespace TerraBlind
 					if (_routeIdx >= _route.Count)
 					{ Fail($"路上的箱子开完了,火把只有{Have(ItemID.Torch)}/{NeedTorch},没光 NPC 不住"); return; }
 					var stop = _route[_routeIdx++];
-					if (stop.kind == "heart") return;         // 这趟只为补货,血量另说
+					if (stop.kind == "heart") return;         // 生命水晶不挖
+					if (!Main.tile[stop.x, stop.y].HasTile)
+					{ DiagLog.Write($"[start] 跳过({stop.x},{stop.y}) 那儿已经空了"); return; }
 					DiagLog.Write($"[start] 开箱[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 火把{Have(ItemID.Torch)}/{NeedTorch}");
 					if (!TreasureGrab.Start(stop.x, stop.y, out string tw))
 						DiagLog.Write($"[start] 这个开不了:{tw},跳过");
@@ -163,7 +166,20 @@ namespace TerraBlind
 					if (_routeIdx < _route.Count)
 					{
 						var stop = _route[_routeIdx++];
-						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y})");
+						int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
+						int d = System.Math.Abs(pcx - stop.x) + System.Math.Abs(pcy - stop.y);
+						int ph2 = HttpServerSystem.DescentH(pcx, pcy), th = HttpServerSystem.DescentH(stop.x, stop.y);
+						// 【生命水晶不挖】
+						if (stop.kind == "heart")
+						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] 生命水晶({stop.x},{stop.y})"); return; }
+						// 【H 比我大 = 离地狱更远 = 在身后】。拐一趟出来人就偏了,近的会被误判,
+						// 所以只有【又远又在上游】才算走过头 --- 近的一律去拿,折回也就几秒
+						if (d > SkipNearCells && ph2 >= 0 && th >= 0 && th > ph2 + 30)
+						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) H{th}>我的H{ph2}+30 且距{d}格,在身后了"); return; }
+						// 顺路已经捡掉的东西计划里还留着,轮到它时人会跑回去捡空气
+						if (!Main.tile[stop.x, stop.y].HasTile)
+						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 那儿已经空了"); return; }
+						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
 						if (!TreasureGrab.Start(stop.x, stop.y, out _))
 							RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 						return;
