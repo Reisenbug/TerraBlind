@@ -553,10 +553,21 @@ namespace TerraBlind
 
 			// 放第一格:走 PlaceAction,控制要跟着发;让位用 SettleAt,它的 Tick 在下面,
 			// 所以这里必须替它跑一次 —— 直接 return 的话让位永远走不完。
+			// 【寻路也一样】。StepAside 换行时起的是 RecedingNav,它的 Tick 也在下面:
+			// 不替它跑,Active 永远为真,让位那一步死等(日志:2460帧"让位中")
 			if (PlaceAnywhere.IsRunning)
 			{
 				PlaceAnywhere.Tick();
 				if (SettleAt.IsRunning) SettleAt.Tick();
+				// 寻路光 Tick 只是派发,真正走路的是 TickBlocks + ApplyControls --- 一起跑才动得了
+				if (RecedingNav.Active)
+				{
+					RecedingNav.Tick();
+					StateSpacePlanner.TickBlocks();
+					StateSpacePlanner.BlockNavTick();
+					if (StateSpacePlanner.IsActive) StateSpacePlanner.ApplyControls();
+					else if (MineCoordinator.IsActive) MineCoordinator.ApplyControls();
+				}
 				if (ItemUseCoordinator.IsActive) ItemUseCoordinator.ApplyControls();
 				RecordSystem.CaptureFrame(Player);
 				return;
