@@ -449,13 +449,18 @@ namespace TerraBlind
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
 			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On;
 
+		// 【必须挂这儿】。vanilla 顺序:SetControls(Player.cs:23956) 在前,
+		// ResetEffects(24513→17582 把 tileRangeX/Y 打回 5/4)在后 --- 写在 SetControls 里
+		// 会被随后的 ResetEffects 冲掉。而 PlayerLoader.ResetEffects(17598) 正好排在那两行之后
+		public override void ResetEffects()
+		{
+			if (Player != Main.LocalPlayer) return;
+			Concessions.LongArmKeep();
+		}
+
 		public override void SetControls()
 		{
 			if (Player != Main.LocalPlayer) return;
-			// 【每帧重设】。vanilla 的 Player.ResetEffects(Player.cs:17582) 每帧把
-			// tileRangeX/Y 打回 5/4 --- 只在开始那一帧设 30 等于没设,下一帧就没了。
-			// 之前能用是因为 MineCoordinator 每帧开关手臂恰好重设了一次
-			Concessions.LongArmKeep();
 
 			// 光标压在任何 UI 上(背包、别的模组的界面)时,原版把 mouseInterface 置真,
 			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410) ——
