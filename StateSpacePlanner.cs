@@ -2203,7 +2203,7 @@ namespace TerraBlind
                 if (busy) return;
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
                 // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
-                if (_ssPrevStep != null && !_ssPrevStep.Pillar && !_ssPrevStep.Dig)
+                if (_ssPrevStep != null && _ssPrevStep.Frames != null && _ssPrevStep.Frames.Count > 0)
                 {
                     var lf = _ssPrevStep.Frames[_ssPrevStep.Frames.Count - 1];
                     DiagLog.Trc($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
