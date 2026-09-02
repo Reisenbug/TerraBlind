@@ -129,6 +129,11 @@ namespace TerraBlind
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			_frames++;
 
+			// 【无声 return 要有心跳】。原来 START 之后一路没日志 --- 到底在走、在等、还是
+			// Tick 根本没被调用,从日志里分不出来
+			if (_frames % 120 == 1)
+				DiagLog.Write($"[grab] 心跳 {_ph} {_frames}帧 目标({_ax},{_ay}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) nav={RecedingNav.Active} last={RecedingNav.LastStop} 够得着={Reach.CanInteract(p, _ax, _ay)}");
+
 			switch (_ph)
 			{
 				case Ph.Goto:
