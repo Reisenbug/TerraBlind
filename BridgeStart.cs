@@ -35,7 +35,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
 			_item = item; _tx = tx; _ty = ty;
-			_phaseFrames = 0; _held = 0; _tries = 0;
+			_phaseFrames = 0; _held = 0; _tries = 0; _gotoTries = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[bstart] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 桥起点({tx},{ty})");
 			// 【Goto 这一步只要够得着 —— 站上去是 Ph.Stand 的事,而且要等方块放好之后】。
@@ -58,6 +58,20 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
+		// 目标格【正下方】第一个能站的行 --- 站那儿离目标 1 行,放置那把尺子必定过。
+		// 只往下找:目标上方是要留给人身子的
+		static int FootRowFor(int tx, int ty)
+		{
+			for (int y = ty + 1; y <= ty + FootScan; y++)
+			{
+				if (Predicates.IsLava(tx, y)) return -1;
+				if (Predicates.IsGround(tx, y)) return y - 1;
+			}
+			return -1;
+		}
+		const int FootScan = 12;
+		static int _gotoTries;
+
 		static void Fail(string why)
 		{
 			Outcome = "stuck"; Reason = why; _ph = Ph.Done;
@@ -73,12 +87,29 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
-				// 走过去。够得着就行 -- Mode.Reach 的到达判据就是原版的交互距离,
-				// 和"放得出方块"同一把尺子
+				// 走过去。【收尾要用放置那把尺子,不是交互那把】。Mode.Reach 判的是 CanInteract:
+				// 人在目标下方 6 行手仍够得着,它就撒手;而下一步 PlaceAnywhere 差过 4 行直接认输
+				// (现场:人(1182,1056) 目标(1182,1050) 差6行,两边各说各话,桥起点永远放不上)。
+				// 够不着就把人送到目标【正下方那格实地】上,那儿差 1 行,必过
 				case Ph.Goto:
 					if (RecedingNav.Active) return;
 					if (RecedingNav.LastStop != "done")
 					{ Fail($"寻路没到:{RecedingNav.LastStop}"); return; }
+					if (!Reach.CanPlace(p, _tx, _ty))
+					{
+						if (++_gotoTries > MaxTries)
+						{ Fail($"到不了能放({_tx},{_ty})的位置,现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
+						int fy = FootRowFor(_tx, _ty);
+						if (fy < 0)
+						{ Fail($"({_tx},{_ty})下方找不到能站的地,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
+						// 算出来就是人现在这格 = 再发一趟也是原地不动,别空转
+						if (ActExecutor.OriginCx(p) == _tx && ActExecutor.OriginCy(p) == fy)
+						{ Fail($"已经站在({_tx},{fy})却仍放不了({_tx},{_ty})"); return; }
+						DiagLog.Write($"[bstart] 够得着但放不了({_tx},{_ty}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 去({_tx},{fy})站住 第{_gotoTries}次");
+						RecedingNav.Start(_tx, fy, RecedingNav.Mode.Stand);
+						_phaseFrames = 0;
+						return;
+					}
 					_phaseFrames = 0; _ph = Ph.Place;
 					return;
 
