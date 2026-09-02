@@ -16,6 +16,9 @@ namespace TerraBlind
 	public class MineCoordinator : ModSystem
 	{
 		private static volatile MineRequest _active;
+		// 连着多少帧扫不出要挖的格就认输。横向挖有"走进已挖开的隧道"这种合法空帧,给足余量
+		private static int _idleFrames;
+		private const int IdleMax = 90;
 		// 上次为够不着而伸手的那一格。只为日志去重 —— 每帧都打会刷满
 		private static (int, int) _boostLogAt = (int.MinValue, int.MinValue);
 		private static int _stallFrames, _lastRemaining;
@@ -28,6 +31,7 @@ namespace TerraBlind
 		{
 			_active = r;
 			_stallFrames = 0;
+			_idleFrames = 0;
 			_lastRemaining = int.MaxValue;
 		}
 
@@ -149,7 +153,21 @@ namespace TerraBlind
 				return;
 			}
 
-			if (tx == int.MinValue) return; // nothing to mine this frame (walking into the opened tunnel)
+			// 【这条以前是完全静默的 return,而且不清 _active —— 于是彻底死锁】。
+			// 扫不出要挖的格时 remaining==0,上面那段又把 _stallFrames 清零,600 帧的看门狗永远不触发;
+			// _active 一直非空,TickSteps 开头的 busy 门就把后面每一轮都挡在 "start n=1" 上,
+			// 人一格不动、一条日志不打,只能等 sentinel 判 H 平线放弃整段
+			// (现场:(1461,230) 要挖 (1460,230),第一次派发之后 14 轮全停在 start n=1)。
+			// 横向那一步本来就有"走进已挖开的隧道"这种合法的空帧,所以不能一见空就停;
+			// 但连着空这么久就是真扫不出来了,交回上层重规划
+			if (tx == int.MinValue)
+			{
+				if (++_idleFrames <= IdleMax) return;
+				DiagLog.Write($"[mine] 连着{IdleMax}帧扫不出要挖的格 dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) 人=({pcx},{pfeet}) → stop");
+				_active = null; _idleFrames = 0;
+				return;
+			}
+			_idleFrames = 0;
 
 			// the target tile supports an attached object above (chest/tree/etc.) → Terraria won't let it break;
 			// swinging forever would hang. abort now (don't wait out StallMax) so closed-loop replan routes around.
