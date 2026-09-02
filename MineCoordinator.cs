@@ -16,6 +16,8 @@ namespace TerraBlind
 	public class MineCoordinator : ModSystem
 	{
 		private static volatile MineRequest _active;
+		// 上次为够不着而伸手的那一格。只为日志去重 —— 每帧都打会刷满
+		private static (int, int) _boostLogAt = (int.MinValue, int.MinValue);
 		private static int _stallFrames, _lastRemaining;
 		private const int StallMax = 600; // ~10s with no tile removed = can't reach the target → bail
 		private const int MineBoxMargin = 2; // tiles of slack around the start↔target box before mining aborts
@@ -158,10 +160,39 @@ namespace TerraBlind
 				return;
 			}
 
-			Cursor.AimTile(tx, ty);
-			p.selectedItem = slot;
-			if (p.itemTime == 0)
-				p.controlUseItem = true;
+			// 【够不着就别空挥】。vanilla 够不着时根本不破坏方块,而这里原来只管瞄准+按键,
+			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥 —— 死循环。
+			// 现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段。
+			// 尺子用 Reach.CanMine(vanilla 挖掘那一份),别另编
+			if (!Reach.CanMine(p, tx, ty))
+			{
+				DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → stop");
+				_active = null;
+				return;
+			}
+
+			// 【够不着就临时把手伸长,别空挥】。vanilla 够不着时根本不破坏方块,而这里原来只管
+			// 瞄准+按键,于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥 —— 死循环
+			// (现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段)。
+			// 【只在这一帧开,同帧关】。LongArm 改的是 static tileRangeX,全局都读得到,
+			// 跨帧持有会让整个寻路以为手能伸 30 格 —— 所以用 try/finally 保证挥完就还
+			// 【别抢别人的手臂】。捅向导那段(WofPrep)会长期开着 30 格,那时 LongArmBegin 是空操作,
+			// 我这儿的 finally 却会把它提前还掉 —— 所以本来就开着就不碰
+			bool boosted = !Concessions.LongArmOn && !Reach.CanMine(p, tx, ty);
+			if (boosted)
+			{
+				Concessions.LongArmBegin();
+				if (_boostLogAt != (tx, ty))
+				{ _boostLogAt = (tx, ty); DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 伸长手臂挖"); }
+			}
+			try
+			{
+				Cursor.AimTile(tx, ty);
+				p.selectedItem = slot;
+				if (p.itemTime == 0)
+					p.controlUseItem = true;
+			}
+			finally { if (boosted) Concessions.LongArmEnd(); }
 		}
 
 		// aim for the 2-column shaft center (±2px), not the edge — an edge-snug stop leaves a sub-pixel lip
