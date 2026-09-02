@@ -36,7 +36,9 @@ namespace TerraBlind
 		// 换向导捅岩浆那一整套白干,还得重来。20 以上是有概率的,值得试
 		const int MinDynamite = 20;
 		const int WalkAwayTiles = 80;
-		const int DigDepth = 6;   // 往下最多挖这么深;再深人就够不着,也补不回来
+		// 往下最多挖这么深。【6 是 4 格手臂时代的数】:这一段开着 30 格手臂,
+		// 够不着由循环里的 Reach.CanMine 逐格挡,深度上限不该再当第二道闸
+		const int DigDepth = 24;
 		// 向导要掉过洞口这么多行才开始补。补早了等于给他垫块地,他就再也下不去了
 		const int PatchClear = 8;
 		const int PatchWait = 60 * 10;   // 最多等他掉 10 秒。再不掉就照补,别把窟窿永远留着
