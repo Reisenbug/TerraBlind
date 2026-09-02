@@ -3450,6 +3450,10 @@ namespace TerraBlind
 			for (int i = 0; i < w; i += 2)
 			{
 				int ex = sMinX + i, ey = surf[i] - 1;
+				// 窗口只是签名的横向跨度,丛林几百格宽,里面每一列都是候选。
+				// 只按 H 挑就会落在丛林左半边而不是主道 --- 脚下得真是签名方块才算数。
+				var st = Main.tile[ex, surf[i]];
+				if (!st.HasTile || !want.Contains(st.TileType)) continue;
 				cands++;
 				// the stand cell over a pit mouth is air — the field prices it; try one higher as fallback
 				if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
