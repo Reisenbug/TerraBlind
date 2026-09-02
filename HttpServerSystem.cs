@@ -3379,17 +3379,28 @@ namespace TerraBlind
 			failReason = "";
 			var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
 			int surfaceCap = (int)Main.worldSurface;
-			int sMinX = int.MaxValue, sMaxX = int.MinValue;
+			// 窗口不能取 min/max 跨度:丛林和雪地中间只要有一格零星丛林草,跨度就把雪地整个吞进去,
+			// 然后按 H 挑就挑到雪地了。改成按列数签名格,取【最密的那一段连续列】=生物群系本体。
+			var colHit = new bool[Main.maxTilesX];
 			for (int x = 0; x < Main.maxTilesX; x += 2)
 				for (int y = 0; y < surfaceCap; y += 2)
 				{
 					var t = Main.tile[x, y];
 					if (!t.HasTile || !want.Contains(t.TileType)) continue;
-					if (x < sMinX) sMinX = x;
-					if (x > sMaxX) sMaxX = x;
+					colHit[x] = true; break;
 				}
+			// 段内允许 gapMax 的空列(河流、湖、光秃的坡),超过就算断开
+			const int gapMax = 60;
+			int sMinX = int.MaxValue, sMaxX = int.MinValue;
+			int curS = -1, curE = -1, curN = 0, bestN = 0;
+			for (int x = 0; x < Main.maxTilesX; x += 2)
+			{
+				if (!colHit[x]) { if (curS >= 0 && x - curE > gapMax) { if (curN > bestN) { bestN = curN; sMinX = curS; sMaxX = curE; } curS = -1; curN = 0; } continue; }
+				if (curS < 0) { curS = x; curN = 0; }
+				curE = x; curN++;
+			}
+			if (curS >= 0 && curN > bestN) { bestN = curN; sMinX = curS; sMaxX = curE; }
 			if (sMinX > sMaxX) { failReason = "no_surface_biome"; return null; }
-			DiagLog.Write($"[descent-win] 签名窗口 x={sMinX}..{sMaxX} 宽{sMaxX - sMinX + 1}");
 
 			int w = sMaxX - sMinX + 1;
 			int hellCap = Main.maxTilesY - 200;
