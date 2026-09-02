@@ -1264,7 +1264,12 @@ namespace TerraBlind
         // 放置的砖【不】存进节点(节点保持纯物理),落点只是站在新平台顶上。纯空中垒柱交给宏。
         // 【按 (站立格, dir) 缓存】。这个判据跟 hold 无关,而同一格的 18 个 hold 变体各调一次,
         // 每次扫 189 格 —— 17/18 是纯重复。缓存跟着 _placeCache 一起在 Plan() 开头清。
-        static readonly Dictionary<(int, int, int), bool> _reachCache = new();
+        // 【必须是并发字典】。A* 跑在后台线程(TrapEscape 的 Task.Run),贪心跑在主线程,
+        // 两边都在搜索内部高频读写这两个缓存,而 ClearPlaceCache 又在 Plan() 开头清 ——
+        // 撞上就是 "non-concurrent collections must have exclusive access",整个 tick 挂掉,
+        // 之后每次寻路都 exception,人钉在原地(现场:(1141,205) 之后 10 个宝箱全 MISS)。
+        // 值只依赖坐标,两条线程算出来一样,所以不用锁串行化,并发字典就够
+        static readonly System.Collections.Concurrent.ConcurrentDictionary<(int, int, int), bool> _reachCache = new();
 
         static bool AnyPlaceableInReach(SSNode cur, int dir, PhysicsSimulator.Params ph)
         {
@@ -1448,7 +1453,7 @@ namespace TerraBlind
         // 每个节点 18 个 hold 变体各扫一遍 AnyPlaceableInReach(189 格),相邻节点的盒子还大量重叠。
         // 实测 jplaceL 350064 次/21925ms = 每次 0.063ms,20000 节点就是 22 秒一帧。
         // Plan() 开头清一次即可 -- 期间不会有人改地形(改地形的边只记账,不落地)。
-        static readonly Dictionary<(int, int), bool> _placeCache = new();
+        static readonly System.Collections.Concurrent.ConcurrentDictionary<(int, int), bool> _placeCache = new();
         internal static void ClearPlaceCache() { _placeCache.Clear(); _reachCache.Clear(); }
 
         static bool CanPlaceReal(int wx, int wy)
