@@ -674,6 +674,8 @@ namespace TerraBlind
 				}
 			}
 			if (WofPrep.IsRunning) WofPrep.Tick();
+			// /tb 1 的全流程编排。只调度别的原语,自己不写控制帧,所以放在它们前面
+			if (StartRun.IsRunning) StartRun.Tick();
 
 			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)

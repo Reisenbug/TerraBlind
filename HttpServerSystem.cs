@@ -58,6 +58,8 @@ namespace TerraBlind
 		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒 —— 绝不能在 HTTP 线程上干。
 		// 排队交给主线程,和开箱/换位是同一套路子
 		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();
+		private static readonly ConcurrentQueue<bool> _startRunQueue = new();
+		public static string StartRunStart = "";   // 主线程跑完写这里,给 /start_run_status 读
 		public static string HellRunStart = "";   // 主线程跑完写这里,给 /hell_run_status 读
 		// 上一次开箱的结果,给 /interact 的调用方看。以前拒绝是静默 continue,外面只知道"没开",不知道为什么。
 		public static volatile string LastInteract = "idle";
@@ -113,6 +115,8 @@ namespace TerraBlind
 				var inv = Main.LocalPlayer.inventory;
 				(inv[src], inv[dst]) = (inv[dst], inv[src]);
 			}
+			while (_startRunQueue.TryDequeue(out _))
+				StartRunStart = StartRun.Start(out string srw2) ? "" : srw2;
 			while (_hellRunQueue.TryDequeue(out _))
 			{
 				HellRunStart = StateSnapshotPlayer.StartHellRun(out string hrw) ? "" : hrw;
@@ -2593,6 +2597,22 @@ namespace TerraBlind
 						: "{\"ok\":false,\"reason\":\"" + JsonEsc(whys) + "\"}";
 				}
 			}
+			else if (path == "/start_run")
+			{
+				// tb 1 的全流程,编排全在 StartRun 里 --- python 只触发。
+				// 真正的活在主线程做(要读地形/背包),这里只入队,照 /hell_run 那条
+				StartRunStart = "";
+				_startRunQueue.Enqueue(true);
+				body = "{\"accepted\":true,\"note\":\"poll /start_run_status\"}";
+			}
+			else if (path == "/start_run_status")
+			{
+				var srj = StartRun.StatusJson();
+				body = StartRunStart.Length > 0
+					? srj.Substring(0, srj.Length - 1) + ",\"start_error\":\"" + JsonEsc(StartRunStart) + "\"}"
+					: srj;
+			}
+			else if (path == "/start_run_stop") { StartRun.Stop(); body = "{\"ok\":true}"; }
 			else if (path == "/hell_run")
 			{
 				// 地狱那一整套:算线 → 选址 → 去桥起点 → 盖房 → 铺桥 → 肉山准备 → 开打。
@@ -3038,6 +3058,27 @@ namespace TerraBlind
 		// 每个宝藏一次 BuildField(实测 22 段 1.5 秒) --- 合起来约 4 秒。放主线程就是盖房前干卡 4 秒,
 		// 所以抽出来:同步端点直接调,/descent_route_async 扔 Task.Run 让它和盖房并行。
 		// 只读地形和玩家位置,写的只有 _descentField 和 PathVis(自带锁)。
+		// mod 内部要这份路线(StartRun 走 itinerary),但它只以 JSON 形式存在 ---
+		// 与其把那个大函数拆一遍,不如让内部也走同一份产出,免得出现第二套判据
+		// 盖房那几十秒里把整条路线算完,和 /descent_route_async 走同一条路
+		public static void WarmDescentAsync(string biome)
+		{
+			var sig = BiomeSig(biome);
+			if (sig == null || !StartRouteWarm(biome, "{}")) return;
+			System.Threading.Tasks.Task.Run(() =>
+			{
+				try { FinishRouteWarm(DescentRouteJson(sig, "{}")); DiagLog.Write($"[warm] 路线算好 {biome}"); }
+				catch (System.Exception e) { FinishRouteWarm(null); DiagLog.Write($"[warm] 路线 EXC {e.Message}"); }
+			});
+			DiagLog.Write($"[warm] 后台开算路线 {biome}");
+		}
+
+		public static string RouteJsonFor(string biome, string reqBody)
+		{
+			var sig = BiomeSig(biome);
+			return sig == null ? "{\"found\":false,\"reason\":\"unknown_biome\"}" : DescentRouteJson(sig, reqBody);
+		}
+
 		static string DescentRouteJson(ushort[] sigTypes, string reqBody)
 		{
 					var dd = ComputeDescent(sigTypes, out string why);
