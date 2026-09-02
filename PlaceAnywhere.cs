@@ -402,6 +402,16 @@ namespace TerraBlind
 		static void Retry(string note)
 		{
 			if (++_rebuilds > MaxRebuilds) { Fail($"重算{_rebuilds}次仍失败,最后:{note}"); return; }
+			{
+				// 【卡满 151 帧却一条分支日志都没有】= 每帧走到底又什么都没做。
+				// 把当时的判据全打出来,不然只能看见"重算链"循环八次然后 STUCK
+				var pp = Main.LocalPlayer;
+				var (tx0, ty0) = _idx < _chain.Count ? _chain[_idx] : (_tx, _ty);
+				if (pp != null) DiagLog.Write($"[placeany] 卡住现场 目标({tx0},{ty0}) 人({ActExecutor.OriginCx(pp)},{ActExecutor.OriginCy(pp)})"
+					+ $" 身子里={InBody(pp, tx0, ty0)} 够得着={Reach.CanPlace(pp, tx0, ty0)} 落脚列={ApproachCol(pp, tx0, ty0)}"
+					+ $" 放置中={PlaceAction.IsRunning} 放置结果={PlaceAction.Outcome}/{PlaceAction.Reason}"
+					+ $" vy={pp.velocity.Y:0.##} 拉黑={_bad.Count}");
+			}
 			DiagLog.Write($"[placeany] 重算链({_rebuilds}/{MaxRebuilds}) 因为 {note}");
 			if (!Build(out string why)) { Fail(why); return; }
 			_idx = 0; _cellFrames = 0;
