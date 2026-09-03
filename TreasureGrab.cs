@@ -52,8 +52,9 @@ namespace TerraBlind
 		{
 			// 【唯一的无声出口】。Fail/Done 都写日志,只有它不写 --- 于是"开箱整段消失"
 			// 在日志里查不出是谁干的。带上调用栈,一次定死
-			if (_ph != Ph.Idle && _ph != Ph.Done)
-				DiagLog.Write($"[grab] STOP ({_tx},{_ty}) ph={_ph} frames={_frames} 谁叫的:\n{System.Environment.StackTrace}");
+			// 【无条件打】。原来带 _ph 守卫,而"已经是 Idle 了"正是要查的那种情况 ---
+			// 守卫一挡,连着 STOP/心跳/看门狗三条全静默,查不出是谁先动的手
+			DiagLog.Write($"[grab] STOP ({_tx},{_ty}) ph={_ph} frames={_frames} 谁叫的:\n{System.Environment.StackTrace}");
 			if (Outcome == "running") { Outcome = "stopped"; Reason = "外部叫停"; }
 			RecedingNav.Stop();
 			_ph = Ph.Idle;
