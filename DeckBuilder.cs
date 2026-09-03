@@ -37,11 +37,20 @@ namespace TerraBlind
 		private static int _heartbeat;
 		private const int SameColStuck = 30;         // 同列够不着这么多帧 = 横移解决不了,交栈
 
-		// 桥面有起伏,人站的行会差一点,松一格免得刚好在坡上误判成掉下去
-		// 竖直差这么多就不是走两步能解决的,交栈。够得着的判据本身有几行余量,所以要比它松
-		// 低这么多以内自己跳一下就上去了,再多就不是跳能解决的,交寻路
+		// 桥面有起伏松一格免得坡上误判;竖直差太多不是走两步能解决的,交栈
 		private const int JumpBackSlack = 2;
 		private const int VertSlack = 4;
+
+		// 往前迈那一列脚下有没有地。判据和 BridgeBuilder 那份一致:桥面是平台也算,
+		// 脚下这行或再下一行有地都行(桥面会抬升/下沉一格)
+		private static bool NextStepStandable(Player p)
+		{
+			var (bl, br) = Predicates.BodyCols(p);
+			int nx = _line[_idx].x, npx = ActExecutor.OriginCx(p);
+			int col = nx > npx ? br + 1 : bl - 1;
+			int fy = ActExecutor.OriginCy(p);
+			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
+		}
 		private const int StandSlack = 1;
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
@@ -135,15 +144,8 @@ namespace TerraBlind
 				Outcome = "done"; _ph = Ph.Done;
 				// 【铺完就放开】。不清的话 WofPrep 捅向导时要挖他脚下那格桥面,会被这条拦住
 				_lineSet.Clear();
-				// 【铺完必须把罗盘作废】。场是按 goal 缓存的,地形变了它不知道 —— 而这一趟
-				// 刚往地狱里填了上百格方块。留着旧场的后果:走桥面时 H 还是"这里全是空的",
-				// 于是贪心选出一条 bridge 边(一步跨 84 格把 H 从 564 打到 23),在已经铺好的
-				// 桥上再铺一层平台,把方块全换掉。作废之后下一趟 RecedingNav.Start 会在
-				// 后台重建(1.5s,不卡主线程)
-				// 【先停寻路再作废】。RecedingNav.cs:284 是主线程直接 GetField 的,
-				// 缓存没了而寻路还活着的话,它会当场同步建场(110万格,1.5秒)= 可见卡顿。
-				// 桥都铺完了,那趟"回桥面"的寻路没有继续的理由,停掉正好;
-				// 下一趟 Start 会在后台把新场建起来
+				// 【铺完必须作废旧罗盘】:场按 goal 缓存,地形变了它不知道,留着会在铺好的桥上再铺一层。
+				// 【先停寻路再作废】:缓存没了而寻路还活着,它会当场同步建场(110万格)= 可见卡顿
 				if (RecedingNav.Active) RecedingNav.Stop();
 				MazeWand.InvalidateField();
 				DiagLog.Write("[deck] 桥铺完了,作废旧罗盘");
@@ -154,10 +156,8 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
-			// 【铺到之前先把上方净空挖出来】。人走桥面时身子要占 3 行,头顶还得留出跳的余量;
-			// 等走到跟前被顶住再救就晚了 —— 那时人卡在桥面下一行,跳 8 次全撞天花板然后整条桥失败
-			// (现场:人1051 桥面1050 只差一行,连报 8 次"跳上去"然后 STUCK)。
-			// 往前看几格一起清,免得刚清完当前格、下一格的天花板又把人拦住
+			// 【铺到之前先把上方净空挖出来】:走到跟前被顶住再救就晚了,那时人卡在桥面下一行,
+			// 跳 8 次全撞天花板然后整条桥失败。往前看几格一起清
             if (ClearAhead(p)) { Mark("清净空"); return; }
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
@@ -170,10 +170,9 @@ namespace TerraBlind
 				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
 				if (_idx % 20 == 0)
 					DiagLog.Write($"[deck] 进度{_idx}/{_line.Count} 放了{Placed} 本来就有{Already}");
-				// 【铺好一格就跟着往前一步】。连铺(BridgeBuilder)自带走位,而斜坡上同一行常常
-				// 不足 MinRun 格,全走 PlaceAnywhere —— 那条是站着放的,一次换行落后一两格,
-				// 几次累积到 14 格,桥头比人低三四行,于是判"回不了桥面"叫寻路,来回折腾。
-				if (_idx < _line.Count)
+				// 【铺好一格就跟一步】:PlaceAnywhere 是站着放的,不跟就一次落后一两格,攒到十几格后判"回不了桥面"。
+				// 【但绝不迈进空里】:下一格还没铺出来时脚下是空的,跨出桥面就掉下去(现场:桥面1044,人掉到1065)
+				if (_idx < _line.Count && NextStepStandable(p))
 				{
 					int npx = ActExecutor.OriginCx(p), nx = _line[_idx].x;
 					if (nx > npx) p.controlRight = true;
@@ -191,10 +190,8 @@ namespace TerraBlind
 				// 于是在挖不到的地方放行,每帧发起一次挖、每帧挖不动,181 帧后报 STUCK
 				if (!Reach.CanMine(p, x, y))
 				{
-					// 【这条 return 也要计卡住】。它只按左右键横移,人推着墙原地踏步时列号不变,
-					// 而累加 _blockedFrames 的代码排在下面 —— 每帧从这儿返回就永远跑不到,
-					// blocked 恒为 0,ClearAhead 清身前那段(要 blocked 攒够)一次都不触发,
-					// 于是墙不挖、走不过去、平台永远够不着,4200 帧原地不动。
+					// 【这条 return 也要计卡住】:累加 _blockedFrames 的代码排在下面,每帧从这儿返回
+					// 就永远跑不到,blocked 恒为 0,ClearAhead 一次都不触发,4200 帧原地不动
 					int pdx = System.Math.Abs(ActExecutor.OriginCx(p) - x);
 					if (pdx < _lastDx) { _blockedFrames = 0; _lastDx = pdx; }
 					else _blockedFrames++;
