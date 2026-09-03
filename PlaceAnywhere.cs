@@ -74,8 +74,7 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 锚点【跟着料走】:这个原语放什么由调用方给(94 平台 / 9 木头 / 任意方块 ID),
-		// 判据也得跟着变 —— 平台是 3x3 含斜角认墙,方块是四邻认墙。
+		// 锚点【跟着料走】:平台是 3x3 含斜角认墙,方块是四邻认墙。
 		// 绝不另写第三份(写过一次 3x3 的,7 格全判反)
 		static bool HasAnchor(int x, int y)
 			=> PlacingPlatform() ? MazeWand.PlatformAnchor(x, y) : MazeWand.BlockAnchor(x, y);
@@ -99,14 +98,12 @@ namespace TerraBlind
 			   && !(Predicates.IsLava(x, y) && Concessions.BurnsInLava(_item))
 			   && !_bad.Contains((x, y));
 
-		// 先试【绕开身子】的一条,不行再退回原来那条。
-		// 原来一律不排除身体格,靠"到跟前人会让开" —— 可两侧悬空时根本让不开:
-		// 人跳上去 2 格,链上更高的格子又进了身体,于是跳→等151帧→重算,循环不停(日志里就是这样)
+		// 先试【绕开身子】的一条,不行再退回原来那条。两侧悬空时人根本让不开:
+		// 跳上去 2 格,链上更高的格又进了身体,于是跳→等151帧→重算,循环不停
 		static bool Build(out string why)
 		{
 			if (BuildAvoid(true, out why)) return true;
-			// 放宽【身体格】重试:人到跟前会让开,所以链穿过身体是可以的。
-			// 但"不许封住头顶"那条【永远不放宽】—— 那不是让一让能解决的,
+			// 放宽【身体格】重试:人到跟前会让开。但"不许封住头顶"那条【永远不放宽】,
 			// 砌完人就出不来了,A* 也搜不出路,只能整趟重开
 			return BuildAvoid(false, out why);
 		}
@@ -121,10 +118,8 @@ namespace TerraBlind
 			{ var bc = Predicates.BodyCols(pl); bl0 = bc.left; br0 = bc.right; fy0 = ActExecutor.OriginCy(pl); }
 			bool InBodyCell(int x, int y)
 				=> avoidBody && x >= bl0 && x <= br0 && y <= fy0 && y >= fy0 - 2;
-			// 【绝不把自己封在里面】。链只是"接到锚点"的最短路,它不知道人站在哪 ——
-			// 现场:人在(2097,1055),链沿 2095 列从 1056 砌到 1052 再横盖到 (2097,1050),
-			// 人头顶和左边全被自己的方块堵死(跳升=0 能搭=False 顶=1055),A* 再也搜不出路。
-			// 判据只管【人头顶那一列】:身子上方 3 行内不许有链上的格,那是跳出去的唯一出口
+			// 【绝不把自己封在里面】:链是最短路,它不知道人站在哪,砌完头顶 A* 再也搜不出路。
+			// 判据只管【人头顶那一列】:身子上方 3 行不许有链上的格,那是跳出去的唯一出口
 			bool SealsPlayer(int x, int y)
 			{
 				if (pl == null) return false;
@@ -176,11 +171,8 @@ namespace TerraBlind
 			return c < 0 ? ActExecutor.OriginCx(p) : c;
 		}
 
-		// 【站哪儿才能放 (x,y)】—— 一格都不压住它,而且够得着。返回那一格(脚站的格),
-		// 找不到返回 (-1,-1) 让调用方交栈。
-		//
-		// 判据全部按【真碰撞箱】算,不拿 OriginCy±N 近似:站半砖上脚底下沉 8px,
-		// 身子跨 4 行而不是 3 行,近似会把"其实压着"判成"没压着",于是放不出来又不知道为什么
+		// 【站哪儿才能放 (x,y)】:一格都不压住它而且够得着,找不到返回 (-1,-1) 让调用方交栈。
+		// 判据按【真碰撞箱】算 -- 近似会把"其实压着"判成"没压着",放不出来又不知道为什么
 		static (int col, int row) ApproachSpot(Player p, int x, int y)
 		{
 			int cx = ActExecutor.OriginCx(p);
@@ -321,6 +313,9 @@ namespace TerraBlind
 				DiagLog.Write($"[placeany] DONE ({_tx},{_ty}) 接了{_idx}格");
 				return;
 			}
+			// 【交栈之后要让路】:Unstick 会派 pillar/平台梯去造落脚点,它们自己按方向键。
+			// 不等的话这边同一帧也在推,两套控制打架,谁也走不成
+			if (PillarUp.IsRunning || PlatformDown.IsRunning) { Mark("等落脚点造好"); return; }
 			if (_idx >= _chain.Count) { Fail($"链铺完了({_chain.Count}格)目标还是空的"); return; }
 
 			var (x, y) = _chain[_idx];
@@ -377,7 +372,15 @@ namespace TerraBlind
 				// 【别朝目标走】:走到目标头上,StepAside 又把人赶开,两边互相推翻。
 				// 日志:settle 到 3508 → 这里往右推回 3511 → 让开 → 再推回,190帧全是 out_of_reach
 				int dst = ApproachCol(p, x, y);
-				if (dst == cx) { Retry($"够不着({x},{y})但没有能站的落脚列"); return; }
+				// 【没有落脚列 = 要造一个,不是再算一遍链】。悬空处这是死结:要放砖得先走近,
+				// 要走近得有地站,要有地得先放砖 -- 重算 9 次只会转回同一个结论。交栈让它造
+				if (dst == cx)
+				{
+					DiagLog.Write($"[placeany] 够不着({x},{y}) 人({cx},{cy}) 周围{MaxAsideCols}列内没有落脚列,交栈造一个");
+					if (!Unstick.Handle("placeany", new Blocker(BlockKind.NoFooting, x, y + 1, "够不着又没有落脚列")))
+						Retry($"够不着({x},{y})但没有能站的落脚列,交栈也没辙");
+					return;
+				}
 				int dir = dst > cx ? 1 : -1;
 				// 地形挡着就挖开,不然横向走一辈子也过不去(卡满 MaxCellFrames 才报错)
 				if (ClearWay.Forward(p, dir)) { Mark("挖挡路"); return; }
