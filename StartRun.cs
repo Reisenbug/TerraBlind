@@ -85,7 +85,7 @@ namespace TerraBlind
 					{ DiagLog.Write($"[start] 火把够了({Have(ItemID.Torch)}/{NeedTorch})"); Go(Ph.Site); return; }
 					if (_frames > 60 * 900) { Fail($"收火把超时,只有{Have(ItemID.Torch)}/{NeedTorch}"); return; }
 					// 到了再开箱,和下降那段同一个分工,同样要排在最前面
-					if (_stop.HasValue && !RecedingNav.Active && !TreasureGrab.IsRunning)
+					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
 						var st2 = _stop.Value; _stop = null;
 						DiagLog.Write($"[start] 到了({st2.x},{st2.y}) nav={RecedingNav.LastStop} 还在={Main.tile[st2.x, st2.y].HasTile}");
@@ -94,7 +94,7 @@ namespace TerraBlind
 							DiagLog.Write($"[start] ({st2.x},{st2.y})开不了:{tw2}");
 						return;
 					}
-					if (!RecedingNav.Active && !TreasureGrab.IsRunning && GreedSideTrip()) return;
+					if (!TreasureGrab.IsRunning && GreedSideTrip()) return;
 					if (RecedingNav.Active || TreasureGrab.IsRunning) return;
 					if (_route.Count == 0)
 					{
@@ -182,7 +182,8 @@ namespace TerraBlind
 				{
 					// 【到了再开箱,而且要排在最前面】。寻路结束那一帧,顺路采集和"取下一站"
 					// 都会抢在前面执行 --- 一抢 _stop 就被覆盖,箱子永远开不了
-					if (_stop.HasValue && !RecedingNav.Active && !TreasureGrab.IsRunning)
+					// _sideTrip 期间原目标还没走完,别把它当"到了"
+					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
 						var st = _stop.Value; _stop = null;
 						DiagLog.Write($"[start] 到了({st.x},{st.y}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) nav={RecedingNav.LastStop} 还在={Main.tile[st.x, st.y].HasTile}");
@@ -197,7 +198,8 @@ namespace TerraBlind
 					// 【顺路采集】。itinerary 只列了几个大目标,路上贴着走过去的箱子靠这一层。
 					// 【只在主链空档拐】:主链正朝某个目标走时抢过方向盘,那个目标就丢了 ---
 					// _routeIdx 已经推进过,回来不会重走。空档拐,回来接着取下一站,不丢东西
-					if (!RecedingNav.Active && !TreasureGrab.IsRunning && GreedSideTrip()) return;
+					// 【nav 在跑的时候也要扫】。等它跑完人早过去了 --- 这是漏宝的主因
+					if (!TreasureGrab.IsRunning && GreedSideTrip()) return;
 					if (RecedingNav.Active || TreasureGrab.IsRunning) return;
 					if (_frames > 60 * 60 * 30) { Fail("下地狱超时"); return; }
 					if (!_haveTarget)
@@ -314,12 +316,24 @@ namespace TerraBlind
 			{
 				_sideTrip = false;
 				DiagLog.Write($"[greed] 顺路那趟完了:{TreasureGrab.Outcome}/{TreasureGrab.Reason}");
+				// 【捡完回原路】。打断时把原目标记在 _stop 里,这儿重新起一趟 ---
+				// 不重发的话人就停在岔路上,主链以为"到了"直接取下一站
+				if (_stop.HasValue)
+				{
+					var b = _stop.Value;
+					DiagLog.Write($"[greed] 回原路 ({b.x},{b.y})");
+					RecedingNav.Start(b.x, b.y, RecedingNav.Mode.Reach);
+					return true;
+				}
 				return false;
 			}
 			var hit = GreedPickup.Poll();
 			if (hit == null) return false;
 			var (gx, gy) = hit.Value;
 			GreedPickup.MarkDone(gx, gy);
+			// 【边走边拐】。python 那份是 nav_to 全程带 greed,随时打断去捡 ---
+			// 只在主链空档扫的话,一趟长途下来路过的箱子全漏了
+			RecedingNav.Stop();
 			if (!TreasureGrab.Start(gx, gy, out string gw))
 			{ DiagLog.Write($"[greed] ({gx},{gy})开不了:{gw}"); return false; }
 			_sideTrip = true;
