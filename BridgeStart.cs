@@ -38,15 +38,12 @@ namespace TerraBlind
 			_phaseFrames = 0; _held = 0; _tries = 0; _gotoTries = 0;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[bstart] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 桥起点({tx},{ty})");
-			// 【Goto 这一步只要够得着 —— 站上去是 Ph.Stand 的事,而且要等方块放好之后】。
-			// 桥起点此刻【还是空气】(整个原语就是为了"先放一块再站上去"存在的),
-			// 这时要求 Mode.Stand 等于让 A* 去站一个不存在的落脚点:它只能垫平台去够,
-			// 搜不出来就报 unreachable(现场:人已到(784,1050),目标(788,1050)同行差4列,
-			// 却连报 3 次 no plan)。方块放好之后 Ph.Stand 再用 Mode.Stand,那时它是实的。
-			//
-			// 之前改成 Stand 是为了躲另一个坑:Reach 停得远 → PlaceAnywhere 接 9 格锚点链 →
-			// 把人砌在墙里。那个坑已在 PlaceAnywhere 单独堵了(SealsPlayer:链绝不砌进头顶 3 行)。
-			RecedingNav.Start(tx, ty, RecedingNav.Mode.Reach);
+			// 【不能拿 tx,ty 当落脚点】:桥起点此刻还是空气,Mode.Stand 会去站一个不存在的格子,
+			// Mode.Reach 判的又是交互那把尺子(撒手时 CanPlace 未必过)。直接去它旁边那格实地站住
+			int sy = FootRowFor(tx, ty);
+			if (sy < 0) { why = $"({tx},{ty})上下{FootScan}行都没有能站的地"; return false; }
+			DiagLog.Write($"[bstart] 先去落脚行({tx},{sy})站住");
+			RecedingNav.Start(tx, sy, RecedingNav.Mode.Stand);
 			_ph = Ph.Goto;
 			return true;
 		}
@@ -58,15 +55,18 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 目标格【正下方】第一个能站的行 --- 站那儿离目标 1 行,放置那把尺子必定过。
-		// 只往下找:目标上方是要留给人身子的
+		// 目标格附近第一个能站的行。【下方优先再往上】:Reach 按玩家中心格收尾,
+		// 常把人撂在目标下方,那时落脚点在人上方,只往下扫必然扑空
 		static int FootRowFor(int tx, int ty)
 		{
 			for (int y = ty + 1; y <= ty + FootScan; y++)
 			{
+				// 【先判站得住】:岩浆表层已经是方块,而那格 LiquidAmount 仍 >0,反过来判会把踩得住的地当死路
+				if (Predicates.IsGround(tx, y) && Predicates.CanStand(tx, y - 1)) return y - 1;
 				if (Predicates.IsLava(tx, y)) return -1;
-				if (Predicates.IsGround(tx, y)) return y - 1;
 			}
+			for (int y = ty - 1; y >= ty - FootScan; y--)
+				if (Predicates.IsGround(tx, y) && Predicates.CanStand(tx, y - 1)) return y - 1;
 			return -1;
 		}
 		const int FootScan = 12;
@@ -87,31 +87,26 @@ namespace TerraBlind
 
 			switch (_ph)
 			{
-				// 走过去。【收尾要用放置那把尺子,不是交互那把】。Mode.Reach 判的是 CanInteract:
-				// 人在目标下方 6 行手仍够得着,它就撒手;而下一步 PlaceAnywhere 差过 4 行直接认输
-				// (现场:人(1182,1056) 目标(1182,1050) 差6行,两边各说各话,桥起点永远放不上)。
-				// 够不着就把人送到目标【正下方那格实地】上,那儿差 1 行,必过
+				// 走过去。判据是【放得下】不是【走到了】:寻路说 done 也可能停在够不着的地方,
+				// 向导入住前范围还是原版 5/4,差几行就放不了
 				case Ph.Goto:
 					if (RecedingNav.Active) return;
-					if (RecedingNav.LastStop != "done")
-					{ Fail($"寻路没到:{RecedingNav.LastStop}"); return; }
-					if (!Reach.CanPlace(p, _tx, _ty))
+					if (Reach.CanPlace(p, _tx, _ty))
+					{ _phaseFrames = 0; _ph = Ph.Place; return; }
+					if (++_gotoTries > MaxTries)
+					{ Fail($"到不了能放({_tx},{_ty})的位置,现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 上一趟={RecedingNav.LastStop}"); return; }
 					{
-						if (++_gotoTries > MaxTries)
-						{ Fail($"到不了能放({_tx},{_ty})的位置,现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
 						int fy = FootRowFor(_tx, _ty);
 						if (fy < 0)
-						{ Fail($"({_tx},{_ty})下方找不到能站的地,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
-						// 算出来就是人现在这格 = 再发一趟也是原地不动,别空转
+						{ Fail($"({_tx},{_ty})上下{FootScan}行都没有能站的地,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
+						// 已经站在落脚行还放不了 = 再发一趟也是原地不动,别空转
 						if (ActExecutor.OriginCx(p) == _tx && ActExecutor.OriginCy(p) == fy)
 						{ Fail($"已经站在({_tx},{fy})却仍放不了({_tx},{_ty})"); return; }
-						DiagLog.Write($"[bstart] 够得着但放不了({_tx},{_ty}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 去({_tx},{fy})站住 第{_gotoTries}次");
+						DiagLog.Write($"[bstart] 放不了({_tx},{_ty}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 去({_tx},{fy})站住 第{_gotoTries}次");
 						RecedingNav.Start(_tx, fy, RecedingNav.Mode.Stand);
 						_phaseFrames = 0;
 						return;
 					}
-					_phaseFrames = 0; _ph = Ph.Place;
-					return;
 
 				// 目标格是空气,先放一块。放完它才是"能站的一格"
 				case Ph.Place:
@@ -133,10 +128,8 @@ namespace TerraBlind
 						if (cx == _tx && cy == _ty - 1 && p.velocity.Y == 0f)
 						{ _phaseFrames = 0; _held = 0; _ph = Ph.Verify; return; }
 						if (++_tries > MaxTries) { Fail($"站不上桥起点({_tx},{_ty}),现在({cx},{cy})"); return; }
-						// 【差一格才自己挪,差得多交寻路】。原来一律"先对列再对高度",
-						// 而 SettleAt 只会横移 —— 人在(2068,1057)、目标(2067,1054)差3行时
-						// 横移一辈子也上不去,三次重试全打在同一个位置然后 STUCK。
-						// 寻路会跳会搭会挖,这种一跳的事它自己就办了
+						// 【差一格才自己挪,差得多交寻路】:SettleAt 只会横移,差 3 行时
+						// 横移一辈子也上不去,三次重试全打在同一个位置然后 STUCK
 						int dx = System.Math.Abs(cx - _tx), dy = System.Math.Abs(cy - (_ty - 1));
 						if (dx <= 1 && dy == 0) { SettleAt.Start(_tx, out _); return; }
 						DiagLog.Write($"[bstart] 站位差({dx},{dy}) → 交寻路 ({_tx},{_ty - 1}) 第{_tries}次");
