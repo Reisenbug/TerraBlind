@@ -275,7 +275,15 @@ namespace TerraBlind
 					}
 					// 到地狱了,交给地狱那一套
 					if (!StateSnapshotPlayer.StartHellRun(out string hrw))
-					{ Fail($"地狱流程起不来:{hrw}"); return; }
+					{
+						// "还在空中"是让你等落地再试,不是失败(/hell_run 端点也是重新排队)
+						if (hrw.Contains("还在空中"))
+						{
+							if (_frames % 120 == 1) DiagLog.Write($"[start] {hrw}");
+							return;
+						}
+						Fail($"地狱流程起不来:{hrw}"); return;
+					}
 					Chatter.Say("[TerraBlind] 到地狱了", 120, 255, 120);
 					Go(Ph.Hell);
 					return;
