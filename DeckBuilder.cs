@@ -156,8 +156,13 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
-			// 【铺到之前先把上方净空挖出来】:走到跟前被顶住再救就晚了。往前看几格一起清
-            if (ClearAhead(p)) { Mark("清净空"); return; }
+			// 【清净空时连铺必须停】:两个 Tick 同一帧都跑,这边站着挖那边照样往前走,
+			// 人就边走边挖,一直走到那格正上方 -- 脚下只剩刚放的一格,下一步就掉
+            if (ClearAhead(p))
+			{
+				if (BridgeBuilder.IsRunning) BridgeBuilder.Stop();
+				Mark("清净空"); return;
+			}
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
 			// 地狱石砖(76)是废墟自带的,踩上去烧人 --- 当成不合格,照平台那条挖掉换方块
