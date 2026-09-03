@@ -37,7 +37,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _sideHeart = null; _stop = null; _atHellEnd = false; _hellEndTries = 0;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _sideHeart = null; _stop = null; _crystalStall = 0; _atHellEnd = false; _hellEndTries = 0;
 			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
@@ -318,6 +318,10 @@ namespace TerraBlind
 		static (int x, int y)? _sideHeart;   // 顺路那颗水晶,要一帧挖一格
 		// 生命水晶占 2x2,四格都挖掉才消失。挖完最后一格 _stop/_sideHeart 由调用方的
 		// HasTile 判据自然放行 --- 这儿只负责挥一次镐
+		// 【够不着不能干等】。原来只打一行日志就 return,人停在差一格的地方就永远静默 ---
+		// 和捅向导那次同一个坑。够不着先走近一步,走够次数还不行就放弃这一颗
+		static int _crystalStall;
+		const int CrystalStallMax = 180;
 		static void MineCrystal(Player p, int x, int y)
 		{
 			if (p == null || ItemUseCoordinator.IsActive) return;
@@ -326,17 +330,28 @@ namespace TerraBlind
 				{
 					int mx = x + dx, my = y + dy;
 					if (!Main.tile[mx, my].HasTile) continue;
-					if (!Reach.CanMine(p, mx, my))
+					if (Reach.CanMine(p, mx, my))
+					{ _crystalStall = 0; ClearWay.Dig(p, mx, my, "生命水晶"); return; }
+					// 够不着:先靠过去。寻路在跑就等它
+					if (RecedingNav.Active) return;
+					if (++_crystalStall > CrystalStallMax)
 					{
-						if (_frames % 60 == 1)
-							DiagLog.Write($"[start] 水晶({mx},{my})够不着,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+						DiagLog.Write($"[start] 水晶({x},{y})够不着也走不近,放弃 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+						GreedPickup.MarkDone(x, y);
+						// 两条路径都要收干净:主链那站丢掉,顺路那趟也要结束
+						_crystalStall = 0; _stop = null; _sideHeart = null; _sideTrip = false;
 						return;
 					}
-					ClearWay.Dig(p, mx, my, "生命水晶");
+					if (_crystalStall % 60 == 1)
+					{
+						DiagLog.Write($"[start] 水晶({mx},{my})够不着,走近点 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+						RecedingNav.Start(mx, my, RecedingNav.Mode.Reach);
+					}
 					return;
 				}
 			DiagLog.Write($"[start] 水晶({x},{y})挖掉了");
 			GreedPickup.MarkDone(x, y);
+			_crystalStall = 0;
 		}
 
 		static bool GreedSideTrip()
