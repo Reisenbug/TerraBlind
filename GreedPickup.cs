@@ -21,7 +21,7 @@ namespace TerraBlind
 		// 【按局清】--- python 那份是模块级 set,跨局不清,重开游戏没重开进程就再也不开箱了
 		static readonly HashSet<(int, int)> _done = new();
 		static bool _busy;
-		static (int x, int y)? _ready;
+		static (int x, int y, bool heart)? _ready;
 		static int _lastScan;
 
 		public static void Reset() { _done.Clear(); _ready = null; _lastScan = 0; }
@@ -29,13 +29,16 @@ namespace TerraBlind
 
 		// 身边有没有值得拐一趟的。有就返回那一格,调用方自己去捡。
 		// 【只在主线程调】,而且调用方得容忍它返回 null(后台还在算)
-		public static (int x, int y)? Poll()
+		public static (int x, int y, bool heart)? Poll()
 		{
 			if (_ready.HasValue)
 			{
 				var r = _ready.Value; _ready = null;
-				// 拿出来的时候再验一次:走这一路可能已经被顺手捡掉了
-				if (_done.Contains(r) || !IsChest(r.x, r.y)) return null;
+				// 拿出来的时候再验一次:走这一路可能已经被顺手捡掉了。
+				// 【这儿不 MarkDone】--- python 是拿到了才记账,选中就拉黑的话
+				// 这一趟失败就再也不回来了
+				if (_done.Contains((r.x, r.y))) return null;
+				if (!(r.heart ? IsHeart(r.x, r.y) : IsChest(r.x, r.y))) return null;
 				return r;
 			}
 			if (_busy) return null;
@@ -52,8 +55,13 @@ namespace TerraBlind
 					foreach (var c in cands)
 					{
 						if (!HttpServerSystem.PathCost(c.x, c.y, out int dig, out int walk)) continue;
-						if (dig > DigMax || walk > WalkMax) continue;
-						DiagLog.Write($"[greed] 顺路捡({c.x},{c.y}) 要挖{dig}走{walk},上限{DigMax}/{WalkMax}");
+						if (dig > DigMax || walk > WalkMax)
+						{
+							// 【确实太远才永久拉黑】。算不出路是暂时的,走几步换个位置往往就通了
+							_done.Add((c.x, c.y));
+							continue;
+						}
+						DiagLog.Write($"[greed] 顺路捡{(c.heart ? "水晶" : "箱子")}({c.x},{c.y}) 要挖{dig}走{walk},上限{DigMax}/{WalkMax}");
 						_ready = c;
 						return;
 					}
@@ -65,9 +73,9 @@ namespace TerraBlind
 		}
 
 		// 直线半径内的箱子。归一到左上角那格 --- 箱子占 2x2,只有锚点算数
-		static List<(int x, int y)> ScanNearby()
+		static List<(int x, int y, bool heart)> ScanNearby()
 		{
-			var outp = new List<(int x, int y)>();
+			var outp = new List<(int x, int y, bool heart)>();
 			var p = Main.LocalPlayer;
 			if (p == null) return outp;
 			int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
@@ -75,11 +83,20 @@ namespace TerraBlind
 				for (int y = pcy - ScanRadius; y <= pcy + ScanRadius; y++)
 				{
 					if (x < 1 || y < 1 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1) continue;
-					if (!IsChest(x, y)) continue;
 					if (_done.Contains((x, y))) continue;
-					outp.Add((x, y));
+					// python 的 GREED_DEFAULT 是 ("Containers","Heart") --- 水晶也顺路拿
+					if (IsChest(x, y)) outp.Add((x, y, false));
+					else if (IsHeart(x, y)) outp.Add((x, y, true));
 				}
 			return outp;
+		}
+
+		// 生命水晶的锚点格。占 2x2,只有左上角算数
+		static bool IsHeart(int x, int y)
+		{
+			var t = Main.tile[x, y];
+			return t.HasTile && t.TileType == TileID.Heart
+				&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0;
 		}
 
 		// 能开的箱子的【锚点格】。上锁的、神庙的、蜂巢里的都不算 --- 和 /descent_route 同一套判据

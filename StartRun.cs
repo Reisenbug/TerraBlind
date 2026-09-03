@@ -37,7 +37,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _stop = null; _atHellEnd = false; _hellEndTries = 0;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _sideHeart = null; _stop = null; _atHellEnd = false; _hellEndTries = 0;
 			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
@@ -185,14 +185,16 @@ namespace TerraBlind
 					// _sideTrip 期间原目标还没走完,别把它当"到了"
 					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
-						var st = _stop.Value; _stop = null;
-						DiagLog.Write($"[start] 到了({st.x},{st.y}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) nav={RecedingNav.LastStop} 还在={Main.tile[st.x, st.y].HasTile}");
-						if (st.kind != "heart" && Main.tile[st.x, st.y].HasTile)
-						{
-							if (!TreasureGrab.Start(st.x, st.y, out string sw))
-								DiagLog.Write($"[start] ({st.x},{st.y})开不了:{sw}");
-							return;
-						}
+						var st = _stop.Value;
+						if (!Main.tile[st.x, st.y].HasTile)
+						{ _stop = null; DiagLog.Write($"[start] ({st.x},{st.y})已经没了"); return; }
+						// 【水晶要挖,不是开箱】。它占 2x2,四格都挖掉才从地图上消失 ---
+						// 留在 _stop 里一帧挖一格,挖没了上面那道 HasTile 自然放行
+						if (st.kind == "heart") { MineCrystal(p, st.x, st.y); return; }
+						_stop = null;
+						DiagLog.Write($"[start] 到了({st.x},{st.y}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) nav={RecedingNav.LastStop}");
+						if (!TreasureGrab.Start(st.x, st.y, out string sw))
+							DiagLog.Write($"[start] ({st.x},{st.y})开不了:{sw}");
 						return;
 					}
 					// 【顺路采集】。itinerary 只列了几个大目标,路上贴着走过去的箱子靠这一层。
@@ -218,9 +220,6 @@ namespace TerraBlind
 						int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
 						int d = System.Math.Abs(pcx - stop.x) + System.Math.Abs(pcy - stop.y);
 						int ph2 = HttpServerSystem.DescentH(pcx, pcy), th = HttpServerSystem.DescentH(stop.x, stop.y);
-						// 【生命水晶不挖】
-						if (stop.kind == "heart")
-						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] 生命水晶({stop.x},{stop.y})"); return; }
 						// 【H 比我大 = 离地狱更远 = 在身后】。拐一趟出来人就偏了,近的会被误判,
 						// 所以只有【又远又在上游】才算走过头 --- 近的一律去拿,折回也就几秒
 						if (d > SkipNearCells && ph2 >= 0 && th >= 0 && th > ph2 + 30)
@@ -316,12 +315,53 @@ namespace TerraBlind
 		static int _hellEndTries;
 		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
 		static bool _sideTrip;
+		static (int x, int y)? _sideHeart;   // 顺路那颗水晶,要一帧挖一格
+		// 生命水晶占 2x2,四格都挖掉才消失。挖完最后一格 _stop/_sideHeart 由调用方的
+		// HasTile 判据自然放行 --- 这儿只负责挥一次镐
+		static void MineCrystal(Player p, int x, int y)
+		{
+			if (p == null || ItemUseCoordinator.IsActive) return;
+			for (int dx = 0; dx < 2; dx++)
+				for (int dy = 0; dy < 2; dy++)
+				{
+					int mx = x + dx, my = y + dy;
+					if (!Main.tile[mx, my].HasTile) continue;
+					if (!Reach.CanMine(p, mx, my))
+					{
+						if (_frames % 60 == 1)
+							DiagLog.Write($"[start] 水晶({mx},{my})够不着,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+						return;
+					}
+					ClearWay.Dig(p, mx, my, "生命水晶");
+					return;
+				}
+			DiagLog.Write($"[start] 水晶({x},{y})挖掉了");
+			GreedPickup.MarkDone(x, y);
+		}
+
 		static bool GreedSideTrip()
 		{
 			if (_sideTrip)
 			{
+				// 顺路那颗水晶:寻路到了就一帧挖一格,挖没了才算完
+				if (_sideHeart.HasValue)
+				{
+					if (RecedingNav.Active) return true;
+					var h = _sideHeart.Value;
+					if (Main.tile[h.x, h.y].HasTile) { MineCrystal(Main.LocalPlayer, h.x, h.y); return true; }
+					// 水晶挖没了 = 拿到了(MineCrystal 里已经记过账)。这一趟没经过 TreasureGrab,
+					// 别去读它的 Outcome --- 那是上一个箱子留下的
+					_sideHeart = null; _sideTrip = false;
+					DiagLog.Write("[greed] 顺路那颗水晶挖完了");
+				}
+				else
+				{
 				_sideTrip = false;
+				// 【拿到了才记账】。选中就拉黑的话,这一趟失败就再也不回来了
+				if (TreasureGrab.Outcome == "done" || TreasureGrab.Outcome == "partial")
+					GreedPickup.MarkDone(TreasureGrab.At.x, TreasureGrab.At.y);
 				DiagLog.Write($"[greed] 顺路那趟完了:{TreasureGrab.Outcome}/{TreasureGrab.Reason}");
+				}
 				// 【捡完回原路】。打断时把原目标记在 _stop 里,这儿重新起一趟 ---
 				// 不重发的话人就停在岔路上,主链以为"到了"直接取下一站
 				if (_stop.HasValue)
@@ -335,11 +375,18 @@ namespace TerraBlind
 			}
 			var hit = GreedPickup.Poll();
 			if (hit == null) return false;
-			var (gx, gy) = hit.Value;
-			GreedPickup.MarkDone(gx, gy);
+			var (gx, gy, isHeart) = hit.Value;
 			// 【边走边拐】。python 那份是 nav_to 全程带 greed,随时打断去捡 ---
 			// 只在主链空档扫的话,一趟长途下来路过的箱子全漏了
 			RecedingNav.Stop();
+			if (isHeart)
+			{
+				// 水晶要挖,先走到够得着的地方,挖归 MineCrystal
+				_sideHeart = (gx, gy);
+				_sideTrip = true;
+				RecedingNav.Start(gx, gy, RecedingNav.Mode.Reach);
+				return true;
+			}
 			if (!TreasureGrab.Start(gx, gy, out string gw))
 			{ DiagLog.Write($"[greed] ({gx},{gy})开不了:{gw}"); return false; }
 			_sideTrip = true;

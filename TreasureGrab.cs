@@ -26,6 +26,7 @@ namespace TerraBlind
 		const int LootWait = 30;       // LootAll 之后等几帧再验收 —— 掏空是当帧做的,给点余量
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
+		public static (int x, int y) At => (_tx, _ty);   // 这一趟开的是哪一格,调用方记账要用
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
