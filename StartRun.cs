@@ -183,6 +183,10 @@ namespace TerraBlind
 					// 【到了再开箱,而且要排在最前面】。寻路结束那一帧,顺路采集和"取下一站"
 					// 都会抢在前面执行 --- 一抢 _stop 就被覆盖,箱子永远开不了
 					// _sideTrip 期间原目标还没走完,别把它当"到了"
+					// 【_stop 挂着却进不来】要看得见。上一局 heart(1152,568) 设了 _stop 之后
+					// 2400 帧一条日志都没有,分不出是 nav 一直在跑还是条件哪项不满足
+					if (_stop.HasValue && _frames % 300 == 1)
+						DiagLog.Write($"[start] 等着办({_stop.Value.x},{_stop.Value.y}){_stop.Value.kind} nav={RecedingNav.Active} grab={TreasureGrab.IsRunning} side={_sideTrip}");
 					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
 						var st = _stop.Value;
