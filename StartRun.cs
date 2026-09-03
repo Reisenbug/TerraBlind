@@ -140,9 +140,7 @@ namespace TerraBlind
 						RecedingNav.Start(_siteX, HouseBuilder.LadderFootRow(_siteX, _siteY));
 						return;
 					}
-					// 【平台不够就别开工】。盖房第一步 pillar 要垫平台上去,没有就当场
-					// "爬不动"判死(现场:pillar stop: no platform slot)。python 那份在这儿
-					// 显式补货并等结果,mod 这边 PlatformStock 是自动的,等它补上就行
+					// 没平台开工必死:pillar 垫不上去,当场判"爬不动"
 					if (Have(PlatformStock.ItemId) < NeedPlatforms)
 					{
 						if (_frames % 120 == 1)
@@ -180,11 +178,7 @@ namespace TerraBlind
 				// 下地狱。走 itinerary 链,逐站导航 + 顺手收
 				case Ph.Descend:
 				{
-					// 【到了再开箱,而且要排在最前面】。寻路结束那一帧,顺路采集和"取下一站"
-					// 都会抢在前面执行 --- 一抢 _stop 就被覆盖,箱子永远开不了
-					// _sideTrip 期间原目标还没走完,别把它当"到了"
-					// 【_stop 挂着却进不来】要看得见。上一局 heart(1152,568) 设了 _stop 之后
-					// 2400 帧一条日志都没有,分不出是 nav 一直在跑还是条件哪项不满足
+					// 【排最前面】:顺路采集和"取下一站"抢先执行的话 _stop 就被覆盖了
 					if (_stop.HasValue && _frames % 300 == 1)
 						DiagLog.Write($"[start] 等着办({_stop.Value.x},{_stop.Value.y}){_stop.Value.kind} nav={RecedingNav.Active} grab={TreasureGrab.IsRunning} side={_sideTrip}");
 					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
@@ -201,10 +195,7 @@ namespace TerraBlind
 							DiagLog.Write($"[start] ({st.x},{st.y})开不了:{sw}");
 						return;
 					}
-					// 【顺路采集】。itinerary 只列了几个大目标,路上贴着走过去的箱子靠这一层。
-					// 【只在主链空档拐】:主链正朝某个目标走时抢过方向盘,那个目标就丢了 ---
-					// _routeIdx 已经推进过,回来不会重走。空档拐,回来接着取下一站,不丢东西
-					// 【nav 在跑的时候也要扫】。等它跑完人早过去了 --- 这是漏宝的主因
+					// nav 跑着也要扫:等它跑完人早过去了,这是漏宝的主因
 					if (!TreasureGrab.IsRunning && GreedSideTrip()) return;
 					if (RecedingNav.Active || TreasureGrab.IsRunning) return;
 					if (_frames > 60 * 60 * 30) { Fail("下地狱超时"); return; }
@@ -233,22 +224,17 @@ namespace TerraBlind
 						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 那儿已经空了"); return; }
 						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
 						GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
-						// 【走过去和开箱是两件事】。TreasureGrab 的 MaxGoto 只有 30 秒,
-						// 是给"走到附近的箱子"设的 --- 拿它跑 495 格的长途必然超时判死
-						// (现场:FAIL 走了1801帧还没到,人还差232格)。走路交给寻路,到了再开
+						// 走路归寻路:TreasureGrab 的 MaxGoto 只有 30 秒,跑长途必超时判死
 						_stop = stop;
-						RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
+						// 箱子够得着就行,水晶要挖得站到位(Reach 停在5列外就报"够到了")
+						RecedingNav.Start(stop.x, stop.y,
+							stop.kind == "heart" ? RecedingNav.Mode.Stand : RecedingNav.Mode.Reach);
 						return;
 					}
-					// 【链走完了不等于到地狱了】。人停在最后一站宝藏那儿(现场:(1080,888)),
-					// 离 A 点还差一百多行 --- python 那份走完链还有一趟 nav_to(hell_x,hell_y),
-					// 到了才算 arrived。A 点就是 tb 2 传送的落点,用同一份算法,别再推一遍
+					// 链走完了不等于到地狱:人停在最后一站宝藏那儿,离 A 点还差一百多行
 					if (!_atHellEnd)
 					{
-						// 【用 HellLanding 不是 DescentEnd】。A 点是 H 场描出来的线上一格,线允许
-						// 穿实心(下降路上本来就要挖) --- 直接拿它当落脚点,Mode.Stand 要精确站进
-						// 一个实心格,A* 搜不出来,一条日志都不留就没了。HellLanding 会往上找到
-						// 第一处身子那 3 行都空的落脚行,tb 2 传送用的就是它,同一份不另推
+						// 用 HellLanding 不是 DescentEnd:后者是线上一格,可能是实心,站不进去
 						var (ax, ay) = StateSnapshotPlayer.HellLanding();
 						if (ax <= 0) { Fail("算不出地狱落脚点"); return; }
 						int mycx = ActExecutor.OriginCx(p), mycy = ActExecutor.OriginCy(p);
@@ -320,11 +306,7 @@ namespace TerraBlind
 		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
 		static bool _sideTrip;
 		static (int x, int y)? _sideHeart;   // 顺路那颗水晶,要一帧挖一格
-		// 生命水晶占 2x2,四格都挖掉才消失。挖完最后一格 _stop/_sideHeart 由调用方的
-		// HasTile 判据自然放行 --- 这儿只负责挥一次镐
-		// 【照抄 python 那三行】。它不是一格一格挖:发一次 use_item(strict, duration=0),
-		// ItemUseCoordinator 自己挥到"地图上没了"为止,然后问那一格还在不在。
-		// 拉黑的判据也照抄:out_of_reach / tool_weak / blocked 三种才拉黑
+		// 照 python:发一次 use_item,协调器自己挥到"地图上没了"为止,不是一格一格挖
 		static int _crystalStall;
 		const int CrystalStallMax = 60 * 60;
 		static void MineCrystal(Player p, int x, int y)
