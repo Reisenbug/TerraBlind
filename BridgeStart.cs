@@ -52,8 +52,9 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 目标格【正下方】第一个能站的行 --- 站那儿离目标 1 行,放置那把尺子必定过。
-		// 只往下找:目标上方是要留给人身子的
+		// 目标格附近第一个能站的行 --- 站那儿离目标 1 行,放置那把尺子必定过。
+		// 【下方优先,找不到再往上】:Reach 按玩家中心格收尾,常把人撂在目标下方,
+		// 那时落脚点在人【上方】,只往下扫必然扑空(现场:目标1048 人1054,连报 STUCK)
 		static int FootRowFor(int tx, int ty)
 		{
 			for (int y = ty + 1; y <= ty + FootScan; y++)
@@ -63,6 +64,8 @@ namespace TerraBlind
 				if (Predicates.IsGround(tx, y)) return y - 1;
 				if (Predicates.IsLava(tx, y)) return -1;
 			}
+			for (int y = ty - 1; y >= ty - FootScan; y--)
+				if (Predicates.IsGround(tx, y) && Predicates.CanStand(tx, y - 1)) return y - 1;
 			return -1;
 		}
 		const int FootScan = 12;
@@ -94,8 +97,13 @@ namespace TerraBlind
 						if (++_gotoTries > MaxTries)
 						{ Fail($"到不了能放({_tx},{_ty})的位置,现在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
 						int fy = FootRowFor(_tx, _ty);
+						// 【找不到落脚行是常态,不是失败】:桥起点悬空(锚 i=0..7 全 False),
+						// 上下十几行都没有地才是正常。造锚是 PlaceAnywhere 的活,交给它
 						if (fy < 0)
-						{ Fail($"({_tx},{_ty})下方找不到能站的地,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})"); return; }
+						{
+							DiagLog.Write($"[bstart] ({_tx},{_ty})上下{FootScan}行都悬空,交 PlaceAnywhere 造锚 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+							_phaseFrames = 0; _ph = Ph.Place; return;
+						}
 						// 算出来就是人现在这格 = 再发一趟也是原地不动,别空转
 						if (ActExecutor.OriginCx(p) == _tx && ActExecutor.OriginCy(p) == fy)
 						{ Fail($"已经站在({_tx},{fy})却仍放不了({_tx},{_ty})"); return; }
