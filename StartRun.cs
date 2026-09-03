@@ -37,7 +37,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _stop = null;
 			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
@@ -97,13 +97,22 @@ namespace TerraBlind
 					// 走完了还不够:没光 NPC 不住,盖了也白盖
 					if (_routeIdx >= _route.Count)
 					{ Fail($"路上的箱子开完了,火把只有{Have(ItemID.Torch)}/{NeedTorch},没光 NPC 不住"); return; }
+					// 到了再开箱,和下降那段同一个分工
+					if (_stop.HasValue)
+					{
+						var st2 = _stop.Value; _stop = null;
+						if (!Main.tile[st2.x, st2.y].HasTile) return;
+						if (!TreasureGrab.Start(st2.x, st2.y, out string tw2))
+							DiagLog.Write($"[start] ({st2.x},{st2.y})开不了:{tw2}");
+						return;
+					}
 					var stop = _route[_routeIdx++];
 					if (stop.kind == "heart") return;         // 生命水晶不挖
 					if (!Main.tile[stop.x, stop.y].HasTile)
 					{ DiagLog.Write($"[start] 跳过({stop.x},{stop.y}) 那儿已经空了"); return; }
 					DiagLog.Write($"[start] 开箱[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 火把{Have(ItemID.Torch)}/{NeedTorch}");
-					if (!TreasureGrab.Start(stop.x, stop.y, out string tw))
-						DiagLog.Write($"[start] 这个开不了:{tw},跳过");
+					_stop = stop;
+					RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 					return;
 				}
 
@@ -204,8 +213,22 @@ namespace TerraBlind
 						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 那儿已经空了"); return; }
 						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
 						GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
-						if (!TreasureGrab.Start(stop.x, stop.y, out _))
-							RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
+						// 【走过去和开箱是两件事】。TreasureGrab 的 MaxGoto 只有 30 秒,
+						// 是给"走到附近的箱子"设的 --- 拿它跑 495 格的长途必然超时判死
+						// (现场:FAIL 走了1801帧还没到,人还差232格)。走路交给寻路,到了再开
+						_stop = stop;
+						RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
+						return;
+					}
+					// 【到了再开箱】。寻路结束、目标还在,这才轮到 TreasureGrab ---
+					// 它只管"到了之后的开箱和掏空",和 python 那份的分工一样
+					if (_stop.HasValue)
+					{
+						var st = _stop.Value; _stop = null;
+						if (st.kind == "heart") return;
+						if (!Main.tile[st.x, st.y].HasTile) return;   // 路上顺手捡掉了
+						if (!TreasureGrab.Start(st.x, st.y, out string sw))
+							DiagLog.Write($"[start] ({st.x},{st.y})开不了:{sw}");
 						return;
 					}
 					// 链走完了 = 到地狱了,交给地狱那一套
@@ -261,6 +284,7 @@ namespace TerraBlind
 
 		// 身边有值得捡的就拐一趟。返回 true = 这一帧归顺路采集管,主链先让开。
 		// 【捡完自己回来】:TreasureGrab 跑完,主链下一帧照旧从人当前位置继续
+		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
 		static bool _sideTrip;
 		static bool GreedSideTrip()
 		{
