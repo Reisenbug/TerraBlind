@@ -370,28 +370,39 @@ namespace TerraBlind
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
 				$"ceil={ceilA[Length / 2]} floor={floorA[Length / 2]} | 末 ceil={ceilA[Length - 1]} floor={floorA[Length - 1]}");
 
+			// 【绝不留斜连接】。每列一格的话变高处两格是斜对角(1100/0011),中间没有
+			// 上下左右相邻的衔接 -- 人走不过去,而净空检查又会把上一行那格当墙挖掉。
+			// 变高时在【新行、旧列】补一格,接成 1100/0111
 			int digTotal = 0;
 			for (int i = 0; i < Length; i++)
 			{
 				int x = sx + dir * i;
+				if (i > 0 && ys[i] != ys[i - 1])
+				{
+					int jx = sx + dir * (i - 1);
+					res.Line.Add((jx, ys[i]));
+					digTotal += Blocked(jx, ys[i]);
+				}
 				res.Line.Add((x, ys[i]));
 				digTotal += Blocked(x, ys[i]);
 			}
 
 			// 【离人最近】的那一格。锚不当门槛 —— 悬空是常态(整条线大半悬空),
 			// 放不出第一格是 PlaceAnywhere 的活,不是算不出线。
+			// 【下标走 res.Line 不走列】:衔接格插进去之后两者不再一一对应,
+			// 而 WorkI 是当 Line 的下标用的
 			res.WorkI = 0; res.WorkAnchor = 0;
 			int bestD = int.MaxValue;
-			for (int i = 0; i < Length; i++)
+			for (int i = 0; i < res.Line.Count; i++)
 			{
-				int x = sx + dir * i, y = ys[i];
+				var (x, y) = res.Line[i];
 				int d2 = System.Math.Abs(x - bx) + System.Math.Abs(y - by);
 				if (d2 < bestD)
 				{ bestD = d2; res.WorkAnchor = AnchorScore(x, y); res.WorkI = i; res.WorkX = x; res.WorkY = y; }
 			}
 			// 离人多远是关键指标:大了就说明人要在地狱里徒步过去,那正是掉岩浆的机会
 			DiagLog.Write($"[hell-line] 开工点 i={res.WorkI} ({res.WorkX},{res.WorkY}) 锚={res.WorkAnchor} " +
-				$"离人{bestD}格 往房子{res.WorkI}格 往远端{Length - 1 - res.WorkI}格");
+				$"离人{bestD}格 往房子{res.WorkI}格 往远端{res.Line.Count - 1 - res.WorkI}格");
 
 			res.Found = true;
 			// 起点 = 房子【靠玩家】那一角(Line[0])。从右往左依次是:玩家、房子、桥。

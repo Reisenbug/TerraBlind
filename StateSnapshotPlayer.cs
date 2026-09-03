@@ -384,7 +384,17 @@ namespace TerraBlind
 			// 【传送落点不走这儿】:那是 A 点(下降终点),在这一步【之前】
 			var rr = PickHellSite(rbx, rdir);
 			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
-			_deckFrom = HouseBuilder.RoomWidth + 1;
+			// 房子占前 RoomWidth+1 【列】,而线里变高处插了衔接格,下标不再等于列数 --
+			// 数到第 RoomWidth+1 个不同的列为止
+			_deckFrom = rr.Line.Count;
+			{
+				int seen = 0, lastCol = int.MinValue;
+				for (int li = 0; li < rr.Line.Count; li++)
+				{
+					if (rr.Line[li].x != lastCol) { lastCol = rr.Line[li].x; seen++; }
+					if (seen > HouseBuilder.RoomWidth + 1) { _deckFrom = li; break; }
+				}
+			}
 			var (rsx, rsy) = rr.Line[0];
 			// 画线必须在重算【之后】:画早了显示的是旧线,和实际铺的对不上。
 			// 蓝=要铺 绿=现成地形能用上 白=起点。时长按 176 格铺完估,别中途消失
