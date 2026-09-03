@@ -5,3 +5,4 @@ obj/
 .idea/
 *.DS_Store
 .claude/
+.claude/hooks/.walls_grace
