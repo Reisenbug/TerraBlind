@@ -226,9 +226,9 @@ namespace TerraBlind
 						GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
 						// 走路归寻路:TreasureGrab 的 MaxGoto 只有 30 秒,跑长途必超时判死
 						_stop = stop;
-						// 箱子够得着就行,水晶要挖得站到位(Reach 停在5列外就报"够到了")
+						// 水晶要走到跟前才挖得着。Snap 会吸到旁边能站的格 --- Stand 会去站水晶本身那个实心格,永远到不了
 						RecedingNav.Start(stop.x, stop.y,
-							stop.kind == "heart" ? RecedingNav.Mode.Stand : RecedingNav.Mode.Reach);
+							stop.kind == "heart" ? RecedingNav.Mode.Snap : RecedingNav.Mode.Reach);
 						return;
 					}
 					// 链走完了不等于到地狱:人停在最后一站宝藏那儿,离 A 点还差一百多行
@@ -380,10 +380,10 @@ namespace TerraBlind
 			RecedingNav.Stop();
 			if (isHeart)
 			{
-				// 水晶要挖得站到位,和主链那条同一把尺子(Reach 停在5列外挖不着)
+				// 和主链那条同一把尺子:Snap 吸到旁边能站的格
 				_sideHeart = (gx, gy);
 				_sideTrip = true;
-				RecedingNav.Start(gx, gy, RecedingNav.Mode.Stand);
+				RecedingNav.Start(gx, gy, RecedingNav.Mode.Snap);
 				return true;
 			}
 			if (!TreasureGrab.Start(gx, gy, out string gw))
