@@ -49,9 +49,8 @@ namespace TerraBlind
 			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
 		}
 
-		// 【绝不走到桥头】。目标格够得着就别再往前 -- 站在边缘那一格,一个残余横速就掉下去。
-		// 距离不写死:按【最窄的那把尺子】(挖)反推,手臂长短一变它自己跟着变,
-		// 而挖够得着时放一定也够(CanPlace 宽出一个 blockRange)
+		// 【绝不走到桥头】:站在边缘那一格,一个残余横速就掉下去。距离不写死,
+		// 按【最窄的那把尺子】(挖)反推 -- 手臂长短一变它自己跟着变
 		private static bool KeepBack(Player p, int x, int y) => Reach.CanMine(p, x, y);
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
@@ -222,9 +221,8 @@ namespace TerraBlind
 			}
 
 			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
-			// 判据是【推了却没靠近】,不是"前面有方块":桥面贴着地形,见方块就挖会把两侧刨空。
-			// 【够得着就不算卡住】:那是故意留的安全距离,人本来就不再往前 --
-			// 拿"没靠近"当门会每 20 帧刨一次桥边的地形
+			// 判据是【推了却没靠近】:见方块就挖会把桥两侧刨空。
+			// 【够得着不算卡住】:那是故意留的安全距离,否则每 20 帧刨一次桥边地形
 			int dxNow = System.Math.Abs(px - x);
 			if (KeepBack(p, x, y) || dxNow < _lastDx) { _blockedFrames = 0; _lastDx = dxNow; }
 			else if (dxNow > 0) _blockedFrames++;
@@ -234,9 +232,8 @@ namespace TerraBlind
 				if (ClearWay.Forward(p, bdir, "挡着桥面的路", stuck: true))
 				{
 					DiagLog.Write($"[deck] 人卡在{px}列{_blockedFrames}帧,挖开往{(bdir > 0 ? "右" : "左")}那面墙");
-					// 【这一列没挖干净就别清零】。Forward 一帧只挖一格,清零要重新攒 BlockedAt 帧;
-					// 挖到第三格口子够钻了人就挤进去,dxNow 一变小计数器也清零 ——
-					// 剩下的一两格再没人管,人头顶留着方块,走到那儿被顶住。
+					// 【这一列没挖干净就别清零】:Forward 一帧只挖一格,提前清零会让剩下的
+					// 一两格再没人管,人头顶留着方块,走到那儿被顶住
 					if (!ClearWay.ForwardClear(p, bdir)) return;   // 还有活儿,保住计数
 					_blockedFrames = 0;
 					return;
@@ -249,11 +246,12 @@ namespace TerraBlind
 				}
 			}
 
-			// 【铺桥只有左右移动,没有跳】。y 差得多说明人掉下去了 -- 那不是走两步能解决的,
-			// 交寻路把人送回桥上,回来接着铺。差一点点是坡上的正常起伏,照走
-			if (py > y - 1 + VertSlack)
+			// y 差得多说明人不在桥上了,交寻路送回去。【上方下方都要管】:只判"掉下去"的话,
+			// 跳到房子 pillar 顶上(桥面在下方 8 行)这条永远不成立,人就在那儿站到超时
+			if (System.Math.Abs(py - (y - 1)) > VertSlack)
 			{
 				if (RecedingNav.Active) { Mark("寻路回桥上"); return; }
+				if (BridgeBuilder.IsRunning) BridgeBuilder.Stop();
 				if (++_recovers > MaxRecovers) { Fail($"回不了桥面 (人{py} 桥面{y})"); return; }
 				DiagLog.Write($"[deck] 人{py} 桥面{y} 差{py - (y - 1)}行,寻路回桥上({_recovers}/{MaxRecovers})");
 				RecedingNav.Start(x, y - 1, RecedingNav.Mode.Stand);
@@ -265,10 +263,8 @@ namespace TerraBlind
 			// 同一行的连续段一次铺完:房子的 base 就是这么干的 —— BridgeBuilder 锁一个槽连着放,
 			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
 			if (BridgeBuilder.IsRunning) { Mark("连铺中"); return; }
-			// 连铺必须从有锚的格子起步:BridgeBuilder 不造锚,第一格悬空就整段 no_anchor(日志 20格 placed=0)。
-			// 换行处新行头一格和上一段是斜对角不是四邻 —— 那一格交给 PlaceAnywhere 造。
-			// 【用方块的判据】:这条桥铺的是方块,而原来借的是绳子那份(不认背景墙),
-			// 在地狱要塞那种有墙的地方会把能起步的格判成没锚,整段连铺退化成一格一格慢铺
+			// 连铺必须从有锚的格子起步(BridgeBuilder 不造锚,第一格悬空就整段 no_anchor)。
+			// 【用方块的判据】:借绳子那份(不认背景墙)会在有墙的地方把能起步的格判成没锚
 			if (PlaceAnywhere.Outcome != "stuck" && _runAt != _idx
 			    && MazeWand.BlockAnchor(x, y))
 			{

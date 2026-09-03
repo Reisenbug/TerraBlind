@@ -183,14 +183,15 @@ namespace TerraBlind
 			if (cx != _lastOriginCx) { _lastOriginCx = cx; _walkStall = 0; _reachStall = 0; _digStall = 0; }
 			else
 			{
-				// 走不动的头号原因是地形挡着 —— 当场挖开,别等 WalkStallLimit(120帧)超时退出
-				// 再由上层去挖。日志里那 163 帧的停顿就是这么来的
-				// 前面是一格高的台阶(桥面抬升处)就跳上去 —— 那是路,不是障碍。
-				// BridgeBuilder 原本完全不会跳,只能干等到超时,所以"挖掉"才成了唯一出路
+				// 前面是一格高的台阶就跳上去 -- 那是路,不是障碍。
+				// 【踩上去必须还在这段桥的行上】:这一段锁死 _rowWy 铺,人就该走在 _rowWy-1。
+				// 不问这一句的话,桥面下降时身前同行那格是【旁边的地形】(房子 pillar 侧面),
+				// 一样长得像台阶,人就跳到柱子顶上去了,再也回不来
 				var (jl, jr) = Predicates.BodyCols(p);
 				int fcol = _dir > 0 ? jr + 1 : jl - 1;
 				int fy2 = ActExecutor.OriginCy(p);
-				if (Predicates.IsGround(fcol, fy2) && !Predicates.IsWall(fcol, fy2 - 1))
+				if (Predicates.IsGround(fcol, fy2) && !Predicates.IsWall(fcol, fy2 - 1)
+					&& fy2 == _rowWy)
 				{
 					p.controlJump = true;
 					if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
