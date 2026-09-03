@@ -27,6 +27,10 @@ namespace TerraBlind
 		public static void Reset() { _done.Clear(); _ready = null; _lastScan = 0; }
 		public static void MarkDone(int x, int y) => _done.Add((x, y));
 
+		// 【主链也要问这一份】。掏空的箱子不消失,HasTile 分不出来 --- 顺路捡过的箱子
+		// 轮到它当主链那一站时会再开一遍(python 的 _looted 就是干这个的)
+		public static bool Looted(int x, int y) => _done.Contains((x, y));
+
 		// 身边有没有值得拐一趟的。有就返回那一格,调用方自己去捡。
 		// 【只在主线程调】,而且调用方得容忍它返回 null(后台还在算)
 		public static (int x, int y, bool heart)? Poll()

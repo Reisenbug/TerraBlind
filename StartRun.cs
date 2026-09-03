@@ -119,9 +119,12 @@ namespace TerraBlind
 					{ Fail($"路上的箱子开完了,火把只有{Have(ItemID.Torch)}/{NeedTorch},没光 NPC 不住"); return; }
 					var stop = _route[_routeIdx++];
 					if (stop.kind == "heart") return;         // 生命水晶不挖
+					if (GreedPickup.Looted(stop.x, stop.y))
+					{ DiagLog.Write($"[start] 跳过({stop.x},{stop.y}) 这个我拿过了"); return; }
 					if (!Main.tile[stop.x, stop.y].HasTile)
 					{ DiagLog.Write($"[start] 跳过({stop.x},{stop.y}) 那儿已经空了"); return; }
 					DiagLog.Write($"[start] 开箱[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 火把{Have(ItemID.Torch)}/{NeedTorch}");
+					GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
 					_stop = stop; _stopAt = Main.GameUpdateCount;
 					RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 					return;
@@ -244,7 +247,10 @@ namespace TerraBlind
 						// 所以只有【又远又在上游】才算走过头 --- 近的一律去拿,折回也就几秒
 						if (d > SkipNearCells && ph2 >= 0 && th >= 0 && th > ph2 + 30)
 						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) H{th}>我的H{ph2}+30 且距{d}格,在身后了"); return; }
-						// 顺路已经捡掉的东西计划里还留着,轮到它时人会跑回去捡空气
+						// 顺路已经捡掉的东西计划里还留着,轮到它时人会跑回去捡空气。
+						// 掏空的箱子不消失,HasTile 判不出来,只能靠记账那一份
+						if (GreedPickup.Looted(stop.x, stop.y))
+						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 这个我拿过了"); return; }
 						if (!Main.tile[stop.x, stop.y].HasTile)
 						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 那儿已经空了"); return; }
 						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
@@ -414,8 +420,10 @@ namespace TerraBlind
 				if (_stop.HasValue)
 				{
 					var b = _stop.Value;
-					DiagLog.Write($"[greed] 回原路 ({b.x},{b.y})");
-					RecedingNav.Start(b.x, b.y, RecedingNav.Mode.Reach);
+					DiagLog.Write($"[greed] 回原路 ({b.x},{b.y}){b.kind}");
+					// 和主链派站同一把尺子:水晶要走到跟前才挖得着,Reach 会停在够不着的地方
+					RecedingNav.Start(b.x, b.y,
+						b.kind == "heart" ? RecedingNav.Mode.Snap : RecedingNav.Mode.Reach);
 					return true;
 				}
 				return false;
