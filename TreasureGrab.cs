@@ -50,6 +50,10 @@ namespace TerraBlind
 
 		public static void Stop()
 		{
+			// 【唯一的无声出口】。Fail/Done 都写日志,只有它不写 --- 于是"开箱整段消失"
+			// 在日志里查不出是谁干的。带上调用栈,一次定死
+			if (_ph != Ph.Idle && _ph != Ph.Done)
+				DiagLog.Write($"[grab] STOP ({_tx},{_ty}) ph={_ph} frames={_frames} 谁叫的:\n{System.Environment.StackTrace}");
 			if (Outcome == "running") { Outcome = "stopped"; Reason = "外部叫停"; }
 			RecedingNav.Stop();
 			_ph = Ph.Idle;
