@@ -18,23 +18,40 @@ namespace TerraBlind
 
 		private static int _nextTry;
 
+		// 【跨局要清】:GameUpdateCount 每次进世界从头数,上一局留下的 _nextTry
+		// 会让新一局开头几十秒不补货
+		public override void OnWorldLoad() => _nextTry = 0;
+
 		public static void Tick()
 		{
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) return;
 			if (Main.GameUpdateCount % CheckEvery != 0) return;
-			if (Main.GameUpdateCount < _nextTry) return;
+			// 【在等冷却也要说话】:平台见底而这儿每帧无声返回,上游只会打"等平台0/20",
+			// 查不出到底是没在补还是补不动
+			if (Main.GameUpdateCount < _nextTry)
+			{
+				if (Predicates.Have(ItemId) < Low && Main.GameUpdateCount % (CheckEvery * 20) == 0)
+					DiagLog.Write($"[platstock] 平台{Predicates.Have(ItemId)}/{Low},在等冷却到{_nextTry}帧");
+				return;
+			}
 
 			int have = Predicates.Have(ItemId);
 			if (have >= Low) return;
 
 			int wood = Predicates.Have(ItemID.Wood);
 			int spare = wood - WoodReserve;
-			if (spare <= 0) { _nextTry = (int)Main.GameUpdateCount + RetryCooldown; return; }
-
 			int want = High - have;
 			int times = System.Math.Min((want + 1) / 2, spare);
-			if (times <= 0) { _nextTry = (int)Main.GameUpdateCount + RetryCooldown; return; }
+			// 【木材不够是"再等等",不是失败】:刚进世界背包没加载完读到 0 木材,
+			// 吃 600 帧冷却连着几轮就是 2000 多帧,人已经走到房址干等着了
+			if (spare <= 0 || times <= 0)
+			{
+				_nextTry = (int)Main.GameUpdateCount + ShortRetry;
+				if (Main.GameUpdateCount % (CheckEvery * 20) == 0)
+					DiagLog.Write($"[platstock] 木材{wood}(留{WoodReserve})不够合平台,平台{have}/{Low},过{ShortRetry}帧再看");
+				return;
+			}
 
 			CraftCoordinator.Craft(ItemId, times * 2);
 			int now = Predicates.Have(ItemId);
