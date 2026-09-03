@@ -67,14 +67,22 @@ namespace TerraBlind
 			if (_slot < 0) { why = "no_item"; Outcome = "no_item"; Reason = itemName; return false; }
 
 			_item = itemName; _dir = dir == "left" ? -1 : 1;
+
+			// 桥铺在【人脚下那一行】,人站在它上面一行,走出去不用跳也不用降。
+			// 【这是前提,不是建议】:人不在那一行的话它只会左右走,永远够不着边缘,
+			// 而调用方每帧让路给它,两边一起僵住(现场:人1043 row=1046,600帧一动不动)
+			int wantRow = startWy != int.MinValue ? startWy : ActExecutor.OriginCy(p) + 1;
+			if (ActExecutor.OriginCy(p) != wantRow - 1)
+			{
+				why = $"人在{ActExecutor.OriginCy(p)},该站在{wantRow - 1}才能沿{wantRow}行铺";
+				Outcome = "bad_stand"; Reason = why; return false;
+			}
+
 			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Lay;
-
-			// The bridge runs along the row the player STANDS ON — one below their own cell — so walking out onto it
-			// needs no drop or jump.
-			_rowWy = startWy != int.MinValue ? startWy : ActExecutor.OriginCy(p) + 1;
+			_rowWy = wantRow;
 			_targetWx = startWx != int.MinValue ? startWx : ActExecutor.OriginCx(p) + _dir;
 			_lastOriginCx = ActExecutor.OriginCx(p); _walkStall = 0; _reachStall = 0; _digStall = 0;
 			_frames = 0; _sinceProgress = 0; _lastDone = 0;
