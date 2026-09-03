@@ -35,8 +35,9 @@ namespace TerraBlind
 		private static int _heartbeat;
 		private const int SameColStuck = 30;         // 同列够不着这么多帧 = 横移解决不了,交栈
 
-		// 竖直差这么多就不是走两步能解决的,说明人掉下去了,交寻路
-		private const int VertSlack = 4;
+		// 【bridge 要求人恰好站在 y-1】,差 1 行是坡上的正常起伏,差 2 行就是站错了地方
+		// (房子 pillar 顶上正是差 2~3 行),再宽就等不到救援
+		private const int VertSlack = 1;
 
 		// 往前迈那一列脚下有没有地。判据和 BridgeBuilder 那份一致:桥面是平台也算,
 		// 脚下这行或再下一行有地都行(桥面会抬升/下沉一格)
@@ -300,7 +301,7 @@ namespace TerraBlind
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
 				// 【竖直够不着不能靠横移】:人在桥面上方 39 行时往右走一辈子也够不着,
 				// 列号还一路爬。差得多就交栈,横移只管同高度的小偏差
-				if (System.Math.Abs(py - y) > VertSlack)
+				if (System.Math.Abs(py - (y - 1)) > VertSlack)
 				{
 					// 【人在桥面上方且桥面在前方 = 往前走一步就掉下去】:交栈只会叫导航
 					// "站到那格",可那格还是空气,递归 8 层全在"回桥面"上打转然后放弃
