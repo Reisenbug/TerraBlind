@@ -380,10 +380,10 @@ namespace TerraBlind
 			RecedingNav.Stop();
 			if (isHeart)
 			{
-				// 水晶要挖,先走到够得着的地方,挖归 MineCrystal
+				// 水晶要挖得站到位,和主链那条同一把尺子(Reach 停在5列外挖不着)
 				_sideHeart = (gx, gy);
 				_sideTrip = true;
-				RecedingNav.Start(gx, gy, RecedingNav.Mode.Reach);
+				RecedingNav.Start(gx, gy, RecedingNav.Mode.Stand);
 				return true;
 			}
 			if (!TreasureGrab.Start(gx, gy, out string gw))
