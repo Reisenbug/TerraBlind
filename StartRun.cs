@@ -37,7 +37,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _stop = null;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _stop = null; _atHellEnd = false; _hellEndTries = 0;
 			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
@@ -235,7 +235,23 @@ namespace TerraBlind
 						RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 						return;
 					}
-					// 链走完了 = 到地狱了,交给地狱那一套
+					// 【链走完了不等于到地狱了】。人停在最后一站宝藏那儿(现场:(1080,888)),
+					// 离 A 点还差一百多行 --- python 那份走完链还有一趟 nav_to(hell_x,hell_y),
+					// 到了才算 arrived。A 点就是 tb 2 传送的落点,用同一份算法,别再推一遍
+					if (!_atHellEnd)
+					{
+						var (ax, ay) = HttpServerSystem.DescentEnd("jungle", out string dw);
+						if (ax <= 0) { Fail($"算不出下降终点:{dw}"); return; }
+						int mycx = ActExecutor.OriginCx(p), mycy = ActExecutor.OriginCy(p);
+						if (System.Math.Abs(mycx - ax) + System.Math.Abs(mycy - ay) <= 6)
+						{ _atHellEnd = true; DiagLog.Write($"[start] 到 A 点了({ax},{ay})"); return; }
+						if (++_hellEndTries > 3)
+						{ Fail($"走不到 A 点({ax},{ay}),人({mycx},{mycy})"); return; }
+						DiagLog.Write($"[start] 链走完了,去 A 点({ax},{ay}) 人({mycx},{mycy}) 第{_hellEndTries}次");
+						RecedingNav.Start(ax, ay, RecedingNav.Mode.Stand);
+						return;
+					}
+					// 到地狱了,交给地狱那一套
 					if (!StateSnapshotPlayer.StartHellRun(out string hrw))
 					{ Fail($"地狱流程起不来:{hrw}"); return; }
 					Chatter.Say("[TerraBlind] 到地狱了", 120, 255, 120);
@@ -288,6 +304,8 @@ namespace TerraBlind
 
 		// 身边有值得捡的就拐一趟。返回 true = 这一帧归顺路采集管,主链先让开。
 		// 【捡完自己回来】:TreasureGrab 跑完,主链下一帧照旧从人当前位置继续
+		static bool _atHellEnd;      // 走到 A 点(下降线终点)了没 --- tb 2 是直接传到这儿的
+		static int _hellEndTries;
 		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
 		static bool _sideTrip;
 		static bool GreedSideTrip()
