@@ -379,10 +379,7 @@ namespace TerraBlind
 			}
 			else if (path == "/collect_treasure")
 			{
-				// 【一条龙:走过去→开箱→掏空→验收】。python 只发这一次,再轮询 /collect_treasure_status。
-				// 原来这套编排在 python 里(nav_to + interact + 轮询 last_interact + loot_all + 记账),
-				// 而 last_interact 是【不带坐标的全局字符串】—— 读到的 opened 可能是上一个箱子留下的,
-				// 而且"拿到了"只等于"发过 loot_all",箱子空没空从来没人查。
+				// 一条龙:走过去→开箱→掏空→验收。拆在 python 里的话,轮询的是不带坐标的全局 last_interact
 				string ctBody = ReadBody(ctx).Replace(" ", "");
 				var ctX = System.Text.RegularExpressions.Regex.Match(ctBody, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ctY = System.Text.RegularExpressions.Regex.Match(ctBody, "\"y\"\\s*:\\s*(-?\\d+)");
@@ -834,10 +831,7 @@ namespace TerraBlind
 				var nameMatch = System.Text.RegularExpressions.Regex.Match(reqBody, "\"item_name\"\\s*:\\s*\"([^\"]+)\"");
 				var amtMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"amount\":(\\d+)");
 				int amount = amtMatch.Success ? int.Parse(amtMatch.Groups[1].Value) : 1;
-				// 【先刷一次配方表】。Main.availableRecipe 是 vanilla 在背包 UI 那条路上刷的,
-				// 而 tb 2 传送直达地狱,一次都没刷过 —— 表是空的,于是木平台报 item_not_found
-				// (available_count=0 而 free_slots=45,材料明明够)。tb 1 只是碰巧在路上
-				// 删垃圾/开箱子时顺带刷过。合成本来就在这个线程做,加这一句不多担风险。
+				// 先刷配方表:vanilla 只在背包 UI 那条路上刷,传送直达地狱时表是空的
 				Recipe.FindRecipes();
 				int targetId = -1;
 				if (idMatch.Success)
@@ -2020,9 +2014,7 @@ namespace TerraBlind
 			}
 			else if (path == "/field_warm")
 			{
-				// 【只建场,不导航】。建场是 110 万格 Dijkstra ~1.5 秒,盖房那几十秒里它白闲着。
-				// 提前按目标格建好,盖完房子 RecedingNav.Start 走 GetField 直接命中缓存,人立刻动身。
-				// 场按【目标格】缓存(两个槽),跟出发位置无关,所以这时候人在哪都不影响。
+				// 只建场不导航:场按目标格缓存,跟出发位置无关,所以盖房那几十秒里可以先建好
 				string wbody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					wbody = sr.ReadToEnd();
@@ -2615,13 +2607,8 @@ namespace TerraBlind
 			else if (path == "/start_run_stop") { StartRun.Stop(); body = "{\"ok\":true}"; }
 			else if (path == "/hell_run")
 			{
-				// 地狱那一整套:算线 → 选址 → 去桥起点 → 盖房 → 铺桥 → 肉山准备 → 开打。
-				// 全部编排在 mod 里,python 只管触发和轮询 —— 和 /build_house 一个路子。
-				// 真正的活在主线程做(要读地形算线),这里只入队。
-				//
-				// POST {"teleport":true} → 先把人放到地狱再开跑。【只测地狱这一段】时用:
-				// 不用每次都从地表跑一遍丛林+下降。传哪由 mod 算(TeleportToHell),
-				// python 照旧只是一次触发
+				// 地狱全套,编排都在 mod 里;真正的活要读地形,所以这里只入队交给主线程。
+				// POST {"teleport":true} = 先把人放到地狱再跑,只测这一段时用
 				string hrb = ReadBody(ctx).Replace(" ", "");
 				if (hrb.Contains("\"teleport\":true")) _hellTpQueue.Enqueue(true);
 				HellRunStart = "";
@@ -2880,13 +2867,8 @@ namespace TerraBlind
 			public System.Collections.Generic.Dictionary<(int, int), int> Field;
 		}
 
-		// 【A 点】= tb 1 下丛林走完、刚到地狱时人站的那一格。
-		//
-		// 就是下降路线的终点:从入口沿 H 场一路下降,H 到 0 就是地狱源点。和 /descent_route
-		// 描线用的是【同一份】ComputeDescent + 同一套梯度下降,所以 tb 2 传过去 = tb 1 走到那儿。
-		//
-		// 【绝不在这儿算房址/桥线】。那是到了地狱【之后】的事(StartHellRun 自己会算),
-		// 把它塞进落点等于把 tb 2 传到流程更后面的位置,测的就不是同一段了。
+		// A 点 = 下降路线终点,和 /descent_route 同一份 ComputeDescent,所以 tb 2 传过去 = tb 1 走到那儿。
+		// 绝不在这儿算房址/桥线:那是到了之后的事,塞进来就把 tb 2 传到流程更后面了
 		public static (int x, int y) DescentEnd(string biome, out string why)
 		{
 			why = "";
@@ -3005,11 +2987,8 @@ namespace TerraBlind
 		const int BudgetSteps = 80;
 		static System.Collections.Generic.Dictionary<(int, int), int> _descentField;
 
-		// 地表线 S(x):从天上往下第一块【底下 20 格里有 ≥15 格实心】的砖(树冠屋顶那种薄壳跳过),
-		// 再做宽 64 的闭运算,免得坑底竖井内壁冒充地表。然后从地狱带往上 flood,H 最小的地表格就是最便宜的入口。
-		// 【下降场也要缓存】。全图扫描 + Dijkstra 和建场同量级(秒级),而 /descent_route 一趟就调它一次,
-		// 盖房前后各一次就是两次同步卡顿。地形在这期间只多了一栋房子(不在下降走廊上),结果通用。
-		// 按 biome 签名缓存。/descent_route_async 整趟后台跑时也走这里,重复调用不会重算。
+		// 地表线 S(x) + 从地狱往上 flood,H 最小的地表格就是最便宜的入口。
+		// 按 biome 签名缓存:它和建场同量级(秒级),盖房前后各调一次就是两次同步卡顿
 		static ushort[] _ddKey;
 		static DescentData _ddCache;
 		static string _ddWhy = "";
@@ -3054,13 +3033,7 @@ namespace TerraBlind
 			}
 		}
 
-		// 【整段可后台跑】。这一趟里有三个秒级搜索:ComputeDescent(入口)、走廊多源场、
-		// 每个宝藏一次 BuildField(实测 22 段 1.5 秒) --- 合起来约 4 秒。放主线程就是盖房前干卡 4 秒,
-		// 所以抽出来:同步端点直接调,/descent_route_async 扔 Task.Run 让它和盖房并行。
-		// 只读地形和玩家位置,写的只有 _descentField 和 PathVis(自带锁)。
-		// mod 内部要这份路线(StartRun 走 itinerary),但它只以 JSON 形式存在 ---
-		// 与其把那个大函数拆一遍,不如让内部也走同一份产出,免得出现第二套判据
-		// 盖房那几十秒里把整条路线算完,和 /descent_route_async 走同一条路
+		// 整趟约 4 秒(入口场 + 走廊场 + 每个宝藏一次 BuildField),放主线程就是盖房前干卡 4 秒
 		public static void WarmDescentAsync(string biome)
 		{
 			var sig = BiomeSig(biome);
@@ -3073,9 +3046,7 @@ namespace TerraBlind
 			DiagLog.Write($"[warm] 后台开算路线 {biome}");
 		}
 
-		// 【走到 (x,y) 要挖几格、走几格】。抽出来给 StartRun 的顺路采集用 ---
-		// find_tiles 的 max_dist 是直线距离,直线 25 格的东西可能隔着山要绕几百格。
-		// 【秒级操作】:里面是 BuildFieldMulti,绝不能每帧调,调用方自己降频/扔后台
+		// 走到 (x,y) 要挖几格走几格。里面是 BuildFieldMulti(秒级),绝不能每帧调
 		public static bool PathCost(int tx, int ty, out int dig, out int walk)
 		{
 			dig = walk = 0;
@@ -3310,12 +3281,15 @@ namespace TerraBlind
 							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
 							int step = System.Math.Max(1, budget / BudgetSteps);
 							int B = budget / step + 2;
-							// i→j 只收【从 i 回线】+【从线进 j】两个单程,回程按 gap 封顶所以一窝宝藏共享进出。
-							// 原来收 det[i]/2+det[j] 而 det 本身是往返,中间站的回程被收两遍,九个就吃光预算。
+							// i→j 只收两个单程,回程按 gap 封顶,一窝宝藏共享进出。
+							// sway 收横向折返:li 是挂到主线的接驳点,只按它排会走成 C(左远)→A(近)→B(右)
 							int Extra(int i, int j)
 							{
-								int gap = System.Math.Abs(treasures[cand[j]].li - treasures[cand[i]].li);
-								return System.Math.Min(det[i], gap) + det[j];
+								var ti = treasures[cand[i]]; var tj = treasures[cand[j]];
+								int gap = System.Math.Abs(tj.li - ti.li);
+								int sway = System.Math.Abs(tj.x - ti.x) - gap;   // 超出线序那部分才是白走的
+								if (sway < 0) sway = 0;
+								return System.Math.Min(det[i], gap) + det[j] + sway;
 							}
 							var f = new int[n, B];
 							var from = new int[n, B];
@@ -3662,10 +3636,8 @@ namespace TerraBlind
 			catch { return ""; }
 		}
 
-		// 箱子子类型名。frameX/36 就是子 id(金箱=1,常春藤=21…),名字查 Lang.chestType[]/chestType2[]。
-		// 别用 MapHelper.TileToLookup:它的 option 是地图【颜色】分组,多种箱子共用一色 → 名字全错。
-		// 陷阱箱:和普通箱子是不同的 TileID(BasicChestFake = 441/468),外观一模一样。
-		// 箱子占 2x2,四个格都查一遍,点哪个角都认得出来。
+		// 名字查 Lang.chestType[],别用 MapHelper.TileToLookup(它按地图颜色分组,多种箱子共用一色)。
+		// 陷阱箱是不同的 TileID(441/468),外观一样;箱子占 2x2,四个角都查
 		public static bool IsFakeChestPublic(int x, int y) => IsFakeChest(x, y);
 
 		static bool IsFakeChest(int x, int y)
