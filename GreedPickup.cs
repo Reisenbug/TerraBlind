@@ -12,7 +12,7 @@ namespace TerraBlind
 	// 所以:降频扫描 + 候选扔后台算,主线程只读结果。
 	public static class GreedPickup
 	{
-		const int ScanEvery = 90;      // 多久扫一次身边
+		const int ScanEvery = 30;      // 和 python 的 0.5 秒一轮对齐:人跑得快,慢了就甩身后
 		const int ScanRadius = 25;     // 直线多少格以内才进候选
 		const int DigMax = 4;          // 顺路可以凿几格,再多就不是顺路了
 		const int WalkMax = 40;
@@ -34,9 +34,7 @@ namespace TerraBlind
 			if (_ready.HasValue)
 			{
 				var r = _ready.Value; _ready = null;
-				// 拿出来的时候再验一次:走这一路可能已经被顺手捡掉了。
-				// 【这儿不 MarkDone】--- python 是拿到了才记账,选中就拉黑的话
-				// 这一趟失败就再也不回来了
+				// 这儿不 MarkDone:拿到了才记账,否则这一趟失败就再也不回来了
 				if (_done.Contains((r.x, r.y))) return null;
 				if (!(r.heart ? IsHeart(r.x, r.y) : IsChest(r.x, r.y))) return null;
 				return r;

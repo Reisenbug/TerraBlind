@@ -9,8 +9,8 @@ namespace TerraBlind
 	public class PlatformStock : ModSystem
 	{
 		public const int ItemId = ItemID.WoodPlatform;
-		private const int Low = 20;
-		private const int High = 100;
+		private const int Low = 50;    // 和 python 的 PLAT_LOW/PLAT_HIGH 对齐
+		private const int High = 150;
 		private const int WoodReserve = 30;    // 留给房子/家具的木材,不许平台吃光
 		private const int CheckEvery = 30;
 		private const int RetryCooldown = 600; // 合失败了别每半秒重试一次

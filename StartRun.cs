@@ -38,7 +38,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
-			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _sideHeart = null; _stop = null; _crystalStall = 0; _crystalSwung = false; _atHellEnd = false; _hellEndTries = 0;
+			_route.Clear(); _routeIdx = 0; _haveTarget = false; _routeReady = null; _sideTrip = false; _sideHeart = null; _stop = null; _crystalStall = 0; _crystalSwung = false; _atHellEnd = false; _hellEndTries = 0; _siteTries = 0;
 			GreedPickup.Reset();
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[start] 开工 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 木材{Have(ItemID.Wood)} 火把{Have(ItemID.Torch)}");
@@ -144,9 +144,14 @@ namespace TerraBlind
 				{
 					if (RecedingNav.Active) return;
 					if (_frames > 60 * 300) { Fail($"走不到房址({_siteX},{_siteY})"); return; }
-					if (!_haveTarget)
+					// 自己验位置:nav 会在半路停下还报 done(python 那边同样不信它,差 6 列就重走)
+					int gap = System.Math.Abs(ActExecutor.OriginCx(p) - _siteX);
+					if (!_haveTarget || gap > 6)
 					{
+						if (_haveTarget && ++_siteTries > 3)
+						{ Fail($"走不到开工位({_siteX}),还差{gap}格"); return; }
 						_haveTarget = true;
+						DiagLog.Write($"[start] 去房址({_siteX}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 差{gap}格 第{_siteTries}次");
 						RecedingNav.Start(_siteX, HouseBuilder.LadderFootRow(_siteX, _siteY));
 						return;
 					}
@@ -299,7 +304,20 @@ namespace TerraBlind
 			DiagLog.Write("[start] 后台开算路线");
 			System.Threading.Tasks.Task.Run(() =>
 			{
-				try { _routeReady = ParseRoute(HttpServerSystem.RouteJsonFor("jungle", "{}")); }
+				try
+				{
+					var one = ParseRoute(HttpServerSystem.RouteJsonFor("jungle", "{}"));
+					// 木箱少于 2 个就放宽挖掘额度重查一次,多出来才换(python 的 _tally 那段)
+					int wood = one.FindAll(t => t.kind == "wood_chest").Count;
+					if (wood < 2)
+					{
+						var two = ParseRoute(HttpServerSystem.RouteJsonFor("jungle", "{\"dig_max\":30,\"dig_max2\":40}"));
+						int wood2 = two.FindAll(t => t.kind == "wood_chest").Count;
+						DiagLog.Write($"[start] 木箱只有{wood}个,放宽到挖30格 → {wood2}个");
+						if (wood2 > wood) one = two;
+					}
+					_routeReady = one;
+				}
 				catch (System.Exception e) { DiagLog.Write($"[start] 算路线炸了:{e.Message}"); _routeReady = new List<(int, int, string)>(); }
 				finally { _routeBusy = false; }
 			});
@@ -325,6 +343,7 @@ namespace TerraBlind
 		static int _hellEndTries;
 		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
 		static uint _stopAt;                        // 这一站是什么时候起的,用来判超时
+		static int _siteTries;                      // 去房址重走了几次
 		static bool _sideTrip;
 		static (int x, int y)? _sideHeart;   // 顺路那颗水晶,要一帧挖一格
 		// 照 python:发一次 use_item,协调器自己挥到"地图上没了"为止,不是一格一格挖
