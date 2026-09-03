@@ -34,6 +34,7 @@ namespace TerraBlind
 		private static int _houseNavTries;
 		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
+		private static uint _grabTickedAt;
 		private static bool _hellHouseStarted;
 		private static (int x, int y)? _pendingStand;
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
@@ -541,6 +542,17 @@ namespace TerraBlind
 			// DeckBuilder.Tick 一帧都轮不到 —— 那时它自己的心跳也不响,整段全黑,
 			// 人站着不动而日志几百帧一片空白。必须埋在链头(所有 return 之前),
 			// 真跑到 DeckBuilder.Tick 时清零;连着不清零就是被上游截了
+			// 【开箱停摆的看门狗】。照 deck 那条的样子:TreasureGrab 在跑却连着 120 帧
+			// 没轮到它的 Tick,说明下面某条 return 把整段挡住了
+			if (TreasureGrab.IsRunning && _grabTickedAt > 0 && Main.GameUpdateCount - _grabTickedAt > 120)
+			{
+				_grabTickedAt = Main.GameUpdateCount;
+				DiagLog.Write($"[grab] Tick连120帧没轮到 占着的:place={PlaceAnywhere.IsRunning} "
+					+ $"settle={SettleAt.IsRunning} hop={HopUp.IsRunning} drop={DropDown.IsRunning} "
+					+ $"pillar={PillarUp.IsRunning} platdown={PlatformDown.IsRunning} walls={PlaceWalls.IsRunning} "
+					+ $"helldeck={HellDeck.IsRunning} bridge={BridgeBuilder.IsRunning} act={ActExecutor.IsActive} "
+					+ $"rope={RopeLadder.IsRunning} walk={WalkPlace.IsRunning}");
+			}
 			if (DeckBuilder.IsRunning && ++_deckStarve % 120 == 0)
 				DiagLog.Write($"[deck] Tick连{_deckStarve}帧没轮到 占着的:place={PlaceAnywhere.IsRunning} " +
 					$"settle={SettleAt.IsRunning} hop={HopUp.IsRunning} drop={DropDown.IsRunning} " +
@@ -703,6 +715,10 @@ namespace TerraBlind
 			// 必须在 RecedingNav.Tick 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			BuildReplayer.Tick();
 
+			// 【谁挡住了 TreasureGrab】。它的 Tick 在这一行,前面十来条 return 任何一条命中
+			// 都会让开箱整段停摆(现场:START 之后 4000 帧一条日志都没有,人走到箱子跟前也不开)。
+			// 这行只在真的有活儿要干时打,不刷屏
+			if (TreasureGrab.IsRunning) _grabTickedAt = Main.GameUpdateCount;
 			TreasureGrab.Tick();  // 必须在 RecedingNav 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it
 			StateSpacePlanner.TickBlocks();
