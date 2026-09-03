@@ -17,6 +17,7 @@ namespace TerraBlind
 		// 线要连房子一起算:头 6 列是房子地板,后面 170 格才是桥。
 		// 只算 170 的话房子会吃掉桥的前 6 格,雷管站的地方就短了。
 		public const int Length = HouseW + Bridge;
+		const int SlopeRun = 4;             // 升降一格要跨几列。台阶太陡人走不上去
 		const int SlopeW = 4;               // 上下挪一格的钱。没约束时线自己走平
 		// 连着爬第 k 段额外加这么多:陡坡不禁止,但连成一串会越来越贵,于是"能分散就分散"。
 		// 只加 SlopeW 是线性的 —— 连爬10段和分散爬10段一样贵,Dijkstra 没理由避开陡坡
@@ -71,17 +72,10 @@ namespace TerraBlind
 				if (Predicates.IsSolid(x, y)) { ceil = y + 1; break; }
 		}
 
-		// 桥面在 (x,y):人占 y-1..y-Body。再往上多留一格 = Head 行全要空。
-		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话,第 4 行那块石头就是卡死的地方。
-		//
-		// 【和 DeckBuilder.HeadClear 必须是同一个数】。算线按 4 行禁、铺桥按 5 行清的话,
-		// 第 5 行的地狱熔炉算线时放行、铺桥时挖不掉,人走到那儿被顶住 —— 线保证不了的事
-		// 执行期补不回来。所以两处都读这一份
+		// 上坡时人先升一行再落到新桥面,只按身高 3 行算的话第 4 行那块石头就是卡死的地方
 		const int Head = Body + 1;
-		// 【挖不动的东西按铺桥真正会清的高度禁】。DeckBuilder 铺到一格之前清它上方
-		// HeadClear 行,清不掉(地狱熔炉 tile 77)人就被顶住 —— 线保证不了的事执行期补不回来,
-		// 所以两处读同一个数,别一边禁 4 行一边清 5 行。
-		// 【不和 Head 合并】:Head 还管着"头顶不许有岩浆",两条判据将来未必同高
+		// 【和 DeckBuilder.HeadClear 读同一个数】:一边禁 4 行一边清 5 行的话,
+		// 第 5 行那块挖不动的算线时放行、铺桥时清不掉,人走到那儿被顶住
 		const int DigHead = DeckBuilder.HeadClear;
 		// 这一趟的镐力。算线前取一次 —— CellCost 是 DP 里逐格调的,不能每次去翻背包
 		static int _pick;
@@ -121,13 +115,8 @@ namespace TerraBlind
 		// 居中按比例:腔 3 格高时"居中"=离下表面 1 格,60 格高时=30 格,一个式子两种都对。
 		static int CellCost(int x, int y, int ceil, int floor)
 		{
-			// 【挖不动的一律不许穿】。地狱熔炉(tile 77,镐力<65)、地狱祭坛这些伤害恒 0,
-			// 线大大方方从中间穿过去、代价按普通石头算,执行时人对着它挥一辈子也开不了。
-			// 这是真禁行不是"贵":给有限价的话绕路一长就还是选择硬凿。
-			//
-			// 用 MineableWith 不用 CostFrames:这里是 176 列 x 190 行的 DP,每格要问 4 次。
-			// CostFrames 每次 new Item() 还扫一遍热键栏,13 万次会把算线拖垮 ——
-			// 而镐力一趟不变,循环外取一次就够
+			// 【挖不动的一律不许穿】:给有限价的话绕路一长就还是选择硬凿,人对着熔炉挥一辈子。
+			// 用 MineableWith 不用 CostFrames:13 万次 new Item() 会把算线拖垮
 			for (int r = 0; r <= DigHead; r++)
 				if (Predicates.IsSolid(x, y - r) && !DigTable.MineableWith(x, y - r, _pick))
 					return Unreachable;
@@ -201,9 +190,8 @@ namespace TerraBlind
 			// 锚不进打分:悬空处处都是,人自己造锚(PlaceAnywhere)。留下的判据只有居中和离人近。
 			int sx = bx, bestScore = int.MinValue, bestClear = -1, bestRow = 0;
 			float bestRel = -1f;
-			// 【房子底下必须是岩浆】,所以先按"够不够岩浆"分档,再在同档里比居中/离人近。
-			// 原来只按居中打分,岩浆只在最后 PickHouse 里数一数就报出去,选址等于没管过它 ——
-			// 日志:ScanHouse 明明挪到了岩浆上的 1091 行,Compute 一重算又跑回 1047
+			// 【房子底下必须是岩浆】:先按"够不够岩浆"分档,再在同档里比居中/离人近。
+			// 只按居中打分的话选址等于没管岩浆,重算一次就跑回没岩浆的行
 			int bestLava = -1;
 			for (int pass = 0; pass < 2; pass++)
 			{
@@ -261,25 +249,30 @@ namespace TerraBlind
 			}
 			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
 
-			// 升降一格必须占【两列】:先平一格再抬,坡度上限 0.5。一列一抬(斜率 1)的台阶不好搭。
-			// 中间那列的钱也要算,不然抬升会白蹭一格免费的地。
+			// 升降一格必须占【四列】:先平三格再抬,坡度上限 0.25。台阶太陡走不上去。
+			// 中间那几列的钱照付,不然抬升会白蹭几格免费的地。
 			while (pq.Count > 0)
 			{
 				var (d, i, r, k) = pq.Min;
 				pq.Remove(pq.Min);
 				if (d > dist[i, r, k]) continue;
-				foreach (var (di, dr) in new[] { (1, 0), (2, 1), (2, -1) })
+				foreach (var (di, dr) in new[] { (1, 0), (SlopeRun, 1), (SlopeRun, -1) })
 				{
 					int ni = i + di, nr = r + dr;
 					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
 					int cc = CellCost(sx + dir * ni, yLo + nr, ceilA[ni], floorA[ni]);
 					if (cc >= Unreachable) continue;
 					int mid = 0;
-					if (di == 2)
+					if (di > 1)
 					{
-						// 跨两列时中间那列留在原高度,它的钱照付、岩浆照否决,不然抬升白蹭一格
-						mid = CellCost(sx + dir * (i + 1), yLo + r, ceilA[i + 1], floorA[i + 1]);
-						if (mid >= Unreachable) continue;
+						// 跨列时中间那几列都留在原高度,钱照付、岩浆照否决,不然抬升白蹭几格
+						bool bad = false;
+						for (int m = 1; m < di && !bad; m++)
+						{
+							int mc = CellCost(sx + dir * (i + m), yLo + r, ceilA[i + m], floorA[i + m]);
+							if (mc >= Unreachable) bad = true; else mid += mc;
+						}
+						if (bad) continue;
 					}
 					// 平走清零,爬一段就 +1(封顶)。罚款按【已经连爬了几段】收,越连越贵
 					int nk = dr != 0 ? System.Math.Min(k + 1, MaxRun) : 0;
@@ -318,7 +311,7 @@ namespace TerraBlind
 				return res;
 			}
 
-			// 回溯走前驱链。抬升那一步跨了两列,中间那列没进过 prev —— 它留在【前驱的高度】,补上。
+			// 回溯走前驱链。抬升那一步跨了几列,中间那几列没进过 prev,都留在【前驱的高度】,补上
 			var ys = new int[Length];
 			for (int i = 0; i < Length; i++) ys[i] = -1;
 			int ci = Length - 1, cr2 = endR, ck = endK;
@@ -329,7 +322,7 @@ namespace TerraBlind
 				if (p < 0) break;
 				int pk = p % (MaxRun + 1), pcell = p / (MaxRun + 1);
 				int pi = pcell / rows, pr = pcell % rows;
-				if (ci - pi == 2) ys[pi + 1] = yLo + pr;
+				for (int m = 1; m < ci - pi; m++) ys[pi + m] = yLo + pr;
 				ci = pi; cr2 = pr; ck = pk;
 			}
 			for (int i = 0; i < Length; i++)
@@ -338,7 +331,7 @@ namespace TerraBlind
 			for (int i = 0; i < Length; i++)
 				if (Predicates.IsLava(sx + dir * i, ys[i])) { res.Why = $"lava_on_deck@col{i}"; return res; }
 
-			// 坡度 0.5 = 每变一次高度前必须先平至少一格。连续两列都变高就是边集坏了
+			// 坡度 1/SlopeRun = 每变一次高度前必须先平 SlopeRun-1 格。连着变高就是边集坏了
 			int maxStep = 0, backToBack = 0;
 			for (int i = 1; i < Length; i++)
 			{
