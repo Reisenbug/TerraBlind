@@ -105,6 +105,7 @@ namespace TerraBlind
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
 			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0;
+			_stillHash = 0; _stillCount = 0; _stillAt = 0; _frozen = 0;
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -137,6 +138,18 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > MaxFrames) { Fail($"超时 铺到第{_idx}/{_line.Count}格"); return; }
+			// 【卡死就回到逐格】。连铺一次要 run 格,中间一格放不上就整段停在那儿,
+			// 而这边每帧让路,逐格那道检查一次也轮不到(pillar 那次 600 帧全从"连铺中"走掉)。
+			// 逐格永远推得动:有就跳过,没有就铺,铺不上攒够 MaxSkips 就跳过这一格
+			if (Frozen(p))
+			{
+				DiagLog.Write($"[deck] 周围{StillSeconds}秒一格没变,停掉连铺回到逐格 第{_idx}/{_line.Count}格 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+				if (BridgeBuilder.IsRunning) BridgeBuilder.Stop();
+				if (PlaceAnywhere.IsRunning) PlaceAnywhere.Stop();
+				_runAt = _idx;   // 这一段别再起连铺了,就是它卡的
+				if (++_frozen > MaxFrozen) { Fail($"连着{_frozen}次卡在第{_idx}/{_line.Count}格,救不回来"); return; }
+				return;
+			}
 
 			// 铺完了
 			if (_idx >= _line.Count)
@@ -169,7 +182,7 @@ namespace TerraBlind
 			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHellBrick(x, y))
 			{
 				if (_tried) Placed++; else Already++;
-				_idx++; _cellFrames = 0; _tried = false; _skipped = 0;
+				_idx++; _cellFrames = 0; _tried = false; _frozen = 0; _skipped = 0;
 				_lastDx = int.MaxValue; _blockedFrames = 0;   // 换目标了,离目标多远重新算
 				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
 				if (_idx % 20 == 0)
@@ -220,7 +233,7 @@ namespace TerraBlind
 			{
 				DiagLog.Write($"[deck] ({x},{y})有占位物但站不住,跳过");
 				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格站不住,最后({x},{y})"); return; }
-				_idx++; _cellFrames = 0; _tried = false;
+				_idx++; _cellFrames = 0; _tried = false; _frozen = 0;
 				_lastDx = int.MaxValue; _blockedFrames = 0;
 				return;
 			}
@@ -350,7 +363,7 @@ namespace TerraBlind
 				DiagLog.Write($"[deck] 第{_idx}格({x},{y})跳过:{PlaceAnywhere.Reason}");
 				if (++_skipped > MaxSkips) { Fail($"连着{_skipped}格放不上,最后({x},{y}):{PlaceAnywhere.Reason}"); return; }
 				PlaceAnywhere.Outcome = "idle";
-				_idx++; _cellFrames = 0; _tried = false;
+				_idx++; _cellFrames = 0; _tried = false; _frozen = 0;
 				_lastDx = int.MaxValue; _blockedFrames = 0;
 				return;
 			}
@@ -374,6 +387,31 @@ namespace TerraBlind
 		// 铺桥按它清障,两边必须是同一个数
 		public const int HeadClear = 4;
 		const int LookAhead = 4;   // 往前看几格。太少会走到跟前才发现,太多会挖到用不上的地方
+
+		// 【卡死只认世界事实】。"推了没靠近""同格多少帧"那些判据都挂在各自的分支上,
+		// 从别的 return 退出就一次也数不到(pillar 那次 600 帧全从"连铺中"那条走掉)。
+		// 这条在 Tick 最前面,不管走哪条分支都数得到:周围地形连着几秒一格没变就是真卡住了
+		const int StillSeconds = 3;
+		const int StillEvery = 10;                       // 每这么多帧采一次样,别每帧扫 61x61
+		const int StillMax = 60 * StillSeconds / StillEvery;
+		const int MaxFrozen = 5;                         // 同一格救这么多次还是不动,才真判死
+		static int _stillHash, _stillCount, _stillAt, _frozen;
+
+		static bool Frozen(Player p)
+		{
+			if (_frames - _stillAt < StillEvery) return false;
+			_stillAt = _frames;
+			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
+			int r = Player.tileRangeX + 2;
+			int h = 17;
+			for (int x = cx - r; x <= cx + r; x++)
+				for (int y = cy - r; y <= cy + r; y++)
+					h = h * 31 + (Predicates.InBounds(x, y) && Main.tile[x, y].HasTile ? Main.tile[x, y].TileType + 1 : 0);
+			// 人挪了窝也算有变化 -- 走在长直段上时地形确实一动不动,那不是卡住
+			h = h * 31 + cx; h = h * 31 + cy;
+			if (h != _stillHash) { _stillHash = h; _stillCount = 0; return false; }
+			return ++_stillCount >= StillMax;
+		}
 
 		// 这一列在线上最高的那格。变高处一列有两格,净空要从最上面那格算起
 		static int TopOfCol(int cx, int cy)
