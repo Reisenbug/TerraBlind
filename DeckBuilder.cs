@@ -298,16 +298,12 @@ namespace TerraBlind
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
 				if (!ClearWay.HasPick(p) && Predicates.IsWall(px + (px < x ? 1 : -1), py))
 				{ Fail($"({px},{py})前面有地形挡着,手上没镐挖不开"); return; }
-				// 【竖直够不着不能靠横移】。人在桥面上方 39 行时往右走一辈子也够不着,
-				// 而每走一列 x 跟着推进 -> 列号一路爬(702->726),全是 out_of_reach 一格没铺。
-				// 差得多就交栈(它会寻路/造落脚点),横移只管同高度的小偏差
+				// 【竖直够不着不能靠横移】:人在桥面上方 39 行时往右走一辈子也够不着,
+				// 列号还一路爬。差得多就交栈,横移只管同高度的小偏差
 				if (System.Math.Abs(py - y) > VertSlack)
 				{
-					// 【人在桥面【上方】而且桥面在前方 = 往前走一步就掉下去了】。
-					// 铺出来的桥是往下走的台阶,铺完一段人留在高的那一级,下一格在下方几行 ——
-					// 而这条分支直接交栈,横移那条永远轮不到。Unstick 只会叫导航"站到那格",
-					// 可那格还是空气,站不上去,于是递归 8 层全在"回桥面"上打转然后放弃。
-					// 交栈留给【桥面在上方】(要爬)和【同列】(纯竖直)那两种。
+					// 【人在桥面上方且桥面在前方 = 往前走一步就掉下去】:交栈只会叫导航
+					// "站到那格",可那格还是空气,递归 8 层全在"回桥面"上打转然后放弃
 					int fdir = x > px ? 1 : -1;
 					if (y > py && px != x && !Predicates.IsWall(px + fdir, py))
 					{
@@ -328,9 +324,8 @@ namespace TerraBlind
 						Fail($"人在{py},桥面{y},差{System.Math.Abs(py - y)}行,够不着又救不回来");
 					return;
 				}
-				// 【同列还够不着 = 竖直问题,横移救不了】。原来这两个 if 都不成立时直接空转:
-				// 不按键、不计数、不打日志 —— 人站着不动,日志 500 帧全空,连卡在哪都看不出来。
-				// 现场:人在(3123,1054)一动不动,手不挥,玩家按方向键都被这条每帧盖掉
+				// 【同列还够不着 = 竖直问题,横移救不了】:不这么写就是空转,
+				// 不按键不计数不打日志,人站着不动而日志 500 帧全空
 				if (px == x)
 				{
 					if (++_sameColFrames > SameColStuck)
@@ -375,29 +370,35 @@ namespace TerraBlind
 			_tried = true;
 		}
 
-		// 桥面【上方 HeadClear 行】必须是空的,从当前格往前看 LookAhead 格。
-		// 挖了返回 true(这一帧交给挖,别再往下走)
-		// 桥面上方要空几行。【HellLine.Head 读的就是这一份】—— 算线按它禁掉
-		// "上方有挖不动的东西"的列,铺桥按它清障,两边必须是同一个数
+		// 桥面上方要空几行。【HellLine.Head 读的就是这一份】:算线按它禁列、
+		// 铺桥按它清障,两边必须是同一个数
 		public const int HeadClear = 4;
 		const int LookAhead = 4;   // 往前看几格。太少会走到跟前才发现,太多会挖到用不上的地方
 
+		// 这一列在线上最高的那格。变高处一列有两格,净空要从最上面那格算起
+		static int TopOfCol(int cx, int cy)
+		{
+			if (OnLine(cx, cy - 1)) return cy - 1;
+			return cy;
+		}
+
 		static bool ClearAhead(Player p)
 		{
-			// 【挖得到的桥线格,上方 HeadClear 行一律清空】。原来只看前 LookAhead(4) 格,
-			// 手明明够得到第 5 格头顶的方块也不清,等走到跟前才发现被顶住。
-			// 扫多远由【挖掘距离】定,不由一个写死的数定:Dig 自己会用 Reach.CanMine 挡够不着的,
-			// 这儿多扫几格只是多几次判断。上限取 tileRangeX 的两倍,够覆盖手能碰到的全部。
+			// 【扫多远由挖掘距离定,不写死】:Dig 自己用 Reach.CanMine 挡够不着的,
+			// 这儿多扫几格只是多几次判断。写死 4 格的话手够得到第 5 格也不清
 			int scan = System.Math.Max(LookAhead, (Player.tileRangeX + 1) * 2);
 			for (int k = 0; k < scan && _idx + k < _line.Count; k++)
 			{
 				var (cx, cy) = _line[_idx + k];
+				// 【从这一列最高的那格桥面往上数】。变高处同一列有上下两格(衔接格),
+				// 按下面那格算的话上面那格正好落进 HeadClear 里,净空会把自己的桥挖掉
+				int top = TopOfCol(cx, cy);
 				for (int r = 1; r <= HeadClear; r++)
 				{
 					// 平台不算挡路(穿得过去),ClearWay.Dig 自己会判;这里只挑实心的问
-					if (!Predicates.IsWall(cx, cy - r)) continue;
-					if (!ClearWay.Dig(p, cx, cy - r, $"桥面净空(第{_idx + k}格上方{r})")) continue;
-					DiagLog.Write($"[deck] 清第{_idx + k}格({cx},{cy})上方{r}行的方块");
+					if (!Predicates.IsWall(cx, top - r)) continue;
+					if (!ClearWay.Dig(p, cx, top - r, $"桥面净空(第{_idx + k}格上方{r})")) continue;
+					DiagLog.Write($"[deck] 清第{_idx + k}格({cx},{top})上方{r}行的方块");
 					return true;
 				}
 			}
