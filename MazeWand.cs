@@ -712,4 +712,11 @@ namespace TerraBlind
             CreateRecipe().AddIngredient(ItemID.DirtBlock, 1).AddTile(TileID.WorkBenches).Register();
         }
     }
+
+    // 【场跟着世界走】。mod 不会因为退出世界而重载,不清的话第二局拿着第一局的地形当罗盘,
+    // 而它只在铺完桥那一处作废 -- 于是"必须 /build 一次才正常"
+    public class MazeWandSystem : Terraria.ModLoader.ModSystem
+    {
+        public override void OnWorldUnload() => MazeWand.InvalidateField();
+    }
 }
