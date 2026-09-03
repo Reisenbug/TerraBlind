@@ -263,14 +263,13 @@ namespace TerraBlind
 						var (ax, ay) = StateSnapshotPlayer.HellLanding();
 						if (ax <= 0) { Fail("算不出地狱落脚点"); return; }
 						int mycx = ActExecutor.OriginCx(p), mycy = ActExecutor.OriginCy(p);
-						if (System.Math.Abs(mycx - ax) + System.Math.Abs(mycy - ay) <= 6)
+						if (mycx == ax && mycy == ay)
 						{ _atHellEnd = true; DiagLog.Write($"[start] 到 A 点了({ax},{ay})"); return; }
 						if (++_hellEndTries > 3)
 						{ Fail($"走不到 A 点({ax},{ay}),人({mycx},{mycy}) 最后一次nav={RecedingNav.LastStop}"); return; }
 						DiagLog.Write($"[start] 链走完了,去 A 点({ax},{ay}) 人({mycx},{mycy}) 第{_hellEndTries}次 上一趟={RecedingNav.LastStop}");
-						// Mode.Reach:够得着就行。A 点只是"到地狱了"的标志,不用精确踩上去 ---
-						// 精确站位是 Mode.Stand,它在这种地形上常常一条路都搜不出来
-						RecedingNav.Start(ax, ay, RecedingNav.Mode.Reach);
+						// 要精确踩上那一格,所以用 Stand;HellLanding 已经保证它是能站的落脚行
+						RecedingNav.Start(ax, ay, RecedingNav.Mode.Stand);
 						return;
 					}
 					// 到地狱了,交给地狱那一套
