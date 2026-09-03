@@ -263,13 +263,14 @@ namespace TerraBlind
 						var (ax, ay) = StateSnapshotPlayer.HellLanding();
 						if (ax <= 0) { Fail("算不出地狱落脚点"); return; }
 						int mycx = ActExecutor.OriginCx(p), mycy = ActExecutor.OriginCy(p);
-						if (mycx == ax && mycy == ay)
-						{ _atHellEnd = true; DiagLog.Write($"[start] 到 A 点了({ax},{ay})"); return; }
+						// 判据就是寻路自己说 done,不另编一套坐标校验(python 那份也只看 nav 的结论)
+						if (_hellEndTries > 0 && RecedingNav.LastStop == "done")
+						{ _atHellEnd = true; DiagLog.Write($"[start] 到 A 点了({ax},{ay}) 人({mycx},{mycy})"); return; }
 						if (++_hellEndTries > 3)
 						{ Fail($"走不到 A 点({ax},{ay}),人({mycx},{mycy}) 最后一次nav={RecedingNav.LastStop}"); return; }
 						DiagLog.Write($"[start] 链走完了,去 A 点({ax},{ay}) 人({mycx},{mycy}) 第{_hellEndTries}次 上一趟={RecedingNav.LastStop}");
-						// 要精确踩上那一格,所以用 Stand;HellLanding 已经保证它是能站的落脚行
-						RecedingNav.Start(ax, ay, RecedingNav.Mode.Stand);
+						// Snap:目标是线上一格,它会吸到旁边能站的格。Stand 会在末段每帧同步跑 A*,地狱地形一帧卡死游戏
+						RecedingNav.Start(ax, ay, RecedingNav.Mode.Snap);
 						return;
 					}
 					// 到地狱了,交给地狱那一套
