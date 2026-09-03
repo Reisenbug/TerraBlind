@@ -22,6 +22,7 @@ namespace TerraBlind
 		// 和 python 那份保持一致 (RUN1_BUILD_WOOD / RUN1_ROAD_WOOD / RUN1_NEED)
 		const int NeedTorch = 4;
 		const int HouseW = 21, HouseH = 10;
+		const int NeedPlatforms = 20;   // 开工前手上至少要有这么多平台
 		const int SkipNearCells = 60;   // 这么近的宝藏不判"在身后",直接去拿
 
 		static int _frames;
@@ -129,6 +130,15 @@ namespace TerraBlind
 						RecedingNav.Start(_siteX, HouseBuilder.LadderFootRow(_siteX, _siteY));
 						return;
 					}
+					// 【平台不够就别开工】。盖房第一步 pillar 要垫平台上去,没有就当场
+					// "爬不动"判死(现场:pillar stop: no platform slot)。python 那份在这儿
+					// 显式补货并等结果,mod 这边 PlatformStock 是自动的,等它补上就行
+					if (Have(PlatformStock.ItemId) < NeedPlatforms)
+					{
+						if (_frames % 120 == 1)
+							DiagLog.Write($"[start] 等平台 {Have(PlatformStock.ItemId)}/{NeedPlatforms}");
+						return;
+					}
 					// 【盖房前先把下一段的场建起来】。建场是秒级的,而盖房要几十秒 ---
 					// 让它在这期间后台跑完,房子一好人直接动身
 					HttpServerSystem.WarmDescentAsync("jungle");
@@ -144,6 +154,13 @@ namespace TerraBlind
 					if (HouseBuilder.IsRunning) return;
 					if (HouseBuilder.Outcome != "done")
 					{ Fail($"房子没盖成:{HouseBuilder.Outcome}/{HouseBuilder.Reason}"); return; }
+					// python 那份在下地狱前也补一次平台(_top_up_platforms) --- 平台是寻路的耗材
+					if (Have(PlatformStock.ItemId) < NeedPlatforms)
+					{
+						if (_frames % 120 == 1)
+							DiagLog.Write($"[start] 下地狱前等平台 {Have(PlatformStock.ItemId)}/{NeedPlatforms}");
+						return;
+					}
 					DiagLog.Write("[start] 房子盖好了");
 					Chatter.Say("[TerraBlind] 房子好了,下地狱", 120, 255, 120);
 					Go(Ph.Descend);
