@@ -29,16 +29,13 @@ namespace TerraBlind
 		private static int _lastDx = int.MaxValue;   // 离目标最近到过几列。判"推了却没靠近"= 被顶住
 		private static int _blockedFrames;           // 连着几帧没挪窝
 		private static int _sameColFrames;           // 同列却够不着,连着几帧
-		private static int _lastRecoverAt = -1000;   // 上一次起跳是第几帧
-		private const int RecoverGap = 25;           // 一跳约 20 帧落地,隔这么久才算下一次
 		// 【每条无声的 return 都留个名字】。人站着不动、日志 500 帧全空的时候,
 		// 唯一能查的就是"每帧走到哪一条就退出了"。60 帧汇报一次,不刷屏
 		private static string _where = "";
 		private static int _heartbeat;
 		private const int SameColStuck = 30;         // 同列够不着这么多帧 = 横移解决不了,交栈
 
-		// 桥面有起伏松一格免得坡上误判;竖直差太多不是走两步能解决的,交栈
-		private const int JumpBackSlack = 2;
+		// 竖直差这么多就不是走两步能解决的,说明人掉下去了,交寻路
 		private const int VertSlack = 4;
 
 		// 往前迈那一列脚下有没有地。判据和 BridgeBuilder 那份一致:桥面是平台也算,
@@ -51,11 +48,15 @@ namespace TerraBlind
 			int fy = ActExecutor.OriginCy(p);
 			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
 		}
-		private const int StandSlack = 1;
+
+		// 【绝不走到桥头】。目标格够得着就别再往前 -- 站在边缘那一格,一个残余横速就掉下去。
+		// 距离不写死:按【最窄的那把尺子】(挖)反推,手臂长短一变它自己跟着变,
+		// 而挖够得着时放一定也够(CanPlace 宽出一个 blockRange)
+		private static bool KeepBack(Player p, int x, int y) => Reach.CanMine(p, x, y);
 		private const int MaxRecovers = 8;
 		private const int MaxSkips = 6;
 		private const int MinRun = 3;   // 短于这个不值得起一趟 BridgeBuilder,直接单格放
-		// 朝目标推了这么多帧还没换列 = 被顶住了。太小会把"起跳前的一帧"误判成卡住
+		// 朝目标推了这么多帧还没换列 = 被顶住了
 		private const int BlockedAt = 20;
 
 		private const int MaxFrames = 60 * 600;
@@ -104,7 +105,7 @@ namespace TerraBlind
 			_item = itemName;
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
-			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0; _lastRecoverAt = -1000;
+			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0;
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -156,8 +157,7 @@ namespace TerraBlind
 
 			var (x, y) = _line[_idx];
 
-			// 【铺到之前先把上方净空挖出来】:走到跟前被顶住再救就晚了,那时人卡在桥面下一行,
-			// 跳 8 次全撞天花板然后整条桥失败。往前看几格一起清
+			// 【铺到之前先把上方净空挖出来】:走到跟前被顶住再救就晚了。往前看几格一起清
             if (ClearAhead(p)) { Mark("清净空"); return; }
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
@@ -170,13 +170,17 @@ namespace TerraBlind
 				// 每 20 格报一次进度。逐格打会淹掉日志,一行不打就分不出"在推进"和"死了"
 				if (_idx % 20 == 0)
 					DiagLog.Write($"[deck] 进度{_idx}/{_line.Count} 放了{Placed} 本来就有{Already}");
-				// 【铺好一格就跟一步】:PlaceAnywhere 是站着放的,不跟就一次落后一两格,攒到十几格后判"回不了桥面"。
-				// 【但绝不迈进空里】:下一格还没铺出来时脚下是空的,跨出桥面就掉下去(现场:桥面1044,人掉到1065)
-				if (_idx < _line.Count && NextStepStandable(p))
+				// 【铺好一格就跟一步】:PlaceAnywhere 是站着放的,不跟就一次落后一两格。
+				// 【但够得着就别再往前】:走到桥头那一格,一个残余横速就掉下去
+				if (_idx < _line.Count)
 				{
-					int npx = ActExecutor.OriginCx(p), nx = _line[_idx].x;
-					if (nx > npx) p.controlRight = true;
-					else if (nx < npx) p.controlLeft = true;
+					var (nx, ny) = _line[_idx];
+					int npx = ActExecutor.OriginCx(p);
+					if (!KeepBack(p, nx, ny) && NextStepStandable(p))
+					{
+						if (nx > npx) p.controlRight = true;
+						else if (nx < npx) p.controlLeft = true;
+					}
 				}
 				return;
 			}
@@ -217,23 +221,12 @@ namespace TerraBlind
 				return;
 			}
 
-			// 人得站在【已经铺好的那一段】上。低了就跳:Reach 判的是"够得着"不是"站上去",
-			// 人在桥面下方也够得着 → 立刻 done → 下一帧又低 → 又 Start,于是刷屏且没爬上去
 			int py = ActExecutor.OriginCy(p), px = ActExecutor.OriginCx(p);
-			// 【挡路的挖掉 —— 不管够不够得着】。原来这句只挂在下面"够不着"那条分支里,
-			// 而挡的是【身子】不是【手】:ReachBoost 让手能隔着墙够到 8 格外,于是够得着 →
-			// 跳过整条分支 → 交给 PlaceAnywhere → 它那份挖同样只在够不着时跑 → 两边都不挖。
-			// 现场:2768 帧铺完(2064,1047)后 422 帧一行日志都没有,墙就在人前面。
-			//
-			// 判据是【推了却没挪窝】,不是"前面有方块":桥面本来就贴着地形,见方块就挖会把
-			// 整条线两侧刨空。人朝目标推了 BlockedAt 帧列号还没变,那才是真被顶住。
-			// 判"横着推不动"要看 velocity.X,不看 Y:人低于桥面时下面那段会一直让他跳,
-			// 腾空占了大半帧数,拿 Y==0 当门会几乎数不上去 —— 而墙挡着恰恰就是这个场面
-			// 【判据是"离目标近了没有",不是"列号变没变"】。人顶着墙时会原地跳、左右蹭,
-			// 列号来回变 —— 拿"变了就清零"当门,计数永远攒不到,挖的那条路一次都轮不上。
-			// 真正的卡住是【推了半天离目标还是那么远】
+			// 判据是【推了却没靠近】,不是"前面有方块":桥面贴着地形,见方块就挖会把两侧刨空。
+			// 【够得着就不算卡住】:那是故意留的安全距离,人本来就不再往前 --
+			// 拿"没靠近"当门会每 20 帧刨一次桥边的地形
 			int dxNow = System.Math.Abs(px - x);
-			if (dxNow < _lastDx) { _blockedFrames = 0; _lastDx = dxNow; }
+			if (KeepBack(p, x, y) || dxNow < _lastDx) { _blockedFrames = 0; _lastDx = dxNow; }
 			else if (dxNow > 0) _blockedFrames++;
 			if (_blockedFrames >= BlockedAt)
 			{
@@ -256,47 +249,14 @@ namespace TerraBlind
 				}
 			}
 
-			if (py > y - 1 + StandSlack)
+			// 【铺桥只有左右移动,没有跳】。y 差得多说明人掉下去了 -- 那不是走两步能解决的,
+			// 交寻路把人送回桥上,回来接着铺。差一点点是坡上的正常起伏,照走
+			if (py > y - 1 + VertSlack)
 			{
-				// 数帧会在跳到一半判死(一跳十几帧),所以只在落地时计次;腾空中横向照推不计次
-				if (p.velocity.Y != 0f)
-				{ Mark("腾空中横推"); if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true; return; }
-				// 【人在桥上就只按左右键,别叫寻路】。桥面是自己刚铺的,连着一路通到目标格,
-				// 走过去就是了 —— 而寻路会重建整张场、绕大圈、递归好几层"回桥面"。
-				// 判据:脚下踩的就是这条桥线上的格子。
-				var (tl, tr) = Predicates.TouchCols(p.position.X, p.width);
-				bool onDeck = false;
-				for (int c = tl; c <= tr && !onDeck; c++) onDeck = OnLine(c, py + 1);
-				if (onDeck)
-				{
-					Mark("在桥上,走过去");
-					if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
-					return;
-				}
-				// 差一格就自己跳(比启动整套寻路便宜)。差得多【交给寻路】——
-				// 它会挖会搭会跳,而这儿硬按方向键只会在坎前蹭,8 次蹭不上去就整条桥失败
-				if (py - (y - 1) > JumpBackSlack)
-				{
-					// 【NotStanding 不是 OutOfReach】:要的是脚踩上去,不是手够到。
-					// 用 OutOfReach 会走 Mode.Reach,而手隔 3 行就够得着 —— 每帧"到了"却一步不动
-					if (!Unstick.Handle("deck", new Blocker(BlockKind.NotStanding, x, y - 1, "回桥面")))
-						Fail($"回不了桥面 (人{py} 桥面{y})");
-					return;
-				}
-				// 【跳不起来就是头顶挡着 —— 先挖了再跳】。现场:人1058 桥面1057 只差一行,
-				// 而 (1170,1056)(1170,1058) 是地狱石砖,人一动不动连跳 8 次然后 STUCK
-				if (ClearWay.Above(p, "挡着跳回桥面"))
-				{ Mark("挖头顶"); return; }
-				// 【计次要隔开】。原来每帧 +1:按下 controlJump 之后 vanilla 要下一帧才把
-				// velocity.Y 变负,这一帧读到的还是 0 —— 于是"腾空不计次"那道门形同虚设,
-				// 8 次机会在 9 帧里烧光(日志 3398→3406),人连跳都没跳起来就判死
-				if (_frames - _lastRecoverAt < RecoverGap) { Mark("等上一跳落地"); return; }
-				_lastRecoverAt = _frames;
-				if (++_recovers > MaxRecovers) { Fail($"爬不回桥面 (人{py} 桥面{y})"); return; }
-				DiagLog.Write($"[deck] 人在{py},桥面{y},跳上去({_recovers}/{MaxRecovers})");
-				// 光按跳是原地起跳,上不去斜前方那一格 —— 得朝目标列一起推
-				p.controlJump = true;
-				if (px < x) p.controlRight = true; else if (px > x) p.controlLeft = true;
+				if (RecedingNav.Active) { Mark("寻路回桥上"); return; }
+				if (++_recovers > MaxRecovers) { Fail($"回不了桥面 (人{py} 桥面{y})"); return; }
+				DiagLog.Write($"[deck] 人{py} 桥面{y} 差{py - (y - 1)}行,寻路回桥上({_recovers}/{MaxRecovers})");
+				RecedingNav.Start(x, y - 1, RecedingNav.Mode.Stand);
 				_cellFrames = 0;
 				return;
 			}
@@ -329,9 +289,9 @@ namespace TerraBlind
 				}
 			}
 
-			// 走到够得着再交给 PlaceAnywhere。不然它每一格都要"启动→发现够不着→走→放→收摊",
-			// 日志里每格 6 列远、13 帧;BridgeBuilder 连续铺是 5.93 格/秒。
-			if (!Reach.CanPlace(p, x, y))
+			// 走到够得着再交给 PlaceAnywhere,不然每格都要"启动→发现够不着→走→放→收摊"。
+			// 【按最窄的那把尺子(挖)】:只够放不够挖的话,挡路的障碍清不掉
+			if (!KeepBack(p, x, y))
 			{
 				if (PlaceAnywhere.IsRunning) { Mark("够不着+放置中"); return; }
 				// 挡着又没镐:横着走一辈子也过不去,当场报出来,别烧满 MaxCellFrames 才说"卡了"
