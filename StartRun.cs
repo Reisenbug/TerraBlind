@@ -242,15 +242,21 @@ namespace TerraBlind
 					// 到了才算 arrived。A 点就是 tb 2 传送的落点,用同一份算法,别再推一遍
 					if (!_atHellEnd)
 					{
-						var (ax, ay) = HttpServerSystem.DescentEnd("jungle", out string dw);
-						if (ax <= 0) { Fail($"算不出下降终点:{dw}"); return; }
+						// 【用 HellLanding 不是 DescentEnd】。A 点是 H 场描出来的线上一格,线允许
+						// 穿实心(下降路上本来就要挖) --- 直接拿它当落脚点,Mode.Stand 要精确站进
+						// 一个实心格,A* 搜不出来,一条日志都不留就没了。HellLanding 会往上找到
+						// 第一处身子那 3 行都空的落脚行,tb 2 传送用的就是它,同一份不另推
+						var (ax, ay) = StateSnapshotPlayer.HellLanding();
+						if (ax <= 0) { Fail("算不出地狱落脚点"); return; }
 						int mycx = ActExecutor.OriginCx(p), mycy = ActExecutor.OriginCy(p);
 						if (System.Math.Abs(mycx - ax) + System.Math.Abs(mycy - ay) <= 6)
 						{ _atHellEnd = true; DiagLog.Write($"[start] 到 A 点了({ax},{ay})"); return; }
 						if (++_hellEndTries > 3)
-						{ Fail($"走不到 A 点({ax},{ay}),人({mycx},{mycy})"); return; }
-						DiagLog.Write($"[start] 链走完了,去 A 点({ax},{ay}) 人({mycx},{mycy}) 第{_hellEndTries}次");
-						RecedingNav.Start(ax, ay, RecedingNav.Mode.Stand);
+						{ Fail($"走不到 A 点({ax},{ay}),人({mycx},{mycy}) 最后一次nav={RecedingNav.LastStop}"); return; }
+						DiagLog.Write($"[start] 链走完了,去 A 点({ax},{ay}) 人({mycx},{mycy}) 第{_hellEndTries}次 上一趟={RecedingNav.LastStop}");
+						// Mode.Reach:够得着就行。A 点只是"到地狱了"的标志,不用精确踩上去 ---
+						// 精确站位是 Mode.Stand,它在这种地形上常常一条路都搜不出来
+						RecedingNav.Start(ax, ay, RecedingNav.Mode.Reach);
 						return;
 					}
 					// 到地狱了,交给地狱那一套
