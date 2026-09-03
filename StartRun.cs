@@ -23,7 +23,8 @@ namespace TerraBlind
 		const int NeedTorch = 4;
 		const int HouseW = 21, HouseH = 10;
 		const int NeedPlatforms = 20;   // 开工前手上至少要有这么多平台
-		const int SkipNearCells = 60;   // 这么近的宝藏不判"在身后",直接去拿
+		const int SkipNearCells = 60;
+		const int StopTimeout = 60 * 240;   // 单站走多久还没办成就放弃(python 的 NAV_TIMEOUT_S)   // 这么近的宝藏不判"在身后",直接去拿
 
 		static int _frames;
 		static int _siteX, _siteY;
@@ -85,6 +86,15 @@ namespace TerraBlind
 					{ DiagLog.Write($"[start] 火把够了({Have(ItemID.Torch)}/{NeedTorch})"); Go(Ph.Site); return; }
 					if (_frames > 60 * 900) { Fail($"收火把超时,只有{Have(ItemID.Torch)}/{NeedTorch}"); return; }
 					// 到了再开箱,和下降那段同一个分工,同样要排在最前面
+					if (_stop.HasValue && Main.GameUpdateCount - _stopAt > StopTimeout)
+					{
+						var sv2 = _stop.Value;
+						DiagLog.Write($"[start] ({sv2.x},{sv2.y})超时,放弃");
+						GreedPickup.MarkDone(sv2.x, sv2.y);
+						RecedingNav.Stop(); TreasureGrab.Stop();
+						_stop = null; _sideTrip = false; _sideHeart = null;
+						return;
+					}
 					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
 						var st2 = _stop.Value; _stop = null;
@@ -112,7 +122,7 @@ namespace TerraBlind
 					if (!Main.tile[stop.x, stop.y].HasTile)
 					{ DiagLog.Write($"[start] 跳过({stop.x},{stop.y}) 那儿已经空了"); return; }
 					DiagLog.Write($"[start] 开箱[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) 火把{Have(ItemID.Torch)}/{NeedTorch}");
-					_stop = stop;
+					_stop = stop; _stopAt = Main.GameUpdateCount;
 					RecedingNav.Start(stop.x, stop.y, RecedingNav.Mode.Reach);
 					return;
 				}
@@ -181,6 +191,16 @@ namespace TerraBlind
 					// 【排最前面】:顺路采集和"取下一站"抢先执行的话 _stop 就被覆盖了
 					if (_stop.HasValue && _frames % 300 == 1)
 						DiagLog.Write($"[start] 等着办({_stop.Value.x},{_stop.Value.y}){_stop.Value.kind} nav={RecedingNav.Active} grab={TreasureGrab.IsRunning} side={_sideTrip}");
+					// 单站超时:走不到就放弃这一站接着走,别让 A* 每 300 帧白算一次(python 那边是 NAV_TIMEOUT_S)
+					if (_stop.HasValue && Main.GameUpdateCount - _stopAt > StopTimeout)
+					{
+						var sv = _stop.Value;
+						DiagLog.Write($"[start] ({sv.x},{sv.y})走了{StopTimeout}帧还没办成,放弃 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+						GreedPickup.MarkDone(sv.x, sv.y);
+						RecedingNav.Stop(); TreasureGrab.Stop();
+						_stop = null; _sideTrip = false; _sideHeart = null;
+						return;
+					}
 					if (_stop.HasValue && !_sideTrip && !RecedingNav.Active && !TreasureGrab.IsRunning)
 					{
 						var st = _stop.Value;
@@ -225,7 +245,7 @@ namespace TerraBlind
 						DiagLog.Write($"[start] 下降[{_routeIdx}/{_route.Count}] {stop.kind}({stop.x},{stop.y}) 距{d} H{th}(我{ph2})");
 						GreedPickup.MarkDone(stop.x, stop.y);   // 主链要去的,顺路那层别再算一遍
 						// 走路归寻路:TreasureGrab 的 MaxGoto 只有 30 秒,跑长途必超时判死
-						_stop = stop;
+						_stop = stop; _stopAt = Main.GameUpdateCount;
 						// 水晶要走到跟前才挖得着。Snap 会吸到旁边能站的格 --- Stand 会去站水晶本身那个实心格,永远到不了
 						RecedingNav.Start(stop.x, stop.y,
 							stop.kind == "heart" ? RecedingNav.Mode.Snap : RecedingNav.Mode.Reach);
@@ -304,6 +324,7 @@ namespace TerraBlind
 		static bool _atHellEnd;      // 走到 A 点(下降线终点)了没 --- tb 2 是直接传到这儿的
 		static int _hellEndTries;
 		static (int x, int y, string kind)? _stop;   // 正在赶去的那一站,到了再开箱
+		static uint _stopAt;                        // 这一站是什么时候起的,用来判超时
 		static bool _sideTrip;
 		static (int x, int y)? _sideHeart;   // 顺路那颗水晶,要一帧挖一格
 		// 照 python:发一次 use_item,协调器自己挥到"地图上没了"为止,不是一格一格挖
