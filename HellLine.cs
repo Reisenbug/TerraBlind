@@ -256,7 +256,11 @@ namespace TerraBlind
 				var (d, i, r, k) = pq.Min;
 				pq.Remove(pq.Min);
 				if (d > dist[i, r, k]) continue;
-				foreach (var (di, dr) in new[] { (1, 0), (SlopeRun, 1), (SlopeRun, -1) })
+				// 【末端不许因为够不到而 no_path】:剩下的列数不足 SlopeRun 时用剩多少跨多少。
+				// 桥总得铺到头,末尾几列陡一点也比整条线算不出来强
+				int run = System.Math.Min(SlopeRun, Length - 1 - i);
+				if (run < 1) run = 1;
+				foreach (var (di, dr) in new[] { (1, 0), (run, 1), (run, -1) })
 				{
 					int ni = i + di, nr = r + dr;
 					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
