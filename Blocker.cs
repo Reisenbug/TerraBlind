@@ -25,7 +25,9 @@ namespace TerraBlind
 		NoFooting,    // 没地方站 -> 造:平台/pillar/桥
 		NoItem,       // 背包没料 -> 合成(递归:材料+工作台)
 		NoTool,       // 没镐/斧 -> 合成工具(递归)
-		Hopeless      // 真无解(岩浆/材料的材料也没有) -> 这才允许失败
+		// 真无解(越界/材料的材料也没有) -> 这才允许失败。【岩浆不算】:它只是让某个手段
+		// 不成立(平台会烧),换方块/pillar 照样过得去 -- 那种报 NoFooting
+		Hopeless
 	}
 
 	public struct Blocker

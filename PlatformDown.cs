@@ -103,10 +103,8 @@ namespace TerraBlind
 							: new Blocker(BlockKind.NotStanding, bl, feetY, "站不住");
 						Stuck(sb2, $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return;
 					}
-					// 【掉过目标行就别再等了】。这一相位只服务"站着往下铺梯子",人悬空时原样 return
-					// 等落地 —— 而等的过程中人一直在掉:(2552,1012)那次 61 帧掉到目标行 1044、
-					// 241 帧掉到 1084,穿过去 40 行进了岩浆,全程一句话没报。
-					// 掉过了就当场报出来,让上层重算(人落地后位置本来就变了,原来那条线也不对了)
+					// 【掉过目标行就别再等了】:这一相位只服务"站着往下铺梯子",悬空时原样等落地,
+					// 而等的过程中人一直在掉,穿过目标 40 行全程一句话没报
 					if (feetY > _targetWy + PastTargetSlack)
 					{
 						Stuck(new Blocker(BlockKind.OutOfReach, _col == int.MinValue ? bl : _col, _targetWy, "掉过头了"),
@@ -152,11 +150,8 @@ namespace TerraBlind
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
 					{ Stuck(new Blocker(BlockKind.Terrain, _col, _platY + 1, "放不出来"), $"放不出来 ({_col},{_platY + 1})"); return; }
-					// 【挡路的才办,空的不铺】。以前人占几列就铺几列,理由是"隔壁那块砖会顶住人,
-					// S 按不下去" —— 那个理由只在隔壁【真是砖】时成立。隔壁是空气时多铺的那一格
-					// 纯属浪费,而且它自己会变成下一步卡住身子的东西(日志:铺完 704..705,
-					// 转头就 unstick 挖(705,1012))。
-					// 所以:实心的必须换成平台(不然沉不下去),空的只办站着的那一列。
+					// 【挡路的才办,空的不铺】:实心的必须换成平台(不然沉不下去),空的只办站着那一列。
+					// 多铺的那一格会变成下一步卡住身子的东西,转头就得 unstick 挖掉
 					int need = int.MinValue;
 					for (int c = bl; c <= br; c++)
 						if (!IsPlat(c, _platY + 1) && Predicates.IsSolid(c, _platY + 1)) { need = c; break; }
@@ -168,11 +163,10 @@ namespace TerraBlind
 						_phaseFrames = 0; _tapped = false; _ph = Ph.Tap;
 						return;
 					}
-					// 到岩浆面就是该停的地方。放【得】进去(按下去那帧会抹掉液体),
-					// 但平台放进岩浆会立即烧毁,而这套下降靠踩平台按 S 穿 -- 平台一没人就直接掉下去。
-					// 所以这里停住往上报,让上层改用方块或者绕开,别在这儿死等。
+					// 【平台这手不行,不等于无解】:岩浆会烧掉平台,但报 Hopeless 会让 Unstick
+					// 直接放弃,整条流程为一格岩浆判死。报 NoFooting 让它改用方块/pillar
 					if (!Predicates.IsSolid(need, _platY + 1) && Predicates.IsLava(need, _platY + 1))
-					{ Stuck(new Blocker(BlockKind.Hopeless, need, _platY + 1, "岩浆"), $"下面是岩浆 ({need},{_platY + 1})"); return; }
+					{ Stuck(new Blocker(BlockKind.NoFooting, need, _platY + 1, "岩浆上留不住平台"), $"下面是岩浆 ({need},{_platY + 1})"); return; }
 					if (!PlaceAction.IsRunning)
 						PlaceAction.Start(_item, need, _platY + 1, 1, 0, 0, true, out _);
 					return;
