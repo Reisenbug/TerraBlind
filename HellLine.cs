@@ -377,11 +377,16 @@ namespace TerraBlind
 			for (int i = 0; i < Length; i++)
 			{
 				int x = sx + dir * i;
+				// 【衔接格也要守岩浆那道禁令】。DP 只验过 (jx,ys[i-1]) 和 (x,ys[i]),
+				// 中间这一格没人问过 -- 它落在岩浆上,下面那道 lava_on_deck 就把整条线作废了
 				if (i > 0 && ys[i] != ys[i - 1])
 				{
 					int jx = sx + dir * (i - 1);
-					res.Line.Add((jx, ys[i]));
-					digTotal += Blocked(jx, ys[i]);
+					if (!Predicates.IsLava(jx, ys[i]))
+					{
+						res.Line.Add((jx, ys[i]));
+						digTotal += Blocked(jx, ys[i]);
+					}
 				}
 				res.Line.Add((x, ys[i]));
 				digTotal += Blocked(x, ys[i]);
