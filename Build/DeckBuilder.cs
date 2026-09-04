@@ -75,9 +75,15 @@ namespace TerraBlind
 			int n = 1;
 			while (i + n < _line.Count
 			       && _line[i + n].y == _line[i].y
-			       && _line[i + n].x == _line[i].x + dir * n) n++;
+			       && _line[i + n].x == _line[i].x + dir * n
+			       && !NeedsDig(_line[i + n].x, _line[i + n].y)) n++;
 			return n;
 		}
+
+		// 【要先挖才能铺的格子必须断开连续段】。BridgeBuilder 只会放不会挖:段里混着
+		// 地狱石砖(76)/平台/罐子,它就对着那格空挥到超时,那两格永远换不掉
+		static bool NeedsDig(int x, int y)
+			=> Predicates.IsPlatform(x, y) || IsHellBrick(x, y) || Predicates.IsClutter(x, y);
 
 		// 桥面用任何方块都行:挑存量最多的那种,一种铺光自动换下一种(平台不算,要站得住)
 		public static int PickBlock()
@@ -138,9 +144,8 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > MaxFrames) { Fail($"超时 铺到第{_idx}/{_line.Count}格"); return; }
-			// 【卡死就回到逐格】。连铺一次要 run 格,中间一格放不上就整段停在那儿,
-			// 而这边每帧让路,逐格那道检查一次也轮不到(pillar 那次 600 帧全从"连铺中"走掉)。
-			// 逐格永远推得动:有就跳过,没有就铺,铺不上攒够 MaxSkips 就跳过这一格
+			// 【卡死就回到逐格】:连铺中间一格放不上就整段停住,而这边每帧让路,
+			// 逐格那道检查一次也轮不到。逐格永远推得动
 			if (Frozen(p))
 			{
 				DiagLog.Write($"[deck] 周围{StillSeconds}秒一格没变,停掉连铺回到逐格 第{_idx}/{_line.Count}格 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
@@ -201,8 +206,12 @@ namespace TerraBlind
 				}
 				return;
 			}
-			// 桥面这一格是平台或地狱石砖:挖掉换成方块。平台会被踩空/穿下去,石砖烧人
-			if (Predicates.IsPlatform(x, y) || IsHellBrick(x, y))
+			// 桥面这一格是平台/地狱石砖/占位物(罐子、草、藤):挖掉换成方块。
+			// 【罐子也走这条】:它 HasTile 但站不住,原来直接跳过 -- 桥面就留了两格洞,
+			// 而它一敲就碎,不是"谁也放不上"那种
+			// 占位物敲不动就别死磕,让它落到下面那条跳过 -- 一个罐子不值得让整条桥停下
+			bool clutterGaveUp = Predicates.IsClutter(x, y) && _cellFrames > MaxCellFrames;
+			if ((Predicates.IsPlatform(x, y) || IsHellBrick(x, y) || Predicates.IsClutter(x, y)) && !clutterGaveUp)
 			{
 				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);
@@ -222,13 +231,14 @@ namespace TerraBlind
 					if (_blockedFrames >= BlockedAt && ClearAhead(p)) { _blockedFrames = 0; Mark("清身前的墙"); }
 					return;
 				}
-				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})平台换不掉,卡了{_cellFrames}帧"); return; }
+				// 平台/石砖换不掉是真失败(那是路);占位物由上面 clutterGaveUp 接走
+				if (++_cellFrames > MaxCellFrames) { Fail($"({x},{y})换不掉,卡了{_cellFrames}帧"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = ppk, Strict = true });
-				DiagLog.Write($"[deck] ({x},{y})是平台,挖掉换方块");
+				DiagLog.Write($"[deck] ({x},{y})挖掉换方块");
 				return;
 			}
-			// HasTile 但站不住(草/藤):放置那边判"已经有东西"直接 done,这边判"还没好",
-			// 于是每帧对撞死循环(日志:(684,1049) 刷 181 帧)。这一格谁也放不上,跳过
+			// 【兜底】:上面那条挖不掉才走到这儿(挖不动的占位物)。放置那边判"已经有东西"
+			// 直接 done,这边判"还没好",不跳过就每帧对撞死循环
 			if (Predicates.IsClutter(x, y))
 			{
 				DiagLog.Write($"[deck] ({x},{y})有占位物但站不住,跳过");
@@ -388,8 +398,7 @@ namespace TerraBlind
 		public const int HeadClear = 4;
 		const int LookAhead = 4;   // 往前看几格。太少会走到跟前才发现,太多会挖到用不上的地方
 
-		// 【卡死只认世界事实】。"推了没靠近""同格多少帧"那些判据都挂在各自的分支上,
-		// 从别的 return 退出就一次也数不到(pillar 那次 600 帧全从"连铺中"那条走掉)。
+		// 【卡死只认世界事实】:别的判据都挂在各自分支上,从别的 return 退出就一次也数不到。
 		// 这条在 Tick 最前面,不管走哪条分支都数得到:周围地形连着几秒一格没变就是真卡住了
 		const int StillSeconds = 3;
 		const int StillEvery = 10;                       // 每这么多帧采一次样,别每帧扫 61x61
@@ -440,10 +449,8 @@ namespace TerraBlind
 					return true;
 				}
 			}
-			// 【人身前那一列也要清】。上面只管【桥线格的正上方】,而挡住人的墙常常在
-			// 人和桥线格【之间】—— 它不在任何桥线格头顶,于是一格都不清,人顶着墙站到死。
-			// 人脚那一行到上面 HeadClear 行,就是走过去要占的空间。
-			//
+			// 【人身前那一列也要清】:挡住人的墙常在人和桥线格【之间】,不在任何桥线格头顶,
+			// 于是一格都不清,人顶着墙站到死
 			// 【只在真走不动时才挖】:无条件挖身前会把上升段那块刚铺好的桥面也刨了
 			// (桥往上走时,身前那一格正是下一块桥面)。人推了半天没挪窝才是真被挡
 			if (_blockedFrames < BlockedAt) return false;
