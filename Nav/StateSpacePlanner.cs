@@ -659,10 +659,8 @@ namespace TerraBlind
         static float BridgeFrames(int n) => n * BridgeFramesPerCell + BridgeStartFrames;
 
         const float BridgeFramesPerCell = 11.25f;   // 实测 5.33 格/秒(连续铺)
-        // bridge 边【跨过那段路】按每格收这么多帧。走路实测 2.8 帧/格 ——
-        // 这里要的不是"打平",是让 bridge 在平地上【差一个数量级】地输掉:
-        // 铺桥要停下来一格格挥手,还会把已有的地形替换掉,本来就该是走不过去才用的最后手段。
-        // 有洞的地方 walk 边根本发不出来(脚下没地),bridge 照旧是唯一选择,不受这个数影响
+        // bridge 跨过的每格收这么多帧(走路实测 2.8):故意让它在平地上差一个数量级地输给 walk,
+        // 铺桥只该是走不过去时的最后手段。有洞的地方 walk 发不出来,bridge 照旧唯一
         const float WalkFramesPerCell = 30f;
         const float BridgeStartFrames = 20f;        // 起手:对齐、掏料、第一次挥
 
@@ -680,10 +678,8 @@ namespace TerraBlind
         const int LavaVoidProbe = 200;   // 40 行探不到 121 行深的竖井底,探不到就当安全 —— 掉下去才发现
         static (int, int) _gateLogCell = (int.MinValue, int.MinValue);
 
-        // 每条边的【落点】都要能站人。模拟器把岩浆当空气,所以落进岩浆的边看起来一切正常 ——
-        // 20 处 yield return 逐个判会漏,统一在出口拦一次。
-        // 判据是"站不住【而且】底下悬着岩浆":地狱里桥面本来就悬在岩浆上方,
-        // 只判"底下有岩浆"的话人连自己的桥和房子都上不去
+        // 落点要能站人:模拟器把岩浆当空气,统一在出口拦一次。判据是"站不住【而且】底下悬着岩浆",
+        // 只判底下有岩浆的话人连自己的桥都上不去
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
@@ -705,10 +701,8 @@ namespace TerraBlind
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
-                // 自造落脚点的边(pillar / 长bridge / 跳放)落点当然还没有地,不受这条限制;
-                // 真正要拦的是 walk/jump/fall 那种"指望那儿本来就有地"的边。
-                // pillar 那个布尔只标竖直柱 —— 长 bridge 的标记是"没帧、不挖、不是柱"
-                // (EdgeToSteps 也靠这个组合认桥),借 pillar 表示会让执行器改去竖着搭。
+                // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
+                // 长 bridge 的标记是"没帧、不挖、不是柱"(EdgeToSteps 同一组合),别借 pillar 表示
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
                 if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey) && !LavaSurvivable) continue;
                 yield return e;
@@ -765,10 +759,8 @@ namespace TerraBlind
             int vertRise = 0;
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
             var (_, dcy) = StandCell(cur.Px, cur.Py);
-            // dir 0 = 原地竖直跳:直接跳上头顶正上方的台阶,人在走不上去的坎前就这么干。
-            // 对位还没做,身体本来就对齐时才成;没对齐时模拟自己会失败,边被跳过,无害。
-            // Coarse 时同一落点只发最便宜的一条:9 档 hold 里大半落在同一格,
-            // 重复的进 open 之后各自再展开一遍 —— 20000 预算就是这么烧光的
+            // dir 0 = 原地竖直跳上头顶的台阶(没对齐时模拟自己失败,无害)。Coarse 时同一落点只发
+            // 最便宜的一条:9 档 hold 大半落同一格,各自再展开一遍会把 20000 预算烧光
             var segSeen = ctx.Coarse ? new HashSet<(int, int)>() : null;
             foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
             {
@@ -800,12 +792,8 @@ namespace TerraBlind
                 bool anyPlat = PathPlanner.PlatformPublic(dropLc, fcy + 1) || PathPlanner.PlatformPublic(dropRc, fcy + 1);
                 bool anySolid = DigSolid(dropLc, fcy + 1) || DigSolid(dropRc, fcy + 1);
                 bool plat = anyPlat && !anySolid;
-                // 【只报脚下真有平台却仍不生成 drop 边的那一种】。当初要抓的就是这个
-                // ((1097,390) 脚下是平台、plat=true,三条 drop 全 null,日志里一个字都没有)。
-                // 原来 !plat 全打,而 plat=false 恰恰是【理应不生成】的情况:脚踩实地(9514 条)、
-                // 或者下落弧线上脚下本来就是空的(7477 条,自由落体归 FreeFall 管,不归 drop)。
-                // 这些是 A* 一次搜索里几十个虚拟节点各记一条,一帧几十行 —— 真正要抓的 plat=true
-                // 只有 40 条,被 17000 条正确判断的噪音淹掉了。
+                // 只报脚下真有平台却不生成 drop 边的那种((1097,390) 那次)。plat=false 是理应不生成
+                // (踩实地/自由落体归 FreeFall),原来全打,40 条真问题被 17000 条噪音淹掉
                 if (anyPlat && anySolid) EventLog.W(Ev.Fail, $"DROP-NULL support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
                 if (plat)
                 {
@@ -1629,6 +1617,7 @@ namespace TerraBlind
             for (int i = apex; i < frames.Count; i++)
             {
                 if (!CanReachTile(frames[i].Px, frames[i].Py, cx, cy)) continue;
+                if (BodyInCell(frames[i], cx, cy)) continue;
                 var fr = frames[i];
                 fr.Place = true; fr.PlaceCx = cx; fr.PlaceCy = cy;
                 frames[i] = fr;
@@ -1636,6 +1625,23 @@ namespace TerraBlind
                 return true;
             }
             return false;
+        }
+
+        // 【vanilla 不让把砖放进身体里】:WorldGen.PlaceTile 走 Collision.EmptyTile,平台也算 solid;
+        // 而放置发生在同一帧移动【之后】,所以拿帧末位置判(一局 6 次 FAILED-AIR 全是脚陷进去 1-3px)
+        static bool BodyInCell(PhysicsSimulator.ControlInput f, int cx, int cy)
+        {
+            int px = (int)f.Px, py = (int)f.Py;
+            if (px + PhysicsSimulator.PlayerW <= cx * 16 || px >= cx * 16 + 16) return false;
+            if (py >= cy * 16 + 16) return false;
+            int feet = py + PhysicsSimulator.PlayerH;
+            if (feet > cy * 16) return true;
+            if (feet < cy * 16) return false;
+            // 脚正好贴着顶面:模拟里是这块虚拟平台托着,真身会陷进去。只有别的东西托着才算清
+            int l = (int)(f.Px / 16f), r = (int)((f.Px + PhysicsSimulator.PlayerW - 1f) / 16f);
+            for (int c = l; c <= r; c++)
+                if (c != cx && Predicates.IsSolid(c, cy)) return false;
+            return true;
         }
 
         // 人从平台上下来:按住 Down 直到离开起始平台(这样才能落在下面的平台/地板而不是一路穿过去),方向键全程按住。
