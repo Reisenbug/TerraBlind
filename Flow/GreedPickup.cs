@@ -17,14 +17,17 @@ namespace TerraBlind
 		const int DigMax = 4;          // 顺路可以凿几格,再多就不是顺路了
 		const int WalkMax = 40;
 
-		// 处理过就别再回来:掏空的箱子还立在原地,地图分不出来,得自己记。
-		// 【按局清】--- python 那份是模块级 set,跨局不清,重开游戏没重开进程就再也不开箱了
+		// 【两本账,语义不同,绝不合并】。
+		// _done  = 真拿过了(掏空的箱子不消失,地图分不出来)。主链和顺路层共用。
+		// _tooFar = 顺路层判"不顺路"。那是【顺路的标准】(走40格/挖4格),
+		//           主链要走 97 格去拿是正常的 -- 混在一起会让主链跳过没拿过的宝
 		static readonly HashSet<(int, int)> _done = new();
+		static readonly HashSet<(int, int)> _tooFar = new();
 		static bool _busy;
 		static (int x, int y, bool heart)? _ready;
 		static int _lastScan;
 
-		public static void Reset() { _done.Clear(); _ready = null; _lastScan = 0; }
+		public static void Reset() { _done.Clear(); _tooFar.Clear(); _ready = null; _lastScan = 0; }
 		public static void MarkDone(int x, int y) => _done.Add((x, y));
 
 		// 【主链也要问这一份】。掏空的箱子不消失,HasTile 分不出来 --- 顺路捡过的箱子
@@ -59,8 +62,9 @@ namespace TerraBlind
 						if (!HttpServerSystem.PathCost(c.x, c.y, out int dig, out int walk)) continue;
 						if (dig > DigMax || walk > WalkMax)
 						{
-							// 【确实太远才永久拉黑】。算不出路是暂时的,走几步换个位置往往就通了
-							_done.Add((c.x, c.y));
+							// 【只拉黑顺路那一层】。算不出路是暂时的,走几步换个位置往往就通了。
+							// 记进 _done 的话主链也会跳过它 -- 而主链本来就该走远路去拿
+							_tooFar.Add((c.x, c.y));
 							continue;
 						}
 						DiagLog.Write($"[greed] 顺路捡{(c.heart ? "水晶" : "箱子")}({c.x},{c.y}) 要挖{dig}走{walk},上限{DigMax}/{WalkMax}");
@@ -85,7 +89,7 @@ namespace TerraBlind
 				for (int y = pcy - ScanRadius; y <= pcy + ScanRadius; y++)
 				{
 					if (x < 1 || y < 1 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1) continue;
-					if (_done.Contains((x, y))) continue;
+					if (_done.Contains((x, y)) || _tooFar.Contains((x, y))) continue;
 					// python 的 GREED_DEFAULT 是 ("Containers","Heart") --- 水晶也顺路拿
 					if (IsChest(x, y)) outp.Add((x, y, false));
 					else if (IsHeart(x, y)) outp.Add((x, y, true));
