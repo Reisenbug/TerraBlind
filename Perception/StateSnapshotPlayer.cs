@@ -68,9 +68,8 @@ namespace TerraBlind
 						Chatter.Say($"[TerraBlind] 开工失败:{whyH}", 255, 120, 120);
 				}
 			}
-			// 第一格放好了 → 直接开工盖房子。HouseBuilder 的 Ph.Lift 本来就是"站到那个悬空的
-			// 左下角上":对齐列 → 爬过头就 DropDown → 挑头顶干净的半边 → pillar 上去。
-			// 通用寻路不知道这些约束,扔给 Mode.Stand 会在目标附近来回弹(1036↔1037↔1039)。
+			// 第一格放好了 → 直接开工盖房子。HouseBuilder.Ph.Lift 本来就是"站到那个悬空的左下角上",
+			// 通用寻路不知道这些约束,扔给 Mode.Stand 会在目标附近来回弹
 			if (_pendingStand.HasValue && !BridgeStart.IsRunning && !PlaceAnywhere.IsRunning
 			    && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
@@ -97,9 +96,8 @@ namespace TerraBlind
 					}
 				}
 			}
-			// 房子盖完 → 沿着线把桥铺出去。桥面从房子那一头往外接,所以跳过房子占的那几列。
-			// 【还得等下降结束】。人在桥面上方 39 行时开工,DeckBuilder 每格都够不着,
-			// 而它够不着只会横着走 -- 列号一格格往右爬(702->726),桥一格没铺。
+			// 房子盖完 → 沿线铺桥,跳过房子占的那几列。【还得等下降结束】:
+			// 人在桥面上方几十行时开工,DeckBuilder 每格都够不着,只会横着走而一格没铺
 			if (_pendingDeck != null && !HouseBuilder.IsRunning && !PlaceAnywhere.IsRunning
 			    && !RecedingNav.Active && !DeckBuilder.IsRunning
 			    && !BridgeStart.IsRunning && !PlatformDown.IsRunning)
@@ -298,14 +296,8 @@ namespace TerraBlind
 			}
 		}
 
-		// 地狱里一个站得住的落脚点。【只测地狱那一段】时传送用 —— 不用每次都从地表
-		// 跑一遍丛林和下降。
-		//
-		// 挑法和 HellLine 一致:从人所在半边往中间扫,找【天花板到岩浆面之间空腔够高】
-		// 且脚下是实地的列。找不到返回 (-1,-1),调用方自己报。
-		// 选址:算线 → 找块干净的(底下要有岩浆)→ 从新房址重算线。
-		// 人【已经在地狱】之后才跑这一步 —— tb 1 是走下来的,tb 2 是传到 A 点的,
-		// 两条路到这儿汇合,后面完全一样
+		// 选址:算线 → 找块干净的(底下要有岩浆)→ 从新房址重算线。挑法和 HellLine 一致。
+		// 人【已经在地狱】之后才跑:tb 1 走下来、tb 2 传到 A 点,两条路到这儿汇合
 		public static HellLine.Result PickHellSite(int bx, int dir)
 		{
 			var rr = HellLine.Compute(bx, dir);
@@ -331,13 +323,8 @@ namespace TerraBlind
 			return rr;
 		}
 
-		// tb 2 的传送落点。【必须和 tb 1 选的房址是同一处】—— 传到别处等于测的不是那条流程。
-		// 落在桥起点上:那本来就是 BridgeStart 要站的第一格,人一到就能接着往下跑
-		// tb 2 的落点 = 【A 点】= tb 1 下丛林走完、刚到地狱时人站的那一格。
-		// 就是下降路线的终点,和 /descent_route 描的是同一条线。
-		//
-		// 【别在这儿算房址/桥线】。写过一版是"算出桥起点再传过去",那是流程更后面好几步的位置,
-		// 传到那儿测的就不是"从地狱开始"这一段了。到了 A 点之后的事全归 StartHellRun。
+		// tb 2 的落点 = 【A 点】= tb 1 走完下降、刚到地狱时站的那一格,就是下降路线的终点。
+		// 【别在这儿算房址/桥线】:那是更后面几步的位置,传到那儿测的就不是"从地狱开始"了
 		const int LandScan = 30;   // A 点被埋住时往上找几行
 
 		public static (int x, int y) HellLanding()
@@ -348,18 +335,20 @@ namespace TerraBlind
 				DiagLog.Write($"[teleport] 算不出下降终点:{why}");
 				return (-1, -1);
 			}
-			// 【必须落在人放得下的地方】。A 点是 H 场描出来的线上一格,线是允许穿实心的
-			// (下降路上本来就要挖),直接把人塞进方块 = vanilla 的挤出算炸,一帧飞几千格。
-			// 从 A 点往上找第一处身子那 3 行都空、且不沾岩浆的落脚行
-			for (int y = ay; y > ay - LandScan && y > 1; y--)
-			{
-				bool clear = true;
-				for (int r = 0; r < 3 && clear; r++)
-					if (Predicates.IsWall(ax, y - r) || Predicates.IsLava(ax, y - r)) clear = false;
-				if (!clear) continue;
-				DiagLog.Write($"[teleport] A点(下降终点)=({ax},{ay}) 落脚({ax},{y - 1}) 往上让了{ay - y}行");
-				return (ax, y - 1);
-			}
+			// 【必须放得下人,而且脚下要有地】:半空中的 A 点,它下方那一大片空腔算出来的
+			// H 一样低,贪心分不出"到了"和"过了" -- 现场:目标1011,人挖到 1077 砸进岩浆面
+			for (int pass = 0; pass < 2; pass++)
+				for (int y = ay; y > ay - LandScan && y > 1; y--)
+				{
+					bool clear = true;
+					for (int r = 0; r < 3 && clear; r++)
+						if (Predicates.IsWall(ax, y - r) || Predicates.IsLava(ax, y - r)) clear = false;
+					if (!clear) continue;
+					// 第一趟只认站得住的;一趟找不到再放宽(传送落点不需要地,走过去的才需要)
+					if (pass == 0 && !Predicates.IsGround(ax, y + 1)) continue;
+					DiagLog.Write($"[teleport] A点(下降终点)=({ax},{ay}) 落脚({ax},{y - 1}) 往上让了{ay - y}行 脚下{(Predicates.IsGround(ax, y + 1) ? "有地" : "悬空")}");
+					return (ax, y - 1);
+				}
 			DiagLog.Write($"[teleport] A点({ax},{ay})往上{LandScan}行都塞不下人");
 			return (-1, -1);
 		}
