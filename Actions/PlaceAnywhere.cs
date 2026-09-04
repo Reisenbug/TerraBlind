@@ -217,16 +217,8 @@ namespace TerraBlind
 			return ok;
 		}
 
-		// 目标格在人身子里 → 挪到一个【放得出来】的位置。
-		//
-		// 挪多远、要不要爬、路上有没有坑,这一律【交给寻路】,不在这儿自己试两个候选列:
-		//   * 让一格就够   -> ApproachSpot 找到的就在隔壁,寻路两步走完
-		//   * 让不了一格   -> ApproachSpot 会往外找到 5 列、上下 3 行,总共几十个候选
-		//   * 让开会掉下去 -> 候选本来就只收"脚下实心"的格,悬空的进不来
-		//   * 要爬 100 格  -> 寻路的事。它会挖会搭,到不了会明确报 unreachable
-		//   * 跳不起来     -> 不靠跳了。跳只在原地起跳能解决时用,别的一律走寻路
-		//
-		// 一个候选都没有 = 这一格谁站着都放不出来,交栈(它还有挖/搭/换目标那几手)
+		// 目标格在人身子里 → 挪到一个放得出来的位置。挪法一律交寻路(候选只收脚下实心的格);
+		// 一个候选都没有 = 谁站着都放不出来,交栈
 		static bool StepAside(Player p, int x, int y, out string why)
 		{
 			why = "";
@@ -294,9 +286,8 @@ namespace TerraBlind
 				// 【寻路也要等】。原来只等 SettleAt,让位改走寻路之后一帧就当"让完了"回到 Step,
 				// 而人还在半路 —— 又判在身子里,又发一次寻路,永远走不完
 				if (SettleAt.IsRunning || RecedingNav.Active) { Mark("让位中"); return; }
-				// 寻路认输了就别装作让开了:它挖过搭过都到不了,这一格得换条链。
-				// 只在【这次让位真的起了寻路】时才看 LastStop —— 横移那条路不碰它,
-				// 读到的会是上一趟寻路留下的旧值
+				// 寻路认输了就别装作让开了。只在【这次让位真的起了寻路】时才看 LastStop,
+				// 横移那条路读到的会是上一趟寻路的旧值
 				if (_asideNav)
 				{
 					_asideNav = false;
@@ -322,9 +313,8 @@ namespace TerraBlind
 			if (Occupied(x, y)) { _idx++; _cellFrames = 0; return; }
 			if (++_cellFrames > MaxCellFrames) { Retry($"({x},{y})卡了{_cellFrames}帧"); return; }
 
-			// 【挡路的挖掉 —— 不管够不够得着】。下面那份挖只在"够不着"分支里,
-			// 而手能隔着墙够到 8 格外(ReachBoost),脚过不去 —— 于是够得着就永远不挖。
-			// 判据是【推了却没挪窝】,不是"前面有方块":见方块就挖会把路两侧刨空
+			// 挡路的挖掉,不管够不够得着(手隔墙够得到时"够不着"分支不进,永远不挖)。
+			// 判据是【推了却没挪窝】:见方块就挖会把路两侧刨空
 			{
 				int bpx = ActExecutor.OriginCx(p);
 				if (bpx != _lastPx) { _blockedFrames = 0; _lastPx = bpx; }
@@ -364,10 +354,15 @@ namespace TerraBlind
 			if (!Reach.CanPlace(p, x, y))
 			{
 				int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
-				// 行差太大:重算链没有意义(人没挪窝,算出来还是同一条),直接认输交给上层。
-				// 上层有寻路/pillar/平台梯,那才是改变行的手段。
+				// 行差太大得先【改行】(pillar/平台梯),交栈。上方目标站位选 y+4:
+				// 再高目标进身体,再低放置尺子够不到(现场:桥起点悬空在头顶6行,这儿直接认输整趟 STUCK)
 				if (System.Math.Abs(cy - y) > RowGap)
-				{ Fail($"人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,横向够不着"); return; }
+				{
+					int foot = y < cy ? y + 4 : y - 1;
+					if (!Unstick.Handle("placeany", new Blocker(BlockKind.NoFooting, x, foot, $"差{System.Math.Abs(cy - y)}行,先造能放的站位")))
+						Fail($"人({cx},{cy})和({x},{y})差{System.Math.Abs(cy - y)}行,造站位也没辙");
+					return;
+				}
 				if (_cellFrames % 60 == 1) DiagLog.Write($"[placeany] 够不着({x},{y}) 人在({cx},{cy})");
 				// 【别朝目标走】:走到目标头上,StepAside 又把人赶开,两边互相推翻。
 				// 日志:settle 到 3508 → 这里往右推回 3511 → 让开 → 再推回,190帧全是 out_of_reach
