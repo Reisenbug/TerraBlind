@@ -354,23 +354,18 @@ namespace TerraBlind
 		}
 
 		// 地狱那一整套的唯一入口:算线 → 选址 → 去桥起点 → (盖房 → 铺桥 → 肉山 → 开打)。
-		// 后面几步由 _pendingStand/_pendingDeck/_wofAfterDeck 接力,不在这儿等。
-		// 键盘([ 键)和 HTTP(/hell_run)都走这里 —— 两套入口各写一遍是老毛病了
+		// 后面几步由 _pendingStand/_pendingDeck/_wofAfterDeck 接力,不在这儿等
 		public static bool StartHellRun(out string why)
 		{
 			why = "";
 			var rp = Main.LocalPlayer;
 			if (rp == null || !rp.active) { why = "no_player"; return false; }
-			// 【人得先站稳】。整条线是按"人现在在哪"算的,而人在空中时那个坐标是半路的:
-			// 落地后位置早变了,算出来的线和房址全对不上。
-			// 实测(2559,1005)正在执行一条下落边,70 帧后这里切进来取到(2552,1012) —— 半空中,
-			// 然后 ReachCell→PlatformDown 一路等落地,人却掉穿目标行 40 格进了岩浆。
+			// 【人得先站稳】:整条线按"人现在在哪"算,而空中那个坐标是半路的,
+			// 落地后位置早变了,算出来的线和房址全对不上
 			if (rp.velocity.Y != 0f) { why = $"人还在空中(vy={rp.velocity.Y:0.##}),等落地再开工"; return false; }
 			int rbx = ActExecutor.OriginCx(rp);
 			int rdir = rbx < Main.maxTilesX / 2 ? 1 : -1;
-			// 树和旧平台都占着格子(Vacant 认 HasTile),直接开工必然撞上。
-			// 选址那一套单独拆成 PickHellSite,读起来清楚些。
-			// 【传送落点不走这儿】:那是 A 点(下降终点),在这一步【之前】
+			// 选址单独拆成 PickHellSite。【传送落点不走这儿】:那是 A 点,在这一步之前
 			var rr = PickHellSite(rbx, rdir);
 			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
 			// 房子占前 RoomWidth+1 【列】,而线里变高处插了衔接格,下标不再等于列数 --
@@ -398,15 +393,8 @@ namespace TerraBlind
 			}
 			rv.Add((rsx, rsy, new Microsoft.Xna.Framework.Color(255, 255, 255, 240)));
 			PathVisSystem.SetDeck(rv, 60 * 60 * 20);
-			// 【去桥起点这一段整个重写过】。老的 ReachCell 是"先降到目标行再横过去",
-			// 实测一路铺平台梯、回头拆自己刚铺的平台、身子飘了 _col 还锁在原列。
-			// 现在走路交给寻路,BridgeStart 只管三件寻路不管的事:放出那一格、站上去、
-			// 【站住 60 帧才算到】。放第一格也归它了,所以不再走 _pendingAnchor。
-			// 【桥起点一律用平台】。方块的锚点只认【四邻】,平台认 3x3【含斜角】——
+			// 【桥起点一律用平台】:方块的锚点只认四邻,平台认 3x3 含斜角。
 			// 桥起点常常只有斜下方那一格有东西,方块判"没锚"直接 STUCK,平台放得上去
-			// (现场:(857,1032)左下角明明有方块,却报"接不到任何有锚的地方")。
-			// 原来借的是 HellBridge.FindBlockSlot,那函数专门 continue 掉平台(桥面要方块),
-			// 借过来就把平台的锚点能力一起丢了
 			int rplat = Unstick.PlatformItem(rp);
 			if (rplat <= 0) { why = "背包里没有平台,放不出桥起点"; return false; }
 			string rblk = rplat.ToString();
@@ -449,13 +437,16 @@ namespace TerraBlind
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
 			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On;
 
-		// 【必须挂这儿】。vanilla 顺序:SetControls(Player.cs:23956) 在前,
-		// ResetEffects(24513→17582 把 tileRangeX/Y 打回 5/4)在后 --- 写在 SetControls 里
-		// 会被随后的 ResetEffects 冲掉。而 PlayerLoader.ResetEffects(17598) 正好排在那两行之后
+		// 【必须挂这儿】:vanilla 的 SetControls 在前、ResetEffects(把 tileRangeX/Y 打回 5/4)在后,
+		// 写在 SetControls 里会被随后的 ResetEffects 冲掉
 		public override void ResetEffects()
 		{
 			if (Player != Main.LocalPlayer) return;
 			Concessions.LongArmKeep();
+			// 【演示用常驻】:鱼鳃(掉水里不淹死)和光芒(地狱和洞里看得清)。
+			// 每帧续时长,和 vanilla 装备给 buff 是同一个路子
+			Player.AddBuff(BuffID.Gills, 2, quiet: true);
+			Player.AddBuff(BuffID.Shine, 2, quiet: true);
 		}
 
 		public override void SetControls()
