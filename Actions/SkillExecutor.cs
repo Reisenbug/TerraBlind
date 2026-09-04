@@ -320,6 +320,9 @@ namespace TerraBlind
                 if (_jumpFramesLeft > 0) { p.controlJump = true; _jumpFramesLeft--; }
                 if (!grounded) _airFrames++;
 
+                // 悬空起步时第一跳还没发生,锚点仍是 Start 填的 int.MaxValue --
+                // 拿它当下标就是 IndexOutOfRange(整局刷屏)。等落地那一跳把锚定好再干活
+                if (_anchorWy == int.MaxValue) return;
                 // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
