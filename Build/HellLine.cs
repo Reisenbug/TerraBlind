@@ -87,6 +87,11 @@ namespace TerraBlind
 			return n;
 		}
 
+		// 用 MineableWith 不用 CostFrames:13 万次 new Item() 会把算线拖垮
+		public static bool Unmineable(int x, int y, int pick)
+			=> Predicates.InBounds(x, y) && Main.tile[x, y].HasTile && !DigTable.MineableWith(x, y, pick);
+		static bool Unmineable(int x, int y) => Unmineable(x, y, _pick);
+
 		// 桥面底下一路往下是不是岩浆。中间隔着石头就不算 —— 那是地,不是悬在岩浆上。
 		static bool LavaBelow(int x, int y)
 		{
@@ -115,11 +120,10 @@ namespace TerraBlind
 		// 居中按比例:腔 3 格高时"居中"=离下表面 1 格,60 格高时=30 格,一个式子两种都对。
 		static int CellCost(int x, int y, int ceil, int floor)
 		{
-			// 【挖不动的一律不许穿】:给有限价的话绕路一长就还是选择硬凿,人对着熔炉挥一辈子。
-			// 用 MineableWith 不用 CostFrames:13 万次 new Item() 会把算线拖垮
+			// 【挖不动的一律不许穿】,有限价的话绕路一长还是会选硬凿。【不只看实心】:地狱熔炉(77)
+			// 不是实心却要 65 镐力,按实心判它就是空气,线从它身上穿过去,铺到那儿挥到看门狗判死
 			for (int r = 0; r <= DigHead; r++)
-				if (Predicates.IsSolid(x, y - r) && !DigTable.MineableWith(x, y - r, _pick))
-					return Unreachable;
+				if (Unmineable(x, y - r)) return Unreachable;
 			int blk = Blocked(x, y);
 			int c = blk * DigCell;
 			// 越挖不到头越贵:薄壳(1~2 列)照旧,厚墙按平方涨,绕多远都比硬凿划算
@@ -223,117 +227,8 @@ namespace TerraBlind
 			int lastX = sx + dir * (Length - 1);
 			if (lastX < 2 || lastX >= Main.maxTilesX - 2) { res.Why = "line_off_world"; return res; }
 
-			// 镐力取一次,给 CellCost 判"挖不挖得动"用。DP 里逐格翻背包会拖垮算线
-			_pick = MazeWand.BestPickPower();
-			int yLo = Main.UnderworldLayer + 1, yHi = Main.maxTilesY - 3;
-			int rows = yHi - yLo + 1;
-			var ceilA = new int[Length];
-			var floorA = new int[Length];
-			for (int i = 0; i < Length; i++) Column(sx + dir * i, out ceilA[i], out floorA[i]);
-
-			// 第三维 = 到这里为止【连着爬了几段】。没有它就记不住"刚才是不是也在爬",
-			// 连续陡坡和分散陡坡的总价就永远相等
-			var dist = new int[Length, rows, MaxRun + 1];
-			var prev = new int[Length, rows, MaxRun + 1];
-			for (int i = 0; i < Length; i++)
-				for (int r = 0; r < rows; r++)
-					for (int k = 0; k <= MaxRun; k++) { dist[i, r, k] = Unreachable; prev[i, r, k] = -1; }
-
-			var pq = new SortedSet<(int d, int i, int r, int k)>();
-			for (int r = 0; r < rows; r++)
-			{
-				int c = CellCost(sx, yLo + r, ceilA[0], floorA[0]);
-				if (c >= Unreachable) continue;
-				dist[0, r, 0] = c;
-				pq.Add((c, 0, r, 0));
-			}
-			if (pq.Count == 0) { res.Why = "start_blocked"; return res; }
-
-			// 升降一格必须占【四列】:先平三格再抬,坡度上限 0.25。台阶太陡走不上去。
-			// 中间那几列的钱照付,不然抬升会白蹭几格免费的地。
-			while (pq.Count > 0)
-			{
-				var (d, i, r, k) = pq.Min;
-				pq.Remove(pq.Min);
-				if (d > dist[i, r, k]) continue;
-				// 【末端不许因为够不到而 no_path】:剩下的列数不足 SlopeRun 时用剩多少跨多少。
-				// 桥总得铺到头,末尾几列陡一点也比整条线算不出来强
-				int run = System.Math.Min(SlopeRun, Length - 1 - i);
-				if (run < 1) run = 1;
-				foreach (var (di, dr) in new[] { (1, 0), (run, 1), (run, -1) })
-				{
-					int ni = i + di, nr = r + dr;
-					if (ni < 0 || ni >= Length || nr < 0 || nr >= rows) continue;
-					int cc = CellCost(sx + dir * ni, yLo + nr, ceilA[ni], floorA[ni]);
-					if (cc >= Unreachable) continue;
-					int mid = 0;
-					if (di > 1)
-					{
-						// 跨列时中间那几列都留在原高度,钱照付、岩浆照否决,不然抬升白蹭几格
-						bool bad = false;
-						for (int m = 1; m < di && !bad; m++)
-						{
-							int mc = CellCost(sx + dir * (i + m), yLo + r, ceilA[i + m], floorA[i + m]);
-							if (mc >= Unreachable) bad = true; else mid += mc;
-						}
-						if (bad) continue;
-					}
-					// 平走清零,爬一段就 +1(封顶)。罚款按【已经连爬了几段】收,越连越贵
-					int nk = dr != 0 ? System.Math.Min(k + 1, MaxRun) : 0;
-					int slope = dr != 0 ? SlopeW + k * RunSlopeW : 0;
-					int nd = d + cc + mid + slope;
-					if (nd >= dist[ni, nr, nk]) continue;
-					if (dist[ni, nr, nk] < Unreachable) pq.Remove((dist[ni, nr, nk], ni, nr, nk));
-					dist[ni, nr, nk] = nd;
-					prev[ni, nr, nk] = (i * rows + r) * (MaxRun + 1) + k;   // 存整个前驱:竖直移动的前驱在【同一列】,只存行号回溯必错位
-					pq.Add((nd, ni, nr, nk));
-				}
-			}
-
-			int endR = -1, endC = Unreachable, endK = 0;
-			for (int r = 0; r < rows; r++)
-				for (int k = 0; k <= MaxRun; k++)
-					if (dist[Length - 1, r, k] < endC) { endC = dist[Length - 1, r, k]; endR = r; endK = k; }
-			if (endR < 0)
-			{
-				// 断在哪一列比"no_path"有用得多:列号一报出来就知道是地形挡死还是我的判据把整层判死了
-				int reached = 0;
-				for (int i = 0; i < Length; i++)
-				{
-					bool any = false;
-					for (int r = 0; r < rows && !any; r++)
-						for (int k = 0; k <= MaxRun; k++) if (dist[i, r, k] < Unreachable) { any = true; break; }
-					if (!any) break;
-					reached = i;
-				}
-				int ok0 = 0;
-				for (int r = 0; r < rows; r++) if (CellCost(sx, yLo + r, ceilA[0], floorA[0]) < Unreachable) ok0++;
-				DiagLog.Write($"[hell-line] no_path 断在第{reached}列 x={sx + dir * reached} " +
-					$"ceil={ceilA[reached]} floor={floorA[reached]} span={floorA[reached] - ceilA[reached]} " +
-					$"起点列可用行={ok0} yLo={yLo} rows={rows}");
-				res.Why = $"no_path@col{reached}";
+			if (!Solve(sx, dir, Length, SlopeRun, -1, out var ys, out var ceilA, out var floorA, out int endC, out res.Why))
 				return res;
-			}
-
-			// 回溯走前驱链。抬升那一步跨了几列,中间那几列没进过 prev,都留在【前驱的高度】,补上
-			var ys = new int[Length];
-			for (int i = 0; i < Length; i++) ys[i] = -1;
-			int ci = Length - 1, cr2 = endR, ck = endK;
-			for (int guard = 0; guard < Length * rows * (MaxRun + 1) + 16; guard++)
-			{
-				if (ys[ci] < 0) ys[ci] = yLo + cr2;
-				int p = prev[ci, cr2, ck];
-				if (p < 0) break;
-				int pk = p % (MaxRun + 1), pcell = p / (MaxRun + 1);
-				int pi = pcell / rows, pr = pcell % rows;
-				for (int m = 1; m < ci - pi; m++) ys[pi + m] = yLo + pr;
-				ci = pi; cr2 = pr; ck = pk;
-			}
-			for (int i = 0; i < Length; i++)
-				if (ys[i] < 0) { res.Why = $"broken_trace@col{i}"; return res; }
-
-			for (int i = 0; i < Length; i++)
-				if (Predicates.IsLava(sx + dir * i, ys[i])) { res.Why = $"lava_on_deck@col{i}"; return res; }
 
 			// 坡度 1/SlopeRun = 每变一次高度前必须先平 SlopeRun-1 格。连着变高就是边集坏了
 			int maxStep = 0, backToBack = 0;
@@ -370,32 +265,10 @@ namespace TerraBlind
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
 				$"ceil={ceilA[Length / 2]} floor={floorA[Length / 2]} | 末 ceil={ceilA[Length - 1]} floor={floorA[Length - 1]}");
 
-			// 【绝不留斜连接】。每列一格的话变高处两格是斜对角(1100/0011),中间没有
-			// 上下左右相邻的衔接 -- 人走不过去,而净空检查又会把上一行那格当墙挖掉。
-			// 变高时在【新行、旧列】补一格,接成 1100/0111
-			int digTotal = 0;
-			for (int i = 0; i < Length; i++)
-			{
-				int x = sx + dir * i;
-				// 【衔接格也要守岩浆那道禁令】。DP 只验过 (jx,ys[i-1]) 和 (x,ys[i]),
-				// 中间这一格没人问过 -- 它落在岩浆上,下面那道 lava_on_deck 就把整条线作废了
-				if (i > 0 && ys[i] != ys[i - 1])
-				{
-					int jx = sx + dir * (i - 1);
-					if (!Predicates.IsLava(jx, ys[i]))
-					{
-						res.Line.Add((jx, ys[i]));
-						digTotal += Blocked(jx, ys[i]);
-					}
-				}
-				res.Line.Add((x, ys[i]));
-				digTotal += Blocked(x, ys[i]);
-			}
+			int digTotal = Thread(sx, dir, ys, res.Line);
 
-			// 【离人最近】的那一格。锚不当门槛 —— 悬空是常态(整条线大半悬空),
-			// 放不出第一格是 PlaceAnywhere 的活,不是算不出线。
-			// 【下标走 res.Line 不走列】:衔接格插进去之后两者不再一一对应,
-			// 而 WorkI 是当 Line 的下标用的
+			// 【离人最近】的那一格。锚不当门槛(悬空是常态,放不出第一格是 PlaceAnywhere 的活)。
+			// 【下标走 res.Line 不走列】:衔接格插进去之后两者不再一一对应
 			res.WorkI = 0; res.WorkAnchor = 0;
 			int bestD = int.MaxValue;
 			for (int i = 0; i < res.Line.Count; i++)
@@ -419,8 +292,168 @@ namespace TerraBlind
 			return res;
 		}
 
+		// 从 sx 起沿 dir 走 len 列,每列选一行。startY>=0 就钉死第一列的行(铺到一半改线时人站在那格)。
+		// slopeRun = 升降一格要跨几列;改线时障碍就在跟前,允许 1(坡度破例)
+		static bool Solve(int sx, int dir, int len, int slopeRun, int startY,
+			out int[] ys, out int[] ceilA, out int[] floorA, out int cost, out string why)
+		{
+			why = ""; cost = Unreachable; ys = null;
+			// 镐力取一次,给 CellCost 判"挖不挖得动"用。DP 里逐格翻背包会拖垮算线
+			_pick = MazeWand.BestPickPower();
+			int yLo = Main.UnderworldLayer + 1, yHi = Main.maxTilesY - 3;
+			int rows = yHi - yLo + 1;
+			ceilA = new int[len];
+			floorA = new int[len];
+			for (int i = 0; i < len; i++) Column(sx + dir * i, out ceilA[i], out floorA[i]);
+
+			// 第三维 = 到这里为止【连着爬了几段】。没有它就记不住"刚才是不是也在爬",
+			// 连续陡坡和分散陡坡的总价就永远相等
+			var dist = new int[len, rows, MaxRun + 1];
+			var prev = new int[len, rows, MaxRun + 1];
+			for (int i = 0; i < len; i++)
+				for (int r = 0; r < rows; r++)
+					for (int k = 0; k <= MaxRun; k++) { dist[i, r, k] = Unreachable; prev[i, r, k] = -1; }
+
+			var pq = new SortedSet<(int d, int i, int r, int k)>();
+			for (int r = 0; r < rows; r++)
+			{
+				if (startY >= 0 && yLo + r != startY) continue;
+				int c = CellCost(sx, yLo + r, ceilA[0], floorA[0]);
+				if (c >= Unreachable) continue;
+				dist[0, r, 0] = c;
+				pq.Add((c, 0, r, 0));
+			}
+			if (pq.Count == 0) { why = "start_blocked"; return false; }
+
+			// 升降一格必须占 slopeRun 列:先平再抬。中间那几列的钱照付,不然抬升会白蹭几格免费的地
+			while (pq.Count > 0)
+			{
+				var (d, i, r, k) = pq.Min;
+				pq.Remove(pq.Min);
+				if (d > dist[i, r, k]) continue;
+				// 【末端不许因为够不到而 no_path】:剩下的列数不足 slopeRun 时用剩多少跨多少。
+				// 桥总得铺到头,末尾几列陡一点也比整条线算不出来强
+				int run = System.Math.Min(slopeRun, len - 1 - i);
+				if (run < 1) run = 1;
+				foreach (var (di, dr) in new[] { (1, 0), (run, 1), (run, -1) })
+				{
+					int ni = i + di, nr = r + dr;
+					if (ni < 0 || ni >= len || nr < 0 || nr >= rows) continue;
+					int cc = CellCost(sx + dir * ni, yLo + nr, ceilA[ni], floorA[ni]);
+					if (cc >= Unreachable) continue;
+					int mid = 0;
+					if (di > 1)
+					{
+						// 跨列时中间那几列都留在原高度,钱照付、岩浆照否决,不然抬升白蹭几格
+						bool bad = false;
+						for (int m = 1; m < di && !bad; m++)
+						{
+							int mc = CellCost(sx + dir * (i + m), yLo + r, ceilA[i + m], floorA[i + m]);
+							if (mc >= Unreachable) bad = true; else mid += mc;
+						}
+						if (bad) continue;
+					}
+					// 平走清零,爬一段就 +1(封顶)。罚款按【已经连爬了几段】收,越连越贵
+					int nk = dr != 0 ? System.Math.Min(k + 1, MaxRun) : 0;
+					int slope = dr != 0 ? SlopeW + k * RunSlopeW : 0;
+					int nd = d + cc + mid + slope;
+					if (nd >= dist[ni, nr, nk]) continue;
+					if (dist[ni, nr, nk] < Unreachable) pq.Remove((dist[ni, nr, nk], ni, nr, nk));
+					dist[ni, nr, nk] = nd;
+					prev[ni, nr, nk] = (i * rows + r) * (MaxRun + 1) + k;   // 存整个前驱:竖直移动的前驱在【同一列】,只存行号回溯必错位
+					pq.Add((nd, ni, nr, nk));
+				}
+			}
+
+			int endR = -1, endC = Unreachable, endK = 0;
+			for (int r = 0; r < rows; r++)
+				for (int k = 0; k <= MaxRun; k++)
+					if (dist[len - 1, r, k] < endC) { endC = dist[len - 1, r, k]; endR = r; endK = k; }
+			if (endR < 0)
+			{
+				// 断在哪一列比"no_path"有用得多:列号一报出来就知道是地形挡死还是我的判据把整层判死了
+				int reached = 0;
+				for (int i = 0; i < len; i++)
+				{
+					bool any = false;
+					for (int r = 0; r < rows && !any; r++)
+						for (int k = 0; k <= MaxRun; k++) if (dist[i, r, k] < Unreachable) { any = true; break; }
+					if (!any) break;
+					reached = i;
+				}
+				int ok0 = 0;
+				for (int r = 0; r < rows; r++) if (CellCost(sx, yLo + r, ceilA[0], floorA[0]) < Unreachable) ok0++;
+				DiagLog.Write($"[hell-line] no_path 断在第{reached}列 x={sx + dir * reached} " +
+					$"ceil={ceilA[reached]} floor={floorA[reached]} span={floorA[reached] - ceilA[reached]} " +
+					$"起点列可用行={ok0} yLo={yLo} rows={rows}");
+				why = $"no_path@col{reached}";
+				return false;
+			}
+
+			// 回溯走前驱链。抬升那一步跨了几列,中间那几列没进过 prev,都留在【前驱的高度】,补上
+			ys = new int[len];
+			for (int i = 0; i < len; i++) ys[i] = -1;
+			int ci = len - 1, cr2 = endR, ck = endK;
+			for (int guard = 0; guard < len * rows * (MaxRun + 1) + 16; guard++)
+			{
+				if (ys[ci] < 0) ys[ci] = yLo + cr2;
+				int p = prev[ci, cr2, ck];
+				if (p < 0) break;
+				int pk = p % (MaxRun + 1), pcell = p / (MaxRun + 1);
+				int pi = pcell / rows, pr = pcell % rows;
+				for (int m = 1; m < ci - pi; m++) ys[pi + m] = yLo + pr;
+				ci = pi; cr2 = pr; ck = pk;
+			}
+			for (int i = 0; i < len; i++)
+				if (ys[i] < 0) { why = $"broken_trace@col{i}"; return false; }
+			for (int i = 0; i < len; i++)
+				if (Predicates.IsLava(sx + dir * i, ys[i])) { why = $"lava_on_deck@col{i}"; return false; }
+			cost = endC;
+			return true;
+		}
+
+		// 每列一行串成线。【绝不留斜连接】:变高处两格是斜对角(1100/0011),人走不过去,
+		// 净空检查还会把上一行那格当墙挖掉;在【新行、旧列】补一格接成 1100/0111。返回要挖的格数
+		static int Thread(int sx, int dir, int[] ys, List<(int x, int y)> line)
+		{
+			int digTotal = 0;
+			for (int i = 0; i < ys.Length; i++)
+			{
+				int x = sx + dir * i;
+				// 衔接格也要守岩浆禁令:DP 只验过 (jx,ys[i-1]) 和 (x,ys[i]),这一格没人问过
+				if (i > 0 && ys[i] != ys[i - 1])
+				{
+					int jx = sx + dir * (i - 1);
+					if (!Predicates.IsLava(jx, ys[i]))
+					{
+						line.Add((jx, ys[i]));
+						digTotal += Blocked(jx, ys[i]);
+					}
+				}
+				line.Add((x, ys[i]));
+				digTotal += Blocked(x, ys[i]);
+			}
+			return digTotal;
+		}
+
+		// 铺到一半撞上挖不动的东西:从人站的那格 (sx,sy) 起把到 lastX 的线重算。
+		// 【坡度破例】:障碍就在跟前,4 列爬 1 行来不及,这里每列都许升降 1 行
+		public static bool Reroute(int sx, int sy, int lastX, out List<(int x, int y)> line, out string why)
+		{
+			line = null;
+			int dir = lastX >= sx ? 1 : -1;
+			int len = System.Math.Abs(lastX - sx) + 1;
+			if (!Solve(sx, dir, len, 1, sy, out var ys, out _, out _, out int cost, out why)) return false;
+			line = new List<(int x, int y)>();
+			int dig = Thread(sx, dir, ys, line);
+			int steps = 0;
+			for (int i = 1; i < len; i++) if (ys[i] != ys[i - 1]) steps++;
+			DiagLog.Write($"[hell-line] 改线 从({sx},{sy})到x={lastX} {len}列 升降{steps}次 挖{dig} 价{cost}");
+			return true;
+		}
+
 		// 房子要 6 列平地 + 头顶 10 行净空(HouseBuilder: RoomWidth*1+1 宽, PillarH=9 加地板)。
-		// 桥可以有坡,房子不行 —— 所以只认窗口内 y 恒定的位置,挖得最少的那个。
+		// 桥可以有坡,房子不行 -- 所以只认窗口内 y 恒定的位置,挖得最少的那个。
 		static void PickHouse(ref Result res, int sx, int dir, int[] ys, int[] ceilA)
 		{
 			const int W = HouseW;
