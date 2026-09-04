@@ -36,9 +36,9 @@ namespace TerraBlind
 		// 换向导捅岩浆那一整套白干,还得重来。20 以上是有概率的,值得试
 		const int MinDynamite = 20;
 		const int WalkAwayTiles = 80;
-		// 往下最多挖这么深。【6 是 4 格手臂时代的数】:这一段开着 30 格手臂,
-		// 够不着由循环里的 Reach.CanMine 逐格挡,深度上限不该再当第二道闸
-		const int DigDepth = 24;
+		// 往下最多挖这么深。够不着由循环里的 Reach.CanMine 逐格挡,深度上限不该抢在手臂前面
+		// 截断 -- 24 比 30 格手臂短,岩浆刚好在 24~30 之间时挖不到(现场:壳挡在薄壳那种)
+		const int DigDepth = Concessions.LongArm;
 		// 向导要掉过洞口这么多行才开始补。补早了等于给他垫块地,他就再也下不去了
 		const int PatchClear = 8;
 		const int PatchWait = 60 * 10;   // 最多等他掉 10 秒。再不掉就照补,别把窟窿永远留着
@@ -79,9 +79,16 @@ namespace TerraBlind
 		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
 		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
 		const int DeckScan = 12;
-		// 向导是不是【真的在往下掉】。桥是有坡的,必须按他自己那一列的桥面判 --
-		// 拿远处记的行号来判,他好端端站在自家地板上也会被当成掉下去了。
-		// 而挖开那一帧他那列往下全空、人却还没获得重力,只看地板同样会误判
+		// 向导脚下这一格是不是岩浆:成功判据。feet+2 会在他站薄壳上时误报,这里只认脚所在格
+		static bool GuideSubmerged(NPC gn)
+		{
+			int gx = (int)(gn.Center.X / 16f);
+			int feet = (int)((gn.position.Y + gn.height - 1f) / 16f);
+			return Predicates.IsLava(gx, feet);
+		}
+
+		// 向导是不是【真的在往下掉】。桥有坡,按远处记的行号判会把他站自家地板当成掉了;
+		// 挖开那一帧他那列往下全空、人还没获重力,只看地板也误判
 		static bool GuideFell(NPC gn)
 		{
 			int gx = (int)(gn.Center.X / 16f);
@@ -251,9 +258,8 @@ namespace TerraBlind
 					if (_nightAt == 0) { _nightAt = _frames; DiagLog.Write("[wof] 天黑了,开始等爆破专家回家"); }
 					if (!AtHome(NPCID.Demolitionist))
 					{
-						// 【天黑之后才计时】。等不到有两种,原因完全不同,别混成一句"超时":
-						//   NPC 不在世界里  -> 等一辈子也不会有,当场认账
-						//   有 NPC 但 homeless -> 房子不合格(家具/光源不齐),他没家可传
+						// 等不到有两种:NPC 不在世界里(等一辈子也没有,当场认账),
+						// 或有 NPC 但 homeless(房子不合格,他没家可传)。别混成一句"超时"
 						int dn1 = NPC.FindFirstNPC(NPCID.Demolitionist);
 						if (dn1 < 0) { Fail("世界里没有爆破专家,他不会自己出现"); return; }
 						if (_frames - _nightAt > NightWaitFrames)
@@ -279,9 +285,8 @@ namespace TerraBlind
 					if (CanTalkTo(p, Main.npc[dn0])) { RecedingNav.Stop(); Go(Ph.Buy); return; }
 					if (RecedingNav.Active) return;
 					if (_frames > 60 * 300) { Fail("走不到爆破专家跟前"); return; }
-					// 【寻路那把尺子不是搭话那把】。Mode.Reach 按方块的交互距离判"够到了"就停,
-					// 而搭话判的是人和 NPC 两个矩形相交 --- 停在刚好差一点的位置时,
-					// 重发寻路会被同目标守卫挡掉,原地耗到超时。停下了就自己朝他走,判据用 CanTalkTo
+					// 寻路按方块交互距离判"够到了"就停,而搭话判两个矩形相交。停在刚好差一点的位置时
+					// 重发寻路会被同目标守卫挡掉,耗到超时。停下了就自己朝他走,判据用 CanTalkTo
 					if (p.velocity.Y == 0f && RecedingNav.LastStop == "done")
 					{
 						float pcx = p.position.X + p.width / 2f, ncx = Main.npc[dn0].Center.X;
@@ -409,9 +414,8 @@ namespace TerraBlind
 					return;
 				}
 
-				// 走到【单间房靠桥那头的最里面一格】站定,然后把手臂加长到 30 格。
-				// 不再算站位:30 格的手臂从这儿够得着向导脚下的每一列,
-				// 原来那套"扫一圈找能覆盖三列的桥面格"是给 4 格手臂擦屁股的,已经删了
+				// 走到单间房靠桥那头最里面一格站定,再把手臂加长到 30 格 --
+				// 从这儿够得着向导脚下每一列,不用再扫站位
 				case Ph.BackToGuide:
 				{
 					int g0 = NPC.FindFirstNPC(NPCID.Guide);
@@ -451,15 +455,17 @@ namespace TerraBlind
 					var gn = Main.npc[g];
 					int gx = (int)(gn.Center.X / 16f);
 					int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
-					if (Predicates.IsLava(gx, gy) || gn.life <= 0) { Go(Ph.Patch); return; }
+					// 【成功只算"他真的沉进岩浆"】。原来判 feet+2 是岩浆就收工 -- 而他站在
+					// 岩浆上方那道 2 格薄壳上,脚下 feet+2 读到岩浆,人却干着,肉山永远不出
+					if (gn.life <= 0 || GuideSubmerged(gn))
+					{ DiagLog.Write($"[wof] 向导进岩浆了({gx},{gy}) life={gn.life},去补洞"); Go(Ph.Patch); return; }
 					if (GuideFell(gn))
 					{ DiagLog.Write($"[wof] 向导已在{gy}行往下落,不挖了"); Go(Ph.Patch); return; }
 					// 【挖不动不判死】。挖不掉一般是狱岩,向导容易自己走下去 --- 报一嘴接着等
 					if (_frames > 60 * 300 && _frames % 600 == 1)
 						DiagLog.Write($"[wof] 挖不动向导脚下({gx},{gy}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) 手臂{Player.tileRangeX}/{Player.tileRangeY},等他自己走下去");
-					// 手臂 30 格(横竖都是),站在房子最右格够得着向导脚下的每一列。
-					// 真够不着说明他走出去 30 格以外了,才回去重新站位 —— 【别一够不着就退】:
-					// 他跳回人身边那一帧也会瞬时判不够,一退手臂就被收,剩下的格子再也挖不到
+					// 真够不着才回去重新站位。【别一够不着就退】:他跳回人身边那一帧也会瞬时判不够,
+					// 一退手臂就被收,剩下的格子再也挖不到
 					if (!Reach.CanMine(p, gx, gy))
 					{
 						if (_frames % 120 == 1)
@@ -526,7 +532,11 @@ namespace TerraBlind
 					for (int k = 0; k < DigDepth; k++)
 					{
 						int dy = gy + k;
-						if (Predicates.IsLava(gx, dy)) break;          // 到岩浆了,下面不用管
+						// 【他压着的每一列都要到岩浆才算完】。只看中心列的话,中心先挖穿了就 break,
+						// 而两边的壳还撑着他 -- 他站在洞上不掉(现场:中心通了,侧列57挡着)
+						bool allLava = true;
+						for (int cx = gbl; cx <= gbr; cx++) if (!Predicates.IsLava(cx, dy)) { allLava = false; break; }
+						if (allLava) break;
 						for (int dx = gbl; dx <= gbr; dx++)
 						{
 							// 【和人相交的那一列照挖】。人跨 2~3 列,挖掉其中一列剩下的还撑着他,
