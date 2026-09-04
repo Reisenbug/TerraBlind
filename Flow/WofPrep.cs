@@ -79,26 +79,15 @@ namespace TerraBlind
 		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
 		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
 		const int DeckScan = 12;
-		// 向导是不是【真的掉到桥面以下】了。
-		//
-		// 【必须按他自己那一列的桥面判】。原来用 _deckRow —— 那是人走远 80 格之后
-		// 在【那边】记的行号,而桥是有坡的:房子在 1042、远处的桥面在 1040,差 2 行。
-		// 于是向导好端端站在自家地板上(1042)就被当成"掉下去了",DigUnder 整个跳过,
-		// 人干等肉山永远不出(现场:5787 向导掉到1042行(桥面1040),不追了)。
-		// 向导是不是【真的在往下掉】。
-		//
-		// 【必须看他本人在不在动,不能只看地板还在不在】。挖开的那一帧他那一列往下全空,
-		// DeckRow 返回 -1 —— 当帧就判"掉了"转去补洞,而向导还稳稳站在原地(vanilla 要
-		// 下一帧才给他重力),洞一补上他就再也掉不下去了,人干等一个永远不来的肉山。
-		//
-		// 判据:他在下落(velocity.Y > 0) 或者 已经落到桥面以下。两个都不成立就是还没走。
+		// 向导是不是【真的在往下掉】。桥是有坡的,必须按他自己那一列的桥面判 --
+		// 拿远处记的行号来判,他好端端站在自家地板上也会被当成掉下去了。
+		// 而挖开那一帧他那列往下全空、人却还没获得重力,只看地板同样会误判
 		static bool GuideFell(NPC gn)
 		{
 			int gx = (int)(gn.Center.X / 16f);
 			int gy = (int)((gn.position.Y + gn.height + 2f) / 16f);
-			// 【有向下速度不算掉下去】。挖开那一帧他必然有向下的速度,而脚下常常还有第二层平台:
-			// 现场他从1052掉到1053就踩住了(1053那格是平台19),代码却判"成了"收手去补洞,
-			// 肉山永远不来。成功只有一种:他到岩浆了
+			// 【有向下速度不算掉下去】:脚下常常还有第二层平台,掉一格就踩住了。
+			// 成功只有一种 -- 他到岩浆了
 			return Predicates.IsLava(gx, gy);
 		}
 
@@ -165,10 +154,8 @@ namespace TerraBlind
 		// 【买够了】和【钱花光了】都走这一条 —— 各写一遍必然漂移
 		static bool DoneBuying(Player p)
 		{
-			// 【最后一根还在鼠标上就把它收进背包】。Predicates.Have 是算鼠标那份的,
-			// 所以买到第 45 根(44 在背包 + 1 在手上)当帧就判"够了"进这里 —— 而上面
-			// 那段 StashMouse 在 have>=Want 时根本走不到。原来这里只 return false 不干活,
-			// 于是每帧进来一次、每帧退回去,买也不买、走也不走,要人手动把那根拖回背包才继续
+			// 【最后一根还在鼠标上就收进背包】:Have 是算鼠标那份的,买到最后一根当帧
+			// 就判"够了"进这里,而上面那段 StashMouse 那时根本走不到
 			if (!Main.mouseItem.IsAir)
 			{
 				if (ThrowItems.FreeSlots() < 1) KeepList.MakeRoom(2);
@@ -185,14 +172,12 @@ namespace TerraBlind
 			Go(Ph.SwapGuide);
 			return true;
 		}
-		// 【超长手臂只属于 DigUnder+Patch】。它改的是 static tileRangeX,全局都读得到,
-		// 漏还一次整个寻路就以为手能伸 30 格。所以在这里统一还 —— 出口有六个,
-		// 一个个加迟早漏,以后再添分支也不用记得这回事
+		// 【超长手臂在这里统一还】:它改的是 static tileRangeX,漏还一次整个寻路
+		// 就以为手能伸 30 格。出口有六个,一个个加迟早漏
 		static void Go(Ph next)
 		{
-			// 【等向导死了再收手臂】。原来只留 DigUnder/Patch,而 BackToGuide 是"回去站好接着挖"
-			// 的中间站 --- 一转过去手臂就收了,人站 1180、剩下那格 (1185,1051) 差 5 列,
-			// 5 格手臂正好够不着,那格永远挖不掉。捅向导整段都该开着
+			// 【等向导死了再收手臂】:BackToGuide 是"回去站好接着挖"的中间站,
+			// 一转过去就收的话,剩下那格差 5 列正好够不着,永远挖不掉
 			if (next == Ph.WaitWof || next == Ph.Done || next == Ph.Idle) Concessions.LongArmEnd();
 			Phase = next; _frames = 0; _nightAt = 0; _digWhere = ""; _digBeat = 0; _overlapFrames = 0;
 			DiagLog.Write($"[wof] → {next}");
@@ -437,7 +422,11 @@ namespace TerraBlind
 					// 【绝不跟下去】:下面没有回得来的路,人一跳就出不来
 					if (GuideFell(gn0))
 					{ DiagLog.Write($"[wof] 向导掉到{fy0}行(他那列的桥面在下面没了),不追了,去补洞"); Go(Ph.Patch); return; }
-					int sx = HouseBuilder.FarWx, sy = HouseBuilder.FarWy;
+					// 【目标要落在桥面上,不是房子地板上】:房子地板比桥面高一行,
+					// 人从桥上走回来时目标却在房子里,高差全甩给寻路
+					int sx = HouseBuilder.FarWx;
+					int sy = DeckRowNear(sx, HouseBuilder.FarWy);
+					if (sy < 0) sy = HouseBuilder.FarWy;
 					// 【站稳了才算到】。半空中量距离,一落地就变了
 					if (p.velocity.Y == 0f && ActExecutor.OriginCx(p) == sx)
 					{
@@ -446,10 +435,10 @@ namespace TerraBlind
 						Go(Ph.DigUnder); return;
 					}
 					if (RecedingNav.Active) return;
-					if (_frames > 60 * 300) { Fail($"走不到房子最右格({sx},{sy})"); return; }
+					if (_frames > 60 * 300) { Fail($"走不到房子那头的桥面({sx},{sy})"); return; }
 					// 【只在没跑的时候发一次】。每帧无条件 Start 会把建场任务每帧撕掉重建,
 					// 屏幕刷满 building field,人一步不动(日志 6413~6857 每帧一条)
-					if (_frames % 120 == 1) DiagLog.Write($"[wof] 去房子最右格({sx},{sy}) 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+					if (_frames % 120 == 1) DiagLog.Write($"[wof] 去房子那头的桥面({sx},{sy}) 地板行{HouseBuilder.FarWy} 人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 					RecedingNav.Start(sx, sy, RecedingNav.Mode.Stand);
 					return;
 				}
