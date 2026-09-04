@@ -6,8 +6,10 @@
 cd "$(dirname "$0")" || exit 1
 # Stuck() 函数体内那句 Finish("stuck") 是"救不了才真失败"的兜底,合法。
 # 用 awk 把每个 Stuck(Blocker) 函数体整段摘掉再查,剩下的才是绕过契约的。
-bad=$(for f in *.cs; do
-        [ "$f" = "Unstick.cs" ] && continue
+# 【必须递归找】:代码分了子目录之后 *.cs 一个文件都扫不到,而脚本照样打勾 --
+# 那比没有检查更糟,绿灯会让人以为覆盖到了
+bad=$(for f in $(find . -name '*.cs' -not -path './bin/*' -not -path './obj/*' -not -path './.claude/*'); do
+        [ "$(basename "$f")" = "Unstick.cs" ] && continue
         awk -v F="$f" '
           /static void Stuck\(/ { inb=1 }
           inb { if (/^\t\t}/) inb=0; next }

@@ -8,7 +8,8 @@ cd "$(dirname "$0")"
 printf "%-34s %-10s %s\n" "原始API(应该走封装)" "处数" "封装"
 printf "%.0s─" {1..78}; echo
 # -F 定长匹配:模式里带 [ 的话正则会把它当字符类,数出来是 0
-chk() { printf "%-34s %-10s %s\n" "$1" "$(grep -rhF -- "$2" *.cs 2>/dev/null | grep -vc '^\s*//')" "$3"; }
+# --include 递归全树:分了子目录之后 *.cs 只展开当前层,数出来全是 0
+chk() { printf "%-34s %-10s %s\n" "$1" "$(grep -rhF --include='*.cs' --exclude-dir=bin --exclude-dir=obj --exclude-dir=.claude -- "$2" . 2>/dev/null | grep -vc '^\s*//')" "$3"; }
 chk "Main.mouseX ="        "Main.mouseX ="            "Cursor.AimTile/AimPx/AimOffset"
 chk "Main.tileSolid["      "Main.tileSolid["          "Predicates.IsSolid/IsWall"
 chk "Main.tileSolidTop["   "Main.tileSolidTop["       "Predicates.IsPlatform"
