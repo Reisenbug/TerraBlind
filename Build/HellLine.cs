@@ -12,7 +12,7 @@ namespace TerraBlind
 	// 图上四邻走,能回头能上下,形状交给它自己找。
 	public static class HellLine
 	{
-		public const int Bridge = 170;      // 硬指标,不缩短。这是【桥】的长度,不含房子
+		public const int Bridge = 190;      // 硬指标,不缩短。这是【桥】的长度,不含房子
 		public const int HouseW = HouseBuilder.RoomWidth + 1;
 		// 线要连房子一起算:头 6 列是房子地板,后面 170 格才是桥。
 		// 只算 170 的话房子会吃掉桥的前 6 格,雷管站的地方就短了。
