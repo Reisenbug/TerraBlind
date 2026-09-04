@@ -103,7 +103,7 @@ namespace TerraBlind
 
         // 【总闸】。调试图层有 39 个来源(A* 轨迹/挖放色块/桥线蓝格...),拍视频时它们
         // 会盖住真实地形。开关放在唯一的绘制出口,一处管全部 -- 逐个来源加判断必漏
-        public static bool Enabled = true;
+        public static bool Enabled = false;   // 【默认关】:平时录像,调试时 /vis on
 
         public override void PostDrawTiles()
         {
