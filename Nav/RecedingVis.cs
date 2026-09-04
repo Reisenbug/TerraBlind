@@ -49,6 +49,7 @@ namespace TerraBlind
 
         public override void PostDrawTiles()
         {
+            if (!PathVisSystem.Enabled) return;   // 总闸,和另一个绘制出口共用
             if (!RecedingNav.Active) return;
             Dictionary<(int, int), int> field;
             int curCx, curCy, curH; List<StateSpacePlanner.Cand> cands; (int, int)? chosen; float score; int ttl;

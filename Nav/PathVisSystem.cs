@@ -26,9 +26,8 @@ namespace TerraBlind
 
         public static void ClearDeck() { lock (_lock) { _deck = new List<(int, int, Color)>(); _deckTtl = 0; } }
 
-        // GHOST TILES: draw a recorded structure as faint real-tile sprites (the actual block's look, half-transparent
-        // "air version"), not solid debug squares. Each entry carries the tile type + frame so the correct sprite +
-        // orientation renders. mineGhost cells (recorded removals) draw as a faint red outline instead.
+        // GHOST TILES: a recorded structure drawn as faint real-tile sprites, not debug squares.
+        // Type + frame per entry so the right sprite/orientation renders; removals draw as a red outline.
         private static List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> _ghosts = new();
         private static int _ghostTtl = 0;
         public static void SetGhosts(List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> g, int ttlFrames = 7200)
@@ -48,9 +47,8 @@ namespace TerraBlind
         private static List<(int wx, int wy)> _ssMineTiles = new();
         private static int _ssTtl = 0;
 
-        // LOOKAHEAD viz: the next leg the background thread pre-planned while the current leg walks. Drawn dim so it
-        // reads as "tentative future" vs the bright current leg. _laStart = predicted landing the bg plan branched
-        // from (white ring) — eyeball whether the bg trail actually connects to where the current leg ends.
+        // LOOKAHEAD viz: the leg the background thread pre-planned. Drawn dim = "tentative future";
+        // _laStart is the predicted landing it branched from, so the join can be eyeballed.
         private static List<(float wpx, float wpy, bool isJump)> _laTrail = new();
         private static (float wpx, float wpy)? _laGoal;
         private static (float wpx, float wpy)? _laStart;
@@ -103,8 +101,13 @@ namespace TerraBlind
             lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; if (_deckTtl > 0) _deckTtl--; }
         }
 
+        // 【总闸】。调试图层有 39 个来源(A* 轨迹/挖放色块/桥线蓝格...),拍视频时它们
+        // 会盖住真实地形。开关放在唯一的绘制出口,一处管全部 -- 逐个来源加判断必漏
+        public static bool Enabled = true;
+
         public override void PostDrawTiles()
         {
+            if (!Enabled) return;
             List<NavNode> path;
             int curIdx;
             if (NavCoordinator.IsActive)
@@ -355,9 +358,8 @@ namespace TerraBlind
             sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), c);
         }
 
-        // GHOST: the recorded block's ACTUAL sprite drawn faint (a half-transparent "air version"), so the preview
-        // reads as the real structure — wood looks like wood, a platform like a platform, with correct orientation
-        // from the recorded frameX/Y. A mine cell has no sprite (it's a removal) → faint red hollow square instead.
+        // GHOST: the recorded block's ACTUAL sprite drawn faint, so wood looks like wood and a platform
+        // like a platform. A mine cell is a removal, so it has no sprite: faint red hollow square instead.
         private void DrawGhost(SpriteBatch sb, int wx, int wy, ushort type, short frameX, short frameY, bool mine)
         {
             float sx = wx * 16f - Main.screenPosition.X;
