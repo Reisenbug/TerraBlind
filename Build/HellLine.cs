@@ -29,6 +29,9 @@ namespace TerraBlind
 		const int CeilNear = 5;             // 头顶 5 格以内开始罚
 		const int LavaGap = 4;              // 离岩浆面 4 格以内开始罚
 		const int LavaW = 30;               // 贴岩浆比贴石头贵:掉下去是死,蹭天花板只是难受
+		// 要铺的格才收钱,现成的桥面免费。没有这条,现成的岩架和空气同价,DP 只看居中分,
+		// 把起点选在腔子正中悬空处 -- 人落在岩架上,起点浮在头顶6行,够不着,STUCK
+		const int PlaceCost = 15;
 		const int ThinOk = 2;               // 这么薄的壳随便挖
 		const int ThickW = 40;              // 超出部分按平方涨价
 		const int ThickMax = 24;            // 量到这么厚就够贵了,再往前数没意义
@@ -127,6 +130,8 @@ namespace TerraBlind
 				if (Unmineable(x, y - r)) return Unreachable;
 			int blk = Blocked(x, y);
 			int c = blk * DigCell;
+			// 现成的合格桥面免铺费,线自己会去贴岩架(判据和铺桥验收同一份)
+			if (!DeckBuilder.DeckReady(x, y)) c += PlaceCost;
 			// 越挖不到头越贵:薄壳(1~2 列)照旧,厚墙按平方涨,绕多远都比硬凿划算
 			if (blk > 0)
 			{

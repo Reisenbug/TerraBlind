@@ -141,6 +141,10 @@ namespace TerraBlind
 			return t.HasTile && t.TileType == Terraria.ID.TileID.HellstoneBrick;
 		}
 
+		// 这一格已经是合格的桥面。铺桥的验收和算线的免铺折扣都问这一份,别各编一套
+		public static bool DeckReady(int x, int y)
+			=> Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHellBrick(x, y);
+
 		public static void Tick()
 		{
 			if (!IsRunning) return;
@@ -195,7 +199,7 @@ namespace TerraBlind
 
 			// 桥面必须站得住,所以只认 IsGround。判 HasTile 会把草/藤当铺好了,人走上去直接掉下去
 			// 地狱石砖(76)是废墟自带的,踩上去烧人 --- 当成不合格,照平台那条挖掉换方块
-			if (Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHellBrick(x, y))
+			if (DeckReady(x, y))
 			{
 				if (_tried) Placed++; else Already++;
 				_idx++; _cellFrames = 0; _tried = false; _frozen = 0; _skipped = 0;
