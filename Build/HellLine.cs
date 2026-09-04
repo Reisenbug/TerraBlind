@@ -92,13 +92,14 @@ namespace TerraBlind
 			=> Predicates.InBounds(x, y) && Main.tile[x, y].HasTile && !DigTable.MineableWith(x, y, pick);
 		static bool Unmineable(int x, int y) => Unmineable(x, y, _pick);
 
-		// 桥面底下一路往下是不是岩浆。中间隔着石头就不算 —— 那是地,不是悬在岩浆上。
-		static bool LavaBelow(int x, int y)
+		// 桥面到岩浆之间【全挖得动】。中间隔着石头不算(那是地);暗影箱/地狱熔炉/椅子这类
+		// 挖不动的家具也不算 -- 它不是实心,可捅向导时挡着,向导站上面永远掉不下去
+		static bool ClearToLava(int x, int y)
 		{
 			for (int k = 1; k <= LavaProbe; k++)
 			{
 				if (Predicates.IsLava(x, y + k)) return true;
-				if (Predicates.IsSolid(x, y + k)) return false;
+				if (Unmineable(x, y + k)) return false;
 			}
 			return false;
 		}
@@ -185,6 +186,8 @@ namespace TerraBlind
 			var res = new Result { Line = new List<(int x, int y)>() };
 			dir = dir >= 0 ? 1 : -1;
 			if (by == int.MinValue) by = Main.LocalPlayer != null ? ActExecutor.OriginCy(Main.LocalPlayer) : 0;
+			// 选址就要用挖力判"挖不动的家具挡在下面",不能等 Solve 才取
+			_pick = MazeWand.BestPickPower();
 
 			// 每列只量一次:候选 121 个、每个查 6 列,现算的话 Column() 要跑八百多趟,比 Dijkstra 本身还贵
 			int span0 = StartWindow + HouseBuilder.RoomWidth + 2;
@@ -206,8 +209,10 @@ namespace TerraBlind
 					if (f0 - c0 < Head) continue;   // 腔子得塞得下人 + 头顶那一格
 					int y0 = StartRow(x, c0, f0);
 					int lav = 0;
-					for (int k = 0; k < HouseW; k++) if (LavaBelow(x + dir * k, y0)) lav++;
-					if (pass == 0 && lav < HouseW) continue;   // 头一遍只要整排都在岩浆上的
+					// 【挖得到岩浆才算数】:整排下方不光要有岩浆,中间还不能夹挖不动的家具 --
+					// 那正是捅向导挖不通、他站在暗影箱/熔炉/椅子上不掉的根源
+					for (int k = 0; k < HouseW; k++) if (ClearToLava(x + dir * k, y0)) lav++;
+					if (pass == 0 && lav < HouseW) continue;   // 头一遍只要整排都通到岩浆的
 					float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
 					// 就近不就价:只按离人远近挑。居中分再高也没用 —— 人得先徒步走过去,
 					// 而在地狱里每多走一格都是掉岩浆的机会
@@ -463,7 +468,7 @@ namespace TerraBlind
 			res.HouseY = ys[0];
 			int lavaCols = 0;
 			for (int k = 0; k < W && k < Length; k++)
-				if (LavaBelow(sx + dir * k, ys[k])) lavaCols++;
+				if (ClearToLava(sx + dir * k, ys[k])) lavaCols++;
 			res.HouseOnLava = lavaCols == W;
 			res.HouseLavaCols = lavaCols;
 			// 选起点时是按【预估行】算的岩浆,这里是线上真实的 ys[0]。两者该一致,
