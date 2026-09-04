@@ -2114,7 +2114,10 @@ namespace TerraBlind
 
         static int _jpWaitFrames;
         const int JpWaitCap = 60;
-        public static void StopExec() { _execFrames = null; _execIdx = 0; _walkActive = false; _jpWaitFrames = 0; }
+        // 空中发出去还没见到砖的那一格。发一帧就当放好了是没人管的失败
+        static (int cx, int cy)? _airPlace;
+        static int _airPlaceTries;
+        public static void StopExec() { _execFrames = null; _execIdx = 0; _walkActive = false; _jpWaitFrames = 0; _airPlace = null; }
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
@@ -3541,6 +3544,7 @@ namespace TerraBlind
             if (_execFrames == null) { WatchUnplannedFall(); return; }
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopExec(); return; }
+            if (_airPlace.HasValue && !AirPlaceTick(p)) return;
             if (_execIdx >= _execFrames.Count)
             {
                 float cx = p.position.X + p.width / 2f, fy = p.position.Y + p.height;
@@ -3662,6 +3666,8 @@ namespace TerraBlind
                 if (airborne)
                 {
                     EmitPlace(p, f.PlaceCx, f.PlaceCy);
+                    // 发出去不等于放好了,后面每帧由 AirPlaceTick 盯着它出现或判它失败
+                    _airPlace = (f.PlaceCx, f.PlaceCy); _airPlaceTries = 1;
                     if (f.Left) p.controlLeft = true;
                     if (f.Right) p.controlRight = true;
                     if (f.Jump) p.controlJump = true;
@@ -3688,12 +3694,7 @@ namespace TerraBlind
                     for (int ax = -1; ax <= 1; ax++) for (int ay = -1; ay <= 1; ay++) if (Main.tile[f.PlaceCx + ax, f.PlaceCy + ay].HasTile) nbr = true;
                     EventLog.W(Ev.Place, $"FAILED ({f.PlaceCx},{f.PlaceCy}) from=({fcx},{fcy}) nbrSupport={nbr} hasTile={Main.tile[f.PlaceCx, f.PlaceCy].HasTile} → replan");
                 }
-                _placeStall = 0;
-                // greedy re-picks from real position next TickBlocks, so just abort this frame loop. edge-by-edge
-                // replans toward the true goal (closed-loop), same as drift.
-                if (_greedyActive) { StopExec(); return; }
-                if (Replan("place_failed")) return;
-                StopExec();
+                PlaceFailed();
                 return;
             }
             if (f.Place) { EventLog.W(Ev.Place, $"OK ({f.PlaceCx},{f.PlaceCy})"); _placeStall = 0; }
@@ -3717,6 +3718,41 @@ namespace TerraBlind
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
             var t = Main.tile[cx, cy];
             return Predicates.IsGround(cx, cy);
+        }
+
+        // 贪心下一 tick 从真实位置重选;逐边模式朝真目标重规划,和漂移同一条路
+        static void PlaceFailed()
+        {
+            _placeStall = 0;
+            if (_greedyActive) { StopExec(); return; }
+            if (Replan("place_failed")) return;
+            StopExec();
+        }
+
+        // 空中发出去的那块砖:出现了记 OK;脚底已经低过它的顶面就再也接不住 = 失败,
+        // 把 vanilla 那几道门的现场一起打出来。还来得及就再发。返回 false = 这帧到此为止
+        static bool AirPlaceTick(Player p)
+        {
+            var (acx, acy) = _airPlace.Value;
+            float feet = p.position.Y + p.height;
+            if (TilePlaced(acx, acy))
+            {
+                EventLog.W(Ev.Place, $"OK ({acx},{acy}) 空中第{_airPlaceTries}次");
+                _airPlace = null; return true;
+            }
+            if (feet <= acy * 16f)
+            {
+                EmitPlace(p, acx, acy); _airPlaceTries++;
+                return true;
+            }
+            var t = Main.tile[acx, acy];
+            var it = p.inventory[p.selectedItem];
+            EventLog.W(Ev.Place, $"FAILED-AIR ({acx},{acy}) 发了{_airPlaceTries}次 脚底{feet:0.#}>顶{acy * 16} "
+                + $"itemTime={p.itemTime} anim={p.itemAnimation} release={p.releaseUseItem} 瞄=({Player.tileTargetX},{Player.tileTargetY}) "
+                + $"格 tile={t.HasTile}/{t.TileType} liquid={t.LiquidAmount}/{t.LiquidType} 手={it.Name}x{it.stack}");
+            _airPlace = null;
+            PlaceFailed();
+            return false;
         }
 
         static void EmitPlace(Player p, int cx, int cy)
