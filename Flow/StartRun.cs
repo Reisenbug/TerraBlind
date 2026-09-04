@@ -243,10 +243,10 @@ namespace TerraBlind
 						int pcx = ActExecutor.OriginCx(p), pcy = ActExecutor.OriginCy(p);
 						int d = System.Math.Abs(pcx - stop.x) + System.Math.Abs(pcy - stop.y);
 						int ph2 = HttpServerSystem.DescentH(pcx, pcy), th = HttpServerSystem.DescentH(stop.x, stop.y);
-						// 【H 比我大 = 离地狱更远 = 在身后】。拐一趟出来人就偏了,近的会被误判,
-						// 所以只有【又远又在上游】才算走过头 --- 近的一律去拿,折回也就几秒
-						if (d > SkipNearCells && ph2 >= 0 && th >= 0 && th > ph2 + 30)
-						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) H{th}>我的H{ph2}+30 且距{d}格,在身后了"); return; }
+						// 【在身后 = 去那儿得往上爬】。原来 +30 只是 10 格横走的价:拐去 1063 之后,线上同一
+						// 深度的 (1151,662) H 只高 69 就被判成身后。H 涨得比平着走过去还多才是上游
+						if (d > SkipNearCells && ph2 >= 0 && th >= 0 && th - ph2 > MazeWand.FlatTripH(d))
+						{ DiagLog.Write($"[start] 跳过[{_routeIdx}/{_route.Count}] ({stop.x},{stop.y}) H{th}-我的H{ph2}={th - ph2}>平走{d}格的{MazeWand.FlatTripH(d)},在身后了"); return; }
 						// 顺路已经捡掉的东西计划里还留着,轮到它时人会跑回去捡空气。
 						// 掏空的箱子不消失,HasTile 判不出来,只能靠记账那一份
 						if (GreedPickup.Looted(stop.x, stop.y))

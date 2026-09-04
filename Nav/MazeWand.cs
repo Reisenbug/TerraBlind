@@ -18,6 +18,8 @@ namespace TerraBlind
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
+        // 走 d 格不真正爬高,H 最多涨这么多(横走 + 一跳白嫖的高度)。超过它 = 目标在上游
+        public static int FlatTripH(int d) => d * MoveSide + JumpReach * MoveUp;
         public const int MaxMoveCost = PillarUp;   // 比这贵的边一定含挖掘 —— 别在别处硬编阈值
 
         // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
@@ -287,9 +289,8 @@ namespace TerraBlind
                     if (closed.Contains((nx, ny))) continue;
                     int sc = StepCost(cx, cy, nx, ny);
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
-                    // H 的意思是【站在 (nx,ny) 还要多少】,所以先问人站不站得住那一格。
-                    // 悬空格照发 H,就在空中连成一条 H 递减的假路,把人吸进死角:腐化区那次西边
-                    // 1341..1343 脚下全空,场却给了 411..433 递减,而唯一的真出口要先爬高,H 反被标成 462。
+                    // H = 站在 (nx,ny) 还要多少,先问站不站得住。悬空格照发 H 会在空中连成
+                    // 一条 H 递减的假路把人吸进死角(腐化区 1341..1343 那次)
                     int stand = StandPenalty(nx, ny);
                     if (stand == Impassable) continue;
                     int nc = cost + sc + stand;
@@ -365,8 +366,6 @@ namespace TerraBlind
         // (going down a chasm is cheap, climbing back out is not — a one-way field hides that).
         public static int StepCostPublic(int cx, int cy, int nx, int ny) => StepCost(cx, cy, nx, ny);
 
-        // forward cost of moving FROM (nx,ny) TO (cx,cy): direction is (cx,cy)-(nx,ny), price set by the cell
-        // being entered (cx,cy). reverse BFS expands neighbor nx,ny so we cost the forward step toward goal.
         // 人要【站在】这一格得先付多少。站得住=0;站不住就得自己造落脚点,那是真代价。
         // 判据只此一份(CellKind),不在这儿另编。
         static int StandPenalty(int x, int y)
@@ -386,9 +385,8 @@ namespace TerraBlind
         // 在里面扫 58 格背包会把建场从 1.5s 拖成几十秒 —— 所以和 pickPower 一样,建场前取一次
         static bool _fieldLavaSurvivable;
 
-        // 全身上下最好的镐力。【背包也算】-- 只扫热键栏 10 格的话,镐在背包里就等于 pickPower=0,
-        // MineableWith 一律 false,所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"。
-        // 三处建场/失效判定原本各抄一遍这段循环,现在共用这一份。
+        // 全身上下最好的镐力。【背包也算】-- 只扫热键栏的话镐在背包里就等于 pickPower=0,
+        // 所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"
         public static int BestPickPower()
         {
             var pl = Main.LocalPlayer;
@@ -417,9 +415,8 @@ namespace TerraBlind
                 if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
                     return PlateCost;
             }
-            // 人 3 行高,只看脚下那格会把"脚下空、头顶是石"的烟囱当免费爬(场爱钻它钻不过去的缝)。
-            // 斜砖只在脚那行豁免:48px 的壳装 42px 的身子只剩 6px 余量,胸口一块斜砖就卡住。
-            // 上锁的门另判:MineableWith 说门能挖,可神庙门没钥匙砸不开,不特判线就直接穿过去。
+            // 人 3 行高,只看脚下会把烟囱当免费爬。斜砖只在脚那行豁免(胸口一块斜砖就卡住);
+            // 上锁的门另判:MineableWith 说能挖,可神庙门没钥匙砸不开
             for (int r = 0; r < 3; r++)
             {
                 int dy2 = cy - r;
@@ -443,12 +440,8 @@ namespace TerraBlind
                 if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
             }
             bool wall = digCells > 0;
-            // BODY WIDTH: the 20px body straddles TWO columns — a cell whose own column is open but whose left AND
-            // right neighbor columns are both blocked (any of the 3 body rows) is a 1-tile-wide slot the body cannot
-            // occupy. Pricing it as free flow let H stream up a 1-wide temple-wall shaft the body could never enter
-            // ((3393,700): all 61 candidates H-rising, shock death) — the true route was digging the mineable east
-            // rock. A side column counts as widenable if every solid row in it is mineable: then entering costs a dig;
-            // if neither side is widenable the slot is impassable.
+            // 20px 的身子跨两列:左右邻列都堵的 1 格宽缝身体进不去,按免费算 H 会顺着神庙墙缝往上流
+            // ((3393,700) 那次)。邻列全能挖就按挖收费,两边都不能挖才是禁行
             if (!wall && !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
             {
                 wall = true;
