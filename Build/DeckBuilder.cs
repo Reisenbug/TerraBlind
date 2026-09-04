@@ -29,6 +29,8 @@ namespace TerraBlind
 		private static int _lastDx = int.MaxValue;   // 离目标最近到过几列。判"推了却没靠近"= 被顶住
 		private static int _blockedFrames;           // 连着几帧没挪窝
 		private static int _sameColFrames;           // 同列却够不着,连着几帧
+		private static int _checkedIdx = -1;         // 前方挖不动的东西查到哪一格了,一格只查一次
+		private static (int, int) _detourAt = (int.MinValue, int.MinValue);   // 上次为哪一格改的线
 		// 【每条无声的 return 都留个名字】。人站着不动、日志 500 帧全空的时候,
 		// 唯一能查的就是"每帧走到哪一条就退出了"。60 帧汇报一次,不刷屏
 		private static string _where = "";
@@ -111,7 +113,8 @@ namespace TerraBlind
 			_line = line; _idx = System.Math.Max(0, from);
 			_frames = 0; _cellFrames = 0; Placed = 0; Already = 0; _tried = false; _recovers = 0; _skipped = 0; _runAt = -1;
 			_lastDx = int.MaxValue; _blockedFrames = 0; _sameColFrames = 0; _where = ""; _heartbeat = 0;
-			_stillHash = 0; _stillCount = 0; _stillAt = 0; _frozen = 0;
+			_stillHash = 0; _stillCount = 0; _stillAt = 0; _frozen = 0; _checkedIdx = -1;
+			_detourAt = (int.MinValue, int.MinValue);
 			_lineSet.Clear();
 			foreach (var c in line) _lineSet.Add(c);
 			Outcome = "running"; Reason = "";
@@ -172,6 +175,14 @@ namespace TerraBlind
 				return;
 			}
 
+			// 【第二道保险】:算线时按镐力禁过一遍,但那是按当时的世界。铺到跟前发现挖不动就改线,
+			// 别对着熔炉挥到看门狗判死
+			if (_idx != _checkedIdx)
+			{
+				_checkedIdx = _idx;
+				int bad = FirstUnmineable();
+				if (bad >= 0 && !Detour(bad)) return;
+			}
 			var (x, y) = _line[_idx];
 
 			// 【清净空时连铺必须停】:两个 Tick 同一帧都跑,这边站着挖那边照样往前走,
@@ -206,10 +217,8 @@ namespace TerraBlind
 				}
 				return;
 			}
-			// 桥面这一格是平台/地狱石砖/占位物(罐子、草、藤):挖掉换成方块。
-			// 【罐子也走这条】:它 HasTile 但站不住,原来直接跳过 -- 桥面就留了两格洞,
-			// 而它一敲就碎,不是"谁也放不上"那种
-			// 占位物敲不动就别死磕,让它落到下面那条跳过 -- 一个罐子不值得让整条桥停下
+			// 平台/地狱石砖/占位物(罐子、草、藤)都挖掉换方块。罐子原来直接跳过,桥面就留了洞;
+			// 占位物敲不动就别死磕,落到下面那条跳过
 			bool clutterGaveUp = Predicates.IsClutter(x, y) && _cellFrames > MaxCellFrames;
 			if ((Predicates.IsPlatform(x, y) || IsHellBrick(x, y) || Predicates.IsClutter(x, y)) && !clutterGaveUp)
 			{
@@ -422,6 +431,48 @@ namespace TerraBlind
 			return ++_stillCount >= StillMax;
 		}
 
+		// 前方 LookAhead 格里第一个被挖不动的东西占着的(桥面格本身站不住的,或头顶净空里的)。
+		// 桥面格已经是能站的实心就不算,它就是桥
+		static int FirstUnmineable()
+		{
+			int pick = MazeWand.BestPickPower();
+			for (int k = 0; k < LookAhead && _idx + k < _line.Count; k++)
+			{
+				var (cx, cy) = _line[_idx + k];
+				int top = TopOfCol(cx, cy);
+				if (!Predicates.IsGround(cx, top) && HellLine.Unmineable(cx, top, pick)) return _idx + k;
+				for (int r = 1; r <= HeadClear; r++)
+					if (HellLine.Unmineable(cx, top - r, pick)) return _idx + k;
+			}
+			return -1;
+		}
+
+		// 从人站的那格(上一格,已铺好)起把剩下的线重算,换掉 _line 尾巴。人站的那格不变,_idx 仍指它下一格
+		static bool Detour(int badI)
+		{
+			int from = System.Math.Max(_idx - 1, 0);
+			var (sx, sy) = _line[from];
+			var (bx, by) = _line[badI];
+			int lastX = _line[_line.Count - 1].x;
+			DiagLog.Write($"[deck] 第{badI}格({bx},{by})挡着挖不动的东西(type={Main.tile[bx, by].TileType}),从第{from}格({sx},{sy})改线到x={lastX}");
+			// 改完线还是撞同一格 = 改线绕不开它(衔接格下面那格 DP 没验),别每帧算一遍 Dijkstra
+			if (_detourAt == (bx, by)) { Fail($"({bx},{by})改线之后还是挡着"); return false; }
+			_detourAt = (bx, by);
+			if (!HellLine.Reroute(sx, sy, lastX, out var nl, out string why))
+			{ Fail($"({bx},{by})挖不动又绕不开:{why}"); return false; }
+			_line.RemoveRange(from, _line.Count - from);
+			_line.AddRange(nl);
+			_lineSet.Clear();
+			foreach (var c in _line) _lineSet.Add(c);
+			// nl[0] 就是人站的那格;_idx 本来就在 0 的话那格还没铺,别跳过它
+			_idx = from < _idx ? from + 1 : from;
+			_runAt = -1; _cellFrames = 0; _tried = false; _frozen = 0; _skipped = 0;
+			_lastDx = int.MaxValue; _blockedFrames = 0; _checkedIdx = -1;
+			if (BridgeBuilder.IsRunning) BridgeBuilder.Stop();
+			if (PlaceAnywhere.IsRunning) PlaceAnywhere.Stop();
+			return true;
+		}
+
 		// 这一列在线上最高的那格。变高处一列有两格,净空要从最上面那格算起
 		static int TopOfCol(int cx, int cy)
 		{
@@ -449,10 +500,8 @@ namespace TerraBlind
 					return true;
 				}
 			}
-			// 【人身前那一列也要清】:挡住人的墙常在人和桥线格【之间】,不在任何桥线格头顶,
-			// 于是一格都不清,人顶着墙站到死
-			// 【只在真走不动时才挖】:无条件挖身前会把上升段那块刚铺好的桥面也刨了
-			// (桥往上走时,身前那一格正是下一块桥面)。人推了半天没挪窝才是真被挡
+			// 挡住人的墙常在人和桥线格【之间】,不在任何桥线格头顶,所以身前那列也要清;
+			// 但只在真推不动时才挖,无条件挖会把上升段刚铺好的下一块桥面也刨了
 			if (_blockedFrames < BlockedAt) return false;
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
