@@ -576,14 +576,16 @@ namespace TerraBlind
 			if (HellBridge.IsRunning) HellBridge.Tick();
 			if (BridgeStart.IsRunning) BridgeStart.Tick();
 
-			// 放第一格:走 PlaceAction,控制要跟着发;让位用 SettleAt,它的 Tick 在下面,
-			// 所以这里必须替它跑一次 —— 直接 return 的话让位永远走不完。
-			// 【寻路也一样】。StepAside 换行时起的是 RecedingNav,它的 Tick 也在下面:
-			// 不替它跑,Active 永远为真,让位那一步死等(日志:2460帧"让位中")
+			// PlaceAnywhere 会 return 等下游造落脚点/让位,那些原语的 Tick 都排在本 block 之后。
+			// 替它们各跑一次,否则死等(SettleAt 让位、RecedingNav 换行、platdown/pillar 造点)
 			if (PlaceAnywhere.IsRunning)
 			{
 				PlaceAnywhere.Tick();
 				if (SettleAt.IsRunning) SettleAt.Tick();
+				// placeany 在 318 行 return 等 platdown/pillar 造落脚点,而它俩的 Tick 排在本 block 之后
+				// 永远轮不到,死等(现场:3400帧"等落脚点造好")。替它们跑,PlaceAction 是放平台的手
+				if (PlatformDown.IsRunning) { PlatformDown.Tick(); PlaceAction.Tick(); }
+				if (PillarUp.IsRunning) PillarUp.Tick();
 				// 寻路光 Tick 只是派发,真正走路的是 TickBlocks + ApplyControls --- 一起跑才动得了
 				if (RecedingNav.Active)
 				{
