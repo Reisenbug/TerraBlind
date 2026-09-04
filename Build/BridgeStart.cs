@@ -52,9 +52,8 @@ namespace TerraBlind
 			_ph = Ph.Idle;
 		}
 
-		// 目标格附近第一个能站的行 --- 站那儿离目标 1 行,放置那把尺子必定过。
-		// 【下方优先,找不到再往上】:Reach 按玩家中心格收尾,常把人撂在目标下方,
-		// 那时落脚点在人【上方】,只往下扫必然扑空(现场:目标1048 人1054,连报 STUCK)
+		// 目标格附近第一个能站的行。【下方优先,找不到再往上】:Reach 按玩家中心格收尾,
+		// 常把人撂在目标下方,只往下扫必然扑空(现场:目标1048 人1054,连报 STUCK)
 		static int FootRowFor(int tx, int ty)
 		{
 			for (int y = ty + 1; y <= ty + FootScan; y++)
@@ -104,9 +103,13 @@ namespace TerraBlind
 							DiagLog.Write($"[bstart] ({_tx},{_ty})上下{FootScan}行都悬空,交 PlaceAnywhere 造锚 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 							_phaseFrames = 0; _ph = Ph.Place; return;
 						}
-						// 算出来就是人现在这格 = 再发一趟也是原地不动,别空转
+						// 算出来就是人现在这格 = 走位帮不上了。桥起点是悬空的(mid-cavity),人只能
+						// 站到它下方的地上,够不到那个浮空格 -- 这不是失败,交 PlaceAnywhere 从下往上造锚
 						if (ActExecutor.OriginCx(p) == _tx && ActExecutor.OriginCy(p) == fy)
-						{ Fail($"已经站在({_tx},{fy})却仍放不了({_tx},{_ty})"); return; }
+						{
+							DiagLog.Write($"[bstart] 站在({_tx},{fy})够不着浮空的({_tx},{_ty}),交 PlaceAnywhere 造锚");
+							_phaseFrames = 0; _ph = Ph.Place; return;
+						}
 						DiagLog.Write($"[bstart] 够得着但放不了({_tx},{_ty}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 去({_tx},{fy})站住 第{_gotoTries}次");
 						RecedingNav.Start(_tx, fy, RecedingNav.Mode.Stand);
 						_phaseFrames = 0;
