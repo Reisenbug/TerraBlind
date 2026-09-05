@@ -115,7 +115,6 @@ TerraBlind 里的每一样东西，本质上都是**工具**：找路、跳、�
 | 文件 | 内容 |
 |------|------|
 | [`CAPABILITIES.md`](CAPABILITIES.md) | 已有能力清单。写新动作前先查，别重复造 |
-| [`PROJECT_STATE.md`](PROJECT_STATE.md) | 项目总体状态与方向 |
 | [`PERCEPTION_DESIGN.md`](docs/PERCEPTION_DESIGN.md) | 感知/执行架构设计 |
 | [`DECISIONS.md`](docs/DECISIONS.md) | 决策记录：每个坑为什么这么填 |
 | [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | 碰撞箱与搭桥的边界情形 |
@@ -249,7 +248,6 @@ One hard rule: **getting stuck must be structurally impossible.** Every primitiv
 | File | Contents |
 |------|----------|
 | [`CAPABILITIES.md`](CAPABILITIES.md) | Inventory of existing capabilities. Check before writing a new action |
-| [`PROJECT_STATE.md`](PROJECT_STATE.md) | Overall project state and direction |
 | [`PERCEPTION_DESIGN.md`](docs/PERCEPTION_DESIGN.md) | Perception/execution architecture |
 | [`DECISIONS.md`](docs/DECISIONS.md) | Decision log: why each pitfall is handled the way it is |
 | [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | Hitbox and bridge-placement edge cases |

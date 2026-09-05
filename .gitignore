@@ -6,3 +6,6 @@ obj/
 *.DS_Store
 .claude/
 .claude/hooks/.walls_grace
+
+# agent 的工作记忆,不是给读者的文档:里面有会话产出、本机绝对路径、provider 细节
+PROJECT_STATE.md
