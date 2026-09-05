@@ -26,6 +26,14 @@ namespace TerraBlind
 
         public static void ClearDeck() { lock (_lock) { _deck = new List<(int, int, Color)>(); _deckTtl = 0; } }
 
+        // 空心框:标宝藏那种"指着它但别盖住它"的记号,填色块会把箱子/水晶本体糊没
+        private static List<(int wx, int wy, int w, int h, Color color)> _hollow = new();
+        private static int _hollowTtl = 0;
+        public static void SetHollow(List<(int wx, int wy, int w, int h, Color color)> boxes, int ttlFrames)
+        {
+            lock (_lock) { _hollow = boxes; _hollowTtl = ttlFrames; }
+        }
+
         // GHOST TILES: a recorded structure drawn as faint real-tile sprites, not debug squares.
         // Type + frame per entry so the right sprite/orientation renders; removals draw as a red outline.
         private static List<(int wx, int wy, ushort type, short frameX, short frameY, bool mine)> _ghosts = new();
@@ -98,12 +106,14 @@ namespace TerraBlind
 
         public override void PostUpdateEverything()
         {
-            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; if (_deckTtl > 0) _deckTtl--; }
+            lock (_lock) { if (_ttl > 0) _ttl--; if (_ssTtl > 0) _ssTtl--; if (_laTtl > 0) _laTtl--; if (_ghostTtl > 0) _ghostTtl--; if (_deckTtl > 0) _deckTtl--; if (_hollowTtl > 0) _hollowTtl--; }
         }
 
         // 【总闸】。调试图层有 39 个来源(A* 轨迹/挖放色块/桥线蓝格...),拍视频时它们
         // 会盖住真实地形。开关放在唯一的绘制出口,一处管全部 -- 逐个来源加判断必漏
         public static bool Enabled = true;   // 默认开,录像前 /vis off
+        // A* 的轨迹/探索点/落点那几层单独关:它们最密,盖信息最多,平时只要建造类色块
+        public static bool ShowPlanner = false;
 
         public override void PostDrawTiles()
         {
@@ -134,7 +144,7 @@ namespace TerraBlind
             {
                 List<(float, float, bool)> ssTrail; List<(float, float)> ssExp; (float, float)? ssGoal; List<(int, int)> ssPlaced; List<(int, int)> ssMine; int ssTtl;
                 lock (_lock) { ssTrail = _ssTrail; ssExp = _ssExplored; ssGoal = _ssGoal; ssPlaced = _ssPlaced; ssMine = _ssMineTiles; ssTtl = _ssTtl; }
-                if (ssTtl > 0)
+                if (ssTtl > 0 && ShowPlanner)
                 {
                     foreach (var (px, py) in ssExp) DrawDot(spriteBatch, px, py, new Color(70, 100, 200, 70));
                     foreach (var (mx, my) in ssMine) DrawTile(spriteBatch, mx, my, new Color(255, 60, 30, 180));
@@ -150,7 +160,7 @@ namespace TerraBlind
             {
                 List<(float, float, bool)> laTrail; (float, float)? laGoal; (float, float)? laStart; int laTtl;
                 lock (_lock) { laTrail = _laTrail; laGoal = _laGoal; laStart = _laStart; laTtl = _laTtl; }
-                if (laTtl > 0)
+                if (laTtl > 0 && ShowPlanner)
                 {
                     foreach (var (px, py, isJump) in laTrail)
                         DrawDot(spriteBatch, px, py, isJump ? new Color(0, 150, 150, 130) : new Color(200, 150, 40, 120));
@@ -179,6 +189,10 @@ namespace TerraBlind
             lock (_lock) { deckTiles = new List<(int, int, Color)>(_deck); deckTtl = _deckTtl; }
             if (deckTtl > 0)
                 foreach (var (tx, ty, tc) in deckTiles) DrawTile(spriteBatch, tx, ty, tc);
+            List<(int wx, int wy, int w, int h, Color color)> hollow; int hollowTtl;
+            lock (_lock) { hollow = new List<(int, int, int, int, Color)>(_hollow); hollowTtl = _hollowTtl; }
+            if (hollowTtl > 0)
+                foreach (var (hx, hy, hw, hh, hc) in hollow) DrawHollow(spriteBatch, hx, hy, hw, hh, hc);
             if (extraTtl > 0)
             {
                 foreach (var (tx, ty, tc) in extraTiles)
@@ -203,7 +217,7 @@ namespace TerraBlind
                 foreach (var g in ghosts)
                     DrawGhost(spriteBatch, g.wx, g.wy, g.type, g.frameX, g.frameY, g.mine);
 
-            if (path != null)
+            if (path != null && ShowPlanner)
                 foreach (var node in path)
                     if (node.MineTiles != null)
                         foreach (var (mx, my) in node.MineTiles)
@@ -217,7 +231,7 @@ namespace TerraBlind
                         }
 
             int prevWx = -1, prevWy = -1;
-            if (path != null)
+            if (path != null && ShowPlanner)
             for (int i = 0; i < path.Count; i++)
             {
                 int wx = path[i].Wx, wy = path[i].Wy;
@@ -349,13 +363,32 @@ namespace TerraBlind
             spriteBatch.End();
         }
 
+        // 【所有色块统一压到半透明】。39 个来源各带各的 alpha(160~240),盖住真实地形;
+        // 在唯一的填充出口封顶,一处管全部
+        const int TileAlphaCap = 90;
+
         private void DrawTile(SpriteBatch sb, int wx, int wy, Color c)
         {
             float sx = wx * 16f - Main.screenPosition.X;
             float sy = wy * 16f - Main.screenPosition.Y;
             if (sx < -16 || sx > Main.screenWidth + 16) return;
             if (sy < -16 || sy > Main.screenHeight + 16) return;
+            if (c.A > TileAlphaCap) c = c * (TileAlphaCap / (float)c.A);
             sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), c);
+        }
+
+        // 空心框:2px 描边,中间留空,框里的东西原样可见
+        private void DrawHollow(SpriteBatch sb, int wx, int wy, int w, int h, Color c)
+        {
+            float sx = wx * 16f - Main.screenPosition.X;
+            float sy = wy * 16f - Main.screenPosition.Y;
+            int pw = w * 16, phh = h * 16;
+            if (sx < -pw || sx > Main.screenWidth + 16) return;
+            if (sy < -phh || sy > Main.screenHeight + 16) return;
+            sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, pw, 2), c);
+            sb.Draw(_pixel, new Rectangle((int)sx, (int)sy + phh - 2, pw, 2), c);
+            sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 2, phh), c);
+            sb.Draw(_pixel, new Rectangle((int)sx + pw - 2, (int)sy, 2, phh), c);
         }
 
         // GHOST: the recorded block's ACTUAL sprite drawn faint, so wood looks like wood and a platform

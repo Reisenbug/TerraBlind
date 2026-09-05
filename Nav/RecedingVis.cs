@@ -79,11 +79,7 @@ namespace TerraBlind
                 }
             }
 
-            // THE SCREEN SHOWS A LINE AND A POINT — nothing else. Everything this used to draw at once (three
-            // direction arrows, a box and a text label per candidate, the chosen box with its score, the current
-            // cell with its H) turned the answer to "where is it going?" into a pile no one could read at a glance.
-            // Candidate H values, costs and scores are diagnosis material: they belong in the log, where they can be
-            // read at leisure, not stacked on top of the very cells they describe. See RecedingNav's [rn-dec] lines.
+            // 屏幕只画一条线和一个点。候选的 H/分数属于日志([rn-dec]),摞在格子上没人读得动
             if (ttl > 0)
             {
                 bool stuck = chosen == null && cands.Count > 0;
@@ -103,6 +99,8 @@ namespace TerraBlind
         {
             float sx = wx * 16f - Main.screenPosition.X, sy = wy * 16f - Main.screenPosition.Y;
             if (sx < -16 || sx > Main.screenWidth + 16 || sy < -16 || sy > Main.screenHeight + 16) return;
+            // 和 PathVisSystem.DrawTile 一样封顶,色块底下的真实方块要看得见
+            if (c.A > 90) c = c * (90f / c.A);
             sb.Draw(_pixel, new Rectangle((int)sx, (int)sy, 16, 16), c);
         }
 
