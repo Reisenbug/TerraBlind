@@ -2,10 +2,11 @@
 
 [中文](#中文) · [English](#english)
 
-一个 tModLoader mod：把泰拉瑞亚的感知、寻路、建造、战斗拆成一套可调用的工具，并用这些工具组合出一条**从新世界开局到打死血肉之墙**的完整流程。
+一个 tModLoader mod：把泰拉瑞亚的感知、寻路、建造、战斗拆成一套可调用的工具，并用这些工具组合出一条**从新世界开局到打死肉山**的完整流程。
+此项目完全在AI辅助下开发。
 
 A tModLoader mod: a toolbox of perception, pathfinding, building and combat primitives for Terraria, plus one hand-written pipeline that chains them from a fresh world all the way to killing the Wall of Flesh.
-
+This project was developed entirely with the assistance of AI.
 ![status](https://img.shields.io/badge/milestone-Wall%20of%20Flesh-red) ![ai](https://img.shields.io/badge/AI-none%20yet-lightgrey) ![tml](https://img.shields.io/badge/tModLoader-1.4.4.9-blue)
 
 ---
@@ -14,42 +15,48 @@ A tModLoader mod: a toolbox of perception, pathfinding, building and combat prim
 
 ### 这是什么
 
-TerraBlind 里的每一样东西，本质上都是**工具**：找路、跳、搭桥、挖矿、开箱、放平台、盖房、瞄准、扔雷管。
+TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准、使用物品、开箱、放平台、盖房，等等。
 
-`/start` 不是"AI"，它是**我手工把这些工具串起来的一条流程**，目标是打死血肉之墙。流程里的每一步都是写死的判断和调用，没有任何模型参与决策。
+`/start` 是**手工把这些工具串起来的一条流程**，目标是击败经典难度下的肉山。
 
-> **当前 milestone：纯代码通关肉山，没有 AI 介入。**
+> **当前 milestone：纯代码通关肉山，没有 AI 介入游戏。**
 
-以后我大概会写一个 agent，让它自己去用这些工具玩游戏。无论效果好坏，总要试一次。但那不在这个 milestone 里，现在仓库里也没有任何相关代码。
+以后也许会尝试写一个 agent，让它自己去用这些工具玩Terraria。无论效果好坏。
 
 ### 完成度
 
-主线流程已经在种子 **`1.1.2.38154567`** 上稳定跑通：开局 → 采集下降 → 地狱选址 → 搭桥 → 盖房 → 换向导 → 捅进岩浆 → 雷管打死肉山。
+主线流程已经在种子 **`1.1.2.38154567`** 上稳定跑通：输入/start → 建造速通4人NPC房屋 → 前往丛林并尽量从main entrance下地狱 → 地狱选址 → 搭桥 → 盖NPC单人房屋 → 引入爆破专家，购买雷管 → 引入向导，捅下岩浆 → 雷管定点爆破肉山。
 
-其他种子有的能跑通，有的还会卡。世界生成的随机性太大（种子有几十亿个），**"所有种子都通"不是这个项目的目标，也不现实**。目前的做法是：遇到卡住就读日志、定位、修掉那一类结构性问题，而不是给某个种子打补丁。
+其他种子有的能跑通，有的还会卡。世界生成的随机性太大。**"所有种子都通"不是这个项目的当前目标**。目前的做法是：遇到卡住就读日志、定位、修掉那一类结构性问题，而不是给某个种子打补丁。
+
+为了避开一些复杂的机制/增加成功率/提升全程的观感，对原版逻辑采取的修改措施：
+- 常驻鱼鳃，光芒buff
+- 掉到岩浆上方，会将最表层的接触格转化为格子；岩浆内能够在脚下放方块
+- 新建的玩家自带无限木材，4根火把用于初始房屋的建造
+- 地狱把向导捅入岩浆的时候加长挖掘范围
+- 下方的dragonlens修改
 
 ### 依赖 DragonLens
 
-**跑这套流程目前离不开 [DragonLens](https://github.com/ScalarVector1/DragonLens)。** 它提供的这些开关是流程能跑完的前提：
+**跑这套流程目前离不开 [DragonLens](https://github.com/ScalarVector1/DragonLens)。** 它提供的这些功能是流程能跑完的前提：
 
 | 用途 | 说明 |
 |------|------|
-| 关闭刷怪 | 否则怪物会持续打断建造和赶路 |
+| 关闭刷怪 | 怪物造成的影响过多 |
 | 无敌 | 当前 milestone 不处理战斗生存，只求全程动作可行 |
 | 倍速 | 一趟完整流程很长，调试时靠它压缩时间 |
 | 坐标显示 | 对日志里的格坐标时用 |
 
-这不是"作弊换通关"，而是**先把导航与建造这层做对**：血量、逃跑、打怪是另一个 milestone 的事。
 
 ### 流程长什么样
 
 ```
 /start
-  ├─ Torch     凑火把
+  ├─ Torch     凑火把（当前无用）
   ├─ Site      选地表房址
   ├─ GotoSite  走过去
   ├─ House     盖房（21×10）
-  ├─ Descend   规划一条穿过箱子与生命水晶的下降路线，一路采集到地狱
+  ├─ Descend   规划一条穿过箱子与生命水晶的下降路线（主要是丛林主入口），一路采集到地狱
   └─ Hell      交给地狱段
        ├─ goto   走到桥的开工点
        ├─ house  在岩浆上方盖单间 NPC 房
@@ -58,27 +65,22 @@ TerraBlind 里的每一样东西，本质上都是**工具**：找路、跳、�
        └─ fight  肉山出现，边退边扔雷管
 ```
 
-地狱那条桥的行不是随便挑的：`HellLine` 用 Dijkstra 在天花板与岩浆面之间搜一条 190 格的线，同时权衡挖掘量、坡度（升降一格至少跨 4 列）、离岩浆/天花板的距离，并且拒绝任何以现有镐力挖不动的格子。
-
 ### 怎么跑
 
-```bash
-# 1. 放进 tModLoader 的 ModSources
-#    tModLoader/ModSources/TerraBlind/
+**只想用**：下载 release 里的 `.tmod`，丢进 `tModLoader/Mods/`，在游戏的模组列表里启用。
 
-# 2. 改完代码先本地类型检查（不打包，游戏开着也能跑，约 1 秒）
-./check.sh
+**要改源码**：
 
-# 3. 游戏内构建
-#    Mod Sources → Build + Reload   或聊天框输入 /build TerraBlind
-```
+1. 把仓库放进 `tModLoader/ModSources/TerraBlind/`
+2. 改完先跑 `./check.sh` 本地类型检查（不打包，游戏开着也能跑，约 1 秒）
+3. 游戏主界面 → 创意工坊 → 开发模组 → 构建并重新加载（TerraBlind）
 
 进世界后 HTTP 服务自动起在 `http://127.0.0.1:17878`。
 
 触发主线（二选一）：
 
 - 游戏内快捷键 / 聊天命令
-- 配套 Python 仓库 [Terraria-Agent](https://github.com/Reisenbug/Tairaria) 里的 `/tb N`。**Python 只负责触发，所有编排都在 mod 里**
+- 配套 Python 仓库后[Terraria-Agent](https://github.com/Reisenbug/Tairaria) 使用 `/tb `。**Python 主要负责触发。**（尚未完工）
 
 ### 调试
 
@@ -89,9 +91,22 @@ TerraBlind 里的每一样东西，本质上都是**工具**：找路、跳、�
 | `latest/jump_trace.log` | 主时间线：规划、派发、每一步的决策 |
 | `latest/events/*.log` | 按类分流：`plan` / `place` / `fail` / `exec` / `sentinel` |
 | `latest/runs/<起点>__<终点>.log` | 单次导航的独立日志 |
-| `./check.sh` | 本地类型检查，过了再进游戏 `/build` |
+| `./check.sh` | 本地类型检查，过了再进游戏构建 |
 
 日志里的关键判断都会打出**当时用来判断的那个数**，而不只是结论。不然出问题只能靠猜。
+
+### AI 辅助开发的工作流
+
+这个项目是在 AI 辅助下写的，仓库里有几样东西专为此存在。
+
+| 环节 | 做法 |
+|------|------|
+| 编译自验 | `./check.sh` 只做类型检查不打包，约 1 秒。游戏开着也能跑，改完立刻知道编译过没过 |
+| 定位自验 | 三层日志 + 一条规矩：**每个判断都要打出它依据的那个数**，不只打结论。有了实测值才能定位，没有就只能猜 |
+| 机器下限 | `stuck_contract.sh` 检查每个原语是否交出了失败现场；`dup.sh` 查同一件事有没有两份实现 |
+| 写码约束 | `.claude/hooks/` 里挂了两条：注释块不许超长、标点必须 ASCII。|
+
+真正花时间的是**判断哪个环节出了问题**。上面这套的意义就是把"读日志找原因"这一步也变成 AI 能独立做完的事。
 
 ### 代码结构
 
@@ -115,8 +130,6 @@ TerraBlind 里的每一样东西，本质上都是**工具**：找路、跳、�
 | 文件 | 内容 |
 |------|------|
 | [`CAPABILITIES.md`](CAPABILITIES.md) | 已有能力清单。写新动作前先查，别重复造 |
-| [`PERCEPTION_DESIGN.md`](docs/PERCEPTION_DESIGN.md) | 感知/执行架构设计 |
-| [`DECISIONS.md`](docs/DECISIONS.md) | 决策记录：每个坑为什么这么填 |
 | [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | 碰撞箱与搭桥的边界情形 |
 
 ### HTTP 接口
@@ -150,42 +163,49 @@ MIT
 
 ### What this is
 
-Everything in TerraBlind is a **tool**: pathfind, jump, bridge, mine, open chests, place platforms, build houses, aim, throw dynamite.
+Everything in TerraBlind is a **tool**: pathfinding, aiming, using items, opening chests, placing platforms, building houses, and so on.
 
-`/start` is not "an AI". It is **one pipeline I wired by hand** out of those tools, aimed at killing the Wall of Flesh. Every step in it is hard-coded logic. No model makes any decision.
+`/start` is **one pipeline wired by hand** out of those tools, aimed at beating the Wall of Flesh on Classic difficulty.
 
-> **Current milestone: beat the Wall of Flesh with code only. No AI involved.**
+> **Current milestone: beat the Wall of Flesh with code only. No AI plays the game.**
 
-I will probably write an agent later that drives these tools itself. Worth trying regardless of how well it works. That is not part of this milestone, and no such code is in the repo yet.
+An agent that drives these tools by itself may come later, however well or badly it works.
 
 ### How far it gets
 
-The pipeline completes reliably on seed **`1.1.2.38154567`**: spawn, descend while looting, pick a hell site, bridge, house, swap the Guide in, drop him into lava, dynamite the Wall of Flesh.
+The pipeline completes reliably on seed **`1.1.2.38154567`**: type `/start`, speed-build a 4-room NPC house, head for the jungle and descend to hell through the main entrance where possible, pick a hell site, bridge, build a single-room NPC house, move the Demolitionist in and buy dynamite, move the Guide in and drop him into lava, then blow up the Wall of Flesh with placed dynamite.
 
-Other seeds sometimes finish and sometimes get stuck. World generation varies enormously (billions of seeds), so **"works on every seed" is neither the goal nor realistic**. The approach is: when it gets stuck, read the log, find the structural cause, fix that class of problem. Never patch one seed.
+Other seeds sometimes finish and sometimes get stuck. World generation varies enormously. **"Works on every seed" is not the current goal.** The approach is: when it gets stuck, read the log, find the structural cause, fix that class of problem. Never patch one seed.
+
+Changes to vanilla behaviour, made to sidestep awkward mechanics, raise the success rate, and keep the run watchable:
+
+- Gills and Shine buffs are always on
+- Landing above lava turns the surface contact tile into a block; blocks can be placed underfoot inside lava
+- A new player starts with unlimited wood and 4 torches for the first house
+- Reach is extended while digging the Guide into lava
+- The DragonLens toggles below
 
 ### DragonLens is required
 
-**The pipeline currently depends on [DragonLens](https://github.com/ScalarVector1/DragonLens).** These toggles are prerequisites:
+**The pipeline currently depends on [DragonLens](https://github.com/ScalarVector1/DragonLens).** These features are prerequisites:
 
 | Toggle | Why |
 |--------|-----|
-| Disable spawns | Otherwise enemies constantly interrupt building and travel |
+| Disable spawns | Enemies interfere too much |
 | Godmode | This milestone does not handle combat survival, only that every action is feasible |
 | Fast-forward | A full run is long; this compresses debugging time |
 | Coordinate display | For cross-checking tile coordinates against the logs |
-
-This is not "cheating to win". It is **getting navigation and building right first**: health, fleeing and fighting belong to a different milestone.
 
 ### The pipeline
 
 ```
 /start
-  ├─ Torch     gather torches
+  ├─ Torch     gather torches (currently unused)
   ├─ Site      choose a surface house site
   ├─ GotoSite  walk there
-  ├─ House     build it (21×10)
-  ├─ Descend   plan a descent threading chests and life crystals, looting on the way
+  ├─ House     build it (21x10)
+  ├─ Descend   plan a descent threading chests and life crystals (mainly via the
+  │            jungle main entrance), looting all the way to hell
   └─ Hell      hand off to the hell stage
        ├─ goto   walk to the bridge's work point
        ├─ house  build a single NPC room above lava
@@ -194,24 +214,22 @@ This is not "cheating to win". It is **getting navigation and building right fir
        └─ fight  Wall of Flesh spawns; retreat and throw dynamite
 ```
 
-The bridge row is not arbitrary: `HellLine` runs Dijkstra between the ceiling and the lava surface to find a 190-tile line, trading off digging volume, slope (a one-row change must span at least 4 columns), clearance from lava and ceiling, and refusing any tile the current pickaxe cannot break.
-
 ### Running it
 
-```bash
-# 1. Drop into tModLoader's ModSources
-#    tModLoader/ModSources/TerraBlind/
+**Just to play it**: download the `.tmod` from releases, drop it into `tModLoader/Mods/`, enable it in the in-game mod list.
 
-# 2. Type-check locally before building (no packing, works while the game runs, ~1s)
-./check.sh
+**To change the source**:
 
-# 3. Build in-game
-#    Mod Sources → Build + Reload   or type /build TerraBlind in chat
-```
+1. Put the repo in `tModLoader/ModSources/TerraBlind/`
+2. Run `./check.sh` first (type check only, no packing, works while the game runs, ~1s)
+3. Main menu, Workshop, Develop Mods, Build and Reload (TerraBlind)
 
 The HTTP server starts automatically on `http://127.0.0.1:17878` when a world loads.
 
-Trigger the pipeline either from an in-game command, or via `/tb N` in the companion Python repo [Terraria-Agent](https://github.com/Reisenbug/Tairaria). **Python only triggers; all orchestration lives in the mod.**
+Two ways to trigger the pipeline:
+
+- An in-game hotkey or chat command
+- `/tb` from the companion Python repo [Terraria-Agent](https://github.com/Reisenbug/Tairaria). **Python mostly just triggers.** (unfinished)
 
 ### Debugging
 
@@ -222,9 +240,22 @@ Trigger the pipeline either from an in-game command, or via `/tb N` in the compa
 | `latest/jump_trace.log` | Main timeline: planning, dispatch, per-step decisions |
 | `latest/events/*.log` | Split by kind: `plan` / `place` / `fail` / `exec` / `sentinel` |
 | `latest/runs/<from>__<to>.log` | Per-navigation log |
-| `./check.sh` | Local type check; pass this before `/build` |
+| `./check.sh` | Local type check; pass this before building in-game |
 
 Every significant decision logs **the number it was based on**, not just the verdict. Otherwise diagnosis is guesswork.
+
+### The AI-assisted workflow
+
+This project was written with AI assistance, and a few things in the repo exist for that.
+
+| Step | How |
+|------|-----|
+| Verify it compiles | `./check.sh` type-checks without packing, about 1s. Works while the game is running |
+| Verify what went wrong | Three log layers plus one rule: **every decision prints the number behind it**, not just the verdict. Without measured values there is nothing to diagnose from |
+| Machine-enforced floor | `stuck_contract.sh` checks that every primitive hands up a failure; `dup.sh` looks for the same thing implemented twice |
+| Writing constraints | Two hooks in `.claude/hooks/`: comment blocks may not run long, punctuation must be ASCII. |
+
+The time goes into working out **which part broke**. The point of the above is to make that step something the AI can finish on its own.
 
 ### Code layout
 
@@ -248,8 +279,6 @@ One hard rule: **getting stuck must be structurally impossible.** Every primitiv
 | File | Contents |
 |------|----------|
 | [`CAPABILITIES.md`](CAPABILITIES.md) | Inventory of existing capabilities. Check before writing a new action |
-| [`PERCEPTION_DESIGN.md`](docs/PERCEPTION_DESIGN.md) | Perception/execution architecture |
-| [`DECISIONS.md`](docs/DECISIONS.md) | Decision log: why each pitfall is handled the way it is |
 | [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | Hitbox and bridge-placement edge cases |
 
 ### HTTP API
