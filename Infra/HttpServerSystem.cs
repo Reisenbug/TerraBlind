@@ -3374,16 +3374,18 @@ namespace TerraBlind
 						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
 						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
+						// 宝藏画空心框不画色块:填色会把箱子/水晶本体糊没
+						var boxes = new System.Collections.Generic.List<(int, int, int, int, Microsoft.Xna.Framework.Color)>();
 						foreach (var tr in treasures)
 						{
 							bool opt = tr.tier == "optional";
 							var mc = tr.kind == "chest"
 								? new Microsoft.Xna.Framework.Color(255, 180, 0, opt ? 160 : 230)
-								: new Microsoft.Xna.Framework.Color(255, 60, 120, opt ? 160 : 230);
-							vis.Add((tr.x, tr.y, mc)); vis.Add((tr.x + 1, tr.y, mc));
-							vis.Add((tr.x, tr.y + 1, mc)); vis.Add((tr.x + 1, tr.y + 1, mc));
+								: new Microsoft.Xna.Framework.Color(90, 255, 160, opt ? 160 : 230);
+							boxes.Add((tr.x, tr.y, 2, 2, mc));
 						}
 						PathVisSystem.SetTiles(vis, 7200);
+						PathVisSystem.SetHollow(boxes, 7200);
 						var rsb = new StringBuilder();
 						var tail = threaded.Count > 0 ? threaded[threaded.Count - 1] : (line[line.Count - 1].x, line[line.Count - 1].y);
 						rsb.Append("{\"found\":true,\"entrance\":{\"x\":").Append(dd.EntX).Append(",\"y\":").Append(dd.EntY)
