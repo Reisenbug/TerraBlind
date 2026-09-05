@@ -2,7 +2,7 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// PLATFORM DOWN — 踩着平台一格一格往下降。
+	// PLATFORM DOWN。踩着平台一格一格往下降。
 	//
 	//   1 站位:人站的格子里有一格是平台,记下它的列和行
 	//   2 放置:往那块平台的【下面一格】放平台
@@ -99,7 +99,7 @@ namespace TerraBlind
 					{
 						// 脚下有砖就是地形,没砖就是够不着(悬空)
 						var sb2 = Predicates.IsWall(bl, feetY + 1) ? new Blocker(BlockKind.Terrain, bl, feetY + 1, "脚下被占")
-							// 要的是【站上去】不是够得着 —— 用 OutOfReach 会走 Mode.Reach,手够到就报到达
+							// 要的是【站上去】不是够得着。用 OutOfReach 会走 Mode.Reach,手够到就报到达
 							: new Blocker(BlockKind.NotStanding, bl, feetY, "站不住");
 						Stuck(sb2, $"站位超时 vy={p.velocity.Y:0.##} 身子{bl}..{br} 脚下行{feetY + 1}"); return;
 					}
@@ -137,7 +137,7 @@ namespace TerraBlind
 						}
 						return;
 					}
-					// 旁边那列有砖挡着沉不下去 —— 一样替换掉,不用绕路走位
+					// 旁边那列有砖挡着沉不下去。一样替换掉,不用绕路走位
 					if (!PlaceAction.IsRunning)
 					{
 						PlaceAction.Start(_item, brick, feetY + 1, 1, 0, 0, true, out _);
@@ -145,7 +145,7 @@ namespace TerraBlind
 					}
 					return;
 
-				// 放置:往那块平台的下面一格放。下面是砖就靠物块替换换掉 —— 厚砖层这样一格一格啃,
+				// 放置:往那块平台的下面一格放。下面是砖就靠物块替换换掉。厚砖层这样一格一格啃,
 				// 每一步人都站在平台上,不用先挖穿再铺。
 				case Ph.Place:
 					if (++_phaseFrames > MaxPhaseFrames)
@@ -171,9 +171,9 @@ namespace TerraBlind
 						PlaceAction.Start(_item, need, _platY + 1, 1, 0, 0, true, out _);
 					return;
 
-				// 下移:按【一下】S。按住的话人会一路穿到底 —— 之前掉 12 格就是这么来的。
+				// 下移:按【一下】S。按住的话人会一路穿到底。之前掉 12 格就是这么来的。
 				case Ph.Tap:
-					// 沉的过程中身子可能挪列,新压住的那列没铺就又被顶住 —— 回 Place 补上,别在这儿干等
+					// 沉的过程中身子可能挪列,新压住的那列没铺就又被顶住。回 Place 补上,别在这儿干等
 					if (++_phaseFrames > MaxPhaseFrames)
 					{
 						// 判据必须和 Ph.Place 【一模一样】,否则两个相位互相踢皮球:

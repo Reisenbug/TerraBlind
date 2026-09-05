@@ -3,17 +3,17 @@ using Terraria;
 namespace TerraBlind
 {
 	// Hand, survival reflex: a horizontal, always-on frame-level loop that keeps the bot ALIVE while any main action
-	// (mine/chop/etc.) is running — the brain (LLM) is seconds too slow to react to lava or a sudden hit. It does
-	// "stay alive", NOT "tactics": jump out of lava, quick-heal when hurt. It does not chase or fight — that's the
+	// (mine/chop/etc.) is running, the brain (LLM) is seconds too slow to react to lava or a sudden hit. It does
+	// "stay alive", NOT "tactics": jump out of lava, quick-heal when hurt. It does not chase or fight, that's the
 	// brain's call once woken. Fires an "interrupted" event so the brain takes over for the actual decision.
 	//
 	// Runs every frame from PostUpdateEverything, independent of any single action (reflex is cross-cutting, not
 	// baked into each action). Sets controls directly, same as the coordinators.
 	public static class SurvivalReflex
 	{
-		// heal when HP falls below this fraction of max — low enough not to waste potions on chip damage.
+		// heal when HP falls below this fraction of max, low enough not to waste potions on chip damage.
 		private const float HealFraction = 0.5f;
-		// melee-on-contact reflex: DISABLED pending a proper combat design — the v1 swing was unreliable and
+		// melee-on-contact reflex: DISABLED pending a proper combat design, the v1 swing was unreliable and
 		// enemy handling deserves better than a slapdash reflex.
 		private const bool MeleeReflexEnabled = false;
 		private static bool _firedThisEmergency;   // one interrupt per danger episode, not per frame
@@ -49,7 +49,7 @@ namespace TerraBlind
 
 			// 【碰到之前先凝固液面】。排在所有岩浆处理【最前面】:人还没进岩浆时
 			// 只要改一格就站住了,进去之后就得跟浮力赛跑,深池根本出不来。
-			// 不抢锁 —— 它不碰控制键也不走 PlaceAction,只改一格地形
+			// 不抢锁。它不碰控制键也不走 PlaceAction,只改一格地形
 			Concessions.FreezeLavaBeneath(p);
 
 			bool touchingLava = TouchesLava(p);
@@ -61,7 +61,7 @@ namespace TerraBlind
 			// 【只在自己拿着 Jump 时按】-- 不然会和寻路派发的跳跃边打架
 			if (inLava && AxisLock.Take(Owner, Ax.Jump, () => TouchesLava(Main.LocalPlayer)))
 				p.controlJump = true;
-			// 垫脚下一格,别再往下沉。脱离岩浆就立刻放锁 —— 拿着不放寻路一步都走不了
+			// 垫脚下一格,别再往下沉。脱离岩浆就立刻放锁。拿着不放寻路一步都走不了
 			if (touchingLava) LavaLevee(p);
 			else AxisLock.Release(Owner);
 
@@ -69,7 +69,7 @@ namespace TerraBlind
 			if (inLava || lowHp)
 				p.QuickHeal();
 
-			// MELEE REFLEX: an enemy INSIDE arm's reach gets a swing — at that range whacking it for a few frames
+			// MELEE REFLEX: an enemy INSIDE arm's reach gets a swing, at that range whacking it for a few frames
 			// beats continuing the dig/walk. Pure reflex, no chasing, no tactics: the moment it leaves the ring we
 			// stop touching the controls, and the encounter-level decision (clear it properly / flee) stays upstream.
 			var foe = MeleeReflexEnabled ? ClosestFoe(p, 3.5f * 16f) : null;
@@ -85,7 +85,7 @@ namespace TerraBlind
 				}
 			}
 
-			// Wake the brain ONCE when an emergency begins — it decides the real response (flee where, fight, retreat).
+			// Wake the brain ONCE when an emergency begins, it decides the real response (flee where, fight, retreat).
 			// The reflex only bought time. Reset when danger clears so the next episode fires again.
 			if (emergency && !_firedThisEmergency)
 			{

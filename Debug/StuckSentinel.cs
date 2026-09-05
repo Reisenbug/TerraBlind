@@ -4,10 +4,10 @@ namespace TerraBlind
 {
 	// THE FAST EYE ON PROGRESS. Stuck is an expectation violation, and every signal needed to see it is readable
 	// every frame: body position, the field's H, mining damage, the tiles around the body. A human notices "I'm
-	// not actually moving" in a fraction of a second — this sentinel matches that: when for FlatWindow ticks
+	// not actually moving" in a fraction of a second, this sentinel matches that: when for FlatWindow ticks
 	// NOTHING changes (no displacement, no H drop, no dig damage accruing, no nearby tile placed/removed), that
 	// is an anomaly. The response ladder starts at a one-cell safe step within half a second and abandons the
-	// leg in single-digit seconds — abandoning is cheap, the receding loop re-selects instantly off the cached
+	// leg in single-digit seconds, abandoning is cheap, the receding loop re-selects instantly off the cached
 	// field. Standing still while the pick chews a tile is NOT stuck: the dig-damage signal keeps it legal.
 	public static class StuckSentinel
 	{
@@ -22,7 +22,7 @@ namespace TerraBlind
 		static int _sampleAge;
 		static int _anomalies;
 		static int _calm;               // ticks since the last anomaly
-		static int _hAtEpisode = int.MaxValue;   // H when the current stuck episode began — dropping below = real recovery
+		static int _hAtEpisode = int.MaxValue;   // H when the current stuck episode began, dropping below = real recovery
 		static int _nudgeLeft;
 		static int _nudgeDir;
 		static float _basePx, _basePy;
@@ -59,13 +59,13 @@ namespace TerraBlind
 			bool progress = moved > MovedPx || (h < _baseH) || (dig > _baseDig) || (solids != _baseSolids);
 			_basePx = p.position.X; _basePy = p.position.Y;
 			_baseH = h; _baseDig = dig; _baseSolids = solids;
-			if (first) return false;                      // no baseline yet — judge from the next window on
+			if (first) return false;                      // no baseline yet, judge from the next window on
 
 			// real recovery: H fell below where this episode started → the safe steps worked, close the episode
 			if (_anomalies > 0 && h < _hAtEpisode) { _anomalies = 0; _hAtEpisode = int.MaxValue; }
 			if (progress) return false;
 
-			// ANOMALY — everything flat for a full window
+			// ANOMALY, everything flat for a full window
 			_calm = 0;
 			_anomalies++;
 			if (_anomalies == 1) _hAtEpisode = h;
@@ -73,7 +73,7 @@ namespace TerraBlind
 			if (_anomalies >= GiveUpAnomalies) return true;
 
 			// SAFE STEP: abort whatever the executor was doing and take one manual sideways hop; alternate the
-			// direction each try so two nudges probe both sides. Never a ban, never a backtrack rule — one step.
+			// direction each try so two nudges probe both sides. Never a ban, never a backtrack rule, one step.
 			StateSpacePlanner.StopNav();
 			_nudgeDir = _nudgeDir == 0 ? OpenDir(p, cx, cy) : -_nudgeDir;
 			_nudgeLeft = NudgeTicks;
@@ -88,7 +88,7 @@ namespace TerraBlind
 			if (_nudgeLeft > NudgeTicks - 10) p.controlJump = true;   // a small hop clears lips/half-bricks
 		}
 
-		// which side has more open body-height cells two columns out — step toward space, not into the wall
+		// which side has more open body-height cells two columns out, step toward space, not into the wall
 		static int OpenDir(Player p, int cx, int cy)
 		{
 			int OpenCount(int c)
@@ -105,7 +105,7 @@ namespace TerraBlind
 			return OpenCount(cx + 2) >= OpenCount(cx - 2) ? 1 : -1;
 		}
 
-		// total mining damage buffered across the player's recent swings — rising = the tool is landing hits
+		// total mining damage buffered across the player's recent swings, rising = the tool is landing hits
 		static int DigSum(Player p)
 		{
 			int s = 0;
@@ -116,7 +116,7 @@ namespace TerraBlind
 			return s;
 		}
 
-		// solid tiles in a small ring around the body — placing a pillar block or finishing a dig changes it
+		// solid tiles in a small ring around the body, placing a pillar block or finishing a dig changes it
 		static int SolidsNear(Player p)
 		{
 			int cx = (int)((p.position.X + p.width / 2f) / 16f);

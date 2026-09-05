@@ -13,7 +13,7 @@ namespace TerraBlind
         const int   MaxExpansions = 20000;
         const int   LegSubgoalCells = 80; // rolling: each leg targets a SUBGOAL this many cells ahead along the field gradient (reachable → A* finds it fast, like a manual single-point nav), not the far final goal
         const int   MaxSegFrames = 1200; // high enough that slow water descents reach the floor; still a fuse vs non-terminating edges
-        const int   MaxPlanSpanCells = 200; // refuse to plan if goal is farther than this in x or y — BuildField would hang
+        const int   MaxPlanSpanCells = 200; // refuse to plan if goal is farther than this in x or y, BuildField would hang
         const int   HoldStep = 2;
         // weighted A*: f = g + w·h. w>1 trades a little path optimality for far fewer expansions,
         // which is what makes the deep climb plans (exp~5000) affordable.
@@ -61,7 +61,7 @@ namespace TerraBlind
             if (BodyFits(cx, cy) && (HasSupport(cx, cy + 1) || other == cx || !HasSupport(other, cy + 1)))
                 return (cx, cy);
             // 只吸附到既放得下身体、脚下又有支撑的列。挖的落点(规划时砖还在,中心列判"放不下")要是被吸到
-            // 隔壁没地板的悬崖列就废了 —— 那种情况保留中心列。
+            // 隔壁没地板的悬崖列就废了。那种情况保留中心列。
             if (other != cx && BodyFits(other, cy) && HasSupport(other, cy + 1)) return (other, cy);
             return (cx, cy);
         }
@@ -77,7 +77,7 @@ namespace TerraBlind
         }
 
         // 推进到【下次重规划真正会读到的那个状态】:RecedingNav 在帧跑完且 vy==0 后的第一 tick 重规划,中间至少一个 idle 步。
-        // 标最后一帧会撒谎 —— 残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
+        // 标最后一帧会撒谎。残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
         const int SettleMaxFrames = 30;
         static SSNode SettleNode(SSNode n, PhysicsSimulator.Params ph)
         {
@@ -156,9 +156,9 @@ namespace TerraBlind
             public List<(float px, float py)> Explored = new();
             public int GoalWx, GoalWy; // goal after snapping to a standable cell
             public List<ExecStep> Steps = new(); // ordered edges for edge-by-edge execution (frame replay or pillar macro)
-            public float CostFrames;       // this action's cost in frames (walk/jump frame count, or pillar/dig frame-equivalent) — caller uses it as the time denominator for progress-efficiency stuck detection
+            public float CostFrames;       // this action's cost in frames (walk/jump frame count, or pillar/dig frame-equivalent), caller uses it as the time denominator for progress-efficiency stuck detection
             public int CurH;               // field H at the cell this plan started from (loop-detector progress signal)
-            public int Altered;            // tiles this edge digs/places/pillars — field-staleness accumulator input
+            public int Altered;            // tiles this edge digs/places/pillars, field-staleness accumulator input
         }
 
         // one path edge to execute: a frame-replay move (Frames!=null) or the pillar macro (Pillar=true → drive
@@ -169,7 +169,7 @@ namespace TerraBlind
             public bool Bridge;   // 长 bridge:沿脚下那行铺到 TargetCx
             public bool Dig;
             public MineDir DigDir;
-            // 挖之前先站到这一列(-1=就地挖)。脚下有一列挖不动时,侧身一格压着的列常常就全挖得动了 ——
+            // 挖之前先站到这一列(-1=就地挖)。脚下有一列挖不动时,侧身一格压着的列常常就全挖得动了
             // 那一步是这条边的一部分,不站过去就等于站在原地挖旁边的洞,白挖
             public int DigStandCx = -1;
             public int TargetCx, TargetCy;
@@ -194,7 +194,7 @@ namespace TerraBlind
             return place ? "jumpPlace" : jump ? "jump" : "move";
         }
 
-        // 给执行看门狗的耗时估计。常数一律往宽了取 —— 余量交给看门狗自己的 margin。
+        // 给执行看门狗的耗时估计。常数一律往宽了取。余量交给看门狗自己的 margin。
         static float EstStepFrames(ExecStep st, Player p)
         {
             if (st.Bridge)
@@ -259,7 +259,7 @@ namespace TerraBlind
             var holdOptions = BuildHoldOptions();
 
             // 向下无限扫是 navwand 的点击语义,内部重规划不能继承:世界一变能把目标传送到深渊。
-            // cap=0 = 【不吸附】,不是"吸附完不许变" —— 空中目标必然吸得远,stand 模式会永远进不了门。
+            // cap=0 = 【不吸附】,不是"吸附完不许变"。空中目标必然吸得远,stand 模式会永远进不了门。
             int requestedWy = goalWy;
             if (goalSnapCap > 0)
             {
@@ -286,7 +286,7 @@ namespace TerraBlind
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
             // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
-            // 单点绝不能走大场 —— 那是 1.4s 的构建,近距离导航会卡死。
+            // 单点绝不能走大场。那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
                 ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
             else
@@ -324,7 +324,7 @@ namespace TerraBlind
             // 必须落地:一段路以站定结束,下一段才有合法起点。
             SSNode bestGroundedNode = start; bool haveBestGrounded = false; float bestGroundedDist = float.MaxValue;
 
-            // f0 = 起点的乐观估计。cutoff 是它的倍数,不是一个绝对帧数 —— 近目标和远目标要的余量差很多倍
+            // f0 = 起点的乐观估计。cutoff 是它的倍数,不是一个绝对帧数。近目标和远目标要的余量差很多倍
             float f0 = Heuristic(ctx, start, goalCx, goalFeetY, ph);
             float fCut = fCutoffMul > 0f && f0 < float.MaxValue / 4f ? f0 * fCutoffMul : float.MaxValue;
             bool gaveUp = false;
@@ -391,7 +391,7 @@ namespace TerraBlind
                     list.Add(new Label { G = ng, Vx = next.Vx, Vy = next.Vy });
                     came[next] = (cur, frames, ng, pillar, digTiles);
                     // 桥是累积的:走过它、在它上面跳,它都还在。BridgeEdges 自己已经写过落点了,
-                    // 这里只补其他边 —— 不继承的话,过了桥再走一步,桥就"消失"了
+                    // 这里只补其他边。不继承的话,过了桥再走一步,桥就"消失"了
                     if (ctx.Laid != null && ctx.Laid.TryGetValue(cur, out var carry) && !ctx.Laid.ContainsKey(next))
                         ctx.Laid[next] = carry;
                     open.Enqueue(next, ng + HeuristicWeight * Heuristic(ctx, next, goalCx, goalFeetY, ph));
@@ -443,7 +443,7 @@ namespace TerraBlind
                     else if (e.pillar)
                     {
                         // DigUp 那条边同时是 pillar 又带 tiles(先挖头顶再砌上去)。丢了 MineTiles 就只砌不挖,
-                        // 头顶那几格挡着柱子砌不上去,人原地不动 —— (1585,218) 反复选同一条边 4 次全 MISS 就是这样。
+                        // 头顶那几格挡着柱子砌不上去,人原地不动。(1585,218) 反复选同一条边 4 次全 MISS 就是这样。
                         revSteps.Add(new ExecStep { Pillar = true, TargetCx = kcx, TargetCy = kcy, Frames = null, MineTiles = e.digTiles });
                     }
                     else if (e.digTiles != null)
@@ -493,7 +493,7 @@ namespace TerraBlind
                 }
                 if (!_silentPath) DiagLog.Write($"[ss-path] steps={revSteps.Count}{segDesc}");
 
-                // 持久 clip 检查:扫每条移动边的帧,看玩家箱有没有和实心格重叠 —— 即【规划出的轨迹穿墙】。
+                // 持久 clip 检查:扫每条移动边的帧,看玩家箱有没有和实心格重叠。即【规划出的轨迹穿墙】。
                 // 这个响了说明模拟器/边生成器在产出物理上不可能的路径,不是执行漂移。
                 for (int si = 0; si < revSteps.Count; si++)
                 {
@@ -591,7 +591,7 @@ namespace TerraBlind
 
         static readonly int[] BridgeSpans = { 4, 8, 16 };
 
-        // 长 bridge:照 BridgeBuilder 的语义 —— 铺在【人脚下那一行】,人边走边放,所以落点是
+        // 长 bridge:照 BridgeBuilder 的语义。铺在【人脚下那一行】,人边走边放,所以落点是
         // 同一行的目标列,不用跳也不用掉。几档定长,档少了贪心才比得动;铺短了下一轮接着铺不亏。
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> BridgeEdges(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, float goalCx)
@@ -617,7 +617,7 @@ namespace TerraBlind
                     {
                         int x = ccx + dir * k;
                         if (!Predicates.IsGround(x, ccy + 1)) { lay++; layCells.Add((x, ccy + 1)); }
-                        // 挡路的是【身子那 3 行】有实心 —— 桥面那格有没有东西不管,
+                        // 挡路的是【身子那 3 行】有实心。桥面那格有没有东西不管,
                         // 有就是现成的地,BridgeBuilder 本来就跳过已经铺好的格子。
                         for (int r = 0; r < 3 && !blocked; r++) if (DigSolid(x, ccy - r)) blocked = true;
                         // 【只查身子那 3 行】:桥【下面】是岩浆恰恰是该搭桥的地方,
@@ -664,7 +664,7 @@ namespace TerraBlind
         const float WalkFramesPerCell = 30f;
         const float BridgeStartFrames = 20f;        // 起手:对齐、掏料、第一次挥
 
-        // 脚下是熔岩池、而且一路没有任何实心/平台撑着 —— 这种格子上跳或走出去都可能落进熔岩
+        // 脚下是熔岩池、而且一路没有任何实心/平台撑着。这种格子上跳或走出去都可能落进熔岩
         public static bool OverLavaVoid(int cx, int cy)
         {
             for (int y = cy + 1; y <= cy + LavaVoidProbe; y++)
@@ -675,7 +675,7 @@ namespace TerraBlind
             return false;
         }
 
-        const int LavaVoidProbe = 200;   // 40 行探不到 121 行深的竖井底,探不到就当安全 —— 掉下去才发现
+        const int LavaVoidProbe = 200;   // 40 行探不到 121 行深的竖井底,探不到就当安全。掉下去才发现
         static (int, int) _gateLogCell = (int.MinValue, int.MinValue);
 
         // 落点要能站人:模拟器把岩浆当空气,统一在出口拦一次。判据是"站不住【而且】底下悬着岩浆",
@@ -730,7 +730,7 @@ namespace TerraBlind
             if (PreciseMode)
             {
                 bool overLava = OverLavaVoid(lcx, lcy);
-                // 三个门缺一条都发不出 bridge —— 缺哪个要一眼看见,别再靠"零条日志"倒推
+                // 三个门缺一条都发不出 bridge。缺哪个要一眼看见,别再靠"零条日志"倒推
                 if (_gateLogCell != (lcx, lcy))
                 {
                     _gateLogCell = (lcx, lcy);
@@ -755,7 +755,7 @@ namespace TerraBlind
             // 不算真进展。放置很贵,只有走跳都卡住时才建。
             bool anyProgress = false;
             // 升多少格,不是"升没升"。原来只要升 1 格就把 pillar 关掉,而"原地跳一格一格上"
-            // 每次都升 1 格 —— 于是爬得动就永远不搭柱子,只能继续一格一格爬,自锁。
+            // 每次都升 1 格。于是爬得动就永远不搭柱子,只能继续一格一格爬,自锁。
             int vertRise = 0;
             int dirToGoal = goalCx >= cur.Px ? 1 : -1;
             var (_, dcy) = StandCell(cur.Px, cur.Py);
@@ -814,7 +814,7 @@ namespace TerraBlind
             }
 
             // 平台不是到处枚举的,只在"场想去但物理挡住"的地方生成:沿梯度找第一个障碍,朝它另一侧发【一条】平台边。
-            // pillar 是最末选择 —— 普通跳够得着的自然台阶(vertProgress)绝不该生柱子,人是徒手爬上去的。
+            // pillar 是最末选择。普通跳够得着的自然台阶(vertProgress)绝不该生柱子,人是徒手爬上去的。
             if (platformTile >= 0 || hasPickaxe)
                 foreach (var pe in OnDemandPlatformEdges(ctx, cur, ph, platformTile, vertRise, hasPickaxe, anyProgress, goalFeetY))
                     yield return pe;
@@ -854,7 +854,7 @@ namespace TerraBlind
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                 }
                 // 只发【爬到顶】这一条:一跳升几格由地形定,铺中间落点兑现不了(50条45条MISS)。
-                // 跳得慢就让 pillar 进候选,由代价决定谁赢 —— 门只筛"根本不必搭"
+                // 跳得慢就让 pillar 进候选,由代价决定谁赢。门只筛"根本不必搭"
                 bool canPil = SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY);
                 if (_pilLogCell != (ccx, ccy))
                 {
@@ -863,10 +863,10 @@ namespace TerraBlind
                 }
                 if (!anyVertJumpPlace && vertRise < PillarBeatsJumpRise && canPil && topFeetY < ccy)
                 {
-                    // CanPillarFrom 给的是【最高能爬到哪】,不是【该爬到哪】—— 只发它就等于
+                    // CanPillarFrom 给的是【最高能爬到哪】,不是【该爬到哪】。只发它就等于
                     // 需要 11 格时报价 38 格,必然输给单步。所以按几档高度各发一条,让代价去挑。
                     float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    // 目标行是已知的,所以【直接发"升到目标那一行"】这一档 —— 固定档位(4/8/16)
+                    // 目标行是已知的,所以【直接发"升到目标那一行"】这一档。固定档位(4/8/16)
                     // 逼着它在 8 和 16 之间二选一:要升 10 格时选了 16,冲过头 6 格。
                     int goalRow = (int)(goalFeetY / 16f) - 1;
                     var wants = new List<int>(PillarRises);
@@ -894,7 +894,7 @@ namespace TerraBlind
             {
                 // 【同一落点只发一条】。9 档 hold × 2 方向 = 18 次模拟,而实测落点只有 7 个不同的格
                 // (一格占 5 条)。重复的那些进 open 之后各自又展开一遍,正是烧满 20000 的来源。
-                // 不能改砍 hold 档数 —— 落点确实不全一样,砍档会丢真边;砍的是重复。
+                // 不能改砍 hold 档数。落点确实不全一样,砍档会丢真边;砍的是重复。
                 var jpSeen = new HashSet<(int, int)>();
                 foreach (int ldir in new[] { gdir, -gdir })
                     foreach (int hold in BuildHoldOptions())
@@ -918,7 +918,7 @@ namespace TerraBlind
             }
 
             // VERTICAL DOWN: worth-it test is inside DigDown (H drop >= margin AND no lateral walk reaches an
-            // equally-low cell), not !anyProgress — the latter made dig a last resort so A* detoured first.
+            // equally-low cell), not !anyProgress, the latter made dig a last resort so A* detoured first.
             if (hasPickaxe && ctx.DistField != null)
             {
                 var dd = Prof("digdown", () => DigDown(ctx, cur, ccx, ccy, curH, gdir, maxScan));
@@ -937,7 +937,7 @@ namespace TerraBlind
                 }
 
             // 【身体自己占的那几格被堵住 → 挖开它】。人 42px 高占 3 行,而斜半砖会把人往上顶 6px,
-            // 于是需要 48px 净空 —— 头顶那格一有方块就卡死,一个像素都推不动
+            // 于是需要 48px 净空。头顶那格一有方块就卡死,一个像素都推不动
             // (现场:(1459,228) 往西所有 hold 都 dpx=0,候选只剩往东和 pillar,sentinel 放弃整段)。
             // DigUp 从 ccy-3 起挖,正好跳过身体占的 ccy-1/ccy-2;横挖只看旁边那一列。
             // 谁都不管这几格,于是"人被卡住"这件事在候选表里没有任何一条边能表达。
@@ -950,7 +950,7 @@ namespace TerraBlind
             }
 
             // 向上挖也改成无条件(原先门在 !anyProgress && Vx<max,别扭姿势下会把它压掉)。
-            // 仍然要 platformTile —— 那是物理必需(得有砖垫脚),不是启发式的门。
+            // 仍然要 platformTile。那是物理必需(得有砖垫脚),不是启发式的门。
             if (hasPickaxe && platformTile >= 0 && ctx.DistField != null)
             {
                 var du = Prof("digup", () => DigUp(ctx, cur, ccx, ccy));
@@ -959,7 +959,7 @@ namespace TerraBlind
             }
 
             // 障碍 = 【普通行走再也推不动】的地方。Step 里含 Collision.StepUp,所以它诚实地爬半砖/缓坡/一格台阶,只在真过不去时停。
-            // 静态 IsBlockPublic 扫描看不见斜坡半砖,会报 obsX=none,于是死在那儿 —— 让走路的停止点定义障碍。
+            // 静态 IsBlockPublic 扫描看不见斜坡半砖,会报 obsX=none,于是死在那儿。让走路的停止点定义障碍。
             int obsX;
             {
                 var walk = Prof("walkprobe", () => SimulateSegment(cur, gdir, 0, ph));
@@ -977,7 +977,7 @@ namespace TerraBlind
             }
             if (obsX < 0 || obsX >= Main.maxTilesX) yield break;
             // 深谷覆盖:掉进深谷的走路会沿谷底一路"推进",把远处的墙报成障碍(22 格外,跳放够不着 → 一条桥候选都没有)。
-            // (3277,1024) 因此每个候选都是 30 格翻滚,而场的路线是从空中往东飘 —— 前方某列探不到底就把那个崖边当【缺口】。
+            // (3277,1024) 因此每个候选都是 30 格翻滚,而场的路线是从空中往东飘。前方某列探不到底就把那个崖边当【缺口】。
             for (int c = ccx + gdir; c != obsX && c >= 0 && c < Main.maxTilesX; c += gdir)
             {
                 if (DigSolid(c, ccy) || DigSolid(c, ccy - 1) || DigSolid(c, ccy - 2)) break;   // wall first → wall branch
@@ -995,7 +995,7 @@ namespace TerraBlind
 
             if (isWall)
             {
-                // 墙:跳放候选上面已经无条件发过了,这里只剩兜底 —— 一个 hold 都找不到落点(纯陡壁)才退回 pillar。
+                // 墙:跳放候选上面已经无条件发过了,这里只剩兜底。一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
                     if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(ccx, ccy, out int wallTopFeetY) && wallTopFeetY < ccy)
@@ -1009,7 +1009,7 @@ namespace TerraBlind
                         }
                     }
                 }
-                // (horizontal dig now emitted unconditionally above, both directions — not gated on this isWall branch)
+                // (horizontal dig now emitted unconditionally above, both directions, not gated on this isWall branch)
             }
             else if (platformTile >= 0)
             {
@@ -1034,7 +1034,7 @@ namespace TerraBlind
         const int DigMaxScan = 12;   // a wall this many tiles wide stops dig (mining wider isn't worth it vs routing around)
         const int DigWorthMargin = 4; // dig-down only when the landing's H is at least this much lower (clearly worth it)
 
-        // 实心【含】斜坡半砖:IsBlock 故意排除它们(走路逻辑当可通行),但斜半砖照样撑住人 —— 竖井下降就卡在这儿。
+        // 实心【含】斜坡半砖:IsBlock 故意排除它们(走路逻辑当可通行),但斜半砖照样撑住人。竖井下降就卡在这儿。
         // 任何能托住碰撞箱的东西都得进挖掘清单。
         static bool DigSolid(int x, int y)
         {
@@ -1060,12 +1060,12 @@ namespace TerraBlind
         }
 
         // 身体占的 3 行里,前进方向那一侧有实心 → 挖【最近的一格】。一次只挖一格:
-        // 挖完重规划,能走就走,还堵着下一周期再发一条 —— 这就是"挖一格试一格"
+        // 挖完重规划,能走就走,还堵着下一周期再发一条。这就是"挖一格试一格"
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigBodyBlock(PlanCtx ctx, SSNode cur, int ccx, int ccy, int gdir)
         {
             // 【落点是前进方向那一格,不是原地】。挖开头顶就是为了走过去,而原地会被
             // "self-loop (no real move)" 当场丢掉,这条边永远进不了候选表。
-            // 挖完还走不动的话,下一周期会再发一条挖下一格 —— 这就是挖一格试一格
+            // 挖完还走不动的话,下一周期会再发一条挖下一格。这就是挖一格试一格
             int nx = ccx + gdir;
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((nx, ccy))) return null;
             var (bl, br) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
@@ -1087,10 +1087,10 @@ namespace TerraBlind
         // 只挖脚下这一格(人 20px 宽 = 两列),不挖到落点的竖井:深descent 靠每周期重规划自然长出来。
         // 竖井版有 "12 格内没落点就 null" 的死角,厚墙前把人钉住过。
         // 【挖不动就换个站位再问一遍,别把这件事外包出去】。人 20px 宽跨 2~3 列,脚下有一列挖不动时
-        // 往左/右挪一格,压着的列常常就全挖得动了 —— (1151,516) 身体跨 1150/1151,1150 是挖不动的
+        // 往左/右挪一格,压着的列常常就全挖得动了。(1151,516) 身体跨 1150/1151,1150 是挖不动的
         // 地狱石,往下的边整条 NULL;而站到 1152 上两列都是 45 帧的普通石头,一挖就下去了。
         // 原来这里只记一个 Trap.FootBlockCol 等 Unstick 那个特例来救,而特例的判据(只肯挪到现成空格)
-        // 和真实解法对不上,于是报"没招了",人转头砌柱子往上爬 —— 白挖一路头顶的方块。
+        // 和真实解法对不上,于是报"没招了",人转头砌柱子往上爬。白挖一路头顶的方块。
         // 挪一格本来就是规划器该表达的一条边,不该是外面打的补丁。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDown(PlanCtx ctx, SSNode cur, int ccx, int ccy, int curH, int gdir, int maxScan)
         {
@@ -1102,7 +1102,7 @@ namespace TerraBlind
                 {
                     int scx = ccx + sdir * off;
                     float spx = scx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-                    // 挪过去得站得住,而且一路上不能被墙挡住 —— 挪不过去的站位等于没有
+                    // 挪过去得站得住,而且一路上不能被墙挡住。挪不过去的站位等于没有
                     if (!CellKind.Stands(scx, ccy)) continue;
                     var r = DigDownFrom(ctx, spx, scx, ccy, curH);
                     if (!r.HasValue) continue;
@@ -1119,7 +1119,7 @@ namespace TerraBlind
 
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigDownFrom(PlanCtx ctx, float px, int ccx, int ccy, int curH)
         {
-            // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列 —— 而 20px 的身子
+            // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列。而 20px 的身子
             // 跨 3 列是常态,漏掉的那一列照样撑着人,挖完两列人掉不下去。用 TouchCols 问真话。
             int y = ccy + 1;   // the single row directly under the feet
             var (footL, footR) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
@@ -1132,7 +1132,7 @@ namespace TerraBlind
                     if (fc >= DigTable.Unmineable)
                     {
                         // 【报出去,不是烂在这儿】。身体压的每一列都空了才掉得下去,一列黑曜石整条边就没了
-                        // —— 而旁边挪一格,压的那几列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
+                        //。而旁边挪一格,压的那几列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
                         Trap.FootBlockCol = c; Trap.FootBlockRow = y;
                         if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})");
                         return null;   // unbreakable (attached object / pick too weak) → route around
@@ -1141,7 +1141,7 @@ namespace TerraBlind
                     tiles.Add((c, y));
                 }
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
-            // 挖开脚下之后人会掉到哪 —— 出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
+            // 挖开脚下之后人会掉到哪。出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
             // 实心岩石,门槛必然短路放行。挖开才是竖井盖子的情况只能在这儿自己模拟。
             for (int c = footL; c <= footR; c++)
             {
@@ -1160,7 +1160,7 @@ namespace TerraBlind
         }
 
         // 挖穿封死的天花板:每周期挖头顶两行(两列,和 DigDown 同样的身体宽度理由),再 pillar 跳两格上去。
-        // 只在天花板真封死(第一周期挖到东西)且突破格 H 更低时才产出 —— 头顶本来就空的归跳跃/跳放/pillar 管。
+        // 只在天花板真封死(第一周期挖到东西)且突破格 H 更低时才产出。头顶本来就空的归跳跃/跳放/pillar 管。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigUp(PlanCtx ctx, SSNode cur, int ccx, int ccy)
         {
             // 必须和 SkillExecutor 实时检查的列【完全一致】,否则 DigUp 挖的是执行器根本不看的格,
@@ -1171,10 +1171,10 @@ namespace TerraBlind
             float cost = 0f;
             // 挖满 [feetY-2, ccy-3] 整段,不跳着挖:pillar 一跳升几格是随地形变的(1~3格),
             // 按"每跳2格"只挖 ccy-1-2k/ccy-2-2k,人升 3 格时 ccy-5 没挖 → 撞上没挖的天花板卡死。
-            // 砌柱子要跳,跳起来脚下就空了。人本来站在薄地板/平台边缘时落回来会踩空 ——
+            // 砌柱子要跳,跳起来脚下就空了。人本来站在薄地板/平台边缘时落回来会踩空
             // (962,705) 那次挖完头顶掉了 39 行到 742,而 pillar 边不带 frames,FallHitsLava 那道防线查不到它。
             // 所以发边前先问:这两列往下掉会掉到哪。碰岩浆或探不到底就不发。
-            // 【一列有地就站得住】。原来要求身体跨的每一列脚下都有地,而踩着边缘站是常态 ——
+            // 【一列有地就站得住】。原来要求身体跨的每一列脚下都有地,而踩着边缘站是常态
             // 人在 (1117,392) 左脚那列(1116,393)悬空,凿子一票否决,往上的路(头顶就是空气、H 更低)
             // 全断,只好往下掉 19 行绕 1800 帧回到同一格才上去。
             bool anyFooting = false;
@@ -1222,7 +1222,7 @@ namespace TerraBlind
             return null;
         }
 
-        // 原子横挖:只挖相邻那一列的 3 个身体行,踏进去。不挖到远处落点的隧道 —— 闭环每周期重规划,厚墙靠 dig→dig→dig 逐格破,
+        // 原子横挖:只挖相邻那一列的 3 个身体行,踏进去。不挖到远处落点的隧道。闭环每周期重规划,厚墙靠 dig→dig→dig 逐格破,
         // 没有 "12 格内没落点就 null" 的死角 ((744,998) 卡死),也不会挖出下一周期发现多余的隧道。
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigThroughWall(PlanCtx ctx, int dir, int ccx, int ccy, int curH)
         {
@@ -1241,9 +1241,9 @@ namespace TerraBlind
             // 【不问挖开之后 H 降不降】。原来有一道 hx < curH 的门,等于要求"一步就得见效",
             // 于是凡是【先横向让开、再往下走】的地形整条路都发不出来:
             // (1102,742) 脚下 1101 列是黑曜石挖不动,往下的边 NULL;而东西两边 H 都比脚下高 58,
-            // 横挖两个方向又都被这道门毙掉 —— 68 个候选里一条 dig 都没有,人就在两格之间弹了几千帧。
+            // 横挖两个方向又都被这道门毙掉。68 个候选里一条 dig 都没有,人就在两格之间弹了几千帧。
             // 第一步单独看永远是亏的,亏不亏该由 total=g+H 去算总账,不是门替它决定。
-            // 挖不动(Unmineable)仍然 return null —— 那是物理不可能,不是贵。
+            // 挖不动(Unmineable)仍然 return null。那是物理不可能,不是贵。
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((x, ccy))) return null;
             float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
             float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
@@ -1275,9 +1275,9 @@ namespace TerraBlind
         // 跳起来放一块:扫弧线找第一个"脚下格空 + 紧邻真支撑"的帧,放平台,落上去。
         // 放置的砖【不】存进节点(节点保持纯物理),落点只是站在新平台顶上。纯空中垒柱交给宏。
         // 【按 (站立格, dir) 缓存】。这个判据跟 hold 无关,而同一格的 18 个 hold 变体各调一次,
-        // 每次扫 189 格 —— 17/18 是纯重复。缓存跟着 _placeCache 一起在 Plan() 开头清。
+        // 每次扫 189 格。17/18 是纯重复。缓存跟着 _placeCache 一起在 Plan() 开头清。
         // 【必须是并发字典】。A* 跑在后台线程(TrapEscape 的 Task.Run),贪心跑在主线程,
-        // 两边都在搜索内部高频读写这两个缓存,而 ClearPlaceCache 又在 Plan() 开头清 ——
+        // 两边都在搜索内部高频读写这两个缓存,而 ClearPlaceCache 又在 Plan() 开头清
         // 撞上就是 "non-concurrent collections must have exclusive access",整个 tick 挂掉,
         // 之后每次寻路都 exception,人钉在原地(现场:(1141,205) 之后 10 个宝箱全 MISS)。
         // 值只依赖坐标,两条线程算出来一样,所以不用锁串行化,并发字典就够
@@ -1303,7 +1303,7 @@ namespace TerraBlind
                 int x = ccx + dir * dx;
                 for (int y = cfy - apex; y <= cfy + PlatformMaxDropTiles; y++)
                     if (CanPlaceReal(x, y)) return true;
-                // dir=0 walks x nowhere — cover the neighbour columns the placement scan now tries
+                // dir=0 walks x nowhere, cover the neighbour columns the placement scan now tries
                 if (dir == 0 && dx == 0)
                     for (int sx = -1; sx <= 1; sx += 2)
                         for (int y = cfy - apex; y <= cfy + PlatformMaxDropTiles; y++)
@@ -1327,7 +1327,7 @@ namespace TerraBlind
                 Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy,
                 Grounded = true, JumpFramesLeft = hold,
             };
-            // find the arc apex (highest point): the platform must go AT or BELOW the apex foot — a platform above
+            // find the arc apex (highest point): the platform must go AT or BELOW the apex foot, a platform above
             // the apex blocks the ascent / can't be reached. simulate the free arc, track the apex foot cell.
             int apexFootCx = int.MinValue, apexFootCy = 0;
             float minPy = float.MaxValue;
@@ -1341,12 +1341,12 @@ namespace TerraBlind
                     apexFootCx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
                     apexFootCy = (int)((s.Py + PhysicsSimulator.PlayerH) / 16f);
                 }
-                if (s.Vy > 0f && s.Py > minPy + 1f) break; // past apex and descending — apex is locked
+                if (s.Vy > 0f && s.Py > minPy + 1f) break; // past apex and descending, apex is locked
             }
             if (apexFootCx == int.MinValue) { ctx.JpNoSpot++; return null; }
 
             // 从弧顶脚下【那一格的下面】往下扫(平台放在弧顶脚所在格接不住人,人会穿过去掉回原地)。
-            // 列的顺序:弧顶列优先,再左右邻列 —— 斜坡上能锚住的格通常偏向坡面一列,只扫自己那列会一无所获。
+            // 列的顺序:弧顶列优先,再左右邻列。斜坡上能锚住的格通常偏向坡面一列,只扫自己那列会一无所获。
             int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int placeCx = int.MinValue, placeCy = 0;
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
@@ -1376,7 +1376,7 @@ namespace TerraBlind
             }
             if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
 
-            // 落在一格宽的平台上带着残余 vx 下一帧就滑下去了 —— 追加一段反向按键刹车,落点节点取真正停稳的位置。
+            // 落在一格宽的平台上带着残余 vx 下一帧就滑下去了。追加一段反向按键刹车,落点节点取真正停稳的位置。
             // 只有滑到脱离地面(掉下去)才判这条边无效。
             if (F_Brake)
             {
@@ -1390,7 +1390,7 @@ namespace TerraBlind
         }
 
         // 移动跳放横穿:和 JumpPlace(只收比起点高的落点)不同,这里同高/更低也收,只要落点 H 真的降。
-        // 放置砖不存进节点(纯物理键,避免组合爆炸 —— 118ab5f 的教训)。H 门限住扇出。
+        // 放置砖不存进节点(纯物理键,避免组合爆炸。118ab5f 的教训)。H 门限住扇出。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlaceAcross(
             PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile, int curH)
         {
@@ -1407,18 +1407,18 @@ namespace TerraBlind
             {
                 var input = new PhysicsSimulator.ControlInput { Right = dir > 0, Left = dir < 0, Jump = f < hold };
                 s = PhysicsSimulator.Step(s, input, ph);
-                if (s.Vy <= 0f) continue; // ascending/apex — a platform here can't catch the player
+                if (s.Vy <= 0f) continue; // ascending/apex, a platform here can't catch the player
                 int fcx = (int)((s.Px + PhysicsSimulator.PlayerW / 2f) / 16f);
                 int fcy = (int)((s.Py + PhysicsSimulator.PlayerH + 1f) / 16f);
                 if (!CanPlaceReal(fcx, fcy)) continue;
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
-                // 【必须真的落在那块平台上】。JumpPlace 早就有这条,横穿版漏了 ——
+                // 【必须真的落在那块平台上】。JumpPlace 早就有这条,横穿版漏了
                 // 平台是 solidTop 只有顶面接人,人从它旁边穿过去继续往下掉,照样 Grounded、H 照样更低,
                 // 于是这条"放了但没接住"的边发得出来。执行时人一路掉回起点,下一轮又选中它,再掉。
                 // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,d=(8.1,96):横向只差 8px,
-                // 竖直差整整 6 行 —— 正是穿过去的形状。这就是换了地方的"跳三下"。
+                // 竖直差整整 6 行。正是穿过去的形状。这就是换了地方的"跳三下"。
                 if (F_LandOnPlat && lcy != fcy)
                 {
                     if (ctx.JpFellThrough < 12)
@@ -1435,7 +1435,7 @@ namespace TerraBlind
         const float BrakeVxEps = 0.3f;   // |Vx| below this counts as settled
         const int   BrakeMaxFrames = 30;
 
-        // 落在窄平台上带残速要反压刹车。落点节点取【实际】停稳的位置 —— 墙或平台边缘挡住滑动也是合法站位,
+        // 落在窄平台上带残速要反压刹车。落点节点取【实际】停稳的位置。墙或平台边缘挡住滑动也是合法站位,
         // 只有滑到失去地面接触才算这条边废了。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? AppendBrake(
             SSNode land, List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
@@ -1447,7 +1447,7 @@ namespace TerraBlind
                 s = PhysicsSimulator.Step(s, input, ph);
                 input.Px = s.Px; input.Py = s.Py;
                 frames.Add(input);
-                if (!s.Grounded) return null; // slid off and started falling — not a valid stand
+                if (!s.Grounded) return null; // slid off and started falling, not a valid stand
             }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
@@ -1495,7 +1495,7 @@ namespace TerraBlind
             return false;
         }
 
-        // 临时把一块平台写进 Main.tile,模拟,再还原 —— 那块砖不进节点,只为这一段的落地物理存在。
+        // 临时把一块平台写进 Main.tile,模拟,再还原。那块砖不进节点,只为这一段的落地物理存在。
         // 搭桥要精确停在新砖那一格(一块砖只有一格站立空间,走完整段会滑出去掉下)。一次一块,贪心每步重挑。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
@@ -1506,7 +1506,7 @@ namespace TerraBlind
             int baseCol = int.MinValue;
             if (dir > 0) { for (int c = rcol; c >= lcol; c--) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
             else { for (int c = lcol; c <= rcol; c++) if (PathPlanner.IsFloorPublic(c, footRow)) { baseCol = c; break; } }
-            if (baseCol == int.MinValue) return null;          // no supported foot column — nothing to extend from
+            if (baseCol == int.MinValue) return null;          // no supported foot column, nothing to extend from
             int placeCx = baseCol + dir, placeCy = footRow;
             int scy = footRow - 1;                              // standing (head) row above the support
             if (PathPlanner.IsBlockPublic(placeCx, placeCy)) return null;       // already solid there
@@ -1565,7 +1565,7 @@ namespace TerraBlind
             var t = Main.tile[cx, cy];
             bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
             var oSlope = t.Slope;
-            // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升 —— 人永远够不到,落回原地成自环。
+            // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升。人永远够不到,落回原地成自环。
             // 真平台是 solidTop:上升穿过去,下降接住。
             t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
             // 【这个窗口里绝不能查地形】。_placeCache/_reachCache 会把"平台在场"的答案存下来,
@@ -1577,7 +1577,7 @@ namespace TerraBlind
         // Vanilla placement reach = tileRangeX + 手上那件的 tileBoost + blockRange(Player.cs:38990)。
         // 三项都得算:底数是 static 的,blockRange 是每帧的玩家字段(饰品/让步加成),tileBoost 跟着手上那件走
         // (镐子会是 -1)。执行端读 Reach.CanPlace,两边必须是同一个公式。
-        // 【原注释说 IsInTileInteractionRange 自动含 blockRange —— 那是错的】,它一项都不含,
+        // 【原注释说 IsInTileInteractionRange 自动含 blockRange。那是错的】,它一项都不含,
         // 规划器照那个前提算了很久。
         static int HeldBoost
         {
@@ -1601,9 +1601,9 @@ namespace TerraBlind
             return cx >= loX && cx <= hiX && cy >= loY && cy <= hiY;
         }
 
-        // 硬规则:放置必须在弧顶【或之后】(vy >= 0),绝不在上升段 —— 上升时人还在穿过那一行,砖要么没支撑要么被穿过。
+        // 硬规则:放置必须在弧顶【或之后】(vy >= 0),绝不在上升段。上升时人还在穿过那一行,砖要么没支撑要么被穿过。
         // 弧顶常常够不到远/低的落点(够不着 → UseItem 静默失败 → 腾空僵住 → 摔),所以等下降把人带进射程再放。
-        // 曾经在这儿卡过一道"帧数够不够放置"的门(14 帧)。那个数来自【空中 stall 时代】——
+        // 曾经在这儿卡过一道"帧数够不够放置"的门(14 帧)。那个数来自【空中 stall 时代】
         // 那会儿执行器会停下等平台出现。现在空中不 stall,放置和飞行并行,门的依据已经不成立,
         // 却把差 1-2 帧的跳放成片砍掉(一处连拒 24 条),所以删了。
         static bool MarkPlaceFrame(List<PhysicsSimulator.ControlInput> frames, int cx, int cy)
@@ -1679,7 +1679,7 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // 评分不用落点那一格的 H,用"从落点能望到的最低 H":跨多格的坎能骗过 greedy —— (4854,379) 往下掉涨 30、
+        // 评分不用落点那一格的 H,用"从落点能望到的最低 H":跨多格的坎能骗过 greedy。(4854,379) 往下掉涨 30、
         // 回头只涨 2 于是选回头,可回头是来路;真相是再走一步就降 78。半径 18 是实测:出口在 14 格外,留余量。
         const int LookaheadRadius = 18;
         const int LookaheadBudget = 400;   // 望多少格封顶,保证不随地形爆炸
@@ -1753,7 +1753,7 @@ namespace TerraBlind
 
         static bool SegDiag;   // when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)
 
-        // SegDiag 只在【饥饿】和【一条边都没有】这两刻开,不会刷屏 —— 所以它的输出必须走 EventLog,
+        // SegDiag 只在【饥饿】和【一条边都没有】这两刻开,不会刷屏。所以它的输出必须走 EventLog,
         // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
         static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
@@ -1809,7 +1809,7 @@ namespace TerraBlind
             }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
             if (MathF.Abs(node.Px - cur.Px) < 1f && MathF.Abs(node.Py - cur.Py) < 1f) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 没动 (dpx={node.Px - cur.Px:0.#} dpy={node.Py - cur.Py:0.#}) gnd={node.Grounded}"); return null; } // no self-loops
-            // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位 —— 拒掉,
+            // 脆:水里重力太弱,人浮在空格上方模拟器仍读 Grounded=true。落地点的两个脚列下面【没有真地板】就是假站位。拒掉,
             // 逼 A* 去放平台,而不是"走"过开阔水面然后循环。只管落地边,腾空的下落/跳跃边不受影响。
             if (node.Grounded)
             {
@@ -1835,7 +1835,7 @@ namespace TerraBlind
             return (node, frames);
         }
 
-        // 走下崖边顺着重力落到真地板 —— 不挖,任意深度,全程按住 gdir(人下落时就是一直按着方向)。
+        // 走下崖边顺着重力落到真地板。不挖,任意深度,全程按住 gdir(人下落时就是一直按着方向)。
         // 人根本没离地(这儿没崖,普通走路已覆盖)或引信内没落地,返回 null。
         const int FallMinDropPx = 32;   // must drop >=2 tiles, else it's a step plain walk/jump handles
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? FreeFall(SSNode cur, int gdir, PhysicsSimulator.Params ph)
@@ -1847,7 +1847,7 @@ namespace TerraBlind
             for (int f = 0; f < MaxSegFrames; f++)
             {
                 // hold the direction only until the feet leave the ledge; once airborne, release it so the player
-                // drops vertically (a human doesn't keep steering mid-fall — holding it sails far past the target).
+                // drops vertically (a human doesn't keep steering mid-fall, holding it sails far past the target).
                 bool airborne = !s.Grounded;
                 var input = new PhysicsSimulator.ControlInput { Right = !airborne && gdir > 0, Left = !airborne && gdir < 0 };
                 s = PhysicsSimulator.Step(s, input, ph);
@@ -1858,7 +1858,7 @@ namespace TerraBlind
             }
             if (!everAirborne || !s.Grounded) return null;          // no cliff, or never landed
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
-            // 掉进岩浆这把就完了,得重开 —— 所以这条边【不发】。物理 Step 把岩浆当空气,
+            // 掉进岩浆这把就完了,得重开。所以这条边【不发】。物理 Step 把岩浆当空气,
             // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
             if (FallHitsLava(frames) && !LavaSurvivable) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
@@ -1869,7 +1869,7 @@ namespace TerraBlind
 
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
-        // 掉进岩浆还有救吗。身上有方块就有 —— SurvivalReflex.LavaLevee 会往碰着人的
+        // 掉进岩浆还有救吗。身上有方块就有。SurvivalReflex.LavaLevee 会往碰着人的
         // 岩浆格里填方块,一格格把人抬出来(Concessions 那边让方块放得进岩浆)。
         //
         // 【只管"掉进去",不管"当路走"】。这个判据只用在下落类的门上:落点是岩浆时
@@ -1895,14 +1895,14 @@ namespace TerraBlind
 
         // 在同一列里按距离【双向】找最近可站格:向上是从块里爬到表面,向下是把悬空目标落到地板。
         const int GoalSnapMaxDrop = 40;
-        // 岩浆里放不了任何东西,人去了也白去 —— 所以"能站"必须排除泡在岩浆里和踩在岩浆面上。
+        // 岩浆里放不了任何东西,人去了也白去。所以"能站"必须排除泡在岩浆里和踩在岩浆面上。
         // 原来只问地板和方块,于是空中目标一路下落、落进岩浆池就当成落脚点,等于主动往岩浆里导航。
         // 判据只此一份。原来这里只查 2 行岩浆(身子有 3 行),而 PathPlanner 那份还认为平台不算站得住
         static bool Standable(int gx, int gy) => CellKind.Stands(gx, gy);
         public static int SnapGoalToStandable(int gx, int gy)
         {
             if (Standable(gx, gy)) return gy;
-            // 点进方块 → 向上爬到表面(有界,表面就在几格内)。点在空中 → 一路往下落,多深都行 —— 
+            // 点进方块 → 向上爬到表面(有界,表面就在几格内)。点在空中 → 一路往下落,多深都行
             // "点空中"的意思就是"去它下面的地",给下落设上限会把目标留在深坑上方飘着,A* 烧光预算也够不到。
             if (PathPlanner.IsBlockPublic(gx, gy))
             {
@@ -1984,7 +1984,7 @@ namespace TerraBlind
             return best;
         }
 
-        // is there a standable cell along gdir (within reach) with lower maze H than here — i.e. a walk-out route.
+        // is there a standable cell along gdir (within reach) with lower maze H than here, i.e. a walk-out route.
         static bool HasLateralProgress(PlanCtx ctx, int ccx, int ccy, int gdir, int curH, int maxScan)
         {
             for (int d = 1; d <= maxScan; d++)
@@ -2058,12 +2058,12 @@ namespace TerraBlind
         static List<PhysicsSimulator.ControlInput> _execFrames;
         static int _execIdx;
         static int _execGoalWx, _execGoalWy;
-        // 真正的终点,执行开始时设一次,绝不被单步目标覆盖。重规划必须瞄这里 —— 瞄单步目标(旧的 _execGoal)会把人送到路径中间某格,
+        // 真正的终点,执行开始时设一次,绝不被单步目标覆盖。重规划必须瞄这里。瞄单步目标(旧的 _execGoal)会把人送到路径中间某格,
         // 这正是当初错误地禁用重规划、进而开环漂移掉进坑里的原因。
         static int _finalGoalWx, _finalGoalWy;
 
         // 滚动导航:一次 Plan 只够一个预算的距离,部分段就从新位置朝【最终目标】再规划,一段接一段。
-        // 连续几段都不朝目标推进(局部极小 —— 封死的坑之类)就放弃。
+        // 连续几段都不朝目标推进(局部极小。封死的坑之类)就放弃。
         static bool _rolling;
         static int _rollFinalWx, _rollFinalWy;
         static float _rollPrevDist;          // goal distance at the end of the previous leg (to detect "not advancing")
@@ -2081,13 +2081,13 @@ namespace TerraBlind
         const float ReplanDriftPx = 24f;
         const int ReplanCooldown = 10;
         static int _replanCooldownLeft;
-        // 空中自救:执行偏离弧线【且】人在下落(脱轨俯冲 —— 放置失败/踩空),不等落地。
+        // 空中自救:执行偏离弧线【且】人在下落(脱轨俯冲。放置失败/踩空),不等落地。
         // 像人踩空时往脚下拍一块平台一样,放一块止住下落,再从那儿重规划。
         const float RescueFallVy = 1.0f;   // vy above which we count as genuinely descending (not apex jitter)
         const float PlungeBelowPx = 24f;   // real player this far BELOW the planned frame (+still falling) = off-arc plunge
         const int RescueCooldown = 20;     // frames between rescue attempts so we don't spam-place every tick
         static int _rescueCooldownLeft;
-        // 卡住 = 速度偏差:计划说该在动(|pf.Vx| 够大)而真身几乎不动(|vx| 很小)且没推进 —— "想动没动成"(撞墙/卡坡)。
+        // 卡住 = 速度偏差:计划说该在动(|pf.Vx| 够大)而真身几乎不动(|vx| 很小)且没推进。"想动没动成"(撞墙/卡坡)。
         // 这是偏差的速度轴,按位置距离判的检查看不见它,因为人几乎没位移。
         const float VelDevExpect = 1.5f;   // plan expected at least this |Vx|
         const float VelDevReal = 0.4f;     // but real |Vx| is below this = blocked
@@ -2146,8 +2146,8 @@ namespace TerraBlind
         static bool _ssDispatched;
         static uint _stepStartTick;        // watchdog soft clock: start of the current NO-MOTION window (slides while moving)
         static uint _stepDispatchTick;     // watchdog hard clock: when the step was dispatched (never slides)
-        static long _stepTimeoutTicks;     // soft deadline (est × 1.75 + 60, capped 1min) — frozen position
-        static long _stepHardTicks;        // hard deadline (est × 4 + 300, capped 2min) — even while moving
+        static long _stepTimeoutTicks;     // soft deadline (est × 1.75 + 60, capped 1min), frozen position
+        static long _stepHardTicks;        // hard deadline (est × 4 + 300, capped 2min), even while moving
         static float _stepEstFrames;       // the step's own time estimate (for the announcement)
         static float _stepLastPx, _stepLastPy;   // last observed position (motion slides the soft window)
         static ExecStep _ssPrevStep;       // the edge being executed, for plan-vs-exec frame-count diagnosis
@@ -2171,7 +2171,7 @@ namespace TerraBlind
             bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning;
 
             // 看门狗:每个动作都有死线。所有计划层的免疫机制(miss/revisit/shock/循环检测)都活在重规划周期里,而重规划要等 ExecRunning 清零
-            // —— 一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
+            //。一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
             if (_ssDispatched)
             {
                 float moved = System.MathF.Abs(p.position.X - _stepLastPx) + System.MathF.Abs(p.position.Y - _stepLastPy);
@@ -2268,7 +2268,7 @@ namespace TerraBlind
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
-            // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理 —— 闭环不会按下键。
+            // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理。闭环不会按下键。
             else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
                      && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
             {
@@ -2288,7 +2288,7 @@ namespace TerraBlind
             else
                 DiagLog.Write("[ss-steps] step has no frames — skip");
             // 【每次派发都说清进了哪条分支】。贪心选中 bridge/place 边之后人一格没动、
-            // 日志里一个字都没有 —— 派发在哪儿走丢的靠读代码推了两次都推错。
+            // 日志里一个字都没有。派发在哪儿走丢的靠读代码推了两次都推错。
             // 现场:(1059,1054)→(1063,1054) bridge 连发两次 moved=0px;
             // (1075,1023)→(1076,1023) place 之后 100 帧掉进地狱,[place] 一条没有。
             DiagLog.Write($"[ss-dispatch] kind={EdgeKind(st)} bridge={st.Bridge} pillar={st.Pillar} dig={st.Dig} "
@@ -2297,7 +2297,7 @@ namespace TerraBlind
         }
 
         // 贪心单步驱动:场给全局趋势,每步只前向模拟几个候选动作,按落点格的场代价打分,执行最好的那一个。
-        // 没有搜索树 → 不会爆炸。都不改善时(竖井:跳放被挡)退回一个 pillar 周期 —— "低收益就爬"是涌现的,不是写死的。
+        // 没有搜索树 → 不会爆炸。都不改善时(竖井:跳放被挡)退回一个 pillar 周期。"低收益就爬"是涌现的,不是写死的。
         static bool _greedyActive;
         static PlanCtx _greedyCtx;   // greedy runs across frames on the game thread: ctx built in ExecBlocks, read each TickBlocks
         static int _greedyGoalWx, _greedyGoalWy;
@@ -2387,8 +2387,8 @@ namespace TerraBlind
         static string _lastParamsSig;   // last logged [ss-params] signature (log on change only)
         public static void ResetLineProgress() { _miss.Clear(); _recent.Clear(); }
 
-        // 注意力失配记忆 —— 【连续】的逐边权重,不是硬禁。真实落点比模拟落点差多少就记多少罚分(曼哈顿格,和 g/H 同单位)。
-        // 永不为 ∞、永不删除候选(卡死在结构上仍不可能),且每周期衰减 —— 这是它不退化成禁退的关键:被罚的边总会恢复。
+        // 注意力失配记忆。【连续】的逐边权重,不是硬禁。真实落点比模拟落点差多少就记多少罚分(曼哈顿格,和 g/H 同单位)。
+        // 永不为 ∞、永不删除候选(卡死在结构上仍不可能),且每周期衰减。这是它不退化成禁退的关键:被罚的边总会恢复。
         static readonly System.Collections.Generic.Dictionary<(int, int, int, int), float> _miss = new();
         const float MissDecayTick = 0.93f;   // per-cycle decay → half-life ~10 cycles (a typical pit fall+climb loop)
         const float MissForgiveHit = 0.3f;   // an edge that DID reach its target this time is largely forgiven
@@ -2400,7 +2400,7 @@ namespace TerraBlind
             foreach (var k in keys) { float v = _miss[k] * MissDecayTick; if (v < 0.5f) _miss.Remove(k); else _miss[k] = v; }
         }
         // report the last edge's outcome: did the real landing match the cell the edge planned for?
-        // 踩的是不是同一块砖 —— 不受取整影响的那个客观事实。中间隔着砖就是两个落脚处,不是读数差异。
+        // 踩的是不是同一块砖。不受取整影响的那个客观事实。中间隔着砖就是两个落脚处,不是读数差异。
         public static bool SameFooting(int cx, int ay, int by)
         {
             int hi = System.Math.Max(ay, by);
@@ -2419,15 +2419,15 @@ namespace TerraBlind
             var key = (fromCx, fromCy, planCx, planCy);
             int miss = System.Math.Abs(realCx - planCx) + System.Math.Abs(realCy - planCy);
             // 差一行但踩着同一块砖 = 到了,只是两把尺子读数不同(StandCell 取整 vs 物理落点)。
-            // 按格号判 miss 会把这种情况罚成失败,边被压价、下轮不选、换条边又是同样的偏差 —— (1998,196)→(1999,198) 13 次。
+            // 按格号判 miss 会把这种情况罚成失败,边被压价、下轮不选、换条边又是同样的偏差。(1998,196)→(1999,198) 13 次。
             if (Arrived(planCx, planCy, realCx, realCy, pillar)) miss = 0;
-            // 零位移地板:落回起点格是对边的承诺最彻底的违背 —— 模拟说"这步能推进",现实说"你压根没动"。
+            // 零位移地板:落回起点格是对边的承诺最彻底的违背。模拟说"这步能推进",现实说"你压根没动"。
             // 曼哈顿只给它 1-2 分,比"超了两格"还轻,于是有点微弱优势的斜坡边被反复重试。给它一个地板价。
             if (miss > 0 && realCx == fromCx && realCy == fromCy) miss = System.Math.Max(miss, NoMoveMissFloor);
             if (miss == 0) { if (_miss.ContainsKey(key)) _miss[key] *= MissForgiveHit; }
             else _miss[key] = _miss.GetValueOrDefault(key) + miss;
 
-            // 重访罚分:同一套连续机制,用来抓【每步都命中(miss=0)却哪也没去】的等高线蹭 —— 落点是刚站过的格就罚那条边。
+            // 重访罚分:同一套连续机制,用来抓【每步都命中(miss=0)却哪也没去】的等高线蹭。落点是刚站过的格就罚那条边。
             // 不靠卡住计数器靠记忆。像 _miss 一样衰减,所以以后正当地重走同一条路不会被禁。
             var landed = (realCx, realCy);
             int recency = _recent.IndexOf(landed);
@@ -2437,7 +2437,7 @@ namespace TerraBlind
                 // 每次至少加上它【当前】的罚分 = 每重复一次翻倍(12→24→48…),第二圈就完成了原来要靠 shock 磨出来的修正。
                 float inc0 = RevisitPenalty * (_recent.Count - recency);
                 // 罚【真去的】那条边,也罚【选的】那条边。只罚前者时罚分挂在 (from→real) 上,
-                // 而下一轮选的键是 (from→plan) —— 罚分永远压不到真正被反复挑中的那条边。
+                // 而下一轮选的键是 (from→plan)。罚分永远压不到真正被反复挑中的那条边。
                 // 蜂蜜坑里 3070↔3072 弹了 9 个周期就是这么来的:每轮都重选 (…,608)→(3071,604)。
                 foreach (var ekey in new[] { (fromCx, fromCy, realCx, realCy), (fromCx, fromCy, planCx, planCy) })
                 {
@@ -2451,7 +2451,7 @@ namespace TerraBlind
         static readonly System.Collections.Generic.List<(int, int)> _recent = new();
         const int RecentLen = 6;              // how many past landings to remember for revisit detection
         const float RevisitPenalty = 12f;     // base penalty for an edge landing on a recently-visited cell; repeats double it (see ReportEdge)
-        const float RevisitCap = 200f;        // escalation ceiling = one shock's worth — revisit alone can do what a shock did, but no more
+        const float RevisitCap = 200f;        // escalation ceiling = one shock's worth, revisit alone can do what a shock did, but no more
 
         // 最近站过的格子。只用来在 PUSH 时把"去过的"排到后面,不做循环判定、不禁止重访。
         const int VisitedLen = 40;
@@ -2462,7 +2462,7 @@ namespace TerraBlind
         public static void ResetFloor() { _visited.Clear(); _visitedQ.Clear(); _recent.Clear(); }
         public static void RequestJiggle() { }
 
-        // 区域内累积的边罚分 —— 让循环无法复现的隐藏状态,也是"一条好边反而全场最贵"的原因。
+        // 区域内累积的边罚分。让循环无法复现的隐藏状态,也是"一条好边反而全场最贵"的原因。
         static List<Cand> _lastCands;
         static (int cx, int cy, int h) _lastAt;
         static (int gx, int gy) _lastGoal;
@@ -2537,7 +2537,7 @@ namespace TerraBlind
             var field = MazeWand.GetField(goalWx, goalWy);
             var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            // 贪心不走 Plan(),得自己取一次 —— 不取的话读到的是上一次 A* 留下的旧值。
+            // 贪心不走 Plan(),得自己取一次。不取的话读到的是上一次 A* 留下的旧值。
             // 一周期一次,不在边上,不贵
             _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
@@ -2552,7 +2552,7 @@ namespace TerraBlind
             bool hasPick = false;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { hasPick = true; break; } }
 
-            Trap.FootBlockCol = -1;   // 这一周期重新算 —— 留着上一周期的会在早就走开的地方触发换站位
+            Trap.FootBlockCol = -1;   // 这一周期重新算。留着上一周期的会在早就走开的地方触发换站位
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
@@ -2577,28 +2577,28 @@ namespace TerraBlind
             var dS = LineDir(line, 0, ArcShort);
             var dM = LineDir(line, 0, ArcMid);
             var dL = LineDir(line, 0, ArcLong);
-            // 脚下的望值。g 必须和落点价值用同一把尺子量,否则恒等式 total≡当前值 不成立 —— 见下面 laH。
+            // 脚下的望值。g 必须和落点价值用同一把尺子量,否则恒等式 total≡当前值 不成立。见下面 laH。
 
             (SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int,int)> dig)? best = null;
             float bestTotal = float.MaxValue; (int, int) bestCell = (curCx, curCy);
             // 单独记一份【降 H 的】最优:平地走的 g 比跳便宜太多,不单记的话上坡边会靠 g 赢下来
             float bestDropTotal = float.MaxValue; (int, int) bestDropCell = (curCx, curCy);
             var cands = new List<Cand>();
-            // 所有候选,连 total 一起留着 —— 选边要按 total 采样,不是取最小(见下面的 softmax)
+            // 所有候选,连 total 一起留着。选边要按 total 采样,不是取最小(见下面的 softmax)
             var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
             var _candLog = new System.Text.StringBuilder();
             var _swCycle = System.Diagnostics.Stopwatch.StartNew();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
             {
                 // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
-                // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降 —— 它们的砖还没挖/放。
+                // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降。它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
                 var landed = alters ? next : SettleNode(next, ph);
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
-                // g+h 两段同尺(帧):g=走这条边的帧数,h=落点场值。弃用 LookaheadH —— 它取周围 18 格最小 H,
+                // g+h 两段同尺(帧):g=走这条边的帧数,h=落点场值。弃用 LookaheadH。它取周围 18 格最小 H,
                 // 望得见走不到:(2581,318)H1097 旁边 H1141 被望成 t862,来回八趟 200 帧。
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);
                 float g = cost * DigFramesToH;
@@ -2630,13 +2630,13 @@ namespace TerraBlind
                 _candLog.Append($" {kind}→({ncx},{ncy})H{nH}g{g:0.#}t{total:0.#}{(nH < curH ? "↓" : "")}");
                 if (total < bestTotal)
                 { bestTotal = total; best = (next, frames, cost, pillar, digTiles); bestCell = (ncx, ncy); }
-                // 最便宜的【降 H】候选。只用来对照记账,不参与选边 —— 见下面 NOUP 那段
+                // 最便宜的【降 H】候选。只用来对照记账,不参与选边。见下面 NOUP 那段
                 if (nH < curH && total < bestDropTotal)
                 { bestDropTotal = total; bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
             // 【只记账,不改判】。这里曾经按"有降 H 的路就别选升 H 的"直接改判,那是在
-            // total=g+H 这套价之外【另开一套判据】—— 而 cost 只能有一套。
+            // total=g+H 这套价之外【另开一套判据】。而 cost 只能有一套。
             // 后果:335 行那片平地上每格 H 只差 3~6 分,"还有更低的邻格"永远成立,
             // 于是它永远否决往上,而往上才是出口(正上方 H1895 最低),人蹭了 1100 帧 22 次 TRAP。
             //
@@ -2662,7 +2662,7 @@ namespace TerraBlind
                     foreach (var c in jigglePool) if (c.h < curH) { anyDrop = true; break; }
                     // 这一刻就是"贪心走不动了"的【定义】:物理候选里没有一个 H 更低。
                     // 不是"弹了几次才发现",是当场。报出来,并记进 Trap 表供画图和预警
-                    // 只报告,【不】启动承诺 —— 承诺是给贪心用的补丁,而这一刻 A* 要接手。
+                    // 只报告,【不】启动承诺。承诺是给贪心用的补丁,而这一刻 A* 要接手。
                     // 两套同时动的话,A* 拿到的已经是承诺选过的边了。A* 失败时 RecedingNav 会退回来,
                     // 那时 JustTrapped 仍为真,下一周期照样能启动承诺兜底。
                     if (!anyDrop) Trap.Hit(curCx, curCy, curH, jigglePool.Count);
@@ -2695,11 +2695,11 @@ namespace TerraBlind
                 int bestH = -1;
                 foreach (var c in jigglePool) if (c.cell == bestCell) { bestH = c.h; break; }
                 // 升幅不是判据,A→B→A 才是:(1998,196)↔(1999,197) 弹 13 次,H 差只有 18,slack 放过去了。
-                // greedy 在降 H 就别拦 —— 窄地形里 _recent 覆盖了所有邻居,每步都判回头,PUSH 一路选更差的 (H 132→146→155→161)。
+                // greedy 在降 H 就别拦。窄地形里 _recent 覆盖了所有邻居,每步都判回头,PUSH 一路选更差的 (H 132→146→155→161)。
                 bool bounce = _recent.Contains(bestCell) && bestH >= curH;
                 if (bestH > curH + PushSlack || bounce)
                 {
-                    // 管子里 H 最低的候选常常就是来路 —— (4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
+                    // 管子里 H 最低的候选常常就是来路。(4854,379) 的候选去重后只有 10 格,7 格在刚走过的 4×4 里,H 最低的正是回头那格。
                     // 人一眼看出"左右是墙只能往下"靠的不是比 H,是【哪边没去过】。所以先在没去过的里挑,用完了才退回全体(排后面,不是禁止)。
                     bool anyFresh = false;
                     foreach (var c in jigglePool) if (!_visited.Contains(c.cell)) { anyFresh = true; break; }
@@ -2713,7 +2713,7 @@ namespace TerraBlind
                         if (bounce && c.cell == bestCell) continue;   // 别把刚判定为回头的那格又选回来
                         if (!have || c.total < push.total) { push = c; have = true; }
                     }
-                    // 一个替代都挑不出来(候选只剩回头那格):保持 greedy 的选择,别退回 jigglePool[0] ——
+                    // 一个替代都挑不出来(候选只剩回头那格):保持 greedy 的选择,别退回 jigglePool[0]
                     // 那是任意一条边,可能比 greedy 差得多。走回去总比乱走强,下一轮 _recent 变了会重选。
                     if (!have) push = (best.Value, bestCell, bestH, bestTotal);
                     if (push.cell != bestCell)
@@ -2754,7 +2754,7 @@ namespace TerraBlind
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
                 SegDiag = false;
-                // 安全逃逸步(硬规则:卡死必须在结构上不可能 —— 选不出来就挪一格重选,绝不停在能站的姿势上)。
+                // 安全逃逸步(硬规则:卡死必须在结构上不可能。选不出来就挪一格重选,绝不停在能站的姿势上)。
                 // 接受【任何】真实位移,不管场和 H(这不是进展,这是脱困):能走进来的身体就能走出去,下一周期由场的诚实定价接管。
                 foreach (int edir in new[] { -1, 1 })
                     foreach (int ehold in new[] { 0, 8 })
@@ -2765,7 +2765,7 @@ namespace TerraBlind
                         if (IsLavaCell(ecx, ecy)) continue;
                         // 【落回原格不算逃逸】。(692,860) 那次 18 条边全 OK 但落点都是自己那格
                         // (像素上动了几格不到一格),派发出去人原地抽搐,而且它排在放置前面,
-                        // 垫一格那条永远轮不到 —— 死循环就是这么来的
+                        // 垫一格那条永远轮不到。死循环就是这么来的
                         if (ecx == curCx && ecy == curCy) continue;
                         DiagLog.Write($"[recede] ESCAPE-STEP dir={edir} hold={ehold} -> ({ecx},{ecy})");
                         var eres = new SSResult { Found = true, GoalWx = ecx, GoalWy = ecy, StartPx = cur.Px, StartPy = cur.Py, CostFrames = esc.Value.frames.Count, CurH = curH };
@@ -2775,7 +2775,7 @@ namespace TerraBlind
                     }
                 // 走和跳都出不去,但【手上有料】就还没到头:往脚下/身侧垫一格,下一周期就有落脚点。
                 // (2848,907) 那次 26 连 walled_in 就死在这儿:东边是空气但下面是岩浆,四种走跳全废,
-                // 而人身上带着平台 —— 从来没人试过"放一块再说"。
+                // 而人身上带着平台。从来没人试过"放一块再说"。
                 if (platformTile >= 0)
                     foreach (var (pcx, pcy) in new[] { (curCx, curCy + 1), (curCx + 1, curCy + 1), (curCx - 1, curCy + 1) })
                     {
@@ -2801,14 +2801,14 @@ namespace TerraBlind
             foreach (var st in res.Steps) if (st.Frames != null) res.ExecFrames.AddRange(st.Frames);
             int landH = field.TryGetValue(pickCell, out int lh) ? lh : -1;
             // 边的【真名】,和候选表用同一套判据。原来只分 pillar/dig/move,把 walk/jump/跳放/桥
-            // 全归成 "move" —— 事后看日志根本不知道这一步干了什么(十步全写 move,可跨了 9 格)
+            // 全归成 "move"。事后看日志根本不知道这一步干了什么(十步全写 move,可跨了 9 格)
             string pickKind = b.pillar ? "pillar"
                 : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}"
                 : b.frames == null ? "bridge"
                 : b.frames.Exists(f => f.Place) ? (b.frames[0].Jump ? "jumpPlace" : "place")
                 : b.frames.Exists(f => f.Jump) ? "jump" : "walk";
             EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {pickKind} {b.cost:0}f{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
-            // 选了要挖的边就把左右两边的账一起打出来 —— "旁边明明能走却偏要挖"每次都得回答这个
+            // 选了要挖的边就把左右两边的账一起打出来。"旁边明明能走却偏要挖"每次都得回答这个
             if (b.dig != null && b.dig.Count > 0)
                 DiagLog.Write($"[costcmp] 挖{b.dig.Count}格 vs 横向: 西({curCx - 1})cost={MazeWand.StepCostPublic(curCx - 1, curCy, curCx, curCy)}"
                     + $" 东({curCx + 1})cost={MazeWand.StepCostPublic(curCx + 1, curCy, curCx, curCy)}"
@@ -2832,7 +2832,7 @@ namespace TerraBlind
         }
 
         // 从 idx 出发沿线走,累计【曼哈顿弧长】到 arc 格为止的单位方向(不是走 idx 步:线是斜的,一个 idx ≈ 1-2 格)。
-        // 这是标量场 H 表达不了的"大方向":H 说多远,向量说走廊实际朝哪拐 —— 用来区分等 H 格,也奖励暂时升 H 但方向对的一步。
+        // 这是标量场 H 表达不了的"大方向":H 说多远,向量说走廊实际朝哪拐。用来区分等 H 格,也奖励暂时升 H 但方向对的一步。
         static (float x, float y) LineDir(List<(int, int)> line, int idx, int arc)
         {
             if (line == null || idx < 0 || idx >= line.Count) return (0f, 0f);
@@ -2852,8 +2852,8 @@ namespace TerraBlind
         const int ArcShort = 6, ArcMid = 20, ArcLong = 80;
         const float WShort = 0.3f, WMid = 1.0f, WLong = 0.4f, AlignScale = 18f;
         // 落点离线每格的单价。调到:偏几格几乎不花钱(允许短暂外出),但深偏(10+ 格进坑)明显被压价。
-        const float DeviCost = 0.5f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty — TIE-BREAKER size (must lose to a real H descent, else it vetoes a big-drop walk in favor of a one-cell dig)
-        // 改造地形的逐格附加费。Bellman 只看落点的价值、看不见"你是怎么到的" —— "走过去掉下来"和"直接挖下去"到同一格完全平手。
+        const float DeviCost = 0.5f;   // coefficient of the super-linear (dist^1.5) line-deviation penalty, TIE-BREAKER size (must lose to a real H descent, else it vetoes a big-drop walk in favor of a one-cell dig)
+        // 改造地形的逐格附加费。Bellman 只看落点的价值、看不见"你是怎么到的", "走过去掉下来"和"直接挖下去"到同一格完全平手。
         // 但改造地形真的贵得多(时间、毁掉的方块),V 编码不了,这笔费就是那个"怎么到的"。帧数→H:MoveSide=3 每 ~5.3 帧一格。
         const float DigFramesToH = 0.5f;
 
@@ -2862,7 +2862,7 @@ namespace TerraBlind
         static List<ExecStep> EdgeToSteps(SSNode from, SSNode to, List<PhysicsSimulator.ControlInput> frames, bool pillar, List<(int,int)> dig)
         {
             // 挖/放/柱的 to 节点描述的是【改造后】的世界:StandCell 的合身吸附会拿还没改的砖去判它,把它relabel 回当前格
-            // —— 那次翻转了挖掘方向(往东挖变成"往左挖到自己",第二次 (981,435) 循环)。这些用 RawCell,from 用真实的。
+            //。那次翻转了挖掘方向(往东挖变成"往左挖到自己",第二次 (981,435) 循环)。这些用 RawCell,from 用真实的。
             var (tcx, tcy) = (dig != null || pillar) ? RawCell(to.Px, to.Py) : StandCell(to.Px, to.Py);
             var (fcx, fcy) = StandCell(from.Px, from.Py);
             var steps = new List<ExecStep>();
@@ -2937,7 +2937,7 @@ namespace TerraBlind
             _greedyVisited.Add((curCx, curCy));
 
             _greedyCtx.JpNoSpot = _greedyCtx.JpNoLand = _greedyCtx.JpFellThrough = _greedyCtx.JpSlidOff = _greedyCtx.JpOk = 0;
-            // 不回头:绝不踏上已访问格。在未访问的可达候选里挑场代价最低的 —— 这逼着人走出局部极小的井
+            // 不回头:绝不踏上已访问格。在未访问的可达候选里挑场代价最低的。这逼着人走出局部极小的井
             // (封死口袋的低代价地板已经访问过 → 只能横向伸进新格,哪怕代价暂时上升)。全都访问过了才真是无处可去。
             List<PhysicsSimulator.ControlInput> chosen = null;
             int chosenCost = int.MaxValue, chosenFC = int.MaxValue;
@@ -3032,7 +3032,7 @@ namespace TerraBlind
                 if (best == cur) break;
                 cur = best;
                 // cut ≥BlockCells apart, but only on a standable cell ON the path. Air stretches extend the cut to the
-                // next landable cell — never snap off-path (that floated 60 tiles up and A* pillared to it = freeze).
+                // next landable cell, never snap off-path (that floated 60 tiles up and A* pillared to it = freeze).
                 sinceCut++;
                 if (sinceCut >= BlockCells && Standable(cur.x, cur.y)) { _blockQueue.Add((cur.x, cur.y)); sinceCut = 0; }
             }
@@ -3077,7 +3077,7 @@ namespace TerraBlind
             }
         }
 
-        // rolling=false(navwand 单点):用快速盒场一次直达目标 —— 原本就快的近距离导航,不走大缓存场也不走分段循环。
+        // rolling=false(navwand 单点):用快速盒场一次直达目标。原本就快的近距离导航,不走大缓存场也不走分段循环。
         // rolling=true(长路线):大缓存罗盘 + 子目标分段 + lookahead。
         public static SSResult Execute(int goalWx, int goalWy, bool rolling = false)
         {
@@ -3198,7 +3198,7 @@ namespace TerraBlind
             if (dist <= GreedyGoalDistPx) { DiagLog.Write($"[ss-roll] reached final goal ({_rollFinalWx},{_rollFinalWy})"); _rolling = false; return false; }
 
             // GUARDRAIL: the cached field only covers a box around the goal. If the player has drifted/run outside it
-            // (no field value at the current cell) we can't steer — stop instead of rebuilding a giant field or guessing.
+            // (no field value at the current cell) we can't steer, stop instead of rebuilding a giant field or guessing.
             var fcell = StandCell(p.position.X, p.position.Y);
             if (!MazeWand.GetField(_rollFinalWx, _rollFinalWy).ContainsKey(fcell))
             {
@@ -3291,17 +3291,17 @@ namespace TerraBlind
         //
         // 规划时边是从某个具体像素模拟出来的,派发时人在另一个像素。走路边差几px无所谓(走到哪算哪),
         // 跳放边不行:落点是一块 16px 宽的平台,起点偏 5px 落点就偏 5px,擦过边缘就是自由落体。
-        // 原来的做法是把帧的位置整体平移,物理【没有】重跑 —— 那等于假装偏差不存在。
+        // 原来的做法是把帧的位置整体平移,物理【没有】重跑。那等于假装偏差不存在。
         //
         // 重跑之后落点还在同一格就放行(顺便把帧换成真实弹道);落不上去就不派发,交回上层重规划。
-        // 验不过一次记多少分。要够大才压得过它原本的优势,但别大到永久拉黑 —— DecayMiss 每周期在衰减
+        // 验不过一次记多少分。要够大才压得过它原本的优势,但别大到永久拉黑。DecayMiss 每周期在衰减
         const float ResimMissPenalty = 200f;
 
         static bool ReSimPlaceSteps(SSResult res, Player p)
         {
             if (res.Steps == null || p == null) return true;
             // 起点就是规划时那个像素 → 帧本来就有效,不用验。
-            // 这条必须在最前面:重跑一遍【不等于】SimulateSegment —— 那个函数有走满步幅就停、
+            // 这条必须在最前面:重跑一遍【不等于】SimulateSegment。那个函数有走满步幅就停、
             // 撞墙就停、落地后追加刹车帧等一堆终止逻辑,照抄一份必然对不齐。
             // 实测 26 次拦截,起点全是 33262.8 对 33262.8,差值为零,却因为我这份重跑跑出低 1-5 行的落点,
             // 把 26 条完全有效的边全否了,人钉在原地反复重规划。
@@ -3318,7 +3318,7 @@ namespace TerraBlind
                 if (si > 0) break;                       // 只重验第一条:后面那些的起点本来就是预测值
 
                 // 【调同一个函数】,不自己再跑一遍循环。SimulateSegment 有走满步幅就停、撞墙就停、
-                // 落地后滑一帧、AppendBrake 追加刹车等一整套终止逻辑 —— 照抄必然对不齐,
+                // 落地后滑一帧、AppendBrake 追加刹车等一整套终止逻辑。照抄必然对不齐,
                 // 上一版就是这么把 26 条有效边全否掉的。dir/hold 从帧里还原。
                 // 【只在第一次记原始值】。下面会改写 Frames,再从改写后的帧里数 Jump
                 // 就一次比一次短(54→24→11),弹道越缩越小而落点检查照样过
@@ -3348,7 +3348,7 @@ namespace TerraBlind
                         + $"起点=({p.position.X:0.#},{p.position.Y:0.#}) 规划起点=({res.StartPx:0.#},{res.StartPy:0.#})");
                     return false;
                 }
-                // 放置帧要重新标 —— 弹道变了,原来那一帧未必还够得着
+                // 放置帧要重新标。弹道变了,原来那一帧未必还够得着
                 int pcx = 0, pcy = 0; bool found = false;
                 foreach (var f in st.Frames) if (f.Place) { pcx = f.PlaceCx; pcy = f.PlaceCy; found = true; break; }
                 if (found && !MarkPlaceFrame(re.Value.frames, pcx, pcy))
@@ -3365,10 +3365,10 @@ namespace TerraBlind
             return true;
         }
 
-        // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划 —— 调用方已经验证过真实位置匹配。
+        // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划。调用方已经验证过真实位置匹配。
         public static void DispatchPlan(SSResult res)
         {
-            // 【入口无条件打一条】。贪心选中的 bridge/place/dig 边派发之后什么都没发生 ——
+            // 【入口无条件打一条】。贪心选中的 bridge/place/dig 边派发之后什么都没发生
             // 桥没铺、平台没放、镐没挥,而 [ss-steps]/[mine] 一条日志都没有。
             // 断在 DispatchPlan 到执行器之间,推了三次都推错(BridgeBuilder/TickSteps/MineCoordinator),
             // 所以在这儿把 Steps 的真实内容打出来,别再猜
@@ -3384,14 +3384,14 @@ namespace TerraBlind
             var pStart = Main.LocalPlayer;
 
             // 放置边(跳放)必须用【真实起点】重跑物理,不能只平移帧。
-            // 落点是一块 1 格宽(16px)的平台,起点差 5px 弹道就偏 5px,人擦着边缘落空 —— 实测
+            // 落点是一块 1 格宽(16px)的平台,起点差 5px 弹道就偏 5px,人擦着边缘落空。实测
             // 同一条 (2080,178)→(2082,177) 跳放边,起点 33282.4 时落点只差 1.3px,
             // 起点 33287.7(差 5.3px)时人直接掉了 109 格。
             // 下面那句"Place 的格坐标是格对齐的,亚格平移不影响"是错的:格坐标确实不用改,
             // 但【能不能落上去】完全取决于那几个像素。
             if (!ReSimPlaceSteps(res, pStart))
             {
-                // 只是不派发的话,下一周期从同一个位置会再选中同一条边,再验不过 —— 原地死循环。
+                // 只是不派发的话,下一周期从同一个位置会再选中同一条边,再验不过。原地死循环。
                 // 记一笔失配,让选边自己偏向别的候选(这就是 _miss 存在的意义,不用另造黑名单)。
                 var (fx, fy) = StandCell(pStart.position.X, pStart.position.Y);
                 PenalizeEdges(new[] { (fx, fy, res.GoalWx, res.GoalWy) }, ResimMissPenalty);
@@ -3490,7 +3490,7 @@ namespace TerraBlind
             _replanPending = false; _replanRes = null;
             Visualize(res, _finalGoalWx, _finalGoalWy);
             DiagLog.Write($"[ss-replan] reason={_replanReason} #{_replanCount} goal=({_finalGoalWx},{_finalGoalWy}) found={res.Found} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
-            // found + zero steps = already AT the goal (drift fired right as we arrived). Not a failure — mark done so
+            // found + zero steps = already AT the goal (drift fired right as we arrived). Not a failure, mark done so
             // block-nav advances to the next leg instead of aborting the whole run.
             if (res.Found && res.Steps.Count == 0) { _execDone = true; return; }
             if ((!res.Found && !res.Partial) || res.Steps.Count == 0) { _execFailCode = "replan_noplan"; return; }
@@ -3513,7 +3513,7 @@ namespace TerraBlind
         }
 
         // 空中自救:像人往脚下拍一块平台一样,放一块止住,落地后再重规划。
-        // 脚下【两】格 —— 人 42px,vy 可达 10/帧,放在脚下一格会被一帧穿过去。
+        // 脚下【两】格。人 42px,vy 可达 10/帧,放在脚下一格会被一帧穿过去。
         static bool TryPlungeRescue(Player p, string why)
         {
             // 【贪心也要救】:别处排除贪心是因为那些是决策,而空中自救是保命 --
@@ -3530,7 +3530,7 @@ namespace TerraBlind
             return true;
         }
 
-        // 计划管不到的自由落体也要有人看着:救援原先整段住在帧重放里,而 jumpPlace 放完平台帧就用尽了 ——
+        // 计划管不到的自由落体也要有人看着:救援原先整段住在帧重放里,而 jumpPlace 放完平台帧就用尽了
         // 人没落上去就一路掉到底 (3186,502) 掉了 18 格无人过问。走闭环/无计划时同样是盲区。
         static void WatchUnplannedFall()
         {
@@ -3578,11 +3578,11 @@ namespace TerraBlind
 
             // 【起跳前把手空出来】。跳放的放置窗口只有弧线上的那一帧,而 itemTime 是上一次用物品的冷却:
             // 用时倍率还原成原版后一次放置要 15 帧,人跳到窗口那一帧手还在挥,EmitPlace 直接 return,
-            // 平台永远不出现 —— 人从平台位置穿过去摔回起点,下一轮又选中同一条边,再摔。
+            // 平台永远不出现。人从平台位置穿过去摔回起点,下一轮又选中同一条边,再摔。
             // 现场:(1418,319)→(1420,317) 计划落 317 行,实际落 323 行,连一条 [place] 都没有;
             // 而 itemTime=1 的那几次(提速时代)全是 OK。这就是"跳两三下才前进"的由来。
             // 在【地上】等冷却是免费的:弧线一模一样,只是整体后移几帧,落点/H/cost 全不变。
-            // 空中不能等 —— 每等一帧多掉一帧,那是另一个坑,下面 _placeStall 那段已经写明。
+            // 空中不能等。每等一帧多掉一帧,那是另一个坑,下面 _placeStall 那段已经写明。
             // 等也要有上限:itemTime 万一因为别的东西一直不归零,这条 return 会把人无声钉死。
             // 原版最慢的东西也就几十帧,60 帧还没空说明不是在等冷却,照常起跳(大不了这次跳放失败重规划)
             if (_execIdx == 0 && p.itemTime > 0 && p.velocity.Y == 0f
@@ -3629,7 +3629,7 @@ namespace TerraBlind
             if (_lastReal.Valid && mismatch > TeleportPx)
             {
                 DiagLog.Write($"[ss-teleport] mismatch={mismatch:0.#} → abort nav");
-                _execFailCode = "cancelled";  // teleported away (recall/mirror) — this nav is meaningless now
+                _execFailCode = "cancelled";  // teleported away (recall/mirror), this nav is meaningless now
                 StopExec(); StopSteps(); DiagLog.EndRun();
                 return;
             }
@@ -3638,7 +3638,7 @@ namespace TerraBlind
 
             if (falling && TryPlungeRescue(p, $"belowPlan={belowPlan:0.#}")) return;
 
-            // 卡住(速度偏差):计划要人这帧在动而真身被挡住(该有 |pf.Vx|,实际 |vx| ~0)—— 按位置距离判的检查看不见的那条轴。
+            // 卡住(速度偏差):计划要人这帧在动而真身被挡住(该有 |pf.Vx|,实际 |vx| ~0)。按位置距离判的检查看不见的那条轴。
             // 数连续被挡的帧,超过 StuckFrames 就从人真正所在的地方重规划。覆盖撞墙/卡坡这类否则会一路重规划风暴到 MaxReplans 的情况。
             if (!_greedyActive && _execIdx > 0)
             {
@@ -3654,7 +3654,7 @@ namespace TerraBlind
             }
 
             // 只在落地时重规划:腾空态不是展开点,跳到一半重规划没有意义。
-            // 贪心逐步自我纠正所以跳过这里;逐边执行【要】它 —— 当初把人摔进坑的正是开环漂移。
+            // 贪心逐步自我纠正所以跳过这里;逐边执行【要】它。当初把人摔进坑的正是开环漂移。
             if (!_greedyActive && drift > ReplanDriftPx && _replanCooldownLeft == 0 && p.velocity.Y == 0f)
             {
                 if (Replan("drift")) return;
@@ -3665,7 +3665,7 @@ namespace TerraBlind
                 if (_placeStall == 0) DiagLog.Trc($"[ss-place] frame={_execIdx} tile=({f.PlaceCx},{f.PlaceCy})");
                 _placeStall++;
                 // 【空中不许 stall】。下面那段是给地面写的:刹住残速、原地等平台。人在空中刹不住,
-                // 每等一帧就多掉一帧 —— 实测跳放等了 13 帧,人掉了 2.3 格,从平台【下面】穿过去
+                // 每等一帧就多掉一帧。实测跳放等了 13 帧,人掉了 2.3 格,从平台【下面】穿过去
                 // (平台是 solidTop,只有顶面接人),然后一路自由落体 109 格。
                 // 空中就照常重放帧,挥手的事交给 ItemUseCoordinator 在后台完成;放不上就当次失败重规划。
                 bool airborne = p.velocity.Y != 0f;
@@ -3718,7 +3718,7 @@ namespace TerraBlind
         }
 
         // "放好了" = 真有能站的支撑(实心或平台),和模拟当初承诺落点时用的是同一把尺子。光看 HasTile 会撒谎:
-        // 目标格里一株草/藤/蛛网就读成"已完成",放置挥空,重放的跳跃差一格 —— (1379,224) 那撮草钉住了整个循环。
+        // 目标格里一株草/藤/蛛网就读成"已完成",放置挥空,重放的跳跃差一格。(1379,224) 那撮草钉住了整个循环。
         static bool TilePlaced(int cx, int cy)
         {
             if (cx < 0 || cy < 0 || cx >= Main.maxTilesX || cy >= Main.maxTilesY) return false;
@@ -3786,7 +3786,7 @@ namespace TerraBlind
             Main.SmartCursorWanted_Mouse = false; // SmartCursor would retarget the cursor away from PlaceCx/Cy
             if (p.itemTime > 0)
             {
-                // 空中每帧都撞在这里直接 return,帧却照常推进 —— 手没挥完平台就永远不出现。
+                // 空中每帧都撞在这里直接 return,帧却照常推进。手没挥完平台就永远不出现。
                 // 静默返回让它看起来像"根本没试过"(死循环 9 个周期,[place] 一条没有)。
                 if (_placeStall == 1) EventLog.W(Ev.Place, $"WAIT ({cx},{cy}) itemTime={p.itemTime} 挥手中");
                 return; // mid-swing; wait for cooldown before re-firing

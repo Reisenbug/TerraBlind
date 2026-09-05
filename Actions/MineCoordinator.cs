@@ -8,8 +8,8 @@ namespace TerraBlind
 	public class MineRequest
 	{
 		public MineDir Dir;
-		public int StartWx, StartWy;   // cell the player stood on when mining began — defines the valid box with Target
-		public int TargetWx, TargetWy; // landing cell from the planner — mining ends when the player stands here
+		public int StartWx, StartWy;   // cell the player stood on when mining began, defines the valid box with Target
+		public int TargetWx, TargetWy; // landing cell from the planner, mining ends when the player stands here
 		public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // planned tiles (fallback when the live hitbox window slides past an obstacle, e.g. a slope half-brick that lifted the player)
 	}
 
@@ -19,7 +19,7 @@ namespace TerraBlind
 		// 连着多少帧扫不出要挖的格就认输。横向挖有"走进已挖开的隧道"这种合法空帧,给足余量
 		private static int _idleFrames;
 		private const int IdleMax = 90;
-		// 上次为够不着而伸手的那一格。只为日志去重 —— 每帧都打会刷满
+		// 上次为够不着而伸手的那一格。只为日志去重。每帧都打会刷满
 		private static (int, int) _boostLogAt = (int.MinValue, int.MinValue);
 		private static int _stallFrames, _lastRemaining;
 		private const int StallMax = 600; // ~10s with no tile removed = can't reach the target → bail
@@ -59,7 +59,7 @@ namespace TerraBlind
 			int slot = FindPickaxeSlot(p);
 			if (slot < 0) { _active = null; return; }
 
-			// real-time hitbox cells — recomputed every frame so upstream landing drift can't aim mining at
+			// real-time hitbox cells, recomputed every frame so upstream landing drift can't aim mining at
 			// stale absolute coords (the bug: tiles planned from a too-shallow landing ended up overhead).
 			// 20px wide → 2 columns; 42px tall → 3 rows.
 			int leftC = (int)(p.position.X / 16f);
@@ -69,8 +69,8 @@ namespace TerraBlind
 
 			int pcx = (int)(p.Center.X / 16f), pfeet = (int)((p.position.Y + p.height) / 16f) - 1;
 
-			// safety box: mining is only ever valid inside the start↔target rectangle (+margin). Any drift —
-			// horizontal or vertical — that walks the player out of it means execution lost the plan; stop and let
+			// safety box: mining is only ever valid inside the start↔target rectangle (+margin). Any drift
+			// horizontal or vertical, that walks the player out of it means execution lost the plan; stop and let
 			// the closed-loop replan re-plan from the new position rather than mining whatever is now in front.
 			int boxX0 = System.Math.Min(req.StartWx, req.TargetWx) - MineBoxMargin;
 			int boxX1 = System.Math.Max(req.StartWx, req.TargetWx) + MineBoxMargin;
@@ -92,7 +92,7 @@ namespace TerraBlind
 				{
 					int col = req.Dir == MineDir.Right ? rightC + 1 : leftC - 1;
 					// rows cover the body (footR..footR-2) AND down to the target row. a slope/half-brick at the exit
-					// lifts the player a cell (footR rises), sliding the obstacle out of the body window — but it still
+					// lifts the player a cell (footR rises), sliding the obstacle out of the body window, but it still
 					// sits at/below TargetWy, so include rows down to TargetWy. clamp the span against an anomalous gap.
 					int loRow = System.Math.Max(footR - 4, System.Math.Min(footR - 2, req.TargetWy));
 					int hiRow = System.Math.Min(footR + 2, System.Math.Max(footR, req.TargetWy));
@@ -109,7 +109,7 @@ namespace TerraBlind
 					// exit lifts the player a cell, so pfeet==TargetWy never holds and mining hangs forever). horizontal
 					// progress to the target column is what "tunnelled through" means.
 					// AND nothing solid left in the window: a sloped half-brick lets the hitbox squeeze a few px into
-					// the target column, so the raw center crosses the line BEFORE anything is mined — done fired on
+					// the target column, so the raw center crosses the line BEFORE anything is mined, done fired on
 					// dispatch, zero tiles dug, and the replan re-picked the same dig every 2 ticks (the (1502,588)
 					// overhead-slope loop). Passing the line only counts once the tunnel is actually clear; if some
 					// tile can never clear, the step watchdog bounds the wait.
@@ -153,7 +153,7 @@ namespace TerraBlind
 				return;
 			}
 
-			// 【这条以前是完全静默的 return,而且不清 _active —— 于是彻底死锁】。
+			// 【这条以前是完全静默的 return,而且不清 _active。于是彻底死锁】。
 			// 扫不出要挖的格时 remaining==0,上面那段又把 _stallFrames 清零,600 帧的看门狗永远不触发;
 			// _active 一直非空,TickSteps 开头的 busy 门就把后面每一轮都挡在 "start n=1" 上,
 			// 人一格不动、一条日志不打,只能等 sentinel 判 H 平线放弃整段
@@ -179,7 +179,7 @@ namespace TerraBlind
 			}
 
 			// 【够不着就别空挥】。vanilla 够不着时根本不破坏方块,而这里原来只管瞄准+按键,
-			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥 —— 死循环。
+			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥。死循环。
 			// 现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段。
 			// 尺子用 Reach.CanMine(vanilla 挖掘那一份),别另编
 			if (!Reach.CanMine(p, tx, ty))
@@ -190,12 +190,12 @@ namespace TerraBlind
 			}
 
 			// 【够不着就临时把手伸长,别空挥】。vanilla 够不着时根本不破坏方块,而这里原来只管
-			// 瞄准+按键,于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥 —— 死循环
+			// 瞄准+按键,于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥。死循环
 			// (现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段)。
 			// 【只在这一帧开,同帧关】。LongArm 改的是 static tileRangeX,全局都读得到,
-			// 跨帧持有会让整个寻路以为手能伸 30 格 —— 所以用 try/finally 保证挥完就还
+			// 跨帧持有会让整个寻路以为手能伸 30 格。所以用 try/finally 保证挥完就还
 			// 【别抢别人的手臂】。捅向导那段(WofPrep)会长期开着 30 格,那时 LongArmBegin 是空操作,
-			// 我这儿的 finally 却会把它提前还掉 —— 所以本来就开着就不碰
+			// 我这儿的 finally 却会把它提前还掉。所以本来就开着就不碰
 			bool boosted = !Concessions.LongArmOn && !Reach.CanMine(p, tx, ty);
 			if (boosted)
 			{
@@ -213,7 +213,7 @@ namespace TerraBlind
 			finally { if (boosted) Concessions.LongArmEnd(); }
 		}
 
-		// aim for the 2-column shaft center (±2px), not the edge — an edge-snug stop leaves a sub-pixel lip
+		// aim for the 2-column shaft center (±2px), not the edge, an edge-snug stop leaves a sub-pixel lip
 		// that still supports the 20px body, who never falls and the deeper tiles leave mining reach.
 		private static void CenterInShaft(Player p, int leftC, int rightC)
 		{

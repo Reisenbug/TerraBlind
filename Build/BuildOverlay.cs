@@ -8,11 +8,11 @@ using Terraria.ModLoader;
 namespace TerraBlind
 {
     // REPLAY-SIDE preview + conflict check for a build_rec.json. Two jobs, both read-only (no world edits):
-    //   OVERLAY  — draw the recorded structure FAINT at the target location (anchor = the player's feet now, or a
+    //   OVERLAY, draw the recorded structure FAINT at the target location (anchor = the player's feet now, or a
     //              passed cell), so the human sees where the house will land before replay drives a single step.
-    //   CONFLICT — for every PLACE cell, is it already occupied (a block, a wall, or a TREE)? Trees are special:
+    //   CONFLICT, for every PLACE cell, is it already occupied (a block, a wall, or a TREE)? Trees are special:
     //              a tree-trunk tile can't be placed into or plainly mined (vanilla forbids mining a tree's support),
-    //              so a placement landing on one needs the tree felled first — flagged distinctly.
+    //              so a placement landing on one needs the tree felled first, flagged distinctly.
     // Conflict cells draw in a warning colour; the replayer skips them (occupied place = already satisfied) and the
     // human sees exactly which cells clash. Kept parallel to BuildRecorder's format (anchor + events list).
     public static class BuildOverlay
@@ -95,8 +95,8 @@ namespace TerraBlind
             return conflicts;
         }
 
-        // occupancy of a place target: a tree trunk (special — must be felled), else any solid/existing tile
-        // ("block"), else a background wall ("wall"), else null (free — placement will succeed).
+        // occupancy of a place target: a tree trunk (special, must be felled), else any solid/existing tile
+        // ("block"), else a background wall ("wall"), else null (free, placement will succeed).
         private static string ConflictAt(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return null;

@@ -2,7 +2,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// /start —— tb 1 的全流程,不经过 python
+	// /start, tb 1 的全流程,不经过 python
 	public class StartCommand : ModCommand
 	{
 		public override CommandType Type => CommandType.Chat;

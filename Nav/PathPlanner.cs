@@ -6,9 +6,9 @@ using Terraria;
 namespace TerraBlind
 {
     // Sub-tile horizontal alignment of the player hitbox relative to its tile column cx.
-    // L: hitbox spans (cx-1, cx)  — player flush left
-    // R: hitbox spans (cx, cx+1)  — player flush right
-    // C: hitbox spans (cx-1, cx, cx+1) — crossing a tile boundary
+    // L: hitbox spans (cx-1, cx), player flush left
+    // R: hitbox spans (cx, cx+1), player flush right
+    // C: hitbox spans (cx-1, cx, cx+1), crossing a tile boundary
     public enum SubPx : byte { L = 0, C = 1, R = 2 }
 
     public static class PathPlanner
@@ -53,7 +53,7 @@ namespace TerraBlind
         private const int BridgeDtgThresh = 12;
         private const int CanProgressK = 0;     // goal validity: 0 = any standable tile is valid goal
         private const int JumpMinCol = 0;
-        private const int NodeBudget = 15000;  // A* expansion cap — beyond this, return best partial path
+        private const int NodeBudget = 15000;  // A* expansion cap, beyond this, return best partial path
         private const float JumpOverheadMax = 4f;    // extra cost for short jumps; full-range jump = 0, min jump = JumpOverheadMax
         private const float BridgeCostBase = 10f;
         private const float BridgeCostPerCol = 4f;
@@ -654,7 +654,7 @@ namespace TerraBlind
                 if (goalSet.Contains((cx, cy, false)) || goalSet.Contains((cx, cy, true)))
                     return BuildResult(prev, g, cx, cy, hc, sub, startNode, verifyData, pillarVerifyData, mineTilesData);
 
-                // budget disabled — partial paths cause executor thrash that's worse than the original lag
+                // budget disabled, partial paths cause executor thrash that's worse than the original lag
                 if (visited.Count >= NodeBudget)
                 {
                     DiagLog.Write($"[plan] WARNING visited={visited.Count} exceeds NodeBudget={NodeBudget} (continuing anyway)");

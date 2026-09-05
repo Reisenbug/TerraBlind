@@ -74,7 +74,7 @@ namespace TerraBlind
             try { lock (_lock) { File.AppendAllText(p, $"{Main.GameUpdateCount} {msg}\n"); } } catch { }
         }
 
-        // 高频逐帧诊断走这个 —— Trace 关着就是一次布尔判断,零 IO、零字符串拼接(调用方用 interpolation 时仍会拼,
+        // 高频逐帧诊断走这个。Trace 关着就是一次布尔判断,零 IO、零字符串拼接(调用方用 interpolation 时仍会拼,
         // 所以热点处要自己先判 if (DiagLog.Trace))。
         public static void Trc(string msg) { if (Trace) Write(msg); }
 

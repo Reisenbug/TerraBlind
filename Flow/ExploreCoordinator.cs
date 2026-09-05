@@ -3,7 +3,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// Open-ended direction explore: walk toward a sign forever. No endpoint, no biome stop — Python flips it on
+	// Open-ended direction explore: walk toward a sign forever. No endpoint, no biome stop, Python flips it on
 	// (/nav_start{sign}) and Ctrl-C's it off (/nav_stop). Each leg picks the furthest reachable standable cell
 	// ahead and drives the NEW StateSpacePlanner there; on arrival, picks the next leg. Reuses the physics-faithful
 	// planner (unlike the legacy NavCoordinator direction explore which used old pathing).
@@ -78,7 +78,7 @@ namespace TerraBlind
 				}
 				else
 				{
-					// leg failed to reach — count it; the next pick will try a nearer/different cell.
+					// leg failed to reach, count it; the next pick will try a nearer/different cell.
 					_failStreak++;
 					_dispatched = false;
 					DiagLog.Write($"[explore] leg failed ({StateSpacePlanner.ExecFailCode}) streak={_failStreak}");
@@ -115,7 +115,7 @@ namespace TerraBlind
 		}
 
 		// Kick off ONE background plan per in-flight leg: from the current leg's PREDICTED landing, pick the next
-		// goal and Plan toward it on a thread pool thread. The result is cached; we never block on it — if it isn't
+		// goal and Plan toward it on a thread pool thread. The result is cached; we never block on it, if it isn't
 		// ready (or doesn't match) on arrival, we just plan fresh. Exceptions are swallowed: a failed lookahead is
 		// indistinguishable from "no cache" downstream, so it can never break the foreground walk.
 		private static void MaybeLaunchLookahead()
@@ -204,11 +204,11 @@ namespace TerraBlind
 			return (px, py, 0f);
 		}
 
-		// goal selection copied verbatim from legacy PathPlanner.Plan(sign) L511-527 — the version that picked GOOD
+		// goal selection copied verbatim from legacy PathPlanner.Plan(sign) L511-527, the version that picked GOOD
 		// surface goals (didn't dive into pits). per column ahead: take the FIRST standable scanning top→down (=
 		// highest surface). score = forward + max(0,rise)*2, which BIASES toward going up, so a pit (negative rise)
 		// scores low and is never chosen over flat/rising ground. pick the highest-scoring column across the window
-		// (NOT the furthest — that was my bug, it picked isolated cells across pits). Execute judges reachability.
+		// (NOT the furthest, that was my bug, it picked isolated cells across pits). Execute judges reachability.
 		private static (int gx, int gy)? PickAhead(int pcx, int feetY)
 		{
 			int goalX = -1, goalY = -1;

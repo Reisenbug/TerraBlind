@@ -4,19 +4,19 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// HOUSE — 盖房子的唯一编排。大房子和肉山桥那间单间是同一个东西,只差间数:
+	// HOUSE。盖房子的唯一编排。大房子和肉山桥那间单间是同一个东西,只差间数:
 	//   Rooms=4 → 21 宽 4 间(地表那座);Rooms=1 → 6 宽单间(地狱桥起点)
 	//
 	// 形状(每间 5 格宽,加最右边一根柱子 = 5*Rooms+1 列):
 	//   铺地板 → 最右端 pillar → 跳上柱顶 → 往回铺屋顶 → 掉下来 → 每间一根支柱
 	//   → 放工作台 → 合成家具和墙 → 摆家具 → 一间一间铺墙
 	//
-	// "支柱"和单间的"第二根柱子"是同一样东西 —— 所以不需要两套流程。
+	// "支柱"和单间的"第二根柱子"是同一样东西。所以不需要两套流程。
 	//
 	// 编排以前在 python(_build_house),坐标在两边各推了一遍,于是同一个 off-by-one 反复出现
 	// (柱子歪一格、屋顶铺在半空、pillar_top 算错)。现在只有这一份。
 	//
-	// 每一步启动一个已有的异步原语,等它报完成再进下一步 —— 这里不重新实现任何动作。
+	// 每一步启动一个已有的异步原语,等它报完成再进下一步。这里不重新实现任何动作。
 	public static class HouseBuilder
 	{
 		private enum Ph
@@ -39,7 +39,7 @@ namespace TerraBlind
 		// 房间内的一格,用来给 NPC 指派住房(moveRoom 要房间【里面】的坐标,火把那格正好)
 		public static int TorchWx => _torchWx;
 		public static int TorchWy => _torchWy;
-		// 第 i 张椅子在哪一列 —— 放置和验收共用这一份,别算两遍。
+		// 第 i 张椅子在哪一列。放置和验收共用这一份,别算两遍。
 		// 单间只有椅子+工作台,而工作台占【两列】、朝哪边展开要看当时的地形,写死哪一列迟早撞上
 		// (日志:占地=.../##./###/ reason=occupied,挥了半天放不上)。
 		// 所以实时扫 Wx(2..5),挑第一个空着的;都占了就退回 Wx(2) 让它照常报缺
@@ -77,7 +77,7 @@ namespace TerraBlind
 		const int H_TABLE = 32;
 		const int H_CHAIR = 34;
 		// 放下去之后地上是【方块 ID】,和上面那些物品 ID 是两套号:椅子 34→15、桌子 32→14。
-		// 拿物品 ID 去比 TileType 会全部判缺 —— 房子明明盖好了却报验收不合格。
+		// 拿物品 ID 去比 TileType 会全部判缺。房子明明盖好了却报验收不合格。
 		const int T_TABLE = Terraria.ID.TileID.Tables;
 		const int T_CHAIR = Terraria.ID.TileID.Chairs;
 		const int H_WALL = 93;        // 木墙
@@ -92,7 +92,7 @@ namespace TerraBlind
 		private static int _retryN;
 
 		// 原语没做成【不等于房子失败】。原语内部已经走过 unstick 栈了(Stuck→Unstick.Handle),
-		// 栈放弃才回到这儿 —— 世界已经被栈改过(补了料/挖开了/让了位),同一步第二次往往就成。
+		// 栈放弃才回到这儿。世界已经被栈改过(补了料/挖开了/让了位),同一步第二次往往就成。
 		// 换相位时清点一次椅子:每帧打会刷屏,而少一把只可能发生在某两个相位之间
 		static void TraceOnAdvance(Ph to)
 		{
@@ -121,7 +121,7 @@ namespace TerraBlind
 		static int TableCount => _rooms >= 4 ? 3 : 0;
 		static int ChairCount => _rooms >= 4 ? 4 : 1;
 		static int WallCount => _rooms * 24;
-		// 每间一个火把。合不出来:配方要凝胶,不刷怪就只能开箱砸罐捡 —— 是进屋前该备好的料
+		// 每间一个火把。合不出来:配方要凝胶,不刷怪就只能开箱砸罐捡。是进屋前该备好的料
 		static int TorchCount => _rooms;
 
 		// 火把不挑种类:原版判房间要光源看的是 TileID.Sets.RoomNeeds.CountsAsTorch,
@@ -200,7 +200,7 @@ namespace TerraBlind
 			return L < 0 ? int.MinValue : ay + L;
 		}
 
-		// 人 20px 跨两列,爬升段里那两列头顶都不能有方块 —— 挑干净的那半边站。
+		// 人 20px 跨两列,爬升段里那两列头顶都不能有方块。挑干净的那半边站。
 		// +3/+13 不取 +1/+15:贴着列边界站,几 px 误差就把 PillarCol 甩到隔壁列。
 		static float ClearStandPx(int x0, int fromCy, int toCy)
 		{
@@ -222,7 +222,7 @@ namespace TerraBlind
 				var it = p.inventory[i];
 				if (it != null && !it.IsAir && it.type == id) { sb.Append($"[{i}]x{it.stack} "); total += it.stack; }
 			}
-			// 光标上那一件不在 inventory 里 —— 换槽/丢东西都经过它,少的那一把最可能就挂在这
+			// 光标上那一件不在 inventory 里。换槽/丢东西都经过它,少的那一把最可能就挂在这
 			if (Main.mouseItem != null && !Main.mouseItem.IsAir && Main.mouseItem.type == id)
 			{ sb.Append($"[鼠标]x{Main.mouseItem.stack} "); total += Main.mouseItem.stack; }
 			// 掉在地上的也算:ThrowItems 扔出去没捡回来就是这种
@@ -294,7 +294,7 @@ namespace TerraBlind
 			switch (_ph)
 			{
 				// 开工先清场:绿框(VisualizeBox 画的那个矩形)里的方块和【平台】全挖掉。
-				// 平台是重点 —— platdown 往下搭梯子时会在地板/屋顶那几行留下平台,
+				// 平台是重点。platdown 往下搭梯子时会在地板/屋顶那几行留下平台,
 				// bridge 只会把它当成"已经有了"(already=1/5),结构里就留着别人的平台。
 				case Ph.Clear:
 				{
@@ -313,8 +313,8 @@ namespace TerraBlind
 						}
 						// 够不着 → 交栈。Unstick.Approach 分两档:同高横挪两格,差得远走 RecedingNav
 						// (会挖会搭平台,能上下)。裸 SettleAt 只会横移,而这框有 10 行高,
-						// 顶上几格和人差 8~9 行 —— 横挪到同一列还是够不着,死循环 200+ 帧。
-						// 清场是【挖】,按挖的尺子量 —— CanPlace 宽出 blockRange,会在挖不到的地方放行
+						// 顶上几格和人差 8~9 行。横挪到同一列还是够不着,死循环 200+ 帧。
+						// 清场是【挖】,按挖的尺子量。CanPlace 宽出 blockRange,会在挖不到的地方放行
 						if (!Reach.CanMine(p, cdx, cdy))
 						{
 							if (Unstick.Handle("house-clear", new Blocker(BlockKind.OutOfReach, cdx, cdy, "清房址够不着")))
@@ -339,7 +339,7 @@ namespace TerraBlind
 					return;
 				}
 
-				// 站到 (_standCx, _ay+1) —— 左下角隔两列。站正下方不行:(_x0,_ay) 会在身体里。
+				// 站到 (_standCx, _ay+1)。左下角隔两列。站正下方不行:(_x0,_ay) 会在身体里。
 				case Ph.Lift:
 				{
 					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
@@ -380,7 +380,7 @@ namespace TerraBlind
 
 				case Ph.LiftStep:
 					if (SkillExecutor.IsActive) return;
-					// 没爬高就别回去重启 —— 会 start/done 空转到 MaxLift,还把人蹭下平台
+					// 没爬高就别回去重启。会 start/done 空转到 MaxLift,还把人蹭下平台
 					if (ActExecutor.OriginCy(p) >= _liftBefore)
 					{ Fail($"爬不动:还在 {ActExecutor.OriginCy(p)},要到 {_ay - 1}"); return; }
 					_ph = Ph.Lift; _waited = 0;
@@ -434,7 +434,7 @@ namespace TerraBlind
 					}
 					_hopTries = 0;
 					// 屋顶行 = 人站柱顶时的 cy+1。曾经改成 PillarTop,那是 _floorRow-(PillarH-1) = 第8格,
-					// 比这里少一格 —— 整间房矮一格,而且人还站在它上面,屋顶 bridge 铺不出来。
+					// 比这里少一格。整间房矮一格,而且人还站在它上面,屋顶 bridge 铺不出来。
 					_roofRow = ActExecutor.OriginCy(p) + 1;
 					Advance(Ph.Roof);
 					if (!Need(BridgeBuilder.Start(Plat(), _dir > 0 ? "left" : "right", Width, out string ws5), "铺屋顶", ws5)) return;
@@ -447,7 +447,7 @@ namespace TerraBlind
 						if (Retry(Ph.SettleTop, "屋顶", $"{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}")) return;
 						Fail($"屋顶:{BridgeBuilder.Outcome}/{BridgeBuilder.Reason}"); return;
 					}
-					// 铺完屋顶横移 2 格再掉下去 —— 落点就在支柱附近,而且不会站进要砌的那一格
+					// 铺完屋顶横移 2 格再掉下去。落点就在支柱附近,而且不会站进要砌的那一格
 					Advance(Ph.MoveOver);
 					SettleAt.Start(ActExecutor.OriginCx(p) - _dir * 2, out _);
 					return;
@@ -565,7 +565,7 @@ namespace TerraBlind
 					{ Fail($"火把只有 {HaveTorch()}/{TorchCount},进屋前得先攒够(开箱砸罐)"); return; }
 
 					// 单间:工作台就在脚下,合完椅子直接原地放,不走来走去。
-					// 多间才需要 walk_place —— 桌 wx(14,9,4) 走到 wx(3),椅 wx(2,7,12,17) 走回 wx(19)。
+					// 多间才需要 walk_place。桌 wx(14,9,4) 走到 wx(3),椅 wx(2,7,12,17) 走回 wx(19)。
 					if (TableCount > 0)
 					{
 						var tt = new List<(int, int, string)>();
@@ -593,7 +593,7 @@ namespace TerraBlind
 					return;
 
 				case Ph.Chairs:
-					// 单间走的是 PlaceAction,多间走 WalkPlace —— 等哪个都行,两个都不在跑就是完了
+					// 单间走的是 PlaceAction,多间走 WalkPlace。等哪个都行,两个都不在跑就是完了
 					if (PlaceAction.IsRunning || WalkPlace.IsRunning) return;
 					DiagLog.Write($"[house] chairs → 背包椅子={Predicates.Have(H_CHAIR)}");
 					// 从最后一间开始倒着铺:摆完椅子人就在第四间那头,顺手就砌,不用先跑回第一间
@@ -637,7 +637,7 @@ namespace TerraBlind
 						return;
 					}
 					// 验收:逐格看有没有东西。placed=4 只说明挥了四次工具,最后一张椅子没落地也照样报 4。
-					// 缺东西先自己补一遍再说 —— 少一张椅子就整栋报废太亏,而缺哪格、缺什么验收都已经知道了。
+					// 缺东西先自己补一遍再说。少一张椅子就整栋报废太亏,而缺哪格、缺什么验收都已经知道了。
 					string missing = AuditHouse();
 					if (missing != null)
 					{
@@ -649,7 +649,7 @@ namespace TerraBlind
 						{ Fail($"补了{_fixRounds}轮没进展,还缺:{missing}"); return; }
 						if (++_fixRounds > FixRoundsMax) { Fail($"补{FixRoundsMax}轮还缺:{missing}"); return; }
 						// 先补结构:地板/屋顶/柱子缺一格,NPC 判定就不认。
-						// 补法和铺桥面完全一样 —— PlaceAnywhere 够不着会自己走、没锚会自己造
+						// 补法和铺桥面完全一样。PlaceAnywhere 够不着会自己走、没锚会自己造
 						if (_fixTiles.Count > 0 || _fixWalls.Count > 0 || _fixDig.Count > 0)
 						{
 							_digTries = 0;
@@ -704,7 +704,7 @@ namespace TerraBlind
 							_fixDig.RemoveAt(_fixDig.Count - 1); _digTries = 0; continue;
 						}
 						if (ClearWay.Dig(p, dx4, dy4, "房内堵着")) return;
-						// 够不着就走过去 —— 房子就这么大,横向挪一挪必定能够着
+						// 够不着就走过去。房子就这么大,横向挪一挪必定能够着
 						if (ActExecutor.OriginCx(p) < dx4) p.controlRight = true; else p.controlLeft = true;
 						return;
 					}
@@ -730,10 +730,10 @@ namespace TerraBlind
 					return;
 				}
 
-				// 补完再验一次。还缺就认输 —— _fixTried 挡着,不会来回补个没完。
+				// 补完再验一次。还缺就认输。_fixTried 挡着,不会来回补个没完。
 				case Ph.Fix:
 					if (WalkPlace.IsRunning) return;
-					// 回去重验,不在这儿判死 —— 缺没缺、还有没有进展,统一由 Audit 那道门说了算
+					// 回去重验,不在这儿判死。缺没缺、还有没有进展,统一由 Audit 那道门说了算
 					if (AuditHouse() != null) { _ph = Ph.Torch; _waited = 0; return; }
 					Advance(Ph.Reclaim);
 					return;
@@ -760,7 +760,7 @@ namespace TerraBlind
 			DiagLog.Write($"[house] done rooms={_rooms} x0={_x0} floor_row={_floorRow}");
 			Chatter.Say($"[TerraBlind] 房子盖好了 ({_x0},{_floorRow}) {_rooms}间", 120, 255, 120);
 			// 椅子底下必须是岩浆:晚上 NPC 坐椅子上,捅他就是挖【椅子这一列】的地板。
-			// 不合格不算盖房失败,但要当场说 —— 否则要等到最后一步才发现白忙
+			// 不合格不算盖房失败,但要当场说。否则要等到最后一步才发现白忙
 			if (_rooms == 1)
 			{
 				bool chairLava = Predicates.LavaBelow(ChairWx, ChairWy + 1);
@@ -794,7 +794,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 完工验收:每一格都实地看过。缺什么报什么坐标 —— "placed=4" 是挥了四次工具,不是四张椅子落了地。
+		// 完工验收:每一格都实地看过。缺什么报什么坐标。"placed=4" 是挥了四次工具,不是四张椅子落了地。
 		// 缺的家具:补的时候要知道往哪放什么,所以和文字报告分开存
 		static readonly List<(int wx, int wy, int item)> _fixList = new();
 		// 结构缺格分两类:方块类(地板/屋顶/柱子)交给 PlaceAnywhere,背景墙交给 PlaceWalls
@@ -813,10 +813,10 @@ namespace TerraBlind
 				for (int iy = 0; iy < h; iy++)
 				{
 					int cx = _x0 + _dir * ix, cy = _ay - iy;
-					// 【左下角那一格留着 —— 那是人的落脚点】。绿框宽 w=Width+1 是为了把地板【框住】,
+					// 【左下角那一格留着。那是人的落脚点】。绿框宽 w=Width+1 是为了把地板【框住】,
 					// 而地板只从 _x0+_dir 起铺 Width 格:_x0 这一列清了永远不铺回来。
 					// Ph.Lift 要求人站在 (_x0,_ay) 上面(lcx==_x0 && lcy==_ay-1),挖了它人就踩空,
-					// 上不到左下角。只保这一格,上方照清 —— 墙和柱子还要占那一列
+					// 上不到左下角。只保这一格,上方照清。墙和柱子还要占那一列
 					if (ix == 0 && iy == 0) continue;
 					if (Predicates.IsWall(cx, cy) || Predicates.IsPlatform(cx, cy))
 						_clearList.Add((cx, cy));
@@ -903,7 +903,7 @@ namespace TerraBlind
 			if (bad.Count == 0) return null;
 			string all = string.Join(" ", bad);
 			DiagLog.Write($"[house] AUDIT 缺 {bad.Count} 处: {all}");
-			// 结构缺了没法补(_fixList 只装家具),但也不该把整栋判死 —— 房子合不合格
+			// 结构缺了没法补(_fixList 只装家具),但也不该把整栋判死。房子合不合格
 			// 最终由原版 moveRoom 说了算。所以只在【有家具可补】时才当作失败去补,否则只警告
 			// 家具没缺、只缺结构:也别放着不管,走 FixStruct 用 PlaceAnywhere/PlaceWalls 补
 			if (_fixList.Count == 0 && (_fixTiles.Count > 0 || _fixWalls.Count > 0 || _fixDig.Count > 0)) return all;
@@ -911,7 +911,7 @@ namespace TerraBlind
 		}
 
 		// 第 r 间的内腔:两根柱子之间、地板上一行到屋顶下一行。
-		// 顺序照抄 _build_house 的 H_WALL_ORDER —— vanilla 的墙体合并依赖放置顺序。
+		// 顺序照抄 _build_house 的 H_WALL_ORDER, vanilla 的墙体合并依赖放置顺序。
 		static readonly (int dr, int dc)[] WallOrder =
 		{
 			(1,2),(2,2),(3,2),(4,2),(5,2),(6,2),
@@ -939,7 +939,7 @@ namespace TerraBlind
 		}
 
 		// python: 椅子 wx(2,7,12,17),走到 wx(19)。
-		// 重试时换个终点往回走 —— 同一个方向再走一遍,够不着的还是够不着。
+		// 重试时换个终点往回走。同一个方向再走一遍,够不着的还是够不着。
 		static bool StartChairs(out string why)
 		{
 			var cc = new List<(int, int, string)>();

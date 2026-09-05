@@ -7,7 +7,7 @@ namespace TerraBlind
     // only a SHORT window from the player's REAL position toward the final goal (big field as h, tiny exp budget →
     // returns the furthest standable cell it reached = the window), executes it, then re-plans from the new real
     // position. Drift can't accumulate (every window starts from reality); no切片, no接力 realign needed beyond the
-    // one DispatchPlan does. Window A* is still complete within its budget (not greedy) — it can back up locally.
+    // one DispatchPlan does. Window A* is still complete within its budget (not greedy), it can back up locally.
     public static class RecedingNav
     {
         public static bool Active;
@@ -18,9 +18,9 @@ namespace TerraBlind
         static string _waitOn = "";   // 上一次被谁挡的,变了才打日志
         static int _goalWx, _goalWy;
         // 三种目标语义:
-        //   Snap  — 悬空目标掉到下面的地面,到达=人站在那格上。走路默认。
-        //   Mine  — 不 snap,到达=目标格被挖空。挖矿:目标是岩石里的矿,身体(2x3)根本站不上去。
-        //   Stand — 不 snap,到达=人站在那格上。房址:目标本来就悬空,必须真站上去。
+        //   Snap。悬空目标掉到下面的地面,到达=人站在那格上。走路默认。
+        //   Mine。不 snap,到达=目标格被挖空。挖矿:目标是岩石里的矿,身体(2x3)根本站不上去。
+        //   Stand。不 snap,到达=人站在那格上。房址:目标本来就悬空,必须真站上去。
         // Reach = 目标悬空,站不上去也放不了东西,人挨着它伸手就算到
         public enum Mode { Snap, Mine, Stand, Reach }
         static Mode _mode;
@@ -56,7 +56,7 @@ namespace TerraBlind
         static int _altered;
         static volatile bool _rebuilding;
         // 同一格重建过还在场外 = 那格 Dijkstra 根本到不了(不是场旧了)。再建多少次都一样,
-        // 而 off-field 分支直接 return,人连安全逃逸步都跑不到 —— 每 50 帧烧 420ms 建场,永不停。
+        // 而 off-field 分支直接 return,人连安全逃逸步都跑不到。每 50 帧烧 420ms 建场,永不停。
         static (int, int) _offFieldCell = (int.MinValue, int.MinValue);
         static int _offFieldTries;
         // 换目标=换场,建一次 ~500ms/70万格。GetField 会在主线程内联建 → 每周期一次可见卡顿,所以丢后台
@@ -147,7 +147,7 @@ namespace TerraBlind
         public static void Start(int goalWx, int goalWy, Mode mode)
         {
             // 【同一个目标已经在跑就别重来】。Start 会作废建场任务、清掉 Commitment/Trap
-            // 的全部记录 —— 每帧调一次的话场永远建不完,人一步不动,屏幕刷满 building field
+            // 的全部记录。每帧调一次的话场永远建不完,人一步不动,屏幕刷满 building field
             // (现场:WofPrep 的兜底每帧调,日志 6413~6857 连着几百条)。
             // 调用方少写一个 if 就会这样,所以守在这里,不指望每个调用点都记得
             // 【先落地再比】。Snap 会把 goalWy 改写成真正站得住的那一行,存下来的是改写后的值;
@@ -238,7 +238,7 @@ namespace TerraBlind
             // 抢同一帧的 controlUseItem,网优先(网拖慢移动,罐子晚一帧无所谓)
             if (!p.controlUseItem) SmashPot(p);
 
-            // EXACT (mining): the goal is a solid ore the body can't stand on — arrival is the tile being MINED OUT.
+            // EXACT (mining): the goal is a solid ore the body can't stand on, arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
             if (_mode == Mode.Mine)
             {
@@ -256,7 +256,7 @@ namespace TerraBlind
                     _braking = false; LastStop = "done"; Stop(); return;
                 }
                 // 【够得着 = 手能碰到,按最窄的那把尺子算】。Mode.Reach 的调用方是开箱/挖那种
-                // "凑近了就行"的活,而交互(右键开箱)的范围只有 tileRangeX,不含 blockRange ——
+                // "凑近了就行"的活,而交互(右键开箱)的范围只有 tileRangeX,不含 blockRange
                 // 拿 CanPlace 判就会在够不着的地方报"到了",人站定却开不了箱。
                 if (p.velocity.Y == 0f
                     && Reach.CanInteract(p, _goalWx, _goalWy))
@@ -273,7 +273,7 @@ namespace TerraBlind
             {
                 float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
                 float cx = p.Center.X, fy = p.position.Y + p.height;
-                // Stand 的契约是"脚踩着那一格开工",±24px 会让人站在隔壁列上就报到达 —— 建房那边整套
+                // Stand 的契约是"脚踩着那一格开工",±24px 会让人站在隔壁列上就报到达。建房那边整套
                 // 局部坐标就全偏一格。收到半格,并且要求真落地。
                 float tol = _mode == Mode.Stand ? StandDistPx : GoalDistPx;
                 if (System.Math.Abs(cx - gx) <= tol && System.Math.Abs(fy - gy) <= tol
@@ -288,7 +288,7 @@ namespace TerraBlind
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
             {
                 // 【判死之前先叫一次 A*】。sentinel 数满四次说的正是"贪心蹭不动了",
-                // 而那恰恰是 A* 该接手的时刻 —— 可 A* 的唯一入口是 Trap(候选里没有一条降 H),
+                // 而那恰恰是 A* 该接手的时刻。可 A* 的唯一入口是 Trap(候选里没有一条降 H),
                 // 黑曜石那种"每步降 3 分却走不出去"的局面够不上 Trap,A* 从头到尾没被叫过。
                 // 现场:(1040,953) 下面一整片黑曜石,场知道要绕(往右挖穿几格或从左边走),
                 // 可那收益要走十几格才兑现,贪心只看下一步,在 1036~1044 来回蹭到判死。
@@ -304,7 +304,7 @@ namespace TerraBlind
                     _haveLast = false;
                     return;
                 }
-                // A* 还在后台搜的时候别判死 —— TryEscape 刚开搜也返回 false,和"搜不出来"长得一样
+                // A* 还在后台搜的时候别判死。TryEscape 刚开搜也返回 false,和"搜不出来"长得一样
                 if (TrapEscape.Busy) { StuckSentinel.Reset(); return; }
                 EventLog.W(Ev.Sentinel, $"GIVE-UP H平线 放弃这一段 goal=({_goalWx},{_goalWy})");
                 LastStop = "stuck"; Stop();
@@ -318,7 +318,7 @@ namespace TerraBlind
 
             // one label function everywhere: same rounding AND same body-fit snap as the planner's landing labels.
             var cell = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
-            // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap — no compass here, and
+            // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap, no compass here, and
             // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
             if (MazeWand.FieldPickStale())
                 RebuildFieldAsync("pick change");
@@ -331,7 +331,7 @@ namespace TerraBlind
                     return;
                 }
                 // 建过了还在场外:不再建,放行下去。StepAlongField 会报 EXPAND-EMPTY 然后走安全逃逸步,
-                // 人挪一格就可能回到场里 —— 停在这儿等一张永远不会包含这格的场才是真死锁。
+                // 人挪一格就可能回到场里。停在这儿等一张永远不会包含这格的场才是真死锁。
                 EventLog.W(Ev.Fail, $"OFF-FIELD {cell} 重建后仍不在场里 → 交给逃逸步");
             }
             else if (cell == _offFieldCell) { _offFieldCell = (int.MinValue, int.MinValue); _offFieldTries = 0; }
@@ -341,14 +341,14 @@ namespace TerraBlind
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
                 // 带上原始 px/py 和脚下踩的东西:格号是取整后的结论,差一行可能是真没到,也可能只是
-                // 两把尺子读数不同。今天四个误判有三个当场就能证伪 —— 如果日志里有这些原始值。
+                // 两把尺子读数不同。今天四个误判有三个当场就能证伪。如果日志里有这些原始值。
                 int feetRow = (int)((p.position.Y + p.height) / 16f);
                 var (bl, br) = Predicates.BodyCols(p);
                 string under = "";
                 for (int c = bl; c <= br; c++)
                     if (Predicates.IsGround(c, feetRow)) under += $"{c}:{Main.tile[c, feetRow].TileType} ";
                 bool hit = StateSpacePlanner.Arrived(t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
-                // MISS 才带规划落点:差一格是取整的结论,像素差才说明是仿真偏了还是执行飘了。vx 是残余速度 ——
+                // MISS 才带规划落点:差一格是取整的结论,像素差才说明是仿真偏了还是执行飘了。vx 是残余速度
                 // 规划器用【空输入】沉降算落点,执行器走完不刹车,这两个假设不一样就会系统性差一行。
                 string gap = hit || _lastLandPx == 0f ? "" :
                     $" plan={_lastLandPx:0.#},{_lastLandPy:0.#} d=({p.position.X - _lastLandPx:0.#},{p.position.Y - _lastLandPy:0.#}) vx={p.velocity.X:0.##}";
@@ -364,13 +364,13 @@ namespace TerraBlind
             if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
                                     && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
             {
-                // goalSnapCap:0 —— 目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
+                // goalSnapCap:0。目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
                 // 建房整套坐标全错。宁可 fail fast。
                 var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
                 if (ap.Found && ap.Steps.Count > 0)
                 {
                     DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
-                    // 往上垫平台/pillar 时人几乎不横移、H 也几乎不降 —— 正好是 sentinel 判"卡死"的特征。
+                    // 往上垫平台/pillar 时人几乎不横移、H 也几乎不降。正好是 sentinel 判"卡死"的特征。
                     // A* 每次真给出一条路就把它的计时清零,否则爬到一半就被当成卡住放弃。
                     StuckSentinel.Reset();
                     _standTries = 0;
@@ -383,7 +383,7 @@ namespace TerraBlind
                 }
                 if (ap.Partial && ap.Steps.Count > 0)
                 {
-                    // 搜不到终点但有更近的落脚点 —— 走过去换个角度再搜。人真的动了,不算一次失败。
+                    // 搜不到终点但有更近的落脚点。走过去换个角度再搜。人真的动了,不算一次失败。
                     StuckSentinel.Reset();
                     _standTries = 0;
                     _lastFrom = cell; _lastTarget = (ap.GoalWx, ap.GoalWy); _haveLast = true;
@@ -393,9 +393,9 @@ namespace TerraBlind
                     StateSpacePlanner.DispatchPlan(ap);
                     return;
                 }
-                // 一步都给不出来。别退回 greedy —— 它在这地形上只会打转到 sentinel 报卡死。
+                // 一步都给不出来。别退回 greedy。它在这地形上只会打转到 sentinel 报卡死。
                 //
-                // 【同一个位置只算一次尝试】。原来每帧 +1,三帧就烧完 —— 而这三帧人一步没动,
+                // 【同一个位置只算一次尝试】。原来每帧 +1,三帧就烧完。而这三帧人一步没动,
                 // 搜的是同一个局面,结果必然一样,等于只试了一次就判死
                 // (现场:675/676/677 三个连续帧报完 1/3 2/3 3/3,然后 unreachable)。
                 // 人挪过窝才是真的"换个角度再试"。
@@ -412,12 +412,12 @@ namespace TerraBlind
             }
 
             // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
-            // 这一帧只是取结果 —— 主线程一次展开都不做
+            // 这一帧只是取结果。主线程一次展开都不做
             if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }
 
             Trap.JustTrapped = false;
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
-            // 贪心当场承认走不动(物理候选没一个降 H) —— 这是它的理论缺陷,补丁修不好。
+            // 贪心当场承认走不动(物理候选没一个降 H)。这是它的理论缺陷,补丁修不好。
             // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
             if (Trap.JustTrapped)
             {

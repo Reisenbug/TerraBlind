@@ -55,7 +55,7 @@ namespace TerraBlind
 		private static readonly ConcurrentQueue<bool> _hellTpQueue = new();
 		private static readonly ConcurrentQueue<(int tx, int ty)> _interactQueue = new();
 
-		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒 —— 绝不能在 HTTP 线程上干。
+		// 地狱流程要读地形、跑 Dijkstra 算线,几十毫秒。绝不能在 HTTP 线程上干。
 		// 排队交给主线程,和开箱/换位是同一套路子
 		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();
 		private static readonly ConcurrentQueue<bool> _startRunQueue = new();
@@ -121,12 +121,12 @@ namespace TerraBlind
 			{
 				HellRunStart = StateSnapshotPlayer.StartHellRun(out string hrw) ? "" : hrw;
 				// 【人在空中就重新排队,别把请求丢了】。整条线按人当前位置算,空中那个坐标是半路的;
-				// 等落地(通常几十帧)再算一次就对了。只对这一种原因重排 —— 别的失败是真失败
+				// 等落地(通常几十帧)再算一次就对了。只对这一种原因重排。别的失败是真失败
 				if (HellRunStart.Contains("还在空中")) { _hellRunQueue.Enqueue(true); break; }
 			}
 			while (_interactQueue.TryDequeue(out var tile))
 			{
-				// 开箱那一套(归一锚点/陷阱箱/锁/占用)只有 TreasureGrab.OpenAt 一份 ——
+				// 开箱那一套(归一锚点/陷阱箱/锁/占用)只有 TreasureGrab.OpenAt 一份
 				// 这儿原来自己抄了一遍,两份判据各改各的迟早分叉。
 				LastInteract = TreasureGrab.OpenAt(tile.tx, tile.ty, out string iw) >= 0 ? "opened" : iw;
 			}
@@ -135,7 +135,7 @@ namespace TerraBlind
 				_lootAllRequested = false;
 				if (Main.LocalPlayer.chest != -1)
 				{
-					// 背包满了 LootAll 会把塞不下的【原样写回箱子】—— 人走了,东西还在里面。
+					// 背包满了 LootAll 会把塞不下的【原样写回箱子】。人走了,东西还在里面。
 					// 掏之前先按清单删掉没用的:一箱最多 40 件,腾够就不会漏
 					KeepList.MakeRoom(LootRoom);
 					Terraria.UI.ChestUI.LootAll();
@@ -290,7 +290,7 @@ namespace TerraBlind
 			}
 			else if (path == "/trace")
 			{
-				// 逐帧追踪开关。默认关 —— 开着的时候候选表/邻居每行几千字符,真正的事件全被淹掉。
+				// 逐帧追踪开关。默认关。开着的时候候选表/邻居每行几千字符,真正的事件全被淹掉。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				if (rb.Contains("\"on\":true")) DiagLog.Trace = true;
 				else if (rb.Contains("\"on\":false")) DiagLog.Trace = false;
@@ -322,7 +322,7 @@ namespace TerraBlind
 			else if (path == "/mine_reach")
 			{
 				// 能挖到的矩形。tML 去掉了 GetTileRegion,所以逐格用 vanilla 自己 gate 挥镐的 IsInTileInteractionRange,取包围盒。
-				// 范围来自 tileRangeX/Y+tileBoost+blockRange,和镐无关 —— 镐只决定挖不挖得动。
+				// 范围来自 tileRangeX/Y+tileBoost+blockRange,和镐无关。镐只决定挖不挖得动。
 				var pr = Main.LocalPlayer;
 				if (pr != null && pr.active)
 				{
@@ -838,7 +838,7 @@ namespace TerraBlind
 					targetId = int.Parse(idMatch.Groups[1].Value);
 				else if (nameMatch.Success)
 				{
-					// 游戏是中文的,createItem.Name 返回中文,而 LLM 只会说英文名 —— 只认显示名英文一发必失败。
+					// 游戏是中文的,createItem.Name 返回中文,而 LLM 只会说英文名。只认显示名英文一发必失败。
 					// 所以再认 ItemID 的字段名(不随语言变),去掉空格,"Work Bench"→WorkBench。
 					string rawName = nameMatch.Groups[1].Value;
 					string targetName = rawName.ToLowerInvariant();
@@ -888,7 +888,7 @@ namespace TerraBlind
 				else
 				{
 					int crafted = CraftCoordinator.Craft(targetId, amount);
-					// crafted 只数真进背包的。要了 96 个只进来 0 个也是失败 —— 以前报 ok:true crafted:96,
+					// crafted 只数真进背包的。要了 96 个只进来 0 个也是失败。以前报 ok:true crafted:96,
 					// 库存却是 0,错要到下一步才炸出来。
 					string extra = ",\"wanted\":" + amount
 						+ ",\"overflow\":" + CraftCoordinator.LastOverflow
@@ -906,7 +906,7 @@ namespace TerraBlind
 			else if (path == "/recipe")
 			{
 				// 查配方:要什么材料、站哪种台子、还差多少。craft 失败只说 not_available,不说缺什么。
-				// 不限于"当前可合成" —— 没材料的照样能查,那才是查配方的意义。
+				// 不限于"当前可合成"。没材料的照样能查,那才是查配方的意义。
 				string reqBody;
 				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
 					reqBody = sr.ReadToEnd();
@@ -945,7 +945,7 @@ namespace TerraBlind
 							var ing = r.requiredItem[k];
 							if (ing == null || ing.type <= 0) continue;
 							if (k > 0) sbr.Append(',');
-							// 背包里现有多少 —— 直接把"还差多少"算好,省得 LLM 自己对账
+							// 背包里现有多少。直接把"还差多少"算好,省得 LLM 自己对账
 							int have = 0;
 							if (p2 != null)
 								foreach (var it in p2.inventory)
@@ -1654,7 +1654,7 @@ namespace TerraBlind
 				body = "{\"ok\":true}";
 			}
 			// ---- /act : the complete action primitive. steps run serially, fields inside a step run in parallel.
-			// Every step MUST carry an `until` (no open-ended steps — a step that cannot end is a step that can hang).
+			// Every step MUST carry an `until` (no open-ended steps, a step that cannot end is a step that can hang).
 			else if (path == "/act")
 			{
 				string reqBody;
@@ -1664,7 +1664,7 @@ namespace TerraBlind
 				var steps = new System.Collections.Generic.List<ActStep>();
 				string err = null;
 				// split the steps array on top-level object boundaries (steps are flat: one nesting level for
-				// cursor/until/invariant, so brace counting is enough — no full JSON parser needed).
+				// cursor/until/invariant, so brace counting is enough, no full JSON parser needed).
 				int arr = rb.IndexOf("\"steps\":[");
 				if (arr < 0) err = "no_steps";
 				else
@@ -1717,7 +1717,7 @@ namespace TerraBlind
 					}
 				}
 			}
-			// /place_at — 语义放置:只说放什么、放哪。物品按名字(不是槽号),坐标相对原点格。
+			// /place_at。语义放置:只说放什么、放哪。物品按名字(不是槽号),坐标相对原点格。
 			// 完成判据不归调用方管:砖在那儿了就是放好了。
 			else if (path == "/place_at")
 			{
@@ -1751,7 +1751,7 @@ namespace TerraBlind
 							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 				}
 			}
-			// /rope_ladder — build a rope column N tall from where the player stands. Place as far as the arm reaches,
+			// /rope_ladder, build a rope column N tall from where the player stands. Place as far as the arm reaches,
 			// climb the rope just placed, repeat. Both phases end on a world fact, so it holds up at any move speed.
 			else if (path == "/rope_ladder")
 			{
@@ -1767,7 +1767,7 @@ namespace TerraBlind
 				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"n\":" + n + ",\"note\":\"poll /rope_ladder_status for what actually happened\"}"
 						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 			}
-			// /bridge — lay a platform run N long. Place as far as the arm reaches, walk out onto what was laid,
+			// /bridge, lay a platform run N long. Place as far as the arm reaches, walk out onto what was laid,
 			// repeat. Walking happens only on ground already placed, so no speed matching is involved.
 			else if (path == "/bridge")
 			{
@@ -1785,7 +1785,7 @@ namespace TerraBlind
 				body = ok ? "{\"accepted\":true,\"item\":\"" + JsonEsc(item) + "\",\"dir\":\"" + dir + "\",\"n\":" + n + ",\"note\":\"poll /bridge_status for what actually happened\"}"
 						  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 			}
-			// /pillar — build a solid column N tall by jump-placing blocks under the feet.
+			// /pillar, build a solid column N tall by jump-placing blocks under the feet.
 			else if (path == "/pillar")
 			{
 				string reqBody;
@@ -1811,7 +1811,7 @@ namespace TerraBlind
 				PillarUp.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /place_walls — place background walls at an ORDERED list of cells (order matters for vanilla spread).
+			// /place_walls, place background walls at an ORDERED list of cells (order matters for vanilla spread).
 			// body: {"item":"木墙","cells":[[x,y],[x,y],...]}  cells are absolute, placed strictly in the given order.
 			else if (path == "/place_walls")
 			{
@@ -1845,7 +1845,7 @@ namespace TerraBlind
 				PlaceWalls.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /walk_place — walk to dest_x, placing furniture at listed targets whenever they come within reach.
+			// /walk_place, walk to dest_x, placing furniture at listed targets whenever they come within reach.
 			// body: {"dest_x":N,"targets":[{"x":N,"y":N,"item":"木桌"}, ...]}
 			else if (path == "/walk_place")
 			{
@@ -1879,7 +1879,7 @@ namespace TerraBlind
 				WalkPlace.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /drop — fall through the platform underfoot down to solid ground (come off the roof onto the base).
+			// /drop, fall through the platform underfoot down to solid ground (come off the roof onto the base).
 			else if (path == "/drop")
 			{
 				bool ok = DropDown.Start(out string why);
@@ -1895,7 +1895,7 @@ namespace TerraBlind
 				DropDown.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /settle — brake to a full stop standing on a given column (no overshoot off a narrow platform).
+			// /settle, brake to a full stop standing on a given column (no overshoot off a narrow platform).
 			else if (path == "/settle")
 			{
 				string reqBody;
@@ -1919,7 +1919,7 @@ namespace TerraBlind
 				SettleAt.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /hop_up — jump until standing on the given surface row (getting off a rope onto a platform above it).
+			// /hop_up, jump until standing on the given surface row (getting off a rope onto a platform above it).
 			else if (path == "/hop_up")
 			{
 				string reqBody;
@@ -1976,7 +1976,7 @@ namespace TerraBlind
 				ActExecutor.Stop();
 				body = "{\"ok\":true}";
 			}
-			// /origin — 所有相对坐标的锚点。身体跨 2~3 列,哪一列算数是条规则不是猜 ——
+			// /origin。所有相对坐标的锚点。身体跨 2~3 列,哪一列算数是条规则不是猜
 			// 所以让调用方在下偏移之前先看得见自己站在哪格,屏幕上也高亮。
 			else if (path == "/origin")
 			{
@@ -2159,7 +2159,7 @@ namespace TerraBlind
 				{
 					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
 					// 不取质心:标志方块从地表铺到洞穴层,平均下来是个没人会挖过去的地下点。
-					// 要的是【地表入口】——头顶露天、离人最近的那块,这样 nav 是走过去而不是往下打洞。
+					// 要的是【地表入口】。头顶露天、离人最近的那块,这样 nav 是走过去而不是往下打洞。
 					var pl0 = Main.LocalPlayer;
 					int px = pl0 != null ? (int)(pl0.Center.X / 16f) : Main.maxTilesX / 2;
 					int total = 0, bestX = -1, bestY = -1, bestDx = int.MaxValue;
@@ -2211,7 +2211,7 @@ namespace TerraBlind
 			else if (path == "/hell_line")
 			{
 				// POST {"x":起点列} → 地狱 170 格桥线。方向按玩家在哪半边定,房子在近端。
-				// 只算只画不搭 —— 线对不对先用眼睛验。
+				// 只算只画不搭。线对不对先用眼睛验。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var hxm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var pl = Main.LocalPlayer;
@@ -2383,7 +2383,7 @@ namespace TerraBlind
 				}
 			}
 			// ── PREDICATES ── 纯查询无副作用。以前这些答案要么写死在脚本里,要么让 LLM 猜。见 Predicates.cs。
-			// /nav_h — 一片矩形里规划器自己的 H 和 can_stand。场外的格子返回 null,而"哪些格在场外"本身就是答案。
+			// /nav_h。一片矩形里规划器自己的 H 和 can_stand。场外的格子返回 null,而"哪些格在场外"本身就是答案。
 			else if (path == "/nav_h")
 			{
 				string rb = ReadBody(ctx).Replace(" ", "");
@@ -2418,7 +2418,7 @@ namespace TerraBlind
 			}
 			else if (path == "/body_cols")
 			{
-				// 玩家此刻压住哪几列 —— 20px 必跨 2 列,亚像素位置决定是 2 列还是 3 列。
+				// 玩家此刻压住哪几列。20px 必跨 2 列,亚像素位置决定是 2 列还是 3 列。
 				// 每处自己 floor 一遍是坐标歧义的源头(往自己脚底下搭桥就是这么来的),统一从这里读。
 				var pl = Main.LocalPlayer;
 				if (pl == null || !pl.active) { body = "{\"error\":\"no_player\"}"; status = 400; }
@@ -2462,7 +2462,7 @@ namespace TerraBlind
 			else if (path == "/scan_flat")
 			{
 				// Find a build site: nearest spot with `w` standable columns, `h` rows of headroom, no hazard within
-				// `hazard_r`. THE replacement for a hardcoded build coordinate — same question, terrain-dependent answer.
+				// `hazard_r`. THE replacement for a hardcoded build coordinate, same question, terrain-dependent answer.
 				string rb = ReadBody(ctx).Replace(" ", "");
 				int Get(string k, int dflt)
 				{
@@ -2485,7 +2485,7 @@ namespace TerraBlind
 			}
 			else if (path == "/path_cost")
 			{
-				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格 —— 判断"值不值得绕过去"要看真实路径。
+				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格。判断"值不值得绕过去"要看真实路径。
 				// find_tiles 的 max_dist 是直线距离,直线 25 格的东西可能隔着山要绕几百格。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
@@ -2571,7 +2571,7 @@ namespace TerraBlind
 			}
 			else if (path == "/shop_sell")
 			{
-				// {"slot":N} 卖掉那一格。整格一起卖 —— 原版 SellItem 就是这个粒度,
+				// {"slot":N} 卖掉那一格。整格一起卖。原版 SellItem 就是这个粒度,
 				// 而且它塞不下钱时会把整个背包回滚,不会东西没了钱也没拿到
 				string rss = ReadBody(ctx).Replace(" ", "");
 				var mss = System.Text.RegularExpressions.Regex.Match(rss, "\"slot\"\\s*:\\s*(\\d+)");
@@ -2677,7 +2677,7 @@ namespace TerraBlind
 			else if (path == "/scan_house")
 			{
 				// 房子就是一个 w×h 的矩形,(x,y) 是左下角。除了"里面全空"没有别的条件:
-				// 脚下是不是实地不管,悬空也行 —— 施工时垫平台上去,垫多高跟选址无关。
+				// 脚下是不是实地不管,悬空也行。施工时垫平台上去,垫多高跟选址无关。
 				string rb = ReadBody(ctx).Replace(" ", "");
 				int Get(string k, int dflt)
 				{
@@ -2708,7 +2708,7 @@ namespace TerraBlind
 			else if (path == "/room_check")
 			{
 				// Vanilla's own housing test, flood-filled from a point INSIDE the room (not a rectangle). Reports
-				// which of door/table/chair/torch is missing — "no door" is a diagnosis, "the NPC didn't move in" isn't.
+				// which of door/table/chair/torch is missing, "no door" is a diagnosis, "the NPC didn't move in" isn't.
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
@@ -2741,7 +2741,7 @@ namespace TerraBlind
 			}
 			else if (path == "/measure")
 			{
-				// How big is the connected blob of the same tile at (x,y): tree height, ore-vein size, cavity — the
+				// How big is the connected blob of the same tile at (x,y): tree height, ore-vein size, cavity, the
 				// "这棵树多高 / 这堆矿多大" question. For an empty cell it measures the open cavity instead.
 				string rb = ReadBody(ctx).Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
@@ -2808,7 +2808,7 @@ namespace TerraBlind
 			return sb.ToString();
 		}
 
-		// Size of the connected same-type blob at (x,y): tree height / ore-vein size, or — for an open cell — the
+		// Size of the connected same-type blob at (x,y): tree height / ore-vein size, or, for an open cell, the
 		// open cavity. BFS with a cap so a huge open area can't run away. Returns bounding box + cell count.
 		static string MeasureBlobJson(int x, int y)
 		{
@@ -2848,7 +2848,7 @@ namespace TerraBlind
 			return sb.ToString();
 		}
 
-		// signature tiles that identify a biome — shared by /find_biome and /find_descent
+		// signature tiles that identify a biome, shared by /find_biome and /find_descent
 		static ushort[] BiomeSig(string biome) => biome switch
 		{
 			"jungle" => new[] { Terraria.ID.TileID.JungleGrass },
@@ -2896,7 +2896,7 @@ namespace TerraBlind
 		}
 
 		// I 键预览:主道 → 地狱的线 + 桥 + 房子,只画不走。ComputeDescent 和描线逻辑都在这个类里,
-		// 所以调用方在外面重写一遍毫无意义 —— 那样两份代码必然漂移。
+		// 所以调用方在外面重写一遍毫无意义。那样两份代码必然漂移。
 		public static bool PreviewDescentAndBridge(string biome, out string msg)
 		{
 			msg = "";
@@ -2975,13 +2975,13 @@ namespace TerraBlind
 		}
 
 		// 宝藏值多少 = 它能撑起的【绕道格数】上限。水晶=金箱>>木箱。
-		// 木箱 90:不值得为它专门绕路,但顺路必开 —— 40 的时候人贴着走过去都不开,过分了。
+		// 木箱 90:不值得为它专门绕路,但顺路必开。40 的时候人贴着走过去都不开,过分了。
 		const int ValueHeart = 220, ValueChest = 220, ValueWoodChest = 90;
 		static int TreasureValue(string kind) => kind == "heart" ? ValueHeart
 			: kind == "wood_chest" ? ValueWoodChest : ValueChest;
 		// 挖一格约等于走这么多格(场里 DigSide 26 : MoveSide 3)。绕道折算成"走了多远"用。
 		const int DigWalkRatio = 9;
-		// 全程绕路预算 = 主线长度的这个比例。用完只走主线 —— 这是"不能光顾着收集"的闸。
+		// 全程绕路预算 = 主线长度的这个比例。用完只走主线。这是"不能光顾着收集"的闸。
 		const float DetourBudgetFrac = 2.55f;
 		// DP 把预算切成几档。80 档下每档约几格,够分出宝藏之间的差别,n²B 也就几十万次。
 		const int BudgetSteps = 80;
@@ -3112,7 +3112,7 @@ namespace TerraBlind
 						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
 						var line = new System.Collections.Generic.List<(int x, int y)>();
 						// 先接一段「玩家现在的位置 → 入口」。脚手架原来从入口起,而搜索盒子是脚手架的包围盒,
-						// 所以人在出生点跑"去地狱"时,出生点到丛林入口这一路完全在盒子外——那一路的箱子一个都看不见。
+						// 所以人在出生点跑"去地狱"时,出生点到丛林入口这一路完全在盒子外。那一路的箱子一个都看不见。
 						{
 							var pl = Main.LocalPlayer;
 							if (pl != null)
@@ -3142,7 +3142,7 @@ namespace TerraBlind
 							}
 						}
 						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
-						// 算进去等于凭空多发一倍额度,而那些额度全花在地表 —— 空岛就是这么去的。
+						// 算进去等于凭空多发一倍额度,而那些额度全花在地表。空岛就是这么去的。
 						int surfaceLen = line.Count;
 						var cur = (dd.EntX, dd.EntY);
 						var seen = new System.Collections.Generic.HashSet<(int, int)>();
@@ -3202,7 +3202,7 @@ namespace TerraBlind
 								if ((t.TileType == Terraria.ID.TileID.Containers || t.TileType == Terraria.ID.TileID.Containers2)
 									&& t.TileFrameX % 36 == 0 && t.TileFrameY % 36 == 0)
 								{
-									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了 —— 没钥匙就别当目标,
+									// 上锁的箱子(地狱暗影箱要暗影钥匙、地牢金箱要金钥匙)开不了。没钥匙就别当目标,
 									// 不然绕一大段路过去开不开,还白占一次收集额度。用 vanilla 自己的判据。
 									if (Terraria.Chest.IsLocked(x, y)) continue;
 									// 丛林蜥蜴箱(style 16)在神庙里,外面那圈砖 Picksaw 之前挖不动,进不去,别当目标。
@@ -3252,7 +3252,7 @@ namespace TerraBlind
 									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
 									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
 								}
-								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了 ——
+								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了
 								// 走到 199 那儿之后 201 明明变近了也回不来。这里只收进候选池,取舍留给下面按性价比排。
 								string tier = nDig <= digMax && nWalk <= walkMax ? "main" : "optional";
 								treasures.Add((x, y, kind, junction.Item1, junction.Item2,
@@ -3277,7 +3277,7 @@ namespace TerraBlind
 								val[i] = TreasureValue(tr.kind);
 							}
 							// 预算只管【绕路】那部分:主线本来就要走,不该占额度。
-							// 只按【入口→地狱】那段发预算,地表那段不算 —— 它不是下丛林的路,不该撑起绕道额度。
+							// 只按【入口→地狱】那段发预算,地表那段不算。它不是下丛林的路,不该撑起绕道额度。
 							int budget = (int)((line.Count - surfaceLen) * DetourBudgetFrac);
 							int step = System.Math.Max(1, budget / BudgetSteps);
 							int B = budget / step + 2;
@@ -3333,7 +3333,7 @@ namespace TerraBlind
 							var stops = new System.Collections.Generic.List<(int x, int y)>();
 							foreach (int ti in chain) stops.Add((treasures[ti].x, treasures[ti].y));
 							stops.Add((line[line.Count - 1].x, line[line.Count - 1].y));    // finish at hell
-							// 从玩家现在站的地方起,不是从入口起——不然前半程(走去入口那段)不在路线里
+							// 从玩家现在站的地方起,不是从入口起。不然前半程(走去入口那段)不在路线里
 							var pl0 = Main.LocalPlayer;
 							var cursor = pl0 != null
 								? (x: ActExecutor.OriginCx(pl0), y: ActExecutor.OriginCy(pl0))
@@ -3345,7 +3345,7 @@ namespace TerraBlind
 							{
 								legN++;
 								var f = MazeWand.BuildField(goal.x, goal.y, cursor.x, cursor.y);
-								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable — skip to next
+								if (!f.ContainsKey(cursor)) { legFail++; continue; }        // leg unroutable, skip to next
 								// 从脚下的 H 起步只收严格更低的邻居:起点若是 int.MaxValue,局部窝里两格会互相挑来挑去,
 								// 一轮加 2 格跑满 20000 步,每段都这样 /descent_route 90s 也回不来。seen 再兜住平地和环。
 								var lseen = new System.Collections.Generic.HashSet<(int, int)> { (cursor.x, cursor.y) };
@@ -3370,7 +3370,7 @@ namespace TerraBlind
 						}
 
 						// 只画穿宝线。所有 tier(main+optional)现在都在线上,所以一根分叉都不画。
-						// 原来那条 hell-only 主线也不画——它已经不是路线,只是量代价的脚手架。
+						// 原来那条 hell-only 主线也不画。它已经不是路线,只是量代价的脚手架。
 						var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
 						var trunk = new Microsoft.Xna.Framework.Color(0, 200, 255, 140);
 						foreach (var (lx, ly) in threaded) vis.Add((lx, ly, trunk));
@@ -3417,7 +3417,7 @@ namespace TerraBlind
 							   .Append(",\"dig\":").Append(tr.dig).Append(",\"walk\":").Append(tr.walk).Append('}');
 						}
 						rsb.Append(']');
-						// ITINERARY — the visit order, already stitched. The executor walks this and nothing else:
+						// ITINERARY, the visit order, already stitched. The executor walks this and nothing else:
 						// go to each stop in turn, collect, continue. No re-deciding what is worth a detour mid-run.
 						rsb.Append(",\"itinerary\":[");
 						for (int i = 0; i < chain.Count; i++)
@@ -3534,7 +3534,7 @@ namespace TerraBlind
 				var st = Main.tile[ex, surf[i]];
 				if (!st.HasTile || !want.Contains(st.TileType)) continue;
 				cands++;
-				// the stand cell over a pit mouth is air — the field prices it; try one higher as fallback
+				// the stand cell over a pit mouth is air, the field prices it; try one higher as fallback
 				if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
 				if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
 			}
@@ -3576,7 +3576,7 @@ namespace TerraBlind
 			var ut = System.Text.RegularExpressions.Regex.Match(o, "\"until\":\\{\"times\":(\\d+)");
 			bool upPlaced = System.Text.RegularExpressions.Regex.IsMatch(o, "\"until\":\\{\"placed\":true");
 			var uc = System.Text.RegularExpressions.Regex.Match(o, "\"consumed\":\\{\"item\":(\\d+),\"n\":(\\d+)\\}");
-			// moved: dx and dy are INDEPENDENTLY optional — {"moved":{"dy":-1}} is the natural way to say "one cell up",
+			// moved: dx and dy are INDEPENDENTLY optional, {"moved":{"dy":-1}} is the natural way to say "one cell up",
 			// and demanding both would reject it for a reason the caller cannot see.
 			var umAny = System.Text.RegularExpressions.Regex.Match(o, "\"moved\":\\{([^}]*)\\}");
 			var umDx = umAny.Success ? System.Text.RegularExpressions.Regex.Match(umAny.Groups[1].Value, "\"dx\":(-?\\d+)") : System.Text.RegularExpressions.Match.Empty;
@@ -3619,7 +3619,7 @@ namespace TerraBlind
 		static string JsonUnesc(string s) =>
 			s.Replace("\\n", "\n").Replace("\\r", "\r").Replace("\\t", "\t").Replace("\\\"", "\"").Replace("\\\\", "\\");
 
-		// Vanilla tooltip text for an item, lines joined by " | ". This is what the mouseover box shows — the only
+		// Vanilla tooltip text for an item, lines joined by " | ". This is what the mouseover box shows, the only
 		// reliable way to tell same-named / confusable items apart (BOMB=summon vs 炸弹=destroy tiles).
 		static string ItemTooltipText(Item it)
 		{

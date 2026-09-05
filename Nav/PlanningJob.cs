@@ -25,7 +25,7 @@ namespace TerraBlind
         public static int PendingGoalWx { get { lock (_lock) return _goalWx; } }
         public static int PendingGoalWy { get { lock (_lock) return _goalWy; } }
 
-        // Submit a new request. If one is already running, it continues — but its result is discarded
+        // Submit a new request. If one is already running, it continues, but its result is discarded
         // unless it matches the latest seq when it completes. Caller polls TryTakeResult next tick.
         public static int Request(int goalWx, int goalWy)
         {

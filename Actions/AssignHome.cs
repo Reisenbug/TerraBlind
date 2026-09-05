@@ -2,7 +2,7 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// 给已存在的 NPC 指派住房 —— 不是生成、也不是传送。原版玩家在住房界面点那一下走的就是
+	// 给已存在的 NPC 指派住房。不是生成、也不是传送。原版玩家在住房界面点那一下走的就是
 	// WorldGen.moveRoom(x, y, n)(WorldGen.cs:1855):设 prioritizedTownNPCType、把它设成
 	// homeless、再 SpawnTownNPC(x,y) 让它按房间规则入住。名字叫 Spawn,走的却是
 	// RelocatedHomeless 分支,只改 homeTileX/Y。
@@ -30,7 +30,7 @@ namespace TerraBlind
 
 			WorldGen.moveRoom(wx, wy, n);
 
-			// 成没成看 homeless 和坐标 —— moveRoom 自己不返回结果
+			// 成没成看 homeless 和坐标。moveRoom 自己不返回结果
 			if (!npc.homeless && (npc.homeTileX != oldX || npc.homeTileY != oldY || wasHomeless))
 			{
 				LastNote = $"{npc.TypeName} 住进 ({npc.homeTileX},{npc.homeTileY})";

@@ -4,10 +4,10 @@ namespace TerraBlind
 {
 	// Eye, B-path: turn continuous reality into DISCRETE events that are worth waking the brain (LLM). Runs every
 	// frame off PostUpdateEverything, compares a few salient world quantities against last frame, and only PushEvents
-	// when something a human would actually notice AND that changes what to do. Stays silent otherwise — no polling,
+	// when something a human would actually notice AND that changes what to do. Stays silent otherwise, no polling,
 	// no per-frame stream to the LLM. This is the salience filter the design calls for: HP drops, a threat entering
 	// the alert ring, world-event transitions, stepping into lava. Normal HP regen, an enemy drifting away, the slow
-	// day/night creep — not reported.
+	// day/night creep, not reported.
 	public static class PerceptionDiff
 	{
 		// alert ring: enemies within this many tiles are "in view" and worth flagging when they first appear.
@@ -65,7 +65,7 @@ namespace TerraBlind
 			}
 			_lastNearbyThreats = threats;
 
-			// world-event transitions (start/end) — each changes the threat landscape
+			// world-event transitions (start/end), each changes the threat landscape
 			if (Main.bloodMoon != _lastBloodMoon)
 				HttpServerSystem.PushEvent("world_event",
 					"{\"event\":\"blood_moon\",\"active\":" + (Main.bloodMoon ? "true" : "false") + "}");
@@ -81,7 +81,7 @@ namespace TerraBlind
 					"{\"event\":\"invasion\",\"type\":" + Main.invasionType + "}");
 			_lastInvasion = Main.invasionType;
 
-			// day↔night flip (dawn/dusk) — night means spawns, a human notices it turning dark
+			// day↔night flip (dawn/dusk), night means spawns, a human notices it turning dark
 			if (Main.dayTime != _lastDay)
 				HttpServerSystem.PushEvent("world_event",
 					"{\"event\":\"" + (Main.dayTime ? "dawn" : "dusk") + "\"}");

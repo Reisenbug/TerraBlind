@@ -4,10 +4,10 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// STUCK SNAPSHOT — the whole decision situation, written to disk the moment a loop is detected.
+	// STUCK SNAPSHOT, the whole decision situation, written to disk the moment a loop is detected.
 	//
 	// Debugging a loop from jump_trace.log means reconstructing a two-dimensional field from one-dimensional text,
-	// with the numbers that decide everything (H over the neighbourhood, the accumulated edge penalties) absent —
+	// with the numbers that decide everything (H over the neighbourhood, the accumulated edge penalties) absent
 	// they only ever appeared for cells already stood on. Worse, the situation is unreproducible: it depends on how
 	// much penalty had piled up and when the field was built, so the same bug cannot be run twice.
 	//
@@ -65,7 +65,7 @@ namespace TerraBlind
 				}
 				sb.Append(']');
 
-				// the penalty table — the hidden state that makes a loop unreproducible
+				// the penalty table, the hidden state that makes a loop unreproducible
 				sb.Append(",\"pen\":[").Append(StateSpacePlanner.PenaltyJson(x0, y0, x1, y1)).Append(']');
 				sb.Append(",\"trail\":\"").Append(Esc(trail)).Append("\"}");
 

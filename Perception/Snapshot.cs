@@ -43,7 +43,7 @@ namespace TerraBlind
 		public bool OnGround;
 		public bool InLiquid;
 		public string Biome = "forest";
-		// combat-derived stats a player reads off the character panel — drive fight decisions.
+		// combat-derived stats a player reads off the character panel, drive fight decisions.
 		public int Defense;
 		public int MinionSlots;     // used / max summon capacity
 		public int MaxMinionSlots;
@@ -51,7 +51,7 @@ namespace TerraBlind
 	}
 
 	// World-global state a player perceives at a glance: time of day, weather, active events, progression.
-	// This whole block was missing — the biggest completeness gap. "It's night / blood moon / hardmode" changes
+	// This whole block was missing, the biggest completeness gap. "It's night / blood moon / hardmode" changes
 	// what's dangerous and what the bot should do.
 	public sealed class WorldSnapshot
 	{

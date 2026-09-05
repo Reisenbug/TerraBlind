@@ -5,9 +5,9 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// SEMANTIC PLACE — "put this thing in that cell", the way a person would say it. A human placing a block decides
+	// SEMANTIC PLACE, "put this thing in that cell", the way a person would say it. A human placing a block decides
 	// two things: WHAT and WHERE. Everything else (which hotbar slot it lives in, when to press, how long to hold,
-	// how to tell it worked) is body knowledge, not decision-making — so the caller must not have to supply it.
+	// how to tell it worked) is body knowledge, not decision-making, so the caller must not have to supply it.
 	//
 	// The primitive layer (/act with steps/until/invariant/cursor) still exists underneath as the escape hatch for
 	// things this layer does not cover. This layer exists because making the caller hand-assemble a placement out of
@@ -16,7 +16,7 @@ namespace TerraBlind
 	//   {"item": "绳", "at": [0,-1]}          → one cell, relative to the ORIGIN CELL (the player's own cell)
 	//   {"item": "木平台", "at": [0,1], "n": 8, "step": [1,0]}   → a run of 8, one per cell going right
 	//
-	// The reply says what a person would see: placed how many, where it stopped, and — if it stopped early — the
+	// The reply says what a person would see: placed how many, where it stopped, and, if it stopped early, the
 	// observed reason, never a prediction. Item lookup is by NAME so the caller never touches slot numbers.
 	public static class PlaceAction
 	{
@@ -30,7 +30,7 @@ namespace TerraBlind
 
 		// PER-CELL OUTCOMES. The counters are kept apart on purpose: "we placed it" and "it was already there" are
 		// different facts about the world, and one number that means either is a number a caller can act wrongly on.
-		// `_cells` records what happened at each coordinate so a caller can also catch aiming at the wrong cell —
+		// `_cells` records what happened at each coordinate so a caller can also catch aiming at the wrong cell
 		// a mistake no summary count can ever reveal.
 		private struct Res { public int Wx, Wy; public string What; public int Type; }
 		private static readonly List<Res> _cells = new();
@@ -43,7 +43,7 @@ namespace TerraBlind
 		private static int _stopWx = -1, _stopWy = -1;
 
 		// THE one item resolver every action goes through. `spec` is either a numeric item id ("965") or a display
-		// name ("绳"). Ids are the stable key — language-independent, alias-free — so a caller that knows what it
+		// name ("绳"). Ids are the stable key, language-independent, alias-free, so a caller that knows what it
 		// wants should send one; names stay supported because the LLM layer speaks names, not numbers.
 		public static int ResolveSlot(string spec)
 		{
@@ -66,7 +66,7 @@ namespace TerraBlind
 			DiagLog.Write($"[place] 鼠标上的 {m.Name} 放回背包,剩 {(Main.mouseItem.IsAir ? 0 : Main.mouseItem.stack)}");
 		}
 
-		// Resolve an item by NAME (exact, then contains) anywhere in the inventory — hotbar or backpack, since
+		// Resolve an item by NAME (exact, then contains) anywhere in the inventory, hotbar or backpack, since
 		// ItemUseCoordinator swaps a backpack slot up on its own. Returns -1 when the player simply doesn't have it,
 		// which is a fact the caller can act on ("我没有绳"), not an internal error.
 		public static int FindSlotByName(string name)
@@ -74,7 +74,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || string.IsNullOrEmpty(name)) return -1;
 			// PLACEABLE = makes a tile OR a wall. Walls have createTile == -1 and createWall >= 0, so filtering on
-			// createTile alone silently hid every wall — the "no_item" for 木墙 despite 95 in the pack.
+			// createTile alone silently hid every wall, the "no_item" for 木墙 despite 95 in the pack.
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
 				var it = p.inventory[i];
@@ -89,7 +89,7 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// Resolve an item by its numeric ID (item.type) — exact, no aliasing, no localization.
+		// Resolve an item by its numeric ID (item.type), exact, no aliasing, no localization.
 		public static int FindSlotById(int id)
 		{
 			var p = Main.LocalPlayer;
@@ -105,7 +105,7 @@ namespace TerraBlind
 		// GIVE AN ITEM A PERMANENT HOTBAR HOME. A build action uses one item many times; if it lives in the backpack
 		// (slot ≥ 10) and gets swapped up per use, the swaps fight and the backpack slot number goes stale. Instead:
 		// swap it ONCE into an empty hotbar slot (else slot 0) and leave it there. Returns the hotbar slot to use for
-		// every subsequent use — no more swapping. -1 if not found.
+		// every subsequent use, no more swapping. -1 if not found.
 		public static int HomeInHotbar(string spec)
 		{
 			var p = Main.LocalPlayer;
@@ -117,11 +117,11 @@ namespace TerraBlind
 		{
 			var p = Main.LocalPlayer;
 			if (slot < 0) return -1;
-			if (slot <= 9) return slot;                    // already in the hotbar — leave it
+			if (slot <= 9) return slot;                    // already in the hotbar, leave it
 			int hb = -1;
 			for (int i = 0; i < 10; i++)
 				if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
-			if (hb < 0) hb = 0;                            // no empty slot — displace slot 0
+			if (hb < 0) hb = 0;                            // no empty slot, displace slot 0
 			var tmp = p.inventory[hb]; p.inventory[hb] = p.inventory[slot]; p.inventory[slot] = tmp;
 			return hb;
 		}
@@ -171,7 +171,7 @@ namespace TerraBlind
 		private static void BeginCell()
 		{
 			var c = _queue[_qi];
-			// Only skip when the cell ALREADY holds the very tile this item makes — that is genuinely nothing to do.
+			// Only skip when the cell ALREADY holds the very tile this item makes, that is genuinely nothing to do.
 			// Anything else in the cell (grass, vines, decorations) does not stop a placement, and refusing to swing
 			// at it would skip a placement the game allows. Swing, then let the map say what happened.
 			int wantTile = WantTileType();
@@ -187,7 +187,7 @@ namespace TerraBlind
 			{ TargetWx = c.Wx, TargetWy = c.Wy, Slot = _slot, DurationTicks = 0, Strict = false });
 		}
 
-		// the tile type the held item creates — what "placed" must mean for this run.
+		// the tile type the held item creates, what "placed" must mean for this run.
 		private static int WantTileType()
 		{
 			var p = Main.LocalPlayer;
@@ -206,7 +206,7 @@ namespace TerraBlind
 			BeginCell();
 		}
 
-		// `done` only when every cell was actually placed by us. Anything else is `partial` — a word that cannot be
+		// `done` only when every cell was actually placed by us. Anything else is `partial`, a word that cannot be
 		// mistaken for success at a glance.
 		private static void Finish()
 		{
@@ -215,7 +215,7 @@ namespace TerraBlind
 		}
 
 		// drives the queue: one cell at a time, each ending on the world fact that the tile appeared (or the observed
-		// reason it did not). A cell that cannot be placed stops the run and reports where — continuing past it would
+		// reason it did not). A cell that cannot be placed stops the run and reports where, continuing past it would
 		// build something different from what was asked for, silently.
 		public static void Tick()
 		{
@@ -256,7 +256,7 @@ namespace TerraBlind
 			  .Append(",\"failed\":").Append(_failedCount)
 			  .Append(",\"wanted\":").Append(_queue.Count)
 			  .Append(",\"reason\":\"").Append(JsonEsc(Reason)).Append('"');
-			// every cell we touched and what actually happened there — this is what makes a mis-aimed coordinate
+			// every cell we touched and what actually happened there, this is what makes a mis-aimed coordinate
 			// visible, which no summary count can do.
 			sb.Append(",\"cells\":[");
 			for (int i = 0; i < _cells.Count; i++)

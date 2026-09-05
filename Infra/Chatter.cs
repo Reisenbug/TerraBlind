@@ -6,7 +6,7 @@ namespace TerraBlind
 	// 游戏内聊天框只留【给人看的】那一路:AgentChat 的 <you → TB> / <TB> 对话。
 	// 其余全是诊断(卡点、脱困、超时、相位播报…),录视频时刷屏,而日志里本来就有一份。
 	//
-	// 【别把 AgentChat 也收进来】。那是录像的主角 —— 它直接调 Main.NewText,不走这里。
+	// 【别把 AgentChat 也收进来】。那是录像的主角。它直接调 Main.NewText,不走这里。
 	public static class Chatter
 	{
 		// 关掉诊断刷屏。要现场看内部状态时用 /tbchat on 打开

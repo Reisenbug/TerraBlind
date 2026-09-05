@@ -4,23 +4,23 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// BRIDGE — lay a horizontal run N cells long, in a given direction, from where the player stands.
+	// BRIDGE, lay a horizontal run N cells long, in a given direction, from where the player stands.
 	//
 	// ONE phase, not two. Placing and walking happen in the SAME frame: the cursor always aims at the edge cell and
 	// swings whenever the hand is free, while the feet advance in the gaps. Laying a tile pushes the edge one cell
-	// further out, which is what the feet were walking toward — the two chase each other and neither waits its turn.
+	// further out, which is what the feet were walking toward, the two chase each other and neither waits its turn.
 	//
 	// It used to alternate: fill the whole arm's reach standing still, then walk to the end, then fill again. Every
-	// frame spent walking placed nothing, so roughly half the run was the hand sitting idle. Nothing forced that —
+	// frame spent walking placed nothing, so roughly half the run was the hand sitting idle. Nothing forced that
 	// it was justified by "a program can move the cursor a cell per frame, so it need not pave while walking", which
 	// is true and beside the point: not having to interleave is not a reason to leave the hand idle.
 	//
 	// The HAND is the bottleneck (a placement takes item.useTime frames; walking a cell takes fewer), so the feet
 	// yield to it: stop advancing once the edge is close enough that another step would overshoot what the hand can
 	// lay in the meantime. That margin is computed from the live useTime and the live speed, so boots or a slowing
-	// liquid change it automatically — no tuned constant.
+	// liquid change it automatically, no tuned constant.
 	//
-	// Everything still ends on an observed fact — the tile is there, the origin cell actually moved — so the result
+	// Everything still ends on an observed fact, the tile is there, the origin cell actually moved, so the result
 	// holds at any movement speed.
 	public static class BridgeBuilder
 	{
@@ -40,7 +40,7 @@ namespace TerraBlind
 		private static int _digStall;
 		private const int DigStallLimit = 60 * 20;   // 挖 20 秒还没通,那就是真过不去
 		private const int ReachStallLimit = 240;
-		// 上面那几个计数器只在【人没挪列】时才涨,人来回蹭两列就全被清零 —— 于是整套一格
+		// 上面那几个计数器只在【人没挪列】时才涨,人来回蹭两列就全被清零。于是整套一格
 		// 没铺也永远不超时。所以另记两笔:总帧数,和"上次铺成到现在过了多久"
 		private static int _frames, _sinceProgress, _lastDone;
 		private const int MaxFrames = 60 * 120;
@@ -50,13 +50,13 @@ namespace TerraBlind
 		public static string Outcome = "idle";   // idle running done no_item blocked stuck
 		public static string Reason = "";
 		public static int Placed => _placed;
-		public static int NextWx => _targetWx;   // 停在哪一格没铺 —— 换料续铺要从这儿接上
+		public static int NextWx => _targetWx;   // 停在哪一格没铺。换料续铺要从这儿接上
 		public static int RowWy => _rowWy;
 
 		public static bool Start(string itemName, string dir, int n, out string why)
 			=> Start(itemName, dir, n, int.MinValue, int.MinValue, out why);
 
-		// startWx/startWy: 从哪一格开始铺。传了就照着铺,人自己走过去够 —— 铺哪儿是调用方定的,
+		// startWx/startWy: 从哪一格开始铺。传了就照着铺,人自己走过去够。铺哪儿是调用方定的,
 		// 不该跟着身体停在哪儿走。不传(int.MinValue)才退回"从我站的地方往外铺"。
 		public static bool Start(string itemName, string dir, int n, int startWx, int startWy, out string why)
 		{
@@ -112,7 +112,7 @@ namespace TerraBlind
 				_targetWx += _dir;
 				return true;
 			}
-			// 够不着不是失败,是该往前走了 —— 走完这一格自然就够得着。
+			// 够不着不是失败,是该往前走了。走完这一格自然就够得着。
 			if (o == "no_swing" && ItemUseCoordinator.Reason == "out_of_reach") return true;
 			Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
 			Finish("blocked");
@@ -176,7 +176,7 @@ namespace TerraBlind
 				_swingIssued = true;
 			}
 
-			// 4) 同一帧里决定脚走不走 —— 手在挥的时候脚照样能走,这正是省下来的时间。
+			// 4) 同一帧里决定脚走不走。手在挥的时候脚照样能走,这正是省下来的时间。
 			// 【但绝不迈进空里】。原来 !inReach 直接放行,而"够不着"最常见的原因正是
 			// 前面那格还没铺出来 --- 人一步跨出桥面边缘就掉下去(现场:桥面1051,人掉到1073)。
 			// 踩不住就站着挥,铺出来了自然走得过去
@@ -238,7 +238,7 @@ namespace TerraBlind
 			DiagLog.Write($"[bridge] {outcome} placed={_placed} already={_already}/{_want} reason={Reason}");
 		}
 
-		// stuck 的唯一出口,签名逼着交出【卡在哪一格、哪一类】。能救就地救,救不了才真失败 ——
+		// stuck 的唯一出口,签名逼着交出【卡在哪一格、哪一类】。能救就地救,救不了才真失败
 		// 以前 5 处 stuck 各自 return,现场只剩一句给人看的话,代码没法据此补救
 		private static void Stuck(Blocker b)
 		{

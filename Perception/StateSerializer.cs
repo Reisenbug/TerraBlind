@@ -65,7 +65,7 @@ namespace TerraBlind
 			AppendSlot(sb, s.Equipment.HeldItem);
 			sb.Append(',');
 			// ONE "items" array of NON-EMPTY slots only (hotbar 0-9, backpack 10-49). Empty slots are the bulk of a
-			// snapshot (40 mostly-air backpack rows) and pure token waste — omit them. Each item carries its absolute
+			// snapshot (40 mostly-air backpack rows) and pure token waste, omit them. Each item carries its absolute
 			// "slot" so the agent copies it verbatim into use_item instead of counting/offsetting.
 			sb.Append("\"items\":[");
 			bool first = true;

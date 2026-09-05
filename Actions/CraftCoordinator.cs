@@ -4,9 +4,9 @@ namespace TerraBlind
 {
     public static class CraftCoordinator
     {
-        // 背包满时 GetItem 收不下,多出来的会掉在地上 —— 而材料已经扣掉了,等于白烧。
+        // 背包满时 GetItem 收不下,多出来的会掉在地上。而材料已经扣掉了,等于白烧。
         // 所以每一轮先看背包收不收得下:收不下就停,不再扣下一份材料。
-        // Crafted 只数真进了背包的,Overflow 数掉地上的,Stopped 说明为什么停 —— 以前一律报
+        // Crafted 只数真进了背包的,Overflow 数掉地上的,Stopped 说明为什么停。以前一律报
         // "crafted:96" 然后下一步查库存是 0,谎报在别处才炸。
         public static int LastCrafted, LastOverflow;
         public static string LastStop = "";
@@ -49,7 +49,7 @@ namespace TerraBlind
                     }
                 }
                 // 配方找不到有三种可能,别一律报 no_recipe:背包满的时候游戏根本不把配方算作
-                // available,材料再多也查不到 —— 那次房子就是这样,报 not_available 像是缺材料。
+                // available,材料再多也查不到。那次房子就是这样,报 not_available 像是缺材料。
                 if (recipeIdx < 0)
                 {
                     if (Trace) DiagLog.Write($"[craft] 第{round}轮 找不到配方 当前数={Count(targetItemId)} 还要={remaining}");

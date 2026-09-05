@@ -3,10 +3,10 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// HELL DECK — 照着 HellLine 那条线逐格铺桥面。
+	// HELL DECK。照着 HellLine 那条线逐格铺桥面。
 	//
 	// 不用 BridgeBuilder:那个只会沿【一行】平推,而线是有坡的。图上有起伏、有挖掘、
-	// 有已存在的方块,平推出来的却是一条直线 —— 图和实物对不上就是这么来的。
+	// 有已存在的方块,平推出来的却是一条直线。图和实物对不上就是这么来的。
 	//
 	// 每一格四种情况:已经是方块→跳过;空→放;实心但不是我要的→照放(物块替换);
 	// 升降的拐角→多铺一格当锚点(斜着的两格贴不上,新方块要正交邻居)。
@@ -88,7 +88,7 @@ namespace TerraBlind
 			// 这里【不】开物块替换:替换会把已有的方块也换掉,白费料。桥面要的是"方块留着、别的挖掉"。
 			if (p.TileReplacementEnabled) p.builderAccStatus[10] = 1;
 
-			// 已经是【方块】的当已铺好跳过。平台不算 —— 平台 tileSolid 也是 true,
+			// 已经是【方块】的当已铺好跳过。平台不算。平台 tileSolid 也是 true,
 			// 拿 IsSolid 判会把平台当成铺好的留在桥面上,而平台停不住雷管。
 			while (_idx < _plan.Count && IsDeckBlock(_plan[_idx].X, _plan[_idx].Y))
 			{ _idx++; _cellFrames = 0; }
@@ -100,14 +100,14 @@ namespace TerraBlind
 			}
 
 			var cell = _plan[_idx];
-			// 岩浆格放不进去(vanilla 只挡空格子),跳过它继续往前 —— 卡在这儿等没有意义
+			// 岩浆格放不进去(vanilla 只挡空格子),跳过它继续往前。卡在这儿等没有意义
 			if (Predicates.IsLava(cell.X, cell.Y))
 			{
 				DiagLog.Write($"[helldeck] ({cell.X},{cell.Y})是岩浆,跳过");
 				_idx++; _cellFrames = 0; return;
 			}
 
-			// 跳过会在桥面上留洞,雷管从那儿掉下去 —— 连着跳几格就说明有系统性原因,别闷头跳完 170 格
+			// 跳过会在桥面上留洞,雷管从那儿掉下去。连着跳几格就说明有系统性原因,别闷头跳完 170 格
 			if (++_cellFrames > MaxCellFrames)
 			{
 				DiagLog.Write($"[helldeck] ({cell.X},{cell.Y})铺不上,跳过 已铺{Placed} 连跳{_skips + 1}");
@@ -122,12 +122,12 @@ namespace TerraBlind
 				int cx = ActExecutor.OriginCx(p);
 				if (_cellFrames % 60 == 1)
 					DiagLog.Write($"[helldeck] 够不着({cell.X},{cell.Y}) 人在{cx} f={_cellFrames}");
-				// 地狱要塞的墙横在路上,人过不去桥就停在墙前 —— 挡身位的挖掉,这是唯一的解法
+				// 地狱要塞的墙横在路上,人过不去桥就停在墙前。挡身位的挖掉,这是唯一的解法
 				if (ClearWay.Forward(p, cx < cell.X ? 1 : -1)) return;
 				if (cx < cell.X) p.controlRight = true; else if (cx > cell.X) p.controlLeft = true;
 				return;
 			}
-			// 方块放不进碰撞箱 —— 站在目标格上往自己脚下放,永远放不出来,只会一直挥。
+			// 方块放不进碰撞箱。站在目标格上往自己脚下放,永远放不出来,只会一直挥。
 			// 挪开是唯一的解法,不是等:让开一格再放。
 			var (bl, br) = Predicates.BodyCols(p);
 			int fy = ActExecutor.OriginCy(p);
@@ -140,14 +140,14 @@ namespace TerraBlind
 				if (away > 0) p.controlRight = true; else p.controlLeft = true;
 				return;
 			}
-			// 那格有东西(平台、家具、杂物)就先挖掉再铺。不用物块替换 —— 替换会把【已有的方块】
+			// 那格有东西(平台、家具、杂物)就先挖掉再铺。不用物块替换。替换会把【已有的方块】
 			// 也换成我的料,白费材料;而这里要区分的恰恰是"方块留着、别的挖掉"。
 			if (Main.tile[cell.X, cell.Y].HasTile && ClearWay.Dig(p, cell.X, cell.Y, "桥面上的东西")) return;
-			// 桥面【上方 3 格】必须空,不然人走不过去 —— 顺手清掉,别等走到跟前才发现挡着
+			// 桥面【上方 3 格】必须空,不然人走不过去。顺手清掉,别等走到跟前才发现挡着
 			for (int r = 1; r <= 3; r++)
 				if (Predicates.IsSolid(cell.X, cell.Y - r) && ClearWay.Dig(p, cell.X, cell.Y - r, "净空")) return;
 
-			// 挥了半天没上去的话,把当时的现场打出来 —— 不然又是"一直挥"却不知道为什么
+			// 挥了半天没上去的话,把当时的现场打出来。不然又是"一直挥"却不知道为什么
 			if (_cellFrames % 90 == 1)
 				DiagLog.Write($"[helldeck] 铺({cell.X},{cell.Y}){(cell.Anchor ? "锚" : "")} f={_cellFrames} " +
 					$"人{bl}..{br}脚{fy} 那格={(Predicates.IsSolid(cell.X, cell.Y) ? "实心" : "空")} 进度{_idx}/{_plan.Count}");

@@ -4,11 +4,11 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// HOP UP — jump and end up standing on the surface directly above. Used to get off the top of a rope onto the
+	// HOP UP, jump and end up standing on the surface directly above. Used to get off the top of a rope onto the
 	// platform just placed above it: on a rope the player hangs, and the platform is passed through from below, so
 	// simply holding jump does not settle them on top of it.
 	//
-	// Ends on the world fact that matters — feet resting on the target row, not moving vertically — so it is right
+	// Ends on the world fact that matters, feet resting on the target row, not moving vertically, so it is right
 	// whatever the jump height happens to be. A fixed number of jump frames would be wrong the moment boots, wings,
 	// or a gravity change enter the picture.
 	public static class HopUp
@@ -31,7 +31,7 @@ namespace TerraBlind
 
 		// targetWy = the row of the surface to land on. col (optional) = the column to line the body up under first,
 		// so the hop rises straight into a platform column. The player is "up" once their own cell sits just above the
-		// target row. A single jump may not clear the whole column — landing on an intermediate platform and pushing
+		// target row. A single jump may not clear the whole column, landing on an intermediate platform and pushing
 		// off again ("跳两下") is expected, so the hop re-jumps each time it lands short.
 		public static bool Start(int targetWy, int col, out string why)
 		{
@@ -70,7 +70,7 @@ namespace TerraBlind
 			int cx = ActExecutor.OriginCx(p);
 			int cy = ActExecutor.OriginCy(p);
 
-			// ALIGN — walk until the body's column sits under the target column, so the jump rises straight into it.
+			// ALIGN, walk until the body's column sits under the target column, so the jump rises straight into it.
 			if (_ph == Ph.Align)
 			{
 				if (cx == _col) { _ph = Ph.Hop; return; }
@@ -87,7 +87,7 @@ namespace TerraBlind
 			}
 
 			// HOP. Hold jump to rise. A single jump may not clear the whole column, so on landing short we must let go
-			// for ONE frame so the next controlJump is a fresh press — the "跳两下". The trap this replaced: standing
+			// for ONE frame so the next controlJump is a fresh press, the "跳两下". The trap this replaced: standing
 			// still before the first jump ALSO has velocity.Y == 0, and must not be mistaken for "landed, release".
 			// So the release only fires on a real landing = we were descending last frame and are grounded now.
 			// (Terraria y is DOWN-positive: rising is velocity.Y < 0, falling is > 0. I had this backwards.)

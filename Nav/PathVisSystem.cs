@@ -15,7 +15,7 @@ namespace TerraBlind
         private static int _ttl = 0;
 
         // 独立槽:SetTiles 是全局单槽,谁调谁独占。地狱桥那条线要显示十几分钟,
-        // 而 PillarUp/NavCoordinator 每帧都用一两格覆盖它 —— 长期图层不能和一次性提示抢
+        // 而 PillarUp/NavCoordinator 每帧都用一两格覆盖它。长期图层不能和一次性提示抢
         private static List<(int wx, int wy, Color color)> _deck = new();
         private static int _deckTtl = 0;
 
@@ -156,7 +156,7 @@ namespace TerraBlind
             }
 
             // LOOKAHEAD: the background-planned NEXT leg, drawn dim. walk=dim amber, jump=dim teal, goal=orange,
-            // start=white ring (the predicted landing it branched from — should sit on the current leg's end).
+            // start=white ring (the predicted landing it branched from, should sit on the current leg's end).
             {
                 List<(float, float, bool)> laTrail; (float, float)? laGoal; (float, float)? laStart; int laTtl;
                 lock (_lock) { laTrail = _laTrail; laGoal = _laGoal; laStart = _laStart; laTtl = _laTtl; }

@@ -5,12 +5,12 @@ using Terraria.ID;
 
 namespace TerraBlind
 {
-	// PREDICATES — the eye's conclusions. Everything here is a pure query: it reads the world and answers a question,
+	// PREDICATES, the eye's conclusions. Everything here is a pure query: it reads the world and answers a question,
 	// with no side effects and no frame state. Actions ask these instead of each re-deriving "can I stand there?" in
 	// their own way, and instead of a coordinate being burned into a script as a constant.
 	//
 	// The split that matters: a predicate MEASURES (how wide is the ledge, how much headroom, is a room legal). It
-	// never decides how much is enough — that threshold is the caller's parameter. Measuring is fixed; thresholds are
+	// never decides how much is enough, that threshold is the caller's parameter. Measuring is fixed; thresholds are
 	// per-task. That is why the same predicates serve a surface hut and a hell hut.
 	public static class Predicates
 	{
@@ -27,14 +27,14 @@ namespace TerraBlind
 			=> ((int)(px / 16f), (int)((px + w - 1f) / 16f));
 		public static (int left, int right) BodyCols(Player p) => BodyCols(p.position.X, p.width);
 
-		// 碰撞箱【左右边界各自落在哪一格】—— 不减那 1px。
+		// 碰撞箱【左右边界各自落在哪一格】。不减那 1px。
 		// BodyCols 减 1 是为了"贴着格边时别多算一列"(往自己脚下搭桥那个坑),
 		// 但要问"他踩着哪几列"时那 1px 会漏掉最右那列:向导明明压着 3 列,
 		// BodyCols 只报 2 列,挖完他往旁边一滑就被第 3 列接住,永远掉不下去
 		public static (int left, int right) TouchCols(float px, float w)
 			=> ((int)(px / 16f), (int)((px + w) / 16f));
 
-		// 这一格和人的碰撞箱重叠吗 —— 重叠就【放不下任何东西】(vanilla Collision.EmptyTile
+		// 这一格和人的碰撞箱重叠吗。重叠就【放不下任何东西】(vanilla Collision.EmptyTile
 		// 拿 position/width/height 做矩形相交,没有别的判据)。
 		//
 		// 【绝不拿 OriginCy±N 近似】。站在半砖上脚底下沉 8px,身子从 3 行变成跨 4 行,
@@ -60,7 +60,7 @@ namespace TerraBlind
 			return t.HasTile && Main.tileSolid[t.TileType];
 		}
 
-		// 平台:tileSolid[19] 也是 true,所以 IsSolid 分不出它 —— 认平台只能靠 tileSolidTop。
+		// 平台:tileSolid[19] 也是 true,所以 IsSolid 分不出它。认平台只能靠 tileSolidTop。
 		// 平台能穿过去(不用挖),但站不住桥面的活(要替换成方块),两处都得先认出它
 		public static bool IsPlatform(int x, int y)
 		{
@@ -110,7 +110,7 @@ namespace TerraBlind
 			return true;
 		}
 
-		// HEADROOM — how many rows above (x,y) are clear, capped at `cap` so a query over open sky is bounded.
+		// HEADROOM, how many rows above (x,y) are clear, capped at `cap` so a query over open sky is bounded.
 		public static int Headroom(int x, int y, int cap)
 		{
 			int n = 0;
@@ -118,7 +118,7 @@ namespace TerraBlind
 			return n;
 		}
 
-		// CLEAR WIDTH — how many consecutive columns around x are standable on row y, and where that run starts.
+		// CLEAR WIDTH, how many consecutive columns around x are standable on row y, and where that run starts.
 		// This is the "is there a ledge big enough" measurement, without saying what big enough is.
 		public static int ClearWidth(int x, int y, int cap, out int left)
 		{
@@ -131,7 +131,7 @@ namespace TerraBlind
 			return rx - lx + 1;
 		}
 
-		// DANGER DISTANCE — is there lava (or any liquid, if asked) within radius r of (x,y)? A cheap box scan; hell
+		// DANGER DISTANCE, is there lava (or any liquid, if asked) within radius r of (x,y)? A cheap box scan; hell
 		// work lives or dies on it.
 		public static bool NearHazard(int x, int y, int r, bool lavaOnly = true)
 		{
@@ -154,8 +154,8 @@ namespace TerraBlind
 		}
 
 		// 把一个 w×h 的框画到游戏里:绿=空(放得下),红=被占。选址对不对,看一眼比读坐标可靠。
-		// 键盘 H 和 /scan_house 共用这一份 —— 画的必须和判的是同一套 Vacant。
-		// dir=-1 时房子往左建,框也要往左画 —— 否则地狱那种 dir=-1 的房子框和实际位置对不上。
+		// 键盘 H 和 /scan_house 共用这一份。画的必须和判的是同一套 Vacant。
+		// dir=-1 时房子往左建,框也要往左画。否则地狱那种 dir=-1 的房子框和实际位置对不上。
 		public static int VisualizeBox(int bx, int by, int w, int h, string label, int ttlFrames = 3600, int dir = 1)
 		{
 			var vis = new System.Collections.Generic.List<(int, int, Microsoft.Xna.Framework.Color)>();
@@ -188,7 +188,7 @@ namespace TerraBlind
 			return t.HasTile && (TileID.Sets.Corrupt[t.TileType] || TileID.Sets.Crimson[t.TileType]);
 		}
 
-		// 房址周围这个半径内不能有邪恶方块 —— 挨着腐化盖,蔓延过来房子就废了
+		// 房址周围这个半径内不能有邪恶方块。挨着腐化盖,蔓延过来房子就废了
 		public const int EvilClearR = 100;
 		// 只看四角:腐化成片,r=100 时四角落在片里就够判,逐格是 22 万格/候选点
 		public static bool EvilNearby(int bx, int by, int w, int h, int r)
@@ -212,7 +212,7 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// 脚下一路往下是不是岩浆(中间隔着石头就不算 —— 那是地,不是悬空在岩浆上)。
+		// 脚下一路往下是不是岩浆(中间隔着石头就不算。那是地,不是悬空在岩浆上)。
 		// 杀向导要靠这个:挖开他脚下他才掉得进去
 		public const int LavaProbeDepth = 30;
 		public static bool LavaBelow(int x, int y)
@@ -227,7 +227,7 @@ namespace TerraBlind
 
 		// 向外扫最近的房址:(x,y)=左下角,往右 w 列往上 h 行(含自己)必须全空,外加左下角要够得着
 		// needLadder=false:地狱起点悬空,底下常是岩浆,要梯子就一个候选都选不出(锚是人造的)
-		// needLava=true:整排底下必须是岩浆 —— 肉山那套要把向导从房里捅下去
+		// needLava=true:整排底下必须是岩浆。肉山那套要把向导从房里捅下去
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
 			out int hitX, out int hitY, out int scanned, bool needLadder = true, bool needLava = false)
 		{
@@ -302,7 +302,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 用原版的房屋判定(不自己重写):传【房间内部】一点,报缺哪一项 —— "NPC 没入住"不算诊断,"没门"才算。
+		// 用原版的房屋判定(不自己重写):传【房间内部】一点,报缺哪一项。"NPC 没入住"不算诊断,"没门"才算。
 		// roomDoor/roomTable 那几个是 private,所以从公开的 houseTile[] 反推
 		private static bool HasAny(int[] types)
 		{
@@ -352,9 +352,9 @@ namespace TerraBlind
 			return sb.ToString();
 		}
 
-		// HAVE — how many of an item id the player holds, across hotbar and backpack.
+		// HAVE, how many of an item id the player holds, across hotbar and backpack.
 		// 【鼠标上拿着的那件也算】。放置/合成中途物品会悬在 Main.mouseItem 上,它不在
-		// inventory 里 —— 只数背包就会少一个,于是"以为够了"不再补合,摆到最后一张时
+		// inventory 里。只数背包就会少一个,于是"以为够了"不再补合,摆到最后一张时
 		// 背包空了报 no_item。当年桌子"合成报成功却只出2张"就是这个,当时靠换合成顺序绕开了
 		public static int Have(int id)
 		{
@@ -371,7 +371,7 @@ namespace TerraBlind
 			return n;
 		}
 
-		// NPC FIND — where a town NPC is, by type id. Needed to wait for a merchant to arrive and to dig out the cell
+		// NPC FIND, where a town NPC is, by type id. Needed to wait for a merchant to arrive and to dig out the cell
 		// under the Guide, both of which are "look at a specific NPC" questions nothing could answer before.
 		public static string NpcJson(int type)
 		{
@@ -396,7 +396,7 @@ namespace TerraBlind
 			return sb.ToString();
 		}
 
-		// CELL — the composed answer for one cell: every geometric predicate at once, so a caller diagnosing "why
+		// CELL, the composed answer for one cell: every geometric predicate at once, so a caller diagnosing "why
 		// can't I stand here" gets the reason instead of a bare false.
 		public static string CellJson(int x, int y, int widthCap, int headCap)
 		{

@@ -15,14 +15,14 @@ namespace TerraBlind
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
         const int DigDown = 26, DigSide = 26, DigUp = 26;   // 【每格】挖价,要乘实际挖的格数
         const int DigUpLift = 19;   // 向上挖额外一次性的垫脚钱:凿开还得砌东西站上去,和挖几格无关
-        const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it — price the pillar, not a free climb
+        const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it, price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
         const int JumpReach = 6;   // cells a jump can gain above support; up-moves within this stay MoveUp
         // 走 d 格不真正爬高,H 最多涨这么多(横走 + 一跳白嫖的高度)。超过它 = 目标在上游
         public static int FlatTripH(int d) => d * MoveSide + JumpReach * MoveUp;
-        public const int MaxMoveCost = PillarUp;   // 比这贵的边一定含挖掘 —— 别在别处硬编阈值
+        public const int MaxMoveCost = PillarUp;   // 比这贵的边一定含挖掘。别在别处硬编阈值
 
-        // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only — underground has
+        // AIR penalty: without it the geometric field cuts straight through the sky. tiny debuff only, underground has
         // background walls everywhere so flight is cheap; this just nudges toward ground and stops surface sky-cruising.
         const int FreeAir = 7;       // free below this (one jump's worth)
         const int AirSat = 10;       // h'=AirSat → half AirCap
@@ -34,8 +34,8 @@ namespace TerraBlind
         const int AirSpanK = 6;       // per-cell cost for each air cell beyond AirSpanFree (tunes float-vs-descend)
         const int AirSpanProbe = 40;  // how far ahead to measure the continuous air span
 
-        // 踩进岩浆就是死。大到实际不可达,但仍是有限数 —— 万不得已跨一格岩浆桥还是允许的。
-        const int PlateCost = 400;   // 绕得开就绕(≈130格横走的代价),绕不开还是让它过 —— 禁行会把人困死
+        // 踩进岩浆就是死。大到实际不可达,但仍是有限数。万不得已跨一格岩浆桥还是允许的。
+        const int PlateCost = 400;   // 绕得开就绕(≈130格横走的代价),绕不开还是让它过。禁行会把人困死
         // 挖不动的砖(神庙)必须真不可达。有限数的话 Dijkstra 照样穿墙算出墙后的 H,
         // 墙后看着又近又好,上层挑中它一头撞上去开挖。Impassable 让边根本不入队。
         const int Impassable = int.MaxValue;
@@ -47,7 +47,7 @@ namespace TerraBlind
         }
 
         // 水/蜂蜜/蛛网原先按免费空气算,线就往里钻。蛛网算过路费不算挖:走过去本身就是破网,不需要工具。
-        // 只是附加费不是禁行 —— 绕路更贵时照样淌水过。物理模拟是旱地的,水里落点会短,miss 机制吸收。
+        // 只是附加费不是禁行。绕路更贵时照样淌水过。物理模拟是旱地的,水里落点会短,miss 机制吸收。
         const int WaterExtra = 6, HoneyExtra = 20, WebExtra = 12;
         static int MediumExtra(int x, int y)
         {
@@ -61,7 +61,7 @@ namespace TerraBlind
             }
             if (t.HasTile && t.TileType == TileID.Cobweb) extra += WebExtra;
             // HONEY BLOCK contact: standing ON a honey block (solid, so it's the floor below, never the entered cell)
-            // slows movement as brutally as swimming in honey — charge the cell whose support is honey.
+            // slows movement as brutally as swimming in honey, charge the cell whose support is honey.
             if (y + 1 < Main.maxTilesY)
             {
                 var f = Main.tile[x, y + 1];
@@ -91,7 +91,7 @@ namespace TerraBlind
         public static (int x, int y)? Point2 => _p2;
         static volatile bool _mazeBusy;
 
-        // J 开关朝 point2 的 receding nav,拿大场当罗盘。从玩家【当前】位置起步 ——
+        // J 开关朝 point2 的 receding nav,拿大场当罗盘。从玩家【当前】位置起步
         // 场是按目标缓存的、哪儿都有效,所以建完场再走远也不影响。
         public static void ToggleNav()
         {
@@ -125,7 +125,7 @@ namespace TerraBlind
             return true;
         }
 
-        //千格距离的 BuildField 耗时几百 ms — run it off the main thread so the game doesn't hitch. PlanCtx-free here
+        //千格距离的 BuildField 耗时几百 ms, run it off the main thread so the game doesn't hitch. PlanCtx-free here
         // (BuildField has no shared scratch), and PathVisSystem.SetTiles is lock-guarded, so the bg thread can draw.
         static void RunMazeAsync((int x, int y) goal, (int x, int y) start)
         {
@@ -155,7 +155,7 @@ namespace TerraBlind
         // 每格一个节点,4 连通,不管物理。执行器读的是这张图的【梯度】,不是画出来的那条线;死胡同归执行层管。
         // 按目标缓存整片:建场是秒级的,但建一次全图哪儿都能用。地形改多了/换镐/人走出盒子才 Rebuild。
         const int FieldMargin = 400;   // 太大就要 flood 整个 5M 格世界(内存+主线程 5s 卡顿),够跨图就行
-        // Mod.Load 跑在游戏线程 —— 日志记 MAIN 的那次建场,就是把游戏冻住的那次
+        // Mod.Load 跑在游戏线程。日志记 MAIN 的那次建场,就是把游戏冻住的那次
         static int _mainThreadId;
         public static void MarkMainThread() => _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
 
@@ -166,7 +166,7 @@ namespace TerraBlind
         static (int gx, int gy) _cachedGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _cachedField;
 
-        // 不重建就读活场。H 是唯一能解释路由决策的数,以前只有日志碰巧打印的地方看得见 ——
+        // 不重建就读活场。H 是唯一能解释路由决策的数,以前只有日志碰巧打印的地方看得见
         // "那个出口为什么不走"对人没站过的格子根本答不了。
         public static Dictionary<(int, int), int> PeekField() => _cachedField;
 
@@ -189,7 +189,7 @@ namespace TerraBlind
             if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
             if (_prevField != null && _prevGoal == (gx, gy))
             {
-                // promote the other slot rather than rebuild — this is the whole point of keeping two
+                // promote the other slot rather than rebuild, this is the whole point of keeping two
                 var f = _prevField; var g = _prevGoal;
                 _prevField = _cachedField; _prevGoal = _cachedGoal;
                 _cachedField = f; _cachedGoal = g;
@@ -200,7 +200,7 @@ namespace TerraBlind
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
-        // 只读地问缓存,【绝不】就地建场。后台预扫要用 —— 建场是秒级的,不能顺手触发
+        // 只读地问缓存,【绝不】就地建场。后台预扫要用。建场是秒级的,不能顺手触发
         public static Dictionary<(int, int), int> PeekFieldOrNull(int gx, int gy)
         {
             if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
@@ -215,14 +215,14 @@ namespace TerraBlind
         }
 
         // FRESHNESS swap-rebuild: build a NEW field for the same goal (call off the main thread) and swap the cache
-        // reference when done — the old field keeps serving replans until the swap, never a null window.
+        // reference when done, the old field keeps serving replans until the swap, never a null window.
         public static void Rebuild(int gx, int gy, int sx, int sy)
         {
             var f = BuildField(gx, gy, sx, sy, bigMargin: true);
             _cachedField = f; _cachedGoal = (gx, gy);
         }
 
-        // the field priced digs with the pick power captured at build time — a pick upgrade mid-nav makes those
+        // the field priced digs with the pick power captured at build time, a pick upgrade mid-nav makes those
         // prices lies (walls it now chews through still priced near-impassable).
         public static bool FieldPickStale()
         {
@@ -236,7 +236,7 @@ namespace TerraBlind
             => DescendPath(field, sx, sy, gx, gy, quiet: true).Item1;
 
         // 场推荐的下一格 = 使 StepCost(这一步) + field[邻居] 最小的那个,也就是 Dijkstra 最优跳。
-        // 不是"H 最低的邻居" —— 那个判据会被诱上一根很贵的柱子掉进井里。没有更好的邻居返回 (0,0)。
+        // 不是"H 最低的邻居"。那个判据会被诱上一根很贵的柱子掉进井里。没有更好的邻居返回 (0,0)。
         public static (int dx, int dy) FieldDir(Dictionary<(int, int), int> field, int cx, int cy)
         {
             if (field == null) return (0, 0);
@@ -363,7 +363,7 @@ namespace TerraBlind
         }
 
         // exposed for /descent_route to price a traced detour path edge by edge in BOTH directions
-        // (going down a chasm is cheap, climbing back out is not — a one-way field hides that).
+        // (going down a chasm is cheap, climbing back out is not, a one-way field hides that).
         public static int StepCostPublic(int cx, int cy, int nx, int ny) => StepCost(cx, cy, nx, ny);
 
         // 人要【站在】这一格得先付多少。站得住=0;站不住就得自己造落脚点,那是真代价。
@@ -382,7 +382,7 @@ namespace TerraBlind
 
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
         // 建场那一刻身上有没有方块。DropLands 是【逐格】调的(110万格),
-        // 在里面扫 58 格背包会把建场从 1.5s 拖成几十秒 —— 所以和 pickPower 一样,建场前取一次
+        // 在里面扫 58 格背包会把建场从 1.5s 拖成几十秒。所以和 pickPower 一样,建场前取一次
         static bool _fieldLavaSurvivable;
 
         // 全身上下最好的镐力。【背包也算】-- 只扫热键栏的话镐在背包里就等于 pickPower=0,
@@ -406,7 +406,7 @@ namespace TerraBlind
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
                 if (IsLava(cx, cy - r)) return Impassable;
-            // 压力板踩下去就触发,有的连着岩浆陷阱 —— 能绕就绕,绕不开也别当免费。
+            // 压力板踩下去就触发,有的连着岩浆陷阱。能绕就绕,绕不开也别当免费。
             for (int r = 0; r < 3; r++)
             {
                 int py2 = cy - r;
@@ -459,7 +459,7 @@ namespace TerraBlind
                 }
             }
             // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
-            // 取左右里实心行少的那侧 —— 人可以站偏,挑便宜的那半边走。
+            // 取左右里实心行少的那侧。人可以站偏,挑便宜的那半边走。
             if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
             bool horizontal = cx != nx;
             // 进这一格要不要自己造落脚点,由 CellKind 一处说了算。原来三个方向各判各的
@@ -488,9 +488,9 @@ namespace TerraBlind
                     if (PathPlanner.IsFloorPublic(cx, cy + d)) { nearSupport = true; break; }
                 if (!nearSupport) baseCost = MoveUp + buildCost;
             }
-            // air penalty ONLY on HORIZONTAL entry into open air — that's "flying sideways", which doesn't exist.
+            // air penalty ONLY on HORIZONTAL entry into open air, that's "flying sideways", which doesn't exist.
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a
-            // wall face has the feet briefly unsupported too — penalizing it made an 18-cell climb-around (1458)
+            // wall face has the feet briefly unsupported too, penalizing it made an 18-cell climb-around (1458)
             // cost more than digging through the wall (1440), which is backwards.
             if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost + MediumExtra(cx, cy);
@@ -499,7 +499,7 @@ namespace TerraBlind
         // 从 (x,y) 掉下去,落不落得住。探到实处/平台=落得住;探完 DropProbe 还没底=不算,那是无底洞。
         //
         // 岩浆【不再是"落不住"】:身上有方块时掉进去有救(SurvivalReflex.LavaLevee 填方块把人抬出来)。
-        // 没方块才照旧算落不住 —— 那种情况下去了是真出不来。
+        // 没方块才照旧算落不住。那种情况下去了是真出不来。
         // 注意这只放宽"往下掉",岩浆当【通路】那条(StepCost/StandPenalty)照旧 Impassable:
         // 松了的话贪心会主动领人趟岩浆湖,一路填方块过去。
         static bool DropLands(int x, int y)
@@ -526,13 +526,13 @@ namespace TerraBlind
         // 方块放得住吗。四邻(不含斜角)有实心,【或者本格有背景墙】。
         //
         // 【墙这一条是必须的】。原来借用 ItemUseCoordinator.HasAnchor,可那份是给【绳子】
-        // 写的(注释写着"绳子只能从已有绳子或天花板往下接"),绳子不认墙 —— 拿它当方块的判据,
+        // 写的(注释写着"绳子只能从已有绳子或天花板往下接"),绳子不认墙。拿它当方块的判据,
         // 在有墙的地方会把放得下的格判成放不下。地狱要塞(Ruined Houses)就是【有墙又有岩浆】的
         // 地形,正好踩中:场说不可达,人却明明能在那儿架方块过去。
         public static bool BlockAnchor(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return false;
-            // 本格有背景墙就锚得住 —— 墙是贴在这一格上的,不用看邻居
+            // 本格有背景墙就锚得住。墙是贴在这一格上的,不用看邻居
             if (Main.tile[x, y].WallType > 0) return true;
             int[] dx = { 0, 0, -1, 1 }, dy = { -1, 1, 0, 0 };
             for (int i = 0; i < 4; i++)
@@ -547,7 +547,7 @@ namespace TerraBlind
             return false;
         }
 
-        // a platform placed at (x,y) would have something to attach to — same 3x3 neighborhood rule as the planner's
+        // a platform placed at (x,y) would have something to attach to, same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
         public static bool PlatformAnchor(int x, int y)
         {
@@ -582,7 +582,7 @@ namespace TerraBlind
             return true;
         }
 
-        // solid of ANY shape (full, slope, half-brick) — what the body envelope collides with above the feet row
+        // solid of ANY shape (full, slope, half-brick), what the body envelope collides with above the feet row
         static bool SolidAnyShape(int x, int y)
         {
             // 越界当实心(和别处相反):场的边界外不许走
@@ -599,12 +599,12 @@ namespace TerraBlind
                 && ((int)t.Slope != 0 || t.IsHalfBlock);
         }
 
-        // Cost of stepping sideways into open air. Two factors, both real costs (NO judgement here — the field weighs
+        // Cost of stepping sideways into open air. Two factors, both real costs (NO judgement here, the field weighs
         // "float across" vs "go down the slope and back up" itself; we only price floating honestly):
-        //   • DEPTH h: how far below is the floor. Small h (a sub-jump dip, ≤ FreeAir≈9) is free — a real jump clears it.
+        //   • DEPTH h: how far below is the floor. Small h (a sub-jump dip, ≤ FreeAir≈9) is free, a real jump clears it.
         //   • SPAN L: how many cells of CONTINUOUS sideways air lie ahead in the travel direction before the ground
         //     returns. A long unsupported horizontal run is what the body physically can't do (no walk/jump crosses 13
-        //     blank cells) — the longer the span, the costlier per cell, so a long float's TOTAL price climbs past the
+        //     blank cells), the longer the span, the costlier per cell, so a long float's TOTAL price climbs past the
         //     down-slope-and-up alternative and the field switches to descending. A short span (≤ a jump's reach) stays
         //     cheap so narrow pits are still floated/jumped. Span dominates depth: a deep-but-narrow chasm is jumpable;
         //     a long shallow ledge-gap is the thing to avoid sailing over.
@@ -647,7 +647,7 @@ namespace TerraBlind
                 // pick the neighbor that reconstructs the Dijkstra-optimal path: minimize (cost OF this step) +
                 // (neighbor's remaining cost to goal). Using only field[n] ignores the step cost, so the greedy walk
                 // can slide onto a cheap-looking neighbor via an expensive edge (e.g. a horizontal hop into deep air)
-                // — drawing a route the field never actually priced that way.
+                //, drawing a route the field never actually priced that way.
                 int bestTotal = int.MaxValue; var best = cur;
                 foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
                 {
@@ -662,7 +662,7 @@ namespace TerraBlind
                 cur = best;
             }
             // per-step cost breakdown for a small probe (a few dozen cells with a wall in the middle): show why the
-            // field picked THIS route — direction, walk vs dig, the air penalty, and the running field value.
+            // field picked THIS route, direction, walk vs dig, the air penalty, and the running field value.
             if (!quiet && path.Count <= 3000)
             {
                 int walk = 0, dig = 0;
@@ -686,7 +686,7 @@ namespace TerraBlind
         static void DrawHeatmap(Dictionary<(int, int), int> field, int sx, int sy, int gx, int gy)
         {
             // normalize by the start cell's cost so the gradient spreads across the actual start→goal range;
-            // cells farther than start clamp to red. (using global max washes everything green — a few far
+            // cells farther than start clamp to red. (using global max washes everything green, a few far
             // dig-heavy cells blow up the scale.)
             float scale = field.TryGetValue((sx, sy), out int sc) && sc > 0 ? sc : 1f;
             var tiles = new List<(int, int, Color)>();

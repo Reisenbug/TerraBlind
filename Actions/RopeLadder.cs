@@ -4,22 +4,22 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// ROPE LADDER — build a rope column upward, N ropes tall, from wherever the player stands.
+	// ROPE LADDER, build a rope column upward, N ropes tall, from wherever the player stands.
 	//
 	// The shape is two strictly alternating phases, and the reason they alternate is the player's arm, not the game:
-	//   PLACE — stand still, walk the cursor UP one cell at a time and place a rope in every cell the arm reaches.
+	//   PLACE, stand still, walk the cursor UP one cell at a time and place a rope in every cell the arm reaches.
 	//           A program can move the cursor a whole cell per frame, so there is nothing to gain from shuffling the
-	//           body around mid-placement the way a human does — the body only moves once the arm has run out.
-	//   CLIMB — hold W. On a rope that IS the climb; the rope already placed is what makes the next stretch reachable.
+	//           body around mid-placement the way a human does, the body only moves once the arm has run out.
+	//   CLIMB, hold W. On a rope that IS the climb; the rope already placed is what makes the next stretch reachable.
 	//
 	// Both phases end on an observed world fact, never on a frame count: placement ends when the tile is there,
 	// climbing ends when the origin cell has actually risen. That is what keeps this correct across any mobility
-	// (wings, boots, honey, potions) — a fixed-frame replay would silently drift the moment the player moves faster.
+	// (wings, boots, honey, potions), a fixed-frame replay would silently drift the moment the player moves faster.
 	public static class RopeLadder
 	{
 		// TopUp is the finishing climb: placement stops wherever the arm last reached, which leaves the player several
-		// cells BELOW the rope's top and therefore unable to reach the cell above it. Ending the action at the top —
-		// and reporting that cell outright — is what lets the next action use the coordinate instead of deriving it.
+		// cells BELOW the rope's top and therefore unable to reach the cell above it. Ending the action at the top
+		// and reporting that cell outright, is what lets the next action use the coordinate instead of deriving it.
 		private enum Ph { Idle, Place, Climb, TopUp, Done }
 		private static Ph _ph = Ph.Idle;
 
@@ -58,10 +58,10 @@ namespace TerraBlind
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Place;
 			// FIRST ROPE GOES INTO THE PLAYER'S OWN CELL. A rope may occupy the player's hitbox, and the cell one above
-			// the floor IS that cell — aiming a cell higher targets empty air with no rope below it to extend from,
+			// the floor IS that cell, aiming a cell higher targets empty air with no rope below it to extend from,
 			// which vanilla refuses while the swing animation plays on regardless (looks like working, places nothing).
 			_targetWy = ActExecutor.OriginCy(p);
-			// 列钉死在开工那一刻 —— BeginPlace 以前每次重读 OriginCx,爬的过程里身体飘一格,
+			// 列钉死在开工那一刻。BeginPlace 以前每次重读 OriginCx,爬的过程里身体飘一格,
 			// 后面的绳就串到隔壁列去了。
 			_col = ActExecutor.OriginCx(p);
 			DiagLog.Write($"[rope] start {itemName} n={_want} slot={_slot} origin=({_col},{ActExecutor.OriginCy(p)})");
@@ -81,15 +81,15 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			int cx = _col;
 
-			// ARM CHECK against vanilla's own range test — the authority on what the player can touch. Out of reach is
+			// ARM CHECK against vanilla's own range test, the authority on what the player can touch. Out of reach is
 			// not a failure, it is simply the moment to climb: the ropes already placed are the way up.
 			if (!Reach.CanPlace(p, cx, _targetWy))
 			{
 				BeginClimb();
 				return;
 			}
-			// A ROPE ALREADY THERE is the only reason to skip a swing. Anything else occupying the cell — grass, a
-			// vine, any cut-through decoration — does NOT stop a rope going in, and treating "HasTile" as "occupied"
+			// A ROPE ALREADY THERE is the only reason to skip a swing. Anything else occupying the cell, grass, a
+			// vine, any cut-through decoration, does NOT stop a rope going in, and treating "HasTile" as "occupied"
 			// is what silently skipped the first rope: the swing never happened, so the cell above had no rope under
 			// it to extend from. Never predict whether the game will accept a placement; swing and read the map.
 			if (IsRope(cx, _targetWy))
@@ -132,12 +132,12 @@ namespace TerraBlind
 			if (_ph == Ph.Place)
 			{
 				if (ItemUseCoordinator.IsActive) return;   // still swinging
-				if (!_swingIssued) return;                 // nothing of ours to read yet — don't judge a stale outcome
+				if (!_swingIssued) return;                 // nothing of ours to read yet, don't judge a stale outcome
 				_swingIssued = false;
 				int cx0 = ActExecutor.OriginCx(p);
 				string o = ItemUseCoordinator.Outcome;
 				// THE MAP IS THE VERDICT: a rope in that cell means it worked, whatever the coordinator concluded.
-				// Rope placement depends on map state in ways not worth re-deriving here — so don't; just look.
+				// Rope placement depends on map state in ways not worth re-deriving here, so don't; just look.
 				if (IsRope(cx0, _targetWy))
 				{
 					if (o == "already_there") _already++; else _placed++;
@@ -147,7 +147,7 @@ namespace TerraBlind
 					BeginPlace();
 					return;
 				}
-				// out of reach is the CLIMB signal, not an error — the arm ran out, so move the body.
+				// out of reach is the CLIMB signal, not an error, the arm ran out, so move the body.
 				if (o == "no_swing" && ItemUseCoordinator.Reason == "out_of_reach") { BeginClimb(); return; }
 				Reason = ItemUseCoordinator.Reason.Length > 0 ? ItemUseCoordinator.Reason : o;
 				Finish("blocked");
@@ -156,7 +156,7 @@ namespace TerraBlind
 
 			if (_ph == Ph.TopUp)
 			{
-				// Climb to the ACTUAL top of the rope — the highest the body can rise. Rope-climbing hitches (a frame
+				// Climb to the ACTUAL top of the rope, the highest the body can rise. Rope-climbing hitches (a frame
 				// or two of no movement mid-climb) fooled the old 6-frame "stopped rising" check into finishing several
 				// cells short, which is why the later hop launched too low to reach the platform. Require a longer,
 				// unmistakable stall (no rise for 30 frames) so brief hitches don't count as the top.
@@ -167,7 +167,7 @@ namespace TerraBlind
 				return;
 			}
 
-			// CLIMB — hold W. On a rope this is the climb; the condition is the origin cell actually rising, so it
+			// CLIMB, hold W. On a rope this is the climb; the condition is the origin cell actually rising, so it
 			// works the same whether the player is fast, slow, or slowed by honey.
 			p.controlUp = true;
 			_climbFrames++;

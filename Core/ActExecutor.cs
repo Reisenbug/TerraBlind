@@ -6,10 +6,10 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// /act — the COMPLETE action primitive. One call submits a list of steps: steps run SERIALLY, everything inside
+	// /act, the COMPLETE action primitive. One call submits a list of steps: steps run SERIALLY, everything inside
 	// one step runs in PARALLEL (hold these keys + aim the cursor here + swing, all at once, until a condition).
 	// This is the surface the LLM writes against directly, so it must be complete (every meaningful vanilla control)
-	// and it must EXPLAIN ITSELF when a step stops making progress — the LLM diagnoses from the report, not from a
+	// and it must EXPLAIN ITSELF when a step stops making progress, the LLM diagnoses from the report, not from a
 	// bare error code. Termination is three-way, same shape as ItemUseCoordinator: done / no_progress / timeout,
 	// plus invariant_broken for a declared invariant that snapped.
 	public class ActStep
@@ -45,11 +45,11 @@ namespace TerraBlind
 		private static int _frozenCx, _frozenCy;         // "at" cursor: origin frozen at step start
 		private static int _curWx = -1, _curWy = -1;     // last resolved cursor world cell (for the report)
 
-		// REPEAT — the step list is a LOOP BODY, re-run until its own condition holds. Without this the caller has to
+		// REPEAT, the step list is a LOOP BODY, re-run until its own condition holds. Without this the caller has to
 		// unroll by hand (20 ropes = 20 near-identical steps), which is where "the player will have climbed by then"
 		// silently breaks: an unrolled chain freezes the geometry it was written against. One loop body re-reads the
-		// world every pass instead. `Max` is mandatory in spirit — a loop that cannot be bounded can hang, so the
-		// parser supplies a default — which is what makes non-termination structurally impossible here.
+		// world every pass instead. `Max` is mandatory in spirit, a loop that cannot be bounded can hang, so the
+		// parser supplies a default, which is what makes non-termination structurally impossible here.
 		private static bool _hasRepeat;
 		private static string _repUntilKind = "";
 		private static int _repUntilN, _repUntilItemType = -1, _repUntilDx, _repUntilDy;
@@ -111,9 +111,9 @@ namespace TerraBlind
 			_startStack = s.UntilKind == "consumed" ? StackOf(p, s.UntilItemType) : 0;
 		}
 
-		// ORIGIN CELL — the anchor for every relative coordinate. Column: of the 2-3 columns the 20px-wide body spans,
+		// ORIGIN CELL, the anchor for every relative coordinate. Column: of the 2-3 columns the 20px-wide body spans,
 		// the one covering the most pixels; an exact 10/10 split takes the LEFT (strict > keeps the earlier column).
-		// Row: the feet row, lifted 2px so standing on ground gives the cell the player OCCUPIES, not the floor below —
+		// Row: the feet row, lifted 2px so standing on ground gives the cell the player OCCUPIES, not the floor below
 		// so [0,0] is the player's own cell and [0,1] is the tile being stood on.
 		public static int OriginCx(Player p)
 		{
@@ -140,7 +140,7 @@ namespace TerraBlind
 			_stepFrames++; _totalFrames++;
 			if (_totalFrames > _timeout) { Finish("timeout"); return; }
 
-			// SLOT — selectedItem only holds 0-9, so a backpack slot must be swapped into the hotbar first (same trick
+			// SLOT, selectedItem only holds 0-9, so a backpack slot must be swapped into the hotbar first (same trick
 			// as ItemUseCoordinator: prefer an empty hotbar slot, else displace slot 0).
 			int slot = s.Slot;
 			if (slot >= 10 && slot < p.inventory.Length)
@@ -157,7 +157,7 @@ namespace TerraBlind
 			}
 			if (slot >= 0 && slot <= 9) p.selectedItem = slot;
 
-			// CURSOR — resolve the target cell and point the mouse at its centre. "rel" recomputes the origin every
+			// CURSOR, resolve the target cell and point the mouse at its centre. "rel" recomputes the origin every
 			// frame (the aim follows the player, e.g. always 4 above the feet while climbing); "at" uses the origin
 			// frozen at step start (the aim stays on one world cell while the player moves).
 			if (s.HasCursor)
@@ -168,7 +168,7 @@ namespace TerraBlind
 				Cursor.AimTile(_curWx, _curWy);
 			}
 
-			// KEYS — written raw into the vanilla control fields. controlDown here is the real platform fall-through
+			// KEYS, written raw into the vanilla control fields. controlDown here is the real platform fall-through
 			// (Player.cs `bool fallThrough = controlDown`), instant, no hold timer involved.
 			if (s.Left) p.controlLeft = true;
 			if (s.Right) p.controlRight = true;
@@ -180,7 +180,7 @@ namespace TerraBlind
 			if (s.Hook) p.controlHook = true;
 			if (s.Mount) p.controlMount = true;
 
-			// USE — TAP semantics. Vanilla gates reuse on `releaseUseItem = !controlUseItem` from the previous frame,
+			// USE, TAP semantics. Vanilla gates reuse on `releaseUseItem = !controlUseItem` from the previous frame,
 			// so holding the button down forever fires exactly once. Pressing only while itemAnimation == 0 gives the
 			// press/release alternation for free: the swing sets itemAnimation, we stop pressing, release registers.
 			if (s.UseItem && p.itemAnimation == 0)
@@ -189,7 +189,7 @@ namespace TerraBlind
 				_times++;
 			}
 
-			// INVARIANT — a declared fact that must hold for the step to make sense. Break it and stop AT ONCE with a
+			// INVARIANT, a declared fact that must hold for the step to make sense. Break it and stop AT ONCE with a
 			// full report, instead of flailing until the stall window expires. This is "stuck must be structurally
 			// impossible": the failure is detected by construction, not by waiting for a timeout.
 			if (s.InvKind.Length > 0 && CheckInv(p, s.InvKind) != s.InvWant)
@@ -202,7 +202,7 @@ namespace TerraBlind
 			int prog = Progress(p, s);
 			if (Satisfied(p, s, prog)) { Advance(); return; }
 
-			// NO-PROGRESS — the progress number for this until-kind hasn't moved for StallFrames. Every kind exposes a
+			// NO-PROGRESS, the progress number for this until-kind hasn't moved for StallFrames. Every kind exposes a
 			// monotone counter (consumed / moved / times / frames) precisely so stalling is measurable rather than
 			// guessed at. frames-based steps can't stall by definition and are skipped.
 			if (s.UntilKind == "frames") return;
@@ -260,7 +260,7 @@ namespace TerraBlind
 			}
 		}
 
-		// "placed" — the natural terminator for a placement: the cell the cursor is aiming at now holds a tile. Without
+		// "placed", the natural terminator for a placement: the cell the cursor is aiming at now holds a tile. Without
 		// it a caller has to spell the same cell out twice (once as the cursor, once as a tile condition) or fall back
 		// to a frame count, and a frame count is how 19 of 20 ropes got skipped while the chain still reported done.
 		private static bool CursorCellFilled()
@@ -319,7 +319,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// WHY — the executor's mechanical self-check when a step stalls. Every entry is a directly testable world fact,
+		// WHY, the executor's mechanical self-check when a step stalls. Every entry is a directly testable world fact,
 		// never a guess. The LLM reads these plus the raw scene below and works out the fix itself; that's the whole
 		// point of reporting the scene instead of an error code.
 		private static void Diagnose(Player p, ActStep s)
@@ -373,7 +373,7 @@ namespace TerraBlind
 
 		private static bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
 
-		// THE SCENE — everything the executor could see when it stopped, dumped raw. Not a verdict: the numbers the
+		// THE SCENE, everything the executor could see when it stopped, dumped raw. Not a verdict: the numbers the
 		// LLM needs to reach its own verdict (where the cursor actually was, whether it was in reach, what sat in the
 		// target cell, what was in hand, whether the player was on a rope).
 		public static string StatusJson()

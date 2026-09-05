@@ -35,7 +35,7 @@ namespace TerraBlind
 
         public static bool IsActive => State != SkillState.Idle;
 
-        // col:柱子钉在哪一列。不传就每跳按脚下支撑现找 —— 人在两列间飘时那个结果会跳变,
+        // col:柱子钉在哪一列。不传就每跳按脚下支撑现找。人在两列间飘时那个结果会跳变,
         // 锚点跟着换列,一块也砌不稳(规划说 2906,执行给 2907,50 条 pillar 只中 5 条)。
         public static void StartPillarJump(bool dirRight, int targetWy, bool trace = true, int col = int.MinValue)
         {
@@ -76,7 +76,7 @@ namespace TerraBlind
         static string _lastAirVeto = "";
         static int _nudgeFrames;
         private const int NudgeGrace = 20;
-        // 逐帧拍下整个放置窗口:跳多高、箱子在哪、够不够得着、手好了没 —— 定不下窗口就别改跳跃帧数
+        // 逐帧拍下整个放置窗口:跳多高、箱子在哪、够不够得着、手好了没。定不下窗口就别改跳跃帧数
         public static bool PillarTrace = false;
 
         // 头顶到第一个实心块还有几格:跳不满就是被它挡的
@@ -124,7 +124,7 @@ namespace TerraBlind
         static bool PlatAnchor(int x, int y)
         {
             (int dx, int dy)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
-            // 问的是【邻居】(a,b) 是不是地,不是自己(x,y) —— 自己当然是空的,
+            // 问的是【邻居】(a,b) 是不是地,不是自己(x,y)。自己当然是空的,
             // 不然也不用放东西了。写成 (x,y) 会让所有平台都放不出来
             foreach (var (dx, dy) in n)
                 if (Predicates.IsGround(x + dx, y + dy)) return true;
@@ -201,7 +201,7 @@ namespace TerraBlind
             return td != null && item.createTile < td.Length && td[item.createTile];
         }
 
-        // 热键栏没有就从背包搬一叠上来 —— selectedItem 只认 0-9。补货是 PlatformStock 的事,这里不管。
+        // 热键栏没有就从背包搬一叠上来。selectedItem 只认 0-9。补货是 PlatformStock 的事,这里不管。
         private static int FindPlatformSlot(Player p)
         {
             for (int i = 0; i < 10; i++)
@@ -244,7 +244,7 @@ namespace TerraBlind
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
                 // 只有脚踏实地时问"能不能起跳"才有意义:人在空中头顶本来就贴着方块,一算就说跳不起来,
-                // 于是一跳到半路把自己判死 —— 平台其实已经放出去了
+                // 于是一跳到半路把自己判死。平台其实已经放出去了
                 var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
                 bool onGround = p.velocity.Y == 0f;
                 bool jumpBlocked = false;
@@ -254,7 +254,7 @@ namespace TerraBlind
                     var nudgeSim = PhysicsSimulator.SimulateJump(nudgeState, 0, 15, nudgePh);
                     jumpBlocked = p.position.Y - nudgeSim.MinPy < 10f; // 正常无遮挡上升 93.46px;<10 就是被挡住了
                 }
-                // 挪一下是【下一帧】才生效的:同一帧拿没变的位置再判一次,必然还是挡着 —— 以前就是这样
+                // 挪一下是【下一帧】才生效的:同一帧拿没变的位置再判一次,必然还是挡着。以前就是这样
                 // 把自己判死的,nudge 写了等于没写。所以设完输入就让开这一帧,给它时间挪。
                 if (jumpBlocked)
                 {
@@ -281,9 +281,9 @@ namespace TerraBlind
                 }
                 _nudgeFrames = 0;
                 // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
-                // 放成功锚点上移,继续找下一格。不回放录制 —— 录制写死一 cycle 2 格,地形一变就错。
+                // 放成功锚点上移,继续找下一格。不回放录制。录制写死一 cycle 2 格,地形一变就错。
                 _totalFrames++;
-                // 脚下真有东西才算到 —— 只比行号会在起步那一帧就"到了"(脚下地面行本来就等于目标行),
+                // 脚下真有东西才算到。只比行号会在起步那一帧就"到了"(脚下地面行本来就等于目标行),
                 // 调用方按身体行判又说没到,两边基准差一格 → start/done 空转
                 if (feetYNow <= _targetWy && p.velocity.Y == 0f
                     && Predicates.IsGround(Pcx(p), feetYNow))
@@ -308,7 +308,7 @@ namespace TerraBlind
                     if (_jumpStartFeetY != 0 && _jumpStartFeetY != feetYNow)
                         DiagLog.Write($"[pillar] jump#{_jumps} rose={_jumpStartFeetY - feetYNow} feetY={feetYNow}");
                     _jumpStartFeetY = feetYNow;
-                    // 优先用调用方钉的列;那列脚下真没支撑才现找【踩着东西】的列 ——
+                    // 优先用调用方钉的列;那列脚下真没支撑才现找【踩着东西】的列
                     // 中心列可能悬空在两列之间,锚点贴不住,一块也放不出来(2711站着,却往2712放)。
                     bool pinnedOk = _pinnedCol != int.MinValue && Predicates.IsSolid(_pinnedCol, SupportRow(_pinnedCol, feetYNow));
                     _pillarCol = pinnedOk ? _pinnedCol : FootedCol(p, feetYNow);

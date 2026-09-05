@@ -2,12 +2,12 @@ using Terraria;
 
 namespace TerraBlind
 {
-    // FRAME-DRIVEN build replayer — the whole record/replay orchestration lives here in the mod, not in Python.
+    // FRAME-DRIVEN build replayer, the whole record/replay orchestration lives here in the mod, not in Python.
     // Python is a trigger: /build_replay_start kicks this off, /build_replay_status polls, /build_replay_stop aborts.
     // Ticked every frame from PreUpdate (before RecedingNav.Tick, so a nav started this frame is driven immediately).
     //
     // Per recorded event it runs a small state machine that STARTS the existing async executors and advances when
-    // they report done — the same shape as the descent itinerary, but resident in the game loop:
+    // they report done, the same shape as the descent itinerary, but resident in the game loop:
     //   NAV  → RecedingNav.Start(a standable cell near the target); wait for Active to clear.
     //   ACT  → ItemUseCoordinator.Start (place: non-strict, swings at the exact cell; mine: strict, watches removal);
     //          wait for IsActive to clear, read Outcome.

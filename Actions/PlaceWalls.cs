@@ -5,12 +5,12 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// PLACE-WALLS — place background walls at an ORDERED list of cells, strictly in order (one fully done before the
+	// PLACE-WALLS, place background walls at an ORDERED list of cells, strictly in order (one fully done before the
 	// next starts). Order matters here: vanilla's wall merge/spread depends on placement order, so the caller's
 	// sequence must be honored exactly, not "place whatever's in reach".
 	//
 	// For each cell: if the player can reach it standing, place; if not, hold jump and place the moment it comes into
-	// reach (a taller wall placed from a shorter piece of furniture — e.g. the workbench room — needs a hop). The
+	// reach (a taller wall placed from a shorter piece of furniture, e.g. the workbench room, needs a hop). The
 	// player does not move between cells; the caller positions them (on the room's table) first. Walls may sit inside
 	// the player's hitbox, so no stepping aside.
 	public static class PlaceWalls
@@ -55,7 +55,7 @@ namespace TerraBlind
 		}
 
 		// a wall is here when the cell's WallType matches what our item makes. Vanilla spread may fill neighbours with
-		// the same wall type, which is fine — "done" for a cell only needs THIS cell to carry the wall.
+		// the same wall type, which is fine, "done" for a cell only needs THIS cell to carry the wall.
 		private static bool WallHere(int wx, int wy)
 		{
 			if (!InBounds(wx, wy)) return false;
@@ -84,7 +84,7 @@ namespace TerraBlind
 			_cellFrames++;
 			if (_cellFrames > MaxCellFrames)
 			{
-				// couldn't get this cell walled even with jumping — skip it (report incomplete at the end) rather than
+				// couldn't get this cell walled even with jumping, skip it (report incomplete at the end) rather than
 				// hang. Strict order is preserved: we only move on after genuinely failing this one.
 				DiagLog.Write($"[walls] skip cell {_i} ({wx},{wy}) — unreachable");
 				_i++; _cellFrames = 0; return;
@@ -93,7 +93,7 @@ namespace TerraBlind
 			bool inReach = Reach.CanPlace(p, wx, wy);
 			if (!inReach)
 			{
-				// too high to reach standing (short furniture / top row) → hop for it. controlDown never — that would
+				// too high to reach standing (short furniture / top row) → hop for it. controlDown never, that would
 				// drop off the furniture. Just jump and re-test reach each frame.
 				p.controlJump = true;
 				return;

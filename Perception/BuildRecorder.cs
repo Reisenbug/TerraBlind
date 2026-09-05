@@ -6,19 +6,19 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-    // SEMANTIC build recorder — records the FINAL STRUCTURE, not the build process. Detection is WORLD DIFF for BOTH
+    // SEMANTIC build recorder, records the FINAL STRUCTURE, not the build process. Detection is WORLD DIFF for BOTH
     // directions (symmetric): each frame, compare the watched box to last frame. A cell that gained a tile → PLACE
     // (recorded with its real tile type + frame for the ghost preview, and the held buildable item's id/name for
     // replay's inventory lookup). A cell that lost a tile → MINE. This replaces the old cursor/useItem-edge guess,
-    // which missed held-down multi-places and drifted a cell off — the world diff catches every cell exactly where
+    // which missed held-down multi-places and drifted a cell off, the world diff catches every cell exactly where
     // it landed, just like the mining half always did.
     //
-    // Storage is a PER-CELL map (relative coords), so only the FINAL state of each cell survives — build churn
+    // Storage is a PER-CELL map (relative coords), so only the FINAL state of each cell survives, build churn
     // (place then re-place then mine) collapses to the end result. Net rule: mining a cell THIS recording placed
     // cancels it (never happened); mining a pre-existing cell records a removal.
-    //   DIFF   — a cell stores the item TYPE+NAME, never a hotbar slot (replay finds it wherever it sits).
-    //   REUSE  — coords RELATIVE to an anchor (feet cell at Start); straight runs collapse into a `groups` hint.
-    //   GHOST  — a cell also stores tile type+frameX/Y so the preview draws the real block faint, not a debug square.
+    //   DIFF, a cell stores the item TYPE+NAME, never a hotbar slot (replay finds it wherever it sits).
+    //   REUSE, coords RELATIVE to an anchor (feet cell at Start); straight runs collapse into a `groups` hint.
+    //   GHOST, a cell also stores tile type+frameX/Y so the preview draws the real block faint, not a debug square.
     public class BuildRecorder : ModSystem
     {
         private static readonly object _lock = new object();
@@ -67,7 +67,7 @@ namespace TerraBlind
                 try { Directory.CreateDirectory(dir); File.WriteAllText(dir + "/build_rec.json", json); } catch { }
 
                 // GHOST preview: draw the captured structure as faint real-tile sprites (placements) + red outlines
-                // (removals), rebased at the anchor. This is the "淡色版本的方块" — the actual blocks, half-transparent.
+                // (removals), rebased at the anchor. This is the "淡色版本的方块", the actual blocks, half-transparent.
                 var ghosts = new List<(int, int, ushort, short, short, bool)>();
                 foreach (var kv in _cells)
                     ghosts.Add((_anchorX + kv.Key.cx, _anchorY + kv.Key.cy, kv.Value.TileType, kv.Value.FrameX, kv.Value.FrameY, kv.Value.Mine));
@@ -148,7 +148,7 @@ namespace TerraBlind
                 var held = p.inventory[p.selectedItem];
                 bool buildItemHeld = held != null && !held.IsAir && (held.createTile >= 0 || held.createWall >= 0);
 
-                // FIXED box at the anchor — never trails the player.
+                // FIXED box at the anchor, never trails the player.
                 var now = new Dictionary<(int, int), (ushort, short, short)>();
                 for (int x = _anchorX - WatchRadius; x <= _anchorX + WatchRadius; x++)
                     for (int y = _anchorY - WatchRadius; y <= _anchorY + WatchRadius; y++)

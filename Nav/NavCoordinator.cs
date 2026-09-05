@@ -1126,7 +1126,7 @@ namespace TerraBlind
 
                         // fire once the predicted landing is within tolerance horizontally; requiring
                         // exact (==0) deadlocks when no hold can land precisely on the target column
-                        // (e.g. half-brick / odd-distance gaps) — landing Dx tolerance is 3, so 1 is safe.
+                        // (e.g. half-brick / odd-distance gaps), landing Dx tolerance is 3, so 1 is safe.
                         if (bestHold == 0 || bestDistCx > JumpFireDistCx)
                         {
                             // move to reduce simDist: if sim lands short, move toward target; if overshoots, move back
@@ -1612,7 +1612,7 @@ namespace TerraBlind
             return px;
         }
 
-        // 平台在背包里但不在 hotbar 时,以前直接返回 -1 —— 寻路的跳放/搭桥全哑火,人明明有平台。
+        // 平台在背包里但不在 hotbar 时,以前直接返回 -1。寻路的跳放/搭桥全哑火,人明明有平台。
         // 手只够得到 hotbar,所以扫全背包,找到了就 home 进 hotbar 再用。
         public static int FindPlatformSlot(Player p)
         {

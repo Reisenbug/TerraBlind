@@ -19,7 +19,7 @@ namespace TerraBlind
         // multiplies moveSpeed in LATE in the update (Player.cs 1.4.5.4 L25491: runAcceleration *= moveSpeed;
         // maxRunSpeed *= moveSpeed). Our planning hook (SetControls) sits between the reset and the bake, so reading
         // p.maxRunSpeed there returns bare 3.0 even under Happy! (buff 146: moveSpeed += 0.1 then *= 1.1 → +21%,
-        // exactly the measured 3.64/3.0) — every plan near a sunflower undershot. PostUpdate reads the fully-baked
+        // exactly the measured 3.64/3.0), every plan near a sunflower undershot. PostUpdate reads the fully-baked
         // values of the SAME frame; planning prefers this snapshot when fresh.
         static float _bakedMaxRun, _bakedAccRunSpeed, _bakedRunAccel;
         static uint _bakedTick;
@@ -70,7 +70,7 @@ namespace TerraBlind
             }
 
             // vanilla honey liquid (Update L23934): gravity=0.1, maxFall=3, jump params UNTOUCHED (unlike water's
-            // 30-frame hold) — the crawl comes from the 0.25 position multiplier (L27588; water is 0.5), applied
+            // 30-frame hold), the crawl comes from the 0.25 position multiplier (L27588; water is 0.5), applied
             // in Step the same way as water's.
             static Params BuildHoney(Player p)
             {
@@ -84,12 +84,12 @@ namespace TerraBlind
 
             static Params BuildDry(Player p)
             {
-                // FRAGILE: the VERTICAL fields (gravity/jumpSpeed/jumpHeight/maxFallSpeed) are water-modified — when
+                // FRAGILE: the VERTICAL fields (gravity/jumpSpeed/jumpHeight/maxFallSpeed) are water-modified, when
                 // FromPlayer runs while IN water they hold water values (gravity=0.2, jumpHeight=30, ...), so the air
                 // variant must hardcode bare values, NOT read p.*. The HORIZONTAL fields are NEVER touched by water
                 // (verified: no wet/liquid-gated write to runAcceleration/maxRunSpeed/accRunSpeed in Player.cs).
                 // NOT baked at SetControls though (the old probe note claiming so was wrong): vanilla resets them
-                // each frame and multiplies moveSpeed in only late in the update — so use the PostUpdate-captured
+                // each frame and multiplies moveSpeed in only late in the update, so use the PostUpdate-captured
                 // snapshot (Baked*), which covers all speed buffs/accessories (sunflower, swiftness, boots...).
                 return new Params
                 {
@@ -158,7 +158,7 @@ namespace TerraBlind
                 honeyNow = wetNow && Terraria.Collision.honey;
                 ph = honeyNow ? _honey : wetNow ? _wet : _dry;
                 // crossing OUT of water mid-hold: vanilla (Player.cs L27354) caps remaining hold to jumpHeight/5 of
-                // the AIR jumpHeight (15/5 = 3), regardless of frames already spent — NOT airCap-used.
+                // the AIR jumpHeight (15/5 = 3), regardless of frames already spent, NOT airCap-used.
                 if (s.WasWet && !wetNow && jfl > ph.JumpHeight / 5)
                     jfl = ph.JumpHeight / 5;
             }
@@ -208,13 +208,13 @@ namespace TerraBlind
             }
 
             // vanilla runs JumpMovement (sets vy = -jumpSpeed) and the gravity block (vy += gravity, then clamp to
-            // maxFall) as TWO separate steps in Update — and the gravity block runs EVERY frame, hold frames included
+            // maxFall) as TWO separate steps in Update, and the gravity block runs EVERY frame, hold frames included
             // (Player.cs: JumpMovement L20212/L20322 → gravity L26830 → maxFall clamp L26841). keep them separate here
             // so each medium switch / future modifier lands on the right step instead of a pre-folded -4.61 constant.
             int jumpHStart = s.JumpHStart;
-            // step 1 — JumpMovement (vanilla): two distinct cases. LAUNCH (vanilla L20316 `velocity.Y==0` → fire) and
+            // step 1, JumpMovement (vanilla): two distinct cases. LAUNCH (vanilla L20316 `velocity.Y==0` → fire) and
             // HOLD-continue (vanilla L20204 `jump>0`, already airborne). vanilla's `if(velocity.Y==0)jump=0` (L20206)
-            // is the HOLD case ending on landing — it must NOT fire on the launch frame (which IS at velocity.Y==0).
+            // is the HOLD case ending on landing, it must NOT fire on the launch frame (which IS at velocity.Y==0).
             // we distinguish them by jumpHStart: 0 = not launched yet (this is the launch frame), >0 = mid-hold.
             if (input.Jump && jfl > 0)
             {
@@ -240,11 +240,11 @@ namespace TerraBlind
             {
                 jfl = 0;
             }
-            // step 2 — gravity block: applied every frame (hold's -jumpSpeed + gravity = -4.61 net for bare player).
+            // step 2, gravity block: applied every frame (hold's -jumpSpeed + gravity = -4.61 net for bare player).
             vy = System.Math.Min(vy + ph.Gravity, ph.MaxFall);
 
             // vanilla StickyMovement (Update L27137: after gravity, BEFORE the move): a honey block touching the
-            // hitbox clamps and damps velocity every frame — vx to ±1 then ×0.85 (|vx|>0.75) / ×0.6, vy ≤1 / ≥−5
+            // hitbox clamps and damps velocity every frame, vx to ±1 then ×0.85 (|vx|>0.75) / ×0.6, vy ≤1 / ≥, 5
             // then ×0.96 rising / ×0.3 falling. This is what makes walking on a honey floor crawl at ≤1px/f; the
             // dry sim promised full-speed landings across honey that reality missed by cells. Cobweb (51) is NOT
             // modelled: the web reflex smashes it in one hit, so plans should treat it as passable.
@@ -264,14 +264,14 @@ namespace TerraBlind
             // StepUp (it would lift the player back onto the platform). matches vanilla controlDown behavior.
             bool ft = input.Down;
             // vanilla per-frame order (Player.cs L27536-27557): SlopeDownMovement → StepDown → StepUp, BEFORE the
-            // move. these are the down-direction counterparts of StepUp — without them a walk off a downward slope or
+            // move. these are the down-direction counterparts of StepUp, without them a walk off a downward slope or
             // a 1-tile down-step floats out and free-falls instead of hugging the ground like the real player.
             // SlopeDownMovement (WalkDownSlope): glue to a downward slope as you walk onto it.
             {
                 var ds = Terraria.Collision.WalkDownSlope(pos, vel, PlayerW, PlayerH, ph.Gravity);
                 pos.X = ds.X; pos.Y = ds.Y; vel.X = ds.Z; vel.Y = ds.W;
             }
-            // StepDown (vanilla L27544): condition is exactly velocity.Y == gravity. NO !controlDown gate — vanilla
+            // StepDown (vanilla L27544): condition is exactly velocity.Y == gravity. NO !controlDown gate, vanilla
             // runs StepDown regardless of crouch; drop-through is handled by TileCollision's fallThrough below.
             if (vel.Y == ph.Gravity)
                 Terraria.Collision.StepDown(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
@@ -285,7 +285,7 @@ namespace TerraBlind
 
             // vanilla Player.WetCollision (Player.cs L22962-22973): in liquid position += velocity×mult, but an axis
             // that TileCollision CLIPPED (hit a wall/floor) moves at full speed, not scaled. velocity itself stays
-            // full-speed (so leaving liquid restores full motion instantly — fixes the out-of-water seam drift where
+            // full-speed (so leaving liquid restores full motion instantly, fixes the out-of-water seam drift where
             // a speed-capped wet model crawled back to maxRun over ~18 frames). mult: water 0.5, honey 0.25 (L27588).
             float moveX = result.X, moveY = result.Y;
             if (wetNow)
@@ -300,7 +300,7 @@ namespace TerraBlind
 
             // vanilla Player.SlopingCollision (Player.cs L27716) runs AFTER position += velocity: Collision.SlopeCollision
             // lifts the player along a slope / half-brick face. without this the sim "walked through" slope half-bricks
-            // the real game pushes up — the player gets lifted ~8px and, if a ceiling is above, jams (vx clips next
+            // the real game pushes up, the player gets lifted ~8px and, if a ceiling is above, jams (vx clips next
             // frame). modelling it makes the planner see the genuine block instead of a phantom flat walk.
             {
                 var slope = Terraria.Collision.SlopeCollision(new Vector2(nx, ny), new Vector2(result.X, result.Y), PlayerW, PlayerH, ph.Gravity, ft);

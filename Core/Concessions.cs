@@ -14,14 +14,14 @@ namespace TerraBlind
 		// "椅子从4变3、walkplace 卡在物品34没了"这种查不动的现场
 		public const int WoodKeep = 9999;
 
-		// 伸手范围加成。【已归零】—— 全流程跑通之后回到原版距离,只剩捅向导那一段
+		// 伸手范围加成。【已归零】。全流程跑通之后回到原版距离,只剩捅向导那一段
 		// 单独开 LongArm。留着这个常量是因为好几处判据的注释拿它举例(隔墙够得着但脚过不去),
 		// 归零之后那些分支自然不再触发,但代码路径还在
 		public const int ReachBoost = 0;
 
 		// 捅向导那一段专用的【超长手臂】。ReachBoost 只加 blockRange,只有放置吃得到;
 		// 挖和对话都以 static tileRangeX 为底,所以要够到向导脚下的每一列,只能动这个 static。
-		// 【动了就必须还回去】—— 它是全局的,规划器的判据也读它,留着不还会让整个寻路以为
+		// 【动了就必须还回去】。它是全局的,规划器的判据也读它,留着不还会让整个寻路以为
 		// 手能伸 30 格。开关成对出现在 WofPrep:BackToGuide 开,Patch 收尾关
 		public const int LongArm = 30;
 		static int _savedRangeX = -1, _savedRangeY = -1;
@@ -48,7 +48,7 @@ namespace TerraBlind
 			_savedRangeX = _savedRangeY = -1;
 		}
 
-		// 放置/挖掘用时倍率。【已还原成 1】—— 全流程跑通了,回到原版速度。
+		// 放置/挖掘用时倍率。【已还原成 1】。全流程跑通了,回到原版速度。
 		// 提速当初是为了绕开"空中放置来不来得及""放置和飞行的时序竞争"这一类时序问题,
 		// 还原之后这些会重新露头:一次放置回到十几帧,ItemUseCoordinator 要等更久
 		public const float UseTimeMul = 1f;
@@ -90,7 +90,7 @@ namespace TerraBlind
 			return Main.tileLavaDeath[it.createTile];
 		}
 
-		// 【人碰撞箱内不能放东西 —— 这条走原版逻辑,不绕】。
+		// 【人碰撞箱内不能放东西。这条走原版逻辑,不绕】。
 		// 试过在 PreItemCheck 里把 width/height 临时缩成 0 骗过 Collision.EmptyTile,
 		// 结果是人一旦被封在方块里,vanilla 的挤出算炸:一帧飞几千格到地图边缘
 		// (DragonLens 传送进石头里也复现)。人要放东西就自己让开。
@@ -101,7 +101,7 @@ namespace TerraBlind
 		// 而深岩浆池根本堤不出来。接触前凝固只需要改一格,而且那一格【本来就要被填】。
 		//
 		// 判据是【下一帧会不会碰到】:拿当前位置加速度外推一帧,看碰撞箱会盖到哪几格。
-		// 只在【往下掉】时做 —— 横着走进岩浆是寻路的错,该让寻路自己绕(不然一路走一路凝固)。
+		// 只在【往下掉】时做。横着走进岩浆是寻路的错,该让寻路自己绕(不然一路走一路凝固)。
 		public const int FreezeLookahead = 2;   // 往前看几帧。1 帧太紧(放置有延迟),太多会提前凝固没必要的格
 
 		public static void FreezeLavaBeneath(Player p)
@@ -125,7 +125,7 @@ namespace TerraBlind
 			//   整行都有实地 -> 人落在那儿,岩浆轮不到,收工
 			//   有岩浆       -> 这就是液面,凝固它
 			// 【必须整行判完再决定】。原来在列循环里遇到 HasTile 就 return,
-			// 左列有砖右列是岩浆时会漏 —— 人半只脚踩砖半只脚陷进去
+			// 左列有砖右列是岩浆时会漏。人半只脚踩砖半只脚陷进去
 			for (int y = nowFeetRow; y <= futFeetRow + 1; y++)
 			{
 				bool anyLava = false, allSolid = true;
@@ -139,7 +139,7 @@ namespace TerraBlind
 				if (allSolid) return;      // 整行是地,人落这儿,不用管下面的岩浆
 				if (!anyLava) continue;    // 这一行还是空气,接着往下看
 				{
-					// 找到液面了。人跨几列就凝固几列 —— 只凝一列的话另一列还是液体,人会歪着陷进去
+					// 找到液面了。人跨几列就凝固几列。只凝一列的话另一列还是液体,人会歪着陷进去
 					for (int c = lc; c <= rc; c++)
 					{
 						if (!Predicates.InBounds(c, y)) continue;
@@ -172,7 +172,7 @@ namespace TerraBlind
 				&& p.position.Y < b && p.position.Y + p.height > t;
 		}
 
-		// 从背包扣一个。扣不出来返回 false —— 凭空造方块会让"料够不够"这件事永远查不出问题
+		// 从背包扣一个。扣不出来返回 false。凭空造方块会让"料够不够"这件事永远查不出问题
 		static bool TakeBlock(Player p, int itemId)
 		{
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
@@ -202,7 +202,7 @@ namespace TerraBlind
 		public override void PostUpdate()
 		{
 			if (Player.whoAmI != Main.myPlayer) return;
-			// 清垃圾和让步无关 —— 关了让步照样得扔,所以排在 Enabled 之前
+			// 清垃圾和让步无关。关了让步照样得扔,所以排在 Enabled 之前
 			KeepList.Sweep();
 			if (!Enabled) return;
 			TopUpWood();
@@ -239,7 +239,7 @@ namespace TerraBlind
 	// 这里一次覆盖所有物品,挖和放都在内
 	public class ConcessionSpeed : GlobalItem
 	{
-		// 【雷管不加速】。原版 useTime=useAnimation=40,把投掷节奏卡死在 40 帧 ——
+		// 【雷管不加速】。原版 useTime=useAnimation=40,把投掷节奏卡死在 40 帧
 		// 这是打肉山那套距离表的基准。加速到 1/8 会让雷管连珠炮一样出去,
 		// 距离/血量全对不上,打起来会出大问题
 		static bool NoSpeedup(Item it) => it != null && it.type == ItemID.Dynamite;

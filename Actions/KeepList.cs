@@ -4,7 +4,7 @@ using Terraria.ID;
 
 namespace TerraBlind
 {
-	// 背包满了箱子就掏不动 —— vanilla 的 LootAll 把塞不下的原样写回箱子里,
+	// 背包满了箱子就掏不动。vanilla 的 LootAll 把塞不下的原样写回箱子里,
 	// 好东西看着就在眼前却拿不走。腾位置的办法是【删掉没用的】。
 	//
 	// 和 ThrowItems 是两条路,别合并:那边是"暂扔地上、合完捡回来",给合成腾一帧用的;
@@ -22,7 +22,7 @@ namespace TerraBlind
 			ItemID.PortableStool,     // 梯凳
 			ItemID.JungleGrassSeeds,  // 丛林草种子
 			ItemID.VineRopeCoil,      // 植物纤维绳索宝典
-			// 【留着会招错人】。带枪会让军火商满足入住条件先来占位,爆破专家就可能不来了 ——
+			// 【留着会招错人】。带枪会让军火商满足入住条件先来占位,爆破专家就可能不来了
 			// 而整条线全指望爆破专家卖雷管
 			ItemID.Boomstick,         // 三发猎枪
 		};
@@ -37,12 +37,12 @@ namespace TerraBlind
 			return t == ItemID.Shiverthorn || t == ItemID.ShiverthornSeeds;
 		}
 
-		// 矿石,全扔。判据问 vanilla 的 TileID.Sets.Ore,不点名 —— 点名必漏(锡/铅/钨/铂在另一段 ID)。
+		// 矿石,全扔。判据问 vanilla 的 TileID.Sets.Ore,不点名。点名必漏(锡/铅/钨/铂在另一段 ID)。
 		// 【锭不扔】:用户说的是矿物不含锭。锭 createTile 是 -1,进不了这个判据,自然留着
 		static bool Ore(Item it)
 			=> it.createTile >= 0 && it.createTile < TileID.Sets.Ore.Length && TileID.Sets.Ore[it.createTile];
 
-		// 扔不扔。矿石虽然能放置(是方块),但用户点名要扔 —— 所以【先判扔再判留】,
+		// 扔不扔。矿石虽然能放置(是方块),但用户点名要扔。所以【先判扔再判留】,
 		// 顺序反了矿石会被"能放置的都是建材"那条救回来
 		public static bool Drop(Item it)
 		{
@@ -51,7 +51,7 @@ namespace TerraBlind
 			return Junk.Contains(it.type) || Herb(it) || Ore(it);
 		}
 
-		// 【拿到就扔】。人的做法是 ctrl+左键丢垃圾桶,不等背包满 —— 名单上的东西留着本身就是问题:
+		// 【拿到就扔】。人的做法是 ctrl+左键丢垃圾桶,不等背包满。名单上的东西留着本身就是问题:
 		// 三发猎枪会让军火商满足入住条件先来占房,爆破专家就不来了,而整条线全指望他卖雷管。
 		// MakeRoom 只在"腾地方"时才动手,背包有空格就一件不删,盖不住这个语义。
 		public static void Sweep()
@@ -119,7 +119,7 @@ namespace TerraBlind
 		}
 
 		const int InvEnd = 50;      // 50..57 是钱币/弹药格,不动
-		const int HotbarEnd = 10;   // 0..9 是手上要用的,别动 —— HomeInHotbar 把镐/平台钉在这儿
+		const int HotbarEnd = 10;   // 0..9 是手上要用的,别动。HomeInHotbar 把镐/平台钉在这儿
 
 		public static int Free(Player p)
 		{

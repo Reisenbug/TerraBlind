@@ -2,10 +2,10 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// HELL BRIDGE — 从人现在站的地方,把 170 格桥建出来。
+	// HELL BRIDGE。从人现在站的地方,把 170 格桥建出来。
 	//
 	//   1 算线   HellLine 定桥面高度和方向
-	//   2 下去   寻路(stand 模式)走到桥头 —— 它自己绕岩浆、搭梯子、挖穿
+	//   2 下去   寻路(stand 模式)走到桥头。它自己绕岩浆、搭梯子、挖穿
 	//   3 横铺   BridgeBuilder 往 dir 铺满 170 格
 	//
 	// 先竖后横:横向那段并进桥里,不用在半空单独解决走位。
@@ -86,7 +86,7 @@ namespace TerraBlind
 			  DiagLog.Write($"[hellbridge] STUCK {Reason}"); return false; }
 			string block = p.inventory[bslot].type.ToString();
 			_lastBlock = block;
-			// 照着线铺,不是沿一行平推 —— 平推的话图上有坡有挖,实际是一条直线,两边永远对不上
+			// 照着线铺,不是沿一行平推。平推的话图上有坡有挖,实际是一条直线,两边永远对不上
 			if (!HellDeck.Start(block, seg, out why))
 			{ Outcome = "stuck"; Reason = why; _ph = Ph.Idle; return false; }
 			DiagLog.Write($"[hellbridge] 开铺 {seg.Count}格 从({seg[0].x},{seg[0].y}) 料={p.inventory[bslot].Name}({block}) 存量{bcount}");
@@ -105,7 +105,7 @@ namespace TerraBlind
 			return seg;
 		}
 
-		// 绿=已铺、青=待铺、黄=拐角锚点、金=房子那几列。看真实地块不看计数 —— 卡在哪一格要一眼看见。
+		// 绿=已铺、青=待铺、黄=拐角锚点、金=房子那几列。看真实地块不看计数。卡在哪一格要一眼看见。
 		static void Repaint()
 		{
 			if (_line == null) return;
@@ -132,7 +132,7 @@ namespace TerraBlind
 			int slot = FindBlockSlot(p, out int cnt);
 			if (slot < 0) return false;
 			string it = p.inventory[slot].type.ToString();
-			// 挑出来还是刚才那摞就别重来了 —— 那说明停下另有原因(够不着、被挡),换料解决不了,重启只会死循环
+			// 挑出来还是刚才那摞就别重来了。那说明停下另有原因(够不着、被挡),换料解决不了,重启只会死循环
 			if (it == _lastBlock) return false;
 			_lastBlock = it;
 			if (!HellDeck.Start(it, seg, out _)) return false;
@@ -179,7 +179,7 @@ namespace TerraBlind
 				case Ph.LayNear:
 					if (HellDeck.IsRunning) return;
 					_laid += HellDeck.Placed;
-					// 这摞用光了就换第二多的接着铺 —— 2000 木材铺完还差的那截该由 150 泥块顶上
+					// 这摞用光了就换第二多的接着铺。2000 木材铺完还差的那截该由 150 泥块顶上
 					if (HellDeck.Outcome != "done" && Relay(NearPart())) return;
 					if (HellDeck.Outcome != "done")
 					{ Fail($"近端铺不完:{HellDeck.Outcome} {HellDeck.Reason} 已铺{_laid}"); return; }

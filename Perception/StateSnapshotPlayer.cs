@@ -7,7 +7,7 @@ namespace TerraBlind
 	public class StateSnapshotPlayer : ModPlayer
 	{
 		// 每间房要一个火把,而火把合不出来(配方要凝胶,这世界不刷怪),只能开箱砸罐。
-		// 沿下丛林的路收会一路走到丛林深处,房子反而没盖成 —— 直接发,别让它成为流程的坎。
+		// 沿下丛林的路收会一路走到丛林深处,房子反而没盖成。直接发,别让它成为流程的坎。
 		public override System.Collections.Generic.IEnumerable<Item> AddStartingItems(bool mediumCoreDeath)
 		{
 			yield return new Item(ItemID.Torch, 4);
@@ -50,7 +50,7 @@ namespace TerraBlind
 				var php2 = Main.LocalPlayer;
 				int scol = hx;   // 梯子就在房子那一列
 				int gapX = System.Math.Abs(ActExecutor.OriginCx(php2) - scol);
-				// nav 会在半路停下还报 done,所以自己验位置。差得远就重走 —— SettleAt 只会走平地,
+				// nav 会在半路停下还报 done,所以自己验位置。差得远就重走。SettleAt 只会走平地,
 				// 跨不了沟翻不了墙,那是寻路的活。差几格才交给 Ph.Lift 精调。
 				if (gapX > 6 && ++_houseNavTries <= 3)
 				{
@@ -158,7 +158,7 @@ namespace TerraBlind
 				var hp = Main.LocalPlayer;
 				int fx = ActExecutor.OriginCx(hp), fy = ActExecutor.OriginCy(hp);
 				const int HW = 21, HH = 10;
-				// 扫最坏是 200×60×4 个候选,每个再验 210 格 —— 放主线程上就是一次可见的卡顿。
+				// 扫最坏是 200×60×4 个候选,每个再验 210 格。放主线程上就是一次可见的卡顿。
 				// 纯读 tile,丢后台;画和走留到结果回来那一帧(SiteReady 在下面消费)。
 				System.Threading.Tasks.Task.Run(() =>
 				{
@@ -189,7 +189,7 @@ namespace TerraBlind
 					{ _bridgeStartTick = 0; Chatter.Say($"[TerraBlind] 铺不了: {bwhy}", 255, 120, 120); }
 				}
 			}
-			// 铺完报一次用时 —— "边走边放"到底快多少,就看这个数。
+			// 铺完报一次用时。"边走边放"到底快多少,就看这个数。
 			if (_bridgeStartTick > 0 && !BridgeBuilder.IsRunning)
 			{
 				int el = (int)Main.GameUpdateCount - _bridgeStartTick;
@@ -303,7 +303,7 @@ namespace TerraBlind
 			var rr = HellLine.Compute(bx, dir);
 			if (!rr.Found) return rr;
 			// 底下必须是岩浆:杀向导召肉山靠的就是把他从房里捅进岩浆。
-			// 实在找不到岩浆上的干净地才退而求其次 —— 那时候后面那套做不了,但房子还能盖
+			// 实在找不到岩浆上的干净地才退而求其次。那时候后面那套做不了,但房子还能盖
 			int hw1 = HouseBuilder.RoomWidth + 1;
 			bool got = Predicates.ScanHouse(rr.HouseX, rr.HouseY, hw1, 10, 24,
 				out int cx0, out int cy0, out int sc0, false, true);
@@ -417,7 +417,7 @@ namespace TerraBlind
 			DiagLog.Write("[reach-test] 地狱流程停止");
 		}
 
-		// 跑到哪一步了。给 /hell_run_status 用 —— Python 靠它判断该不该继续等
+		// 跑到哪一步了。给 /hell_run_status 用。Python 靠它判断该不该继续等
 		public static string HellRunPhase()
 		{
 			if (WofFight.On) return "fight";
@@ -454,15 +454,15 @@ namespace TerraBlind
 			if (Player != Main.LocalPlayer) return;
 
 			// 光标压在任何 UI 上(背包、别的模组的界面)时,原版把 mouseInterface 置真,
-			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410) ——
+			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410)
 			// 我们的动作全靠 controlUseItem,于是"用物品偶尔失效"。自动化在跑时清掉它
 			// delayUseItem 一旦被置真就【自锁】:原版只在 !controlUseItem 时才清它(Player.cs:23969),
-			// 而我们每帧都按着 controlUseItem —— 所以它永远不清,不是偶发失效是永久失效。
+			// 而我们每帧都按着 controlUseItem。所以它永远不清,不是偶发失效是永久失效。
 			// 上一版把清除挂在 mouseInterface 上,而那个标志此刻还没被置真(24410 在 23956 之后),
 			// 于是一次都没触发。这里只认"我们自己在挥",玩家手动时不动
 			// 【所有】鼠标动作都被这两个标志拦,不只是用物品:
-			//   delayUseItem — 吃掉 controlUseItem(Player.cs:23969),而且会自锁
-			//   mouseInterface — 拦 controlUseTile(29679,开箱/对话/开门)、拦挥动(46962/45495)、
+			//   delayUseItem。吃掉 controlUseItem(Player.cs:23969),而且会自锁
+			//   mouseInterface。拦 controlUseTile(29679,开箱/对话/开门)、拦挥动(46962/45495)、
 			//                    拦智能光标(16188)
 			// mouseInterface 每帧在 Main.Update 里重置、UI 绘制时再置真,而 SetControls 在两者之间,
 			// 所以这里清掉的正是那些门本帧要读的值
@@ -484,7 +484,7 @@ namespace TerraBlind
 			}
 
 			// 打肉山:方向键和 controlUseItem 都要在 SetControls 这条线上发才算数。
-			// 【必须在清拦截之后】—— delayUseItem 会自锁,先发 controlUseItem 就再也清不掉了
+			// 【必须在清拦截之后】。delayUseItem 会自锁,先发 controlUseItem 就再也清不掉了
 			WofFight.Tick();
 
 			if (JumpPlaceEnabled)
@@ -529,7 +529,7 @@ namespace TerraBlind
 			AxisLock.Sweep();
 
 			// 【铺桥时这一帧被谁吃掉了】。下面那一串原语只要有一个在跑就 return,
-			// DeckBuilder.Tick 一帧都轮不到 —— 那时它自己的心跳也不响,整段全黑,
+			// DeckBuilder.Tick 一帧都轮不到。那时它自己的心跳也不响,整段全黑,
 			// 人站着不动而日志几百帧一片空白。必须埋在链头(所有 return 之前),
 			// 真跑到 DeckBuilder.Tick 时清零;连着不清零就是被上游截了
 			// 【开箱停摆的看门狗】。照 deck 那条的样子:TreasureGrab 在跑却连着 120 帧
@@ -681,7 +681,7 @@ namespace TerraBlind
 			// /tb 1 的全流程编排。只调度别的原语,自己不写控制帧,所以放在它们前面
 			if (StartRun.IsRunning) StartRun.Tick();
 
-			// bridge: same deal — its walk phase writes the movement keys itself, so it owns the frame while running.
+			// bridge: same deal, its walk phase writes the movement keys itself, so it owns the frame while running.
 			if (BridgeBuilder.IsRunning)
 			{
 				BridgeBuilder.Tick();
@@ -691,7 +691,7 @@ namespace TerraBlind
 			}
 
 			// /act takes the wheel outright: it is the raw action primitive the LLM drives by hand, so nothing else may
-			// write controls underneath it. First in, and it returns — nav/mine/place all stand down while it runs.
+			// write controls underneath it. First in, and it returns, nav/mine/place all stand down while it runs.
 			if (ActExecutor.IsActive)
 			{
 				ActExecutor.ApplyControls();
@@ -855,10 +855,10 @@ namespace TerraBlind
 		public override void PostUpdate()
 		{
 			if (Player != Main.LocalPlayer) return;
-			// speed fields are baked (×moveSpeed) LATE in Player.Update — only here are they trustworthy for planning
+			// speed fields are baked (×moveSpeed) LATE in Player.Update, only here are they trustworthy for planning
 			PhysicsSimulator.CaptureBaked(Player);
 			PlatformStock.Tick();
-			// 手动开的观测工具,和自动化无关 —— 所以挂在这条无条件的更新上
+			// 手动开的观测工具,和自动化无关。所以挂在这条无条件的更新上
 			DynamiteMeter.Tick();
 
 			var snap = new Snapshot
@@ -995,7 +995,7 @@ namespace TerraBlind
 			return eq;
 		}
 
-		// 测试用:背包里挑个能铺的 —— 平台优先,没有就拿存量最多的方块。
+		// 测试用:背包里挑个能铺的。平台优先,没有就拿存量最多的方块。
 		private static string BridgeTestItem(Player p)
 		{
 			var td = Terraria.ID.TileID.Sets.Platforms;

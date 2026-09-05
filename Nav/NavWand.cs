@@ -45,7 +45,7 @@ namespace TerraBlind
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
                 StateSpacePlanner.StopExec();
-                StateSpacePlanner.ExecuteAsync(mx, my);   // bg Plan, dispatch on main thread — never stutters
+                StateSpacePlanner.ExecuteAsync(mx, my);   // bg Plan, dispatch on main thread, never stutters
                 DiagLog.Write($"[wand] ss_exec target=({mx},{my})");
             }
             else
@@ -53,7 +53,7 @@ namespace TerraBlind
                 // left click = state-space A* plan + visualize (forward-simulated trajectory, no execution)
                 if (NavCoordinator.IsActive) NavCoordinator.Stop();
                 if (SegmentedNavCoordinator.IsActive) SegmentedNavCoordinator.Stop();
-                StateSpacePlanner.PlanAsync(mx, my);   // bg Plan, visualize on main thread — never stutters
+                StateSpacePlanner.PlanAsync(mx, my);   // bg Plan, visualize on main thread, never stutters
                 DiagLog.Write($"[wand] ss_plan target=({mx},{my})");
             }
             return true;

@@ -4,17 +4,17 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// SETTLE — come to a full stop with the player CENTERED on a target column, without overshooting off it.
+	// SETTLE, come to a full stop with the player CENTERED on a target column, without overshooting off it.
 	//
 	// The stopping DISTANCE is computed from vanilla's own friction, so it holds under any mobility. Release with no
-	// input, on the ground, decays velocity.X by `runSlowdown` per frame (Player.cs ~19591) — a linear ramp, so the
+	// input, on the ground, decays velocity.X by `runSlowdown` per frame (Player.cs ~19591), a linear ramp, so the
 	// slide distance is the arithmetic series sum ≈ v² / (2·runSlowdown). runSlowdown is a LIVE player field that
 	// already bakes in boots/wings/honey/etc., so predicting with it never goes stale the way a hard-coded distance
 	// would.
 	//
 	// Each frame compare the remaining distance to that predicted slide:
 	//   remaining > slide  → not far enough; keep pushing toward the target
-	//   remaining ≤ slide  → release (or brake) — momentum will carry us the rest of the way onto the cell
+	//   remaining ≤ slide  → release (or brake), momentum will carry us the rest of the way onto the cell
 	// Done when centered within half a tile, ~stopped, on the ground, for a few frames.
 	public static class SettleAt
 	{
@@ -26,7 +26,7 @@ namespace TerraBlind
 
 		private const int MaxFrames = 300;
 		private const int StableNeeded = 5;      // frames centered & ~stopped to call it settled
-		private const float HalfTile = 8f;       // half a tile — the target tolerance (geometry, not mobility)
+		private const float HalfTile = 8f;       // half a tile, the target tolerance (geometry, not mobility)
 		public const float VxDead = 0.05f;       // treat |vx| below this as stopped(到达判定共用这一份)
 
 		public static bool IsRunning => _running;
@@ -36,7 +36,7 @@ namespace TerraBlind
 		public static bool Start(int col, out string why) => StartPx(col, col * 16f + 8f, HalfTile, out why);
 
 		// 精确到【占哪几列】。像素 tol=0 不可能:落点靠摩擦滑行,是亚像素值,永远等不到相等。
-		// 列是整数条件 —— 取合法像素窗口的中点、容差=半窗宽,于是列上零容差。
+		// 列是整数条件。取合法像素窗口的中点、容差=半窗宽,于是列上零容差。
 		public static bool StartSpan(int leftCol, int rightCol, out string why)
 		{
 			why = "";
@@ -52,7 +52,7 @@ namespace TerraBlind
 		}
 
 		// 精确停位:身体中心停到 centerPx(容差 tol)。柱子放哪一列看身体中心,
-		// 半格容差下人可能跨 {col-1,col} 也可能跨 {col,col+1} —— 头顶哪一列有方块就撞哪列。
+		// 半格容差下人可能跨 {col-1,col} 也可能跨 {col,col+1}。头顶哪一列有方块就撞哪列。
 		public static bool StartPx(int col, float centerPx, float tol, out string why)
 		{
 			why = "";
@@ -87,7 +87,7 @@ namespace TerraBlind
 			float err = _targetPx - center;    // remaining distance, signed: >0 target is to the right
 			float vx = p.velocity.X;
 
-			// SETTLED — centered within half a tile, ~stopped, on the ground, held a few frames.
+			// SETTLED, centered within half a tile, ~stopped, on the ground, held a few frames.
 			if (System.MathF.Abs(err) <= _tol && System.MathF.Abs(vx) <= VxDead && p.velocity.Y == 0f)
 			{
 				if (++_stableFrames >= StableNeeded)
@@ -100,13 +100,13 @@ namespace TerraBlind
 			}
 			_stableFrames = 0;
 
-			// PREDICTED SLIDE from vanilla's live friction — how far a release now would carry us, in the direction we
+			// PREDICTED SLIDE from vanilla's live friction, how far a release now would carry us, in the direction we
 			// are actually moving. runSlowdown is read every frame, so this tracks whatever mobility is in effect.
 			float slow = System.MathF.Max(p.runSlowdown, 0.01f);
 			float slide = vx * vx / (2f * slow);               // magnitude
 			float slideSigned = System.MathF.Sign(vx) * slide; // along the current motion
 
-			// If letting go now would carry us PAST the target, stop feeding speed — release, or brake if we are
+			// If letting go now would carry us PAST the target, stop feeding speed, release, or brake if we are
 			// overshooting fast. Otherwise we still need more distance, so push toward the target.
 			bool wouldReachOrPass = System.MathF.Abs(slideSigned) >= System.MathF.Abs(err)
 									 && System.MathF.Sign(slideSigned) == System.MathF.Sign(err);
@@ -120,7 +120,7 @@ namespace TerraBlind
 				{
 					if (vx > 0f) p.controlLeft = true; else if (vx < 0f) p.controlRight = true;
 				}
-				// else release — the coast lands within tolerance.
+				// else release, the coast lands within tolerance.
 			}
 			else
 			{

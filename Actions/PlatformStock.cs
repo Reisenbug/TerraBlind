@@ -4,7 +4,7 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// 平台是脚下的路。任何时候低于 Low 就用木材补到 High —— 不看谁在用、也不等流程走到补货点。
+	// 平台是脚下的路。任何时候低于 Low 就用木材补到 High。不看谁在用、也不等流程走到补货点。
 	// 手里 198 木材却因为平台见底停在半空,是最没道理的失败。
 	public class PlatformStock : ModSystem
 	{

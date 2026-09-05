@@ -2,25 +2,25 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// 精确模式 —— 地狱专有的一套判据。
+	// 精确模式。地狱专有的一套判据。
 	//
-	// 地狱和地表只差一件事:岩浆。掉进去,正常玩家秒死,无敌玩家也几乎爬不上来 ——
+	// 地狱和地表只差一件事:岩浆。掉进去,正常玩家秒死,无敌玩家也几乎爬不上来
 	// 无论哪种都是这一趟作废。除掉岩浆,地狱就能完全复用地表那套。
 	//
 	// 所以规矩只有四条:
 	//   1 轨迹上任何一格碰到岩浆 = 任务失败,不是"贵一点"
 	//   2 落点必须站得住;唯一的例外是【自己造落脚点】的动作(bridge/pillar/platdown)
 	//   3 碰到岩浆就是不可逆的,没有第二套"不可逆"判据
-	//   4 地狱里目标几乎全是悬空的 —— 所以自造落脚点是主力手段,不是备选
+	//   4 地狱里目标几乎全是悬空的。所以自造落脚点是主力手段,不是备选
 	public static class PreciseHell
 	{
-		// 人或目标在地狱层就算数。人在地表往地狱走的那一段也得按这套来 ——
+		// 人或目标在地狱层就算数。人在地表往地狱走的那一段也得按这套来
 		// 等人已经站在岩浆边上再开精确模式就晚了
 		public static bool Active(int goalWy)
 			=> goalWy >= Main.UnderworldLayer
 			|| (Main.LocalPlayer != null && ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer);
 
-		// 往下探到底有没有岩浆。中间碰到实处就停 —— 那是地,不是悬空
+		// 往下探到底有没有岩浆。中间碰到实处就停。那是地,不是悬空
 		public const int Probe = 40;
 		public static bool LavaVoidBelow(int x, int y)
 		{
@@ -58,7 +58,7 @@ namespace TerraBlind
 		}
 
 		// 规则 1:一整段轨迹里有没有碰到岩浆。人 3 行高,所以每一格都要连着身子一起查。
-		// PhysicsSimulator 把岩浆当空气,模拟出来的弧线看着完全正常 —— 这里是唯一拦得住的地方
+		// PhysicsSimulator 把岩浆当空气,模拟出来的弧线看着完全正常。这里是唯一拦得住的地方
 		public static bool PathHitsLava(int x0, int y0, int x1, int y1)
 		{
 			int dx = System.Math.Abs(x1 - x0), dy = System.Math.Abs(y1 - y0);

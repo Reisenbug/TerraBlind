@@ -6,7 +6,7 @@ namespace TerraBlind
 	// 让某一格出现方块/平台。调用方只管要结果,过程全在里面解决。
 	//
 	// 放置只有三个硬条件:够得着、那格空着、四邻有锚。前两个能自己制造:
-	// 够不着就挪脚,身子挡着就让开。没锚就从【人脚下那块地】接一串过去 ——
+	// 够不着就挪脚,身子挡着就让开。没锚就从【人脚下那块地】接一串过去
 	// 人站着,脚下必是实处,它旁边那格就有锚,放出来之后又成为下一格的锚。
 	//
 	// 所以"放不出来"在结构上只剩两种:目标本身是熔岩,或者一路被熔岩隔断。
@@ -31,7 +31,7 @@ namespace TerraBlind
 		private const int RowGap = 4;   // 行差超过这个,横向走位就不可能够到
 		private const int JumpSettleFrames = 25;   // 一次跳约20帧落地,过了就别再等
 		private static bool _asideNav;   // 这次让位是不是起了寻路(决定要不要看 LastStop)
-		// 每条无声 return 留个名字,60 帧汇报一次 —— 人不动时唯一能查的就是"卡在哪一条"
+		// 每条无声 return 留个名字,60 帧汇报一次。人不动时唯一能查的就是"卡在哪一条"
 		private static string _where = "";
 		private static int _heartbeat;
 		const int HeartbeatEvery = 60;
@@ -160,11 +160,11 @@ namespace TerraBlind
 		}
 
 		// 判据只有这一份:StepAside 和 Tick 用同一个,不然一边以为让开了一边还在等。
-		// 【走 vanilla 的矩形相交】,不拿 OriginCy±2 近似 —— 半砖上身子跨 4 行,近似会判错
+		// 【走 vanilla 的矩形相交】,不拿 OriginCy±2 近似。半砖上身子跨 4 行,近似会判错
 		static bool InBody(Player p, int x, int y) => Predicates.BodyOverlaps(p, x, y);
 
 		// 够得着又不压住目标的最近落脚列。伸手 tileRangeX=5,身子占 1~2 列,
-		// 所以离目标 2~4 列的地方两个条件都能满足 —— 朝它走,而不是朝目标走。
+		// 所以离目标 2~4 列的地方两个条件都能满足。朝它走,而不是朝目标走。
 		static int ApproachCol(Player p, int x, int y)
 		{
 			var (c, _) = ApproachSpot(p, x, y);
@@ -178,7 +178,7 @@ namespace TerraBlind
 			int cx = ActExecutor.OriginCx(p);
 			int span = Predicates.BodyCols(p).right - Predicates.BodyCols(p).left;
 			int best = -1, bestRow = -1, bestD = int.MaxValue;
-			// 只找【站得住】的:脚下那格实心。悬空的列不算落脚点 —— 走过去就掉下去
+			// 只找【站得住】的:脚下那格实心。悬空的列不算落脚点。走过去就掉下去
 			for (int off = span + 1; off <= MaxAsideCols; off++)
 				foreach (int col in new[] { x - off, x + off })
 				{
@@ -228,7 +228,7 @@ namespace TerraBlind
 			var (col, row) = ApproachSpot(p, x, y);
 			if (col < 0)
 			{
-				// 一个能站的地方都没有。这不是"再试一次"能解决的 —— 交栈,让它去挖/搭
+				// 一个能站的地方都没有。这不是"再试一次"能解决的。交栈,让它去挖/搭
 				DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br}),周围{MaxAsideCols}列内没有能放它的落脚点,交栈");
 				if (!Unstick.Handle("placeany", new Blocker(BlockKind.NoFooting, x, y + 1, "让不开:没有能放这格的落脚点")))
 					why = $"({x},{y})在身子里,周围没有能站的地方";
@@ -243,7 +243,7 @@ namespace TerraBlind
 				return SettleAt.Start(col, out why);
 			}
 
-			// 要换行、要绕、要爬 —— 【精准一格】的寻路。Mode.Stand 会跳会搭会挖,
+			// 要换行、要绕、要爬。【精准一格】的寻路。Mode.Stand 会跳会搭会挖,
 			// 到不了会报 unreachable,不会像原来那样跳一下落回原地无限循环
 			DiagLog.Write($"[placeany] ({x},{y})在身子里(身{bl}..{br} 脚{fy}),寻路去({col},{row})站住");
 			RecedingNav.Start(col, row, RecedingNav.Mode.Stand);
@@ -251,7 +251,7 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 从身子边缘走到 col,沿途每一列脚下都得有地 —— 中间有缺口人会掉下去。
+		// 从身子边缘走到 col,沿途每一列脚下都得有地。中间有缺口人会掉下去。
 		// 日志:750 和 753 都踩得住,751/752 是空的,人走过去掉了 39 行
 		static bool NoGapTo(Player p, int col, int fy)
 		{
@@ -284,7 +284,7 @@ namespace TerraBlind
 			if (_ph == Ph.Move)
 			{
 				// 【寻路也要等】。原来只等 SettleAt,让位改走寻路之后一帧就当"让完了"回到 Step,
-				// 而人还在半路 —— 又判在身子里,又发一次寻路,永远走不完
+				// 而人还在半路。又判在身子里,又发一次寻路,永远走不完
 				if (SettleAt.IsRunning || RecedingNav.Active) { Mark("让位中"); return; }
 				// 寻路认输了就别装作让开了。只在【这次让位真的起了寻路】时才看 LastStop,
 				// 横移那条路读到的会是上一趟寻路的旧值
@@ -336,11 +336,11 @@ namespace TerraBlind
 				}
 			}
 
-			// 人挡着就让开 —— 碰撞箱里放不了任何东西
+			// 人挡着就让开。碰撞箱里放不了任何东西
 			if (StepAside(p, x, y, out string sw)) { _ph = Ph.Move; return; }
 			if (sw.Length > 0) { Retry($"让不开({x},{y}):{sw}"); return; }
 			// StepAside 交栈之后还在身子里:栈那边在挖/搭,等它。落了地还没让开就换条链,
-			// 别干等到 MaxCellFrames —— 日志里每次白等 151 帧,那就是"每爬2格停几秒"的来源
+			// 别干等到 MaxCellFrames。日志里每次白等 151 帧,那就是"每爬2格停几秒"的来源
 			if (InBody(p, x, y))
 			{
 				if (p.velocity.Y == 0f && _cellFrames > JumpSettleFrames)
@@ -350,7 +350,7 @@ namespace TerraBlind
 			if (_bad.Contains((x, y))) { Retry($"({x},{y})让不开,绕路"); return; }
 
 			// 够不着:左右走只能改列。让位时人可能掉下去十几行(日志:人1061 目标1051),
-			// 那时横向走一辈子也够不着 —— 行差得多就当链失效,从人现在的位置重接一条。
+			// 那时横向走一辈子也够不着。行差得多就当链失效,从人现在的位置重接一条。
 			if (!Reach.CanPlace(p, x, y))
 			{
 				int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
@@ -386,7 +386,7 @@ namespace TerraBlind
 			if (PlaceAction.Outcome == "blocked")
 			{
 				DiagLog.Write($"[placeany] ({x},{y})放不上:{PlaceAction.Reason}");
-				// out_of_reach 是【人站错了】不是这格不行 —— 拉黑它会把好格子一个个丢掉,
+				// out_of_reach 是【人站错了】不是这格不行。拉黑它会把好格子一个个丢掉,
 				// 链越重算越远(日志里连丢 8 格)。这种只等下一帧,让上面的走位去解决。
 				if (PlaceAction.Reason != null && PlaceAction.Reason.Contains("out_of_reach")) { Mark("放置报够不着"); return; }
 				_bad.Add((x, y));

@@ -8,7 +8,7 @@ namespace TerraBlind
 	// 【为什么搬进来】。原来这一套写在 python 的 _greed_collect 里:nav_to、interact、
 	// 轮询 /state 的 last_interact、loot_all、记账。跨进程轮询一个【不带坐标的全局字符串】,
 	// 于是这次读到的 opened 可能是上一个箱子留下的;而"拿到了"只等于"发过 loot_all",
-	// 箱子到底空没空从来没人查 —— 日志里一串 GOT 全是水分。
+	// 箱子到底空没空从来没人查。日志里一串 GOT 全是水分。
 	public static class TreasureGrab
 	{
 		enum Ph { Idle, Goto, Open, Loot, Done }
@@ -23,7 +23,7 @@ namespace TerraBlind
 		// "到了之后被怪挤开几格"这种小位移。原来设 60*30 当【全程】超时,而宝藏常在几百格外,
 		// 443 格的目标 30 秒判失败,整趟一个都没拿到。
 		const int MaxGoto = 60 * 30;
-		const int LootWait = 30;       // LootAll 之后等几帧再验收 —— 掏空是当帧做的,给点余量
+		const int LootWait = 30;       // LootAll 之后等几帧再验收。掏空是当帧做的,给点余量
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
 		public static (int x, int y) At => (_tx, _ty);   // 这一趟开的是哪一格,调用方记账要用
@@ -38,12 +38,12 @@ namespace TerraBlind
 			_tx = tx; _ty = ty; _frames = 0; _lootFrames = 0; _idx = -1;
 			Outcome = "running"; Reason = "";
 			// 【先归一到左上角】。箱子占 2x2 而 Chest.FindChest 只认锚点,坐标是扫地形来的,
-			// 扫到右上/左下/右下都可能 —— 不归一就报 no_chest,人走到跟前也开不了。
+			// 扫到右上/左下/右下都可能。不归一就报 no_chest,人走到跟前也开不了。
 			var a = TileObjectData.TopLeft(tx, ty);
 			_ax = a.X >= 0 ? a.X : tx;
 			_ay = a.Y >= 0 ? a.Y : ty;
 			DiagLog.Write($"[grab] START ({tx},{ty}) 锚点({_ax},{_ay})");
-			// 够得着就行 —— 开箱不用踩在箱子那一格上
+			// 够得着就行。开箱不用踩在箱子那一格上
 			RecedingNav.Start(_ax, _ay, RecedingNav.Mode.Reach);
 			_ph = Ph.Goto;
 			return true;
@@ -82,7 +82,7 @@ namespace TerraBlind
 			if (p != null && p.chest != -1) { p.chest = -1; Recipe.FindRecipes(); }
 		}
 
-		// 【开箱只有这一份】。/interact 那条路(LLM 直接编排动作时用)也调它 —— 原来那边自己
+		// 【开箱只有这一份】。/interact 那条路(LLM 直接编排动作时用)也调它。原来那边自己
 		// 抄了一遍归一/陷阱箱/锁/占用,两份判据各改各的迟早分叉。
 		// 返回 Main.chest 下标,失败返回 -1 并把原因写进 why。
 		public static int OpenAt(int tx, int ty, out string why)
@@ -93,7 +93,7 @@ namespace TerraBlind
 			// 箱子占 2x2 而 Chest.FindChest 只认锚点。坐标是扫地形来的,扫到哪一格都可能
 			var a = TileObjectData.TopLeft(tx, ty);
 			int ax = a.X >= 0 ? a.X : tx, ay = a.Y >= 0 ? a.Y : ty;
-			// 陷阱箱(FakeContainers)在 Main.chest 里也有条目,直接写 Player.chest 就开了 ——
+			// 陷阱箱(FakeContainers)在 Main.chest 里也有条目,直接写 Player.chest 就开了
 			// 而那条路绕过右键,引线根本不触发,是作弊。一律不开。按锚点判:它同样看 frameX
 			if (HttpServerSystem.IsFakeChestPublic(ax, ay)) { why = "trapped_chest"; return -1; }
 			// 上一个还开着就先关,否则这个开不了(vanilla 关箱就是 chest=-1 + FindRecipes)
@@ -156,7 +156,7 @@ namespace TerraBlind
 
 				case Ph.Open:
 					{
-						// 开箱查【交互】那把尺子(只有 tileRangeX),不是挖的那把 —— 用错会在够不着处开箱
+						// 开箱查【交互】那把尺子(只有 tileRangeX),不是挖的那把。用错会在够不着处开箱
 						if (!Reach.CanInteract(p, _ax, _ay)) { Fail("到了却够不着(交互距离)"); return; }
 						_idx = OpenAt(_tx, _ty, out string ow);
 						if (_idx < 0) { Fail(ow); return; }

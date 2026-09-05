@@ -7,7 +7,7 @@ namespace TerraBlind
 {
     // Full A* over an action graph. Nodes = standable cells (player box fits, has/can-make support). Edges = real
     // moves: walk / jump / fall / jump-place / bridge / dig. Edge existence uses O(1) coarse geometric checks
-    // (no per-edge physics sim — that stays in the executor), so building is cheap and A* with a heuristic stays
+    // (no per-edge physics sim, that stays in the executor), so building is cheap and A* with a heuristic stays
     // fast. Dig edges keep the graph always-connected → any reachable-by-digging goal is found. Reach limits come
     // from the player's CURRENT movement stats (not hardcoded) so accessories scale automatically.
     public static class ActionGraphPlanner
@@ -112,7 +112,7 @@ namespace TerraBlind
 
             // jump: forward-simulate each (dir,hold). the landing cell IS the simulator's result (not a geometric
             // guess), and the frames are carried on the edge so execution replays the identical arc. an arc that
-            // hits a wall / falls short / plunges simply lands somewhere else (or not standable) — no fake edges.
+            // hits a wall / falls short / plunges simply lands somewhere else (or not standable), no fake edges.
             var ph = PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer);
             foreach (int dir in new[] { -1, 1 })
                 foreach (int hold in JumpHolds())
@@ -129,7 +129,7 @@ namespace TerraBlind
             if (canPlace)
             {
                 // 2b PILLAR-UP (the key move for flat ground / pit floors): jump, place a platform under the feet,
-                // land on it, repeat. Stands on what it just placed — needs NO pre-existing support, only OPEN air
+                // land on it, repeat. Stands on what it just placed, needs NO pre-existing support, only OPEN air
                 // to rise into. This is how you leave a flat floor. Each notch ≈ 2 tiles (SkillExecutor cadence).
                 int pillarMax = JumpReach().dyUp;
                 for (int dy = 2; dy <= pillarMax; dy += 2)
@@ -226,7 +226,7 @@ namespace TerraBlind
             _maze = MazeWand.BuildField(goal.gx, goal.gy, sx, sy);
 
             {
-                // exactly answer "why doesn't it go up first?" — dump every edge out of the start cell.
+                // exactly answer "why doesn't it go up first?", dump every edge out of the start cell.
                 bool cp = p != null && NavCoordinator.FindPlatformSlot(p) >= 0;
                 var eb = new System.Text.StringBuilder($"[ag-startedges] from=({sx},{sy}) canPlace={cp}:");
                 foreach (var e in Edges(sx, sy, cp)) eb.Append($" {e.Act}->({e.Cx},{e.Cy})/{EdgeCost(sx, sy, e):0}");
@@ -336,7 +336,7 @@ namespace TerraBlind
         }
 
         // visualize the action path. Jump edges draw their REAL forward-simulated trajectory (per-frame dots, the
-        // arc the player will actually fly) — not a colored block. state-machine edges (pillar/bridge/dig) and the
+        // arc the player will actually fly), not a colored block. state-machine edges (pillar/bridge/dig) and the
         // landing cells are marked as tiles. trail (SSPath dots) + tiles overlay in PathVisSystem.
         public static void Visualize(Result r)
         {

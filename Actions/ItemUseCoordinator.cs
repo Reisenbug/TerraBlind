@@ -9,7 +9,7 @@ namespace TerraBlind
 		public int TargetWx;
 		public int TargetWy;
 		public int Slot;          // -1 = keep current selection
-		public int DurationTicks; // 0 = run until Stop(). IGNORED for mining and placing — both end on a world fact,
+		public int DurationTicks; // 0 = run until Stop(). IGNORED for mining and placing, both end on a world fact,
 		                          // not a swing budget; only bounds uses with nothing observable (potion/bomb/summon).
 		public bool Strict;       // exact-coord caller: never snap to a different tile; target gone = report, don't hunt
 	}
@@ -21,14 +21,14 @@ namespace TerraBlind
 		private static bool _snapped;    // has this request already snapped its target this session?
 		private static int _watchType = -1;  // TileType of the collect target we're watching; -1 = not watching
 		// PLACEMENT has its own eye, mirroring the collect one. Collect watches a tile DISAPPEAR; placement watches
-		// the target cell GAIN the tile this item creates (item.createTile — the placement counterpart of pick/axe/
+		// the target cell GAIN the tile this item creates (item.createTile, the placement counterpart of pick/axe/
 		// hammer). Without this a place action had nothing observable at all and always ended "n/a", which upper
 		// layers read as success: 20 ropes could fail silently and every single call reported fine.
 		private static int _placeType = -1;  // TileType this item will create; -1 = not a placing item
 		private static int _swings;          // COMPLETED swings (itemAnimation falling edge), not frames pressed
 		private static int _prevAnim;        // last frame's itemAnimation, for that falling edge
 		private static bool _preHadTile;     // something (not ours) occupied the target before we swung
-		// How many full swings a placement gets before we call it refused. One is enough when it works — the extra
+		// How many full swings a placement gets before we call it refused. One is enough when it works, the extra
 		// two absorb a swing eaten by a stance change or an item swap.
 		private const int PlaceSwingGrace = 3;
 		// hard ceiling in frames for one placement attempt, so the attempt ends even if no swing ever completes.
@@ -39,14 +39,14 @@ namespace TerraBlind
 		private static int _outOfReachFrames;
 		private const int ReachLostGrace = 30;
 
-		// 镐/斧/锤挥出去是为了让某一格消失,那格找不到就没有终点可等 —— 药水炸弹不算
+		// 镐/斧/锤挥出去是为了让某一格消失,那格找不到就没有终点可等。药水炸弹不算
 		private static bool IsCollectTool(Item it) => it.pick > 0 || it.axe > 0 || it.hammer > 0;
 
 		// the tile the target snapped to (for HTTP reporting); -1,-1 if no snap happened.
 		public static int SnappedWx = -1;
 		public static int SnappedWy = -1;
 		// 采集:removed/no_progress/timeout。放置:placed/already_there/not_placed/no_swing。
-		// n/a 只留给药水炸弹这种既不采也不放的 —— 没有可观测的目标格
+		// n/a 只留给药水炸弹这种既不采也不放的。没有可观测的目标格
 		public static string Outcome = "idle";
 		// 采集:blocked/tool_weak/out_of_reach。放置:occupied/no_anchor/out_of_reach/wrong_item/out_of_stock
 		public static string Reason = "";
@@ -76,7 +76,7 @@ namespace TerraBlind
 			_active = null;
 		}
 
-		// 这一趟是挖还是放,自己知道 —— 两者 vanilla 的距离公式不同(放多一项 blockRange)
+		// 这一趟是挖还是放,自己知道。两者 vanilla 的距离公式不同(放多一项 blockRange)
 		static bool InReachNow(Player p)
 			=> _placeType >= 0 ? Reach.CanPlace(p, SnappedWx, SnappedWy) : Reach.CanMine(p, SnappedWx, SnappedWy);
 
@@ -100,7 +100,7 @@ namespace TerraBlind
 				{
 					// 零伤害要分清原因:上面压着树/箱子是结构问题(换镐没用),否则才是镐不够硬
 					Reason = WorldGen.CanKillTile(SnappedWx, SnappedWy) ? "tool_weak" : "blocked";
-					// 【挖掉了要说,挖不掉更要说】。原来只有放置那条打日志,挖掘两个出口都是哑的 ——
+					// 【挖掉了要说,挖不掉更要说】。原来只有放置那条打日志,挖掘两个出口都是哑的
 					// 现场:桥面净空每 45 帧发起一次挖 (1136,1055) type=30,挖了 2400 帧方块还在,
 					// 而 Reason 早就算出来了,只是从没写进日志,调用方每帧 return true 一直转。
 					// 【两把尺子一起量】。mod 放行用 IsInTileInteractionRange(Simple),而原版挖掘真正查的是
@@ -117,7 +117,7 @@ namespace TerraBlind
 				}
 			}
 
-			// PLACE completion — the mirror of the collect check above: the target cell now holds the tile this item
+			// PLACE completion, the mirror of the collect check above: the target cell now holds the tile this item
 			// creates, so the placement landed. Checked before the budget runs out so a successful place ends at once.
 			if (_placeType >= 0)
 			{
@@ -138,7 +138,7 @@ namespace TerraBlind
 					_active = null; return;
 				}
 			}
-			// Uses with NOTHING observable (potion, bomb, summon) are the only ones still bounded by the budget —
+			// Uses with NOTHING observable (potion, bomb, summon) are the only ones still bounded by the budget
 			// there is no world fact to wait for, so the swing count is all they have.
 			else if (_watchType < 0 && _ticksLeft <= 0)
 			{
@@ -159,7 +159,7 @@ namespace TerraBlind
 					return;
 				}
 			}
-			// selectedItem only holds items in the hotbar (0-9). A backpack slot (10-49) can't be held — swap it
+			// selectedItem only holds items in the hotbar (0-9). A backpack slot (10-49) can't be held, swap it
 			// into a hotbar slot first (prefer an empty one, else slot 0), then use from there.
 			if (slot >= 10 && slot < p.inventory.Length)
 			{
@@ -173,7 +173,7 @@ namespace TerraBlind
 				slot = hb;
 			}
 
-			// LLM 给的是"树大概在这儿",常落在树叶或空气上 —— 像原版 SmartCursor 那样吸附到最近可作用的格
+			// LLM 给的是"树大概在这儿",常落在树叶或空气上。像原版 SmartCursor 那样吸附到最近可作用的格
 			if (!_snapped)
 			{
 				_snapped = true;
@@ -211,7 +211,7 @@ namespace TerraBlind
 					}
 
 					// 采集工具吸附不到任何目标(够不着时半径内一格可作用的都没有)= 没有可观测的终点,
-					// 而 DurationTicks=0 的预算是无限的 —— 不在这儿报,就会对着空气永远挥下去。
+					// 而 DurationTicks=0 的预算是无限的。不在这儿报,就会对着空气永远挥下去。
 					if (_watchType < 0 && _placeType < 0 && IsCollectTool(it))
 					{
 						Outcome = "no_progress"; Reason = "out_of_reach";
@@ -219,7 +219,7 @@ namespace TerraBlind
 						_active = null; return;
 					}
 
-					// 够不着就是挥空(原版会把目标钳回来),挖脚下还会把人挪走让批量作废 —— 直接报,别耗宽限窗口
+					// 够不着就是挥空(原版会把目标钳回来),挖脚下还会把人挪走让批量作废。直接报,别耗宽限窗口
 					if ((_watchType >= 0 || _placeType >= 0) && !InReachNow(p))
 					{
 						Outcome = _placeType >= 0 ? "no_swing" : "no_progress";
@@ -229,7 +229,7 @@ namespace TerraBlind
 			}
 
 			// 开工时够得着不代表一直够得着:被怪击退、脚下塌了,目标就出了射程,再挥全是空的。
-			// 每帧复查,但给宽限 —— 挖矿本来就会小幅位移,一出界就放弃太脆。
+			// 每帧复查,但给宽限。挖矿本来就会小幅位移,一出界就放弃太脆。
 			if ((_watchType >= 0 || _placeType >= 0) && SnappedWx >= 0)
 			{
 				if (InReachNow(p))
@@ -264,7 +264,7 @@ namespace TerraBlind
 			}
 		}
 
-		// 只报【观测到的事实】,绝不预判原版会不会接受 —— 眼睛报发生了什么,不判断能不能发生。
+		// 只报【观测到的事实】,绝不预判原版会不会接受。眼睛报发生了什么,不判断能不能发生。
 		// 所以 no_anchor 只作为提示附上,永远不当拦截条件(往空中放绳子是合法的,只是没意义)
 		private static string DiagnosePlace(Player p, ItemUseRequest req)
 		{
@@ -277,11 +277,11 @@ namespace TerraBlind
 			if (!Reach.CanPlace(p, x, y)) return "out_of_reach";
 			var t = Main.tile[x, y];
 			if (t.HasTile) return "occupied";
-			// 挥了、格子空、够得着、东西对、有货,却没出现 —— 原版自己拒的。如实报,附个不具约束力的提示
+			// 挥了、格子空、够得着、东西对、有货,却没出现。原版自己拒的。如实报,附个不具约束力的提示
 			return HasAnchor(x, y) ? "rejected" : "rejected_no_anchor_hint";
 		}
 
-		// 绳子只能从已有绳子或天花板往下接,对着半空放是静默失败 —— 以前这种情况会误报成功
+		// 绳子只能从已有绳子或天花板往下接,对着半空放是静默失败。以前这种情况会误报成功
 		public static bool HasAnchor(int x, int y)
 		{
 			(int, int)[] n = { (0, -1), (0, 1), (-1, 0), (1, 0) };
@@ -305,7 +305,7 @@ namespace TerraBlind
 			System.Func<int, int, bool> ok;
 			if (it.hammer > 0) ok = (x, y) => Main.tile[x, y].HasTile && Main.tileHammer[Main.tile[x, y].TileType];
 			else if (it.pick > 0) ok = (x, y) => Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType] && !Main.tileHammer[Main.tile[x, y].TileType];
-			else return false;   // not a collecting tool — don't snap
+			else return false;   // not a collecting tool, don't snap
 
 			if (InBounds(wx, wy) && ok(wx, wy)) return false;   // already on a valid tile, no snap needed
 
@@ -342,7 +342,7 @@ namespace TerraBlind
 
 			int type = Main.tile[bestX, bestY].TileType;
 			bool IsTree(int x, int y) => InBounds(x, y) && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type;
-			// 主干是唯一贯穿整棵树高的那一列,枝杈只占部分高度所以总更短 —— 取最长的那列就是主干
+			// 主干是唯一贯穿整棵树高的那一列,枝杈只占部分高度所以总更短。取最长的那列就是主干
 			int trunkX = bestX, trunkLen = -1;
 			for (int sx = -3; sx <= 3; sx++)
 			{
@@ -362,7 +362,7 @@ namespace TerraBlind
 		}
 
 		// Live view of the watched target for /item_use_status: is there still a tile, can the HELD tool act on it,
-		// and how much mining damage has accumulated — rising damage = the swings are landing; flat 0 = flailing.
+		// and how much mining damage has accumulated, rising damage = the swings are landing; flat 0 = flailing.
 		public static string TargetJson()
 		{
 			if (SnappedWx < 0 || !InBounds(SnappedWx, SnappedWy)) return "null";

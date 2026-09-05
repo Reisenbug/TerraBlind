@@ -105,7 +105,7 @@ namespace TerraBlind
                 }
 
                 // mining event: detect tiles that actually disappeared (HasTile last frame → gone now) in a small
-                // box around the player. ground truth — independent of cursor / SmartCursor / reach, which made the
+                // box around the player. ground truth, independent of cursor / SmartCursor / reach, which made the
                 // recorded cell drift along the dig direction.
                 int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
                 var nowSolid = new HashSet<(int, int)>();

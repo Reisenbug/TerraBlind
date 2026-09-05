@@ -6,7 +6,7 @@ namespace TerraBlind
 {
     // 贪心卡死的【唯一】判据:Expand 给出的物理候选里,没有一个 H 更低。
     //
-    // 注意不是"4 邻域没有更低的 H" —— 那个判据我试过,全场 231 万格一个都扫不出来,
+    // 注意不是"4 邻域没有更低的 H"。那个判据我试过,全场 231 万格一个都扫不出来,
     // 因为 Dijkstra 的每格 H 本来就是从某个更低的邻居松弛来的,4 邻域极小几乎不存在。
     // 真正卡人的是【物理够不着】:邻居 H 是更低,但人跳不过去、挖不动、站不住。
     public static class Trap
@@ -23,7 +23,7 @@ namespace TerraBlind
         public static int JustH;
 
         // 【脚下哪一列挖不动】。DigDown 每周期都会算这个,算出来就记在这儿;
-        // TRAP 那一刻 RecedingNav 读它,交给 Unstick 换站位 —— 别让"挖不动"这个结论烂在生成器里。
+        // TRAP 那一刻 RecedingNav 读它,交给 Unstick 换站位。别让"挖不动"这个结论烂在生成器里。
         // -1 = 这一周期没撞上不可挖的列
         public static int FootBlockCol = -1;
         public static int FootBlockRow = -1;
@@ -62,7 +62,7 @@ namespace TerraBlind
         }
 
         // 提前预扫【已删除】。它在后台线程遍历 MazeWand 的 H 场,而主线程同时在建/换那张 Dictionary,
-        // 于是每帧都抛 "A concurrent update was performed on this collection and corrupted its state" ——
+        // 于是每帧都抛 "A concurrent update was performed on this collection and corrupted its state"
         // 整个寻路的依据被这个诊断功能搞坏了,人第一步就掉进 109 格深的坑。
         // 预警是诊断,寻路是主线,不值得为它冒并发风险。要重做的话:主线程同步跑,或者给场加锁/传副本。
         public static System.Collections.Generic.List<(int, int)> Predicted()

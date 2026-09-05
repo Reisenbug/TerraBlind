@@ -5,8 +5,8 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// WALK-PLACE — walk in one direction to a target column, and along the way, whenever a placement target comes
-	// within reach, place its item there. Does not stop at each target — reaches, places, keeps walking. Used to
+	// WALK-PLACE, walk in one direction to a target column, and along the way, whenever a placement target comes
+	// within reach, place its item there. Does not stop at each target, reaches, places, keeps walking. Used to
 	// drop furniture at specific columns while crossing a floor.
 	//
 	// Each target is an absolute cell + an item name (resolved to a slot). A target is placed once; placement is
@@ -39,7 +39,7 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 
 			// 【手没收干净之前不碰背包】。ResolveSlot 会 StashMouseItem(动背包),而这里常常
-			// 紧接着上一个动作(合成/放置)的同一帧 —— 原版在冷却归零那帧会拿手上那格补一次消耗,
+			// 紧接着上一个动作(合成/放置)的同一帧。原版在冷却归零那帧会拿手上那格补一次消耗,
 			// 于是物品扣了却没落地。桌子丢一张、椅子丢一把,都是这个窗口。
 			// 只记名字,真正解析推迟到 Tick 里手空闲之后。
 			_pending.Clear();
@@ -63,7 +63,7 @@ namespace TerraBlind
 			_running = false;
 		}
 
-		// 桌子 3 格宽 2 格高,锚点那格空不代表放得下 —— 连脚下支撑一起看
+		// 桌子 3 格宽 2 格高,锚点那格空不代表放得下。连脚下支撑一起看
 		static string Foot(int wx, int wy)
 		{
 			var sb = new StringBuilder();
@@ -95,7 +95,7 @@ namespace TerraBlind
 			DiagLog.Write($"[walkplace] {tag} placed={PlacedCount}/{_targets.Count} 没放上={miss.ToString().Trim()} 人在={(p != null ? ActExecutor.OriginCx(p) : -1)} 手上={(p != null ? p.selectedItem : -1)} 帧={_frames}");
 		}
 
-		// 别动这些:盖房后面几步还要用。只看本轮 _targets 是不够的 —— 摆桌子那轮把热键0
+		// 别动这些:盖房后面几步还要用。只看本轮 _targets 是不够的。摆桌子那轮把热键0
 		// 的椅子换到槽48,换出来就少了一把(日志:arm 物品32 槽48→热键0 换出=34x3,原本4把)
 		public static readonly List<int> Protected = new();
 
@@ -116,12 +116,12 @@ namespace TerraBlind
 				if (Protected.Contains(it.type)) { if (spare < 0) spare = i; continue; }
 				return i;
 			}
-			// 实在只剩受保护的,才动它 —— 总比 home=0 硬挤强
+			// 实在只剩受保护的,才动它。总比 home=0 硬挤强
 			return spare >= 0 ? spare : 0;
 		}
 
 		// 每种物品占一个固定热键位:以前每次放置临时换槽,几个目标抢同一个槽会互相踢掉。
-		// 只在手空闲时调用 —— 冷却里换槽会被原版补一次消耗。
+		// 只在手空闲时调用。冷却里换槽会被原版补一次消耗。
 		static void Arm(Player p)
 		{
 			var homeOf = new Dictionary<int, int>();
@@ -196,7 +196,7 @@ namespace TerraBlind
 			if (!_armed)
 			{
 				if (p.itemTime > 0 || p.itemAnimation > 0) return;
-				// 手空了才解析槽位 —— Start 那会儿动背包会把物品吃掉
+				// 手空了才解析槽位。Start 那会儿动背包会把物品吃掉
 				if (!_resolved)
 				{
 					foreach (var (wx, wy, item) in _pending)
@@ -234,7 +234,7 @@ namespace TerraBlind
 
 				if (!swungThisFrame && p.itemTime == 0)
 				{
-					// t.Slot 是 Arm 分的热键位,但中途别的动作可能把料挪走了 —— 按【物品类型】认,
+					// t.Slot 是 Arm 分的热键位,但中途别的动作可能把料挪走了。按【物品类型】认,
 					// 不认下标。认错下标 = 拿着别的东西挥一下,料没少但也没放上。
 					var held = p.inventory[t.Slot];
 					if (held == null || held.IsAir || held.type != t.ItemType)

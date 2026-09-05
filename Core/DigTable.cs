@@ -15,11 +15,11 @@ namespace TerraBlind
     public static class DigTable
     {
         // Per-swing pickaxe damage, transcribed VERBATIM from vanilla Player.GetPickaxeDamage (Player.cs 1.4.5.4
-        // L52756-52838). Bare type numbers kept exactly as vanilla (226, 211, 85, ...) — NOT translated to TileID
+        // L52756-52838). Bare type numbers kept exactly as vanilla (226, 211, 85, ...), NOT translated to TileID
         // constants and NOT annotated with block names, so this can be diffed line-for-line against the source with
         // zero room for a mislabel. Returns 0 when the current pickaxe is too weak (= unmineable). ONLY字面 deviation
         // from source: vanilla's `tileTarget.type`/`.frameY` become tModLoader's `.TileType`/`.TileFrameY` (the Tile
-        // wrapper renames the fields) — the numeric type IDs and all logic are untouched.
+        // wrapper renames the fields), the numeric type IDs and all logic are untouched.
         //
         // NOT transcribed: the framed-object tail (vanilla L52839-52900, types 128/269/334 = racks/dressers). It has
         // side effects (mutates x/y, writes hitTile.UpdatePosition and Main.blockMouse) that a pure cost query must
@@ -119,7 +119,7 @@ namespace TerraBlind
         // 蜂蜜流一地、小蜜蜂满天、还招蜂王。见 MineableWith。
         public static bool IsForbidden(int type) => type == TileID.Hive;
 
-        // 挖开的【后果】,不是挖它要多久。蜂蜜块软,纯按耗时算规划器专挑它走 —— 但踩上去移动力暴跌。
+        // 挖开的【后果】,不是挖它要多久。蜂蜜块软,纯按耗时算规划器专挑它走。但踩上去移动力暴跌。
         private const int HivePenalty = 3000;
         private static int Trouble(int type)
         {

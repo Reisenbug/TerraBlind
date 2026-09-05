@@ -4,7 +4,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// 沿着 HellLine 一格一格铺桥面。和 BridgeBuilder 的区别只有一个:那个锁死一行,
-	// 这个跟着 Line 的起伏走 —— 地狱的线本来就不是平的。
+	// 这个跟着 Line 的起伏走。地狱的线本来就不是平的。
 	//
 	// 线自己保证了坡度:每列最多变 1 行,而且不会连着两列都变(HellLine 的 maxStep/backToBack)。
 	// 所以人站在已铺好的桥面上,下一格永远在伸手范围内,不用另算怎么爬。
@@ -126,7 +126,7 @@ namespace TerraBlind
 		public static void Stop()
 		{
 			// 【无声 Stop 是查不动的】:铺到一半被谁停掉,日志和"正常铺完"一模一样。
-			// 2768 帧那次就是这样 —— 422 帧没有任何一行,分不出死了还是在走路
+			// 2768 帧那次就是这样。422 帧没有任何一行,分不出死了还是在走路
 			if (IsRunning) DiagLog.Write($"[deck] STOP 停在第{_idx}/{_line.Count}格 已放{Placed}");
 			if (Outcome == "running") Outcome = "stopped";
 			_ph = Ph.Idle;
@@ -240,7 +240,7 @@ namespace TerraBlind
 					else _blockedFrames++;
 					Mark("走去换平台");
 					if (ActExecutor.OriginCx(p) < x) p.controlRight = true; else p.controlLeft = true;
-					// 推不动就先把身前那面墙清了 —— ClearAhead 里那段正是干这个的
+					// 推不动就先把身前那面墙清了。ClearAhead 里那段正是干这个的
 					if (_blockedFrames >= BlockedAt && ClearAhead(p)) { _blockedFrames = 0; Mark("清身前的墙"); }
 					return;
 				}
@@ -301,7 +301,7 @@ namespace TerraBlind
 			}
 			_recovers = 0;
 
-			// 同一行的连续段一次铺完:房子的 base 就是这么干的 —— BridgeBuilder 锁一个槽连着放,
+			// 同一行的连续段一次铺完:房子的 base 就是这么干的。BridgeBuilder 锁一个槽连着放,
 			// 实测 5.93 格/秒。逐格调 PlaceAnywhere 每格都要重新归位手上的东西,手根本没用满
 			if (BridgeBuilder.IsRunning) { Mark("连铺中"); return; }
 			// 连铺必须从有锚的格子起步(BridgeBuilder 不造锚,第一格悬空就整段 no_anchor)。
@@ -380,7 +380,7 @@ namespace TerraBlind
 
 			if (PlaceAnywhere.IsRunning) { Mark("放置中"); return; }
 			// 一格放不上不该毁掉整条桥:跳过它接着铺,人走到那儿会掉一下但桥还在往前长。
-			// 全线放不上才算真失败 —— 那时 _skipped 会一路涨上去。
+			// 全线放不上才算真失败。那时 _skipped 会一路涨上去。
 			if (PlaceAnywhere.Outcome == "stuck" && _tried)
 			{
 				DiagLog.Write($"[deck] 第{_idx}格({x},{y})跳过:{PlaceAnywhere.Reason}");
@@ -521,7 +521,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 记下这一帧走到哪条分支就退出了。同一条连着走 HeartbeatEvery 帧就汇报一次 ——
+		// 记下这一帧走到哪条分支就退出了。同一条连着走 HeartbeatEvery 帧就汇报一次
 		// 不打的话"人不动"和"正常干活"在日志里长得一模一样
 		const int HeartbeatEvery = 60;
 		static void Mark(string where)

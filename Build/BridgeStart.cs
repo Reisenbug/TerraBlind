@@ -160,7 +160,7 @@ namespace TerraBlind
 						if (!onSpot)
 						{
 							DiagLog.Write($"[bstart] 站了{_held}帧就掉了:现在({cx},{cy}) vy={p.velocity.Y:0.##} → 重站");
-							// 【滑落不算"站不上去"】,重试配额得还回去 —— 不然掉两次就把
+							// 【滑落不算"站不上去"】,重试配额得还回去。不然掉两次就把
 							// Ph.Stand 的三次机会吃光,而它一次都还没真正试过
 							_held = 0; _phaseFrames = 0; _tries = 0; _ph = Ph.Place;   // 那一格可能也没了,回去重放
 							return;

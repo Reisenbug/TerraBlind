@@ -4,16 +4,16 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// PILLAR — build a PLATFORM column upward, N tall, in the column one cell to the player's RIGHT.
+	// PILLAR, build a PLATFORM column upward, N tall, in the column one cell to the player's RIGHT.
 	//
 	// Platforms attach to the platform below, so the column grows straight up while the player stays on the ground;
-	// the only limit is the arm (~6 cells standing). Past that the player JUMPS — airborne, the arm reaches higher —
+	// the only limit is the arm (~6 cells standing). Past that the player JUMPS, airborne, the arm reaches higher
 	// and places the next cell at its absolute coordinate mid-air. Land, jump again, place the next.
 	//
 	// This drives useItem and the cursor DIRECTLY, not through ItemUseCoordinator, because the motion here is
 	// continuous, not one-cell-at-a-time. Per the intended timing:
 	//   - keep pressing use; the CURSOR advances the instant the target cell shows our platform on the map. The tile
-	//     lands early in a useItem cycle, so the map — not the animation — is the trigger. (An autoReuse item's
+	//     lands early in a useItem cycle, so the map, not the animation, is the trigger. (An autoReuse item's
 	//     animation may never fall back to 0, so trusting that edge pins the cursor on cell one forever.)
 	//   - jumping: each frame test whether the target cell is in reach; if yes, useItem; if no, stop placing and wait
 	//     for the next jump. Never hang mid-air waiting.
@@ -33,9 +33,9 @@ namespace TerraBlind
 		private static int _lastWy;
 		private static bool _grounded;         // have the feet touched down so the ground row is valid?
 
-		private const int MaxPhaseFrames = 240;   // a single fill/jump phase can't outlast this — structural bound
+		private const int MaxPhaseFrames = 240;   // a single fill/jump phase can't outlast this, structural bound
 		// If the cursor cell hasn't advanced for this long, the column simply cannot grow (target unreachable even by
-		// jumping, out of stock, blocked). This counter is NEVER reset by landing, so a jump loop can't dodge it —
+		// jumping, out of stock, blocked). This counter is NEVER reset by landing, so a jump loop can't dodge it
 		// which is exactly what let JumpRise spin forever (each landing zeroed _phaseFrames before it hit the cap).
 		private const int NoProgressFrames = 180;
 
@@ -124,13 +124,13 @@ namespace TerraBlind
 			}
 
 			// GLOBAL no-progress guard, immune to the per-jump reset. If the cursor cell (_wy) hasn't changed for
-			// NoProgressFrames, the pillar cannot advance — bail instead of jumping forever.
+			// NoProgressFrames, the pillar cannot advance, bail instead of jumping forever.
 			if (_wy != _lastWy) { _lastWy = _wy; _wyStuckFrames = 0; }
 			else if (++_wyStuckFrames > NoProgressFrames) { Reason = "unreachable"; Stuck(Diagnose("光标不动")); return; }
 
-			// (item already homed in the hotbar at Start — _slot is a stable 0-9 slot, no per-frame swapping.)
+			// (item already homed in the hotbar at Start, _slot is a stable 0-9 slot, no per-frame swapping.)
 
-			// STEP ASIDE — stand just LEFT of the target column, body clear of it, close enough to reach it. The body
+			// STEP ASIDE, stand just LEFT of the target column, body clear of it, close enough to reach it. The body
 			// must not overlap the column (block/platform can't go inside the hitbox), and must be adjacent so the
 			// ground cell is in reach. Walk toward that stance: right if we're left of it, left if we overlap.
 			if (_ph == Ph.StepAside)
@@ -166,15 +166,15 @@ namespace TerraBlind
 				Aim(p);
 				// CONTINUOUS placement: keep pressing use, and advance the cursor THE MOMENT the tile appears on the
 				// map. The tile lands early in the useItem cycle, so waiting for the cycle to finish is both needless
-				// and unreliable — an autoReuse item's animation may never fall back to 0, which is exactly what pinned
+				// and unreliable, an autoReuse item's animation may never fall back to 0, which is exactly what pinned
 				// the cursor on the first cell forever. The map is the trigger; the animation is not consulted.
 				if (Filled(_wy)) { if (!Advance()) return; }
 				if (p.itemTime == 0) p.controlUseItem = true;
 				return;
 			}
 
-			// JUMP RISE — hold jump. Each frame: is the target in reach yet? If so, place (continuous, same as fill).
-			// If a whole jump goes by without reaching it, land and jump again — never hang in the air.
+			// JUMP RISE, hold jump. Each frame: is the target in reach yet? If so, place (continuous, same as fill).
+			// If a whole jump goes by without reaching it, land and jump again, never hang in the air.
 			p.controlJump = true;
 			if (_phaseFrames > MaxPhaseFrames) { Reason = "jump_unreached"; Stuck(Diagnose("跳着也够不到")); return; }
 

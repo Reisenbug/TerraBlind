@@ -3,7 +3,7 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// HELL LINE — 地狱那条 170 格的桥铺在哪一行。
+	// HELL LINE。地狱那条 170 格的桥铺在哪一行。
 	//
 	// 地狱是上下两个不规则表面夹出来的长通道:上表面是天花板底面(石头),
 	// 下表面是岩浆面或地面。桥是给人站、给雷管停的实心面,所以要连续 170 格。
@@ -20,7 +20,7 @@ namespace TerraBlind
 		const int SlopeRun = 4;             // 升降一格要跨几列。台阶太陡人走不上去
 		const int SlopeW = 4;               // 上下挪一格的钱。没约束时线自己走平
 		// 连着爬第 k 段额外加这么多:陡坡不禁止,但连成一串会越来越贵,于是"能分散就分散"。
-		// 只加 SlopeW 是线性的 —— 连爬10段和分散爬10段一样贵,Dijkstra 没理由避开陡坡
+		// 只加 SlopeW 是线性的。连爬10段和分散爬10段一样贵,Dijkstra 没理由避开陡坡
 		const int RunSlopeW = 26;           // 一段连爬 ≈ 一格挖掘的钱
 		const int MaxRun = 3;               // 连爬段数封顶(状态维度),再陡也不再涨价
 		const int DigCell = 26;             // 和主线同价(MazeWand.DigSide),绝不另编一套
@@ -57,7 +57,7 @@ namespace TerraBlind
 			public List<(int x, int y)> Line;
 		}
 
-		// 一列的空腔:天花板底面 .. 第一个实心/岩浆。岩浆算下表面 —— 桥架它上面,脚下是空气。
+		// 一列的空腔:天花板底面 .. 第一个实心/岩浆。岩浆算下表面。桥架它上面,脚下是空气。
 		static void Column(int x, out int ceil, out int floor)
 		{
 			ceil = Main.UnderworldLayer;
@@ -80,7 +80,7 @@ namespace TerraBlind
 		// 【和 DeckBuilder.HeadClear 读同一个数】:一边禁 4 行一边清 5 行的话,
 		// 第 5 行那块挖不动的算线时放行、铺桥时清不掉,人走到那儿被顶住
 		const int DigHead = DeckBuilder.HeadClear;
-		// 这一趟的镐力。算线前取一次 —— CellCost 是 DP 里逐格调的,不能每次去翻背包
+		// 这一趟的镐力。算线前取一次。CellCost 是 DP 里逐格调的,不能每次去翻背包
 		static int _pick;
 
 		static int Blocked(int x, int y)
@@ -107,7 +107,7 @@ namespace TerraBlind
 			return false;
 		}
 
-		// 这一格挡着的话,往前还要连挖几列。薄壳挖穿就通了,厚墙是一路挖到底 ——
+		// 这一格挡着的话,往前还要连挖几列。薄壳挖穿就通了,厚墙是一路挖到底
 		// 按格数线性收钱两者一样贵(20 列×3 格 = 60,和 20 处薄壳同价),所以厚度必须自己涨价。
 		static int Thickness(int x, int y, int dir)
 		{
@@ -147,10 +147,10 @@ namespace TerraBlind
 			}
 			int head = (y - Head) - ceil;
 			if (head < CeilNear) c += (CeilNear - head) * CeilW;
-			// 腔外面不是不能去,只是白挖 —— 给个明确的钱,别让它比腔里还便宜
+			// 腔外面不是不能去,只是白挖。给个明确的钱,别让它比腔里还便宜
 			if (y <= ceil) c += (ceil - y + 1) * CeilW;
 			// 桥面贴着岩浆面就等于把方块插进岩浆里。|rel-0.5| 两头一样贵,分不出"蹭石头"和"蹭岩浆",
-			// 而 y>floor 才收钱,y==floor 白送 —— 于是线专挑岩浆面走。离下表面近本身就得涨价。
+			// 而 y>floor 才收钱,y==floor 白送。于是线专挑岩浆面走。离下表面近本身就得涨价。
 			int overLava = LavaGap - (floor - y);
 			if (overLava > 0) c += overLava * LavaW;
 			if (y > floor) c += (y - floor) * DigCell;
@@ -219,13 +219,13 @@ namespace TerraBlind
 					for (int k = 0; k < HouseW; k++) if (ClearToLava(x + dir * k, y0)) lav++;
 					if (pass == 0 && lav < HouseW) continue;   // 头一遍只要整排都通到岩浆的
 					float rel = (float)(y0 - c0) / System.Math.Max(1, f0 - c0);
-					// 就近不就价:只按离人远近挑。居中分再高也没用 —— 人得先徒步走过去,
+					// 就近不就价:只按离人远近挑。居中分再高也没用。人得先徒步走过去,
 					// 而在地狱里每多走一格都是掉岩浆的机会
 					int score = -System.Math.Abs(d);
 					if (score > bestScore)
 					{ bestScore = score; sx = x; bestClear = f0 - c0; bestRel = rel; bestRow = y0; bestLava = lav; }
 				}
-				// 整排岩浆的位置一个都没有才放宽 —— 那时后面捅向导那套做不了,但房子还能盖
+				// 整排岩浆的位置一个都没有才放宽。那时后面捅向导那套做不了,但房子还能盖
 				if (bestScore != int.MinValue) break;
 				DiagLog.Write("[hell-line] 附近没有整排悬在岩浆上的起点,放宽岩浆要求");
 			}
@@ -259,7 +259,7 @@ namespace TerraBlind
 			}
 			DiagLog.Write($"[hell-line] 坡 抬升{steps}次/{Length}列 最长连爬={runMax}段 背靠背={backToBack}");
 
-			// 第一格放不出来的话整条线都白算 —— 所以把起点这一带【每一列】的锚点情况打全。
+			// 第一格放不出来的话整条线都白算。所以把起点这一带【每一列】的锚点情况打全。
 			// 放方块要正交邻居:上下左右任一格有实心就贴得住。四周全空 = 悬在岩浆上,放不出来。
 			for (int i = 0; i < HouseW + 2 && i < Length; i++)
 			{
@@ -271,7 +271,7 @@ namespace TerraBlind
 					$"下面={(Predicates.IsLava(x, y + 1) ? "岩浆" : dn ? "地" : "空")} 贴得住={(up || dn || lf || rt)}");
 			}
 
-			// 两个面量得对不对,一行就能看出来 —— 位置错过一次就是错在这儿
+			// 两个面量得对不对,一行就能看出来。位置错过一次就是错在这儿
 			DiagLog.Write($"[hell-line] 面 x={sx} ceil={ceilA[0]} floor={floorA[0]} | 中段 x={sx + dir * (Length / 2)} " +
 				$"ceil={ceilA[Length / 2]} floor={floorA[Length / 2]} | 末 ceil={ceilA[Length - 1]} floor={floorA[Length - 1]}");
 
@@ -468,7 +468,7 @@ namespace TerraBlind
 		{
 			const int W = HouseW;
 			// 房子钉在桥的最边缘:起点那 6 列,不再满桥找便宜地方。桥是从房子往外铺的,
-			// 房子跑到中间就等于把桥截成两段。下方必须是岩浆 —— NPC 房要悬在岩浆上。
+			// 房子跑到中间就等于把桥截成两段。下方必须是岩浆。NPC 房要悬在岩浆上。
 			res.HouseX = sx;
 			res.HouseY = ys[0];
 			int lavaCols = 0;
@@ -477,7 +477,7 @@ namespace TerraBlind
 			res.HouseOnLava = lavaCols == W;
 			res.HouseLavaCols = lavaCols;
 			// 选起点时是按【预估行】算的岩浆,这里是线上真实的 ys[0]。两者该一致,
-			// 不一致就说明打分打在了没人去的行上 —— 报出来,别让"房子不在岩浆上"再无声溜过去
+			// 不一致就说明打分打在了没人去的行上。报出来,别让"房子不在岩浆上"再无声溜过去
 			if (lavaCols < W)
 				DiagLog.Write($"[hell-line] 房子({res.HouseX},{res.HouseY})只有{lavaCols}/{W}列在岩浆上");
 		}

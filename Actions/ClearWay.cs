@@ -2,7 +2,7 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// 真实地形挡住人怎么办 —— 挖开。地狱要塞的墙、矿脉、山体横在路上时,这是唯一的解法。
+	// 真实地形挡住人怎么办。挖开。地狱要塞的墙、矿脉、山体横在路上时,这是唯一的解法。
 	//
 	// 判据只有这一份:HellDeck 里原本有一套(DigWayForward),DeckBuilder 又漏写了一套,
 	// 于是同样的墙在老路径上能过、新路径上卡死。所有"被地形挡住"都该调这里。
@@ -49,7 +49,7 @@ namespace TerraBlind
 			if (DeckBuilder.OnLine(x, y)) return false;
 			// 【挖不动的当场认账】。地狱熔炉(tile 77)镐力不够 65 时伤害恒 0,
 			// 地狱祭坛/神庙砖同理。原来这儿不查,Dig 照样开挥并返回 true("我在处理"),
-			// 调用方每帧 return —— 人对着炉子挥一辈子。
+			// 调用方每帧 return。人对着炉子挥一辈子。
 			// 判据用 DigTable 那一份(它抄的是 vanilla 的伤害表),不另写第二套
 			if (DigTable.CostFrames(x, y) >= DigTable.Unmineable)
 			{
@@ -74,7 +74,7 @@ namespace TerraBlind
 		// 日志:刚放好的衔接方块(910,1037) 40帧后被当"挡路"挖掉,桥就断在那儿
 		static (int, int) _lastHard = (int.MinValue, int.MinValue);   // 挖不动的那一格只报一次,别每帧刷屏
 
-		// stuck=true:调用方【已经确认人推不动了】。这时"一格高的台阶跳一下就过去"不成立 ——
+		// stuck=true:调用方【已经确认人推不动了】。这时"一格高的台阶跳一下就过去"不成立
 		// 卡住本身就是跳不过去的证据,那一格照挖。
 		// stuck=false:只是顺手清一下路,一格高的台阶留着(挖了会把刚铺好的桥面拆断)
 		public static bool Forward(Player p, int dir, string why = "挡路", bool stuck = false)
@@ -84,7 +84,7 @@ namespace TerraBlind
 			int fy = ActExecutor.OriginCy(p);
 			// 台阶只有一格高就别动它;两格及以上人跳不过去,那才是真挡路
 			bool step = !stuck && Predicates.IsWall(col, fy) && !Predicates.IsWall(col, fy - 1);
-			// 【挖 4 行,不是 3 行】。人走过去要占 3 行,头顶还得留一格跳的余量 ——
+			// 【挖 4 行,不是 3 行】。人走过去要占 3 行,头顶还得留一格跳的余量
 			// 只挖 3 行的话第 4 行那块砖照样把人顶住,跳不起来
 			for (int r = step ? 1 : 0; r <= DeckBuilder.HeadClear; r++)
 				if (Dig(p, col, fy - r, why)) return true;
@@ -92,7 +92,7 @@ namespace TerraBlind
 		}
 
 		// 前进方向那一列的 HeadClear+1 行都空了吗。Forward 一帧只挖一格,调用方靠这个
-		// 判断"还要不要接着挖" —— 挖开三格人就挤过去了,剩下的头顶那两格会被漏掉
+		// 判断"还要不要接着挖"。挖开三格人就挤过去了,剩下的头顶那两格会被漏掉
 		public static bool ForwardClear(Player p, int dir)
 		{
 			var (bl, br) = Predicates.BodyCols(p);

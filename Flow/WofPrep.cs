@@ -7,7 +7,7 @@ namespace TerraBlind
 	// 把向导捅进岩浆 → 等肉山。
 	//
 	// 每一相位的完成判据都是【世界里的事实】(NPC 在不在家、背包里有几根雷管、人走了多远),
-	// 不是等帧数 —— 帧数在别人机器上就不对。
+	// 不是等帧数。帧数在别人机器上就不对。
 	public static class WofPrep
 	{
 		public enum Ph
@@ -30,9 +30,9 @@ namespace TerraBlind
 
 		const int DynamiteId = ItemID.Dynamite;
 		// 实测 34 根刚好打死(日志:第34根时剩35血),30 根必然打不完。
-		// 45 根留出余量 —— 单价 1780 铜,合 8 金 1 银
+		// 45 根留出余量。单价 1780 铜,合 8 金 1 银
 		const int WantDynamite = 45;
-		// 【买不够就有几根用几根】,但少于这个数一定打不死 —— 那就别往下走了,
+		// 【买不够就有几根用几根】,但少于这个数一定打不死。那就别往下走了,
 		// 换向导捅岩浆那一整套白干,还得重来。20 以上是有概率的,值得试
 		const int MinDynamite = 20;
 		const int WalkAwayTiles = 80;
@@ -57,7 +57,7 @@ namespace TerraBlind
 		// 挖掉的格子,存【完整坐标】。原来只存行号、列共用一个 _dugCol,
 		// 而向导每挖一格就移位,三格挖在三列上(日志:3931/3930/3929),补回来的只有一格
 		static readonly System.Collections.Generic.List<(int x, int y)> _dug = new();
-		// 站定挖洞时脚下那一行。向导掉下去之后【绝不能跟着他往下走】——
+		// 站定挖洞时脚下那一行。向导掉下去之后【绝不能跟着他往下走】
 		// 日志:向导落到 1062,寻路算出 jump→(3470,1059) H=0 代价-4.6,人就跟着跳进坑里上不来了
 
 		public static bool Start(int houseWx, int houseWy, int bridgeDir, out string why)
@@ -73,10 +73,10 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 外部叫停也要还手臂 —— 不然停在 DigUnder 那一刻,30 格就永远留在全局里了
+		// 外部叫停也要还手臂。不然停在 DigUnder 那一刻,30 格就永远留在全局里了
 		public static void Stop() { Concessions.LongArmEnd(); if (Outcome == "running") Outcome = "stopped"; Phase = Ph.Idle; }
 
-		// 桥有起伏,没有固定的一行 —— 从人当前高度往下找第一块站得住的地。
+		// 桥有起伏,没有固定的一行。从人当前高度往下找第一块站得住的地。
 		// 找不到就是那一列没铺到(桥断了),交给上层报,别默默停在空中。
 		const int DeckScan = 12;
 		// 向导脚下这一格是不是岩浆:成功判据。feet+2 会在他站薄壳上时误报,这里只认脚所在格
@@ -158,7 +158,7 @@ namespace TerraBlind
 		static void Fail(string r) { Concessions.LongArmEnd(); Outcome = "stuck"; Reason = r; Phase = Ph.Idle; DiagLog.Write($"[wof] STUCK {r}"); }
 
 		// 买完的收尾:鼠标上还攥着东西就等一帧(不然那件会掉地上),关背包、结束对话、进下一相位。
-		// 【买够了】和【钱花光了】都走这一条 —— 各写一遍必然漂移
+		// 【买够了】和【钱花光了】都走这一条。各写一遍必然漂移
 		static bool DoneBuying(Player p)
 		{
 			// 【最后一根还在鼠标上就收进背包】:Have 是算鼠标那份的,买到最后一根当帧
@@ -190,7 +190,7 @@ namespace TerraBlind
 			DiagLog.Write($"[wof] → {next}");
 		}
 
-		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)——玩家中心±tileRange 的矩形
+		// 能不能跟他说话:照抄原版每帧那套(Player.cs:26297)。玩家中心±tileRange 的矩形
 		// 和 NPC 碰撞箱相交。够不着的话 SetTalkNPC 当帧就被原版清掉,商店根本开不起来
 		public static bool CanTalkTo(Player p, NPC npc)
 		{
@@ -245,9 +245,9 @@ namespace TerraBlind
 			switch (Phase)
 			{
 				// 不自己搬 NPC:原版每帧判"不在好休息点 + 玩家看不见"就把他传送回家。
-				// 我们只要满足条件然后等 —— 人此刻在桥的远端,本来就离得远
+				// 我们只要满足条件然后等。人此刻在桥的远端,本来就离得远
 				case Ph.WaitNight:
-					// 【等天黑不设上限】。NPC 只在夜里传送回家,白天等多久都是白等 ——
+					// 【等天黑不设上限】。NPC 只在夜里传送回家,白天等多久都是白等
 					// 这是流程本身要等的时间,不是卡住。计时从天黑那一刻才起算
 					if (!IsNight())
 					{
@@ -276,7 +276,7 @@ namespace TerraBlind
 					Go(Ph.GoToNpc);
 					return;
 
-				// 走到【NPC 跟前】,不是走到火把那格 —— 火把在房顶,NPC 站地板上,
+				// 走到【NPC 跟前】,不是走到火把那格。火把在房顶,NPC 站地板上,
 				// 够得着火把不等于够得着他,于是商店开不起来、Reach 又反复重启刷屏
 				case Ph.GoToNpc:
 				{
@@ -309,7 +309,7 @@ namespace TerraBlind
 				}
 
 				// 严格走商店:跟 NPC 对话 → 开他的货架 → 从货架上一件件买。
-				// 价格问游戏要(GetItemExpectedPrice),不自己写死 —— 写死的数迟早和版本对不上
+				// 价格问游戏要(GetItemExpectedPrice),不自己写死。写死的数迟早和版本对不上
 				case Ph.Buy:
 				{
 					int have = Predicates.Have(DynamiteId);
@@ -324,7 +324,7 @@ namespace TerraBlind
 
 					int dn = NPC.FindFirstNPC(NPCID.Demolitionist);
 					if (dn < 0) { Fail("爆破专家不见了"); return; }
-					// 走远了就回去 —— 原版每帧会把够不着的 talkNPC 清掉
+					// 走远了就回去。原版每帧会把够不着的 talkNPC 清掉
 					if (!CanTalkTo(p, Main.npc[dn])) { DiagLog.Write("[wof] 离商人太远,回去"); Go(Ph.GoToNpc); return; }
 					if (p.talkNPC != dn) { OpenShop(p, dn); return; }
 
@@ -339,7 +339,7 @@ namespace TerraBlind
 					if (!Main.mouseItem.IsAir)
 					{
 						// 满了先按清单删掉没用的(草药/矿石那些)。原来直接 Fail,而背包里
-						// 多半全是一路捡的杂物 —— 45 根雷管就卡在这儿买不成
+						// 多半全是一路捡的杂物。45 根雷管就卡在这儿买不成
 						if (ThrowItems.FreeSlots() < 1) KeepList.MakeRoom(2);
 						if (ThrowItems.FreeSlots() < 1 && !StashMouse(p)) { Fail("背包满了,放不下买到的雷管"); return; }
 						if (!StashMouse(p)) return;
@@ -348,14 +348,14 @@ namespace TerraBlind
 					p.GetItemExpectedPrice(shop.item[slot], out _, out long buyPrice);
 					if (!p.CanAfford(buyPrice, shop.item[slot].shopSpecialCurrency))
 					{
-						// 钱不够就【当场卖东西】—— 商店已经开着,不用另走一趟。
+						// 钱不够就【当场卖东西】。商店已经开着,不用另走一趟。
 						// 一帧只卖一格,卖完 return 等下一帧重新算够不够
 						if (shop.item[slot].shopSpecialCurrency != -1)
 						{ Fail($"第{have + 1}根雷管要特殊货币,买不了"); return; }
 						// 还要买 (WantDynamite-have) 根,一次把总账算够,省得卖一件买一根来回折腾
 						long need = buyPrice * (WantDynamite - have);
 						if (Shop.SellOneFor(p, need, out string sn, DynamiteId)) { DiagLog.Write($"[wof] {sn}"); return; }
-						// 【卖不出更多了 —— 有几根用几根】。够门槛就往下走,不够就当场认账:
+						// 【卖不出更多了。有几根用几根】。够门槛就往下走,不够就当场认账:
 						// 少于 MinDynamite 一定打不死,换向导捅岩浆那一套白干还得重来
 						if (have >= MinDynamite)
 						{
@@ -388,7 +388,7 @@ namespace TerraBlind
 					return;
 				}
 
-				// 走开一个屏幕,原版才肯把向导传送回家 —— 传送要求 NPC 和家都不在玩家视野内
+				// 走开一个屏幕,原版才肯把向导传送回家。传送要求 NPC 和家都不在玩家视野内
 				case Ph.WalkAway:
 				{
 					if (RecedingNav.Active) return;
@@ -447,7 +447,7 @@ namespace TerraBlind
 					return;
 				}
 
-				// 向导站哪是他自己走出来的,不能预先算死 —— 每帧读他真实位置,挖【他脚下】那一列
+				// 向导站哪是他自己走出来的,不能预先算死。每帧读他真实位置,挖【他脚下】那一列
 				case Ph.DigUnder:
 				{
 					int g = NPC.FindFirstNPC(NPCID.Guide);
@@ -472,14 +472,14 @@ namespace TerraBlind
 							DiagLog.Write($"[wof] 向导({gx},{gy})在30格外,人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}),回去重新站位");
 						p.SetTalkNPC(-1); Go(Ph.BackToGuide); return;
 					}
-					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动 ——
+					// 【挖之前先跟他说话,挖的全程别断】。对话中的 NPC 站着不动
 					// 不拉住他的话人一边挖他一边溜达,挖开的洞永远不在他脚下。
 					// vanilla 每帧会把够不着的 talkNPC 清掉,所以要每帧重设。
 					// 他掉下去之后原版自己会断对话,不用我们收尾
 					if (CanTalkTo(p, gn) && p.talkNPC != g)
 					{
 						// 【照抄右键那条路】(Main.cs:56173 那一段)。光调 SetTalkNPC 只设了个字段,
-						// 对话框根本不弹 —— 而让 NPC 站住不动的正是【弹出来的对话框】。
+						// 对话框根本不弹。而让 NPC 站住不动的正是【弹出来的对话框】。
 						// npcChatText 必须是 GetChat() 的真台词,给空串等于没开
 						Main.CancelHairWindow();
 						Main.SetNPCShopIndex(0);
@@ -497,10 +497,10 @@ namespace TerraBlind
 						DiagLog.Write($"[wof] 拉住向导说话(talk={p.talkNPC}),免得他乱走");
 					}
 					// 向导走到人自己脚底下那一列了:挖下去等于拆自己站的地,人跟着一起掉。
-					// 先挪开一格再挖 —— 挪位由 SettleAt 落定,别在这儿硬挖
+					// 先挪开一格再挖。挪位由 SettleAt 落定,别在这儿硬挖
 					// 【只有一方被另一方完全盖住才让位】。部分相交照挖:人跨 2~3 列,
 					// 挖掉相交的那一列剩下的还撑着人,而向导少一列支撑就可能掉下去。
-					// 完全包含才是死结 —— 向导⊆人挖不到他,人⊆向导挖了自己没地站
+					// 完全包含才是死结。向导⊆人挖不到他,人⊆向导挖了自己没地站
 					var (mbl, mbr) = Predicates.TouchCols(p.position.X, p.width);
 					var (ggl, ggr) = Predicates.TouchCols(gn.position.X, gn.width);
 					bool overlap = (ggl >= mbl && ggr <= mbr) || (mbl >= ggl && mbr <= ggr);
@@ -518,17 +518,17 @@ namespace TerraBlind
 						return;
 					}
 					if (ItemUseCoordinator.IsActive) { DigBeat(p, gx, gy, "挥镐中"); return; }
-					// 【他碰撞箱压住的每一列都要挖】。NPC 和人一样跨 2~3 列 ——
+					// 【他碰撞箱压住的每一列都要挖】。NPC 和人一样跨 2~3 列
 					// 只挖中心那列,两边还各有半只脚踩着地,他就站在洞上不动
 					// (现场:向导(1082,1052) 那一列 1052..1057 全空了,人却 960 帧一动不动)。
 					// 列的算法和判人一样,不另写一套
-					// 【用 TouchCols 不是 BodyCols】。BodyCols 减 1px 会少报最右那列 ——
+					// 【用 TouchCols 不是 BodyCols】。BodyCols 减 1px 会少报最右那列
 					// 向导实际压着 3 列却只报 2 列,挖完两列他往右一滑就被第 3 列接住
 					// (现场:1081/1082 全空了,他 840 帧一动不动)
 					var (gbl, gbr) = Predicates.TouchCols(gn.position.X, gn.width);
 					var (pbl, pbr) = Predicates.TouchCols(p.position.X, p.width);
 					// 一路往下挖到岩浆:脚下常有寻路自己铺的平台,只挖 3 格的话向导落在平台上就卡住了。
-					// 但【只挖够得着的】—— 够不着的挖不动,而且补的时候也回不去,那洞就永远留着
+					// 但【只挖够得着的】。够不着的挖不动,而且补的时候也回不去,那洞就永远留着
 					for (int k = 0; k < DigDepth; k++)
 					{
 						int dy = gy + k;
@@ -541,7 +541,7 @@ namespace TerraBlind
 						{
 							// 【和人相交的那一列照挖】。人跨 2~3 列,挖掉其中一列剩下的还撑着他,
 							// 人不会掉;而向导少一列支撑就可能掉下去,不挖等于白等。
-							// 只有【人所有的列都在要挖的范围里】才留手 —— 那才是把自己的地拆光
+							// 只有【人所有的列都在要挖的范围里】才留手。那才是把自己的地拆光
 							if (pbl >= gbl && pbr <= gbr) continue;
 							if (!Main.tile[dx, dy].HasTile) continue;   // 空的跳过
 							if (!Reach.CanMine(p, dx, dy))
@@ -557,7 +557,7 @@ namespace TerraBlind
 								ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = dx, TargetWy = dy, Slot = pk2, Strict = true });
 								DiagLog.Write($"[wof] 挖({dx},{dy}) 平台挡着向导");
 							}
-							// 【挖不动就换下一格,别整个退出】。原来是 `if (!Dig(...)) return;` ——
+							// 【挖不动就换下一格,别整个退出】。原来是 `if (!Dig(...)) return;`
 							// Dig 在够不着/挖不动/被 OnLine 拦时返回 false,一 false 整个循环就没了
 							else if (!ClearWay.Dig(p, dx, dy, "捅向导"))
 							{
@@ -588,7 +588,7 @@ namespace TerraBlind
 							int pgy = (int)((pgn.position.Y + pgn.height + 2f) / 16f);
 							int topDug = int.MaxValue;
 							foreach (var d in _dug) if (d.y < topDug) topDug = d.y;
-							// 等他掉远。但【只等 PatchWait 帧】—— 他要是卡在洞口不动,
+							// 等他掉远。但【只等 PatchWait 帧】。他要是卡在洞口不动,
 							// 一直等下去就是把洞永远留着,桥面有个窟窿人后面还要走
 							if (pgy < topDug + PatchClear && _frames < PatchWait)
 							{
@@ -612,7 +612,7 @@ namespace TerraBlind
 					if (_dug.Count > 0 && _frames % 120 == 1) DiagLog.Write($"[wof] 补洞({px2},{py2}) 还剩{_dug.Count}格");
 					int bid = DeckBuilder.PickBlock();
 					if (bid < 0) { DiagLog.Write("[wof] 没方块补洞了,先放着"); Go(Ph.WaitWof); return; }
-					// PlaceAnywhere 够不着会自己走过去,但行差太大它会认输 —— 那种洞补不回来,
+					// PlaceAnywhere 够不着会自己走过去,但行差太大它会认输。那种洞补不回来,
 					// 与其卡在这儿不如放掉,桥面已经通了(挖的是向导脚下那一列)
 					if (System.Math.Abs(ActExecutor.OriginCy(p) - py2) > 4)
 					{

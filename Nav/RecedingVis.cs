@@ -7,7 +7,7 @@ using Terraria.UI.Chat;
 
 namespace TerraBlind
 {
-    // Receding-horizon visualization — shows the DECISION at the current node, so the algorithm is legible and a
+    // Receding-horizon visualization, shows the DECISION at the current node, so the algorithm is legible and a
     // stuck can be diagnosed by eye. Every step the planner asks "from here, which action?"; this draws that:
     //   • WHITE box + H  = where I am, how far from goal (field cost)
     //   • BLUE line      = field compass: follow the gradient downhill to the goal (global direction)
@@ -83,7 +83,7 @@ namespace TerraBlind
             if (ttl > 0)
             {
                 bool stuck = chosen == null && cands.Count > 0;
-                // the point: where the next step lands — yellow normally, red when nothing can lower H
+                // the point: where the next step lands, yellow normally, red when nothing can lower H
                 var pt = chosen ?? (curCx, curCy);
                 Box(sb, pt.Item1, pt.Item2, stuck ? new Color(255, 40, 40, 240) : new Color(255, 230, 0, 230));
                 if (chosen.HasValue)

@@ -3,21 +3,21 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// COMMITMENT — the fix for greedy's short memory.
+	// COMMITMENT, the fix for greedy's short memory.
 	//
 	// Receding selection re-asks "which neighbour has the lowest H?" every single cycle, having forgotten why it
 	// walked here. In a basin that question flip-flops: at H=366 the best neighbour is 367, and from 367 the best
 	// neighbour is 366. Every step is locally optimal and the pair goes nowhere. Meanwhile all three ways out that
-	// a human sees at a glance — drop down the shaft, climb west, mine through — start by making H WORSE, so
+	// a human sees at a glance, drop down the shaft, climb west, mine through, start by making H WORSE, so
 	// per-step selection rejects every one of them, forever.
 	//
 	// A human escapes not by evaluating better but by DECIDING ONCE: "I'm going down," and then going down even
-	// though it looks worse halfway. So: when the loop detector fires, pick a target that is genuinely better —
-	// the nearest cell whose H is meaningfully below here — and commit to reaching it. Until it is reached, the
+	// though it looks worse halfway. So: when the loop detector fires, pick a target that is genuinely better
+	// the nearest cell whose H is meaningfully below here, and commit to reaching it. Until it is reached, the
 	// planner routes to THAT cell and rising H along the way is not a reason to reconsider.
 	//
 	// Only two things end a commitment early: arriving, or failing to make progress toward it. Note what is NOT on
-	// that list — H getting worse. That is expected; it is the entire point.
+	// that list, H getting worse. That is expected; it is the entire point.
 	public static class Commitment
 	{
 		public static bool Active { get; private set; }
@@ -39,7 +39,7 @@ namespace TerraBlind
 		const int FailRadius = 3;      // 一个目标到不了,它周围这一圈也别再试了
 		// A target that cannot be reached shows itself fast: distance oscillated 14→10→14→10 for twenty cycles
 		// against the first commitment, closing to 10 and bouncing back every time. Ten cycles of no new best is
-		// already conclusive — the point of committing is to stop dithering, not to keep failing longer.
+		// already conclusive, the point of committing is to stop dithering, not to keep failing longer.
 		const int StaleCycles = 10;
 
 		static readonly HashSet<(int, int)> _failed = new();
@@ -54,7 +54,7 @@ namespace TerraBlind
 
 		// Look for somewhere worth committing to. Judge candidates by FIELD COST, not by how close they look:
 		// straight-line distance knows nothing about what lies between. Committing to the nearest qualifying cell
-		// picked (977,550) — ten cells west, through terrain the body could not cross — and burned ten cycles
+		// picked (977,550), ten cells west, through terrain the body could not cross, and burned ten cycles
 		// bouncing off it before falling back to (987,535), twelve cells straight up, which was reached in six.
 		//
 		// H already prices the crossing: it is the field's own cost-to-goal, so a cell whose H is far below here is
@@ -65,7 +65,7 @@ namespace TerraBlind
 			var field = MazeWand.PeekField();
 			if (field == null) return false;
 			// One pass over the field, not a ring scan outward: the field is a dictionary of the cells that exist,
-			// while scanning rings visits every coordinate in a 121×121 box — ~900k lookups on the main thread,
+			// while scanning rings visits every coordinate in a 121×121 box, ~900k lookups on the main thread,
 			// each calling CanStand, which is its own three tile reads. Iterate what is there and keep the nearest
 			// qualifying cell. CanStand is checked LAST, only for cells that already pass the cheap tests.
 			// 【完全不看 H】。H 在这个坑里指的就是死方向 --- 承诺再拿 H 选目标,
@@ -142,7 +142,7 @@ namespace TerraBlind
 				Clear();
 				return false;
 			}
-			// progress is measured against the TARGET, not against H — H is allowed to get worse the whole way
+			// progress is measured against the TARGET, not against H, H is allowed to get worse the whole way
 			if (d < _bestDist) { _bestDist = d; _sinceProgress = 0; }
 			else _sinceProgress++;
 			_cycles++;

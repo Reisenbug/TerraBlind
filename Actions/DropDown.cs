@@ -4,12 +4,12 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// DROP — fall down through the platform underfoot to the solid ground below. Standing on a platform, holding
+	// DROP, fall down through the platform underfoot to the solid ground below. Standing on a platform, holding
 	// controlDown makes vanilla drop the player through it (Player.cs `fallThrough = controlDown`, instant). Used to
 	// come down off a roof onto the foundation.
 	//
 	// Ends on a world fact: standing (velocity.Y == 0) on a SOLID tile (not a platform we could keep falling through).
-	// No frame count — the fall takes as long as it takes at whatever gravity is in effect.
+	// No frame count, the fall takes as long as it takes at whatever gravity is in effect.
 	public static class DropDown
 	{
 		private static bool _running;
@@ -59,7 +59,7 @@ namespace TerraBlind
 			int cy = ActExecutor.OriginCy(p);
 
 			// LANDED ON SOLID GROUND = done. Grounded, moved down from the start, and the tile just below the feet is
-			// SOLID (not a platform — landing on a platform we would just keep dropping through).
+			// SOLID (not a platform, landing on a platform we would just keep dropping through).
 			// 到了指定行就停:再往下穿就得重爬一遍
 			if (cy >= _stopCy && p.velocity.Y == 0f)
 			{
