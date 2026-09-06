@@ -33,3 +33,34 @@ Keybinds: {
 	TestReachWork.DisplayName: Test Reach Work
 	ShowMinima.DisplayName: Show Minima
 }
+
+Configs: {
+	Config: {
+		DisplayName: TerraBlind
+
+		Headers: {
+			Assist: Assists
+			Debug: Debug
+		}
+
+		FreezeLavaUnderFeet: {
+			Label: Freeze lava underfoot
+			Tooltip: Turns the lava surface you are about to land on into a block, spending one from your inventory. Off by default, since it changes your world without being asked.
+		}
+
+		AlwaysGillsAndShine: {
+			Label: Always Gills and Shine
+			Tooltip: Keeps the Gills and Shine buffs refreshed every frame, so the run does not drown or walk blind.
+		}
+
+		ShowOverlay: {
+			Label: Show debug overlay
+			Tooltip: Draws the bridge line, house box and treasure markers over the world. Turn it off before recording.
+		}
+
+		ShowPlannerTrails: {
+			Label: Show planner trails
+			Tooltip: Also draws the A* search dots and jump arcs. Dense enough to hide the terrain underneath.
+		}
+	}
+}
