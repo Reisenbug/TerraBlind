@@ -60,6 +60,7 @@ namespace TerraBlind
 		private static readonly ConcurrentQueue<bool> _hellRunQueue = new();
 		private static readonly ConcurrentQueue<bool> _startRunQueue = new();
 		public static string StartRunStart = "";   // 主线程跑完写这里,给 /start_run_status 读
+		private static volatile bool _haltPending;   // /halt 置位,主线程下一帧执行
 		public static string HellRunStart = "";   // 主线程跑完写这里,给 /hell_run_status 读
 		// 上一次开箱的结果,给 /interact 的调用方看。以前拒绝是静默 continue,外面只知道"没开",不知道为什么。
 		public static volatile string LastInteract = "idle";
@@ -85,6 +86,8 @@ namespace TerraBlind
 			}
 
 			if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
+
+			if (_haltPending) { _haltPending = false; Halt.All(); }
 
 			PerceptionDiff.Tick();   // eye B-path: push salient world-change events to the agent (silent otherwise)
 			SurvivalReflex.Tick();   // hand reflex: stay alive (jump out of lava / quick-heal) while any action runs
@@ -2605,6 +2608,8 @@ namespace TerraBlind
 					: srj;
 			}
 			else if (path == "/start_run_stop") { StartRun.Stop(); body = "{\"ok\":true}"; }
+			// 【交主线程】。Halt 要停 30 多个原语、动控制权锁,在 HTTP 线程上跑会和主线程撞
+			else if (path == "/halt") { _haltPending = true; body = "{\"ok\":true}"; }
 			else if (path == "/hell_run")
 			{
 				// 地狱全套,编排都在 mod 里;真正的活要读地形,所以这里只入队交给主线程。
