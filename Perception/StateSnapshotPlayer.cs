@@ -443,10 +443,12 @@ namespace TerraBlind
 		{
 			if (Player != Main.LocalPlayer) return;
 			Concessions.LongArmKeep();
-			// 【演示用常驻】:鱼鳃(掉水里不淹死)和光芒(地狱和洞里看得清)。
-			// 每帧续时长,和 vanilla 装备给 buff 是同一个路子
-			Player.AddBuff(BuffID.Gills, 2, quiet: true);
-			Player.AddBuff(BuffID.Shine, 2, quiet: true);
+			// 演示用常驻:鱼鳃(掉水里不淹死)和光芒(地狱和洞里看得清)。每帧续时长
+			if (Config.I.AlwaysGillsAndShine)
+			{
+				Player.AddBuff(BuffID.Gills, 2, quiet: true);
+				Player.AddBuff(BuffID.Shine, 2, quiet: true);
+			}
 		}
 
 		public override void SetControls()

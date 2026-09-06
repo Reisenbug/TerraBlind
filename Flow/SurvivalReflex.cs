@@ -24,9 +24,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { _firedThisEmergency = false; _prevPx = float.NaN; return; }
 
-			// 【一帧动了几百格 = 不是物理,是传送或者碰撞崩了】。DragonLens 右键地图传送之后
-			// 人以巨大速度往左飞,这里把那一帧的真实数字打出来:到底是坐标被写了,
-			// 还是速度被写了,还是碰撞箱是 0 导致推出量算炸。猜不出来就量。
+			// 一帧动了几百格 = 传送或碰撞崩了。把那一帧的真实数字打出来,猜不出来就量
 			if (!float.IsNaN(_prevPx))
 			{
 				float dpx = p.position.X - _prevPx, dpy = p.position.Y - _prevPy;
@@ -38,19 +36,8 @@ namespace TerraBlind
 			}
 			_prevPx = p.position.X; _prevPy = p.position.Y;
 
-			// 【不能只看 lavaWet】。零点几格的岩浆照样把人困住(行为和满格岩浆没区别),
-			// 而那种深度下 lavaWet 可能已经是假的 -- 堤会提前停手,人还泡在里面出不来。
-			// 判据改成:碰撞箱盖到的格子里【一滴岩浆都不许有】。
-			// 【人卡进方块里一律不管】。写过一个"刨掉身体里的方块"的反射,后果是:
-			// 人传送进石头 -> 每帧刨 -> 人往下掉一点又进新方块 -> 又刨,
-			// vanilla 的碰撞在"方块突然消失"和"人还在里面"之间反复解算,
-			// 速度每帧被放大约 1.75 倍 -> 一帧几百格飞出地图。
-			// 卡进方块是原版自己会处理的事(它有挤出逻辑),别插手。
-
-			// 【碰到之前先凝固液面】。排在所有岩浆处理【最前面】:人还没进岩浆时
-			// 只要改一格就站住了,进去之后就得跟浮力赛跑,深池根本出不来。
-			// 不抢锁。它不碰控制键也不走 PlaceAction,只改一格地形
-			Concessions.FreezeLavaBeneath(p);
+			// 碰到之前先凝固液面,排在所有岩浆处理最前面:进去之后就得跟浮力赛跑,深池出不来
+			if (Config.I.FreezeLavaUnderFeet) Concessions.FreezeLavaBeneath(p);
 
 			bool touchingLava = TouchesLava(p);
 			bool inLava = p.lavaWet || touchingLava;
@@ -69,9 +56,7 @@ namespace TerraBlind
 			if (inLava || lowHp)
 				p.QuickHeal();
 
-			// MELEE REFLEX: an enemy INSIDE arm's reach gets a swing, at that range whacking it for a few frames
-			// beats continuing the dig/walk. Pure reflex, no chasing, no tactics: the moment it leaves the ring we
-			// stop touching the controls, and the encounter-level decision (clear it properly / flee) stays upstream.
+			// 够得着的敌人就挥两下。纯反射,不追不打策略,出了圈立刻松手
 			var foe = MeleeReflexEnabled ? ClosestFoe(p, 3.5f * 16f) : null;
 			if (foe != null)
 			{
@@ -100,11 +85,8 @@ namespace TerraBlind
 			}
 		}
 
-		// 岩浆里往脚下堤方块。一格一格垫,直到 lavaWet 消失。
-		//
-		// 放置本身走 PlaceAction(它管选槽/搬到热键栏/瞄准),按下去那一帧
-		// Concessions.ClearLavaForPlacement 会抹掉目标格的液体 -- 没有它 vanilla 的
-		// CheckLavaBlocking 会一路拒到底(方块是 tileSolid,连 tileLavaDeath 都问不到)。
+		// 岩浆里往脚下堤方块,一格一格垫到 lavaWet 消失。放置走 PlaceAction,
+		// 按下去那帧 ClearLavaForPlacement 抹掉液体,否则 vanilla 的 CheckLavaBlocking 一路拒
 		static int _leveeWait;
 
 		// 碰撞箱碰到岩浆没有。【一滴都算】 -- 零点几格的岩浆和满格一样能困住人,

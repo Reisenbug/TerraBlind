@@ -2,8 +2,8 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// /vis on|off --- 调试图层的总开关。拍视频时关掉:A* 轨迹、跳跃/挖掘/放置的色块、
-	// 地狱桥线那层蓝格都会盖住真实地形
+	// /vis on|off, 调试图层的总开关。开关本身在模组配置里,这条命令只是游戏内的快捷方式:
+	// 录像时要临时关掉,不想为此退出去开配置界面
 	public class VisCommand : ModCommand
 	{
 		public override CommandType Type => CommandType.Chat;
@@ -19,6 +19,7 @@ namespace TerraBlind
 			}
 			PathVisSystem.Enabled = args[0] != "off" && args[0] != "0";
 			caller.Reply(PathVisSystem.Enabled ? "调试图层开了。" : "调试图层关了,画面干净了。");
+			caller.Reply("(只改这一局。要长期改,在模组配置里)");
 		}
 	}
 }

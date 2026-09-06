@@ -111,7 +111,8 @@ namespace TerraBlind
 
         // 【总闸】。调试图层有 39 个来源(A* 轨迹/挖放色块/桥线蓝格...),拍视频时它们
         // 会盖住真实地形。开关放在唯一的绘制出口,一处管全部 -- 逐个来源加判断必漏
-        public static bool Enabled = true;   // 默认开,录像前 /vis off
+        // 开关的家在模组配置里,这两个字段是运行时副本(/vis 也写它们)
+        public static bool Enabled = true;
         // A* 的轨迹/探索点/落点那几层单独关:它们最密,盖信息最多,平时只要建造类色块
         public static bool ShowPlanner = false;
 
