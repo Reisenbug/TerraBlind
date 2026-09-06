@@ -43,8 +43,7 @@ namespace TerraBlind
                 sb.Append("]}");
                 string json = sb.ToString();
 
-                var dir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile)
-                    + "/Library/Application Support/Terraria/tModLoader/TerraBlindLogs";
+                var dir = LogRoot.Root;
                 try { Directory.CreateDirectory(dir); File.WriteAllText(dir + "/human_rec.json", json); } catch { }
 
                 PathVisSystem.SetSSPath(new List<(float, float, bool)>(_trail), new List<(float, float)>(), 0, 0);
@@ -104,9 +103,7 @@ namespace TerraBlind
                     DiagLog.Write($"[rec-place] tile=({tcx},{tcy})");
                 }
 
-                // mining event: detect tiles that actually disappeared (HasTile last frame → gone now) in a small
-                // box around the player. ground truth, independent of cursor / SmartCursor / reach, which made the
-                // recorded cell drift along the dig direction.
+                // 挖掘事件按【真的消失了的格】记,不看光标。看光标会让记录的格沿挖掘方向漂
                 int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
                 var nowSolid = new HashSet<(int, int)>();
                 for (int x = pcx - MineWatchRadius; x <= pcx + MineWatchRadius; x++)

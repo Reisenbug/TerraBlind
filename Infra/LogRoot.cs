@@ -14,6 +14,9 @@ namespace TerraBlind
 	{
 		static string _dir;
 
+		// 所有日志的根。跨平台由 Main.SavePath 决定,绝不自己拼绝对路径
+		public static string Root => Path.Combine(Main.SavePath, "TerraBlindLogs");
+
 		public static string Dir
 		{
 			get
@@ -21,7 +24,7 @@ namespace TerraBlind
 				if (_dir != null) return _dir;
 				try
 				{
-					string root = Path.Combine(Main.SavePath, "TerraBlindLogs");
+					string root = Root;
 					_dir = Path.Combine(root, DateTime.Now.ToString("MMdd_HHmmss"));
 					Directory.CreateDirectory(_dir);
 					Point(root, _dir);

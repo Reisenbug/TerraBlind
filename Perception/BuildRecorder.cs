@@ -62,8 +62,7 @@ namespace TerraBlind
             {
                 _recording = false;
                 string json = BuildJson();
-                var dir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile)
-                    + "/Library/Application Support/Terraria/tModLoader/TerraBlindLogs";
+                var dir = LogRoot.Root;
                 try { Directory.CreateDirectory(dir); File.WriteAllText(dir + "/build_rec.json", json); } catch { }
 
                 // GHOST preview: draw the captured structure as faint real-tile sprites (placements) + red outlines
