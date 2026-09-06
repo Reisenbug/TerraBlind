@@ -1,1 +1,36 @@
-Exposes Terraria game state (player, inventory, buffs) over local HTTP for an external Python agent.
+把泰拉瑞亚的寻路、建造、战斗拆成一套工具,并用它们串出一条从新世界开局到打死肉山的完整流程。
+
+寻路核心:走、跳、挖、放平台统一按帧数标价(帧数来自照着源码还原的物理引擎),
+每一步把所有动作模拟一遍,挑"落点离目标最近 + 这步最便宜"的那个。贪心跑主路,卡住时 A* 接管。
+
+聊天命令:
+  /start  跑完整流程
+  /halt   急停,停掉全流程和所有正在跑的动作
+  /vis    调试图层开关(录像前关掉)
+
+模组配置里可以开关辅助项(岩浆凝固、常驻 buff)和调试图层
+
+需要配合 DragonLens 使用(关刷怪/无敌/倍速)。
+
+源码与说明:https://github.com/Reisenbug/TerraBlind
+
+---
+
+A toolbox of pathfinding, building and combat primitives for Terraria, wired by hand into one
+pipeline that runs from a fresh world all the way to killing the Wall of Flesh.
+
+Pathfinding: walking, jumping, mining and platform-placing are all priced in frames, taken from
+a physics engine reconstructed off the game's source. Every step simulates all of them and picks
+the one whose landing is closest to the goal for the least cost. Greedy drives the route; A*
+takes over the moment it gets stuck.
+
+Chat commands:
+  /start  run the whole pipeline
+  /halt   emergency stop, kills the pipeline and every running action
+  /vis    toggle the debug overlay (turn it off before recording)
+
+Mod config toggles the assists (lava freezing, always-on buffs) and the debug overlay.
+
+Requires DragonLens (disable spawns / godmode / fast-forward).
+
+Source and details: https://github.com/Reisenbug/TerraBlind

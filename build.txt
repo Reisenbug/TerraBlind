@@ -1,3 +1,6 @@
 displayName = TerraBlind
 author = Stardust
 version = 0.1
+homepage = https://github.com/Reisenbug/TerraBlind
+includeSource = true
+buildIgnore = *.csproj, *.user, *.sh, *.md, .git*, .vs*, .claude*, .DS_Store, obj\*, bin\*, docs\*
