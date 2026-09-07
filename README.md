@@ -15,7 +15,7 @@ This project was developed entirely with the assistance of AI.
 
 ### 演示视频
 
-[![14 分钟击败肉山](https://img.youtube.com/vi/5fHr4ESr6os/maxresdefault.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
+[![14 分钟击败肉山](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
 
 **[哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/)** · [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os)
 
@@ -171,7 +171,7 @@ MIT
 
 ### Demo
 
-[![Wall of Flesh in 14 minutes](https://img.youtube.com/vi/5fHr4ESr6os/maxresdefault.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os)
+[![Wall of Flesh in 14 minutes](docs/cover-zh.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os)
 
 **[YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os)** · [Bilibili](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
 
