@@ -9,9 +9,9 @@ A tModLoader mod: a toolbox of perception, pathfinding, building and combat prim
 This project was developed entirely with the assistance of AI.
 ![status](https://img.shields.io/badge/milestone-Wall%20of%20Flesh-red) ![ai](https://img.shields.io/badge/AI-none%20yet-lightgrey) ![tml](https://img.shields.io/badge/tModLoader-1.4.4.9-blue)
 
-[![14 分钟击败肉山 / Wall of Flesh in 14 minutes](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
-
-[哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) · [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os)
+| [![14 分钟击败肉山](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [![Wall of Flesh in 14 minutes](docs/cover-en.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os) |
+|:---:|:---:|
+| [哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os) |
 
 从 `/start` 到击败肉山，全程 14 分 15 秒（三倍速下）。
 From `/start` to a dead Wall of Flesh in 14 minutes 15 seconds (at 3x speed).
