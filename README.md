@@ -13,6 +13,14 @@ This project was developed entirely with the assistance of AI.
 
 ## 中文
 
+### 演示视频
+
+[![14 分钟击败肉山](https://img.youtube.com/vi/5fHr4ESr6os/maxresdefault.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
+
+**[哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/)** · [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os)
+
+从 `/start` 到击败肉山，全程 14 分 15 秒（三倍速下）。
+
 ### 这是什么
 
 TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准、使用物品、开箱、放平台、盖房，等等。
@@ -160,6 +168,14 @@ MIT
 ---
 
 ## English
+
+### Demo
+
+[![Wall of Flesh in 14 minutes](https://img.youtube.com/vi/5fHr4ESr6os/maxresdefault.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os)
+
+**[YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os)** · [Bilibili](https://www.bilibili.com/video/BV1PmbP6ZEJc/)
+
+From `/start` to a dead Wall of Flesh in 14 minutes 15 seconds (at 3x speed).
 
 ### What this is
 
