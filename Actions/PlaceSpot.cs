@@ -31,13 +31,16 @@ namespace TerraBlind
 			}
 
 			int x0 = wx - data.Origin.X, y0 = wy - data.Origin.Y;
-			// 1) 占位范围内不许有别的东西
+			// 1) 占位范围内不许有【挡得住的】东西。
+			// 【判据抄 vanilla TileObject.CanPlace:346】,别用 HasTile:草/藤/小花这些 tileCut 的,
+			// 放置时会被直接顶掉,vanilla 放行。用 HasTile 判会比原版严,把站在草地上放工作台
+			// 判成"占位里有东西",然后白跑一趟 Unstick 去挖草。
 			for (int dx = 0; dx < data.Width; dx++)
 				for (int dy = 0; dy < data.Height; dy++)
 				{
 					int x = x0 + dx, y = y0 + dy;
 					if (!Predicates.InBounds(x, y)) { why = new Blocker(BlockKind.Hopeless, x, y, "越界"); return false; }
-					if (Main.tile[x, y].HasTile)
+					if (Blocks(x, y))
 					{ why = new Blocker(BlockKind.Terrain, x, y, "占位里有东西"); return false; }
 				}
 
@@ -62,6 +65,19 @@ namespace TerraBlind
 			// 3) 前两条都过了还是放不下,交给 vanilla 说最终的话
 			if (!TileObject.CanPlace(wx, wy, type, probe.placeStyle, 1, out _, onlyCheck: true))
 			{ why = new Blocker(BlockKind.Hopeless, wx, wy, "vanilla 说放不了"); return false; }
+			return true;
+		}
+
+		// 这一格挡不挡得住放置。照抄 vanilla TileObject.CanPlace 里那一行:
+		// active() && (!tileCut || 484/654) && !BreakableWhenPlacing
+		public static bool Blocks(int x, int y)
+		{
+			if (!Predicates.InBounds(x, y)) return true;
+			var t = Main.tile[x, y];
+			if (!t.HasTile) return false;
+			int ty = t.TileType;
+			if (Main.tileCut[ty] && ty != 484 && ty != 654) return false;   // 草/藤,放置时顶掉
+			if (TileID.Sets.BreakableWhenPlacing[ty]) return false;
 			return true;
 		}
 
