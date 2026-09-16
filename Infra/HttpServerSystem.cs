@@ -1758,6 +1758,43 @@ namespace TerraBlind
 							  : "{\"accepted\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 				}
 			}
+			// /place_at 只是对着那格挥一下,放不上就放不上;这个会自己挪脚、让位、挖墙、接锚点链
+			else if (path == "/place_anywhere")
+			{
+				string paBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					paBody = sr.ReadToEnd();
+				var pab = paBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
+				var paIt = System.Text.RegularExpressions.Regex.Match(pab, "\"item\"\\s*:\\s*\"([^\"]*)\"");
+				var paAt = System.Text.RegularExpressions.Regex.Match(pab, "\"world\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
+				if (!paIt.Success || !paAt.Success)
+				{
+					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_anywhere {\\\"item\\\":\\\"工作台\\\",\\\"world\\\":[2107,260]}\"}";
+					status = 400;
+				}
+				else if (PlaceAnywhere.IsRunning)
+				{
+					body = "{\"accepted\":false,\"reason\":\"busy\"}";
+				}
+				else
+				{
+					bool paOk = PlaceAnywhere.Start(paIt.Groups[1].Value,
+						int.Parse(paAt.Groups[1].Value), int.Parse(paAt.Groups[2].Value), out string paWhy);
+					body = paOk ? "{\"accepted\":true,\"note\":\"poll /place_anywhere_status\"}"
+								: "{\"accepted\":false,\"reason\":\"" + JsonEsc(paWhy) + "\"}";
+				}
+			}
+			else if (path == "/place_anywhere_status")
+			{
+				body = "{\"outcome\":\"" + JsonEsc(PlaceAnywhere.Outcome) + "\""
+					 + ",\"running\":" + (PlaceAnywhere.IsRunning ? "true" : "false")
+					 + ",\"reason\":\"" + JsonEsc(PlaceAnywhere.Reason) + "\"}";
+			}
+			else if (path == "/place_anywhere_stop")
+			{
+				PlaceAnywhere.Stop();
+				body = "{\"ok\":true}";
+			}
 			// /rope_ladder, build a rope column N tall from where the player stands. Place as far as the arm reaches,
 			// climb the rope just placed, repeat. Both phases end on a world fact, so it holds up at any move speed.
 			else if (path == "/rope_ladder")

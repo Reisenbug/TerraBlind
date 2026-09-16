@@ -56,11 +56,37 @@ namespace TerraBlind
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
+			// 【先问有没有货,再谈放哪儿】。Build() 只做几何搜索,它不知道背包里有没有这件东西,
+			// 所以手上没料时报出来的是"接不到任何有锚的地方" -- 一句几何措辞,把调用方指向
+			// 找更宽敞的地方,而真相是根本没得放。现场:背包里没工作台,报锚点问题,人白跑一趟。
+			if (PlaceAction.ResolveSlot(itemName) < 0)
+			{ why = $"背包里没有{itemName}"; Outcome = "no_item"; Reason = why;
+			  DiagLog.Write($"[placeany] NO_ITEM {itemName}"); return false; }
 			// 岩浆格现在放得下 -- 按下去那一帧会先抹掉液体(Concessions.ClearLavaForPlacement)。
 			// 只有【会被烧掉】的东西还得拦:平台放进去当场没,人以为搭上了其实还在往下掉
 			if (Predicates.IsLava(tx, ty) && Concessions.BurnsInLava(_item))
 			{ why = $"({tx},{ty})是熔岩,{_item}放进去会被烧掉"; Outcome = "stuck"; Reason = why;
 			  DiagLog.Write($"[placeany] STUCK {why}"); return false; }
+			// 【多格家具走 vanilla 的判据,不走单格锚点】。HasAnchor/BlockAnchor 是给方块平台用的
+			// (四邻随便哪格有东西就算有锚),而工作台这种 2x1 要的是【每一列正下方都有合格支撑】。
+			// 拿单格尺子量家具,放不上时还报"四周没锚点",把调用方指去找更宽敞的地方 --- 而真相
+			// 往往只是左半边下面空了一格,补一块就能放。现场:(2001,326) 放工作台,(2001,327) 悬空。
+			if (IsMultiCell(out int furnId))
+			{
+				if (!PlaceSpot.Check(furnId, tx, ty, PlaceSpot.Fill.Block, out var fb))
+				{
+					// 交给 unstick:NoFooting 会补一格支撑,Terrain 会挖掉挡路的,够不着会走过去。
+					// 它接手了就让相位机空转等它解完,下一帧 Start 会重来
+					if (Unstick.Handle("placeany-furn", fb))
+					{ Outcome = "running"; _ph = Ph.Step; _chain.Clear(); _chain.Add((tx, ty)); return true; }
+					why = fb.ToString(); Outcome = "stuck"; Reason = why;
+					DiagLog.Write($"[placeany] STUCK 家具放不下 {why}"); return false;
+				}
+				// vanilla 说放得下:不用接链,直接挥
+				_chain.Clear(); _chain.Add((tx, ty)); _ph = Ph.Step;
+				DiagLog.Write($"[placeany] 家具({tx},{ty}) vanilla 判可放,直接放");
+				return true;
+			}
 			if (!Build(out why)) { Outcome = "stuck"; Reason = why; DiagLog.Write($"[placeany] STUCK {why}"); return false; }
 			DiagLog.Write($"[placeany] ({tx},{ty}) 要接{_chain.Count}格,从({_chain[0].x},{_chain[0].y})起");
 			_ph = Ph.Step;
@@ -78,6 +104,19 @@ namespace TerraBlind
 		// 绝不另写第三份(写过一次 3x3 的,7 格全判反)
 		static bool HasAnchor(int x, int y)
 			=> PlacingPlatform() ? MazeWand.PlatformAnchor(x, y) : MazeWand.BlockAnchor(x, y);
+
+		// 手上这件是不是【多格家具】(工作台/熔炉/铁砧/桌椅)。判据问 vanilla 的 TileObjectData:
+		// 有 data 就是多格对象,没有就是方块/平台这种单格的。不硬编尺寸表。
+		static bool IsMultiCell(out int itemId)
+		{
+			itemId = -1;
+			int slot = PlaceAction.ResolveSlot(_item);
+			if (slot < 0) return false;
+			var it = Main.LocalPlayer?.inventory[slot];
+			if (it == null || it.IsAir || it.createTile < 0) return false;
+			itemId = it.type;
+			return Terraria.ObjectData.TileObjectData.GetTileData(it.createTile, it.placeStyle) != null;
+		}
 
 		static bool PlacingPlatform()
 		{
@@ -302,6 +341,40 @@ namespace TerraBlind
 			{
 				Outcome = "done"; _ph = Ph.Done;
 				DiagLog.Write($"[placeany] DONE ({_tx},{_ty}) 接了{_idx}格");
+				return;
+			}
+			// 边放边可能用光(铺链最费料)。用光了立刻说"没货了",别接着耗到超时再报几何原因
+			if (PlaceAction.ResolveSlot(_item) < 0)
+			{
+				Outcome = "no_item"; Reason = $"{_item}用完了,接到第{_idx}/{_chain.Count}格";
+				_ph = Ph.Idle;
+				DiagLog.Write($"[placeany] NO_ITEM 半路用完 {_item}");
+				return;
+			}
+			// 【家具每轮都要重问 vanilla】。Start 里交给 unstick 去补支撑之后就回到这儿了,
+			// 而支撑是下一帧才补上的。不重查就会拿着"还没补好"的现场去挥,挥空一轮又一轮。
+			// 查过合格才放手让下面的流程挥。
+			if (IsMultiCell(out int furnId2))
+			{
+				if (!PlaceSpot.Check(furnId2, _tx, _ty, PlaceSpot.Fill.Block, out var fb2))
+				{
+					if (Unstick.Handle("placeany-furn", fb2)) { Mark("等家具的坑填好"); return; }
+					Fail($"家具放不下:{fb2}");
+					return;
+				}
+				// 合格了:人别压着,够得着就挥
+				if (InBody(p, _tx, _ty)) { if (StepAside(p, _tx, _ty, out _)) { _ph = Ph.Move; } return; }
+				if (!Reach.CanPlace(p, _tx, _ty))
+				{
+					if (Unstick.Handle("placeany-furn", new Blocker(BlockKind.OutOfReach, _tx, _ty, "放家具够不着")))
+					{ Mark("靠近家具位"); return; }
+					Fail($"够不着({_tx},{_ty})");
+					return;
+				}
+				if (!ItemUseCoordinator.IsActive)
+					ItemUseCoordinator.Start(new ItemUseRequest
+					{ TargetWx = _tx, TargetWy = _ty, Slot = PlaceAction.ResolveSlot(_item), DurationTicks = 0, Strict = false });
+				Mark("放家具");
 				return;
 			}
 			// 【交栈之后要让路】:Unstick 会派 pillar/平台梯去造落脚点,它们自己按方向键。
