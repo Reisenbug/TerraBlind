@@ -421,6 +421,18 @@ namespace TerraBlind
             // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
             if (Trap.JustTrapped)
             {
+                // 【只观测,不接管】。下面那几条既判断又动手(TryEscape 开搜就返回、Unstick 直接派活),
+                // 换成 switch 会把副作用做两遍。先让它跟着跑,对不对看日志
+                Triage.Observe(new StuckScene
+                {
+                    Cx = Trap.JustAt.x, Cy = Trap.JustAt.y,
+                    GoalWx = _goalWx, GoalWy = _goalWy,
+                    CurH = Trap.JustH,
+                    FootBlockCol = Trap.FootBlockCol, FootBlockRow = Trap.FootBlockRow,
+                    TrapEscapeBusy = TrapEscape.Busy,
+                    CommitmentActive = Commitment.Active,
+                    AnyPhysicsEdge = res != null && res.Steps.Count > 0,
+                });
                 var escField = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
                 if (escField != null
                     && TrapEscape.TryEscape(escField, Trap.JustAt.x, Trap.JustAt.y, Trap.JustH, _goalWx, _goalWy))

@@ -9,12 +9,11 @@ namespace TerraBlind
 	{
 		public int Cx, Cy;             // 人脚下那一格
 		public int GoalWx, GoalWy;     // 这一段导航的终点
-		public int CurH, GoalH;        // 当前格势能 / 终点格势能
+		public int CurH;               // 当前格势能。终点格恒为 0,不用带
 		public int FootBlockCol, FootBlockRow;   // 脚下挖不动的那一列,-1 = 没有
 		public bool TrapEscapeBusy;    // A* 后台还在搜
 		public bool CommitmentActive;  // 已经在承诺里了
 		public bool AnyPhysicsEdge;    // 物理候选一条都发不出来 = 真封死
-		public int SameCellFrames;     // 在这一格待了多少帧
 
 		// 9x9 地形。中心是人脚下那格。'#'实心 '='平台 '~'岩浆 '.'空
 		public static string Terrain(int cx, int cy, int r = 4)
@@ -51,8 +50,6 @@ namespace TerraBlind
 			sb.Append("{\"player_cell\":[").Append(Cx).Append(',').Append(Cy).Append(']')
 			  .Append(",\"goal_cell\":[").Append(GoalWx).Append(',').Append(GoalWy).Append(']')
 			  .Append(",\"potential_here\":").Append(CurH)
-			  .Append(",\"potential_at_goal\":").Append(GoalH)
-			  .Append(",\"frames_stuck_in_this_cell\":").Append(SameCellFrames)
 			  .Append(",\"unmineable_under_foot\":").Append(FootBlockDesc())
 			  .Append(",\"astar_already_searching\":").Append(TrapEscapeBusy ? "true" : "false")
 			  .Append(",\"commitment_already_active\":").Append(CommitmentActive ? "true" : "false")
