@@ -524,6 +524,10 @@ namespace TerraBlind
 					status = 400;
 				}
 			}
+			else if (path == "/mine_status")
+			{
+				body = MineCoordinator.StatusJson();
+			}
 			else if (path == "/mine_stop")
 			{
 				MineCoordinator.Stop();

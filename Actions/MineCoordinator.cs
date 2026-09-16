@@ -27,17 +27,50 @@ namespace TerraBlind
 
 		public static bool IsActive => _active != null;
 
+		// 【五个退出点原来全是静默 _active=null】,调用方只能看 IsActive 从 true 变 false,
+		// 分不清"挖通了"和"够不着放弃了"。于是 agent 那边宁可用 use_item 一格格怼也不用 /mine。
+		// outcome: running done out_of_box stalled no_tiles unbreakable out_of_reach no_pickaxe stopped
+		public static string Outcome = "idle";
+		public static string Reason = "";
+		public static int MinedCount;
+
 		public static void Start(MineRequest r)
 		{
 			_active = r;
 			_stallFrames = 0;
 			_idleFrames = 0;
 			_lastRemaining = int.MaxValue;
+			Outcome = "running";
+			Reason = "";
+			MinedCount = 0;
 		}
 
 		public static void Stop()
 		{
+			if (Outcome == "running") Outcome = "stopped";
 			_active = null;
+		}
+
+		// 每个退出点说清自己是谁。done 之外一律带上卡在哪一格
+		static void Finish(string outcome, string reason = "")
+		{
+			Outcome = outcome;
+			Reason = reason;
+			_active = null;
+		}
+
+		public static string StatusJson()
+		{
+			var sb = new System.Text.StringBuilder();
+			sb.Append("{\"outcome\":\"").Append(Outcome).Append('"')
+			  .Append(",\"running\":").Append(_active != null ? "true" : "false")
+			  .Append(",\"mined\":").Append(MinedCount)
+			  .Append(",\"reason\":\"").Append(Reason.Replace("\\", "\\\\").Replace("\"", "\\\"")).Append('"');
+			var req = _active;
+			if (req != null)
+				sb.Append(",\"target\":[").Append(req.TargetWx).Append(',').Append(req.TargetWy).Append(']');
+			sb.Append('}');
+			return sb.ToString();
 		}
 
 		// solid INCLUDING slopes/half-bricks (mirrors StateSpacePlanner.DigSolid): anything that supports or
@@ -54,10 +87,10 @@ namespace TerraBlind
 			var req = _active;
 			if (req == null) return;
 			var p = Main.LocalPlayer;
-			if (p == null || !p.active) { _active = null; return; }
+			if (p == null || !p.active) { Finish("stopped", "no_player"); return; }
 
 			int slot = FindPickaxeSlot(p);
-			if (slot < 0) { _active = null; return; }
+			if (slot < 0) { Finish("no_pickaxe", "背包前十格没有镐"); return; }
 
 			// real-time hitbox cells, recomputed every frame so upstream landing drift can't aim mining at
 			// stale absolute coords (the bug: tiles planned from a too-shallow landing ended up overhead).
@@ -79,7 +112,7 @@ namespace TerraBlind
 			if (pcx < boxX0 || pcx > boxX1 || pfeet < boxY0 || pfeet > boxY1)
 			{
 				DiagLog.Write($"[mine] out of box dir={req.Dir} p=({pcx},{pfeet}) box=[{boxX0}..{boxX1},{boxY0}..{boxY1}] → stop");
-				_active = null;
+				Finish("out_of_box", $"人走出了起点到目标的范围,在({pcx},{pfeet})");
 				return;
 			}
 
@@ -140,7 +173,11 @@ namespace TerraBlind
 					break;
 				}
 			}
-			if (done) { _active = null; return; }
+			if (done) { Finish("done"); return; }
+
+			// remaining 变少 = 这一帧真挖掉了格子。用它累加,比事后数背包准(掉落可能还没进包)
+			if (remaining < _lastRemaining && _lastRemaining != int.MaxValue)
+				MinedCount += _lastRemaining - remaining;
 
 			// only count stalls while there's rock to remove and it isn't shrinking; remaining==0 means we're
 			// walking the opened tunnel toward the target, not stuck.
@@ -149,7 +186,7 @@ namespace TerraBlind
 			if (_stallFrames > StallMax)
 			{
 				DiagLog.Write($"[mine] stalled {StallMax}f dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) → stop");
-				_active = null;
+				Finish("stalled", $"挖了{StallMax}帧一格没掉,多半镐不够硬");
 				return;
 			}
 
@@ -164,7 +201,8 @@ namespace TerraBlind
 			{
 				if (++_idleFrames <= IdleMax) return;
 				DiagLog.Write($"[mine] 连着{IdleMax}帧扫不出要挖的格 dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) 人=({pcx},{pfeet}) → stop");
-				_active = null; _idleFrames = 0;
+				Finish("no_tiles", $"这个方向扫不出要挖的格,人在({pcx},{pfeet})");
+				_idleFrames = 0;
 				return;
 			}
 			_idleFrames = 0;
@@ -174,7 +212,7 @@ namespace TerraBlind
 			if (!Terraria.WorldGen.CanKillTile(tx, ty))
 			{
 				DiagLog.Write($"[mine] unbreakable ({tx},{ty}) dir={req.Dir} → stop");
-				_active = null;
+				Finish("unbreakable", $"({tx},{ty}) 上面压着东西,原版不许破坏,换镐没用");
 				return;
 			}
 
@@ -185,7 +223,7 @@ namespace TerraBlind
 			if (!Reach.CanMine(p, tx, ty))
 			{
 				DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → stop");
-				_active = null;
+				Finish("out_of_reach", $"够不着({tx},{ty}),人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 				return;
 			}
 
