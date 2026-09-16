@@ -2408,7 +2408,21 @@ namespace TerraBlind
 						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
 						fsb.Append("}");
 					}
-					fsb.Append("]}");
+					fsb.Append(']');
+					// 名字错在上面就 400 了,走到这儿说明名字有效。报出扫过的半径和图尺寸,
+					// 调用方才分得清"半径内没有"和"这世界没有",不用换着 max_dist 反复重扫
+					if (found.Count == 0)
+					{
+						bool whole = maxD >= Main.maxTilesX && maxD >= Main.maxTilesY;
+						fsb.Append(",\"empty\":true,\"name_valid\":true,\"searched_radius\":").Append(maxD)
+						   .Append(",\"world\":[").Append(Main.maxTilesX).Append(',').Append(Main.maxTilesY).Append(']')
+						   .Append(",\"note\":\"")
+						   .Append(whole
+							   ? "名字有效,全图扫完一个没有,这世界就是没有这种 tile,别再换距离重扫"
+							   : "名字有效,但只扫了半径 " + maxD + " 格。要确认全世界有没有,把 max_dist 开到比地图还大")
+						   .Append('"');
+					}
+					fsb.Append('}');
 					body = fsb.ToString();
 				}
 			}
