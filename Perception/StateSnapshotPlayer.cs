@@ -431,11 +431,13 @@ namespace TerraBlind
 		}
 
 		// 我们自己的动作在不在跑。判据只有这一份,别在各处各写一套
+		// 【打 boss 两层也算】。漏了就跳过清拦截,而 delayUseItem 只在 !controlUseItem 时才清
 		static bool TbAutoActive()
 			=> ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
 			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
-			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On;
+			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On
+			   || Combat.Enabled || Dodge.Enabled;
 
 		// 【必须挂这儿】:vanilla 的 SetControls 在前、ResetEffects(把 tileRangeX/Y 打回 5/4)在后,
 		// 写在 SetControls 里会被随后的 ResetEffects 冲掉
@@ -455,19 +457,8 @@ namespace TerraBlind
 		{
 			if (Player != Main.LocalPlayer) return;
 
-			// 光标压在任何 UI 上(背包、别的模组的界面)时,原版把 mouseInterface 置真,
-			// ItemCheck 里就 delayUseItem=true 把这一帧的使用吞掉(Player.cs:24410)
-			// 我们的动作全靠 controlUseItem,于是"用物品偶尔失效"。自动化在跑时清掉它
-			// delayUseItem 一旦被置真就【自锁】:原版只在 !controlUseItem 时才清它(Player.cs:23969),
-			// 而我们每帧都按着 controlUseItem。所以它永远不清,不是偶发失效是永久失效。
-			// 上一版把清除挂在 mouseInterface 上,而那个标志此刻还没被置真(24410 在 23956 之后),
-			// 于是一次都没触发。这里只认"我们自己在挥",玩家手动时不动
-			// 【所有】鼠标动作都被这两个标志拦,不只是用物品:
-			//   delayUseItem。吃掉 controlUseItem(Player.cs:23969),而且会自锁
-			//   mouseInterface。拦 controlUseTile(29679,开箱/对话/开门)、拦挥动(46962/45495)、
-			//                    拦智能光标(16188)
-			// mouseInterface 每帧在 Main.Update 里重置、UI 绘制时再置真,而 SetControls 在两者之间,
-			// 所以这里清掉的正是那些门本帧要读的值
+			// 光标压在 UI 上时 delayUseItem 吞掉这一帧的使用(Player.cs:24410),而它【自锁】:
+			// 原版只在 !controlUseItem 时清(23969),我们每帧都按着,所以是永久失效不是偶发
 			if (TbAutoActive())
 			{
 				// 只在【开始拦】和【拦完了】各记一行。原来每帧一行,光标往背包上一放就是几百行,
@@ -530,12 +521,8 @@ namespace TerraBlind
 			// 锁本身【跨帧】,这里不清活着的那些
 			AxisLock.Sweep();
 
-			// 【铺桥时这一帧被谁吃掉了】。下面那一串原语只要有一个在跑就 return,
-			// DeckBuilder.Tick 一帧都轮不到。那时它自己的心跳也不响,整段全黑,
-			// 人站着不动而日志几百帧一片空白。必须埋在链头(所有 return 之前),
-			// 真跑到 DeckBuilder.Tick 时清零;连着不清零就是被上游截了
-			// 【开箱停摆的看门狗】。照 deck 那条的样子:TreasureGrab 在跑却连着 120 帧
-			// 没轮到它的 Tick,说明下面某条 return 把整段挡住了
+			// 【看门狗】。下面一串原语任一在跑就 return,被截的那个连心跳都不响,整段全黑
+			// 必须埋在链头(所有 return 之前),轮到自己的 Tick 时清零;不清零就是被上游截了
 			if (TreasureGrab.IsRunning && _grabTickedAt > 0 && Main.GameUpdateCount - _grabTickedAt > 120)
 			{
 				_grabTickedAt = Main.GameUpdateCount;
@@ -713,9 +700,8 @@ namespace TerraBlind
 			// 必须在 RecedingNav.Tick 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			BuildReplayer.Tick();
 
-			// 【谁挡住了 TreasureGrab】。它的 Tick 在这一行,前面十来条 return 任何一条命中
-			// 都会让开箱整段停摆(现场:START 之后 4000 帧一条日志都没有,人走到箱子跟前也不开)。
-			// 这行只在真的有活儿要干时打,不刷屏
+			// 【谁挡住了 TreasureGrab】。前面十来条 return 任一命中,开箱就整段停摆
+			// 只在真有活儿时打,不刷屏
 			if (TreasureGrab.IsRunning) _grabTickedAt = Main.GameUpdateCount;
 			TreasureGrab.Tick();  // 必须在 RecedingNav 之前:它这一帧起的 nav 要靠同帧的 Tick 驱动
 			RecedingNav.Tick();   // receding-horizon (K): plan next short window from real pos, dispatch; below drives it
