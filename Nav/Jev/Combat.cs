@@ -40,7 +40,7 @@ namespace TerraBlind
 		// 只有放置不能打断。挖掘、寻路、砸网停了都能重来
 		static bool WorkBusy => PlaceAction.IsRunning || PlaceAnywhere.IsRunning;
 
-		public static int SlotOf(Player p, int typeId)
+		static int SlotOf(Player p, int typeId)
 		{
 			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
 			{
@@ -73,6 +73,35 @@ namespace TerraBlind
 				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;
 			}
 			return best;
+		}
+
+		// 射程内一只都没有时的兜底。boss 会飞出 30 格再冲回来,那几秒不该站着发呆
+		static int AnyBoss(Player p, out int cx, out int cy, out int dist)
+		{
+			cx = cy = dist = 0;
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (!Hostile(npc) || !npc.boss) continue;
+				cx = (int)(npc.Center.X / 16f); cy = (int)(npc.Center.Y / 16f);
+				dist = System.Math.Abs(cx - pcx) + System.Math.Abs(cy - pcy);
+				return i;
+			}
+			return -1;
+		}
+
+		// 热键栏【最靠前】的武器。不挑最强:持续攻击时换手比多几点伤害重要
+		static int FrontWeaponSlot(Player p)
+		{
+			for (int i = 0; i < 10; i++)
+			{
+				var it = p.inventory[i];
+				if (it == null || it.IsAir || it.damage <= 0 || it.useStyle == 0) continue;
+				if (it.pick != 0 || it.axe != 0 || it.hammer != 0) continue;
+				return i;
+			}
+			return -1;
 		}
 
 		// 局面变了没有。【编号 + 移动距离】:同一批怪原地小动不算变,走远了才算
@@ -118,6 +147,7 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
+			if (n < 0) n = AnyBoss(p, out tcx, out tcy, out dist);
 			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
 
 			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
@@ -147,9 +177,9 @@ namespace TerraBlind
 			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
 			if (WorkBusy && !_call.InterruptWork) { Last = "在放置,先不打"; return; }
 
-			int slot = SlotOf(p, Concessions.StartWeapon);
+			int slot = FrontWeaponSlot(p);
 			if (slot < 0)
-			{ Last = "背包里没有武器"; DiagLog.Write($"[combat] 不挥:找不到 id{Concessions.StartWeapon}"); Release(); return; }
+			{ Last = "背包里没有武器"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
 			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
 			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
