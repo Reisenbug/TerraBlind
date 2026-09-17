@@ -28,6 +28,10 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool FightBack;
 
+		// 默认关:boss 战自己走位躲冲撞,会抢 Move/Jump,和寻路互斥
+		[DefaultValue(false)]
+		public bool DodgeBoss;
+
 		[Header("Debug")]
 		[DefaultValue(true)]
 		public bool ShowOverlay;
@@ -42,6 +46,7 @@ namespace TerraBlind
 			PathVisSystem.ShowPlanner = ShowPlannerTrails;
 			RiskLayer.Enabled = AvoidDanger;
 			Combat.Enabled = FightBack;
+			Dodge.Enabled = DodgeBoss;
 		}
 	}
 }

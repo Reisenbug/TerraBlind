@@ -554,6 +554,7 @@ namespace TerraBlind
 
 			// 战斗排在所有早退分支【之前】:铺桥/挖矿那些分支自己 return,挂在后面永远轮不到
 			Combat.Tick();
+			Dodge.Tick();
 
 			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
 			// below so a cell it starts this frame gets swung at immediately.
