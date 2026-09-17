@@ -910,6 +910,26 @@ namespace TerraBlind
 							 + "\",\"crafted\":0,\"item_id\":" + targetId + extra + "}";
 				}
 			}
+			else if (path == "/recipe_tree")
+			{
+				// 把目标递归展开到叶子:要去世界上弄到哪些东西、按什么顺序合成、要哪些台子。
+				// 配方是游戏自己的表,展开是纯查表,不该走模型也不该一层层过 HTTP
+				string reqBody;
+				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
+					reqBody = sr.ReadToEnd();
+				var rtM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
+				var rqM = System.Text.RegularExpressions.Regex.Match(reqBody.Replace(" ", ""), "\"qty\":(\\d+)");
+				if (!rtM.Success)
+				{ body = "{\"error\":\"bad_request\"}"; status = 400; }
+				else
+				{
+					int rootId = ResolveItemName(rtM.Groups[1].Value);
+					if (rootId < 0)
+					{ body = "{\"error\":\"item_not_found\",\"raw_name\":\"" + JsonEsc(rtM.Groups[1].Value) + "\"}"; status = 404; }
+					else
+						body = BuildRecipeTree(rootId, rqM.Success ? int.Parse(rqM.Groups[1].Value) : 1);
+				}
+			}
 			else if (path == "/recipe")
 			{
 				// 查配方:要什么材料、站哪种台子、还差多少。craft 失败只说 not_available,不说缺什么。
@@ -3714,6 +3734,126 @@ namespace TerraBlind
 				foreach (var it in p.inventory)
 					if (it != null && !it.IsAir && it.type == type) n += it.stack;
 			return n;
+		}
+
+		static int ResolveItemName(string raw)
+		{
+			foreach (var nm in new[] { raw, raw.Replace(" ", "") })
+				if (Terraria.ID.ItemID.Search.ContainsName(nm))
+					return Terraria.ID.ItemID.Search.GetId(nm);
+			string low = raw.ToLowerInvariant();
+			for (int ri = 0; ri < Recipe.numRecipes; ri++)
+			{
+				var r = Main.recipe[ri];
+				if (r?.createItem != null && (r.createItem.Name ?? "").ToLowerInvariant() == low)
+					return r.createItem.type;
+			}
+			return -1;
+		}
+
+		static Recipe FirstRecipeFor(int type)
+		{
+			for (int ri = 0; ri < Recipe.numRecipes; ri++)
+			{
+				var r = Main.recipe[ri];
+				if (r?.createItem != null && r.createItem.type == type) return r;
+			}
+			return null;
+		}
+
+		static string ItemLabel(int type)
+		{
+			var probe = new Item();
+			probe.SetDefaults(type);
+			return probe.Name ?? "";
+		}
+
+		static void WalkTree(int type, int need, int depth,
+			System.Collections.Generic.HashSet<int> path,
+			System.Collections.Generic.Dictionary<int, int> leaves,
+			System.Collections.Generic.List<int> order,
+			System.Collections.Generic.Dictionary<int, bool> stations,
+			Player p)
+		{
+			// 同一个物品在树里出现几十次(每个砧都要一遍工作台)。展开一次,之后只累加数量
+			if (depth > 12 || path.Contains(type))
+			{ leaves[type] = (leaves.TryGetValue(type, out int q) ? q : 0) + need; return; }
+			var r = FirstRecipeFor(type);
+			if (r == null)
+			{ leaves[type] = (leaves.TryGetValue(type, out int q2) ? q2 : 0) + need; return; }
+
+			int short_ = need - StationHave(p, type);
+			if (short_ <= 0) return;
+			int per = r.createItem.stack < 1 ? 1 : r.createItem.stack;
+			int rounds = (short_ + per - 1) / per;
+
+			path.Add(type);
+			for (int k = 0; k < r.requiredTile.Count; k++)
+			{
+				int tt = r.requiredTile[k];
+				if (tt < 0 || stations.ContainsKey(tt)) continue;
+				var mk = Unstick.ItemsThatPlace(tt);
+				// 恶魔祭坛这类做不出来,是世界里天生的。和矿石一样是叶子,只是获取方式不同
+				stations[tt] = mk.Count == 0;
+				if (mk.Count == 0) continue;
+				int best = mk[0];
+				foreach (int cand in mk)
+					if (StationHave(p, cand) > 0) { best = cand; break; }
+				if (StationHave(p, best) <= 0)
+					WalkTree(best, 1, depth + 1, path, leaves, order, stations, p);
+			}
+			foreach (var ing in r.requiredItem)
+			{
+				if (ing == null || ing.type <= 0 || ing.type == type) continue;
+				int want = ing.stack * rounds - StationHave(p, ing.type);
+				if (want > 0) WalkTree(ing.type, want, depth + 1, path, leaves, order, stations, p);
+			}
+			path.Remove(type);
+			if (!order.Contains(type)) order.Add(type);
+		}
+
+		static string BuildRecipeTree(int rootId, int qty)
+		{
+			var leaves = new System.Collections.Generic.Dictionary<int, int>();
+			var order = new System.Collections.Generic.List<int>();
+			var stations = new System.Collections.Generic.Dictionary<int, bool>();
+			WalkTree(rootId, qty < 1 ? 1 : qty, 0, new System.Collections.Generic.HashSet<int>(),
+					 leaves, order, stations, Main.LocalPlayer);
+
+			var sb = new System.Text.StringBuilder();
+			sb.Append("{\"goal\":\"").Append(JsonEsc(ItemLabel(rootId))).Append("\",\"qty\":").Append(qty < 1 ? 1 : qty);
+			sb.Append(",\"gather\":[");
+			bool first = true;
+			foreach (var kv in leaves)
+			{
+				if (!first) sb.Append(',');
+				first = false;
+				string inm = Terraria.ID.ItemID.Search.ContainsId(kv.Key) ? Terraria.ID.ItemID.Search.GetName(kv.Key) : "";
+				sb.Append("{\"name\":\"").Append(JsonEsc(ItemLabel(kv.Key)))
+				  .Append("\",\"internal\":\"").Append(JsonEsc(inm))
+				  .Append("\",\"count\":").Append(kv.Value).Append('}');
+			}
+			sb.Append("],\"craft_order\":[");
+			for (int i = 0; i < order.Count; i++)
+			{
+				if (i > 0) sb.Append(',');
+				string inm = Terraria.ID.ItemID.Search.ContainsId(order[i]) ? Terraria.ID.ItemID.Search.GetName(order[i]) : "";
+				sb.Append("{\"name\":\"").Append(JsonEsc(ItemLabel(order[i])))
+				  .Append("\",\"internal\":\"").Append(JsonEsc(inm)).Append("\"}");
+			}
+			sb.Append("],\"stations\":[");
+			first = true;
+			foreach (var kv in stations)
+			{
+				if (!first) sb.Append(',');
+				first = false;
+				string tnm = Terraria.ID.TileID.Search.ContainsId(kv.Key)
+					? Terraria.ID.TileID.Search.GetName(kv.Key) : kv.Key.ToString();
+				sb.Append("{\"tile\":\"").Append(JsonEsc(tnm)).Append("\",\"find_in_world\":")
+				  .Append(kv.Value ? "true" : "false").Append('}');
+			}
+			sb.Append("],\"note\":\"gather 要去世界上弄到手(挖/砍/打怪/开箱);craft_order 是从底往上的合成顺序;find_in_world 的台子做不出来,要去世界里找\"}");
+			return sb.ToString();
 		}
 
 		public static string JsonEscPublic(string s) => JsonEsc(s);
