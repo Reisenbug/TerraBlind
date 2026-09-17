@@ -80,15 +80,9 @@ namespace TerraBlind
 			return _key.Length == 0 ? null : _key;
 		}
 
-		// 【蠕虫的三段都没有 boss 标志】。世界吞噬者头/身/尾 SetDefaults 里一个都没设,
-		// 只认 npc.boss 的话走位层直接退出,整场没有躲避
-		static bool IsBossLike(NPC npc)
-			=> npc.boss
-			|| npc.type == Terraria.ID.NPCID.EaterofWorldsHead
-			|| npc.type == Terraria.ID.NPCID.EaterofWorldsBody
-			|| npc.type == Terraria.ID.NPCID.EaterofWorldsTail
-			// 骷髅王的手没有 boss 标志,可它比头还危险 -- 不认的话走位只躲头
-			|| npc.type == Terraria.ID.NPCID.SkeletronHand;
+		// 【蠕虫三段和骷髅王的手都没有 boss 标志】,只认 npc.boss 的话走位层整场退出
+		// 清单只存 Combat.BossPart 一份,各存一份的话下个 boss 只会被加进一边
+		static bool IsBossLike(NPC npc) => npc.boss || Combat.BossPart(npc.type);
 
 		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
 		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节

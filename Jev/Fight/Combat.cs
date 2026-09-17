@@ -50,6 +50,13 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// boss 的部件:自己不带 boss 标志,但打它就是在打 boss
+		public static bool BossPart(int type)
+			=> type == Terraria.ID.NPCID.SkeletronHand
+			|| type == Terraria.ID.NPCID.EaterofWorldsHead
+			|| type == Terraria.ID.NPCID.EaterofWorldsBody
+			|| type == Terraria.ID.NPCID.EaterofWorldsTail;
+
 		static bool Hostile(NPC npc)
 			=> npc != null && npc.active && !npc.townNPC && !npc.friendly
 			   && !(npc.lifeMax <= 5 && npc.damage == 0);
@@ -78,7 +85,7 @@ namespace TerraBlind
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
 				// 【boss 的部件不限射程】。骷髅王的手没有 boss 标志,走的是小怪这一趟 --
 				// 手荡到 30 格外就看不见了,于是又去打那个打不动的头
-				bool part = npc.type == Terraria.ID.NPCID.SkeletronHand;
+				bool part = BossPart(npc.type);
 				if (!bossPass && !part && d > ThreatScan.RangeCells) continue;
 				float sc = ThreatScan.Score(p, npc, d);
 				if (sc <= bestScore) continue;
@@ -150,8 +157,9 @@ namespace TerraBlind
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
 
-			// 【boss 在场不问打不打】。Fight/Ignore 天然分概率,置信上不去 0.6,退回 baseline 的"还远"就一直不出手
-			if (Main.npc[n].boss)
+			// 【boss 和它的部件都不问打不打】。骷髅王的手没有 boss 标志,走的是小怪那套措辞,
+			// 而那套问的是"要不要停下赶路" -- boss 战里根本没有赶路,于是 9 格也答 Ignore
+			if (Main.npc[n].boss || BossPart(Main.npc[n].type))
 			{
 				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss在场,只管打" };
 				_target = n;
@@ -218,7 +226,7 @@ namespace TerraBlind
 			=> "{\"hp\":" + p.statLife + ",\"hp_max\":" + p.statLifeMax
 			 + ",\"player_cell\":[" + (int)(p.Center.X / 16f) + "," + (int)(p.Center.Y / 16f) + "]"
 			 + ",\"work_busy\":" + (WorkBusy ? "true" : "false")
-			 + ",\"nearest_distance\":" + dist
+			 + ",\"distance_to_the_one_i_would_attack\":" + dist
 			 + ",\"enemies\":" + ThreatScan.Json(p, (int)(p.Center.X / 16f), (int)(p.Center.Y / 16f))
 			 + "}";
 
