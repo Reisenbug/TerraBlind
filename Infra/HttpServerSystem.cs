@@ -974,22 +974,27 @@ namespace TerraBlind
 								? Terraria.ID.TileID.Search.GetName(tt) : tt.ToString();
 							sbr.Append("{\"tile\":\"").Append(JsonEsc(tnm)).Append("\",\"items\":[");
 							var mk = Unstick.ItemsThatPlace(tt);
-							for (int m = 0; m < mk.Count; m++)
+							// 一种台子能有几百个材质变体,语义等价。背包里有的排前面,其余按 id 升序(前期物品 id 小)
+							var pick = new System.Collections.Generic.List<int>(mk);
+							pick.Sort((a, b) =>
+							{
+								int ha = StationHave(p2, a), hb = StationHave(p2, b);
+								if ((ha > 0) != (hb > 0)) return hb > 0 ? 1 : -1;
+								return a.CompareTo(b);
+							});
+							int shown = pick.Count < 3 ? pick.Count : 3;
+							for (int m = 0; m < shown; m++)
 							{
 								if (m > 0) sbr.Append(',');
 								var probe = new Item();
-								probe.SetDefaults(mk[m]);
-								string pinm = Terraria.ID.ItemID.Search.ContainsId(mk[m])
-									? Terraria.ID.ItemID.Search.GetName(mk[m]) : "";
-								int phave = 0;
-								if (p2 != null)
-									foreach (var it in p2.inventory)
-										if (it != null && !it.IsAir && it.type == mk[m]) phave += it.stack;
+								probe.SetDefaults(pick[m]);
+								string pinm = Terraria.ID.ItemID.Search.ContainsId(pick[m])
+									? Terraria.ID.ItemID.Search.GetName(pick[m]) : "";
 								sbr.Append("{\"name\":\"").Append(JsonEsc(probe.Name ?? ""))
 								   .Append("\",\"internal\":\"").Append(JsonEsc(pinm))
-								   .Append("\",\"have\":").Append(phave).Append('}');
+								   .Append("\",\"have\":").Append(StationHave(p2, pick[m])).Append('}');
 							}
-							sbr.Append("]}");
+							sbr.Append("],\"total\":").Append(mk.Count).Append('}');
 						}
 						sbr.Append("]}");
 					}
@@ -3699,6 +3704,15 @@ namespace TerraBlind
 			int n = 0;
 			for (int i = 0; i < 50; i++)
 				if (pf.inventory[i] == null || pf.inventory[i].IsAir) n++;
+			return n;
+		}
+
+		static int StationHave(Player p, int type)
+		{
+			int n = 0;
+			if (p != null)
+				foreach (var it in p.inventory)
+					if (it != null && !it.IsAir && it.type == type) n += it.stack;
 			return n;
 		}
 
