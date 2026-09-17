@@ -36,6 +36,10 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool ShowOverlay;
 
+		// 单独开关:只想看 Jev 在想什么,不用连带打开一屏的格子覆盖层
+		[DefaultValue(false)]
+		public bool ShowJevHud;
+
 		// A* 的轨迹/探索点最密,盖信息最多,单独一条
 		[DefaultValue(false)]
 		public bool ShowPlannerTrails;
@@ -47,6 +51,7 @@ namespace TerraBlind
 			RiskLayer.Enabled = AvoidDanger;
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
+			JevHud.Enabled = ShowJevHud;
 		}
 	}
 }
