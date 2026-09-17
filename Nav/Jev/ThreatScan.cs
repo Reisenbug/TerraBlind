@@ -25,6 +25,15 @@ namespace TerraBlind
 			return false;
 		}
 
+		// 威胁分。伤害按【占当前血量】的比例算:同样 30 点,满血是擦伤,残血是致命
+		public static float Score(Player p, NPC npc, int dist)
+		{
+			float hpFrac = npc.damage / (float)System.Math.Max(1, p.statLife);
+			float speed = System.Math.Abs(npc.velocity.X) + System.Math.Abs(npc.velocity.Y);
+			float near = 1f / (dist + 1f);
+			return hpFrac * 100f * near + speed * 2f + npc.life * 0.01f;
+		}
+
 		public static string Json(Player p, int atCx, int atCy)
 		{
 			var sb = new StringBuilder("[");
@@ -44,7 +53,10 @@ namespace TerraBlind
 				sb.Append("{\"name\":\"").Append(npc.TypeName ?? "?").Append('"')
 				  .Append(",\"cell\":[").Append(ncx).Append(',').Append(ncy).Append(']')
 				  .Append(",\"damage\":").Append(npc.damage)
+				  .Append(",\"damage_pct_of_my_hp\":").Append((int)(npc.damage * 100f / System.Math.Max(1, p.statLife)))
 				  .Append(",\"hp\":").Append(npc.life)
+				  .Append(",\"speed\":").Append((System.Math.Abs(npc.velocity.X) + System.Math.Abs(npc.velocity.Y)).ToString("0.0"))
+				  .Append(",\"threat\":").Append(Score(p, npc, d).ToString("0.0"))
 				  .Append(",\"distance_cells\":").Append(d)
 				  .Append(",\"flies\":").Append(npc.noGravity ? "true" : "false")
 				  .Append(",\"behind_blocks\":").Append(walled ? "true" : "false")

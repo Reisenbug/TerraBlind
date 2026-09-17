@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Terraria;
 
 namespace TerraBlind
@@ -7,31 +8,36 @@ namespace TerraBlind
 	public struct CombatCall
 	{
 		public CombatAct Act;
-		public bool InterruptWork;   // 值不值得打断手上的放置/挖掘
+		public bool InterruptWork;
 		public float Confidence;
 		public string Why;
 		public string Probs;
 		public int LatencyMs;
 	}
 
-	// 战斗层。只抢 Ax.Use,绝不碰 Move -- 边走边挥是合法的,而放置/挖掘同样要 Use,天然互斥
+	// 战斗层。【每帧本地锁敌,按需才问 Jev】:瞄准要跟着怪走,判断不用
 	public static class Combat
 	{
 		public static bool Enabled = false;
 		const string Owner = "combat";
-		const int ScanEvery = 20;      // 三分之一秒扫一次,不用每帧
 		const int SwingTicks = 30;
+		// 名单里任何一只走了这么多格就重新判断。局面没动就沿用上次的结论
+		const int MoveRedecide = 3;
+		// 血量跨档也要重判:同样的怪,满血该打,残血该跑
+		const int HpBuckets = 5;
 
-		static int _tick;
 		static int _target = -1;
+		static string _lastSig = "";
+		static int _lastHpBucket = -1;
+		static readonly Dictionary<int, (int cx, int cy)> _askedAt = new();
+		static CombatCall _call;
+		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 		public static string Last = "idle";
 
 		static ICombatBrain _brain = new CombatBaseline();
 
-		// 手上有活在干:这几样都占 Use,打断了要付代价
-		static bool WorkBusy =>
-			PlaceAction.IsRunning || MineCoordinator.IsActive || PlatformDown.IsRunning
-			|| PillarUp.IsRunning || BridgeBuilder.IsRunning || PlaceAnywhere.IsRunning;
+		// 只有放置不能打断。挖掘、寻路、砸网停了都能重来
+		static bool WorkBusy => PlaceAction.IsRunning || PlaceAnywhere.IsRunning;
 
 		public static int SlotOf(Player p, int typeId)
 		{
@@ -43,23 +49,65 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// 最近的活敌人。星怒直接对着它的格子挥
-		static int Nearest(Player p, out int cx, out int cy, out int dist)
+		static bool Hostile(NPC npc)
+			=> npc != null && npc.active && !npc.townNPC && !npc.friendly
+			   && !(npc.lifeMax <= 5 && npc.damage == 0);
+
+		// 威胁最高的那只,不是最近那只
+		static int Worst(Player p, out int cx, out int cy, out int dist)
 		{
-			cx = cy = 0; dist = int.MaxValue;
+			cx = cy = 0; dist = 0;
 			int best = -1;
+			float bestScore = -1f;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var npc = Main.npc[i];
-				if (npc == null || !npc.active || npc.townNPC || npc.friendly) continue;
-				if (npc.lifeMax <= 5 && npc.damage == 0) continue;
+				if (!Hostile(npc)) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
-				if (d >= dist || d > ThreatScan.RangeCells) continue;
-				dist = d; best = i; cx = ncx; cy = ncy;
+				if (d > ThreatScan.RangeCells) continue;
+				float sc = ThreatScan.Score(p, npc, d);
+				if (sc <= bestScore) continue;
+				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;
 			}
 			return best;
+		}
+
+		// 局面变了没有。【编号 + 移动距离】:同一批怪原地小动不算变,走远了才算
+		static bool Changed(Player p, int worst)
+		{
+			int bucket = p.statLife * HpBuckets / System.Math.Max(1, p.statLifeMax);
+			if (bucket != _lastHpBucket) { _lastHpBucket = bucket; return true; }
+			if (worst != _target) return true;
+
+			int live = 0;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (!Hostile(npc)) continue;
+				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
+				int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+				if (System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy) > ThreatScan.RangeCells) continue;
+				live++;
+				if (!_askedAt.TryGetValue(npc.whoAmI, out var was)) return true;   // 新来的
+				if (System.Math.Abs(ncx - was.cx) + System.Math.Abs(ncy - was.cy) >= MoveRedecide) return true;
+			}
+			return live != _askedAt.Count;   // 走掉了/死了
+		}
+
+		static void Remember(Player p)
+		{
+			_askedAt.Clear();
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (!Hostile(npc)) continue;
+				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
+				if (System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy) > ThreatScan.RangeCells) continue;
+				_askedAt[npc.whoAmI] = (ncx, ncy);
+			}
 		}
 
 		public static void Tick()
@@ -67,41 +115,62 @@ namespace TerraBlind
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { Release(); return; }
-			if (++_tick % ScanEvery != 0) return;
 
-			int n = Nearest(p, out int tcx, out int tcy, out int dist);
-			if (n < 0) { Last = "没敌人"; Release(); return; }
+			int n = Worst(p, out int tcx, out int tcy, out int dist);
+			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
 
-			var call = _brain.Decide(p, tcx, tcy, dist, WorkBusy);
-			JevLog.Add(new JevLog.Entry
+			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
+			if (Changed(p, n))
 			{
-				Ms = _tick,
-				Site = "combat",
-				State = Facts(p, tcx, tcy, dist),
-				Pick = call.Act.ToString() + (call.InterruptWork ? "+打断" : ""),
-				Confidence = call.Confidence,
-				Probs = call.Probs ?? "",
-				Why = call.Why,
-				LatencyMs = call.LatencyMs,
-			});
+				_call = _brain.Decide(p, tcx, tcy, dist, WorkBusy);
+				_target = n;
+				Remember(p);
+				string sig = _call.Act + "|" + n + "|" + _call.InterruptWork;
+				if (sig != _lastSig)
+				{
+					_lastSig = sig;
+					JevLog.Add(new JevLog.Entry
+					{
+						Ms = _clock.ElapsedMilliseconds,
+						Site = "combat",
+						State = Facts(p, tcx, tcy, dist),
+						Pick = _call.Act.ToString() + (_call.InterruptWork ? "+打断" : ""),
+						Confidence = _call.Confidence,
+						Probs = _call.Probs ?? "",
+						Why = _call.Why,
+						LatencyMs = _call.LatencyMs,
+					});
+				}
+			}
 
-			if (call.Act != CombatAct.Fight) { Last = call.Act + ":" + call.Why; Release(); return; }
-			if (WorkBusy && !call.InterruptWork) { Last = "手上有活,先不打"; return; }
+			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
+			if (WorkBusy && !_call.InterruptWork) { Last = "在放置,先不打"; return; }
 
 			int slot = SlotOf(p, Concessions.StartWeapon);
 			if (slot < 0)
-			{ Last = "背包里没有武器"; DiagLog.Write($"[combat] 不挥:背包里找不到 id{Concessions.StartWeapon}"); Release(); return; }
-			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
-			{ Last = "Use 被占着"; DiagLog.Write($"[combat] 不挥:Use 被 {AxisLock.Held(Ax.Use)} 占着 {AxisLock.Dump()}"); return; }
-			if (ItemUseCoordinator.IsActive)
-			{ Last = "上一挥还没完"; DiagLog.Write($"[combat] 不挥:ItemUse 还在跑 outcome={ItemUseCoordinator.Outcome}"); return; }
+			{ Last = "背包里没有武器"; DiagLog.Write($"[combat] 不挥:找不到 id{Concessions.StartWeapon}"); Release(); return; }
 
-			_target = n;
+			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
+			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
+			{
+				string h = AxisLock.Held(Ax.Use);
+				AxisLock.Release(h);
+				if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
+				{ Last = "Use 抢不到"; DiagLog.Write($"[combat] 不挥:抢不到 Use {AxisLock.Dump()}"); return; }
+				DiagLog.Write($"[combat] 抢过 Use(原持有 {h})");
+			}
+
+			// 【瞄准每帧跟】。ItemUse 在 Start 那刻钉死坐标,怪走了就重发,否则一直砍空气
+			if (ItemUseCoordinator.IsActive
+				&& (ItemUseCoordinator.SnappedWx != tcx || ItemUseCoordinator.SnappedWy != tcy))
+				ItemUseCoordinator.Stop();
 			if (!ItemUseCoordinator.IsActive)
+			{
 				ItemUseCoordinator.Start(new ItemUseRequest
 				{ TargetWx = tcx, TargetWy = tcy, Slot = slot, DurationTicks = SwingTicks, Strict = false });
+				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
+			}
 			Last = $"打 {Main.npc[n].TypeName} {dist}格";
-			DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 		}
 
 		static string Facts(Player p, int tcx, int tcy, int dist)
@@ -114,12 +183,12 @@ namespace TerraBlind
 
 		public static void Release()
 		{
-			if (_target < 0) return;
+			if (_target < 0 && !AxisLock.Has(Owner, Ax.Use)) return;
 			_target = -1;
 			ItemUseCoordinator.Stop();
 			AxisLock.Release(Owner);
 		}
 
-		public static void Stop() { Release(); Last = "stopped"; }
+		public static void Stop() { Release(); _askedAt.Clear(); _lastSig = ""; Last = "stopped"; }
 	}
 }
