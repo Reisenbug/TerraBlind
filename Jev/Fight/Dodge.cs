@@ -27,6 +27,10 @@ namespace TerraBlind
 		const int HookGiveUpFrames = 45;
 		static int _hookFrames;
 		static bool _hookHeld;
+		// 荡完歇一会儿。钩爪的价值是荡出去那段位移,而位移要时间兑现 --
+		// 勾上就跳、跳完就勾,人只会在同一格上下震荡,一格都没挪
+		const int HookCooldownFrames = 30;
+		static int _hookCooldown;
 		// 飘太久就强制落地。羽落 + 按住 up 能悬到天荒地老,而悬着既打不到 boss
 		// 也躲不开从上面压下来的东西 -- 判据只有一条:能不能躲开 boss
 		const int MaxAirborneFrames = 150;
@@ -223,12 +227,15 @@ namespace TerraBlind
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
-				// 勾住了,这一帧就跳。跳完二段跳重置,等于白赚一次滞空
+				// 勾住了,这一帧就跳。跳完二段跳重置,等于白赚一次滞空。
+				// 【顺便进冷却】:原来这里清 _hookFrames,等于把唯一的止损计数器抹掉
 				hookJump = true;
 				_airJumpUsed = false;
 				_hookFrames = 0;
+				_hookCooldown = HookCooldownFrames;
 				return true;
 			}
+			if (_hookCooldown > 0) { _hookCooldown--; return false; }
 			if (act != DodgeAct.Grapple) { _hookFrames = 0; return false; }
 			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
 			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
