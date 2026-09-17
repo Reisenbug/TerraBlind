@@ -237,11 +237,8 @@ namespace TerraBlind
 			if (p.grapCount > 0)
 			{
 				// 勾住了就跳,顺便进冷却。二段跳重置,等于白赚一次滞空
-				// 【跳跃状态机要清干净】。拉升时 velocity.Y<0,Jump() 当成旧按压的延续吃掉这一跳
 				hookJump = true;
 				_airJumpUsed = false;
-				_jumpHeld = false;
-				_holdFrames = 0;
 				_hookFrames = 0;
 				_hookCooldown = HookCooldownFrames;
 				return true;
@@ -271,7 +268,8 @@ namespace TerraBlind
 			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
 			{ _holdFrames++; _jumpHeld = true; return true; }
 
-			// 到顶了就松开。松开这一帧本身也是二段跳要的"新按压"前置
+			// 【按住了就必须先松一帧】。站在地上时 velocity.Y==0,上面那条永不命中,
+			// 而 vanilla 要 releaseJump 才认新按压 -- 不松手就是每帧空按,钩爪也取消不掉
 			if (_jumpHeld) { _jumpHeld = false; _holdFrames = 0; return false; }
 
 			if (!want) return false;
