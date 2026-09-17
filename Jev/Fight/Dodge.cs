@@ -174,16 +174,12 @@ namespace TerraBlind
 			// 钩爪:发射 → 勾住 → 【必须跳一次取消】。跳完拿到那段速度,二段跳也回来了
 			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
 
-			// 跳的时机归反射层。Evade/Up 是"该闪",快撞上才是"现在闪"
-			// 【飘太久就连跳也不许】。原来只关 controlUp,可一落地 incoming 又把人弹上去,
-			// 二段跳落地就回充 -- 于是"落地→立刻二段跳→再飘五秒",强制落地是句空话
+			// 【飘太久连跳也不许】。只关 controlUp 的话,一落地 incoming 又把人弹上去
 			bool wantJump = (hookJump || act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne;
 			bool jump = Jump(p, onGround, wantJump);
 
-			// 【别频繁转弯】。克苏鲁之眼锁的是冲刺开始那一刻的位置,躲开它靠的是
-			// 横向速度拉满。每 200ms 换一次方向,加速度全耗在掉头上,净位移接近 0 --
-			// 认准一个方向就跑满 MinRunFrames,除非撞墙或者要掉下去
-			// 【要躲的那一下不受节流管】。锁住 Evade 等于冲刺来了还不许躲
+			// 【别频繁转弯】。掉头要先把速度减到 0,转得勤净位移接近 0
+			// 【但要躲的那一下不受管】。锁住 Evade 等于冲刺来了还不许躲
 			bool mustTurn = act == DodgeAct.Evade || incoming;
 			// 【每帧都涨】。原来只在 go!=0 时涨,站定期间锁一直不解除
 			_runFrames++;
@@ -337,7 +333,9 @@ namespace TerraBlind
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
-				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙。站着不动就会被撞\""
+				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
+				 // 写在这里等于对每个 boss 都这么说 -- 该由 how_this_boss_fights 去讲
+				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙\""
 				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
 				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
 				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
@@ -356,7 +354,9 @@ namespace TerraBlind
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
 			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
-			 + "\"Float\":\"【只为躲开眼前这一下】跳起来滞空,让贴着地面冲过来的那一击从脚下穿过去。"
+			 + "\"Float\":\"【只为躲开眼前这一下】跳起来滞空,躲开贴着地面来的那一击。"
+			 + "看 how_this_boss_fights:这一招只对横着冲过来的有用,对从上往下砸的、"
+			 + "或者会瞬移到人身上的没用,那种情况滞空反而是把自己定在落点上。"
 			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘。"
 			 + "飘在半空移动慢、够不着它、也躲不开从上面压下来的东西\","
 			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
