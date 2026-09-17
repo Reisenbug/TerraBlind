@@ -5,7 +5,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit }
+	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
@@ -81,7 +81,9 @@ namespace TerraBlind
 			=> npc.boss
 			|| npc.type == Terraria.ID.NPCID.EaterofWorldsHead
 			|| npc.type == Terraria.ID.NPCID.EaterofWorldsBody
-			|| npc.type == Terraria.ID.NPCID.EaterofWorldsTail;
+			|| npc.type == Terraria.ID.NPCID.EaterofWorldsTail
+			// 骷髅王的手没有 boss 标志,可它比头还危险 -- 不认的话走位只躲头
+			|| npc.type == Terraria.ID.NPCID.SkeletronHand;
 
 		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
 		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节
@@ -183,6 +185,10 @@ namespace TerraBlind
 					if (System.Math.Abs(boss.Center.Y - p.Center.Y) > System.Math.Abs(dx)) go = _runDir;
 					else go = 0;
 					break;
+				// 【下坠时也要横移】。站着往下掉只是换个高度挨打
+				case DodgeAct.Dive:
+					if (dist < want) go = away;
+					break;
 				case DodgeAct.Keep:
 					if (dist < want / 2) go = away;
 					break;
@@ -207,10 +213,12 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【羽落只在要躲的时候按】。离地就按住 up 的话下落只剩 1/10,等于永不落地 --
-			// 落不了地二段跳就永远不回充,人就一直挂在天上。钩爪那一下要按,拉高度靠它
-			bool hover = act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming;
-			if (!onGround && hover && !_tooLongAirborne) p.controlUp = true;
+			// 【羽落只在要躲的时候按】。离地就按住 up 等于永不落地,二段跳也就永不回充
+			// 【down 一个键干两件事】(Player.cs: fallThrough = controlDown):穿平台 + 取消缓降
+			bool dive = act == DodgeAct.Dive || _tooLongAirborne;
+			bool hover = !dive && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			if (dive) p.controlDown = true;
+			else if (!onGround && hover) p.controlUp = true;
 
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
 				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
@@ -376,6 +384,9 @@ namespace TerraBlind
 			 + "或者会瞬移到人身上的没用,那种情况滞空反而是把自己定在落点上。"
 			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘。"
 			 + "飘在半空移动慢、够不着它、也躲不开从上面压下来的东西\","
+			 + "\"Dive\":\"往下走。按住下键:踩着平台时会从平台穿下去到下一层,"
+			 + "在空中时会取消羽落的缓降、正常速度砸下去。想快点落地、想躲开从上方压来的东西、"
+			 + "或者已经在空中飘太久了,就用这个 -- 一直飘着躲不开上面来的攻击\","
 			 + "\"Orbit\":\"绕着它走。沿垂直于'自己到它连线'的方向横移,让它的冲撞擦身而过。"
 			 + "场地封闭、退无可退的时候用这个 -- 往后退只会退到墙上,而绕开既保持了移动又不撞上去\","
 			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
@@ -434,6 +445,7 @@ namespace TerraBlind
 				"Float" => DodgeAct.Float,
 				"Grapple" => DodgeAct.Grapple,
 				"Orbit" => DodgeAct.Orbit,
+				"Dive" => DodgeAct.Dive,
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
@@ -514,6 +526,7 @@ namespace TerraBlind
 			DodgeAct.Float => "hover, let it pass underneath",
 			DodgeAct.Grapple => "grapple for height",
 			DodgeAct.Orbit => "orbit around it",
+			DodgeAct.Dive => "drop down fast",
 			_ => "hold position",
 		};
 

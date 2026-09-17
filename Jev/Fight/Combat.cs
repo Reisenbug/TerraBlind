@@ -76,7 +76,10 @@ namespace TerraBlind
 				if (npc.boss != bossPass) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
-				if (!bossPass && d > ThreatScan.RangeCells) continue;
+				// 【boss 的部件不限射程】。骷髅王的手没有 boss 标志,走的是小怪这一趟 --
+				// 手荡到 30 格外就看不见了,于是又去打那个打不动的头
+				bool part = npc.type == Terraria.ID.NPCID.SkeletronHand;
+				if (!bossPass && !part && d > ThreatScan.RangeCells) continue;
 				float sc = ThreatScan.Score(p, npc, d);
 				if (sc <= bestScore) continue;
 				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;

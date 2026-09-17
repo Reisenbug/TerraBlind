@@ -31,7 +31,10 @@ namespace TerraBlind
 			float hpFrac = npc.damage / (float)System.Math.Max(1, p.statLife);
 			float speed = System.Math.Abs(npc.velocity.X) + System.Math.Abs(npc.velocity.Y);
 			float near = 1f / (dist + 1f);
-			return hpFrac * 100f * near + speed * 2f + npc.life * 0.01f;
+			// 【手在场就先打手】。血量那项让 4400 血的头碾压 600 血的手,
+			// 而手不打掉,头一直无敌 -- 排序反了就是全程在打一个打不动的目标
+			float part = npc.type == Terraria.ID.NPCID.SkeletronHand ? 100f : 0f;
+			return hpFrac * 100f * near + speed * 2f + npc.life * 0.01f + part;
 		}
 
 		public static string Json(Player p, int atCx, int atCy)

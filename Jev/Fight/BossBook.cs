@@ -34,6 +34,18 @@ namespace TerraBlind
 				+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远,也拉不开 -- 它会一直钻过来,"
 				+ "保持个不会擦到的距离,一直打就是了。报给你的距离说的是离你最近的那一节,"
 				+ "不是头 -- 身体从背后钻出来一样掉血,所以看的是最近那节有多近。",
+
+			[Terraria.ID.NPCID.SkeletronHead] =
+				"骷髅王有一个头和两只手。【两只手还在的时候先打手】,手比头好打也更危险。"
+				+ "打掉一只手之后它开始发射自动制导的骷髅头弹幕,两只手都没了发射得更快 -- "
+				+ "那时候要盯着弹幕躲。最要命的是头:它会突然高速旋转着撞过来,"
+				+ "【离高速移动的头远一点】,看到它速度起来了就别待在它的路线上。"
+				+ "和手、和头都要留出距离,但场地没有边界,不用担心退到墙上。"
+				+ "【这一场特别适合用钩爪】:手和头都是从固定的中心荡过来的,"
+				+ "钩住一个高处的落点把自己吊起来,它们就够不到 -- 比在地面上跑好用得多,"
+				+ "所以这场要比平时频繁得多地甩钩爪。"
+				+ "另外别长时间朝一个方向全速跑,那样很容易正好撞进手的弧线里,"
+				+ "多绕圈,该下平台就下平台,该加速落地就落地,别一直飘在空中。",
 		};
 
 		// 玩家这一局带着什么本事。【也只是一段话】,组合技尤其不该写成状态机
@@ -52,6 +64,8 @@ namespace TerraBlind
 			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
 			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
 				npcType = Terraria.ID.NPCID.EaterofWorldsHead;
+			if (npcType == Terraria.ID.NPCID.SkeletronHand)
+				npcType = Terraria.ID.NPCID.SkeletronHead;
 			return Book.TryGetValue(npcType, out string s) ? s : "";
 		}
 	}
