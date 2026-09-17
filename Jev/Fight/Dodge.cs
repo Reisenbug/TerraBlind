@@ -330,23 +330,28 @@ namespace TerraBlind
 			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
 		}
 
-		// 往上找一个勾得住的落点。【背着 boss 那一侧】,主要拿高度。
-		// 一圈都找不到就让 Hook 放弃,总比对着空气甩强
+		// 【上下都找,挑离 boss 最远的那个】。原来只扫头顶,人贴着天花板时上面没别的落点了
+		// 找不到就让 Hook 放弃,总比对着空气甩强
 		static bool FindAnchor(Player p, NPC boss, out int ax, out int ay)
 		{
 			ax = ay = 0;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			int side = boss.Center.X > p.Center.X ? -1 : 1;
-			for (int up = 4; up <= HookReachCells; up++)
-				for (int w = 0; w <= up; w++)
+			int bcx = (int)(boss.Center.X / 16f), bcy = (int)(boss.Center.Y / 16f);
+			int best = -1;
+			for (int dy = -HookReachCells; dy <= HookReachCells; dy++)
+				for (int dx2 = -HookReachCells; dx2 <= HookReachCells; dx2++)
 				{
-					int x = pcx + side * w, y = pcy - up;
+					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
+					if (reach < 4 || reach > HookReachCells) continue;
+					int x = pcx + dx2, y = pcy + dy;
 					if (!Hookable(x, y)) continue;
-					if (System.Math.Abs(x - pcx) + System.Math.Abs(y - pcy) > HookReachCells) continue;
-					ax = x; ay = y;
-					return true;
+					// 【远离 boss 就是好落点】。往上还是往下让局面自己定,
+					// 不编"高过 N 格就往下勾"那种阈值 -- 那些数我一个都不知道
+					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
+					if (score <= best) continue;
+					best = score; ax = x; ay = y;
 				}
-			return false;
+			return best >= 0;
 		}
 
 		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
