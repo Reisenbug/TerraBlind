@@ -24,6 +24,10 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool AvoidDanger;
 
+		// 默认关:会自己挥武器,而且会和放置/挖掘抢 Use
+		[DefaultValue(false)]
+		public bool FightBack;
+
 		[Header("Debug")]
 		[DefaultValue(true)]
 		public bool ShowOverlay;
@@ -37,6 +41,7 @@ namespace TerraBlind
 			PathVisSystem.Enabled = ShowOverlay;
 			PathVisSystem.ShowPlanner = ShowPlannerTrails;
 			RiskLayer.Enabled = AvoidDanger;
+			Combat.Enabled = FightBack;
 		}
 	}
 }
