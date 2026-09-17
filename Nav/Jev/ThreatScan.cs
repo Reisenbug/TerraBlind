@@ -42,6 +42,7 @@ namespace TerraBlind
 				bool toward = (ncx < atCx && npc.velocity.X > 0.1f) || (ncx > atCx && npc.velocity.X < -0.1f);
 				if (n++ > 0) sb.Append(',');
 				sb.Append("{\"name\":\"").Append(npc.TypeName ?? "?").Append('"')
+				  .Append(",\"cell\":[").Append(ncx).Append(',').Append(ncy).Append(']')
 				  .Append(",\"damage\":").Append(npc.damage)
 				  .Append(",\"hp\":").Append(npc.life)
 				  .Append(",\"distance_cells\":").Append(d)

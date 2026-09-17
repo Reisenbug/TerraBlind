@@ -30,7 +30,6 @@ namespace TerraBlind
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - toCx) + System.Math.Abs(ncy - toCy);
 				if (d > 8) continue;
-				if (ThreatScan.Blocked(toCx, toCy, ncx, ncy)) continue;
 				pen += (npc.noGravity ? MobFlying : MobNear) / (d + 1);
 			}
 			return pen;
