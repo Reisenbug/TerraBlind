@@ -25,7 +25,8 @@ namespace TerraBlind
 			{
 				Line(sb, font, ref x, ref y, "走位 " + Dodge.Last, Tint(Dodge.Confidence));
 				Line(sb, font, ref x, ref y,
-					$"     置信{Dodge.Confidence:0.00}  {Dodge.LatencyMs}ms", Color.LightGray);
+					$"     置信{Dodge.Confidence:0.00}  危险{Dodge.Danger:0.0}"
+					+ (Dodge.SafeToAttack ? "" : " 别贴脸") + $"  {Dodge.LatencyMs}ms", Color.LightGray);
 			}
 			if (Combat.Enabled)
 				Line(sb, font, ref x, ref y, "攻击 " + Combat.Last, Color.White);

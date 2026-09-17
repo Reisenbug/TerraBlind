@@ -16,10 +16,6 @@ namespace TerraBlind
 		const int CareCells = 60;
 		// 意图过期就退回保守行为。拿 3 秒前的判断当真比没有判断更糟
 		const long IntentTtlMs = 1500;
-		// 贴脸/拉开各自的舒适距离(格)
-		const int CloseCells = 6, BackCells = 18;
-		// 还有这么多帧就撞上,该跳了。60fps 下 12 帧 = 0.2 秒,够起跳也不至于跳太早
-		const int HitSoonFrames = 12;
 
 		// 二段跳:落地才回充,空中再按一次触发,而且【必须松一帧】才算新按压
 		static bool _airJumpUsed;
@@ -32,6 +28,12 @@ namespace TerraBlind
 		public static DodgeAct Act = DodgeAct.Back;
 		public static float Confidence;
 		public static int LatencyMs;
+		// 【距离不再写死】。原来 6/18 两个数是我编的,对所有 boss 一视同仁。
+		// 现在问 Jev "该离多远",0=贴脸 4=远远躲开,反射层照着走
+		public static float Danger = 2f;
+		public static bool TacticWorking = true;
+		public static bool SafeToAttack = true;
+		public static bool JevSaysJump;
 
 		public const string Url = "https://api.typesafe.ai/v1/systemone";
 		public const string Model = "jev-latest";
@@ -91,6 +93,9 @@ namespace TerraBlind
 			Drive(p, boss, dist, act);
 		}
 
+		// 危险分换成格数。0=贴脸输出,4=离远点
+		static int WantCells(float danger) => 4 + (int)(danger * 4f);
+
 		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
 		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
 		static void Drive(Player p, NPC boss, int dist, DodgeAct act)
@@ -102,18 +107,21 @@ namespace TerraBlind
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
+			int want = WantCells(Danger);
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
 			int framesToHit = FramesToHit(p, boss);
-			bool incoming = framesToHit >= 0 && framesToHit <= HitSoonFrames;
+			// 危险时提前跳,安全时晚点跳。原来这也是个写死的 12
+			int soon = 8 + (int)(Danger * 4f);
+			bool incoming = framesToHit >= 0 && framesToHit <= soon;
 
 			switch (act)
 			{
 				case DodgeAct.Back:
-					if (dist < BackCells) go = away;
+					if (dist < want) go = away;
 					break;
 				case DodgeAct.Close:
-					if (dist > CloseCells) go = toward;
+					if (dist > want / 2) go = toward;
 					break;
 				case DodgeAct.Evade:
 					go = away;
@@ -121,23 +129,21 @@ namespace TerraBlind
 				case DodgeAct.Up:
 					break;
 				case DodgeAct.Keep:
-					if (dist < CloseCells) go = away;
+					if (dist < want / 2) go = away;
 					break;
 			}
 
 			// 跳的时机归反射层。Evade/Up 是"该闪",快撞上才是"现在闪"
-			bool wantJump = act == DodgeAct.Up
-				|| (act == DodgeAct.Evade && incoming)
-				|| incoming;
-
+			bool wantJump = act == DodgeAct.Up || JevSaysJump || incoming;
 			bool jump = Jump(p, onGround, wantJump);
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
-				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (incoming ? $" 撞击{framesToHit}帧" : "");
+			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
+				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (incoming ? $" 撞击{framesToHit}帧" : "")
+				 + (TacticWorking ? "" : " [这套没用]");
 		}
 
 		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
@@ -147,7 +153,6 @@ namespace TerraBlind
 			if (onGround) { _airJumpUsed = false; _holdFrames = 0; }
 
 			bool rising = p.velocity.Y < 0f;
-			// 起跳后一直按住,直到到顶。上限只是兜底,免得某种状态下永远升不完
 			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
 			{ _holdFrames++; _jumpHeld = true; return true; }
 
@@ -185,8 +190,7 @@ namespace TerraBlind
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			bool closing = (dx > 0 && boss.velocity.X < 0) || (dx < 0 && boss.velocity.X > 0);
 			int hit = FramesToHit(p, boss);
-			// 【给它能直接用的量】。vx=7.3 这种像素/帧模型没有尺度感,
-			// "还有 14 帧撞上"才是能拿来决定闪不闪的数
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
@@ -198,21 +202,35 @@ namespace TerraBlind
 				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
 				 + ",\"i_am_airborne\":" + (p.velocity.Y != 0f ? "true" : "false")
 				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
+				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
+				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
+				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙。站着不动就会被撞\""
 				 + "}";
 		}
 
+		// 同一份 state 一次问完。【并行求值不加延迟】,多问几个等于白捡
 		static string Body(string state)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
 			 + "\"intent\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
-			 + "boss 撞到身上才掉血。【说的是意图不是按键】,具体往左往右由下面的代码每帧算。\",\"criteria\":{"
+			 + "碰到 boss 或者吃到弹幕才掉血。【说的是意图不是按键】,具体往左往右由代码每帧算。\",\"criteria\":{"
 			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
 			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
-			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\"}}"
+			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\"}},"
+			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
+			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
+			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
+			 + "\"很险,离远点\",\"随时会死,能躲多远躲多远\"]},"
+			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
+			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
+			 + "\"safe_to_attack\":{\"type\":\"noul\",\"instructions\":"
+			 + "\"现在靠近输出安全吗?\"},"
+			 + "\"tactic_working\":{\"type\":\"noul\",\"instructions\":"
+			 + "\"现在这套打法有效吗?boss 的血在掉,而自己没有一直挨打。\"}"
 			 + "}}";
 
 		static void Fire(string key, string state)
@@ -242,11 +260,12 @@ namespace TerraBlind
 			int ms = 0;
 			string txt = packed;
 			if (cut > 0) { int.TryParse(packed.Substring(0, cut), out ms); txt = packed.Substring(cut + 1); }
-			string pick = Field(txt, "choice");
+
+			string intent = Seg(txt, "intent");
+			string pick = Field(intent, "choice");
 			if (pick == null) return;
-			float.TryParse(Field(txt, "confidence"), out float c);
 			LatencyMs = ms;
-			Confidence = c;
+			Confidence = Num(intent, "confidence", 0f);
 			Act = pick switch
 			{
 				"Back" => DodgeAct.Back,
@@ -256,7 +275,14 @@ namespace TerraBlind
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
-			string sig = pick + "|" + c.ToString("0.00");
+
+			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
+			Danger = Num(Seg(txt, "danger"), "score", Danger);
+			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
+			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
+			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
+
+			string sig = pick + "|" + Confidence.ToString("0.00") + "|" + Danger.ToString("0.0");
 			if (sig != _lastSig)
 			{
 				_lastSig = sig;
@@ -265,8 +291,8 @@ namespace TerraBlind
 					Ms = _clock.ElapsedMilliseconds,
 					Site = "dodge",
 					State = "",
-					Pick = pick,
-					Confidence = c,
+					Pick = pick + $" 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "") + (TacticWorking ? "" : " 这套没用"),
+					Confidence = Confidence,
 					Probs = "",
 					Why = "jev",
 					LatencyMs = ms,
@@ -274,8 +300,26 @@ namespace TerraBlind
 			}
 		}
 
+		// 【多问题必须按问题名定位】。响应是 {"answers":{"intent":{...},"danger":{...}}},
+		// 全文找第一个 "choice" 会把别的问题的答案读进来
+		static string Seg(string s, string question)
+		{
+			int i = s.IndexOf("\"" + question + "\"", System.StringComparison.Ordinal);
+			if (i < 0) return null;
+			int a = s.IndexOf('{', i);
+			if (a < 0) return null;
+			int depth = 0;
+			for (int j = a; j < s.Length; j++)
+			{
+				if (s[j] == '{') depth++;
+				else if (s[j] == '}' && --depth == 0) return s.Substring(a, j - a + 1);
+			}
+			return null;
+		}
+
 		static string Field(string s, string name)
 		{
+			if (s == null) return null;
 			int i = s.IndexOf("\"" + name + "\"", System.StringComparison.Ordinal);
 			if (i < 0) return null;
 			i = s.IndexOf(':', i);
@@ -286,6 +330,9 @@ namespace TerraBlind
 			while (j < s.Length && s[j] != '"' && s[j] != ',' && s[j] != '}') j++;
 			return s.Substring(i, j - i).Trim();
 		}
+
+		static float Num(string seg, string name, float dflt)
+			=> seg != null && float.TryParse(Field(seg, name), out float v) ? v : dflt;
 
 		static string JsonStr(string s) => s == null ? "" : s.Replace("\\", "").Replace("\"", "");
 
