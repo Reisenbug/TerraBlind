@@ -26,6 +26,7 @@ namespace TerraBlind
 		// 钩爪甩出去这么多帧还没勾上就放弃,别一直按着钩子不打人
 		const int HookGiveUpFrames = 45;
 		static int _hookFrames;
+		static bool _hookHeld;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -43,7 +44,8 @@ namespace TerraBlind
 		static readonly HttpClient _http = new() { Timeout = System.TimeSpan.FromSeconds(5) };
 		static volatile bool _busy;
 		static volatile string _pending;
-		static string _lastSig = "";
+		// 发出去的那份现场,答案回来时一起记进日志 -- 只看结论看不出它为什么这么选
+		static string _lastFacts = "";
 		static long _actAt = -100000;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
@@ -85,7 +87,11 @@ namespace TerraBlind
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done); }
 			string key = Key();
-			if (key != null && !_busy) Fire(key, Facts(p, boss, dist));
+			if (key != null && !_busy)
+			{
+				_lastFacts = Facts(p, boss, dist);
+				Fire(key, _lastFacts);
+			}
 
 			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
 			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
@@ -121,8 +127,10 @@ namespace TerraBlind
 
 			switch (act)
 			{
+				// 【别"够远就停"】。克苏鲁之眼是冲撞型,站定就是等撞 --
+				// 它锁的是冲刺开始那一刻的位置,横向一直有速度才躲得开
 				case DodgeAct.Back:
-					if (dist < want) go = away;
+					go = away;
 					break;
 				case DodgeAct.Close:
 					if (dist > want / 2) go = toward;
@@ -178,12 +186,16 @@ namespace TerraBlind
 				return true;
 			}
 			if (act != DodgeAct.Grapple) { _hookFrames = 0; return false; }
-			// 【往上勾】。配合羽落按住上键,跳取消之后能飞很高,整片地面攻击都躲得掉。
-			// 横向只带一点,躲开 boss 那一侧;主要是拿高度。勾不到就算了,不纠缠
+			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
+			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
 			if (_hookFrames++ > HookGiveUpFrames) return false;
+			if (_hookHeld) { _hookHeld = false; return true; }
+			// 【往上勾】。配合羽落按住上键,跳取消之后能飞很高,整片地面攻击都躲得掉。
+			// 横向只带一点,躲开 boss 那一侧;主要是拿高度
 			float dir = boss.Center.X > p.Center.X ? -1f : 1f;
 			Cursor.AimPx(p.Center.X + dir * 16f * 6f, p.Center.Y - 16f * 16f);
 			p.controlHook = true;
+			_hookHeld = true;
 			return true;
 		}
 
@@ -334,22 +346,21 @@ namespace TerraBlind
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
-			string sig = pick + "|" + Confidence.ToString("0.00") + "|" + Danger.ToString("0.0");
-			if (sig != _lastSig)
+			// 【每次回答都记】。原来只在意图变了才记 -- 于是"一直选 Float"在日志里
+			// 只有孤零零一条,看不出它卡了多久,也看不出反射层这期间在干什么
+			JevLog.Add(new JevLog.Entry
 			{
-				_lastSig = sig;
-				JevLog.Add(new JevLog.Entry
-				{
-					Ms = _clock.ElapsedMilliseconds,
-					Site = "dodge",
-					State = "",
-					Pick = pick + $" 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "") + (TacticWorking ? "" : " 这套没用"),
-					Confidence = Confidence,
-					Probs = "",
-					Why = "jev",
-					LatencyMs = ms,
-				});
-			}
+				Ms = _clock.ElapsedMilliseconds,
+				Site = "dodge",
+				State = _lastFacts,
+				Pick = pick + $" 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "")
+					 + (SafeToAttack ? "" : " 别贴脸") + (TacticWorking ? "" : " 这套没用")
+					 + "  →  " + Last,
+				Confidence = Confidence,
+				Probs = Seg(intent, "probabilities") ?? "",
+				Why = "jev",
+				LatencyMs = ms,
+			});
 		}
 
 		// 【多问题必须按问题名定位】。响应是 {"answers":{"intent":{...},"danger":{...}}},
