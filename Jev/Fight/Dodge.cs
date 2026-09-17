@@ -236,10 +236,12 @@ namespace TerraBlind
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
-				// 勾住了,这一帧就跳。跳完二段跳重置,等于白赚一次滞空。
-				// 【顺便进冷却】:原来这里清 _hookFrames,等于把唯一的止损计数器抹掉
+				// 勾住了就跳,顺便进冷却。二段跳重置,等于白赚一次滞空
+				// 【跳跃状态机要清干净】。拉升时 velocity.Y<0,Jump() 当成旧按压的延续吃掉这一跳
 				hookJump = true;
 				_airJumpUsed = false;
+				_jumpHeld = false;
+				_holdFrames = 0;
 				_hookFrames = 0;
 				_hookCooldown = HookCooldownFrames;
 				return true;
