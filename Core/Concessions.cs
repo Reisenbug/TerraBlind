@@ -206,6 +206,34 @@ namespace TerraBlind
 			KeepList.Sweep();
 			if (!Enabled) return;
 			TopUpWood();
+			GiveWeapon();
+		}
+
+		// 开局给一把武器。【只给一次】:像木头那样每帧补的话,扔掉/换掉它又会自己回来
+		public const int StartWeapon = 65;
+		static bool _gaveWeapon;
+		public static void ResetWeaponGrant() => _gaveWeapon = false;
+
+		static void GiveWeapon()
+		{
+			if (_gaveWeapon) return;
+			var p = Main.LocalPlayer;
+			if (p == null || !p.active) return;
+			for (int i = 0; i < 58 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir && it.type == StartWeapon) { _gaveWeapon = true; return; }
+			}
+			for (int i = 0; i < 50 && i < p.inventory.Length; i++)
+			{
+				var it = p.inventory[i];
+				if (it != null && !it.IsAir) continue;
+				p.inventory[i] = new Item();
+				p.inventory[i].SetDefaults(StartWeapon);
+				_gaveWeapon = true;
+				DiagLog.Write($"[concession] 开局武器 {p.inventory[i].Name}(id{StartWeapon}) 放在第{i}格");
+				return;
+			}
 		}
 
 		// 补到 WoodKeep。找第一摞木头往上加;一摞都没有就塞进空格
