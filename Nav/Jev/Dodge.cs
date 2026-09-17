@@ -24,6 +24,9 @@ namespace TerraBlind
 		// 二段跳:落地才回充,空中再按一次触发,而且【必须松一帧】才算新按压
 		static bool _airJumpUsed;
 		static bool _jumpHeld;
+		static int _holdFrames;
+		// 按住的兜底上限。正常到顶就松了,这个数只防"某种状态下一直升不完"
+		const int MaxHoldFrames = 30;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -98,7 +101,6 @@ namespace TerraBlind
 			int toward = -away;
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
-			if (onGround) _airJumpUsed = false;   // 落地回充二段
 
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
@@ -128,22 +130,34 @@ namespace TerraBlind
 				|| (act == DodgeAct.Evade && incoming)
 				|| incoming;
 
-			bool jump = false;
-			if (wantJump)
-			{
-				// 【松一帧再按】。连着按住,游戏不认第二次按压,二段跳永远放不出来
-				if (_jumpHeld) jump = false;
-				else if (onGround) jump = true;
-				else if (!_airJumpUsed) { jump = true; _airJumpUsed = true; }
-			}
+			bool jump = Jump(p, onGround, wantJump);
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
-			_jumpHeld = jump;
 
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
 				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (incoming ? $" 撞击{framesToHit}帧" : "");
+		}
+
+		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
+		// 硬编码必错。velocity.Y 转正那一刻就是到顶,这个判据对两种跳都成立
+		static bool Jump(Player p, bool onGround, bool want)
+		{
+			if (onGround) { _airJumpUsed = false; _holdFrames = 0; }
+
+			bool rising = p.velocity.Y < 0f;
+			// 起跳后一直按住,直到到顶。上限只是兜底,免得某种状态下永远升不完
+			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
+			{ _holdFrames++; _jumpHeld = true; return true; }
+
+			// 到顶了就松开。松开这一帧本身也是二段跳要的"新按压"前置
+			if (_jumpHeld) { _jumpHeld = false; _holdFrames = 0; return false; }
+
+			if (!want) return false;
+			if (onGround) { _jumpHeld = true; _holdFrames = 1; return true; }
+			if (!_airJumpUsed) { _airJumpUsed = true; _jumpHeld = true; _holdFrames = 1; return true; }
+			return false;
 		}
 
 		// boss 朝我飞过来的话,按当前速度还有几帧接触。不朝我来就返回 -1。
