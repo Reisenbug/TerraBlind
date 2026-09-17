@@ -41,6 +41,7 @@ Configs: {
 		Headers: {
 			Assist: Assists
 			Debug: Debug
+			Nav: Navigation
 		}
 
 		FreezeLavaUnderFeet: {
@@ -61,6 +62,16 @@ Configs: {
 		ShowPlannerTrails: {
 			Label: Show planner trails
 			Tooltip: Also draws the A* search dots and jump arcs. Dense enough to hide the terrain underneath.
+		}
+
+		AvoidDanger: {
+			Label: Avoid danger when picking a step
+			Tooltip: Prices fall damage and nearby enemies into the choice of the next move, so the route bends around drops and mobs. Off by default, since it changes long-tuned pathfinding.
+		}
+
+		FightBack: {
+			Label: Fight back
+			Tooltip: Swings at the nearest enemy that is close and not behind blocks. Shares the use-item control with placing and mining, so it waits rather than interrupting work in progress.
 		}
 	}
 }
