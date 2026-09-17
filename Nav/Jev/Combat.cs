@@ -167,7 +167,9 @@ namespace TerraBlind
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
 			Cursor.AimTile(tcx, tcy);
-			if (p.itemTime == 0) p.controlUseItem = true;
+			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
+			// 拿它当条件就是挥一下等一轮。动画结束就能再挥,这才是连挥
+			if (p.itemAnimation == 0) p.controlUseItem = true;
 			if (_target != n || !_swinging)
 			{
 				_swinging = true;
