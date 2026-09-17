@@ -55,7 +55,19 @@ namespace TerraBlind
 			=> type == Terraria.ID.NPCID.SkeletronHand
 			|| type == Terraria.ID.NPCID.EaterofWorldsHead
 			|| type == Terraria.ID.NPCID.EaterofWorldsBody
-			|| type == Terraria.ID.NPCID.EaterofWorldsTail;
+			|| type == Terraria.ID.NPCID.EaterofWorldsTail
+			|| type == Terraria.ID.NPCID.WallofFleshEye
+			|| type == Terraria.ID.NPCID.TheHungry
+			|| type == Terraria.ID.NPCID.TheHungryII;
+
+		// 【肉山在场就只打本体】。眼睛是独立 NPC,血少又离得近,威胁分必然赢过本体 --
+		// 而肉山一动起来,瞄眼睛十发九空。嘴(本体)是个大目标,跑着也打得中
+		static int WallBody()
+		{
+			for (int i = 0; i < Main.maxNPCs; i++)
+				if (Main.npc[i].active && Main.npc[i].type == Terraria.ID.NPCID.WallofFlesh) return i;
+			return -1;
+		}
 
 		static bool Hostile(NPC npc)
 			=> npc != null && npc.active && !npc.townNPC && !npc.friendly
@@ -65,6 +77,15 @@ namespace TerraBlind
 		// 那项 life*0.01 让它永远碾压小怪 -- 于是服务者贴着脸咬,人还在对着 boss 挥
 		static int Worst(Player p, out int cx, out int cy, out int dist)
 		{
+			int wall = WallBody();
+			if (wall >= 0)
+			{
+				var w = Main.npc[wall];
+				cx = (int)(w.Center.X / 16f); cy = (int)(w.Center.Y / 16f);
+				dist = System.Math.Abs(cx - (int)(p.Center.X / 16f))
+					 + System.Math.Abs(cy - (int)(p.Center.Y / 16f));
+				return wall;
+			}
 			int n = Pick(p, false, out cx, out cy, out dist);
 			return n >= 0 ? n : Pick(p, true, out cx, out cy, out dist);
 		}

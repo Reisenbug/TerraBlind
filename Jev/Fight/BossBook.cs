@@ -2,50 +2,95 @@ using System.Collections.Generic;
 
 namespace TerraBlind
 {
-	// 每个 boss 的打法知识,【只是一段话,不是规则】。人打 boss 靠背板,
-	// 而板子写成 if 就得为每个 boss 编阈值 -- 那些数我一个都不知道。
-	// 直接把话给 Jev,它自己判断现在处在哪个阶段。加新 boss = 加一行字
+	// 每个 boss 一条。打法和场地【都只是一段话】,人打 boss 靠背板,
+	// 写成 if 就得为每个 boss 编阈值 -- 那些数我一个都不知道
+	public class BossInfo
+	{
+		public string HowItFights = "";
+		// 这个 boss 的场地长什么样。以前写死"一整片平台",对蜂巢和地狱都是谎话
+		public string Arena = "";
+		// 这一场不许用的意图。肉山那种完全平整的场地,任何竖直动作都是白白送伤害
+		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
+	}
+
 	public static class BossBook
 	{
-		static readonly Dictionary<int, string> Book = new()
+		const string OpenArena = "一整片平台,左右都能跑,没有坑也没有墙";
+
+		static readonly Dictionary<int, BossInfo> Book = new()
 		{
-			[Terraria.ID.NPCID.EyeofCthulhu] =
-				"克苏鲁之眼通常先悬停在玩家头顶上方,蓄一会儿,然后朝玩家所在的位置直线冲刺。"
-				+ "所以它悬停不动的时候正是最危险的时候,要提前把横向速度拉起来,"
-				+ "站着不动等它冲下来必然被撞。它冲过去之后会有一段收招,那时可以贴近输出。"
-				+ "它还会召唤服务者小怪,小怪贴身也掉血。",
+			[Terraria.ID.NPCID.EyeofCthulhu] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"克苏鲁之眼通常先悬停在玩家头顶上方,蓄一会儿,然后朝玩家所在的位置直线冲刺。"
+					+ "所以它悬停不动的时候正是最危险的时候,要提前把横向速度拉起来,"
+					+ "站着不动等它冲下来必然被撞。它冲过去之后会有一段收招,那时可以贴近输出。"
+					+ "它还会召唤服务者小怪,小怪贴身也掉血。",
+			},
 
-			[Terraria.ID.NPCID.KingSlime] =
-				"史莱姆王的打法就一句话:一直远离它,别停。它会瞬移到玩家身上,"
-				+ "而瞬移本身带伤害 -- 站着不动就是把自己送到落点上,所以要时刻保持移动。"
-				+ "它的速度跟着玩家走,玩家越快它越快,甩不掉它,别指望拉开就安全。"
-				+ "不存在'它收招了可以贴近输出'的窗口,离得近就是在挨打。",
+			[Terraria.ID.NPCID.KingSlime] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"史莱姆王的打法就一句话:一直远离它,别停。它会瞬移到玩家身上,"
+					+ "而瞬移本身带伤害 -- 站着不动就是把自己送到落点上,所以要时刻保持移动。"
+					+ "它的速度跟着玩家走,玩家越快它越快,甩不掉它,别指望拉开就安全。"
+					+ "不存在'它收招了可以贴近输出'的窗口,离得近就是在挨打。",
+			},
 
-			[Terraria.ID.NPCID.BrainofCthulhu] =
-				"克苏鲁之脑分两个阶段。一阶段本体刀枪不入,场上一圈爬行者绕着它转,"
-				+ "先把爬行者清光,清光的那一刻本体才会现身 -- 爬行者是一次性的,不会再刷。"
-				+ "二阶段本体会瞬移到玩家附近再撞过来。全程碰到爬行者或者本体都掉血。"
-				+ "场地是个正方形房间,【拉不开距离】,往后退只会退到墙上。"
-				+ "所以别想着远离,要沿着垂直于'自己到本体连线'的方向绕着走,"
-				+ "让它的冲撞从身边擦过去,而不是迎面撞上。",
+			[Terraria.ID.NPCID.BrainofCthulhu] = new BossInfo
+			{
+				Arena = "一个正方形房间,四面都是墙,退无可退",
+				HowItFights =
+					"克苏鲁之脑分两个阶段。一阶段本体刀枪不入,场上一圈爬行者绕着它转,"
+					+ "先把爬行者清光,清光的那一刻本体才会现身 -- 爬行者是一次性的,不会再刷。"
+					+ "二阶段本体会瞬移到玩家附近再撞过来。全程碰到爬行者或者本体都掉血。"
+					+ "场地是个正方形房间,【拉不开距离】,往后退只会退到墙上。"
+					+ "所以别想着远离,要沿着垂直于'自己到本体连线'的方向绕着走,"
+					+ "让它的冲撞从身边擦过去,而不是迎面撞上。",
+			},
 
-			[Terraria.ID.NPCID.EaterofWorldsHead] =
-				"世界吞噬者是一条几十节的长虫,穿墙钻土,整条身体都会撞人。"
-				+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远,也拉不开 -- 它会一直钻过来,"
-				+ "保持个不会擦到的距离,一直打就是了。报给你的距离说的是离你最近的那一节,"
-				+ "不是头 -- 身体从背后钻出来一样掉血,所以看的是最近那节有多近。",
+			[Terraria.ID.NPCID.EaterofWorldsHead] = new BossInfo
+			{
+				Arena = "腐化之地的竖井和土层,它穿墙钻土,墙挡不住它",
+				HowItFights =
+					"世界吞噬者是一条几十节的长虫,穿墙钻土,整条身体都会撞人。"
+					+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远,也拉不开 -- 它会一直钻过来,"
+					+ "保持个不会擦到的距离,一直打就是了。报给你的距离说的是离你最近的那一节,"
+					+ "不是头 -- 身体从背后钻出来一样掉血,所以看的是最近那节有多近。",
+			},
 
-			[Terraria.ID.NPCID.SkeletronHead] =
-				"骷髅王有一个头和两只手。【两只手还在的时候先打手】,手比头好打也更危险。"
-				+ "打掉一只手之后它开始发射自动制导的骷髅头弹幕,两只手都没了发射得更快 -- "
-				+ "那时候要盯着弹幕躲。最要命的是头:它会突然高速旋转着撞过来,"
-				+ "【离高速移动的头远一点】,看到它速度起来了就别待在它的路线上。"
-				+ "和手、和头都要留出距离,但场地没有边界,不用担心退到墙上。"
-				+ "手和头都是从固定的中心荡过来的,每一下都有固定的弧线,"
-				+ "钩爪能让你瞬间换一个方向或者拔高,避开正在扫过来的那一只。"
-				+ "只在地面上左右跑的话,躲避就只剩一个维度,而制导骷髅头会从水平方向追上来。"
-				+ "钩爪可以往上勾,也可以往左下右下勾,换一个高度常常比继续横跑躲得开。"
-				+ "两只手都打掉之后弹幕会变密,那时候垂直方向的机动更有用。",
+			[Terraria.ID.NPCID.SkeletronHead] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"骷髅王有一个头和两只手。【两只手还在的时候先打手】,手比头好打也更危险。"
+					+ "打掉一只手之后它开始发射自动制导的骷髅头弹幕,两只手都没了发射得更快 -- "
+					+ "那时候要盯着弹幕躲。最要命的是头:它会突然高速旋转着撞过来,"
+					+ "【离高速移动的头远一点】,看到它速度起来了就别待在它的路线上。"
+					+ "和手、和头都要留出距离,但场地没有边界,不用担心退到墙上。"
+					+ "手和头都是从固定的中心荡过来的,每一下都有固定的弧线,"
+					+ "钩爪能让你瞬间换一个方向或者拔高,避开正在扫过来的那一只。"
+					+ "只在地面上左右跑的话,躲避就只剩一个维度,而制导骷髅头会从水平方向追上来。"
+					+ "钩爪可以往上勾,也可以往左下右下勾,换一个高度常常比继续横跑躲得开。"
+					+ "两只手都打掉之后弹幕会变密,那时候垂直方向的机动更有用。",
+			},
+
+			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
+			{
+				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
+				// 【竖直动作全禁】。地面是平的,跳起来既躲不开也够不到,落地那段还没法变向
+				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
+				HowItFights =
+					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,【只会水平移动,永远不会停】。"
+					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"
+					+ "唯一的打法是一直往它的反方向跑,边跑边打 -- 停下来就会被推平。"
+					+ "【它的血越少跑得越快】,所以血越低就要离得越远、跑得越早,"
+					+ "等被追近了才动就来不及了。"
+					+ "场地是完全平的,跳起来毫无意义:既躲不开它也够不到它,"
+					+ "而且滞空的时候横向速度反而不好调整。全程贴着地面跑就行。",
+			},
 		};
 
 		// 玩家这一局带着什么本事。【也只是一段话】,组合技尤其不该写成状态机
@@ -57,16 +102,42 @@ namespace TerraBlind
 			+ "钩爪主要用来急转向和急拔高:往上勾、勾住就跳、同时按住上键能窜得很高,"
 			+ "往左下右下勾则能快速换到另一个高度。荡出去的那一段改不了方向,吊着不跳也打不到人。";
 
-		// 【身体和尾巴要查到头那条】。Dodge.Boss() 返回的是最近的一节,多数帧拿到的
-		// 是 14/15,直接查表会返回空字符串 -- 知识就在最需要的时候悄悄消失了
-		public static string For(int npcType)
+		// 【部件要查到本体那条】。Boss() 返回的可能是蠕虫的某一节或者骷髅王的手,
+		// 直接查表会返回空 -- 知识就在最需要的时候悄悄消失了
+		static int Canon(int npcType)
 		{
 			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
 			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
-				npcType = Terraria.ID.NPCID.EaterofWorldsHead;
+				return Terraria.ID.NPCID.EaterofWorldsHead;
 			if (npcType == Terraria.ID.NPCID.SkeletronHand)
-				npcType = Terraria.ID.NPCID.SkeletronHead;
-			return Book.TryGetValue(npcType, out string s) ? s : "";
+				return Terraria.ID.NPCID.SkeletronHead;
+			if (npcType == Terraria.ID.NPCID.WallofFleshEye
+			 || npcType == Terraria.ID.NPCID.TheHungry
+			 || npcType == Terraria.ID.NPCID.TheHungryII)
+				return Terraria.ID.NPCID.WallofFlesh;
+			return npcType;
+		}
+
+		static readonly BossInfo None = new();
+
+		public static BossInfo Of(int npcType)
+			=> Book.TryGetValue(Canon(npcType), out var b) ? b : None;
+
+		public static string For(int npcType) => Of(npcType).HowItFights;
+
+		// 没有条目的 boss 也得有个场地描述,否则那个字段是空的
+		public static string ArenaOf(int npcType)
+		{
+			string a = Of(npcType).Arena;
+			return a.Length > 0 ? a : OpenArena;
+		}
+
+		public static bool IsBanned(int npcType, DodgeAct act)
+		{
+			var b = Of(npcType).Banned;
+			for (int i = 0; i < b.Length; i++)
+				if (b[i] == act) return true;
+			return false;
 		}
 	}
 }

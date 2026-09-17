@@ -125,6 +125,8 @@ namespace TerraBlind
 
 			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
 			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
+			// 这一场禁用的意图退回 Back。肉山那种平地上,跳和钩爪都是白白送伤害
+			if (BossBook.IsBanned(boss.type, act)) act = DodgeAct.Back;
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
@@ -196,9 +198,10 @@ namespace TerraBlind
 			// 钩爪:发射 → 勾住 → 【必须跳一次取消】。跳完拿到那段速度,二段跳也回来了
 			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
 
-			// 【飘太久连跳也不许,但取消钩爪的那一跳例外】。挂在钩子上不是滞空 --
-			// 拿这条拦住 hookJump,人就永远下不来,而下不来又让它一直成立
-			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne);
+			// 【飘太久连跳也不许,但 hookJump 例外】。挂在钩子上不是滞空,拦住就永远下不来
+			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
+			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
+			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
 			int want0 = go;
@@ -390,7 +393,7 @@ namespace TerraBlind
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
 				 // 写在这里等于对每个 boss 都这么说 -- 该由 how_this_boss_fights 去讲
-				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙\""
+				 + ",\"arena\":\"" + JsonStr(BossBook.ArenaOf(boss.type)) + "\""
 				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
 				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
 				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
