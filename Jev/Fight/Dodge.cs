@@ -5,7 +5,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	public enum DodgeAct { Keep, Back, Close, Evade, Up }
+	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
@@ -23,6 +23,9 @@ namespace TerraBlind
 		static int _holdFrames;
 		// 按住的兜底上限。正常到顶就松了,这个数只防"某种状态下一直升不完"
 		const int MaxHoldFrames = 30;
+		// 钩爪甩出去这么多帧还没勾上就放弃,别一直按着钩子不打人
+		const int HookGiveUpFrames = 45;
+		static int _hookFrames;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -87,7 +90,8 @@ namespace TerraBlind
 			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
 			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
 
-			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump, () => Enabled))
+			// Vertical 也要:羽落靠按住 up 才慢降
+			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
 			{ Last = "Move 抢不到:" + AxisLock.Held(Ax.Move); return; }
 
 			Drive(p, boss, dist, act);
@@ -127,23 +131,59 @@ namespace TerraBlind
 					go = away;
 					break;
 				case DodgeAct.Up:
+				case DodgeAct.Float:
+					break;
+				case DodgeAct.Grapple:
+					go = away;
 					break;
 				case DodgeAct.Keep:
 					if (dist < want / 2) go = away;
 					break;
 			}
 
+			// 钩爪:发射 → 勾住 → 【必须跳一次取消】。跳完拿到那段速度,二段跳也回来了
+			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
+
 			// 跳的时机归反射层。Evade/Up 是"该闪",快撞上才是"现在闪"
-			bool wantJump = act == DodgeAct.Up || JevSaysJump || incoming;
+			bool wantJump = hookJump || act == DodgeAct.Up || JevSaysJump || incoming;
 			bool jump = Jump(p, onGround, wantJump);
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
+			// 【羽落:空中一直按住 up】。慢降永远比快落安全,而站地上按 up 没有任何坏处。
+			// 要快速落地的只有一种情况 -- 它从上面压下来,那时 Jev 会给 Back/Evade 并且人在地面
+			if (!onGround && act != DodgeAct.Close) p.controlUp = true;
+
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
-				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (incoming ? $" 撞击{framesToHit}帧" : "")
+				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
+				 + (!onGround && act != DodgeAct.Close ? "+飘" : "")
+				 + (incoming ? $" 撞击{framesToHit}帧" : "")
 				 + (TacticWorking ? "" : " [这套没用]");
+		}
+
+		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
+		// 光标是全局的,攻击层每帧在瞄 boss -- 只有发射那一帧抢过来指个方向,之后不用再指
+		static bool Hook(Player p, NPC boss, DodgeAct act, bool onGround, out bool hookJump)
+		{
+			hookJump = false;
+			if (p.grapCount > 0)
+			{
+				// 勾住了,这一帧就跳。跳完二段跳重置,等于白赚一次滞空
+				hookJump = true;
+				_airJumpUsed = false;
+				_hookFrames = 0;
+				return true;
+			}
+			if (act != DodgeAct.Grapple) { _hookFrames = 0; return false; }
+			// 【往上勾】。配合羽落按住上键,跳取消之后能飞很高,整片地面攻击都躲得掉。
+			// 横向只带一点,躲开 boss 那一侧;主要是拿高度。勾不到就算了,不纠缠
+			if (_hookFrames++ > HookGiveUpFrames) return false;
+			float dir = boss.Center.X > p.Center.X ? -1f : 1f;
+			Cursor.AimPx(p.Center.X + dir * 16f * 6f, p.Center.Y - 16f * 16f);
+			p.controlHook = true;
+			return true;
 		}
 
 		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
@@ -209,6 +249,8 @@ namespace TerraBlind
 				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙。站着不动就会被撞\""
 				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
 				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
+				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
+				 + ",\"grapple_attached\":" + (p.grapCount > 0 ? "true" : "false")
 				 + "}";
 		}
 
@@ -222,7 +264,11 @@ namespace TerraBlind
 			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
-			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\"}},"
+			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
+			 + "\"Float\":\"留在空中慢慢飘。喝了羽落药水,按住上键下落速度只有十分之一,"
+			 + "等于能悬停 -- 贴地面冲过来的东西这样就撞不到\","
+			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
+			 + "整片地面攻击都躲得掉,而且二段跳会重置。想快速脱离险境或者拉高度时用\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
 			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
@@ -274,6 +320,8 @@ namespace TerraBlind
 				"Close" => DodgeAct.Close,
 				"Evade" => DodgeAct.Evade,
 				"Up" => DodgeAct.Up,
+				"Float" => DodgeAct.Float,
+				"Grapple" => DodgeAct.Grapple,
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
