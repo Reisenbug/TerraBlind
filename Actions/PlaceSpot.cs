@@ -14,6 +14,28 @@ namespace TerraBlind
 		// 调用方说这里该拿什么补地板。家具下面缺格时用它,栈自己猜必错
 		public enum Fill { Block, Platform }
 
+		// 放哪儿。【坐标要算,不能猜】:模型报的 y 比自己头顶还高,底下悬空,NoFooting 卡死
+		public static bool FindSpot(Player p, int itemId, out int bx, out int by)
+		{
+			bx = by = 0;
+			if (p == null) return false;
+			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
+			int span = Player.tileRangeX + p.blockRange + 4;
+			for (int r = 1; r <= span; r++)
+				for (int dy = -r; dy <= r; dy++)
+					for (int dx = -r; dx <= r; dx++)
+					{
+						if (System.Math.Abs(dx) != r && System.Math.Abs(dy) != r) continue;
+						int x = cx + dx, y = cy + dy;
+						if (!Predicates.InBounds(x, y)) continue;
+						if (!Reach.CanPlace(p, x, y)) continue;
+						if (!Check(itemId, x, y, Fill.Block, out _)) continue;
+						bx = x; by = y;
+						return true;
+					}
+			return false;
+		}
+
 		// 放得下吗。放不下就给出【第一个】要解决的 Blocker
 		public static bool Check(int itemId, int wx, int wy, Fill fill, out Blocker why)
 		{

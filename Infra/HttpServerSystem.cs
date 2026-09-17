@@ -1809,9 +1809,9 @@ namespace TerraBlind
 				var pab = paBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var paIt = System.Text.RegularExpressions.Regex.Match(pab, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var paAt = System.Text.RegularExpressions.Regex.Match(pab, "\"world\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
-				if (!paIt.Success || !paAt.Success)
+				if (!paIt.Success)
 				{
-					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_anywhere {\\\"item\\\":\\\"工作台\\\",\\\"world\\\":[2107,260]}\"}";
+					body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /place_anywhere {\\\"item\\\":\\\"工作台\\\"} -- world 省略就由代码选位置\"}";
 					status = 400;
 				}
 				else if (PlaceAnywhere.IsRunning)
@@ -1820,9 +1820,27 @@ namespace TerraBlind
 				}
 				else
 				{
-					bool paOk = PlaceAnywhere.Start(paIt.Groups[1].Value,
-						int.Parse(paAt.Groups[1].Value), int.Parse(paAt.Groups[2].Value), out string paWhy);
-					body = paOk ? "{\"accepted\":true,\"note\":\"poll /place_anywhere_status\"}"
+					int paX = 0, paY = 0;
+					bool haveAt = paAt.Success;
+					if (haveAt)
+					{ paX = int.Parse(paAt.Groups[1].Value); paY = int.Parse(paAt.Groups[2].Value); }
+					string paWhy = "";
+					bool paOk = false;
+					if (!haveAt)
+					{
+						// 不给坐标就自己找。省得调用方拿个悬空的格子过来,白走一趟自救再卡死
+						var pp = Main.LocalPlayer;
+						int slot = PlaceAction.ResolveSlot(paIt.Groups[1].Value);
+						if (pp == null || slot < 0)
+							paWhy = $"背包里没有{paIt.Groups[1].Value}";
+						else if (!PlaceSpot.FindSpot(pp, pp.inventory[slot].type, out paX, out paY))
+							paWhy = "附近没有放得下又够得着的地方";
+						else
+							haveAt = true;
+					}
+					if (haveAt)
+						paOk = PlaceAnywhere.Start(paIt.Groups[1].Value, paX, paY, out paWhy);
+					body = paOk ? "{\"accepted\":true,\"world\":[" + paX + "," + paY + "],\"note\":\"poll /place_anywhere_status\"}"
 								: "{\"accepted\":false,\"reason\":\"" + JsonEsc(paWhy) + "\"}";
 				}
 			}
