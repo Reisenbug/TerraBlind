@@ -202,8 +202,9 @@ namespace TerraBlind
 			// 钩爪:发射 → 勾住 → 【必须跳一次取消】。跳完拿到那段速度,二段跳也回来了
 			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
 
-			// 【飘太久连跳也不许】。只关 controlUp 的话,一落地 incoming 又把人弹上去
-			bool wantJump = (hookJump || act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne;
+			// 【飘太久连跳也不许,但取消钩爪的那一跳例外】。挂在钩子上不是滞空 --
+			// 拿这条拦住 hookJump,人就永远下不来,而下不来又让它一直成立
+			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne);
 			bool jump = Jump(p, onGround, wantJump);
 
 			int want0 = go;
@@ -214,9 +215,9 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【羽落只在要躲的时候按】。离地就按住 up 等于永不落地,二段跳也就永不回充
 			// 【down 一个键干两件事】(Player.cs: fallThrough = controlDown):穿平台 + 取消缓降
-			bool dive = act == DodgeAct.Dive || _tooLongAirborne;
+			// 【但勾着时不能按】。vanilla 取消钩爪要 !controlDown,按着就只给 velocity.Y 加 0.01
+			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
 			bool hover = !dive && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
