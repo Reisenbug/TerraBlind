@@ -75,21 +75,33 @@ namespace TerraBlind
 			return _key.Length == 0 ? null : _key;
 		}
 
+		// 【蠕虫的三段都没有 boss 标志】。世界吞噬者头/身/尾 SetDefaults 里一个都没设,
+		// 只认 npc.boss 的话走位层直接退出,整场没有躲避
+		static bool IsBossLike(NPC npc)
+			=> npc.boss
+			|| npc.type == Terraria.ID.NPCID.EaterofWorldsHead
+			|| npc.type == Terraria.ID.NPCID.EaterofWorldsBody
+			|| npc.type == Terraria.ID.NPCID.EaterofWorldsTail;
+
+		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
+		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节
 		static NPC Boss(Player p, out int dist)
 		{
 			dist = -1;
+			NPC best = null;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var npc = Main.npc[i];
-				if (npc == null || !npc.active || !npc.boss || npc.friendly) continue;
+				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
 				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
 				if (d > CareCells) continue;
+				if (best != null && d >= dist) continue;
 				dist = d;
-				return npc;
+				best = npc;
 			}
-			return null;
+			return best;
 		}
 
 		public static void Tick()

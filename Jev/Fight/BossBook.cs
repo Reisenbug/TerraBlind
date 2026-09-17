@@ -28,6 +28,12 @@ namespace TerraBlind
 				+ "场地是个正方形房间,【拉不开距离】,往后退只会退到墙上。"
 				+ "所以别想着远离,要沿着垂直于'自己到本体连线'的方向绕着走,"
 				+ "让它的冲撞从身边擦过去,而不是迎面撞上。",
+
+			[Terraria.ID.NPCID.EaterofWorldsHead] =
+				"世界吞噬者是一条几十节的长虫,穿墙钻土,整条身体都会撞人。"
+				+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远,也拉不开 -- 它会一直钻过来,"
+				+ "保持个不会擦到的距离,一直打就是了。报给你的距离说的是离你最近的那一节,"
+				+ "不是头 -- 身体从背后钻出来一样掉血,所以看的是最近那节有多近。",
 		};
 
 		// 玩家这一局带着什么本事。【也只是一段话】,组合技尤其不该写成状态机
@@ -39,7 +45,14 @@ namespace TerraBlind
 			+ "常用的组合是【往上勾,勾住的瞬间跳,同时按住上键】,能飞得很高,"
 			+ "整个屏幕的地面攻击都躲得掉。";
 
+		// 【身体和尾巴要查到头那条】。Dodge.Boss() 返回的是最近的一节,多数帧拿到的
+		// 是 14/15,直接查表会返回空字符串 -- 知识就在最需要的时候悄悄消失了
 		public static string For(int npcType)
-			=> Book.TryGetValue(npcType, out string s) ? s : "";
+		{
+			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
+			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
+				npcType = Terraria.ID.NPCID.EaterofWorldsHead;
+			return Book.TryGetValue(npcType, out string s) ? s : "";
+		}
 	}
 }
