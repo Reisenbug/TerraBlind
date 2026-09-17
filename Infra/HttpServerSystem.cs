@@ -2813,6 +2813,19 @@ namespace TerraBlind
 					body = MeasureBlobJson(x, y);
 				}
 			}
+			else if (path == "/jev")
+			{
+				body = JevPage.Html();
+			}
+			else if (path == "/jev_log")
+			{
+				body = JevPage.Json();
+			}
+			else if (path == "/jev_clear")
+			{
+				JevLog.Clear();
+				body = "{\"ok\":true}";
+			}
 			else
 			{
 				body = "{\"error\":\"not_found\"}";
@@ -2821,7 +2834,8 @@ namespace TerraBlind
 
 			byte[] bytes = Encoding.UTF8.GetBytes(body);
 			ctx.Response.StatusCode = status;
-			ctx.Response.ContentType = "application/json";
+			// /jev 是给人看的页面,其余全是 JSON
+			ctx.Response.ContentType = path == "/jev" ? "text/html; charset=utf-8" : "application/json";
 			ctx.Response.ContentLength64 = bytes.Length;
 			ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
 			ctx.Response.OutputStream.Close();

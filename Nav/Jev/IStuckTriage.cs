@@ -15,6 +15,8 @@ namespace TerraBlind
 		public Rung Rung;
 		public float Confidence;   // Choice 的 confidence,0..1。Baseline 恒为 1
 		public string Why;
+		public string Probs;       // "AstarEscape:0.72,Commit:0.21" 给观测页看。baseline 为空
+		public int LatencyMs;      // -1 = 没真发请求
 	}
 
 	public interface IStuckTriage
