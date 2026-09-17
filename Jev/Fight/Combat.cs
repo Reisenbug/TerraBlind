@@ -162,6 +162,22 @@ namespace TerraBlind
 			if (Main.npc[n].boss || BossPart(Main.npc[n].type))
 			{
 				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss在场,只管打" };
+				// 【这一支也要记】。日志只写在问 Jev 那一支里,走捷径就整场零条 --
+				// 看上去像没在打,其实是没在记
+				string bsig = "boss|" + n;
+				if (bsig != _lastSig)
+				{
+					_lastSig = bsig;
+					JevLog.Add(new JevLog.Entry
+					{
+						Ms = _clock.ElapsedMilliseconds,
+						Site = "combat",
+						State = Facts(p, tcx, tcy, dist),
+						Pick = "Fight(" + Main.npc[n].TypeName + ")",
+						Confidence = 1f,
+						Why = _call.Why,
+					});
+				}
 				_target = n;
 			}
 			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
