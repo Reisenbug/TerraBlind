@@ -175,15 +175,20 @@ namespace TerraBlind
 			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
 
 			// 跳的时机归反射层。Evade/Up 是"该闪",快撞上才是"现在闪"
-			bool wantJump = hookJump || act == DodgeAct.Up || JevSaysJump || incoming;
+			// 【飘太久就连跳也不许】。原来只关 controlUp,可一落地 incoming 又把人弹上去,
+			// 二段跳落地就回充 -- 于是"落地→立刻二段跳→再飘五秒",强制落地是句空话
+			bool wantJump = (hookJump || act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne;
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【别频繁转弯】。克苏鲁之眼锁的是冲刺开始那一刻的位置,躲开它靠的是
 			// 横向速度拉满。每 200ms 换一次方向,加速度全耗在掉头上,净位移接近 0 --
 			// 认准一个方向就跑满 MinRunFrames,除非撞墙或者要掉下去
-			if (go != 0 && go != _runDir && _runFrames < MinRunFrames) go = _runDir;
-			if (go != 0 && go != _runDir) { _runDir = go; _runFrames = 0; }
-			if (go != 0) _runFrames++;
+			// 【要躲的那一下不受节流管】。锁住 Evade 等于冲刺来了还不许躲
+			bool mustTurn = act == DodgeAct.Evade || incoming;
+			// 【每帧都涨】。原来只在 go!=0 时涨,站定期间锁一直不解除
+			_runFrames++;
+			if (go != 0 && go != _runDir && !mustTurn && _runFrames < MinRunFrames) go = _runDir;
+			else if (go != 0 && go != _runDir) { _runDir = go; _runFrames = 0; }
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
@@ -419,7 +424,7 @@ namespace TerraBlind
 			if (Act != _saidAct)
 			{
 				_saidAct = Act;
-				Main.NewText($"<Jev> {Say(Act)}  ({TopTwo})  置信{Confidence:0.00} {ms}ms", 90, 230, 120);
+				Main.NewText($"<Jev> {Say(Act)}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
@@ -479,16 +484,16 @@ namespace TerraBlind
 		static float Num(string seg, string name, float dflt)
 			=> seg != null && float.TryParse(Field(seg, name), out float v) ? v : dflt;
 
-		// 意图的人话。聊天里要看懂的是"它在干什么",不是枚举名
+		// 意图的人话。【聊天栏一律英文】,录像给外面的人看
 		static string Say(DodgeAct a) => a switch
 		{
-			DodgeAct.Back => "拉开距离",
-			DodgeAct.Close => "贴上去输出",
-			DodgeAct.Evade => "横向闪开",
-			DodgeAct.Up => "往上跳",
-			DodgeAct.Float => "滞空让它从脚下过",
-			DodgeAct.Grapple => "甩钩爪拉高度",
-			_ => "保持位置",
+			DodgeAct.Back => "back off",
+			DodgeAct.Close => "close in and attack",
+			DodgeAct.Evade => "dodge sideways",
+			DodgeAct.Up => "jump up",
+			DodgeAct.Float => "hover, let it pass underneath",
+			DodgeAct.Grapple => "grapple for height",
+			_ => "hold position",
 		};
 
 		// "Float:0.41 Grapple:0.19" -- 从 probabilities 里挑最高的两个
