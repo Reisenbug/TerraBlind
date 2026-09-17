@@ -20,13 +20,13 @@ namespace TerraBlind
 	{
 		public static bool Enabled = false;
 		const string Owner = "combat";
-		const int SwingTicks = 30;
 		// 名单里任何一只走了这么多格就重新判断。局面没动就沿用上次的结论
 		const int MoveRedecide = 3;
 		// 血量跨档也要重判:同样的怪,满血该打,残血该跑
 		const int HpBuckets = 5;
 
 		static int _target = -1;
+		static bool _swinging;
 		static string _lastSig = "";
 		static int _lastHpBucket = -1;
 		static readonly Dictionary<int, (int cx, int cy)> _askedAt = new();
@@ -34,7 +34,8 @@ namespace TerraBlind
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 		public static string Last = "idle";
 
-		static ICombatBrain _brain = new CombatBaseline();
+		// 没 key 或者请求还没回来时,JevCombat 自己会退回 baseline
+		static ICombatBrain _brain = new JevCombat();
 
 		// 只有放置不能打断。挖掘、寻路、砸网停了都能重来
 		static bool WorkBusy => PlaceAction.IsRunning || PlaceAnywhere.IsRunning;
@@ -160,14 +161,16 @@ namespace TerraBlind
 				DiagLog.Write($"[combat] 抢过 Use(原持有 {h})");
 			}
 
-			// 【瞄准每帧跟】。ItemUse 在 Start 那刻钉死坐标,怪走了就重发,否则一直砍空气
-			if (ItemUseCoordinator.IsActive
-				&& (ItemUseCoordinator.SnappedWx != tcx || ItemUseCoordinator.SnappedWy != tcy))
-				ItemUseCoordinator.Stop();
-			if (!ItemUseCoordinator.IsActive)
+			// 【自己按键,不走 ItemUseCoordinator】。那套是为挖和放做的:会把光标吸附到附近的 tile、
+			// 按挖掘距离判够不着。武器要的只是"对着这个坐标一直挥",怪那格通常是空气
+			if (slot >= 10) { Last = "武器不在快捷栏"; return; }
+			p.selectedItem = slot;
+			Main.SmartCursorWanted_Mouse = false;
+			Cursor.AimTile(tcx, tcy);
+			if (p.itemTime == 0) p.controlUseItem = true;
+			if (_target != n || !_swinging)
 			{
-				ItemUseCoordinator.Start(new ItemUseRequest
-				{ TargetWx = tcx, TargetWy = tcy, Slot = slot, DurationTicks = SwingTicks, Strict = false });
+				_swinging = true;
 				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 			}
 			Last = $"打 {Main.npc[n].TypeName} {dist}格";
@@ -184,8 +187,7 @@ namespace TerraBlind
 		public static void Release()
 		{
 			if (_target < 0 && !AxisLock.Has(Owner, Ax.Use)) return;
-			_target = -1;
-			ItemUseCoordinator.Stop();
+			_target = -1; _swinging = false;
 			AxisLock.Release(Owner);
 		}
 
