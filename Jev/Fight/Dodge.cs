@@ -5,7 +5,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple }
+	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
@@ -165,6 +165,11 @@ namespace TerraBlind
 					break;
 				case DodgeAct.Grapple:
 					go = away;
+					break;
+				// 【绕着走,不是退开】。场地封闭时退只能退到墙上,垂直于连线才躲得开
+				case DodgeAct.Orbit:
+					if (System.Math.Abs(boss.Center.Y - p.Center.Y) > System.Math.Abs(dx)) go = _runDir;
+					else go = 0;
 					break;
 				case DodgeAct.Keep:
 					if (dist < want / 2) go = away;
@@ -359,6 +364,8 @@ namespace TerraBlind
 			 + "或者会瞬移到人身上的没用,那种情况滞空反而是把自己定在落点上。"
 			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘。"
 			 + "飘在半空移动慢、够不着它、也躲不开从上面压下来的东西\","
+			 + "\"Orbit\":\"绕着它走。沿垂直于'自己到它连线'的方向横移,让它的冲撞擦身而过。"
+			 + "场地封闭、退无可退的时候用这个 -- 往后退只会退到墙上,而绕开既保持了移动又不撞上去\","
 			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
 			 + "整片地面攻击都躲得掉,而且二段跳会重置。想快速脱离险境或者拉高度时用\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
@@ -414,6 +421,7 @@ namespace TerraBlind
 				"Up" => DodgeAct.Up,
 				"Float" => DodgeAct.Float,
 				"Grapple" => DodgeAct.Grapple,
+				"Orbit" => DodgeAct.Orbit,
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
@@ -493,6 +501,7 @@ namespace TerraBlind
 			DodgeAct.Up => "jump up",
 			DodgeAct.Float => "hover, let it pass underneath",
 			DodgeAct.Grapple => "grapple for height",
+			DodgeAct.Orbit => "orbit around it",
 			_ => "hold position",
 		};
 

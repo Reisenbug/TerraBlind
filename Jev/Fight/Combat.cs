@@ -84,17 +84,22 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 热键栏【最靠前】的武器。不挑最强:持续攻击时换手比多几点伤害重要
-		static int FrontWeaponSlot(Player p)
+		// 打小怪用 0 号位,打 boss 本体用 1 号位。【目标类型天然就是阶段】--
+		// 克脑一阶段本体打不动,Worst() 那时只会返回爬行者,不用存阶段变量
+		static int WeaponSlot(Player p, bool atBoss)
 		{
+			int want = atBoss ? 1 : 0;
+			if (Usable(p, want)) return want;
 			for (int i = 0; i < 10; i++)
-			{
-				var it = p.inventory[i];
-				if (it == null || it.IsAir || it.damage <= 0 || it.useStyle == 0) continue;
-				if (it.pick != 0 || it.axe != 0 || it.hammer != 0) continue;
-				return i;
-			}
+				if (Usable(p, i)) return i;
 			return -1;
+		}
+
+		static bool Usable(Player p, int i)
+		{
+			var it = p.inventory[i];
+			if (it == null || it.IsAir || it.damage <= 0 || it.useStyle == 0) return false;
+			return it.pick == 0 && it.axe == 0 && it.hammer == 0;
 		}
 
 		// 局面变了没有。【编号 + 移动距离】:同一批怪原地小动不算变,走远了才算
@@ -175,7 +180,7 @@ namespace TerraBlind
 			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
 			if (WorkBusy && !_call.InterruptWork) { Last = "在放置,先不打"; return; }
 
-			int slot = FrontWeaponSlot(p);
+			int slot = WeaponSlot(p, Main.npc[n].boss);
 			if (slot < 0)
 			{ Last = "背包里没有武器"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
