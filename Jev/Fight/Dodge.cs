@@ -54,6 +54,7 @@ namespace TerraBlind
 		public static bool TacticWorking = true;
 		public static bool SafeToAttack = true;
 		public static bool JevSaysJump;
+		public static bool JevSaysDash;
 		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
 		public static string Probs = "";
 		public static string TopTwo = "";
@@ -296,17 +297,22 @@ namespace TerraBlind
 		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
 		static int Dash(Player p, int go, bool incoming, DodgeAct act)
 		{
+			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
+			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
+			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
+
 			// dashDelay==0 才是就绪。>0 是内置冷却,<0 是正在冲
 			bool ready = p.dashType != 0 && p.dashDelay == 0 && p.dash == 0;
 			if (!ready) { _dashGap = false; _dashDir = 0; return go; }
 
-			// 上一帧空了手,这一帧按下去 -- 双击成立
-			if (_dashGap) { _dashGap = false; int d = _dashDir; _dashDir = 0; return d; }
+			// 上一帧空了手,这一帧按下去 -- 双击成立。【按住不放】,
+			// 冲完直接接着走,不然冲刺结束会有一段没速度的真空
+			if (_dashGap) { _dashGap = false; return _dashDir; }
+			_dashDir = 0;
 
-			// 【A:快撞上了就撞过去】。盾牌冲刺撞到 NPC 自带无敌帧,硬吃不如撞
-			// 【B:要闪要退时用它当位移】,比跑得快
-			bool worth = incoming || act == DodgeAct.Evade || act == DodgeAct.Back;
-			if (!worth || go == 0) return go;
+			// 【时机交给 Jev】。反射层判不了:FramesToHit 只做直线外推,
+			// 对荡着走的手那种圆周运动完全失真,拿它当冲刺时机就是乱冲
+			if (!JevSaysDash || go == 0) return go;
 
 			_dashGap = true; _dashDir = go;
 			return 0;   // 这一帧松手
@@ -419,6 +425,10 @@ namespace TerraBlind
 			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
 			 + "\"很险,离远点\",\"随时会死,能躲多远躲多远\"]},"
+			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
+			 + "\"就这一刻该用克苏鲁之盾冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
+			 + "它能瞬间拉开一段距离、或者穿过一片危险区域;撞到敌人还会免掉那一下伤害。"
+			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。\"},"
 			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
 			 + "\"safe_to_attack\":{\"type\":\"noul\",\"instructions\":"
@@ -486,6 +496,7 @@ namespace TerraBlind
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
+			JevSaysDash = Num(Seg(txt, "should_dash_now"), "noul", 0f) > 0.7f;
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
