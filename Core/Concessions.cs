@@ -202,8 +202,9 @@ namespace TerraBlind
 		public override void PostUpdate()
 		{
 			if (Player.whoAmI != Main.myPlayer) return;
-			// 清垃圾和让步无关。关了让步照样得扔,所以排在 Enabled 之前
-			KeepList.Sweep();
+			// 【只有 start 全流程才扔】。名单上有矿石,而每帧无条件扫会让挖来的矿进包即毁:
+			// mine_vein 挖满 45 格铅矿,got 里只剩土块石块,到 craft 那步才发现手里是空的
+			if (StartRun.IsRunning) KeepList.Sweep();
 			if (!Enabled) return;
 			TopUpWood();
 			GiveWeapon();
