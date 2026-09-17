@@ -36,9 +36,6 @@ namespace TerraBlind
 		// 猜远了钩子够不着,自己会空手回来,HookGiveUpFrames 收场
 		const int HookReachCells = 20;
 		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步
-		const int MinRunFrames = 25;
-		static int _runDir = 1;
-		static int _runFrames;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -182,7 +179,7 @@ namespace TerraBlind
 					break;
 				// 【绕着走,不是退开】。场地封闭时退只能退到墙上,垂直于连线才躲得开
 				case DodgeAct.Orbit:
-					if (System.Math.Abs(boss.Center.Y - p.Center.Y) > System.Math.Abs(dx)) go = _runDir;
+					if (System.Math.Abs(boss.Center.Y - p.Center.Y) > System.Math.Abs(dx)) go = p.direction;
 					else go = 0;
 					break;
 				// 【下坠时也要横移】。站着往下掉只是换个高度挨打
@@ -200,14 +197,6 @@ namespace TerraBlind
 			// 【飘太久连跳也不许】。只关 controlUp 的话,一落地 incoming 又把人弹上去
 			bool wantJump = (hookJump || act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne;
 			bool jump = Jump(p, onGround, wantJump);
-
-			// 【别频繁转弯】。掉头要先把速度减到 0,转得勤净位移接近 0
-			// 【但要躲的那一下不受管】。锁住 Evade 等于冲刺来了还不许躲
-			bool mustTurn = act == DodgeAct.Evade || incoming;
-			// 【每帧都涨】。原来只在 go!=0 时涨,站定期间锁一直不解除
-			_runFrames++;
-			if (go != 0 && go != _runDir && !mustTurn && _runFrames < MinRunFrames) go = _runDir;
-			else if (go != 0 && go != _runDir) { _runDir = go; _runFrames = 0; }
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
