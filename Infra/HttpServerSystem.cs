@@ -3751,13 +3751,43 @@ namespace TerraBlind
 			return -1;
 		}
 
-		static Recipe FirstRecipeFor(int type)
+		static System.Collections.Generic.List<Recipe> RecipesFor(int type)
 		{
+			var outp = new System.Collections.Generic.List<Recipe>();
 			for (int ri = 0; ri < Recipe.numRecipes; ri++)
 			{
 				var r = Main.recipe[ri];
-				if (r?.createItem != null && r.createItem.type == type) return r;
+				if (r?.createItem != null && r.createItem.type == type) outp.Add(r);
 			}
+			return outp;
+		}
+
+		// 铁锭最前那条配方是"拆铁栅栏还原",而栅栏自己又要铁锭,选它整棵树就崩成叶子。
+		// 先纯判定会不会绕回来,判定不写输出,被否掉的候选不留垃圾
+		static bool LeadsBackTo(int type, Recipe r, System.Collections.Generic.HashSet<int> path, int depth)
+		{
+			if (depth > 8) return true;
+			foreach (var ing in r.requiredItem)
+			{
+				if (ing == null || ing.type <= 0) continue;
+				if (ing.type == type || path.Contains(ing.type)) return true;
+				var subs = RecipesFor(ing.type);
+				if (subs.Count == 0) continue;
+				path.Add(ing.type);
+				bool allBad = true;
+				foreach (var sub in subs)
+					if (!LeadsBackTo(type, sub, path, depth + 1)) { allBad = false; break; }
+				path.Remove(ing.type);
+				if (allBad) return true;
+			}
+			return false;
+		}
+
+		static Recipe PickRecipe(int type, System.Collections.Generic.HashSet<int> path)
+		{
+			var cands = RecipesFor(type);
+			foreach (var r in cands)
+				if (!LeadsBackTo(type, r, path, 0)) return r;
 			return null;
 		}
 
@@ -3778,7 +3808,7 @@ namespace TerraBlind
 			// 同一个物品在树里出现几十次(每个砧都要一遍工作台)。展开一次,之后只累加数量
 			if (depth > 12 || path.Contains(type))
 			{ leaves[type] = (leaves.TryGetValue(type, out int q) ? q : 0) + need; return; }
-			var r = FirstRecipeFor(type);
+			var r = PickRecipe(type, path);
 			if (r == null)
 			{ leaves[type] = (leaves.TryGetValue(type, out int q2) ? q2 : 0) + need; return; }
 
@@ -3793,12 +3823,16 @@ namespace TerraBlind
 				int tt = r.requiredTile[k];
 				if (tt < 0 || stations.ContainsKey(tt)) continue;
 				var mk = Unstick.ItemsThatPlace(tt);
-				// 恶魔祭坛这类做不出来,是世界里天生的。和矿石一样是叶子,只是获取方式不同
-				stations[tt] = mk.Count == 0;
-				if (mk.Count == 0) continue;
-				int best = mk[0];
+				int best = -1;
 				foreach (int cand in mk)
 					if (StationHave(p, cand) > 0) { best = cand; break; }
+				if (best < 0)
+					foreach (int cand in mk)
+						if (PickRecipe(cand, path) != null) { best = cand; break; }
+				// 恶魔祭坛/地狱熔炉这类做不出来,是世界里天生的。标出来让上层去找,
+				// 别递归进去 -- 那会把台子自己塞进"要采集的原料"里
+				stations[tt] = best < 0;
+				if (best < 0) continue;
 				if (StationHave(p, best) <= 0)
 					WalkTree(best, 1, depth + 1, path, leaves, order, stations, p);
 			}
