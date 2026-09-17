@@ -89,8 +89,12 @@ namespace TerraBlind
 			if (WorkBusy && !call.InterruptWork) { Last = "手上有活,先不打"; return; }
 
 			int slot = SlotOf(p, Concessions.StartWeapon);
-			if (slot < 0) { Last = "背包里没有武器"; Release(); return; }
-			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled)) { Last = "Use 被占着"; return; }
+			if (slot < 0)
+			{ Last = "背包里没有武器"; DiagLog.Write($"[combat] 不挥:背包里找不到 id{Concessions.StartWeapon}"); Release(); return; }
+			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
+			{ Last = "Use 被占着"; DiagLog.Write($"[combat] 不挥:Use 被 {AxisLock.Held(Ax.Use)} 占着 {AxisLock.Dump()}"); return; }
+			if (ItemUseCoordinator.IsActive)
+			{ Last = "上一挥还没完"; DiagLog.Write($"[combat] 不挥:ItemUse 还在跑 outcome={ItemUseCoordinator.Outcome}"); return; }
 
 			_target = n;
 			if (!ItemUseCoordinator.IsActive)
@@ -102,6 +106,7 @@ namespace TerraBlind
 
 		static string Facts(Player p, int tcx, int tcy, int dist)
 			=> "{\"hp\":" + p.statLife + ",\"hp_max\":" + p.statLifeMax
+			 + ",\"player_cell\":[" + (int)(p.Center.X / 16f) + "," + (int)(p.Center.Y / 16f) + "]"
 			 + ",\"work_busy\":" + (WorkBusy ? "true" : "false")
 			 + ",\"nearest_distance\":" + dist
 			 + ",\"enemies\":" + ThreatScan.Json(p, (int)(p.Center.X / 16f), (int)(p.Center.Y / 16f))
