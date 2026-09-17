@@ -27,6 +27,11 @@ namespace TerraBlind
 		const int HookGiveUpFrames = 45;
 		static int _hookFrames;
 		static bool _hookHeld;
+		// 飘太久就强制落地。羽落 + 按住 up 能悬到天荒地老,而悬着既打不到 boss
+		// 也躲不开从上面压下来的东西 -- 判据只有一条:能不能躲开 boss
+		const int MaxAirborneFrames = 150;
+		static int _airborneFrames;
+		static bool _tooLongAirborne;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -117,6 +122,9 @@ namespace TerraBlind
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
+			if (onGround) { _airborneFrames = 0; _tooLongAirborne = false; }
+			else if (++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
+
 			int want = WantCells(Danger);
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
@@ -162,8 +170,10 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【羽落:空中就按住 up】。慢降永远比快落安全,站地上按也没有坏处
-			if (!onGround) p.controlUp = true;
+			// 【羽落只在要躲的时候按】。离地就按住 up 的话下落只剩 1/10,等于永不落地 --
+			// 落不了地二段跳就永远不回充,人就一直挂在天上。钩爪那一下要按,拉高度靠它
+			bool hover = act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming;
+			if (!onGround && hover && !_tooLongAirborne) p.controlUp = true;
 
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
 				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
@@ -233,6 +243,17 @@ namespace TerraBlind
 			return f > 600f ? -1 : (int)f;
 		}
 
+		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
+		// 探不到就报这个上限 -- "很高"和"极高"对走位是一回事
+		static int CellsAboveGround(Player p)
+		{
+			int cx = (int)(p.Center.X / 16f);
+			int feet = (int)((p.position.Y + p.height) / 16f);
+			for (int d = 0; d < 40; d++)
+				if (Predicates.IsSolid(cx, feet + d)) return d;
+			return 40;
+		}
+
 		static void Release() => AxisLock.Release(Owner);
 
 		// 【给方向不给标量】。ThreatScan 那份 speed 是绝对值,丢了符号,
@@ -254,6 +275,10 @@ namespace TerraBlind
 				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
 				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
 				 + ",\"i_am_airborne\":" + (p.velocity.Y != 0f ? "true" : "false")
+				 // 【飘了多久、离地多高】。原来只说"在空中",于是它每次都在答
+				 // "现在要不要滞空",而不是"要不要继续滞空" -- 悬了三秒也看不出来
+				 + ",\"frames_airborne\":" + _airborneFrames
+				 + ",\"cells_above_ground\":" + CellsAboveGround(p)
 				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
@@ -278,9 +303,9 @@ namespace TerraBlind
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
 			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
-			 + "\"Float\":\"【就这一下】跳起来滞空,让贴着地面冲过来的那一击从脚下穿过去。"
-			 + "不是常驻姿势:飘在半空移动慢、够不着它、也躲不开从上面压下来的东西,"
-			 + "平时该在地面上跑动\","
+			 + "\"Float\":\"【只为躲开眼前这一下】跳起来滞空,让贴着地面冲过来的那一击从脚下穿过去。"
+			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘。"
+			 + "飘在半空移动慢、够不着它、也躲不开从上面压下来的东西\","
 			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
 			 + "整片地面攻击都躲得掉,而且二段跳会重置。想快速脱离险境或者拉高度时用\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
