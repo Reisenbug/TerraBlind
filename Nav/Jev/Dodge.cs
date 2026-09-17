@@ -4,19 +4,23 @@ using Terraria;
 
 namespace TerraBlind
 {
-	public enum DodgeAct { Stand, Left, Right, JumpLeft, JumpRight, Jump }
+	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
+	public enum DodgeAct { Keep, Back, Close, Evade, Up }
 
-	// boss 战的移动。【不走寻路】:场子是平的,没有地形问题,要判的只有
-	// "它在哪、朝哪冲、我该往哪闪"。形状照 JevCombat:后台发请求,主线程拿上一次的结果
+	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
+	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
 	public static class Dodge
 	{
 		public static bool Enabled = false;
 		const string Owner = "dodge";
-		// 这么多格以内才谈得上躲。再远它还没冲过来,站着挥就行
 		const int CareCells = 60;
+		// 意图过期就退回保守行为。拿 3 秒前的判断当真比没有判断更糟
+		const long IntentTtlMs = 1500;
+		// 贴脸/拉开各自的舒适距离(格)
+		const int CloseCells = 6, BackCells = 18;
 
 		public static string Last = "idle";
-		public static DodgeAct Act = DodgeAct.Stand;
+		public static DodgeAct Act = DodgeAct.Back;
 		public static float Confidence;
 		public static int LatencyMs;
 
@@ -26,9 +30,9 @@ namespace TerraBlind
 		static volatile bool _busy;
 		static volatile string _pending;
 		static string _lastSig = "";
+		static long _actAt = -100000;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
-		// 【读一次记住】。每帧跑的东西不能碰磁盘
 		static string _key;
 		static string Key()
 		{
@@ -38,9 +42,9 @@ namespace TerraBlind
 			return _key.Length == 0 ? null : _key;
 		}
 
-		static int Boss(Player p, out NPC found)
+		static NPC Boss(Player p, out int dist)
 		{
-			found = null;
+			dist = -1;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
@@ -49,10 +53,10 @@ namespace TerraBlind
 				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
 				if (d > CareCells) continue;
-				found = npc;
-				return d;
+				dist = d;
+				return npc;
 			}
-			return -1;
+			return null;
 		}
 
 		public static void Tick()
@@ -61,33 +65,66 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
-			int dist = Boss(p, out var boss);
-			if (boss == null) { Last = "没有boss"; Act = DodgeAct.Stand; Release(); return; }
+			var boss = Boss(p, out int dist);
+			if (boss == null) { Last = "没有boss"; Release(); return; }
 
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done); }
 			string key = Key();
 			if (key != null && !_busy) Fire(key, Facts(p, boss, dist));
 
-			// 移动和跳,攻击那边只占 Use,互不干扰
+			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
+			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
+
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump, () => Enabled))
 			{ Last = "Move 抢不到:" + AxisLock.Held(Ax.Move); return; }
 
-			switch (Act)
+			Drive(p, boss, dist, act);
+		}
+
+		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
+		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
+		static void Drive(Player p, NPC boss, int dist, DodgeAct act)
+		{
+			float dx = boss.Center.X - p.Center.X;
+			bool bossRight = dx > 0;
+			int away = bossRight ? -1 : 1;
+			int toward = -away;
+			int go = 0;
+			bool jump = false;
+
+			switch (act)
 			{
-				case DodgeAct.Left: p.controlLeft = true; break;
-				case DodgeAct.Right: p.controlRight = true; break;
-				case DodgeAct.JumpLeft: p.controlLeft = true; p.controlJump = true; break;
-				case DodgeAct.JumpRight: p.controlRight = true; p.controlJump = true; break;
-				case DodgeAct.Jump: p.controlJump = true; break;
+				case DodgeAct.Back:
+					if (dist < BackCells) go = away;
+					break;
+				case DodgeAct.Close:
+					if (dist > CloseCells) go = toward;
+					break;
+				case DodgeAct.Evade:
+					// 横向闪:往它【来向的侧面】让开,同时跳起来避开贴地冲撞
+					go = away;
+					jump = p.velocity.Y == 0f;
+					break;
+				case DodgeAct.Up:
+					jump = p.velocity.Y == 0f;
+					break;
+				case DodgeAct.Keep:
+					// 只在被挤得太近时才动,否则站定挥武器更稳
+					if (dist < CloseCells) go = away;
+					break;
 			}
-			Last = $"{Act} 离boss{dist}格 血{p.statLife}/{p.statLifeMax}";
+
+			if (go < 0) p.controlLeft = true;
+			else if (go > 0) p.controlRight = true;
+			if (jump) p.controlJump = true;
+			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}{(jump ? "+跳" : "")}";
 		}
 
 		static void Release() => AxisLock.Release(Owner);
 
 		// 【给方向不给标量】。ThreatScan 那份 speed 是绝对值,丢了符号,
-		// 而躲避要判的正是"它朝哪飞"
+		// 而走位要判的正是"它朝哪飞"
 		static string Facts(Player p, NPC boss, int dist)
 		{
 			float dx = (boss.Center.X - p.Center.X) / 16f;
@@ -98,31 +135,28 @@ namespace TerraBlind
 				 + ",\"on_ground\":" + (p.velocity.Y == 0f ? "true" : "false")
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
-				 + ",\"boss_is\":\"" + (dx > 0 ? "右边" : "左边") + (System.Math.Abs(dy) < 3 ? "" : (dy > 0 ? "下方" : "上方")) + "\""
-				 + ",\"boss_cells_right\":" + (int)dx
+				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
+				 + ",\"boss_cells_away\":" + dist
 				 + ",\"boss_cells_below\":" + (int)dy
-				 + ",\"boss_distance_cells\":" + dist
 				 + ",\"boss_vx\":" + boss.velocity.X.ToString("0.0")
 				 + ",\"boss_vy\":" + boss.velocity.Y.ToString("0.0")
-				 + ",\"boss_charging_at_me\":" + (closing ? "true" : "false")
-				 + ",\"boss_damage\":" + boss.damage
-				 + ",\"my_vx\":" + p.velocity.X.ToString("0.0")
-				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑\""
+				 + ",\"boss_coming_at_me\":" + (closing ? "true" : "false")
+				 + ",\"boss_contact_damage\":" + boss.damage
+				 + ",\"my_weapon_auto_aims\":true"
+				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑,也没有墙\""
 				 + "}";
 		}
 
 		static string Body(string state)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
-			 + "\"move\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"泰拉瑞亚 boss 战。这个自动玩家站在一整片平台搭的战斗场上,武器会自己瞄准开火,"
-			 + "所以它只需要决定怎么走位躲开 boss 的冲撞。boss 撞到身上才掉血,拉开距离就安全。"
-			 + "选它这一刻最该做的动作。\",\"criteria\":{"
-			 + "\"Stand\":\"站着不动。boss 还远,或者它正飞开,没必要动\","
-			 + "\"Left\":\"往左跑。boss 在右边,拉开距离\","
-			 + "\"Right\":\"往右跑。boss 在左边,拉开距离\","
-			 + "\"JumpLeft\":\"往左跳。boss 贴着地面冲过来,跳起来同时往左闪\","
-			 + "\"JumpRight\":\"往右跳。boss 贴着地面冲过来,跳起来同时往右闪\","
-			 + "\"Jump\":\"原地跳。boss 从下方上来,或者要跳上更高一层平台\"}}"
+			 + "\"intent\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
+			 + "boss 撞到身上才掉血。【说的是意图不是按键】,具体往左往右由下面的代码每帧算。\",\"criteria\":{"
+			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
+			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
+			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
+			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
+			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\"}}"
 			 + "}}";
 
 		static void Fire(string key, string state)
@@ -159,13 +193,13 @@ namespace TerraBlind
 			Confidence = c;
 			Act = pick switch
 			{
-				"Left" => DodgeAct.Left,
-				"Right" => DodgeAct.Right,
-				"JumpLeft" => DodgeAct.JumpLeft,
-				"JumpRight" => DodgeAct.JumpRight,
-				"Jump" => DodgeAct.Jump,
-				_ => DodgeAct.Stand,
+				"Back" => DodgeAct.Back,
+				"Close" => DodgeAct.Close,
+				"Evade" => DodgeAct.Evade,
+				"Up" => DodgeAct.Up,
+				_ => DodgeAct.Keep,
 			};
+			_actAt = _clock.ElapsedMilliseconds;
 			string sig = pick + "|" + c.ToString("0.00");
 			if (sig != _lastSig)
 			{
