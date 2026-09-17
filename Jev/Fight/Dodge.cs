@@ -130,8 +130,10 @@ namespace TerraBlind
 				case DodgeAct.Evade:
 					go = away;
 					break;
+				// 【飘着也要横移】。羽落是边飘边躲,不是站桩 -- 悬在半空不动就是靶子
 				case DodgeAct.Up:
 				case DodgeAct.Float:
+					if (dist < want) go = away;
 					break;
 				case DodgeAct.Grapple:
 					go = away;
@@ -152,9 +154,8 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【羽落:空中一直按住 up】。慢降永远比快落安全,而站地上按 up 没有任何坏处。
-			// 要快速落地的只有一种情况 -- 它从上面压下来,那时 Jev 会给 Back/Evade 并且人在地面
-			if (!onGround && act != DodgeAct.Close) p.controlUp = true;
+			// 【羽落:空中就按住 up】。慢降永远比快落安全,站地上按也没有坏处
+			if (!onGround) p.controlUp = true;
 
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
 				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
@@ -265,8 +266,9 @@ namespace TerraBlind
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
 			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
-			 + "\"Float\":\"留在空中慢慢飘。喝了羽落药水,按住上键下落速度只有十分之一,"
-			 + "等于能悬停 -- 贴地面冲过来的东西这样就撞不到\","
+			 + "\"Float\":\"【就这一下】跳起来滞空,让贴着地面冲过来的那一击从脚下穿过去。"
+			 + "不是常驻姿势:飘在半空移动慢、够不着它、也躲不开从上面压下来的东西,"
+			 + "平时该在地面上跑动\","
 			 + "\"Grapple\":\"甩钩爪。往上勾,勾住的瞬间跳起来取消,配合羽落按住上键能飞得很高,"
 			 + "整片地面攻击都躲得掉,而且二段跳会重置。想快速脱离险境或者拉高度时用\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
