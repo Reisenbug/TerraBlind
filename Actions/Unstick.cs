@@ -441,6 +441,22 @@ namespace TerraBlind
 			return -1;
 		}
 
+		// 同一种台子常有好几个物品都能放出来(砧/炉各有几种材质)。全给出去,让调用方按缺口挑
+		static readonly Dictionary<int, List<int>> _allPlacesCache = new();
+		public static List<int> ItemsThatPlace(int tileId)
+		{
+			if (_allPlacesCache.TryGetValue(tileId, out var hit)) return hit;
+			var found = new List<int>();
+			for (int i = 0; i < Terraria.ID.ItemID.Count; i++)
+			{
+				var probe = new Item();
+				probe.SetDefaults(i);
+				if (probe.createTile == tileId) found.Add(i);
+			}
+			_allPlacesCache[tileId] = found;
+			return found;
+		}
+
 		// 5000 个物品逐个 SetDefaults 很贵,查过一次就记住
 		static readonly Dictionary<int, int> _placesCache = new();
 		static int ItemThatPlaces(int tileId)

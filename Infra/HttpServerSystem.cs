@@ -972,7 +972,24 @@ namespace TerraBlind
 							if (k > 0) sbr.Append(',');
 							string tnm = Terraria.ID.TileID.Search.ContainsId(tt)
 								? Terraria.ID.TileID.Search.GetName(tt) : tt.ToString();
-							sbr.Append('"').Append(JsonEsc(tnm)).Append('"');
+							sbr.Append("{\"tile\":\"").Append(JsonEsc(tnm)).Append("\",\"items\":[");
+							var mk = Unstick.ItemsThatPlace(tt);
+							for (int m = 0; m < mk.Count; m++)
+							{
+								if (m > 0) sbr.Append(',');
+								var probe = new Item();
+								probe.SetDefaults(mk[m]);
+								string pinm = Terraria.ID.ItemID.Search.ContainsId(mk[m])
+									? Terraria.ID.ItemID.Search.GetName(mk[m]) : "";
+								int phave = 0;
+								if (p2 != null)
+									foreach (var it in p2.inventory)
+										if (it != null && !it.IsAir && it.type == mk[m]) phave += it.stack;
+								sbr.Append("{\"name\":\"").Append(JsonEsc(probe.Name ?? ""))
+								   .Append("\",\"internal\":\"").Append(JsonEsc(pinm))
+								   .Append("\",\"have\":").Append(phave).Append('}');
+							}
+							sbr.Append("]}");
 						}
 						sbr.Append("]}");
 					}
