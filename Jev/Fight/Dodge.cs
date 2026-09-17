@@ -32,6 +32,13 @@ namespace TerraBlind
 		const int MaxAirborneFrames = 150;
 		static int _airborneFrames;
 		static bool _tooLongAirborne;
+		// 找落点时往上探多少格。不是钩爪的真实射程(那个数我不知道),只是个搜索上界:
+		// 猜远了钩子够不着,自己会空手回来,HookGiveUpFrames 收场
+		const int HookReachCells = 20;
+		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步
+		const int MinRunFrames = 25;
+		static int _runDir = 1;
+		static int _runFrames;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -166,6 +173,13 @@ namespace TerraBlind
 			bool wantJump = hookJump || act == DodgeAct.Up || JevSaysJump || incoming;
 			bool jump = Jump(p, onGround, wantJump);
 
+			// 【别频繁转弯】。克苏鲁之眼锁的是冲刺开始那一刻的位置,躲开它靠的是
+			// 横向速度拉满。每 200ms 换一次方向,加速度全耗在掉头上,净位移接近 0 --
+			// 认准一个方向就跑满 MinRunFrames,除非撞墙或者要掉下去
+			if (go != 0 && go != _runDir && _runFrames < MinRunFrames) go = _runDir;
+			if (go != 0 && go != _runDir) { _runDir = go; _runFrames = 0; }
+			if (go != 0) _runFrames++;
+
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
@@ -200,10 +214,10 @@ namespace TerraBlind
 			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
 			if (_hookFrames++ > HookGiveUpFrames) return false;
 			if (_hookHeld) { _hookHeld = false; return true; }
-			// 【往上勾】。配合羽落按住上键,跳取消之后能飞很高,整片地面攻击都躲得掉。
-			// 横向只带一点,躲开 boss 那一侧;主要是拿高度
-			float dir = boss.Center.X > p.Center.X ? -1f : 1f;
-			Cursor.AimPx(p.Center.X + dir * 16f * 6f, p.Center.Y - 16f * 16f);
+			// 【必须瞄到真能勾住的格子】。对着空气甩,钩子飞完全程再空手回来,
+			// 这期间人既没位移也没输出 -- 找不到落点就干脆不甩
+			if (!FindAnchor(p, boss, out int ax, out int ay)) { _hookFrames = 0; return false; }
+			Cursor.AimTile(ax, ay);
 			p.controlHook = true;
 			_hookHeld = true;
 			return true;
@@ -241,6 +255,35 @@ namespace TerraBlind
 			float fy = closeY > 0.1f ? gapY / closeY : 9999f;
 			float f = System.Math.Max(fx <= 0f ? 0f : fx, fy <= 0f ? 0f : fy);
 			return f > 600f ? -1 : (int)f;
+		}
+
+		// 钩子能不能勾这一格。照 vanilla 的 AI_007_GrapplingHooks_CanTileBeLatchedOnTo:
+		// 实心或者铁轨(314),而且 tile 得是实打实存在的。铁轨不实心但勾得住
+		static bool Hookable(int x, int y)
+		{
+			if (!Predicates.InBounds(x, y)) return false;
+			var t = Main.tile[x, y];
+			if (!t.HasTile) return false;
+			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
+		}
+
+		// 往上找一个勾得住的落点。【背着 boss 那一侧】,主要拿高度。
+		// 一圈都找不到就让 Hook 放弃,总比对着空气甩强
+		static bool FindAnchor(Player p, NPC boss, out int ax, out int ay)
+		{
+			ax = ay = 0;
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			int side = boss.Center.X > p.Center.X ? -1 : 1;
+			for (int up = 4; up <= HookReachCells; up++)
+				for (int w = 0; w <= up; w++)
+				{
+					int x = pcx + side * w, y = pcy - up;
+					if (!Hookable(x, y)) continue;
+					if (System.Math.Abs(x - pcx) + System.Math.Abs(y - pcy) > HookReachCells) continue;
+					ax = x; ay = y;
+					return true;
+				}
+			return false;
 		}
 
 		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,

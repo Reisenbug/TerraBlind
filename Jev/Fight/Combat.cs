@@ -142,8 +142,14 @@ namespace TerraBlind
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
 
+			// 【boss 在场不问打不打】。Fight/Ignore 天然分概率,置信上不去 0.6,退回 baseline 的"还远"就一直不出手
+			if (Main.npc[n].boss)
+			{
+				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss在场,只管打" };
+				_target = n;
+			}
 			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
-			if (Changed(p, n))
+			else if (Changed(p, n))
 			{
 				_call = _brain.Decide(p, tcx, tcy, dist, WorkBusy);
 				_target = n;
