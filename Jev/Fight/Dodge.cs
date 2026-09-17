@@ -31,6 +31,9 @@ namespace TerraBlind
 		// 勾上就跳、跳完就勾,人只会在同一格上下震荡,一格都没挪
 		const int HookCooldownFrames = 30;
 		static int _hookCooldown;
+		// 冲刺要"按→松→按"三帧。这一帧是不是该松手,下一帧再按下去触发双击
+		static int _dashDir;
+		static bool _dashGap;
 		// 飘太久就强制落地。羽落 + 按住 up 能悬到天荒地老,而悬着既打不到 boss
 		// 也躲不开从上面压下来的东西 -- 判据只有一条:能不能躲开 boss
 		const int MaxAirborneFrames = 150;
@@ -202,6 +205,10 @@ namespace TerraBlind
 			bool wantJump = (hookJump || act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne;
 			bool jump = Jump(p, onGround, wantJump);
 
+			int want0 = go;
+			go = Dash(p, go, incoming, act);
+			bool dashing = go != want0 || _dashGap;
+
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
@@ -215,6 +222,7 @@ namespace TerraBlind
 
 			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
 				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
+				 + (dashing ? "+冲" : "") + (p.dashDelay < 0 ? "[冲刺中]" : "")
 				 + (!onGround && act != DodgeAct.Close ? "+飘" : "")
 				 + (incoming ? $" 撞击{framesToHit}帧" : "")
 				 + (TacticWorking ? "" : " [这套没用]");
@@ -282,6 +290,26 @@ namespace TerraBlind
 			float fy = closeY > 0.1f ? gapY / closeY : 9999f;
 			float f = System.Math.Max(fx <= 0f ? 0f : fx, fy <= 0f ? 0f : fy);
 			return f > 600f ? -1 : (int)f;
+		}
+
+		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
+		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
+		static int Dash(Player p, int go, bool incoming, DodgeAct act)
+		{
+			// dashDelay==0 才是就绪。>0 是内置冷却,<0 是正在冲
+			bool ready = p.dashType != 0 && p.dashDelay == 0 && p.dash == 0;
+			if (!ready) { _dashGap = false; _dashDir = 0; return go; }
+
+			// 上一帧空了手,这一帧按下去 -- 双击成立
+			if (_dashGap) { _dashGap = false; int d = _dashDir; _dashDir = 0; return d; }
+
+			// 【A:快撞上了就撞过去】。盾牌冲刺撞到 NPC 自带无敌帧,硬吃不如撞
+			// 【B:要闪要退时用它当位移】,比跑得快
+			bool worth = incoming || act == DodgeAct.Evade || act == DodgeAct.Back;
+			if (!worth || go == 0) return go;
+
+			_dashGap = true; _dashDir = go;
+			return 0;   // 这一帧松手
 		}
 
 		// 钩子能不能勾这一格。照 vanilla 的 AI_007_GrapplingHooks_CanTileBeLatchedOnTo:
