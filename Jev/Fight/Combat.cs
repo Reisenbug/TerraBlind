@@ -54,8 +54,16 @@ namespace TerraBlind
 			=> npc != null && npc.active && !npc.townNPC && !npc.friendly
 			   && !(npc.lifeMax <= 5 && npc.damage == 0);
 
-		// 威胁最高的那只,不是最近那只
+		// 【小怪优先,按威胁分排序;清光了才打 boss】。boss 血几千,ThreatScan.Score 里
+		// 那项 life*0.01 让它永远碾压小怪 -- 于是服务者贴着脸咬,人还在对着 boss 挥
 		static int Worst(Player p, out int cx, out int cy, out int dist)
+		{
+			int n = Pick(p, false, out cx, out cy, out dist);
+			return n >= 0 ? n : Pick(p, true, out cx, out cy, out dist);
+		}
+
+		// bossPass=false 只看小怪(有射程限制);true 只看 boss(不限射程,它会飞远再冲回来)
+		static int Pick(Player p, bool bossPass, out int cx, out int cy, out int dist)
 		{
 			cx = cy = 0; dist = 0;
 			int best = -1;
@@ -65,30 +73,15 @@ namespace TerraBlind
 			{
 				var npc = Main.npc[i];
 				if (!Hostile(npc)) continue;
+				if (npc.boss != bossPass) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
-				if (d > ThreatScan.RangeCells) continue;
+				if (!bossPass && d > ThreatScan.RangeCells) continue;
 				float sc = ThreatScan.Score(p, npc, d);
 				if (sc <= bestScore) continue;
 				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;
 			}
 			return best;
-		}
-
-		// 射程内一只都没有时的兜底。boss 会飞出 30 格再冲回来,那几秒不该站着发呆
-		static int AnyBoss(Player p, out int cx, out int cy, out int dist)
-		{
-			cx = cy = dist = 0;
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var npc = Main.npc[i];
-				if (!Hostile(npc) || !npc.boss) continue;
-				cx = (int)(npc.Center.X / 16f); cy = (int)(npc.Center.Y / 16f);
-				dist = System.Math.Abs(cx - pcx) + System.Math.Abs(cy - pcy);
-				return i;
-			}
-			return -1;
 		}
 
 		// 热键栏【最靠前】的武器。不挑最强:持续攻击时换手比多几点伤害重要
@@ -147,7 +140,6 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
-			if (n < 0) n = AnyBoss(p, out tcx, out tcy, out dist);
 			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
 
 			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
