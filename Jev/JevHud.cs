@@ -27,6 +27,9 @@ namespace TerraBlind
 				Line(sb, font, ref x, ref y,
 					$"     置信{Dodge.Confidence:0.00}  危险{Dodge.Danger:0.0}"
 					+ (Dodge.SafeToAttack ? "" : " 别贴脸") + $"  {Dodge.LatencyMs}ms", Color.LightGray);
+				// 【概率分布是证据】。写死的状态机给不出七个选项各占多少
+				if (Dodge.TopTwo.Length > 0)
+					Line(sb, font, ref x, ref y, "     " + Dodge.TopTwo, Color.MediumPurple);
 			}
 			if (Combat.Enabled)
 				Line(sb, font, ref x, ref y, "攻击 " + Combat.Last, Color.White);

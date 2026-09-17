@@ -50,6 +50,11 @@ namespace TerraBlind
 		public static bool TacticWorking = true;
 		public static bool SafeToAttack = true;
 		public static bool JevSaysJump;
+		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
+		public static string Probs = "";
+		public static string TopTwo = "";
+		// 上一条播报过的意图。没变就不再刷屏
+		static DodgeAct _saidAct = (DodgeAct)(-1);
 
 		public const string Url = "https://api.typesafe.ai/v1/systemone";
 		public const string Model = "jev-latest";
@@ -408,6 +413,15 @@ namespace TerraBlind
 			};
 			_actAt = _clock.ElapsedMilliseconds;
 
+			Probs = Seg(intent, "probabilities") ?? "";
+			TopTwo = Rank(Probs);
+			// 意图变了才播报。每 200ms 一条会把聊天刷没,那就不是证据是噪音
+			if (Act != _saidAct)
+			{
+				_saidAct = Act;
+				Main.NewText($"<Jev> {Say(Act)}  ({TopTwo})  置信{Confidence:0.00} {ms}ms", 90, 230, 120);
+			}
+
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
@@ -464,6 +478,37 @@ namespace TerraBlind
 
 		static float Num(string seg, string name, float dflt)
 			=> seg != null && float.TryParse(Field(seg, name), out float v) ? v : dflt;
+
+		// 意图的人话。聊天里要看懂的是"它在干什么",不是枚举名
+		static string Say(DodgeAct a) => a switch
+		{
+			DodgeAct.Back => "拉开距离",
+			DodgeAct.Close => "贴上去输出",
+			DodgeAct.Evade => "横向闪开",
+			DodgeAct.Up => "往上跳",
+			DodgeAct.Float => "滞空让它从脚下过",
+			DodgeAct.Grapple => "甩钩爪拉高度",
+			_ => "保持位置",
+		};
+
+		// "Float:0.41 Grapple:0.19" -- 从 probabilities 里挑最高的两个
+		static string Rank(string probs)
+		{
+			if (string.IsNullOrEmpty(probs)) return "";
+			string ka = "", kb = "";
+			float va = -1f, vb = -1f;
+			foreach (string part in probs.Split(','))
+			{
+				int c = part.LastIndexOf(':');
+				if (c < 0) continue;
+				string k = part.Substring(0, c).Replace("\"", "").Replace("{", "").Trim();
+				if (!float.TryParse(part.Substring(c + 1).Replace("}", "").Trim(), out float v)) continue;
+				if (v > va) { kb = ka; vb = va; ka = k; va = v; }
+				else if (v > vb) { kb = k; vb = v; }
+			}
+			if (va < 0f) return "";
+			return vb < 0f ? $"{ka}:{va:0.00}" : $"{ka}:{va:0.00} {kb}:{vb:0.00}";
+		}
 
 		static string JsonStr(string s) => s == null ? "" : s.Replace("\\", "").Replace("\"", "");
 
