@@ -207,6 +207,8 @@ namespace TerraBlind
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙。站着不动就会被撞\""
+				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
+				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
 				 + "}";
 		}
 

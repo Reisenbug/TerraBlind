@@ -78,5 +78,10 @@ Configs: {
 			Label: Dodge Boss
 			Tooltip: ""
 		}
+
+		ShowJevHud: {
+			Label: Show Jev Hud
+			Tooltip: ""
+		}
 	}
 }
