@@ -2635,6 +2635,16 @@ namespace TerraBlind
                 { bestDropTotal = total; bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
+            // 风险只在【选边】这一层加价,势能场一分不动 -- 场仍然是纯帧数,cost 还是一套
+            if (jigglePool.Count > 0 && best != null && RiskLayer.Enabled)
+            {
+                float rbest = float.MaxValue;
+                foreach (var c in jigglePool)
+                {
+                    float r = c.total + RiskLayer.Penalty(p, curCx, curCy, c.cell.Item1, c.cell.Item2);
+                    if (r < rbest) { rbest = r; best = c.edge; bestCell = c.cell; bestTotal = c.total; }
+                }
+            }
             // 【只记账,不改判】。这里曾经按"有降 H 的路就别选升 H 的"直接改判,那是在
             // total=g+H 这套价之外【另开一套判据】。而 cost 只能有一套。
             // 后果:335 行那片平地上每格 H 只差 3~6 分,"还有更低的邻格"永远成立,

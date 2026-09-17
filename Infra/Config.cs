@@ -19,6 +19,11 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool AlwaysGillsAndShine;
 
+		[Header("Nav")]
+		// 默认关:它改的是调了几个月的选边热路径
+		[DefaultValue(false)]
+		public bool AvoidDanger;
+
 		[Header("Debug")]
 		[DefaultValue(true)]
 		public bool ShowOverlay;
@@ -31,6 +36,7 @@ namespace TerraBlind
 		{
 			PathVisSystem.Enabled = ShowOverlay;
 			PathVisSystem.ShowPlanner = ShowPlannerTrails;
+			RiskLayer.Enabled = AvoidDanger;
 		}
 	}
 }
