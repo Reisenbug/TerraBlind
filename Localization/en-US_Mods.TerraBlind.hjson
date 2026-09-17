@@ -73,5 +73,10 @@ Configs: {
 			Label: Fight back
 			Tooltip: Swings at the nearest enemy that is close and not behind blocks. Shares the use-item control with placing and mining, so it waits rather than interrupting work in progress.
 		}
+
+		DodgeBoss: {
+			Label: Dodge Boss
+			Tooltip: ""
+		}
 	}
 }

@@ -18,6 +18,12 @@ namespace TerraBlind
 		const long IntentTtlMs = 1500;
 		// 贴脸/拉开各自的舒适距离(格)
 		const int CloseCells = 6, BackCells = 18;
+		// 还有这么多帧就撞上,该跳了。60fps 下 12 帧 = 0.2 秒,够起跳也不至于跳太早
+		const int HitSoonFrames = 12;
+
+		// 二段跳:落地才回充,空中再按一次触发,而且【必须松一帧】才算新按压
+		static bool _airJumpUsed;
+		static bool _jumpHeld;
 
 		public static string Last = "idle";
 		public static DodgeAct Act = DodgeAct.Back;
@@ -91,7 +97,13 @@ namespace TerraBlind
 			int away = bossRight ? -1 : 1;
 			int toward = -away;
 			int go = 0;
-			bool jump = false;
+			bool onGround = p.velocity.Y == 0f;
+			if (onGround) _airJumpUsed = false;   // 落地回充二段
+
+			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
+			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
+			int framesToHit = FramesToHit(p, boss);
+			bool incoming = framesToHit >= 0 && framesToHit <= HitSoonFrames;
 
 			switch (act)
 			{
@@ -102,23 +114,51 @@ namespace TerraBlind
 					if (dist > CloseCells) go = toward;
 					break;
 				case DodgeAct.Evade:
-					// 横向闪:往它【来向的侧面】让开,同时跳起来避开贴地冲撞
 					go = away;
-					jump = p.velocity.Y == 0f;
 					break;
 				case DodgeAct.Up:
-					jump = p.velocity.Y == 0f;
 					break;
 				case DodgeAct.Keep:
-					// 只在被挤得太近时才动,否则站定挥武器更稳
 					if (dist < CloseCells) go = away;
 					break;
+			}
+
+			// 跳的时机归反射层。Evade/Up 是"该闪",快撞上才是"现在闪"
+			bool wantJump = act == DodgeAct.Up
+				|| (act == DodgeAct.Evade && incoming)
+				|| incoming;
+
+			bool jump = false;
+			if (wantJump)
+			{
+				// 【松一帧再按】。连着按住,游戏不认第二次按压,二段跳永远放不出来
+				if (_jumpHeld) jump = false;
+				else if (onGround) jump = true;
+				else if (!_airJumpUsed) { jump = true; _airJumpUsed = true; }
 			}
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
-			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}{(jump ? "+跳" : "")}";
+			_jumpHeld = jump;
+
+			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
+				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (incoming ? $" 撞击{framesToHit}帧" : "");
+		}
+
+		// boss 朝我飞过来的话,按当前速度还有几帧接触。不朝我来就返回 -1。
+		// 【只用确定的量】:位置和速度。它的攻击模式我不知道,不猜
+		static int FramesToHit(Player p, NPC boss)
+		{
+			float gapX = System.Math.Abs(boss.Center.X - p.Center.X) - (boss.width + p.width) * 0.5f;
+			float gapY = System.Math.Abs(boss.Center.Y - p.Center.Y) - (boss.height + p.height) * 0.5f;
+			float closeX = (boss.Center.X > p.Center.X) == (boss.velocity.X < 0) ? System.Math.Abs(boss.velocity.X) : 0f;
+			float closeY = (boss.Center.Y > p.Center.Y) == (boss.velocity.Y < 0) ? System.Math.Abs(boss.velocity.Y) : 0f;
+			if (closeX < 0.1f && closeY < 0.1f) return -1;
+			float fx = closeX > 0.1f ? gapX / closeX : 9999f;
+			float fy = closeY > 0.1f ? gapY / closeY : 9999f;
+			float f = System.Math.Max(fx <= 0f ? 0f : fx, fy <= 0f ? 0f : fy);
+			return f > 600f ? -1 : (int)f;
 		}
 
 		static void Release() => AxisLock.Release(Owner);
@@ -130,20 +170,22 @@ namespace TerraBlind
 			float dx = (boss.Center.X - p.Center.X) / 16f;
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			bool closing = (dx > 0 && boss.velocity.X < 0) || (dx < 0 && boss.velocity.X > 0);
-			return "{\"hp\":" + p.statLife + ",\"hp_max\":" + p.statLifeMax
-				 + ",\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
-				 + ",\"on_ground\":" + (p.velocity.Y == 0f ? "true" : "false")
+			int hit = FramesToHit(p, boss);
+			// 【给它能直接用的量】。vx=7.3 这种像素/帧模型没有尺度感,
+			// "还有 14 帧撞上"才是能拿来决定闪不闪的数
+			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
-				 + ",\"boss_cells_away\":" + dist
-				 + ",\"boss_cells_below\":" + (int)dy
-				 + ",\"boss_vx\":" + boss.velocity.X.ToString("0.0")
-				 + ",\"boss_vy\":" + boss.velocity.Y.ToString("0.0")
+				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
+				 + ",\"boss_cells_vertical\":" + (int)dy
 				 + ",\"boss_coming_at_me\":" + (closing ? "true" : "false")
-				 + ",\"boss_contact_damage\":" + boss.damage
-				 + ",\"my_weapon_auto_aims\":true"
-				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑,也没有墙\""
+				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
+				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
+				 + ",\"i_am_airborne\":" + (p.velocity.Y != 0f ? "true" : "false")
+				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
+				 + ",\"my_weapon_fires_by_itself\":true"
+				 + ",\"arena\":\"一整片平台,左右都能跑,没有坑也没有墙。站着不动就会被撞\""
 				 + "}";
 		}
 
