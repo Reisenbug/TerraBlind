@@ -26,24 +26,70 @@ namespace TerraBlind
 		public static string Stats => $"发了{_sent}次 失败{_failed}次 {(HasKey ? "key已加载" : "没有key")}";
 		public static bool HasKey => Key() != null;
 
-		// 配置 > 环境变量 > 文件。【配置不进缓存】:游戏里随时能改,缓存了就要重开才生效
+		// 仓库根目录的 .env。【它进了 .gitignore 和 buildIgnore】,两边都要有否则会跟着发布
+		public static string EnvPath => System.IO.Path.Combine(ModSourceDir, ".env");
+
+		// Main.SavePath 就是 tModLoader 目录,LogRoot 也用它。别自己拼家目录
+		static string ModSourceDir => System.IO.Path.Combine(Main.SavePath, "ModSources", "TerraBlind");
+
+		// 配置 > .env > 环境变量 > 家目录文件。【配置不进缓存】:游戏里随时能改,缓存了就要重开才生效
 		static string Key()
 		{
 			string cfg = Config.I?.TypeSafeKey?.Trim();
-			if (!string.IsNullOrEmpty(cfg)) { Warn(cfg, "模组配置"); return cfg; }
+			if (!string.IsNullOrEmpty(cfg)) { Migrate(cfg); Warn(cfg, "模组配置"); return cfg; }
 			if (_key != null) return _key.Length == 0 ? null : _key;
-			_key = System.Environment.GetEnvironmentVariable("TYPESAFE_API_KEY")?.Trim() ?? "";
-			string from = _key.Length > 0 ? "TYPESAFE_API_KEY" : null;
+			_key = FromEnvFile() ?? "";
+			string from = _key.Length > 0 ? EnvPath : null;
+			if (_key.Length == 0)
+			{
+				_key = System.Environment.GetEnvironmentVariable("TYPESAFE_API_KEY")?.Trim() ?? "";
+				if (_key.Length > 0) from = "TYPESAFE_API_KEY";
+			}
 			if (_key.Length == 0)
 			{
 				try { _key = System.IO.File.Exists(KeyPath) ? System.IO.File.ReadAllText(KeyPath).Trim() : ""; }
 				catch { _key = ""; }
 				if (_key.Length == 0)
-					DiagLog.Write($"[jev] 没有 key。填进模组配置,或设 TYPESAFE_API_KEY,或放一个在 {KeyPath}");
+					DiagLog.Write($"[jev] 没有 key。填进模组配置,或写进 {EnvPath},或设 TYPESAFE_API_KEY");
 				else from = KeyPath;
 			}
 			if (from != null) Warn(_key, from);
 			return _key.Length == 0 ? null : _key;
+		}
+
+		// 只认 TYPESAFE_API_KEY 一行,# 开头是注释。引号可有可无
+		static string FromEnvFile()
+		{
+			try
+			{
+				if (!System.IO.File.Exists(EnvPath)) return null;
+				foreach (string raw in System.IO.File.ReadAllLines(EnvPath))
+				{
+					string line = raw.Trim();
+					if (line.Length == 0 || line[0] == '#') continue;
+					int eq = line.IndexOf('=');
+					if (eq < 0 || line.Substring(0, eq).Trim() != "TYPESAFE_API_KEY") continue;
+					return line.Substring(eq + 1).Trim().Trim('"', '\'');
+				}
+			}
+			catch (System.Exception e) { DiagLog.Write($"[jev] 读 .env 炸了 {e.GetType().Name} {e.Message}"); }
+			return null;
+		}
+
+		// 配置里填了就落到 .env。【字段不自己清空】:ModConfig 的存盘归 tModLoader 管,
+		// 从游戏里写它不可靠。清空要人去设置界面做,tooltip 里说了
+		static bool _migrated;
+		static void Migrate(string key)
+		{
+			if (_migrated) return;
+			_migrated = true;
+			if (key == FromEnvFile()) return;
+			try
+			{
+				System.IO.File.WriteAllText(EnvPath, "TYPESAFE_API_KEY=" + key + "\n");
+				DiagLog.Write($"[jev] key 已写进 {EnvPath}。去模组配置把那一栏清空,别让它留在 ModConfigs 里");
+			}
+			catch (System.Exception e) { DiagLog.Write($"[jev] 写 .env 炸了 {e.GetType().Name} {e.Message}"); }
 		}
 
 		// build.txt 里 includeSource=true,.tmod 会连源码一起发出去。【写死在代码里的 key 会跟着发布】

@@ -93,8 +93,8 @@ Configs: {
 			Label: TypeSafe API key
 			Tooltip:
 				'''
-				Key for the Jev calls that drive boss fighting. Leave it empty to read TYPESAFE_API_KEY from the environment, or ~/.typesafe_key instead.
-				Typing it here saves it in plain text to ModConfigs/TerraBlind.json -- do not share that file.
+				Key for the Jev calls that drive boss fighting. Paste it here once and it is copied to the .env file in the mod source folder, which git and the mod build both skip.
+				Then clear this box: whatever stays here is also kept in plain text in ModConfigs/TerraBlind.json, so do not share that file.
 				'''
 		}
 	}

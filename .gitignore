@@ -9,3 +9,7 @@ obj/
 
 # agent 的工作记忆,不是给读者的文档:里面有会话产出、本机绝对路径、provider 细节
 PROJECT_STATE.md
+
+# 真 key 在这儿,只提交 .env.example。build.txt 的 buildIgnore 也要有它:
+# includeSource=true 会把源码树打进 .tmod
+.env
