@@ -207,9 +207,9 @@ namespace TerraBlind
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
-			// 【贴着墙就别硬顶】。撞墙之后按方向键位移为零,人还留在攻击线上 --
-			// 这是代码看得见的事实,不该等 200ms 后的意图来救
-			if (go != 0 && WallDistance(p, go) <= 0) go = -go;
+			// 【贴着墙就松手,但不反向】。反向会把 Back 执行成 Close:墙在左、boss 在右时,
+			// 反弹等于朝 boss 跑过去。方向归 Jev,它手里有离墙几格那两个数
+			if (go != 0 && WallDistance(p, go) <= 0) go = 0;
 
 			int want0 = go;
 			go = Dash(p, go, incoming, act);
