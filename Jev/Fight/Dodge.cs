@@ -5,7 +5,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive }
+	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive, Level }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
@@ -170,8 +170,14 @@ namespace TerraBlind
 				case DodgeAct.Back:
 					go = away;
 					break;
+				// 【按横向差判,不按曼哈顿距离】。dist 是 |dx|+|dy|,人悬在 boss 头顶 40 格时
+				// 它也算"远",于是一直往横里挤 -- 而横着走再久也收不掉那 40 格高低差
 				case DodgeAct.Close:
-					if (dist > want / 2) go = toward;
+					if (System.Math.Abs(dx) / 16f > want / 2) go = toward;
+					break;
+				// 【收高低差】。横向照常走,别站着调高度
+				case DodgeAct.Level:
+					if (System.Math.Abs(dx) / 16f > want) go = toward;
 					break;
 				case DodgeAct.Evade:
 					go = away;
@@ -204,7 +210,8 @@ namespace TerraBlind
 			// 【飘太久连跳也不许,但 hookJump 例外】。挂在钩子上不是滞空,拦住就永远下不来
 			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			bool levelUp = act == DodgeAct.Level && p.Center.Y > boss.Center.Y + 16f * 3f;
+			bool wantJump = hookJump || ((act == DodgeAct.Up || levelUp || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【贴着墙就松手,但不反向】。反向会把 Back 执行成 Close:墙在左、boss 在右时,
@@ -219,9 +226,11 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【down 一个键干两件事】(Player.cs: fallThrough = controlDown):穿平台 + 取消缓降
-			// 【但勾着时不能按】。vanilla 取消钩爪要 !controlDown,按着就只给 velocity.Y 加 0.01
-			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
+			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
+			// Level 在 boss 上方就往下掉,横移收不掉高低差
+			bool aboveBoss = p.Center.Y < boss.Center.Y - 16f * 3f;
+			bool dive = (act == DodgeAct.Dive || _tooLongAirborne
+					  || (act == DodgeAct.Level && aboveBoss)) && p.grapCount == 0;
 			bool hover = !dive && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
@@ -397,6 +406,10 @@ namespace TerraBlind
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
 				 + ",\"boss_cells_vertical\":" + (int)dy
+				 // 【正上方也算"远"】。原来只给一个曼哈顿距离,人悬在 boss 头顶 40 格时
+				 // 它读到的是"离得远",于是一直想靠近 -- 而横着走一辈子也下不来
+				 + ",\"i_am_above_the_boss_by\":" + (int)(-dy)
+				 + ",\"same_height_as_boss\":" + (System.Math.Abs(dy) <= 3 ? "true" : "false")
 				 + ",\"boss_coming_at_me\":" + (closing ? "true" : "false")
 				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
 				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
@@ -433,6 +446,8 @@ namespace TerraBlind
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
 			 + "碰到 boss 或者吃到弹幕才掉血。【说的是意图不是按键】,具体往左往右由代码每帧算。\",\"criteria\":{"
 			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
+			 + "\"Level\":\"回到和 boss 差不多的高度。悬在它头顶或者卡在它脚底下时,"
+			 + "横向怎么走都够不着也躲不开 -- 先把高低差收掉,回到同一个水平面上再打\","
 			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去。"
@@ -509,6 +524,7 @@ namespace TerraBlind
 				"Grapple" => DodgeAct.Grapple,
 				"Orbit" => DodgeAct.Orbit,
 				"Dive" => DodgeAct.Dive,
+				"Level" => DodgeAct.Level,
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
@@ -591,6 +607,7 @@ namespace TerraBlind
 			DodgeAct.Grapple => "grapple for height",
 			DodgeAct.Orbit => "orbit around it",
 			DodgeAct.Dive => "drop down fast",
+			DodgeAct.Level => "get level with it",
 			_ => "hold position",
 		};
 
