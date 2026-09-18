@@ -32,6 +32,10 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool DodgeBoss;
 
+		// 关掉就不给 Jev 任何 boss 背板,只留场地和通用字段。用来验知识到底值多少
+		[DefaultValue(true)]
+		public bool BossKnowledge;
+
 		[Header("Debug")]
 		[DefaultValue(true)]
 		public bool ShowOverlay;
@@ -51,6 +55,7 @@ namespace TerraBlind
 			RiskLayer.Enabled = AvoidDanger;
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
+			BossBook.UseKnowledge = BossKnowledge;
 			JevHud.Enabled = ShowJevHud;
 		}
 	}

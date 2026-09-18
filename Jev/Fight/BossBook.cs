@@ -15,6 +15,10 @@ namespace TerraBlind
 
 	public static class BossBook
 	{
+		// 【对照实验:关掉背板】。蜂王零知识一遍过,所以要验的是"知识到底贡献了多少"。
+		// 只关 HowItFights,场地和禁用动作照旧 -- 那两样是事实不是打法
+		public static bool UseKnowledge = true;
+
 		const string OpenArena = "一整片平台,左右都能跑,没有坑也没有墙";
 
 		static readonly Dictionary<int, BossInfo> Book = new()
@@ -123,7 +127,7 @@ namespace TerraBlind
 		public static BossInfo Of(int npcType)
 			=> Book.TryGetValue(Canon(npcType), out var b) ? b : None;
 
-		public static string For(int npcType) => Of(npcType).HowItFights;
+		public static string For(int npcType) => UseKnowledge ? Of(npcType).HowItFights : "";
 
 		// 没有条目的 boss 也得有个场地描述,否则那个字段是空的
 		public static string ArenaOf(int npcType)
@@ -138,6 +142,21 @@ namespace TerraBlind
 			for (int i = 0; i < b.Length; i++)
 				if (b[i] == act) return true;
 			return false;
+		}
+	}
+
+	public class BossKnowledgeCommand : Terraria.ModLoader.ModCommand
+	{
+		public override Terraria.ModLoader.CommandType Type => Terraria.ModLoader.CommandType.Chat;
+		public override string Command => "bossbook";
+		public override string Description => "开关 boss 背板,用来做对照实验";
+		public override string Usage => "/bossbook";
+
+		public override void Action(Terraria.ModLoader.CommandCaller caller, string input, string[] args)
+		{
+			BossBook.UseKnowledge = !BossBook.UseKnowledge;
+			Terraria.Main.NewText($"[TerraBlind] boss 背板 {(BossBook.UseKnowledge ? "开" : "关")}", 200, 200, 120);
+			DiagLog.Write($"[bossbook] UseKnowledge={BossBook.UseKnowledge}");
 		}
 	}
 }
