@@ -11,6 +11,9 @@ namespace TerraBlind
 		public string Arena = "";
 		// 这一场不许用的意图。肉山那种完全平整的场地,任何竖直动作都是白白送伤害
 		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
+		// 这一场该保持的水平距离(格)。0 = 不指定,按 danger 算。
+		// 【只是一个数,不是一套规则】-- 有的 boss 的安全区就是不在通用公式的量程里
+		public int WantCells;
 	}
 
 	public static class BossBook
@@ -112,9 +115,10 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
 				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
-				// 【只禁竖直】。地面全平,跳起来躲不开也够不到。Close 不能禁 --
-				// 禁了就没有任何意图能把跑远的人收回来,而太远正是激光覆盖区
-				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
+				// 【竖直全禁,外加不许贴近】。地面全平跳起来躲不开;主动靠近就是扑到恶鬼嘴里
+				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
+				// 通用公式上限才 20 格,而这一场的安全区在 60 -- 量程根本不重合
+				WantCells = 60,
 				HowItFights =
 					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,【只会水平移动,永远不会停】。"
 					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"
@@ -169,6 +173,9 @@ namespace TerraBlind
 			string a = Of(npcType).Arena;
 			return a.Length > 0 ? a : OpenArena;
 		}
+
+		// 这个 boss 指定的距离,没指定返回 0
+		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{

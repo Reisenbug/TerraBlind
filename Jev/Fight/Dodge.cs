@@ -144,6 +144,14 @@ namespace TerraBlind
 		// 危险分换成格数。0=贴脸输出,4=离远点
 		static int WantCells(float danger) => 4 + (int)(danger * 4f);
 
+		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
+		// 报给 Jev 的字段都走这一个入口,免得两边各算各的
+		static int Want(NPC boss)
+		{
+			int fixedWant = BossBook.WantCellsFor(boss.type);
+			return fixedWant > 0 ? fixedWant : WantCells(Danger);
+		}
+
 		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
 		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
 		static void Drive(Player p, NPC boss, int dist, DodgeAct act)
@@ -158,7 +166,7 @@ namespace TerraBlind
 			if (onGround) { _airborneFrames = 0; _tooLongAirborne = false; }
 			else if (++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
 
-			int want = WantCells(Danger);
+			int want = Want(boss);
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
 			int framesToHit = FramesToHit(p, boss);
@@ -176,10 +184,10 @@ namespace TerraBlind
 				case DodgeAct.Back:
 					go = away;
 					break;
-				// 【按横向差判,不按曼哈顿距离】。dist 是 |dx|+|dy|,人悬在 boss 头顶 40 格时
-				// 它也算"远",于是一直往横里挤 -- 而横着走再久也收不掉那 40 格高低差
+				// 【按横向差判】。dist 是 |dx|+|dy|,悬在头顶 40 格也算"远",横着走收不掉高低差
+				// 【收到 want 就停,不是 want/2】。砍一半等于主动贴到脸上
 				case DodgeAct.Close:
-					if (System.Math.Abs(dx) / 16f > want / 2) go = toward;
+					if (System.Math.Abs(dx) / 16f > want) go = toward;
 					break;
 				case DodgeAct.Evade:
 					go = away;
@@ -416,8 +424,10 @@ namespace TerraBlind
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
 				 // 【"比想要的远多少"要直说】。它每帧给 danger 换算出一个想要的距离,
 				 // 可 state 里没有任何字段告诉它此刻偏离了多少 -- 于是一直答 Back
-				 + ",\"distance_i_asked_for\":" + WantCells(Danger)
-				 + ",\"cells_further_than_i_asked_for\":" + System.Math.Max(0, dist - WantCells(Danger))
+				 // 【和反射层用同一个数】。这里报通用公式、那边照 boss 指定值走的话,
+				 // 它以为自己要 12 格而人在奔向 60,两边对不上
+				 + ",\"distance_i_asked_for\":" + Want(boss)
+				 + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
 				 + ",\"boss_cells_vertical\":" + (int)dy
 				 // 【正上方也算"远"】。原来只给一个曼哈顿距离,人悬在 boss 头顶 40 格时
 				 // 它读到的是"离得远",于是一直想靠近 -- 而横着走一辈子也下不来
