@@ -166,7 +166,8 @@ namespace TerraBlind
 			if (onGround) { _airborneFrames = 0; _tooLongAirborne = false; }
 			else if (++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
 
-			int want = Want(boss);
+			int fixedWant = BossBook.WantCellsFor(boss.type);
+			int want = fixedWant > 0 ? fixedWant : WantCells(Danger);
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
 			int framesToHit = FramesToHit(p, boss);
@@ -209,11 +210,11 @@ namespace TerraBlind
 				case DodgeAct.Dive:
 					if (dist < want) go = away;
 					break;
-				// 【两头都管】。原来只防太近,跑到 100 格时它什么都不做 --
-				// 而 Keep 的意思本来就是"维持在想要的距离",不是"只要别贴脸"
+				// 【远端只对指定了距离的 boss 生效】。那是肉山的需求(跑太远吃激光),
+				// 别的 boss 没填 WantCells,行为和以前一模一样
 				case DodgeAct.Keep:
 					if (dist < want / 2) go = away;
-					else if (dist > want) go = toward;
+					else if (fixedWant > 0 && dist > want) go = toward;
 					break;
 			}
 
@@ -425,10 +426,8 @@ namespace TerraBlind
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 // 【"比想要的远多少"要直说】。它每帧给 danger 换算出一个想要的距离,
-				 // 可 state 里没有任何字段告诉它此刻偏离了多少 -- 于是一直答 Back
-				 // 【和反射层用同一个数】。这里报通用公式、那边照 boss 指定值走的话,
-				 // 它以为自己要 12 格而人在奔向 60,两边对不上
+				 // 【"偏了多少"要直说】,不然它不知道此刻离想要的距离有多远,只会一直答 Back
+				 // 【和反射层用同一个数】。两边各算各的话,它以为要 12 格而人在奔向 60
 				 + ",\"distance_i_asked_for\":" + Want(boss)
 				 + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
 				 + ",\"boss_cells_vertical\":" + (int)dy
