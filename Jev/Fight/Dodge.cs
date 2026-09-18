@@ -13,7 +13,11 @@ namespace TerraBlind
 	{
 		public static bool Enabled = false;
 		const string Owner = "dodge";
-		const int CareCells = 60;
+		// 【别把远处的 boss 当不存在】。原来 60 格截断,而肉山退到 60 格外就"消失",
+		// 走位层每隔几帧就 Release 一次,没有任何东西再把人拉回来
+		const int CareCells = 200;
+		// 量墙用另一把尺子。跟着 CareCells 涨的话,扫描量翻三倍,报出去的"还剩多少空间"也变了意思
+		const int RoomScanCells = 60;
 		// 意图过期就退回保守行为。拿 3 秒前的判断当真比没有判断更糟
 		const long IntentTtlMs = 1500;
 
@@ -367,9 +371,9 @@ namespace TerraBlind
 			int cx = (int)(p.Center.X / 16f);
 			// 齐胸那一行。贴地扫的话一格台阶就读成墙
 			int cy = (int)((p.position.Y + p.height * 0.5f) / 16f);
-			for (int d = 1; d <= CareCells; d++)
+			for (int d = 1; d <= RoomScanCells; d++)
 				if (Predicates.IsWall(cx + dir * d, cy)) return d - 1;
-			return CareCells;
+			return RoomScanCells;
 		}
 
 		// 头顶到天花板几格。【只往上,不往下】:脚下永远有地,往下扫出来的数没有意义
@@ -377,9 +381,9 @@ namespace TerraBlind
 		{
 			int cx = (int)(p.Center.X / 16f);
 			int top = (int)(p.position.Y / 16f);
-			for (int d = 1; d <= CareCells; d++)
+			for (int d = 1; d <= RoomScanCells; d++)
 				if (Predicates.IsWall(cx, top - d)) return d - 1;
-			return CareCells;
+			return RoomScanCells;
 		}
 
 		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
@@ -409,6 +413,10 @@ namespace TerraBlind
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
+				 // 【"比想要的远多少"要直说】。它每帧给 danger 换算出一个想要的距离,
+				 // 可 state 里没有任何字段告诉它此刻偏离了多少 -- 于是一直答 Back
+				 + ",\"distance_i_asked_for\":" + WantCells(Danger)
+				 + ",\"cells_further_than_i_asked_for\":" + System.Math.Max(0, dist - WantCells(Danger))
 				 + ",\"boss_cells_vertical\":" + (int)dy
 				 // 【正上方也算"远"】。原来只给一个曼哈顿距离,人悬在 boss 头顶 40 格时
 				 // 它读到的是"离得远",于是一直想靠近 -- 而横着走一辈子也下不来
@@ -452,7 +460,9 @@ namespace TerraBlind
 			 + "碰到 boss 或者吃到弹幕才掉血。【说的是意图不是按键】,具体往左往右由代码每帧算。\",\"criteria\":{"
 			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
 			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
-			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
+			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下。"
+			 + "看 cells_further_than_i_asked_for:这个数大就说明已经比自己要的距离远出不少,"
+			 + "有的 boss 离太远反而更危险(远程攻击正好覆盖那一带),那就该收回来\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去。"
 			 + "弹幕从某一侧压过来时也用这个 -- 看 projectile_pressure 的左右两边哪边发数少,往空的那边闪\","
 			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
