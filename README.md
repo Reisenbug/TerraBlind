@@ -11,14 +11,15 @@ This project was developed entirely with the assistance of AI.
 
 **Jev 打 boss** -- Jev fights the bosses
 
-| [![Jev 打穿肉前 boss](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1Boe26JEh4/) | [![Jev beats the pre-hardmode bosses](docs/cover-en.jpg)](https://www.youtube.com/watch?v=g6CADbjBhlk) |
+| [![Jev 打穿大师模式肉前全 boss](docs/cover-jev-zh.png)](https://www.bilibili.com/video/BV1Boe26JEh4/) | [![Jev beat every pre-hardmode boss in master mode](docs/cover-jev-en.png)](https://www.youtube.com/watch?v=g6CADbjBhlk) |
 |:---:|:---:|
 | [哔哩哔哩](https://www.bilibili.com/video/BV1Boe26JEh4/) | [YouTube](https://www.youtube.com/watch?v=g6CADbjBhlk) |
 
 **纯代码通关肉山** -- Wall of Flesh, code only
 
-| [哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os) |
+| [![14 分钟击败肉山](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [![Wall of Flesh in 14 minutes](docs/cover-en.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os) |
 |:---:|:---:|
+| [哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os) |
 
 从 `/start` 到击败肉山，全程 14 分 15 秒（三倍速下）。
 From `/start` to a dead Wall of Flesh in 14 minutes 15 seconds (at 3x speed).
@@ -49,6 +50,8 @@ TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准�
 Jev 答判断，代码拥有瞄准、距离、时序和 TTL。
 
 每个 boss 的背板是**一段中文文字**（`Jev/Fight/BossBook.cs`），不是分支：怎么打、场地什么样、禁用哪几个意图、保持几格。加一个 boss 通常只是加一条文字条目。目前有克苏鲁之眼、史莱姆王、克苏鲁之脑、世界吞噬者、骷髅王、蜂王、鹿角怪七条，外加肉山和恶鬼两条距离规则。
+
+录制是在**大师模式**下跑的。
 
 `/bossbook` 可以整个关掉背板，只留场地和通用字段，用来验知识到底值多少。
 
@@ -215,6 +218,8 @@ Two layers:
 Jev answers judgments; the code owns aiming, distance, timing and TTL.
 
 Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, what the arena is like, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are seven: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, Queen Bee, Deerclops -- plus distance rules for the Wall of Flesh and The Hungry.
+
+The recorded runs were fought on **Master Mode**.
 
 `/bossbook` switches the playbooks off entirely, leaving only the arena and the generic fields, to measure what the knowledge is actually worth.
 
