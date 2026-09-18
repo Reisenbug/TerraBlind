@@ -5,7 +5,7 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive, Level }
+	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive, Level, Bounce }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
@@ -176,6 +176,10 @@ namespace TerraBlind
 				case DodgeAct.Close:
 					if (System.Math.Abs(dx) / 16f > want / 2) go = toward;
 					break;
+				// 【跳落节奏】。留在 boss 跟前,横向不跑开 -- 跑开了它就不出招了
+				case DodgeAct.Bounce:
+					if (System.Math.Abs(dx) / 16f > want) go = toward;
+					break;
 				// 【收高低差】。横向照常走,别站着调高度
 				case DodgeAct.Level:
 					if (System.Math.Abs(dx) / 16f > want) go = toward;
@@ -211,8 +215,11 @@ namespace TerraBlind
 			// 【飘太久连跳也不许,但 hookJump 例外】。挂在钩子上不是滞空,拦住就永远下不来
 			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			// 【Level 在下方时不跳】。跳是一次性冲量,冲过死区又被羽落拖回来,于是原地弹跳一帧不落地
-			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			// 【Bounce 落地就再跳,但只在地面上按】。空中还按着的话会把二段跳花掉,
+			// 滞空更久 -- 而这套打法要的恰恰是快点落地
+			bool bounce = act == DodgeAct.Bounce && onGround;
+			bool wantJump = hookJump || ((act == DodgeAct.Up || bounce
+									   || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【贴着墙就松手,但不反向】。反向会把 Back 执行成 Close:墙在左、boss 在右时,
@@ -232,7 +239,9 @@ namespace TerraBlind
 			bool aboveBoss = p.Center.Y < boss.Center.Y - 16f * 3f;
 			bool dive = (act == DodgeAct.Dive || _tooLongAirborne
 					  || (act == DodgeAct.Level && aboveBoss)) && p.grapCount == 0;
-			bool hover = !dive && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			// 【Bounce 绝不按 up】。羽落缓降会让人迟迟落不了地,而落地正是要的那一下
+			bool hover = !dive && act != DodgeAct.Bounce
+					  && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
@@ -453,7 +462,10 @@ namespace TerraBlind
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
 			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去。"
 			 + "弹幕从某一侧压过来时也用这个 -- 看 projectile_pressure 的左右两边哪边发数少,往空的那边闪\","
-			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
+			 + "\"Up\":\"往上跳一次。它从下方上来,或者该上更高一层平台\","
+			 + "\"Bounce\":\"在原地【反复跳起又落地】,不是跳一次。跳起来是为了让弹幕从脚下过去,"
+			 + "落地是为了逼 boss 出下一招 -- 有的 boss 要等你落地才肯动,一直飘着它就一直不出手。"
+			 + "所以这是一个来回不停的节奏,不是一次动作,落地之后马上再跳\","
 			 + "\"Float\":\"跳起来滞空,让贴着地面来的那一击从脚下穿过去 -- 弹幕贴着地面扫过来时也一样。"
 			 + "滞空时横向移动速度正常,照样能边飘边躲。"
 			 + "但对从上往下砸的、从上方压下来的弹幕、或者会瞬移到人身上的没用,那种情况滞空是把自己定在落点上。"
@@ -526,6 +538,7 @@ namespace TerraBlind
 				"Orbit" => DodgeAct.Orbit,
 				"Dive" => DodgeAct.Dive,
 				"Level" => DodgeAct.Level,
+				"Bounce" => DodgeAct.Bounce,
 				_ => DodgeAct.Keep,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
@@ -537,7 +550,7 @@ namespace TerraBlind
 			long now = _clock.ElapsedMilliseconds;
 			if (Act != _saidAct || now - _saidAt > 4000)
 			{
-				string tag = Act == _saidAct ? $" still, {(now - _saidAt) / 1000}s" : "";
+				string tag = Act == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
 				_saidAct = Act; _saidAt = now;
 				Main.NewText($"<Jev> {Say(Act)}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
@@ -612,6 +625,7 @@ namespace TerraBlind
 			DodgeAct.Orbit => "orbit around it",
 			DodgeAct.Dive => "drop down fast",
 			DodgeAct.Level => "get level with it",
+			DodgeAct.Bounce => "jump and land on rhythm",
 			_ => "hold position",
 		};
 
