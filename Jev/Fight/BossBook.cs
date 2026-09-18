@@ -82,6 +82,19 @@ namespace TerraBlind
 					+ "两只手都打掉之后弹幕会变密,那时候垂直方向的机动更有用。",
 			},
 
+			[Terraria.ID.NPCID.QueenBee] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"蜂王的两种威胁要躲的方向【正好相反】。它悬在头顶上方的时候,"
+					+ "掉下来的东西是往下砸的,这时候横着跑躲得开,上下动反而是迎上去。"
+					+ "而它和自己处在差不多同一高度、横着冲过来的时候,左右跑是跟它抢同一条线,"
+					+ "这时候要的是快速换个高度让它从那条线上扑空 -- 跳起来或者往下落都行,"
+					+ "哪边快就走哪边。"
+					+ "所以先看 i_am_above_the_boss_by 和 boss_cells_vertical 判断它在哪一头,"
+					+ "再决定这一下该横着躲还是上下躲。",
+			},
+
 			[Terraria.ID.NPCID.Deerclops] = new BossInfo
 			{
 				Arena = OpenArena,
