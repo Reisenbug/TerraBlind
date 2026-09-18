@@ -113,7 +113,8 @@ namespace TerraBlind
 			{
 				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
 				// 【竖直动作全禁】。地面是平的,跳起来既躲不开也够不到,落地那段还没法变向
-				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
+				// 【竖直全禁,外加不许主动靠近】。它只会推进,迎上去就是送 -- 最多站住不动
+				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
 				HowItFights =
 					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,【只会水平移动,永远不会停】。"
 					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"

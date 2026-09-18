@@ -130,8 +130,9 @@ namespace TerraBlind
 
 			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
 			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
-			// 这一场禁用的意图退回 Back。肉山那种平地上,跳和钩爪都是白白送伤害
-			if (BossBook.IsBanned(boss.type, act)) act = DodgeAct.Back;
+			// 【禁用的意图退回 Keep,不是 Back】。禁 Close 的 boss 往往正是"太远也危险"那种,
+			// 自动后退等于换个方向送
+			if (BossBook.IsBanned(boss.type, act)) act = DodgeAct.Keep;
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
