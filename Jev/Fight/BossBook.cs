@@ -112,6 +112,18 @@ namespace TerraBlind
 					+ "别跑远也别悬着不下来。",
 			},
 
+			// 恶鬼自己一条。【它的规则覆盖肉山】:Boss() 取最近的那个,恶鬼贴得近就按这条算
+			[Terraria.ID.NPCID.TheHungry] = new BossInfo
+			{
+				Arena = "地狱里一条完全平整的长桥,一路平到底",
+				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
+				WantCells = 10,
+				HowItFights =
+					"恶鬼是挂在肉山身上的一串小怪,伸得很长,碰到就掉血。"
+					+ "它跟着肉山走,所以【离它至少十格】,这条比和肉山保持的那个距离更要紧 -- "
+					+ "两个要求冲突的时候听这一条的,先把恶鬼甩开。",
+			},
+
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
 				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
@@ -153,10 +165,12 @@ namespace TerraBlind
 				return Terraria.ID.NPCID.EaterofWorldsHead;
 			if (npcType == Terraria.ID.NPCID.SkeletronHand)
 				return Terraria.ID.NPCID.SkeletronHead;
-			if (npcType == Terraria.ID.NPCID.WallofFleshEye
-			 || npcType == Terraria.ID.NPCID.TheHungry
-			 || npcType == Terraria.ID.NPCID.TheHungryII)
+			// 【恶鬼不映射到肉山】。映射过去就继承了 60 格,而恶鬼永远贴在人身边 --
+			// 于是"离肉山 60"被当成"离恶鬼 60",人反而被吸到肉山脸上
+			if (npcType == Terraria.ID.NPCID.WallofFleshEye)
 				return Terraria.ID.NPCID.WallofFlesh;
+			if (npcType == Terraria.ID.NPCID.TheHungryII)
+				return Terraria.ID.NPCID.TheHungry;
 			return npcType;
 		}
 
