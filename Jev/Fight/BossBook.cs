@@ -81,6 +81,16 @@ namespace TerraBlind
 					+ "两只手都打掉之后弹幕会变密,那时候垂直方向的机动更有用。",
 			},
 
+			[Terraria.ID.NPCID.Deerclops] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"鹿角怪的节奏是【远近交替】:拉开一段就放一轮弹幕,靠近了再放一轮,来回循环。"
+					+ "【关键是别离太远】 -- 离得远反而是它弹幕覆盖得最狠的时候,"
+					+ "近身反倒有安全的间隙。所以不要一味后退,把距离控制在中近,"
+					+ "跟着它那一轮弹幕的节奏进退。",
+			},
+
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
 				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
