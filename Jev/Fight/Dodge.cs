@@ -158,7 +158,10 @@ namespace TerraBlind
 			int framesToHit = FramesToHit(p, boss);
 			// 危险时提前跳,安全时晚点跳。原来这也是个写死的 12
 			int soon = 8 + (int)(Danger * 4f);
-			bool incoming = framesToHit >= 0 && framesToHit <= soon;
+			// 【弹幕也算"快被打中了"】。原来只看 boss 本体,弹幕贴脸反射层一无所知
+			int projHit = ThreatScan.SoonestHit(p);
+			bool incoming = (framesToHit >= 0 && framesToHit <= soon)
+						 || (projHit >= 0 && projHit <= soon);
 
 			switch (act)
 			{
@@ -389,6 +392,8 @@ namespace TerraBlind
 				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
+				 // 【逐发列表之外还要给汇总】。十几发各自的 vx/vy 看不出该往哪躲
+				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
@@ -410,16 +415,16 @@ namespace TerraBlind
 			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
 			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
 			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下\","
-			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去\","
+			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去。"
+			 + "弹幕从某一侧压过来时也用这个 -- 看 projectile_pressure 的左右两边哪边发数少,往空的那边闪\","
 			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
-			 + "\"Float\":\"【只为躲开眼前这一下】跳起来滞空,躲开贴着地面来的那一击。"
-			 + "看 how_this_boss_fights:这一招只对横着冲过来的有用,对从上往下砸的、"
-			 + "或者会瞬移到人身上的没用,那种情况滞空反而是把自己定在落点上。"
-			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘。"
-			 + "飘在半空移动慢、够不着它、也躲不开从上面压下来的东西\","
-			 + "\"Dive\":\"往下走。按住下键:踩着平台时会从平台穿下去到下一层,"
-			 + "在空中时会取消羽落的缓降、正常速度砸下去。想快点落地、想躲开从上方压来的东西、"
-			 + "或者已经在空中飘太久了,就用这个 -- 一直飘着躲不开上面来的攻击\","
+			 + "\"Float\":\"跳起来滞空,让贴着地面来的那一击从脚下穿过去 -- 弹幕贴着地面扫过来时也一样。"
+			 + "滞空时横向移动速度正常,照样能边飘边躲。"
+			 + "但对从上往下砸的、从上方压下来的弹幕、或者会瞬移到人身上的没用,那种情况滞空是把自己定在落点上。"
+			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘\","
+			 + "\"Dive\":\"降到下面一层去。踩着平台时会穿下去,在空中时会快速落回地面。"
+			 + "头顶压下来的东西、或者从上方来的弹幕(看 projectile_pressure 的 from_above),"
+			 + "掉下去一层往往就扑空了;在空中飘了一阵子而局面没有变好时也用它落地重来\","
 			 + "\"Orbit\":\"绕着它走。沿垂直于'自己到它连线'的方向横移,让它的冲撞擦身而过。"
 			 + "场地封闭、退无可退的时候用这个 -- 往后退只会退到墙上,而绕开既保持了移动又不撞上去\","
 			 + "\"Grapple\":\"甩钩爪换位。勾住的瞬间跳起来取消,拿到那一段速度,二段跳也会重置。"

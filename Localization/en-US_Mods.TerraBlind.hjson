@@ -83,5 +83,10 @@ Configs: {
 			Label: Show Jev Hud
 			Tooltip: ""
 		}
+
+		BossKnowledge: {
+			Label: Boss Knowledge
+			Tooltip: ""
+		}
 	}
 }
