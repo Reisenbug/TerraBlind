@@ -58,7 +58,7 @@ namespace TerraBlind
 			{
 				if (f.FieldType != typeof(string) || !f.IsLiteral) continue;
 				string v = f.GetRawConstantValue() as string;
-				if (v != null && v.Length > 20 && (v.StartsWith("sk-") || v == key))
+				if (v != null && v.Length > 20 && (v.StartsWith("apikey") || v == key))
 					DiagLog.Write($"[jev] 警告:常量 {f.Name} 看着像 key。includeSource=true,发布会把它一起带走");
 			}
 		}
