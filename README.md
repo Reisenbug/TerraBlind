@@ -7,11 +7,18 @@
 
 A tModLoader mod: a toolbox of perception, pathfinding, building and combat primitives for Terraria, plus one hand-written pipeline that chains them from a fresh world all the way to killing the Wall of Flesh.
 This project was developed entirely with the assistance of AI.
-![status](https://img.shields.io/badge/milestone-Wall%20of%20Flesh-red) ![ai](https://img.shields.io/badge/AI-none%20yet-lightgrey) ![tml](https://img.shields.io/badge/tModLoader-1.4.4.9-blue)
+![status](https://img.shields.io/badge/milestone-boss%20fights-red) ![ai](https://img.shields.io/badge/AI-Jev%20drives%20the%20fights-brightgreen) ![tml](https://img.shields.io/badge/tModLoader-1.4.4.9-blue)
 
-| [![14 分钟击败肉山](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [![Wall of Flesh in 14 minutes](docs/cover-en.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os) |
+**Jev 打 boss** -- Jev fights the bosses
+
+| [![Jev 打穿肉前 boss](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1Boe26JEh4/) | [![Jev beats the pre-hardmode bosses](docs/cover-en.jpg)](https://www.youtube.com/watch?v=g6CADbjBhlk) |
 |:---:|:---:|
+| [哔哩哔哩](https://www.bilibili.com/video/BV1Boe26JEh4/) | [YouTube](https://www.youtube.com/watch?v=g6CADbjBhlk) |
+
+**纯代码通关肉山** -- Wall of Flesh, code only
+
 | [哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os) |
+|:---:|:---:|
 
 从 `/start` 到击败肉山，全程 14 分 15 秒（三倍速下）。
 From `/start` to a dead Wall of Flesh in 14 minutes 15 seconds (at 3x speed).
@@ -26,9 +33,26 @@ TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准�
 
 `/start` 是**手工把这些工具串起来的一条流程**，目标是击败经典难度下的肉山。
 
-> **当前 milestone：纯代码通关肉山，没有 AI 介入游戏。**
+> **上一个 milestone：纯代码通关肉山，没有 AI 介入游戏。已完成。**
+>
+> **当前 milestone：让模型开打。** boss 战由 [Jev](https://docs.typesafe.ai) 驱动，见下。
 
-以后也许会尝试写一个 agent，让它自己去用这些工具玩Terraria。无论效果好坏。
+### Jev 打 boss
+
+[Jev](https://docs.typesafe.ai) 是 TypeSafe 的 System One 模型。它不生成文字，只返回带概率的类型化判断。
+
+分两层：
+
+- **Jev 每 200ms 答一次**（5Hz）。同一份 state 一次问五个并行问题：九选一的意图（`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`）、五档危险度、要不要冲刺、要不要跳。
+- **反射层每帧翻译成按键**：瞄准、距离、冲刺的双击时序、钩爪落点搜索、跳跃的"松一帧"、意图过期回退，全归代码。
+
+Jev 答判断，代码拥有瞄准、距离、时序和 TTL。
+
+每个 boss 的背板是**一段中文文字**（`Jev/Fight/BossBook.cs`），不是分支：怎么打、场地什么样、禁用哪几个意图、保持几格。加一个 boss 通常只是加一条文字条目。目前有克苏鲁之眼、史莱姆王、克苏鲁之脑、世界吞噬者、骷髅王、蜂王、鹿角怪七条，外加肉山和恶鬼两条距离规则。
+
+`/bossbook` 可以整个关掉背板，只留场地和通用字段，用来验知识到底值多少。
+
+需要一个 TypeSafe API key，三个来源按优先级：模组配置界面 → 仓库根目录的 `.env`（见 `.env.example`，已进 `.gitignore` 和 `buildIgnore`）→ 环境变量 `TYPESAFE_API_KEY`。没有 key 时战斗层退回保守的 baseline，不影响主线流程。
 
 ### 完成度
 
@@ -117,7 +141,7 @@ TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准�
 
 ### 代码结构
 
-141 个 `.cs`，按职责分目录（namespace 统一是 `TerraBlind`，不跟目录走）：
+159 个 `.cs`，按职责分目录（namespace 统一是 `TerraBlind`，不跟目录走）：
 
 | 目录 | 内容 |
 |------|------|
@@ -127,6 +151,7 @@ TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准�
 | `Actions/` | 原语：放置、挖掘、柱子、平台梯、走位、合成、购物、脱困栈 |
 | `Build/` | 建造：地狱线规划、桥面铺设、房屋、桥起点 |
 | `Flow/` | 流程编排：`/start` 主链、地狱段、肉山准备与战斗、顺路采集 |
+| `Jev/` | 模型那一层：走位意图、boss 背板、威胁扫描、请求与降级、HUD 与日志环 |
 | `Infra/` | HTTP 服务、日志、聊天输出 |
 | `Debug/` | 录制回放、卡死哨兵、冻结、可视化命令 |
 
@@ -174,9 +199,26 @@ Everything in TerraBlind is a **tool**: pathfinding, aiming, using items, openin
 
 `/start` is **one pipeline wired by hand** out of those tools, aimed at beating the Wall of Flesh on Classic difficulty.
 
-> **Current milestone: beat the Wall of Flesh with code only. No AI plays the game.**
+> **Previous milestone: beat the Wall of Flesh with code only, no AI. Done.**
+>
+> **Current milestone: let a model fight.** Boss fights are driven by [Jev](https://docs.typesafe.ai); see below.
 
-An agent that drives these tools by itself may come later, however well or badly it works.
+### Jev fights the bosses
+
+[Jev](https://docs.typesafe.ai) is TypeSafe's System One model. It does not generate text -- it returns typed judgments with probabilities.
+
+Two layers:
+
+- **Jev answers every 200ms** (5Hz). One state, five questions in parallel: one of nine intents (`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`), a five-level danger score, whether to dash, whether to jump.
+- **A reflex layer turns that into keystrokes every frame**: aiming, distance, the double-tap timing for dashes, hook anchor search, the one-frame release a jump needs, intent expiry. All code.
+
+Jev answers judgments; the code owns aiming, distance, timing and TTL.
+
+Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, what the arena is like, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are seven: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, Queen Bee, Deerclops -- plus distance rules for the Wall of Flesh and The Hungry.
+
+`/bossbook` switches the playbooks off entirely, leaving only the arena and the generic fields, to measure what the knowledge is actually worth.
+
+A TypeSafe API key is required, read in this order: the mod config screen, then `.env` in the repo root (see `.env.example`; it is in both `.gitignore` and `buildIgnore`), then the `TYPESAFE_API_KEY` environment variable. Without a key the combat layer falls back to a conservative baseline and the main pipeline is unaffected.
 
 ### How far it gets
 
@@ -266,7 +308,7 @@ The time goes into working out **which part broke**. The point of the above is t
 
 ### Code layout
 
-141 `.cs` files grouped by responsibility (the namespace is flat `TerraBlind`; it does not follow directories):
+159 `.cs` files grouped by responsibility (the namespace is flat `TerraBlind`; it does not follow directories):
 
 | Directory | Contents |
 |-----------|----------|
@@ -276,6 +318,7 @@ The time goes into working out **which part broke**. The point of the above is t
 | `Actions/` | Primitives: place, mine, pillar, platform ladder, settle, craft, shop, the unstick stack |
 | `Build/` | Building: hell line planning, deck laying, houses, bridge start |
 | `Flow/` | Orchestration: the `/start` chain, hell stage, WoF prep and fight, opportunistic looting |
+| `Jev/` | The model layer: dodge intents, boss playbooks, threat scan, requests and fallback, HUD and log ring |
 | `Infra/` | HTTP server, logging, chat output |
 | `Debug/` | Record/replay, stuck sentinel, freeze, visualization commands |
 
