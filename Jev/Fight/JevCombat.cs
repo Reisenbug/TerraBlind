@@ -30,15 +30,37 @@ namespace TerraBlind
 		static string Key()
 		{
 			string cfg = Config.I?.TypeSafeKey?.Trim();
-			if (!string.IsNullOrEmpty(cfg)) return cfg;
+			if (!string.IsNullOrEmpty(cfg)) { Warn(cfg, "模组配置"); return cfg; }
 			if (_key != null) return _key.Length == 0 ? null : _key;
 			_key = System.Environment.GetEnvironmentVariable("TYPESAFE_API_KEY")?.Trim() ?? "";
+			string from = _key.Length > 0 ? "TYPESAFE_API_KEY" : null;
 			if (_key.Length == 0)
+			{
 				try { _key = System.IO.File.Exists(KeyPath) ? System.IO.File.ReadAllText(KeyPath).Trim() : ""; }
 				catch { _key = ""; }
-			if (_key.Length == 0)
-				DiagLog.Write($"[jev] 没有 key。填进模组配置,或设 TYPESAFE_API_KEY,或放一个在 {KeyPath}");
+				if (_key.Length == 0)
+					DiagLog.Write($"[jev] 没有 key。填进模组配置,或设 TYPESAFE_API_KEY,或放一个在 {KeyPath}");
+				else from = KeyPath;
+			}
+			if (from != null) Warn(_key, from);
 			return _key.Length == 0 ? null : _key;
+		}
+
+		// build.txt 里 includeSource=true,.tmod 会连源码一起发出去。【写死在代码里的 key 会跟着发布】
+		static bool _warned;
+		static void Warn(string key, string from)
+		{
+			if (_warned) return;
+			_warned = true;
+			DiagLog.Write($"[jev] key 来自 {from},长度 {key.Length}");
+			foreach (var f in typeof(JevCombat).GetFields(System.Reflection.BindingFlags.Static
+				| System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public))
+			{
+				if (f.FieldType != typeof(string) || !f.IsLiteral) continue;
+				string v = f.GetRawConstantValue() as string;
+				if (v != null && v.Length > 20 && (v.StartsWith("sk-") || v == key))
+					DiagLog.Write($"[jev] 警告:常量 {f.Name} 看着像 key。includeSource=true,发布会把它一起带走");
+			}
 		}
 
 		// 问题措辞固定不变,写死在这儿好让人审。criteria 的 key 和 CombatAct 一一对应
