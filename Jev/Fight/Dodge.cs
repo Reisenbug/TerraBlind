@@ -210,9 +210,10 @@ namespace TerraBlind
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
-			// 【贴着墙就松手,但不反向】。反向会把 Back 执行成 Close:墙在左、boss 在右时,
-			// 反弹等于朝 boss 跑过去。方向归 Jev,它手里有离墙几格那两个数
-			if (go != 0 && WallDistance(p, go) <= 0) go = 0;
+			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
+			// 两侧都堵才停。哪边空是算得出来的,不用猜
+			if (go != 0 && WallDistance(p, go) <= 0)
+				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
 			go = Dash(p, go, incoming, act);
@@ -371,6 +372,16 @@ namespace TerraBlind
 			return CareCells;
 		}
 
+		// 头顶到天花板几格。【只往上,不往下】:脚下永远有地,往下扫出来的数没有意义
+		static int CeilingDistance(Player p)
+		{
+			int cx = (int)(p.Center.X / 16f);
+			int top = (int)(p.position.Y / 16f);
+			for (int d = 1; d <= CareCells; d++)
+				if (Predicates.IsWall(cx, top - d)) return d - 1;
+			return CareCells;
+		}
+
 		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
 		// 探不到就报这个上限 -- "很高"和"极高"对走位是一回事
 		static int CellsAboveGround(Player p)
@@ -415,6 +426,7 @@ namespace TerraBlind
 				 // 而它不知道此刻离墙多近 -- 于是 Back 一路跑到墙根还在按方向键
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
+				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
 				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
