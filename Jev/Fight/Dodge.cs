@@ -209,8 +209,11 @@ namespace TerraBlind
 				case DodgeAct.Dive:
 					if (dist < want) go = away;
 					break;
+				// 【两头都管】。原来只防太近,跑到 100 格时它什么都不做 --
+				// 而 Keep 的意思本来就是"维持在想要的距离",不是"只要别贴脸"
 				case DodgeAct.Keep:
 					if (dist < want / 2) go = away;
+					else if (dist > want) go = toward;
 					break;
 			}
 

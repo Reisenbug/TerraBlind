@@ -115,8 +115,8 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
 				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
-				// 【竖直全禁,外加不许贴近】。地面全平跳起来躲不开;主动靠近就是扑到恶鬼嘴里
-				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
+				// 【只禁竖直】。Close 现在收到 want(这一场是 60)就停,不会再扑到恶鬼嘴里
+				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
 				// 通用公式上限才 20 格,而这一场的安全区在 60 -- 量程根本不重合
 				WantCells = 60,
 				HowItFights =
