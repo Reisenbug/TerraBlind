@@ -207,6 +207,10 @@ namespace TerraBlind
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
+			// 【贴着墙就别硬顶】。撞墙之后按方向键位移为零,人还留在攻击线上 --
+			// 这是代码看得见的事实,不该等 200ms 后的意图来救
+			if (go != 0 && WallDistance(p, go) <= 0) go = -go;
+
 			int want0 = go;
 			go = Dash(p, go, incoming, act);
 			bool dashing = go != want0 || _dashGap;
@@ -353,6 +357,18 @@ namespace TerraBlind
 			return best >= 0;
 		}
 
+		// 往这一侧还能跑多远才撞墙。【不能用 ClearWidth】:那个量的是"站得住的连续地面",
+		// 悬崖和平台边缘都会截断,而那些地方人照样跑得过去 -- 这里要的是"有东西挡着"
+		static int WallDistance(Player p, int dir)
+		{
+			int cx = (int)(p.Center.X / 16f);
+			// 齐胸那一行。贴地扫的话一格台阶就读成墙
+			int cy = (int)((p.position.Y + p.height * 0.5f) / 16f);
+			for (int d = 1; d <= CareCells; d++)
+				if (Predicates.IsWall(cx + dir * d, cy)) return d - 1;
+			return CareCells;
+		}
+
 		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
 		// 探不到就报这个上限 -- "很高"和"极高"对走位是一回事
 		static int CellsAboveGround(Player p)
@@ -389,6 +405,10 @@ namespace TerraBlind
 				 // "现在要不要滞空",而不是"要不要继续滞空" -- 悬了三秒也看不出来
 				 + ",\"frames_airborne\":" + _airborneFrames
 				 + ",\"cells_above_ground\":" + CellsAboveGround(p)
+				 // 【离墙还有几格】。arena 那段话只说了"这是个封闭房间",
+				 // 而它不知道此刻离墙多近 -- 于是 Back 一路跑到墙根还在按方向键
+				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
+				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
