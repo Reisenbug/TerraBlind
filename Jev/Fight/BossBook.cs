@@ -155,7 +155,7 @@ namespace TerraBlind
 		public override void Action(Terraria.ModLoader.CommandCaller caller, string input, string[] args)
 		{
 			BossBook.UseKnowledge = !BossBook.UseKnowledge;
-			Terraria.Main.NewText($"[TerraBlind] boss 背板 {(BossBook.UseKnowledge ? "开" : "关")}", 200, 200, 120);
+			Terraria.Main.NewText($"[TerraBlind] boss playbook {(BossBook.UseKnowledge ? "ON" : "OFF")}", 200, 200, 120);
 			DiagLog.Write($"[bossbook] UseKnowledge={BossBook.UseKnowledge}");
 		}
 	}

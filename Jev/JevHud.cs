@@ -22,22 +22,22 @@ namespace TerraBlind
 
 			// 关背板时标一行。录像和日志都得自己说明当时是哪一组,不然事后分不清
 			Line(sb, font, ref x, ref y,
-				BossBook.UseKnowledge ? "[Jev]" : "[Jev] 无背板",
+				BossBook.UseKnowledge ? "[Jev]" : "[Jev] no playbook",
 				BossBook.UseKnowledge ? Color.Gold : Color.Orange);
 			if (Dodge.Enabled)
 			{
-				Line(sb, font, ref x, ref y, "走位 " + Dodge.Last, Tint(Dodge.Confidence));
+				Line(sb, font, ref x, ref y, "move  " + Dodge.Last, Tint(Dodge.Confidence));
 				Line(sb, font, ref x, ref y,
-					$"     置信{Dodge.Confidence:0.00}  危险{Dodge.Danger:0.0}"
-					+ (Dodge.SafeToAttack ? "" : " 别贴脸") + $"  {Dodge.LatencyMs}ms", Color.LightGray);
+					$"      confidence {Dodge.Confidence:0.00}  danger {Dodge.Danger:0.0}"
+					+ (Dodge.SafeToAttack ? "" : "  keep away") + $"  {Dodge.LatencyMs}ms", Color.LightGray);
 				// 【概率分布是证据】。写死的状态机给不出七个选项各占多少
 				if (Dodge.TopTwo.Length > 0)
-					Line(sb, font, ref x, ref y, "     " + Dodge.TopTwo, Color.MediumPurple);
+					Line(sb, font, ref x, ref y, "      " + Dodge.TopTwo, Color.MediumPurple);
 			}
 			if (Combat.Enabled)
-				Line(sb, font, ref x, ref y, "攻击 " + Combat.Last, Color.White);
+				Line(sb, font, ref x, ref y, "fight " + Combat.Last, Color.White);
 			if (!Dodge.Enabled && !Combat.Enabled)
-				Line(sb, font, ref x, ref y, "两层都没开", Color.Gray);
+				Line(sb, font, ref x, ref y, "both layers off", Color.Gray);
 		}
 
 		// 置信低就变暗:一眼看出它是在判断还是在猜

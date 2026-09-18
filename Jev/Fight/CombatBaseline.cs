@@ -17,10 +17,10 @@ namespace TerraBlind
 		{
 			var c = new CombatCall { Confidence = 1f, LatencyMs = -1, InterruptWork = false };
 			if (p.statLife <= p.statLifeMax * FleeHpFrac)
-			{ c.Act = CombatAct.Flee; c.Why = $"血{p.statLife}/{p.statLifeMax},撤"; return c; }
+			{ c.Act = CombatAct.Flee; c.Why = $"hp {p.statLife}/{p.statLifeMax}, retreat"; return c; }
 			if (dist > EngageCells)
-			{ c.Act = CombatAct.Ignore; c.Why = $"{dist}格,还远"; return c; }
-			c.Act = CombatAct.Fight; c.Why = $"{dist}格,打";
+			{ c.Act = CombatAct.Ignore; c.Why = $"{dist} away, too far"; return c; }
+			c.Act = CombatAct.Fight; c.Why = $"{dist} away, engage";
 			return c;
 		}
 	}

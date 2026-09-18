@@ -112,7 +112,7 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			var boss = Boss(p, out int dist);
-			if (boss == null) { Last = "没有boss"; Release(); return; }
+			if (boss == null) { Last = "no boss"; Release(); return; }
 
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done); }
@@ -130,7 +130,7 @@ namespace TerraBlind
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
-			{ Last = "Move 抢不到:" + AxisLock.Held(Ax.Move); return; }
+			{ Last = "Move axis taken by " + AxisLock.Held(Ax.Move); return; }
 
 			Drive(p, boss, dist, act);
 		}
@@ -226,12 +226,12 @@ namespace TerraBlind
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
-			Last = $"{act} boss在{(bossRight ? "右" : "左")}{dist}格(想要{want}) 走{(go == 0 ? "停" : go < 0 ? "左" : "右")}"
-				 + (jump ? (onGround ? "+跳" : "+二段") : "") + (hooking ? "+钩" : "")
-				 + (dashing ? "+冲" : "") + (p.dashDelay < 0 ? "[冲刺中]" : "")
-				 + (!onGround && act != DodgeAct.Close ? "+飘" : "")
-				 + (incoming ? $" 撞击{framesToHit}帧" : "")
-				 + (TacticWorking ? "" : " [这套没用]");
+			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
+				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
+				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
+				 + (!onGround && act != DodgeAct.Close ? " +float" : "")
+				 + (incoming ? $" hit in {framesToHit}f" : "")
+				 + (TacticWorking ? "" : " [not working]");
 		}
 
 		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。

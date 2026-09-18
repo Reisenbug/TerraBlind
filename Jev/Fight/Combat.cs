@@ -176,13 +176,13 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
-			if (n < 0) { Last = "没敌人"; _askedAt.Clear(); _target = -1; Release(); return; }
+			if (n < 0) { Last = "no enemies"; _askedAt.Clear(); _target = -1; Release(); return; }
 
 			// 【boss 和它的部件都不问打不打】。骷髅王的手没有 boss 标志,走的是小怪那套措辞,
 			// 而那套问的是"要不要停下赶路" -- boss 战里根本没有赶路,于是 9 格也答 Ignore
 			if (Main.npc[n].boss || BossPart(Main.npc[n].type))
 			{
-				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss在场,只管打" };
+				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss present, just fight" };
 				// 【这一支也要记】。日志只写在问 Jev 那一支里,走捷径就整场零条 --
 				// 看上去像没在打,其实是没在记
 				string bsig = "boss|" + n;
@@ -226,11 +226,11 @@ namespace TerraBlind
 			}
 
 			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
-			if (WorkBusy && !_call.InterruptWork) { Last = "在放置,先不打"; return; }
+			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; return; }
 
 			int slot = WeaponSlot(p, Main.npc[n].boss);
 			if (slot < 0)
-			{ Last = "背包里没有武器"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
+			{ Last = "no weapon"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
 			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
 			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
@@ -238,13 +238,13 @@ namespace TerraBlind
 				string h = AxisLock.Held(Ax.Use);
 				AxisLock.Release(h);
 				if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
-				{ Last = "Use 抢不到"; DiagLog.Write($"[combat] 不挥:抢不到 Use {AxisLock.Dump()}"); return; }
+				{ Last = "Use axis taken"; DiagLog.Write($"[combat] 不挥:抢不到 Use {AxisLock.Dump()}"); return; }
 				DiagLog.Write($"[combat] 抢过 Use(原持有 {h})");
 			}
 
 			// 【自己按键,不走 ItemUseCoordinator】。那套是为挖和放做的:会把光标吸附到附近的 tile、
 			// 按挖掘距离判够不着。武器要的只是"对着这个坐标一直挥",怪那格通常是空气
-			if (slot >= 10) { Last = "武器不在快捷栏"; return; }
+			if (slot >= 10) { Last = "weapon not in hotbar"; return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
 			Cursor.AimTile(tcx, tcy);
@@ -256,7 +256,7 @@ namespace TerraBlind
 				_swinging = true;
 				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 			}
-			Last = $"打 {Main.npc[n].TypeName} {dist}格";
+			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
 		}
 
 		static string Facts(Player p, int tcx, int tcy, int dist)

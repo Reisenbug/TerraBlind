@@ -148,7 +148,7 @@ namespace TerraBlind
 			call.Probs = Probs(txt);
 			// 置信太低就不听它的,退回 baseline。0.6 和 python 侧 fastjudge.CONF_ACT 一个数:
 			// 实测 45 血遇恶魔眼它自己也只有 0.51~0.56,那种判断不值得照着动
-			if (c > 0f && c < 0.6f) { call.Why = $"jev置信{c:0.00}太低,不采信"; _haveLast = false; return; }
+			if (c > 0f && c < 0.6f) { call.Why = $"jev confidence {c:0.00} too low"; _haveLast = false; return; }
 			_last = call; _haveLast = true;
 		}
 
