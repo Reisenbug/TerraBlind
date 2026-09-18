@@ -188,9 +188,9 @@ namespace TerraBlind
 					go = away;
 					break;
 				// 【绕着走,不是退开】。场地封闭时退只能退到墙上,垂直于连线才躲得开
+				// 【真正的切向】。原来 go = p.direction 跟 boss 在哪无关,是沿惯性直走
 				case DodgeAct.Orbit:
-					if (System.Math.Abs(boss.Center.Y - p.Center.Y) > System.Math.Abs(dx)) go = p.direction;
-					else go = 0;
+					go = boss.Center.Y < p.Center.Y ? (dx > 0 ? 1 : -1) : (dx > 0 ? -1 : 1);
 					break;
 				// 【下坠时也要横移】。站着往下掉只是换个高度挨打
 				case DodgeAct.Dive:
