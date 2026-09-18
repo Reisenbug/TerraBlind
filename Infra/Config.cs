@@ -36,6 +36,10 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool BossKnowledge;
 
+		// 留空就去环境变量和 ~/.typesafe_key 找。【填了就会存进 ModConfigs/TerraBlind.json】
+		[DefaultValue("")]
+		public string TypeSafeKey;
+
 		[Header("Debug")]
 		[DefaultValue(true)]
 		public bool ShowOverlay;

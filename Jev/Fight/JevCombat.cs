@@ -26,12 +26,18 @@ namespace TerraBlind
 		public static string Stats => $"发了{_sent}次 失败{_failed}次 {(HasKey ? "key已加载" : "没有key")}";
 		public static bool HasKey => Key() != null;
 
+		// 配置 > 环境变量 > 文件。【配置不进缓存】:游戏里随时能改,缓存了就要重开才生效
 		static string Key()
 		{
+			string cfg = Config.I?.TypeSafeKey?.Trim();
+			if (!string.IsNullOrEmpty(cfg)) return cfg;
 			if (_key != null) return _key.Length == 0 ? null : _key;
-			try { _key = System.IO.File.Exists(KeyPath) ? System.IO.File.ReadAllText(KeyPath).Trim() : ""; }
-			catch { _key = ""; }
-			if (_key.Length == 0) DiagLog.Write($"[jev] 没有 key,放一个在 {KeyPath}");
+			_key = System.Environment.GetEnvironmentVariable("TYPESAFE_API_KEY")?.Trim() ?? "";
+			if (_key.Length == 0)
+				try { _key = System.IO.File.Exists(KeyPath) ? System.IO.File.ReadAllText(KeyPath).Trim() : ""; }
+				catch { _key = ""; }
+			if (_key.Length == 0)
+				DiagLog.Write($"[jev] 没有 key。填进模组配置,或设 TYPESAFE_API_KEY,或放一个在 {KeyPath}");
 			return _key.Length == 0 ? null : _key;
 		}
 

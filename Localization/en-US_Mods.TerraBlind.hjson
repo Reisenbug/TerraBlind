@@ -88,5 +88,14 @@ Configs: {
 			Label: Boss Knowledge
 			Tooltip: ""
 		}
+
+		TypeSafeKey: {
+			Label: TypeSafe API key
+			Tooltip:
+				'''
+				Key for the Jev calls that drive boss fighting. Leave it empty to read TYPESAFE_API_KEY from the environment, or ~/.typesafe_key instead.
+				Typing it here saves it in plain text to ModConfigs/TerraBlind.json -- do not share that file.
+				'''
+		}
 	}
 }
