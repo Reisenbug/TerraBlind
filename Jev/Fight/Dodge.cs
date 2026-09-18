@@ -60,6 +60,7 @@ namespace TerraBlind
 		public static string TopTwo = "";
 		// 上一条播报过的意图。没变就不再刷屏
 		static DodgeAct _saidAct = (DodgeAct)(-1);
+		static long _saidAt;
 
 		public const string Url = "https://api.typesafe.ai/v1/systemone";
 		public const string Model = "jev-latest";
@@ -210,8 +211,8 @@ namespace TerraBlind
 			// 【飘太久连跳也不许,但 hookJump 例外】。挂在钩子上不是滞空,拦住就永远下不来
 			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			bool levelUp = act == DodgeAct.Level && p.Center.Y > boss.Center.Y + 16f * 3f;
-			bool wantJump = hookJump || ((act == DodgeAct.Up || levelUp || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			// 【Level 在下方时不跳】。跳是一次性冲量,冲过死区又被羽落拖回来,于是原地弹跳一帧不落地
+			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【贴着墙就松手,但不反向】。反向会把 Back 执行成 Close:墙在左、boss 在右时,
@@ -531,11 +532,14 @@ namespace TerraBlind
 
 			Probs = Seg(intent, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
-			// 意图变了才播报。每 200ms 一条会把聊天刷没,那就不是证据是噪音
-			if (Act != _saidAct)
+			// 意图变了才播报。每 200ms 一条会把聊天刷没,那就不是证据是噪音。
+			// 【但卡在一个意图上时也要出声】,否则最该看见的那种局面反而一片安静
+			long now = _clock.ElapsedMilliseconds;
+			if (Act != _saidAct || now - _saidAt > 4000)
 			{
-				_saidAct = Act;
-				Main.NewText($"<Jev> {Say(Act)}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
+				string tag = Act == _saidAct ? $" still, {(now - _saidAt) / 1000}s" : "";
+				_saidAct = Act; _saidAt = now;
+				Main.NewText($"<Jev> {Say(Act)}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
