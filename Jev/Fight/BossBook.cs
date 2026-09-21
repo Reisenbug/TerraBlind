@@ -19,6 +19,9 @@ namespace TerraBlind
 		// 【拼到 should_dash_now 的题干末尾】。背板写在 state 里压不过题干 --
 		// 同一句话放 state 里 noul 只有 0.19,那一场就是一次冲刺都不出
 		public string DashNote = "";
+		// noul 到多少算"该冲"。【题干里那句谨慎话把整体压低了】,
+		// DoG 这种冲刺无敌的场合,0.7 永远够不到,而 0.59 在那一场就是明确的"该冲"
+		public float DashAt = 0.7f;
 	}
 
 	// 一个模组 boss 的登记。【type 是运行时分配的】,编译期字典写不进去
@@ -197,6 +200,7 @@ namespace TerraBlind
 					Arena = "开阔的地方。它会绕着人转圈,转起来四周都是它的身体",
 					Banned = new[] { DodgeAct.Keep },
 					Fallback = DodgeAct.Evade,
+					DashAt = 0.25f,
 					DashNote =
 						"这一场例外:冲刺全程无敌,撞到这条虫的头和身体都不掉血,"
 						+ "所以上面那条'乱冲会撞进攻击里'在这里不适用。"
@@ -288,6 +292,8 @@ namespace TerraBlind
 		public static DodgeAct FallbackFor(int npcType) => Of(npcType).Fallback;
 
 		public static string DashNoteFor(int npcType) => UseKnowledge ? Of(npcType).DashNote : "";
+
+		public static float DashAtFor(int npcType) => Of(npcType).DashAt;
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{

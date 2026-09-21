@@ -181,6 +181,9 @@ namespace TerraBlind
 
 			int fixedWant = BossBook.WantCellsFor(boss.type);
 			int want = fixedWant > 0 ? fixedWant : WantCells(Danger);
+			// 【门槛跟着这一场走】。题干里那句谨慎话把 noul 整体压低,
+			// 冲刺无敌的场合 0.7 永远够不到 -- 而远近它自己分得很清(远 0.14 近 0.59)
+			JevSaysDash = DashNoul > BossBook.DashAtFor(boss.type);
 			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
 			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
 			int framesToHit = FramesToHit(p, boss);
@@ -588,9 +591,9 @@ namespace TerraBlind
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
-			// 原始概率也留着:只记一个 bool 的话,"它不想冲"和"门槛卡太高"在日志里长得一样
+			// 【门槛按 boss 取,在 Drive 里判】。这里拿不到 boss,只存原始概率 --
+			// 而且只记一个 bool 的话,"它不想冲"和"门槛卡太高"在日志里长得一样
 			DashNoul = Num(Seg(txt, "should_dash_now"), "noul", 0f);
-			JevSaysDash = DashNoul > 0.7f;
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
