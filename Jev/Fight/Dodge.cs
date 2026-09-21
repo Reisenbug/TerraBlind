@@ -161,17 +161,21 @@ namespace TerraBlind
 			return boss.velocity.X > 0f ? -1 : 1;
 		}
 
-		// 冲刺往哪个方向。【垂直于它扑过来的那条线】:沿着它的来向冲是被追,
-		// 正对着冲是对撞,横切过去才让它扑空。它不动时就退开
+		// 冲刺往哪个方向。【先离开它,再谈角度】:原来按速度符号转 90 度,
+		// 结果头从左上扑来时算出"往右",正好顺着它冲的方向跑
 		static int DashDir(Player p, NPC boss, int away)
 		{
-			var v = boss.velocity;
-			if (System.Math.Abs(v.X) + System.Math.Abs(v.Y) < 1f) return away;
-			// 它来的方向逆时针转 90 度,取水平分量的符号。竖直分量由 Jev 的意图去补
-			int perp = v.Y > 0f ? 1 : -1;
-			// 那一侧是墙就走另一侧,两边都堵才退开
-			if (WallDistance(p, perp) <= 0) perp = WallDistance(p, -perp) > 0 ? -perp : away;
-			return perp;
+			int side = away;
+			if (WallDistance(p, side) <= 0) side = WallDistance(p, -side) > 0 ? -side : 0;
+			return side == 0 ? away : side;
+		}
+
+		// 这一下冲刺该往上还是往下。【远离侧优先往下】,被迫朝它那一侧冲时改成往上,
+		// 免得贴着它的行进线走
+		static bool DashGoesDown(Player p, NPC boss, int dir)
+		{
+			int away = boss.Center.X > p.Center.X ? -1 : 1;
+			return dir == away;
 		}
 
 		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
@@ -265,7 +269,8 @@ namespace TerraBlind
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
 			// 斜上冲刺:冲的那几帧按住空格。走 Jump() 而不是直接按,那个键归它的状态机管
-			if (act == DodgeAct.Up && p.dashDelay < 0 && BossBook.DashAcrossFor(boss.type)) wantJump = true;
+			if (p.dashDelay < 0 && BossBook.DashAcrossFor(boss.type)
+			 && !DashGoesDown(p, boss, _dashDir != 0 ? _dashDir : go)) wantJump = true;
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
@@ -283,10 +288,11 @@ namespace TerraBlind
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
 			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
-			// 【斜着冲要配竖直键】:左下=左+冲+按住下,左上=左+冲+按住空格。斜上斜下由意图定
+			// 【斜着冲要配竖直键】:左下=左+冲+按住下,左上=左+冲+按住空格。
+			// 往远离它的那侧冲就压低,被墙逼得朝它那侧冲就抬高 -- 别贴着它的行进线走
 			bool dashVert = (dashing || p.dashDelay < 0) && p.grapCount == 0
 						 && BossBook.DashAcrossFor(boss.type);
-			bool dashDown = dashVert && act != DodgeAct.Up;
+			bool dashDown = dashVert && DashGoesDown(p, boss, _dashDir != 0 ? _dashDir : go);
 			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
 			bool hover = !dive && !_wantFly && !dashDown && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
 			if (dashDown || dive) p.controlDown = true;

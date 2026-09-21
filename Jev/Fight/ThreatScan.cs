@@ -81,14 +81,20 @@ namespace TerraBlind
 			for (int i = 0; i < Main.maxProjectiles && n < 12; i++)
 			{
 				var pr = Main.projectile[i];
-				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
+				if (pr == null || !pr.active || !pr.hostile) continue;
 				int pcx = (int)(pr.Center.X / 16f), pcy = (int)(pr.Center.Y / 16f);
 				int d = System.Math.Abs(pcx - atCx) + System.Math.Abs(pcy - atCy);
 				if (d > RangeCells) continue;
+				// 【不掉血又不动的是预警线】。激光发射前先画一条线,那正是要躲开的位置 --
+				// 按"朝我飞来"筛会把它全扔掉,而它根本不飞
+				bool still = System.Math.Abs(pr.velocity.X) + System.Math.Abs(pr.velocity.Y) < 0.1f;
+				bool telegraph = pr.damage <= 0 && still;
+				// 不掉血又在飞的是纯特效,那个才该扔
+				if (pr.damage <= 0 && !still) continue;
 				// 朝我来才值得报。飞走的弹幕不该占名额,更不该让它以为处处是危险
 				bool toward = (pcx < atCx && pr.velocity.X > 0.1f) || (pcx > atCx && pr.velocity.X < -0.1f)
 						   || (pcy < atCy && pr.velocity.Y > 0.1f) || (pcy > atCy && pr.velocity.Y < -0.1f);
-				if (!toward) continue;
+				if (!toward && !telegraph) continue;
 				if (n++ > 0) sb.Append(',');
 				sb.Append("{\"name\":\"").Append(pr.Name ?? "?").Append('"')
 				  .Append(",\"cells_right\":").Append(pcx - atCx)
@@ -97,6 +103,10 @@ namespace TerraBlind
 				  .Append(",\"damage_pct_of_my_hp\":").Append((int)(pr.damage * 100f / System.Math.Max(1, p.statLife)))
 				  .Append(",\"vx\":").Append(pr.velocity.X.ToString("0.0"))
 				  .Append(",\"vy\":").Append(pr.velocity.Y.ToString("0.0"))
+				  // 尺寸也报:预警线是一条细长的东西,只给中心点看不出它横着还是竖着
+				  .Append(",\"cells_wide\":").Append(System.Math.Max(1, pr.width / 16))
+				  .Append(",\"cells_tall\":").Append(System.Math.Max(1, pr.height / 16))
+				  .Append(",\"is_warning_line\":").Append(telegraph ? "true" : "false")
 				  .Append('}');
 			}
 			return sb.Append(']').ToString();
