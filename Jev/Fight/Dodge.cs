@@ -5,6 +5,12 @@ using Terraria;
 namespace TerraBlind
 {
 	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
+	// 两个正交的轴,九种组合。【旋转不是第三个轴】:绕着 boss 走就是这两个轴的一个组合。
+	// 钩爪/冲刺/二段跳/翅膀都不在这里 -- 那些是"怎么做",由代码挑
+	public enum Horiz { Away, Hold, Near }
+	public enum Vert { Rise, Level, Drop }
+
+	// 旧的九选一。BossBook 的 Banned 还按它写,映射到两个轴上
 	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive }
 
 	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
@@ -54,7 +60,8 @@ namespace TerraBlind
 		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步
 
 		public static string Last = "idle";
-		public static DodgeAct Act = DodgeAct.Back;
+		public static Horiz Hor = Horiz.Away;
+		public static Vert Ver = Vert.Level;
 		public static float Confidence;
 		public static int LatencyMs;
 		// 【距离不再写死】。原来 6/18 两个数是我编的,对所有 boss 一视同仁。
@@ -177,18 +184,33 @@ namespace TerraBlind
 				Fire(key, _lastFacts);
 			}
 
-			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
-			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
-			// 【禁用的意图退回 Keep,不是 Back】。禁 Close 的 boss 往往正是"太远也危险"那种,
-			// 自动后退等于换个方向送
-			if (BossBook.IsBanned(boss.type, act)) act = DodgeAct.Keep;
+			// 意图过期:退回"拉开距离 + 保持高度",那是任何时候都不会送命的默认
+			bool stale = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs;
+			var hor = stale ? Horiz.Away : Hor;
+			var ver = stale ? Vert.Level : Ver;
+			// 【两个轴各禁各的】。肉山只禁竖直,一起清掉会把该退开的水平也抹平
+			// 【禁用退回"不变",不是反向】:禁 Near 的 boss 往往正是"太远也危险"那种
+			if (ver == Vert.Rise && BossBook.IsBanned(boss.type, DodgeAct.Up)) ver = Vert.Level;
+			if (ver == Vert.Drop && BossBook.IsBanned(boss.type, DodgeAct.Dive)) ver = Vert.Level;
+			if (hor == Horiz.Near && BossBook.IsBanned(boss.type, DodgeAct.Close)) hor = Horiz.Hold;
+			if (hor == Horiz.Away && BossBook.IsBanned(boss.type, DodgeAct.Back)) hor = Horiz.Hold;
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
 			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); return; }
 
-			Gate($"driving {boss.TypeName} {dist}格 act={act}");
-			Drive(p, boss, dist, act);
+			Gate($"driving {boss.TypeName} {dist}格 act={hor}/{ver}");
+			Drive(p, boss, dist, hor, ver);
+		}
+
+		// BossBook 的 Banned 还是按旧的九选一写的。两个轴映射回去查一次
+		static DodgeAct ToAct(Horiz h, Vert v)
+		{
+			if (v == Vert.Rise) return DodgeAct.Up;
+			if (v == Vert.Drop) return DodgeAct.Dive;
+			if (h == Horiz.Away) return DodgeAct.Back;
+			if (h == Horiz.Near) return DodgeAct.Close;
+			return DodgeAct.Keep;
 		}
 
 		// 【拦在门口要出声】。Last 只有 HUD 看得见,日志里一片空白时分不清
@@ -217,7 +239,7 @@ namespace TerraBlind
 
 		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
 		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
-		static void Drive(Player p, NPC boss, int dist, DodgeAct act)
+		static void Drive(Player p, NPC boss, int dist, Horiz hor, Vert ver)
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
@@ -247,60 +269,45 @@ namespace TerraBlind
 			bool incoming = (framesToHit >= 0 && framesToHit <= soon)
 						 || (projHit >= 0 && projHit <= soon);
 
-			switch (act)
+			switch (hor)
 			{
-				// 【别"够远就停"】。克苏鲁之眼是冲撞型,站定就是等撞 --
-				// 它锁的是冲刺开始那一刻的位置,横向一直有速度才躲得开
-				case DodgeAct.Back:
+				// 【别"够远就停"】。冲撞型 boss 锁的是起冲那一刻的位置,
+				// 横向一直有速度才躲得开
+				case Horiz.Away:
 					go = away;
 					break;
 				// 【按横向差判】。dist 是 |dx|+|dy|,悬在头顶 40 格也算"远",横着走收不掉高低差
-				// 【收到 want 就停,不是 want/2】。砍一半等于主动贴到脸上
-				case DodgeAct.Close:
+				case Horiz.Near:
 					if (System.Math.Abs(dx) / 16f > want) go = toward;
 					break;
-				case DodgeAct.Evade:
-					go = away;
-					break;
-				// 【飘着也要横移】。羽落是边飘边躲,不是站桩 -- 悬在半空不动就是靶子
-				case DodgeAct.Up:
-				case DodgeAct.Float:
-					if (dist < want) go = away;
-					break;
-				case DodgeAct.Grapple:
-					go = away;
-					break;
-				// 【绕着走,不是退开】。场地封闭时退只能退到墙上,垂直于连线才躲得开
-				// 【真正的切向】。原来 go = p.direction 跟 boss 在哪无关,是沿惯性直走
-				case DodgeAct.Orbit:
-					go = boss.Center.Y < p.Center.Y ? (dx > 0 ? 1 : -1) : (dx > 0 ? -1 : 1);
-					break;
-				// 【下坠时也要横移】。站着往下掉只是换个高度挨打
-				case DodgeAct.Dive:
-					if (dist < want) go = away;
-					break;
-				// 【远端只对指定了距离的 boss 生效】。那是肉山的需求(跑太远吃激光),
-				// 别的 boss 没填 WantCells,行为和以前一模一样
-				case DodgeAct.Keep:
+				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
+				// 【远端只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
+				case Horiz.Hold:
 					if (dist < want / 2) go = away;
 					else if (fixedWant > 0 && dist > want) go = toward;
 					break;
 			}
 
-			// 钩爪:发射 → 勾住 → 【必须跳一次取消】。跳完拿到那段速度,二段跳也回来了
-			bool hooking = Hook(p, boss, act, onGround, out bool hookJump);
+			// 【竖直动了就必须横移】。原地上下只是换个高度挨打,
+			// 而斜着走才是这次重构要的那个方向
+			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 【飘太久连跳也不许,但 hookJump 例外】。挂在钩子上不是滞空,拦住就永远下不来
-			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
+			// 钩爪现在是手段不是意图:想升而地面跳够不着,或者想降而脚下没路,才甩钩
+			bool wantHook = (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f)
+						 || (ver == Vert.Drop && CellsAboveGround(p) > 12);
+			bool hooking = Hook(p, boss, wantHook, onGround, out bool hookJump);
+
+			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			// 想往上。【手段不在这里选】:跳/二段跳/翅膀哪个能用由 Jump 自己挑
+			bool rise = ver == Vert.Rise && !noJump;
+			bool wantJump = hookJump || ((rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
-			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
-			bool jump = Jump(p, onGround, wantJump, act == DodgeAct.Up && !_tooLongAirborne && !noJump);
-			// 【Up 为什么没飞】。三个门各自都会让竖直动作整个哑掉,日志里分不出是哪个
-			if (act == DodgeAct.Up && !_wantFly)
-				Gate($"Up 但不飞: 滞空{_airborneFrames}帧 tooLong={_tooLongAirborne}"
-					+ $" grap={p.grapCount} noJump={noJump} wing={p.wingTime:0}");
+			_wantFly = rise && !_tooLongAirborne && p.grapCount == 0;
+			bool jump = Jump(p, onGround, wantJump, rise && !_tooLongAirborne);
+			if (rise && !_wantFly)
+				Gate($"Rise 但不飞: 滞空{_airborneFrames}帧 tooLong={_tooLongAirborne}"
+					+ $" grap={p.grapCount} wing={p.wingTime:0}");
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
 			// 两侧都堵才停。哪边空是算得出来的,不用猜
@@ -308,7 +315,7 @@ namespace TerraBlind
 				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
-			go = Dash(p, go, incoming, act);
+			go = Dash(p, go, incoming, ver);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -316,17 +323,16 @@ namespace TerraBlind
 			if (jump) p.controlJump = true;
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
-			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
+			bool dive = (ver == Vert.Drop || _tooLongAirborne) && p.grapCount == 0;
 			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
-			bool hover = !dive && !_wantFly && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			bool hover = !dive && !_wantFly && (rise || hooking || incoming);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
 			Fly(p);
-			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
+			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
-				 + (!onGround && act != DodgeAct.Close ? " +float" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
 		}
@@ -346,7 +352,7 @@ namespace TerraBlind
 
 		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
 		// 光标是全局的,攻击层每帧在瞄 boss -- 只有发射那一帧抢过来指个方向,之后不用再指
-		static bool Hook(Player p, NPC boss, DodgeAct act, bool onGround, out bool hookJump)
+		static bool Hook(Player p, NPC boss, bool want, bool onGround, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
@@ -359,7 +365,7 @@ namespace TerraBlind
 				return true;
 			}
 			if (_hookCooldown > 0) { _hookCooldown--; return false; }
-			if (act != DodgeAct.Grapple) { _hookFrames = 0; return false; }
+			if (!want) { _hookFrames = 0; return false; }
 			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
 			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
 			if (_hookFrames++ > HookGiveUpFrames) return false;
@@ -420,7 +426,7 @@ namespace TerraBlind
 
 		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
 		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
-		static int Dash(Player p, int go, bool incoming, DodgeAct act)
+		static int Dash(Player p, int go, bool incoming, Vert ver)
 		{
 			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
@@ -589,29 +595,26 @@ namespace TerraBlind
 		// 同一份 state 一次问完。【并行求值不加延迟】,多问几个等于白捡
 		static string Body(string state)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
-			 + "\"intent\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
-			 + "碰到 boss 或者吃到弹幕才掉血。【说的是意图不是按键】,具体往左往右由代码每帧算。\",\"criteria\":{"
-			 + "\"Keep\":\"保持现在的位置。够得着打,又没有被逼近,站稳输出\","
-			 + "\"Back\":\"拉开距离。它正冲过来,或者血不多了要留余地\","
-			 + "\"Close\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下。"
+			 + "碰到 boss 或者吃到弹幕才掉血。这一题只管【和 boss 的距离该怎么变】,"
+			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
+			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
+			 + "\"Away\":\"拉开距离。它正冲过来、已经贴脸、或者血不多了要留余地。"
+			 + "弹幕从某一侧压过来时也是这个 -- 代码会往两侧里空的那边走\","
+			 + "\"Hold\":\"距离正好,不用变。够得着打又没有被逼近,站稳输出\","
+			 + "\"Near\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下。"
 			 + "看 cells_further_than_i_asked_for:这个数大就说明已经比自己要的距离远出不少,"
-			 + "有的 boss 离太远反而更危险(远程攻击正好覆盖那一带),那就该收回来\","
-			 + "\"Evade\":\"横向闪开。它已经贴脸或者马上要撞上,先把这一下躲过去。"
-			 + "弹幕从某一侧压过来时也用这个 -- 看 projectile_pressure 的左右两边哪边发数少,往空的那边闪\","
-			 + "\"Up\":\"往上跳。它从下方上来,或者该上更高一层平台\","
-			 + "\"Float\":\"跳起来滞空,让贴着地面来的那一击从脚下穿过去 -- 弹幕贴着地面扫过来时也一样。"
-			 + "滞空时横向移动速度正常,照样能边飘边躲。"
-			 + "但对从上往下砸的、从上方压下来的弹幕、或者会瞬移到人身上的没用,那种情况滞空是把自己定在落点上。"
-			 + "看 frames_airborne:已经飘了一阵子说明那一下早就过去了,该落地跑动而不是接着飘\","
-			 + "\"Dive\":\"降到下面一层去。踩着平台时会穿下去,在空中时会快速落回地面。"
-			 + "头顶压下来的东西、或者从上方来的弹幕(看 projectile_pressure 的 from_above),"
-			 + "掉下去一层往往就扑空了;在空中飘了一阵子而局面没有变好时也用它落地重来\","
-			 + "\"Orbit\":\"绕着它走。沿垂直于'自己到它连线'的方向横移,让它的冲撞擦身而过。"
-			 + "场地封闭、退无可退的时候用这个 -- 往后退只会退到墙上,而绕开既保持了移动又不撞上去\","
-			 + "\"Grapple\":\"甩钩爪换位。勾住的瞬间跳起来取消,拿到那一段速度,二段跳也会重置。"
-			 + "往上勾能拔高,往左下右下勾能快速落到另一个高度 -- 跑动中来不及掉头、"
-			 + "或者横着跑躲不开追过来的东西时,换个高度往往比继续跑有用\"}},"
+			 + "有的 boss 离太远反而更危险(远程攻击正好覆盖那一带),那就该收回来\"}},"
+			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
+			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
+			 + "\"Rise\":\"往上。它从下方上来、贴着地面的攻击要从脚下穿过去、或者该上更高一层平台。"
+			 + "但对从上往下砸的东西没用,那种情况往上是迎上去\","
+			 + "\"Level\":\"保持现在的高度。没有上下方向的威胁,或者正在地面上跑得好好的\","
+			 + "\"Drop\":\"往下。踩着平台时会穿下去,在空中时会快速落回地面。"
+			 + "头顶压下来的东西、从上方来的弹幕(看 projectile_pressure 的 from_above),"
+			 + "掉一层往往就扑空了;看 frames_airborne,在空中飘了一阵子而局面没变好时也该落地重来\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
 			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
@@ -656,41 +659,43 @@ namespace TerraBlind
 			string txt = packed;
 			if (cut > 0) { int.TryParse(packed.Substring(0, cut), out ms); txt = packed.Substring(cut + 1); }
 
-			string intent = Seg(txt, "intent");
-			string pick = Field(intent, "choice");
-			if (pick == null)
+			string hq = Seg(txt, "horizontal"), vq = Seg(txt, "vertical");
+			string hp = Field(hq, "choice"), vp = Field(vq, "choice");
+			if (hp == null)
 			{
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
 			// 【延迟要落日志】。只进 HUD 的话,事后没法回答"200ms 够不够"
-			DiagLog.Write($"[dodge] jev {ms}ms -> {pick}");
+			DiagLog.Write($"[dodge] jev {ms}ms -> {hp}/{vp}");
 			LatencyMs = ms;
-			Confidence = Num(intent, "confidence", 0f);
-			Act = pick switch
+			Confidence = Num(hq, "confidence", 0f);
+			Hor = hp switch
 			{
-				"Back" => DodgeAct.Back,
-				"Close" => DodgeAct.Close,
-				"Evade" => DodgeAct.Evade,
-				"Up" => DodgeAct.Up,
-				"Float" => DodgeAct.Float,
-				"Grapple" => DodgeAct.Grapple,
-				"Orbit" => DodgeAct.Orbit,
-				"Dive" => DodgeAct.Dive,
-				_ => DodgeAct.Keep,
+				"Hold" => Horiz.Hold,
+				"Near" => Horiz.Near,
+				_ => Horiz.Away,
+			};
+			// 竖直那题没答上来就保持高度。【不猜】:瞎升瞎降都是白白换位置
+			Ver = vp switch
+			{
+				"Rise" => Vert.Rise,
+				"Drop" => Vert.Drop,
+				_ => Vert.Level,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
 
-			Probs = Seg(intent, "probabilities") ?? "";
+			Probs = Seg(hq, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
 			// 意图变了才播报。每 200ms 一条会把聊天刷没,那就不是证据是噪音。
 			// 【但卡在一个意图上时也要出声】,否则最该看见的那种局面反而一片安静
 			long now = _clock.ElapsedMilliseconds;
-			if (Act != _saidAct || now - _saidAt > 4000)
+			var said = ToAct(Hor, Ver);
+			if (said != _saidAct || now - _saidAt > 4000)
 			{
-				string tag = Act == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
-				_saidAct = Act; _saidAt = now;
-				Main.NewText($"<Jev> {Say(Act)}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
+				string tag = said == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
+				_saidAct = said; _saidAt = now;
+				Main.NewText($"<Jev> {Hor}/{Ver}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
@@ -707,11 +712,11 @@ namespace TerraBlind
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
 				State = _lastFacts,
-				Pick = pick + $" 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "")
+				Pick = $"{hp}/{vp} 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "")
 					 + (SafeToAttack ? "" : " 别贴脸") + (TacticWorking ? "" : " 这套没用")
 					 + "  →  " + Last,
 				Confidence = Confidence,
-				Probs = Seg(intent, "probabilities") ?? "",
+				Probs = Seg(hq, "probabilities") ?? "",
 				Why = "jev",
 				LatencyMs = ms,
 			});
@@ -752,18 +757,6 @@ namespace TerraBlind
 			=> seg != null && float.TryParse(Field(seg, name), out float v) ? v : dflt;
 
 		// 意图的人话。【聊天栏一律英文】,录像给外面的人看
-		static string Say(DodgeAct a) => a switch
-		{
-			DodgeAct.Back => "back off",
-			DodgeAct.Close => "close in and attack",
-			DodgeAct.Evade => "dodge sideways",
-			DodgeAct.Up => "jump up",
-			DodgeAct.Float => "hover, let it pass underneath",
-			DodgeAct.Grapple => "grapple for height",
-			DodgeAct.Orbit => "orbit around it",
-			DodgeAct.Dive => "drop down fast",
-			_ => "hold position",
-		};
 
 		// "Float:0.41 Grapple:0.19" -- 从 probabilities 里挑最高的两个
 		static string Rank(string probs)
