@@ -83,6 +83,9 @@ namespace TerraBlind
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
 			BossBook.UseKnowledge = BossKnowledge;
+			// 【这里也要铺】。OnChanged 会在 PostSetupContent 之后再响一次,
+			// 而那次的实例列表还是空的 -- 不补就把刚铺好的 24 条清回 0
+			BossBook.Seed(BossPlaybook);
 			BossBook.SetOverrides(BossPlaybook);
 			JevHud.Enabled = ShowJevHud;
 		}
@@ -95,8 +98,10 @@ namespace TerraBlind
 		public override void PostSetupContent()
 		{
 			var c = Config.I;
-			if (c == null) return;
+			if (c == null) { DiagLog.Write("[bossbook] PostSetupContent 时 Config.I 还是空的,没铺成"); return; }
+			int before = c.BossPlaybook.Count;
 			BossBook.Seed(c.BossPlaybook);
+			DiagLog.Write($"[bossbook] 铺了 {c.BossPlaybook.Count - before} 条,现在共 {c.BossPlaybook.Count} 条");
 			BossBook.SetOverrides(c.BossPlaybook);
 		}
 	}
