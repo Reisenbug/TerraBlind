@@ -22,7 +22,8 @@ namespace TerraBlind
 		const long IntentTtlMs = 1500;
 
 		// 二段跳:落地才回充,空中再按一次触发,而且【必须松一帧】才算新按压
-		static bool _airJumpUsed;
+		// 这次滞空已经跳过空中跳了。只用来分"第一段"和"后续段",能不能跳问 AnyExtraJumpUsable
+		static bool _airJumped;
 		static bool _jumpHeld;
 		static int _holdFrames;
 		// 按住的兜底上限。正常到顶就松了,这个数只防"某种状态下一直升不完"
@@ -231,7 +232,7 @@ namespace TerraBlind
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
-			bool jump = Jump(p, onGround, wantJump);
+			bool jump = Jump(p, onGround, wantJump, act == DodgeAct.Up && !_tooLongAirborne && !noJump);
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
 			// 两侧都堵才停。哪边空是算得出来的,不用猜
@@ -268,9 +269,9 @@ namespace TerraBlind
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
-				// 勾住了就跳,顺便进冷却。二段跳重置,等于白赚一次滞空
+				// 勾住了就跳,顺便进冷却。【不再自己重置空中跳】:能不能跳归 vanilla 管,
+				// 清我们这个 bool 只会让它以为还有第一段
 				hookJump = true;
-				_airJumpUsed = false;
 				_hookFrames = 0;
 				_hookCooldown = HookCooldownFrames;
 				return true;
@@ -292,9 +293,9 @@ namespace TerraBlind
 
 		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
 		// 硬编码必错。velocity.Y 转正那一刻就是到顶,这个判据对两种跳都成立
-		static bool Jump(Player p, bool onGround, bool want)
+		static bool Jump(Player p, bool onGround, bool want, bool wantMore)
 		{
-			if (onGround) { _airJumpUsed = false; _holdFrames = 0; }
+			if (onGround) { _airJumped = false; _holdFrames = 0; }
 
 			bool rising = p.velocity.Y < 0f;
 			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
@@ -311,8 +312,13 @@ namespace TerraBlind
 
 			if (!want) return false;
 			if (onGround) { _jumpHeld = true; _holdFrames = 1; return true; }
-			if (!_airJumpUsed) { _airJumpUsed = true; _jumpHeld = true; _holdFrames = 1; return true; }
-			return false;
+			// 【能不能跳问 vanilla】。原来只记"这次滞空跳过没有",没跳就当有 --
+			// 没云朵瓶也照按,白扔一次。AnyExtraJumpUsable 连模组跳一起算,还认 blockExtraJumps
+			if (!p.AnyExtraJumpUsable()) return false;
+			// 【有多段不等于要烧多段】。第一段照旧,第二段起只认 act==Up:
+			// incoming 几乎恒真,拿它放行就是一滞空把储备全烧完
+			if (_airJumped && !wantMore) return false;
+			_airJumped = true; _jumpHeld = true; _holdFrames = 1; return true;
 		}
 
 		// boss 朝我飞过来的话,按当前速度还有几帧接触。不朝我来就返回 -1。
@@ -460,7 +466,8 @@ namespace TerraBlind
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
-				 + ",\"double_jump_ready\":" + (!_airJumpUsed ? "true" : "false")
+				 // 【问真值】。原来报的是"我们还没跳过",没云朵瓶时也说 true -- 骗了 Jev
+				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 // 【逐发列表之外还要给汇总】。十几发各自的 vx/vy 看不出该往哪躲
