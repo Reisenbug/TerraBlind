@@ -388,9 +388,10 @@ namespace TerraBlind
 			if (_dashGap) { _dashGap = false; return _dashDir; }
 			_dashDir = 0;
 
-			// 【时机交给 Jev】。反射层判不了:FramesToHit 只做直线外推,
-			// 对荡着走的手那种圆周运动完全失真,拿它当冲刺时机就是乱冲
-			if (!JevSaysDash || go == 0) return go;
+			// 【Jev 给许可,反射层挑那一帧】。答案 200ms 才回来,对速度 22 的头
+			// 那已经是 16 格之前的局面 -- 所以它只说"这一秒要不要用",撞上来的那一刻自己算
+			if (!JevSaysDash || go == 0) { DashGate = JevSaysDash ? "go0" : $"noul{DashNoul:0.00}"; return go; }
+			if (BossBook.DashAcrossFor(boss.type) && !incoming) { DashGate = "waiting"; return go; }
 
 			// 【冲刺方向可以不等于走路方向】。走路方向是意图定的(Orbit 是切向、Evade 是横移),
 			// 而冲刺要的是横切它扑过来的那条线 -- 拿 go 去冲就是沿着切向冲出去
@@ -554,10 +555,13 @@ namespace TerraBlind
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
 			 + "\"很险,离远点\",\"随时会死,能躲多远躲多远\"]},"
 			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"就这一刻该冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
+			 // 【问"接下来这一秒",不问"就这一刻"】。答案要 200ms 才回来,
+			 // 而快 boss 那时早换了位置 -- 准确那一帧交给反射层挑
+			 + "\"接下来这一秒里会需要冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
 			 + "它能瞬间拉开一段距离、或者穿过一片危险区域;撞到敌人还会免掉那一下伤害。"
+			 + "问的不是此时此刻按不按,而是这一段时间里该不该留着这次冲刺 -- "
+			 + "具体哪一帧出手由代码按碰撞时间挑。"
 			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。"
-			 // 【这一场的例外写在题干里】。同样的话放 state 里压不过题干,noul 只动了 0.04
 			 + JsonStr(_dashNote) + "\"},"
 			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
