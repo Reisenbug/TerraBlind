@@ -136,9 +136,12 @@ namespace TerraBlind
 			float closeX = (pr.Center.X > p.Center.X) == (pr.velocity.X < 0) ? System.Math.Abs(pr.velocity.X) : 0f;
 			float closeY = (pr.Center.Y > p.Center.Y) == (pr.velocity.Y < 0) ? System.Math.Abs(pr.velocity.Y) : 0f;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
-			float fx = closeX > 0.1f ? gapX / closeX : 9999f;
-			float fy = closeY > 0.1f ? gapY / closeY : 9999f;
-			float f = System.Math.Max(fx <= 0f ? 0f : fx, fy <= 0f ? 0f : fy);
+			// 【和 Dodge.FramesToHit 同一个坑】。不靠近的轴给 9999 再取 Max,
+			// 平着飞过来的弹幕就永远报"没威胁"
+			float fx = gapX <= 0f ? 0f : (closeX > 0.1f ? gapX / closeX : -1f);
+			float fy = gapY <= 0f ? 0f : (closeY > 0.1f ? gapY / closeY : -1f);
+			if (fx < 0f || fy < 0f) return -1;
+			float f = System.Math.Max(fx, fy);
 			return f > 600f ? -1 : (int)f;
 		}
 

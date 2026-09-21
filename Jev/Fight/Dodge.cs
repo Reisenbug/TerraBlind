@@ -271,6 +271,10 @@ namespace TerraBlind
 			int projHit = ThreatScan.SoonestHit(p);
 			bool incoming = (framesToHit >= 0 && framesToHit <= soon)
 						 || (projHit >= 0 && projHit <= soon);
+			// 【预警响没响要能查】。上一局 2125 帧里 incoming 一次没触发,而人被撞死了
+			if (incoming && !_wasIncoming)
+				DiagLog.Write($"[dodge] 预警 撞击还有{framesToHit}帧 弹幕还有{projHit}帧 阈值{soon}");
+			_wasIncoming = incoming;
 
 			switch (hor)
 			{
@@ -419,6 +423,7 @@ namespace TerraBlind
 		}
 
 		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
+		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
 		static void Fly(Player p)
@@ -502,9 +507,14 @@ namespace TerraBlind
 			float closeX = (boss.Center.X > p.Center.X) == (boss.velocity.X < 0) ? System.Math.Abs(boss.velocity.X) : 0f;
 			float closeY = (boss.Center.Y > p.Center.Y) == (boss.velocity.Y < 0) ? System.Math.Abs(boss.velocity.Y) : 0f;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
-			float fx = closeX > 0.1f ? gapX / closeX : 9999f;
-			float fy = closeY > 0.1f ? gapY / closeY : 9999f;
-			float f = System.Math.Max(fx <= 0f ? 0f : fx, fy <= 0f ? 0f : fy);
+			// 【一个轴已经重叠就不算那个轴】。平飞冲过来时 closeY 是 0,
+			// 老代码给它 9999 再取 Max,于是"马上撞上"被报成"没威胁"-- 实测 2125 帧里一次没响
+			float fx = gapX <= 0f ? 0f : (closeX > 0.1f ? gapX / closeX : -1f);
+			float fy = gapY <= 0f ? 0f : (closeY > 0.1f ? gapY / closeY : -1f);
+			// 两个轴都要在同一时刻重叠才算撞上,所以取晚的那个;但没在靠近的轴
+			// 只有已经重叠才算数,否则这一下压根撞不上
+			if (fx < 0f || fy < 0f) return -1;
+			float f = System.Math.Max(fx, fy);
 			return f > 600f ? -1 : (int)f;
 		}
 
