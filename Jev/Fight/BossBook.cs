@@ -16,6 +16,9 @@ namespace TerraBlind
 		public int WantCells;
 		// 意图被禁时退到哪个。默认站住,但禁了 Keep 的 boss 得退到别处
 		public DodgeAct Fallback = DodgeAct.Keep;
+		// 【拼到 should_dash_now 的题干末尾】。背板写在 state 里压不过题干 --
+		// 同一句话放 state 里 noul 只有 0.19,那一场就是一次冲刺都不出
+		public string DashNote = "";
 	}
 
 	// 一个模组 boss 的登记。【type 是运行时分配的】,编译期字典写不进去
@@ -194,6 +197,11 @@ namespace TerraBlind
 					Arena = "开阔的地方。它会绕着人转圈,转起来四周都是它的身体",
 					Banned = new[] { DodgeAct.Keep },
 					Fallback = DodgeAct.Evade,
+					DashNote =
+						"这一场例外:冲刺全程无敌,撞到这条虫的头和身体都不掉血,"
+						+ "所以上面那条'乱冲会撞进攻击里'在这里不适用。"
+						+ "它快到跑不赢,冲刺是这一场的主要位移手段,头一靠近就该冲,"
+						+ "二阶段它更快,冲得还要更频繁。冷却一好、头又在近处,那就是该冲的时候。",
 					HowItFights =
 						"神明吞噬者是一条很长很快的蠕虫,头、身体、尾巴碰到都掉血。"
 						+ "【头和身体完全是两回事】:头极快,碰到基本就是当场死,身体只是擦伤。"
@@ -278,6 +286,8 @@ namespace TerraBlind
 		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
 
 		public static DodgeAct FallbackFor(int npcType) => Of(npcType).Fallback;
+
+		public static string DashNoteFor(int npcType) => UseKnowledge ? Of(npcType).DashNote : "";
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{

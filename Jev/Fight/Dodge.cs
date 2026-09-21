@@ -75,6 +75,8 @@ namespace TerraBlind
 		static volatile string _pending;
 		// 发出去的那份现场,答案回来时一起记进日志 -- 只看结论看不出它为什么这么选
 		static string _lastFacts = "";
+		// 这一场追加给 should_dash_now 的话。发请求那一帧定好,Body() 读它
+		static string _dashNote = "";
 		static long _actAt = -100000;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
@@ -127,6 +129,7 @@ namespace TerraBlind
 			if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
+				_dashNote = BossBook.DashNoteFor(boss.type);
 				Fire(key, _lastFacts);
 			}
 
@@ -510,9 +513,11 @@ namespace TerraBlind
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
 			 + "\"很险,离远点\",\"随时会死,能躲多远躲多远\"]},"
 			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"就这一刻该用克苏鲁之盾冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
+			 + "\"就这一刻该冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
 			 + "它能瞬间拉开一段距离、或者穿过一片危险区域;撞到敌人还会免掉那一下伤害。"
-			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。\"},"
+			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。"
+			 // 【这一场的例外写在题干里】。同样的话放 state 里压不过题干,noul 只动了 0.04
+			 + JsonStr(_dashNote) + "\"},"
 			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
 			 + "\"safe_to_attack\":{\"type\":\"noul\",\"instructions\":"
