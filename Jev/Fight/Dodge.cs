@@ -280,8 +280,10 @@ namespace TerraBlind
 					go = away;
 					break;
 				// 【按横向差判】。dist 是 |dx|+|dy|,悬在头顶 40 格也算"远",横着走收不掉高低差
+				// 【说靠近也不许贴上去】。判断有 300ms 延迟,这期间 boss 会扑过来
 				case Horiz.Near:
 					if (System.Math.Abs(dx) / 16f > want) go = toward;
+					else if (dist < want / 2) go = away;
 					break;
 				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
 				// 【远端只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
@@ -335,11 +337,34 @@ namespace TerraBlind
 			else if (!onGround && hover) p.controlUp = true;
 
 			Fly(p);
+			Hurt(p, boss, dist, hor, ver);
 			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
+		}
+
+		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
+		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
+		static int _prevHp = -1;
+		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Vert ver)
+		{
+			if (_prevHp < 0) { _prevHp = p.statLife; return; }
+			int lost = _prevHp - p.statLife;
+			_prevHp = p.statLife;
+			if (lost <= 0) return;
+			// 【最近的敌人和最近的弹幕都要报】。只报一个分不出这一下是撞的还是打的
+			int nearNpc = 999, nearProj = 999;
+			foreach (var n in Main.npc)
+				if (n != null && n.active && !n.friendly && n.damage > 0)
+					nearNpc = System.Math.Min(nearNpc, (int)(Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16f));
+			foreach (var pr in Main.projectile)
+				if (pr != null && pr.active && pr.hostile && pr.damage > 0)
+					nearProj = System.Math.Min(nearProj, (int)(Microsoft.Xna.Framework.Vector2.Distance(pr.Center, p.Center) / 16f));
+			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
+				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{ver}"
+				+ $" 最近敌人{nearNpc}格 最近弹幕{nearProj}格");
 		}
 
 		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
@@ -623,9 +648,10 @@ namespace TerraBlind
 			 + "boss 的血不掉这一场就不会结束 -- 所以只在这一下真的躲不掉时才退\","
 			 + "\"Hold\":\"距离正好,不用变。够得着打又没有被逼近,站稳输出。"
 			 + "威胁过去了就该回到这一档,而不是接着退\","
-			 + "\"Near\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下。"
-			 + "看 cells_further_than_i_asked_for:这个数大就说明已经比自己要的距离远出不少,"
-			 + "有的 boss 离太远反而更危险(远程攻击正好覆盖那一带),那就该收回来\"}},"
+			 + "\"Near\":\"靠近一点。只在确实比该保持的距离远出不少时才用 --"
+			 + "看 cells_further_than_i_asked_for,这个数是正的才说明退过头了,负的就已经太近了。"
+			 + "【靠近同样不是免费的】:越近越难躲开冲撞,而撞一下的代价比少打几秒大得多,"
+			 + "所以贴到 distance_i_asked_for 就该停,不要一路凑上去\"}},"
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
 			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
