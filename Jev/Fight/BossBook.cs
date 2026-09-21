@@ -22,7 +22,10 @@ namespace TerraBlind
 		// 只关 HowItFights,场地和禁用动作照旧 -- 那两样是事实不是打法
 		public static bool UseKnowledge = true;
 
-		const string OpenArena = "一整片平台,左右都能跑,没有坑也没有墙";
+		// 【说清楚上下都能走】。只说"一片平台"会让它以为高度是稀缺的,于是一路往上顶
+		const string OpenArena = "一层层斜坡平台摞起来的场地,左右都能跑。"
+			+ "平台可以穿:按住下就直接落到下一层,往上跳也能穿过去,所以换高度很便宜。"
+			+ "最上面是实心方块封顶,顶到那里就再也上不去了;最下面一层是平台,底下是空的";
 
 		static readonly Dictionary<int, BossInfo> Book = new()
 		{

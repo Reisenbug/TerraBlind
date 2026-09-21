@@ -327,8 +327,8 @@ namespace TerraBlind
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
 			bool dive = (ver == Vert.Drop || _tooLongAirborne) && p.grapCount == 0;
-			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
-			bool hover = !dive && !_wantFly && (rise || hooking || incoming);
+			// 【incoming 不进缓降】。它几乎恒真,全程按住上就是人飘在高处下不来
+			bool hover = !dive && !_wantFly && (rise || hooking);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
@@ -583,6 +583,10 @@ namespace TerraBlind
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
+				 // 【退开是有代价的】。武器自动瞄准,所以从它的角度看后退全是好处 --
+				 // 不说一声就会一路退到天上去,全场只剩 Away/Rise
+				 + ",\"my_shots_miss_more_the_further_i_am\":true"
+				 + ",\"i_am_pinned_against_the_ceiling\":" + (CeilingDistance(p) <= 2 ? "true" : "false")
 				 // 【问真值】。原来报的是"我们还没跳过",没云朵瓶时也说 true -- 骗了 Jev
 				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
 				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
@@ -610,8 +614,11 @@ namespace TerraBlind
 			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
 			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。它正冲过来、已经贴脸、或者血不多了要留余地。"
-			 + "弹幕从某一侧压过来时也是这个 -- 代码会往两侧里空的那边走\","
-			 + "\"Hold\":\"距离正好,不用变。够得着打又没有被逼近,站稳输出\","
+			 + "弹幕从某一侧压过来时也是这个 -- 代码会往两侧里空的那边走。"
+			 + "【退开不是免费的】:离得越远自己的子弹越打不中,一直退就是一直不输出,"
+			 + "boss 的血不掉这一场就不会结束 -- 所以只在这一下真的躲不掉时才退\","
+			 + "\"Hold\":\"距离正好,不用变。够得着打又没有被逼近,站稳输出。"
+			 + "威胁过去了就该回到这一档,而不是接着退\","
 			 + "\"Near\":\"靠近一点。它飞远了打不到,或者它现在不动正好多打几下。"
 			 + "看 cells_further_than_i_asked_for:这个数大就说明已经比自己要的距离远出不少,"
 			 + "有的 boss 离太远反而更危险(远程攻击正好覆盖那一带),那就该收回来\"}},"
@@ -619,7 +626,9 @@ namespace TerraBlind
 			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
 			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
 			 + "\"Rise\":\"往上。它从下方上来、贴着地面的攻击要从脚下穿过去、或者该上更高一层平台。"
-			 + "但对从上往下砸的东西没用,那种情况往上是迎上去\","
+			 + "但对从上往下砸的东西没用,那种情况往上是迎上去。"
+			 + "【越高越糟】:看 cells_of_room_above_me,这个数小就说明快顶到天花板了,"
+			 + "顶在上面时竖直方向无路可走,下一次攻击只能硬吃 -- 那时候该往下而不是接着往上\","
 			 + "\"Level\":\"保持现在的高度。没有上下方向的威胁,或者正在地面上跑得好好的\","
 			 + "\"Drop\":\"往下。踩着平台时会穿下去,在空中时会快速落回地面。"
 			 + "头顶压下来的东西、从上方来的弹幕(看 projectile_pressure 的 from_above),"
