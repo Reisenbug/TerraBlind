@@ -63,6 +63,8 @@ namespace TerraBlind
 		public static bool JevSaysDash;
 		// 原始概率也留着。只记一个 bool 的话,"它不想冲"和"门槛卡太高"在日志里长得一样
 		public static float DashNoul;
+		// 冲刺没出来时卡在哪一道门。只看 +dash 有没有的话,失败原因一个字都没有
+		public static string DashGate = "";
 		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
 		public static string Probs = "";
 		public static string TopTwo = "";
@@ -273,7 +275,7 @@ namespace TerraBlind
 
 			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
-				 + (dashing ? " +dash" : $" dash?{DashNoul:0.00}") + (p.dashDelay < 0 ? " [dashing]" : "")
+				 + (dashing ? " +dash" : $" dash?{DashNoul:0.00}/{DashGate}") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (!onGround && act != DodgeAct.Close ? " +float" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
@@ -356,8 +358,10 @@ namespace TerraBlind
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
 			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
 
-			// dashDelay==0 才是就绪。>0 是内置冷却,<0 是正在冲
-			bool ready = p.dashType != 0 && p.dashDelay == 0 && p.dash == 0;
+			// 【不认 dashType】。那是原版盾的字段,模组饰品(比如灾厄那些)自己实现冲刺,
+			// 这个字段一直是 0 -- 拿它当"有没有冲刺"会让整场一次都冲不出来
+			bool ready = p.dashDelay == 0 && p.dash == 0;
+			DashGate = ready ? "ready" : $"type{p.dashType} delay{p.dashDelay} dash{p.dash}";
 			if (!ready) { _dashGap = false; _dashDir = 0; return go; }
 
 			// 上一帧空了手,这一帧按下去 -- 双击成立。【按住不放】,
