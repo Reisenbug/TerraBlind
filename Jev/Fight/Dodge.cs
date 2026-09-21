@@ -144,12 +144,12 @@ namespace TerraBlind
 		// 危险分换成格数。0=贴脸输出,4=离远点
 		static int WantCells(float danger) => 4 + (int)(danger * 4f);
 
-		// 顺着它冲的方向让开。【实测:同向比逆向多撑几帧】-- 逆向是迎头对撞。
-		// 但水平方向本来就跑不赢高速冲撞,真正躲开要靠竖直位移,那归 Up/Dive/Grapple
+		// 【迎着它来的方向走】。冲刺只有左右,而要的是和它的速度成大夹角 --
+		// 相向出去再配上同时的升降,合成的那一下才是斜着切开它的路线
 		static int Across(NPC boss, int away)
 		{
 			if (System.Math.Abs(boss.velocity.X) < 1f) return away;
-			return boss.velocity.X > 0f ? 1 : -1;
+			return boss.velocity.X > 0f ? -1 : 1;
 		}
 
 		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
