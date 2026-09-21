@@ -647,16 +647,32 @@ namespace TerraBlind
 
 		// 【给方向不给标量】。ThreatScan 那份 speed 是绝对值,丢了符号,
 		// 而走位要判的正是"它朝哪飞"
+		// 格/秒。【峰值跟着这一场自己长】:每个 boss 的"快"不是一个数,
+		// 而且换了阶段上限也会变 -- 峰值慢慢衰减,不然一次爆发就把尺子永久顶死
+		static float _bossTopSpeed;
+		static int BossSpeed(NPC boss)
+		{
+			float v = (System.Math.Abs(boss.velocity.X) + System.Math.Abs(boss.velocity.Y)) * 60f / 16f;
+			if (v > _bossTopSpeed) _bossTopSpeed = v;
+			else _bossTopSpeed -= 0.02f;
+			return (int)v;
+		}
+
 		static string Facts(Player p, NPC boss, int dist)
 		{
 			float dx = (boss.Center.X - p.Center.X) / 16f;
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			bool closing = (dx > 0 && boss.velocity.X < 0) || (dx < 0 && boss.velocity.X > 0);
+			int bossSpd = BossSpeed(boss);
 			int hit = FramesToHit(p, boss);
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
+				 // 【速度要有参照】。20 格/秒 是快是慢取决于这个 boss,拿它自己的峰值当尺子
+				 + ",\"boss_speed_cells_per_second\":" + bossSpd
+				 + ",\"boss_top_speed_this_fight\":" + (int)_bossTopSpeed
+				 + ",\"boss_is_charging\":" + (_bossTopSpeed > 5f && bossSpd > _bossTopSpeed * 0.6f ? "true" : "false")
 				 // 【够不够得着打用实测】。距离多少算够是跟着武器和装备变的,这个数直接说明打没打中
 				 + ",\"damage_i_am_dealing_per_second\":" + BossDps
 				 + ",\"my_usual_damage_per_second_this_fight\":" + DpsTypical
