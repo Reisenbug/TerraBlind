@@ -264,6 +264,8 @@ namespace TerraBlind
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
+			// 斜上冲刺:冲的那几帧按住空格。走 Jump() 而不是直接按,那个键归它的状态机管
+			if (act == DodgeAct.Up && p.dashDelay < 0 && BossBook.DashAcrossFor(boss.type)) wantJump = true;
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
@@ -281,15 +283,13 @@ namespace TerraBlind
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
 			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
-			// 【横切的冲刺要配竖直分量】。只有左右的话,那一下仍然在它扑来的平面里 --
-			// 往它来的反侧抬或沉,合起来才是斜着切开。只给 DashAcross 的 boss
+			// 【斜着冲要配竖直键】:左下=左+冲+按住下,左上=左+冲+按住空格。斜上斜下由意图定
 			bool dashVert = (dashing || p.dashDelay < 0) && p.grapCount == 0
-						 && BossBook.DashAcrossFor(boss.type) && boss.Center.Y < p.Center.Y;
+						 && BossBook.DashAcrossFor(boss.type);
+			bool dashDown = dashVert && act != DodgeAct.Up;
 			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
-			bool hover = !dive && !_wantFly && !dashVert && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
-			// 【冲刺时只往下切】。往上要走 Jump() 那套 releaseJump 状态机,
-			// 在这儿直接按 controlJump 会把它的记账冲掉 -- 那个坑踩过三次
-			if (dashVert || dive) p.controlDown = true;
+			bool hover = !dive && !_wantFly && !dashDown && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			if (dashDown || dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
 			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
