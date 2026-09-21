@@ -336,7 +336,10 @@ namespace TerraBlind
 				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
-			go = Dash(p, go, incoming, ver);
+			// 【应急冲刺只认碰撞】。盾冲的免伤只在 NPC 碰撞那一趟里(Player.cs:29501),
+			// 对弹幕没有任何无敌 -- 拿弹幕触发是白冲一次还进 30 帧冷却
+			bool bossAboutToHit = framesToHit >= 0 && framesToHit <= soon;
+			go = Dash(p, go, bossAboutToHit, ver);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -572,10 +575,10 @@ namespace TerraBlind
 			if (_dashGap) { _dashGap = false; return _dashDir; }
 			_dashDir = 0;
 
-			// 【时机交给 Jev】。反射层判不了:FramesToHit 只做直线外推,
-			// 对荡着走的手那种圆周运动完全失真,拿它当冲刺时机就是乱冲
-			if (!JevSaysDash || go == 0) return go;
+			// 【快撞上了就自己冲,不等 Jev】。意图 300ms 才回来,实测预警中位只提前 23 帧
+			if ((!JevSaysDash && !incoming) || go == 0) return go;
 
+			DiagLog.Write($"[dodge] 冲刺 {(JevSaysDash ? "jev" : "应急")} 方向{(go < 0 ? "左" : "右")}");
 			_dashGap = true; _dashDir = go;
 			return 0;   // 这一帧松手
 		}
