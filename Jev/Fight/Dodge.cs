@@ -293,10 +293,10 @@ namespace TerraBlind
 				case Horiz.Away:
 					go = away;
 					break;
-				// 【按横向差判】。dist 是 |dx|+|dy|,悬在头顶 40 格也算"远",横着走收不掉高低差
-				// 【说靠近也不许贴上去】。判断有 300ms 延迟,这期间 boss 会扑过来
+				// 【正在挨打就不准靠近】。火焰流站进去每帧掉血,而按距离算那里"够远"(实测吃 78)
 				case Horiz.Near:
-					if (System.Math.Abs(dx) / 16f > want) go = toward;
+					if (_hurtRecently > 0) go = away;
+					else if (System.Math.Abs(dx) / 16f > want) go = toward;
 					else if (dist < want / 2) go = away;
 					break;
 				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
@@ -410,12 +410,17 @@ namespace TerraBlind
 		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
 		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
 		static int _prevHp = -1;
+		// 挨打之后这么多帧内不许往它那边走。半秒够走出一道火焰流
+		const int HurtCooldown = 30;
+		static int _hurtRecently;
 		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Vert ver)
 		{
 			if (_prevHp < 0) { _prevHp = p.statLife; return; }
 			int lost = _prevHp - p.statLife;
 			_prevHp = p.statLife;
-			if (lost <= 0) return;
+			if (lost <= 0) { if (_hurtRecently > 0) _hurtRecently--; return; }
+			// 【挨打就是挨打,不用问】。一道火焰流站进去每帧掉血,而按距离算那里"够远"
+			if (lost > 5) _hurtRecently = HurtCooldown;
 			// 【名字和伤害都要报】。只有距离的话分不出是哪一发打的,也不知道该躲的是什么
 			int nd = 999, pd = 999;
 			string nn = "无", pn = "无";
