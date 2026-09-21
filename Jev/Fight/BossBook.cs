@@ -198,7 +198,48 @@ namespace TerraBlind
 		public static BossInfo Of(int npcType)
 			=> Book.TryGetValue(Canon(npcType), out var b) ? b : None;
 
-		public static string For(int npcType) => UseKnowledge ? Of(npcType).HowItFights : "";
+		// 内部名 -> 覆盖。【存内部名不存 id】:配置是人手填的,数字没法看也没法查
+		static readonly Dictionary<string, BossOverride> Overrides = new();
+
+		public static void SetOverrides(List<BossOverride> list)
+		{
+			Overrides.Clear();
+			if (list == null) return;
+			foreach (var o in list)
+			{
+				if (o == null || string.IsNullOrWhiteSpace(o.Boss)) continue;
+				Overrides[o.Boss.Trim()] = o;
+			}
+			// 【名字拼错了要说】。对不上就是静默失效,人会以为改了其实没改
+			foreach (string name in Overrides.Keys)
+				if (!Known(name)) DiagLog.Write($"[bossbook] \"{name}\" 不是任何 boss 的名字,这条没用上");
+			DiagLog.Write($"[bossbook] 覆盖 {Overrides.Count} 条");
+		}
+
+		// 【只认书里有的 boss】。扫全部 NPC 名字太宽:打错成某个小怪也会算"对上了"
+		static bool Known(string name)
+		{
+			foreach (int t in Book.Keys)
+				if (Terraria.Lang.GetNPCNameValue(t) == name) return true;
+			return name == Terraria.Lang.GetNPCNameValue(Terraria.ID.NPCID.Retinazer);
+		}
+
+		// 【查覆盖用真名不用 Canon】。想单独关掉激光眼那条时,映射会把它变成魔焰眼
+		static BossOverride Override(int npcType)
+		{
+			string name = Terraria.Lang.GetNPCNameValue(npcType);
+			return name != null && Overrides.TryGetValue(name, out var o) ? o : null;
+		}
+
+		public static string For(int npcType)
+		{
+			var o = Override(npcType);
+			// 关掉这一条就当没有背板,和全局开关一个意思,只是范围小到一个 boss
+			if (o != null && !o.Enabled) return "";
+			if (!UseKnowledge) return "";
+			if (o != null && o.HowItFights.Trim().Length > 0) return o.HowItFights;
+			return Of(npcType).HowItFights;
+		}
 
 		// 没有条目的 boss 也得有个场地描述,否则那个字段是空的
 		public static string ArenaOf(int npcType)

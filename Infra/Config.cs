@@ -1,9 +1,27 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using Terraria.ModLoader;
 using Terraria.ModLoader.Config;
 
 namespace TerraBlind
 {
+	// 一条覆盖。【文本留空就不覆盖】,这样只想临时关掉某个 boss 的背板时不用先把话删了
+	public class BossOverride
+	{
+		[DefaultValue("")]
+		public string Boss = "";
+
+		[DefaultValue(true)]
+		public bool Enabled = true;
+
+		[DefaultValue("")]
+		[System.ComponentModel.DataAnnotations.StringLength(4000)]
+		public string HowItFights = "";
+
+		public override string ToString()
+			=> (string.IsNullOrWhiteSpace(Boss) ? "(empty)" : Boss) + (Enabled ? "" : " [off]");
+	}
+
 	// 全是本机行为(画覆盖层、给自己加 buff、改自己脚下的地形),所以 ClientSide
 	public class Config : ModConfig
 	{
@@ -36,6 +54,10 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool BossKnowledge;
 
+		// 游戏内改背板。【单独开一页】:打法是一整段话,挤在列表那一行里没法读也没法改
+		[SeparatePage]
+		public List<BossOverride> BossPlaybook = new();
+
 		// 留空就去环境变量和 ~/.typesafe_key 找。【填了就会存进 ModConfigs/TerraBlind.json】
 		[DefaultValue("")]
 		public string TypeSafeKey;
@@ -60,6 +82,7 @@ namespace TerraBlind
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
 			BossBook.UseKnowledge = BossKnowledge;
+			BossBook.SetOverrides(BossPlaybook);
 			JevHud.Enabled = ShowJevHud;
 		}
 	}

@@ -89,6 +89,15 @@ Configs: {
 			Tooltip: ""
 		}
 
+		BossPlaybook: {
+			Label: Boss playbook overrides
+			Tooltip:
+				'''
+				Rewrite what Jev is told about a boss, without rebuilding the mod. Add an entry, put the boss name in Boss exactly as the game shows it (Spazmatism, Retinazer, Skeletron), and type the new playbook into How It Fights.
+				Leave How It Fights empty to keep the built-in text. Uncheck Enabled to fight that one boss with no playbook at all.
+				'''
+		}
+
 		TypeSafeKey: {
 			Label: TypeSafe API key
 			Tooltip:
