@@ -337,6 +337,7 @@ namespace TerraBlind
 			else if (!onGround && hover) p.controlUp = true;
 
 			Fly(p);
+			TrackDps(boss);
 			Hurt(p, boss, dist, hor, ver);
 			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
@@ -344,6 +345,49 @@ namespace TerraBlind
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
 		}
+
+		// boss 每秒掉多少血。【"够不够得着打"用实测不用猜距离】--
+		// 装备和武器一换,那个距离就变了,而这个数直接说明打没打中
+		static int _bossPrevHp = -1, _bossPrevId = -1;
+		static readonly int[] _dpsRing = new int[60];
+		static int _dpsAt;
+		// 最近 30 秒里每秒的 dps。【要的是分位不是极值】:最高值整场只出现一次,
+		// 最低值几乎恒为 0(冲刺、无敌帧),拿它俩当参照等于没有参照
+		static readonly int[] _dpsHist = new int[30];
+		static int _histAt, _histCount, _secFrames;
+		public static int BossDps, DpsGood, DpsTypical, DpsPct = 100;
+		static void TrackDps(NPC boss)
+		{
+			if (boss.whoAmI != _bossPrevId) { _bossPrevId = boss.whoAmI; _bossPrevHp = boss.life; return; }
+			int d = _bossPrevHp - boss.life;
+			_bossPrevHp = boss.life;
+			// 换目标或者 boss 回血都会算出负数,当 0 -- 那不是我们打的
+			_dpsRing[_dpsAt] = d > 0 ? d : 0;
+			_dpsAt = (_dpsAt + 1) % _dpsRing.Length;
+			int sum = 0;
+			foreach (int v in _dpsRing) sum += v;
+			BossDps = sum;
+
+			if (++_secFrames < 60) return;
+			_secFrames = 0;
+			_dpsHist[_histAt] = BossDps;
+			_histAt = (_histAt + 1) % _dpsHist.Length;
+			if (_histCount < _dpsHist.Length) _histCount++;
+			var s = new int[_histCount];
+			System.Array.Copy(_dpsHist, s, _histCount);
+			System.Array.Sort(s);
+			// 打得好的时候能到多少(p80),平常是多少(中位)。差的那头不取:那是 0
+			DpsGood = s[(int)(_histCount * 0.8f) >= _histCount ? _histCount - 1 : (int)(_histCount * 0.8f)];
+			DpsTypical = s[_histCount / 2];
+			// 【拿常驻当尺子,不拿 0 当尺子】。常驻 300 时 200 照样在打,只是那一秒没满 --
+			// 掉到常驻的三分之一以下才是真的够不着
+			DpsPct = DpsTypical > 0 ? BossDps * 100 / DpsTypical : 100;
+			// 【连续低才算,头几秒不算】。掠过/错开/无敌帧都会让某一秒归零,样本少时中位也是噪音
+			if (_histCount >= 5 && DpsTypical > 0 && DpsPct < 35) _lowSecs++; else _lowSecs = 0;
+		}
+		static int _lowSecs;
+		// 攒够 3 秒才认。【够不着是个持续状态】,不是某一秒的抖动
+		public static bool TooFar => _lowSecs >= 3;
 
 		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
 		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
@@ -354,17 +398,24 @@ namespace TerraBlind
 			int lost = _prevHp - p.statLife;
 			_prevHp = p.statLife;
 			if (lost <= 0) return;
-			// 【最近的敌人和最近的弹幕都要报】。只报一个分不出这一下是撞的还是打的
-			int nearNpc = 999, nearProj = 999;
+			// 【名字和伤害都要报】。只有距离的话分不出是哪一发打的,也不知道该躲的是什么
+			int nd = 999, pd = 999;
+			string nn = "无", pn = "无";
 			foreach (var n in Main.npc)
-				if (n != null && n.active && !n.friendly && n.damage > 0)
-					nearNpc = System.Math.Min(nearNpc, (int)(Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16f));
+			{
+				if (n == null || !n.active || n.friendly || n.damage <= 0) continue;
+				int d = (int)(Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16f);
+				if (d < nd) { nd = d; nn = $"{n.TypeName}(伤{n.damage})"; }
+			}
 			foreach (var pr in Main.projectile)
-				if (pr != null && pr.active && pr.hostile && pr.damage > 0)
-					nearProj = System.Math.Min(nearProj, (int)(Microsoft.Xna.Framework.Vector2.Distance(pr.Center, p.Center) / 16f));
+			{
+				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
+				int d = (int)(Microsoft.Xna.Framework.Vector2.Distance(pr.Center, p.Center) / 16f);
+				if (d < pd) { pd = d; pn = $"{pr.Name}(伤{pr.damage})"; }
+			}
 			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
 				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{ver}"
-				+ $" 最近敌人{nearNpc}格 最近弹幕{nearProj}格");
+				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格");
 		}
 
 		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
@@ -586,6 +637,14 @@ namespace TerraBlind
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
+				 // 【够不够得着打用实测】。距离多少算够是跟着武器和装备变的,这个数直接说明打没打中
+				 + ",\"damage_i_am_dealing_per_second\":" + BossDps
+				 + ",\"my_usual_damage_per_second_this_fight\":" + DpsTypical
+				 + ",\"my_best_damage_per_second_this_fight\":" + DpsGood
+				 // 【百分比才有参照】。光给个 300 它不知道那是高是低
+				 + ",\"percent_of_my_usual_damage_right_now\":" + DpsPct
+				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
+				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
 				 // 【"偏了多少"要直说】,不然它不知道此刻离想要的距离有多远,只会一直答 Back
@@ -644,14 +703,19 @@ namespace TerraBlind
 			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。它正冲过来、已经贴脸、或者血不多了要留余地。"
 			 + "弹幕从某一侧压过来时也是这个 -- 代码会往两侧里空的那边走。"
-			 + "【退开不是免费的】:离得越远自己的子弹越打不中,一直退就是一直不输出,"
-			 + "boss 的血不掉这一场就不会结束 -- 所以只在这一下真的躲不掉时才退\","
+			 + "【退开不是免费的】:退到打不中就是一直不输出,boss 的血不掉这一场就不会结束。"
+			 + "但只要 i_am_too_far_to_hit_it 还是假的,退就是白赚的安全 --"
+			 + "所以先退到还打得中的最远处,而不是贴着危险区换输出\","
 			 + "\"Hold\":\"距离正好,不用变。够得着打又没有被逼近,站稳输出。"
 			 + "威胁过去了就该回到这一档,而不是接着退\","
-			 + "\"Near\":\"靠近一点。只在确实比该保持的距离远出不少时才用 --"
-			 + "看 cells_further_than_i_asked_for,这个数是正的才说明退过头了,负的就已经太近了。"
-			 + "【靠近同样不是免费的】:越近越难躲开冲撞,而撞一下的代价比少打几秒大得多,"
-			 + "所以贴到 distance_i_asked_for 就该停,不要一路凑上去\"}},"
+			 + "\"Near\":\"靠近一点。【判据是打没打中,不是距离】:"
+			 + "看 percent_of_my_usual_damage_right_now,它是当前输出占这一场常驻水平的百分比。"
+			 + "这个数在 100 上下正常波动都算打中了,60% 不是够不着只是那一秒没打满。"
+			 + "【看持续时间不看瞬间】:单看某一秒低没有意义(boss 掠过、弹道错开都会让它归零),"
+			 + "要 i_am_too_far_to_hit_it 为真、或者 seconds_i_have_been_unable_to_hit_it 攒到几秒,"
+			 + "才说明是位置的问题而不是运气的问题。"
+			 + "【靠近同样不是免费的】:越近越难躲开冲撞,而撞一下的代价比少打几秒大得多 --"
+			 + "所以伤害已经打出来了就别再往前凑,那是白白进入危险区\"}},"
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
 			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
