@@ -120,7 +120,7 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			var boss = Boss(p, out int dist);
-			if (boss == null) { Last = "no boss"; Release(); return; }
+			if (boss == null) { Gate("no boss"); Release(); return; }
 
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done); }
@@ -139,9 +139,23 @@ namespace TerraBlind
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
-			{ Last = "Move axis taken by " + AxisLock.Held(Ax.Move); return; }
+			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); return; }
 
+			Gate($"driving {boss.TypeName} {dist}格 act={act}");
 			Drive(p, boss, dist, act);
+		}
+
+		// 【拦在门口要出声】。Last 只有 HUD 看得见,日志里一片空白时分不清
+		// "没跑"和"跑了没报错" -- 只在状态变化时写,免得每帧刷屏
+		static string _gate = "";
+		static void Gate(string why)
+		{
+			Last = why;
+			int cut = why.IndexOf(" act=", System.StringComparison.Ordinal);
+			string key = cut > 0 ? why.Substring(0, cut) : why;
+			if (key == _gate) return;
+			_gate = key;
+			DiagLog.Write("[dodge] " + why);
 		}
 
 		// 危险分换成格数。0=贴脸输出,4=离远点
@@ -254,12 +268,25 @@ namespace TerraBlind
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
+			Fly(p);
 			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (!onGround && act != DodgeAct.Close ? " +float" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
+		}
+
+		// 翅膀到底有没有烧。【只报事实不改行为】:想飞/有没有翅膀/vanilla 认不认,
+		// 三个数一起出来才分得清是没想飞、没翅膀,还是想了飞不起来
+		static bool _flying;
+		static void Fly(Player p)
+		{
+			bool now = p.wingTime > 0f && p.velocity.Y < 0f && p.controlJump;
+			if (now == _flying) return;
+			_flying = now;
+			DiagLog.Write($"[dodge] 飞行{(now ? "开始" : "结束")} wantFly={_wantFly}"
+				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
 		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
