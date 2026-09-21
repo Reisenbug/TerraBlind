@@ -296,7 +296,7 @@ namespace TerraBlind
 					else if (dist < want / 2) go = away;
 					break;
 				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
-				// 【远端只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
+				// 【只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
 				case Horiz.Hold:
 					if (want != NoWant && dist < want / 2) go = away;
 					else if (want != NoWant && dist > want) go = toward;
