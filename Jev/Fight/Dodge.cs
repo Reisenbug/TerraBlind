@@ -137,11 +137,12 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 哪一侧压力小。每个威胁按 1/距离 计权投到左右两边,包括弹幕 --
-		// 【只看最近那个会在两个威胁之间来回横跳】
-		static int AwaySide(Player p, NPC boss)
+		// 四面各有多挤。【几何不该让 Jev 自己做】:逐发报坐标和速度,
+		// 它得在脑子里叠加才知道哪边空,而这个数代码顺手就算出来了
+		public static float PressLeft, PressRight, PressUp, PressDown;
+		static void Pressure(Player p)
 		{
-			float left = 0f, right = 0f;
+			PressLeft = PressRight = PressUp = PressDown = 0f;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
@@ -150,23 +151,31 @@ namespace TerraBlind
 				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
 				if (d > CareCells) continue;
-				float w = 1f / System.Math.Max(1, d);
-				if (npc.Center.X > p.Center.X) right += w; else left += w;
+				Add(npc.Center, p.Center, 1f / System.Math.Max(1, d));
 			}
 			foreach (var pr in Main.projectile)
 			{
-				// 【认 hostile 不认 !friendly】。两个标志互相独立,可以都为假 --
-				// 拿 !friendly 当敌意会把打不到人的东西也算进躲避方向
+				// 【认 hostile 不认 !friendly】。两个标志互相独立,可以都为假
 				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
 				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
 				if (d > ThreatScan.RangeCells) continue;
-				float w = 1f / System.Math.Max(1, d);
-				if (pr.Center.X > p.Center.X) right += w; else left += w;
+				Add(pr.Center, p.Center, 1f / System.Math.Max(1, d));
 			}
+		}
+
+		// 一个威胁同时投给水平和竖直,正上方的东西不该只算"上"不算别的
+		static void Add(Microsoft.Xna.Framework.Vector2 at, Microsoft.Xna.Framework.Vector2 me, float w)
+		{
+			if (at.X > me.X) PressRight += w; else PressLeft += w;
+			if (at.Y > me.Y) PressDown += w; else PressUp += w;
+		}
+
+		static int AwaySide(Player p, NPC boss)
+		{
 			// 一样重就退回"背对锁定的那个",至少不会站着不动
-			if (System.Math.Abs(left - right) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
-			return right > left ? -1 : 1;
+			if (System.Math.Abs(PressLeft - PressRight) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
+			return PressRight > PressLeft ? -1 : 1;
 		}
 
 		public static void Tick()
@@ -246,8 +255,9 @@ namespace TerraBlind
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
-			// 【"远离"要看全场,不是只看锁定的那个】。双子两只眼分开飞,
-			// 躲开一只常常是撞进另一只 -- 两边都有威胁时往空的那侧走
+			// 【"远离"要看全场,不是只看锁定的那个】。躲开一只常常是撞进另一只
+			// 每帧重算:Facts 那次是发请求时的,这里要的是此刻的
+			Pressure(p);
 			int away = AwaySide(p, boss);
 			int toward = bossRight ? 1 : -1;
 			int go = 0;
@@ -647,14 +657,21 @@ namespace TerraBlind
 
 		// 【给方向不给标量】。ThreatScan 那份 speed 是绝对值,丢了符号,
 		// 而走位要判的正是"它朝哪飞"
-		// 格/秒。【峰值跟着这一场自己长】:每个 boss 的"快"不是一个数,
-		// 而且换了阶段上限也会变 -- 峰值慢慢衰减,不然一次爆发就把尺子永久顶死
-		static float _bossTopSpeed;
+		// 格/秒,外加最近一秒的峰值和加速度。【窗口只有一秒】:十秒会跨阶段,
+		// 一阶段的速度污染二阶段的参照
+		static readonly float[] _spdRing = new float[60];
+		static int _spdAt;
+		static float _bossRecentTop, _bossAccel, _bossPrevSpd;
 		static int BossSpeed(NPC boss)
 		{
 			float v = (System.Math.Abs(boss.velocity.X) + System.Math.Abs(boss.velocity.Y)) * 60f / 16f;
-			if (v > _bossTopSpeed) _bossTopSpeed = v;
-			else _bossTopSpeed -= 0.02f;
+			_spdRing[_spdAt] = v;
+			_spdAt = (_spdAt + 1) % _spdRing.Length;
+			float top = 0f;
+			foreach (float s in _spdRing) if (s > top) top = s;
+			_bossRecentTop = top;
+			_bossAccel = v - _bossPrevSpd;
+			_bossPrevSpd = v;
 			return (int)v;
 		}
 
@@ -664,15 +681,16 @@ namespace TerraBlind
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			bool closing = (dx > 0 && boss.velocity.X < 0) || (dx < 0 && boss.velocity.X > 0);
 			int bossSpd = BossSpeed(boss);
+			Pressure(p);
 			int hit = FramesToHit(p, boss);
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
-				 // 【速度要有参照】。20 格/秒 是快是慢取决于这个 boss,拿它自己的峰值当尺子
+				 // 【只报实测量】。"在不在冲刺"要编阈值,而没有冲刺的 boss 那个字段本身就是错的
 				 + ",\"boss_speed_cells_per_second\":" + bossSpd
-				 + ",\"boss_top_speed_this_fight\":" + (int)_bossTopSpeed
-				 + ",\"boss_is_charging\":" + (_bossTopSpeed > 5f && bossSpd > _bossTopSpeed * 0.6f ? "true" : "false")
+				 + ",\"boss_fastest_in_the_last_second\":" + (int)_bossRecentTop
+				 + ",\"boss_acceleration\":" + _bossAccel.ToString("0.0")
 				 // 【够不够得着打用实测】。距离多少算够是跟着武器和装备变的,这个数直接说明打没打中
 				 + ",\"damage_i_am_dealing_per_second\":" + BossDps
 				 + ",\"my_usual_damage_per_second_this_fight\":" + DpsTypical
@@ -705,6 +723,12 @@ namespace TerraBlind
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
+				 // 【四面的压力】。同一份数反射层也在用来挑往哪边退,两边看的是一个东西。
+				 // 数越大越挤,近的威胁权重高(按 1/距离 加)
+				 + ",\"how_crowded_each_side_is\":{\"left\":" + PressLeft.ToString("0.00")
+				 + ",\"right\":" + PressRight.ToString("0.00")
+				 + ",\"above\":" + PressUp.ToString("0.00")
+				 + ",\"below\":" + PressDown.ToString("0.00") + "}"
 				 // 【退开是有代价的】。武器自动瞄准,所以从它的角度看后退全是好处 --
 				 // 不说一声就会一路退到天上去,全场只剩 Away/Rise
 				 + ",\"my_shots_miss_more_the_further_i_am\":true"
@@ -738,7 +762,8 @@ namespace TerraBlind
 			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
 			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。它正冲过来、已经贴脸、或者血不多了要留余地。"
-			 + "弹幕从某一侧压过来时也是这个 -- 代码会往两侧里空的那边走。"
+			 + "弹幕从某一侧压过来时也是这个 -- 代码会按 how_crowded_each_side_is 往空的那侧走。"
+			 + "但左右两边都挤的时候退不出去,那种局面该换竖直方向而不是接着退。"
 			 + "【退开不是免费的】:退到打不中就是一直不输出,boss 的血不掉这一场就不会结束。"
 			 + "但只要 i_am_too_far_to_hit_it 还是假的,退就是白赚的安全 --"
 			 + "所以先退到还打得中的最远处,而不是贴着危险区换输出\","
@@ -758,7 +783,7 @@ namespace TerraBlind
 			 + "\"Rise\":\"往上。【躲横着冲过来的东西主要靠这个】:它锁的是起冲那一刻的高度,"
 			 + "升一层它就扑空了,而横着跑是跟它比速度。脚下有翅膀和空中跳,往上比往下灵活得多 --"
 			 + "但要连着选几次才升得起来,选一下就换等于只跳了一小下。"
-			 + "对从上往下砸的东西没用,那种情况往上是迎上去;"
+			 + "对从上往下砸的东西没用,那种情况往上是迎上去 -- 看 how_crowded_each_side_is 的 above;"
 			 + "cells_of_room_above_me 很小的时候说明快顶到天花板,那才该往下\","
 			 + "\"Level\":\"保持现在的高度。没有上下方向的威胁,或者正在地面上跑得好好的\","
 			 + "\"Drop\":\"往下。踩着平台时会穿下去,在空中时会快速落回地面。"
