@@ -460,7 +460,7 @@ namespace TerraBlind
 				 + ",\"arena\":\"" + JsonStr(BossBook.ArenaOf(boss.type)) + "\""
 				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
 				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
-				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
+				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.AbilitiesOf(p)) + "\""
 				 + ",\"grapple_attached\":" + (p.grapCount > 0 ? "true" : "false")
 				 + "}";
 		}
