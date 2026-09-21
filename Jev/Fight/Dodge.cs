@@ -295,7 +295,7 @@ namespace TerraBlind
 			// 钩爪现在是手段不是意图:想升而地面跳够不着,或者想降而脚下没路,才甩钩
 			bool wantHook = (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f)
 						 || (ver == Vert.Drop && CellsAboveGround(p) > 12);
-			bool hooking = Hook(p, boss, wantHook, onGround, out bool hookJump);
+			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
 
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
@@ -352,7 +352,7 @@ namespace TerraBlind
 
 		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
 		// 光标是全局的,攻击层每帧在瞄 boss -- 只有发射那一帧抢过来指个方向,之后不用再指
-		static bool Hook(Player p, NPC boss, bool want, bool onGround, out bool hookJump)
+		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
@@ -372,7 +372,7 @@ namespace TerraBlind
 			if (_hookHeld) { _hookHeld = false; return true; }
 			// 【必须瞄到真能勾住的格子】。对着空气甩,钩子飞完全程再空手回来,
 			// 这期间人既没位移也没输出 -- 找不到落点就干脆不甩
-			if (!FindAnchor(p, boss, out int ax, out int ay)) { _hookFrames = 0; return false; }
+			if (!FindAnchor(p, boss, ver, out int ax, out int ay)) { _hookFrames = 0; return false; }
 			Cursor.AimTile(ax, ay);
 			p.controlHook = true;
 			_hookHeld = true;
@@ -461,7 +461,7 @@ namespace TerraBlind
 
 		// 【上下都找,挑离 boss 最远的那个】。原来只扫头顶,人贴着天花板时上面没别的落点了
 		// 找不到就让 Hook 放弃,总比对着空气甩强
-		static bool FindAnchor(Player p, NPC boss, out int ax, out int ay)
+		static bool FindAnchor(Player p, NPC boss, Vert ver, out int ax, out int ay)
 		{
 			ax = ay = 0;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
@@ -473,12 +473,15 @@ namespace TerraBlind
 					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
 					if (reach < 4 || reach > HookReachCells) continue;
 					int x = pcx + dx2, y = pcy + dy;
+					// 【勾的方向要和意图一致】。钩爪是实现"升/降"的手段,
+					// 想上去却勾到脚下,等于把自己按回原处
+					if (ver == Vert.Rise && dy >= 0) continue;
+					if (ver == Vert.Drop && dy <= 0) continue;
 					// 【往下勾要够斜】。太接近正下方的落点,勾上只是把自己钉在原地,
 					// 换不来位移。和垂线夹角至少 60 度: |dx| >= dy * tan60 = dy * 1.73
 					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
 					if (!Hookable(x, y)) continue;
-					// 【远离 boss 就是好落点】。往上还是往下让局面自己定,
-					// 不编"高过 N 格就往下勾"那种阈值 -- 那些数我一个都不知道
+					// 【远离 boss 就是好落点】。同方向的落点里挑离它最远的那个
 					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
 					if (score <= best) continue;
 					best = score; ax = x; ay = y;
