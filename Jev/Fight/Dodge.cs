@@ -255,7 +255,8 @@ namespace TerraBlind
 
 			// 【踩到东西就清零,不只是 velocity.Y==0】。斜坡平台上人几乎一直在微微下滑,
 			// 那一帧永远等不到 -- 计数跑到 244 帧,tooLong 锁死,竖直动作全哑(实测)
-			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; }
+			// 落地就把爬升的余量清掉,不然下一次起跳会带着上一轮没用完的帧数
+			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; _riseHold = 0; }
 			// 【飞行不算滞空】。翅膀能飞 3 秒而上限 150 帧,不豁免就永远飞不到耗尽;
 			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
 			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
@@ -311,7 +312,10 @@ namespace TerraBlind
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
 			// 想往上。【手段不在这里选】:跳/二段跳/翅膀哪个能用由 Jump 自己挑
-			bool rise = ver == Vert.Rise && !noJump;
+			// 【起飞流程要 20~30 帧】。实测 Rise 中位只持续 10 帧,101 次只飞起来 2 次
+			if (ver == Vert.Rise && !noJump) _riseHold = RiseHoldFrames;
+			else if (_riseHold > 0) _riseHold--;
+			bool rise = _riseHold > 0 && !noJump;
 			bool wantJump = hookJump || ((rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = rise && !_tooLongAirborne && p.grapCount == 0;
@@ -423,12 +427,16 @@ namespace TerraBlind
 		}
 
 		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
+		// 说了往上就至少按这么多帧。够走完 跳→到顶→接着按 那一套
+		const int RiseHoldFrames = 30;
+		static int _riseHold;
 		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
 		static void Fly(Player p)
 		{
-			bool now = p.wingTime < _prevWing - 0.01f;
+			// 【要在爬升,不是在缓降】。羽落也烧 wingTime,把它算成飞行就看不出翅膀有没有真用上
+			bool now = p.wingTime < _prevWing - 0.01f && p.velocity.Y < -0.5f;
 			_prevWing = p.wingTime;
 			if (now == _flying) return;
 			_flying = now;
@@ -495,6 +503,8 @@ namespace TerraBlind
 			// 【有多段不等于要烧多段】。第一段照旧,第二段起只认 act==Up:
 			// incoming 几乎恒真,拿它放行就是一滞空把储备全烧完
 			if (_airJumped && !wantMore) return false;
+			// 【空中跳要落日志】。原来只进 HUD 的状态串,事后查不出到底跳没跳
+			DiagLog.Write($"[dodge] 空中跳 第{(_airJumped ? 2 : 1)}段 vy={p.velocity.Y:0.0}");
 			_airJumped = true; _jumpHeld = true; _holdFrames = 1; return true;
 		}
 
@@ -729,14 +739,17 @@ namespace TerraBlind
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
 			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
-			 + "\"Rise\":\"往上。它从下方上来、贴着地面的攻击要从脚下穿过去、或者该上更高一层平台。"
-			 + "但对从上往下砸的东西没用,那种情况往上是迎上去。"
-			 + "【越高越糟】:看 cells_of_room_above_me,这个数小就说明快顶到天花板了,"
-			 + "顶在上面时竖直方向无路可走,下一次攻击只能硬吃 -- 那时候该往下而不是接着往上\","
+			 + "\"Rise\":\"往上。【躲横着冲过来的东西主要靠这个】:它锁的是起冲那一刻的高度,"
+			 + "升一层它就扑空了,而横着跑是跟它比速度。脚下有翅膀和空中跳,往上比往下灵活得多 --"
+			 + "但要连着选几次才升得起来,选一下就换等于只跳了一小下。"
+			 + "对从上往下砸的东西没用,那种情况往上是迎上去;"
+			 + "cells_of_room_above_me 很小的时候说明快顶到天花板,那才该往下\","
 			 + "\"Level\":\"保持现在的高度。没有上下方向的威胁,或者正在地面上跑得好好的\","
 			 + "\"Drop\":\"往下。踩着平台时会穿下去,在空中时会快速落回地面。"
 			 + "头顶压下来的东西、从上方来的弹幕(看 projectile_pressure 的 from_above),"
-			 + "掉一层往往就扑空了;看 frames_airborne,在空中飘了一阵子而局面没变好时也该落地重来\"}},"
+			 + "掉一层往往就扑空了;看 frames_airborne,在空中飘了一阵子而局面没变好时也该落地重来。"
+			 + "【往下不是默认选项】:落到地面就把翅膀和空中跳那些躲避手段交了出去,"
+			 + "下一次冲撞来的时候只剩横着跑 -- 没有来自上方的威胁时,留在半空比贴着地面安全\"}},"
 			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
 			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
 			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
