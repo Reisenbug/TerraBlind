@@ -59,6 +59,8 @@ namespace TerraBlind
 		public static bool SafeToAttack = true;
 		public static bool JevSaysJump;
 		public static bool JevSaysDash;
+		// 原始概率也留着。只记一个 bool 的话,"它不想冲"和"门槛卡太高"在日志里长得一样
+		public static float DashNoul;
 		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
 		public static string Probs = "";
 		public static string TopTwo = "";
@@ -130,9 +132,9 @@ namespace TerraBlind
 
 			// 意图过期:退回"拉开距离",那是任何时候都不会送命的默认
 			var act = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs ? DodgeAct.Back : Act;
-			// 【禁用的意图退回 Keep,不是 Back】。禁 Close 的 boss 往往正是"太远也危险"那种,
-			// 自动后退等于换个方向送
-			if (BossBook.IsBanned(boss.type, act)) act = DodgeAct.Keep;
+			// 【退回哪个由 boss 自己定】。默认 Keep:禁 Close 的往往正是"太远也危险"那种,
+			// 自动后退等于换个方向送。但禁了 Keep 的 boss 退回 Keep 就等于没禁
+			if (BossBook.IsBanned(boss.type, act)) act = BossBook.FallbackFor(boss.type);
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
@@ -258,7 +260,7 @@ namespace TerraBlind
 
 			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
-				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
+				 + (dashing ? " +dash" : $" dash?{DashNoul:0.00}") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (!onGround && act != DodgeAct.Close ? " +float" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "")
 				 + (TacticWorking ? "" : " [not working]");
@@ -581,7 +583,9 @@ namespace TerraBlind
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
-			JevSaysDash = Num(Seg(txt, "should_dash_now"), "noul", 0f) > 0.7f;
+			// 原始概率也留着:只记一个 bool 的话,"它不想冲"和"门槛卡太高"在日志里长得一样
+			DashNoul = Num(Seg(txt, "should_dash_now"), "noul", 0f);
+			JevSaysDash = DashNoul > 0.7f;
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
