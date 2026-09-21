@@ -16,6 +16,17 @@ namespace TerraBlind
 		public int WantCells;
 	}
 
+	// 一个模组 boss 的登记。【type 是运行时分配的】,编译期字典写不进去
+	public class ModBoss
+	{
+		public string Mod = "";
+		// 本体的内部名。这条的 BossInfo 挂在它身上
+		public string Head = "";
+		// 身体各节的内部名。蠕虫要全列上,否则 Boss() 会选中最近的一节而不是头
+		public string[] Parts = System.Array.Empty<string>();
+		public BossInfo Info = new();
+	}
+
 	public static class BossBook
 	{
 		// 【对照实验:关掉背板】。蜂王零知识一遍过,所以要验的是"知识到底贡献了多少"。
@@ -156,10 +167,59 @@ namespace TerraBlind
 			+ "钩爪主要用来急转向和急拔高:往上勾、勾住就跳、同时按住上键能窜得很高,"
 			+ "往左下右下勾则能快速换到另一个高度。荡出去的那一段改不了方向,吊着不跳也打不到人。";
 
-		// 【部件要查到本体那条】。Boss() 返回的可能是蠕虫的某一节或者骷髅王的手,
-		// 直接查表会返回空 -- 知识就在最需要的时候悄悄消失了
+		// 装了对应模组才登记。内部名对不上就整条跳过,不报错
+		static readonly ModBoss[] ModBosses =
+		{
+			new ModBoss
+			{
+				Mod = "CalamityMod",
+				Head = "DevourerofGodsHead",
+				Parts = new[] { "DevourerofGodsBody", "DevourerofGodsTail" },
+				Info = new BossInfo
+				{
+					Arena = "开阔的地方。它会绕着人转圈,转起来四周都是它的身体",
+					HowItFights =
+						"神明吞噬者是一条很长很快的蠕虫,头、身体、尾巴碰到都掉血。"
+						+ "头朝人加速冲过来的时候,冲刺能把那一下拉开 -- "
+						+ "冲的方向和头的来向岔开一个大角度才有用,顺着它来的方向冲是跟它跑同一条线。"
+						+ "它会绕着人盘旋,把人圈在中间,那时候四周都是体节,冲刺能从体节之间穿出去。"
+						+ "【冲刺过程中撞到身体不掉血,但弹幕照样伤人】,所以冲刺躲得开撞击躲不开弹幕。"
+						+ "这一场的钩爪速度很快,拉开距离和换高度都比跑动快得多。"
+						+ "场上会出现激光的预警线,线亮起之后过一会儿才真的发射,"
+						+ "看到预警就找两条线之间的空隙待着。",
+				},
+			},
+		};
+
+		// 模组 boss:装了才有。【本体 type -> 条目】和【部件 type -> 本体 type】
+		static readonly Dictionary<int, BossInfo> ModBook = new();
+		static readonly Dictionary<int, int> ModParts = new();
+
+		public static bool IsModPart(int npcType) => ModParts.ContainsKey(npcType);
+
+		// 【只在 PostSetupContent 里跑一次】。那时候所有模组都加载完了,type 才定下来
+		public static void LoadModBosses()
+		{
+			ModBook.Clear();
+			ModParts.Clear();
+			foreach (var mb in ModBosses)
+			{
+				if (!Terraria.ModLoader.ModContent.TryFind<Terraria.ModLoader.ModNPC>(mb.Mod, mb.Head, out var head))
+					continue;
+				ModBook[head.Type] = mb.Info;
+				foreach (string part in mb.Parts)
+					if (Terraria.ModLoader.ModContent.TryFind<Terraria.ModLoader.ModNPC>(mb.Mod, part, out var pn))
+						ModParts[pn.Type] = head.Type;
+				DiagLog.Write($"[bossbook] 登记模组 boss {mb.Mod}/{mb.Head} type {head.Type},部件 {ModParts.Count} 个");
+			}
+		}
+
+		// 【部件要查到本体那条】。蠕虫的某一节或者骷髅王的手直接查表会返回空 --
+		// 知识就在最需要的时候悄悄消失了
 		static int Canon(int npcType)
 		{
+			// 模组部件先折。【放最前面】:下面全是原版 ID 比较,对模组 type 无意义
+			if (ModParts.TryGetValue(npcType, out int modHead)) return modHead;
 			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
 			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
 				return Terraria.ID.NPCID.EaterofWorldsHead;
@@ -177,7 +237,8 @@ namespace TerraBlind
 		static readonly BossInfo None = new();
 
 		public static BossInfo Of(int npcType)
-			=> Book.TryGetValue(Canon(npcType), out var b) ? b : None;
+			=> Book.TryGetValue(Canon(npcType), out var b) ? b
+			 : ModBook.TryGetValue(Canon(npcType), out var m) ? m : None;
 
 		public static string For(int npcType) => UseKnowledge ? Of(npcType).HowItFights : "";
 
@@ -198,6 +259,12 @@ namespace TerraBlind
 				if (b[i] == act) return true;
 			return false;
 		}
+	}
+
+	// 模组的 NPC type 要等所有模组都加载完才定得下来
+	public class BossBookLoader : Terraria.ModLoader.ModSystem
+	{
+		public override void PostSetupContent() => BossBook.LoadModBosses();
 	}
 
 	public class BossKnowledgeCommand : Terraria.ModLoader.ModCommand

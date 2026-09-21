@@ -52,7 +52,8 @@ namespace TerraBlind
 
 		// boss 的部件:自己不带 boss 标志,但打它就是在打 boss
 		public static bool BossPart(int type)
-			=> type == Terraria.ID.NPCID.SkeletronHand
+			=> BossBook.IsModPart(type)
+			|| type == Terraria.ID.NPCID.SkeletronHand
 			|| type == Terraria.ID.NPCID.EaterofWorldsHead
 			|| type == Terraria.ID.NPCID.EaterofWorldsBody
 			|| type == Terraria.ID.NPCID.EaterofWorldsTail
