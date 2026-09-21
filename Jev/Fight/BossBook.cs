@@ -22,6 +22,8 @@ namespace TerraBlind
 		// noul 到多少算"该冲"。【题干里那句谨慎话把整体压低了】,
 		// DoG 这种冲刺无敌的场合,0.7 永远够不到,而 0.59 在那一场就是明确的"该冲"
 		public float DashAt = 0.7f;
+		// 冲刺方向按 boss 的来向算,不跟走路方向。【只给那种"冲刺本身就是躲避"的 boss】
+		public bool DashAcross;
 	}
 
 	// 一个模组 boss 的登记。【type 是运行时分配的】,编译期字典写不进去
@@ -201,6 +203,7 @@ namespace TerraBlind
 					Banned = new[] { DodgeAct.Keep },
 					Fallback = DodgeAct.Evade,
 					DashAt = 0.25f,
+					DashAcross = true,
 					DashNote =
 						"这一场例外:冲刺全程无敌,撞到这条虫的头和身体都不掉血,"
 						+ "所以上面那条'乱冲会撞进攻击里'在这里不适用。"
@@ -294,6 +297,8 @@ namespace TerraBlind
 		public static string DashNoteFor(int npcType) => UseKnowledge ? Of(npcType).DashNote : "";
 
 		public static float DashAtFor(int npcType) => Of(npcType).DashAt;
+
+		public static bool DashAcrossFor(int npcType) => Of(npcType).DashAcross;
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{

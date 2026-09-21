@@ -161,6 +161,19 @@ namespace TerraBlind
 			return boss.velocity.X > 0f ? -1 : 1;
 		}
 
+		// 冲刺往哪个方向。【垂直于它扑过来的那条线】:沿着它的来向冲是被追,
+		// 正对着冲是对撞,横切过去才让它扑空。它不动时就退开
+		static int DashDir(Player p, NPC boss, int away)
+		{
+			var v = boss.velocity;
+			if (System.Math.Abs(v.X) + System.Math.Abs(v.Y) < 1f) return away;
+			// 它来的方向逆时针转 90 度,取水平分量的符号。竖直分量由 Jev 的意图去补
+			int perp = v.Y > 0f ? 1 : -1;
+			// 那一侧是墙就走另一侧,两边都堵才退开
+			if (WallDistance(p, perp) <= 0) perp = WallDistance(p, -perp) > 0 ? -perp : away;
+			return perp;
+		}
+
 		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
 		// 报给 Jev 的字段都走这一个入口,免得两边各算各的
 		static int Want(NPC boss)
@@ -259,7 +272,7 @@ namespace TerraBlind
 				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
-			go = Dash(p, go, incoming, act);
+			go = Dash(p, boss, go, incoming, act);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -268,9 +281,15 @@ namespace TerraBlind
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
 			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
+			// 【横切的冲刺要配竖直分量】。只有左右的话,那一下仍然在它扑来的平面里 --
+			// 往它来的反侧抬或沉,合起来才是斜着切开。只给 DashAcross 的 boss
+			bool dashVert = (dashing || p.dashDelay < 0) && p.grapCount == 0
+						 && BossBook.DashAcrossFor(boss.type) && boss.Center.Y < p.Center.Y;
 			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
-			bool hover = !dive && !_wantFly && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
-			if (dive) p.controlDown = true;
+			bool hover = !dive && !_wantFly && !dashVert && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			// 【冲刺时只往下切】。往上要走 Jump() 那套 releaseJump 状态机,
+			// 在这儿直接按 controlJump 会把它的记账冲掉 -- 那个坑踩过三次
+			if (dashVert || dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
 			Last = $"{act} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
@@ -352,7 +371,7 @@ namespace TerraBlind
 
 		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
 		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
-		static int Dash(Player p, int go, bool incoming, DodgeAct act)
+		static int Dash(Player p, NPC boss, int go, bool incoming, DodgeAct act)
 		{
 			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
@@ -373,7 +392,10 @@ namespace TerraBlind
 			// 对荡着走的手那种圆周运动完全失真,拿它当冲刺时机就是乱冲
 			if (!JevSaysDash || go == 0) return go;
 
-			_dashGap = true; _dashDir = go;
+			// 【冲刺方向可以不等于走路方向】。走路方向是意图定的(Orbit 是切向、Evade 是横移),
+			// 而冲刺要的是横切它扑过来的那条线 -- 拿 go 去冲就是沿着切向冲出去
+			_dashGap = true;
+			_dashDir = BossBook.DashAcrossFor(boss.type) ? DashDir(p, boss, go) : go;
 			return 0;   // 这一帧松手
 		}
 
