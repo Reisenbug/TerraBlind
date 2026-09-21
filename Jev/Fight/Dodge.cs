@@ -403,6 +403,9 @@ namespace TerraBlind
 
 			if (!want) return false;
 			if (onGround) { _jumpHeld = true; _holdFrames = 1; return true; }
+			// 【挂着钩子那一跳不花空中跳】。vanilla 自己会解钩并刷新跳(Player.cs:20975),
+			// 走下面 AnyExtraJumpUsable 那道门会让人永远吊在天花板上
+			if (p.grapCount > 0) { _jumpHeld = true; _holdFrames = 1; return true; }
 			// 【能不能跳问 vanilla】。原来只记"这次滞空跳过没有",没跳就当有 --
 			// 没云朵瓶也照按,白扔一次。AnyExtraJumpUsable 连模组跳一起算,还认 blockExtraJumps
 			if (!p.AnyExtraJumpUsable()) return false;
