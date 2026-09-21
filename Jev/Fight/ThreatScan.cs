@@ -84,7 +84,9 @@ namespace TerraBlind
 				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
 				int pcx = (int)(pr.Center.X / 16f), pcy = (int)(pr.Center.Y / 16f);
 				int d = System.Math.Abs(pcx - atCx) + System.Math.Abs(pcy - atCy);
-				if (d > RangeCells) continue;
+				// 【朝我来的不受 30 格限制】。人常年停在 38 格外,而弹幕是从 boss 那边飞过来的 --
+				// 按 30 格滤,它要贴到脸上才第一次出现在视野里
+				if (d > RangeCells && FramesToReach(p, pr) < 0) continue;
 				// 朝我来才值得报。飞走的弹幕不该占名额,更不该让它以为处处是危险
 				bool toward = (pcx < atCx && pr.velocity.X > 0.1f) || (pcx > atCx && pr.velocity.X < -0.1f)
 						   || (pcy < atCy && pr.velocity.Y > 0.1f) || (pcy > atCy && pr.velocity.Y < -0.1f);

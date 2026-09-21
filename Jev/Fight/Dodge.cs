@@ -155,7 +155,9 @@ namespace TerraBlind
 			}
 			foreach (var pr in Main.projectile)
 			{
-				if (pr == null || !pr.active || pr.friendly || pr.damage <= 0) continue;
+				// 【认 hostile 不认 !friendly】。两个标志互相独立,可以都为假 --
+				// 拿 !friendly 当敌意会把打不到人的东西也算进躲避方向
+				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
 				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
 				if (d > ThreatScan.RangeCells) continue;
@@ -610,7 +612,9 @@ namespace TerraBlind
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
-			 + "碰到 boss 或者吃到弹幕才掉血。这一题只管【和 boss 的距离该怎么变】,"
+			 + "【撞到 boss 身上掉的血远比吃一发弹幕多】,躲开碰撞永远排在最前面;"
+			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离带上 --"
+			 + "distance_i_asked_for 就是那个距离。这一题只管【和 boss 的距离该怎么变】,"
 			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
 			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。它正冲过来、已经贴脸、或者血不多了要留余地。"
