@@ -228,7 +228,9 @@ namespace TerraBlind
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
-			if (onGround) { _airborneFrames = 0; _tooLongAirborne = false; }
+			// 【踩到东西就清零,不只是 velocity.Y==0】。斜坡平台上人几乎一直在微微下滑,
+			// 那一帧永远等不到 -- 计数跑到 244 帧,tooLong 锁死,竖直动作全哑(实测)
+			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; }
 			// 【飞行不算滞空】。翅膀能飞 3 秒而上限 150 帧,不豁免就永远飞不到耗尽;
 			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
 			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
@@ -521,7 +523,9 @@ namespace TerraBlind
 			{
 				// 地图底部就是岩浆和虚空,当成地面:再往下没有可去的地方
 				if (feet + d >= Main.maxTilesY - EdgeCells) return d;
-				if (Predicates.IsSolid(cx, feet + d)) return d;
+				// 【平台也是地】。IsSolid 只认 tileSolid,平台是 tileSolidTop --
+				// 整个场地都是平台时这里会一路报 40,人明明站着却被当成在半空
+				if (Predicates.IsSolid(cx, feet + d) || Predicates.IsPlatform(cx, feet + d)) return d;
 			}
 			return 40;
 		}
