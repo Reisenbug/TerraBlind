@@ -144,6 +144,14 @@ namespace TerraBlind
 		// 危险分换成格数。0=贴脸输出,4=离远点
 		static int WantCells(float danger) => 4 + (int)(danger * 4f);
 
+		// 顺着它冲的方向让开。【实测:同向比逆向多撑几帧】-- 逆向是迎头对撞。
+		// 但水平方向本来就跑不赢高速冲撞,真正躲开要靠竖直位移,那归 Up/Dive/Grapple
+		static int Across(NPC boss, int away)
+		{
+			if (System.Math.Abs(boss.velocity.X) < 1f) return away;
+			return boss.velocity.X > 0f ? 1 : -1;
+		}
+
 		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
 		// 报给 Jev 的字段都走这一个入口,免得两边各算各的
 		static int Want(NPC boss)
@@ -190,8 +198,10 @@ namespace TerraBlind
 				case DodgeAct.Close:
 					if (System.Math.Abs(dx) / 16f > want) go = toward;
 					break;
+				// 【横切来袭方向,不是往后退】。没有哪个距离是安全的,只有走位躲得开 --
+				// 顺着它来的方向退是跟它跑同一条线,横切才让它扑空
 				case DodgeAct.Evade:
-					go = away;
+					go = Across(boss, away);
 					break;
 				// 【飘着也要横移】。羽落是边飘边躲,不是站桩 -- 悬在半空不动就是靶子
 				case DodgeAct.Up:
@@ -368,6 +378,8 @@ namespace TerraBlind
 					if (reach < 4 || reach > HookReachCells) continue;
 					int x = pcx + dx2, y = pcy + dy;
 					if (!Hookable(x, y)) continue;
+					// 【往下勾要够斜】。太接近正下方的落点,勾上只是把自己钉在原地
+					if (dy > 0 && System.Math.Abs(dx2) * 1.73f < dy) continue;
 					// 【远离 boss 就是好落点】。往上还是往下让局面自己定,
 					// 不编"高过 N 格就往下勾"那种阈值 -- 那些数我一个都不知道
 					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
