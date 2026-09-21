@@ -198,8 +198,23 @@ namespace TerraBlind
 		public static BossInfo Of(int npcType)
 			=> Book.TryGetValue(Canon(npcType), out var b) ? b : None;
 
-		// 内部名 -> 覆盖。【存内部名不存 id】:配置是人手填的,数字没法看也没法查
-		static readonly Dictionary<string, BossOverride> Overrides = new();
+		// npc id -> 覆盖。配置里存的是名字,解析一次存成 id,查的时候不用每帧比字符串
+		static readonly Dictionary<int, BossOverride> Overrides = new();
+
+		// 把整本书铺进配置。【默认值就是代码里的原文】,所以打开就能看见能改,
+		// 而不是一个要自己填 boss 名字的空列表
+		public static void Seed(List<BossOverride> list)
+		{
+			if (list == null) return;
+			foreach (var kv in Book)
+			{
+				string name = Terraria.Lang.GetNPCNameValue(kv.Key);
+				bool have = false;
+				foreach (var o in list) if (o != null && o.Boss == name) { have = true; break; }
+				if (have) continue;
+				list.Add(new BossOverride { Boss = name, Enabled = true, HowItFights = kv.Value.HowItFights });
+			}
+		}
 
 		public static void SetOverrides(List<BossOverride> list)
 		{
@@ -208,37 +223,36 @@ namespace TerraBlind
 			foreach (var o in list)
 			{
 				if (o == null || string.IsNullOrWhiteSpace(o.Boss)) continue;
-				Overrides[o.Boss.Trim()] = o;
+				int id = IdOf(o.Boss.Trim());
+				// 【名字对不上要说】。人改了 Boss 那一栏就是静默失效,以为改了其实没改
+				if (id == 0) { DiagLog.Write($"[bossbook] \"{o.Boss}\" 对不上任何 boss,这条没用上"); continue; }
+				Overrides[id] = o;
 			}
-			// 【名字拼错了要说】。对不上就是静默失效,人会以为改了其实没改
-			foreach (string name in Overrides.Keys)
-				if (!Known(name)) DiagLog.Write($"[bossbook] \"{name}\" 不是任何 boss 的名字,这条没用上");
-			DiagLog.Write($"[bossbook] 覆盖 {Overrides.Count} 条");
+			int off = 0;
+			foreach (var o in Overrides.Values) if (!o.Enabled) off++;
+			DiagLog.Write($"[bossbook] {Overrides.Count} 条,其中 {off} 条关着");
 		}
 
-		// 【只认书里有的 boss】。扫全部 NPC 名字太宽:打错成某个小怪也会算"对上了"
-		static bool Known(string name)
+		static int IdOf(string name)
 		{
 			foreach (int t in Book.Keys)
-				if (Terraria.Lang.GetNPCNameValue(t) == name) return true;
-			return name == Terraria.Lang.GetNPCNameValue(Terraria.ID.NPCID.Retinazer);
+				if (Terraria.Lang.GetNPCNameValue(t) == name) return t;
+			return 0;
 		}
 
-		// 【查覆盖用真名不用 Canon】。想单独关掉激光眼那条时,映射会把它变成魔焰眼
+		// 【部件跟着本体那条走】。激光眼、骷髅手都没有自己的条目,
+		// 不映射的话它们就永远读不到覆盖,开关也管不着它们
 		static BossOverride Override(int npcType)
-		{
-			string name = Terraria.Lang.GetNPCNameValue(npcType);
-			return name != null && Overrides.TryGetValue(name, out var o) ? o : null;
-		}
+			=> Overrides.TryGetValue(Canon(npcType), out var o) ? o : null;
 
 		public static string For(int npcType)
 		{
-			var o = Override(npcType);
-			// 关掉这一条就当没有背板,和全局开关一个意思,只是范围小到一个 boss
-			if (o != null && !o.Enabled) return "";
 			if (!UseKnowledge) return "";
-			if (o != null && o.HowItFights.Trim().Length > 0) return o.HowItFights;
-			return Of(npcType).HowItFights;
+			var o = Override(npcType);
+			if (o == null) return Of(npcType).HowItFights;
+			// 【空就是空,不回退】。条目是自动铺好的,里面本来就有原文 --
+			// 人把它删干净就是想试零知识,这时候再塞回去等于开关失灵
+			return o.Enabled ? o.HowItFights : "";
 		}
 
 		// 没有条目的 boss 也得有个场地描述,否则那个字段是空的

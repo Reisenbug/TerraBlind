@@ -5,21 +5,22 @@ using Terraria.ModLoader.Config;
 
 namespace TerraBlind
 {
-	// 一条覆盖。【文本留空就不覆盖】,这样只想临时关掉某个 boss 的背板时不用先把话删了
+	// 一个 boss 一条,开局自动铺满,文本默认就是代码里那段
 	public class BossOverride
 	{
+		// 哪个 boss。【自动铺进来的,不用自己填】,改坏了就对不上,那一条静默失效
 		[DefaultValue("")]
 		public string Boss = "";
 
 		[DefaultValue(true)]
 		public bool Enabled = true;
 
-		[DefaultValue("")]
 		[System.ComponentModel.DataAnnotations.StringLength(4000)]
+		[DefaultValue("")]
 		public string HowItFights = "";
 
 		public override string ToString()
-			=> (string.IsNullOrWhiteSpace(Boss) ? "(empty)" : Boss) + (Enabled ? "" : " [off]");
+			=> (string.IsNullOrWhiteSpace(Boss) ? "?" : Boss) + (Enabled ? "" : " [off]");
 	}
 
 	// 全是本机行为(画覆盖层、给自己加 buff、改自己脚下的地形),所以 ClientSide
@@ -74,6 +75,10 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool ShowPlannerTrails;
 
+		// 【铺在 OnChanged 之前】。ConfigManager 的顺序是 Load -> OnLoaded -> OnChanged -> 克隆给界面,
+		// 在这里补齐的条目才会出现在配置界面里
+		public override void OnLoaded() => BossBook.Seed(BossPlaybook);
+
 		public override void OnChanged()
 		{
 			PathVisSystem.Enabled = ShowOverlay;
@@ -82,6 +87,8 @@ namespace TerraBlind
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
 			BossBook.UseKnowledge = BossKnowledge;
+			// 这里也补一次:旧存档的 json 里不会有后来新加的 boss
+			BossBook.Seed(BossPlaybook);
 			BossBook.SetOverrides(BossPlaybook);
 			JevHud.Enabled = ShowJevHud;
 		}

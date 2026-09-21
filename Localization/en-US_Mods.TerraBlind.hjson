@@ -93,8 +93,8 @@ Configs: {
 			Label: Boss playbook overrides
 			Tooltip:
 				'''
-				Rewrite what Jev is told about a boss, without rebuilding the mod. Add an entry, put the boss name in Boss exactly as the game shows it (Spazmatism, Retinazer, Skeletron), and type the new playbook into How It Fights.
-				Leave How It Fights empty to keep the built-in text. Uncheck Enabled to fight that one boss with no playbook at all.
+				One entry per boss, filled in for you with the text the mod ships. Edit How It Fights to change what Jev is told, without rebuilding the mod.
+				Uncheck Enabled, or clear the text, to fight that one boss with no playbook at all. Deleting an entry just restores the built-in text on the next load.
 				'''
 		}
 
@@ -105,6 +105,25 @@ Configs: {
 				Key for the Jev calls that drive boss fighting. Paste it here once and it is copied to the .env file in the mod source folder, which git and the mod build both skip.
 				Then clear this box: whatever stays here is also kept in plain text in ModConfigs/TerraBlind.json, so do not share that file.
 				'''
+		}
+	}
+
+	BossOverride: {
+		Tooltip: ""
+
+		Boss: {
+			Label: Boss
+			Tooltip: ""
+		}
+
+		Enabled: {
+			Label: Enabled
+			Tooltip: ""
+		}
+
+		HowItFights: {
+			Label: How It Fights
+			Tooltip: ""
 		}
 	}
 }
