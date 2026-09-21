@@ -34,7 +34,9 @@ namespace TerraBlind
 			// 【手在场就先打手】。血量那项让 4400 血的头碾压 600 血的手,
 			// 而手不打掉,头一直无敌 -- 排序反了就是全程在打一个打不动的目标
 			float part = npc.type == Terraria.ID.NPCID.SkeletronHand ? 100f : 0f;
-			return hpFrac * 100f * near + speed * 2f + npc.life * 0.01f + part;
+			// 【血量绝对值不进分】。DoG 一节体节 244 万血,乘 0.01 就是两万多分,
+			// 头永远排在身体后面 -- 全程在打一节打不动的身体
+			return hpFrac * 100f * near + speed * 2f + part;
 		}
 
 		public static string Json(Player p, int atCx, int atCy)
