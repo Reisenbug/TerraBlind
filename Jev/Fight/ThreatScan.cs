@@ -76,29 +76,48 @@ namespace TerraBlind
 		// 等于躲无可躲 -- 打得到你的东西有一半不在视野里
 		public static string ProjJson(Player p, int atCx, int atCy)
 		{
-			var sb = new StringBuilder("[");
-			int n = 0;
-			for (int i = 0; i < Main.maxProjectiles && n < 12; i++)
+			// 【名额给最快打到的那几发,不是数组里靠前的】。喷火一次几十发,
+			// 按下标截断会让名额全被远处的火星占掉,真正要命的那发反而报不出来
+			var pick = new System.Collections.Generic.List<Projectile>();
+			for (int i = 0; i < Main.maxProjectiles; i++)
 			{
 				var pr = Main.projectile[i];
 				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
+				int pcx0 = (int)(pr.Center.X / 16f), pcy0 = (int)(pr.Center.Y / 16f);
+				int d0 = System.Math.Abs(pcx0 - atCx) + System.Math.Abs(pcy0 - atCy);
+				// 【朝我来的不受 30 格限制】。人常年停在 38 格外,而弹幕是从 boss 那边飞过来的
+				if (d0 > RangeCells && FramesToReach(p, pr) < 0) continue;
+				// 朝我来才值得报。飞走的弹幕不该占名额,更不该让它以为处处是危险
+				bool toward0 = (pcx0 < atCx && pr.velocity.X > 0.1f) || (pcx0 > atCx && pr.velocity.X < -0.1f)
+							|| (pcy0 < atCy && pr.velocity.Y > 0.1f) || (pcy0 > atCy && pr.velocity.Y < -0.1f);
+				if (!toward0) continue;
+				pick.Add(pr);
+			}
+			pick.Sort((a, b) =>
+			{
+				int fa = FramesToReach(p, a), fb = FramesToReach(p, b);
+				if (fa < 0) fa = int.MaxValue;
+				if (fb < 0) fb = int.MaxValue;
+				return fa.CompareTo(fb);
+			});
+
+			var sb = new StringBuilder("[");
+			int n = 0;
+			foreach (var pr in pick)
+			{
+				if (n >= 12) break;
 				int pcx = (int)(pr.Center.X / 16f), pcy = (int)(pr.Center.Y / 16f);
 				int d = System.Math.Abs(pcx - atCx) + System.Math.Abs(pcy - atCy);
-				// 【朝我来的不受 30 格限制】。人常年停在 38 格外,而弹幕是从 boss 那边飞过来的 --
-				// 按 30 格滤,它要贴到脸上才第一次出现在视野里
-				if (d > RangeCells && FramesToReach(p, pr) < 0) continue;
-				// 朝我来才值得报。飞走的弹幕不该占名额,更不该让它以为处处是危险
-				bool toward = (pcx < atCx && pr.velocity.X > 0.1f) || (pcx > atCx && pr.velocity.X < -0.1f)
-						   || (pcy < atCy && pr.velocity.Y > 0.1f) || (pcy > atCy && pr.velocity.Y < -0.1f);
-				if (!toward) continue;
 				if (n++ > 0) sb.Append(',');
 				sb.Append("{\"name\":\"").Append(pr.Name ?? "?").Append('"')
 				  .Append(",\"cells_right\":").Append(pcx - atCx)
 				  .Append(",\"cells_below\":").Append(pcy - atCy)
 				  .Append(",\"distance_cells\":").Append(d)
 				  .Append(",\"damage_pct_of_my_hp\":").Append((int)(pr.damage * 100f / System.Math.Max(1, p.statLife)))
-				  .Append(",\"vx\":").Append(pr.velocity.X.ToString("0.0"))
-				  .Append(",\"vy\":").Append(pr.velocity.Y.ToString("0.0"))
+				  // 【报实际速度】。有的弹幕一帧走好几次,报 velocity 会把它说得比实际慢
+				  .Append(",\"vx\":").Append((pr.velocity.X * (pr.extraUpdates + 1)).ToString("0.0"))
+				  .Append(",\"vy\":").Append((pr.velocity.Y * (pr.extraUpdates + 1)).ToString("0.0"))
+				  .Append(",\"frames_until_it_reaches_me\":").Append(FramesToReach(p, pr))
 				  .Append('}');
 			}
 			return sb.Append(']').ToString();
@@ -133,8 +152,12 @@ namespace TerraBlind
 		{
 			float gapX = System.Math.Abs(pr.Center.X - p.Center.X) - (pr.width + p.width) * 0.5f;
 			float gapY = System.Math.Abs(pr.Center.Y - p.Center.Y) - (pr.height + p.height) * 0.5f;
-			float closeX = (pr.Center.X > p.Center.X) == (pr.velocity.X < 0) ? System.Math.Abs(pr.velocity.X) : 0f;
-			float closeY = (pr.Center.Y > p.Center.Y) == (pr.velocity.Y < 0) ? System.Math.Abs(pr.velocity.Y) : 0f;
+			// 【一帧走 extraUpdates+1 次】(Projectile.cs:15908 的 while)。魔焰眼的喷火是 3,
+			// 也就是实际速度的 4 倍 -- 不乘就把到达时间高估四倍,预警永远来不及
+			float step = pr.extraUpdates + 1;
+			float vx = pr.velocity.X * step, vy = pr.velocity.Y * step;
+			float closeX = (pr.Center.X > p.Center.X) == (vx < 0) ? System.Math.Abs(vx) : 0f;
+			float closeY = (pr.Center.Y > p.Center.Y) == (vy < 0) ? System.Math.Abs(vy) : 0f;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
 			// 【和 Dodge.FramesToHit 同一个坑】。不靠近的轴给 9999 再取 Max,
 			// 平着飞过来的弹幕就永远报"没威胁"
@@ -146,6 +169,22 @@ namespace TerraBlind
 		}
 
 		// 最近的一发还有几帧到。反射层用它 -- 原来 incoming 只看 boss 本体,弹幕再近也不算数
+		// 最快打到我的那发叫什么。【只为查日志】:分不出是哪种弹幕就没法判断是不是漏检了
+		public static string SoonestName(Player p)
+		{
+			int best = -1;
+			string name = "无";
+			for (int i = 0; i < Main.maxProjectiles; i++)
+			{
+				var pr = Main.projectile[i];
+				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
+				int f = FramesToReach(p, pr);
+				if (f < 0) continue;
+				if (best < 0 || f < best) { best = f; name = $"{pr.Name}(x{pr.extraUpdates + 1})"; }
+			}
+			return name;
+		}
+
 		public static int SoonestHit(Player p)
 		{
 			int best = -1;

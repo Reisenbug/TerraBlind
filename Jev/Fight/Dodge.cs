@@ -263,9 +263,7 @@ namespace TerraBlind
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
-			// 【踩到东西就清零,不只是 velocity.Y==0】。斜坡平台上人几乎一直在微微下滑,
-			// 那一帧永远等不到 -- 计数跑到 244 帧,tooLong 锁死,竖直动作全哑(实测)
-			// 落地就把爬升的余量清掉,不然下一次起跳会带着上一轮没用完的帧数
+			// 【踩到东西就清零,不只是 velocity.Y==0】。斜坡上人一直在微微下滑,那一帧永远等不到
 			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; _riseHold = 0; }
 			// 【飞行不算滞空】。翅膀能飞 3 秒而上限 150 帧,不豁免就永远飞不到耗尽;
 			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
@@ -284,7 +282,8 @@ namespace TerraBlind
 						 || (projHit >= 0 && projHit <= soon);
 			// 【预警响没响要能查】。上一局 2125 帧里 incoming 一次没触发,而人被撞死了
 			if (incoming && !_wasIncoming)
-				DiagLog.Write($"[dodge] 预警 撞击还有{framesToHit}帧 弹幕还有{projHit}帧 阈值{soon}");
+				DiagLog.Write($"[dodge] 预警 撞击还有{framesToHit}帧 弹幕还有{projHit}帧 阈值{soon}"
+					+ $" 最快的是{ThreatScan.SoonestName(p)}");
 			_wasIncoming = incoming;
 
 			switch (hor)
@@ -321,8 +320,6 @@ namespace TerraBlind
 
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			// 想往上。【手段不在这里选】:跳/二段跳/翅膀哪个能用由 Jump 自己挑
-			// 【起飞流程要 20~30 帧】。实测 Rise 中位只持续 10 帧,101 次只飞起来 2 次
 			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
 			int headroom = CeilingDistance(p);
 			if (ver == Vert.Rise && !noJump && headroom > 2) _riseHold = RiseHoldFrames;
@@ -658,8 +655,6 @@ namespace TerraBlind
 
 		static void Release() => AxisLock.Release(Owner);
 
-		// 【给方向不给标量】。ThreatScan 那份 speed 是绝对值,丢了符号,
-		// 而走位要判的正是"它朝哪飞"
 		// 格/秒,外加最近一秒的峰值和加速度。【窗口只有一秒】:十秒会跨阶段,
 		// 一阶段的速度污染二阶段的参照
 		static readonly float[] _spdRing = new float[60];
