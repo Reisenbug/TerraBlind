@@ -901,8 +901,12 @@ namespace TerraBlind
 			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
-			JevSaysDash = Num(Seg(txt, "should_dash_now"), "noul", 0f) > 0.7f;
-			JevSaysHook = Num(Seg(txt, "should_grapple_now"), "noul", 0f) > 0.7f;
+			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
+			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
+			JevSaysDash = dashN > 0.7f;
+			JevSaysHook = hookN > 0.7f;
+			// 【noul 的原值要能看见】。只记"过没过 0.7"的话,常年 0.6 和常年 0.05 长得一样
+			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{Num(Seg(txt, "should_jump_now"), "noul", 0f):0.00}");
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
