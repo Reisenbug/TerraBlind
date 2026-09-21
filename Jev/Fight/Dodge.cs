@@ -249,6 +249,10 @@ namespace TerraBlind
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, act == DodgeAct.Up && !_tooLongAirborne && !noJump);
+			// 【Up 为什么没飞】。三个门各自都会让竖直动作整个哑掉,日志里分不出是哪个
+			if (act == DodgeAct.Up && !_wantFly)
+				Gate($"Up 但不飞: 滞空{_airborneFrames}帧 tooLong={_tooLongAirborne}"
+					+ $" grap={p.grapCount} noJump={noJump} wing={p.wingTime:0}");
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
 			// 两侧都堵才停。哪边空是算得出来的,不用猜
@@ -415,6 +419,9 @@ namespace TerraBlind
 					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
 					if (reach < 4 || reach > HookReachCells) continue;
 					int x = pcx + dx2, y = pcy + dy;
+					// 【往下勾要够斜】。太接近正下方的落点,勾上只是把自己钉在原地,
+					// 换不来位移。和垂线夹角至少 60 度: |dx| >= dy * tan60 = dy * 1.73
+					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
 					if (!Hookable(x, y)) continue;
 					// 【远离 boss 就是好落点】。往上还是往下让局面自己定,
 					// 不编"高过 N 格就往下勾"那种阈值 -- 那些数我一个都不知道
@@ -601,7 +608,13 @@ namespace TerraBlind
 
 			string intent = Seg(txt, "intent");
 			string pick = Field(intent, "choice");
-			if (pick == null) return;
+			if (pick == null)
+			{
+				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
+				return;
+			}
+			// 【延迟要落日志】。只进 HUD 的话,事后没法回答"200ms 够不够"
+			DiagLog.Write($"[dodge] jev {ms}ms -> {pick}");
 			LatencyMs = ms;
 			Confidence = Num(intent, "confidence", 0f);
 			Act = pick switch
