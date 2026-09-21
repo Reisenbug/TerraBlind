@@ -239,15 +239,11 @@ namespace TerraBlind
 		}
 
 		// 危险分换成格数。0=贴脸输出,4=离远点
-		static int WantCells(float danger) => 4 + (int)(danger * 4f);
+		// 0 = 这一场没有目标距离。【别编兜底公式】:编出来的数会当成指令喂回给 Jev
+		const int NoWant = 0;
 
-		// 这一场该保持多远。boss 指定了就用它的,否则按 danger 算 -- 反射层和
-		// 报给 Jev 的字段都走这一个入口,免得两边各算各的
-		static int Want(NPC boss)
-		{
-			int fixedWant = BossBook.WantCellsFor(boss.type);
-			return fixedWant > 0 ? fixedWant : WantCells(Danger);
-		}
+		// 这一场该保持多远,没填就是 NoWant。反射层和报给 Jev 的字段都走这一个入口
+		static int Want(NPC boss) => BossBook.WantCellsFor(boss.type);
 
 		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
 		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
@@ -269,13 +265,13 @@ namespace TerraBlind
 			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
 			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
 
-			int fixedWant = BossBook.WantCellsFor(boss.type);
-			int want = fixedWant > 0 ? fixedWant : WantCells(Danger);
+			int want = Want(boss);
 			// 【每帧自己算全场最早的那一下】。等下一个意图就晚了,而只算锁定那只的话,
 			// 另一只冲过来时反射层一无所知
 			int framesToHit = SoonestBossHit(p);
-			// 危险时提前跳,安全时晚点跳。原来这也是个写死的 12
-			int soon = 8 + (int)(Danger * 4f);
+			// 多早算"快打中了"。【按反应时间定,不按危险度】:意图 300ms 才回来,
+			// 留不出这段时间的预警等于没有预警
+			const int soon = 24;
 			// 【弹幕也算"快被打中了"】。原来只看 boss 本体,弹幕贴脸反射层一无所知
 			int projHit = ThreatScan.SoonestHit(p);
 			bool incoming = (framesToHit >= 0 && framesToHit <= soon)
@@ -296,14 +292,14 @@ namespace TerraBlind
 				// 【正在挨打就不准靠近】。火焰流站进去每帧掉血,而按距离算那里"够远"(实测吃 78)
 				case Horiz.Near:
 					if (_hurtRecently > 0) go = away;
-					else if (System.Math.Abs(dx) / 16f > want) go = toward;
+					else if (want == NoWant || System.Math.Abs(dx) / 16f > want) go = toward;
 					else if (dist < want / 2) go = away;
 					break;
 				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
 				// 【远端只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
 				case Horiz.Hold:
-					if (dist < want / 2) go = away;
-					else if (fixedWant > 0 && dist > want) go = toward;
+					if (want != NoWant && dist < want / 2) go = away;
+					else if (want != NoWant && dist > want) go = toward;
 					break;
 			}
 
@@ -720,10 +716,11 @@ namespace TerraBlind
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
 				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 // 【"偏了多少"要直说】,不然它不知道此刻离想要的距离有多远,只会一直答 Back
-				 // 【和反射层用同一个数】。两边各算各的话,它以为要 12 格而人在奔向 60
-				 + ",\"distance_i_asked_for\":" + Want(boss)
-				 + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
+				 // 只有实测过的 boss 才报目标距离。【编出来的数会被当指令执行】
+				 + (Want(boss) != NoWant
+					? ",\"distance_i_asked_for\":" + Want(boss)
+					  + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
+					: "")
 				 + ",\"boss_cells_vertical\":" + (int)dy
 				 // 【正上方也算"远"】。原来只给一个曼哈顿距离,人悬在 boss 头顶 40 格时
 				 // 它读到的是"离得远",于是一直想靠近 -- 而横着走一辈子也下不来
@@ -775,8 +772,10 @@ namespace TerraBlind
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
 			 + "【撞到 boss 身上掉的血远比吃一发弹幕多】,躲开碰撞永远排在最前面;"
-			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离带上 --"
-			 + "distance_i_asked_for 就是那个距离。这一题只管【和 boss 的距离该怎么变】,"
+			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离上。"
+			 + "那个距离没有固定的数,只能从结果看:伤害还在出就是够得着,在挨打就是太近了"
+			 + "(有 distance_i_asked_for 这个字段时,它是这一场实测过的距离)。"
+			 + "这一题只管【和 boss 的距离该怎么变】,"
 			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
 			 + "【说的是意图不是按键】,往左还是往右由代码按 boss 此刻在哪一侧每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。换来的是反应时间:离得越远,冲过来的东西路上花的时间越长,"
