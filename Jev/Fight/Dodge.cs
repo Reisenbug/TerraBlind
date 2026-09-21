@@ -355,7 +355,7 @@ namespace TerraBlind
 			else if (!onGround && hover) p.controlUp = true;
 
 			Fly(p);
-			TrackDps(boss);
+			TrackDps();
 			Hurt(p, boss, dist, hor, ver);
 			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
@@ -366,7 +366,7 @@ namespace TerraBlind
 
 		// boss 每秒掉多少血。【"够不够得着打"用实测不用猜距离】--
 		// 装备和武器一换,那个距离就变了,而这个数直接说明打没打中
-		static int _bossPrevHp = -1, _bossPrevId = -1;
+		static int _bossPrevHp = -1;
 		static readonly int[] _dpsRing = new int[60];
 		static int _dpsAt;
 		// 最近 30 秒里每秒的 dps。【要的是分位不是极值】:最高值整场只出现一次,
@@ -374,11 +374,25 @@ namespace TerraBlind
 		static readonly int[] _dpsHist = new int[30];
 		static int _histAt, _histCount, _secFrames;
 		public static int BossDps, DpsGood, DpsTypical, DpsPct = 100;
-		static void TrackDps(NPC boss)
+		// 【按总血量算,不跟着锁定目标】。Boss() 返回最近的那只,双子之间每局切 78 次,
+		// 每切一次就清空累积 -- dps 永远是 0,于是它一直以为自己够不着,全程选 Near
+		static int TotalBossHp()
 		{
-			if (boss.whoAmI != _bossPrevId) { _bossPrevId = boss.whoAmI; _bossPrevHp = boss.life; return; }
-			int d = _bossPrevHp - boss.life;
-			_bossPrevHp = boss.life;
+			int sum = 0;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var n = Main.npc[i];
+				if (n != null && n.active && !n.friendly && IsBossLike(n)) sum += n.life;
+			}
+			return sum;
+		}
+
+		static void TrackDps()
+		{
+			int hp = TotalBossHp();
+			if (_bossPrevHp < 0) { _bossPrevHp = hp; return; }
+			int d = _bossPrevHp - hp;
+			_bossPrevHp = hp;
 			// 换目标或者 boss 回血都会算出负数,当 0 -- 那不是我们打的
 			_dpsRing[_dpsAt] = d > 0 ? d : 0;
 			_dpsAt = (_dpsAt + 1) % _dpsRing.Length;
@@ -402,6 +416,8 @@ namespace TerraBlind
 			DpsPct = DpsTypical > 0 ? BossDps * 100 / DpsTypical : 100;
 			// 【连续低才算,头几秒不算】。掠过/错开/无敌帧都会让某一秒归零,样本少时中位也是噪音
 			if (_histCount >= 5 && DpsTypical > 0 && DpsPct < 35) _lowSecs++; else _lowSecs = 0;
+			// 每秒一行。dps 是"该不该靠近"的唯一判据,它坏了整场都会往前凑
+			DiagLog.Write($"[dodge] dps {BossDps} 常驻{DpsTypical} {DpsPct}% 低了{_lowSecs}秒");
 		}
 		static int _lowSecs;
 		// 攒够 3 秒才认。【够不着是个持续状态】,不是某一秒的抖动
@@ -734,7 +750,6 @@ namespace TerraBlind
 				 + ",\"below\":" + PressDown.ToString("0.00") + "}"
 				 // 【退开是有代价的】。武器自动瞄准,所以从它的角度看后退全是好处 --
 				 // 不说一声就会一路退到天上去,全场只剩 Away/Rise
-				 + ",\"my_shots_miss_more_the_further_i_am\":true"
 				 + ",\"i_am_pinned_against_the_ceiling\":" + (CeilingDistance(p) <= 2 ? "true" : "false")
 				 // 【问真值】。原来报的是"我们还没跳过",没云朵瓶时也说 true -- 骗了 Jev
 				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
