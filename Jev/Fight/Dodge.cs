@@ -115,6 +115,50 @@ namespace TerraBlind
 			return best;
 		}
 
+		// 全场 boss 里最早撞到我的那一下还有几帧。都不朝我来就 -1
+		static int SoonestBossHit(Player p)
+		{
+			int best = -1;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
+				int f = FramesToHit(p, npc);
+				if (f >= 0 && (best < 0 || f < best)) best = f;
+			}
+			return best;
+		}
+
+		// 哪一侧压力小。每个威胁按 1/距离 计权投到左右两边,包括弹幕 --
+		// 【只看最近那个会在两个威胁之间来回横跳】
+		static int AwaySide(Player p, NPC boss)
+		{
+			float left = 0f, right = 0f;
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
+				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
+					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
+				if (d > CareCells) continue;
+				float w = 1f / System.Math.Max(1, d);
+				if (npc.Center.X > p.Center.X) right += w; else left += w;
+			}
+			foreach (var pr in Main.projectile)
+			{
+				if (pr == null || !pr.active || pr.friendly || pr.damage <= 0) continue;
+				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
+					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
+				if (d > ThreatScan.RangeCells) continue;
+				float w = 1f / System.Math.Max(1, d);
+				if (pr.Center.X > p.Center.X) right += w; else left += w;
+			}
+			// 一样重就退回"背对锁定的那个",至少不会站着不动
+			if (System.Math.Abs(left - right) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
+			return right > left ? -1 : 1;
+		}
+
 		public static void Tick()
 		{
 			if (!Enabled) return;
@@ -177,8 +221,10 @@ namespace TerraBlind
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
-			int away = bossRight ? -1 : 1;
-			int toward = -away;
+			// 【"远离"要看全场,不是只看锁定的那个】。双子两只眼分开飞,
+			// 躲开一只常常是撞进另一只 -- 两边都有威胁时往空的那侧走
+			int away = AwaySide(p, boss);
+			int toward = bossRight ? 1 : -1;
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
@@ -189,9 +235,9 @@ namespace TerraBlind
 
 			int fixedWant = BossBook.WantCellsFor(boss.type);
 			int want = fixedWant > 0 ? fixedWant : WantCells(Danger);
-			// 【撞上还有几帧】。躲晚不是因为判断慢,是因为收到意图那一刻才跳一次 --
-			// 该跳的时机在那之后。所以每帧自己算,不等下一个意图
-			int framesToHit = FramesToHit(p, boss);
+			// 【每帧自己算全场最早的那一下】。等下一个意图就晚了,而只算锁定那只的话,
+			// 另一只冲过来时反射层一无所知
+			int framesToHit = SoonestBossHit(p);
 			// 危险时提前跳,安全时晚点跳。原来这也是个写死的 12
 			int soon = 8 + (int)(Danger * 4f);
 			// 【弹幕也算"快被打中了"】。原来只看 boss 本体,弹幕贴脸反射层一无所知

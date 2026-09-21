@@ -49,7 +49,9 @@ namespace TerraBlind
 				if (npc.lifeMax <= 5 && npc.damage == 0) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - atCx) + System.Math.Abs(ncy - atCy);
-				if (d > RangeCells) continue;
+				// 【boss 不受 30 格限制】。双子分开飞,另一只常常在 30 格外 --
+				// 滤掉它 Jev 就只看得见一只眼睛,躲开这只正好撞上那只
+				if (d > RangeCells && !npc.boss) continue;
 				bool walled = Blocked(atCx, atCy, ncx, ncy);
 				bool toward = (ncx < atCx && npc.velocity.X > 0.1f) || (ncx > atCx && npc.velocity.X < -0.1f);
 				if (n++ > 0) sb.Append(',');
