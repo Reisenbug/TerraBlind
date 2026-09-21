@@ -201,17 +201,33 @@ namespace TerraBlind
 		// npc id -> 覆盖。配置里存的是名字,解析一次存成 id,查的时候不用每帧比字符串
 		static readonly Dictionary<int, BossOverride> Overrides = new();
 
-		// 把整本书铺进配置。【默认值就是代码里的原文】,所以打开就能看见能改,
-		// 而不是一个要自己填 boss 名字的空列表
+		// 铺满配置。【取游戏里全部 boss,不只是书里写过的】:只铺 Book 的话,
+		// 没写过背板的 boss 在配置里根本不出现,也就没法给它们写
 		public static void Seed(List<BossOverride> list)
 		{
 			if (list == null) return;
+			var have = new HashSet<string>();
+			foreach (var o in list) if (o != null && o.Boss != null) have.Add(o.Boss);
+			foreach (var kv in Terraria.ID.ContentSamples.NpcsByNetId)
+			{
+				// ContentSamples 每个类型一份 SetDefaults 过的实例,boss 标志是准的,模组 boss 也在里面
+				if (kv.Value == null || !kv.Value.boss) continue;
+				string name = Terraria.Lang.GetNPCNameValue(kv.Key);
+				if (string.IsNullOrWhiteSpace(name) || !have.Add(name)) continue;
+				Book.TryGetValue(kv.Key, out var info);
+				list.Add(new BossOverride
+				{
+					Boss = name,
+					Enabled = true,
+					HowItFights = info?.HowItFights ?? "",
+				});
+			}
+			// 【书里有但没打 boss 标志的也要铺】。世界吞噬者的头、饥饿都是这种,
+			// 上面那一趟扫不到,而它们恰恰是已经写好背板的
 			foreach (var kv in Book)
 			{
 				string name = Terraria.Lang.GetNPCNameValue(kv.Key);
-				bool have = false;
-				foreach (var o in list) if (o != null && o.Boss == name) { have = true; break; }
-				if (have) continue;
+				if (string.IsNullOrWhiteSpace(name) || !have.Add(name)) continue;
 				list.Add(new BossOverride { Boss = name, Enabled = true, HowItFights = kv.Value.HowItFights });
 			}
 		}
@@ -233,10 +249,12 @@ namespace TerraBlind
 			DiagLog.Write($"[bossbook] {Overrides.Count} 条,其中 {off} 条关着");
 		}
 
+		// 【认全部 NPC 不只是书里的】。新写的那条背板对应的 boss 本来就不在书里,
+		// 只查 Book 的话人刚写完就静默失效
 		static int IdOf(string name)
 		{
-			foreach (int t in Book.Keys)
-				if (Terraria.Lang.GetNPCNameValue(t) == name) return t;
+			foreach (var kv in Terraria.ID.ContentSamples.NpcsByNetId)
+				if (Terraria.Lang.GetNPCNameValue(kv.Key) == name) return kv.Key;
 			return 0;
 		}
 

@@ -75,10 +75,6 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool ShowPlannerTrails;
 
-		// 【铺在 OnChanged 之前】。ConfigManager 的顺序是 Load -> OnLoaded -> OnChanged -> 克隆给界面,
-		// 在这里补齐的条目才会出现在配置界面里
-		public override void OnLoaded() => BossBook.Seed(BossPlaybook);
-
 		public override void OnChanged()
 		{
 			PathVisSystem.Enabled = ShowOverlay;
@@ -87,10 +83,21 @@ namespace TerraBlind
 			Combat.Enabled = FightBack;
 			Dodge.Enabled = DodgeBoss;
 			BossBook.UseKnowledge = BossKnowledge;
-			// 这里也补一次:旧存档的 json 里不会有后来新加的 boss
-			BossBook.Seed(BossPlaybook);
 			BossBook.SetOverrides(BossPlaybook);
 			JevHud.Enabled = ShowJevHud;
+		}
+	}
+
+	// 【必须等 PostSetupContent】。ContentSamples.Initialize 在 SetupContent 之后才跑
+	// (ModContent.cs:513),而 ModConfig.OnLoaded 在 Mod.Load 之前 -- 那时候 boss 列表还是空的
+	public class BossPlaybookSeeder : Terraria.ModLoader.ModSystem
+	{
+		public override void PostSetupContent()
+		{
+			var c = Config.I;
+			if (c == null) return;
+			BossBook.Seed(c.BossPlaybook);
+			BossBook.SetOverrides(c.BossPlaybook);
 		}
 	}
 }
