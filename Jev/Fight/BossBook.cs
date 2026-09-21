@@ -85,6 +85,22 @@ namespace TerraBlind
 					+ "两只手都打掉之后弹幕会变密,那时候垂直方向的机动更有用。",
 			},
 
+			[Terraria.ID.NPCID.Spazmatism] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights =
+					"双子魔眼是两只分开飞的眼睛,正在打的是魔焰眼(绿色那只)。"
+					+ "它的两个阶段威胁方向不一样:一阶段隔着距离吐绿色的诅咒火焰弹,"
+					+ "那是横着飞过来的,换个高度就能让它打空;二阶段它不再吐弹,"
+					+ "改成拖着火焰贴着自己直冲过来,一轮接一轮,【冲刺是沿着一条直线的】,"
+					+ "它锁定的是冲开始那一刻自己所在的位置。"
+					+ "所以横着跑是在跟它抢同一条线,而突然抬高或者掉下去能让整条直线扑空。"
+					+ "翅膀和二段跳在这里比左右跑有用得多:垂直方向能瞬间离开它瞄准的那条线,"
+					+ "冲刺结束它要拐回来重新加速,那个空档就是拉开距离的时候。"
+					+ "另一只激光眼还在场上,它的激光是从远处直线打过来的,"
+					+ "所以不要停在和任何一只眼睛连成一条水平直线的位置上。",
+			},
+
 			[Terraria.ID.NPCID.QueenBee] = new BossInfo
 			{
 				Arena = OpenArena,
@@ -171,6 +187,9 @@ namespace TerraBlind
 				return Terraria.ID.NPCID.WallofFlesh;
 			if (npcType == Terraria.ID.NPCID.TheHungryII)
 				return Terraria.ID.NPCID.TheHungry;
+			// 【激光眼也查魔焰眼那条】。两只眼共用一场战斗,那段话把两只都讲了
+			if (npcType == Terraria.ID.NPCID.Retinazer)
+				return Terraria.ID.NPCID.Spazmatism;
 			return npcType;
 		}
 

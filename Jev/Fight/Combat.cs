@@ -99,11 +99,14 @@ namespace TerraBlind
 			int best = -1;
 			float bestScore = -1f;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			// 【双子只打魔焰眼】。分头打等于两个都不死,而它贴脸喷火比激光眼危险
+			bool twinLock = bossPass && Alive(Terraria.ID.NPCID.Spazmatism);
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var npc = Main.npc[i];
 				if (!Hostile(npc)) continue;
 				if (npc.boss != bossPass) continue;
+				if (twinLock && npc.type != Terraria.ID.NPCID.Spazmatism) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
 				// 【boss 的部件不限射程】。骷髅王的手没有 boss 标志,走的是小怪这一趟 --
@@ -115,6 +118,13 @@ namespace TerraBlind
 				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;
 			}
 			return best;
+		}
+
+		public static bool Alive(int type)
+		{
+			for (int i = 0; i < Main.maxNPCs; i++)
+				if (Main.npc[i] != null && Main.npc[i].active && Main.npc[i].type == type) return true;
+			return false;
 		}
 
 		// 打小怪用 0 号位,打 boss 本体用 1 号位。【目标类型天然就是阶段】--

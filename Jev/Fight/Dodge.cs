@@ -277,12 +277,13 @@ namespace TerraBlind
 				 + (TacticWorking ? "" : " [not working]");
 		}
 
-		// 翅膀到底有没有烧。【只报事实不改行为】:想飞/有没有翅膀/vanilla 认不认,
-		// 三个数一起出来才分得清是没想飞、没翅膀,还是想了飞不起来
+		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
 		static bool _flying;
+		static float _prevWing;
 		static void Fly(Player p)
 		{
-			bool now = p.wingTime > 0f && p.velocity.Y < 0f && p.controlJump;
+			bool now = p.wingTime < _prevWing - 0.01f;
+			_prevWing = p.wingTime;
 			if (now == _flying) return;
 			_flying = now;
 			DiagLog.Write($"[dodge] 飞行{(now ? "开始" : "结束")} wantFly={_wantFly}"
