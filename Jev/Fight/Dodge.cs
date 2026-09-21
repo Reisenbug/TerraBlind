@@ -71,6 +71,7 @@ namespace TerraBlind
 		public static bool SafeToAttack = true;
 		public static bool JevSaysJump;
 		public static bool JevSaysDash;
+		public static bool JevSaysHook;
 		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
 		public static string Probs = "";
 		public static string TopTwo = "";
@@ -293,7 +294,9 @@ namespace TerraBlind
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
 			// 钩爪现在是手段不是意图:想升而地面跳够不着,或者想降而脚下没路,才甩钩
-			bool wantHook = (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f)
+			// 【时机问 Jev,方向归代码】。兜底那两条只管"跳不上去/落不下来",不猜战术
+			bool wantHook = JevSaysHook
+						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f)
 						 || (ver == Vert.Drop && CellsAboveGround(p) > 12);
 			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
 
@@ -626,6 +629,12 @@ namespace TerraBlind
 			 + "\"就这一刻该用克苏鲁之盾冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
 			 + "它能瞬间拉开一段距离、或者穿过一片危险区域;撞到敌人还会免掉那一下伤害。"
 			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。\"},"
+			 + "\"should_grapple_now\":{\"type\":\"noul\",\"instructions\":"
+			 + "\"接下来这一秒该甩钩爪吗?钩子勾住后会把人整个拽过去,是一段跑不出来的位移,"
+			 + "勾住的瞬间还能跳一下取消、顺带拿到那段速度。往哪勾由代码按当前意图挑落点,"
+			 + "这里只判该不该用。它换位置比跑快得多,横着跑来不及躲开追过来的东西时特别有用;"
+			 + "但拽过去的路上人没法改方向,而且钩子飞出去到勾上有一段空窗,"
+			 + "贴脸的时候甩等于把自己钉在原地挨那一下。\"},"
 			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
 			 + "\"safe_to_attack\":{\"type\":\"noul\",\"instructions\":"
@@ -705,6 +714,7 @@ namespace TerraBlind
 			Danger = Num(Seg(txt, "danger"), "score", Danger);
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
 			JevSaysDash = Num(Seg(txt, "should_dash_now"), "noul", 0f) > 0.7f;
+			JevSaysHook = Num(Seg(txt, "should_grapple_now"), "noul", 0f) > 0.7f;
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 
@@ -716,6 +726,7 @@ namespace TerraBlind
 				Site = "dodge",
 				State = _lastFacts,
 				Pick = $"{hp}/{vp} 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "")
+					 + (JevSaysDash ? " 该冲" : "") + (JevSaysHook ? " 该勾" : "")
 					 + (SafeToAttack ? "" : " 别贴脸") + (TacticWorking ? "" : " 这套没用")
 					 + "  →  " + Last,
 				Confidence = Confidence,
