@@ -18,6 +18,8 @@ namespace TerraBlind
 		const int CareCells = 200;
 		// 量墙用另一把尺子。跟着 CareCells 涨的话,扫描量翻三倍,报出去的"还剩多少空间"也变了意思
 		const int RoomScanCells = 60;
+		// 离地图边界这么近就当撞墙。原版自己拿 maxTilesX-38 当边(Player.cs:20648),取整到 40
+		const int EdgeCells = 40;
 		// 意图过期就退回保守行为。拿 3 秒前的判断当真比没有判断更糟
 		const long IntentTtlMs = 1500;
 
@@ -431,7 +433,13 @@ namespace TerraBlind
 			// 齐胸那一行。贴地扫的话一格台阶就读成墙
 			int cy = (int)((p.position.Y + p.height * 0.5f) / 16f);
 			for (int d = 1; d <= RoomScanCells; d++)
-				if (Predicates.IsWall(cx + dir * d, cy)) return d - 1;
+			{
+				int x = cx + dir * d;
+				// 【世界边界也是墙】。边界外没有方块,IsWall 一路返回 false,
+				// 于是贴着地图边缘反而报"还有 60 格"-- 往那边走是走进死角
+				if (x <= EdgeCells || x >= Main.maxTilesX - EdgeCells) return d - 1;
+				if (Predicates.IsWall(x, cy)) return d - 1;
+			}
 			return RoomScanCells;
 		}
 
@@ -441,7 +449,12 @@ namespace TerraBlind
 			int cx = (int)(p.Center.X / 16f);
 			int top = (int)(p.position.Y / 16f);
 			for (int d = 1; d <= RoomScanCells; d++)
-				if (Predicates.IsWall(cx, top - d)) return d - 1;
+			{
+				int y = top - d;
+				// 天上飞出地图会被太空的低重力和边界卡住,当成天花板
+				if (y <= EdgeCells) return d - 1;
+				if (Predicates.IsWall(cx, y)) return d - 1;
+			}
 			return RoomScanCells;
 		}
 
@@ -452,7 +465,11 @@ namespace TerraBlind
 			int cx = (int)(p.Center.X / 16f);
 			int feet = (int)((p.position.Y + p.height) / 16f);
 			for (int d = 0; d < 40; d++)
+			{
+				// 地图底部就是岩浆和虚空,当成地面:再往下没有可去的地方
+				if (feet + d >= Main.maxTilesY - EdgeCells) return d;
 				if (Predicates.IsSolid(cx, feet + d)) return d;
+			}
 			return 40;
 		}
 
