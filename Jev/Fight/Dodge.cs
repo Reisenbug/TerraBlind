@@ -43,6 +43,8 @@ namespace TerraBlind
 		const int MaxAirborneFrames = 150;
 		static int _airborneFrames;
 		static bool _tooLongAirborne;
+		// 这一帧要不要靠翅膀爬升。跳到顶之后还按着才会起飞
+		static bool _wantFly;
 		// 找落点时往上探多少格。不是钩爪的真实射程(那个数我不知道),只是个搜索上界:
 		// 猜远了钩子够不着,自己会空手回来,HookGiveUpFrames 收场
 		const int HookReachCells = 20;
@@ -164,7 +166,9 @@ namespace TerraBlind
 			bool onGround = p.velocity.Y == 0f;
 
 			if (onGround) { _airborneFrames = 0; _tooLongAirborne = false; }
-			else if (++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
+			// 【飞行不算滞空】。翅膀能飞 3 秒而上限 150 帧,不豁免就永远飞不到耗尽;
+			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
+			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
 
 			int fixedWant = BossBook.WantCellsFor(boss.type);
 			int want = fixedWant > 0 ? fixedWant : WantCells(Danger);
@@ -225,6 +229,8 @@ namespace TerraBlind
 			// 【noJump 要连反射层一起禁】。Banned 只改 act,而 JevSaysJump/incoming 跟 act 无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
 			bool wantJump = hookJump || ((act == DodgeAct.Up || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
+			_wantFly = act == DodgeAct.Up && !_tooLongAirborne && !noJump && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump);
 
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
@@ -242,7 +248,8 @@ namespace TerraBlind
 
 			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
 			bool dive = (act == DodgeAct.Dive || _tooLongAirborne) && p.grapCount == 0;
-			bool hover = !dive && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
+			// 飞的时候不按上:那是羽落缓降,跟爬升抢同一个方向键
+			bool hover = !dive && !_wantFly && (act == DodgeAct.Float || act == DodgeAct.Up || hooking || incoming);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
@@ -292,6 +299,11 @@ namespace TerraBlind
 			bool rising = p.velocity.Y < 0f;
 			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
 			{ _holdFrames++; _jumpHeld = true; return true; }
+
+			// 【跳到顶还按着就会起飞】(Player.cs:25618 要 jump==0 && controlJump && wingTime>0)。
+			// 想往上而且还有翅膀时就接着按,不松手 -- 松了就只是跳了一下
+			if (_jumpHeld && _wantFly && p.wingTimeMax > 0 && p.wingTime > 0f && !onGround)
+			{ _holdFrames = 0; return true; }
 
 			// 【按住了就必须先松一帧】。站在地上时 velocity.Y==0,上面那条永不命中,
 			// 而 vanilla 要 releaseJump 才认新按压 -- 不松手就是每帧空按,钩爪也取消不掉
