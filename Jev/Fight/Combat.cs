@@ -24,6 +24,8 @@ namespace TerraBlind
 		const int MoveRedecide = 3;
 		// 血量跨档也要重判:同样的怪,满血该打,残血该跑
 		const int HpBuckets = 5;
+		// 提前量最多外推这么多帧。再远全是误差,boss 早拐弯了
+		const float MaxLeadFrames = 45f;
 
 		static int _target = -1;
 		static bool _swinging;
@@ -247,7 +249,8 @@ namespace TerraBlind
 			if (slot >= 10) { Last = "weapon not in hotbar"; return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
-			Cursor.AimTile(tcx, tcy);
+			var aim = Lead(p, Main.npc[n], p.inventory[slot].shootSpeed);
+			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
 			// 拿它当条件就是挥一下等一轮。动画结束就能再挥,这才是连挥
 			if (p.itemAnimation == 0) p.controlUseItem = true;
@@ -257,6 +260,38 @@ namespace TerraBlind
 				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 			}
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
+		}
+
+		// 提前量。每帧瞄 boss 当前位置的话,子弹飞过去时它早走了 -- 快 boss 全空。
+		// 解 |d + v*t| = s*t 取最小正根,追不上就退回当前位置
+		static Microsoft.Xna.Framework.Vector2 Lead(Player p, NPC npc, float shootSpeed)
+		{
+			var d = npc.Center - p.Center;
+			if (shootSpeed <= 0.01f) return npc.Center;
+			var v = npc.velocity;
+			float a = Microsoft.Xna.Framework.Vector2.Dot(v, v) - shootSpeed * shootSpeed;
+			float b = 2f * Microsoft.Xna.Framework.Vector2.Dot(d, v);
+			float c = Microsoft.Xna.Framework.Vector2.Dot(d, d);
+			float t;
+			// a==0 是 boss 速度正好等于子弹速度,二次项没了,退化成一次方程
+			if (System.MathF.Abs(a) < 0.0001f)
+			{
+				if (System.MathF.Abs(b) < 0.0001f) return npc.Center;
+				t = -c / b;
+			}
+			else
+			{
+				float disc = b * b - 4f * a * c;
+				// 判别式为负 = 追不上。boss 比子弹快而且在跑
+				if (disc < 0f) return npc.Center;
+				float sq = System.MathF.Sqrt(disc);
+				float t1 = (-b - sq) / (2f * a), t2 = (-b + sq) / (2f * a);
+				t = System.MathF.Min(t1 > 0f ? t1 : float.MaxValue, t2 > 0f ? t2 : float.MaxValue);
+				if (t == float.MaxValue) return npc.Center;
+			}
+			// 【封顶】。t 很大时那点全是外推误差,boss 早拐弯了
+			if (t > MaxLeadFrames) t = MaxLeadFrames;
+			return npc.Center + v * t;
 		}
 
 		static string Facts(Player p, int tcx, int tcy, int dist)
