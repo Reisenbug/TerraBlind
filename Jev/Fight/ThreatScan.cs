@@ -72,6 +72,29 @@ namespace TerraBlind
 			return sb.Append(']').ToString();
 		}
 
+		// 【四周哪边挤】。蠕虫盘旋时四周全是体节,逐节报坐标看不出缺口在哪 --
+		// 八个方向各数几节,最空的那侧就是能钻出去的地方
+		public static string RingJson(Player p, int atCx, int atCy)
+		{
+			int left = 0, right = 0, up = 0, down = 0, near = 9999;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (npc == null || !npc.active || npc.townNPC || npc.friendly) continue;
+				if (!npc.boss && !Combat.BossPart(npc.type)) continue;
+				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
+				int dx = ncx - atCx, dy = ncy - atCy;
+				int d = System.Math.Abs(dx) + System.Math.Abs(dy);
+				if (d > RangeCells) continue;
+				if (d < near) near = d;
+				if (System.Math.Abs(dx) >= System.Math.Abs(dy)) { if (dx < 0) left++; else right++; }
+				else { if (dy < 0) up++; else down++; }
+			}
+			return "{\"to_my_left\":" + left + ",\"to_my_right\":" + right
+				 + ",\"above_me\":" + up + ",\"below_me\":" + down
+				 + ",\"closest_piece_cells\":" + (near == 9999 ? "\"没有\"" : near.ToString()) + "}";
+		}
+
 		// 敌方弹幕。【眼睛里原本没有这一类东西】:只扫 NPC 的话,会放弹幕的 boss
 		// 等于躲无可躲 -- 打得到你的东西有一半不在视野里
 		public static string ProjJson(Player p, int atCx, int atCy)

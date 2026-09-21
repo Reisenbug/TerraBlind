@@ -279,7 +279,7 @@ namespace TerraBlind
 				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
-			go = Dash(p, boss, go, incoming, act);
+			go = Dash(p, boss, go, dist, incoming, act);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -377,7 +377,10 @@ namespace TerraBlind
 
 		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
 		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
-		static int Dash(Player p, NPC boss, int go, bool incoming, DodgeAct act)
+		// 离这么近才值得冲。太远冲了就是白交冷却,等它真扑过来反而没得用
+		const int DashRangeCells = 30;
+
+		static int Dash(Player p, NPC boss, int go, int dist, bool incoming, DodgeAct act)
 		{
 			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
@@ -397,7 +400,8 @@ namespace TerraBlind
 			// 【Jev 给许可,反射层挑那一帧】。答案 200ms 才回来,对速度 22 的头
 			// 那已经是 16 格之前的局面 -- 所以它只说"这一秒要不要用",撞上来的那一刻自己算
 			if (!JevSaysDash || go == 0) { DashGate = JevSaysDash ? "go0" : $"noul{DashNoul:0.00}"; return go; }
-			if (BossBook.DashAcrossFor(boss.type) && !incoming) { DashGate = "waiting"; return go; }
+			// 【不等 incoming】:FramesToHit 对蠕虫的圆周运动整场都返回"它没朝我来"
+			if (BossBook.DashAcrossFor(boss.type) && dist > DashRangeCells) { DashGate = "far"; return go; }
 
 			// 【冲刺方向可以不等于走路方向】。走路方向是意图定的(Orbit 是切向、Evade 是横移),
 			// 而冲刺要的是横切它扑过来的那条线 -- 拿 go 去冲就是沿着切向冲出去
@@ -518,6 +522,8 @@ namespace TerraBlind
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 // 【逐发列表之外还要给汇总】。十几发各自的 vx/vy 看不出该往哪躲
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
+				 // 【盘旋的蠕虫要看缺口】。逐节报坐标看不出该往哪钻,八个方向各数几节才看得出
+				 + ",\"boss_pieces_around_me\":" + ThreatScan.RingJson(p, pcx, pcy)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
