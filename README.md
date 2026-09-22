@@ -44,12 +44,27 @@ TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准�
 
 分两层：
 
-- **Jev 每 200ms 答一次**（5Hz）。同一份 state 一次问五个并行问题：九选一的意图（`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`）、五档危险度、要不要冲刺、要不要跳。
-- **反射层每帧翻译成按键**：瞄准、距离、冲刺的双击时序、钩爪落点搜索、跳跃的"松一帧"、意图过期回退，全归代码。
+- **Jev 每 ~300ms 答一次**（实测中位 300ms，min 252 / p90 402）。同一份 state 一次问完所有问题，并行求值不加延迟。
+- **反射层每帧翻译成按键**（60Hz）：瞄准、距离、冲刺的双击时序、钩爪落点搜索、跳跃的"松一帧"、意图过期回退，全归代码。
+
+走位意图是**两个正交的轴**，不是九选一的枚举：
+
+| 轴 | 取值 | 问的是 |
+| --- | --- | --- |
+| `horizontal` | `Away` / `Hold` / `Near` | 和 boss 的距离该怎么变 |
+| `vertical` | `Rise` / `Level` / `Drop` | 高度该怎么变 |
+
+两题各选一个就凑出九个方向，斜着走自然包含在内。**旋转不是第三个轴** -- 绕着 boss 走就是这两个轴的一个组合。拆开之前是九个离散意图（`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`），表达不了对角线，而且每个选项要同时描述两件事，判据互相打架。
+
+另外还有一个 `danger` 五档评分和几个 noul：`should_dash_now`、`should_grapple_now`、`should_jump_now`。
+
+**意图和手段分开**：Jev 只说要达成什么，跳 / 二段跳 / 翅膀 / 钩爪里挑哪个由代码算 -- 哪个能用是确定的量，没必要问模型。冲刺留在决策层，因为它的无敌帧和时机需要读懂战局。
 
 Jev 答判断，代码拥有瞄准、距离、时序和 TTL。
 
-每个 boss 的背板是**一段中文文字**（`Jev/Fight/BossBook.cs`），不是分支：怎么打、场地什么样、禁用哪几个意图、保持几格。加一个 boss 通常只是加一条文字条目。目前有克苏鲁之眼、史莱姆王、克苏鲁之脑、世界吞噬者、骷髅王、蜂王、鹿角怪七条，外加肉山和恶鬼两条距离规则。
+每个 boss 的背板是**一段中文文字**（`Jev/Fight/BossBook.cs`），不是分支：怎么打、场地什么样、禁用哪几个意图、保持几格。加一个 boss 通常只是加一条文字条目。目前十条：克苏鲁之眼、史莱姆王、克苏鲁之脑、世界吞噬者、骷髅王、双子魔眼、蜂王、鹿角怪、饥饿、肉山，其中双子魔眼 / 饥饿 / 肉山另带一条保持距离的数。
+
+背板可以**在游戏内改**：模组配置里的 `BossPlaybook` 开局自动铺满游戏里全部 boss，文本默认就是代码里那段，每条单独 on/off。
 
 录制是在**大师模式**下跑的。
 
@@ -212,12 +227,27 @@ Everything in TerraBlind is a **tool**: pathfinding, aiming, using items, openin
 
 Two layers:
 
-- **Jev answers every 200ms** (5Hz). One state, five questions in parallel: one of nine intents (`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`), a five-level danger score, whether to dash, whether to jump.
-- **A reflex layer turns that into keystrokes every frame**: aiming, distance, the double-tap timing for dashes, hook anchor search, the one-frame release a jump needs, intent expiry. All code.
+- **Jev answers every ~300ms** (measured: median 300ms, min 252, p90 402). One state, all questions asked at once; parallel evaluation costs no extra latency.
+- **A reflex layer turns that into keystrokes every frame** (60Hz): aiming, distance, the double-tap timing for dashes, hook anchor search, the one-frame release a jump needs, intent expiry. All code.
+
+Movement intent is **two orthogonal axes**, not a nine-way enum:
+
+| Axis | Values | Question |
+| --- | --- | --- |
+| `horizontal` | `Away` / `Hold` / `Near` | how the distance to the boss should change |
+| `vertical` | `Rise` / `Level` / `Drop` | how altitude should change |
+
+One answer from each gives nine directions, diagonals included for free. **Rotation is not a third axis** -- orbiting the boss is a combination of these two. The earlier design was nine discrete intents (`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`); it could not express diagonals, and each option had to describe two things at once, so the criteria fought each other.
+
+Alongside those: a five-level `danger` score and several nouls -- `should_dash_now`, `should_grapple_now`, `should_jump_now`.
+
+**Intent is separated from means**: Jev says what to achieve; which of jump / double-jump / wings / grapple gets used is computed, since availability is deterministic and not worth asking a model. Dash stays at the decision layer because its invincibility frames and timing need to be read from the situation.
 
 Jev answers judgments; the code owns aiming, distance, timing and TTL.
 
-Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, what the arena is like, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are seven: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, Queen Bee, Deerclops -- plus distance rules for the Wall of Flesh and The Hungry.
+Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, what the arena is like, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are ten: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, The Twins, Queen Bee, Deerclops, The Hungry, Wall of Flesh -- the last three of those also carry a keep-distance number.
+
+Playbooks are **editable in game**: the `BossPlaybook` list in the mod config is auto-populated with every boss in the game at startup, each entry defaulting to the text from the code and carrying its own on/off toggle.
 
 The recorded runs were fought on **Master Mode**.
 
