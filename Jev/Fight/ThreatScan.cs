@@ -90,7 +90,8 @@ namespace TerraBlind
 				// 朝我来才值得报。飞走的弹幕不该占名额,更不该让它以为处处是危险
 				bool toward0 = (pcx0 < atCx && pr.velocity.X > 0.1f) || (pcx0 > atCx && pr.velocity.X < -0.1f)
 							|| (pcy0 < atCy && pr.velocity.Y > 0.1f) || (pcy0 > atCy && pr.velocity.Y < -0.1f);
-				if (!toward0) continue;
+				// 贴在身上的不管朝哪飞都要报。火焰扫过来时不"朝我来",但人正站在里面
+				if (!toward0 && d0 > 6) continue;
 				pick.Add(pr);
 			}
 			pick.Sort((a, b) =>
@@ -127,7 +128,7 @@ namespace TerraBlind
 		// 是确定的算术,代码算比让模型心算可靠
 		public static string PressureJson(Player p)
 		{
-			int left = 0, right = 0, above = 0, below = 0;
+			int left = 0, right = 0, above = 0, below = 0, onMe = 0;
 			int soonest = -1;
 			for (int i = 0; i < Main.maxProjectiles; i++)
 			{
@@ -136,6 +137,10 @@ namespace TerraBlind
 				float dx = pr.Center.X - p.Center.X, dy = pr.Center.Y - p.Center.Y;
 				if (System.Math.Abs(dx) / 16f > RangeCells || System.Math.Abs(dy) / 16f > RangeCells) continue;
 				int f = FramesToReach(p, pr);
+				// 【围着我的也要数】。喷火是一片停在身上的火,不"朝我来",
+				// 按 FramesToReach 滤就整片消失 -- 而那正是最该退开的时候
+				int cells = (int)(System.Math.Abs(dx) / 16f + System.Math.Abs(dy) / 16f);
+				if (cells <= 6) onMe++;
 				if (f < 0) continue;
 				if (dx < 0) left++; else right++;
 				if (dy < 0) above++; else below++;
@@ -143,6 +148,7 @@ namespace TerraBlind
 			}
 			return "{\"from_left\":" + left + ",\"from_right\":" + right
 				 + ",\"from_above\":" + above + ",\"from_below\":" + below
+				 + ",\"hostile_shots_within_six_cells_of_me\":" + onMe
 				 + ",\"frames_until_the_closest_one_reaches_me\":"
 				 + (soonest < 0 ? "\"没有朝我来的\"" : soonest.ToString()) + "}";
 		}
