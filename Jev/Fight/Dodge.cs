@@ -603,14 +603,13 @@ namespace TerraBlind
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
 			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
 
-			// dashDelay==0 才是就绪。>0 是内置冷却,<0 是正在冲
-			bool ready = p.dashType != 0 && p.dashDelay == 0 && p.dash == 0;
+			// dashDelay==0 就是就绪(>0 冷却,<0 正在冲)。【别加 dash==0】:
+			// dash 是 dashType 的副本(Player.cs:19764),装了盾恒为 2,那条等于永远不准冲
+			bool ready = p.dashType != 0 && p.dashDelay == 0;
 			if (!ready)
 			{
-				// 【想冲而冲不了要报出来】。冲刺一局都没触发过,而这里静默 return,
-				// 查不出是没装盾(dashType=0)还是在冷却
 				if ((JevSaysDash || incoming) && go != 0)
-					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay} dash={p.dash}");
+					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay}");
 				_dashGap = false; _dashDir = 0; return go;
 			}
 
