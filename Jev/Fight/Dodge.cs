@@ -151,7 +151,7 @@ namespace TerraBlind
 				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
 				if (d > CareCells) continue;
-				Add(npc.Center, p.Center, 1f / System.Math.Max(1, d));
+				Add(npc.Center, p.Center, Weight(npc.damage, d));
 			}
 			foreach (var pr in Main.projectile)
 			{
@@ -160,9 +160,14 @@ namespace TerraBlind
 				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
 				if (d > ThreatScan.RangeCells) continue;
-				Add(pr.Center, p.Center, 1f / System.Math.Max(1, d));
+				Add(pr.Center, p.Center, Weight(pr.damage, d));
 			}
 		}
+
+		// 【按伤害算,不只按远近】。原来一发算一份,于是一串 19 伤的激光
+		// 压过一只 190 伤的碰撞箱,"远离"就退进喷火里了
+		static float Weight(int damage, int cells)
+			=> damage / 50f / System.Math.Max(1, cells);
 
 		// 一个威胁同时投给水平和竖直,正上方的东西不该只算"上"不算别的
 		static void Add(Microsoft.Xna.Framework.Vector2 at, Microsoft.Xna.Framework.Vector2 me, float w)
@@ -171,12 +176,45 @@ namespace TerraBlind
 			if (at.Y > me.Y) PressDown += w; else PressUp += w;
 		}
 
+		// 被两边夹住时往哪退。【没有空的那一侧了】:两边都有东西,
+		// 按压力和挑只会挑中"弹幕少但碰撞疼"的那边,所以直接背对更疼的那个
+		static int PincerSide(Player p, out NPC worst)
+		{
+			worst = null;
+			NPC left = null, right = null;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var npc = Main.npc[i];
+				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
+				int d = System.Math.Abs((int)(npc.Center.X / 16f) - (int)(p.Center.X / 16f))
+					  + System.Math.Abs((int)(npc.Center.Y / 16f) - (int)(p.Center.Y / 16f));
+				if (d > CareCells) continue;
+				if (npc.Center.X > p.Center.X)
+				{ if (right == null || npc.damage > right.damage) right = npc; }
+				else
+				{ if (left == null || npc.damage > left.damage) left = npc; }
+			}
+			// 只有一侧有东西就不是夹击,交回给压力和去挑
+			if (left == null || right == null) return 0;
+			worst = left.damage >= right.damage ? left : right;
+			return worst.Center.X > p.Center.X ? -1 : 1;
+		}
+
 		static int AwaySide(Player p, NPC boss)
 		{
+			// 【夹击优先】。被夹住的时候"哪边空"是个伪命题
+			int pincer = PincerSide(p, out var worst);
+			if (pincer != 0)
+			{
+				if (worst != _lastPincer) { _lastPincer = worst; Gate($"夹击 背对{worst.TypeName}(伤{worst.damage})"); }
+				return pincer;
+			}
+			_lastPincer = null;
 			// 一样重就退回"背对锁定的那个",至少不会站着不动
 			if (System.Math.Abs(PressLeft - PressRight) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
 			return PressRight > PressLeft ? -1 : 1;
 		}
+		static NPC _lastPincer;
 
 		public static void Tick()
 		{
@@ -307,11 +345,10 @@ namespace TerraBlind
 			// 而斜着走才是这次重构要的那个方向
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 钩爪现在是手段不是意图:想升而地面跳够不着,或者想降而脚下没路,才甩钩
-			// 【时机问 Jev,方向归代码】。兜底那两条只管"跳不上去/落不下来",不猜战术
+			// 钩爪是手段不是意图,时机问 Jev,方向归代码
+			// 【Drop 不甩钩】。72% 的帧都是 Drop 且人一直在空中,那条兜底常年成立
 			bool wantHook = JevSaysHook
-						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f)
-						 || (ver == Vert.Drop && CellsAboveGround(p) > 12);
+						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
 			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
 
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
@@ -568,7 +605,14 @@ namespace TerraBlind
 
 			// dashDelay==0 才是就绪。>0 是内置冷却,<0 是正在冲
 			bool ready = p.dashType != 0 && p.dashDelay == 0 && p.dash == 0;
-			if (!ready) { _dashGap = false; _dashDir = 0; return go; }
+			if (!ready)
+			{
+				// 【想冲而冲不了要报出来】。冲刺一局都没触发过,而这里静默 return,
+				// 查不出是没装盾(dashType=0)还是在冷却
+				if ((JevSaysDash || incoming) && go != 0)
+					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay} dash={p.dash}");
+				_dashGap = false; _dashDir = 0; return go;
+			}
 
 			// 上一帧空了手,这一帧按下去 -- 双击成立。【按住不放】,
 			// 冲完直接接着走,不然冲刺结束会有一段没速度的真空
