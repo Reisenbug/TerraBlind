@@ -129,11 +129,17 @@ namespace TerraBlind
 			{
 				Arena = OpenArena,
 				Orbit = true,
+				// 绕圈得有个半径,不给就从 46 格一路收到 2 格(切线方向没人维持距离)。
+				// 40 是实测开场自然稳住的那一段,不是我挑的数
+				WantCells = 40,
 				HowItFights =
 					"世纪之花分两个阶段,【血量掉到一半就进二阶段】。"
 					+ "一阶段绕着它转:保持一个固定的距离,沿着圆周一直走,左上右下地绕回来。"
 					+ "所以一阶段选 Hold,横向会自动沿切线走 -- 要的是轨迹始终围着它,别停下。"
-					+ "二阶段不再绕圈,就是正常地拉开距离躲。",
+					+ "二阶段不再绕圈,就是正常地拉开距离躲。"
+					+ "【二阶段它身上会伸出触手】,触手碰一下掉的血比本体还多,"
+					+ "而且它是贴着人甩过来的 -- other_enemies 里能看到触手在哪,"
+					+ "离本体远不等于离触手远,要按最近的那条触手算距离。",
 			},
 
 			[Terraria.ID.NPCID.QueenBee] = new BossInfo
@@ -225,6 +231,10 @@ namespace TerraBlind
 			// 【激光眼也查魔焰眼那条】。两只眼共用一场战斗,那段话把两只都讲了
 			if (npcType == Terraria.ID.NPCID.Retinazer)
 				return Terraria.ID.NPCID.Spazmatism;
+			// 触手和钩子查本体那条,否则绕圈和阶段判断都落空
+			if (npcType == Terraria.ID.NPCID.PlanterasTentacle
+			 || npcType == Terraria.ID.NPCID.PlanterasHook)
+				return Terraria.ID.NPCID.Plantera;
 			return npcType;
 		}
 

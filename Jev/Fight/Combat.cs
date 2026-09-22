@@ -65,6 +65,12 @@ namespace TerraBlind
 			|| type == Terraria.ID.NPCID.TheHungry
 			|| type == Terraria.ID.NPCID.TheHungryII;
 
+		// 要躲但不该打的部件。【触手伤 206 比本体还疼】,走位层看不见它就永远躲不开;
+		// 但它是本体的挂件,打它等于整场不输出
+		public static bool DodgeOnlyPart(int type)
+			=> type == Terraria.ID.NPCID.PlanterasTentacle
+			|| type == Terraria.ID.NPCID.PlanterasHook;
+
 		// 【肉山在场就只打本体】。眼睛是独立 NPC,血少又离得近,威胁分必然赢过本体 --
 		// 而肉山一动起来,瞄眼睛十发九空。嘴(本体)是个大目标,跑着也打得中
 		static int WallBody()
@@ -110,6 +116,8 @@ namespace TerraBlind
 				if (!Hostile(npc)) continue;
 				if (npc.boss != bossPass) continue;
 				if (twinLock && npc.type != Terraria.ID.NPCID.Spazmatism) continue;
+				// 只躲不打的部件。打它等于整场不输出
+				if (DodgeOnlyPart(npc.type)) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
 				// 【boss 的部件不限射程】。骷髅王的手没有 boss 标志,走的是小怪这一趟 --

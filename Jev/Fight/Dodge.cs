@@ -100,7 +100,8 @@ namespace TerraBlind
 
 		// 【蠕虫三段和骷髅王的手都没有 boss 标志】,只认 npc.boss 的话走位层整场退出
 		// 清单只存 Combat.BossPart 一份,各存一份的话下个 boss 只会被加进一边
-		static bool IsBossLike(NPC npc) => npc.boss || Combat.BossPart(npc.type);
+		static bool IsBossLike(NPC npc)
+			=> npc.boss || Combat.BossPart(npc.type) || Combat.DodgeOnlyPart(npc.type);
 
 		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
 		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节
@@ -339,7 +340,7 @@ namespace TerraBlind
 					if (want != NoWant && dist < want / 2) go = away;
 					else if (want != NoWant && dist > want) go = toward;
 					// 【距离合适时走切线】,站住只是换个位置挨打。半血后不绕(NPC.cs:2638 的阶段分界)
-					else if (BossBook.OrbitFor(boss.type) && boss.life * 2 > boss.lifeMax) go = _spin;
+					else if (BossBook.OrbitFor(boss.type) && FirstHalf(boss)) go = _spin;
 					break;
 			}
 
@@ -477,6 +478,19 @@ namespace TerraBlind
 		const int PoseSecs = 3;
 		// 绕圈往哪边转。【认准一个方向】:每帧重挑就在原地抖,撞墙才翻
 		static int _spin = 1;
+
+		// 还在前半血吗。【要查本体的血,不是手上那节】:Boss() 返回的可能是触手,
+		// 拿触手的血判阶段,一阶段会被当成二阶段
+		static bool FirstHalf(NPC boss)
+		{
+			if (!boss.boss)
+				for (int i = 0; i < Main.maxNPCs; i++)
+				{
+					var n = Main.npc[i];
+					if (n != null && n.active && n.boss) { boss = n; break; }
+				}
+			return boss.lifeMax <= 0 || boss.life * 2 > boss.lifeMax;
+		}
 
 		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
 		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
