@@ -26,8 +26,7 @@ namespace TerraBlind
 		const int HpBuckets = 5;
 		// 提前量最多外推这么多帧。再远全是误差,boss 早拐弯了
 		const float MaxLeadFrames = 45f;
-		// 【默认不算提前量】。那套解算只对匀速直飞的弹幕成立,换把武器就整局打空
-		public static bool UseLead = false;
+		public static bool UseLead = true;
 		// 瞄准抖一点,别整批偏同一个方向
 		const float JitterPx = 8f;
 
