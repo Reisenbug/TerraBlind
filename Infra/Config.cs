@@ -51,6 +51,10 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool DodgeBoss;
 
+		// 默认关:提前量只对匀速直飞的弹幕成立,换把武器就整局打空
+		[DefaultValue(false)]
+		public bool AimAhead;
+
 		// 关掉就不给 Jev 任何 boss 背板,只留场地和通用字段。用来验知识到底值多少
 		[DefaultValue(true)]
 		public bool BossKnowledge;
@@ -81,6 +85,7 @@ namespace TerraBlind
 			PathVisSystem.ShowPlanner = ShowPlannerTrails;
 			RiskLayer.Enabled = AvoidDanger;
 			Combat.Enabled = FightBack;
+			Combat.UseLead = AimAhead;
 			Dodge.Enabled = DodgeBoss;
 			BossBook.UseKnowledge = BossKnowledge;
 			// 【这里也要铺】。OnChanged 会在 PostSetupContent 之后再响一次,

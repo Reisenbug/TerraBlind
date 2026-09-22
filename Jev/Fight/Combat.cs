@@ -26,6 +26,10 @@ namespace TerraBlind
 		const int HpBuckets = 5;
 		// 提前量最多外推这么多帧。再远全是误差,boss 早拐弯了
 		const float MaxLeadFrames = 45f;
+		// 【默认不算提前量】。那套解算只对匀速直飞的弹幕成立,换把武器就整局打空
+		public static bool UseLead = false;
+		// 瞄准抖一点,别整批偏同一个方向
+		const float JitterPx = 8f;
 
 		static int _target = -1;
 		static bool _swinging;
@@ -259,7 +263,9 @@ namespace TerraBlind
 			if (slot >= 10) { Last = "weapon not in hotbar"; return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
-			var aim = Lead(p, Main.npc[n], p.inventory[slot].shootSpeed);
+			var aim = UseLead ? Lead(p, Main.npc[n], p.inventory[slot].shootSpeed) : Main.npc[n].Center;
+			aim.X += Main.rand.NextFloat(-JitterPx, JitterPx);
+			aim.Y += Main.rand.NextFloat(-JitterPx, JitterPx);
 			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
 			// 拿它当条件就是挥一下等一轮。动画结束就能再挥,这才是连挥

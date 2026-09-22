@@ -353,6 +353,15 @@ namespace TerraBlind
 
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
+			// 【一直打不中就换个高度】。站位不对时 Jev 只看得到"打不出伤害",
+			// 看不到自己卡在哪 -- 换一层比站着耗强,3 秒一翻
+			if (TooFar)
+			{
+				var was = ver;
+				ver = (_lowSecs / PoseSecs) % 2 == 0 ? Vert.Rise : Vert.Drop;
+				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
+			}
+
 			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
 			int headroom = CeilingDistance(p);
 			if (ver == Vert.Rise && !noJump && headroom > 2) _riseHold = RiseHoldFrames;
@@ -458,6 +467,8 @@ namespace TerraBlind
 		static int _lowSecs;
 		// 攒够 3 秒才认。【够不着是个持续状态】,不是某一秒的抖动
 		public static bool TooFar => _lowSecs >= 3;
+		// 打不中的时候每隔这么多秒翻一次高度
+		const int PoseSecs = 3;
 
 		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
 		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
