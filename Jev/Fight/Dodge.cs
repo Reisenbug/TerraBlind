@@ -338,6 +338,8 @@ namespace TerraBlind
 				case Horiz.Hold:
 					if (want != NoWant && dist < want / 2) go = away;
 					else if (want != NoWant && dist > want) go = toward;
+					// 【距离合适时走切线】,站住只是换个位置挨打。半血后不绕(NPC.cs:2638 的阶段分界)
+					else if (BossBook.OrbitFor(boss.type) && boss.life * 2 > boss.lifeMax) go = _spin;
 					break;
 			}
 
@@ -379,7 +381,11 @@ namespace TerraBlind
 			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
 			// 两侧都堵才停。哪边空是算得出来的,不用猜
 			if (go != 0 && WallDistance(p, go) <= 0)
+			{
 				go = WallDistance(p, -go) > 0 ? -go : 0;
+				// 撞墙就把绕行方向也翻过来,不然下一帧又朝墙走
+				if (go != 0) _spin = go;
+			}
 
 			int want0 = go;
 			// 【应急冲刺只认碰撞】。盾冲的免伤只在 NPC 碰撞那一趟里(Player.cs:29501),
@@ -469,6 +475,8 @@ namespace TerraBlind
 		public static bool TooFar => _lowSecs >= 3;
 		// 打不中的时候每隔这么多秒翻一次高度
 		const int PoseSecs = 3;
+		// 绕圈往哪边转。【认准一个方向】:每帧重挑就在原地抖,撞墙才翻
+		static int _spin = 1;
 
 		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
 		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种

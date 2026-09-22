@@ -14,6 +14,9 @@ namespace TerraBlind
 		// 这一场该保持的水平距离(格)。0 = 不指定,按 danger 算。
 		// 【只是一个数,不是一套规则】-- 有的 boss 的安全区就是不在通用公式的量程里
 		public int WantCells;
+		// Hold 的时候绕着它走而不是站住。【只给需要的 boss 开】:
+		// 肉山那种只会平推的,绕圈就是往它怀里送
+		public bool Orbit;
 	}
 
 	public static class BossBook
@@ -120,6 +123,17 @@ namespace TerraBlind
 					+ "【被两只夹在中间的时候,先离开魔焰眼】:两边都有东西,没有空的那一侧了,"
 					+ "这时候比的是哪边更疼 -- 魔焰眼的碰撞和喷火都比激光眼重,"
 					+ "为了躲激光眼而朝魔焰眼挪是这场里最亏的一步。",
+			},
+
+			[Terraria.ID.NPCID.Plantera] = new BossInfo
+			{
+				Arena = OpenArena,
+				Orbit = true,
+				HowItFights =
+					"世纪之花分两个阶段,【血量掉到一半就进二阶段】。"
+					+ "一阶段绕着它转:保持一个固定的距离,沿着圆周一直走,左上右下地绕回来。"
+					+ "所以一阶段选 Hold,横向会自动沿切线走 -- 要的是轨迹始终围着它,别停下。"
+					+ "二阶段不再绕圈,就是正常地拉开距离躲。",
 			},
 
 			[Terraria.ID.NPCID.QueenBee] = new BossInfo
@@ -303,6 +317,7 @@ namespace TerraBlind
 
 		// 这个 boss 指定的距离,没指定返回 0
 		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
+		public static bool OrbitFor(int npcType) => Of(npcType).Orbit;
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{
