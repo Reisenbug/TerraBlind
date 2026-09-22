@@ -278,7 +278,9 @@ namespace TerraBlind
 		{
 			var d = npc.Center - p.Center;
 			if (shootSpeed <= 0.01f) return npc.Center;
-			var v = npc.velocity;
+			// 【要用相对速度】。子弹不继承玩家速度(Player.cs:7180 只按 shootSpeed 给),
+			// 而起飞时人每帧上升近 10px -- 只算 boss 的速度就会整段打在它下方
+			var v = npc.velocity - p.velocity;
 			float a = Microsoft.Xna.Framework.Vector2.Dot(v, v) - shootSpeed * shootSpeed;
 			float b = 2f * Microsoft.Xna.Framework.Vector2.Dot(d, v);
 			float c = Microsoft.Xna.Framework.Vector2.Dot(d, d);
