@@ -418,7 +418,7 @@ namespace TerraBlind
 			bool plat = false;
 			for (int x = (int)(p.position.X / 16f); x <= (int)((p.position.X + p.width - 1) / 16f); x++)
 			{
-				if (Predicates.IsSolid(x, feet)) return false;
+				if (Predicates.IsWall(x, feet)) return false;
 				if (Predicates.IsPlatform(x, feet)) plat = true;
 			}
 			return plat;
