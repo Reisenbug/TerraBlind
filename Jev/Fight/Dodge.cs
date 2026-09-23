@@ -396,15 +396,17 @@ namespace TerraBlind
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格");
 		}
 
-		// Drop:站在平台上时按住下穿过脚下这一层,脚过了那一层就松开,落到下一层停住。一次回答穿一层
+		// Drop:站在平台上时按住下穿过脚下这一层;空中按住下快速落,下一层平台快到时松开,停在上面。一次回答穿一层
 		static int _dropRow = -1;
 		static int _dropUsed = -1;
 		static int _dropSaid = -1;
 		static bool DropThrough(Player p, Vert ver, bool onGround)
 		{
 			int feet = (int)((p.position.Y + p.height) / 16f);
-			if (ver != Vert.Drop || p.grapCount > 0) _dropRow = -1;
-			else if (_dropRow < 0 && onGround && _dropUsed != _answer)
+			if (ver != Vert.Drop || p.grapCount > 0) { _dropRow = -1; return false; }
+			// 斜坡平台上 velocity.Y 不为 0,脚踩着平台行也算站着
+			bool standing = onGround || (p.velocity.Y >= 0f && OnPlatform(p, feet));
+			if (_dropRow < 0 && standing && _dropUsed != _answer)
 			{
 				if (OnPlatform(p, feet))
 				{
@@ -419,7 +421,13 @@ namespace TerraBlind
 				}
 			}
 			if (_dropRow >= 0 && feet > _dropRow) _dropRow = -1;
-			return _dropRow >= 0;
+			if (_dropRow >= 0) return true;
+			if (standing) return false;
+			// 这一帧和下一帧会落到的行里有平台就松开
+			int ahead = (int)(System.Math.Max(0f, p.velocity.Y) / 16f) + 2;
+			for (int r = feet; r <= feet + ahead; r++)
+				if (OnPlatform(p, r)) return false;
+			return true;
 		}
 
 		// 脚下这一行踩着的是平台而不是实心块
@@ -743,7 +751,7 @@ namespace TerraBlind
 			 + "在半空时翅膀和空中跳都还没用,上下两个方向随时能走;"
 			 + "在地面上时跑动最快最稳。付出的是这一刻没有在躲 --"
 			 + "如果已经有东西朝自己来了,不动就是站在原地等它到\","
-			 + "\"Drop\":\"往下一层:站在平台上就穿过脚下这一层,落到下一层停住;在空中就是慢慢往下落。"
+			 + "\"Drop\":\"往下一层:站在平台上就穿过脚下这一层,落到下一层停住;在空中就快速往下落,落到下一层平台停住。"
 			 + "要再往下,下一次再选 Drop。换掉的是头顶那片区域:压下来的东西、从上方来的弹幕"
 			 + "(看 projectile_pressure 的 from_above)掉一层就扑空了,"
 			 + "而且 cells_of_room_above_me 会变大,竖直方向重新有空间。"
