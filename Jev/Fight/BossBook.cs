@@ -108,6 +108,7 @@ namespace TerraBlind
 					+ "它掉到一半血会脱壳进二阶段,那之后的循环是:【喷一段时间火,然后连冲六次,再重来】。"
 					+ "喷火是一道连续的火焰流,不是一发一发的 -- 站在里面每一帧都在掉血,"
 					+ "所以【只要开始挨火就立刻走开】,离得越近烧得越狠。"
+					+ "【二阶段的魔焰眼要时刻远离】,不只是挨火的时候。"
 					+ "那六次冲刺的碰撞比喷火还疼,冲起来的时候一定会有被贴近的一瞬间,"
 					+ "那一下靠变向躲:它锁的是起冲那一刻的位置,横向或竖直换一步就扑空了。"
 					+ "【怎么看出它在冲】:boss_speed_cells_per_second 接近"
@@ -123,6 +124,12 @@ namespace TerraBlind
 					+ "【被两只夹在中间的时候,先离开魔焰眼】:两边都有东西,没有空的那一侧了,"
 					+ "这时候比的是哪边更疼 -- 魔焰眼的碰撞和喷火都比激光眼重,"
 					+ "为了躲激光眼而朝魔焰眼挪是这场里最亏的一步。",
+			},
+
+			[Terraria.ID.NPCID.TheDestroyer] = new BossInfo
+			{
+				Arena = OpenArena,
+				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】。",
 			},
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
@@ -217,6 +224,9 @@ namespace TerraBlind
 		// 直接查表会返回空 -- 知识就在最需要的时候悄悄消失了
 		static int Canon(int npcType)
 		{
+			if (npcType == Terraria.ID.NPCID.TheDestroyerBody
+			 || npcType == Terraria.ID.NPCID.TheDestroyerTail)
+				return Terraria.ID.NPCID.TheDestroyer;
 			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
 			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
 				return Terraria.ID.NPCID.EaterofWorldsHead;

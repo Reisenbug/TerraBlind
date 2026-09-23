@@ -201,8 +201,8 @@ namespace TerraBlind
 			return worst.Center.X > p.Center.X ? -1 : 1;
 		}
 
-		// 在场就必须远离的:毁灭者的头、二阶段的魔焰眼(ai[0]!=0 就是过了 40% 血,NPC.cs aiStyle 31)。
-		// 两个都在就背对近的那个
+		// Away 时优先背对的:毁灭者的头、二阶段的魔焰眼(ai[0]!=0 就是过了 40% 血,NPC.cs aiStyle 31)。
+		// 只定方向,退不退归 Jev。两个都在就背对近的那个
 		static NPC MustFlee(Player p)
 		{
 			NPC best = null;
@@ -225,7 +225,7 @@ namespace TerraBlind
 		{
 			// 【必须远离的排在夹击前面】。被撞一下的代价比被别的挤一下大得多
 			var flee = MustFlee(p);
-			if (flee != _lastFlee) { _lastFlee = flee; if (flee != null) Gate($"强制远离 {flee.TypeName}"); }
+			if (flee != _lastFlee) { _lastFlee = flee; if (flee != null) Gate($"退的时候背对 {flee.TypeName}"); }
 			if (flee != null) return flee.Center.X > p.Center.X ? -1 : 1;
 			// 【夹击优先】。被夹住的时候"哪边空"是个伪命题
 			int pincer = PincerSide(p, out var worst);
@@ -269,7 +269,6 @@ namespace TerraBlind
 			if (ver == Vert.Drop && BossBook.IsBanned(boss.type, DodgeAct.Dive)) ver = Vert.Level;
 			if (hor == Horiz.Near && BossBook.IsBanned(boss.type, DodgeAct.Close)) hor = Horiz.Hold;
 			if (hor == Horiz.Away && BossBook.IsBanned(boss.type, DodgeAct.Back)) hor = Horiz.Hold;
-			if (MustFlee(p) != null) hor = Horiz.Away;
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
