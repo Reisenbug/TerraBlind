@@ -202,14 +202,14 @@ namespace TerraBlind
 			return worst.Center.X > p.Center.X ? -1 : 1;
 		}
 
-		// 要远离的,数越小越要紧(用户给的顺序):骷髅王的头、毁灭者的头、二阶段魔焰眼、毁灭者的身体。
+		// 要远离的,数越小越要紧(用户给的):骷髅王的头 = 二阶段魔焰眼 > 毁灭者的头 > 毁灭者的身体。
 		// 魔焰眼 ai[0]!=0 就是过了 40% 血(NPC.cs aiStyle 31)。-1 = 不在名单里
 		static int FleeRank(NPC n)
 		{
 			if (n.type == Terraria.ID.NPCID.SkeletronPrime) return 0;
+			if (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f) return 0;
 			if (n.type == Terraria.ID.NPCID.TheDestroyer) return 1;
-			if (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f) return 2;
-			if (Combat.DestroyerSegment(n.type)) return 3;
+			if (Combat.DestroyerSegment(n.type)) return 2;
 			return -1;
 		}
 
