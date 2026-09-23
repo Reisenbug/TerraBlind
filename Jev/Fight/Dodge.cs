@@ -98,10 +98,11 @@ namespace TerraBlind
 			return _key.Length == 0 ? null : _key;
 		}
 
-		// 【蠕虫三段和骷髅王的手都没有 boss 标志】,只认 npc.boss 的话走位层整场退出
-		// 清单只存 Combat.BossPart 一份,各存一份的话下个 boss 只会被加进一边
+		// 【部件大多没有 boss 标志】(蠕虫各节、骷髅王的手、探测器),漏一个预警、压力、夹击就全看不见它
+		// 清单在 Combat 里只存一份,各存一份的话下个 boss 只会被加进一边
 		static bool IsBossLike(NPC npc)
-			=> npc.boss || Combat.BossPart(npc.type) || Combat.DodgeOnlyPart(npc.type);
+			=> npc.boss || Combat.BossPart(npc.type) || Combat.DodgeOnlyPart(npc.type)
+			|| Combat.DestroyerSegment(npc.type) || npc.type == Terraria.ID.NPCID.Probe;
 
 		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
 		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节
@@ -456,7 +457,10 @@ namespace TerraBlind
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var n = Main.npc[i];
-				if (n != null && n.active && !n.friendly && IsBossLike(n)) sum += n.life;
+				if (n == null || !n.active || n.friendly || !IsBossLike(n)) continue;
+				// 蠕虫各节共用头的血(realLife),每节都加就把一条虫算几十遍
+				if (n.realLife >= 0 && n.realLife != i) continue;
+				sum += n.life;
 			}
 			return sum;
 		}

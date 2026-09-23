@@ -225,8 +225,12 @@ namespace TerraBlind
 		static int Canon(int npcType)
 		{
 			if (npcType == Terraria.ID.NPCID.TheDestroyerBody
-			 || npcType == Terraria.ID.NPCID.TheDestroyerTail)
+			 || npcType == Terraria.ID.NPCID.TheDestroyerTail
+			 || npcType == Terraria.ID.NPCID.Probe)
 				return Terraria.ID.NPCID.TheDestroyer;
+			if (npcType == Terraria.ID.NPCID.PrimeCannon || npcType == Terraria.ID.NPCID.PrimeSaw
+			 || npcType == Terraria.ID.NPCID.PrimeVice || npcType == Terraria.ID.NPCID.PrimeLaser)
+				return Terraria.ID.NPCID.SkeletronPrime;
 			if (npcType == Terraria.ID.NPCID.EaterofWorldsBody
 			 || npcType == Terraria.ID.NPCID.EaterofWorldsTail)
 				return Terraria.ID.NPCID.EaterofWorldsHead;
