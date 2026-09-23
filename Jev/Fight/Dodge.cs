@@ -414,10 +414,7 @@ namespace TerraBlind
 			}
 
 			int want0 = go;
-			// 【应急冲刺只认碰撞】。盾冲的免伤只在 NPC 碰撞那一趟里(Player.cs:29501),
-			// 对弹幕没有任何无敌 -- 拿弹幕触发是白冲一次还进 30 帧冷却
-			bool bossAboutToHit = framesToHit >= 0 && framesToHit <= soon;
-			go = Dash(p, go, bossAboutToHit, ver);
+			go = Dash(p, go, ver);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -674,7 +671,7 @@ namespace TerraBlind
 
 		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
 		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
-		static int Dash(Player p, int go, bool incoming, Vert ver)
+		static int Dash(Player p, int go, Vert ver)
 		{
 			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
 			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
@@ -685,7 +682,7 @@ namespace TerraBlind
 			bool ready = p.dashType != 0 && p.dashDelay == 0;
 			if (!ready)
 			{
-				if ((JevSaysDash || incoming) && go != 0)
+				if (JevSaysDash && go != 0)
 					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay}");
 				_dashGap = false; _dashDir = 0; return go;
 			}
@@ -695,10 +692,10 @@ namespace TerraBlind
 			if (_dashGap) { _dashGap = false; return _dashDir; }
 			_dashDir = 0;
 
-			// 【快撞上了就自己冲,不等 Jev】。意图 300ms 才回来,实测预警中位只提前 23 帧
-			if ((!JevSaysDash && !incoming) || go == 0) return go;
+			// 【只听 Jev,不自己冲】。按预警自动冲是在 11 格外冲掉,真撞上时正好在 30 帧冷却里
+			if (!JevSaysDash || go == 0) return go;
 
-			DiagLog.Write($"[dodge] 冲刺 {(JevSaysDash ? "jev" : "应急")} 方向{(go < 0 ? "左" : "右")}");
+			DiagLog.Write($"[dodge] 冲刺 方向{(go < 0 ? "左" : "右")}");
 			_dashGap = true; _dashDir = go;
 			return 0;   // 这一帧松手
 		}
@@ -1026,7 +1023,8 @@ namespace TerraBlind
 			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
 			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
 			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
-			JevSaysDash = dashN > 0.7f;
+			// 冲刺按 0.5:过半就是"该冲"比"不该冲"更可能。原来的 0.7 是随手定的,实测最高 0.45 一次没过
+			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
 			// 【noul 的原值要能看见】。只记"过没过 0.7"的话,常年 0.6 和常年 0.05 长得一样
 			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{Num(Seg(txt, "should_jump_now"), "noul", 0f):0.00}");
