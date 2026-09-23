@@ -15,7 +15,6 @@ namespace TerraBlind
 		{
 			public int[] Pick = new int[9];
 			public int[] Dash = new int[Buckets], Hook = new int[Buckets], Jump = new int[Buckets];
-			public int[] Danger = new int[5];
 			public int Total;
 		}
 
@@ -34,7 +33,7 @@ namespace TerraBlind
 
 		static int Bucket(float v) => System.Math.Clamp((int)(v * Buckets), 0, Buckets - 1);
 
-		public static void Record(int bossType, Horiz h, Vert v, float dash, float hook, float jump, float danger)
+		public static void Record(int bossType, Horiz h, Vert v, float dash, float hook, float jump)
 		{
 			int key = BossBook.Canonical(bossType);
 			if (!Book.TryGetValue(key, out var p)) Book[key] = p = new Prior();
@@ -42,15 +41,14 @@ namespace TerraBlind
 			p.Dash[Bucket(dash)]++;
 			p.Hook[Bucket(hook)]++;
 			p.Jump[Bucket(jump)]++;
-			p.Danger[System.Math.Clamp((int)System.Math.Round(danger), 0, 4)]++;
 			p.Total++;
 			if (++_unsaved >= SaveEvery) Save();
 		}
 
 		// 这个 boss 没有 Jev 的记录就返回 false,调用方自己退回均匀
-		public static bool Sample(int bossType, out Horiz h, out Vert v, out float dash, out float hook, out float jump, out float danger, out int samples)
+		public static bool Sample(int bossType, out Horiz h, out Vert v, out float dash, out float hook, out float jump, out int samples)
 		{
-			h = Horiz.Away; v = Vert.Level; dash = hook = jump = danger = 0f; samples = 0;
+			h = Horiz.Away; v = Vert.Level; dash = hook = jump = 0f; samples = 0;
 			if (!Book.TryGetValue(BossBook.Canonical(bossType), out var p) || p.Total == 0) return false;
 			samples = p.Total;
 			int pick = Draw(p.Pick);
@@ -59,7 +57,6 @@ namespace TerraBlind
 			dash = DrawValue(p.Dash);
 			hook = DrawValue(p.Hook);
 			jump = DrawValue(p.Jump);
-			danger = Draw(p.Danger);
 			return true;
 		}
 
@@ -88,10 +85,10 @@ namespace TerraBlind
 				foreach (var line in File.ReadAllLines(FilePath))
 				{
 					var f = line.Split('|');
-					if (f.Length != 7 || !int.TryParse(f[0], out int key)) continue;
+					if (f.Length != 6 || !int.TryParse(f[0], out int key)) continue;
 					var p = new Prior();
 					if (!Fill(f[1], p.Pick) || !Fill(f[2], p.Dash) || !Fill(f[3], p.Hook)
-					 || !Fill(f[4], p.Jump) || !Fill(f[5], p.Danger) || !int.TryParse(f[6], out p.Total)) continue;
+					 || !Fill(f[4], p.Jump) || !int.TryParse(f[5], out p.Total)) continue;
 					_book[key] = p;
 				}
 				DiagLog.Write($"[prior] 读到 {_book.Count} 个 boss 的 Jev 记录");
@@ -119,7 +116,7 @@ namespace TerraBlind
 				{
 					var p = kv.Value;
 					lines.Add($"{kv.Key}|{string.Join(",", p.Pick)}|{string.Join(",", p.Dash)}|{string.Join(",", p.Hook)}"
-						+ $"|{string.Join(",", p.Jump)}|{string.Join(",", p.Danger)}|{p.Total}");
+						+ $"|{string.Join(",", p.Jump)}|{p.Total}");
 				}
 				Directory.CreateDirectory(LogRoot.Root);
 				File.WriteAllLines(FilePath, lines);

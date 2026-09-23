@@ -28,8 +28,7 @@ namespace TerraBlind
 			{
 				Line(sb, font, ref x, ref y, "move  " + Dodge.Last, Tint(Dodge.Confidence));
 				Line(sb, font, ref x, ref y,
-					$"      confidence {Dodge.Confidence:0.00}  danger {Dodge.Danger:0.0}"
-					+ (Dodge.SafeToAttack ? "" : "  keep away") + $"  {Dodge.LatencyMs}ms", Color.LightGray);
+					$"      confidence {Dodge.Confidence:0.00}  {Dodge.LatencyMs}ms", Color.LightGray);
 				// 【概率分布是证据】。写死的状态机给不出七个选项各占多少
 				if (Dodge.TopTwo.Length > 0)
 					Line(sb, font, ref x, ref y, "      " + Dodge.TopTwo, Color.MediumPurple);

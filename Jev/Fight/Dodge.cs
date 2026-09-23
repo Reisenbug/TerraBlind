@@ -66,11 +66,6 @@ namespace TerraBlind
 		public static Vert Ver = Vert.Level;
 		public static float Confidence;
 		public static int LatencyMs;
-		// 【距离不再写死】。原来 6/18 两个数是我编的,对所有 boss 一视同仁。
-		// 现在问 Jev "该离多远",0=贴脸 4=远远躲开,反射层照着走
-		public static float Danger = 2f;
-		public static bool TacticWorking = true;
-		public static bool SafeToAttack = true;
 		public static bool JevSaysJump;
 		public static bool JevSaysDash;
 		public static bool JevSaysHook;
@@ -471,8 +466,7 @@ namespace TerraBlind
 			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
-				 + (incoming ? $" hit in {framesToHit}f" : "")
-				 + (TacticWorking ? "" : " [not working]");
+				 + (incoming ? $" hit in {framesToHit}f" : "");
 		}
 
 		// boss 每秒掉多少血。【"够不够得着打"用实测不用猜距离】--
@@ -996,10 +990,6 @@ namespace TerraBlind
 			 + "付出的是下落途中翅膀和空中跳都在消耗或已经用掉,"
 			 + "真正落到地面才重新充满 -- 在那之前竖直方向是空的,只剩左右能躲;"
 			 + "frames_airborne 很大而局面没变好时,落地重来反而是划算的\"}},"
-			 + "\"danger\":{\"type\":\"score\",\"instructions\":"
-			 + "\"眼下有多危险,决定它该离 boss 多远。越危险越该拉开。\",\"criteria\":["
-			 + "\"很安全,可以贴上去输出\",\"一般,保持中距\",\"有点险,拉开一些\","
-			 + "\"很险,离远点\",\"随时会死,能躲多远躲多远\"]},"
 			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该用克苏鲁之盾冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
 			 + "它能瞬间拉开一段距离、或者穿过一片危险区域;撞到敌人还会免掉那一下伤害。"
@@ -1011,11 +1001,7 @@ namespace TerraBlind
 			 + "但拽过去的路上人没法改方向,而且钩子飞出去到勾上有一段空窗,"
 			 + "贴脸的时候甩等于把自己钉在原地挨那一下。\"},"
 			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"},"
-			 + "\"safe_to_attack\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"现在靠近输出安全吗?\"},"
-			 + "\"tactic_working\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"现在这套打法有效吗?boss 的血在掉,而自己没有一直挨打。\"}"
+			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"}"
 			 + "}}";
 
 		static void Fire(string key, string state)
@@ -1049,13 +1035,12 @@ namespace TerraBlind
 			if (now - _actAt < RandomEveryMs) return;
 			var r = Main.rand;
 			float jumpN, dashN, hookN;
-			bool fromJev = JevPrior.Sample(bossType, out var h, out var v, out dashN, out hookN, out jumpN, out float danger, out int samples);
-			if (fromJev) { Hor = h; Ver = v; Danger = danger; }
+			bool fromJev = JevPrior.Sample(bossType, out var h, out var v, out dashN, out hookN, out jumpN, out int samples);
+			if (fromJev) { Hor = h; Ver = v; }
 			else
 			{
 				Hor = (Horiz)r.Next(3);
 				Ver = (Vert)r.Next(3);
-				Danger = r.Next(5);
 				jumpN = r.NextFloat(); dashN = r.NextFloat(); hookN = r.NextFloat();
 			}
 			if (!_priorSaid || !fromJev)
@@ -1119,31 +1104,24 @@ namespace TerraBlind
 				Main.NewText($"<Jev> {Hor}/{Ver}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			// Noul 【没有 confidence】,概率本身就是答案。0.7 当"是"
-			Danger = Num(Seg(txt, "danger"), "score", Danger);
-			JevSaysJump = Num(Seg(txt, "should_jump_now"), "noul", 0f) > 0.7f;
+			// Noul 没有 confidence,概率本身就是答案。冲刺按 0.5(过半即更可能该冲),跳和勾仍是 0.7
+			float jumpN = Num(Seg(txt, "should_jump_now"), "noul", 0f);
 			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
 			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
-			// 冲刺按 0.5:过半就是"该冲"比"不该冲"更可能。原来的 0.7 是随手定的,实测最高 0.45 一次没过
+			JevSaysJump = jumpN > 0.7f;
 			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
-			// 【noul 的原值要能看见】。只记"过没过 0.7"的话,常年 0.6 和常年 0.05 长得一样
-			float jumpN = Num(Seg(txt, "should_jump_now"), "noul", 0f);
 			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
-			JevPrior.Record(bossType, Hor, Ver, dashN, hookN, jumpN, Danger);
-			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
-			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
+			JevPrior.Record(bossType, Hor, Ver, dashN, hookN, jumpN);
 
-			// 【每次回答都记】。原来只在意图变了才记 -- 于是"一直选 Float"在日志里
-			// 只有孤零零一条,看不出它卡了多久,也看不出反射层这期间在干什么
+			// 每次回答都记,不只是意图变了才记:要看得出卡在一个选择上多久
 			JevLog.Add(new JevLog.Entry
 			{
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
 				State = _lastFacts,
-				Pick = $"{hp}/{vp} 危险{Danger:0.0}" + (JevSaysJump ? " 该跳" : "")
+				Pick = $"{hp}/{vp}" + (JevSaysJump ? " 该跳" : "")
 					 + (JevSaysDash ? " 该冲" : "") + (JevSaysHook ? " 该勾" : "")
-					 + (SafeToAttack ? "" : " 别贴脸") + (TacticWorking ? "" : " 这套没用")
 					 + "  →  " + Last,
 				Confidence = Confidence,
 				Probs = Seg(hq, "probabilities") ?? "",
