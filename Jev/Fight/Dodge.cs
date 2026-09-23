@@ -278,12 +278,6 @@ namespace TerraBlind
 			DiagLog.Write("[dodge] " + why);
 		}
 
-		// 这一场没有目标距离
-		const int NoWant = 0;
-
-		// BossBook 里这一场的目标距离
-		static int Want(NPC boss) => BossBook.WantCellsFor(boss.type);
-
 		// 反射层,每帧把意图翻译成按键
 		static void Drive(Player p, NPC boss, int dist, Horiz hor, Vert ver)
 		{
@@ -299,7 +293,6 @@ namespace TerraBlind
 			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _riseHold = 0; }
 			else _airborneFrames++;
 
-			int want = Want(boss);
 			int framesToHit = SoonestBossHit(p);
 			// 这么多帧内会被 boss 或弹幕碰到就算 incoming
 			const int soon = 24;
@@ -318,18 +311,9 @@ namespace TerraBlind
 					go = away;
 					break;
 				case Horiz.Near:
-					if (want == NoWant || System.Math.Abs(dx) / 16f > want) go = toward;
-					else if (dist < want / 2) go = away;
-					break;
-				// 有目标距离时把距离维持在 want/2 到 want 之间
-				case Horiz.Hold:
-					if (want != NoWant && dist < want / 2) go = away;
-					else if (want != NoWant && dist > want) go = toward;
+					go = toward;
 					break;
 			}
-
-			// 要升降又没横移时,斜着往远离的方向走
-			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
 			bool hooking = Hook(p, boss, JevSaysHook, ver, onGround, out bool hookJump);
 
@@ -375,7 +359,7 @@ namespace TerraBlind
 			Fly(p);
 			TrackDps();
 			Hurt(p, boss, dist, hor, ver);
-			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} (want {want}) go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
+			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "");
@@ -691,10 +675,6 @@ namespace TerraBlind
 				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 + (Want(boss) != NoWant
-					? ",\"distance_i_asked_for\":" + Want(boss)
-					  + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
-					: "")
 				 + ",\"i_am_above_the_boss_by\":" + (int)(-dy)
 				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
 				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
@@ -724,7 +704,7 @@ namespace TerraBlind
 			 + "【撞到 boss 身上掉的血远比吃一发弹幕多】,躲开碰撞永远排在最前面;"
 			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离上。"
 			 + "那个距离没有固定的数,只能从结果看:伤害还在出就是够得着,在挨打就是太近了"
-			 + "(有 distance_i_asked_for 这个字段时,它是这一场实测过的距离)。"
+			 + "(背板里写了距离的,按背板来)。"
 			 + "这一题只管【和 boss 的距离该怎么变】,"
 			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
 			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。\",\"criteria\":{"

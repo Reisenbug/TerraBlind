@@ -6,8 +6,6 @@ namespace TerraBlind
 	public class BossInfo
 	{
 		public string HowItFights = "";
-		// 这一场该保持的距离(格),实测过才填。0 = 不指定
-		public int WantCells;
 	}
 
 	public static class BossBook
@@ -70,14 +68,12 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.Spazmatism] = new BossInfo
 			{
-				// 喷火范围约 30 格,boss 还一直在逼近,所以定 40
-				WantCells = 40,
 				HowItFights =
 					"双子魔眼是两只分开飞的眼睛,优先进攻是魔焰眼。"
 					+ "优先躲开碰撞。"
 					+ "一阶段boss移动逻辑：人靠近它就退,人退开它就跟上来,"
 					+ "所以横向的距离根本调不动 -- 主动往它那边走,只会和它射出来的弹幕迎头相撞。"
-					+ "【30 格以内就危险了】:那个范围里喷火够得着,而且冲刺来不及反应,站得比它远才有余地。"
+					+ "【30 格以内就危险了】:那个范围里喷火够得着,而且冲刺来不及反应,站得比它远才有余地,保持 40 格左右。"
 					+ "一阶段的魔焰眼除了冲刺之外一直在追人:【上下不能停】。"
 					+ "躲冲刺要的是横向和竖直一起变向,它锁的是起冲那一刻的位置。"
 					+ "它掉到一半血会脱壳进二阶段,那之后的循环是:【喷一段时间火,然后连冲六次,再重来】。"
@@ -111,11 +107,9 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
 			{
-				// 绕圈的半径,实测开场自然稳在 40 格左右
-				WantCells = 40,
 				HowItFights =
 					"世纪之花分两个阶段,【血量掉到一半就进二阶段】。"
-					+ "一阶段绕着它转:保持一个固定的距离,沿着圆周一直走,左上右下地绕回来。"
+					+ "一阶段绕着它转:保持 40 格左右的距离,沿着圆周一直走,左上右下地绕回来。"
 					+ "要的是轨迹始终围着它。"
 					+ "二阶段不再绕圈,就是正常地拉开距离躲。"
 					+ "【二阶段它身上会伸出触手】,触手碰一下掉的血比本体还多,"
@@ -139,7 +133,6 @@ namespace TerraBlind
 			// 恶鬼离得比肉山近时按这条算(Boss() 取最近的)
 			[Terraria.ID.NPCID.TheHungry] = new BossInfo
 			{
-				WantCells = 10,
 				HowItFights =
 					"恶鬼是挂在肉山身上的一串小怪,伸得很长,碰到就掉血。"
 					+ "离它保持十格的安全距离。与肉山的距离规则冲突时，优先这一条。"
@@ -147,14 +140,13 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
-				WantCells = 60,
 				HowItFights =
 					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,只会水平移动,永远不会停。"
 					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"
 					+ "打法是往它的反方向跑,边跑边打。"
-					+ "距离是一个区间,两头都不能碰:离太远会被它的激光扫满,"
+					+ "距离是 60 格左右的一个区间,两头都不能碰:离太远会被它的激光扫满,"
 					+ "离太近又会被身上那串恶鬼打到。跑过头了就该收回来,贴太近了就该退开,"
-					+ "始终卡在中间那一段 -- 看 cells_further_than_i_asked_for 判断自己偏到哪一头了。"
+					+ "始终卡在中间那一段 -- 看 boss_cells_horizontal 判断自己偏到哪一头了。"
 					+ "只要 incoming_projectiles 里出现它的激光,就一刻不停地动,"
 					+ "站定一下就会被扫到;但这不等于一路往远处跑。"
 					+ "要的是在区间里持续移动,不是拉开距离。"
@@ -294,7 +286,6 @@ namespace TerraBlind
 		}
 
 		// 这个 boss 指定的距离
-		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
 	}
 
 	public class BossKnowledgeCommand : Terraria.ModLoader.ModCommand
