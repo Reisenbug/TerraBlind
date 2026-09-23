@@ -393,7 +393,21 @@ namespace TerraBlind
 			}
 			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
 				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{ver}"
-				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格");
+				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格 | debuff {Debuffs(p)}");
+		}
+
+		// 身上的 debuff 名字,没有就是"无"
+		static string Debuffs(Player p)
+		{
+			var sb = new StringBuilder();
+			for (int i = 0; i < Player.MaxBuffs; i++)
+			{
+				int t = p.buffType[i];
+				if (t <= 0 || p.buffTime[i] <= 0 || !Main.debuff[t]) continue;
+				if (sb.Length > 0) sb.Append(',');
+				sb.Append(Terraria.Lang.GetBuffName(t));
+			}
+			return sb.Length > 0 ? sb.ToString() : "无";
 		}
 
 		// Drop:站在平台上时按住下穿过脚下这一层;空中按住下快速落,下一层平台快到时松开,停在上面。一次回答穿一层
