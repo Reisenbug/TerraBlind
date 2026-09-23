@@ -129,7 +129,15 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.TheDestroyer] = new BossInfo
 			{
 				Arena = OpenArena,
-				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】。",
+				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】,身体也要远离。",
+			},
+
+			[Terraria.ID.NPCID.SkeletronPrime] = new BossInfo
+			{
+				Arena = OpenArena,
+				// 每下伤害是实测:三局分别 54/43/61,毁灭者身体每下 27 左右
+				HowItFights = "【机械骷髅王的头要远离】。它撞一下的伤害大约是毁灭者身体的两倍,"
+					+ "而且一贴上会被连着撞好几下。",
 			},
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo

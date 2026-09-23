@@ -202,23 +202,36 @@ namespace TerraBlind
 			return worst.Center.X > p.Center.X ? -1 : 1;
 		}
 
-		// Away 时优先背对的:毁灭者的头、二阶段的魔焰眼(ai[0]!=0 就是过了 40% 血,NPC.cs aiStyle 31)。
-		// 只定方向,退不退归 Jev。两个都在就背对近的那个
+		// 要远离的,数越小越要紧(用户给的顺序):骷髅王的头、毁灭者的头、二阶段魔焰眼、毁灭者的身体。
+		// 魔焰眼 ai[0]!=0 就是过了 40% 血(NPC.cs aiStyle 31)。-1 = 不在名单里
+		static int FleeRank(NPC n)
+		{
+			if (n.type == Terraria.ID.NPCID.SkeletronPrime) return 0;
+			if (n.type == Terraria.ID.NPCID.TheDestroyer) return 1;
+			if (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f) return 2;
+			if (Combat.DestroyerSegment(n.type)) return 3;
+			return -1;
+		}
+
+		// Away 时背对谁。【先看正在朝我来的,再按名单顺序】:骷髅王的头全程在场,
+		// 只按顺序就永远背对它,哪怕毁灭者已经贴在另一边。都没朝我来就背对最近的
 		static NPC MustFlee(Player p)
 		{
-			NPC best = null;
-			float bd = float.MaxValue;
+			NPC best = null, nearest = null;
+			int bestRank = int.MaxValue;
+			float bestD = float.MaxValue, nearD = float.MaxValue;
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var n = Main.npc[i];
 				if (n == null || !n.active) continue;
-				bool flee = n.type == Terraria.ID.NPCID.TheDestroyer
-						 || (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f);
-				if (!flee) continue;
+				int rank = FleeRank(n);
+				if (rank < 0) continue;
 				float d = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center);
-				if (d < bd) { bd = d; best = n; }
+				if (d < nearD) { nearD = d; nearest = n; }
+				if (FramesToHit(p, n) < 0) continue;
+				if (rank < bestRank || (rank == bestRank && d < bestD)) { bestRank = rank; bestD = d; best = n; }
 			}
-			return best;
+			return best ?? nearest;
 		}
 		static NPC _lastFlee;
 
@@ -391,17 +404,17 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			// 【上下也别穿毁灭者,挡住了就往反方向走】。改成 Level 等于停在虫子上方等它撞:
+			// 【上下也别穿要远离的东西,挡住了就往反方向走】。改成 Level 等于停在虫子上方等它撞:
 			// 实测往下被挡 25 帧,距离一直 4-6 格没拉开,最后挨撞。两头都挡才停
-			if (ver == Vert.Drop && CrossesWorm(p, 0, 1))
+			if (ver == Vert.Drop && Crosses(p, 0, 1, out var hitD))
 			{
-				ver = CrossesWorm(p, 0, -1) ? Vert.Level : Vert.Rise;
-				Gate($"往下会穿毁灭者 改{ver}");
+				ver = Crosses(p, 0, -1, out _) ? Vert.Level : Vert.Rise;
+				Gate($"往下会穿{hitD.TypeName} 改{ver}");
 			}
-			else if (ver == Vert.Rise && CrossesWorm(p, 0, -1))
+			else if (ver == Vert.Rise && Crosses(p, 0, -1, out var hitU))
 			{
-				ver = CrossesWorm(p, 0, 1) ? Vert.Level : Vert.Drop;
-				Gate($"往上会穿毁灭者 改{ver}");
+				ver = Crosses(p, 0, 1, out _) ? Vert.Level : Vert.Drop;
+				Gate($"往上会穿{hitU.TypeName} 改{ver}");
 			}
 
 			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
@@ -427,10 +440,10 @@ namespace TerraBlind
 				// 撞墙就把绕行方向也翻过来,不然下一帧又朝墙走
 				if (go != 0) _spin = go;
 			}
-			// 【没必要就不穿毁灭者】。背对头跑常常正好横穿身体;两边都挡才硬穿
-			if (go != 0 && CrossesWorm(p, go, 0) && !CrossesWorm(p, -go, 0))
+			// 【没必要就不穿】。背对头跑常常正好横穿身体;两边都挡才硬穿
+			if (go != 0 && Crosses(p, go, 0, out var hitX) && !Crosses(p, -go, 0, out _))
 			{
-				Gate($"往{(go < 0 ? "左" : "右")}会穿毁灭者 掉头");
+				Gate($"往{(go < 0 ? "左" : "右")}会穿{hitX.TypeName} 掉头");
 				go = -go;
 			}
 
@@ -590,10 +603,11 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 沿 (dx,dy) 把碰撞箱扫一个 Jev 往返能走到的距离,扫到毁灭者没贴着我的某一节就算要穿过去
+		// 沿 (dx,dy) 把碰撞箱扫一个 Jev 往返能走到的距离,扫到要远离的名单里没贴着我的那个就算要穿过去
 		const int LookFrames = 18;
-		static bool CrossesWorm(Player p, int dx, int dy)
+		static bool Crosses(Player p, int dx, int dy, out NPC hit)
 		{
+			hit = null;
 			var box = p.Hitbox;
 			var moved = box;
 			moved.Offset((int)(dx * p.maxRunSpeed * LookFrames),
@@ -602,9 +616,8 @@ namespace TerraBlind
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var n = Main.npc[i];
-				if (n == null || !n.active) continue;
-				if (n.type != Terraria.ID.NPCID.TheDestroyer && !Combat.DestroyerSegment(n.type)) continue;
-				if (n.Hitbox.Intersects(swept) && !n.Hitbox.Intersects(box)) return true;
+				if (n == null || !n.active || FleeRank(n) < 0) continue;
+				if (n.Hitbox.Intersects(swept) && !n.Hitbox.Intersects(box)) { hit = n; return true; }
 			}
 			return false;
 		}
