@@ -54,10 +54,8 @@ namespace TerraBlind
 		static bool _tooLongAirborne;
 		// 这一帧要不要靠翅膀爬升。跳到顶之后还按着才会起飞
 		static bool _wantFly;
-		// 找落点时往上探多少格。不是钩爪的真实射程(那个数我不知道),只是个搜索上界:
-		// 猜远了钩子够不着,自己会空手回来,HookGiveUpFrames 收场
+		// 找钩爪落点的搜索半径,不是钩爪射程
 		const int HookReachCells = 20;
-		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步。效果可能需要进一步测试。
 
 		public static string Last = "idle";
 		public static Horiz Hor = Horiz.Away;
@@ -99,7 +97,7 @@ namespace TerraBlind
 			|| Combat.DestroyerSegment(npc.type) || npc.type == Terraria.ID.NPCID.Probe;
 
 		// 返回最近的那一段
-			static NPC Boss(Player p, out int dist)
+		static NPC Boss(Player p, out int dist)
 		{
 			dist = -1;
 			NPC best = null;
@@ -118,7 +116,7 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 何意味。
+		// 场上所有 boss 部件里最快撞到我的帧数,没有朝我来的就是 -1
 		static int SoonestBossHit(Player p)
 		{
 			int best = -1;
@@ -149,7 +147,7 @@ namespace TerraBlind
 			}
 			foreach (var pr in Main.projectile)
 			{
-				// 【认 hostile 不认 !friendly】。两个标志互相独立,可以都为假
+				// hostile 和 friendly 可以都为假,所以认 hostile
 				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
 				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
 					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
@@ -169,8 +167,7 @@ namespace TerraBlind
 			if (at.Y > me.Y) PressDown += w; else PressUp += w;
 		}
 
-		// 被两边夹住时往哪退
-		// 按压力和挑只会挑中"弹幕少但碰撞疼"的那边
+		// 两侧都有 boss 时背对伤害高的那个
 		static int PincerSide(Player p, out NPC worst)
 		{
 			worst = null;
@@ -225,11 +222,10 @@ namespace TerraBlind
 
 		static int AwaySide(Player p, NPC boss)
 		{
-			// 【必须远离的排在夹击前面】。被撞一下的代价比被别的挤一下大得多
+			// 顺序:要远离的 > 夹击 > 压力
 			var flee = MustFlee(p);
 			if (flee != _lastFlee) { _lastFlee = flee; if (flee != null) Gate($"退的时候背对 {flee.TypeName}"); }
 			if (flee != null) return flee.Center.X > p.Center.X ? -1 : 1;
-			// 【夹击优先】。被夹住的时候"哪边空"是个伪命题
 			int pincer = PincerSide(p, out var worst);
 			if (pincer != 0)
 			{
@@ -237,7 +233,7 @@ namespace TerraBlind
 				return pincer;
 			}
 			_lastPincer = null;
-			// 一样重就退回"背对锁定的那个",至少不会站着不动
+			// 两侧一样挤就背对锁定的那个
 			if (System.Math.Abs(PressLeft - PressRight) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
 			return PressRight > PressLeft ? -1 : 1;
 		}
@@ -262,18 +258,17 @@ namespace TerraBlind
 				Fire(key, _lastFacts);
 			}
 
-			// 意图过期:退回"拉开距离 + 保持高度",那是任何时候都不会送命的默认
+			// 意图过期时用 Away/Level
 			bool stale = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs;
 			var hor = stale ? Horiz.Away : Hor;
 			var ver = stale ? Vert.Level : Ver;
-			// 【两个轴各禁各的】。肉山只禁竖直,一起清掉会把该退开的水平也抹平
-			// 【禁用退回"不变",不是反向】:禁 Near 的 boss 往往正是"太远也危险"那种
+			// 两个轴各查各的禁用,被禁就退回不变
 			if (ver == Vert.Rise && BossBook.IsBanned(boss.type, DodgeAct.Up)) ver = Vert.Level;
 			if (ver == Vert.Drop && BossBook.IsBanned(boss.type, DodgeAct.Dive)) ver = Vert.Level;
 			if (hor == Horiz.Near && BossBook.IsBanned(boss.type, DodgeAct.Close)) hor = Horiz.Hold;
 			if (hor == Horiz.Away && BossBook.IsBanned(boss.type, DodgeAct.Back)) hor = Horiz.Hold;
 
-			// Vertical 也要:羽落靠按住 up 才慢降
+			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
 			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); return; }
 
@@ -281,7 +276,7 @@ namespace TerraBlind
 			Drive(p, boss, dist, hor, ver);
 		}
 
-		// BossBook 的 Banned 还是按旧的九选一写的。两个轴映射回去查一次
+		// 两个轴映射回旧的九选一,给 BossBook.Banned 查
 		static DodgeAct ToAct(Horiz h, Vert v)
 		{
 			if (v == Vert.Rise) return DodgeAct.Up;
@@ -291,8 +286,7 @@ namespace TerraBlind
 			return DodgeAct.Keep;
 		}
 
-		// 【拦在门口要出声】。Last 只有 HUD 看得见,日志里一片空白时分不清
-		// "没跑"和"跑了没报错" -- 只在状态变化时写,免得每帧刷屏
+		// 写 HUD 状态,变了才进日志
 		static string _gate = "";
 		static void Gate(string why)
 		{
@@ -304,45 +298,34 @@ namespace TerraBlind
 			DiagLog.Write("[dodge] " + why);
 		}
 
-		// 危险分换成格数。0=贴脸输出,4=离远点
-		// 0 = 这一场没有目标距离。【别编兜底公式】:编出来的数会当成指令喂回给 Jev
+		// 这一场没有目标距离
 		const int NoWant = 0;
 
-		// 这一场该保持多远,没填就是 NoWant。反射层和报给 Jev 的字段都走这一个入口
+		// BossBook 里这一场的目标距离
 		static int Want(NPC boss) => BossBook.WantCellsFor(boss.type);
 
-		// 反射层。【每帧重算方向】-- Jev 说"拉开"的那一刻 boss 在右边,
-		// 200ms 后它可能已经绕到左边,照着旧按键跑就是迎头撞上去
+		// 反射层,每帧把意图翻译成按键
 		static void Drive(Player p, NPC boss, int dist, Horiz hor, Vert ver)
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
-			// 【"远离"要看全场,不是只看锁定的那个】。躲开一只常常是撞进另一只
-			// 每帧重算:Facts 那次是发请求时的,这里要的是此刻的
 			Pressure(p);
 			int away = AwaySide(p, boss);
 			int toward = bossRight ? 1 : -1;
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
 
-			// 【踩到东西就清零,不只是 velocity.Y==0】。斜坡上人一直在微微下滑,那一帧永远等不到
+			// 斜坡上 velocity.Y 不为 0,所以也看脚下
 			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; _riseHold = 0; }
-			// 【飞行不算滞空】。翅膀能飞 3 秒而上限 150 帧,不豁免就永远飞不到耗尽;
-			// 判据用 wingTime 不用 _wantFly,否则飞干了计数还冻着,再也落不了地
 			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
 
 			int want = Want(boss);
-			// 【每帧自己算全场最早的那一下】。等下一个意图就晚了,而只算锁定那只的话,
-			// 另一只冲过来时反射层一无所知
 			int framesToHit = SoonestBossHit(p);
-			// 多早算"快打中了"。【按反应时间定,不按危险度】:意图 300ms 才回来,
-			// 留不出这段时间的预警等于没有预警
+			// 这么多帧内会被 boss 或弹幕碰到就算 incoming
 			const int soon = 24;
-			// 【弹幕也算"快被打中了"】。原来只看 boss 本体,弹幕贴脸反射层一无所知
 			int projHit = ThreatScan.SoonestHit(p);
 			bool incoming = (framesToHit >= 0 && framesToHit <= soon)
 						 || (projHit >= 0 && projHit <= soon);
-			// 【预警响没响要能查】。上一局 2125 帧里 incoming 一次没触发,而人被撞死了
 			if (incoming && !_wasIncoming)
 				DiagLog.Write($"[dodge] 预警 撞击还有{framesToHit}帧 弹幕还有{projHit}帧 阈值{soon}"
 					+ $" 最快的是{ThreatScan.SoonestName(p)}");
@@ -350,42 +333,37 @@ namespace TerraBlind
 
 			switch (hor)
 			{
-				// 【别"够远就停"】。冲撞型 boss 锁的是起冲那一刻的位置,
-				// 横向一直有速度才躲得开
+				// 一直跑,不因为够远就停
 				case Horiz.Away:
 					go = away;
 					break;
-				// 【正在挨打就不准靠近】。火焰流站进去每帧掉血,而按距离算那里"够远"(实测吃 78)
+				// 刚挨过打就不靠近
 				case Horiz.Near:
 					if (_hurtRecently > 0) go = away;
 					else if (want == NoWant || System.Math.Abs(dx) / 16f > want) go = toward;
 					else if (dist < want / 2) go = away;
 					break;
-				// 【贴太近还是要退】。Hold 是"距离正好",不是"站着不动"
-				// 【只对指定了距离的 boss 生效】,别的 boss 没填 WantCells,行为照旧
+				// 有目标距离时把距离维持在 want/2 到 want 之间
 				case Horiz.Hold:
 					if (want != NoWant && dist < want / 2) go = away;
 					else if (want != NoWant && dist > want) go = toward;
-					// 【距离合适时走切线】,站住只是换个位置挨打。半血后不绕(NPC.cs:2638 的阶段分界)
+					// 距离合适时绕圈,半血后不绕(NPC.cs:2638)
 					else if (BossBook.OrbitFor(boss.type) && FirstHalf(boss)) go = _spin;
 					break;
 			}
 
-			// 【竖直动了就必须横移】。原地上下只是换个高度挨打,
-			// 而斜着走才是这次重构要的那个方向
+			// 要升降又没横移时,斜着往远离的方向走
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 钩爪时机问 Jev,方向归代码。【Drop 不甩钩】:72% 的帧是 Drop,兜底会常年成立
-			// 【被机械骷髅王的头贴住立刻甩钩】。实测贴在 0-2 格连挨 31/86/12,跑和冲刺都甩不开
+			// 甩钩:Jev 说勾、被骷髅王贴住、或 Rise 时空中已经没有跳和翅膀
 			bool pinned = PinnedByPrime(p);
 			bool wantHook = JevSaysHook || pinned
 						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
 			bool hooking = Hook(p, boss, wantHook, ver, onGround, pinned, out bool hookJump);
 
-			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
+			// 禁 Up 的 boss 连 JevSaysJump 和 incoming 的跳也禁
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
-			// 【一直打不中就换个高度】。站位不对时 Jev 只看得到"打不出伤害",
-			// 看不到自己卡在哪 -- 换一层比站着耗强,3 秒一翻
+			// 打不中时每 PoseSecs 秒在 Rise/Drop 之间翻
 			if (TooFar)
 			{
 				var was = ver;
@@ -393,8 +371,7 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			// 【上下也别穿要远离的东西,挡住了就往反方向走】。改成 Level 等于停在虫子上方等它撞:
-			// 实测往下被挡 25 帧,距离一直 4-6 格没拉开,最后挨撞。两头都挡才停
+			// 升降会穿过要远离的东西就反向,两头都挡才 Level
 			if (ver == Vert.Drop && Crosses(p, 0, 1, out var hitD))
 			{
 				ver = Crosses(p, 0, -1, out _) ? Vert.Level : Vert.Rise;
@@ -406,30 +383,28 @@ namespace TerraBlind
 				Gate($"往上会穿{hitU.TypeName} 改{ver}");
 			}
 
-			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
+			// 头顶没空间就不再往上
 			int headroom = CeilingDistance(p);
 			if (ver == Vert.Rise && !noJump && headroom > 2) _riseHold = RiseHoldFrames;
 			else if (_riseHold > 0) _riseHold--;
 			if (headroom <= 1) _riseHold = 0;
 			bool rise = _riseHold > 0 && !noJump;
-			// 【挂着钩子时只有钩子能喊跳】。incoming 几乎恒真,放它进来一按就解钩,拉的那段全白费
+			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
 			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
-			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
+			// 只有 Rise 才用翅膀
 			_wantFly = rise && !_tooLongAirborne && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, rise && !_tooLongAirborne);
 			if (rise && !_wantFly)
 				Gate($"Rise 但不飞: 滞空{_airborneFrames}帧 tooLong={_tooLongAirborne}"
 					+ $" grap={p.grapCount} wing={p.wingTime:0}");
 
-			// 【堵死了就往空的那侧走】。站定会被顶在墙上当靶子(两次 20%/12% 的大掉血都是 L0+go-)
-			// 两侧都堵才停。哪边空是算得出来的,不用猜
+			// 撞墙就掉头,绕圈方向跟着翻,两侧都堵才停
 			if (go != 0 && WallDistance(p, go) <= 0)
 			{
 				go = WallDistance(p, -go) > 0 ? -go : 0;
-				// 撞墙就把绕行方向也翻过来,不然下一帧又朝墙走
 				if (go != 0) _spin = go;
 			}
-			// 【没必要就不穿】。背对头跑常常正好横穿身体;两边都挡才硬穿
+			// 横移会穿过要远离的东西就掉头,两边都挡才硬穿
 			if (go != 0 && Crosses(p, go, 0, out var hitX) && !Crosses(p, -go, 0, out _))
 			{
 				Gate($"往{(go < 0 ? "左" : "右")}会穿{hitX.TypeName} 掉头");
@@ -444,9 +419,9 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 【down 干两件事】(fallThrough = controlDown):穿平台 + 取消缓降;勾着时不能按
+			// down 会穿平台并取消缓降,勾着时不按
 			bool dive = (ver == Vert.Drop || _tooLongAirborne) && p.grapCount == 0;
-			// 【incoming 不进缓降】。它几乎恒真,全程按住上就是人飘在高处下不来
+			// 缓降只在 Rise 或挂钩时
 			bool hover = !dive && !_wantFly && (rise || hooking);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
@@ -460,18 +435,15 @@ namespace TerraBlind
 				 + (incoming ? $" hit in {framesToHit}f" : "");
 		}
 
-		// boss 每秒掉多少血。【"够不够得着打"用实测不用猜距离】--
-		// 装备和武器一换,那个距离就变了,而这个数直接说明打没打中
+		// 最近 60 帧 boss 掉的血
 		static int _bossPrevHp = -1;
 		static readonly int[] _dpsRing = new int[60];
 		static int _dpsAt;
-		// 最近 30 秒里每秒的 dps。【要的是分位不是极值】:最高值整场只出现一次,
-		// 最低值几乎恒为 0(冲刺、无敌帧),拿它俩当参照等于没有参照
+		// 最近 30 秒每秒的 dps,取中位当常驻
 		static readonly int[] _dpsHist = new int[30];
 		static int _histAt, _histCount, _secFrames;
 		public static int BossDps, DpsTypical, DpsPct = 100;
-		// 【按总血量算,不跟着锁定目标】。Boss() 返回最近的那只,双子之间每局切 78 次,
-		// 每切一次就清空累积 -- dps 永远是 0,于是它一直以为自己够不着,全程选 Near
+		// 场上所有 boss 的血量和
 		static int TotalBossHp()
 		{
 			int sum = 0;
@@ -479,7 +451,7 @@ namespace TerraBlind
 			{
 				var n = Main.npc[i];
 				if (n == null || !n.active || n.friendly || !IsBossLike(n)) continue;
-				// 蠕虫各节共用头的血(realLife),每节都加就把一条虫算几十遍
+				// 蠕虫各节共用 realLife,只算一次
 				if (n.realLife >= 0 && n.realLife != i) continue;
 				sum += n.life;
 			}
@@ -492,7 +464,7 @@ namespace TerraBlind
 			if (_bossPrevHp < 0) { _bossPrevHp = hp; return; }
 			int d = _bossPrevHp - hp;
 			_bossPrevHp = hp;
-			// 换目标或者 boss 回血都会算出负数,当 0 -- 那不是我们打的
+			// 回血或 boss 离场算出负数,当 0
 			_dpsRing[_dpsAt] = d > 0 ? d : 0;
 			_dpsAt = (_dpsAt + 1) % _dpsRing.Length;
 			int sum = 0;
@@ -508,24 +480,18 @@ namespace TerraBlind
 			System.Array.Copy(_dpsHist, s, _histCount);
 			System.Array.Sort(s);
 			DpsTypical = s[_histCount / 2];
-			// 【拿常驻当尺子,不拿 0 当尺子】。常驻 300 时 200 照样在打,只是那一秒没满 --
-			// 掉到常驻的三分之一以下才是真的够不着
 			DpsPct = DpsTypical > 0 ? BossDps * 100 / DpsTypical : 100;
-			// 【连续低才算,头几秒不算】。掠过/错开/无敌帧都会让某一秒归零,样本少时中位也是噪音
+			// 攒够 5 秒样本后,低于常驻 35% 的连续秒数
 			if (_histCount >= 5 && DpsTypical > 0 && DpsPct < 35) _lowSecs++; else _lowSecs = 0;
-			// 每秒一行。dps 是"该不该靠近"的唯一判据,它坏了整场都会往前凑
 			DiagLog.Write($"[dodge] dps {BossDps} 常驻{DpsTypical} {DpsPct}% 低了{_lowSecs}秒");
 		}
 		static int _lowSecs;
-		// 攒够 3 秒才认。【够不着是个持续状态】,不是某一秒的抖动
 		public static bool TooFar => _lowSecs >= 3;
-		// 打不中的时候每隔这么多秒翻一次高度
 		const int PoseSecs = 3;
-		// 绕圈往哪边转。【认准一个方向】:每帧重挑就在原地抖,撞墙才翻
+		// 绕圈方向,撞墙才翻
 		static int _spin = 1;
 
-		// 还在前半血吗。【要查本体的血,不是手上那节】:Boss() 返回的可能是触手,
-		// 拿触手的血判阶段,一阶段会被当成二阶段
+		// 本体还在前半血,锁定的是部件时找本体
 		static bool FirstHalf(NPC boss)
 		{
 			if (!boss.boss)
@@ -537,10 +503,9 @@ namespace TerraBlind
 			return boss.lifeMax <= 0 || boss.life * 2 > boss.lifeMax;
 		}
 
-		// 【每一下掉血都要记】。走位看着不错还是死了,分不清是被撞一下还是被弹幕磨的 --
-		// 掉的量和当时的距离一起记下来,一眼就能看出是哪种
+		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;
-		// 挨打之后这么多帧内不许往它那边走。半秒够走出一道火焰流
+		// 挨打后这么多帧内 Near 改成退
 		const int HurtCooldown = 30;
 		static int _hurtRecently;
 		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Vert ver)
@@ -549,9 +514,7 @@ namespace TerraBlind
 			int lost = _prevHp - p.statLife;
 			_prevHp = p.statLife;
 			if (lost <= 0) { if (_hurtRecently > 0) _hurtRecently--; return; }
-			// 【挨打就是挨打,不用问】。一道火焰流站进去每帧掉血,而按距离算那里"够远"
 			if (lost > 5) _hurtRecently = HurtCooldown;
-			// 【名字和伤害都要报】。只有距离的话分不出是哪一发打的,也不知道该躲的是什么
 			int nd = 999, pd = 999;
 			string nn = "无", pn = "无";
 			foreach (var n in Main.npc)
@@ -571,16 +534,15 @@ namespace TerraBlind
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格");
 		}
 
-		// 【判据是 wingTime 在掉】。"有翅膀+在上升"会把每次起跳都算成飞行,翅膀其实一格没烧
-		// 说了往上就至少按这么多帧。够走完 跳→到顶→接着按 那一套
+		// Rise 之后至少往上按这么多帧
 		const int RiseHoldFrames = 30;
 		static int _riseHold;
 		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
+		// 飞行开始和结束各记一行。wingTime 在掉而且在上升才算飞,缓降也烧 wingTime
 		static void Fly(Player p)
 		{
-			// 【要在爬升,不是在缓降】。羽落也烧 wingTime,把它算成飞行就看不出翅膀有没有真用上
 			bool now = p.wingTime < _prevWing - 0.01f && p.velocity.Y < -0.5f;
 			_prevWing = p.wingTime;
 			if (now == _flying) return;
@@ -589,7 +551,7 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 沿 (dx,dy) 把碰撞箱扫一个 Jev 往返能走到的距离,扫到要远离的名单里没贴着我的那个就算要穿过去
+		// 沿 (dx,dy) 把碰撞箱扫 LookFrames 帧,碰到要远离的东西就算会穿过去,已经贴着的不算
 		const int LookFrames = 18;
 		static bool Crosses(Player p, int dx, int dy, out NPC hit)
 		{
@@ -608,6 +570,7 @@ namespace TerraBlind
 			return false;
 		}
 
+		// 机械骷髅王的头离我不超过 PinnedCells 格
 		const int PinnedCells = 2;
 		static bool _wasPinned;
 		static bool PinnedByPrime(Player p)
@@ -626,15 +589,13 @@ namespace TerraBlind
 			return pinned;
 		}
 
-		// 钩爪。光标是全局的,攻击层每帧在瞄 boss,只有发射那一帧抢过来指个方向
-		// urgent:不等冷却。贴脸时等 30 帧就是多挨一下
+		// 钩爪。只在发射那一帧占用光标;urgent 无视冷却
 		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, bool urgent, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
-				// 【拉到不再靠近落点才跳】。勾上当帧就跳会立刻解钩,人一格没动,
-				// 贴住的判据还成立,下一帧对同一格再甩 -- 原地勾、跳、勾
+				// 拉到不再靠近落点才跳
 				float d = Microsoft.Xna.Framework.Vector2.Distance(p.Center, _anchorPx);
 				bool pulling = d < _anchorPrev;
 				_anchorPrev = d;
@@ -648,12 +609,10 @@ namespace TerraBlind
 			_anchorPrev = float.MaxValue;
 			if (_hookCooldown > 0) { _hookCooldown--; if (!urgent) return false; }
 			if (!want) { _hookFrames = 0; return false; }
-			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
-			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
+			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
 			if (_hookFrames++ > HookGiveUpFrames) return false;
 			if (_hookHeld) { _hookHeld = false; return true; }
-			// 【必须瞄到真能勾住的格子】。对着空气甩,钩子飞完全程再空手回来,
-			// 这期间人既没位移也没输出 -- 找不到落点就干脆不甩
+			// 找不到能勾的格子就不甩
 			if (!FindAnchor(p, boss, ver, out int ax, out int ay)) { _hookFrames = 0; return false; }
 			Cursor.AimTile(ax, ay);
 			_anchorPx = new Microsoft.Xna.Framework.Vector2(ax * 16 + 8, ay * 16 + 8);
@@ -664,8 +623,7 @@ namespace TerraBlind
 		static Microsoft.Xna.Framework.Vector2 _anchorPx;
 		static float _anchorPrev = float.MaxValue;
 
-		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
-		// 硬编码必错。velocity.Y 转正那一刻就是到顶,这个判据对两种跳都成立
+		// 跳。按住直到开始下落,Rise 且有翅膀时接着按住起飞
 		static bool Jump(Player p, bool onGround, bool want, bool wantMore)
 		{
 			if (onGround) { _airJumped = false; _holdFrames = 0; }
@@ -674,33 +632,25 @@ namespace TerraBlind
 			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
 			{ _holdFrames++; _jumpHeld = true; return true; }
 
-			// 【跳到顶还按着就会起飞】(Player.cs:25618 要 jump==0 && controlJump && wingTime>0)。
-			// 想往上而且还有翅膀时就接着按,不松手 -- 松了就只是跳了一下
+			// 起飞条件见 Player.cs:25618
 			if (_jumpHeld && _wantFly && p.wingTimeMax > 0 && p.wingTime > 0f && !onGround)
 			{ _holdFrames = 0; return true; }
 
-			// 【按住了就必须先松一帧】。站在地上时 velocity.Y==0,上面那条永不命中,
-			// 而 vanilla 要 releaseJump 才认新按压 -- 不松手就是每帧空按,钩爪也取消不掉
+			// 松一帧,vanilla 要 releaseJump 才认新按压
 			if (_jumpHeld) { _jumpHeld = false; _holdFrames = 0; return false; }
 
 			if (!want) return false;
 			if (onGround) { _jumpHeld = true; _holdFrames = 1; return true; }
-			// 【挂着钩子那一跳不花空中跳】。vanilla 自己会解钩并刷新跳(Player.cs:20975),
-			// 走下面 AnyExtraJumpUsable 那道门会让人永远吊在天花板上
+			// 挂钩时的跳是解钩跳,不花空中跳(Player.cs:20975)
 			if (p.grapCount > 0) { _jumpHeld = true; _holdFrames = 1; return true; }
-			// 【能不能跳问 vanilla】。原来只记"这次滞空跳过没有",没跳就当有 --
-			// 没云朵瓶也照按,白扔一次。AnyExtraJumpUsable 连模组跳一起算,还认 blockExtraJumps
 			if (!p.AnyExtraJumpUsable()) return false;
-			// 【有多段不等于要烧多段】。第一段照旧,第二段起只认 act==Up:
-			// incoming 几乎恒真,拿它放行就是一滞空把储备全烧完
+			// 第二段起的空中跳只在 Rise 时用
 			if (_airJumped && !wantMore) return false;
-			// 【空中跳要落日志】。原来只进 HUD 的状态串,事后查不出到底跳没跳
 			DiagLog.Write($"[dodge] 空中跳 第{(_airJumped ? 2 : 1)}段 vy={p.velocity.Y:0.0}");
 			_airJumped = true; _jumpHeld = true; _holdFrames = 1; return true;
 		}
 
-		// boss 朝我飞过来的话,按当前速度还有几帧接触。不朝我来就返回 -1。
-		// 【只用确定的量】:位置和速度。它的攻击模式我不知道,不猜
+		// 按当前速度还有几帧碰到我,不会碰到就是 -1
 		static int FramesToHit(Player p, NPC boss)
 		{
 			float gapX = System.Math.Abs(boss.Center.X - p.Center.X) - (boss.width + p.width) * 0.5f;
@@ -708,27 +658,22 @@ namespace TerraBlind
 			float closeX = (boss.Center.X > p.Center.X) == (boss.velocity.X < 0) ? System.Math.Abs(boss.velocity.X) : 0f;
 			float closeY = (boss.Center.Y > p.Center.Y) == (boss.velocity.Y < 0) ? System.Math.Abs(boss.velocity.Y) : 0f;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
-			// 【一个轴已经重叠就不算那个轴】。平飞冲过来时 closeY 是 0,
-			// 老代码给它 9999 再取 Max,于是"马上撞上"被报成"没威胁"-- 实测 2125 帧里一次没响
+			// 已经重叠的轴算 0 帧,不重叠又不靠近的轴撞不上
 			float fx = gapX <= 0f ? 0f : (closeX > 0.1f ? gapX / closeX : -1f);
 			float fy = gapY <= 0f ? 0f : (closeY > 0.1f ? gapY / closeY : -1f);
-			// 两个轴都要在同一时刻重叠才算撞上,所以取晚的那个;但没在靠近的轴
-			// 只有已经重叠才算数,否则这一下压根撞不上
+			// 两个轴都重叠才算碰到,取晚的那个
 			if (fx < 0f || fy < 0f) return -1;
 			float f = System.Math.Max(fx, fy);
 			return f > 600f ? -1 : (int)f;
 		}
 
-		// 克苏鲁之盾的冲刺。【vanilla 要双击】(Player.cs: flag5 = controlLeft && releaseLeft,
-		// 15 帧内第二次按下才算),所以必须空出一帧不按方向键,下一帧再按下去
+		// 冲刺是方向键双击:松一帧再按
 		static int Dash(Player p, int go, Vert ver)
 		{
-			// 【冲刺中要先于就绪判断】。正在冲的时候 dashDelay<0、dash!=0,
-			// 就绪判据必然为假 -- 写在它后面这一行永远执行不到,方向也就保持不住
+			// 冲刺中保持方向
 			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
 
-			// dashDelay==0 就是就绪(>0 冷却,<0 正在冲)。【别加 dash==0】:
-			// dash 是 dashType 的副本(Player.cs:19764),装了盾恒为 2,那条等于永远不准冲
+			// dashDelay 大于 0 冷却,小于 0 正在冲
 			bool ready = p.dashType != 0 && p.dashDelay == 0;
 			if (!ready)
 			{
@@ -737,21 +682,17 @@ namespace TerraBlind
 				_dashGap = false; _dashDir = 0; return go;
 			}
 
-			// 上一帧空了手,这一帧按下去 -- 双击成立。【按住不放】,
-			// 冲完直接接着走,不然冲刺结束会有一段没速度的真空
 			if (_dashGap) { _dashGap = false; return _dashDir; }
 			_dashDir = 0;
 
-			// 【只听 Jev,不自己冲】。按预警自动冲是在 11 格外冲掉,真撞上时正好在 30 帧冷却里
 			if (!JevSaysDash || go == 0) return go;
 
 			DiagLog.Write($"[dodge] 冲刺 方向{(go < 0 ? "左" : "右")}");
 			_dashGap = true; _dashDir = go;
-			return 0;   // 这一帧松手
+			return 0;
 		}
 
-		// 钩子能不能勾这一格。照 vanilla 的 AI_007_GrapplingHooks_CanTileBeLatchedOnTo:
-		// 实心或者铁轨(314),而且 tile 得是实打实存在的。铁轨不实心但勾得住
+		// 钩子能不能勾这一格,照 AI_007_GrapplingHooks_CanTileBeLatchedOnTo
 		static bool Hookable(int x, int y)
 		{
 			if (!Predicates.InBounds(x, y)) return false;
@@ -760,8 +701,7 @@ namespace TerraBlind
 			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
 		}
 
-		// 【上下都找,挑离 boss 最远的那个】。原来只扫头顶,人贴着天花板时上面没别的落点了
-		// 找不到就让 Hook 放弃,总比对着空气甩强
+		// 顺着竖直意图找能勾的格子,挑离 boss 最远的
 		static bool FindAnchor(Player p, NPC boss, Vert ver, out int ax, out int ay)
 		{
 			ax = ay = 0;
@@ -774,15 +714,11 @@ namespace TerraBlind
 					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
 					if (reach < 4 || reach > HookReachCells) continue;
 					int x = pcx + dx2, y = pcy + dy;
-					// 【勾的方向要和意图一致】。钩爪是实现"升/降"的手段,
-					// 想上去却勾到脚下,等于把自己按回原处
 					if (ver == Vert.Rise && dy >= 0) continue;
 					if (ver == Vert.Drop && dy <= 0) continue;
-					// 【往下勾要够斜】。太接近正下方的落点,勾上只是把自己钉在原地,
-					// 换不来位移。和垂线夹角至少 60 度: |dx| >= dy * tan60 = dy * 1.73
+					// 往下勾和垂线至少差 60 度
 					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
 					if (!Hookable(x, y)) continue;
-					// 【远离 boss 就是好落点】。同方向的落点里挑离它最远的那个
 					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
 					if (score <= best) continue;
 					best = score; ax = x; ay = y;
@@ -790,25 +726,21 @@ namespace TerraBlind
 			return best >= 0;
 		}
 
-		// 往这一侧还能跑多远才撞墙。【不能用 ClearWidth】:那个量的是"站得住的连续地面",
-		// 悬崖和平台边缘都会截断,而那些地方人照样跑得过去 -- 这里要的是"有东西挡着"
+		// 这一侧齐胸高度离墙几格,地图边缘也算墙
 		static int WallDistance(Player p, int dir)
 		{
 			int cx = (int)(p.Center.X / 16f);
-			// 齐胸那一行。贴地扫的话一格台阶就读成墙
 			int cy = (int)((p.position.Y + p.height * 0.5f) / 16f);
 			for (int d = 1; d <= RoomScanCells; d++)
 			{
 				int x = cx + dir * d;
-				// 【世界边界也是墙】。边界外没有方块,IsWall 一路返回 false,
-				// 于是贴着地图边缘反而报"还有 60 格"-- 往那边走是走进死角
 				if (x <= EdgeCells || x >= Main.maxTilesX - EdgeCells) return d - 1;
 				if (Predicates.IsWall(x, cy)) return d - 1;
 			}
 			return RoomScanCells;
 		}
 
-		// 头顶到天花板几格。【只往上,不往下】:脚下永远有地,往下扫出来的数没有意义
+		// 头顶离天花板几格,地图上边缘也算
 		static int CeilingDistance(Player p)
 		{
 			int cx = (int)(p.Center.X / 16f);
@@ -816,25 +748,20 @@ namespace TerraBlind
 			for (int d = 1; d <= RoomScanCells; d++)
 			{
 				int y = top - d;
-				// 天上飞出地图会被太空的低重力和边界卡住,当成天花板
 				if (y <= EdgeCells) return d - 1;
 				if (Predicates.IsWall(cx, y)) return d - 1;
 			}
 			return RoomScanCells;
 		}
 
-		// 脚下到最近一块实心的格数。往下探够 MaxAirborneFrames 那点高度就行,
-		// 探不到就报这个上限 -- "很高"和"极高"对走位是一回事
+		// 脚下离地几格,平台和地图下边缘也算地,最多探 40 格
 		static int CellsAboveGround(Player p)
 		{
 			int cx = (int)(p.Center.X / 16f);
 			int feet = (int)((p.position.Y + p.height) / 16f);
 			for (int d = 0; d < 40; d++)
 			{
-				// 地图底部就是岩浆和虚空,当成地面:再往下没有可去的地方
 				if (feet + d >= Main.maxTilesY - EdgeCells) return d;
-				// 【平台也是地】。IsSolid 只认 tileSolid,平台是 tileSolidTop --
-				// 整个场地都是平台时这里会一路报 40,人明明站着却被当成在半空
 				if (Predicates.IsSolid(cx, feet + d) || Predicates.IsPlatform(cx, feet + d)) return d;
 			}
 			return 40;
@@ -874,7 +801,6 @@ namespace TerraBlind
 				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 // 只有实测过的 boss 才有目标距离
 				 + (Want(boss) != NoWant
 					? ",\"distance_i_asked_for\":" + Want(boss)
 					  + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
@@ -887,7 +813,6 @@ namespace TerraBlind
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
-				 // 数越大越挤,反射层挑退的方向也用这一份
 				 + ",\"how_crowded_each_side_is\":{\"left\":" + PressLeft.ToString("0.00")
 				 + ",\"right\":" + PressRight.ToString("0.00")
 				 + ",\"above\":" + PressUp.ToString("0.00")
@@ -902,7 +827,7 @@ namespace TerraBlind
 				 + "}";
 		}
 
-		// 同一份 state 一次问完。【并行求值不加延迟】,多问几个等于白捡
+		// 同一份 state 的所有问题一次发出
 		static string Body(string state)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
@@ -980,8 +905,7 @@ namespace TerraBlind
 			});
 		}
 
-		// 对照组。【节奏和 Jev 一样】(实测中位 326ms),每帧换就是在测抖动不是在测决策。
-		// 【按 Jev 对这个 boss 的实际比例抽】(JevPrior),没记录才均匀。阈值照旧,日志格式一样好直接比
+		// 对照组:按 JevPrior 里这个 boss 的选择比例抽,没记录就均匀抽。间隔取 Jev 实测延迟中位
 		const int RandomEveryMs = 300;
 		static bool _priorSaid;
 		static void RandomPick(int bossType)
@@ -1027,7 +951,6 @@ namespace TerraBlind
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
-			// 【延迟要落日志】。只进 HUD 的话,事后没法回答"200ms 够不够"
 			DiagLog.Write($"[dodge] jev {ms}ms -> {hp}/{vp}");
 			LatencyMs = ms;
 			Confidence = Num(hq, "confidence", 0f);
@@ -1037,7 +960,7 @@ namespace TerraBlind
 				"Near" => Horiz.Near,
 				_ => Horiz.Away,
 			};
-			// 竖直那题没答上来就保持高度。【不猜】:瞎升瞎降都是白白换位置
+			// 竖直那题没答上来就 Level
 			Ver = vp switch
 			{
 				"Rise" => Vert.Rise,
@@ -1048,8 +971,7 @@ namespace TerraBlind
 
 			Probs = Seg(hq, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
-			// 意图变了才播报。每 200ms 一条会把聊天刷没,那就不是证据是噪音。
-			// 【但卡在一个意图上时也要出声】,否则最该看见的那种局面反而一片安静
+			// 意图变了或同一意图持续 4 秒才发到聊天栏
 			long now = _clock.ElapsedMilliseconds;
 			var said = ToAct(Hor, Ver);
 			if (said != _saidAct || now - _saidAt > 4000)
@@ -1059,7 +981,6 @@ namespace TerraBlind
 				Main.NewText($"<Jev> {Hor}/{Ver}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			// Noul 没有 confidence,概率本身就是答案。冲刺按 0.5(过半即更可能该冲),跳和勾仍是 0.7
 			float jumpN = Num(Seg(txt, "should_jump_now"), "noul", 0f);
 			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
 			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
@@ -1069,7 +990,6 @@ namespace TerraBlind
 			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
 			JevPrior.Record(bossType, Hor, Ver, dashN, hookN, jumpN);
 
-			// 每次回答都记,不只是意图变了才记:要看得出卡在一个选择上多久
 			JevLog.Add(new JevLog.Entry
 			{
 				Ms = _clock.ElapsedMilliseconds,
@@ -1085,8 +1005,7 @@ namespace TerraBlind
 			});
 		}
 
-		// 【多问题必须按问题名定位】。响应是 {"answers":{"intent":{...},"danger":{...}}},
-		// 全文找第一个 "choice" 会把别的问题的答案读进来
+		// 按问题名取出响应里那一段 {...}
 		static string Seg(string s, string question)
 		{
 			int i = s.IndexOf("\"" + question + "\"", System.StringComparison.Ordinal);
@@ -1119,9 +1038,7 @@ namespace TerraBlind
 		static float Num(string seg, string name, float dflt)
 			=> seg != null && float.TryParse(Field(seg, name), out float v) ? v : dflt;
 
-		// 意图的人话。【聊天栏一律英文】,录像给外面的人看
-
-		// "Float:0.41 Grapple:0.19" -- 从 probabilities 里挑最高的两个
+		// 从 probabilities 里挑最高的两个,如 "Away:0.61 Hold:0.30"
 		static string Rank(string probs)
 		{
 			if (string.IsNullOrEmpty(probs)) return "";
