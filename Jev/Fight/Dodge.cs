@@ -677,6 +677,8 @@ namespace TerraBlind
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
+				 + ",\"my_speed_to_the_right_cells_per_second\":" + (int)(p.velocity.X * 60f / 16f)
+				 + ",\"my_speed_upward_cells_per_second\":" + (int)(-p.velocity.Y * 60f / 16f)
 				 + ",\"how_crowded_each_side_is\":{\"left\":" + PressLeft.ToString("0.00")
 				 + ",\"right\":" + PressRight.ToString("0.00")
 				 + ",\"above\":" + PressUp.ToString("0.00")
