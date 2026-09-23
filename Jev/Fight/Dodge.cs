@@ -835,7 +835,7 @@ namespace TerraBlind
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
 				State = _lastFacts,
-				Pick = $"{hp}/{vp}" + (JevSaysJump ? " 该跳" : "")
+				Pick = $"{hp}/{vp}" + (fp != null ? $" 背对{fp}" : "") + (JevSaysJump ? " 该跳" : "")
 					 + (JevSaysDash ? " 该冲" : "") + (JevSaysHook ? " 该勾" : "")
 					 + "  →  " + Last,
 				Confidence = Confidence,
