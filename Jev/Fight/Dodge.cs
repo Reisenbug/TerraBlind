@@ -334,9 +334,6 @@ namespace TerraBlind
 			_wantFly = rise && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, rise);
 
-			// 撞墙就掉头,两侧都堵才停
-			if (go != 0 && WallDistance(p, go) <= 0)
-				go = WallDistance(p, -go) > 0 ? -go : 0;
 
 			int want0 = go;
 			go = Dash(p, go, ver);
