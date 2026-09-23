@@ -6,8 +6,6 @@ namespace TerraBlind
 	public class BossInfo
 	{
 		public string HowItFights = "";
-		// 这一场不许用的意图。
-		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
 		// 这一场该保持的距离(格),实测过才填。0 = 不指定
 		public int WantCells;
 	}
@@ -141,7 +139,6 @@ namespace TerraBlind
 			// 恶鬼离得比肉山近时按这条算(Boss() 取最近的)
 			[Terraria.ID.NPCID.TheHungry] = new BossInfo
 			{
-				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
 				WantCells = 10,
 				HowItFights =
 					"恶鬼是挂在肉山身上的一串小怪,伸得很长,碰到就掉血。"
@@ -150,8 +147,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
-				// 只禁竖直
-				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
 				WantCells = 60,
 				HowItFights =
 					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,只会水平移动,永远不会停。"
@@ -300,14 +295,6 @@ namespace TerraBlind
 
 		// 这个 boss 指定的距离
 		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
-
-		public static bool IsBanned(int npcType, DodgeAct act)
-		{
-			var b = Of(npcType).Banned;
-			for (int i = 0; i < b.Length; i++)
-				if (b[i] == act) return true;
-			return false;
-		}
 	}
 
 	public class BossKnowledgeCommand : Terraria.ModLoader.ModCommand

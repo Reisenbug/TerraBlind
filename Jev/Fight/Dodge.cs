@@ -9,9 +9,6 @@ namespace TerraBlind
 	public enum Horiz { Away, Hold, Near }
 	public enum Vert { Rise, Level, Drop }
 
-	// 旧的九选一。BossBook 的 Banned 还按它写,映射到两个轴上
-	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive }
-
 	// boss 战的走位。两层:Jev 每次反应说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 大约250ms 的判断直接当按键会吃满伤害。对，我测过。
 	public static class Dodge
@@ -67,7 +64,7 @@ namespace TerraBlind
 		public static string Probs = "";
 		public static string TopTwo = "";
 		// 上一条播报过的意图。
-		static DodgeAct _saidAct = (DodgeAct)(-1);
+		static string _saidAct = "";
 		static long _saidAt;
 
 		public const string Url = "https://api.typesafe.ai/v1/systemone";
@@ -260,11 +257,6 @@ namespace TerraBlind
 			bool stale = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs;
 			var hor = stale ? Horiz.Away : Hor;
 			var ver = stale ? Vert.Level : Ver;
-			// 两个轴各查各的禁用,被禁就退回不变
-			if (ver == Vert.Rise && BossBook.IsBanned(boss.type, DodgeAct.Up)) ver = Vert.Level;
-			if (ver == Vert.Drop && BossBook.IsBanned(boss.type, DodgeAct.Dive)) ver = Vert.Level;
-			if (hor == Horiz.Near && BossBook.IsBanned(boss.type, DodgeAct.Close)) hor = Horiz.Hold;
-			if (hor == Horiz.Away && BossBook.IsBanned(boss.type, DodgeAct.Back)) hor = Horiz.Hold;
 
 			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
@@ -272,16 +264,6 @@ namespace TerraBlind
 
 			Gate($"driving {boss.TypeName} {dist}格 act={hor}/{ver}");
 			Drive(p, boss, dist, hor, ver);
-		}
-
-		// 两个轴映射回旧的九选一,给 BossBook.Banned 查
-		static DodgeAct ToAct(Horiz h, Vert v)
-		{
-			if (v == Vert.Rise) return DodgeAct.Up;
-			if (v == Vert.Drop) return DodgeAct.Dive;
-			if (h == Horiz.Away) return DodgeAct.Back;
-			if (h == Horiz.Near) return DodgeAct.Close;
-			return DodgeAct.Keep;
 		}
 
 		// 写 HUD 状态,变了才进日志
@@ -355,8 +337,6 @@ namespace TerraBlind
 						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
 			bool hooking = Hook(p, boss, wantHook, ver, onGround, pinned, out bool hookJump);
 
-			// 禁 Up 的 boss 连 JevSaysJump 和 incoming 的跳也禁
-			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
 			// 打不中时每 PoseSecs 秒在 Rise/Drop 之间翻
 			if (TooFar)
 			{
@@ -379,12 +359,12 @@ namespace TerraBlind
 
 			// 头顶没空间就不再往上
 			int headroom = CeilingDistance(p);
-			if (ver == Vert.Rise && !noJump && headroom > 2) _riseHold = RiseHoldFrames;
+			if (ver == Vert.Rise && headroom > 2) _riseHold = RiseHoldFrames;
 			else if (_riseHold > 0) _riseHold--;
 			if (headroom <= 1) _riseHold = 0;
-			bool rise = _riseHold > 0 && !noJump;
+			bool rise = _riseHold > 0;
 			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
-			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming) && !noJump);
+			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming));
 			// 只有 Rise 才用翅膀
 			_wantFly = rise && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, rise);
@@ -942,7 +922,7 @@ namespace TerraBlind
 			TopTwo = Rank(Probs);
 			// 意图变了或同一意图持续 4 秒才发到聊天栏
 			long now = _clock.ElapsedMilliseconds;
-			var said = ToAct(Hor, Ver);
+			var said = $"{Hor}/{Ver}";
 			if (said != _saidAct || now - _saidAt > 4000)
 			{
 				string tag = said == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
