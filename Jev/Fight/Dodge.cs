@@ -399,14 +399,24 @@ namespace TerraBlind
 		// Drop:站在平台上时按住下穿过脚下这一层,脚过了那一层就松开,落到下一层停住。一次回答穿一层
 		static int _dropRow = -1;
 		static int _dropUsed = -1;
+		static int _dropSaid = -1;
 		static bool DropThrough(Player p, Vert ver, bool onGround)
 		{
 			int feet = (int)((p.position.Y + p.height) / 16f);
 			if (ver != Vert.Drop || p.grapCount > 0) _dropRow = -1;
-			else if (_dropRow < 0 && onGround && _dropUsed != _answer && OnPlatform(p, feet))
+			else if (_dropRow < 0 && onGround && _dropUsed != _answer)
 			{
-				_dropRow = feet;
-				_dropUsed = _answer;
+				if (OnPlatform(p, feet))
+				{
+					_dropRow = feet;
+					_dropUsed = _answer;
+					DiagLog.Write($"[dodge] 穿平台 第{feet}行");
+				}
+				else if (_dropSaid != _answer)
+				{
+					_dropSaid = _answer;
+					DiagLog.Write($"[dodge] Drop 但脚下第{feet}行不是平台");
+				}
 			}
 			if (_dropRow >= 0 && feet > _dropRow) _dropRow = -1;
 			return _dropRow >= 0;
