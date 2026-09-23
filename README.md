@@ -245,13 +245,13 @@ Alongside those: a five-level `danger` score and several nouls -- `should_dash_n
 
 Jev answers judgments; the code owns aiming, distance, timing and TTL.
 
-Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, what the arena is like, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are ten: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, The Twins, Queen Bee, Deerclops, The Hungry, Wall of Flesh -- the last three of those also carry a keep-distance number.
+Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are ten: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, The Twins, Queen Bee, Deerclops, The Hungry, Wall of Flesh -- the last three of those also carry a keep-distance number.
 
 Playbooks are **editable in game**: the `BossPlaybook` list in the mod config is auto-populated with every boss in the game at startup, each entry defaulting to the text from the code and carrying its own on/off toggle.
 
 The recorded runs were fought on **Master Mode**.
 
-`/bossbook` switches the playbooks off entirely, leaving only the arena and the generic fields, to measure what the knowledge is actually worth.
+`/bossbook` switches the playbooks off entirely, leaving only the generic fields, to measure what the knowledge is actually worth.
 
 A TypeSafe API key is required, read in this order: the mod config screen, then `.env` in the repo root (see `.env.example`; it is in both `.gitignore` and `buildIgnore`), then the `TYPESAFE_API_KEY` environment variable. Without a key the combat layer falls back to a conservative baseline and the main pipeline is unaffected.
 

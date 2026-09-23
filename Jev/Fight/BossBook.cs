@@ -2,12 +2,10 @@ using System.Collections.Generic;
 
 namespace TerraBlind
 {
-	// 每个 boss 一条。打法和场地【都只是一段话】。
+	// 每个 boss 一条,打法只是一段话
 	public class BossInfo
 	{
 		public string HowItFights = "";
-		// 这个 boss 的场地长什么样。（真的需要嘛？）
-		public string Arena = "";
 		// 这一场不许用的意图。
 		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
 		// 这一场该保持的距离(格),实测过才填。0 = 不指定
@@ -22,16 +20,10 @@ namespace TerraBlind
 		// 只关 HowItFights
 		public static bool UseKnowledge = true;
 
-		// 说清楚上下都能走
-		const string OpenArena = "一层层斜坡平台摞起来的场地,左右都能跑。"
-			+ "平台可以穿:按住下就直接落到下一层,往上跳也能穿过去,所以换高度很便宜。"
-			+ "最上面是实心方块封顶,顶到那里就再也上不去了;最下面一层是平台,底下是空的";
-
 		static readonly Dictionary<int, BossInfo> Book = new()
 		{
 			[Terraria.ID.NPCID.EyeofCthulhu] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights =
 					"克苏鲁之眼通常先悬停在玩家头顶上方,蓄一会儿,然后朝玩家所在的位置直线冲刺。"
 					+ "需要横向速度。站着不动等它冲下来必然被撞。"
@@ -40,7 +32,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.KingSlime] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights =
 					"史莱姆王的打法就一句话:一直远离它,别停。它会瞬移到玩家身上,"
 					+ "而瞬移后的接触有伤害。站着不动就容易吃到。所以要时刻保持移动。"
@@ -48,7 +39,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.BrainofCthulhu] = new BossInfo
 			{
-				Arena = "一个正方形房间,四面都是墙,退无可退", // 视频演示所需。TODO: 不硬写这段话
 				HowItFights =
 					"克苏鲁之脑分两个阶段。一阶段本体无敌,需要攻击场上的creeper"
 					+ "先把爬行者清光,清光的那一刻本体才会现身。爬行者是一次性的,不会再刷。"
@@ -61,7 +51,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.EaterofWorldsHead] = new BossInfo
 			{
-				Arena = "腐化之地的竖井和土层,它穿墙钻土,墙挡不住它",
 				HowItFights =
 					"世界吞噬者是一条几十节的长虫,穿墙钻土,整条身体都会撞人。"
 					+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远。"
@@ -71,7 +60,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.SkeletronHead] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights =
 					"骷髅王有一个头和两只手。两只手还在的时候先打手。"
 					+ "打掉一只手之后它开始发射弧形轨迹的的骷髅头弹幕,两只手都没了发射得更快。"
@@ -86,7 +74,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.Spazmatism] = new BossInfo
 			{
-				Arena = OpenArena,
 				// 喷火范围约 30 格,boss 还一直在逼近,所以定 40
 				WantCells = 40,
 				HowItFights =
@@ -118,19 +105,16 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.TheDestroyer] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】,身体也要远离。如有需要，清理探针小怪。",
 			},
 
 			[Terraria.ID.NPCID.SkeletronPrime] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights = "机械骷髅王的头要远离。"
 			},
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
 			{
-				Arena = OpenArena,
 				Orbit = true,
 				// 绕圈的半径,实测开场自然稳在 40 格左右
 				WantCells = 40,
@@ -146,7 +130,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.QueenBee] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights =
 					"蜂王悬在头顶上方的时候,横向移动。"
 					+ "而它和自己处在差不多同一高度、横着冲过来的时候,上下移动。"
@@ -154,7 +137,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.Deerclops] = new BossInfo
 			{
-				Arena = OpenArena,
 				HowItFights =
 					"尽量与boss平齐。此boss伤害不高，脚底下无碰撞伤害。需要始终在boss几格内。",
 			},
@@ -162,7 +144,6 @@ namespace TerraBlind
 			// 恶鬼离得比肉山近时按这条算(Boss() 取最近的)
 			[Terraria.ID.NPCID.TheHungry] = new BossInfo
 			{
-				Arena = "地狱里一条完全平整的长桥,一路平到底",
 				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple, DodgeAct.Close },
 				WantCells = 10,
 				HowItFights =
@@ -172,7 +153,6 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
-				Arena = "地狱里一条完全平整的长桥,一路平到底,没有高低差也没有可以跳上去的东西",
 				// 只禁竖直
 				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
 				WantCells = 60,
@@ -319,13 +299,6 @@ namespace TerraBlind
 			var o = Override(npcType);
 			if (o == null) return Of(npcType).HowItFights;
 			return o.Enabled ? o.HowItFights : "";
-		}
-
-		// 没有条目的 boss 也得有个场地描述,否则那个字段是空的
-		public static string ArenaOf(int npcType)
-		{
-			string a = Of(npcType).Arena;
-			return a.Length > 0 ? a : OpenArena;
 		}
 
 		// 这个 boss 指定的距离

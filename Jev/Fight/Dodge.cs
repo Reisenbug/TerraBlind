@@ -816,7 +816,6 @@ namespace TerraBlind
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
-				 + ",\"arena\":\"" + JsonStr(BossBook.ArenaOf(boss.type)) + "\""
 				 + ",\"how_the_bosses_here_fight\":" + FieldBooks(boss)
 				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
 				 + "}";
