@@ -53,19 +53,14 @@ namespace TerraBlind
 				// 滤掉它 Jev 就只看得见一只眼睛,躲开这只正好撞上那只
 				if (d > RangeCells && !npc.boss) continue;
 				bool walled = Blocked(atCx, atCy, ncx, ncy);
-				bool toward = (ncx < atCx && npc.velocity.X > 0.1f) || (ncx > atCx && npc.velocity.X < -0.1f);
 				if (n++ > 0) sb.Append(',');
 				sb.Append("{\"name\":\"").Append(npc.TypeName ?? "?").Append('"')
-				  .Append(",\"cell\":[").Append(ncx).Append(',').Append(ncy).Append(']')
 				  .Append(",\"damage\":").Append(npc.damage)
 				  .Append(",\"damage_pct_of_my_hp\":").Append((int)(npc.damage * 100f / System.Math.Max(1, p.statLife)))
-				  .Append(",\"hp\":").Append(npc.life)
 				  .Append(",\"speed\":").Append((System.Math.Abs(npc.velocity.X) + System.Math.Abs(npc.velocity.Y)).ToString("0.0"))
-				  .Append(",\"threat\":").Append(Score(p, npc, d).ToString("0.0"))
 				  .Append(",\"distance_cells\":").Append(d)
 				  .Append(",\"flies\":").Append(npc.noGravity ? "true" : "false")
 				  .Append(",\"behind_blocks\":").Append(walled ? "true" : "false")
-				  .Append(",\"moving_toward_player\":").Append(toward ? "true" : "false")
 				  .Append(",\"boss\":").Append(npc.boss ? "true" : "false")
 				  .Append('}');
 			}

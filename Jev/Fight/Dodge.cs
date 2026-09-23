@@ -478,7 +478,7 @@ namespace TerraBlind
 		// 最低值几乎恒为 0(冲刺、无敌帧),拿它俩当参照等于没有参照
 		static readonly int[] _dpsHist = new int[30];
 		static int _histAt, _histCount, _secFrames;
-		public static int BossDps, DpsGood, DpsTypical, DpsPct = 100;
+		public static int BossDps, DpsTypical, DpsPct = 100;
 		// 【按总血量算,不跟着锁定目标】。Boss() 返回最近的那只,双子之间每局切 78 次,
 		// 每切一次就清空累积 -- dps 永远是 0,于是它一直以为自己够不着,全程选 Near
 		static int TotalBossHp()
@@ -516,8 +516,6 @@ namespace TerraBlind
 			var s = new int[_histCount];
 			System.Array.Copy(_dpsHist, s, _histCount);
 			System.Array.Sort(s);
-			// 打得好的时候能到多少(p80),平常是多少(中位)。差的那头不取:那是 0
-			DpsGood = s[(int)(_histCount * 0.8f) >= _histCount ? _histCount - 1 : (int)(_histCount * 0.8f)];
 			DpsTypical = s[_histCount / 2];
 			// 【拿常驻当尺子,不拿 0 当尺子】。常驻 300 时 200 照样在打,只是那一秒没满 --
 			// 掉到常驻的三分之一以下才是真的够不着
@@ -853,11 +851,10 @@ namespace TerraBlind
 
 		static void Release() => AxisLock.Release(Owner);
 
-		// 格/秒,外加最近一秒的峰值和加速度。【窗口只有一秒】:十秒会跨阶段,
-		// 一阶段的速度污染二阶段的参照
+		// boss 速度(格/秒)和最近一秒的峰值
 		static readonly float[] _spdRing = new float[60];
 		static int _spdAt;
-		static float _bossRecentTop, _bossAccel, _bossPrevSpd;
+		static float _bossRecentTop;
 		static int BossSpeed(NPC boss)
 		{
 			float v = (System.Math.Abs(boss.velocity.X) + System.Math.Abs(boss.velocity.Y)) * 60f / 16f;
@@ -866,8 +863,6 @@ namespace TerraBlind
 			float top = 0f;
 			foreach (float s in _spdRing) if (s > top) top = s;
 			_bossRecentTop = top;
-			_bossAccel = v - _bossPrevSpd;
-			_bossPrevSpd = v;
 			return (int)v;
 		}
 
@@ -875,7 +870,6 @@ namespace TerraBlind
 		{
 			float dx = (boss.Center.X - p.Center.X) / 16f;
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
-			bool closing = (dx > 0 && boss.velocity.X < 0) || (dx < 0 && boss.velocity.X > 0);
 			int bossSpd = BossSpeed(boss);
 			Pressure(p);
 			int hit = FramesToHit(p, boss);
@@ -883,67 +877,37 @@ namespace TerraBlind
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
-				 // 【只报实测量】。"在不在冲刺"要编阈值,而没有冲刺的 boss 那个字段本身就是错的
 				 + ",\"boss_speed_cells_per_second\":" + bossSpd
 				 + ",\"boss_fastest_in_the_last_second\":" + (int)_bossRecentTop
-				 + ",\"boss_acceleration\":" + _bossAccel.ToString("0.0")
-				 // 【够不够得着打用实测】。距离多少算够是跟着武器和装备变的,这个数直接说明打没打中
-				 + ",\"damage_i_am_dealing_per_second\":" + BossDps
-				 + ",\"my_usual_damage_per_second_this_fight\":" + DpsTypical
-				 + ",\"my_best_damage_per_second_this_fight\":" + DpsGood
-				 // 【百分比才有参照】。光给个 300 它不知道那是高是低
 				 + ",\"percent_of_my_usual_damage_right_now\":" + DpsPct
 				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
-				 + ",\"boss_side\":\"" + (dx > 0 ? "右边" : "左边") + "\""
 				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 // 只有实测过的 boss 才报目标距离。【编出来的数会被当指令执行】
+				 // 只有实测过的 boss 才有目标距离
 				 + (Want(boss) != NoWant
 					? ",\"distance_i_asked_for\":" + Want(boss)
 					  + ",\"cells_further_than_i_asked_for\":" + (dist - Want(boss))
 					: "")
-				 + ",\"boss_cells_vertical\":" + (int)dy
-				 // 【正上方也算"远"】。原来只给一个曼哈顿距离,人悬在 boss 头顶 40 格时
-				 // 它读到的是"离得远",于是一直想靠近 -- 而横着走一辈子也下不来
 				 + ",\"i_am_above_the_boss_by\":" + (int)(-dy)
-				 + ",\"same_height_as_boss\":" + (System.Math.Abs(dy) <= 3 ? "true" : "false")
-				 + ",\"boss_coming_at_me\":" + (closing ? "true" : "false")
 				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
 				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
-				 + ",\"i_am_airborne\":" + (p.velocity.Y != 0f ? "true" : "false")
-				 // 【飘了多久、离地多高】。原来只说"在空中",于是它每次都在答
-				 // "现在要不要滞空",而不是"要不要继续滞空" -- 悬了三秒也看不出来
 				 + ",\"frames_airborne\":" + _airborneFrames
 				 + ",\"cells_above_ground\":" + CellsAboveGround(p)
-				 // 【离墙还有几格】。arena 那段话只说了"这是个封闭房间",
-				 // 而它不知道此刻离墙多近 -- 于是 Back 一路跑到墙根还在按方向键
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
-				 // 【四面的压力】。同一份数反射层也在用来挑往哪边退,两边看的是一个东西。
-				 // 数越大越挤,近的威胁权重高(按 1/距离 加)
+				 // 数越大越挤,反射层挑退的方向也用这一份
 				 + ",\"how_crowded_each_side_is\":{\"left\":" + PressLeft.ToString("0.00")
 				 + ",\"right\":" + PressRight.ToString("0.00")
 				 + ",\"above\":" + PressUp.ToString("0.00")
 				 + ",\"below\":" + PressDown.ToString("0.00") + "}"
-				 // 【退开是有代价的】。武器自动瞄准,所以从它的角度看后退全是好处 --
-				 // 不说一声就会一路退到天上去,全场只剩 Away/Rise
-				 + ",\"i_am_pinned_against_the_ceiling\":" + (CeilingDistance(p) <= 2 ? "true" : "false")
-				 // 【问真值】。原来报的是"我们还没跳过",没云朵瓶时也说 true -- 骗了 Jev
 				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
-				 // 【弹幕也要看见】。只扫 NPC 的话,打得到我的东西有一半不在视野里
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
-				 // 【逐发列表之外还要给汇总】。十几发各自的 vx/vy 看不出该往哪躲
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
-				 + ",\"my_weapon_fires_by_itself\":true"
-				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
-				 // 写在这里等于对每个 boss 都这么说 -- 该由 how_the_bosses_here_fight 去讲
 				 + ",\"arena\":\"" + JsonStr(BossBook.ArenaOf(boss.type)) + "\""
-				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
 				 + ",\"how_the_bosses_here_fight\":" + FieldBooks(boss)
 				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
-				 + ",\"grapple_attached\":" + (p.grapCount > 0 ? "true" : "false")
 				 + "}";
 		}
 
