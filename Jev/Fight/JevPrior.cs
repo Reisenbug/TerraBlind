@@ -4,17 +4,16 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// Jev 实际怎么选的,按 boss 分开记。对照组按这张表抽,
-	// 【比例和 Jev 一样,差的只剩"什么时候选"】 -- 均匀随机的话连"多数时候远离"都没有,比的就不是一个东西
+	// Jev 每道题每个选项选了几次,按 boss 分开记。对照组按这张表抽
 	public static class JevPrior
 	{
-		const int Buckets = 20;
+		// noul 按概率分成这么多个桶记
+		public const int Buckets = 20;
 		const int SaveEvery = 20;
 
 		class Prior
 		{
-			public int[] Pick = new int[9];
-			public int[] Dash = new int[Buckets], Hook = new int[Buckets], Jump = new int[Buckets];
+			public Dictionary<string, int[]> Counts = new();
 			public int Total;
 		}
 
@@ -31,51 +30,51 @@ namespace TerraBlind
 			}
 		}
 
-		static int Bucket(float v) => System.Math.Clamp((int)(v * Buckets), 0, Buckets - 1);
+		public static int Bucket(float v) => System.Math.Clamp((int)(v * Buckets), 0, Buckets - 1);
 
-		public static void Record(int bossType, Horiz h, Vert v, float dash, float hook, float jump)
+		// 一次回答记一条:每道题选了第几个选项,一共几个选项
+		public static void Record(int bossType, params (string Q, int Pick, int Options)[] picks)
 		{
 			int key = BossBook.Canonical(bossType);
 			if (!Book.TryGetValue(key, out var p)) Book[key] = p = new Prior();
-			p.Pick[(int)h * 3 + (int)v]++;
-			p.Dash[Bucket(dash)]++;
-			p.Hook[Bucket(hook)]++;
-			p.Jump[Bucket(jump)]++;
+			foreach (var (q, pick, n) in picks)
+			{
+				if (!p.Counts.TryGetValue(q, out var c) || c.Length != n) p.Counts[q] = c = new int[n];
+				c[pick]++;
+			}
 			p.Total++;
 			if (++_unsaved >= SaveEvery) Save();
 		}
 
-		// 这个 boss 没有 Jev 的记录就返回 false,调用方自己退回均匀
-		public static bool Sample(int bossType, out Horiz h, out Vert v, out float dash, out float hook, out float jump, out int samples)
-		{
-			h = Horiz.Away; v = Vert.Level; dash = hook = jump = 0f; samples = 0;
-			if (!Book.TryGetValue(BossBook.Canonical(bossType), out var p) || p.Total == 0) return false;
-			samples = p.Total;
-			int pick = Draw(p.Pick);
-			h = (Horiz)(pick / 3);
-			v = (Vert)(pick % 3);
-			dash = DrawValue(p.Dash);
-			hook = DrawValue(p.Hook);
-			jump = DrawValue(p.Jump);
-			return true;
-		}
+		public static int Samples(int bossType)
+			=> Book.TryGetValue(BossBook.Canonical(bossType), out var p) ? p.Total : 0;
 
-		static int Draw(int[] counts)
+		// 按 Jev 的比例抽一道题的选项,没有记录就均匀抽
+		public static int Sample(int bossType, string q, int options)
 		{
-			int sum = 0;
-			foreach (int c in counts) sum += c;
-			int r = Main.rand.Next(sum);
-			for (int i = 0; i < counts.Length; i++)
+			if (Book.TryGetValue(BossBook.Canonical(bossType), out var p)
+			 && p.Counts.TryGetValue(q, out var c) && c.Length == options)
 			{
-				r -= counts[i];
-				if (r < 0) return i;
+				int sum = 0;
+				foreach (int x in c) sum += x;
+				if (sum > 0)
+				{
+					int r = Main.rand.Next(sum);
+					for (int i = 0; i < c.Length; i++)
+					{
+						r -= c[i];
+						if (r < 0) return i;
+					}
+				}
 			}
-			return counts.Length - 1;
+			return Main.rand.Next(options);
 		}
 
-		// 先按比例抽桶,桶内均匀
-		static float DrawValue(int[] counts) => (Draw(counts) + Main.rand.NextFloat()) / Buckets;
+		// noul 先按比例抽桶,桶内均匀
+		public static float SampleNoul(int bossType, string q)
+			=> (Sample(bossType, q, Buckets) + Main.rand.NextFloat()) / Buckets;
 
+		// 一行一个 boss:key|total|题=次数,次数;题=...
 		static void Load()
 		{
 			_book = new Dictionary<int, Prior>();
@@ -85,24 +84,22 @@ namespace TerraBlind
 				foreach (var line in File.ReadAllLines(FilePath))
 				{
 					var f = line.Split('|');
-					if (f.Length != 6 || !int.TryParse(f[0], out int key)) continue;
-					var p = new Prior();
-					if (!Fill(f[1], p.Pick) || !Fill(f[2], p.Dash) || !Fill(f[3], p.Hook)
-					 || !Fill(f[4], p.Jump) || !int.TryParse(f[5], out p.Total)) continue;
+					if (f.Length != 3 || !int.TryParse(f[0], out int key) || !int.TryParse(f[1], out int total)) continue;
+					var p = new Prior { Total = total };
+					foreach (var part in f[2].Split(';'))
+					{
+						int eq = part.IndexOf('=');
+						if (eq <= 0) continue;
+						var nums = part.Substring(eq + 1).Split(',');
+						var c = new int[nums.Length];
+						for (int i = 0; i < nums.Length; i++) int.TryParse(nums[i], out c[i]);
+						p.Counts[part.Substring(0, eq)] = c;
+					}
 					_book[key] = p;
 				}
 				DiagLog.Write($"[prior] 读到 {_book.Count} 个 boss 的 Jev 记录");
 			}
 			catch (System.Exception e) { DiagLog.Write($"[prior] 读取失败 {e.Message},从空表开始"); }
-		}
-
-		static bool Fill(string s, int[] into)
-		{
-			var parts = s.Split(',');
-			if (parts.Length != into.Length) return false;
-			for (int i = 0; i < parts.Length; i++)
-				if (!int.TryParse(parts[i], out into[i])) return false;
-			return true;
 		}
 
 		public static void Save()
@@ -114,9 +111,9 @@ namespace TerraBlind
 				var lines = new List<string>();
 				foreach (var kv in _book)
 				{
-					var p = kv.Value;
-					lines.Add($"{kv.Key}|{string.Join(",", p.Pick)}|{string.Join(",", p.Dash)}|{string.Join(",", p.Hook)}"
-						+ $"|{string.Join(",", p.Jump)}|{p.Total}");
+					var parts = new List<string>();
+					foreach (var c in kv.Value.Counts) parts.Add(c.Key + "=" + string.Join(",", c.Value));
+					lines.Add($"{kv.Key}|{kv.Value.Total}|{string.Join(";", parts)}");
 				}
 				Directory.CreateDirectory(LogRoot.Root);
 				File.WriteAllLines(FilePath, lines);

@@ -7,7 +7,10 @@ namespace TerraBlind
 	// Jev 给意图，不给按键
 	// 钩爪/冲刺/二段跳/飞行，由代码挑
 	public enum Horiz { Away, Hold, Near }
-	public enum Vert { Rise, Level, Drop }
+	// 竖直动作
+	public enum Move { Fly, AirJump, DropPlatform, None }
+	// 在空中又没在飞时,上下键怎么按
+	public enum Fall { Up, Free, Down }
 
 	// boss 战的走位。两层:Jev 每次反应说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 大约250ms 的判断直接当按键会吃满伤害。对，我测过。
@@ -47,17 +50,15 @@ namespace TerraBlind
 		static bool _dashGap;
 		// 这次滞空了多少帧,报给 Jev
 		static int _airborneFrames;
-		// 这一帧要不要靠翅膀爬升。跳到顶之后还按着才会起飞
-		static bool _wantFly;
 		// 找钩爪落点的搜索半径,不是钩爪射程
 		const int HookReachCells = 20;
 
 		public static string Last = "idle";
 		public static Horiz Hor = Horiz.Away;
-		public static Vert Ver = Vert.Level;
+		public static Move Mv = Move.None;
+		public static Fall Fl = Fall.Free;
 		public static float Confidence;
 		public static int LatencyMs;
-		public static bool JevSaysJump;
 		public static bool JevSaysDash;
 		public static bool JevSaysHook;
 		// jev判的概率分布。
@@ -210,17 +211,18 @@ namespace TerraBlind
 				Fire(key, Body(_lastFacts, FleeQuestion()));
 			}
 
-			// 意图过期时用 Away/Level
+			// 意图过期时用 Away/None/Free
 			bool stale = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs;
 			var hor = stale ? Horiz.Away : Hor;
-			var ver = stale ? Vert.Level : Ver;
+			var mv = stale ? Move.None : Mv;
+			var fl = stale ? Fall.Free : Fl;
 
 			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
 			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); return; }
 
-			Gate($"driving {boss.TypeName} {dist}格 act={hor}/{ver}");
-			Drive(p, boss, dist, hor, ver);
+			Gate($"driving {boss.TypeName} {dist}格 act={hor}/{mv}/{fl}");
+			Drive(p, boss, dist, hor, mv, fl);
 		}
 
 		// 写 HUD 状态,变了才进日志
@@ -236,7 +238,7 @@ namespace TerraBlind
 		}
 
 		// 反射层,每帧把意图翻译成按键
-		static void Drive(Player p, NPC boss, int dist, Horiz hor, Vert ver)
+		static void Drive(Player p, NPC boss, int dist, Horiz hor, Move mv, Fall fl)
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
@@ -271,45 +273,44 @@ namespace TerraBlind
 					break;
 			}
 
-			bool hooking = Hook(p, boss, JevSaysHook, ver, onGround, out bool hookJump);
-
-			// 打不中时每 PoseSecs 秒在 Rise/Drop 之间翻
+			// 打不中时每 PoseSecs 秒在往上飞和往下穿之间翻
 			if (TooFar)
 			{
-				var was = ver;
-				ver = (_lowSecs / PoseSecs) % 2 == 0 ? Vert.Rise : Vert.Drop;
-				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
+				bool up = (_lowSecs / PoseSecs) % 2 == 0;
+				var was = mv;
+				mv = up ? Move.Fly : Move.DropPlatform;
+				fl = up ? Fall.Up : Fall.Down;
+				if (mv != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{mv}/{fl}");
 			}
 
-			// 一次 Rise 回答只起一段跳
-			bool riseNew = ver == Vert.Rise && _riseUsed != _answer;
-			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
-			bool wantJump = hookJump || (p.grapCount == 0 && (riseNew || JevSaysJump || incoming));
-			// 空中跳用完了才用翅膀,飞到 Jev 不再说 Rise
-			_wantFly = ver == Vert.Rise && p.grapCount == 0 && !p.AnyExtraJumpUsable();
-			bool jump = Jump(p, onGround, wantJump, riseNew);
-			if (_jumpStarted && riseNew) _riseUsed = _answer;
-
+			// 钩爪落点跟着竖直方向:往上的动作勾上面,往下的勾下面
+			int hookDir = mv == Move.Fly || mv == Move.AirJump || fl == Fall.Up ? -1
+						: mv == Move.DropPlatform || fl == Fall.Down ? 1 : 0;
+			bool hooking = Hook(p, boss, JevSaysHook, hookDir, onGround, out bool hookJump);
+			bool jump = Jump(p, onGround, mv, hookJump, incoming);
 
 			int want0 = go;
-			go = Dash(p, go, ver);
+			go = Dash(p, go);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 只在穿平台的那几帧按下
-			bool dive = DropThrough(p, ver, onGround);
-			// 缓降只在 Rise 或挂钩时
-			bool hover = !dive && !_wantFly && (ver == Vert.Rise || hooking);
+			// 下键:穿平台那几帧按住;空中没在飞、没挂钩时按下落那一题
+			bool flying = jump && mv == Move.Fly && !onGround;
+			bool dive = DropThrough(p, mv == Move.DropPlatform, onGround);
+			if (!dive && !onGround && !flying && p.grapCount == 0)
+			{
+				if (fl == Fall.Down) dive = true;
+				else if (fl == Fall.Up) p.controlUp = true;
+			}
 			if (dive) p.controlDown = true;
-			else if (!onGround && hover) p.controlUp = true;
 
-			Fly(p);
+			Fly(p, mv);
 			TrackDps();
-			Hurt(p, boss, dist, hor, ver);
-			Last = $"{hor}/{ver} boss {(bossRight ? "R" : "L")}{dist} go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
+			Hurt(p, boss, dist, hor, mv, fl);
+			Last = $"{hor}/{mv}/{fl} boss {(bossRight ? "R" : "L")}{dist} go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "")
 				 + (incoming ? $" hit in {framesToHit}f" : "");
@@ -373,7 +374,7 @@ namespace TerraBlind
 
 		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;
-		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Vert ver)
+		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Move mv, Fall fl)
 		{
 			if (_prevHp < 0) { _prevHp = p.statLife; return; }
 			int lost = _prevHp - p.statLife;
@@ -394,7 +395,7 @@ namespace TerraBlind
 				if (d < pd) { pd = d; pn = $"{pr.Name}(伤{pr.damage})"; }
 			}
 			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
-				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{ver}"
+				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{mv}/{fl}"
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格 | debuff {Debuffs(p)}");
 		}
 
@@ -412,14 +413,14 @@ namespace TerraBlind
 			return sb.Length > 0 ? sb.ToString() : "无";
 		}
 
-		// Drop:站在平台上时按住下穿过脚下这一层;空中按住下快速落,下一层平台快到时松开,停在上面。一次回答穿一层
+		// 下平台:站在平台上时按住下穿过脚下这一层,脚过了就松开。一次回答穿一层
 		static int _dropRow = -1;
 		static int _dropUsed = -1;
 		static int _dropSaid = -1;
-		static bool DropThrough(Player p, Vert ver, bool onGround)
+		static bool DropThrough(Player p, bool want, bool onGround)
 		{
 			int feet = (int)((p.position.Y + p.height) / 16f);
-			if (ver != Vert.Drop || p.grapCount > 0) { _dropRow = -1; return false; }
+			if (!want || p.grapCount > 0) { _dropRow = -1; return false; }
 			// 斜坡平台上 velocity.Y 不为 0,脚踩着平台行也算站着
 			bool standing = onGround || (p.velocity.Y >= 0f && OnPlatform(p, feet));
 			if (_dropRow < 0 && standing && _dropUsed != _answer)
@@ -433,17 +434,11 @@ namespace TerraBlind
 				else if (_dropSaid != _answer)
 				{
 					_dropSaid = _answer;
-					DiagLog.Write($"[dodge] Drop 但脚下第{feet}行不是平台");
+					DiagLog.Write($"[dodge] 下平台 但脚下第{feet}行不是平台");
 				}
 			}
 			if (_dropRow >= 0 && feet > _dropRow) _dropRow = -1;
-			if (_dropRow >= 0) return true;
-			if (standing) return false;
-			// 这一帧和下一帧会落到的行里有平台就松开
-			int ahead = (int)(System.Math.Max(0f, p.velocity.Y) / 16f) + 2;
-			for (int r = feet; r <= feet + ahead; r++)
-				if (OnPlatform(p, r)) return false;
-			return true;
+			return _dropRow >= 0;
 		}
 
 		// 脚下这一行踩着的是平台而不是实心块
@@ -458,26 +453,24 @@ namespace TerraBlind
 			return plat;
 		}
 
-		// 上一次起过跳的 Rise 回答
-		static int _riseUsed = -1;
-		// 这一帧按下了新的一跳
-		static bool _jumpStarted;
+		// 上一次再跳一段的回答
+		static int _airJumpUsed = -1;
 		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
 		// 飞行开始和结束各记一行。wingTime 在掉而且在上升才算飞,缓降也烧 wingTime
-		static void Fly(Player p)
+		static void Fly(Player p, Move mv)
 		{
 			bool now = p.wingTime < _prevWing - 0.01f && p.velocity.Y < -0.5f;
 			_prevWing = p.wingTime;
 			if (now == _flying) return;
 			_flying = now;
-			DiagLog.Write($"[dodge] 飞行{(now ? "开始" : "结束")} wantFly={_wantFly}"
+			DiagLog.Write($"[dodge] 飞行{(now ? "开始" : "结束")} 竖直动作={mv}"
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
 		// 钩爪。只在发射那一帧占用光标
-		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, out bool hookJump)
+		static bool Hook(Player p, NPC boss, bool want, int dir, bool onGround, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
@@ -500,7 +493,7 @@ namespace TerraBlind
 			if (_hookFrames++ > HookGiveUpFrames) return false;
 			if (_hookHeld) { _hookHeld = false; return true; }
 			// 找不到能勾的格子就不甩
-			if (!FindAnchor(p, boss, ver, out int ax, out int ay)) { _hookFrames = 0; return false; }
+			if (!FindAnchor(p, boss, dir, out int ax, out int ay)) { _hookFrames = 0; return false; }
 			Cursor.AimTile(ax, ay);
 			_anchorPx = new Microsoft.Xna.Framework.Vector2(ax * 16 + 8, ay * 16 + 8);
 			p.controlHook = true;
@@ -510,35 +503,37 @@ namespace TerraBlind
 		static Microsoft.Xna.Framework.Vector2 _anchorPx;
 		static float _anchorPrev = float.MaxValue;
 
-		// 跳。按住直到开始下落;_wantFly 时接着按住或重新按下起飞
-		static bool Jump(Player p, bool onGround, bool want, bool wantMore)
+		// 跳键。空中新按一下,有空中跳 vanilla 先用空中跳,没有才是翅膀(Player.cs:25618)
+		static bool Jump(Player p, bool onGround, Move mv, bool hookJump, bool incoming)
 		{
-			_jumpStarted = false;
-			if (onGround) { _airJumped = false; _holdFrames = 0; }
-
-			bool rising = p.velocity.Y < 0f;
-			if (_jumpHeld && rising && _holdFrames < MaxHoldFrames)
-			{ _holdFrames++; _jumpHeld = true; return true; }
-
-			// 起飞条件见 Player.cs:25618
-			if (_jumpHeld && _wantFly && p.wingTimeMax > 0 && p.wingTime > 0f && !onGround)
-			{ _holdFrames = 0; return true; }
-
-			// 松一帧,vanilla 要 releaseJump 才认新按压
-			if (_jumpHeld) { _jumpHeld = false; _holdFrames = 0; return false; }
-
-			// 空中跳用完后重新按下就是飞
-			if (_wantFly && !onGround && p.wingTime > 0f) { _jumpHeld = true; return true; }
-
-			if (!want) return false;
-			if (onGround) { _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true; }
-			// 挂钩时的跳是解钩跳,不花空中跳(Player.cs:20975)
-			if (p.grapCount > 0) { _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true; }
-			if (!p.AnyExtraJumpUsable()) return false;
-			// 第二段起的空中跳只在 Rise 时用
-			if (_airJumped && !wantMore) return false;
-			DiagLog.Write($"[dodge] 空中跳 第{(_airJumped ? 2 : 1)}段 vy={p.velocity.Y:0.0}");
-			_airJumped = true; _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true;
+			if (onGround) _airJumped = false;
+			if (_jumpHeld)
+			{
+				_holdFrames++;
+				bool landed = onGround && _holdFrames > 2;
+				if (mv == Move.Fly && p.grapCount == 0 && !landed) return true;
+				if (p.velocity.Y < 0f && _holdFrames < MaxHoldFrames && !landed) return true;
+				// 松一帧,vanilla 要 releaseJump 才认新按压
+				_jumpHeld = false;
+				return false;
+			}
+			bool air = !onGround && p.grapCount == 0;
+			string why = hookJump ? "解钩"
+				: p.grapCount > 0 ? null
+				: mv == Move.Fly ? "飞"
+				: mv == Move.AirJump && _airJumpUsed != _answer ? "再跳一段"
+				: incoming && (!air || !_airJumped) ? "预警"
+				: null;
+			if (why == null) return false;
+			bool extra = air && p.AnyExtraJumpUsable();
+			if (air && why != "飞" && !extra) return false;
+			if (mv == Move.AirJump) _airJumpUsed = _answer;
+			if (extra) _airJumped = true;
+			DiagLog.Write($"[dodge] 起跳 {why} {(onGround ? "地面" : p.grapCount > 0 ? "钩上" : extra ? "空中跳" : "翅膀")}"
+				+ $" vy={p.velocity.Y:0.0} 翅膀{p.wingTime:0}");
+			_jumpHeld = true;
+			_holdFrames = 0;
+			return true;
 		}
 
 		// 按当前速度还有几帧碰到我,不会碰到就是 -1
@@ -559,7 +554,7 @@ namespace TerraBlind
 		}
 
 		// 冲刺是方向键双击:松一帧再按
-		static int Dash(Player p, int go, Vert ver)
+		static int Dash(Player p, int go)
 		{
 			// 冲刺中保持方向
 			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
@@ -592,8 +587,8 @@ namespace TerraBlind
 			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
 		}
 
-		// 顺着竖直意图找能勾的格子,挑离 boss 最远的
-		static bool FindAnchor(Player p, NPC boss, Vert ver, out int ax, out int ay)
+		// 找能勾的格子,挑离 boss 最远的。dir -1 只找上面,1 只找下面,0 都行
+		static bool FindAnchor(Player p, NPC boss, int dir, out int ax, out int ay)
 		{
 			ax = ay = 0;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
@@ -605,8 +600,8 @@ namespace TerraBlind
 					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
 					if (reach < 4 || reach > HookReachCells) continue;
 					int x = pcx + dx2, y = pcy + dy;
-					if (ver == Vert.Rise && dy >= 0) continue;
-					if (ver == Vert.Drop && dy <= 0) continue;
+					if (dir < 0 && dy >= 0) continue;
+					if (dir > 0 && dy <= 0) continue;
 					// 往下勾和垂线至少差 60 度
 					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
 					if (!Hookable(x, y)) continue;
@@ -703,6 +698,7 @@ namespace TerraBlind
 				 + ",\"my_speed_upward_cells_per_second\":" + (int)(-p.velocity.Y * 60f / 16f)
 				 + ",\"threats\":" + ThreatsJson(p)
 				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
+				 + ",\"wings_left_percent\":" + (p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
@@ -739,7 +735,7 @@ namespace TerraBlind
 			 + "那个距离没有固定的数,只能从结果看:伤害还在出就是够得着,在挨打就是太近了"
 			 + "(背板里写了距离的,按背板来)。"
 			 + "这一题只管【和 boss 的距离该怎么变】,"
-			 + "高度另有一题,两题合起来才是完整方向 -- 所以斜着走是这一题和那一题各选一个。"
+			 + "竖直方向另有两题,合起来才是完整的动作。"
 			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。\",\"criteria\":{"
 			 + "\"Away\":\"拉开距离。换来的是反应时间:离得越远,冲过来的东西路上花的时间越长,"
 			 + "弹幕的轨迹也越早看得出来。"
@@ -754,26 +750,20 @@ namespace TerraBlind
 			 + "要 i_am_too_far_to_hit_it 为真、或 seconds_i_have_been_unable_to_hit_it 攒到几秒,"
 			 + "才说明是位置的问题。付出的是反应时间:越近,冲撞从起手到打到身上的帧数越少,"
 			 + "而撞一下掉的血比少打几秒多得多\"}},"
-			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
-			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
-			 + "\"Rise\":\"往上一段:在地上就跳一下,在空中就用一段空中跳,空中跳用完了就用翅膀飞到下一次回答。"
-			 + "要继续往上,下一次再选 Rise。换掉的是横向攻击瞄准的那条线:冲撞和贴地扫过来的东西"
-			 + "锁的是起冲那一刻的高度,升一层就从它的路线上让开了。"
-			 + "付出的是头顶的余量,cells_of_room_above_me 每升一次就少一截;"
-			 + "这个数归零之后竖直方向再无处可去,那时候来一下只能硬吃。"
-			 + "上方本来就有东西时(看 threats 的 cells_above_me),往上是迎上去\","
-			 + "\"Level\":\"保持现在的高度。换来的是手里的余地:"
-			 + "在半空时翅膀和空中跳都还没用,上下两个方向随时能走;"
-			 + "在地面上时跑动最快最稳。付出的是这一刻没有在躲 --"
-			 + "如果已经有东西朝自己来了,不动就是站在原地等它到\","
-			 + "\"Drop\":\"往下一层:站在平台上就穿过脚下这一层,落到下一层停住;在空中就快速往下落,落到下一层平台停住。"
-			 + "要再往下,下一次再选 Drop。换掉的是头顶那片区域:压下来的东西、从上方来的弹幕"
-			 + "(看 projectile_pressure 的 from_above)掉一层就扑空了,"
-			 + "而且 cells_of_room_above_me 会变大,竖直方向重新有空间。"
-			 + "付出的是下落途中翅膀和空中跳都在消耗或已经用掉,"
-			 + "真正落到地面才重新充满 -- 在那之前竖直方向是空的,只剩左右能躲;"
-			 + "frames_airborne 很大而局面没变好时,落地重来反而是划算的\"}},"
+			 + "\"move\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"同一场战斗,这一题只管竖直方向用哪个动作。和水平那一题、下落那一题各自独立,合起来才是完整的动作。"
+			 + "空中跳和翅膀落地才会充满。cells_of_room_above_me 为 0 时往上的动作不会让人再升高。\",\"criteria\":{"
+			 + "\"Fly\":\"按住跳键不放:在地上就起跳,跳到顶接着用翅膀往上飞,一直到选了别的。"
+			 + "在空中松开过跳键再选它,游戏会先用掉一段空中跳,空中跳用完才是翅膀。翅膀剩多少看 wings_left_percent\","
+			 + "\"AirJump\":\"再跳一段:在地上就是起跳,在空中就用一段空中跳,跳到顶就松开。"
+			 + "一次回答只跳一段。air_jump_ready 为 false 时在空中什么都不会发生\","
+			 + "\"DropPlatform\":\"站在平台上时穿过脚下这一层。脚下不是平台时什么都不会发生。穿过去以后怎么落看下落那一题\","
+			 + "\"None\":\"不按跳键,也不穿平台\"}},"
+			 + "\"fall\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"人在空中、又没在用翅膀飞的时候,上下键怎么按。身上有羽落药水。在地面上和挂着钩子时这一题不起作用。\",\"criteria\":{"
+			 + "\"Up\":\"按住上:下落速度只有正常的十分之一,几乎停在这个高度\","
+			 + "\"Free\":\"不按:下落速度是正常的三分之一\","
+			 + "\"Down\":\"按住下:取消羽落,按正常速度下落,并且一路穿过所有平台,直到落在实心块上\"}},"
 			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
 			 + "\"就这一刻该冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
 			 + "它能瞬间拉开一段距离、或者穿过一片危险区域。"
@@ -783,9 +773,7 @@ namespace TerraBlind
 			 + "往哪勾、什么时候松由代码管,"
 			 + "这里只判该不该用。它换位置比跑快得多,横着跑来不及躲开追过来的东西时特别有用;"
 			 + "但拽过去的路上人没法改方向,而且钩子飞出去到勾上有一段空窗,"
-			 + "贴脸的时候甩等于把自己钉在原地挨那一下。\"},"
-			 + "\"should_jump_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"}"
+			 + "贴脸的时候甩等于把自己钉在原地挨那一下。\"}"
 			 + "}}";
 
 		static void Fire(string key, string body)
@@ -819,29 +807,26 @@ namespace TerraBlind
 			var r = Main.rand;
 			ThreatsJson(p);
 			FleeType = _threats.Count < 2 ? -1 : _threats[r.Next(_threats.Count)].Type;
-			float jumpN, dashN, hookN;
-			bool fromJev = JevPrior.Sample(bossType, out var h, out var v, out dashN, out hookN, out jumpN, out int samples);
-			if (fromJev) { Hor = h; Ver = v; }
-			else
-			{
-				Hor = (Horiz)r.Next(3);
-				Ver = (Vert)r.Next(3);
-				jumpN = r.NextFloat(); dashN = r.NextFloat(); hookN = r.NextFloat();
-			}
+			int samples = JevPrior.Samples(bossType);
+			Hor = (Horiz)JevPrior.Sample(bossType, "horizontal", 3);
+			Mv = (Move)JevPrior.Sample(bossType, "move", 4);
+			Fl = (Fall)JevPrior.Sample(bossType, "fall", 3);
+			float dashN = JevPrior.SampleNoul(bossType, "dash");
+			float hookN = JevPrior.SampleNoul(bossType, "grapple");
+			bool fromJev = samples > 0;
 			if (!_priorSaid || !fromJev)
 			{
 				_priorSaid = fromJev;
 				Gate(fromJev ? $"随机组按 Jev 对这个 boss 的 {samples} 次选择抽" : "随机组:这个 boss 没有 Jev 记录,均匀抽");
 			}
-			JevSaysJump = jumpN > 0.7f;
 			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
 			Confidence = 0f;
 			LatencyMs = 0;
 			_actAt = now;
 			_answer++;
-			DiagLog.Write($"[dodge] random -> {Hor}/{Ver}");
-			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
+			DiagLog.Write($"[dodge] random -> {Hor}/{Mv}/{Fl}");
+			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00}");
 		}
 
 		static void Parse(string packed, int bossType)
@@ -851,14 +836,15 @@ namespace TerraBlind
 			string txt = packed;
 			if (cut > 0) { int.TryParse(packed.Substring(0, cut), out ms); txt = packed.Substring(cut + 1); }
 
-			string hq = Seg(txt, "horizontal"), vq = Seg(txt, "vertical");
-			string hp = Field(hq, "choice"), vp = Field(vq, "choice");
+			string hq = Seg(txt, "horizontal");
+			string hp = Field(hq, "choice");
+			string mp = Field(Seg(txt, "move"), "choice"), lp = Field(Seg(txt, "fall"), "choice");
 			if (hp == null)
 			{
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
-			DiagLog.Write($"[dodge] jev {ms}ms -> {hp}/{vp}");
+			DiagLog.Write($"[dodge] jev {ms}ms -> {hp}/{mp}/{lp}");
 			LatencyMs = ms;
 			Confidence = Num(hq, "confidence", 0f);
 			Hor = hp switch
@@ -867,13 +853,9 @@ namespace TerraBlind
 				"Near" => Horiz.Near,
 				_ => Horiz.Away,
 			};
-			// 竖直那题没答上来就 Level
-			Ver = vp switch
-			{
-				"Rise" => Vert.Rise,
-				"Drop" => Vert.Drop,
-				_ => Vert.Level,
-			};
+			// 没答上来就不动、不按
+			Mv = System.Enum.TryParse<Move>(mp, out var m) ? m : Move.None;
+			Fl = System.Enum.TryParse<Fall>(lp, out var f) ? f : Fall.Free;
 			_actAt = _clock.ElapsedMilliseconds;
 			_answer++;
 
@@ -886,29 +868,28 @@ namespace TerraBlind
 			TopTwo = Rank(Probs);
 			// 意图变了或同一意图持续 4 秒才发到聊天栏
 			long now = _clock.ElapsedMilliseconds;
-			var said = $"{Hor}/{Ver}";
+			var said = $"{Hor}/{Mv}/{Fl}";
 			if (said != _saidAct || now - _saidAt > 4000)
 			{
 				string tag = said == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
 				_saidAct = said; _saidAt = now;
-				Main.NewText($"<Jev> {Hor}/{Ver}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
+				Main.NewText($"<Jev> {said}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			float jumpN = Num(Seg(txt, "should_jump_now"), "noul", 0f);
 			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
 			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
-			JevSaysJump = jumpN > 0.7f;
 			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
-			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
-			JevPrior.Record(bossType, Hor, Ver, dashN, hookN, jumpN);
+			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00}");
+			JevPrior.Record(bossType, ("horizontal", (int)Hor, 3), ("move", (int)Mv, 4), ("fall", (int)Fl, 3),
+				("dash", JevPrior.Bucket(dashN), JevPrior.Buckets), ("grapple", JevPrior.Bucket(hookN), JevPrior.Buckets));
 
 			JevLog.Add(new JevLog.Entry
 			{
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
 				State = _lastFacts,
-				Pick = $"{hp}/{vp}" + (fp != null ? $" 背对{fp}" : "") + (JevSaysJump ? " 该跳" : "")
+				Pick = $"{hp}/{mp}/{lp}" + (fp != null ? $" 背对{fp}" : "")
 					 + (JevSaysDash ? " 该冲" : "") + (JevSaysHook ? " 该勾" : "")
 					 + "  →  " + Last,
 				Confidence = Confidence,
