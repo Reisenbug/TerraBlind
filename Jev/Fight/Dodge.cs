@@ -363,7 +363,9 @@ namespace TerraBlind
 			DpsPct = DpsTypical > 0 ? BossDps * 100 / DpsTypical : 100;
 			// 攒够 5 秒样本后,低于常驻 35% 的连续秒数
 			if (_histCount >= 5 && DpsTypical > 0 && DpsPct < 35) _lowSecs++; else _lowSecs = 0;
-			DiagLog.Write($"[dodge] dps {BossDps} 常驻{DpsTypical} {DpsPct}% 低了{_lowSecs}秒");
+			var me = Main.LocalPlayer;
+			DiagLog.Write($"[dodge] dps {BossDps} 常驻{DpsTypical} {DpsPct}% 低了{_lowSecs}秒"
+				+ $" | 脚在第{(int)((me.position.Y + me.height) / 16f)}行 离地{CellsAboveGround(me)} 头顶{CeilingDistance(me)}");
 		}
 		static int _lowSecs;
 		public static bool TooFar => _lowSecs >= 3;
