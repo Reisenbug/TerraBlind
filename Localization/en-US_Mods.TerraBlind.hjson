@@ -111,6 +111,11 @@ Configs: {
 			Label: Aim Ahead
 			Tooltip: ""
 		}
+
+		RandomBrain: {
+			Label: Random Brain (control group)
+			Tooltip: Replace Jev's movement intent with a random pick every 300ms. The reflex layer stays the same, so the difference is what Jev is worth.
+		}
 	}
 
 	BossOverride: {

@@ -54,6 +54,10 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool AimAhead = true;
 
+		// 对照组:走位意图不问 Jev,每 300ms 随机选一次,反射层照旧。用来看 Jev 到底值多少
+		[DefaultValue(false)]
+		public bool RandomBrain;
+
 		// 关掉就不给 Jev 任何 boss 背板,只留场地和通用字段。用来验知识到底值多少
 		[DefaultValue(true)]
 		public bool BossKnowledge;
@@ -86,6 +90,8 @@ namespace TerraBlind
 			Combat.Enabled = FightBack;
 			Combat.UseLead = AimAhead;
 			Dodge.Enabled = DodgeBoss;
+			if (Dodge.RandomBrain != RandomBrain) DiagLog.Write($"[dodge] 大脑换成 {(RandomBrain ? "随机" : "Jev")}");
+			Dodge.RandomBrain = RandomBrain;
 			BossBook.UseKnowledge = BossKnowledge;
 			// 【这里也要铺】。OnChanged 会在 PostSetupContent 之后再响一次,
 			// 而那次的实例列表还是空的 -- 不补就把刚铺好的 24 条清回 0

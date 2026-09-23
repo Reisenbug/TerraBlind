@@ -18,6 +18,8 @@ namespace TerraBlind
 	public static class Dodge
 	{
 		public static bool Enabled = false;
+		// 对照组:把 Jev 换成随机选择器,反射层一行不动
+		public static bool RandomBrain = false;
 		const string Owner = "dodge";
 		// 【别把远处的 boss 当不存在】。原来 60 格截断,而肉山退到 60 格外就"消失",
 		// 走位层每隔几帧就 Release 一次,没有任何东西再把人拉回来
@@ -267,7 +269,8 @@ namespace TerraBlind
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done); }
 			string key = Key();
-			if (key != null && !_busy)
+			if (RandomBrain) RandomPick();
+			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
 				Fire(key, _lastFacts);
@@ -1034,6 +1037,28 @@ namespace TerraBlind
 				catch (System.Exception e) { DiagLog.Write($"[dodge] 请求炸了 {e.GetType().Name} {e.Message}"); }
 				finally { _busy = false; }
 			});
+		}
+
+		// 对照组。【节奏和 Jev 一样】(实测中位 326ms),每帧换就是在测抖动不是在测决策。
+		// 【所有输出都随机,阈值照旧】,落到和 Parse 同一批字段上,日志格式也一样好直接比
+		const int RandomEveryMs = 300;
+		static void RandomPick()
+		{
+			long now = _clock.ElapsedMilliseconds;
+			if (now - _actAt < RandomEveryMs) return;
+			var r = Main.rand;
+			Hor = (Horiz)r.Next(3);
+			Ver = (Vert)r.Next(3);
+			Danger = r.Next(5);
+			float jumpN = r.NextFloat(), dashN = r.NextFloat(), hookN = r.NextFloat();
+			JevSaysJump = jumpN > 0.7f;
+			JevSaysDash = dashN > 0.5f;
+			JevSaysHook = hookN > 0.7f;
+			Confidence = 0f;
+			LatencyMs = 0;
+			_actAt = now;
+			DiagLog.Write($"[dodge] random -> {Hor}/{Ver}");
+			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
 		}
 
 		static void Parse(string packed)
