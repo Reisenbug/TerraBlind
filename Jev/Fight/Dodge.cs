@@ -343,8 +343,6 @@ namespace TerraBlind
 				case Horiz.Hold:
 					if (want != NoWant && dist < want / 2) go = away;
 					else if (want != NoWant && dist > want) go = toward;
-					// 距离合适时绕圈,半血后不绕(NPC.cs:2638)
-					else if (BossBook.OrbitFor(boss.type) && FirstHalf(boss)) go = _spin;
 					break;
 			}
 
@@ -391,12 +389,9 @@ namespace TerraBlind
 			_wantFly = rise && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, rise);
 
-			// 撞墙就掉头,绕圈方向跟着翻,两侧都堵才停
+			// 撞墙就掉头,两侧都堵才停
 			if (go != 0 && WallDistance(p, go) <= 0)
-			{
 				go = WallDistance(p, -go) > 0 ? -go : 0;
-				if (go != 0) _spin = go;
-			}
 			// 横移会穿过要远离的东西就掉头,两边都挡才硬穿
 			if (go != 0 && Crosses(p, go, 0, out var hitX) && !Crosses(p, -go, 0, out _))
 			{
@@ -481,20 +476,6 @@ namespace TerraBlind
 		static int _lowSecs;
 		public static bool TooFar => _lowSecs >= 3;
 		const int PoseSecs = 3;
-		// 绕圈方向,撞墙才翻
-		static int _spin = 1;
-
-		// 本体还在前半血,锁定的是部件时找本体
-		static bool FirstHalf(NPC boss)
-		{
-			if (!boss.boss)
-				for (int i = 0; i < Main.maxNPCs; i++)
-				{
-					var n = Main.npc[i];
-					if (n != null && n.active && n.boss) { boss = n; break; }
-				}
-			return boss.lifeMax <= 0 || boss.life * 2 > boss.lifeMax;
-		}
 
 		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;

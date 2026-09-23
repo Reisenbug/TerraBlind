@@ -10,8 +10,6 @@ namespace TerraBlind
 		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
 		// 这一场该保持的距离(格),实测过才填。0 = 不指定
 		public int WantCells;
-		// Hold 的时候绕着它走而不是站住
-		public bool Orbit;
 	}
 
 	public static class BossBook
@@ -115,13 +113,12 @@ namespace TerraBlind
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
 			{
-				Orbit = true,
 				// 绕圈的半径,实测开场自然稳在 40 格左右
 				WantCells = 40,
 				HowItFights =
 					"世纪之花分两个阶段,【血量掉到一半就进二阶段】。"
 					+ "一阶段绕着它转:保持一个固定的距离,沿着圆周一直走,左上右下地绕回来。"
-					+ "一阶段选 Hold 就会绕着它走,要的是轨迹始终围着它。"
+					+ "要的是轨迹始终围着它。"
 					+ "二阶段不再绕圈,就是正常地拉开距离躲。"
 					+ "【二阶段它身上会伸出触手】,触手碰一下掉的血比本体还多,"
 					+ "而且它是贴着人甩过来的 -- other_enemies 里能看到触手在哪,"
@@ -303,7 +300,6 @@ namespace TerraBlind
 
 		// 这个 boss 指定的距离
 		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
-		public static bool OrbitFor(int npcType) => Of(npcType).Orbit;
 
 		public static bool IsBanned(int npcType, DodgeAct act)
 		{
