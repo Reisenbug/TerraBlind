@@ -318,6 +318,28 @@ namespace TerraBlind
 		static BossOverride Override(int npcType)
 			=> Overrides.TryGetValue(Canon(npcType), out var o) ? o : null;
 
+		// 场上每个有背板的 boss 各一段,锁定的排第一。【不能只给锁定的那只】:
+		// 三王同场锁定目标一直在换,锁在骷髅王身上就读不到"魔焰眼要远离"
+		public static List<(string Name, string Text)> OnField(int lockedType)
+		{
+			var seen = new HashSet<int>();
+			var list = new List<(string, string)>();
+			void Put(int type)
+			{
+				int c = Canon(type);
+				if (!seen.Add(c)) return;
+				string txt = For(c);
+				if (!string.IsNullOrEmpty(txt)) list.Add((Terraria.Lang.GetNPCNameValue(c), txt));
+			}
+			Put(lockedType);
+			for (int i = 0; i < Terraria.Main.maxNPCs; i++)
+			{
+				var n = Terraria.Main.npc[i];
+				if (n != null && n.active && !n.friendly) Put(n.type);
+			}
+			return list;
+		}
+
 		public static string For(int npcType)
 		{
 			if (!UseKnowledge) return "";

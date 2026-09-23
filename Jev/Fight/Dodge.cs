@@ -880,10 +880,10 @@ namespace TerraBlind
 				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"my_weapon_fires_by_itself\":true"
 				 // 【只描述地形,不替 boss 下结论】。"站着不动就会被撞"是克苏鲁之眼的事,
-				 // 写在这里等于对每个 boss 都这么说 -- 该由 how_this_boss_fights 去讲
+				 // 写在这里等于对每个 boss 都这么说 -- 该由 how_the_bosses_here_fight 去讲
 				 + ",\"arena\":\"" + JsonStr(BossBook.ArenaOf(boss.type)) + "\""
 				 // 【背板交给它,不写成 if】。这些阈值我一个都不知道,而它读得懂一段话
-				 + ",\"how_this_boss_fights\":\"" + JsonStr(BossBook.For(boss.type)) + "\""
+				 + ",\"how_the_bosses_here_fight\":" + FieldBooks(boss)
 				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
 				 + ",\"grapple_attached\":" + (p.grapCount > 0 ? "true" : "false")
 				 + "}";
@@ -1107,6 +1107,17 @@ namespace TerraBlind
 		}
 
 		static string JsonStr(string s) => s == null ? "" : s.Replace("\\", "").Replace("\"", "");
+
+		static string FieldBooks(NPC locked)
+		{
+			var sb = new StringBuilder("{");
+			foreach (var (name, text) in BossBook.OnField(locked.type))
+			{
+				if (sb.Length > 1) sb.Append(',');
+				sb.Append('"').Append(JsonStr(name)).Append("\":\"").Append(JsonStr(text)).Append('"');
+			}
+			return sb.Append('}').ToString();
+		}
 
 		static string Quote(string s)
 		{
