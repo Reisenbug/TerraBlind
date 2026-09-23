@@ -29,6 +29,11 @@ namespace TerraBlind
 		public static bool UseLead = true;
 		// 瞄准抖一点,别整批偏同一个方向
 		const float JitterPx = 8f;
+		// 换 boss 目标要近出这么多格才换
+		const int StickCells = 5;
+
+		static bool DestroyerSegment(int type)
+			=> type == Terraria.ID.NPCID.TheDestroyerBody || type == Terraria.ID.NPCID.TheDestroyerTail;
 
 		static int _target = -1;
 		static bool _swinging;
@@ -84,8 +89,7 @@ namespace TerraBlind
 			=> npc != null && npc.active && !npc.townNPC && !npc.friendly
 			   && !(npc.lifeMax <= 5 && npc.damage == 0);
 
-		// 【小怪优先,按威胁分排序;清光了才打 boss】。boss 血几千,ThreatScan.Score 里
-		// 那项 life*0.01 让它永远碾压小怪 -- 于是服务者贴着脸咬,人还在对着 boss 挥
+		// 【小怪优先,按威胁分排序;清光了才打 boss】。混在一起比,服务者贴着脸咬,人还在对着 boss 挥
 		static int Worst(Player p, out int cx, out int cy, out int dist)
 		{
 			int wall = WallBody();
@@ -106,7 +110,7 @@ namespace TerraBlind
 		{
 			cx = cy = 0; dist = 0;
 			int best = -1;
-			float bestScore = -1f;
+			float bestScore = float.MinValue;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			// 【双子只打魔焰眼】。分头打等于两个都不死,而它贴脸喷火比激光眼危险
 			// 【只在场上就这一场时锁】。三王同召时恒为真会让另外两个一枪不挨
@@ -115,7 +119,10 @@ namespace TerraBlind
 			{
 				var npc = Main.npc[i];
 				if (!Hostile(npc)) continue;
-				if (npc.boss != bossPass) continue;
+				// 毁灭者只有头带 boss 标志,身体算小怪就被 30 格射程滤掉
+				if ((npc.boss || DestroyerSegment(npc.type)) != bossPass) continue;
+				// 【毁灭者打最近的体节,不打头】。头只有一个,常在 200 格外
+				if (npc.type == Terraria.ID.NPCID.TheDestroyer) continue;
 				if (twinLock && npc.type != Terraria.ID.NPCID.Spazmatism) continue;
 				// 只躲不打的部件。打它等于整场不输出
 				if (DodgeOnlyPart(npc.type)) continue;
@@ -125,7 +132,8 @@ namespace TerraBlind
 				// 手荡到 30 格外就看不见了,于是又去打那个打不动的头
 				bool part = BossPart(npc.type);
 				if (!bossPass && !part && d > ThreatScan.RangeCells) continue;
-				float sc = ThreatScan.Score(p, npc, d);
+				// 【boss 之间只比远近】,当前目标让几格,别在两个差不多近的之间每帧换
+				float sc = bossPass ? -d + (i == _target ? StickCells : 0) : ThreatScan.Score(p, npc, d);
 				if (sc <= bestScore) continue;
 				bestScore = sc; best = i; cx = ncx; cy = ncy; dist = d;
 			}
@@ -222,7 +230,7 @@ namespace TerraBlind
 
 			// 【boss 和它的部件都不问打不打】。骷髅王的手没有 boss 标志,走的是小怪那套措辞,
 			// 而那套问的是"要不要停下赶路" -- boss 战里根本没有赶路,于是 9 格也答 Ignore
-			if (Main.npc[n].boss || BossPart(Main.npc[n].type))
+			if (Main.npc[n].boss || BossPart(Main.npc[n].type) || DestroyerSegment(Main.npc[n].type))
 			{
 				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss present, just fight" };
 				// 【这一支也要记】。日志只写在问 Jev 那一支里,走捷径就整场零条 --
@@ -270,7 +278,7 @@ namespace TerraBlind
 			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
 			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; return; }
 
-			int slot = WeaponSlot(p, Main.npc[n].boss);
+			int slot = WeaponSlot(p, Main.npc[n].boss || DestroyerSegment(Main.npc[n].type));
 			if (slot < 0)
 			{ Last = "no weapon"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
