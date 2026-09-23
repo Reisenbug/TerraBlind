@@ -20,10 +20,6 @@ namespace TerraBlind
 	{
 		public static bool Enabled = false;
 		const string Owner = "combat";
-		// 名单里任何一只走了这么多格就重新判断。局面没动就沿用上次的结论
-		const int MoveRedecide = 3;
-		// 血量跨档也要重判:同样的怪,满血该打,残血该跑
-		const int HpBuckets = 5;
 		// 提前量最多外推这么多帧。再远全是误差,boss 早拐弯了
 		const float MaxLeadFrames = 45f;
 		public static bool UseLead = true;
@@ -41,20 +37,15 @@ namespace TerraBlind
 			DiagLog.Write("[combat] 不挥:" + why);
 		}
 
-		static bool DestroyerSegment(int type)
+		public static bool DestroyerSegment(int type)
 			=> type == Terraria.ID.NPCID.TheDestroyerBody || type == Terraria.ID.NPCID.TheDestroyerTail;
 
 		static int _target = -1;
 		static bool _swinging;
 		static string _lastSig = "";
-		static int _lastHpBucket = -1;
-		static readonly Dictionary<int, (int cx, int cy)> _askedAt = new();
 		static CombatCall _call;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 		public static string Last = "idle";
-
-		// 没 key 或者请求还没回来时,JevCombat 自己会退回 baseline
-		static ICombatBrain _brain = new JevCombat();
 
 		// 只有放置不能打断。挖掘、寻路、砸网停了都能重来
 		static bool WorkBusy => PlaceAction.IsRunning || PlaceAnywhere.IsRunning;
@@ -83,7 +74,11 @@ namespace TerraBlind
 		// 但它是本体的挂件,打它等于整场不输出
 		public static bool DodgeOnlyPart(int type)
 			=> type == Terraria.ID.NPCID.PlanterasTentacle
-			|| type == Terraria.ID.NPCID.PlanterasHook;
+			|| type == Terraria.ID.NPCID.PlanterasHook
+			|| type == Terraria.ID.NPCID.PrimeCannon
+			|| type == Terraria.ID.NPCID.PrimeSaw
+			|| type == Terraria.ID.NPCID.PrimeVice
+			|| type == Terraria.ID.NPCID.PrimeLaser;
 
 		// 【肉山在场就只打本体】。眼睛是独立 NPC,血少又离得近,威胁分必然赢过本体 --
 		// 而肉山一动起来,瞄眼睛十发九空。嘴(本体)是个大目标,跑着也打得中
@@ -192,40 +187,11 @@ namespace TerraBlind
 			return it.pick == 0 && it.axe == 0 && it.hammer == 0;
 		}
 
-		// 局面变了没有。【编号 + 移动距离】:同一批怪原地小动不算变,走远了才算
-		static bool Changed(Player p, int worst)
+		static bool BossOnField()
 		{
-			int bucket = p.statLife * HpBuckets / System.Math.Max(1, p.statLifeMax);
-			if (bucket != _lastHpBucket) { _lastHpBucket = bucket; return true; }
-			if (worst != _target) return true;
-
-			int live = 0;
 			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var npc = Main.npc[i];
-				if (!Hostile(npc)) continue;
-				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
-				int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-				if (System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy) > ThreatScan.RangeCells) continue;
-				live++;
-				if (!_askedAt.TryGetValue(npc.whoAmI, out var was)) return true;   // 新来的
-				if (System.Math.Abs(ncx - was.cx) + System.Math.Abs(ncy - was.cy) >= MoveRedecide) return true;
-			}
-			return live != _askedAt.Count;   // 走掉了/死了
-		}
-
-		static void Remember(Player p)
-		{
-			_askedAt.Clear();
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var npc = Main.npc[i];
-				if (!Hostile(npc)) continue;
-				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
-				if (System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy) > ThreatScan.RangeCells) continue;
-				_askedAt[npc.whoAmI] = (ncx, ncy);
-			}
+				if (Main.npc[i] != null && Main.npc[i].active && Main.npc[i].boss) return true;
+			return false;
 		}
 
 		public static void Tick()
@@ -235,56 +201,28 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
-			if (n < 0) { Last = "no enemies"; _askedAt.Clear(); _target = -1; Release(); return; }
+			if (n < 0) { Last = "no enemies"; _target = -1; Release(); return; }
 
-			// 【boss 和它的部件都不问打不打】。骷髅王的手没有 boss 标志,走的是小怪那套措辞,
-			// 而那套问的是"要不要停下赶路" -- boss 战里根本没有赶路,于是 9 格也答 Ignore
-			if (Main.npc[n].boss || BossPart(Main.npc[n].type) || DestroyerSegment(Main.npc[n].type))
+			// 【有目标就打,不问 Jev】。问的是"要不要停下赶路",boss 战里它对探测器和手答了 36% 的 Ignore,
+			// 武器就那么松着。boss 在场时连放置也打断:全程开火
+			bool bossFight = BossOnField();
+			_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = bossFight, Confidence = 1f, Why = bossFight ? "boss present, just fight" : "enemy in range" };
+			string sig = "fight|" + n;
+			if (sig != _lastSig)
 			{
-				_call = new CombatCall { Act = CombatAct.Fight, InterruptWork = true, Confidence = 1f, Why = "boss present, just fight" };
-				// 【这一支也要记】。日志只写在问 Jev 那一支里,走捷径就整场零条 --
-				// 看上去像没在打,其实是没在记
-				string bsig = "boss|" + n;
-				if (bsig != _lastSig)
+				_lastSig = sig;
+				JevLog.Add(new JevLog.Entry
 				{
-					_lastSig = bsig;
-					JevLog.Add(new JevLog.Entry
-					{
-						Ms = _clock.ElapsedMilliseconds,
-						Site = "combat",
-						State = Facts(p, tcx, tcy, dist),
-						Pick = "Fight(" + Main.npc[n].TypeName + ")",
-						Confidence = 1f,
-						Why = _call.Why,
-					});
-				}
-				_target = n;
+					Ms = _clock.ElapsedMilliseconds,
+					Site = "combat",
+					State = Facts(p, tcx, tcy, dist),
+					Pick = "Fight(" + Main.npc[n].TypeName + ")",
+					Confidence = 1f,
+					Why = _call.Why,
+				});
 			}
-			// 判断:局面变了才重新问。没变就沿用上次的结论,一个请求都不发
-			else if (Changed(p, n))
-			{
-				_call = _brain.Decide(p, tcx, tcy, dist, WorkBusy);
-				_target = n;
-				Remember(p);
-				string sig = _call.Act + "|" + n + "|" + _call.InterruptWork;
-				if (sig != _lastSig)
-				{
-					_lastSig = sig;
-					JevLog.Add(new JevLog.Entry
-					{
-						Ms = _clock.ElapsedMilliseconds,
-						Site = "combat",
-						State = Facts(p, tcx, tcy, dist),
-						Pick = _call.Act.ToString() + (_call.InterruptWork ? "+打断" : ""),
-						Confidence = _call.Confidence,
-						Probs = _call.Probs ?? "",
-						Why = _call.Why,
-						LatencyMs = _call.LatencyMs,
-					});
-				}
-			}
+			_target = n;
 
-			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; NoFire($"{_call.Act} 对{Main.npc[n].TypeName} {dist}格 {_call.Why}"); Release(); return; }
 			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); return; }
 			_noFire = "";
 
@@ -304,7 +242,7 @@ namespace TerraBlind
 
 			// 【自己按键,不走 ItemUseCoordinator】。那套是为挖和放做的:会把光标吸附到附近的 tile、
 			// 按挖掘距离判够不着。武器要的只是"对着这个坐标一直挥",怪那格通常是空气
-			if (slot >= 10) { Last = "weapon not in hotbar"; return; }
+			if (slot >= 10) { Last = "weapon not in hotbar"; NoFire("武器不在热键栏"); return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
 			var aim = UseLead ? Lead(p, Main.npc[n], p.inventory[slot].shootSpeed) : Main.npc[n].Center;
@@ -371,6 +309,6 @@ namespace TerraBlind
 			AxisLock.Release(Owner);
 		}
 
-		public static void Stop() { Release(); _askedAt.Clear(); _lastSig = ""; Last = "stopped"; }
+		public static void Stop() { Release(); _lastSig = ""; Last = "stopped"; }
 	}
 }
