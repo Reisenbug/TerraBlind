@@ -345,18 +345,6 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			// 升降会穿过要远离的东西就反向,两头都挡才 Level
-			if (ver == Vert.Drop && Crosses(p, 0, 1, out var hitD))
-			{
-				ver = Crosses(p, 0, -1, out _) ? Vert.Level : Vert.Rise;
-				Gate($"往下会穿{hitD.TypeName} 改{ver}");
-			}
-			else if (ver == Vert.Rise && Crosses(p, 0, -1, out var hitU))
-			{
-				ver = Crosses(p, 0, 1, out _) ? Vert.Level : Vert.Drop;
-				Gate($"往上会穿{hitU.TypeName} 改{ver}");
-			}
-
 			// 头顶没空间就不再往上
 			int headroom = CeilingDistance(p);
 			if (ver == Vert.Rise && headroom > 2) _riseHold = RiseHoldFrames;
@@ -372,12 +360,6 @@ namespace TerraBlind
 			// 撞墙就掉头,两侧都堵才停
 			if (go != 0 && WallDistance(p, go) <= 0)
 				go = WallDistance(p, -go) > 0 ? -go : 0;
-			// 横移会穿过要远离的东西就掉头,两边都挡才硬穿
-			if (go != 0 && Crosses(p, go, 0, out var hitX) && !Crosses(p, -go, 0, out _))
-			{
-				Gate($"往{(go < 0 ? "左" : "右")}会穿{hitX.TypeName} 掉头");
-				go = -go;
-			}
 
 			int want0 = go;
 			go = Dash(p, go, ver);
@@ -499,25 +481,6 @@ namespace TerraBlind
 			_flying = now;
 			DiagLog.Write($"[dodge] 飞行{(now ? "开始" : "结束")} wantFly={_wantFly}"
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
-		}
-
-		// 沿 (dx,dy) 把碰撞箱扫 LookFrames 帧,碰到要远离的东西就算会穿过去,已经贴着的不算
-		const int LookFrames = 18;
-		static bool Crosses(Player p, int dx, int dy, out NPC hit)
-		{
-			hit = null;
-			var box = p.Hitbox;
-			var moved = box;
-			moved.Offset((int)(dx * p.maxRunSpeed * LookFrames),
-				dy > 0 ? (int)(p.maxFallSpeed * LookFrames) : dy < 0 ? -(int)(Player.jumpSpeed * LookFrames) : 0);
-			var swept = Microsoft.Xna.Framework.Rectangle.Union(box, moved);
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var n = Main.npc[i];
-				if (n == null || !n.active || FleeRank(n) < 0) continue;
-				if (n.Hitbox.Intersects(swept) && !n.Hitbox.Intersects(box)) { hit = n; return true; }
-			}
-			return false;
 		}
 
 		// 机械骷髅王的头离我不超过 PinnedCells 格
