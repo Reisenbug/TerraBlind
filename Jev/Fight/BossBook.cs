@@ -6,7 +6,7 @@ namespace TerraBlind
 	public class BossInfo
 	{
 		public string HowItFights = "";
-		// 这个 boss 的场地长什么样。
+		// 这个 boss 的场地长什么样。（真的需要嘛？）
 		public string Arena = "";
 		// 这一场不许用的意图。
 		public DodgeAct[] Banned = System.Array.Empty<DodgeAct>();
@@ -90,9 +90,9 @@ namespace TerraBlind
 				// 喷火范围约 30 格,boss 还一直在逼近,所以定 40
 				WantCells = 40,
 				HowItFights =
-					"双子魔眼是两只分开飞的眼睛,正在打的是魔焰眼(绿色那只)。"
-					+ "【碰到它掉的血比吃弹幕多得多】,躲开碰撞永远排在最前面。"
-					+ "【这两只眼睛自己会跟人保持距离】:人靠近它就退,人退开它就跟上来,"
+					"双子魔眼是两只分开飞的眼睛,优先进攻是魔焰眼。"
+					+ "优先躲开碰撞。"
+					+ "一阶段boss移动逻辑：人靠近它就退,人退开它就跟上来,"
 					+ "所以横向的距离根本调不动 -- 主动往它那边走,只会和它射出来的弹幕迎头相撞。"
 					+ "【30 格以内就危险了】:那个范围里喷火够得着,而且冲刺来不及反应,站得比它远才有余地。"
 					+ "一阶段的魔焰眼除了冲刺之外一直在追人:【上下不能停】。"
@@ -106,30 +106,26 @@ namespace TerraBlind
 					+ "【怎么看出它在冲】:boss_speed_cells_per_second 接近"
 					+ "boss_fastest_in_the_last_second 就是正在冲的那一下,"
 					+ "速度掉下来说明这一轮冲完了,那是拉开距离和输出的空档。"
-					+ "【魔焰眼的伤害带 debuff】,吃一发的代价比伤害数字大。"
-					+ "【激光眼最危险的是冲撞不是激光】:它两个阶段都和人保持距离,"
+					+ "魔焰眼的弹幕伤害带 debuff,吃一发的代价比伤害数字大。"
+					+ "激光眼最危险的是冲撞不是激光。它两个阶段都和人保持距离,"
 					+ "激光打在身上一阶段几乎不痛、二阶段也只是稍微痛一点,不值得为躲激光乱走;"
 					+ "但它撞过来一下就是一大块血 -- 两只眼睛都要当成会撞人的东西躲,"
 					+ "不能因为在打魔焰眼就放着激光眼不管。"
 					+ "【场上始终是两只眼睛,躲的时候两只都要算】,other_enemies 里能看到另一只在哪。"
 					+ "背对一只跑常常正好撞进另一只,往两只都不在的那一侧走才是真的躲开。"
-					+ "【被两只夹在中间的时候,先离开魔焰眼】:两边都有东西,没有空的那一侧了,"
-					+ "这时候比的是哪边更疼 -- 魔焰眼的碰撞和喷火都比激光眼重,"
-					+ "为了躲激光眼而朝魔焰眼挪是这场里最亏的一步。",
+					+ "被两只夹在中间的时候,先远离魔焰眼。",
 			},
 
 			[Terraria.ID.NPCID.TheDestroyer] = new BossInfo
 			{
 				Arena = OpenArena,
-				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】,身体也要远离。",
+				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】,身体也要远离。如有需要，清理探针小怪。",
 			},
 
 			[Terraria.ID.NPCID.SkeletronPrime] = new BossInfo
 			{
 				Arena = OpenArena,
-				// 每下伤害是实测:三局分别 54/43/61,毁灭者身体每下 27 左右
-				HowItFights = "【机械骷髅王的头要远离】。它撞一下的伤害大约是毁灭者身体的两倍,"
-					+ "而且一贴上会被连着撞好几下。",
+				HowItFights = "机械骷髅王的头要远离。"
 			},
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
@@ -152,27 +148,15 @@ namespace TerraBlind
 			{
 				Arena = OpenArena,
 				HowItFights =
-					"蜂王的两种威胁要躲的方向【正好相反】。它悬在头顶上方的时候,"
-					+ "掉下来的东西是往下砸的,这时候横着跑躲得开,上下动反而是迎上去。"
-					+ "而它和自己处在差不多同一高度、横着冲过来的时候,左右跑是跟它抢同一条线,"
-					+ "这时候要的是快速换个高度让它从那条线上扑空 -- 跳起来或者往下落都行,"
-					+ "哪边快就走哪边。"
-					+ "所以先看 i_am_above_the_boss_by 判断它在哪一头,"
-					+ "再决定这一下该横着躲还是上下躲。",
+					"蜂王悬在头顶上方的时候,横向移动。"
+					+ "而它和自己处在差不多同一高度、横着冲过来的时候,上下移动。"
 			},
 
 			[Terraria.ID.NPCID.Deerclops] = new BossInfo
 			{
 				Arena = OpenArena,
 				HowItFights =
-					"鹿角怪的节奏是【远近交替】:拉开一段就放一轮弹幕,靠近了再放一轮,来回循环。"
-					+ "【关键是别离太远】 -- 离得远反而是它弹幕覆盖得最狠的时候,"
-					+ "近身反倒有安全的间隙。所以不要一味后退,把距离控制在中近,"
-					+ "跟着它那一轮弹幕的节奏进退。"
-					+ "【标准打法是站在它面前反复跳起又落地】:跳起来是为了让弹幕从脚下过去,"
-					+ "落地是为了逼它出下一招 -- 一直飘在空中它就不出手,节奏也就断了。"
-					+ "跳的高度不用很高,离地十来格以内就够,人始终待在它跟前,"
-					+ "别跑远也别悬着不下来。",
+					"尽量与boss平齐。此boss伤害不高，脚底下无碰撞伤害。需要始终在boss几格内。",
 			},
 
 			// 恶鬼离得比肉山近时按这条算(Boss() 取最近的)
@@ -183,8 +167,7 @@ namespace TerraBlind
 				WantCells = 10,
 				HowItFights =
 					"恶鬼是挂在肉山身上的一串小怪,伸得很长,碰到就掉血。"
-					+ "它跟着肉山走,所以【离它至少十格】,这条比和肉山保持的那个距离更要紧 -- "
-					+ "两个要求冲突的时候听这一条的,先把恶鬼甩开。",
+					+ "离它保持十格的安全距离。与肉山的距离规则冲突时，优先这一条。"
 			},
 
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
@@ -194,25 +177,24 @@ namespace TerraBlind
 				Banned = new[] { DodgeAct.Up, DodgeAct.Float, DodgeAct.Dive, DodgeAct.Grapple },
 				WantCells = 60,
 				HowItFights =
-					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,【只会水平移动,永远不会停】。"
+					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,只会水平移动,永远不会停。"
 					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"
-					+ "打法是往它的反方向跑,边跑边打 -- 停下来就会被推平。"
-					+ "【距离是一个区间,两头都不能碰】:离太远会被它的激光扫满,"
+					+ "打法是往它的反方向跑,边跑边打。"
+					+ "距离是一个区间,两头都不能碰:离太远会被它的激光扫满,"
 					+ "离太近又会被身上那串恶鬼打到。跑过头了就该收回来,贴太近了就该退开,"
 					+ "始终卡在中间那一段 -- 看 cells_further_than_i_asked_for 判断自己偏到哪一头了。"
-					+ "【只要 incoming_projectiles 里出现它的激光,就一刻不停地动】,"
-					+ "站定一下就会被扫到;但这不等于一路往远处跑,跑出那个区间照样吃满 -- "
+					+ "只要 incoming_projectiles 里出现它的激光,就一刻不停地动,"
+					+ "站定一下就会被扫到;但这不等于一路往远处跑。"
 					+ "要的是在区间里持续移动,不是拉开距离。"
-					+ "它的血越少推得越快,这一点会让那个距离越来越难守。"
-					+ "场地是完全平的,跳起来毫无意义:既躲不开它也够不到它,"
-					+ "而且滞空的时候横向速度反而不好调整。全程贴着地面跑就行。",
+					+ "它的血越少推得越快。"
+					+ "场地是完全平的,跳起来毫无意义:既躲不开它也够不到它," // 专为视频准备的场地。 TODO
 			},
 		};
 
 		// 玩家这一局带着什么本事。钩爪怎么按由代码管,这里不讲
 		public const string Abilities =
 			"身上有羽落药水:不按上下键时下落速度只有平常的三分之一,按住上键只有十分之一,"
-			+ "等于能在空中悬停。按下键恢复正常下落速度。";
+			+ "按下键恢复正常下落速度。";
 
 		// 部件查本体那条。Boss() 返回的可能是蠕虫的某一节或者骷髅王的手
 		public static int Canonical(int npcType) => Canon(npcType);
@@ -231,7 +213,7 @@ namespace TerraBlind
 				return Terraria.ID.NPCID.EaterofWorldsHead;
 			if (npcType == Terraria.ID.NPCID.SkeletronHand)
 				return Terraria.ID.NPCID.SkeletronHead;
-			// 恶鬼不映射到肉山,它有自己那条(离恶鬼 10 格,不是离肉山 60 格)
+			// 恶鬼不映射到肉山
 			if (npcType == Terraria.ID.NPCID.WallofFleshEye)
 				return Terraria.ID.NPCID.WallofFlesh;
 			if (npcType == Terraria.ID.NPCID.TheHungryII)
@@ -253,7 +235,7 @@ namespace TerraBlind
 		// npc id -> 覆盖。配置里存的是名字,解析一次存成 id,查的时候不用每帧比字符串
 		static readonly Dictionary<int, BossOverride> Overrides = new();
 
-		// 铺满配置:游戏里全部 boss,不只是书里写过的,这样没写过背板的也能在配置里写
+		// 铺满配置:游戏里全部 boss
 		public static void Seed(List<BossOverride> list)
 		{
 			if (list == null) return;
@@ -336,7 +318,6 @@ namespace TerraBlind
 			if (!UseKnowledge) return "";
 			var o = Override(npcType);
 			if (o == null) return Of(npcType).HowItFights;
-			// 配置里写空就是空,不回退到代码里的原文
 			return o.Enabled ? o.HowItFights : "";
 		}
 
@@ -347,7 +328,7 @@ namespace TerraBlind
 			return a.Length > 0 ? a : OpenArena;
 		}
 
-		// 这个 boss 指定的距离,没指定返回 0
+		// 这个 boss 指定的距离
 		public static int WantCellsFor(int npcType) => Of(npcType).WantCells;
 		public static bool OrbitFor(int npcType) => Of(npcType).Orbit;
 

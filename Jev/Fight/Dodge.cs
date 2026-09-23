@@ -4,53 +4,51 @@ using Terraria;
 
 namespace TerraBlind
 {
-	// Jev 给【意图】,不给按键。按键由下面那个每帧跑的反射层算
-	// 两个正交的轴,九种组合。【旋转不是第三个轴】:绕着 boss 走就是这两个轴的一个组合。
-	// 钩爪/冲刺/二段跳/翅膀都不在这里 -- 那些是"怎么做",由代码挑
+	// Jev 给意图，不给按键
+	// 钩爪/冲刺/二段跳/飞行，由代码挑
 	public enum Horiz { Away, Hold, Near }
 	public enum Vert { Rise, Level, Drop }
 
 	// 旧的九选一。BossBook 的 Banned 还按它写,映射到两个轴上
 	public enum DodgeAct { Keep, Back, Close, Evade, Up, Float, Grapple, Orbit, Dive }
 
-	// boss 战的走位。【两层】:Jev 每 200ms 说"该拉开还是该贴脸",反射层每帧算
-	// "这一刻往左还是往右、跳不跳"。让 250ms 的判断直接当按键,就是站着挨撞
+	// boss 战的走位。两层:Jev 每次反应说"该拉开还是该贴脸",反射层每帧算
+	// "这一刻往左还是往右、跳不跳"。让 大约250ms 的判断直接当按键会吃满伤害。对，我测过。
 	public static class Dodge
 	{
 		public static bool Enabled = false;
-		// 对照组:把 Jev 换成随机选择器,反射层一行不动
+		// 对照组:把 Jev 换成随机选择器
 		public static bool RandomBrain = false;
 		const string Owner = "dodge";
-		// 【别把远处的 boss 当不存在】。原来 60 格截断,而肉山退到 60 格外就"消失",
+		// 别把远处的 boss 当不存在
 		// 走位层每隔几帧就 Release 一次,没有任何东西再把人拉回来
 		const int CareCells = 200;
-		// 量墙用另一把尺子。跟着 CareCells 涨的话,扫描量翻三倍,报出去的"还剩多少空间"也变了意思
+		// 量墙用另一把尺子。
 		const int RoomScanCells = 60;
-		// 离地图边界这么近就当撞墙。原版自己拿 maxTilesX-38 当边(Player.cs:20648),取整到 40
+		// 离地图边界这么近就当撞墙。
 		const int EdgeCells = 40;
-		// 意图过期就退回保守行为。拿 3 秒前的判断当真比没有判断更糟
+		// 意图过期就退回保守行为。
 		const long IntentTtlMs = 1500;
 
-		// 二段跳:落地才回充,空中再按一次触发,而且【必须松一帧】才算新按压
+		// 二段跳:落地或钩爪中了才充能。,空中再按一次触发,而且必须松一帧才算新按压
 		// 这次滞空已经跳过空中跳了。只用来分"第一段"和"后续段",能不能跳问 AnyExtraJumpUsable
 		static bool _airJumped;
 		static bool _jumpHeld;
 		static int _holdFrames;
-		// 按住的兜底上限。正常到顶就松了,这个数只防"某种状态下一直升不完"
+		// 按住的兜底上限。防"某种状态下一直升不完"
 		const int MaxHoldFrames = 30;
 		// 钩爪甩出去这么多帧还没勾上就放弃,别一直按着钩子不打人
 		const int HookGiveUpFrames = 45;
 		static int _hookFrames;
 		static bool _hookHeld;
-		// 荡完歇一会儿。钩爪的价值是荡出去那段位移,而位移要时间兑现 --
-		// 勾上就跳、跳完就勾,人只会在同一格上下震荡,一格都没挪
+		// 荡完歇一会儿
+		// 勾上就跳、跳完就勾，等于玩家原地不动
 		const int HookCooldownFrames = 30;
 		static int _hookCooldown;
-		// 冲刺要"按→松→按"三帧。这一帧是不是该松手,下一帧再按下去触发双击
+		// 冲刺要"按→松→按"三帧。因为这不是1.4.5。TMod更新1.4.5后得改。现在的模组覆盖掉了的话也得改
 		static int _dashDir;
 		static bool _dashGap;
-		// 飘太久就强制落地。羽落 + 按住 up 能悬到天荒地老,而悬着既打不到 boss
-		// 也躲不开从上面压下来的东西 -- 判据只有一条:能不能躲开 boss
+		// 为什么存在这个东西？？Claude给我解释
 		const int MaxAirborneFrames = 150;
 		static int _airborneFrames;
 		static bool _tooLongAirborne;
@@ -59,7 +57,7 @@ namespace TerraBlind
 		// 找落点时往上探多少格。不是钩爪的真实射程(那个数我不知道),只是个搜索上界:
 		// 猜远了钩子够不着,自己会空手回来,HookGiveUpFrames 收场
 		const int HookReachCells = 20;
-		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步
+		// 认准一个方向至少跑这么多帧。掉头要先把速度减到 0,转得勤等于原地踏步。效果可能需要进一步测试。
 
 		public static string Last = "idle";
 		public static Horiz Hor = Horiz.Away;
@@ -69,10 +67,10 @@ namespace TerraBlind
 		public static bool JevSaysJump;
 		public static bool JevSaysDash;
 		public static bool JevSaysHook;
-		// 【概率分布才是"这是模型判的"的证据】。一个结论谁都能编,七个选项各占多少编不出来
+		// jev判的概率分布。
 		public static string Probs = "";
 		public static string TopTwo = "";
-		// 上一条播报过的意图。没变就不再刷屏
+		// 上一条播报过的意图。
 		static DodgeAct _saidAct = (DodgeAct)(-1);
 		static long _saidAt;
 
@@ -81,7 +79,7 @@ namespace TerraBlind
 		static readonly HttpClient _http = new() { Timeout = System.TimeSpan.FromSeconds(5) };
 		static volatile bool _busy;
 		static volatile string _pending;
-		// 发出去的那份现场,答案回来时一起记进日志 -- 只看结论看不出它为什么这么选
+		// 发出去的那份现场,答案回来时一起记进日志。
 		static string _lastFacts = "";
 		static long _actAt = -100000;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
@@ -95,15 +93,13 @@ namespace TerraBlind
 			return _key.Length == 0 ? null : _key;
 		}
 
-		// 【部件大多没有 boss 标志】(蠕虫各节、骷髅王的手、探测器),漏一个预警、压力、夹击就全看不见它
-		// 清单在 Combat 里只存一份,各存一份的话下个 boss 只会被加进一边
+		// 部件大多没有 boss 标志。见Conbat.cs
 		static bool IsBossLike(NPC npc)
 			=> npc.boss || Combat.BossPart(npc.type) || Combat.DodgeOnlyPart(npc.type)
 			|| Combat.DestroyerSegment(npc.type) || npc.type == Terraria.ID.NPCID.Probe;
 
-		// 【返回最近的那一段,不是第一个】。蠕虫几十节,锁到 40 格外的尾巴上
-		// 距离和 FramesToHit 就全是错的 -- 要躲的永远是离自己最近的那节
-		static NPC Boss(Player p, out int dist)
+		// 返回最近的那一段
+			static NPC Boss(Player p, out int dist)
 		{
 			dist = -1;
 			NPC best = null;
@@ -122,7 +118,7 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 全场 boss 里最早撞到我的那一下还有几帧。都不朝我来就 -1
+		// 何意味。
 		static int SoonestBossHit(Player p)
 		{
 			int best = -1;
@@ -136,8 +132,7 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 四面各有多挤。【几何不该让 Jev 自己做】:逐发报坐标和速度,
-		// 它得在脑子里叠加才知道哪边空,而这个数代码顺手就算出来了
+		// 四面各有多“挤”。
 		public static float PressLeft, PressRight, PressUp, PressDown;
 		static void Pressure(Player p)
 		{
@@ -163,20 +158,19 @@ namespace TerraBlind
 			}
 		}
 
-		// 【按伤害算,不只按远近】。原来一发算一份,于是一串 19 伤的激光
-		// 压过一只 190 伤的碰撞箱,"远离"就退进喷火里了
+		// 按伤害算
 		static float Weight(int damage, int cells)
 			=> damage / 50f / System.Math.Max(1, cells);
 
-		// 一个威胁同时投给水平和竖直,正上方的东西不该只算"上"不算别的
+		// 一个威胁同时投给水平和竖直
 		static void Add(Microsoft.Xna.Framework.Vector2 at, Microsoft.Xna.Framework.Vector2 me, float w)
 		{
 			if (at.X > me.X) PressRight += w; else PressLeft += w;
 			if (at.Y > me.Y) PressDown += w; else PressUp += w;
 		}
 
-		// 被两边夹住时往哪退。【没有空的那一侧了】:两边都有东西,
-		// 按压力和挑只会挑中"弹幕少但碰撞疼"的那边,所以直接背对更疼的那个
+		// 被两边夹住时往哪退
+		// 按压力和挑只会挑中"弹幕少但碰撞疼"的那边
 		static int PincerSide(Player p, out NPC worst)
 		{
 			worst = null;
@@ -193,14 +187,12 @@ namespace TerraBlind
 				else
 				{ if (left == null || npc.damage > left.damage) left = npc; }
 			}
-			// 只有一侧有东西就不是夹击,交回给压力和去挑
 			if (left == null || right == null) return 0;
 			worst = left.damage >= right.damage ? left : right;
 			return worst.Center.X > p.Center.X ? -1 : 1;
 		}
 
-		// 要远离的,数越小越要紧(用户给的):骷髅王的头 = 二阶段魔焰眼 = 毁灭者的头 > 毁灭者的身体。
-		// 魔焰眼 ai[0]!=0 就是过了 40% 血(NPC.cs aiStyle 31)。-1 = 不在名单里
+		// 机甲混战里，要远离的，按顺序:骷髅王的头 = 二阶段魔焰眼 = 毁灭者的头 > 毁灭者的身体。（期待更好的解决方案。）
 		static int FleeRank(NPC n)
 		{
 			if (n.type == Terraria.ID.NPCID.SkeletronPrime) return 0;
@@ -210,8 +202,7 @@ namespace TerraBlind
 			return -1;
 		}
 
-		// Away 时背对谁。【先看正在朝我来的,再按名单顺序】:骷髅王的头全程在场,
-		// 只按顺序就永远背对它,哪怕毁灭者已经贴在另一边。都没朝我来就背对最近的
+		// Away 时背对谁。
 		static NPC MustFlee(Player p)
 		{
 			NPC best = null, nearest = null;

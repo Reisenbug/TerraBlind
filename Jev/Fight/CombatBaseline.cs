@@ -7,7 +7,7 @@ namespace TerraBlind
 		CombatCall Decide(Player p, int tcx, int tcy, int dist, bool workBusy);
 	}
 
-	// Jev 没接上之前的对照组。保守:够得着才打,手上有活一律不打断,血少了跑
+	// Jev 没接上之前的对照。
 	public class CombatBaseline : ICombatBrain
 	{
 		public const int EngageCells = 12;
