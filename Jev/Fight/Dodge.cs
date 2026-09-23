@@ -75,6 +75,8 @@ namespace TerraBlind
 		// 发出去的那份现场,答案回来时一起记进日志。
 		static string _lastFacts = "";
 		static long _actAt = -100000;
+		// 第几次回答,一次回答只触发一次的动作用它去重
+		static int _answer;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
 		static string _key;
@@ -297,8 +299,8 @@ namespace TerraBlind
 			else if (go > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// down 会穿平台并取消缓降,勾着时不按
-			bool dive = ver == Vert.Drop && p.grapCount == 0;
+			// 只在穿平台的那几帧按下
+			bool dive = DropThrough(p, ver, onGround);
 			// 缓降只在 Rise 或挂钩时
 			bool hover = !dive && !_wantFly && (rise || hooking);
 			if (dive) p.controlDown = true;
@@ -392,6 +394,34 @@ namespace TerraBlind
 			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
 				+ $" 离{boss.TypeName} {dist}格 意图{hor}/{ver}"
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格");
+		}
+
+		// Drop:站在平台上时按住下穿过脚下这一层,脚过了那一层就松开,落到下一层停住。一次回答穿一层
+		static int _dropRow = -1;
+		static int _dropUsed = -1;
+		static bool DropThrough(Player p, Vert ver, bool onGround)
+		{
+			int feet = (int)((p.position.Y + p.height) / 16f);
+			if (ver != Vert.Drop || p.grapCount > 0) _dropRow = -1;
+			else if (_dropRow < 0 && onGround && _dropUsed != _answer && OnPlatform(p, feet))
+			{
+				_dropRow = feet;
+				_dropUsed = _answer;
+			}
+			if (_dropRow >= 0 && feet > _dropRow) _dropRow = -1;
+			return _dropRow >= 0;
+		}
+
+		// 脚下这一行踩着的是平台而不是实心块
+		static bool OnPlatform(Player p, int feet)
+		{
+			bool plat = false;
+			for (int x = (int)(p.position.X / 16f); x <= (int)((p.position.X + p.width - 1) / 16f); x++)
+			{
+				if (Predicates.IsSolid(x, feet)) return false;
+				if (Predicates.IsPlatform(x, feet)) plat = true;
+			}
+			return plat;
 		}
 
 		// Rise 之后至少往上按这么多帧
@@ -697,7 +727,8 @@ namespace TerraBlind
 			 + "在半空时翅膀和空中跳都还没用,上下两个方向随时能走;"
 			 + "在地面上时跑动最快最稳。付出的是这一刻没有在躲 --"
 			 + "如果已经有东西朝自己来了,不动就是站在原地等它到\","
-			 + "\"Drop\":\"往下。换掉的是头顶那片区域:压下来的东西、从上方来的弹幕"
+			 + "\"Drop\":\"往下一层:站在平台上就穿过脚下这一层,落到下一层停住;在空中就是慢慢往下落。"
+			 + "要再往下,下一次再选 Drop。换掉的是头顶那片区域:压下来的东西、从上方来的弹幕"
 			 + "(看 projectile_pressure 的 from_above)掉一层就扑空了,"
 			 + "而且 cells_of_room_above_me 会变大,竖直方向重新有空间。"
 			 + "付出的是下落途中翅膀和空中跳都在消耗或已经用掉,"
@@ -768,6 +799,7 @@ namespace TerraBlind
 			Confidence = 0f;
 			LatencyMs = 0;
 			_actAt = now;
+			_answer++;
 			DiagLog.Write($"[dodge] random -> {Hor}/{Ver}");
 			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
 		}
@@ -803,6 +835,7 @@ namespace TerraBlind
 				_ => Vert.Level,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
+			_answer++;
 
 			string fp = Field(Seg(txt, "flee_from"), "choice");
 			FleeType = -1;
