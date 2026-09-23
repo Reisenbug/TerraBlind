@@ -267,9 +267,9 @@ namespace TerraBlind
 			if (boss == null) { Gate("no boss"); Release(); return; }
 
 			var done = _pending;
-			if (done != null) { _pending = null; Parse(done); }
+			if (done != null) { _pending = null; Parse(done, boss.type); }
 			string key = Key();
-			if (RandomBrain) RandomPick();
+			if (RandomBrain) RandomPick(boss.type);
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
@@ -1040,17 +1040,29 @@ namespace TerraBlind
 		}
 
 		// 对照组。【节奏和 Jev 一样】(实测中位 326ms),每帧换就是在测抖动不是在测决策。
-		// 【所有输出都随机,阈值照旧】,落到和 Parse 同一批字段上,日志格式也一样好直接比
+		// 【按 Jev 对这个 boss 的实际比例抽】(JevPrior),没记录才均匀。阈值照旧,日志格式一样好直接比
 		const int RandomEveryMs = 300;
-		static void RandomPick()
+		static bool _priorSaid;
+		static void RandomPick(int bossType)
 		{
 			long now = _clock.ElapsedMilliseconds;
 			if (now - _actAt < RandomEveryMs) return;
 			var r = Main.rand;
-			Hor = (Horiz)r.Next(3);
-			Ver = (Vert)r.Next(3);
-			Danger = r.Next(5);
-			float jumpN = r.NextFloat(), dashN = r.NextFloat(), hookN = r.NextFloat();
+			float jumpN, dashN, hookN;
+			bool fromJev = JevPrior.Sample(bossType, out var h, out var v, out dashN, out hookN, out jumpN, out float danger, out int samples);
+			if (fromJev) { Hor = h; Ver = v; Danger = danger; }
+			else
+			{
+				Hor = (Horiz)r.Next(3);
+				Ver = (Vert)r.Next(3);
+				Danger = r.Next(5);
+				jumpN = r.NextFloat(); dashN = r.NextFloat(); hookN = r.NextFloat();
+			}
+			if (!_priorSaid || !fromJev)
+			{
+				_priorSaid = fromJev;
+				Gate(fromJev ? $"随机组按 Jev 对这个 boss 的 {samples} 次选择抽" : "随机组:这个 boss 没有 Jev 记录,均匀抽");
+			}
 			JevSaysJump = jumpN > 0.7f;
 			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
@@ -1061,7 +1073,7 @@ namespace TerraBlind
 			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
 		}
 
-		static void Parse(string packed)
+		static void Parse(string packed, int bossType)
 		{
 			int cut = packed.IndexOf('');
 			int ms = 0;
@@ -1116,7 +1128,9 @@ namespace TerraBlind
 			JevSaysDash = dashN > 0.5f;
 			JevSaysHook = hookN > 0.7f;
 			// 【noul 的原值要能看见】。只记"过没过 0.7"的话,常年 0.6 和常年 0.05 长得一样
-			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{Num(Seg(txt, "should_jump_now"), "noul", 0f):0.00}");
+			float jumpN = Num(Seg(txt, "should_jump_now"), "noul", 0f);
+			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00} 跳{jumpN:0.00}");
+			JevPrior.Record(bossType, Hor, Ver, dashN, hookN, jumpN, Danger);
 			SafeToAttack = Num(Seg(txt, "safe_to_attack"), "noul", 1f) > 0.5f;
 			TacticWorking = Num(Seg(txt, "tactic_working"), "noul", 1f) > 0.4f;
 

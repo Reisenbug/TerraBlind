@@ -230,6 +230,8 @@ namespace TerraBlind
 
 		// 【部件要查到本体那条】。Boss() 返回的可能是蠕虫的某一节或者骷髅王的手,
 		// 直接查表会返回空 -- 知识就在最需要的时候悄悄消失了
+		public static int Canonical(int npcType) => Canon(npcType);
+
 		static int Canon(int npcType)
 		{
 			if (npcType == Terraria.ID.NPCID.TheDestroyerBody
