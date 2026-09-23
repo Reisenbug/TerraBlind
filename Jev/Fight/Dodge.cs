@@ -391,6 +391,10 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
+			// 【上下也别穿毁灭者】。实测 Away/Drop 往下落,正好落进趴在下面的体节里
+			if (ver == Vert.Drop && CrossesWorm(p, 0, 1)) { Gate("往下会穿毁灭者 改不动"); ver = Vert.Level; }
+			else if (ver == Vert.Rise && CrossesWorm(p, 0, -1)) { Gate("往上会穿毁灭者 改不动"); ver = Vert.Level; }
+
 			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
 			int headroom = CeilingDistance(p);
 			if (ver == Vert.Rise && !noJump && headroom > 2) _riseHold = RiseHoldFrames;
@@ -413,6 +417,12 @@ namespace TerraBlind
 				go = WallDistance(p, -go) > 0 ? -go : 0;
 				// 撞墙就把绕行方向也翻过来,不然下一帧又朝墙走
 				if (go != 0) _spin = go;
+			}
+			// 【没必要就不穿毁灭者】。背对头跑常常正好横穿身体;两边都挡才硬穿
+			if (go != 0 && CrossesWorm(p, go, 0) && !CrossesWorm(p, -go, 0))
+			{
+				Gate($"往{(go < 0 ? "左" : "右")}会穿毁灭者 掉头");
+				go = -go;
 			}
 
 			int want0 = go;
@@ -571,8 +581,25 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
-		// 光标是全局的,攻击层每帧在瞄 boss -- 只有发射那一帧抢过来指个方向,之后不用再指
+		// 沿 (dx,dy) 把碰撞箱扫一个 Jev 往返能走到的距离,扫到毁灭者没贴着我的某一节就算要穿过去
+		const int LookFrames = 18;
+		static bool CrossesWorm(Player p, int dx, int dy)
+		{
+			var box = p.Hitbox;
+			var moved = box;
+			moved.Offset((int)(dx * p.maxRunSpeed * LookFrames),
+				dy > 0 ? (int)(p.maxFallSpeed * LookFrames) : dy < 0 ? -(int)(Player.jumpSpeed * LookFrames) : 0);
+			var swept = Microsoft.Xna.Framework.Rectangle.Union(box, moved);
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var n = Main.npc[i];
+				if (n == null || !n.active) continue;
+				if (n.type != Terraria.ID.NPCID.TheDestroyer && !Combat.DestroyerSegment(n.type)) continue;
+				if (n.Hitbox.Intersects(swept) && !n.Hitbox.Intersects(box)) return true;
+			}
+			return false;
+		}
+
 		const int PinnedCells = 2;
 		static bool _wasPinned;
 		static bool PinnedByPrime(Player p)
@@ -591,6 +618,7 @@ namespace TerraBlind
 			return pinned;
 		}
 
+		// 钩爪。光标是全局的,攻击层每帧在瞄 boss,只有发射那一帧抢过来指个方向
 		// urgent:不等冷却。贴脸时等 30 帧就是多挨一下
 		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, bool urgent, out bool hookJump)
 		{
