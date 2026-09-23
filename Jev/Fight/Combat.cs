@@ -41,6 +41,7 @@ namespace TerraBlind
 			=> type == Terraria.ID.NPCID.TheDestroyerBody || type == Terraria.ID.NPCID.TheDestroyerTail;
 
 		static int _target = -1;
+		static int _loggedTarget = -1;
 		static bool _swinging;
 		static string _lastSig = "";
 		static CombatCall _call;
@@ -252,9 +253,11 @@ namespace TerraBlind
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
 			// 拿它当条件就是挥一下等一轮。动画结束就能再挥,这才是连挥
 			if (p.itemAnimation == 0) p.controlUseItem = true;
-			if (_target != n || !_swinging)
+			// 【比的是上次记过的目标,不是 _target】。_target 在上面已经改成 n 了,拿它比永远相等
+			if (_loggedTarget != n || !_swinging)
 			{
 				_swinging = true;
+				_loggedTarget = n;
 				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 			}
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
