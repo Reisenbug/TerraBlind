@@ -335,10 +335,8 @@ namespace TerraBlind
 				case Horiz.Away:
 					go = away;
 					break;
-				// 刚挨过打就不靠近
 				case Horiz.Near:
-					if (_hurtRecently > 0) go = away;
-					else if (want == NoWant || System.Math.Abs(dx) / 16f > want) go = toward;
+					if (want == NoWant || System.Math.Abs(dx) / 16f > want) go = toward;
 					else if (dist < want / 2) go = away;
 					break;
 				// 有目标距离时把距离维持在 want/2 到 want 之间
@@ -500,16 +498,12 @@ namespace TerraBlind
 
 		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;
-		// 挨打后这么多帧内 Near 改成退
-		const int HurtCooldown = 30;
-		static int _hurtRecently;
 		static void Hurt(Player p, NPC boss, int dist, Horiz hor, Vert ver)
 		{
 			if (_prevHp < 0) { _prevHp = p.statLife; return; }
 			int lost = _prevHp - p.statLife;
 			_prevHp = p.statLife;
-			if (lost <= 0) { if (_hurtRecently > 0) _hurtRecently--; return; }
-			if (lost > 5) _hurtRecently = HurtCooldown;
+			if (lost <= 0) return;
 			int nd = 999, pd = 999;
 			string nn = "无", pn = "无";
 			foreach (var n in Main.npc)
