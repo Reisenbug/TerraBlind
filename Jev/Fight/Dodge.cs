@@ -125,114 +125,69 @@ namespace TerraBlind
 			return best;
 		}
 
-		// 四面各有多“挤”。
-		public static float PressLeft, PressRight, PressUp, PressDown;
-		static void Pressure(Player p)
-		{
-			PressLeft = PressRight = PressUp = PressDown = 0f;
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var npc = Main.npc[i];
-				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
-				int d = System.Math.Abs((int)(npc.Center.X / 16f) - pcx)
-					  + System.Math.Abs((int)(npc.Center.Y / 16f) - pcy);
-				if (d > CareCells) continue;
-				Add(npc.Center, p.Center, Weight(npc.damage, d));
-			}
-			foreach (var pr in Main.projectile)
-			{
-				// hostile 和 friendly 可以都为假,所以认 hostile
-				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
-				int d = System.Math.Abs((int)(pr.Center.X / 16f) - pcx)
-					  + System.Math.Abs((int)(pr.Center.Y / 16f) - pcy);
-				if (d > ThreatScan.RangeCells) continue;
-				Add(pr.Center, p.Center, Weight(pr.damage, d));
-			}
-		}
+		// 场上每种 boss 部件一项,Jev 从里面选 Away 时背对谁
+		static readonly System.Collections.Generic.List<(string Id, int Type, int Damage)> _threats = new();
+		// Jev 选的那种部件,-1 就背对锁定的那个
+		public static int FleeType = -1;
 
-		// 按伤害算
-		static float Weight(int damage, int cells)
-			=> damage / 50f / System.Math.Max(1, cells);
+		static string ThreatId(int type)
+			=> type < Terraria.ID.NPCID.Count ? Terraria.ID.NPCID.Search.GetName(type)
+			 : Terraria.ModLoader.NPCLoader.GetNPC(type).Name;
 
-		// 一个威胁同时投给水平和竖直
-		static void Add(Microsoft.Xna.Framework.Vector2 at, Microsoft.Xna.Framework.Vector2 me, float w)
+		// 这种部件里离我最近的一个
+		static NPC Nearest(Player p, int type)
 		{
-			if (at.X > me.X) PressRight += w; else PressLeft += w;
-			if (at.Y > me.Y) PressDown += w; else PressUp += w;
-		}
-
-		// 两侧都有 boss 时背对伤害高的那个
-		static int PincerSide(Player p, out NPC worst)
-		{
-			worst = null;
-			NPC left = null, right = null;
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var npc = Main.npc[i];
-				if (npc == null || !npc.active || npc.friendly || !IsBossLike(npc)) continue;
-				int d = System.Math.Abs((int)(npc.Center.X / 16f) - (int)(p.Center.X / 16f))
-					  + System.Math.Abs((int)(npc.Center.Y / 16f) - (int)(p.Center.Y / 16f));
-				if (d > CareCells) continue;
-				if (npc.Center.X > p.Center.X)
-				{ if (right == null || npc.damage > right.damage) right = npc; }
-				else
-				{ if (left == null || npc.damage > left.damage) left = npc; }
-			}
-			if (left == null || right == null) return 0;
-			worst = left.damage >= right.damage ? left : right;
-			return worst.Center.X > p.Center.X ? -1 : 1;
-		}
-
-		// 机甲混战里，要远离的，按顺序:骷髅王的头 = 二阶段魔焰眼 = 毁灭者的头 > 毁灭者的身体。（期待更好的解决方案。）
-		static int FleeRank(NPC n)
-		{
-			if (n.type == Terraria.ID.NPCID.SkeletronPrime) return 0;
-			if (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f) return 0;
-			if (n.type == Terraria.ID.NPCID.TheDestroyer) return 0;
-			if (Combat.DestroyerSegment(n.type)) return 1;
-			return -1;
-		}
-
-		// Away 时背对谁。
-		static NPC MustFlee(Player p)
-		{
-			NPC best = null, nearest = null;
-			int bestRank = int.MaxValue;
-			float bestD = float.MaxValue, nearD = float.MaxValue;
+			NPC best = null;
+			float bd = float.MaxValue;
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var n = Main.npc[i];
-				if (n == null || !n.active) continue;
-				int rank = FleeRank(n);
-				if (rank < 0) continue;
-				float d = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center);
-				if (d < nearD) { nearD = d; nearest = n; }
-				if (FramesToHit(p, n) < 0) continue;
-				if (rank < bestRank || (rank == bestRank && d < bestD)) { bestRank = rank; bestD = d; best = n; }
+				if (n == null || !n.active || n.type != type) continue;
+				float d = Microsoft.Xna.Framework.Vector2.DistanceSquared(n.Center, p.Center);
+				if (d < bd) { bd = d; best = n; }
 			}
-			return best ?? nearest;
+			return best;
 		}
-		static NPC _lastFlee;
 
+		// 刷新 _threats,每种取最近的一个报位置、速度、伤害
+		static string ThreatsJson(Player p)
+		{
+			_threats.Clear();
+			var seen = new System.Collections.Generic.HashSet<int>();
+			var sb = new StringBuilder("[");
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var m = Main.npc[i];
+				if (m == null || !m.active || m.friendly || !IsBossLike(m) || !seen.Add(m.type)) continue;
+				var n = Nearest(p, m.type);
+				int cx = (int)(n.Center.X / 16f) - pcx, cy = pcy - (int)(n.Center.Y / 16f);
+				if (System.Math.Abs(cx) + System.Math.Abs(cy) > CareCells) continue;
+				string id = ThreatId(n.type);
+				_threats.Add((id, n.type, n.damage));
+				int f = FramesToHit(p, n);
+				if (sb.Length > 1) sb.Append(',');
+				sb.Append("{\"id\":\"").Append(JsonStr(id)).Append('"')
+				  .Append(",\"name\":\"").Append(JsonStr(n.TypeName)).Append('"')
+				  .Append(",\"damage\":").Append(n.damage)
+				  .Append(",\"cells_to_my_right\":").Append(cx)
+				  .Append(",\"cells_above_me\":").Append(cy)
+				  .Append(",\"speed_to_the_right\":").Append((int)(n.velocity.X * 60f / 16f))
+				  .Append(",\"speed_upward\":").Append((int)(-n.velocity.Y * 60f / 16f))
+				  .Append(",\"frames_until_it_hits_me\":").Append(f < 0 ? "\"它没朝我来\"" : f.ToString())
+				  .Append('}');
+			}
+			return sb.Append(']').ToString();
+		}
+
+		// Away 时往哪边:背对 Jev 选的那种部件里最近的一个
+		static int _saidFlee = -2;
 		static int AwaySide(Player p, NPC boss)
 		{
-			// 顺序:要远离的 > 夹击 > 压力
-			var flee = MustFlee(p);
-			if (flee != _lastFlee) { _lastFlee = flee; if (flee != null) Gate($"退的时候背对 {flee.TypeName}"); }
-			if (flee != null) return flee.Center.X > p.Center.X ? -1 : 1;
-			int pincer = PincerSide(p, out var worst);
-			if (pincer != 0)
-			{
-				if (worst != _lastPincer) { _lastPincer = worst; Gate($"夹击 背对{worst.TypeName}(伤{worst.damage})"); }
-				return pincer;
-			}
-			_lastPincer = null;
-			// 两侧一样挤就背对锁定的那个
-			if (System.Math.Abs(PressLeft - PressRight) < 0.0001f) return boss.Center.X > p.Center.X ? -1 : 1;
-			return PressRight > PressLeft ? -1 : 1;
+			var from = (FleeType >= 0 ? Nearest(p, FleeType) : null) ?? boss;
+			if (from.type != _saidFlee) { _saidFlee = from.type; Gate($"退的时候背对 {from.TypeName}"); }
+			return from.Center.X > p.Center.X ? -1 : 1;
 		}
-		static NPC _lastPincer;
 
 		public static void Tick()
 		{
@@ -246,11 +201,11 @@ namespace TerraBlind
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done, boss.type); }
 			string key = Key();
-			if (RandomBrain) RandomPick(boss.type);
+			if (RandomBrain) RandomPick(p, boss.type);
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
-				Fire(key, _lastFacts);
+				Fire(key, Body(_lastFacts, FleeQuestion()));
 			}
 
 			// 意图过期时用 Away/Level
@@ -283,7 +238,6 @@ namespace TerraBlind
 		{
 			float dx = boss.Center.X - p.Center.X;
 			bool bossRight = dx > 0;
-			Pressure(p);
 			int away = AwaySide(p, boss);
 			int toward = bossRight ? 1 : -1;
 			int go = 0;
@@ -657,7 +611,6 @@ namespace TerraBlind
 			float dx = (boss.Center.X - p.Center.X) / 16f;
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			int bossSpd = BossSpeed(boss);
-			Pressure(p);
 			int hit = FramesToHit(p, boss);
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
@@ -679,10 +632,7 @@ namespace TerraBlind
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
 				 + ",\"my_speed_to_the_right_cells_per_second\":" + (int)(p.velocity.X * 60f / 16f)
 				 + ",\"my_speed_upward_cells_per_second\":" + (int)(-p.velocity.Y * 60f / 16f)
-				 + ",\"how_crowded_each_side_is\":{\"left\":" + PressLeft.ToString("0.00")
-				 + ",\"right\":" + PressRight.ToString("0.00")
-				 + ",\"above\":" + PressUp.ToString("0.00")
-				 + ",\"below\":" + PressDown.ToString("0.00") + "}"
+				 + ",\"threats\":" + ThreatsJson(p)
 				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
@@ -692,9 +642,27 @@ namespace TerraBlind
 				 + "}";
 		}
 
+		// 场上不止一种部件时才问背对谁,选项就是 _threats
+		static string FleeQuestion()
+		{
+			if (_threats.Count < 2) return "";
+			var sb = new StringBuilder("\"flee_from\":{\"type\":\"choice\",\"instructions\":"
+				+ "\"水平那一题选 Away 时,代码每帧背对这一题选中的那个跑。此刻最该远离 threats 里的哪一个?"
+				+ "碰一下的伤害(damage)越高、离得越近、越快撞上(frames_until_it_hits_me 越小)越该远离;"
+				+ "背板里说了要远离谁的,按背板来。背对一个跑会不会正好撞进另一个,也要算进去。\",\"criteria\":{");
+			for (int i = 0; i < _threats.Count; i++)
+			{
+				if (i > 0) sb.Append(',');
+				var t = _threats[i];
+				sb.Append('"').Append(JsonStr(t.Id)).Append("\":\"远离 ")
+				  .Append(JsonStr(Terraria.Lang.GetNPCNameValue(t.Type))).Append(",碰一下伤害 ").Append(t.Damage).Append('"');
+			}
+			return sb.Append("}},").ToString();
+		}
+
 		// 同一份 state 的所有问题一次发出
-		static string Body(string state)
-			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
+		static string Body(string state, string flee)
+			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{" + flee
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
 			 + "【撞到 boss 身上掉的血远比吃一发弹幕多】,躲开碰撞永远排在最前面;"
@@ -724,7 +692,7 @@ namespace TerraBlind
 			 + "锁的是起冲那一刻的高度,升一层就从它的路线上让开了。"
 			 + "付出的是头顶的余量,cells_of_room_above_me 每升一次就少一截;"
 			 + "这个数归零之后竖直方向再无处可去,那时候来一下只能硬吃。"
-			 + "上方本来就有东西时(how_crowded_each_side_is 的 above 大),往上是迎上去\","
+			 + "上方本来就有东西时(看 threats 的 cells_above_me),往上是迎上去\","
 			 + "\"Level\":\"保持现在的高度。换来的是手里的余地:"
 			 + "在半空时翅膀和空中跳都还没用,上下两个方向随时能走;"
 			 + "在地面上时跑动最快最稳。付出的是这一刻没有在躲 --"
@@ -749,7 +717,7 @@ namespace TerraBlind
 			 + "\"就这一刻该起跳吗?比如有东西贴着地面冲过来,或者弹幕从下方上来。\"}"
 			 + "}}";
 
-		static void Fire(string key, string state)
+		static void Fire(string key, string body)
 		{
 			_busy = true;
 			var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -759,7 +727,7 @@ namespace TerraBlind
 				{
 					using var req = new HttpRequestMessage(HttpMethod.Post, Url);
 					req.Headers.Add("Authorization", "Bearer " + key);
-					req.Content = new StringContent(Body(state), Encoding.UTF8, "application/json");
+					req.Content = new StringContent(body, Encoding.UTF8, "application/json");
 					var res = await _http.SendAsync(req);
 					string txt = await res.Content.ReadAsStringAsync();
 					if (res.IsSuccessStatusCode) _pending = sw.ElapsedMilliseconds + "" + txt;
@@ -773,11 +741,13 @@ namespace TerraBlind
 		// 对照组:按 JevPrior 里这个 boss 的选择比例抽,没记录就均匀抽。间隔取 Jev 实测延迟中位
 		const int RandomEveryMs = 300;
 		static bool _priorSaid;
-		static void RandomPick(int bossType)
+		static void RandomPick(Player p, int bossType)
 		{
 			long now = _clock.ElapsedMilliseconds;
 			if (now - _actAt < RandomEveryMs) return;
 			var r = Main.rand;
+			ThreatsJson(p);
+			FleeType = _threats.Count < 2 ? -1 : _threats[r.Next(_threats.Count)].Type;
 			float jumpN, dashN, hookN;
 			bool fromJev = JevPrior.Sample(bossType, out var h, out var v, out dashN, out hookN, out jumpN, out int samples);
 			if (fromJev) { Hor = h; Ver = v; }
@@ -833,6 +803,11 @@ namespace TerraBlind
 				_ => Vert.Level,
 			};
 			_actAt = _clock.ElapsedMilliseconds;
+
+			string fp = Field(Seg(txt, "flee_from"), "choice");
+			FleeType = -1;
+			foreach (var t in _threats) if (t.Id == fp) FleeType = t.Type;
+			if (fp != null) DiagLog.Write($"[dodge] jev 背对 {fp}");
 
 			Probs = Seg(hq, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
