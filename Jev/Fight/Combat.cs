@@ -109,7 +109,8 @@ namespace TerraBlind
 			float bestScore = -1f;
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			// 【双子只打魔焰眼】。分头打等于两个都不死,而它贴脸喷火比激光眼危险
-			bool twinLock = bossPass && Alive(Terraria.ID.NPCID.Spazmatism);
+			// 【只在场上就这一场时锁】。三王同召时恒为真会让另外两个一枪不挨
+			bool twinLock = bossPass && Alive(Terraria.ID.NPCID.Spazmatism) && OnlyTwins();
 			for (int i = 0; i < Main.maxNPCs; i++)
 			{
 				var npc = Main.npc[i];
@@ -136,6 +137,24 @@ namespace TerraBlind
 			for (int i = 0; i < Main.maxNPCs; i++)
 				if (Main.npc[i] != null && Main.npc[i].active && Main.npc[i].type == type) return true;
 			return false;
+		}
+
+		// 场上的 boss 是不是只有双子这一场。别的机械王在场时不能再锁魔焰眼
+		// 【毁灭者的身体和尾巴没有 boss 标志】,漏掉就等于没看见它在场
+		static bool OnlyTwins()
+		{
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var n = Main.npc[i];
+				if (n == null || !n.active || n.friendly) continue;
+				if (n.type == Terraria.ID.NPCID.TheDestroyer
+				 || n.type == Terraria.ID.NPCID.TheDestroyerBody
+				 || n.type == Terraria.ID.NPCID.TheDestroyerTail
+				 || n.type == Terraria.ID.NPCID.SkeletronPrime) return false;
+				if (n.boss && n.type != Terraria.ID.NPCID.Spazmatism
+				 && n.type != Terraria.ID.NPCID.Retinazer) return false;
+			}
+			return true;
 		}
 
 		// 打小怪用 0 号位,打 boss 本体用 1 号位。【目标类型天然就是阶段】--
