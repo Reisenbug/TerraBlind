@@ -2886,6 +2886,28 @@ namespace TerraBlind
 				JevLog.Clear();
 				body = "{\"ok\":true}";
 			}
+			else if (path == "/keys")
+			{
+				body = KeyPress.KeysJson;
+			}
+			else if (path == "/press")
+			{
+				// {"key":"Jump","mode":"tap|hold|double","frames":20}
+				string pb = ReadBody(ctx);
+				var km = System.Text.RegularExpressions.Regex.Match(pb, "\"key\"\\s*:\\s*\"([^\"]+)\"");
+				var mm = System.Text.RegularExpressions.Regex.Match(pb, "\"mode\"\\s*:\\s*\"(\\w+)\"");
+				var fm = System.Text.RegularExpressions.Regex.Match(pb, "\"frames\"\\s*:\\s*(\\d+)");
+				string mode = mm.Success ? mm.Groups[1].Value : "tap";
+				if (!km.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
+				else
+				{
+					string key = km.Groups[1].Value;
+					if (mode == "hold") KeyPress.Hold(key, fm.Success ? int.Parse(fm.Groups[1].Value) : 20);
+					else if (mode == "double") KeyPress.DoubleTap(key);
+					else KeyPress.Tap(key);
+					body = "{\"accepted\":true}";
+				}
+			}
 			else
 			{
 				body = "{\"error\":\"not_found\"}";
