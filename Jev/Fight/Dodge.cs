@@ -331,11 +331,10 @@ namespace TerraBlind
 			// 要升降又没横移时,斜着往远离的方向走
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 甩钩:Jev 说勾、被骷髅王贴住、或 Rise 时空中已经没有跳和翅膀
-			bool pinned = PinnedByPrime(p);
-			bool wantHook = JevSaysHook || pinned
+			// 甩钩:Jev 说勾、或 Rise 时空中已经没有跳和翅膀
+			bool wantHook = JevSaysHook
 						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
-			bool hooking = Hook(p, boss, wantHook, ver, onGround, pinned, out bool hookJump);
+			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
 
 			// 打不中时每 PoseSecs 秒在 Rise/Drop 之间翻
 			if (TooFar)
@@ -483,27 +482,8 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 机械骷髅王的头离我不超过 PinnedCells 格
-		const int PinnedCells = 2;
-		static bool _wasPinned;
-		static bool PinnedByPrime(Player p)
-		{
-			bool pinned = false;
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			for (int i = 0; i < Main.maxNPCs && !pinned; i++)
-			{
-				var n = Main.npc[i];
-				if (n == null || !n.active || n.type != Terraria.ID.NPCID.SkeletronPrime) continue;
-				pinned = System.Math.Abs((int)(n.Center.X / 16f) - pcx)
-					   + System.Math.Abs((int)(n.Center.Y / 16f) - pcy) <= PinnedCells;
-			}
-			if (pinned && !_wasPinned) Gate($"被机械骷髅王贴住 甩钩 冷却{_hookCooldown} grap={p.grapCount}");
-			_wasPinned = pinned;
-			return pinned;
-		}
-
-		// 钩爪。只在发射那一帧占用光标;urgent 无视冷却
-		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, bool urgent, out bool hookJump)
+		// 钩爪。只在发射那一帧占用光标
+		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
@@ -520,7 +500,7 @@ namespace TerraBlind
 				return true;
 			}
 			_anchorPrev = float.MaxValue;
-			if (_hookCooldown > 0) { _hookCooldown--; if (!urgent) return false; }
+			if (_hookCooldown > 0) { _hookCooldown--; return false; }
 			if (!want) { _hookFrames = 0; return false; }
 			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
 			if (_hookFrames++ > HookGiveUpFrames) return false;
