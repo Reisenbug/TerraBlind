@@ -331,10 +331,7 @@ namespace TerraBlind
 			// 要升降又没横移时,斜着往远离的方向走
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 甩钩:Jev 说勾、或 Rise 时空中已经没有跳和翅膀
-			bool wantHook = JevSaysHook
-						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
-			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
+			bool hooking = Hook(p, boss, JevSaysHook, ver, onGround, out bool hookJump);
 
 			// 打不中时每 PoseSecs 秒在 Rise/Drop 之间翻
 			if (TooFar)
