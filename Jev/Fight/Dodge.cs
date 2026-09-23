@@ -48,10 +48,8 @@ namespace TerraBlind
 		// 冲刺要"按→松→按"三帧。因为这不是1.4.5。TMod更新1.4.5后得改。现在的模组覆盖掉了的话也得改
 		static int _dashDir;
 		static bool _dashGap;
-		// 为什么存在这个东西？？Claude给我解释
-		const int MaxAirborneFrames = 150;
+		// 这次滞空了多少帧,报给 Jev
 		static int _airborneFrames;
-		static bool _tooLongAirborne;
 		// 这一帧要不要靠翅膀爬升。跳到顶之后还按着才会起飞
 		static bool _wantFly;
 		// 找钩爪落点的搜索半径,不是钩爪射程
@@ -316,8 +314,8 @@ namespace TerraBlind
 			bool onGround = p.velocity.Y == 0f;
 
 			// 斜坡上 velocity.Y 不为 0,所以也看脚下
-			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _tooLongAirborne = false; _riseHold = 0; }
-			else if (!(_wantFly && p.wingTime > 0f) && ++_airborneFrames > MaxAirborneFrames) _tooLongAirborne = true;
+			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _riseHold = 0; }
+			else _airborneFrames++;
 
 			int want = Want(boss);
 			int framesToHit = SoonestBossHit(p);
@@ -390,13 +388,10 @@ namespace TerraBlind
 			if (headroom <= 1) _riseHold = 0;
 			bool rise = _riseHold > 0 && !noJump;
 			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
-			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming) && !noJump);
 			// 只有 Rise 才用翅膀
-			_wantFly = rise && !_tooLongAirborne && p.grapCount == 0;
-			bool jump = Jump(p, onGround, wantJump, rise && !_tooLongAirborne);
-			if (rise && !_wantFly)
-				Gate($"Rise 但不飞: 滞空{_airborneFrames}帧 tooLong={_tooLongAirborne}"
-					+ $" grap={p.grapCount} wing={p.wingTime:0}");
+			_wantFly = rise && p.grapCount == 0;
+			bool jump = Jump(p, onGround, wantJump, rise);
 
 			// 撞墙就掉头,绕圈方向跟着翻,两侧都堵才停
 			if (go != 0 && WallDistance(p, go) <= 0)
@@ -420,7 +415,7 @@ namespace TerraBlind
 			if (jump) p.controlJump = true;
 
 			// down 会穿平台并取消缓降,勾着时不按
-			bool dive = (ver == Vert.Drop || _tooLongAirborne) && p.grapCount == 0;
+			bool dive = ver == Vert.Drop && p.grapCount == 0;
 			// 缓降只在 Rise 或挂钩时
 			bool hover = !dive && !_wantFly && (rise || hooking);
 			if (dive) p.controlDown = true;
