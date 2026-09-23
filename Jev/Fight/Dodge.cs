@@ -325,11 +325,8 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			// 头顶没空间就不再往上
-			int headroom = CeilingDistance(p);
-			if (ver == Vert.Rise && headroom > 2) _riseHold = RiseHoldFrames;
+			if (ver == Vert.Rise) _riseHold = RiseHoldFrames;
 			else if (_riseHold > 0) _riseHold--;
-			if (headroom <= 1) _riseHold = 0;
 			bool rise = _riseHold > 0;
 			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
 			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming));
