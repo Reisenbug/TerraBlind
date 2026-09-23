@@ -7,8 +7,8 @@ namespace TerraBlind
 	// Jev 给意图，不给按键
 	// 钩爪/冲刺/二段跳/飞行，由代码挑
 	public enum Horiz { Away, Hold, Near }
-	// 竖直动作
-	public enum Move { Fly, AirJump, DropPlatform, None }
+	// 动作:竖直的几种,加上钩爪和冲刺
+	public enum Move { Fly, AirJump, DropPlatform, Grapple, Dash, None }
 	// 在空中又没在飞时,上下键怎么按
 	public enum Fall { Up, Free, Down }
 
@@ -59,8 +59,6 @@ namespace TerraBlind
 		public static Fall Fl = Fall.Free;
 		public static float Confidence;
 		public static int LatencyMs;
-		public static bool JevSaysDash;
-		public static bool JevSaysHook;
 		// jev判的概率分布。
 		public static string Probs = "";
 		public static string TopTwo = "";
@@ -283,14 +281,13 @@ namespace TerraBlind
 				if (mv != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{mv}/{fl}");
 			}
 
-			// 钩爪落点跟着竖直方向:往上的动作勾上面,往下的勾下面
-			int hookDir = mv == Move.Fly || mv == Move.AirJump || fl == Fall.Up ? -1
-						: mv == Move.DropPlatform || fl == Fall.Down ? 1 : 0;
-			bool hooking = Hook(p, boss, JevSaysHook, hookDir, onGround, out bool hookJump);
+			// 钩爪落点跟着下落那一题:Up 勾上面,Down 勾下面
+			int hookDir = fl == Fall.Up ? -1 : fl == Fall.Down ? 1 : 0;
+			bool hooking = Hook(p, boss, mv == Move.Grapple, hookDir, onGround, out bool hookJump);
 			bool jump = Jump(p, onGround, mv, hookJump, incoming);
 
 			int want0 = go;
-			go = Dash(p, go);
+			go = Dash(p, go, mv == Move.Dash);
 			bool dashing = go != want0 || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -554,7 +551,7 @@ namespace TerraBlind
 		}
 
 		// 冲刺是方向键双击:松一帧再按
-		static int Dash(Player p, int go)
+		static int Dash(Player p, int go, bool want)
 		{
 			// 冲刺中保持方向
 			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
@@ -563,7 +560,7 @@ namespace TerraBlind
 			bool ready = p.dashType != 0 && p.dashDelay == 0;
 			if (!ready)
 			{
-				if (JevSaysDash && go != 0)
+				if (want && go != 0)
 					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay}");
 				_dashGap = false; _dashDir = 0; return go;
 			}
@@ -571,7 +568,7 @@ namespace TerraBlind
 			if (_dashGap) { _dashGap = false; return _dashDir; }
 			_dashDir = 0;
 
-			if (!JevSaysDash || go == 0) return go;
+			if (!want || go == 0) return go;
 
 			DiagLog.Write($"[dodge] 冲刺 方向{(go < 0 ? "左" : "右")}");
 			_dashGap = true; _dashDir = go;
@@ -758,22 +755,17 @@ namespace TerraBlind
 			 + "\"AirJump\":\"再跳一段:在地上就是起跳,在空中就用一段空中跳,跳到顶就松开。"
 			 + "一次回答只跳一段。air_jump_ready 为 false 时在空中什么都不会发生\","
 			 + "\"DropPlatform\":\"站在平台上时穿过脚下这一层。脚下不是平台时什么都不会发生。穿过去以后怎么落看下落那一题\","
-			 + "\"None\":\"不按跳键,也不穿平台\"}},"
+			 + "\"Grapple\":\"甩钩爪:勾住后把人整个拽过去,是一段跑不出来的位移。往哪勾由代码挑,"
+			 + "下落那一题选 Up 就勾上面,选 Down 就勾下面。拽过去的路上人没法改方向,"
+			 + "钩子飞出去到勾上有一段空窗;拽完有一小段冷却\","
+			 + "\"Dash\":\"冲刺:朝水平那一题决定的方向猛冲一小段,有内置冷却。水平方向不动时冲不出去。"
+			 + "冲刺中方向不好改\","
+			 + "\"None\":\"什么都不做\"}},"
 			 + "\"fall\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"人在空中、又没在用翅膀飞的时候,上下键怎么按。身上有羽落药水。在地面上和挂着钩子时这一题不起作用。\",\"criteria\":{"
 			 + "\"Up\":\"按住上:下落速度只有正常的十分之一,几乎停在这个高度\","
 			 + "\"Free\":\"不按:下落速度是正常的三分之一\","
-			 + "\"Down\":\"按住下:取消羽落,按正常速度下落,并且一路穿过所有平台,直到落在实心块上\"}},"
-			 + "\"should_dash_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"就这一刻该冲刺吗?冲刺是朝当前移动方向猛冲一小段,有内置冷却。"
-			 + "它能瞬间拉开一段距离、或者穿过一片危险区域。"
-			 + "但冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里。\"},"
-			 + "\"should_grapple_now\":{\"type\":\"noul\",\"instructions\":"
-			 + "\"接下来这一秒该甩钩爪吗?钩子勾住后会把人整个拽过去,是一段跑不出来的位移。"
-			 + "往哪勾、什么时候松由代码管,"
-			 + "这里只判该不该用。它换位置比跑快得多,横着跑来不及躲开追过来的东西时特别有用;"
-			 + "但拽过去的路上人没法改方向,而且钩子飞出去到勾上有一段空窗,"
-			 + "贴脸的时候甩等于把自己钉在原地挨那一下。\"}"
+			 + "\"Down\":\"按住下:取消羽落,按正常速度下落,并且一路穿过所有平台,直到落在实心块上\"}}"
 			 + "}}";
 
 		static void Fire(string key, string body)
@@ -809,24 +801,19 @@ namespace TerraBlind
 			FleeType = _threats.Count < 2 ? -1 : _threats[r.Next(_threats.Count)].Type;
 			int samples = JevPrior.Samples(bossType);
 			Hor = (Horiz)JevPrior.Sample(bossType, "horizontal", 3);
-			Mv = (Move)JevPrior.Sample(bossType, "move", 4);
+			Mv = (Move)JevPrior.Sample(bossType, "move", 6);
 			Fl = (Fall)JevPrior.Sample(bossType, "fall", 3);
-			float dashN = JevPrior.SampleNoul(bossType, "dash");
-			float hookN = JevPrior.SampleNoul(bossType, "grapple");
 			bool fromJev = samples > 0;
 			if (!_priorSaid || !fromJev)
 			{
 				_priorSaid = fromJev;
 				Gate(fromJev ? $"随机组按 Jev 对这个 boss 的 {samples} 次选择抽" : "随机组:这个 boss 没有 Jev 记录,均匀抽");
 			}
-			JevSaysDash = dashN > 0.5f;
-			JevSaysHook = hookN > 0.7f;
 			Confidence = 0f;
 			LatencyMs = 0;
 			_actAt = now;
 			_answer++;
 			DiagLog.Write($"[dodge] random -> {Hor}/{Mv}/{Fl}");
-			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00}");
 		}
 
 		static void Parse(string packed, int bossType)
@@ -876,13 +863,7 @@ namespace TerraBlind
 				Main.NewText($"<Jev> {said}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			float dashN = Num(Seg(txt, "should_dash_now"), "noul", 0f);
-			float hookN = Num(Seg(txt, "should_grapple_now"), "noul", 0f);
-			JevSaysDash = dashN > 0.5f;
-			JevSaysHook = hookN > 0.7f;
-			DiagLog.Write($"[dodge] noul 冲{dashN:0.00} 勾{hookN:0.00}");
-			JevPrior.Record(bossType, ("horizontal", (int)Hor, 3), ("move", (int)Mv, 4), ("fall", (int)Fl, 3),
-				("dash", JevPrior.Bucket(dashN), JevPrior.Buckets), ("grapple", JevPrior.Bucket(hookN), JevPrior.Buckets));
+			JevPrior.Record(bossType, ("horizontal", (int)Hor, 3), ("move", (int)Mv, 6), ("fall", (int)Fl, 3));
 
 			JevLog.Add(new JevLog.Entry
 			{
@@ -890,7 +871,6 @@ namespace TerraBlind
 				Site = "dodge",
 				State = _lastFacts,
 				Pick = $"{hp}/{mp}/{lp}" + (fp != null ? $" 背对{fp}" : "")
-					 + (JevSaysDash ? " 该冲" : "") + (JevSaysHook ? " 该勾" : "")
 					 + "  →  " + Last,
 				Confidence = Confidence,
 				Probs = Seg(hq, "probabilities") ?? "",

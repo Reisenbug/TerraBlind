@@ -7,8 +7,6 @@ namespace TerraBlind
 	// Jev 每道题每个选项选了几次,按 boss 分开记。对照组按这张表抽
 	public static class JevPrior
 	{
-		// noul 按概率分成这么多个桶记
-		public const int Buckets = 20;
 		const int SaveEvery = 20;
 
 		class Prior
@@ -29,8 +27,6 @@ namespace TerraBlind
 				return _book;
 			}
 		}
-
-		public static int Bucket(float v) => System.Math.Clamp((int)(v * Buckets), 0, Buckets - 1);
 
 		// 一次回答记一条:每道题选了第几个选项,一共几个选项
 		public static void Record(int bossType, params (string Q, int Pick, int Options)[] picks)
@@ -69,10 +65,6 @@ namespace TerraBlind
 			}
 			return Main.rand.Next(options);
 		}
-
-		// noul 先按比例抽桶,桶内均匀
-		public static float SampleNoul(int bossType, string q)
-			=> (Sample(bossType, q, Buckets) + Main.rand.NextFloat()) / Buckets;
 
 		// 一行一个 boss:key|total|题=次数,次数;题=...
 		static void Load()
