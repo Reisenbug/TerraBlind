@@ -246,7 +246,7 @@ namespace TerraBlind
 			bool onGround = p.velocity.Y == 0f;
 
 			// 斜坡上 velocity.Y 不为 0,所以也看脚下
-			if (onGround || CellsAboveGround(p) <= 1) { _airborneFrames = 0; _riseHold = 0; }
+			if (onGround || CellsAboveGround(p) <= 1) _airborneFrames = 0;
 			else _airborneFrames++;
 
 			int framesToHit = SoonestBossHit(p);
@@ -281,14 +281,14 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			if (ver == Vert.Rise) _riseHold = RiseHoldFrames;
-			else if (_riseHold > 0) _riseHold--;
-			bool rise = _riseHold > 0;
+			// 一次 Rise 回答只起一段跳
+			bool riseNew = ver == Vert.Rise && _riseUsed != _answer;
 			// 挂着钩子时只有 Hook 能喊跳,跳会解钩
-			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming));
-			// 只有 Rise 才用翅膀
-			_wantFly = rise && p.grapCount == 0;
-			bool jump = Jump(p, onGround, wantJump, rise);
+			bool wantJump = hookJump || (p.grapCount == 0 && (riseNew || JevSaysJump || incoming));
+			// 空中跳用完了才用翅膀,飞到 Jev 不再说 Rise
+			_wantFly = ver == Vert.Rise && p.grapCount == 0 && !p.AnyExtraJumpUsable();
+			bool jump = Jump(p, onGround, wantJump, riseNew);
+			if (_jumpStarted && riseNew) _riseUsed = _answer;
 
 
 			int want0 = go;
@@ -302,7 +302,7 @@ namespace TerraBlind
 			// 只在穿平台的那几帧按下
 			bool dive = DropThrough(p, ver, onGround);
 			// 缓降只在 Rise 或挂钩时
-			bool hover = !dive && !_wantFly && (rise || hooking);
+			bool hover = !dive && !_wantFly && (ver == Vert.Rise || hooking);
 			if (dive) p.controlDown = true;
 			else if (!onGround && hover) p.controlUp = true;
 
@@ -424,9 +424,10 @@ namespace TerraBlind
 			return plat;
 		}
 
-		// Rise 之后至少往上按这么多帧
-		const int RiseHoldFrames = 30;
-		static int _riseHold;
+		// 上一次起过跳的 Rise 回答
+		static int _riseUsed = -1;
+		// 这一帧按下了新的一跳
+		static bool _jumpStarted;
 		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
@@ -475,9 +476,10 @@ namespace TerraBlind
 		static Microsoft.Xna.Framework.Vector2 _anchorPx;
 		static float _anchorPrev = float.MaxValue;
 
-		// 跳。按住直到开始下落,Rise 且有翅膀时接着按住起飞
+		// 跳。按住直到开始下落;_wantFly 时接着按住或重新按下起飞
 		static bool Jump(Player p, bool onGround, bool want, bool wantMore)
 		{
+			_jumpStarted = false;
 			if (onGround) { _airJumped = false; _holdFrames = 0; }
 
 			bool rising = p.velocity.Y < 0f;
@@ -491,15 +493,18 @@ namespace TerraBlind
 			// 松一帧,vanilla 要 releaseJump 才认新按压
 			if (_jumpHeld) { _jumpHeld = false; _holdFrames = 0; return false; }
 
+			// 空中跳用完后重新按下就是飞
+			if (_wantFly && !onGround && p.wingTime > 0f) { _jumpHeld = true; return true; }
+
 			if (!want) return false;
-			if (onGround) { _jumpHeld = true; _holdFrames = 1; return true; }
+			if (onGround) { _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true; }
 			// 挂钩时的跳是解钩跳,不花空中跳(Player.cs:20975)
-			if (p.grapCount > 0) { _jumpHeld = true; _holdFrames = 1; return true; }
+			if (p.grapCount > 0) { _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true; }
 			if (!p.AnyExtraJumpUsable()) return false;
 			// 第二段起的空中跳只在 Rise 时用
 			if (_airJumped && !wantMore) return false;
 			DiagLog.Write($"[dodge] 空中跳 第{(_airJumped ? 2 : 1)}段 vy={p.velocity.Y:0.0}");
-			_airJumped = true; _jumpHeld = true; _holdFrames = 1; return true;
+			_airJumped = true; _jumpHeld = true; _holdFrames = 1; _jumpStarted = true; return true;
 		}
 
 		// 按当前速度还有几帧碰到我,不会碰到就是 -1
@@ -718,7 +723,8 @@ namespace TerraBlind
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管【高度该怎么变】。怎么上去(跳、二段跳、翅膀、钩爪)由代码挑,"
 			 + "这里只说要不要上去。和水平那一题是独立的两个轴:两边都选'变'就是斜着走。\",\"criteria\":{"
-			 + "\"Rise\":\"往上。换掉的是横向攻击瞄准的那条线:冲撞和贴地扫过来的东西"
+			 + "\"Rise\":\"往上一段:在地上就跳一下,在空中就用一段空中跳,空中跳用完了就用翅膀飞到下一次回答。"
+			 + "要继续往上,下一次再选 Rise。换掉的是横向攻击瞄准的那条线:冲撞和贴地扫过来的东西"
 			 + "锁的是起冲那一刻的高度,升一层就从它的路线上让开了。"
 			 + "付出的是头顶的余量,cells_of_room_above_me 每升一次就少一截;"
 			 + "这个数归零之后竖直方向再无处可去,那时候来一下只能硬吃。"
