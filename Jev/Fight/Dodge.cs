@@ -201,8 +201,32 @@ namespace TerraBlind
 			return worst.Center.X > p.Center.X ? -1 : 1;
 		}
 
+		// 在场就必须远离的:毁灭者的头、二阶段的魔焰眼(ai[0]!=0 就是过了 40% 血,NPC.cs aiStyle 31)。
+		// 两个都在就背对近的那个
+		static NPC MustFlee(Player p)
+		{
+			NPC best = null;
+			float bd = float.MaxValue;
+			for (int i = 0; i < Main.maxNPCs; i++)
+			{
+				var n = Main.npc[i];
+				if (n == null || !n.active) continue;
+				bool flee = n.type == Terraria.ID.NPCID.TheDestroyer
+						 || (n.type == Terraria.ID.NPCID.Spazmatism && n.ai[0] != 0f);
+				if (!flee) continue;
+				float d = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center);
+				if (d < bd) { bd = d; best = n; }
+			}
+			return best;
+		}
+		static NPC _lastFlee;
+
 		static int AwaySide(Player p, NPC boss)
 		{
+			// 【必须远离的排在夹击前面】。被撞一下的代价比被别的挤一下大得多
+			var flee = MustFlee(p);
+			if (flee != _lastFlee) { _lastFlee = flee; if (flee != null) Gate($"强制远离 {flee.TypeName}"); }
+			if (flee != null) return flee.Center.X > p.Center.X ? -1 : 1;
 			// 【夹击优先】。被夹住的时候"哪边空"是个伪命题
 			int pincer = PincerSide(p, out var worst);
 			if (pincer != 0)
@@ -245,6 +269,7 @@ namespace TerraBlind
 			if (ver == Vert.Drop && BossBook.IsBanned(boss.type, DodgeAct.Dive)) ver = Vert.Level;
 			if (hor == Horiz.Near && BossBook.IsBanned(boss.type, DodgeAct.Close)) hor = Horiz.Hold;
 			if (hor == Horiz.Away && BossBook.IsBanned(boss.type, DodgeAct.Back)) hor = Horiz.Hold;
+			if (MustFlee(p) != null) hor = Horiz.Away;
 
 			// Vertical 也要:羽落靠按住 up 才慢降
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
@@ -348,11 +373,12 @@ namespace TerraBlind
 			// 而斜着走才是这次重构要的那个方向
 			if (ver != Vert.Level && go == 0 && dist < want) go = away;
 
-			// 钩爪是手段不是意图,时机问 Jev,方向归代码
-			// 【Drop 不甩钩】。72% 的帧都是 Drop 且人一直在空中,那条兜底常年成立
-			bool wantHook = JevSaysHook
+			// 钩爪时机问 Jev,方向归代码。【Drop 不甩钩】:72% 的帧是 Drop,兜底会常年成立
+			// 【被机械骷髅王的头贴住立刻甩钩】。实测贴在 0-2 格连挨 31/86/12,跑和冲刺都甩不开
+			bool pinned = PinnedByPrime(p);
+			bool wantHook = JevSaysHook || pinned
 						 || (ver == Vert.Rise && !onGround && !p.AnyExtraJumpUsable() && p.wingTime <= 0f);
-			bool hooking = Hook(p, boss, wantHook, ver, onGround, out bool hookJump);
+			bool hooking = Hook(p, boss, wantHook, ver, onGround, pinned, out bool hookJump);
 
 			// 【noJump 要连反射层一起禁】。Banned 只改意图,而 JevSaysJump/incoming 跟意图无关
 			bool noJump = BossBook.IsBanned(boss.type, DodgeAct.Up);
@@ -546,7 +572,26 @@ namespace TerraBlind
 
 		// 钩爪。【勾住之后一定要跳一次】,否则会被直接拉过去,那就不是位移是送死。
 		// 光标是全局的,攻击层每帧在瞄 boss -- 只有发射那一帧抢过来指个方向,之后不用再指
-		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, out bool hookJump)
+		const int PinnedCells = 2;
+		static bool _wasPinned;
+		static bool PinnedByPrime(Player p)
+		{
+			bool pinned = false;
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			for (int i = 0; i < Main.maxNPCs && !pinned; i++)
+			{
+				var n = Main.npc[i];
+				if (n == null || !n.active || n.type != Terraria.ID.NPCID.SkeletronPrime) continue;
+				pinned = System.Math.Abs((int)(n.Center.X / 16f) - pcx)
+					   + System.Math.Abs((int)(n.Center.Y / 16f) - pcy) <= PinnedCells;
+			}
+			if (pinned && !_wasPinned) Gate($"被机械骷髅王贴住 甩钩 冷却{_hookCooldown} grap={p.grapCount}");
+			_wasPinned = pinned;
+			return pinned;
+		}
+
+		// urgent:不等冷却。贴脸时等 30 帧就是多挨一下
+		static bool Hook(Player p, NPC boss, bool want, Vert ver, bool onGround, bool urgent, out bool hookJump)
 		{
 			hookJump = false;
 			if (p.grapCount > 0)
@@ -558,7 +603,7 @@ namespace TerraBlind
 				_hookCooldown = HookCooldownFrames;
 				return true;
 			}
-			if (_hookCooldown > 0) { _hookCooldown--; return false; }
+			if (_hookCooldown > 0) { _hookCooldown--; if (!urgent) return false; }
 			if (!want) { _hookFrames = 0; return false; }
 			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
 			// else releaseHook=true -- 一直按住只发射一次,之后全是空按。和二段跳同一个坑
