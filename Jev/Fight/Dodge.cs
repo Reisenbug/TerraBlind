@@ -397,7 +397,8 @@ namespace TerraBlind
 			else if (_riseHold > 0) _riseHold--;
 			if (headroom <= 1) _riseHold = 0;
 			bool rise = _riseHold > 0 && !noJump;
-			bool wantJump = hookJump || ((rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
+			// 【挂着钩子时只有钩子能喊跳】。incoming 几乎恒真,放它进来一按就解钩,拉的那段全白费
+			bool wantJump = hookJump || (p.grapCount == 0 && (rise || JevSaysJump || incoming) && !_tooLongAirborne && !noJump);
 			// 【只有"想往上"才烧翅膀】。incoming 几乎恒真,拿它当飞行条件就是一有威胁就烧光
 			_wantFly = rise && !_tooLongAirborne && p.grapCount == 0;
 			bool jump = Jump(p, onGround, wantJump, rise && !_tooLongAirborne);
@@ -596,13 +597,19 @@ namespace TerraBlind
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
-				// 勾住了就跳,顺便进冷却。【不再自己重置空中跳】:能不能跳归 vanilla 管,
-				// 清我们这个 bool 只会让它以为还有第一段
+				// 【拉到不再靠近落点才跳】。勾上当帧就跳会立刻解钩,人一格没动,
+				// 贴住的判据还成立,下一帧对同一格再甩 -- 原地勾、跳、勾
+				float d = Microsoft.Xna.Framework.Vector2.Distance(p.Center, _anchorPx);
+				bool pulling = d < _anchorPrev;
+				_anchorPrev = d;
+				if (pulling) return true;
+				Gate($"钩子拉到位 离落点{d / 16f:0.0}格 跳开");
 				hookJump = true;
 				_hookFrames = 0;
 				_hookCooldown = HookCooldownFrames;
 				return true;
 			}
+			_anchorPrev = float.MaxValue;
 			if (_hookCooldown > 0) { _hookCooldown--; if (!urgent) return false; }
 			if (!want) { _hookFrames = 0; return false; }
 			// 【钩爪也要松一帧】。vanilla 是 if(controlHook){ if(releaseHook) 发射; releaseHook=false; }
@@ -613,10 +620,13 @@ namespace TerraBlind
 			// 这期间人既没位移也没输出 -- 找不到落点就干脆不甩
 			if (!FindAnchor(p, boss, ver, out int ax, out int ay)) { _hookFrames = 0; return false; }
 			Cursor.AimTile(ax, ay);
+			_anchorPx = new Microsoft.Xna.Framework.Vector2(ax * 16 + 8, ay * 16 + 8);
 			p.controlHook = true;
 			_hookHeld = true;
 			return true;
 		}
+		static Microsoft.Xna.Framework.Vector2 _anchorPx;
+		static float _anchorPrev = float.MaxValue;
 
 		// 【按住到上升结束,不数帧】。按满才跳得最高,而每种跳的满按时长不一样,
 		// 硬编码必错。velocity.Y 转正那一刻就是到顶,这个判据对两种跳都成立
