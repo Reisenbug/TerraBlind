@@ -32,6 +32,15 @@ namespace TerraBlind
 		// 换 boss 目标要近出这么多格才换
 		const int StickCells = 5;
 
+		// 不挥的原因变了才记一行。这两支原来是静默 return,看不出武器为什么停
+		static string _noFire = "";
+		static void NoFire(string why)
+		{
+			if (why == _noFire) return;
+			_noFire = why;
+			DiagLog.Write("[combat] 不挥:" + why);
+		}
+
 		static bool DestroyerSegment(int type)
 			=> type == Terraria.ID.NPCID.TheDestroyerBody || type == Terraria.ID.NPCID.TheDestroyerTail;
 
@@ -275,8 +284,9 @@ namespace TerraBlind
 				}
 			}
 
-			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; Release(); return; }
-			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; return; }
+			if (_call.Act != CombatAct.Fight) { Last = _call.Act + ":" + _call.Why; NoFire($"{_call.Act} 对{Main.npc[n].TypeName} {dist}格 {_call.Why}"); Release(); return; }
+			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); return; }
+			_noFire = "";
 
 			int slot = WeaponSlot(p, Main.npc[n].boss || DestroyerSegment(Main.npc[n].type));
 			if (slot < 0)
