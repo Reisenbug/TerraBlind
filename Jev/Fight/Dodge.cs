@@ -391,9 +391,18 @@ namespace TerraBlind
 				if (ver != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{ver}");
 			}
 
-			// 【上下也别穿毁灭者】。实测 Away/Drop 往下落,正好落进趴在下面的体节里
-			if (ver == Vert.Drop && CrossesWorm(p, 0, 1)) { Gate("往下会穿毁灭者 改不动"); ver = Vert.Level; }
-			else if (ver == Vert.Rise && CrossesWorm(p, 0, -1)) { Gate("往上会穿毁灭者 改不动"); ver = Vert.Level; }
+			// 【上下也别穿毁灭者,挡住了就往反方向走】。改成 Level 等于停在虫子上方等它撞:
+			// 实测往下被挡 25 帧,距离一直 4-6 格没拉开,最后挨撞。两头都挡才停
+			if (ver == Vert.Drop && CrossesWorm(p, 0, 1))
+			{
+				ver = CrossesWorm(p, 0, -1) ? Vert.Level : Vert.Rise;
+				Gate($"往下会穿毁灭者 改{ver}");
+			}
+			else if (ver == Vert.Rise && CrossesWorm(p, 0, -1))
+			{
+				ver = CrossesWorm(p, 0, 1) ? Vert.Level : Vert.Drop;
+				Gate($"往上会穿毁灭者 改{ver}");
+			}
 
 			// 【顶到了就别再往上顶】。这个数以前只报给 Jev,反射层不看,于是对着方块烧翅膀
 			int headroom = CeilingDistance(p);
