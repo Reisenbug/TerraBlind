@@ -515,6 +515,8 @@ namespace TerraBlind
 			if (onGround) _airJumped = false;
 			if (_jumpHeld)
 			{
+				// 要解钩就先松一帧,下一帧的新按压才会解钩
+				if (hookJump) { _jumpHeld = false; return false; }
 				_holdFrames++;
 				bool landed = onGround && _holdFrames > 2;
 				if (vt == Vert.Rise && p.grapCount == 0 && !landed) return true;
