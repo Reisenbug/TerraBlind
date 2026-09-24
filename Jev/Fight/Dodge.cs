@@ -76,7 +76,7 @@ namespace TerraBlind
 		// 发出去的各选项现算后果,答案回来时记进日志
 		static string _lastConseq = "";
 		static readonly System.Text.RegularExpressions.Regex ConseqRx =
-			new("\"(\\w+)\":\"[^\"]*?现在选它[就:]?([^\"]*)\"");
+			new("\"(\\w+)\":\"[^\"]*?现在选它[就:]([^\"]*)\"");
 
 		// 从题目里抠出每个选项的"现在选它"那一段
 		static string Conseq(string body)
