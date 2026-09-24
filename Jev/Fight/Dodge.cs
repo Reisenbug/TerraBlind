@@ -73,6 +73,19 @@ namespace TerraBlind
 		static volatile string _pending;
 		// 发出去的那份现场,答案回来时一起记进日志。
 		static string _lastFacts = "";
+		// 发出去的各选项现算后果,答案回来时记进日志
+		static string _lastConseq = "";
+		static readonly System.Text.RegularExpressions.Regex ConseqRx =
+			new("\"(\\w+)\":\"[^\"]*?现在选它[就:]?([^\"]*)\"");
+
+		// 从题目里抠出每个选项的"现在选它"那一段
+		static string Conseq(string body)
+		{
+			var sb = new StringBuilder();
+			foreach (System.Text.RegularExpressions.Match m in ConseqRx.Matches(body))
+				sb.Append(m.Groups[1].Value).Append('=').Append(m.Groups[2].Value).Append(" | ");
+			return sb.ToString();
+		}
 		static long _actAt = -100000;
 		// 第几次回答,一次回答只触发一次的动作用它去重
 		static int _answer;
@@ -198,7 +211,9 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
-				Fire(key, Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss), VertCriteria(p)));
+				string body = Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss), VertCriteria(p));
+				_lastConseq = Conseq(body);
+				Fire(key, body);
 			}
 
 			// 意图过期时用 Away/Drift/None
@@ -948,6 +963,7 @@ namespace TerraBlind
 				return;
 			}
 			DiagLog.Write($"[dodge] jev {ms}ms -> {hp}/{mp}/{lp}");
+			DiagLog.Write($"[dodge] 当时的后果 {_lastConseq}");
 			LatencyMs = ms;
 			Confidence = Num(hq, "confidence", 0f);
 			Hor = hp switch
