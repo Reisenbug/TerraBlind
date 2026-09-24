@@ -486,13 +486,14 @@ namespace TerraBlind
 				bool pulling = d < _anchorPrev;
 				_anchorPrev = d;
 				if (pulling) return true;
-				Gate($"钩子拉到位 离落点{d / 16f:0.0}格 跳开");
+				if (!_hookSaid) { _hookSaid = true; DiagLog.Write($"[dodge] 钩子拉到位 离落点{d / 16f:0.0}格 跳开"); }
 				hookJump = true;
 				_hookFrames = 0;
 				_hookCooldown = HookCooldownFrames;
 				return true;
 			}
 			_anchorPrev = float.MaxValue;
+			_hookSaid = false;
 			if (_hookCooldown > 0) { _hookCooldown--; return false; }
 			if (!want) { _hookFrames = 0; return false; }
 			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
@@ -508,6 +509,8 @@ namespace TerraBlind
 		}
 		static Microsoft.Xna.Framework.Vector2 _anchorPx;
 		static float _anchorPrev = float.MaxValue;
+		// 这次挂钩已经记过"拉到位"
+		static bool _hookSaid;
 
 		// 跳键。空中新按一下,有空中跳 vanilla 先用空中跳,没有才是翅膀(Player.cs:25618)
 		static bool Jump(Player p, bool onGround, Vert vt, bool hookJump, bool incoming)
