@@ -19,139 +19,139 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.EyeofCthulhu] = new BossInfo
 			{
 				HowItFights =
-					"克苏鲁之眼通常先悬停在玩家头顶上方,蓄一会儿,然后朝玩家所在的位置直线冲刺。"
-					+ "需要横向速度。站着不动等它冲下来必然被撞。"
-					+ "它还会召唤servant小怪。",
+					"The Eye of Cthulhu usually hovers above the player, winds up for a moment, then charges in a straight line at where the player is. "
+					+ "It takes horizontal speed. Standing still waiting for it to come down means getting hit. "
+					+ "It also summons Servant minions.",
 			},
 
 			[Terraria.ID.NPCID.KingSlime] = new BossInfo
 			{
 				HowItFights =
-					"史莱姆王的打法就一句话:一直远离它,别停。它会瞬移到玩家身上,"
-					+ "而瞬移后的接触有伤害。站着不动就容易吃到。所以要时刻保持移动。"
+					"King Slime in one sentence: keep away from it and never stop. It teleports onto the player, "
+					+ "and touching it after the teleport hurts. Standing still makes that easy to eat, so keep moving at all times."
 			},
 
 			[Terraria.ID.NPCID.BrainofCthulhu] = new BossInfo
 			{
 				HowItFights =
-					"克苏鲁之脑分两个阶段。一阶段本体无敌,需要攻击场上的creeper"
-					+ "先把爬行者清光,清光的那一刻本体才会现身。爬行者是一次性的,不会再刷。"
-					+ "二阶段本体会瞬移到玩家附近再撞过来。全程碰到爬行者或者本体都掉血。"
-					+ "场地是个正方形房间,往后退退不了多远就到墙上,"
-					+ "所以单纯拉开距离在这里不太行得通。"
-					+ "场上还有爬行者且使用近战武器的时候,待在它们下方比待在上方安全,"
-					+ "它们由本体向玩家连线方向进行撞击。尽可能让它们在自己和brain的连线上。",
+					"The Brain of Cthulhu has two phases. In phase one the Brain itself is invulnerable; attack the Creepers on the field "
+					+ "and clear them all first. The Brain shows itself the moment they are gone. Creepers are one-time and do not respawn. "
+					+ "In phase two the Brain teleports near the player and then rams. Touching a Creeper or the Brain hurts the whole fight. "
+					+ "The arena is a square room; backing off soon hits a wall, "
+					+ "so just opening distance does not work well here. "
+					+ "While Creepers remain and I use a melee weapon, being below them is safer than above; "
+					+ "they ram along the line from the Brain to the player. Keep them on the line between me and the Brain when possible.",
 			},
 
 			[Terraria.ID.NPCID.EaterofWorldsHead] = new BossInfo
 			{
 				HowItFights =
-					"世界吞噬者是一条几十节的长虫,穿墙钻土,整条身体都会撞人。"
-					+ "打法没什么花样:【别碰到它就行】。不用刻意拉很远。"
-					+ "保持个不会擦到的距离,一直打就是了。报给你的距离说的是离你最近的那一节,"
-					+ "不是头。身体一样有碰撞伤害。",
+					"The Eater of Worlds is a worm dozens of segments long; it tunnels through walls and dirt, and its whole body hurts on contact. "
+					+ "Nothing fancy: just do not touch it. No need to go far away. "
+					+ "Keep a distance where it cannot graze me and keep shooting. The distance you are given is to the nearest segment, "
+					+ "not the head. The body does contact damage too.",
 			},
 
 			[Terraria.ID.NPCID.SkeletronHead] = new BossInfo
 			{
 				HowItFights =
-					"骷髅王有一个头和两只手。两只手还在的时候先打手。"
-					+ "打掉一只手之后它开始发射弧形轨迹的的骷髅头弹幕,两只手都没了发射得更快。"
-					+ "那时候要盯着弹幕躲。它的头每隔一段时间会突然高速旋转着撞过来。"
-					+ "离高速移动的头远一点,看到它速度起来了就别待在它的路线上。"
-					+ "和手、和头都要留出距离。"
-					+ "钩爪能让你瞬间换一个方向或者拔高,避开正在扫过来的那一只。"
-					+ "只在地面上左右跑的话,躲避就只剩一个维度,而制导骷髅头对我们的命中率会很高。"
-					+ "钩爪可以往上勾,也可以往左下右下勾。本场战斗中，换一个高度常常比继续横跑躲得开。"
-					+ "两只手都打掉之后，垂直方向的机动更有用。",
+					"Skeletron has a head and two hands. Hit the hands first while both are there. "
+					+ "After one hand is down it starts firing skull shots on curved paths, faster once both hands are gone. "
+					+ "Then watch the shots and dodge them. Every so often its head suddenly spins at high speed and rams. "
+					+ "Stay away from the head when it moves fast; once it speeds up, stay off its path. "
+					+ "Keep distance from both the hands and the head. "
+					+ "The grappling hook can instantly change direction or gain height, avoiding the one sweeping in. "
+					+ "Only running left and right on the ground leaves one dimension to dodge in, and the homing skulls will hit us a lot. "
+					+ "The hook can go up, or down-left and down-right. In this fight, changing height often dodges better than running sideways. "
+					+ "Once both hands are down, vertical movement is more useful.",
 			},
 
 			[Terraria.ID.NPCID.Spazmatism] = new BossInfo
 			{
 				HowItFights =
-					"双子魔眼是两只分开飞的眼睛,优先进攻是魔焰眼。"
-					+ "优先躲开碰撞。"
-					+ "一阶段boss移动逻辑：人靠近它就退,人退开它就跟上来,"
-					+ "所以横向的距离根本调不动 -- 主动往它那边走,只会和它射出来的弹幕迎头相撞。"
-					+ "【30 格以内就危险了】:那个范围里喷火够得着,而且冲刺来不及反应,站得比它远才有余地,保持 40 格左右。"
-					+ "一阶段的魔焰眼除了冲刺之外一直在追人:【上下不能停】。"
-					+ "躲冲刺要的是横向和竖直一起变向,它锁的是起冲那一刻的位置。"
-					+ "它掉到一半血会脱壳进二阶段,那之后的循环是:【喷一段时间火,然后连冲六次,再重来】。"
-					+ "喷火是一道连续的火焰流,不是一发一发的 -- 站在里面每一帧都在掉血,"
-					+ "所以【只要开始挨火就立刻走开】,离得越近烧得越狠。"
-					+ "【二阶段的魔焰眼要时刻远离】,不只是挨火的时候。"
-					+ "那六次冲刺的碰撞比喷火还疼,冲起来的时候一定会有被贴近的一瞬间,"
-					+ "那一下靠变向躲:它锁的是起冲那一刻的位置,横向或竖直换一步就扑空了。"
-					+ "【怎么看出它在冲】:nearest_part_speed_cells_per_second 接近"
-					+ "nearest_part_fastest_in_the_last_second 就是正在冲的那一下,"
-					+ "速度掉下来说明这一轮冲完了,那是拉开距离和输出的空档。"
-					+ "魔焰眼的弹幕伤害带 debuff,吃一发的代价比伤害数字大。"
-					+ "激光眼最危险的是冲撞不是激光。它两个阶段都和人保持距离,"
-					+ "激光打在身上一阶段几乎不痛、二阶段也只是稍微痛一点,不值得为躲激光乱走;"
-					+ "但它撞过来一下就是一大块血 -- 两只眼睛都要当成会撞人的东西躲,"
-					+ "不能因为在打魔焰眼就放着激光眼不管。"
-					+ "【场上始终是两只眼睛,躲的时候两只都要算】,threats 里能看到另一只在哪。"
-					+ "背对一只跑常常正好撞进另一只,往两只都不在的那一侧走才是真的躲开。"
-					+ "被两只夹在中间的时候,先远离魔焰眼。",
+					"The Twins are two eyes flying separately; attack Spazmatism first. "
+					+ "Avoiding contact comes first. "
+					+ "Phase one movement: when I close in it backs off, when I back off it follows, "
+					+ "so the horizontal distance cannot really be controlled; moving toward it only runs me head-on into its shots. "
+					+ "Within 30 cells is dangerous: its flamethrower reaches there and its charges leave no time to react; stay farther, about 40 cells. "
+					+ "In phase one Spazmatism chases me whenever it is not charging: never stop moving vertically. "
+					+ "Dodging a charge needs a change of direction both horizontally and vertically; it locks onto where I was when the charge started. "
+					+ "At half health it sheds its shell into phase two, which loops: breathe fire for a while, then charge six times in a row, then repeat. "
+					+ "The fire is a continuous stream, not separate shots; standing in it hurts every frame, "
+					+ "so the moment the fire starts hitting me, leave; the closer I am, the worse it burns. "
+					+ "In phase two, stay away from Spazmatism at all times, not only while it breathes fire. "
+					+ "Those six charges hurt more than the fire, and each one will get close for an instant; "
+					+ "dodge that by changing direction: it locks onto where I was when the charge started, so one step sideways or vertically makes it miss. "
+					+ "How to tell it is charging: nearest_part_speed_cells_per_second close to "
+					+ "nearest_part_fastest_in_the_last_second is the charge itself; "
+					+ "when the speed drops, that round of charges is over, which is the window to open distance and deal damage. "
+					+ "Spazmatism's shots carry a debuff, so one hit costs more than its damage number. "
+					+ "Retinazer's danger is its ram, not its laser. It keeps its distance in both phases; "
+					+ "its laser barely hurts in phase one and only a little more in phase two, not worth scrambling to dodge; "
+					+ "but one ram is a big chunk of health. Treat both eyes as things that ram, "
+					+ "and do not ignore Retinazer just because I am fighting Spazmatism. "
+					+ "There are always two eyes on the field; count both when dodging. threats shows where the other one is. "
+					+ "Running from one often runs straight into the other; the real dodge is toward the side where neither is. "
+					+ "When caught between the two, get away from Spazmatism first.",
 			},
 
 			[Terraria.ID.NPCID.TheDestroyer] = new BossInfo
 			{
-				HowItFights = "毁灭者是一条很长的机械虫。【一定不能被它的头撞到】,身体也要远离。如有需要，清理探针小怪。",
+				HowItFights = "The Destroyer is a very long mechanical worm. Its head must never hit me, and stay away from the body too. Clear the Probe minions if needed.",
 			},
 
 			[Terraria.ID.NPCID.SkeletronPrime] = new BossInfo
 			{
-				HowItFights = "机械骷髅王的头要远离。"
+				HowItFights = "Stay away from Skeletron Prime's head."
 			},
 
 			[Terraria.ID.NPCID.Plantera] = new BossInfo
 			{
 				HowItFights =
-					"世纪之花分两个阶段,【血量掉到一半就进二阶段】。"
-					+ "一阶段绕着它转:保持 40 格左右的距离,沿着圆周一直走,左上右下地绕回来。"
-					+ "要的是轨迹始终围着它。"
-					+ "二阶段不再绕圈,就是正常地拉开距离躲。"
-					+ "【二阶段它身上会伸出触手】,触手碰一下掉的血比本体还多,"
-					+ "而且它是贴着人甩过来的 -- threats 里能看到触手在哪,"
-					+ "离本体远不等于离触手远,要按最近的那条触手算距离。",
+					"Plantera has two phases; it enters phase two at half health. "
+					+ "In phase one circle around it: keep about 40 cells away and keep moving along the circle, looping up-left and down-right. "
+					+ "What matters is that my path always wraps around it. "
+					+ "In phase two stop circling and just open distance and dodge normally. "
+					+ "In phase two it grows tentacles; a tentacle hurts more than the body, "
+					+ "and they lash out right next to me. threats shows where the tentacles are; "
+					+ "being far from the body is not being far from a tentacle, so measure distance to the nearest tentacle.",
 			},
 
 			[Terraria.ID.NPCID.QueenBee] = new BossInfo
 			{
 				HowItFights =
-					"蜂王悬在头顶上方的时候,横向移动。"
-					+ "而它和自己处在差不多同一高度、横着冲过来的时候,上下移动。"
+					"When Queen Bee hovers above my head, move horizontally. "
+					+ "When it is at about my height and charging sideways at me, move vertically."
 			},
 
 			[Terraria.ID.NPCID.Deerclops] = new BossInfo
 			{
 				HowItFights =
-					"尽量与boss平齐。此boss伤害不高，脚底下无碰撞伤害。需要始终在boss几格内。",
+					"Stay level with the boss as much as possible. It does little damage and there is no contact damage under its feet. Always stay within a few cells of it.",
 			},
 
 			// 恶鬼离得比肉山近时按这条算(Boss() 取最近的)
 			[Terraria.ID.NPCID.TheHungry] = new BossInfo
 			{
 				HowItFights =
-					"恶鬼是挂在肉山身上的一串小怪,伸得很长,碰到就掉血。"
-					+ "离它保持十格的安全距离。与肉山的距离规则冲突时，优先这一条。"
+					"The Hungry are a string of minions hanging off the Wall of Flesh; they reach far and hurt on contact. "
+					+ "Keep a safe distance of ten cells from them. When this conflicts with the Wall of Flesh distance rule, this one wins."
 			},
 
 			[Terraria.ID.NPCID.WallofFlesh] = new BossInfo
 			{
 				HowItFights =
-					"肉山是一堵横跨整个屏幕的墙,从地狱的一头推到另一头,只会水平移动,永远不会停。"
-					+ "它身上挂着一串叫恶鬼的小怪,伸得很长,碰到一样掉血。"
-					+ "打法是往它的反方向跑,边跑边打。"
-					+ "距离是 60 格左右的一个区间,两头都不能碰:离太远会被它的激光扫满,"
-					+ "离太近又会被身上那串恶鬼打到。跑过头了就该收回来,贴太近了就该退开,"
-					+ "始终卡在中间那一段 -- 看 nearest_part_cells_horizontal 判断自己偏到哪一头了。"
-					+ "只要 incoming_projectiles 里出现它的激光,就一刻不停地动,"
-					+ "站定一下就会被扫到;但这不等于一路往远处跑。"
-					+ "要的是在区间里持续移动,不是拉开距离。"
-					+ "它的血越少推得越快。"
-					+ "场地是完全平的,跳起来毫无意义:既躲不开它也够不到它," // 专为视频准备的场地。 TODO
+					"The Wall of Flesh is a wall spanning the whole screen, pushing from one end of the Underworld to the other; it only moves horizontally and never stops. "
+					+ "A string of minions called The Hungry hangs off it, reaching far, and they hurt on contact too. "
+					+ "Run away from it, shooting as I go. "
+					+ "The distance is a band of about 60 cells, and neither end is safe: too far and its laser sweeps me, "
+					+ "too close and The Hungry hit me. Overshoot and come back, too close and back off, "
+					+ "always staying in the middle of the band; read nearest_part_cells_horizontal to tell which end I have drifted to. "
+					+ "Whenever its laser shows up in incoming_projectiles, keep moving without a pause; "
+					+ "stopping for a moment gets me swept. That does not mean running far away. "
+					+ "The goal is to keep moving inside the band, not to open distance. "
+					+ "The lower its health, the faster it pushes. "
+					+ "The arena is completely flat, and jumping is pointless: it neither dodges it nor reaches it," // 专为视频准备的场地。 TODO
 			},
 		};
 
