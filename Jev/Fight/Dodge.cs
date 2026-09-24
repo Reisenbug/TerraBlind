@@ -452,6 +452,7 @@ namespace TerraBlind
 
 		// 上一次再跳一段的回答
 		static int _airJumpUsed = -1;
+		static int _jumpBlockedSaid = -1;
 		static bool _wasIncoming;
 		static bool _flying;
 		static float _prevWing;
@@ -523,7 +524,15 @@ namespace TerraBlind
 				: null;
 			if (why == null) return false;
 			bool extra = air && p.AnyExtraJumpUsable();
-			if (air && why != "飞" && !extra) return false;
+			if (air && why != "飞" && !extra)
+			{
+				if (_jumpBlockedSaid != _answer)
+				{
+					_jumpBlockedSaid = _answer;
+					DiagLog.Write($"[dodge] 想起跳({why})但空中跳已用完 vy={p.velocity.Y:0.0} 翅膀{p.wingTime:0}");
+				}
+				return false;
+			}
 			if (mv == Move.AirJump) _airJumpUsed = _answer;
 			if (extra) _airJumped = true;
 			DiagLog.Write($"[dodge] 起跳 {why} {(onGround ? "地面" : p.grapCount > 0 ? "钩上" : extra ? "空中跳" : "翅膀")}"
