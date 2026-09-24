@@ -48,8 +48,6 @@ namespace TerraBlind
 		// 冲刺要"按→松→按"三帧。因为这不是1.4.5。TMod更新1.4.5后得改。现在的模组覆盖掉了的话也得改
 		static int _dashDir;
 		static bool _dashGap;
-		// 这次滞空了多少帧,报给 Jev
-		static int _airborneFrames;
 
 		public static string Last = "idle";
 		public static Horiz Hor = Horiz.Away;
@@ -172,7 +170,7 @@ namespace TerraBlind
 				if (sb.Length > 1) sb.Append(',');
 				sb.Append("{\"id\":\"").Append(JsonStr(id)).Append('"')
 				  .Append(",\"name\":\"").Append(JsonStr(n.TypeName)).Append('"')
-				  .Append(",\"damage\":").Append(n.damage)
+				  .Append(",\"contact_damage_percent_of_my_hp\":").Append(n.damage * 100 / System.Math.Max(1, p.statLife))
 				  .Append(",\"cells_to_my_right\":").Append(cx)
 				  .Append(",\"cells_above_me\":").Append(cy)
 				  .Append(",\"speed_to_the_right\":").Append((int)(n.velocity.X * 60f / 16f))
@@ -249,10 +247,6 @@ namespace TerraBlind
 			int toward = bossRight ? 1 : -1;
 			int go = 0;
 			bool onGround = p.velocity.Y == 0f;
-
-			// 斜坡上 velocity.Y 不为 0,所以也看脚下
-			if (onGround || CellsAboveGround(p) <= 1) _airborneFrames = 0;
-			else _airborneFrames++;
 
 			int framesToHit = SoonestBossHit(p);
 			// 这么多帧内会被 boss 或弹幕碰到就算 incoming
@@ -733,35 +727,24 @@ namespace TerraBlind
 			float dx = (boss.Center.X - p.Center.X) / 16f;
 			float dy = (boss.Center.Y - p.Center.Y) / 16f;
 			int bossSpd = BossSpeed(boss);
-			int hit = FramesToHit(p, boss);
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
 				 + ",\"nearest_part\":\"" + JsonStr(boss.TypeName) + "\""
 				 + ",\"nearest_part_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
 				 + ",\"nearest_part_speed_cells_per_second\":" + bossSpd
 				 + ",\"nearest_part_fastest_in_the_last_second\":" + (int)_bossRecentTop
+				 + ",\"nearest_part_cells_horizontal\":" + (int)System.Math.Abs(dx)
+				 + ",\"i_am_above_nearest_part_by\":" + (int)(-dy)
 				 + ",\"percent_of_my_usual_damage_right_now\":" + DpsPct
 				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
-				 + ",\"nearest_part_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 + ",\"i_am_above_nearest_part_by\":" + (int)(-dy)
-				 + ",\"frames_until_nearest_part_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
-				 + ",\"nearest_part_contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
-				 + ",\"frames_airborne\":" + _airborneFrames
-				 + ",\"cells_above_ground\":" + CellsAboveGround(p)
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
 				 + ",\"cells_of_room_to_my_right\":" + WallDistance(p, 1)
 				 + ",\"cells_of_room_above_me\":" + CeilingDistance(p)
-				 + ",\"my_speed_to_the_right_cells_per_second\":" + (int)(p.velocity.X * 60f / 16f)
-				 + ",\"my_speed_upward_cells_per_second\":" + (int)(-p.velocity.Y * 60f / 16f)
 				 + ",\"threats\":" + ThreatsJson(p)
-				 + ",\"air_jump_ready\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
-				 + ",\"wings_left_percent\":" + (p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"projectile_pressure\":" + ThreatScan.PressureJson(p)
-				 + ",\"other_enemies\":" + ThreatScan.Json(p, pcx, pcy)
 				 + ",\"how_the_bosses_here_fight\":" + FieldBooks(boss)
-				 + ",\"what_i_can_do\":\"" + JsonStr(BossBook.Abilities) + "\""
 				 + "}";
 		}
 
@@ -771,7 +754,7 @@ namespace TerraBlind
 			if (_threats.Count < 2) return "";
 			var sb = new StringBuilder("\"flee_from\":{\"type\":\"choice\",\"instructions\":"
 				+ "\"水平那一题选 Away 时,代码每帧背对这一题选中的那个跑。此刻最该远离 threats 里的哪一个?"
-				+ "碰一下的伤害(damage)越高、离得越近、越快撞上(frames_until_it_hits_me 越小)越该远离;"
+				+ "碰一下的伤害(contact_damage_percent_of_my_hp)越高、离得越近、越快撞上(frames_until_it_hits_me 越小)越该远离;"
 				+ "背板里说了要远离谁的,按背板来。背对一个跑会不会正好撞进另一个,也要算进去。\",\"criteria\":{");
 			for (int i = 0; i < _threats.Count; i++)
 			{
@@ -867,12 +850,12 @@ namespace TerraBlind
 			string still = NearestHitVertical(p);
 			return "\"Rise\":\"一直往上:按住跳键不放,站着就起跳,跳到顶接着用翅膀往上飞,一直到改选别的。"
 			 + "换来的是持续往上:横着扫过来的东西锁的是起冲那一刻的高度,升上去就让开了。"
-			 + "付出的是翅膀(wings_left_percent)和头顶的余量(cells_of_room_above_me);"
+			 + "付出的是翅膀和头顶的余量(cells_of_room_above_me);"
 			 + "cells_of_room_above_me 为 0 时头已经顶着实心块,不会再升高,只会白白烧掉翅膀。"
 			 + $"现在选它:{up},翅膀还剩 {(p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)}%\","
 			 + "\"HopUp\":\"往上一段:站着就起跳,在空中就用一段空中跳,跳到顶就松开。一次回答只跳一段。"
 			 + "换来的是一下子往上让开一小段,不烧翅膀。"
-			 + "付出的是一段空中跳;air_jump_ready 为 false 时在空中什么都不会发生。"
+			 + "付出的是一段空中跳;空中跳用完时在空中什么都不会发生。"
 			 + $"现在选它:{(room == 0 ? "头已经顶着实心块,跳了也不会升高,只会用掉一段空中跳" : up)},"
 			 + $"{(p.velocity.Y == 0f ? "站着,会起跳" : p.AnyExtraJumpUsable() ? "空中跳还有" : "空中跳已用完,不会发生")}\","
 			 + "\"Hover\":\"停在这个高度:在空中按住上,下落速度只有正常的十分之一;站着就是站着。"
