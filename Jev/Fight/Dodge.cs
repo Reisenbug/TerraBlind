@@ -9,8 +9,8 @@ namespace TerraBlind
 	public enum Horiz { Away, Hold, Near }
 	// 竖直方向往哪动,地上空中都有效
 	public enum Vert { Rise, HopUp, Hover, Drift, DropLayer, Plunge }
-	// 钩爪和冲刺
-	public enum Skill { Grapple, Dash, None }
+	// 冲刺,或者往八个方向之一甩钩爪
+	public enum Skill { None, Dash, HookUp, HookUpRight, HookRight, HookDownRight, HookDown, HookDownLeft, HookLeft, HookUpLeft }
 
 	// boss 战的走位。两层:Jev 每次反应说"该拉开还是该贴脸",反射层每帧算
 	// "这一刻往左还是往右、跳不跳"。让 大约250ms 的判断直接当按键会吃满伤害。对，我测过。
@@ -50,8 +50,6 @@ namespace TerraBlind
 		static bool _dashGap;
 		// 这次滞空了多少帧,报给 Jev
 		static int _airborneFrames;
-		// 找钩爪落点的搜索半径,不是钩爪射程
-		const int HookReachCells = 20;
 
 		public static string Last = "idle";
 		public static Horiz Hor = Horiz.Away;
@@ -211,7 +209,7 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
-				string body = Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss), VertCriteria(p));
+				string body = Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss), VertCriteria(p), HookCriteria(p));
 				_lastConseq = Conseq(body);
 				Fire(key, body);
 			}
@@ -289,9 +287,7 @@ namespace TerraBlind
 			}
 			else _pose = null;
 
-			// 钩爪落点跟着竖直那一题:往上的勾上面,往下的勾下面
-			int hookDir = vt is Vert.Rise or Vert.HopUp ? -1 : vt is Vert.DropLayer or Vert.Plunge ? 1 : 0;
-			bool hooking = Hook(p, boss, sk == Skill.Grapple, hookDir, onGround, out bool hookJump);
+			bool hooking = Hook(p, sk, out bool hookJump);
 			bool jump = Jump(p, onGround, vt, hookJump, incoming);
 
 			int want0 = go;
@@ -476,8 +472,9 @@ namespace TerraBlind
 		}
 
 		// 钩爪。只在发射那一帧占用光标
-		static bool Hook(Player p, NPC boss, bool want, int dir, bool onGround, out bool hookJump)
+		static bool Hook(Player p, Skill dir, out bool hookJump)
 		{
+			bool want = HookVector(dir) != null;
 			hookJump = false;
 			if (p.grapCount > 0)
 			{
@@ -499,8 +496,13 @@ namespace TerraBlind
 			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
 			if (_hookFrames++ > HookGiveUpFrames) return false;
 			if (_hookHeld) { _hookHeld = false; return true; }
-			// 找不到能勾的格子就不甩
-			if (!FindAnchor(p, boss, dir, out int ax, out int ay)) { _hookFrames = 0; return false; }
+			if (!HookTarget(p, dir, out int ax, out int ay))
+			{
+				if (_hookMissSaid != _answer) { _hookMissSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但射程内勾不到东西"); }
+				_hookFrames = 0;
+				return false;
+			}
+			if (_hookFrames == 1) DiagLog.Write($"[dodge] 甩钩爪 往{dir} 瞄第({ax},{ay})格");
 			Cursor.AimTile(ax, ay);
 			_anchorPx = new Microsoft.Xna.Framework.Vector2(ax * 16 + 8, ay * 16 + 8);
 			p.controlHook = true;
@@ -511,6 +513,68 @@ namespace TerraBlind
 		static float _anchorPrev = float.MaxValue;
 		// 这次挂钩已经记过"拉到位"
 		static bool _hookSaid;
+		static int _hookMissSaid = -1;
+
+		// 钩爪选项对应的方向,不是钩爪选项就是 null
+		static Microsoft.Xna.Framework.Vector2? HookVector(Skill s) => s switch
+		{
+			Skill.HookUp => new(0, -1),
+			Skill.HookUpRight => new(1, -1),
+			Skill.HookRight => new(1, 0),
+			Skill.HookDownRight => new(1, 1),
+			Skill.HookDown => new(0, 1),
+			Skill.HookDownLeft => new(-1, 1),
+			Skill.HookLeft => new(-1, 0),
+			Skill.HookUpLeft => new(-1, -1),
+			_ => null,
+		};
+
+		// 装备的钩爪能飞多远(像素),照 Player.QuickGrapple 找钩爪、AI_007_GrapplingHooks 的射程表
+		static float HookRangePx(Player p)
+		{
+			int t = p.miscEquips[4].shoot;
+			if (t <= 0 || !Main.projHook[t])
+			{
+				t = 0;
+				for (int i = 0; i < 58 && t == 0; i++)
+					if (p.inventory[i].shoot > 0 && Main.projHook[p.inventory[i].shoot]) t = p.inventory[i].shoot;
+				if (t == 0) return 0f;
+			}
+			if (t >= Terraria.ID.ProjectileID.Count) return Terraria.ModLoader.ProjectileLoader.GetProjectile(t)?.GrappleRange() ?? 0f;
+			return t switch
+			{
+				13 or 396 or 865 => 300f,
+				32 or 331 or 372 => 400f,
+				73 or 74 => 440f,
+				165 => 375f,
+				256 => 350f,
+				315 or 446 or 935 => 500f,
+				322 or 332 => 550f,
+				>= 646 and <= 649 => 550f,
+				652 => 600f,
+				>= 486 and <= 489 => 480f,
+				>= 230 and <= 235 => 300f + (t - 230) * 30f,
+				753 => 420f,
+				_ => 2500f,
+			};
+		}
+
+		// 从身体中心往这个方向飞,射程内第一个能勾的格子
+		static bool HookTarget(Player p, Skill dir, out int tx, out int ty)
+		{
+			tx = ty = 0;
+			var v = HookVector(dir);
+			if (v == null) return false;
+			var step = Microsoft.Xna.Framework.Vector2.Normalize(v.Value) * 4f;
+			float range = HookRangePx(p);
+			var pt = p.Center;
+			for (float d = 0f; d <= range; d += 4f, pt += step)
+			{
+				int x = (int)(pt.X / 16f), y = (int)(pt.Y / 16f);
+				if (Hookable(x, y)) { tx = x; ty = y; return true; }
+			}
+			return false;
+		}
 
 		// 跳键。空中新按一下,有空中跳 vanilla 先用空中跳,没有才是翅膀(Player.cs:25618)
 		static bool Jump(Player p, bool onGround, Vert vt, bool hookJump, bool incoming)
@@ -604,46 +668,6 @@ namespace TerraBlind
 			var t = Main.tile[x, y];
 			if (!t.HasTile) return false;
 			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
-		}
-
-		// 找能勾的格子,挑离 boss 最远的。dir -1 只找上面,1 只找下面,0 都行
-		static bool FindAnchor(Player p, NPC boss, int dir, out int ax, out int ay)
-		{
-			ax = ay = 0;
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			int bcx = (int)(boss.Center.X / 16f), bcy = (int)(boss.Center.Y / 16f);
-			int best = -1;
-			for (int dy = -HookReachCells; dy <= HookReachCells; dy++)
-				for (int dx2 = -HookReachCells; dx2 <= HookReachCells; dx2++)
-				{
-					int reach = System.Math.Abs(dx2) + System.Math.Abs(dy);
-					if (reach < 4 || reach > HookReachCells) continue;
-					int x = pcx + dx2, y = pcy + dy;
-					if (dir < 0 && dy >= 0) continue;
-					if (dir > 0 && dy <= 0) continue;
-					// 往下勾和垂线至少差 60 度
-					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
-					if (!Hookable(x, y) || !HookLineClear(p, x, y)) continue;
-					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
-					if (score <= best) continue;
-					best = score; ax = x; ay = y;
-				}
-			return best >= 0;
-		}
-
-		// 钩爪从身体中心直线飞到这一格,路上不会先勾到别的格子
-		static bool HookLineClear(Player p, int x, int y)
-		{
-			var from = p.Center;
-			var to = new Microsoft.Xna.Framework.Vector2(x * 16 + 8, y * 16 + 8);
-			int steps = (int)(Microsoft.Xna.Framework.Vector2.Distance(from, to) / 4f);
-			for (int i = 1; i < steps; i++)
-			{
-				var pt = Microsoft.Xna.Framework.Vector2.Lerp(from, to, i / (float)steps);
-				int tx = (int)(pt.X / 16f), ty = (int)(pt.Y / 16f);
-				if ((tx != x || ty != y) && Hookable(tx, ty)) return false;
-			}
-			return true;
 		}
 
 		// 这一侧齐胸高度离墙几格,地图边缘也算墙
@@ -899,7 +923,50 @@ namespace TerraBlind
 			return $"此刻最快撞到我的是 {JsonStr(who.TypeName)},{where},还有 {best} 帧";
 		}
 
-		static string Body(string state, string flee, string horiz, string vert)
+		// 八个钩爪方向,每个后面接现算的落点
+		static string HookCriteria(Player p)
+		{
+			var sb = new StringBuilder();
+			int range = (int)(HookRangePx(p) / 16f);
+			for (var s = Skill.HookUp; s <= Skill.HookUpLeft; s++)
+			{
+				string name = HookName(s);
+				sb.Append('"').Append(s).Append("\":\"往").Append(name).Append("甩钩爪。现在选它就");
+				if (!HookTarget(p, s, out int x, out int y))
+					sb.Append(range == 0 ? "身上没有钩爪,什么都不会发生" : $"{name}方向 {range} 格内勾不到东西,什么都不会发生");
+				else
+				{
+					var at = new Microsoft.Xna.Framework.Vector2(x * 16 + 8, y * 16 + 8);
+					int cells = (int)(Microsoft.Xna.Framework.Vector2.Distance(at, p.Center) / 16f);
+					sb.Append($"勾到{name} {cells} 格处的方块,人被拉到那里");
+					string who = null;
+					float best = float.MaxValue;
+					foreach (var t in _threats)
+					{
+						var n = Nearest(p, t.Type);
+						float d = Microsoft.Xna.Framework.Vector2.Distance(n.Center, at);
+						if (d < best) { best = d; who = n.TypeName; }
+					}
+					if (who != null) sb.Append($",那里离 {JsonStr(who)} {(int)(best / 16f)} 格,是离那里最近的 boss 部件");
+				}
+				sb.Append("\",");
+			}
+			return sb.ToString();
+		}
+
+		static string HookName(Skill s) => s switch
+		{
+			Skill.HookUp => "正上方",
+			Skill.HookUpRight => "右上 45 度",
+			Skill.HookRight => "正右方",
+			Skill.HookDownRight => "右下 45 度",
+			Skill.HookDown => "正下方",
+			Skill.HookDownLeft => "左下 45 度",
+			Skill.HookLeft => "正左方",
+			_ => "左上 45 度",
+		};
+
+		static string Body(string state, string flee, string horiz, string vert, string skill)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{" + flee
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。" + KeepRoom
@@ -920,11 +987,13 @@ namespace TerraBlind
 			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
 			 + vert + "}},"
 			 + "\"skill\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"同一场战斗,这一题只管要不要用钩爪或冲刺,和水平、竖直两题各自独立,合起来才是完整的动作。" + KeepRoom + "\",\"criteria\":{"
-			 + "\"Grapple\":\"甩钩爪:勾住后把人整个拽过去,是一段跑不出来的位移。往哪勾由代码挑,"
-			 + "竖直那一题选 Rise 或 HopUp 就勾上面,选 DropLayer 或 Plunge 就勾下面,其余上下都行。"
+			 + "\"同一场战斗,这一题只管要不要用钩爪或冲刺,和水平、竖直两题各自独立,合起来才是完整的动作。" + KeepRoom
+			 + "Hook 开头的选项是往那个方向甩钩爪:钩子沿直线飞出去,勾住路上碰到的第一个方块,把人整个拽到那里,拽到就跳开。"
 			 + "换来的是比跑快得多的换位置,横着跑来不及躲开追过来的东西时特别有用。"
-			 + "付出的是拽过去的路上没法改方向,钩子飞出去到勾上有一段空窗,拽完有一小段冷却\","
+			 + "付出的是拽过去的路上没法改方向,钩子飞出去到勾上有一段空窗,拽完有一小段冷却;"
+			 + "拽到哪里就停在哪里,勾到天花板就会被拉到天花板下。挂着钩子时竖直那一题不起作用。"
+			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + skill
 			 + "\"Dash\":\"冲刺:朝水平那一题决定的方向猛冲一小段,有内置冷却。水平方向不动时冲不出去。"
 			 + "换来的是一瞬间拉开一段距离,或者穿过一片危险区域。"
 			 + "付出的是冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里\","
@@ -966,7 +1035,7 @@ namespace TerraBlind
 			int samples = JevPrior.Samples(bossType);
 			Hor = (Horiz)JevPrior.Sample(bossType, "horizontal", 3);
 			Vt = (Vert)JevPrior.Sample(bossType, "vertical", 6);
-			Sk = (Skill)JevPrior.Sample(bossType, "skill", 3);
+			Sk = (Skill)JevPrior.Sample(bossType, "skill", 10);
 			bool fromJev = samples > 0;
 			if (!_priorSaid || !fromJev)
 			{
@@ -1028,7 +1097,7 @@ namespace TerraBlind
 				Main.NewText($"<Jev> {said}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			JevPrior.Record(bossType, ("horizontal", (int)Hor, 3), ("vertical", (int)Vt, 6), ("skill", (int)Sk, 3));
+			JevPrior.Record(bossType, ("horizontal", (int)Hor, 3), ("vertical", (int)Vt, 6), ("skill", (int)Sk, 10));
 
 			JevLog.Add(new JevLog.Entry
 			{
