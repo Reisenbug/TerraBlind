@@ -145,7 +145,7 @@ namespace TerraBlind
 				 + ",\"from_above\":" + above + ",\"from_below\":" + below
 				 + ",\"hostile_shots_within_six_cells_of_me\":" + onMe
 				 + ",\"frames_until_the_closest_one_reaches_me\":"
-				 + (soonest < 0 ? "\"没有朝我来的\"" : soonest.ToString()) + "}";
+				 + (soonest < 0 ? "\"none heading at me\"" : soonest.ToString()) + "}";
 		}
 
 		// 这发弹幕按当前速度还有几帧碰到我。不朝我来就 -1。和 Dodge.FramesToHit 同一套算法
