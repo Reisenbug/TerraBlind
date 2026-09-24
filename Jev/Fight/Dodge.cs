@@ -682,17 +682,17 @@ namespace TerraBlind
 			int hit = FramesToHit(p, boss);
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
-				 + ",\"boss\":\"" + JsonStr(boss.TypeName) + "\""
-				 + ",\"boss_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
-				 + ",\"boss_speed_cells_per_second\":" + bossSpd
-				 + ",\"boss_fastest_in_the_last_second\":" + (int)_bossRecentTop
+				 + ",\"nearest_part\":\"" + JsonStr(boss.TypeName) + "\""
+				 + ",\"nearest_part_hp_percent\":" + (boss.life * 100 / System.Math.Max(1, boss.lifeMax))
+				 + ",\"nearest_part_speed_cells_per_second\":" + bossSpd
+				 + ",\"nearest_part_fastest_in_the_last_second\":" + (int)_bossRecentTop
 				 + ",\"percent_of_my_usual_damage_right_now\":" + DpsPct
 				 + ",\"seconds_i_have_been_unable_to_hit_it\":" + _lowSecs
 				 + ",\"i_am_too_far_to_hit_it\":" + (TooFar ? "true" : "false")
-				 + ",\"boss_cells_horizontal\":" + (int)System.Math.Abs(dx)
-				 + ",\"i_am_above_the_boss_by\":" + (int)(-dy)
-				 + ",\"frames_until_it_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
-				 + ",\"contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
+				 + ",\"nearest_part_cells_horizontal\":" + (int)System.Math.Abs(dx)
+				 + ",\"i_am_above_nearest_part_by\":" + (int)(-dy)
+				 + ",\"frames_until_nearest_part_hits_me\":" + (hit < 0 ? "\"它没朝我来\"" : hit.ToString())
+				 + ",\"nearest_part_contact_damage_percent_of_my_hp\":" + (boss.damage * 100 / System.Math.Max(1, p.statLife))
 				 + ",\"frames_airborne\":" + _airborneFrames
 				 + ",\"cells_above_ground\":" + CellsAboveGround(p)
 				 + ",\"cells_of_room_to_my_left\":" + WallDistance(p, -1)
@@ -799,7 +799,8 @@ namespace TerraBlind
 			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离上。"
 			 + "那个距离没有固定的数,只能从结果看:伤害还在出就是够得着,在挨打就是太近了"
 			 + "(背板里写了距离的,按背板来)。"
-			 + "这一题只管【和 boss 的距离该怎么变】,"
+			 + "这一题只管【和离我最近的 boss 部件(nearest_part)的距离该怎么变】,"
+			 + "危险不只来自它,threats 里每个部件和每个选项后面写的后果都要看。"
 			 + "竖直方向和技能另有两题,合起来才是完整的动作。"
 			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。"
 			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
