@@ -284,8 +284,10 @@ namespace TerraBlind
 				bool up = (_lowSecs / PoseSecs) % 2 == 0;
 				var was = vt;
 				vt = up ? Vert.Rise : Vert.Plunge;
-				if (vt != was) Gate($"打不中{_lowSecs}秒 换姿势 {was}->{vt}");
+				if (vt != _pose) DiagLog.Write($"[dodge] 打不中{_lowSecs}秒 换姿势 {was}->{vt}");
+				_pose = vt;
 			}
+			else _pose = null;
 
 			// 钩爪落点跟着竖直那一题:往上的勾上面,往下的勾下面
 			int hookDir = vt is Vert.Rise or Vert.HopUp ? -1 : vt is Vert.DropLayer or Vert.Plunge ? 1 : 0;
@@ -368,6 +370,8 @@ namespace TerraBlind
 				+ $" | 脚在第{(int)((me.position.Y + me.height) / 16f)}行 离地{CellsAboveGround(me)} 头顶{CeilingDistance(me)}");
 		}
 		static int _lowSecs;
+		// 打不中时上一次换到的姿势,变了才记日志
+		static Vert? _pose;
 		public static bool TooFar => _lowSecs >= 3;
 		const int PoseSecs = 3;
 
