@@ -618,12 +618,27 @@ namespace TerraBlind
 					if (dir > 0 && dy <= 0) continue;
 					// 往下勾和垂线至少差 60 度
 					if (dy > 0 && System.Math.Abs(dx2) * 100 < dy * 173) continue;
-					if (!Hookable(x, y)) continue;
+					if (!Hookable(x, y) || !HookLineClear(p, x, y)) continue;
 					int score = System.Math.Abs(x - bcx) + System.Math.Abs(y - bcy);
 					if (score <= best) continue;
 					best = score; ax = x; ay = y;
 				}
 			return best >= 0;
+		}
+
+		// 钩爪从身体中心直线飞到这一格,路上不会先勾到别的格子
+		static bool HookLineClear(Player p, int x, int y)
+		{
+			var from = p.Center;
+			var to = new Microsoft.Xna.Framework.Vector2(x * 16 + 8, y * 16 + 8);
+			int steps = (int)(Microsoft.Xna.Framework.Vector2.Distance(from, to) / 4f);
+			for (int i = 1; i < steps; i++)
+			{
+				var pt = Microsoft.Xna.Framework.Vector2.Lerp(from, to, i / (float)steps);
+				int tx = (int)(pt.X / 16f), ty = (int)(pt.Y / 16f);
+				if ((tx != x || ty != y) && Hookable(tx, ty)) return false;
+			}
+			return true;
 		}
 
 		// 这一侧齐胸高度离墙几格,地图边缘也算墙
