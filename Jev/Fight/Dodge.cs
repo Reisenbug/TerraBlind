@@ -207,7 +207,7 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
-				Fire(key, Body(_lastFacts, FleeQuestion()));
+				Fire(key, Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss)));
 			}
 
 			// 意图过期时用 Away/Drift/None
@@ -712,7 +712,7 @@ namespace TerraBlind
 		}
 
 		// 场上不止一种部件时才问背对谁,选项就是 _threats
-		static string FleeQuestion()
+		static string FleeQuestion(Player p)
 		{
 			if (_threats.Count < 2) return "";
 			var sb = new StringBuilder("\"flee_from\":{\"type\":\"choice\",\"instructions\":"
@@ -723,14 +723,75 @@ namespace TerraBlind
 			{
 				if (i > 0) sb.Append(',');
 				var t = _threats[i];
+				var n = Nearest(p, t.Type);
 				sb.Append('"').Append(JsonStr(t.Id)).Append("\":\"远离 ")
-				  .Append(JsonStr(Terraria.Lang.GetNPCNameValue(t.Type))).Append(",碰一下伤害 ").Append(t.Damage).Append('"');
+				  .Append(JsonStr(Terraria.Lang.GetNPCNameValue(t.Type))).Append(",碰一下伤害 ").Append(t.Damage)
+				  .Append("。现在选它就").Append(SideText(p, n.Center.X > p.Center.X ? -1 : 1)).Append('"');
 			}
 			return sb.Append("}},").ToString();
 		}
 
+		// 往 dir 那边跑的后果:还剩几格,那边有哪些 boss 部件
+		static string SideText(Player p, int dir)
+		{
+			var sb = new StringBuilder(dir < 0 ? "往左跑,左边" : "往右跑,右边");
+			sb.Append("还剩 ").Append(WallDistance(p, dir)).Append(" 格空间;");
+			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
+			int count = 0;
+			foreach (var t in _threats)
+			{
+				var n = Nearest(p, t.Type);
+				int cx = (int)(n.Center.X / 16f) - pcx, cy = pcy - (int)(n.Center.Y / 16f);
+				if (cx * dir <= 0) continue;
+				sb.Append(count++ == 0 ? "那边有 " : "、").Append(JsonStr(n.TypeName))
+				  .Append("(横着 ").Append(System.Math.Abs(cx)).Append(" 格,")
+				  .Append(cy >= 0 ? "高我 " : "低我 ").Append(System.Math.Abs(cy)).Append(" 格,碰一下 ").Append(n.damage).Append(')');
+			}
+			if (count == 0) sb.Append("那边没有 boss 部件");
+			return sb.ToString();
+		}
+
+		// 水平不动的后果:最快撞到我的部件和弹幕还有几帧
+		static string HoldText(Player p)
+		{
+			string who = null;
+			int best = -1;
+			foreach (var t in _threats)
+			{
+				var n = Nearest(p, t.Type);
+				int f = FramesToHit(p, n);
+				if (f >= 0 && (best < 0 || f < best)) { best = f; who = n.TypeName; }
+			}
+			var sb = new StringBuilder(who == null ? "此刻没有 boss 部件朝我来"
+				: $"此刻最快撞到我的是 {JsonStr(who)},还有 {best} 帧");
+			int proj = ThreatScan.SoonestHit(p);
+			sb.Append(proj < 0 ? ";没有朝我来的弹幕" : $";最快的弹幕 {JsonStr(ThreatScan.SoonestName(p))} 还有 {proj} 帧打到");
+			return sb.ToString();
+		}
+
+		// 水平那一题的选项,每个后面接现算的后果
+		static string HorizCriteria(Player p, NPC boss)
+		{
+			int toward = boss.Center.X > p.Center.X ? 1 : -1;
+			string away = _threats.Count < 2 ? "现在选它就" + SideText(p, -toward)
+				: "往左还是往右由 flee_from 那一题定,那一题每个选项都写了往哪边跑、那边还剩几格、那边有什么";
+			return "\"Away\":\"拉开距离。换来的是反应时间:离得越远,冲过来的东西路上花的时间越长,"
+			 + "弹幕的轨迹也越早看得出来。"
+			 + "付出的是输出 -- 退到打不中就是一直不输出,boss 的血不掉这一场不会结束;"
+			 + "而且左右都挤的时候根本退不出去,那种局面退是白退。" + away + "\","
+			 + "\"Hold\":\"距离不变。换来的是稳定的输出和一个已知安全的位置 --"
+			 + "此刻既够得着打又没被逼近,说明这个距离是对的。"
+			 + "付出的是这一刻没有在改善处境:boss 在动,同一个距离下一秒可能就不安全了。现在选它:" + HoldText(p) + "\","
+			 + "\"Near\":\"靠近一点。换来的是打得中 -- 看 percent_of_my_usual_damage_right_now,"
+			 + "它是当前输出占这一场常驻水平的百分比,这个数在 100 上下波动都算正常,"
+			 + "60% 只是那一秒没打满。单看某一秒低没有意义(boss 掠过、弹道错开都会让它归零),"
+			 + "要 i_am_too_far_to_hit_it 为真、或 seconds_i_have_been_unable_to_hit_it 攒到几秒,"
+			 + "才说明是位置的问题。付出的是反应时间:越近,冲撞从起手到打到身上的帧数越少,"
+			 + "而撞一下掉的血比少打几秒多得多。现在选它就" + SideText(p, toward) + "\"";
+		}
+
 		// 同一份 state 的所有问题一次发出
-		static string Body(string state, string flee)
+		static string Body(string state, string flee, string horiz)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{" + flee
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
@@ -740,20 +801,9 @@ namespace TerraBlind
 			 + "(背板里写了距离的,按背板来)。"
 			 + "这一题只管【和 boss 的距离该怎么变】,"
 			 + "竖直方向和技能另有两题,合起来才是完整的动作。"
-			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。\",\"criteria\":{"
-			 + "\"Away\":\"拉开距离。换来的是反应时间:离得越远,冲过来的东西路上花的时间越长,"
-			 + "弹幕的轨迹也越早看得出来。"
-			 + "付出的是输出 -- 退到打不中就是一直不输出,boss 的血不掉这一场不会结束;"
-			 + "而且左右都挤的时候根本退不出去,那种局面退是白退\","
-			 + "\"Hold\":\"距离不变。换来的是稳定的输出和一个已知安全的位置 --"
-			 + "此刻既够得着打又没被逼近,说明这个距离是对的。"
-			 + "付出的是这一刻没有在改善处境:boss 在动,同一个距离下一秒可能就不安全了\","
-			 + "\"Near\":\"靠近一点。换来的是打得中 -- 看 percent_of_my_usual_damage_right_now,"
-			 + "它是当前输出占这一场常驻水平的百分比,这个数在 100 上下波动都算正常,"
-			 + "60% 只是那一秒没打满。单看某一秒低没有意义(boss 掠过、弹道错开都会让它归零),"
-			 + "要 i_am_too_far_to_hit_it 为真、或 seconds_i_have_been_unable_to_hit_it 攒到几秒,"
-			 + "才说明是位置的问题。付出的是反应时间:越近,冲撞从起手到打到身上的帧数越少,"
-			 + "而撞一下掉的血比少打几秒多得多\"}},"
+			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。"
+			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + horiz + "}},"
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管竖直方向往哪动。和水平那一题、技能那一题各自独立,合起来才是完整的动作。"
 			 + "往上和往下一样重要,竖直方向的位置是躲攻击的另一半。每个选项站着和在空中都有效,代码按当时的状态去做。"
