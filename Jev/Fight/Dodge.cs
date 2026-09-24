@@ -207,7 +207,7 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss, dist);
-				Fire(key, Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss)));
+				Fire(key, Body(_lastFacts, FleeQuestion(p), HorizCriteria(p, boss), VertCriteria(p)));
 			}
 
 			// 意图过期时用 Away/Drift/None
@@ -418,16 +418,16 @@ namespace TerraBlind
 				_dropUsed = _answer;
 				_dropRow = PlatformBelow(p, feet);
 				DiagLog.Write(_dropRow >= 0 ? $"[dodge] 往下一层 脚在第{feet}行 穿第{_dropRow}行"
-					: $"[dodge] 往下一层 但脚下第{feet}行起到实心块之间没有平台");
+					: $"[dodge] 往下一层 但脚下第{feet}行起到实心块或 {RoomScanCells} 格之间没有平台");
 			}
 			if (_dropRow >= 0 && feet > _dropRow) _dropRow = -1;
 			return _dropRow >= 0;
 		}
 
-		// 从脚这一行往下第一层平台,先碰到实心块或探满 40 格就是 -1
+		// 从脚这一行往下第一层平台,先碰到实心块或探满 RoomScanCells 就是 -1
 		static int PlatformBelow(Player p, int feet)
 		{
-			for (int y = feet; y < feet + 40 && y < Main.maxTilesY - EdgeCells; y++)
+			for (int y = feet; y < feet + RoomScanCells && y < Main.maxTilesY - EdgeCells; y++)
 			{
 				if (OnPlatform(p, y)) return y;
 				for (int x = (int)(p.position.X / 16f); x <= (int)((p.position.X + p.width - 1) / 16f); x++)
@@ -791,7 +791,76 @@ namespace TerraBlind
 		}
 
 		// 同一份 state 的所有问题一次发出
-		static string Body(string state, string flee, string horiz)
+		// 竖直那一题的选项,每个后面接现算的后果
+		static string VertCriteria(Player p)
+		{
+			int feet = (int)((p.position.Y + p.height) / 16f);
+			int room = CeilingDistance(p);
+			string up = room == 0 ? "头已经顶着实心块" : $"头顶还剩 {room} 格";
+			int layer = PlatformBelow(p, feet);
+			int next = layer < 0 ? -1 : PlatformBelow(p, layer + 1);
+			string drop = layer < 0 ? $"下方到实心块(最多看 {RoomScanCells} 格)之间没有平台,什么都不会发生"
+				: (layer == feet ? "穿过脚下这一层" : $"穿过下方 {layer - feet} 格处的那一层")
+				  + (next >= 0 ? $",再下一层在它下面 {next - layer} 格" : $",它下面 {RoomScanCells} 格内到实心块之间没有平台了");
+			int floor = SolidBelow(p, feet);
+			string plunge = floor < 0 ? $"下方 {RoomScanCells} 格内没有实心块"
+				: floor == 0 ? "脚下就是实心块,什么都不会发生" : $"一路落 {floor} 格碰到实心块";
+			string still = NearestHitVertical(p);
+			return "\"Rise\":\"一直往上:按住跳键不放,站着就起跳,跳到顶接着用翅膀往上飞,一直到改选别的。"
+			 + "换来的是持续往上:横着扫过来的东西锁的是起冲那一刻的高度,升上去就让开了。"
+			 + "付出的是翅膀(wings_left_percent)和头顶的余量(cells_of_room_above_me);"
+			 + "cells_of_room_above_me 为 0 时头已经顶着实心块,不会再升高,只会白白烧掉翅膀。"
+			 + $"现在选它:{up},翅膀还剩 {(p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)}%\","
+			 + "\"HopUp\":\"往上一段:站着就起跳,在空中就用一段空中跳,跳到顶就松开。一次回答只跳一段。"
+			 + "换来的是一下子往上让开一小段,不烧翅膀。"
+			 + "付出的是一段空中跳;air_jump_ready 为 false 时在空中什么都不会发生。"
+			 + $"现在选它:{up},{(p.velocity.Y == 0f ? "站着,会起跳" : p.AnyExtraJumpUsable() ? "空中跳还有" : "空中跳已用完,不会发生")}\","
+			 + "\"Hover\":\"停在这个高度:在空中按住上,下落速度只有正常的十分之一;站着就是站着。"
+			 + "换来的是在空中停得住,不花翅膀。付出的是竖直方向几乎不动,冲过来的东西锁的正是这个高度。"
+			 + $"现在选它:{still}\","
+			 + "\"Drift\":\"慢慢往下:上下都不按,在空中下落速度是正常的三分之一;站着就是站着。"
+			 + "换来的是不花任何东西。付出的是往下很慢,离开一片危险区域要很久。"
+			 + $"现在选它:{still}\","
+			 + "\"DropLayer\":\"往下一层:按住下,穿过脚下的那一层平台(在空中就是下方最近的那一层),穿过就松开,"
+			 + "之后靠羽落慢慢落到再下一层。一次回答穿一层。"
+			 + "换来的是离开这一层:压下来的东西、从上方来的弹幕、烧在这一层的火,往下一层就扑空了,"
+			 + "cells_of_room_above_me 也会变大。付出的是这个落脚点;下方到实心块之间没有平台时什么都不会发生。"
+			 + $"现在选它:{drop}\","
+			 + "\"Plunge\":\"一直往下:按住下,取消羽落,按正常速度下落,脚下和途中的平台一路穿过,"
+			 + "直到落在实心块上或者改选别的。"
+			 + "换来的是最快地往下离开:上方压下来的东西、从上面来的弹幕(projectile_pressure 的 from_above)、"
+			 + "头顶没空间的时候都靠它;落地会把空中跳和翅膀充满。"
+			 + "付出的是高度,一路穿过的每一层平台都不会停。"
+			 + $"现在选它:{plunge}\"";
+		}
+
+		// 脚下到实心块几格,平台不算,探满 RoomScanCells 就是 -1
+		static int SolidBelow(Player p, int feet)
+		{
+			for (int d = 0; d < RoomScanCells && feet + d < Main.maxTilesY - EdgeCells; d++)
+				for (int x = (int)(p.position.X / 16f); x <= (int)((p.position.X + p.width - 1) / 16f); x++)
+					if (Predicates.IsWall(x, feet + d)) return d;
+			return -1;
+		}
+
+		// 最快撞到我的部件在上面还是下面、还有几帧
+		static string NearestHitVertical(Player p)
+		{
+			NPC who = null;
+			int best = -1;
+			foreach (var t in _threats)
+			{
+				var n = Nearest(p, t.Type);
+				int f = FramesToHit(p, n);
+				if (f >= 0 && (best < 0 || f < best)) { best = f; who = n; }
+			}
+			if (who == null) return "此刻没有 boss 部件朝我来";
+			int cy = (int)(p.Center.Y / 16f) - (int)(who.Center.Y / 16f);
+			string where = cy > 0 ? $"在我上方 {cy} 格" : cy < 0 ? $"在我下方 {-cy} 格" : "和我同一高度";
+			return $"此刻最快撞到我的是 {JsonStr(who.TypeName)},{where},还有 {best} 帧";
+		}
+
+		static string Body(string state, string flee, string horiz, string vert)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{" + flee
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。"
@@ -808,27 +877,9 @@ namespace TerraBlind
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管竖直方向往哪动。和水平那一题、技能那一题各自独立,合起来才是完整的动作。"
 			 + "往上和往下一样重要,竖直方向的位置是躲攻击的另一半。每个选项站着和在空中都有效,代码按当时的状态去做。"
-			 + "身上有羽落药水。空中跳和翅膀落地才会充满。挂着钩子时这一题不起作用。\",\"criteria\":{"
-			 + "\"Rise\":\"一直往上:按住跳键不放,站着就起跳,跳到顶接着用翅膀往上飞,一直到改选别的。"
-			 + "换来的是持续往上:横着扫过来的东西锁的是起冲那一刻的高度,升上去就让开了。"
-			 + "付出的是翅膀(wings_left_percent)和头顶的余量(cells_of_room_above_me);"
-			 + "cells_of_room_above_me 为 0 时头已经顶着实心块,不会再升高,只会白白烧掉翅膀\","
-			 + "\"HopUp\":\"往上一段:站着就起跳,在空中就用一段空中跳,跳到顶就松开。一次回答只跳一段。"
-			 + "换来的是一下子往上让开一小段,不烧翅膀。"
-			 + "付出的是一段空中跳;air_jump_ready 为 false 时在空中什么都不会发生\","
-			 + "\"Hover\":\"停在这个高度:在空中按住上,下落速度只有正常的十分之一;站着就是站着。"
-			 + "换来的是在空中停得住,不花翅膀。付出的是竖直方向几乎不动,冲过来的东西锁的正是这个高度\","
-			 + "\"Drift\":\"慢慢往下:上下都不按,在空中下落速度是正常的三分之一;站着就是站着。"
-			 + "换来的是不花任何东西。付出的是往下很慢,离开一片危险区域要很久\","
-			 + "\"DropLayer\":\"往下一层:按住下,穿过脚下的那一层平台(在空中就是下方最近的那一层),穿过就松开,"
-			 + "之后靠羽落慢慢落到再下一层。一次回答穿一层。"
-			 + "换来的是离开这一层:压下来的东西、从上方来的弹幕、烧在这一层的火,往下一层就扑空了,"
-			 + "cells_of_room_above_me 也会变大。付出的是这个落脚点;下方到实心块之间没有平台时什么都不会发生\","
-			 + "\"Plunge\":\"一直往下:按住下,取消羽落,按正常速度下落,脚下和途中的平台一路穿过,"
-			 + "直到落在实心块上或者改选别的。"
-			 + "换来的是最快地往下离开:上方压下来的东西、从上面来的弹幕(projectile_pressure 的 from_above)、"
-			 + "头顶没空间的时候都靠它;落地会把空中跳和翅膀充满。"
-			 + "付出的是高度,一路穿过的每一层平台都不会停\"}},"
+			 + "身上有羽落药水。空中跳和翅膀落地才会充满。挂着钩子时这一题不起作用。"
+			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + vert + "}},"
 			 + "\"skill\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"同一场战斗,这一题只管要不要用钩爪或冲刺,和水平、竖直两题各自独立,合起来才是完整的动作。\",\"criteria\":{"
 			 + "\"Grapple\":\"甩钩爪:勾住后把人整个拽过去,是一段跑不出来的位移。往哪勾由代码挑,"
