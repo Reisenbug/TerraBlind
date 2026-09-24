@@ -47,6 +47,8 @@ namespace TerraBlind
 		static int _hookCooldown;
 		// 冲刺要"按→松→按"三帧。因为这不是1.4.5。TMod更新1.4.5后得改。现在的模组覆盖掉了的话也得改
 		static int _dashDir;
+		// 这次回答已经记过"想冲但没就绪"
+		static int _dashWaitSaid = -1;
 		static bool _dashGap;
 
 		public static string Last = "idle";
@@ -642,8 +644,11 @@ namespace TerraBlind
 			bool ready = p.dashType != 0 && p.dashDelay == 0;
 			if (!ready)
 			{
-				if (want && go != 0)
-					Gate($"想冲但没就绪 dashType={p.dashType} delay={p.dashDelay}");
+				if (want && go != 0 && _dashWaitSaid != _answer)
+				{
+					_dashWaitSaid = _answer;
+					DiagLog.Write($"[dodge] 想冲但没就绪 dashType={p.dashType} delay={p.dashDelay}");
+				}
 				_dashGap = false; _dashDir = 0; return go;
 			}
 
