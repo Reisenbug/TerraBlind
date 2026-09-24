@@ -31,6 +31,7 @@ Keybinds: {
 	TestRoom.DisplayName: Test Room
 	TestReachWork.DisplayName: Test Reach Work
 	ShowMinima.DisplayName: Show Minima
+	ToggleManual.DisplayName: Toggle Manual Control
 }
 
 Configs: {

@@ -195,7 +195,7 @@ namespace TerraBlind
 		{
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
-			if (p == null || !p.active || p.dead) { Release(); return; }
+			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "no enemies"; _target = -1; Release(); return; }

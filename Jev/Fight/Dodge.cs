@@ -195,6 +195,7 @@ namespace TerraBlind
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { Release(); return; }
+			if (Manual.On) { Gate("人工"); Release(); return; }
 
 			var boss = Boss(p, out int dist);
 			if (boss == null) { Gate("no boss"); Release(); return; }

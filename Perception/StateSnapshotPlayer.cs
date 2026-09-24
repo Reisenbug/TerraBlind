@@ -141,6 +141,8 @@ namespace TerraBlind
 					Chatter.Say($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{site.Scanned}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
 				}
 			}
+			if (TerraBlind.ToggleManual != null && TerraBlind.ToggleManual.JustPressed)
+				Manual.Toggle();
 			if (TerraBlind.ToggleMazeNav != null && TerraBlind.ToggleMazeNav.JustPressed)
 				MazeWand.ToggleNav();
 			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
@@ -411,7 +413,7 @@ namespace TerraBlind
 			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
 			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On
-			   || Combat.Enabled || Dodge.Enabled;
+			   || ((Combat.Enabled || Dodge.Enabled) && !Manual.On);
 
 		// 【必须挂这儿】:vanilla 的 SetControls 在前、ResetEffects(把 tileRangeX/Y 打回 5/4)在后,
 		// 写在 SetControls 里会被随后的 ResetEffects 冲掉
