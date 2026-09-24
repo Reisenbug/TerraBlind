@@ -72,7 +72,7 @@ namespace TerraBlind
 		// 发出去的各选项现算后果,答案回来时记进日志
 		static string _lastConseq = "";
 		static readonly System.Text.RegularExpressions.Regex ConseqRx =
-			new("\"(\\w+)\":\"[^\"]*?现在选它[就:]([^\"]*)\"");
+			new("\"(\\w+)\":\"[^\"]*?Right now: ([^\"]*)\"");
 
 		// 从题目里抠出每个选项的"现在选它"那一段
 		static string Conseq(string body)
@@ -127,7 +127,7 @@ namespace TerraBlind
 		}
 
 		// 场上每种 boss 部件一项,Jev 从里面选 Away 时背对谁
-		static readonly System.Collections.Generic.List<(string Id, int Type, int Damage)> _threats = new();
+		static readonly System.Collections.Generic.List<(string Id, int Type)> _threats = new();
 		// Jev 选的那种部件,-1 就背对锁定的那个
 		public static int FleeType = -1;
 
@@ -165,7 +165,7 @@ namespace TerraBlind
 				int cx = (int)(n.Center.X / 16f) - pcx, cy = pcy - (int)(n.Center.Y / 16f);
 				if (System.Math.Abs(cx) + System.Math.Abs(cy) > CareCells) continue;
 				string id = ThreatId(n.type);
-				_threats.Add((id, n.type, n.damage));
+				_threats.Add((id, n.type));
 				int f = FramesToHit(p, n);
 				if (sb.Length > 1) sb.Append(',');
 				sb.Append("{\"id\":\"").Append(JsonStr(id)).Append('"')
@@ -175,7 +175,7 @@ namespace TerraBlind
 				  .Append(",\"cells_above_me\":").Append(cy)
 				  .Append(",\"speed_to_the_right\":").Append((int)(n.velocity.X * 60f / 16f))
 				  .Append(",\"speed_upward\":").Append((int)(-n.velocity.Y * 60f / 16f))
-				  .Append(",\"frames_until_it_hits_me\":").Append(f < 0 ? "\"它没朝我来\"" : f.ToString())
+				  .Append(",\"frames_until_it_hits_me\":").Append(f < 0 ? "\"not heading at me\"" : f.ToString())
 				  .Append('}');
 			}
 			return sb.Append(']').ToString();
@@ -753,17 +753,19 @@ namespace TerraBlind
 		{
 			if (_threats.Count < 2) return "";
 			var sb = new StringBuilder("\"flee_from\":{\"type\":\"choice\",\"instructions\":"
-				+ "\"水平那一题选 Away 时,代码每帧背对这一题选中的那个跑。此刻最该远离 threats 里的哪一个?"
-				+ "碰一下的伤害(contact_damage_percent_of_my_hp)越高、离得越近、越快撞上(frames_until_it_hits_me 越小)越该远离;"
-				+ "背板里说了要远离谁的,按背板来。背对一个跑会不会正好撞进另一个,也要算进去。\",\"criteria\":{");
+				+ "\"When the horizontal question picks Away, the code runs directly away from the part picked here, every frame. "
+				+ "Which part in threats should I get away from right now? "
+				+ "Higher contact damage, closer, and fewer frames_until_it_hits_me all mean more reason to flee it. "
+				+ "If the boss notes say which part to stay away from, follow them. "
+				+ "Also check whether running from one part carries me straight into another.\",\"criteria\":{");
 			for (int i = 0; i < _threats.Count; i++)
 			{
 				if (i > 0) sb.Append(',');
 				var t = _threats[i];
 				var n = Nearest(p, t.Type);
-				sb.Append('"').Append(JsonStr(t.Id)).Append("\":\"远离 ")
-				  .Append(JsonStr(Terraria.Lang.GetNPCNameValue(t.Type))).Append(",碰一下伤害 ").Append(t.Damage)
-				  .Append("。现在选它就").Append(SideText(p, n.Center.X > p.Center.X ? -1 : 1)).Append('"');
+				sb.Append('"').Append(JsonStr(t.Id)).Append("\":\"Flee from ")
+				  .Append(JsonStr(n.TypeName)).Append(". Right now: ")
+				  .Append(SideText(p, n.Center.X > p.Center.X ? -1 : 1)).Append('"');
 			}
 			return sb.Append("}},").ToString();
 		}
@@ -771,8 +773,8 @@ namespace TerraBlind
 		// 往 dir 那边跑的后果:还剩几格,那边有哪些 boss 部件
 		static string SideText(Player p, int dir)
 		{
-			var sb = new StringBuilder(dir < 0 ? "往左跑,左边" : "往右跑,右边");
-			sb.Append("还剩 ").Append(WallDistance(p, dir)).Append(" 格空间;");
+			string side = dir < 0 ? "left" : "right";
+			var sb = new StringBuilder($"I run {side}, with {WallDistance(p, dir)} cells of room on the {side}; ");
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			int count = 0;
 			foreach (var t in _threats)
@@ -780,11 +782,10 @@ namespace TerraBlind
 				var n = Nearest(p, t.Type);
 				int cx = (int)(n.Center.X / 16f) - pcx, cy = pcy - (int)(n.Center.Y / 16f);
 				if (cx * dir <= 0) continue;
-				sb.Append(count++ == 0 ? "那边有 " : "、").Append(JsonStr(n.TypeName))
-				  .Append("(横着 ").Append(System.Math.Abs(cx)).Append(" 格,")
-				  .Append(cy >= 0 ? "高我 " : "低我 ").Append(System.Math.Abs(cy)).Append(" 格,碰一下 ").Append(n.damage).Append(')');
+				sb.Append(count++ == 0 ? "on that side: " : ", ").Append(JsonStr(n.TypeName))
+				  .Append($" ({System.Math.Abs(cx)} cells across, {System.Math.Abs(cy)} cells {(cy >= 0 ? "above" : "below")} me)");
 			}
-			if (count == 0) sb.Append("那边没有 boss 部件");
+			if (count == 0) sb.Append("no boss part on that side");
 			return sb.ToString();
 		}
 
@@ -799,10 +800,10 @@ namespace TerraBlind
 				int f = FramesToHit(p, n);
 				if (f >= 0 && (best < 0 || f < best)) { best = f; who = n.TypeName; }
 			}
-			var sb = new StringBuilder(who == null ? "此刻没有 boss 部件朝我来"
-				: $"此刻最快撞到我的是 {JsonStr(who)},还有 {best} 帧");
+			var sb = new StringBuilder(who == null ? "no boss part is heading at me"
+				: $"the first part to hit me is {JsonStr(who)}, in {best} frames");
 			int proj = ThreatScan.SoonestHit(p);
-			sb.Append(proj < 0 ? ";没有朝我来的弹幕" : $";最快的弹幕 {JsonStr(ThreatScan.SoonestName(p))} 还有 {proj} 帧打到");
+			sb.Append(proj < 0 ? "; no shot is heading at me" : $"; the first shot, {JsonStr(ThreatScan.SoonestName(p))}, hits me in {proj} frames");
 			return sb.ToString();
 		}
 
@@ -810,74 +811,69 @@ namespace TerraBlind
 		static string HorizCriteria(Player p, NPC boss)
 		{
 			int toward = boss.Center.X > p.Center.X ? 1 : -1;
-			string away = _threats.Count < 2 ? "现在选它就" + SideText(p, -toward)
-				: "往左还是往右由 flee_from 那一题定,那一题每个选项都写了往哪边跑、那边还剩几格、那边有什么";
-			return "\"Away\":\"拉开距离。换来的是反应时间:离得越远,冲过来的东西路上花的时间越长,"
-			 + "弹幕的轨迹也越早看得出来。"
-			 + "付出的是输出 -- 退到打不中就是一直不输出,boss 的血不掉这一场不会结束;"
-			 + "而且左右都挤的时候根本退不出去,那种局面退是白退。" + away + "\","
-			 + "\"Hold\":\"水平不动:左右键都不按,人停在原地,boss 动了距离就跟着变。"
-			 + "换来的是不往任何一边撞,输出的位置不变。"
-			 + "付出的是水平方向完全没在躲,朝我来的东西只能靠竖直那一题让开。现在选它:" + HoldText(p) + "\","
-			 + "\"Near\":\"靠近一点。换来的是打得中 -- 看 percent_of_my_usual_damage_right_now,"
-			 + "它是当前输出占这一场常驻水平的百分比,这个数在 100 上下波动都算正常,"
-			 + "60% 只是那一秒没打满。单看某一秒低没有意义(boss 掠过、弹道错开都会让它归零),"
-			 + "要 i_am_too_far_to_hit_it 为真、或 seconds_i_have_been_unable_to_hit_it 攒到几秒,"
-			 + "才说明是位置的问题。付出的是反应时间:越近,冲撞从起手到打到身上的帧数越少,"
-			 + "而撞一下掉的血比少打几秒多得多。现在选它就" + SideText(p, toward) + "\"";
+			string away = _threats.Count < 2 ? " Right now: " + SideText(p, -toward)
+				: " Left or right is set by the flee_from question; each of its options says which way I would run and what is there";
+			return "\"Away\":\"Open the distance. Buys reaction time: anything charging at me takes longer to arrive, "
+			 + "and shots are easier to read. Costs damage: back off until I cannot hit it and the fight never ends; "
+			 + "and when both sides are crowded there is nowhere to back off to." + away + "\","
+			 + "\"Hold\":\"Stand still horizontally: press neither left nor right. The distance changes whenever the boss moves. "
+			 + "Buys not running into anything on either side. Costs any horizontal dodging; "
+			 + "only the vertical question can get me out of the way. Right now: " + HoldText(p) + "\","
+			 + "\"Near\":\"Close in. Buys hitting it: percent_of_my_usual_damage_right_now is my damage as a percent of my usual "
+			 + "for this fight, and swinging around 100 is normal; one low second means nothing. "
+			 + "Only i_am_too_far_to_hit_it being true, or seconds_i_have_been_unable_to_hit_it adding up, means my position is the problem. "
+			 + "Costs reaction time: the closer I am, the fewer frames between a charge starting and it hitting me, "
+			 + "and one body hit costs far more than a few seconds of lost damage. Right now: " + SideText(p, toward) + "\"";
 		}
 
 		// 三道题共用的常识:给自己留退路
-		const string KeepRoom = "人打 boss 时会一直给自己留退路:尽量待在上下左右都有空间的地方。"
-			+ "贴着天花板、墙或者地面,就等于放弃了那个方向的躲闪,下一次攻击从另一边来时只剩一条路可走;"
-			+ "所有东西都在同一边时,往远离它们的方向一直躲,最后会把自己逼进死角。";
+		const string KeepRoom = " A human fighting a boss always keeps an escape route: stay where there is room above, below, left and right. "
+			+ "Hugging a ceiling, a wall or the floor gives up dodging in that direction, so the next attack from the other side leaves one way out. "
+			+ "When everything is on one side, running from it the whole time ends in a corner.";
 
-		// 同一份 state 的所有问题一次发出
 		// 竖直那一题的选项,每个后面接现算的后果
 		static string VertCriteria(Player p)
 		{
 			int feet = (int)((p.position.Y + p.height) / 16f);
 			int room = CeilingDistance(p);
-			string up = room == 0 ? "头已经顶着实心块" : $"头顶还剩 {room} 格";
+			string up = room == 0 ? "my head is already against a solid block" : $"{room} cells of room above my head";
 			int layer = PlatformBelow(p, feet);
 			int next = layer < 0 ? -1 : PlatformBelow(p, layer + 1);
-			string drop = layer < 0 ? $"下方到实心块(最多看 {RoomScanCells} 格)之间没有平台,什么都不会发生"
-				: (layer == feet ? "穿过脚下这一层" : $"穿过下方 {layer - feet} 格处的那一层")
-				  + (next >= 0 ? $",再下一层在它下面 {next - layer} 格" : $",它下面 {RoomScanCells} 格内到实心块之间没有平台了");
+			string drop = layer < 0 ? $"no platform between me and solid ground (looked {RoomScanCells} cells down), so nothing happens"
+				: (layer == feet ? "I drop through the platform under my feet" : $"I drop through the platform {layer - feet} cells below")
+				  + (next >= 0 ? $", and the next one is {next - layer} cells below that" : ", and there is no platform below that one");
 			int floor = SolidBelow(p, feet);
-			string plunge = floor < 0 ? $"下方 {RoomScanCells} 格内没有实心块"
-				: floor == 0 ? "脚下就是实心块,什么都不会发生" : $"一路落 {floor} 格碰到实心块";
+			string plunge = floor < 0 ? $"no solid ground within {RoomScanCells} cells below"
+				: floor == 0 ? "I am standing on solid ground, so nothing happens" : $"I fall {floor} cells to solid ground";
 			string still = NearestHitVertical(p);
-			return "\"Rise\":\"一直往上:按住跳键不放,站着就起跳,跳到顶接着用翅膀往上飞,一直到改选别的。"
-			 + "换来的是持续往上:横着扫过来的东西锁的是起冲那一刻的高度,升上去就让开了。"
-			 + "付出的是翅膀和头顶的余量(cells_of_room_above_me);"
-			 + "cells_of_room_above_me 为 0 时头已经顶着实心块,不会再升高,只会白白烧掉翅膀。"
-			 + $"现在选它:{up},翅膀还剩 {(p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)}%\","
-			 + "\"HopUp\":\"往上一段:站着就起跳,在空中就用一段空中跳,跳到顶就松开。一次回答只跳一段。"
-			 + "换来的是一下子往上让开一小段,不烧翅膀。"
-			 + "付出的是一段空中跳;空中跳用完时在空中什么都不会发生。"
-			 + $"现在选它:{(room == 0 ? "头已经顶着实心块,跳了也不会升高,只会用掉一段空中跳" : up)},"
-			 + $"{(p.velocity.Y == 0f ? "站着,会起跳" : p.AnyExtraJumpUsable() ? "空中跳还有" : "空中跳已用完,不会发生")}\","
-			 + "\"Hover\":\"停在这个高度:在空中按住上,下落速度只有正常的十分之一;站着就是站着。"
-			 + "换来的是在空中停得住,不花翅膀。付出的是竖直方向几乎不动,冲过来的东西锁的正是这个高度。"
-			 + $"现在选它:{still}\","
-			 + "\"Drift\":\"慢慢往下:上下都不按,在空中下落速度是正常的三分之一;站着就是站着。"
-			 + "换来的是一点点降高度,同时随时能改主意:不会像 Plunge 那样一下掉过好几层,"
-			 + "也不像 Hover 那样一直停在同一个高度让冲过来的东西锁住,不花任何东西。"
-			 + "付出的是往下很慢,离开一片危险区域要很久。"
-			 + $"现在选它:{still}\","
-			 + "\"DropLayer\":\"往下一层:按住下,穿过脚下的那一层平台(在空中就是下方最近的那一层),穿过就松开,"
-			 + "之后靠羽落慢慢落到再下一层。一次回答穿一层。"
-			 + "换来的是离开这一层:压下来的东西、从上方来的弹幕、烧在这一层的火,往下一层就扑空了,"
-			 + "cells_of_room_above_me 也会变大;而且只丢一层的高度,不像 Plunge 那样一路掉到底,"
-			 + "落下去还有平台可以站着打。付出的是这个落脚点;下方到实心块之间没有平台时什么都不会发生。"
-			 + $"现在选它:{drop}\","
-			 + "\"Plunge\":\"一直往下:按住下,取消羽落,按正常速度下落,脚下和途中的平台一路穿过,"
-			 + "直到落在实心块上或者改选别的。"
-			 + "换来的是最快地往下离开:上方压下来的东西、从上面来的弹幕(projectile_pressure 的 from_above)、"
-			 + "头顶没空间的时候都靠它;落地会把空中跳和翅膀充满。"
-			 + "付出的是高度,一路穿过的每一层平台都不会停。"
-			 + $"现在选它:{plunge}\"";
+			return "\"Rise\":\"Keep going up: hold jump, jumping from the ground and then flying on wings until another option is picked. "
+			 + "Buys steady height gain; a charge locks the height I was at when it started, so climbing gets out of its line. "
+			 + "Costs wing time and headroom; with my head against a block I cannot climb and only burn wings. "
+			 + $"Right now: {up}, {(p.wingTimeMax > 0 ? (int)(p.wingTime * 100 / p.wingTimeMax) : 0)}% wing time left\","
+			 + "\"HopUp\":\"One hop up: jump from the ground, or use one air jump in the air, released at the top. One hop per answer. "
+			 + "Buys a quick short step up without burning wings. Costs one air jump; with none left, nothing happens in the air. "
+			 + $"Right now: {(room == 0 ? "my head is already against a solid block, so a hop gains no height and only spends an air jump" : up)}, "
+			 + $"{(p.velocity.Y == 0f ? "I am standing, so I will jump" : p.AnyExtraJumpUsable() ? "an air jump is available" : "no air jump left, so nothing happens")}\","
+			 + "\"Hover\":\"Hold this height: hold up in the air, falling at a tenth of normal speed; on the ground I just stand. "
+			 + "Buys staying put in the air without wings. Costs almost no vertical movement, and a charge is aimed at exactly this height. "
+			 + $"Right now: {still}\","
+			 + "\"Drift\":\"Sink slowly: press neither up nor down, falling at a third of normal speed; on the ground I just stand. "
+			 + "Buys losing a little height while staying free to change my mind: unlike Plunge I do not drop several layers at once, "
+			 + "and unlike Hover I do not sit at one height for a charge to lock onto. "
+			 + "Costs nothing but speed: leaving a dangerous area this way takes a long time. "
+			 + $"Right now: {still}\","
+			 + "\"DropLayer\":\"Down one layer: hold down to pass through the platform under me (in the air, the nearest one below), "
+			 + "then let go and float down to the next one. One layer per answer. "
+			 + "Buys leaving this layer: whatever is pressing down, shots from above and fire on this layer miss once I am a layer lower; "
+			 + "and it loses only one layer of height, unlike Plunge, leaving a platform to stand and shoot from. "
+			 + "Costs this footing; with no platform between me and solid ground, nothing happens. "
+			 + $"Right now: {drop}\","
+			 + "\"Plunge\":\"Keep going down: hold down, cancelling the slow fall, falling at full speed through every platform "
+			 + "until I land on solid ground or another option is picked. "
+			 + "Buys the fastest way down and away from things pressing from above, shots from above (from_above in projectile_pressure) "
+			 + "or a ceiling with no room; landing refills air jumps and wings. "
+			 + "Costs height, and it does not stop at any platform on the way. "
+			 + $"Right now: {plunge}\"";
 		}
 
 		// 脚下到实心块几格,平台不算,探满 RoomScanCells 就是 -1
@@ -900,10 +896,10 @@ namespace TerraBlind
 				int f = FramesToHit(p, n);
 				if (f >= 0 && (best < 0 || f < best)) { best = f; who = n; }
 			}
-			if (who == null) return "此刻没有 boss 部件朝我来";
+			if (who == null) return "no boss part is heading at me";
 			int cy = (int)(p.Center.Y / 16f) - (int)(who.Center.Y / 16f);
-			string where = cy > 0 ? $"在我上方 {cy} 格" : cy < 0 ? $"在我下方 {-cy} 格" : "和我同一高度";
-			return $"此刻最快撞到我的是 {JsonStr(who.TypeName)},{where},还有 {best} 帧";
+			string where = cy > 0 ? $"{cy} cells above me" : cy < 0 ? $"{-cy} cells below me" : "at my height";
+			return $"the first part to hit me is {JsonStr(who.TypeName)}, {where}, in {best} frames";
 		}
 
 		// 八个钩爪方向,每个后面接现算的落点
@@ -914,14 +910,14 @@ namespace TerraBlind
 			for (var s = Skill.HookUp; s <= Skill.HookUpLeft; s++)
 			{
 				string name = HookName(s);
-				sb.Append('"').Append(s).Append("\":\"往").Append(name).Append("甩钩爪。现在选它就");
+				sb.Append('"').Append(s).Append("\":\"Throw the hook ").Append(name).Append(". Right now: ");
 				if (!HookTarget(p, s, out int x, out int y))
-					sb.Append(range == 0 ? "身上没有钩爪,什么都不会发生" : $"{name}方向 {range} 格内勾不到东西,什么都不会发生");
+					sb.Append(range == 0 ? "I have no hook, so nothing happens" : $"nothing to latch onto within {range} cells {name}, so nothing happens");
 				else
 				{
 					var at = new Microsoft.Xna.Framework.Vector2(x * 16 + 8, y * 16 + 8);
 					int cells = (int)(Microsoft.Xna.Framework.Vector2.Distance(at, p.Center) / 16f);
-					sb.Append($"勾到{name} {cells} 格处的方块,人被拉到那里");
+					sb.Append($"it latches onto a block {cells} cells {name} and pulls me there");
 					string who = null;
 					float best = float.MaxValue;
 					foreach (var t in _threats)
@@ -930,7 +926,7 @@ namespace TerraBlind
 						float d = Microsoft.Xna.Framework.Vector2.Distance(n.Center, at);
 						if (d < best) { best = d; who = n.TypeName; }
 					}
-					if (who != null) sb.Append($",那里离 {JsonStr(who)} {(int)(best / 16f)} 格,是离那里最近的 boss 部件");
+					if (who != null) sb.Append($"; the closest boss part to that spot is {JsonStr(who)}, {(int)(best / 16f)} cells away");
 				}
 				sb.Append("\",");
 			}
@@ -939,49 +935,53 @@ namespace TerraBlind
 
 		static string HookName(Skill s) => s switch
 		{
-			Skill.HookUp => "正上方",
-			Skill.HookUpRight => "右上 45 度",
-			Skill.HookRight => "正右方",
-			Skill.HookDownRight => "右下 45 度",
-			Skill.HookDown => "正下方",
-			Skill.HookDownLeft => "左下 45 度",
-			Skill.HookLeft => "正左方",
-			_ => "左上 45 度",
+			Skill.HookUp => "straight up",
+			Skill.HookUpRight => "up and right at 45 degrees",
+			Skill.HookRight => "straight right",
+			Skill.HookDownRight => "down and right at 45 degrees",
+			Skill.HookDown => "straight down",
+			Skill.HookDownLeft => "down and left at 45 degrees",
+			Skill.HookLeft => "straight left",
+			_ => "up and left at 45 degrees",
 		};
 
 		static string Body(string state, string flee, string horiz, string vert, string skill)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{" + flee
 			 + "\"horizontal\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"泰拉瑞亚 boss 战。这个自动玩家的武器会自己瞄准开火,所以它只要决定走位。" + KeepRoom
-			 + "【撞到 boss 身上掉的血远比吃一发弹幕多】,躲开碰撞永远排在最前面;"
-			 + "但离太远子弹就打不中,所以目标是停在一个够得着打、又不会被撞到的距离上。"
-			 + "那个距离没有固定的数,只能从结果看:伤害还在出就是够得着,在挨打就是太近了"
-			 + "(背板里写了距离的,按背板来)。"
-			 + "这一题只管【和离我最近的 boss 部件(nearest_part)的距离该怎么变】,"
-			 + "危险不只来自它,threats 里每个部件和每个选项后面写的后果都要看。"
-			 + "竖直方向和技能另有两题,合起来才是完整的动作。"
-			 + "【说的是意图不是按键】,往左还是往右由代码每帧算。"
-			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + "\"Terraria boss fight. My weapon aims and fires by itself, so I only decide how to move." + KeepRoom
+			 + " Touching a boss part costs far more health than one shot, so avoiding contact always comes first; "
+			 + "but too far away my shots miss, so the goal is a distance where I can hit it without being hit. "
+			 + "There is no fixed number for it; judge by results: damage still landing means close enough, getting hit means too close "
+			 + "(if the boss notes give a distance, follow them). "
+			 + "This question only decides how my distance to the nearest boss part (nearest_part) should change; "
+			 + "danger also comes from every other part in threats, so read the consequence at the end of each option. "
+			 + "Vertical movement and skills are two other questions; together they make one move. "
+			 + "This is an intent, not a key press; the code works out left or right every frame. "
+			 + "Each option ends with what picking it does right now, computed from my current position.\",\"criteria\":{"
 			 + horiz + "}},"
 			 + "\"vertical\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"同一场战斗,这一题只管竖直方向往哪动。和水平那一题、技能那一题各自独立,合起来才是完整的动作。" + KeepRoom
-			 + "往上和往下一样重要,竖直方向的位置是躲攻击的另一半。每个选项站着和在空中都有效,代码按当时的状态去做。"
-			 + "身上有羽落药水。空中跳和翅膀落地才会充满。挂着钩子时这一题不起作用。"
-			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + "\"Same fight. This question only decides where I move vertically; the horizontal and skill questions are separate, "
+			 + "and together they make one move." + KeepRoom
+			 + " Up and down matter equally; vertical position is the other half of dodging. "
+			 + "Every option works both standing and in the air; the code handles whichever I am. "
+			 + "I have a featherfall potion. Air jumps and wings refill only on landing. While hooked, this question has no effect. "
+			 + "Each option ends with what picking it does right now, computed from my current position.\",\"criteria\":{"
 			 + vert + "}},"
 			 + "\"skill\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"同一场战斗,这一题只管要不要用钩爪或冲刺,和水平、竖直两题各自独立,合起来才是完整的动作。" + KeepRoom
-			 + "Hook 开头的选项是往那个方向甩钩爪:钩子沿直线飞出去,勾住路上碰到的第一个方块,把人整个拽到那里,拽到就跳开。"
-			 + "换来的是比跑快得多的换位置,横着跑来不及躲开追过来的东西时特别有用。"
-			 + "付出的是拽过去的路上没法改方向,钩子飞出去到勾上有一段空窗,拽完有一小段冷却;"
-			 + "拽到哪里就停在哪里,勾到天花板就会被拉到天花板下。挂着钩子时竖直那一题不起作用。"
-			 + "每个选项最后写了现在选它会怎样,那是按这一刻的位置算出来的。\",\"criteria\":{"
+			 + "\"Same fight. This question only decides whether to use the grappling hook or a dash; the horizontal and vertical questions are separate, "
+			 + "and together they make one move." + KeepRoom
+			 + " Options starting with Hook throw the hook that way: it flies in a straight line, latches onto the first block in its path, "
+			 + "pulls me all the way there, and I jump off on arrival. "
+			 + "Buys moving much faster than running, which helps most when running cannot outpace something chasing me. "
+			 + "Costs steering: I cannot change direction while being pulled, there is a gap before it latches, and a short cooldown after; "
+			 + "I stop wherever it pulls me, so hooking a ceiling pins me under the ceiling. While hooked, the vertical question has no effect. "
+			 + "Each option ends with what picking it does right now, computed from my current position.\",\"criteria\":{"
 			 + skill
-			 + "\"Dash\":\"冲刺:朝水平那一题决定的方向猛冲一小段,有内置冷却。水平方向不动时冲不出去。"
-			 + "换来的是一瞬间拉开一段距离,或者穿过一片危险区域。"
-			 + "付出的是冲刺中方向不好改,乱冲会一头撞进本来躲得开的攻击里\","
-			 + "\"None\":\"不甩钩、不冲刺。换来的是留着冷却给下一刻用。"
-			 + "付出的是这一刻没有用上比跑快的位移\"}}"
+			 + "\"Dash\":\"Dash a short burst in the direction the horizontal question chose, with a built-in cooldown; no dash if I am standing still horizontally. "
+			 + "Buys an instant gap, or a way through a dangerous area. "
+			 + "Costs control: a dash is hard to redirect, and a careless one runs straight into an attack I could have avoided\","
+			 + "\"None\":\"No hook, no dash. Buys keeping the cooldowns for the next moment. "
+			 + "Costs not using a move faster than running right now\"}}"
 			 + "}}";
 
 		static void Fire(string key, string body)
