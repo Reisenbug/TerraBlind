@@ -33,7 +33,7 @@ namespace TerraBlind
 		static string ModSourceDir => System.IO.Path.Combine(Main.SavePath, "ModSources", "TerraBlind");
 
 		// 配置 > .env > 环境变量 > 家目录文件。【配置不进缓存】:游戏里随时能改,缓存了就要重开才生效
-		static string Key()
+		public static string Key()
 		{
 			string cfg = Config.I?.TypeSafeKey?.Trim();
 			if (!string.IsNullOrEmpty(cfg)) { Migrate(cfg); Warn(cfg, "模组配置"); return cfg; }

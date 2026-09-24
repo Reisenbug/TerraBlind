@@ -78,15 +78,6 @@ namespace TerraBlind
 		static int _answer;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
-		static string _key;
-		static string Key()
-		{
-			if (_key != null) return _key.Length == 0 ? null : _key;
-			try { _key = System.IO.File.Exists(JevCombat.KeyPath) ? System.IO.File.ReadAllText(JevCombat.KeyPath).Trim() : ""; }
-			catch { _key = ""; }
-			return _key.Length == 0 ? null : _key;
-		}
-
 		// 部件大多没有 boss 标志。见Conbat.cs
 		static bool IsBossLike(NPC npc)
 			=> npc.boss || Combat.BossPart(npc.type) || Combat.DodgeOnlyPart(npc.type)
@@ -202,7 +193,7 @@ namespace TerraBlind
 
 			var done = _pending;
 			if (done != null) { _pending = null; Parse(done, boss.type); }
-			string key = Key();
+			string key = JevCombat.Key();
 			if (RandomBrain) RandomPick(p, boss.type);
 			else if (key != null && !_busy)
 			{
