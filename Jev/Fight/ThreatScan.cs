@@ -159,6 +159,8 @@ namespace TerraBlind
 			float vx = pr.velocity.X * step, vy = pr.velocity.Y * step;
 			float closeX = (pr.Center.X > p.Center.X) == (vx < 0) ? System.Math.Abs(vx) : 0f;
 			float closeY = (pr.Center.Y > p.Center.Y) == (vy < 0) ? System.Math.Abs(vy) : 0f;
+			// 已经重叠就是正在碰,不管它往哪飞
+			if (gapX <= 0f && gapY <= 0f) return 0;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
 			// 【和 Dodge.FramesToHit 同一个坑】。不靠近的轴给 9999 再取 Max,
 			// 平着飞过来的弹幕就永远报"没威胁"

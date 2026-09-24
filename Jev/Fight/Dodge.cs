@@ -620,6 +620,8 @@ namespace TerraBlind
 			float gapY = System.Math.Abs(boss.Center.Y - p.Center.Y) - (boss.height + p.height) * 0.5f;
 			float closeX = (boss.Center.X > p.Center.X) == (boss.velocity.X < 0) ? System.Math.Abs(boss.velocity.X) : 0f;
 			float closeY = (boss.Center.Y > p.Center.Y) == (boss.velocity.Y < 0) ? System.Math.Abs(boss.velocity.Y) : 0f;
+			// 已经重叠就是正在碰,不管它往哪动
+			if (gapX <= 0f && gapY <= 0f) return 0;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
 			// 已经重叠的轴算 0 帧,不重叠又不靠近的轴撞不上
 			float fx = gapX <= 0f ? 0f : (closeX > 0.1f ? gapX / closeX : -1f);
