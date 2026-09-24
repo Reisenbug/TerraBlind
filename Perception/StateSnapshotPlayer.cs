@@ -30,7 +30,6 @@ namespace TerraBlind
 		private static volatile SiteResult _site;
 		// H 选好的房址:nav 走完就在这儿开工。站位由 HouseBuilder.Ph.Lift 自己对齐,不要求按键时站对。
 		private static (int x, int y)? _pendingHouse;
-		private static int _pillarTestFrom, _pillarTestTarget;
 		private static int _houseNavTries;
 		// [ 测试:导航到桥起点之后,把那一格弄成放得出方块的(四周全空就先造个锚)
 		// 放完第一格之后要站上去的那一格(桥面),站位是它上面一行
@@ -210,31 +209,6 @@ namespace TerraBlind
 					Chatter.Say("[TerraBlind] 盖单间…", 120, 255, 120);
 				else
 					Chatter.Say($"[TerraBlind] 盖不了: {rwhy}", 255, 120, 120);
-			}
-			// P 单测 pillar:原地往上搭 10 格,人跟着爬上去。再按一次停。
-			if (TerraBlind.TestPillar != null && TerraBlind.TestPillar.JustPressed)
-			{
-				if (SkillExecutor.IsActive) { SkillExecutor.Stop(); Chatter.Say("[TerraBlind] pillar 停", 255, 200, 120); }
-				else
-				{
-					var pp = Main.LocalPlayer;
-					int feet = (int)((pp.position.Y + pp.height) / 16f);
-					int tgt = feet - 10;
-					_pillarTestFrom = feet; _pillarTestTarget = tgt;
-					SkillExecutor.StartPillarJump(pp.direction >= 0, tgt);
-					Chatter.Say($"[TerraBlind] pillar: 脚 {feet} → {tgt}(10格)", 120, 255, 120);
-				}
-			}
-			if (_pillarTestFrom != 0 && !SkillExecutor.IsActive)
-			{
-				var pp = Main.LocalPlayer;
-				int feet = (int)((pp.position.Y + pp.height) / 16f);
-				int got = _pillarTestFrom - feet;
-				bool ok = feet <= _pillarTestTarget;
-				Chatter.Say($"[TerraBlind] pillar 结束:升了 {got}/10 格,脚在 {feet}(要 {_pillarTestTarget}) {(ok ? "OK" : "没到")}",
-					ok ? (byte)120 : (byte)255, ok ? (byte)255 : (byte)120, 120);
-				DiagLog.Write($"[pillar-test] rose={got}/10 feet={feet} target={_pillarTestTarget} ok={ok}");
-				_pillarTestFrom = 0;
 			}
 			// L 一键建桥:算线 → 竖降到桥面 → 横铺 170 格
 			if (TerraBlind.BuildHellBridge != null && TerraBlind.BuildHellBridge.JustPressed)
