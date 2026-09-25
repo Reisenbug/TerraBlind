@@ -103,17 +103,17 @@ namespace TerraBlind
 			{
 				if (n >= 12) break;
 				int pcx = (int)(pr.Center.X / 16f), pcy = (int)(pr.Center.Y / 16f);
-				int d = System.Math.Abs(pcx - atCx) + System.Math.Abs(pcy - atCy);
+				int f = FramesToReach(p, pr);
+				// 【报实际速度】。有的弹幕一帧走好几次,报 velocity 会把它说得比实际慢
+				float step = pr.extraUpdates + 1;
 				if (n++ > 0) sb.Append(',');
-				sb.Append("{\"name\":\"").Append(pr.Name ?? "?").Append('"')
-				  .Append(",\"cells_right\":").Append(pcx - atCx)
-				  .Append(",\"cells_below\":").Append(pcy - atCy)
-				  .Append(",\"distance_cells\":").Append(d)
-				  .Append(",\"damage_pct_of_my_hp\":").Append((int)(pr.damage * 100f / System.Math.Max(1, p.statLife)))
-				  // 【报实际速度】。有的弹幕一帧走好几次,报 velocity 会把它说得比实际慢
-				  .Append(",\"vx\":").Append((pr.velocity.X * (pr.extraUpdates + 1)).ToString("0.0"))
-				  .Append(",\"vy\":").Append((pr.velocity.Y * (pr.extraUpdates + 1)).ToString("0.0"))
-				  .Append(",\"frames_until_it_reaches_me\":").Append(FramesToReach(p, pr))
+				sb.Append("{\"name\":\"").Append((pr.Name ?? "?").Replace("\"", "")).Append('"')
+				  .Append(",\"damage_percent_of_my_hp\":").Append((int)(pr.damage * 100f / System.Math.Max(1, p.statLife)))
+				  .Append(",\"cells_to_my_right\":").Append(pcx - atCx)
+				  .Append(",\"cells_above_me\":").Append(atCy - pcy)
+				  .Append(",\"speed_to_the_right\":").Append((int)(pr.velocity.X * step * 60f / 16f))
+				  .Append(",\"speed_upward\":").Append((int)(-pr.velocity.Y * step * 60f / 16f))
+				  .Append(",\"frames_until_it_hits_me\":").Append(f < 0 ? "\"not heading at me\"" : f.ToString())
 				  .Append('}');
 			}
 			return sb.Append(']').ToString();
