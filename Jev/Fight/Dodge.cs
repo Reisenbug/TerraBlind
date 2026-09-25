@@ -63,6 +63,8 @@ namespace TerraBlind
 		static volatile string _pending;
 		// 发出去的那份现场,答案回来时一起记进日志。
 		static string _lastFacts = "";
+		// 发出去时被挡住的方向,答案回来时一起记进日志
+		static string _lastBlocked = "";
 		static long _actAt = -100000;
 		// 第几次回答,一次回答只触发一次的动作用它去重
 		static int _answer;
@@ -184,7 +186,7 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss);
-				Fire(key, Body(_lastFacts));
+				Fire(key, Body(_lastFacts, DirCriteria(p)));
 			}
 
 			// 意图过期时原地、小幅
@@ -632,22 +634,41 @@ namespace TerraBlind
 				 + "}";
 		}
 
+		// 八个方向的选项,被墙、地面或天花板挡住的写明走不动
+		static string DirCriteria(Player p)
+		{
+			bool left = WallDistance(p, -1) == 0, right = WallDistance(p, 1) == 0;
+			bool up = CeilingDistance(p) == 0, down = FloorDistance(p) == 0;
+			var sb = new StringBuilder();
+			var blocked = new StringBuilder();
+			for (var d = Dir.Up; d <= Dir.UpLeft; d++)
+			{
+				var (x, y) = Vec(d);
+				bool xStop = x < 0 ? left : x > 0 && right;
+				bool yStop = y < 0 ? up : y > 0 && down;
+				string h = x < 0 ? "left" : "right", v = y < 0 ? "up" : "down";
+				string move = x == 0 ? $"Move straight {v}." : y == 0 ? $"Move straight {h}." : $"Move {v} and to the {h}.";
+				string note = (x == 0 || xStop) && (y == 0 || yStop)
+					? $" Blocked: {(y < 0 ? "a ceiling" : y > 0 ? "the floor" : "a wall")}{(x != 0 && y != 0 ? " and a wall are" : " is")} right there, so moving this way does nothing."
+					: xStop ? $" The {h} part is blocked by a wall; I would only move {v}."
+					: yStop ? $" The {v} part is blocked by {(y < 0 ? "a ceiling" : "the floor")}; I would only move {h}."
+					: "";
+				sb.Append('"').Append(d).Append("\":\"").Append(move).Append(note).Append("\",");
+				if (note.Length > 0) blocked.Append(d).Append(' ');
+			}
+			_lastBlocked = blocked.ToString();
+			return sb.ToString();
+		}
+
 		// 同一份 state 的两道题一次发出
-		static string Body(string state)
+		static string Body(string state, string dirs)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
 			 + "\"direction\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"Terraria boss fight. Which way should I move right now so that nothing hits me? "
 			 + "Look at every boss part and shot, where each is heading and how soon it reaches me, and how much room I have. "
 			 + "Keep an escape route: do not run into a wall, floor or ceiling, or toward another threat. "
 			 + "Follow the boss notes.\",\"criteria\":{"
-			 + "\"Up\":\"Move straight up.\","
-			 + "\"UpRight\":\"Move up and to the right.\","
-			 + "\"Right\":\"Move straight right.\","
-			 + "\"DownRight\":\"Move down and to the right.\","
-			 + "\"Down\":\"Move straight down.\","
-			 + "\"DownLeft\":\"Move down and to the left.\","
-			 + "\"Left\":\"Move straight left.\","
-			 + "\"UpLeft\":\"Move up and to the left.\","
+			 + dirs
 			 + "\"Stay\":\"Stay where I am.\"}},"
 			 + "\"size\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"Same moment. How big a move does this dodge need? "
@@ -723,7 +744,8 @@ namespace TerraBlind
 			// 没答上来就原地、小幅
 			Way = System.Enum.TryParse<Dir>(dp, out var d) ? d : Dir.Stay;
 			Amount = System.Enum.TryParse<Size>(sp, out var s) ? s : Size.Small;
-			DiagLog.Write($"[dodge] jev {ms}ms -> {dp}/{sp} 方向{Rank(Seg(dq, "probabilities"))} 幅度{Rank(Seg(sq, "probabilities"))}");
+			DiagLog.Write($"[dodge] jev {ms}ms -> {dp}/{sp} 方向{Rank(Seg(dq, "probabilities"))} 幅度{Rank(Seg(sq, "probabilities"))}"
+				+ (_lastBlocked.Length > 0 ? $" 挡住的方向 {_lastBlocked}" : ""));
 			LatencyMs = ms;
 			Confidence = Num(dq, "confidence", 0f);
 			_actAt = _clock.ElapsedMilliseconds;
