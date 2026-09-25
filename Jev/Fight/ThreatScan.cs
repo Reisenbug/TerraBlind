@@ -119,35 +119,6 @@ namespace TerraBlind
 			return sb.Append(']').ToString();
 		}
 
-		// 弹幕的【汇总】。逐发列表看不出该往哪走 -- 那要把十几发加起来看,
-		// 是确定的算术,代码算比让模型心算可靠
-		public static string PressureJson(Player p)
-		{
-			int left = 0, right = 0, above = 0, below = 0, onMe = 0;
-			int soonest = -1;
-			for (int i = 0; i < Main.maxProjectiles; i++)
-			{
-				var pr = Main.projectile[i];
-				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
-				float dx = pr.Center.X - p.Center.X, dy = pr.Center.Y - p.Center.Y;
-				if (System.Math.Abs(dx) / 16f > RangeCells || System.Math.Abs(dy) / 16f > RangeCells) continue;
-				int f = FramesToReach(p, pr);
-				// 【围着我的也要数】。喷火是一片停在身上的火,不"朝我来",
-				// 按 FramesToReach 滤就整片消失 -- 而那正是最该退开的时候
-				int cells = (int)(System.Math.Abs(dx) / 16f + System.Math.Abs(dy) / 16f);
-				if (cells <= 6) onMe++;
-				if (f < 0) continue;
-				if (dx < 0) left++; else right++;
-				if (dy < 0) above++; else below++;
-				if (soonest < 0 || f < soonest) soonest = f;
-			}
-			return "{\"from_left\":" + left + ",\"from_right\":" + right
-				 + ",\"from_above\":" + above + ",\"from_below\":" + below
-				 + ",\"hostile_shots_within_six_cells_of_me\":" + onMe
-				 + ",\"frames_until_the_closest_one_reaches_me\":"
-				 + (soonest < 0 ? "\"none heading at me\"" : soonest.ToString()) + "}";
-		}
-
 		// 这发弹幕按当前速度还有几帧碰到我。不朝我来就 -1。和 Dodge.FramesToHit 同一套算法
 		public static int FramesToReach(Player p, Projectile pr)
 		{
@@ -169,37 +140,6 @@ namespace TerraBlind
 			if (fx < 0f || fy < 0f) return -1;
 			float f = System.Math.Max(fx, fy);
 			return f > 600f ? -1 : (int)f;
-		}
-
-		// 最近的一发还有几帧到。反射层用它 -- 原来 incoming 只看 boss 本体,弹幕再近也不算数
-		// 最快打到我的那发叫什么。【只为查日志】:分不出是哪种弹幕就没法判断是不是漏检了
-		public static string SoonestName(Player p)
-		{
-			int best = -1;
-			string name = "无";
-			for (int i = 0; i < Main.maxProjectiles; i++)
-			{
-				var pr = Main.projectile[i];
-				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
-				int f = FramesToReach(p, pr);
-				if (f < 0) continue;
-				if (best < 0 || f < best) { best = f; name = $"{pr.Name}(x{pr.extraUpdates + 1})"; }
-			}
-			return name;
-		}
-
-		public static int SoonestHit(Player p)
-		{
-			int best = -1;
-			for (int i = 0; i < Main.maxProjectiles; i++)
-			{
-				var pr = Main.projectile[i];
-				if (pr == null || !pr.active || !pr.hostile || pr.damage <= 0) continue;
-				int f = FramesToReach(p, pr);
-				if (f < 0) continue;
-				if (best < 0 || f < best) best = f;
-			}
-			return best;
 		}
 
 		public static int Count(Player p, int atCx, int atCy)
