@@ -172,11 +172,13 @@ namespace TerraBlind
 		{
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
+			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }
 			if (Manual.On) { Gate("人工"); Release(); return; }
 
 			var boss = Boss(p, out int dist);
-			if (boss == null) { Gate("no boss"); Release(); return; }
+			if (boss == null) { FightEnd("boss 没了(击败或离场)"); Gate("no boss"); Release(); return; }
+			if (!_inFight) FightStart();
 			TrackPartSpeeds(p);
 
 			var done = _pending;
@@ -292,6 +294,7 @@ namespace TerraBlind
 			_bossPrevHp = hp;
 			// 回血或 boss 离场算出负数,当 0
 			_dpsRing[_dpsAt] = d > 0 ? d : 0;
+			if (d > 0) _fightBossDmg += d;
 			_dpsAt = (_dpsAt + 1) % _dpsRing.Length;
 			int sum = 0;
 			foreach (int v in _dpsRing) sum += v;
@@ -312,14 +315,43 @@ namespace TerraBlind
 				+ $" | 脚在第{(int)((me.position.Y + me.height) / 16f)}行 离地{CellsAboveGround(me)} 头顶{CeilingDistance(me)}");
 		}
 
+		// 一场 boss 战的累计,结束时记一行小结
+		static bool _inFight;
+		static ulong _fightStart;
+		static int _fightHits, _fightHitHp, _fightDotHp, _fightBossDmg;
+		static void FightStart()
+		{
+			_inFight = true;
+			_fightStart = Main.GameUpdateCount;
+			_fightHits = _fightHitHp = _fightDotHp = _fightBossDmg = 0;
+			_prevHp = -1;
+			DiagLog.Write("[dodge] 战斗开始");
+		}
+		static void FightEnd(string result)
+		{
+			if (!_inFight) return;
+			_inFight = false;
+			float secs = (Main.GameUpdateCount - _fightStart) / 60f;
+			string line = $"战斗小结 {result} 用时{secs:0.0}秒 被打中{_fightHits}次{_fightHitHp}血 持续掉血{_fightDotHp}血"
+				+ $" 打出{_fightBossDmg} 平均秒伤{(secs > 0 ? _fightBossDmg / secs : 0):0}";
+			DiagLog.Write("[dodge] " + line);
+			Main.NewText("[TerraBlind] " + line, 255, 220, 120);
+		}
+
 		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;
+		static int _prevImmune;
 		static void Hurt(Player p, NPC boss, int dist, Dir dir, Size size)
 		{
+			// 被打中会重新给无敌帧,持续掉血不会
+			bool hit = p.immuneTime > _prevImmune;
+			_prevImmune = p.immuneTime;
 			if (_prevHp < 0) { _prevHp = p.statLife; return; }
 			int lost = _prevHp - p.statLife;
 			_prevHp = p.statLife;
 			if (lost <= 0) return;
+			if (hit) { _fightHits++; _fightHitHp += lost; }
+			else _fightDotHp += lost;
 			int nd = 999, pd = 999;
 			string nn = "无", pn = "无";
 			foreach (var n in Main.npc)
@@ -334,7 +366,7 @@ namespace TerraBlind
 				int d = (int)(Microsoft.Xna.Framework.Vector2.Distance(pr.Center, p.Center) / 16f);
 				if (d < pd) { pd = d; pn = $"{pr.Name}(伤{pr.damage})"; }
 			}
-			DiagLog.Write($"[dodge] 掉血 {lost} 剩{p.statLife}/{p.statLifeMax}"
+			DiagLog.Write($"[dodge] 掉血 {lost} {(hit ? "被打中" : "持续")} 无敌帧{p.immuneTime} 回血{p.lifeRegen} 剩{p.statLife}/{p.statLifeMax}"
 				+ $" 离{boss.TypeName} {dist}格 意图{dir}/{size}"
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格 | debuff {Debuffs(p)}");
 		}
