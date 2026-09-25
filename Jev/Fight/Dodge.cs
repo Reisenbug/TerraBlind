@@ -626,6 +626,8 @@ namespace TerraBlind
 		{
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
+				 + ",\"my_speed_to_the_right\":" + (int)(p.velocity.X * 60f / 16f)
+				 + ",\"my_speed_upward\":" + (int)(-p.velocity.Y * 60f / 16f)
 				 + ",\"threats\":" + ThreatsJson(p)
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"room\":{\"left\":" + WallDistance(p, -1) + ",\"right\":" + WallDistance(p, 1)
