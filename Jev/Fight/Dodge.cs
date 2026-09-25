@@ -658,6 +658,7 @@ namespace TerraBlind
 		{
 			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
 			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
+				 + ",\"i_am_losing_health_over_time\":" + (p.lifeRegen < 0 ? "true" : "false")
 				 + ",\"my_speed_to_the_right\":" + (int)(p.velocity.X * 60f / 16f)
 				 + ",\"my_speed_upward\":" + (int)(-p.velocity.Y * 60f / 16f)
 				 + ",\"threats\":" + ThreatsJson(p)
