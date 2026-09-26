@@ -6,7 +6,7 @@ namespace TerraBlind
 {
 	// Jev 说往哪躲
 	public enum Dir { Up, UpRight, Right, DownRight, Down, DownLeft, Left, UpLeft, Stay }
-	// Jev 说躲多大:Small 跑跳落,Medium 加冲刺或空中跳,Large 甩钩爪
+	// Jev 说躲多大:Small 普通移动,Medium 加空中跳,Large 甩钩爪
 	public enum Size { Small, Medium, Large }
 
 	// boss 战的走位。Jev 每次反应给方向和幅度,反射层每帧把它翻成按键
@@ -38,12 +38,7 @@ namespace TerraBlind
 		// 勾上就跳、跳完就勾，等于玩家原地不动
 		const int HookCooldownFrames = 30;
 		static int _hookCooldown;
-		// 冲刺要"按→松→按"三帧。因为这不是1.4.5。TMod更新1.4.5后得改。现在的模组覆盖掉了的话也得改
-		static int _dashDir;
-		// 这次回答已经记过"想冲但没就绪"
-		static int _dashWaitSaid = -1;
-		static bool _dashGap;
-
+		static bool _wasDashing;
 		public static string Last = "idle";
 		public static Dir Way = Dir.Stay;
 		public static Size Amount = Size.Small;
@@ -243,11 +238,8 @@ namespace TerraBlind
 			bool hop = medium && vy < 0 && _airJumpUsed != _answer;
 			bool jump = Jump(p, onGround, vy < 0, hop, hookJump);
 
-			int go = Dash(p, hx, medium && hx != 0 && vy >= 0);
-			bool dashing = go != hx || _dashGap;
-
-			if (go < 0) p.controlLeft = true;
-			else if (go > 0) p.controlRight = true;
+			if (hx < 0) p.controlLeft = true;
+			else if (hx > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
 			// 往下按住下一路穿平台;不上不下时空中按住上,靠羽落保持高度;挂着钩子时都不按
@@ -257,9 +249,12 @@ namespace TerraBlind
 			Fly(p, dir);
 			TrackDps();
 			Hurt(p, boss, dist, dir, size);
-			Last = $"{dir}/{size} boss {dist}格 go {(go == 0 ? "-" : go < 0 ? "L" : "R")}"
+			bool dashing = p.dashDelay < 0;
+			if (dashing && !_wasDashing) DiagLog.Write($"[dodge] 非预期冲刺 方向{(p.velocity.X < 0 ? "左" : "右")} vx={p.velocity.X:0.0} 意图{dir}/{size}");
+			_wasDashing = dashing;
+			Last = $"{dir}/{size} boss {dist}格 go {(hx == 0 ? "-" : hx < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
-				 + (dashing ? " +dash" : "") + (p.dashDelay < 0 ? " [dashing]" : "");
+				 + (dashing ? " [dashing]" : "");
 		}
 
 		// 最近 60 帧 boss 掉的血
@@ -324,6 +319,7 @@ namespace TerraBlind
 			_inFight = true;
 			_fightStart = Main.GameUpdateCount;
 			_fightHits = _fightHitHp = _fightDotHp = _fightBossDmg = 0;
+			_wasDashing = false;
 			_prevHp = -1;
 			DiagLog.Write("[dodge] 战斗开始");
 		}
@@ -561,34 +557,6 @@ namespace TerraBlind
 			return f > 600f ? -1 : (int)f;
 		}
 
-		// 冲刺是方向键双击:松一帧再按。没就绪就照常跑
-		static int Dash(Player p, int go, bool want)
-		{
-			// 冲刺中保持方向
-			if (_dashDir != 0 && p.dashDelay < 0) return _dashDir;
-
-			// dashDelay 大于 0 冷却,小于 0 正在冲
-			bool ready = p.dashType != 0 && p.dashDelay == 0;
-			if (!ready)
-			{
-				if (want && go != 0 && _dashWaitSaid != _answer)
-				{
-					_dashWaitSaid = _answer;
-					DiagLog.Write($"[dodge] 想冲但没就绪 退回跑 dashType={p.dashType} delay={p.dashDelay}");
-				}
-				_dashGap = false; _dashDir = 0; return go;
-			}
-
-			if (_dashGap) { _dashGap = false; return _dashDir; }
-			_dashDir = 0;
-
-			if (!want || go == 0) return go;
-
-			DiagLog.Write($"[dodge] 冲刺 方向{(go < 0 ? "左" : "右")}");
-			_dashGap = true; _dashDir = go;
-			return 0;
-		}
-
 		// 钩子能不能勾这一格,照 AI_007_GrapplingHooks_CanTileBeLatchedOnTo
 		static bool Hookable(int x, int y)
 		{
@@ -710,9 +678,9 @@ namespace TerraBlind
 			 + "These choices do not limit travel distance; movement continues until the next answer.\",\"criteria\":{"
 			 + "\"Small\":\"Run, jump, fly or fall in the chosen direction. No dash or grapple. "
 			 + "I can change direction on the next answer. Use this when ordinary movement is enough, even for a long retreat.\","
-			 + "\"Medium\":\"Use an immediate evasive move: dash when moving sideways or down diagonally, or use an extra jump when moving up, including up diagonally for horizontal travel. "
-			 + "A dash commits me to its direction and then has a cooldown; during cooldown I only run. Down without a horizontal direction has no extra move. "
-			 + "Use only when ordinary movement would be too slow to avoid an imminent hit.\","
+			 + "\"Medium\":\"Trigger an extra jump when moving up or up diagonally; diagonal jumps can also move me sideways. "
+			 + "There is no dash. Sideways and downward Medium move exactly like Small, so choose Small for those directions. "
+			 + "Use Medium only when an extra upward jump is needed to avoid an imminent hit.\","
 			 + "\"Large\":\"Fire a grappling hook toward the chosen direction. It needs a reachable surface and may fail or be on cooldown. "
 			 + "If there is no surface to hook, I fall back to Medium. Use only when I need the hook to cross a large gap or escape a trap.\"}}"
 			 + "}}";
