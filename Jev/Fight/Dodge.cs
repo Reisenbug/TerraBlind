@@ -240,10 +240,10 @@ namespace TerraBlind
 			bool hooking = Hook(p, dir, moving && size == Size.Large, out bool hookJump, out bool hookMiss);
 			// 勾不到就退一档
 			bool medium = moving && (size == Size.Medium || (size == Size.Large && hookMiss));
-			bool hop = medium && dir == Dir.Up && _airJumpUsed != _answer;
+			bool hop = medium && vy < 0 && _airJumpUsed != _answer;
 			bool jump = Jump(p, onGround, vy < 0, hop, hookJump);
 
-			int go = Dash(p, hx, medium && hx != 0);
+			int go = Dash(p, hx, medium && hx != 0 && vy >= 0);
 			bool dashing = go != hx || _dashGap;
 
 			if (go < 0) p.controlLeft = true;
@@ -710,7 +710,7 @@ namespace TerraBlind
 			 + "These choices do not limit travel distance; movement continues until the next answer.\",\"criteria\":{"
 			 + "\"Small\":\"Run, jump, fly or fall in the chosen direction. No dash or grapple. "
 			 + "I can change direction on the next answer. Use this when ordinary movement is enough, even for a long retreat.\","
-			 + "\"Medium\":\"Use an immediate evasive move: dash horizontally if ready, or use an extra jump when moving straight up. "
+			 + "\"Medium\":\"Use an immediate evasive move: dash when moving sideways or down diagonally, or use an extra jump when moving up, including up diagonally for horizontal travel. "
 			 + "A dash commits me to its direction and then has a cooldown; during cooldown I only run. Down without a horizontal direction has no extra move. "
 			 + "Use only when ordinary movement would be too slow to avoid an imminent hit.\","
 			 + "\"Large\":\"Fire a grappling hook toward the chosen direction. It needs a reachable surface and may fail or be on cooldown. "
