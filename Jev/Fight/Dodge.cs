@@ -150,6 +150,7 @@ namespace TerraBlind
 				if (sb.Length > 1) sb.Append(',');
 				sb.Append("{\"id\":\"").Append(JsonStr(ThreatId(n.type))).Append('"')
 				  .Append(",\"name\":\"").Append(JsonStr(n.TypeName)).Append('"')
+				  .Append(",\"health_percent\":").Append((long)n.life * 100 / System.Math.Max(1, n.lifeMax))
 				  .Append(",\"contact_damage_percent_of_my_hp\":").Append(n.damage * 100 / System.Math.Max(1, p.statLife))
 				  .Append(",\"cells_to_my_right\":").Append(cx)
 				  .Append(",\"cells_above_me\":").Append(cy)
@@ -543,8 +544,8 @@ namespace TerraBlind
 		{
 			float gapX = System.Math.Abs(boss.Center.X - p.Center.X) - (boss.width + p.width) * 0.5f;
 			float gapY = System.Math.Abs(boss.Center.Y - p.Center.Y) - (boss.height + p.height) * 0.5f;
-			float closeX = (boss.Center.X > p.Center.X) == (boss.velocity.X < 0) ? System.Math.Abs(boss.velocity.X) : 0f;
-			float closeY = (boss.Center.Y > p.Center.Y) == (boss.velocity.Y < 0) ? System.Math.Abs(boss.velocity.Y) : 0f;
+			float closeX = boss.Center.X > p.Center.X ? p.velocity.X - boss.velocity.X : boss.velocity.X - p.velocity.X;
+			float closeY = boss.Center.Y > p.Center.Y ? p.velocity.Y - boss.velocity.Y : boss.velocity.Y - p.velocity.Y;
 			// 已经重叠就是正在碰,不管它往哪动
 			if (gapX <= 0f && gapY <= 0f) return 0;
 			if (closeX < 0.1f && closeY < 0.1f) return -1;
@@ -669,6 +670,7 @@ namespace TerraBlind
 			 + "\"direction\":{\"type\":\"choice\",\"instructions\":"
 			 + "\"Terraria boss fight. Which way should I move right now so that nothing hits me? "
 			 + "Look at every boss part and shot, where each is heading and how soon it reaches me, and how much room I have. "
+			 + "Frames until contact assumes our current velocities stay constant; use enemy health to identify its phase. "
 			 + "Keep an escape route: do not run into a wall, floor or ceiling, or toward another threat. "
 			 + "Follow the boss notes.\",\"criteria\":{"
 			 + dirs

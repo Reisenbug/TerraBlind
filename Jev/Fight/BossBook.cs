@@ -76,7 +76,7 @@ namespace TerraBlind
 					+ "Within 30 cells is dangerous: its flamethrower reaches there and its charges leave no time to react; stay farther, about 40 cells. "
 					+ "In phase one Spazmatism chases me whenever it is not charging: never stop moving vertically. "
 					+ "Dodging a charge needs a change of direction both horizontally and vertically; it locks onto where I was when the charge started. "
-					+ "At half health it sheds its shell into phase two, which loops: breathe fire for a while, then charge six times in a row, then repeat. "
+					+ "The Spazmatism health_percent in threats at or below 50 means phase two: it sheds its shell, then loops between breathing fire and charging six times in a row. "
 					+ "The fire is a continuous stream, not separate shots; standing in it hurts every frame, "
 					+ "so the moment the fire starts hitting me, leave; the closer I am, the worse it burns. "
 					+ "In phase two, stay away from Spazmatism at all times, not only while it breathes fire. "
