@@ -706,14 +706,15 @@ namespace TerraBlind
 			 + dirs
 			 + "\"Stay\":\"Stay where I am.\"}},"
 			 + "\"size\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"Same moment. How big a move does this dodge need? "
-			 + "Ignore which direction; only judge how far and how fast I must get away.\",\"criteria\":{"
-			 + "\"Small\":\"A small step. Keeps me in control and free to adjust again right away. "
-			 + "Fits when threats are still far or slow, or I am only fine-tuning my position.\","
-			 + "\"Medium\":\"A quick burst of a few cells. "
-			 + "Fits when something reaches me soon and a small step would not clear it.\","
-			 + "\"Large\":\"One big relocation that cannot change direction on the way. "
-			 + "Fits when I am cornered, caught between threats, or an attack covers a wide area.\"}}"
+			 + "\"Same moment. Choose the movement tool needed for the direction you chose. "
+			 + "These choices do not limit travel distance; movement continues until the next answer.\",\"criteria\":{"
+			 + "\"Small\":\"Run, jump, fly or fall in the chosen direction. No dash or grapple. "
+			 + "I can change direction on the next answer. Use this when ordinary movement is enough, even for a long retreat.\","
+			 + "\"Medium\":\"Use an immediate evasive move: dash horizontally if ready, or use an extra jump when moving straight up. "
+			 + "A dash commits me to its direction and then has a cooldown; during cooldown I only run. Down without a horizontal direction has no extra move. "
+			 + "Use only when ordinary movement would be too slow to avoid an imminent hit.\","
+			 + "\"Large\":\"Fire a grappling hook toward the chosen direction. It needs a reachable surface and may fail or be on cooldown. "
+			 + "If there is no surface to hook, I fall back to Medium. Use only when I need the hook to cross a large gap or escape a trap.\"}}"
 			 + "}}";
 
 		static void Fire(string key, string body)
