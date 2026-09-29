@@ -30,6 +30,9 @@ namespace TerraBlind
 		const int RoomScanCells = 60;
 		// 离地图边界这么近就当撞墙。
 		const int EdgeCells = 40;
+		const int HorizontalReserveCells = 35;
+		const int UpperReserveCells = 18;
+		const int LowerReserveCells = 4;
 		// 意图过期就退回保守行为。
 		const long IntentTtlMs = 1500;
 
@@ -58,6 +61,7 @@ namespace TerraBlind
 		public static string Last = "idle";
 		public static DodgeAction Action = DodgeAction.Idle;
 		static Dictionary<string, DodgeAction> _availableActions = new();
+		static string _lastBlocked = "";
 		public static float Confidence;
 		public static int LatencyMs;
 		// jev判的概率分布。
@@ -71,11 +75,29 @@ namespace TerraBlind
 		public const string Model = "jev-latest";
 		static readonly HttpClient _http = new() { Timeout = System.TimeSpan.FromSeconds(5) };
 		static volatile bool _busy;
-		static volatile string _pending;
+		static volatile Reply _pending;
 		// 发出去的那份现场,答案回来时一起记进日志。
-		static string _lastFacts = "";
-		// 发出去时被挡住的方向,答案回来时一起记进日志
-		static string _lastBlocked = "";
+		sealed class RequestContext
+		{
+			public int Sequence;
+			public int BossType;
+			public long SentAtMs;
+			public string Facts;
+			public string Blocked;
+			public Dictionary<string, DodgeAction> Actions;
+		}
+		sealed class Reply
+		{
+			public RequestContext Request;
+			public string Packed;
+		}
+		static int _requestSequence;
+		static int _appliedSequence;
+		static DodgeAction _appliedAction = DodgeAction.Idle;
+		static DodgeAction _completedAction = DodgeAction.Idle;
+		static long _completedDurationMs;
+		static long _releasedAtMs = -1;
+		static string _lastApplied = "";
 		static long _actAt = -100000;
 		// 第几次回答,一次回答只触发一次的动作用它去重
 		static int _answer;
@@ -194,13 +216,27 @@ namespace TerraBlind
 			TrackPartSpeeds(p);
 
 			var done = _pending;
-			if (done != null) { _pending = null; Parse(done, boss.type); }
+			if (done != null)
+			{
+				_pending = null;
+				if (!RandomBrain) Parse(done);
+			}
 			string key = JevCombat.Key();
 			if (RandomBrain) RandomPick(boss.type);
-			else if (key != null && !_busy)
+			else if (key != null && !_busy && _pending == null)
 			{
-				_lastFacts = Facts(p, boss);
-				Fire(key, Body(_lastFacts, ActionCriteria(p)));
+				string facts = Facts(p, boss);
+				string criteria = ActionCriteria(p);
+				var request = new RequestContext
+				{
+					Sequence = ++_requestSequence,
+					BossType = boss.type,
+					SentAtMs = _clock.ElapsedMilliseconds,
+					Facts = facts,
+					Blocked = _lastBlocked,
+					Actions = _availableActions
+				};
+				Fire(key, Body(facts, criteria), request);
 			}
 
 			// 意图过期时原地、小幅
@@ -209,7 +245,7 @@ namespace TerraBlind
 
 			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
-			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); DismountAuto(p); return; }
+			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); DismountAuto(p); _appliedAction = DodgeAction.Idle; _lastApplied = ""; return; }
 
 			Gate($"driving {boss.TypeName} {dist}格 act={action.Direction}/{action.Horizontal}/{action.Vertical}");
 			Drive(p, boss, dist, action);
@@ -248,6 +284,17 @@ namespace TerraBlind
 			(-1, 0) => Dir.Left, (-1, -1) => Dir.UpLeft,
 			_ => Dir.Stay,
 		};
+		static bool Blocked(Player p, int x, int y, int left, int right, int above, int below)
+		{
+			float horizontalReserve = System.Math.Max(HorizontalReserveCells,
+				System.Math.Abs(p.velocity.X) * 60f * 1.2f / 16f)
+				+ System.Math.Max(0f, x * p.velocity.X) * 18f / 16f;
+			float upperReserve = System.Math.Max(UpperReserveCells,
+				System.Math.Max(0f, -p.velocity.Y) * 60f * 0.6f / 16f)
+				+ 5f + System.Math.Max(0f, -p.velocity.Y) * 18f / 16f;
+			return x < 0 && left <= horizontalReserve || x > 0 && right <= horizontalReserve
+				|| y < 0 && above <= upperReserve || y > 0 && below <= LowerReserveCells;
+		}
 		static string ActionName(DodgeAction action)
 		{
 			if (action.Direction == Dir.Stay) return "Stay";
@@ -295,6 +342,13 @@ namespace TerraBlind
 			Dir dir = action.Direction;
 			var (hx, vy) = Vec(dir);
 			Size hSize = action.Horizontal, vSize = action.Vertical;
+			int left = WallDistance(p, -1), right = WallDistance(p, 1);
+			int above = CeilingDistance(p), below = FloorDistance(p);
+			if (hx != 0 && Blocked(p, hx, 0, left, right, above, below)) hx = 0;
+			if (vy != 0 && Blocked(p, 0, vy, left, right, above, below)) vy = 0;
+			if (hx == 0) hSize = Size.None;
+			if (vy == 0) vSize = Size.None;
+			dir = Direction(hx, vy);
 			int mountType = EquippedVerticalMount(p);
 			if (vSize == Size.Large && mountType == MountID.None) vSize = Size.Small;
 			bool upMount = vy < 0 && vSize == Size.Large && mountType != MountID.None;
@@ -351,6 +405,13 @@ namespace TerraBlind
 			Last = $"{dir}/{hSize}/{vSize} boss {dist}格 go {(hx == 0 ? "-" : hx < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
 				 + (_autoMountActive ? " +mount" : "") + (dashing ? " [dashing]" : "");
+			_appliedAction = new DodgeAction(dir, hSize, vSize);
+			string applied = ActionName(_appliedAction);
+			if (applied != _lastApplied)
+			{
+				_lastApplied = applied;
+				DiagLog.Write($"[dodge] applied #{_appliedSequence} requested={ActionName(action)} applied={applied} room={left}/{right}/{above}/{below} vx={p.velocity.X:0.0} vy={p.velocity.Y:0.0}");
+			}
 		}
 
 		// 最近 60 帧 boss 掉的血
@@ -691,13 +752,14 @@ namespace TerraBlind
 		// 这一侧齐胸高度离墙几格,地图边缘也算墙
 		static int WallDistance(Player p, int dir)
 		{
-			int cx = (int)(p.Center.X / 16f);
-			int cy = (int)((p.position.Y + p.height * 0.5f) / 16f);
+			int edge = (dir < 0 ? p.Hitbox.Left : p.Hitbox.Right - 1) / 16;
+			int top = p.Hitbox.Top / 16, bottom = (p.Hitbox.Bottom - 1) / 16;
 			for (int d = 1; d <= RoomScanCells; d++)
 			{
-				int x = cx + dir * d;
+				int x = edge + dir * d;
 				if (x <= EdgeCells || x >= Main.maxTilesX - EdgeCells) return d - 1;
-				if (Predicates.IsWall(x, cy)) return d - 1;
+				for (int y = top; y <= bottom; y++)
+					if (Predicates.IsWall(x, y)) return d - 1;
 			}
 			return RoomScanCells;
 		}
@@ -705,13 +767,14 @@ namespace TerraBlind
 		// 头顶离天花板几格,地图上边缘也算
 		static int CeilingDistance(Player p)
 		{
-			int cx = (int)(p.Center.X / 16f);
-			int top = (int)(p.position.Y / 16f);
+			int left = p.Hitbox.Left / 16, right = (p.Hitbox.Right - 1) / 16;
+			int top = p.Hitbox.Top / 16;
 			for (int d = 1; d <= RoomScanCells; d++)
 			{
 				int y = top - d;
 				if (y <= EdgeCells) return d - 1;
-				if (Predicates.IsWall(cx, y)) return d - 1;
+				for (int x = left; x <= right; x++)
+					if (Predicates.IsWall(x, y)) return d - 1;
 			}
 			return RoomScanCells;
 		}
@@ -744,7 +807,12 @@ namespace TerraBlind
 
 		static void Release()
 		{
+			_releasedAtMs = _clock.ElapsedMilliseconds;
 			DismountAuto(Main.LocalPlayer);
+			_appliedAction = DodgeAction.Idle;
+			_completedAction = DodgeAction.Idle;
+			_completedDurationMs = 0;
+			_lastApplied = "";
 			_jumpHeld = false;
 			_holdFrames = _hookFrames = 0;
 			_hookHeld = false;
@@ -766,17 +834,68 @@ namespace TerraBlind
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"room\":{\"left\":" + WallDistance(p, -1) + ",\"right\":" + WallDistance(p, 1)
 				 + ",\"above\":" + CeilingDistance(p) + ",\"below\":" + FloorDistance(p) + "}"
+					 + ",\"previous_action\":" + Quote(ActionName(_completedAction))
+					 + ",\"previous_action_ms\":" + _completedDurationMs
 				 + ",\"boss_notes\":" + FieldBooks(boss)
 				 + "}";
 		}
 
+		static string RouteDescription(Player p, int x, int y, Size hSize, Size vSize,
+			int left, int right, int above, int below, List<NPC> threats, List<Projectile> shots)
+		{
+			float horizontal = x * (hSize == Size.Medium ? 20f : 12f);
+			float verticalRoom = y < 0 ? above - UpperReserveCells - 5f : below - LowerReserveCells;
+			float vertical = y * System.Math.Max(0f, System.Math.Min(vSize == Size.Large
+				? (y < 0 ? 18f : 22f) : (y < 0 ? 10f : 18f), verticalRoom));
+			Vector2 displacement = new(horizontal * 16f, vertical * 16f);
+			Vector2 after = p.Center + displacement;
+			var trends = new StringBuilder();
+			foreach (NPC npc in threats)
+			{
+				float current = Vector2.Distance(npc.Center, p.Center);
+				float future = Vector2.Distance(npc.Center + npc.velocity * 36f, after);
+				if (trends.Length > 0) trends.Append("; ");
+				trends.Append(npc.TypeName).Append(": ").Append(future - current > 5f * 16f ? "opens space"
+					: future - current < -5f * 16f ? "closes space" : "little change");
+			}
+			int exposed = 0;
+			foreach (Projectile shot in shots)
+			{
+				Vector2 relative = shot.Center - p.Center;
+				Vector2 step = shot.velocity * (shot.extraUpdates + 1) - displacement / 36f;
+				float speedSquared = step.LengthSquared();
+				float frame = speedSquared < 0.01f ? 36f :
+					System.Math.Clamp(-Vector2.Dot(relative, step) / speedSquared, 4f, 36f);
+				if ((relative + step * frame).LengthSquared() < 10f * 16f * 10f * 16f) exposed++;
+			}
+			int horizontalRoom = x < 0 ? left : right;
+			return $"Approximate displacement in 0.6s: {horizontal:0} cells right, {vertical:0} cells down. "
+				+ $"Boss clearance if current motion continues: {(trends.Length == 0 ? "no nearby boss" : trends)}. "
+				+ $"Projectile corridor: {(exposed == 0 ? "clear" : exposed < 3 ? "exposed" : "crowded")}. "
+				+ $"Room beyond reserve: horizontal {(x == 0 ? 0 : System.Math.Max(0, horizontalRoom - HorizontalReserveCells))}, "
+				+ $"vertical {(y == 0 ? 0 : System.Math.Max(0, (int)verticalRoom))} cells. ";
+		}
+
 		static string ActionCriteria(Player p)
 		{
-			bool left = WallDistance(p, -1) == 0, right = WallDistance(p, 1) == 0;
-			bool up = CeilingDistance(p) == 0, down = FloorDistance(p) == 0;
+			int left = WallDistance(p, -1), right = WallDistance(p, 1);
+			int above = CeilingDistance(p), below = FloorDistance(p);
 			var sb = new StringBuilder();
 			var blocked = new HashSet<Dir>();
 			var options = new Dictionary<string, DodgeAction>();
+			var nearest = new Dictionary<int, NPC>();
+			var shots = new List<Projectile>();
+			foreach (NPC npc in Main.npc)
+				if (npc != null && npc.active && !npc.friendly && IsBossLike(npc) &&
+					Vector2.DistanceSquared(npc.Center, p.Center) < 70f * 16f * 70f * 16f &&
+					(!nearest.TryGetValue(npc.type, out NPC old) ||
+					Vector2.DistanceSquared(npc.Center, p.Center) < Vector2.DistanceSquared(old.Center, p.Center)))
+					nearest[npc.type] = npc;
+			foreach (Projectile shot in Main.projectile)
+				if (shot != null && shot.active && shot.hostile && shot.damage > 0 &&
+					Vector2.DistanceSquared(shot.Center, p.Center) < 80f * 16f * 80f * 16f)
+					shots.Add(shot);
+			var threats = new List<NPC>(nearest.Values);
 			int mountType = EquippedVerticalMount(p);
 			(int X, Size Size)[] horizontal = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (1, Size.Small), (1, Size.Medium) };
 			(int Y, Size Size)[] vertical = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (-1, Size.Large), (1, Size.Small), (1, Size.Large) };
@@ -785,7 +904,7 @@ namespace TerraBlind
 			{
 				if (x == 0 && y == 0) continue;
 				Dir d = Direction(x, y);
-				if (x < 0 && left || x > 0 && right || y < 0 && up || y > 0 && down)
+				if (Blocked(p, x, y, left, right, above, below))
 				{
 					blocked.Add(d);
 					continue;
@@ -805,7 +924,8 @@ namespace TerraBlind
 				var action = new DodgeAction(d, hSize, vSize, target);
 				string name = ActionName(action);
 				options[name] = action;
-				string description = $"Move {d}. "
+				string description = $"Move {d}. " + RouteDescription(p, x, y, hSize, vSize,
+					left, right, above, below, threats, shots)
 					+ (hookH && hookV ? $"Grapple diagonally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " :
 						x == 0 ? "" : hookH ? $"Grapple horizontally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " : "Run horizontally. ")
 					+ (y < 0 ? mount ? "Jump, then mount for a fast rise; dismount at the apex. " : hookV && !hookH ? "Grapple upward. " : hookV ? "" : "Jump or fly upward. "
@@ -833,7 +953,7 @@ namespace TerraBlind
 			 + actions + "}"
 			 + "}}";
 
-		static void Fire(string key, string body)
+		static void Fire(string key, string body, RequestContext request)
 		{
 			_busy = true;
 			var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -846,10 +966,10 @@ namespace TerraBlind
 					req.Content = new StringContent(body, Encoding.UTF8, "application/json");
 					var res = await _http.SendAsync(req);
 					string txt = await res.Content.ReadAsStringAsync();
-					if (res.IsSuccessStatusCode) _pending = sw.ElapsedMilliseconds + "\u001f" + txt;
-					else DiagLog.Write($"[dodge] HTTP {(int)res.StatusCode}");
+					if (res.IsSuccessStatusCode) _pending = new Reply { Request = request, Packed = sw.ElapsedMilliseconds + "\u001f" + txt };
+					else DiagLog.Write($"[dodge] HTTP #{request.Sequence} {(int)res.StatusCode}");
 				}
-				catch (System.Exception e) { DiagLog.Write($"[dodge] 请求炸了 {e.GetType().Name} {e.Message}"); }
+				catch (System.Exception e) { DiagLog.Write($"[dodge] 请求 #{request.Sequence} 炸了 {e.GetType().Name} {e.Message}"); }
 				finally { _busy = false; }
 			});
 		}
@@ -884,11 +1004,20 @@ namespace TerraBlind
 			LatencyMs = 0;
 			_actAt = now;
 			_answer++;
+			_appliedSequence = ++_requestSequence;
 			DiagLog.Write($"[dodge] random -> {ActionName(Action)}");
 		}
 
-		static void Parse(string packed, int bossType)
+		static void Parse(Reply reply)
 		{
+			RequestContext request = reply.Request;
+			if (request.Sequence <= _appliedSequence || request.SentAtMs <= _releasedAtMs ||
+				_clock.ElapsedMilliseconds - request.SentAtMs > IntentTtlMs)
+			{
+				DiagLog.Write($"[dodge] 丢弃过期回答 #{request.Sequence}");
+				return;
+			}
+			string packed = reply.Packed;
 			int cut = packed.IndexOf('\u001f');
 			int ms = 0;
 			string txt = packed;
@@ -901,14 +1030,17 @@ namespace TerraBlind
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
-			if (!_availableActions.TryGetValue(choice, out var action))
+			if (!request.Actions.TryGetValue(choice, out var action))
 			{
 				DiagLog.Write($"[dodge] 未知动作 {choice}");
 				return;
 			}
+			_completedAction = _appliedAction;
+			_completedDurationMs = _actAt < 0 ? 0 : System.Math.Max(0, _clock.ElapsedMilliseconds - _actAt);
 			Action = action;
-			DiagLog.Write($"[dodge] jev {ms}ms -> {choice} 选择{Rank(Seg(aq, "probabilities"))}"
-				+ (_lastBlocked.Length > 0 ? $" 挡住的方向 {_lastBlocked}" : ""));
+			_appliedSequence = request.Sequence;
+			DiagLog.Write($"[dodge] jev #{request.Sequence} {ms}ms -> {choice} 选择{Rank(Seg(aq, "probabilities"))}"
+				+ (request.Blocked.Length > 0 ? $" 挡住的方向 {request.Blocked}" : ""));
 			LatencyMs = ms;
 			Confidence = Num(aq, "confidence", 0f);
 			_actAt = _clock.ElapsedMilliseconds;
@@ -931,14 +1063,14 @@ namespace TerraBlind
 			if (x != 0) picks.Add(("horizontal_size", (int)Action.Horizontal, 2));
 			if (y < 0) picks.Add(("up_size", (int)Action.Vertical, 3));
 			if (y > 0) picks.Add(("down_size", Action.Vertical == Size.Large ? 1 : 0, 2));
-			JevPrior.Record(bossType, picks.ToArray());
+			JevPrior.Record(request.BossType, picks.ToArray());
 
 			JevLog.Add(new JevLog.Entry
 			{
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
-				State = _lastFacts,
-				Pick = $"{choice}  →  " + Last,
+				State = request.Facts,
+				Pick = $"#{request.Sequence} {choice}  →  " + Last,
 				Confidence = Confidence,
 				Probs = Probs,
 				Why = "jev",

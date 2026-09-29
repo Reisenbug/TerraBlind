@@ -47,6 +47,7 @@ namespace TerraBlind
 		static CombatCall _call;
 		static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 		public static string Last = "idle";
+		public static Microsoft.Xna.Framework.Vector2? AimTarget;
 
 		// 只有放置不能打断
 		static bool WorkBusy => PlaceAction.IsRunning || PlaceAnywhere.IsRunning;
@@ -193,6 +194,7 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
+			AimTarget = null;
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
@@ -242,9 +244,10 @@ namespace TerraBlind
 			if (slot >= 10) { Last = "weapon not in hotbar"; NoFire("武器不在热键栏"); return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
-			var aim = UseLead ? Lead(p, Main.npc[n], p.inventory[slot].shootSpeed) : Main.npc[n].Center;
+			var aim = UseLead ? Lead(p, Main.npc[n], ShotSpeed(p, p.inventory[slot])) : Main.npc[n].Center;
 			aim.X += Main.rand.NextFloat(-JitterPx, JitterPx);
 			aim.Y += Main.rand.NextFloat(-JitterPx, JitterPx);
+			AimTarget = aim;
 			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
 			// 拿它当条件就是挥一下等一轮。动画结束就能再挥,这才是连挥
@@ -257,6 +260,17 @@ namespace TerraBlind
 				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
 			}
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
+		}
+
+		static float ShotSpeed(Player p, Item weapon)
+		{
+			int type = weapon.shoot;
+			float speed = weapon.shootSpeed;
+			if (weapon.useAmmo != Terraria.ID.AmmoID.None &&
+				!p.PickAmmo(weapon, out type, out speed, out _, out _, out _, true)) return 0f;
+			if (Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(type, out Projectile projectile))
+				speed *= projectile.extraUpdates + 1;
+			return speed;
 		}
 
 		// 提前量。每帧瞄 boss 当前位置的话,子弹飞过去时它早走了 -- 快 boss 全空。
@@ -303,6 +317,7 @@ namespace TerraBlind
 
 		public static void Release()
 		{
+			AimTarget = null;
 			if (_target < 0 && !AxisLock.Has(Owner, Ax.Use)) return;
 			_target = -1; _swinging = false;
 			AxisLock.Release(Owner);

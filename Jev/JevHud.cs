@@ -13,9 +13,16 @@ namespace TerraBlind
 
 		public override void PostDrawInterface(SpriteBatch sb)
 		{
-			if (!Enabled) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) return;
+			if (Combat.Enabled && Combat.AimTarget is Vector2 target)
+			{
+				Vector2 screen = target - Main.screenPosition;
+				var pixel = Terraria.GameContent.TextureAssets.MagicPixel.Value;
+				sb.Draw(pixel, new Microsoft.Xna.Framework.Rectangle((int)screen.X - 7, (int)screen.Y, 15, 2), Color.Lime);
+				sb.Draw(pixel, new Microsoft.Xna.Framework.Rectangle((int)screen.X, (int)screen.Y - 7, 2, 15), Color.Lime);
+			}
+			if (!Enabled) return;
 
 			var font = Terraria.GameContent.FontAssets.MouseText.Value;
 			float x = 16f, y = 120f;
