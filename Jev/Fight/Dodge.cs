@@ -184,7 +184,7 @@ namespace TerraBlind
 			else if (key != null && !_busy)
 			{
 				_lastFacts = Facts(p, boss);
-				Fire(key, Body(_lastFacts, DirCriteria(p)));
+				Fire(key, Body(_lastFacts, ActionCriteria(p)));
 			}
 
 			// 意图过期时原地、小幅
@@ -418,10 +418,10 @@ namespace TerraBlind
 			}
 			_anchorPrev = float.MaxValue;
 			_hookSaid = false;
+			if (_hookCooldown > 0) _hookCooldown--;
 			if (!want) { _hookFrames = 0; return false; }
 			if (_hookCooldown > 0)
 			{
-				_hookCooldown--;
 				if (_hookWaitSaid != _answer) { _hookWaitSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但还在冷却 剩{_hookCooldown}帧"); }
 				return false;
 			}
@@ -638,8 +638,7 @@ namespace TerraBlind
 				 + "}";
 		}
 
-		// 八个方向的选项,被墙、地面或天花板挡住的写明走不动
-		static string DirCriteria(Player p)
+		static string ActionCriteria(Player p)
 		{
 			bool left = WallDistance(p, -1) == 0, right = WallDistance(p, 1) == 0;
 			bool up = CeilingDistance(p) == 0, down = FloorDistance(p) == 0;
@@ -648,43 +647,36 @@ namespace TerraBlind
 			for (var d = Dir.Up; d <= Dir.UpLeft; d++)
 			{
 				var (x, y) = Vec(d);
-				bool xStop = x < 0 ? left : x > 0 && right;
-				bool yStop = y < 0 ? up : y > 0 && down;
-				string h = x < 0 ? "left" : "right", v = y < 0 ? "up" : "down";
-				string move = x == 0 ? $"Move straight {v}." : y == 0 ? $"Move straight {h}." : $"Move {v} and to the {h}.";
-				string note = (x == 0 || xStop) && (y == 0 || yStop)
-					? $" Blocked: {(y < 0 ? "a ceiling" : y > 0 ? "the floor" : "a wall")}{(x != 0 && y != 0 ? " and a wall are" : " is")} right there, so moving this way does nothing."
-					: xStop ? $" The {h} part is blocked by a wall; I would only move {v}."
-					: yStop ? $" The {v} part is blocked by {(y < 0 ? "a ceiling" : "the floor")}; I would only move {h}."
-					: "";
-				sb.Append('"').Append(d).Append("\":\"").Append(move).Append(note).Append("\",");
-				if (note.Length > 0) blocked.Append(d).Append(' ');
+				if (x < 0 && left || x > 0 && right || y < 0 && up || y > 0 && down)
+				{
+					blocked.Append(d).Append(' ');
+					continue;
+				}
+				string move = $"Move {d}. ";
+				sb.Append(Quote(d + "_Small")).Append(':').Append(Quote(move +
+					"Run, jump, fly or fall normally until the next answer. No dash or grapple.")).Append(',');
+				if (y < 0 && p.AnyExtraJumpUsable())
+					sb.Append(Quote(d + "_Medium")).Append(':').Append(Quote(move +
+						"Use one available extra jump while rising. Diagonal jumps also move sideways.")).Append(',');
+				if (_hookCooldown == 0 && p.grapCount == 0 && HookTarget(p, d, out _, out _))
+					sb.Append(Quote(d + "_Large")).Append(':').Append(Quote(move +
+						"Fire a grappling hook at a reachable surface; if it misses, use ordinary movement.")).Append(',');
 			}
 			_lastBlocked = blocked.ToString();
-			return sb.ToString();
+			return sb.Append("\"Stay\":\"Stay only if no approaching threat needs movement.\"").ToString();
 		}
 
-		// 同一份 state 的两道题一次发出
-		static string Body(string state, string dirs)
+		static string Body(string state, string actions)
 			=> "{\"model\":\"" + Model + "\",\"state\":" + Quote(state) + ",\"questions\":{"
-			 + "\"direction\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"Terraria boss fight. Which way should I move right now so that nothing hits me? "
+			 + "\"action\":{\"type\":\"choice\",\"instructions\":"
+			 + "\"Terraria boss fight. Choose one complete dodge action for the next reaction interval. "
 			 + "Look at every boss part and shot, where each is heading and how soon it reaches me, and how much room I have. "
 			 + "Frames until contact assumes our current velocities stay constant; use enemy health to identify its phase. "
 			 + "Keep an escape route: do not run into a wall, floor or ceiling, or toward another threat. "
-			 + "Follow the boss notes.\",\"criteria\":{"
-			 + dirs
-			 + "\"Stay\":\"Stay where I am.\"}},"
-			 + "\"size\":{\"type\":\"choice\",\"instructions\":"
-			 + "\"Same moment. Choose the movement tool needed for the direction you chose. "
-			 + "These choices do not limit travel distance; movement continues until the next answer.\",\"criteria\":{"
-			 + "\"Small\":\"Run, jump, fly or fall in the chosen direction. No dash or grapple. "
-			 + "I can change direction on the next answer. Use this when ordinary movement is enough, even for a long retreat.\","
-			 + "\"Medium\":\"Trigger an extra jump when moving up or up diagonally; diagonal jumps can also move me sideways. "
-			 + "There is no dash. Sideways and downward Medium move exactly like Small, so choose Small for those directions. "
-			 + "Use Medium only when an extra upward jump is needed to avoid an imminent hit.\","
-			 + "\"Large\":\"Fire a grappling hook toward the chosen direction. It needs a reachable surface and may fail or be on cooldown. "
-			 + "If there is no surface to hook, I fall back to Medium. Use only when I need the hook to cross a large gap or escape a trap.\"}}"
+			 + "Follow the boss notes. Small is ordinary movement, Medium uses an extra upward jump, "
+			 + "and Large uses a grapple. Pick a tool only when its extra movement helps. "
+			 + "Actions continue until the next answer.\",\"criteria\":{"
+			 + actions + "}"
 			 + "}}";
 
 		static void Fire(string key, string body)
@@ -738,26 +730,31 @@ namespace TerraBlind
 			string txt = packed;
 			if (cut > 0) { int.TryParse(packed.Substring(0, cut), out ms); txt = packed.Substring(cut + 1); }
 
-			string dq = Seg(txt, "direction");
-			string dp = Field(dq, "choice");
-			string sq = Seg(txt, "size");
-			string sp = Field(sq, "choice");
-			if (dp == null)
+			string aq = Seg(txt, "action");
+			string choice = Field(aq, "choice");
+			if (choice == null)
 			{
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
-			// 没答上来就原地、小幅
-			Way = System.Enum.TryParse<Dir>(dp, out var d) ? d : Dir.Stay;
-			Amount = System.Enum.TryParse<Size>(sp, out var s) ? s : Size.Small;
-			DiagLog.Write($"[dodge] jev {ms}ms -> {dp}/{sp} 方向{Rank(Seg(dq, "probabilities"))} 幅度{Rank(Seg(sq, "probabilities"))}"
+			int split = choice.LastIndexOf('_');
+			string dp = split < 0 ? choice : choice.Substring(0, split);
+			string sp = split < 0 ? "Small" : choice.Substring(split + 1);
+			if (!System.Enum.TryParse<Dir>(dp, out var d) || !System.Enum.TryParse<Size>(sp, out var s))
+			{
+				DiagLog.Write($"[dodge] 未知动作 {choice}");
+				return;
+			}
+			Way = d;
+			Amount = s;
+			DiagLog.Write($"[dodge] jev {ms}ms -> {choice} 选择{Rank(Seg(aq, "probabilities"))}"
 				+ (_lastBlocked.Length > 0 ? $" 挡住的方向 {_lastBlocked}" : ""));
 			LatencyMs = ms;
-			Confidence = Num(dq, "confidence", 0f);
+			Confidence = Num(aq, "confidence", 0f);
 			_actAt = _clock.ElapsedMilliseconds;
 			_answer++;
 
-			Probs = Seg(dq, "probabilities") ?? "";
+			Probs = Seg(aq, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
 			// 意图变了或同一意图持续 4 秒才发到聊天栏
 			long now = _clock.ElapsedMilliseconds;
@@ -776,7 +773,7 @@ namespace TerraBlind
 				Ms = _clock.ElapsedMilliseconds,
 				Site = "dodge",
 				State = _lastFacts,
-				Pick = $"{dp}/{sp}  →  " + Last,
+				Pick = $"{choice}  →  " + Last,
 				Confidence = Confidence,
 				Probs = Probs,
 				Why = "jev",
