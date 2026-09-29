@@ -1,13 +1,20 @@
 using System.Net.Http;
+using System.Collections.Generic;
 using System.Text;
+using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.ID;
 
 namespace TerraBlind
 {
 	// Jev 说往哪躲
 	public enum Dir { Up, UpRight, Right, DownRight, Down, DownLeft, Left, UpLeft, Stay }
-	// Jev 说躲多大:Small 普通移动,Medium 加空中跳,Large 甩钩爪
-	public enum Size { Small, Medium, Large }
+	// 水平 Medium 是钩爪；垂直 Medium 是向上钩爪，Large 是坐骑
+	public enum Size { Small, Medium, Large, None }
+	public readonly record struct DodgeAction(Dir Direction, Size Horizontal, Size Vertical, Vector2? HookTarget = null)
+	{
+		public static DodgeAction Idle => new(Dir.Stay, Size.None, Size.None);
+	}
 
 	// boss 战的走位。Jev 每次反应给方向和幅度,反射层每帧把它翻成按键
 	public static class Dodge
@@ -34,14 +41,23 @@ namespace TerraBlind
 		const int HookGiveUpFrames = 45;
 		static int _hookFrames;
 		static bool _hookHeld;
+		static int _hookAnswer = -1;
 		// 荡完歇一会儿
 		// 勾上就跳、跳完就勾，等于玩家原地不动
 		const int HookCooldownFrames = 30;
 		static int _hookCooldown;
+		static bool _autoMountActive;
+		static int _autoMountType = MountID.None;
+		static bool _mountForDown;
+		static bool _mountRiseSeen;
+		static bool _mountFallSeen;
+		static ulong _mountStartTick;
+		static int _upMountAnswer = -1;
+		static int _downMountAnswer = -1;
 		static bool _wasDashing;
 		public static string Last = "idle";
-		public static Dir Way = Dir.Stay;
-		public static Size Amount = Size.Small;
+		public static DodgeAction Action = DodgeAction.Idle;
+		static Dictionary<string, DodgeAction> _availableActions = new();
 		public static float Confidence;
 		public static int LatencyMs;
 		// jev判的概率分布。
@@ -166,7 +182,7 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
-			if (!Enabled) return;
+			if (!Enabled) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }
@@ -189,15 +205,14 @@ namespace TerraBlind
 
 			// 意图过期时原地、小幅
 			bool stale = _clock.ElapsedMilliseconds - _actAt > IntentTtlMs;
-			var dir = stale ? Dir.Stay : Way;
-			var size = stale ? Size.Small : Amount;
+			var action = stale ? DodgeAction.Idle : Action;
 
 			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
-			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); return; }
+			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); DismountAuto(p); return; }
 
-			Gate($"driving {boss.TypeName} {dist}格 act={dir}/{size}");
-			Drive(p, boss, dist, dir, size);
+			Gate($"driving {boss.TypeName} {dist}格 act={action.Direction}/{action.Horizontal}/{action.Vertical}");
+			Drive(p, boss, dist, action);
 		}
 
 		// 写 HUD 状态,变了才进日志
@@ -225,37 +240,117 @@ namespace TerraBlind
 			Dir.UpLeft => (-1, -1),
 			_ => (0, 0),
 		};
+		static Dir Direction(int x, int y) => (x, y) switch
+		{
+			(0, -1) => Dir.Up, (1, -1) => Dir.UpRight,
+			(1, 0) => Dir.Right, (1, 1) => Dir.DownRight,
+			(0, 1) => Dir.Down, (-1, 1) => Dir.DownLeft,
+			(-1, 0) => Dir.Left, (-1, -1) => Dir.UpLeft,
+			_ => Dir.Stay,
+		};
+		static string ActionName(DodgeAction action)
+		{
+			if (action.Direction == Dir.Stay) return "Stay";
+			var (x, y) = Vec(action.Direction);
+			return (x == 0 ? "" : (x < 0 ? "Left" : "Right") + action.Horizontal)
+				+ (y == 0 ? "" : (y < 0 ? "Up" : "Down") + action.Vertical);
+		}
+		static int EquippedVerticalMount(Player p) => p.miscEquips[3].type switch
+		{
+			ItemID.SlimySaddle => MountID.Slime,
+			ItemID.QueenSlimeMountSaddle => MountID.QueenSlime,
+			_ => MountID.None,
+		};
+		static bool MountAuto(Player p, int type, bool down)
+		{
+			if (p.mount.Active || !p.mount.CanMount(type, p)) return false;
+			float before = p.velocity.Y;
+			p.mount.SetMount(type, p);
+			if (!p.mount.Active || p.mount.Type != type) return false;
+			_autoMountActive = true;
+			_autoMountType = type;
+			_mountForDown = down;
+			_mountRiseSeen = _mountFallSeen = false;
+			_mountStartTick = Main.GameUpdateCount;
+			DiagLog.Write($"[dodge] 坐骑开始 type={type} 方向={(down ? "下" : "上")} vy={before:0.0}->{p.velocity.Y:0.0}");
+			return true;
+		}
+		static void DismountAuto(Player p)
+		{
+			if (!_autoMountActive) return;
+			if (p != null && p.mount.Active && p.mount.Type == _autoMountType)
+			{
+				p.mount.Dismount(p);
+				DiagLog.Write("[dodge] 坐骑结束");
+			}
+			_autoMountActive = false;
+			_autoMountType = MountID.None;
+			_mountForDown = _mountRiseSeen = _mountFallSeen = false;
+		}
 
 		// 反射层,每帧把方向和幅度翻成按键
-		static void Drive(Player p, NPC boss, int dist, Dir dir, Size size)
+		static void Drive(Player p, NPC boss, int dist, DodgeAction action)
 		{
 			bool onGround = p.velocity.Y == 0f;
+			Dir dir = action.Direction;
 			var (hx, vy) = Vec(dir);
-			bool moving = dir != Dir.Stay;
-
-			bool hooking = Hook(p, dir, moving && size == Size.Large, out bool hookJump, out bool hookMiss);
-			// 勾不到就退一档
-			bool medium = moving && (size == Size.Medium || (size == Size.Large && hookMiss));
-			bool hop = medium && vy < 0 && _airJumpUsed != _answer;
+			Size hSize = action.Horizontal, vSize = action.Vertical;
+			int mountType = EquippedVerticalMount(p);
+			if (vSize == Size.Large && mountType == MountID.None) vSize = Size.Small;
+			bool upMount = vy < 0 && vSize == Size.Large && mountType != MountID.None;
+			bool downMount = vy > 0 && vSize == Size.Large && mountType != MountID.None;
+			if (_autoMountActive && (!p.mount.Active || p.mount.Type != _autoMountType ||
+				(!upMount && !downMount) || _mountForDown != downMount ||
+				_mountForDown && _mountFallSeen && p.velocity.Y <= 0f ||
+				!_mountForDown && (_mountRiseSeen && p.velocity.Y >= 0f ||
+					!_mountRiseSeen && Main.GameUpdateCount - _mountStartTick > 6)))
+				DismountAuto(p);
+			bool hookH = hx != 0 && hSize == Size.Medium && !_autoMountActive;
+			bool hookV = vy < 0 && vSize == Size.Medium && !_autoMountActive;
+			Dir hookDir = Direction(hookH ? hx : 0, hookV ? vy : 0);
+			bool hooking = Hook(p, hookDir, (hookH || hookV) && !downMount,
+				action.HookTarget, out bool hookJump, out bool hookMiss);
+			if (hookMiss)
+			{
+				if (hookH) hSize = Size.Small;
+				if (hookV) vSize = Size.Small;
+			}
+			bool hop = vy < 0 && _airJumpUsed != _answer && p.AnyExtraJumpUsable();
 			bool jump = Jump(p, onGround, vy < 0, hop, hookJump);
 
 			if (hx < 0) p.controlLeft = true;
 			else if (hx > 0) p.controlRight = true;
 			if (jump) p.controlJump = true;
 
-			// 往下按住下一路穿平台;不上不下时空中按住上,靠羽落保持高度;挂着钩子时都不按
 			if (p.grapCount == 0 && vy > 0) p.controlDown = true;
-			else if (p.grapCount == 0 && vy == 0 && !onGround) p.controlUp = true;
+			else if (p.grapCount == 0 && (vy < 0 || vy == 0 && !onGround)) p.controlUp = true;
+			if (upMount && !_autoMountActive && _upMountAnswer != _answer &&
+				p.velocity.Y <= -4f && !hooking && p.grapCount == 0)
+			{
+				_upMountAnswer = _answer;
+				if (!MountAuto(p, mountType, false)) vSize = Size.Small;
+			}
+			if (downMount && !_autoMountActive && _downMountAnswer != _answer &&
+				!hooking && p.grapCount == 0)
+			{
+				_downMountAnswer = _answer;
+				if (!MountAuto(p, mountType, true)) vSize = Size.Small;
+			}
+			if (vSize == Size.Large && !_autoMountActive &&
+				(vy < 0 && _upMountAnswer == _answer || vy > 0 && _downMountAnswer == _answer))
+				vSize = Size.Small;
+			if (_autoMountActive && !_mountForDown && p.velocity.Y < -0.1f) _mountRiseSeen = true;
+			if (_autoMountActive && _mountForDown && p.velocity.Y > 0.1f) _mountFallSeen = true;
 
 			Fly(p, dir);
 			TrackDps();
-			Hurt(p, boss, dist, dir, size);
+			Hurt(p, boss, dist, dir, hSize, vSize);
 			bool dashing = p.dashDelay < 0;
-			if (dashing && !_wasDashing) DiagLog.Write($"[dodge] 非预期冲刺 方向{(p.velocity.X < 0 ? "左" : "右")} vx={p.velocity.X:0.0} 意图{dir}/{size}");
+			if (dashing && !_wasDashing) DiagLog.Write($"[dodge] 非预期冲刺 方向{(p.velocity.X < 0 ? "左" : "右")} vx={p.velocity.X:0.0} 意图{ActionName(action)}");
 			_wasDashing = dashing;
-			Last = $"{dir}/{size} boss {dist}格 go {(hx == 0 ? "-" : hx < 0 ? "L" : "R")}"
+			Last = $"{dir}/{hSize}/{vSize} boss {dist}格 go {(hx == 0 ? "-" : hx < 0 ? "L" : "R")}"
 				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
-				 + (dashing ? " [dashing]" : "");
+				 + (_autoMountActive ? " +mount" : "") + (dashing ? " [dashing]" : "");
 		}
 
 		// 最近 60 帧 boss 掉的血
@@ -338,7 +433,7 @@ namespace TerraBlind
 		// 每次掉血记一行,带最近的 NPC 和弹幕
 		static int _prevHp = -1;
 		static int _prevImmune;
-		static void Hurt(Player p, NPC boss, int dist, Dir dir, Size size)
+		static void Hurt(Player p, NPC boss, int dist, Dir dir, Size hSize, Size vSize)
 		{
 			// 被打中会重新给无敌帧,持续掉血不会
 			bool hit = p.immuneTime > _prevImmune;
@@ -364,7 +459,7 @@ namespace TerraBlind
 				if (d < pd) { pd = d; pn = $"{pr.Name}(伤{pr.damage})"; }
 			}
 			DiagLog.Write($"[dodge] 掉血 {lost} {(hit ? "被打中" : "持续")} 无敌帧{p.immuneTime} 回血{p.lifeRegen} 剩{p.statLife}/{p.statLifeMax}"
-				+ $" 离{boss.TypeName} {dist}格 意图{dir}/{size}"
+				+ $" 离{boss.TypeName} {dist}格 意图{dir}/{hSize}/{vSize}"
 				+ $" | 最近NPC {nn} {nd}格 | 最近弹幕 {pn} {pd}格 | debuff {Debuffs(p)}");
 		}
 
@@ -398,8 +493,8 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 钩爪。只在发射那一帧占用光标。miss 表示这个方向射程内勾不到东西
-		static bool Hook(Player p, Dir dir, bool want, out bool hookJump, out bool miss)
+		// 钩爪发射时瞄准选中的落点；miss 表示射程内勾不到东西
+		static bool Hook(Player p, Dir dir, bool want, Vector2? planned, out bool hookJump, out bool miss)
 		{
 			hookJump = false;
 			miss = false;
@@ -419,6 +514,12 @@ namespace TerraBlind
 			_anchorPrev = float.MaxValue;
 			_hookSaid = false;
 			if (_hookCooldown > 0) _hookCooldown--;
+			if (_hookAnswer != _answer)
+			{
+				_hookAnswer = _answer;
+				_hookFrames = 0;
+				_hookHeld = false;
+			}
 			if (!want) { _hookFrames = 0; return false; }
 			if (_hookCooldown > 0)
 			{
@@ -428,16 +529,22 @@ namespace TerraBlind
 			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
 			if (_hookFrames++ > HookGiveUpFrames) return false;
 			if (_hookHeld) { _hookHeld = false; return true; }
-			if (!HookTarget(p, dir, out int ax, out int ay))
+			var (x, y) = Vec(dir);
+			Vector2 target = planned ?? default;
+			if (_hookFrames == 1 && !(planned.HasValue && ValidHookPoint(p, target, x, y)) &&
+				!HookTarget(p, x, y, y == 0, out target))
 			{
-				if (_hookMissSaid != _answer) { _hookMissSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但射程内勾不到东西 退到Medium"); }
+				if (_hookMissSaid != _answer) { _hookMissSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但射程内勾不到东西 退到Small"); }
 				_hookFrames = 0;
 				miss = true;
 				return false;
 			}
-			if (_hookFrames == 1) DiagLog.Write($"[dodge] 甩钩爪 往{dir} 瞄第({ax},{ay})格");
-			Cursor.AimTile(ax, ay);
-			_anchorPx = new Microsoft.Xna.Framework.Vector2(ax * 16 + 8, ay * 16 + 8);
+			if (_hookFrames == 1)
+			{
+				_anchorPx = target;
+				DiagLog.Write($"[dodge] 甩钩爪 往{dir} 瞄第({(int)(target.X / 16f)},{(int)(target.Y / 16f)})格");
+			}
+			Cursor.AimTile((int)(_anchorPx.X / 16f), (int)(_anchorPx.Y / 16f));
 			p.controlHook = true;
 			_hookHeld = true;
 			return true;
@@ -479,21 +586,35 @@ namespace TerraBlind
 			};
 		}
 
-		// 从身体中心往这个方向飞,射程内第一个能勾的格子
-		static bool HookTarget(Player p, Dir dir, out int tx, out int ty)
+		static bool HookTarget(Player p, int x, int y, bool nearHorizontal, out Vector2 target)
 		{
-			tx = ty = 0;
-			var (x0, y0) = Vec(dir);
-			if (x0 == 0 && y0 == 0) return false;
-			var step = Microsoft.Xna.Framework.Vector2.Normalize(new Microsoft.Xna.Framework.Vector2(x0, y0)) * 4f;
+			target = default;
+			if (x == 0 && y == 0) return false;
 			float range = HookRangePx(p);
-			var pt = p.Center;
-			for (float d = 0f; d <= range; d += 4f, pt += step)
+			foreach (float tilt in nearHorizontal ? new[] { 0f, -0.35f, 0.35f } : new[] { 0f })
 			{
-				int x = (int)(pt.X / 16f), y = (int)(pt.Y / 16f);
-				if (Hookable(x, y)) { tx = x; ty = y; return true; }
+				Vector2 step = Vector2.Normalize(new Vector2(x, nearHorizontal ? tilt : y)) * 4f;
+				Vector2 pt = p.Center;
+				for (float d = 0f; d <= range; d += 4f, pt += step)
+				{
+					int tx = (int)(pt.X / 16f), ty = (int)(pt.Y / 16f);
+					if (!Predicates.InBounds(tx, ty)) break;
+					if (!Hookable(tx, ty)) continue;
+					Vector2 found = new(tx * 16f + 8f, ty * 16f + 8f);
+					if (Vector2.DistanceSquared(p.Center, found) <= 6f * 16f * 6f * 16f) break;
+					target = found;
+					return true;
+				}
 			}
 			return false;
+		}
+		static bool ValidHookPoint(Player p, Vector2 target, int x, int y)
+		{
+			Vector2 offset = target - p.Center;
+			float distance = offset.Length();
+			return distance > 6f * 16f && distance <= HookRangePx(p)
+				&& (x == 0 || offset.X * x > 0f) && (y == 0 || offset.Y * y > 0f)
+				&& Hookable((int)(target.X / 16f), (int)(target.Y / 16f));
 		}
 
 		// 跳键。rise 一直按住往上飞,hop 这次回答用一段空中跳。空中新按一下,有空中跳 vanilla 先用空中跳,没有才是翅膀(Player.cs:25618)
@@ -563,7 +684,7 @@ namespace TerraBlind
 		{
 			if (!Predicates.InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
-			if (!t.HasTile) return false;
+			if (!t.HasTile || t.IsActuated) return false;
 			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
 		}
 
@@ -621,7 +742,14 @@ namespace TerraBlind
 			return 40;
 		}
 
-		static void Release() => AxisLock.Release(Owner);
+		static void Release()
+		{
+			DismountAuto(Main.LocalPlayer);
+			_jumpHeld = false;
+			_holdFrames = _hookFrames = 0;
+			_hookHeld = false;
+			AxisLock.Release(Owner);
+		}
 
 		static string Facts(Player p, NPC boss)
 		{
@@ -630,6 +758,10 @@ namespace TerraBlind
 				 + ",\"i_am_losing_health_over_time\":" + (p.lifeRegen < 0 ? "true" : "false")
 				 + ",\"my_speed_to_the_right\":" + (int)(p.velocity.X * 60f / 16f)
 				 + ",\"my_speed_upward\":" + (int)(-p.velocity.Y * 60f / 16f)
+				 + ",\"movement\":{\"can_extra_jump\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
+				 + ",\"can_fly\":" + (p.wingTime > 0f ? "true" : "false")
+				 + ",\"vertical_mount\":" + Quote(EquippedVerticalMount(p) switch
+				 { MountID.Slime => "Slimy Saddle", MountID.QueenSlime => "Gelatinous Pillion", _ => "none" }) + "}"
 				 + ",\"threats\":" + ThreatsJson(p)
 				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
 				 + ",\"room\":{\"left\":" + WallDistance(p, -1) + ",\"right\":" + WallDistance(p, 1)
@@ -643,26 +775,47 @@ namespace TerraBlind
 			bool left = WallDistance(p, -1) == 0, right = WallDistance(p, 1) == 0;
 			bool up = CeilingDistance(p) == 0, down = FloorDistance(p) == 0;
 			var sb = new StringBuilder();
-			var blocked = new StringBuilder();
-			for (var d = Dir.Up; d <= Dir.UpLeft; d++)
+			var blocked = new HashSet<Dir>();
+			var options = new Dictionary<string, DodgeAction>();
+			int mountType = EquippedVerticalMount(p);
+			(int X, Size Size)[] horizontal = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (1, Size.Small), (1, Size.Medium) };
+			(int Y, Size Size)[] vertical = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (-1, Size.Large), (1, Size.Small), (1, Size.Large) };
+			foreach (var (x, hSize) in horizontal)
+			foreach (var (y, vSize) in vertical)
 			{
-				var (x, y) = Vec(d);
+				if (x == 0 && y == 0) continue;
+				Dir d = Direction(x, y);
 				if (x < 0 && left || x > 0 && right || y < 0 && up || y > 0 && down)
 				{
-					blocked.Append(d).Append(' ');
+					blocked.Add(d);
 					continue;
 				}
-				string move = $"Move {d}. ";
-				sb.Append(Quote(d + "_Small")).Append(':').Append(Quote(move +
-					"Run, jump, fly or fall normally until the next answer. No dash or grapple.")).Append(',');
-				if (y < 0 && p.AnyExtraJumpUsable())
-					sb.Append(Quote(d + "_Medium")).Append(':').Append(Quote(move +
-						"Use one available extra jump while rising. Diagonal jumps also move sideways.")).Append(',');
-				if (_hookCooldown == 0 && p.grapCount == 0 && HookTarget(p, d, out _, out _))
-					sb.Append(Quote(d + "_Large")).Append(':').Append(Quote(move +
-						"Fire a grappling hook at a reachable surface; if it misses, use ordinary movement.")).Append(',');
+				bool hookH = hSize == Size.Medium;
+				bool hookV = y < 0 && vSize == Size.Medium;
+				bool mount = vSize == Size.Large;
+				if (mount && (mountType == MountID.None || p.mount.Active && !_autoMountActive) ||
+					y > 0 && mount && hookH) continue;
+				Vector2? target = null;
+				if (hookH || hookV)
+				{
+					if (_hookCooldown > 0 || p.grapCount > 0 ||
+						!HookTarget(p, hookH ? x : 0, hookV ? y : 0, hookH && !hookV, out Vector2 point)) continue;
+					target = point;
+				}
+				var action = new DodgeAction(d, hSize, vSize, target);
+				string name = ActionName(action);
+				options[name] = action;
+				string description = $"Move {d}. "
+					+ (hookH && hookV ? $"Grapple diagonally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " :
+						x == 0 ? "" : hookH ? $"Grapple horizontally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " : "Run horizontally. ")
+					+ (y < 0 ? mount ? "Jump, then mount for a fast rise; dismount at the apex. " : hookV && !hookH ? "Grapple upward. " : hookV ? "" : "Jump or fly upward. "
+						: y > 0 ? mount ? "Mount for a fast descent; dismount when descent ends. " : "Descend or pass through a platform. " : "")
+					+ "Continue until the next answer.";
+				sb.Append(Quote(name)).Append(':').Append(Quote(description)).Append(',');
 			}
-			_lastBlocked = blocked.ToString();
+			options["Stay"] = DodgeAction.Idle;
+			_availableActions = options;
+			_lastBlocked = string.Join(" ", blocked);
 			return sb.Append("\"Stay\":\"Stay only if no approaching threat needs movement.\"").ToString();
 		}
 
@@ -673,8 +826,9 @@ namespace TerraBlind
 			 + "Look at every boss part and shot, where each is heading and how soon it reaches me, and how much room I have. "
 			 + "Frames until contact assumes our current velocities stay constant; use enemy health to identify its phase. "
 			 + "Keep an escape route: do not run into a wall, floor or ceiling, or toward another threat. "
-			 + "Follow the boss notes. Small is ordinary movement, Medium uses an extra upward jump, "
-			 + "and Large uses a grapple. Pick a tool only when its extra movement helps. "
+			 + "Follow the boss notes. Each axis has its own magnitude. Small is ordinary movement, "
+			 + "horizontal or upward Medium uses a grapple, and vertical Large uses a mount. "
+			 + "Pick a tool only when its extra movement helps. "
 			 + "Actions continue until the next answer.\",\"criteria\":{"
 			 + actions + "}"
 			 + "}}";
@@ -708,8 +862,18 @@ namespace TerraBlind
 			long now = _clock.ElapsedMilliseconds;
 			if (now - _actAt < RandomEveryMs) return;
 			int samples = JevPrior.Samples(bossType);
-			Way = (Dir)JevPrior.Sample(bossType, "direction", 9);
-			Amount = (Size)JevPrior.Sample(bossType, "size", 3);
+			Dir dir = (Dir)JevPrior.Sample(bossType, "direction", 9);
+			var (x, y) = Vec(dir);
+			Size hSize = x == 0 ? Size.None : (Size)JevPrior.Sample(bossType, "horizontal_size", 2);
+			Size vSize = y == 0 ? Size.None : y < 0
+				? (Size)JevPrior.Sample(bossType, "up_size", 3)
+				: JevPrior.Sample(bossType, "down_size", 2) == 0 ? Size.Small : Size.Large;
+			ActionCriteria(Main.LocalPlayer);
+			var sampled = new DodgeAction(dir, hSize, vSize);
+			bool found = _availableActions.TryGetValue(ActionName(sampled), out var available);
+			if (!found) found = _availableActions.TryGetValue(ActionName(new DodgeAction(dir,
+					x == 0 ? Size.None : Size.Small, y == 0 ? Size.None : Size.Small)), out available);
+			Action = found ? available : DodgeAction.Idle;
 			bool fromJev = samples > 0;
 			if (!_priorSaid || !fromJev)
 			{
@@ -720,7 +884,7 @@ namespace TerraBlind
 			LatencyMs = 0;
 			_actAt = now;
 			_answer++;
-			DiagLog.Write($"[dodge] random -> {Way}/{Amount}");
+			DiagLog.Write($"[dodge] random -> {ActionName(Action)}");
 		}
 
 		static void Parse(string packed, int bossType)
@@ -737,16 +901,12 @@ namespace TerraBlind
 				DiagLog.Write($"[dodge] 读不出 choice: {txt.Substring(0, System.Math.Min(160, txt.Length))}");
 				return;
 			}
-			int split = choice.LastIndexOf('_');
-			string dp = split < 0 ? choice : choice.Substring(0, split);
-			string sp = split < 0 ? "Small" : choice.Substring(split + 1);
-			if (!System.Enum.TryParse<Dir>(dp, out var d) || !System.Enum.TryParse<Size>(sp, out var s))
+			if (!_availableActions.TryGetValue(choice, out var action))
 			{
 				DiagLog.Write($"[dodge] 未知动作 {choice}");
 				return;
 			}
-			Way = d;
-			Amount = s;
+			Action = action;
 			DiagLog.Write($"[dodge] jev {ms}ms -> {choice} 选择{Rank(Seg(aq, "probabilities"))}"
 				+ (_lastBlocked.Length > 0 ? $" 挡住的方向 {_lastBlocked}" : ""));
 			LatencyMs = ms;
@@ -758,7 +918,7 @@ namespace TerraBlind
 			TopTwo = Rank(Probs);
 			// 意图变了或同一意图持续 4 秒才发到聊天栏
 			long now = _clock.ElapsedMilliseconds;
-			var said = $"{Way}/{Amount}";
+			var said = ActionName(Action);
 			if (said != _saidAct || now - _saidAt > 4000)
 			{
 				string tag = said == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
@@ -766,7 +926,12 @@ namespace TerraBlind
 				Main.NewText($"<Jev> {said}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
 			}
 
-			JevPrior.Record(bossType, ("direction", (int)Way, 9), ("size", (int)Amount, 3));
+			var (x, y) = Vec(Action.Direction);
+			var picks = new List<(string Q, int Pick, int Options)> { ("direction", (int)Action.Direction, 9) };
+			if (x != 0) picks.Add(("horizontal_size", (int)Action.Horizontal, 2));
+			if (y < 0) picks.Add(("up_size", (int)Action.Vertical, 3));
+			if (y > 0) picks.Add(("down_size", Action.Vertical == Size.Large ? 1 : 0, 2));
+			JevPrior.Record(bossType, picks.ToArray());
 
 			JevLog.Add(new JevLog.Entry
 			{
