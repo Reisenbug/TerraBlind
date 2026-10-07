@@ -967,7 +967,7 @@ namespace TerraBlind
 					var res = await _http.SendAsync(req);
 					string txt = await res.Content.ReadAsStringAsync();
 					if (res.IsSuccessStatusCode) _pending = new Reply { Request = request, Packed = sw.ElapsedMilliseconds + "\u001f" + txt };
-					else DiagLog.Write($"[dodge] HTTP #{request.Sequence} {(int)res.StatusCode}");
+					else DiagLog.Write($"[dodge] HTTP #{request.Sequence} {(int)res.StatusCode} body={txt}");
 				}
 				catch (System.Exception e) { DiagLog.Write($"[dodge] 请求 #{request.Sequence} 炸了 {e.GetType().Name} {e.Message}"); }
 				finally { _busy = false; }
