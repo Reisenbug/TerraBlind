@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
+using Port = TerraBlind.JevariaCombat;
 
 namespace TerraBlind
 {
@@ -30,34 +31,14 @@ namespace TerraBlind
 		const int RoomScanCells = 60;
 		// 离地图边界这么近就当撞墙。
 		const int EdgeCells = 40;
-		const int HorizontalReserveCells = 35;
-		const int UpperReserveCells = 18;
-		const int LowerReserveCells = 4;
 		// 意图过期就退回保守行为。
 		const long IntentTtlMs = 1500;
 
-		static bool _jumpHeld;
-		static int _holdFrames;
-		// 按住的兜底上限。防"某种状态下一直升不完"
-		const int MaxHoldFrames = 30;
-		// 钩爪甩出去这么多帧还没勾上就放弃,别一直按着钩子不打人
-		const int HookGiveUpFrames = 45;
-		static int _hookFrames;
-		static bool _hookHeld;
-		static int _hookAnswer = -1;
-		// 荡完歇一会儿
-		// 勾上就跳、跳完就勾，等于玩家原地不动
-		const int HookCooldownFrames = 30;
-		static int _hookCooldown;
-		static bool _autoMountActive;
-		static int _autoMountType = MountID.None;
-		static bool _mountForDown;
-		static bool _mountRiseSeen;
-		static bool _mountFallSeen;
-		static ulong _mountStartTick;
-		static int _upMountAnswer = -1;
-		static int _downMountAnswer = -1;
-		static bool _wasDashing;
+		static readonly Port.GameSensor _sensor = new();
+		static readonly Port.GameMovement _movement = new();
+		static readonly Port.ProjectileAim _attack = new();
+		static Port.CombatSnapshot _snapshot;
+		static string _movementReason = "";
 		public static string Last = "idle";
 		public static DodgeAction Action = DodgeAction.Idle;
 		static Dictionary<string, DodgeAction> _availableActions = new();
@@ -128,80 +109,6 @@ namespace TerraBlind
 			return best;
 		}
 
-		static string ThreatId(int type)
-			=> type < Terraria.ID.NPCID.Count ? Terraria.ID.NPCID.Search.GetName(type)
-			 : Terraria.ModLoader.NPCLoader.GetNPC(type).Name;
-
-		// 这种部件里离我最近的一个
-		static NPC Nearest(Player p, int type)
-		{
-			NPC best = null;
-			float bd = float.MaxValue;
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var n = Main.npc[i];
-				if (n == null || !n.active || n.type != type) continue;
-				float d = Microsoft.Xna.Framework.Vector2.DistanceSquared(n.Center, p.Center);
-				if (d < bd) { bd = d; best = n; }
-			}
-			return best;
-		}
-
-		// 每种部件最近 60 帧的速度(格/秒),报最近一秒的峰值
-		static readonly System.Collections.Generic.Dictionary<int, float[]> _speedRings = new();
-		static int _speedAt;
-		static float PartSpeed(NPC n) => (System.Math.Abs(n.velocity.X) + System.Math.Abs(n.velocity.Y)) * 60f / 16f;
-		static void TrackPartSpeeds(Player p)
-		{
-			_speedAt = (_speedAt + 1) % 60;
-			var seen = new System.Collections.Generic.HashSet<int>();
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var m = Main.npc[i];
-				if (m == null || !m.active || m.friendly || !IsBossLike(m) || !seen.Add(m.type)) continue;
-				if (!_speedRings.TryGetValue(m.type, out var ring)) _speedRings[m.type] = ring = new float[60];
-				ring[_speedAt] = PartSpeed(Nearest(p, m.type));
-			}
-		}
-		static int TopSpeed(int type)
-		{
-			if (!_speedRings.TryGetValue(type, out var ring)) return 0;
-			float top = 0f;
-			foreach (float s in ring) if (s > top) top = s;
-			return (int)top;
-		}
-
-		// 每种部件取最近的一个,报位置、速度、伤害、几帧撞到我
-		static string ThreatsJson(Player p)
-		{
-			var seen = new System.Collections.Generic.HashSet<int>();
-			var sb = new StringBuilder("[");
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			for (int i = 0; i < Main.maxNPCs; i++)
-			{
-				var m = Main.npc[i];
-				if (m == null || !m.active || m.friendly || !IsBossLike(m) || !seen.Add(m.type)) continue;
-				var n = Nearest(p, m.type);
-				int cx = (int)(n.Center.X / 16f) - pcx, cy = pcy - (int)(n.Center.Y / 16f);
-				if (System.Math.Abs(cx) + System.Math.Abs(cy) > CareCells) continue;
-				int f = FramesToHit(p, n);
-				if (sb.Length > 1) sb.Append(',');
-				sb.Append("{\"id\":\"").Append(JsonStr(ThreatId(n.type))).Append('"')
-				  .Append(",\"name\":\"").Append(JsonStr(n.TypeName)).Append('"')
-				  .Append(",\"health_percent\":").Append((long)n.life * 100 / System.Math.Max(1, n.lifeMax))
-				  .Append(",\"contact_damage_percent_of_my_hp\":").Append(n.damage * 100 / System.Math.Max(1, p.statLife))
-				  .Append(",\"cells_to_my_right\":").Append(cx)
-				  .Append(",\"cells_above_me\":").Append(cy)
-				  .Append(",\"speed_to_the_right\":").Append((int)(n.velocity.X * 60f / 16f))
-				  .Append(",\"speed_upward\":").Append((int)(-n.velocity.Y * 60f / 16f))
-				  .Append(",\"speed_cells_per_second\":").Append((int)PartSpeed(n))
-				  .Append(",\"top_speed_in_the_last_second\":").Append(TopSpeed(n.type))
-				  .Append(",\"frames_until_it_hits_me\":").Append(f < 0 ? "\"not heading at me\"" : f.ToString())
-				  .Append('}');
-			}
-			return sb.Append(']').ToString();
-		}
-
 		public static void Tick()
 		{
 			if (!Enabled) { Release(); return; }
@@ -209,11 +116,15 @@ namespace TerraBlind
 			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }
 			if (Manual.On) { Gate("人工"); Release(); return; }
+			if (Main.gameMenu || Main.playerInventory) { Gate("paused"); _movement.Release(p); return; }
+			bool manualInput = p.controlLeft || p.controlRight || p.controlUp || p.controlDown
+				|| p.controlJump || p.controlHook || p.controlMount;
 
 			var boss = Boss(p, out int dist);
 			if (boss == null) { FightEnd("boss 没了(击败或离场)"); Gate("no boss"); Release(); return; }
 			if (!_inFight) FightStart();
-			TrackPartSpeeds(p);
+			_attack.SelectFirstWeapon(p);
+			_sensor.Observe(p);
 
 			var done = _pending;
 			if (done != null)
@@ -225,6 +136,8 @@ namespace TerraBlind
 			if (RandomBrain) RandomPick(boss.type);
 			else if (key != null && !_busy && _pending == null)
 			{
+				_snapshot = _sensor.Capture(p, (ulong)(_requestSequence + 1), ToIntent(_completedAction), _completedDurationMs);
+				if (_snapshot == null) { Release(); return; }
 				string facts = Facts(p, boss);
 				string criteria = ActionCriteria(p);
 				var request = new RequestContext
@@ -245,9 +158,10 @@ namespace TerraBlind
 
 			// 羽落要按住 up,所以也拿 Vertical
 			if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical, () => Enabled))
-			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); DismountAuto(p); _appliedAction = DodgeAction.Idle; _lastApplied = ""; return; }
+			{ Gate("Move axis taken by " + AxisLock.Held(Ax.Move)); _movement.Release(p); _appliedAction = DodgeAction.Idle; _lastApplied = ""; return; }
 
 			Gate($"driving {boss.TypeName} {dist}格 act={action.Direction}/{action.Horizontal}/{action.Vertical}");
+			if (manualInput) { _movement.Release(p); _movementReason = ""; return; }
 			Drive(p, boss, dist, action);
 		}
 
@@ -276,25 +190,6 @@ namespace TerraBlind
 			Dir.UpLeft => (-1, -1),
 			_ => (0, 0),
 		};
-		static Dir Direction(int x, int y) => (x, y) switch
-		{
-			(0, -1) => Dir.Up, (1, -1) => Dir.UpRight,
-			(1, 0) => Dir.Right, (1, 1) => Dir.DownRight,
-			(0, 1) => Dir.Down, (-1, 1) => Dir.DownLeft,
-			(-1, 0) => Dir.Left, (-1, -1) => Dir.UpLeft,
-			_ => Dir.Stay,
-		};
-		static bool Blocked(Player p, int x, int y, int left, int right, int above, int below)
-		{
-			float horizontalReserve = System.Math.Max(HorizontalReserveCells,
-				System.Math.Abs(p.velocity.X) * 60f * 1.2f / 16f)
-				+ System.Math.Max(0f, x * p.velocity.X) * 18f / 16f;
-			float upperReserve = System.Math.Max(UpperReserveCells,
-				System.Math.Max(0f, -p.velocity.Y) * 60f * 0.6f / 16f)
-				+ 5f + System.Math.Max(0f, -p.velocity.Y) * 18f / 16f;
-			return x < 0 && left <= horizontalReserve || x > 0 && right <= horizontalReserve
-				|| y < 0 && above <= upperReserve || y > 0 && below <= LowerReserveCells;
-		}
 		static string ActionName(DodgeAction action)
 		{
 			if (action.Direction == Dir.Stay) return "Stay";
@@ -302,117 +197,53 @@ namespace TerraBlind
 			return (x == 0 ? "" : (x < 0 ? "Left" : "Right") + action.Horizontal)
 				+ (y == 0 ? "" : (y < 0 ? "Up" : "Down") + action.Vertical);
 		}
-		static int EquippedVerticalMount(Player p) => p.miscEquips[3].type switch
-		{
-			ItemID.SlimySaddle => MountID.Slime,
-			ItemID.QueenSlimeMountSaddle => MountID.QueenSlime,
-			_ => MountID.None,
-		};
-		static bool MountAuto(Player p, int type, bool down)
-		{
-			if (p.mount.Active || !p.mount.CanMount(type, p)) return false;
-			float before = p.velocity.Y;
-			p.mount.SetMount(type, p);
-			if (!p.mount.Active || p.mount.Type != type) return false;
-			_autoMountActive = true;
-			_autoMountType = type;
-			_mountForDown = down;
-			_mountRiseSeen = _mountFallSeen = false;
-			_mountStartTick = Main.GameUpdateCount;
-			DiagLog.Write($"[dodge] 坐骑开始 type={type} 方向={(down ? "下" : "上")} vy={before:0.0}->{p.velocity.Y:0.0}");
-			return true;
-		}
-		static void DismountAuto(Player p)
-		{
-			if (!_autoMountActive) return;
-			if (p != null && p.mount.Active && p.mount.Type == _autoMountType)
-			{
-				p.mount.Dismount(p);
-				DiagLog.Write("[dodge] 坐骑结束");
-			}
-			_autoMountActive = false;
-			_autoMountType = MountID.None;
-			_mountForDown = _mountRiseSeen = _mountFallSeen = false;
-		}
+		static Port.DodgeIntent ToIntent(DodgeAction action) => new(
+			(Port.DodgeDirection)action.Direction,
+			System.Enum.Parse<Port.Magnitude>(action.Horizontal.ToString()),
+			System.Enum.Parse<Port.Magnitude>(action.Vertical.ToString()), false);
 
-		// 反射层,每帧把方向和幅度翻成按键
+		static DodgeAction FromIntent(Port.DodgeIntent intent, Vector2? hook = null) => new(
+			(Dir)intent.Direction, System.Enum.Parse<Size>(intent.HorizontalSize.ToString()),
+			System.Enum.Parse<Size>(intent.VerticalSize.ToString()), hook);
+
 		static void Drive(Player p, NPC boss, int dist, DodgeAction action)
 		{
-			bool onGround = p.velocity.Y == 0f;
-			Dir dir = action.Direction;
-			var (hx, vy) = Vec(dir);
-			Size hSize = action.Horizontal, vSize = action.Vertical;
-			int left = WallDistance(p, -1), right = WallDistance(p, 1);
-			int above = CeilingDistance(p), below = FloorDistance(p);
-			if (hx != 0 && Blocked(p, hx, 0, left, right, above, below)) hx = 0;
-			if (vy != 0 && Blocked(p, 0, vy, left, right, above, below)) vy = 0;
-			if (hx == 0) hSize = Size.None;
-			if (vy == 0) vSize = Size.None;
-			dir = Direction(hx, vy);
-			int mountType = EquippedVerticalMount(p);
-			if (vSize == Size.Large && mountType == MountID.None) vSize = Size.Small;
-			bool upMount = vy < 0 && vSize == Size.Large && mountType != MountID.None;
-			bool downMount = vy > 0 && vSize == Size.Large && mountType != MountID.None;
-			if (_autoMountActive && (!p.mount.Active || p.mount.Type != _autoMountType ||
-				(!upMount && !downMount) || _mountForDown != downMount ||
-				_mountForDown && _mountFallSeen && p.velocity.Y <= 0f ||
-				!_mountForDown && (_mountRiseSeen && p.velocity.Y >= 0f ||
-					!_mountRiseSeen && Main.GameUpdateCount - _mountStartTick > 6)))
-				DismountAuto(p);
-			bool hookH = hx != 0 && hSize == Size.Medium && !_autoMountActive;
-			bool hookV = vy < 0 && vSize == Size.Medium && !_autoMountActive;
-			Dir hookDir = Direction(hookH ? hx : 0, hookV ? vy : 0);
-			bool hooking = Hook(p, hookDir, (hookH || hookV) && !downMount,
-				action.HookTarget, out bool hookJump, out bool hookMiss);
-			if (hookMiss)
+			if (_snapshot == null || _clock.ElapsedMilliseconds - _actAt > IntentTtlMs)
 			{
-				if (hookH) hSize = Size.Small;
-				if (hookV) vSize = Size.Small;
+				_movement.Release(p);
+				_movementReason = "";
+				_appliedAction = DodgeAction.Idle;
+				return;
 			}
-			bool hop = vy < 0 && _airJumpUsed != _answer && p.AnyExtraJumpUsable();
-			bool jump = Jump(p, onGround, vy < 0, hop, hookJump);
-
-			if (hx < 0) p.controlLeft = true;
-			else if (hx > 0) p.controlRight = true;
-			if (jump) p.controlJump = true;
-
-			if (p.grapCount == 0 && vy > 0) p.controlDown = true;
-			else if (p.grapCount == 0 && (vy < 0 || vy == 0 && !onGround)) p.controlUp = true;
-			if (upMount && !_autoMountActive && _upMountAnswer != _answer &&
-				p.velocity.Y <= -4f && !hooking && p.grapCount == 0)
+			var result = _movement.Apply(p, ToIntent(action),
+				_snapshot with { Sequence = (ulong)_appliedSequence });
+			_appliedAction = FromIntent(result.Applied);
+			if (_movementReason != result.Reason || _lastApplied != ActionName(_appliedAction))
 			{
-				_upMountAnswer = _answer;
-				if (!MountAuto(p, mountType, false)) vSize = Size.Small;
+				_movementReason = result.Reason;
+				_lastApplied = ActionName(_appliedAction);
+				DiagLog.Write($"[dodge] applied #{_appliedSequence} requested={ActionName(action)} applied={_lastApplied} reason={result.Reason} vx={p.velocity.X:0.0} vy={p.velocity.Y:0.0} mount={p.mount.Active}/{p.mount.Type}");
 			}
-			if (downMount && !_autoMountActive && _downMountAnswer != _answer &&
-				!hooking && p.grapCount == 0)
-			{
-				_downMountAnswer = _answer;
-				if (!MountAuto(p, mountType, true)) vSize = Size.Small;
-			}
-			if (vSize == Size.Large && !_autoMountActive &&
-				(vy < 0 && _upMountAnswer == _answer || vy > 0 && _downMountAnswer == _answer))
-				vSize = Size.Small;
-			if (_autoMountActive && !_mountForDown && p.velocity.Y < -0.1f) _mountRiseSeen = true;
-			if (_autoMountActive && _mountForDown && p.velocity.Y > 0.1f) _mountFallSeen = true;
-
-			Fly(p, dir);
 			TrackDps();
-			Hurt(p, boss, dist, dir, hSize, vSize);
-			bool dashing = p.dashDelay < 0;
-			if (dashing && !_wasDashing) DiagLog.Write($"[dodge] 非预期冲刺 方向{(p.velocity.X < 0 ? "左" : "右")} vx={p.velocity.X:0.0} 意图{ActionName(action)}");
-			_wasDashing = dashing;
-			Last = $"{dir}/{hSize}/{vSize} boss {dist}格 go {(hx == 0 ? "-" : hx < 0 ? "L" : "R")}"
-				 + (jump ? (onGround ? " +jump" : " +airjump") : "") + (hooking ? " +hook" : "")
-				 + (_autoMountActive ? " +mount" : "") + (dashing ? " [dashing]" : "");
-			_appliedAction = new DodgeAction(dir, hSize, vSize);
-			string applied = ActionName(_appliedAction);
-			if (applied != _lastApplied)
-			{
-				_lastApplied = applied;
-				DiagLog.Write($"[dodge] applied #{_appliedSequence} requested={ActionName(action)} applied={applied} room={left}/{right}/{above}/{below} vx={p.velocity.X:0.0} vy={p.velocity.Y:0.0}");
-			}
+			Hurt(p, boss, dist, _appliedAction.Direction, _appliedAction.Horizontal, _appliedAction.Vertical);
+			Fly(p, _appliedAction.Direction);
+			Last = $"{_lastApplied} boss {dist}格 {result.Reason}";
 		}
+
+		public static bool TryAttackBoss(Player p, out Vector2 target)
+		{
+			target = p.Center;
+			if (Main.gameMenu || Main.playerInventory) return false;
+			if (p.statLife < p.statLifeMax2 * 0.5f || p.lavaWet) p.QuickHeal();
+			_attack.SelectFirstWeapon(p);
+			_sensor.Observe(p);
+			var live = _sensor.Capture(p, (ulong)_appliedSequence, ToIntent(_appliedAction), 0);
+			if (live == null) return false;
+			if (_movementReason == "grapple") return false;
+			return _attack.TryAttack(p, live, out target);
+		}
+
+		public static void EndBossAttack(Player p) => _attack.RestoreWeapon(p);
 
 		// 最近 60 帧 boss 掉的血
 		static int _bossPrevHp = -1;
@@ -476,7 +307,6 @@ namespace TerraBlind
 			_inFight = true;
 			_fightStart = Main.GameUpdateCount;
 			_fightHits = _fightHitHp = _fightDotHp = _fightBossDmg = 0;
-			_wasDashing = false;
 			_prevHp = -1;
 			DiagLog.Write("[dodge] 战斗开始");
 		}
@@ -538,9 +368,6 @@ namespace TerraBlind
 			return sb.Length > 0 ? sb.ToString() : "无";
 		}
 
-		// 上一次用过空中跳的回答
-		static int _airJumpUsed = -1;
-		static int _jumpBlockedSaid = -1;
 		static bool _flying;
 		static float _prevWing;
 		// 飞行开始和结束各记一行。wingTime 在掉而且在上升才算飞,缓降也烧 wingTime
@@ -554,217 +381,6 @@ namespace TerraBlind
 				+ $" wingMax={p.wingTimeMax} wingTime={p.wingTime:0.0} vy={p.velocity.Y:0.0}");
 		}
 
-		// 钩爪发射时瞄准选中的落点；miss 表示射程内勾不到东西
-		static bool Hook(Player p, Dir dir, bool want, Vector2? planned, out bool hookJump, out bool miss)
-		{
-			hookJump = false;
-			miss = false;
-			if (p.grapCount > 0)
-			{
-				// 拉到不再靠近落点才跳
-				float d = Microsoft.Xna.Framework.Vector2.Distance(p.Center, _anchorPx);
-				bool pulling = d < _anchorPrev;
-				_anchorPrev = d;
-				if (pulling) return true;
-				if (!_hookSaid) { _hookSaid = true; DiagLog.Write($"[dodge] 钩子拉到位 离落点{d / 16f:0.0}格 跳开"); }
-				hookJump = true;
-				_hookFrames = 0;
-				_hookCooldown = HookCooldownFrames;
-				return true;
-			}
-			_anchorPrev = float.MaxValue;
-			_hookSaid = false;
-			if (_hookCooldown > 0) _hookCooldown--;
-			if (_hookAnswer != _answer)
-			{
-				_hookAnswer = _answer;
-				_hookFrames = 0;
-				_hookHeld = false;
-			}
-			if (!want) { _hookFrames = 0; return false; }
-			if (_hookCooldown > 0)
-			{
-				if (_hookWaitSaid != _answer) { _hookWaitSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但还在冷却 剩{_hookCooldown}帧"); }
-				return false;
-			}
-			// 按一帧松一帧,vanilla 要 releaseHook 才认新按压
-			if (_hookFrames++ > HookGiveUpFrames) return false;
-			if (_hookHeld) { _hookHeld = false; return true; }
-			var (x, y) = Vec(dir);
-			Vector2 target = planned ?? default;
-			if (_hookFrames == 1 && !(planned.HasValue && ValidHookPoint(p, target, x, y)) &&
-				!HookTarget(p, x, y, y == 0, out target))
-			{
-				if (_hookMissSaid != _answer) { _hookMissSaid = _answer; DiagLog.Write($"[dodge] 想往{dir}甩钩爪 但射程内勾不到东西 退到Small"); }
-				_hookFrames = 0;
-				miss = true;
-				return false;
-			}
-			if (_hookFrames == 1)
-			{
-				_anchorPx = target;
-				DiagLog.Write($"[dodge] 甩钩爪 往{dir} 瞄第({(int)(target.X / 16f)},{(int)(target.Y / 16f)})格");
-			}
-			Cursor.AimTile((int)(_anchorPx.X / 16f), (int)(_anchorPx.Y / 16f));
-			p.controlHook = true;
-			_hookHeld = true;
-			return true;
-		}
-		static Microsoft.Xna.Framework.Vector2 _anchorPx;
-		static float _anchorPrev = float.MaxValue;
-		// 这次挂钩已经记过"拉到位"
-		static bool _hookSaid;
-		static int _hookMissSaid = -1;
-		static int _hookWaitSaid = -1;
-
-		// 装备的钩爪能飞多远(像素),照 Player.QuickGrapple 找钩爪、AI_007_GrapplingHooks 的射程表
-		static float HookRangePx(Player p)
-		{
-			int t = p.miscEquips[4].shoot;
-			if (t <= 0 || !Main.projHook[t])
-			{
-				t = 0;
-				for (int i = 0; i < 58 && t == 0; i++)
-					if (p.inventory[i].shoot > 0 && Main.projHook[p.inventory[i].shoot]) t = p.inventory[i].shoot;
-				if (t == 0) return 0f;
-			}
-			if (t >= Terraria.ID.ProjectileID.Count) return Terraria.ModLoader.ProjectileLoader.GetProjectile(t)?.GrappleRange() ?? 0f;
-			return t switch
-			{
-				13 or 396 or 865 => 300f,
-				32 or 331 or 372 => 400f,
-				73 or 74 => 440f,
-				165 => 375f,
-				256 => 350f,
-				315 or 446 or 935 => 500f,
-				322 or 332 => 550f,
-				>= 646 and <= 649 => 550f,
-				652 => 600f,
-				>= 486 and <= 489 => 480f,
-				>= 230 and <= 235 => 300f + (t - 230) * 30f,
-				753 => 420f,
-				_ => 2500f,
-			};
-		}
-
-		static bool HookTarget(Player p, int x, int y, bool nearHorizontal, out Vector2 target)
-		{
-			target = default;
-			if (x == 0 && y == 0) return false;
-			float range = HookRangePx(p);
-			foreach (float tilt in nearHorizontal ? new[] { 0f, -0.35f, 0.35f } : new[] { 0f })
-			{
-				Vector2 step = Vector2.Normalize(new Vector2(x, nearHorizontal ? tilt : y)) * 4f;
-				Vector2 pt = p.Center;
-				for (float d = 0f; d <= range; d += 4f, pt += step)
-				{
-					int tx = (int)(pt.X / 16f), ty = (int)(pt.Y / 16f);
-					if (!Predicates.InBounds(tx, ty)) break;
-					if (!Hookable(tx, ty)) continue;
-					Vector2 found = new(tx * 16f + 8f, ty * 16f + 8f);
-					if (Vector2.DistanceSquared(p.Center, found) <= 6f * 16f * 6f * 16f) break;
-					target = found;
-					return true;
-				}
-			}
-			return false;
-		}
-		static bool ValidHookPoint(Player p, Vector2 target, int x, int y)
-		{
-			Vector2 offset = target - p.Center;
-			float distance = offset.Length();
-			return distance > 6f * 16f && distance <= HookRangePx(p)
-				&& (x == 0 || offset.X * x > 0f) && (y == 0 || offset.Y * y > 0f)
-				&& Hookable((int)(target.X / 16f), (int)(target.Y / 16f));
-		}
-
-		// 跳键。rise 一直按住往上飞,hop 这次回答用一段空中跳。空中新按一下,有空中跳 vanilla 先用空中跳,没有才是翅膀(Player.cs:25618)
-		static bool Jump(Player p, bool onGround, bool rise, bool hop, bool hookJump)
-		{
-			if (_jumpHeld)
-			{
-				// 要解钩或要空中跳就先松一帧,下一帧的新按压才算数
-				if (hookJump || hop) { _jumpHeld = false; return false; }
-				_holdFrames++;
-				bool landed = onGround && _holdFrames > 2;
-				if (rise && p.grapCount == 0 && !landed) return true;
-				if (p.velocity.Y < 0f && _holdFrames < MaxHoldFrames && !landed) return true;
-				// 松一帧,vanilla 要 releaseJump 才认新按压
-				_jumpHeld = false;
-				return false;
-			}
-			bool air = !onGround && p.grapCount == 0;
-			string why = hookJump ? "解钩"
-				: p.grapCount > 0 ? null
-				: hop ? "再跳一段"
-				: rise ? "飞"
-				: null;
-			if (why == null) return false;
-			bool extra = air && p.AnyExtraJumpUsable();
-			if (why == "再跳一段")
-			{
-				_airJumpUsed = _answer;
-				if (air && !extra)
-				{
-					if (_jumpBlockedSaid != _answer)
-					{
-						_jumpBlockedSaid = _answer;
-						DiagLog.Write($"[dodge] 想再跳一段但空中跳已用完 退回飞 vy={p.velocity.Y:0.0} 翅膀{p.wingTime:0}");
-					}
-					why = "飞";
-				}
-			}
-			DiagLog.Write($"[dodge] 起跳 {why} {(onGround ? "地面" : p.grapCount > 0 ? "钩上" : extra ? "空中跳" : "翅膀")}"
-				+ $" vy={p.velocity.Y:0.0} 翅膀{p.wingTime:0}");
-			_jumpHeld = true;
-			_holdFrames = 0;
-			return true;
-		}
-
-		// 按当前速度还有几帧碰到我,不会碰到就是 -1
-		static int FramesToHit(Player p, NPC boss)
-		{
-			float gapX = System.Math.Abs(boss.Center.X - p.Center.X) - (boss.width + p.width) * 0.5f;
-			float gapY = System.Math.Abs(boss.Center.Y - p.Center.Y) - (boss.height + p.height) * 0.5f;
-			float closeX = boss.Center.X > p.Center.X ? p.velocity.X - boss.velocity.X : boss.velocity.X - p.velocity.X;
-			float closeY = boss.Center.Y > p.Center.Y ? p.velocity.Y - boss.velocity.Y : boss.velocity.Y - p.velocity.Y;
-			// 已经重叠就是正在碰,不管它往哪动
-			if (gapX <= 0f && gapY <= 0f) return 0;
-			if (closeX < 0.1f && closeY < 0.1f) return -1;
-			// 已经重叠的轴算 0 帧,不重叠又不靠近的轴撞不上
-			float fx = gapX <= 0f ? 0f : (closeX > 0.1f ? gapX / closeX : -1f);
-			float fy = gapY <= 0f ? 0f : (closeY > 0.1f ? gapY / closeY : -1f);
-			// 两个轴都重叠才算碰到,取晚的那个
-			if (fx < 0f || fy < 0f) return -1;
-			float f = System.Math.Max(fx, fy);
-			return f > 600f ? -1 : (int)f;
-		}
-
-		// 钩子能不能勾这一格,照 AI_007_GrapplingHooks_CanTileBeLatchedOnTo
-		static bool Hookable(int x, int y)
-		{
-			if (!Predicates.InBounds(x, y)) return false;
-			var t = Main.tile[x, y];
-			if (!t.HasTile || t.IsActuated) return false;
-			return Main.tileSolid[t.TileType] || t.TileType == Terraria.ID.TileID.MinecartTrack;
-		}
-
-		// 这一侧齐胸高度离墙几格,地图边缘也算墙
-		static int WallDistance(Player p, int dir)
-		{
-			int edge = (dir < 0 ? p.Hitbox.Left : p.Hitbox.Right - 1) / 16;
-			int top = p.Hitbox.Top / 16, bottom = (p.Hitbox.Bottom - 1) / 16;
-			for (int d = 1; d <= RoomScanCells; d++)
-			{
-				int x = edge + dir * d;
-				if (x <= EdgeCells || x >= Main.maxTilesX - EdgeCells) return d - 1;
-				for (int y = top; y <= bottom; y++)
-					if (Predicates.IsWall(x, y)) return d - 1;
-			}
-			return RoomScanCells;
-		}
-
-		// 头顶离天花板几格,地图上边缘也算
 		static int CeilingDistance(Player p)
 		{
 			int left = p.Hitbox.Left / 16, right = (p.Hitbox.Right - 1) / 16;
@@ -780,19 +396,6 @@ namespace TerraBlind
 		}
 
 		// 脚下到实心块几格,平台能穿所以不算,地图下边缘也算
-		static int FloorDistance(Player p)
-		{
-			int feet = (int)((p.position.Y + p.height) / 16f);
-			for (int d = 0; d < RoomScanCells; d++)
-			{
-				if (feet + d >= Main.maxTilesY - EdgeCells) return d;
-				for (int x = (int)(p.position.X / 16f); x <= (int)((p.position.X + p.width - 1) / 16f); x++)
-					if (Predicates.IsWall(x, feet + d)) return d;
-			}
-			return RoomScanCells;
-		}
-
-		// 脚下离地几格,平台和地图下边缘也算地,最多探 40 格
 		static int CellsAboveGround(Player p)
 		{
 			int cx = (int)(p.Center.X / 16f);
@@ -808,135 +411,35 @@ namespace TerraBlind
 		static void Release()
 		{
 			_releasedAtMs = _clock.ElapsedMilliseconds;
-			DismountAuto(Main.LocalPlayer);
+			_movement.Release(Main.LocalPlayer);
+			_movementReason = "";
 			_appliedAction = DodgeAction.Idle;
 			_completedAction = DodgeAction.Idle;
 			_completedDurationMs = 0;
 			_lastApplied = "";
-			_jumpHeld = false;
-			_holdFrames = _hookFrames = 0;
-			_hookHeld = false;
 			AxisLock.Release(Owner);
 		}
 
-		static string Facts(Player p, NPC boss)
-		{
-			int pcx = (int)(p.Center.X / 16f), pcy = (int)(p.Center.Y / 16f);
-			return "{\"hp_percent\":" + (p.statLife * 100 / System.Math.Max(1, p.statLifeMax))
-				 + ",\"i_am_losing_health_over_time\":" + (p.lifeRegen < 0 ? "true" : "false")
-				 + ",\"my_speed_to_the_right\":" + (int)(p.velocity.X * 60f / 16f)
-				 + ",\"my_speed_upward\":" + (int)(-p.velocity.Y * 60f / 16f)
-				 + ",\"movement\":{\"can_extra_jump\":" + (p.AnyExtraJumpUsable() ? "true" : "false")
-				 + ",\"can_fly\":" + (p.wingTime > 0f ? "true" : "false")
-				 + ",\"vertical_mount\":" + Quote(EquippedVerticalMount(p) switch
-				 { MountID.Slime => "Slimy Saddle", MountID.QueenSlime => "Gelatinous Pillion", _ => "none" }) + "}"
-				 + ",\"threats\":" + ThreatsJson(p)
-				 + ",\"incoming_projectiles\":" + ThreatScan.ProjJson(p, pcx, pcy)
-				 + ",\"room\":{\"left\":" + WallDistance(p, -1) + ",\"right\":" + WallDistance(p, 1)
-				 + ",\"above\":" + CeilingDistance(p) + ",\"below\":" + FloorDistance(p) + "}"
-					 + ",\"previous_action\":" + Quote(ActionName(_completedAction))
-					 + ",\"previous_action_ms\":" + _completedDurationMs
-				 + ",\"boss_notes\":" + FieldBooks(boss)
-				 + "}";
-		}
-
-		static string RouteDescription(Player p, int x, int y, Size hSize, Size vSize,
-			int left, int right, int above, int below, List<NPC> threats, List<Projectile> shots)
-		{
-			float horizontal = x * (hSize == Size.Medium ? 20f : 12f);
-			float verticalRoom = y < 0 ? above - UpperReserveCells - 5f : below - LowerReserveCells;
-			float vertical = y * System.Math.Max(0f, System.Math.Min(vSize == Size.Large
-				? (y < 0 ? 18f : 22f) : (y < 0 ? 10f : 18f), verticalRoom));
-			Vector2 displacement = new(horizontal * 16f, vertical * 16f);
-			Vector2 after = p.Center + displacement;
-			var trends = new StringBuilder();
-			foreach (NPC npc in threats)
-			{
-				float current = Vector2.Distance(npc.Center, p.Center);
-				float future = Vector2.Distance(npc.Center + npc.velocity * 36f, after);
-				if (trends.Length > 0) trends.Append("; ");
-				trends.Append(npc.TypeName).Append(": ").Append(future - current > 5f * 16f ? "opens space"
-					: future - current < -5f * 16f ? "closes space" : "little change");
-			}
-			int exposed = 0;
-			foreach (Projectile shot in shots)
-			{
-				Vector2 relative = shot.Center - p.Center;
-				Vector2 step = shot.velocity * (shot.extraUpdates + 1) - displacement / 36f;
-				float speedSquared = step.LengthSquared();
-				float frame = speedSquared < 0.01f ? 36f :
-					System.Math.Clamp(-Vector2.Dot(relative, step) / speedSquared, 4f, 36f);
-				if ((relative + step * frame).LengthSquared() < 10f * 16f * 10f * 16f) exposed++;
-			}
-			int horizontalRoom = x < 0 ? left : right;
-			return $"Approximate displacement in 0.6s: {horizontal:0} cells right, {vertical:0} cells down. "
-				+ $"Boss clearance if current motion continues: {(trends.Length == 0 ? "no nearby boss" : trends)}. "
-				+ $"Projectile corridor: {(exposed == 0 ? "clear" : exposed < 3 ? "exposed" : "crowded")}. "
-				+ $"Room beyond reserve: horizontal {(x == 0 ? 0 : System.Math.Max(0, horizontalRoom - HorizontalReserveCells))}, "
-				+ $"vertical {(y == 0 ? 0 : System.Math.Max(0, (int)verticalRoom))} cells. ";
-		}
+		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss));
 
 		static string ActionCriteria(Player p)
 		{
-			int left = WallDistance(p, -1), right = WallDistance(p, 1);
-			int above = CeilingDistance(p), below = FloorDistance(p);
-			var sb = new StringBuilder();
-			var blocked = new HashSet<Dir>();
+			if (_snapshot == null)
+				_snapshot = _sensor.Capture(p, (ulong)_appliedSequence, ToIntent(_completedAction), _completedDurationMs);
 			var options = new Dictionary<string, DodgeAction>();
-			var nearest = new Dictionary<int, NPC>();
-			var shots = new List<Projectile>();
-			foreach (NPC npc in Main.npc)
-				if (npc != null && npc.active && !npc.friendly && IsBossLike(npc) &&
-					Vector2.DistanceSquared(npc.Center, p.Center) < 70f * 16f * 70f * 16f &&
-					(!nearest.TryGetValue(npc.type, out NPC old) ||
-					Vector2.DistanceSquared(npc.Center, p.Center) < Vector2.DistanceSquared(old.Center, p.Center)))
-					nearest[npc.type] = npc;
-			foreach (Projectile shot in Main.projectile)
-				if (shot != null && shot.active && shot.hostile && shot.damage > 0 &&
-					Vector2.DistanceSquared(shot.Center, p.Center) < 80f * 16f * 80f * 16f)
-					shots.Add(shot);
-			var threats = new List<NPC>(nearest.Values);
-			int mountType = EquippedVerticalMount(p);
-			(int X, Size Size)[] horizontal = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (1, Size.Small), (1, Size.Medium) };
-			(int Y, Size Size)[] vertical = { (0, Size.None), (-1, Size.Small), (-1, Size.Medium), (-1, Size.Large), (1, Size.Small), (1, Size.Large) };
-			foreach (var (x, hSize) in horizontal)
-			foreach (var (y, vSize) in vertical)
-			{
-				if (x == 0 && y == 0) continue;
-				Dir d = Direction(x, y);
-				if (Blocked(p, x, y, left, right, above, below))
+			var sb = new StringBuilder();
+			if (_snapshot != null)
+				foreach (var option in _snapshot.AvailableActions)
 				{
-					blocked.Add(d);
-					continue;
+					var action = FromIntent(option.Intent, option.HookTarget);
+					string name = ActionName(action);
+					options[name] = action;
+					if (sb.Length > 0) sb.Append(',');
+					sb.Append(Quote(name)).Append(':').Append(Quote(Port.DecisionFacts.Describe(option, _snapshot)));
 				}
-				bool hookH = hSize == Size.Medium;
-				bool hookV = y < 0 && vSize == Size.Medium;
-				bool mount = vSize == Size.Large;
-				if (mount && (mountType == MountID.None || p.mount.Active && !_autoMountActive) ||
-					y > 0 && mount && hookH) continue;
-				Vector2? target = null;
-				if (hookH || hookV)
-				{
-					if (_hookCooldown > 0 || p.grapCount > 0 ||
-						!HookTarget(p, hookH ? x : 0, hookV ? y : 0, hookH && !hookV, out Vector2 point)) continue;
-					target = point;
-				}
-				var action = new DodgeAction(d, hSize, vSize, target);
-				string name = ActionName(action);
-				options[name] = action;
-				string description = $"Move {d}. " + RouteDescription(p, x, y, hSize, vSize,
-					left, right, above, below, threats, shots)
-					+ (hookH && hookV ? $"Grapple diagonally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " :
-						x == 0 ? "" : hookH ? $"Grapple horizontally toward a surface {Vector2.Distance(p.Center, target!.Value) / 16f:0.#} cells away. " : "Run horizontally. ")
-					+ (y < 0 ? mount ? "Jump, then mount for a fast rise; dismount at the apex. " : hookV && !hookH ? "Grapple upward. " : hookV ? "" : "Jump or fly upward. "
-						: y > 0 ? mount ? "Mount for a fast descent; dismount when descent ends. " : "Descend or pass through a platform. " : "")
-					+ "Continue until the next answer.";
-				sb.Append(Quote(name)).Append(':').Append(Quote(description)).Append(',');
-			}
-			options["Stay"] = DodgeAction.Idle;
 			_availableActions = options;
-			_lastBlocked = string.Join(" ", blocked);
-			return sb.Append("\"Stay\":\"Stay only if no approaching threat needs movement.\"").ToString();
+			_lastBlocked = "";
+			return sb.ToString();
 		}
 
 		static string Body(string state, string actions)

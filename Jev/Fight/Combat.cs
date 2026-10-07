@@ -196,6 +196,16 @@ namespace TerraBlind
 			if (!Enabled) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
+			if (BossOnField())
+			{
+				if (Dodge.TryAttackBoss(p, out var bossAim))
+				{
+					AimTarget = bossAim;
+					Last = "boss attack";
+				}
+				return;
+			}
+			Dodge.EndBossAttack(p);
 
 			int n = Worst(p, out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "no enemies"; _target = -1; Release(); return; }
