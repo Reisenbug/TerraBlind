@@ -951,7 +951,7 @@ namespace TerraBlind
 			 + "Pick a tool only when its extra movement helps. "
 			 + "Actions continue until the next answer.\",\"criteria\":{"
 			 + actions + "}"
-			 + "}}";
+			 + "}}}";
 
 		static void Fire(string key, string body, RequestContext request)
 		{

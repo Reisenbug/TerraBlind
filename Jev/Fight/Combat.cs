@@ -23,8 +23,6 @@ namespace TerraBlind
 		// 提前量最多外推这么多帧。
 		const float MaxLeadFrames = 45f;
 		public static bool UseLead = true;
-		// 瞄准抖一点。效果甚微。
-		const float JitterPx = 8f;
 		// 换 boss 目标要近出这么多格才换
 		const int StickCells = 5;
 
@@ -245,8 +243,6 @@ namespace TerraBlind
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
 			var aim = UseLead ? Lead(p, Main.npc[n], ShotSpeed(p, p.inventory[slot])) : Main.npc[n].Center;
-			aim.X += Main.rand.NextFloat(-JitterPx, JitterPx);
-			aim.Y += Main.rand.NextFloat(-JitterPx, JitterPx);
 			AimTarget = aim;
 			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
