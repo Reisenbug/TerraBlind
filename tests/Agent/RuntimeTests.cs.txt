@@ -26,6 +26,7 @@ static class RuntimeTests
         {
             Check(DateTime.UtcNow < deadline, "main-thread test timed out");
             Agent.PostUpdateEverything();
+            PlayerCombat.Tick(Game.LocalPlayer);
             await Task.Delay(5);
         }
     }
@@ -101,6 +102,7 @@ static class RuntimeTests
             Agent.OnWorldUnload();
             Check(AgentPermissions.Dodge && AgentPermissions.Attack, "world unload did not reset permissions");
             Console.WriteLine("PASS: world unload resets combat permissions");
+            await TestPvp();
         }
         finally { Agent.Unload(); }
     }
@@ -212,6 +214,56 @@ static class RuntimeTests
             Check(reader.ReadByte() == 4 && reader.ReadString().Contains("没有绑定"), "reenabled AI retained server owner");
         Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false; Config.I.AiClient = false;
         Console.WriteLine("PASS: live AI toggle registers, stops, unregisters and requires fresh binding");
+    }
+
+    static async Task TestPvp()
+    {
+        Game.netMode = NetmodeID.MultiplayerClient; Config.I.AiClient = true;
+        var self = Game.LocalPlayer;
+        var target = Game.player[1];
+        foreach (var other in Game.player) other.active = false;
+        self.active = target.active = true;
+        target.name = "搭档"; target.position = new System.Numerics.Vector2(100, 20);
+        Check(!PlayerCombat.Start(1, 1, 80, out var reason) && reason == "target_pvp_disabled" && !self.hostile, "disabled target PvP was ignored");
+        target.hostile = true; self.team = target.team = 2;
+        Check(!PlayerCombat.Start(1, 1, 80, out reason) && reason == "same_team", "same-team PvP was allowed");
+        self.team = 0;
+        Check(!PlayerCombat.Start(0, 1, 80, out reason) && reason == "self_target", "self attack was allowed");
+        Check(!PlayerCombat.Start(Game.maxPlayers, 1, 80, out reason) && reason == "invalid_player", "invalid player ID was allowed");
+        Check(!PlayerCombat.Start(1, 1, 80, out reason) && reason == "no_weapon_in_hotbar", "attack without weapon was allowed");
+        self.inventory[2] = new Terraria.Item { stack = 1, damage = 20, useStyle = 1, pick = 50 };
+        self.inventory[3] = new Terraria.Item { stack = 1, damage = 20, useStyle = 1 };
+        self.selectedItem = 2;
+        AgentPermissions.Attack = false;
+        Check(!PlayerCombat.Start(1, 1, 80, out reason) && reason == "attack_forbidden", "PvP bypassed attack permission");
+        AgentPermissions.Attack = true;
+        Check(PlayerCombat.Start(1, 1, 80, out reason), "valid PvP start failed: " + reason);
+        Check(self.hostile && Terraria.NetMessage.Sent.Last() == (30, self.whoAmI), "self PvP toggle was not synced");
+        PlayerCombat.Tick(self);
+        Check(self.controlUseItem && self.selectedItem == 3 && Cursor.X == 110 && Cursor.Y == 40, "PvP did not aim at player center with a weapon");
+        target.hostile = false; PlayerCombat.Tick(self);
+        Check(!PlayerCombat.Active && !self.controlUseItem && PlayerCombat.Outcome == "target_pvp_disabled", "target disabling PvP did not release attack");
+        target.hostile = true;
+        PlayerCombat.Start(1, 1, 80, out _);
+        target.dead = true; PlayerCombat.Tick(self);
+        Check(!PlayerCombat.Active && PlayerCombat.Outcome == "target_dead", "dead target did not stop attack");
+        target.dead = false;
+        PlayerCombat.Start(1, 1, 80, out _);
+        target.position = new System.Numerics.Vector2(5000, 0); PlayerCombat.Tick(self);
+        Check(!PlayerCombat.Active && PlayerCombat.Outcome == "out_of_range", "out-of-range target did not stop attack");
+        target.position = new System.Numerics.Vector2(100, 20);
+        var state = JsonNode.Parse(await Execute(AgentTools.State(default)));
+        Check(state["other_players"].AsArray().Count == 1 && state["other_players"][0]["id"].GetValue<int>() == 1
+            && state["other_players"][0]["pvp"].GetValue<bool>() && state["agent"]["player_id"].GetValue<int>() == 0,
+            "agent state does not expose real player identity and PvP status");
+        var result = JsonNode.Parse(await Execute(AgentTools.Execute("fight_player", JsonNode.Parse("{\"player_id\":1,\"seconds\":1}").AsObject(), default)));
+        Check(result["outcome"].ToString() == "duration_complete" && result["target_hp_before"].GetValue<int>() == target.statLife
+            && result["target_hp_after"].GetValue<int>() == target.statLife && !PlayerCombat.Active && !self.controlUseItem,
+            "PvP tool did not finish or invented damage");
+        PlayerCombat.Start(1, 1, 80, out _); PlayerCombat.Tick(self); AgentTools.Stop();
+        Check(!PlayerCombat.Active && !self.controlUseItem, "agent stop left PvP firing");
+        Game.netMode = NetmodeID.SinglePlayer; Config.I.AiClient = false;
+        Console.WriteLine("PASS: production PvP validates players/teams/permissions, syncs toggle, aims, stops and reports actual HP");
     }
 
     sealed class NavHandler : HttpMessageHandler

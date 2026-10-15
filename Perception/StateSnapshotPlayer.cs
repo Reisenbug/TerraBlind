@@ -420,7 +420,7 @@ namespace TerraBlind
 			=> ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
 			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
-			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On
+			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On || PlayerCombat.Active
 			   || ((Combat.Enabled || Dodge.Enabled) && !Manual.On);
 
 		// 【必须挂这儿】:vanilla 的 SetControls 在前、ResetEffects(把 tileRangeX/Y 打回 5/4)在后,
@@ -526,6 +526,7 @@ namespace TerraBlind
 			// 战斗排在所有早退分支【之前】:铺桥/挖矿那些分支自己 return,挂在后面永远轮不到
 			Dodge.Tick();
 			Combat.Tick();
+			if (PlayerCombat.Active) { PlayerCombat.Tick(Player); return; }
 
 			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
 			// below so a cell it starts this frame gets swung at immediately.

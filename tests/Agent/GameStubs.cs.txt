@@ -10,15 +10,16 @@ namespace Terraria
         public static bool dedServ, gameMenu;
         public static int netMode, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
-        public static Player[] player = Enumerable.Range(0, maxPlayers).Select(_ => new Player()).ToArray();
+        public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
     public class Player
     {
-        public bool active = true, dead;
-        public int statLife = 100, whoAmI;
+        public bool active = true, dead, hostile, controlUseItem;
+        public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
+        public System.Numerics.Vector2 position;
         public string name = "test";
         public (float X, float Y) velocity;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
@@ -26,13 +27,20 @@ namespace Terraria
     public class Item
     {
         public string Name = "";
-        public int stack, pick;
+        public int stack, pick, axe, hammer, ammo, damage, useStyle;
         public bool IsAir => stack == 0;
+    }
+    public static class NetMessage
+    {
+        public static readonly List<(int Message, int Player)> Sent = new();
+        public static void SendData(int msgType, int remoteClient = -1, int ignoreClient = -1, object text = null, int number = 0)
+            => Sent.Add((msgType, number));
     }
 }
 namespace Terraria.ID
 {
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
+    public static class MessageID { public const int TogglePVP = 30; }
 }
 namespace Terraria.ModLoader
 {
@@ -87,6 +95,11 @@ namespace TerraBlind
         public static void Say(string text) => Messages.Add(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
+    public static class Cursor
+    {
+        public static float X, Y;
+        public static void AimPx(float x, float y) { X = x; Y = y; }
+    }
     public static class Halt
     {
         public static int Stops;

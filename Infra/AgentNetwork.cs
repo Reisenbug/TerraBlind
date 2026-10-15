@@ -13,6 +13,7 @@ namespace TerraBlind
 		static readonly Dictionary<int, int> Owners = new();
 		static bool _registered;
 		static int _owner = -1;
+		public static int OwnerPlayer => _owner;
 		static string _lastStatus = "";
 		static uint _lastSent;
 		public static bool CanAutomate => !Main.dedServ
@@ -193,6 +194,7 @@ namespace TerraBlind
 					return "指令已交给内置 agent。";
 				case "stop":
 					NativeAgent.Stop();
+					PlayerCombat.Stop();
 					Combat.Enabled = false; Dodge.Enabled = false; Combat.Stop();
 					Manual.On = true;
 					StateSnapshotPlayer.StopRemoteTask(); ReplaySystem.Stop(); KeyPress.Clear();

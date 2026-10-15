@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "get_state",
-      "description": "获取当前游戏状态快照:玩家血量/魔力/位置(像素,除以16得到格坐标)/速度/biome/背包装备。用它确认自己在哪、身上有什么。",
+      "description": "获取当前游戏状态快照:自己血量/位置(像素,除以16得到格坐标)/背包装备，以及 other_players 的编号/名字/位置/血量/PvP/队伍。agent.instruction_player_id 是发指令的绑定玩家编号，agent.player_id 是自己。",
       "parameters": {
         "type": "object",
         "properties": {}
@@ -370,7 +370,7 @@
     "type": "function",
     "function": {
       "name": "fight",
-      "description": "用当前手持武器持续攻击附近最近的敌人(max_dist 格内自动锁定、追打)。打怪本质就是这个。先确保手上拿的是武器(get_state 看 selected_slot / 用 use_item 前先切槽)。这个工具会阻塞打一阵子并报告,期间玩家也能打断。清场或没敌人了就会停。",
+      "description": "用武器持续攻击附近最近的敌对 NPC，不会攻击玩家。攻击玩家请用 fight_player。这个工具阻塞打一阵子并报告，期间玩家能打断。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -383,6 +383,22 @@
             "description": "打多久(秒),默认10;还有敌人可以再调一次"
           }
         }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fight_player",
+      "description": "攻击指定玩家。player_id 用 other_players 的编号；玩家说打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开启 PvP 且不能是同一非零队伍。用快捷栏武器原地持续瞄准使用，不追人、不保证命中。返回实际执行结果和目标前后血量。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "player_id": { "type": "integer", "description": "目标玩家编号" },
+          "seconds": { "type": "number", "description": "攻击秒数，默认10，最大120" },
+          "max_dist": { "type": "integer", "description": "允许的最大距离（格），默认80，最大200" }
+        },
+        "required": ["player_id"]
       }
     }
   },

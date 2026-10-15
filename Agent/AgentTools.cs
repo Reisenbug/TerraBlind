@@ -20,6 +20,7 @@ public static class AgentTools
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
         FightCoordinator.Stop(); ReplaySystem.Stop(); KeyPress.Clear();
+        PlayerCombat.Stop();
         HttpServerSystem.PendingControl = null;
     }
 
@@ -46,8 +47,25 @@ public static class AgentTools
         state["agent"] = new JsonObject
         {
             ["status"] = NativeAgent.Status, ["auto_dodge"] = AgentPermissions.Dodge,
-            ["auto_attack"] = AgentPermissions.Attack
+            ["auto_attack"] = AgentPermissions.Attack, ["player_id"] = Main.LocalPlayer.whoAmI,
+            ["pvp"] = Main.LocalPlayer.hostile, ["team"] = Main.LocalPlayer.team,
+            ["instruction_player_id"] = AgentNetwork.OwnerPlayer,
+            ["pvp_target"] = PlayerCombat.Target
         };
+        var players = new JsonArray();
+        for (int id = 0; id < Main.maxPlayers; id++)
+        {
+            var other = Main.player[id];
+            if (other == null || !other.active || id == Main.LocalPlayer.whoAmI) continue;
+            players.Add(new JsonObject
+            {
+                ["id"] = id, ["name"] = other.name, ["hp"] = other.statLife, ["dead"] = other.dead,
+                ["pvp"] = other.hostile, ["team"] = other.team,
+                ["pos"] = new JsonObject { ["x"] = other.position.X, ["y"] = other.position.Y },
+                ["pvp_block_reason"] = PlayerCombat.TargetReason(Main.LocalPlayer, id)
+            });
+        }
+        state["other_players"] = players;
         return state.ToJsonString();
     }, token);
 
@@ -115,7 +133,7 @@ public static class AgentTools
                 {
                     if (args["auto_dodge"] != null) AgentPermissions.Dodge = Bool(args, "auto_dodge");
                     if (args["auto_attack"] != null) AgentPermissions.Attack = Bool(args, "auto_attack");
-                    if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); }
+                    if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); PlayerCombat.Stop(); }
                     return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack };
                 }, token);
                 break;
@@ -180,6 +198,31 @@ public static class AgentTools
                 {
                     result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token);
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
+                }
+                break;
+            case "fight_player":
+                int target = Int(args, "player_id", -1);
+                int seconds = Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120);
+                float range = Math.Clamp(Int(args, "max_dist", 80), 1, 200);
+                result = await NativeAgent.OnMain(() =>
+                {
+                    if (!PlayerCombat.Start(target, seconds, range, out string reason))
+                        return new JsonObject { ["error"] = reason };
+                    return new JsonObject { ["target_player"] = target, ["target_hp_before"] = Main.player[target].statLife,
+                        ["self_pvp_enabled"] = Main.LocalPlayer.hostile };
+                }, token);
+                if (!Rejected(result))
+                {
+                    var timer = Stopwatch.StartNew();
+                    while (await NativeAgent.OnMain(() => PlayerCombat.Active, token) && timer.Elapsed.TotalSeconds < seconds + 3)
+                        await Task.Delay(150, token);
+                    await NativeAgent.OnMain(() =>
+                    {
+                        if (PlayerCombat.Active) PlayerCombat.Stop("timeout");
+                        result["outcome"] = PlayerCombat.Outcome;
+                        result["target_hp_after"] = Main.player[target].statLife;
+                        return true;
+                    }, token);
                 }
                 break;
             default: throw new InvalidOperationException($"未知工具: {name}");

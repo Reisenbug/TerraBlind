@@ -150,6 +150,7 @@ public class NativeAgent : ModSystem
     public override void OnWorldUnload()
     {
         Cancel();
+        PlayerCombat.Stop();
         if (_http != null) _conversation = new AgentConversation(_http);
         AgentPermissions.Reset();
     }
