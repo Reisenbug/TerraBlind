@@ -1,0 +1,134 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+namespace Terraria
+{
+    public static class Main
+    {
+        public static bool dedServ, gameMenu;
+        public static int netMode, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
+        public static uint GameUpdateCount;
+        public static Player[] player = Enumerable.Range(0, maxPlayers).Select(_ => new Player()).ToArray();
+        public static Player LocalPlayer = player[0];
+        public static readonly List<string> Chat = new();
+        public static void NewText(string text) => Chat.Add(text);
+    }
+    public class Player
+    {
+        public bool active = true, dead;
+        public int statLife = 100, whoAmI;
+        public string name = "test";
+        public (float X, float Y) velocity;
+        public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+    }
+    public class Item
+    {
+        public string Name = "";
+        public int stack, pick;
+        public bool IsAir => stack == 0;
+    }
+}
+namespace Terraria.ID
+{
+    public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
+}
+namespace Terraria.ModLoader
+{
+    public class Mod
+    {
+        public byte[] GetFileBytes(string path) => File.ReadAllBytes(path);
+        public ModPacket GetPacket() => new();
+    }
+    public class ModSystem
+    {
+        public Mod Mod = new();
+        public virtual void Load() { }
+        public virtual void Unload() { }
+        public virtual void OnWorldLoad() { }
+        public virtual void OnWorldUnload() { }
+        public virtual void PostUpdateEverything() { }
+    }
+    public class ModPlayer
+    {
+        public Terraria.Player Player = new();
+        public virtual void PlayerDisconnect() { }
+    }
+    public static class ModContent { public static T GetInstance<T>() where T : new() => new(); }
+    public class ModPacket : BinaryWriter
+    {
+        public static readonly List<(int Recipient, byte[] Data)> Sent = new();
+        public ModPacket() : base(new MemoryStream()) { }
+        public void Send(int toClient = -1) => Sent.Add((toClient, ((MemoryStream)BaseStream).ToArray()));
+    }
+    public enum CommandType { Chat }
+    public class CommandCaller { public void Reply(string text) => Terraria.Main.NewText(text); }
+    public abstract class ModCommand
+    {
+        public abstract CommandType Type { get; }
+        public abstract string Command { get; }
+        public abstract string Description { get; }
+        public abstract void Action(CommandCaller caller, string input, string[] args);
+    }
+}
+namespace TerraBlind
+{
+    public class TerraBlind : Terraria.ModLoader.Mod { }
+    public class Config
+    {
+        public static readonly Config I = new();
+        public bool AiClient, AgentEnabled = true;
+        public string AgentApiKey = "test-key", AgentModel = "test-model", AgentBaseUrl = "http://localhost/v1", AgentPersona = "test";
+    }
+    public static class AgentChat
+    {
+        public static readonly List<string> Messages = new();
+        public static void Say(string text) => Messages.Add(text);
+    }
+    public static class DiagLog { public static void Write(string text) { } }
+    public static class Halt
+    {
+        public static int Stops;
+        public static string All() { Stops++; RecedingNav.Active = false; return "stopped"; }
+    }
+    public static class StateSnapshotPlayer { public static void StopRemoteTask() { } }
+    public static class FightCoordinator { public static int Stops; public static void Stop() => Stops++; }
+    public static class ReplaySystem { public static void Stop() { } }
+    public static class KeyPress { public static void Clear() { } }
+    public static class Combat
+    {
+        public static bool Enabled;
+        public static int Stops;
+        public static void Stop() => Stops++;
+    }
+    public static class Dodge { public static bool Enabled; }
+    public static class Manual { public static bool On; }
+    public static class StartRun
+    {
+        public static string Phase = "idle", Outcome = "", Reason = "";
+        public static bool Start(out string why) { why = ""; return true; }
+    }
+    public static class RecedingNav
+    {
+        public static bool Active;
+        public static string LastStop = "";
+        public static void Start(int x, int y) => Active = true;
+    }
+    public static class StateSerializer { public static string ToJson(object snapshot) => "{}"; }
+    public static class ActExecutor
+    {
+        public static int OriginCx(Terraria.Player player) => 12;
+        public static int OriginCy(Terraria.Player player) => 34;
+    }
+    public static class Reach { public static bool CanInteract(Terraria.Player player, int x, int y) => true; }
+    public static class HttpServerSystem
+    {
+        public static object PendingControl, LatestSnapshot;
+        public static string LastInteract = "done";
+        public static readonly List<string> Calls = new();
+        public static Func<string, string, (int, string)> Handler = (_, _) => (200, "{}");
+        public static (int Status, string Body) Dispatch(string path, string payload)
+        { Calls.Add(path); return Handler(path, payload); }
+    }
+}

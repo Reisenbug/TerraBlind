@@ -34,3 +34,5 @@ dotnet run --project tests/Agent/AgentTests.csproj
 ```
 
 编译和离线测试不能代替实机验证。建议依次测试纯聊天、询问并回答、合成、导航中停止，以及“Boss 战不自动走位”的许可覆盖。
+
+离线测试共 12 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=12`。除模型协议外，还直接链接生产的 NativeAgent、AgentTools 和 AgentNetwork，检查取消后的主线程队列、任务替换、战斗许可、背包增减统计，以及真实格式数据包的绑定、任务执行、回复拆分和掉线停止。Terraria 对象、动作端点和网络发送使用替身；这不验证真实合成、人物物理、TCP 或双客户端同步，也没有执行 Combat/Dodge 的逐帧控制逻辑。
