@@ -11,6 +11,7 @@ namespace TerraBlind
 
 		public override void Action(CommandCaller caller, string input, string[] args)
 		{
+			if (!AgentNetwork.CanAutomate) { caller.Reply("请用 /ai 向 AI 玩家下达指令。"); return; }
 			if (args.Length > 0 && args[0] == "stop")
 			{
 				StartRun.Stop();

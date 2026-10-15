@@ -43,6 +43,7 @@ namespace TerraBlind
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
+			if (!AgentNetwork.CanAutomate) return;
 			if (_pendingHouse.HasValue && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
 				var (hx, hy) = _pendingHouse.Value;
@@ -393,6 +394,13 @@ namespace TerraBlind
 			DiagLog.Write("[reach-test] 地狱流程停止");
 		}
 
+		public static void StopRemoteTask()
+		{
+			_pendingHouse = null; _site = null;
+			JumpPlaceEnabled = false;
+			StopHellRun();
+		}
+
 		// 跑到哪一步了。给 /hell_run_status 用。Python 靠它判断该不该继续等
 		public static string HellRunPhase()
 		{
@@ -419,7 +427,7 @@ namespace TerraBlind
 		// 写在 SetControls 里会被随后的 ResetEffects 冲掉
 		public override void ResetEffects()
 		{
-			if (Player != Main.LocalPlayer) return;
+			if (Player != Main.LocalPlayer || !AgentNetwork.CanAutomate) return;
 			Concessions.LongArmKeep();
 			// 演示用常驻:鱼鳃(掉水里不淹死)和光芒(地狱和洞里看得清)。每帧续时长
 			if (Config.I.AlwaysGillsAndShine)
@@ -431,7 +439,7 @@ namespace TerraBlind
 
 		public override void SetControls()
 		{
-			if (Player != Main.LocalPlayer) return;
+			if (Player != Main.LocalPlayer || !AgentNetwork.CanAutomate) return;
 
 			// 光标压在 UI 上时 delayUseItem 吞掉这一帧的使用(Player.cs:24410),而它【自锁】:
 			// 原版只在 !controlUseItem 时清(23969),我们每帧都按着,所以是永久失效不是偶发
@@ -822,7 +830,7 @@ namespace TerraBlind
 
 		public override void PostUpdate()
 		{
-			if (Player != Main.LocalPlayer) return;
+			if (Player != Main.LocalPlayer || !AgentNetwork.CanAutomate) return;
 			// speed fields are baked (×moveSpeed) LATE in Player.Update, only here are they trustworthy for planning
 			PhysicsSimulator.CaptureBaked(Player);
 			PlatformStock.Tick();

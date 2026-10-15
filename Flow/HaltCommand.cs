@@ -11,7 +11,10 @@ namespace TerraBlind
 		public override string Description => "急停:停掉全流程和所有正在跑的动作";
 
 		public override void Action(CommandCaller caller, string input, string[] args)
-			=> caller.Reply(Halt.All());
+		{
+			if (!AgentNetwork.CanAutomate) { caller.Reply("请用 /ai <编号> stop 停止 AI。"); return; }
+			caller.Reply(Halt.All());
+		}
 	}
 
 	public static class Halt

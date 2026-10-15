@@ -4,6 +4,8 @@ namespace TerraBlind
 {
 	public class TerraBlind : Mod
 	{
+		public override void HandlePacket(System.IO.BinaryReader reader, int whoAmI)
+			=> AgentNetwork.Receive(reader, whoAmI);
 		// J toggles rolling maze-nav execution toward MazeWand's point1 (debug driver). Registered here, polled in
 		// StateSnapshotPlayer.ProcessTriggers.
 		public static ModKeybind ToggleMazeNav;

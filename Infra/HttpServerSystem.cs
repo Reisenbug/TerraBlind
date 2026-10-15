@@ -77,6 +77,7 @@ namespace TerraBlind
 
 		public override void PostUpdateEverything()
 		{
+			if (!AgentNetwork.CanAutomate) return;
 			if (!_announced && _running)
 			{
 				if (Main.netMode == 2) { _announced = true; return; }
@@ -154,6 +155,22 @@ namespace TerraBlind
 		public override void Load()
 		{
 			LatestSnapshot = null;
+			if (Main.dedServ || !Config.I.AiClient) return;
+			StartListener();
+		}
+
+		public override void OnWorldLoad()
+		{
+			if (AgentNetwork.CanAutomate && !_running) StartListener();
+		}
+
+		public override void OnWorldUnload()
+		{
+			if (!Config.I.AiClient) Unload();
+		}
+
+		void StartListener()
+		{
 			try
 			{
 				_listener = new HttpListener();

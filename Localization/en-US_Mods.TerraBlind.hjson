@@ -38,6 +38,11 @@ Configs: {
 	Config: {
 		DisplayName: TerraBlind
 
+		AiClient: {
+			Label: AI client
+			Tooltip: Enable only on the separate AI client. Requires a mod reload. Enables the local HTTP service and multiplayer AI registration.
+		}
+
 		Headers: {
 			Assist: Assists
 			Debug: Debug

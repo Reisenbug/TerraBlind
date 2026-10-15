@@ -26,9 +26,15 @@ namespace TerraBlind
 			_inbox.Enqueue((key, f));
 		}
 		public static void DoubleTap(string key) => _inbox.Enqueue((key, new[] { true, false, true }));
+		public static void Clear()
+		{
+			while (_inbox.TryDequeue(out _)) { }
+			_running.Clear();
+		}
 
 		public override void PostUpdateInput()
 		{
+			if (!AgentNetwork.CanAutomate) return;
 			var cur = PlayerInput.Triggers.Current.KeyStatus;
 			if (KeysJson == "[]") KeysJson = Snapshot(cur);
 			while (_inbox.TryDequeue(out var c))

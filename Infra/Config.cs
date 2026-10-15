@@ -30,6 +30,10 @@ namespace TerraBlind
 
 		public static Config I => ModContent.GetInstance<Config>();
 
+		[ReloadRequired]
+		[DefaultValue(false)]
+		public bool AiClient;
+
 		[Header("Assist")]
 		// 默认关:用户没下指令就改地形属于"没说一声就动了人家的世界"
 		[DefaultValue(false)]

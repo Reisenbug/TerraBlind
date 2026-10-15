@@ -68,6 +68,7 @@ namespace TerraBlind
 		// 岩浆消失和被填掉结果一样。
 		public static void ClearLavaForPlacement(int wx, int wy)
 		{
+			if (Main.netMode != NetmodeID.SinglePlayer) return;
 			if (!Enabled) return;
 			if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return;
 			var t = Main.tile[wx, wy];
@@ -106,6 +107,7 @@ namespace TerraBlind
 
 		public static void FreezeLavaBeneath(Player p)
 		{
+			if (Main.netMode != NetmodeID.SinglePlayer) return;
 			if (!Enabled || p == null || !p.active || p.dead) return;
 			if (p.velocity.Y <= 0f) return;   // 没在下落
 			int bid = Unstick.BlockItem(p);
@@ -201,6 +203,7 @@ namespace TerraBlind
 
 		public override void PostUpdate()
 		{
+			if (!AgentNetwork.CanAutomate) return;
 			if (Player.whoAmI != Main.myPlayer) return;
 			// 【只有 start 全流程才扔】。名单上有矿石,而每帧无条件扫会让挖来的矿进包即毁:
 			// mine_vein 挖满 45 格铅矿,got 里只剩土块石块,到 craft 那步才发现手里是空的

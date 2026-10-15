@@ -11,7 +11,7 @@ namespace TerraBlind
 	// 箱子到底空没空从来没人查。日志里一串 GOT 全是水分。
 	public static class TreasureGrab
 	{
-		enum Ph { Idle, Goto, Open, Loot, Done }
+		enum Ph { Idle, Goto, Open, WaitOpen, Loot, Done }
 		static Ph _ph = Ph.Idle;
 
 		static int _tx, _ty;        // 调用方给的格(箱子任意一格)
@@ -79,7 +79,13 @@ namespace TerraBlind
 		static void CloseChest()
 		{
 			var p = Main.LocalPlayer;
-			if (p != null && p.chest != -1) { p.chest = -1; Recipe.FindRecipes(); }
+			if (p != null && p.chest != -1)
+			{
+				p.chest = -1;
+				if (Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient)
+					NetMessage.SendData(Terraria.ID.MessageID.SyncPlayerChest, number: -1);
+				Recipe.FindRecipes();
+			}
 		}
 
 		// 【开箱只有这一份】。/interact 那条路(LLM 直接编排动作时用)也调它。原来那边自己
@@ -96,6 +102,15 @@ namespace TerraBlind
 			// 陷阱箱(FakeContainers)在 Main.chest 里也有条目,直接写 Player.chest 就开了
 			// 而那条路绕过右键,引线根本不触发,是作弊。一律不开。按锚点判:它同样看 frameX
 			if (HttpServerSystem.IsFakeChestPublic(ax, ay)) { why = "trapped_chest"; return -1; }
+			if (!Reach.CanInteract(p, ax, ay)) { why = "out_of_reach"; return -1; }
+			if (Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient)
+			{
+				if (Chest.IsLocked(ax, ay)) { why = "locked"; return -1; }
+				CloseChest();
+				NetMessage.SendData(Terraria.ID.MessageID.RequestChestOpen, number: ax, number2: ay);
+				why = "pending";
+				return -1;
+			}
 			// 上一个还开着就先关,否则这个开不了(vanilla 关箱就是 chest=-1 + FindRecipes)
 			if (p.chest != -1) { p.chest = -1; Recipe.FindRecipes(); }
 			int idx = Chest.FindChest(ax, ay);
@@ -159,6 +174,7 @@ namespace TerraBlind
 						// 开箱查【交互】那把尺子(只有 tileRangeX),不是挖的那把。用错会在够不着处开箱
 						if (!Reach.CanInteract(p, _ax, _ay)) { Fail("到了却够不着(交互距离)"); return; }
 						_idx = OpenAt(_tx, _ty, out string ow);
+						if (ow == "pending") { _lootFrames = 0; _ph = Ph.WaitOpen; return; }
 						if (_idx < 0) { Fail(ow); return; }
 						int before = ItemsLeft();
 						if (before == 0) { Done("本来就是空的"); return; }
@@ -170,6 +186,15 @@ namespace TerraBlind
 						_ph = Ph.Loot;
 						return;
 					}
+
+				case Ph.WaitOpen:
+					if (++_lootFrames > 300) { Fail("服务器未允许开箱"); return; }
+					if (p.chest < 0 || p.chestX != _ax || p.chestY != _ay) return;
+					_idx = p.chest;
+					KeepList.MakeRoom(LootRoom);
+					Terraria.UI.ChestUI.LootAll();
+					_lootFrames = 0; _ph = Ph.Loot;
+					return;
 
 				case Ph.Loot:
 					{
