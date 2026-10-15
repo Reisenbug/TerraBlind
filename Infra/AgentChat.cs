@@ -4,9 +4,6 @@ using Terraria.ModLoader;
 
 namespace TerraBlind
 {
-	// Chat bridge for the external LLM agent (the "second player"). The player types /tb <instruction> in game
-	// chat; the agent process polls GET /instruction, thinks, drives the primitive endpoints, and replies through
-	// POST /say, which is flushed to game chat on the main thread (Main.NewText is not safe from the HTTP thread).
 	public class AgentChatCommand : ModCommand
 	{
 		public override CommandType Type => CommandType.Chat;
@@ -18,6 +15,7 @@ namespace TerraBlind
 		{
 			string text = string.Join(" ", args);
 			if (string.IsNullOrWhiteSpace(text)) { caller.Reply("usage: /tb <instruction>"); return; }
+			if (Config.I.AgentEnabled) { NativeAgent.Submit(text); return; }
 			AgentChat.Instructions.Enqueue(text);
 			Main.NewText($"<you → TB> {text}", 120, 200, 255);
 			DiagLog.Write($"[agent] instruction queued: {text}");
@@ -38,9 +36,16 @@ namespace TerraBlind
 		{
 			while (_say.TryDequeue(out var t))
 			{
-				if (t.bot) Main.NewText($"<TB> {t.text}", 140, 170, 200);   // 灰蓝 = 脚本
-				else Main.NewText($"<TB> {t.text}", 90, 230, 120);          // 绿 = LLM
+				if (AgentNetwork.RelayAgentReply(t.text)) continue;
+				if (t.bot) Main.NewText($"<TB> {t.text}", 140, 170, 200);
+				else Main.NewText($"<TB> {t.text}", 90, 230, 120);
 			}
+		}
+
+		public override void OnWorldUnload()
+		{
+			while (_say.TryDequeue(out _)) { }
+			while (Instructions.TryDequeue(out _)) { }
 		}
 	}
 }

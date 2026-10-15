@@ -13,6 +13,7 @@ namespace TerraBlind
 		public override void Action(CommandCaller caller, string input, string[] args)
 		{
 			if (!AgentNetwork.CanAutomate) { caller.Reply("请用 /ai <编号> stop 停止 AI。"); return; }
+			NativeAgent.Stop();
 			caller.Reply(Halt.All());
 		}
 	}

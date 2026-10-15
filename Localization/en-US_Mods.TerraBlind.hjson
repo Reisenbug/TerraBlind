@@ -44,9 +44,31 @@ Configs: {
 		}
 
 		Headers: {
+			Agent: 内置 Agent
 			Assist: Assists
 			Debug: Debug
 			Nav: Navigation
+		}
+
+		AgentEnabled: {
+			Label: 启用内置 Agent
+			Tooltip: 使用 /tb 下达指令，无需 Python。关闭后恢复外部脚本入口。
+		}
+		AgentApiKey: {
+			Label: Agent API Key
+			Tooltip: 保存在本机 ModConfigs，不会同步给其他玩家。用于通用 Agent，与 Jev 的 TypeSafe Key 分开。
+		}
+		AgentBaseUrl: {
+			Label: Agent Base URL
+			Tooltip: "OpenAI 兼容接口的 API 根地址，例如 https://api.openai.com/v1。也可填写完整的 /chat/completions 地址。"
+		}
+		AgentModel: {
+			Label: Agent 模型名
+			Tooltip: 填写服务商提供的模型 ID，模型必须支持 Chat Completions 工具调用。
+		}
+		AgentPersona: {
+			Label: 回复语言风格
+			Tooltip: 只描述你希望角色怎样说话，任务执行规则由内置提示词提供。
 		}
 
 		FreezeLavaUnderFeet: {

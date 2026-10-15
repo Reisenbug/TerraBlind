@@ -34,6 +34,22 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool AiClient;
 
+		[Header("Agent")]
+		[DefaultValue(true)]
+		public bool AgentEnabled = true;
+
+		[DefaultValue("")]
+		public string AgentApiKey = "";
+
+		[DefaultValue("https://api.openai.com/v1")]
+		public string AgentBaseUrl = "https://api.openai.com/v1";
+
+		[DefaultValue("")]
+		public string AgentModel = "";
+
+		[DefaultValue("说中文，简短自然，像一起玩游戏的队友。不要客服腔，不要反复确认已经明确的要求。")]
+		public string AgentPersona = "说中文，简短自然，像一起玩游戏的队友。不要客服腔，不要反复确认已经明确的要求。";
+
 		[Header("Assist")]
 		// 默认关:用户没下指令就改地形属于"没说一声就动了人家的世界"
 		[DefaultValue(false)]

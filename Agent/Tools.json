@@ -1,0 +1,584 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_state",
+      "description": "获取当前游戏状态快照:玩家血量/魔力/位置(像素,除以16得到格坐标)/速度/biome/背包装备。用它确认自己在哪、身上有什么。",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "wiki_search",
+      "description": "搜 Terraria 官方 wiki(terraria.wiki.gg),返回匹配的页面标题+摘要。**不确定的游戏知识一律查 wiki,别凭记忆瞎说**——配方、掉落、boss 召唤条件、物品用途、进度门槛都查。查到标题后用 wiki_page 读正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索词(英文最准,如 'King Slime' / 'Hellstone Bar')"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "wiki_page",
+      "description": "读 Terraria wiki 某个页面的正文(纯文本,含数据表如掉落率/伤害/配方)。title 用 wiki_search 返回的准确标题。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "页面标题(准确,如 'King Slime')"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "item_info",
+      "description": "查背包里某个物品的详细信息(描述tooltip + 类型标志:武器伤害/镐力/放置物createTile/是否消耗品/回血等)。**同名或看不懂的物品别猜别反复问玩家,用这个查一眼就懂**(比如 BOMB 召唤妖精 vs 炸弹摧毁图格,靠 tooltip 分清)。给 slot(槽位号)或 name(物品名)。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "slot": {
+            "type": "integer",
+            "description": "物品栏槽位号(0-based)"
+          },
+          "name": {
+            "type": "string",
+            "description": "物品名(和 slot 二选一)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_biome",
+      "description": "整张地图可读,所以'找丛林/雪地/地牢'不是探索问题,是查询问题。给一个 biome 名,返回它的中心可站坐标 {found,x,y,count}。支持:jungle/snow/desert/dungeon/corruption/crimson/hallow。找到坐标后直接 nav_to 过去。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "biome 名,如 'jungle'"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_descent",
+      "description": "找某 biome '下地狱代价最低'的地表主入口(main entrance)。不是逐列扫——用多源 Dijkstra 从地狱层整体向上流,顺着真实洞穴形状算代价,S形洞口从顶部进也算得出来。返回 {found,x,y,cost}。要速降地狱时先用它拿入口,再 nav_to 过去。biome 名同 find_biome。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "biome 名,如 'jungle'"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "descent_route",
+      "description": "在 find_descent 基础上,把'主入口→地狱'整条路线画进游戏画面(青色主线,持续2分钟),并列出绕路可及的箱子(金)和生命水晶(粉),真实支线路径相连。两档范围:挖<=dig_max且走<=walk_max → tier=main(顺手必捡);挖<=dig_max2且走<=walk_max2 → tier=optional(值不值你判断);再远不列。返回 {found,entrance,cost,line_len,treasures:[{x,y,kind,tier,line_x,line_y,dig,walk}]},dig/walk 是实际要挖/走的格数,line_x/line_y 是接驳点。规划'下地狱顺路搜刮'先调它。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "biome 名,如 'jungle'"
+          },
+          "dig_max": {
+            "type": "integer",
+            "description": "main档挖掘格数上限,默认20"
+          },
+          "walk_max": {
+            "type": "integer",
+            "description": "main档移动格数上限,默认60"
+          },
+          "dig_max2": {
+            "type": "integer",
+            "description": "optional档挖掘上限,默认50"
+          },
+          "walk_max2": {
+            "type": "integer",
+            "description": "optional档移动上限,默认120"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "tile_names",
+      "description": "查 find_tiles 能用的方块名。给一个关键词(英文,如 'heart'/'chest'/'altar'),返回所有含该词的原版 TileID 名。找方块前先用它确认准确名字,别猜。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "关键词(英文子串),留空列全部"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_tiles",
+      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。扫不到就是真没有(钨和银、铜和锡是二选一生成的,没扫到钨就去扫银),不用查 wiki 猜它在哪一层,也不用自己去找洞口。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "TileID 精确名,如 'Iron'"
+          },
+          "n": {
+            "type": "integer",
+            "description": "返回数量,默认5"
+          },
+          "max_dist": {
+            "type": "integer",
+            "description": "搜索半径(格),默认300"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nav_to",
+      "description": "移动到目标方块坐标，等待到达、失败或超时。exact 用于矿石或实心目标，reach 用于开箱等交互目标。返回真实状态和物品增减。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "exact": {
+            "type": "boolean",
+            "description": "目标是矿石/实心块这种人站不上去的格子时传 true。寻路会切到挖矿模式:直接挖竖井过去,落点就在目标那一片里,不会贴到附近地面就说到了。挖矿几乎总该传 true"
+          },
+          "reach": {
+            "type": "boolean",
+            "description": "开箱子这种够得着就行的,传 true。不用挤到那一格上"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mine_vein",
+      "description": "【要攒够多少个矿就用这个,一次搞定】。给矿种和数量,它自己跑完整个循环:找最近的矿脉 → 挖竖井过去(落在矿脉中间) → 站着把射程内同种矿一次挖光 → 不够就去下一个矿脉,直到数量够或附近没了。**不要自己 find_tiles + nav_to + use_item 一颗颗挖**,那要十几轮还容易数错。返回两个数,别搞混:**tiles_removed=清掉了几格(不代表到手)**,**got=真正进背包的东西(这个才算数)**。两者对不上时会给 warn,通常是寻路挖竖井时把矿顺手清了、掉落物没吸到。停止原因:enough=够了/exhausted=附近没了/tool_weak=镐不够硬/interrupted=玩家打断。挖铁/铅/银/钨/铜/锡/金/铂金这些都走这个。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "矿的 TileID 名,如 Iron/Lead/Silver/Tungsten(不确定先 tile_names 查)"
+          },
+          "count": {
+            "type": "integer",
+            "description": "要挖到几个"
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mine",
+      "description": "【挖穿过去】。从人当前位置朝一个方向一路挖到目标格,自己开竖井/横井,人在哪、该挖哪几格全由它算。**目标够不着、埋在实心块里、要往下挖到深处的矿,一律用这个,别用 use_item**(那个只挥一格,够不着就报 out_of_reach)。也【不用】先 nav_to:寻路站不上去的地方正是该用它的地方。dir 选朝哪个方向挖(down 往下开竖井最常用),target_x/y 给要挖到的那一格。等挖完才返回。返回 outcome:done=挖通了/stalled=挥了半天一格没掉(镐不够硬,换更好的镐)/unbreakable=那格上面压着东西原版不许破坏(换镐没用,先清上面)/out_of_reach=中途够不着了/no_tiles=这个方向没东西可挖/no_pickaxe=背包前十格没镐;mined=实际挖掉几格,got=挖到了什么。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dir": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "up",
+              "down"
+            ]
+          },
+          "target_x": {
+            "type": "integer"
+          },
+          "target_y": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "target_x",
+          "target_y"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_item",
+      "description": "对着一个格坐标使用背包里某个槽位的道具,**一步完成**:自动切槽位+瞄准+使用,并等到动作结束才返回。镐挖、斧砍树、剑砍、扔炸弹、用魔杖、喝药都走这个。**放东西不走这个,用 place_at**(它会自己挪脚和补锚点,这里不会)。slot 直接抄 get_state 里那个物品的 slot 字段。x,y 给大概位置即可:砍树/挖矿会自动吸附到最近的树干根部/可挖格,不用你算准。返回 outcome:removed=目标已消失(树倒了/矿挖掉了,成功);no_progress=一下都没啃动,看 reason:reason=tool_weak 是镐/斧不够硬(换更好的);reason=blocked 是上方压着树或箱子(原版不许抽走支撑,先清掉上方那格,换镐没用);**reason=out_of_reach 说明这一格得挖过去而不是站着挥,改用 mine**。挖【挖到为止】,不用你估时间。n/a=喝药/扔炸弹/召唤这种既不采集也不放置的。采集类务必先 find_tiles 拿真实坐标,别自己编。这个工具只挥够得着的一格(砍树、挖脚边的矿);要挖深处或挖穿地形用 mine。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer",
+            "description": "目标格x"
+          },
+          "y": {
+            "type": "integer",
+            "description": "目标格y"
+          },
+          "slot": {
+            "type": "integer",
+            "description": "物品栏槽位号(0-based)"
+          },
+          "duration_ticks": {
+            "type": "integer",
+            "description": "【挖和放都不用填】它们挖到/放到为止。只有喝药/扔炸弹/召唤这种没有可观测结果的才需要,默认30"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "slot"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "place_at",
+      "description": "把背包里的东西放到指定格:家具(工作台/熔炉/铁砧/桌椅)、方块、平台、绳子都走这个。**放东西一律用它,别用 use_item**。它自己解决放置的三个条件:够不着就挪脚走过去(行差大了还会先垒柱子/铺平台造落脚点)、身子挡着就让开、挡路的墙挖开、那格四邻没有可附着的锚就从你脚下那块地接一串方块过去。所以地不平、旁边有树、脚下悬空都不用你操心,给个大概位置就行。item 用物品名(中英文都行)。要连放一排就给 n 和 step_x/step_y(比如往右铺5格:n=5,step_x=1)。返回 outcome:done=全放上了/partial=放上一部分就卡住了/stuck=一格都没放上(reason 说卡在哪);cells 逐格说明结果。**一格失败就停,不会闷头刷完**,看 reason 换地方再来。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string",
+            "description": "物品名,如 '工作台' 或 'Wood'"
+          },
+          "x": {
+            "type": "integer",
+            "description": "目标格x。【不确定就别给】,代码会自己挑一个放得下又够得着的位置"
+          },
+          "y": {
+            "type": "integer",
+            "description": "目标格y。同上,绝对不要自己编坐标"
+          },
+          "n": {
+            "type": "integer",
+            "description": "连放几个,默认1"
+          },
+          "step_x": {
+            "type": "integer",
+            "description": "连放时每格往右挪几列(往左给负数),默认0"
+          },
+          "step_y": {
+            "type": "integer",
+            "description": "连放时每格往下挪几行(往上给负数),默认0"
+          }
+        },
+        "required": [
+          "item"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "interact",
+      "description": "与一个格坐标上的方块交互:开箱子、开门、按机关等(相当于右键那个方块)。先 nav_to 到方块旁边(交互有距离限制)。开箱后用 get_state 看背包变化确认掏到了什么。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer",
+            "description": "方块格x"
+          },
+          "y": {
+            "type": "integer",
+            "description": "方块格y"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "fight",
+      "description": "用当前手持武器持续攻击附近最近的敌人(max_dist 格内自动锁定、追打)。打怪本质就是这个。先确保手上拿的是武器(get_state 看 selected_slot / 用 use_item 前先切槽)。这个工具会阻塞打一阵子并报告,期间玩家也能打断。清场或没敌人了就会停。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "max_dist": {
+            "type": "integer",
+            "description": "锁敌半径(格),默认25"
+          },
+          "seconds": {
+            "type": "number",
+            "description": "打多久(秒),默认10;还有敌人可以再调一次"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "loot_all",
+      "description": "把当前【已打开】的箱子里的东西全部掏进背包。必须先 interact 开箱,再 loot_all。",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "craft",
+      "description": "合成一个物品(按名字)。需要站在对应工作台/熔炉旁边、材料足够,否则失败。失败时会返回当前能合成的物品列表(available_names),据此判断缺工作台还是缺材料。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "物品名。中文显示名('工作台')或英文内部名('WorkBench'/'Work Bench')都行"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "数量,默认1"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "track",
+      "description": "【要攒够某个数量的东西时,先用这个立台账】。比如查出做铁头盔要15铁锭=45铁矿、还要5铁锭做铁砧,就 track {\"铁矿\":60}。之后**每个动作的返回里都会自动带【进度】字段**(如 铁矿 23/60,够了会标'够了'),数字是从背包实时读的真值。所以挖矿这种要重复十几轮的活,照着进度判断够没够就行,**绝不要自己在脑子里累加**:你看不到被省略的旧结果,一定会数错。攒完一样接着攒下一样时,重新 track 覆盖即可。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "object",
+            "description": "物品名->目标数量,如 {\"铁矿\":60,\"石块\":20}"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "recipe",
+      "description": "查一个物品的配方:要什么材料(每样带 need 要多少 / have 你现在有多少)、要站在哪种工作台旁(stations,空=徒手可做)。stations 每项是 {tile:台子的方块名, items:[能放出这台子的物品,各带 have]},任选 items 里的一个做出来放下去就行,优先挑 have>0 或者最好做的。没材料的物品也能查--这是查配方,不是查能不能做。要凑齐一批东西时先用它算清楚缺什么,别去猜也别翻wiki。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "物品名。中文('绳')或英文内部名('Rope')都行"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "act",
+      "description": "最底层的动作原语——按键+光标+使用,你自己编排。上面那些工具做不到的事(搭绳梯、边爬边放、钩爪、骑坐骑、精确连放)就用这个。\nsteps 数组【串行】执行,一个 step 内的所有字段【同时】生效。\n坐标一律相对【脚下那一格】(origin):dx>0 向右, dy>0 向下。[0,0]=人所在的格,[0,1]=踩着的地板。origin 每帧跟着人走,所以 rel 适合边走边做;要钉死在一个世界格上用 at。\n字段:keys 数组(left/right/up/down/jump/use_tile/throw/hook/mount)、rel或at [dx,dy]=光标位置、slot=用哪个槽的东西(0-57,抄 get_state)、use=true 持续使用手上的东西、until=这步什么时候算完(【必填】)、invariant=这步成立的前提,一旦破了立刻停下报告。\nuntil 五选一:{\"frames\":N} 按住N帧 / {\"times\":N} 用N次 / {\"consumed\":{\"item\":物品ID,\"n\":N}} 消耗掉N个 / {\"moved\":{\"dx\":0,\"dy\":-5}} 移动了几格 / {\"tile\":{\"rel\":[0,-1],\"has\":true}} 某格出现/消失了方块。\ninvariant 三选一:{\"on_rope\":true} 必须挂在绳上 / {\"cursor_in_reach\":true} 光标必须够得到 / {\"on_ground\":true} 必须站地上。\n返回 outcome:done=完成;no_progress=进度卡住不动了;invariant_broken=前提破了;timeout=超时。失败时【会把现场原样给你】——光标在哪一格、够不够得到、那格有没有方块、有没有可附着的邻居、人在哪/在不在绳上/站没站地、手上拿的什么还剩几个。why 数组列出可疑项。【看现场自己想明白哪一步错了再改】,别原样重发。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "description": "串行执行的步骤",
+            "items": {
+              "type": "object",
+              "properties": {
+                "keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "同时按住的键:left/right/up/down/jump/use_tile/throw/hook/mount"
+                },
+                "rel": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "description": "光标格[dx,dy],相对脚下格,每帧跟着人走"
+                },
+                "at": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "description": "光标格[dx,dy],开始时算一次就钉死不动"
+                },
+                "slot": {
+                  "type": "integer",
+                  "description": "用哪个槽位的物品(0-57)"
+                },
+                "use": {
+                  "type": "boolean",
+                  "description": "true=持续使用手上的物品"
+                },
+                "until": {
+                  "type": "object",
+                  "description": "结束条件,必填"
+                },
+                "invariant": {
+                  "type": "object",
+                  "description": "前提,破了立刻停"
+                }
+              },
+              "required": [
+                "until"
+              ]
+            }
+          },
+          "timeout_frames": {
+            "type": "integer",
+            "description": "总超时帧数,默认1800(30秒)"
+          }
+        },
+        "required": [
+          "steps"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "ask",
+      "description": "有疑问、需要玩家拍板时,用这个问玩家一个问题,然后【阻塞等待】玩家的回答(玩家用 /tb 回)。返回玩家的原话。任务不中断——拿到答案就在同一个任务里继续干。别为了省事自己瞎猜;也别把该问的做成结束回合让玩家重新发指令。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "问玩家的话,中文"
+          }
+        },
+        "required": [
+          "question"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "say",
+      "description": "对玩家说话(中文,简短,像队友)。开始/关键进展/完成/失败都说一句。这不是提问——不需要回答用 say,需要回答用 ask。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "set_combat",
+      "description": "设置默认战斗许可。玩家明确要求别自动走位或别攻击时使用。未指定字段保持不变，直到再次修改或离开世界。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "auto_dodge": {
+            "type": "boolean"
+          },
+          "auto_attack": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+]

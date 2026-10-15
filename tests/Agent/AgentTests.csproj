@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-agent-tests/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-agent-tests/bin/</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Agent/Conversation.cs" Link="Conversation.cs" />
+    <Compile Include="Program.cs.txt" />
+  </ItemGroup>
+</Project>

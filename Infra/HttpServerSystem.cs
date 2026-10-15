@@ -88,7 +88,7 @@ namespace TerraBlind
 
 			if (Main.LocalPlayer == null || !Main.LocalPlayer.active) return;
 
-			if (_haltPending) { _haltPending = false; Halt.All(); }
+			if (_haltPending) { _haltPending = false; NativeAgent.Stop(); Halt.All(); }
 
 			PerceptionDiff.Tick();   // eye B-path: push salient world-change events to the agent (silent otherwise)
 			SurvivalReflex.Tick();   // hand reflex: stay alive (jump out of lava / quick-heal) while any action runs
@@ -300,7 +300,18 @@ namespace TerraBlind
 
 		private void Handle(HttpListenerContext ctx)
 		{
-			string path = ctx.Request.Url.AbsolutePath;
+			var result = Dispatch(ctx.Request.Url.AbsolutePath, ReadBody(ctx), ctx.Request.QueryString);
+			byte[] bytes = Encoding.UTF8.GetBytes(result.Body);
+			ctx.Response.StatusCode = result.Status;
+			ctx.Response.ContentType = ctx.Request.Url.AbsolutePath == "/jev" ? "text/html; charset=utf-8" : "application/json";
+			ctx.Response.ContentLength64 = bytes.Length;
+			ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+			ctx.Response.OutputStream.Close();
+		}
+
+		public static (int Status, string Body) Dispatch(string path, string payload = "{}",
+			System.Collections.Specialized.NameValueCollection query = null)
+		{
 			string body;
 			int status = 200;
 
@@ -311,7 +322,7 @@ namespace TerraBlind
 			else if (path == "/trace")
 			{
 				// 逐帧追踪开关。默认关。开着的时候候选表/邻居每行几千字符,真正的事件全被淹掉。
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				if (rb.Contains("\"on\":true")) DiagLog.Trace = true;
 				else if (rb.Contains("\"on\":false")) DiagLog.Trace = false;
 				body = "{\"trace\":" + (DiagLog.Trace ? "true" : "false") + "}";
@@ -365,7 +376,7 @@ namespace TerraBlind
 			}
 			else if (path == "/swap")
 			{
-				var qs = ctx.Request.QueryString;
+				var qs = query ?? new System.Collections.Specialized.NameValueCollection();
 				if (int.TryParse(qs["src"], out int src) && int.TryParse(qs["dst"], out int dst))
 				{
 					_swapQueue.Enqueue((src, dst));
@@ -380,8 +391,7 @@ namespace TerraBlind
 			else if (path == "/fight")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				if (rb.Contains("\"active\":false"))
 					FightCoordinator.Stop();
@@ -400,7 +410,7 @@ namespace TerraBlind
 			else if (path == "/collect_treasure")
 			{
 				// 一条龙:走过去→开箱→掏空→验收。拆在 python 里的话,轮询的是不带坐标的全局 last_interact
-				string ctBody = ReadBody(ctx).Replace(" ", "");
+				string ctBody = payload.Replace(" ", "");
 				var ctX = System.Text.RegularExpressions.Regex.Match(ctBody, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ctY = System.Text.RegularExpressions.Regex.Match(ctBody, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (!ctX.Success || !ctY.Success) { body = "{\"ok\":false,\"reason\":\"bad_params\"}"; status = 400; }
@@ -431,8 +441,7 @@ namespace TerraBlind
 			else if (path == "/control")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var ci = new ControlInput();
 				ci.SelectedSlot = -1;
 				var rb = reqBody.Replace(" ", "");
@@ -459,8 +468,7 @@ namespace TerraBlind
 			else if (path == "/interact")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var txMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"tile_x\"\\s*:\\s*(-?\\d+)");
 				var tyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"tile_y\"\\s*:\\s*(-?\\d+)");
@@ -482,8 +490,7 @@ namespace TerraBlind
 			else if (path == "/place")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var dxMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"dx\"\\s*:\\s*(-?\\d+)");
 				var dyMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"dy\"\\s*:\\s*(-?\\d+)");
@@ -514,8 +521,7 @@ namespace TerraBlind
 			else if (path == "/mine")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var dirM = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\"\\s*:\\s*\"(left|right|up|down)\"");
 				var txM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wx\"\\s*:\\s*(-?\\d+)");
@@ -553,8 +559,7 @@ namespace TerraBlind
 			else if (path == "/item_use")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var wxM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wx\"\\s*:\\s*(-?\\d+)");
 				var wyM = System.Text.RegularExpressions.Regex.Match(rb, "\"target_wy\"\\s*:\\s*(-?\\d+)");
@@ -595,8 +600,7 @@ namespace TerraBlind
 			else if (path == "/walk_to_edge")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
 				var extraMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"extra_tiles\"\\s*:\\s*([0-9.]+)");
@@ -613,8 +617,7 @@ namespace TerraBlind
 			else if (path == "/jump")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
 				var lxMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"launch_x\"\\s*:\\s*(-?[0-9.]+)");
@@ -692,8 +695,7 @@ namespace TerraBlind
 			else if (path == "/skill")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var nameMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"name\"\\s*:\\s*\"([^\"]+)\"");
 				var dirMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"direction\"\\s*:\\s*\"([^\"]+)\"");
@@ -748,8 +750,7 @@ namespace TerraBlind
 			else if (path == "/replay")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var frames = new System.Collections.Generic.List<ReplayFrame>();
 				var frameMatches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\{[^}]*\\}");
 				foreach (System.Text.RegularExpressions.Match m in frameMatches)
@@ -812,8 +813,7 @@ namespace TerraBlind
 				// POST {ax?,ay?} → 启动 build_rec.json 的帧重放,锚点缺省=玩家脚下。
 				// 整个建造(nav→place/mine→next)都在 BuildReplayer 里,Python 只负责触发和轮询。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var axM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"ax\"\\s*:\\s*(-?\\d+)");
 				var ayM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"ay\"\\s*:\\s*(-?\\d+)");
 				int ax = axM.Success ? int.Parse(axM.Groups[1].Value) : -1;
@@ -835,8 +835,7 @@ namespace TerraBlind
 			else if (path == "/test_action")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var nm = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
 				var dm = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\":(-?\\d+)");
@@ -848,8 +847,7 @@ namespace TerraBlind
 			else if (path == "/craft")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var idMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"item_id\":(\\d+)");
 				var nameMatch = System.Text.RegularExpressions.Regex.Match(reqBody, "\"item_name\"\\s*:\\s*\"([^\"]+)\"");
@@ -932,8 +930,7 @@ namespace TerraBlind
 				// 把目标递归展开到叶子:要去世界上弄到哪些东西、按什么顺序合成、要哪些台子。
 				// 配方是游戏自己的表,展开是纯查表,不该走模型也不该一层层过 HTTP
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rtM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
 				var rqM = System.Text.RegularExpressions.Regex.Match(reqBody.Replace(" ", ""), "\"qty\":(\\d+)");
 				if (!rtM.Success)
@@ -952,8 +949,7 @@ namespace TerraBlind
 				// 查配方:要什么材料、站哪种台子、还差多少。craft 失败只说 not_available,不说缺什么。
 				// 不限于"当前可合成"。没材料的照样能查,那才是查配方的意义。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
 				if (!rnM.Success)
 				{ body = "{\"error\":\"bad_request\"}"; status = 400; }
@@ -1043,8 +1039,7 @@ namespace TerraBlind
 			else if (path == "/nav")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
 				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
@@ -1073,8 +1068,7 @@ namespace TerraBlind
 			else if (path == "/nav_unlimited")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
 				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
@@ -1094,8 +1088,7 @@ namespace TerraBlind
 			else if (path == "/nav_start")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
@@ -1106,8 +1099,7 @@ namespace TerraBlind
 			else if (path == "/nav_set_path")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var signMatch = System.Text.RegularExpressions.Regex.Match(reqBody.Replace(" ", ""), "\"sign\"\\s*:\\s*(-?1)");
 				int navSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
 				var nodes = NavCoordinator.ParsePathPublic(reqBody);
@@ -1131,8 +1123,7 @@ namespace TerraBlind
 			else if (path == "/sim_jump")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				float simPx = float.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"px\":(-?[\\d.]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
 				float simPy = float.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"py\":(-?[\\d.]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
@@ -1172,8 +1163,7 @@ namespace TerraBlind
 			else if (path == "/start_seg_nav")
 			{
 				string reqBodySN;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBodySN = sr.ReadToEnd();
+				reqBodySN = payload;
 				var rbSN = reqBodySN.Replace(" ", "");
 				int gxSN = int.Parse(System.Text.RegularExpressions.Regex.Match(rbSN, "\"gx\":(-?\\d+)").Groups[1].Value);
 				int gySN = int.Parse(System.Text.RegularExpressions.Regex.Match(rbSN, "\"gy\":(-?\\d+)").Groups[1].Value);
@@ -1188,8 +1178,7 @@ namespace TerraBlind
 			else if (path == "/debug_segment_plan")
 			{
 				string reqBodyS;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBodyS = sr.ReadToEnd();
+				reqBodyS = payload;
 				var rbS = reqBodyS.Replace(" ", "");
 				int gxS = int.Parse(System.Text.RegularExpressions.Regex.Match(rbS, "\"gx\":(-?\\d+)").Groups[1].Value);
 				int gyS = int.Parse(System.Text.RegularExpressions.Regex.Match(rbS, "\"gy\":(-?\\d+)").Groups[1].Value);
@@ -1202,8 +1191,7 @@ namespace TerraBlind
 			else if (path == "/ss_plan")
 			{
 				string rbBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					rbBody = sr.ReadToEnd();
+				rbBody = payload;
 				var rb2 = rbBody.Replace(" ", "");
 				int gx2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gx\":(-?\\d+)").Groups[1].Value);
 				int gy2 = int.Parse(System.Text.RegularExpressions.Regex.Match(rb2, "\"gy\":(-?\\d+)").Groups[1].Value);
@@ -1228,8 +1216,7 @@ namespace TerraBlind
 			else if (path == "/debug_waypoints")
 			{
 				string reqBodyW;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBodyW = sr.ReadToEnd();
+				reqBodyW = payload;
 				var rbW = reqBodyW.Replace(" ", "");
 				int gxW = int.Parse(System.Text.RegularExpressions.Regex.Match(rbW, "\"gx\":(-?\\d+)").Groups[1].Value);
 				int gyW = int.Parse(System.Text.RegularExpressions.Regex.Match(rbW, "\"gy\":(-?\\d+)").Groups[1].Value);
@@ -1258,8 +1245,7 @@ namespace TerraBlind
 			else if (path == "/exec_jump_to")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				int ejTargetCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"target_cx\":(-?\\d+)").Groups[1].Value);
 				int ejSign2 = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
@@ -1268,8 +1254,7 @@ namespace TerraBlind
 			else if (path == "/exec_jump")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				int ejHold = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"hold\":(\\d+)").Groups[1].Value);
 				int ejSign = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Success ? int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)").Groups[1].Value) : 1;
@@ -1303,8 +1288,7 @@ namespace TerraBlind
 			else if (path == "/test_plat_up_n")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\":(\\d+)");
 				int n = nM.Success ? int.Parse(nM.Groups[1].Value) : 2;
@@ -1327,8 +1311,7 @@ namespace TerraBlind
 			else if (path == "/test_plat_jump")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var signM = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)");
 				int sign = signM.Success ? int.Parse(signM.Groups[1].Value) : 1;
@@ -1349,8 +1332,7 @@ namespace TerraBlind
 			else if (path == "/test_plat_jump_n")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\":(\\d+)");
 				var signM2 = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\":(-?1)");
@@ -1381,8 +1363,7 @@ namespace TerraBlind
 			else if (path == "/debug_jump_edges")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				int dbgCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)").Groups[1].Value);
 				int dbgCy = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cy\":(-?\\d+)").Groups[1].Value);
@@ -1402,8 +1383,7 @@ namespace TerraBlind
 			else if (path == "/debug_jump_edges_verbose")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				int dbgCx = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)").Groups[1].Value);
 				int dbgCy = int.Parse(System.Text.RegularExpressions.Regex.Match(rb, "\"cy\":(-?\\d+)").Groups[1].Value);
@@ -1451,8 +1431,7 @@ namespace TerraBlind
 			else if (path == "/plan_path")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var signMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"sign\"\\s*:\\s*(-?1)");
 				int planSign = signMatch.Success ? int.Parse(signMatch.Groups[1].Value) : 1;
@@ -1463,8 +1442,7 @@ namespace TerraBlind
 			else if (path == "/path_vis")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var nodes = new System.Collections.Generic.List<(int wx, int wy)>();
 				var matches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
 				foreach (System.Text.RegularExpressions.Match m in matches)
@@ -1475,8 +1453,7 @@ namespace TerraBlind
 			else if (path == "/path_vis_blocks")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var pillar = new System.Collections.Generic.List<(int wx, int wy)>();
 				var bridge = new System.Collections.Generic.List<(int wx, int wy)>();
 				var matches = System.Text.RegularExpressions.Regex.Matches(reqBody, "\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
@@ -1495,8 +1472,7 @@ namespace TerraBlind
 			else if (path == "/path_vis_tiles")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var parsed = System.Text.Json.JsonDocument.Parse(reqBody);
 				var tiles = new System.Collections.Generic.List<(int wx, int wy, Microsoft.Xna.Framework.Color color)>();
 				foreach (var item in parsed.RootElement.EnumerateArray())
@@ -1514,8 +1490,7 @@ namespace TerraBlind
 			else if (path == "/debug_labels")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var parsed = System.Text.Json.JsonDocument.Parse(reqBody);
 				var labels = new System.Collections.Generic.List<(int wx, int wy, string text, Microsoft.Xna.Framework.Color color)>();
 				foreach (var item in parsed.RootElement.EnumerateArray())
@@ -1578,8 +1553,7 @@ namespace TerraBlind
 			else if (path == "/breakpoint_set")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var idM = System.Text.RegularExpressions.Regex.Match(rb, "\"id\":\"([^\"]+)\"");
 				var onM = System.Text.RegularExpressions.Regex.Match(rb, "\"on\":\"([^\"]+)\"");
@@ -1606,8 +1580,7 @@ namespace TerraBlind
 			else if (path == "/breakpoint_clear")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var idM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"id\"\\s*:\\s*\"([^\"]+)\"");
 				if (idM.Success) { BreakpointSystem.Clear(idM.Groups[1].Value); body = "{\"ok\":true}"; }
 				else body = "{\"error\":\"missing id\"}";
@@ -1632,8 +1605,7 @@ namespace TerraBlind
 				else
 				{
 					string reqBody;
-					using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-						reqBody = sr.ReadToEnd();
+					reqBody = payload;
 					var rb = reqBody.Replace(" ", "");
 					var holdM = System.Text.RegularExpressions.Regex.Match(rb, "\"hold_frames\":(\\d+)");
 					var dirM  = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\":(-?1)");
@@ -1672,8 +1644,7 @@ namespace TerraBlind
 			else if (path == "/terrain")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				int cx = 0, cy = 0, rw = 40, rh = 20;
 				var mCx = System.Text.RegularExpressions.Regex.Match(rb, "\"cx\":(-?\\d+)");
@@ -1724,8 +1695,7 @@ namespace TerraBlind
 			else if (path == "/act")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "").Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var steps = new System.Collections.Generic.List<ActStep>();
 				string err = null;
@@ -1788,8 +1758,7 @@ namespace TerraBlind
 			else if (path == "/place_at")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var atM = System.Text.RegularExpressions.Regex.Match(rb, "\"at\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
@@ -1821,8 +1790,7 @@ namespace TerraBlind
 			else if (path == "/place_anywhere")
 			{
 				string paBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					paBody = sr.ReadToEnd();
+				paBody = payload;
 				var pab = paBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var paIt = System.Text.RegularExpressions.Regex.Match(pab, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var paAt = System.Text.RegularExpressions.Regex.Match(pab, "\"world\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\]");
@@ -1877,8 +1845,7 @@ namespace TerraBlind
 			else if (path == "/rope_ladder")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
@@ -1893,8 +1860,7 @@ namespace TerraBlind
 			else if (path == "/bridge")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var dM = System.Text.RegularExpressions.Regex.Match(rb, "\"dir\"\\s*:\\s*\"(left|right)\"");
@@ -1910,8 +1876,7 @@ namespace TerraBlind
 			else if (path == "/pillar")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var nM = System.Text.RegularExpressions.Regex.Match(rb, "\"n\"\\s*:\\s*(\\d+)");
@@ -1937,8 +1902,7 @@ namespace TerraBlind
 			else if (path == "/place_walls")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var itM = System.Text.RegularExpressions.Regex.Match(rb, "\"item\"\\s*:\\s*\"([^\"]*)\"");
 				var cells = new System.Collections.Generic.List<(int, int)>();
@@ -1971,8 +1935,7 @@ namespace TerraBlind
 			else if (path == "/walk_place")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace("\n", "").Replace("\r", "").Replace("\t", "");
 				var dM = System.Text.RegularExpressions.Regex.Match(rb, "\"dest_x\"\\s*:\\s*(-?\\d+)");
 				var targets = new System.Collections.Generic.List<(int, int, string)>();
@@ -2020,8 +1983,7 @@ namespace TerraBlind
 			else if (path == "/settle")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var cM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"col\"\\s*:\\s*(-?\\d+)");
 				if (!cM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /settle {\\\"col\\\":2027}\"}"; status = 400; }
 				else
@@ -2044,8 +2006,7 @@ namespace TerraBlind
 			else if (path == "/hop_up")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"row\"\\s*:\\s*(-?\\d+)");
 				var cM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"col\"\\s*:\\s*(-?\\d+)");
 				if (!rM.Success) { body = "{\"accepted\":false,\"reason\":\"bad_params\",\"usage\":\"POST /hop_up {\\\"row\\\":242,\\\"col\\\":2027}\"}"; status = 400; }
@@ -2114,8 +2075,7 @@ namespace TerraBlind
 			{
 				// Bellman receding-horizon nav (same engine as the K keybind). Poll /nav_recede_done for the outcome.
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var rb = reqBody.Replace(" ", "");
 				var gxM = System.Text.RegularExpressions.Regex.Match(rb, "\"gx\":(-?\\d+)");
 				var gyM = System.Text.RegularExpressions.Regex.Match(rb, "\"gy\":(-?\\d+)");
@@ -2137,8 +2097,7 @@ namespace TerraBlind
 			{
 				// 只建场不导航:场按目标格缓存,跟出发位置无关,所以盖房那几十秒里可以先建好
 				string wbody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					wbody = sr.ReadToEnd();
+				wbody = payload;
 				var wb = wbody.Replace(" ", "");
 				var wxM = System.Text.RegularExpressions.Regex.Match(wb, "\"gx\":(-?\\d+)");
 				var wyM = System.Text.RegularExpressions.Regex.Match(wb, "\"gy\":(-?\\d+)");
@@ -2167,8 +2126,7 @@ namespace TerraBlind
 				// 【盖房那几十秒里把整条路线算完】。/descent_route 一趟约 4 秒(入口场 + 走廊场 + 每个宝藏一次
 				// BuildField),放主线程就是人干站着等。这里扔后台,盖完房子那次同步调用直接取结果。
 				string arBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					arBody = sr.ReadToEnd();
+				arBody = payload;
 				var arM = System.Text.RegularExpressions.Regex.Match(arBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
 				string arBiome = arM.Success ? arM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] arSig = BiomeSig(arBiome);
@@ -2209,8 +2167,7 @@ namespace TerraBlind
 			else if (path == "/say")
 			{
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var tM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 				if (tM.Success)
 				{
@@ -2226,8 +2183,7 @@ namespace TerraBlind
 				// POST {"slot":18} or {"name":"Bomb"} → full item info so the agent can tell same-named / confusable
 				// items apart (BOMB summons a fairy; 炸弹 destroys tiles). Returns type flags + tooltip lines.
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var slM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"slot\"\\s*:\\s*(\\d+)");
 				var inM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([^\"]+)\"");
 				var pl = Main.LocalPlayer;
@@ -2270,8 +2226,7 @@ namespace TerraBlind
 				// POST {"name":"jungle"} → 那个生态一个能站的坐标。整张图都读得到,所以找生态是查询不是探索:
 				// 扫标志方块、取平均、往下贴到地面。支持 jungle/snow/desert/dungeon/corruption/crimson/hallow。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] sigTypes = BiomeSig(biome);
@@ -2315,8 +2270,7 @@ namespace TerraBlind
 				// POST {"name":"jungle"} → 下地狱【真实路线】最便宜的那个地表入口。下降代价是拓扑的
 				// (S 形洞从顶上进比哪儿直挖都快),所以从整条地狱带往上 flood,取露天候选里 H 最小的。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] sigTypes = BiomeSig(biome);
@@ -2333,7 +2287,7 @@ namespace TerraBlind
 			{
 				// POST {"x":起点列} → 地狱 170 格桥线。方向按玩家在哪半边定,房子在近端。
 				// 只算只画不搭。线对不对先用眼睛验。
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var hxm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var pl = Main.LocalPlayer;
 				int bx = hxm.Success ? int.Parse(hxm.Groups[1].Value)
@@ -2371,8 +2325,7 @@ namespace TerraBlind
 				// POST {"name":"jungle"} → /find_descent 的入口 + 描出来的下地狱路线 + 走廊内的宝藏(箱子/生命水晶)。
 				// 顺便在世界里画两分钟:青色主线,金箱黄叉,水晶粉叉。line_x/line_y 是从主线拐出去的接驳点。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var bnM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([a-zA-Z_]+)\"");
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] sigTypes = BiomeSig(biome);
@@ -2390,8 +2343,7 @@ namespace TerraBlind
 				// POST {"x":..,"y":..} → 上次 /descent_route 那张地狱带场在这一格的 H(=到地狱还要多少)。
 				// H 越大离地狱越远,所以"走过头了没"由真实的场判,不由脚本位置判。h:-1 = 不在场里。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var xM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"x\"\\s*:\\s*(-?\\d+)");
 				var yM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (_descentField == null || !xM.Success || !yM.Success)
@@ -2407,8 +2359,7 @@ namespace TerraBlind
 				// POST {"q":"heart"} → 所有含这个子串的 vanilla TileID 名字,让 agent 先把模糊名字
 				// ("生命水晶"→"Heart")解析出来再调 find_tiles,而不是靠猜。省略 q 就列全部。
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var qM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"q\"\\s*:\\s*\"([^\"]*)\"");
 				string q = qM.Success ? qM.Groups[1].Value.Trim().ToLowerInvariant() : "";
 				var names = new System.Collections.Generic.List<string>();
@@ -2428,8 +2379,7 @@ namespace TerraBlind
 				// POST {"name":"Iron","n":5,"max_dist":300} → nearest tiles of that TileID name (exact vanilla name,
 				// e.g. Iron/Copper/Gold/Demonite/Containers), expanding-ring scan from the player → sorted by distance.
 				string reqBody;
-				using (var sr = new System.IO.StreamReader(ctx.Request.InputStream))
-					reqBody = sr.ReadToEnd();
+				reqBody = payload;
 				var nameM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"name\"\\s*:\\s*\"([A-Za-z0-9_]+)\"");
 				var nM2 = System.Text.RegularExpressions.Regex.Match(reqBody, "\"n\"\\s*:\\s*(\\d+)");
 				var mdM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"max_dist\"\\s*:\\s*(\\d+)");
@@ -2507,7 +2457,7 @@ namespace TerraBlind
 			{
 				// 单格空间查询:有没有背景墙、能不能放方块/平台、这格通不通。
 				// 回答"有背景墙吗/这儿能放平台吗",省得对结构两眼一抹黑。
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
@@ -2521,7 +2471,7 @@ namespace TerraBlind
 			// /nav_h。一片矩形里规划器自己的 H 和 can_stand。场外的格子返回 null,而"哪些格在场外"本身就是答案。
 			else if (path == "/nav_h")
 			{
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				int G(string k, int dflt)
 				{
 					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
@@ -2583,7 +2533,7 @@ namespace TerraBlind
 			{
 				// Every geometric predicate for one cell at once: can_stand plus the measurements behind it, so a
 				// caller learns WHY it can't stand there (no ground / no headroom / lava) instead of a bare false.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
 				var wm = System.Text.RegularExpressions.Regex.Match(rb, "\"width_cap\"\\s*:\\s*(\\d+)");
@@ -2598,7 +2548,7 @@ namespace TerraBlind
 			{
 				// Find a build site: nearest spot with `w` standable columns, `h` rows of headroom, no hazard within
 				// `hazard_r`. THE replacement for a hardcoded build coordinate, same question, terrain-dependent answer.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				int Get(string k, int dflt)
 				{
 					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
@@ -2622,7 +2572,7 @@ namespace TerraBlind
 			{
 				// 从玩家现在的位置走到 (x,y) 要挖几格、走几格。判断"值不值得绕过去"要看真实路径。
 				// find_tiles 的 max_dist 是直线距离,直线 25 格的东西可能隔着山要绕几百格。
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
 				var pc = Main.LocalPlayer;
@@ -2708,7 +2658,7 @@ namespace TerraBlind
 			{
 				// {"slot":N} 卖掉那一格。整格一起卖。原版 SellItem 就是这个粒度,
 				// 而且它塞不下钱时会把整个背包回滚,不会东西没了钱也没拿到
-				string rss = ReadBody(ctx).Replace(" ", "");
+				string rss = payload.Replace(" ", "");
 				var mss = System.Text.RegularExpressions.Regex.Match(rss, "\"slot\"\\s*:\\s*(\\d+)");
 				var sp2 = Main.LocalPlayer;
 				if (!mss.Success) body = "{\"ok\":false,\"reason\":\"need_slot\"}";
@@ -2746,7 +2696,7 @@ namespace TerraBlind
 			{
 				// 地狱全套,编排都在 mod 里;真正的活要读地形,所以这里只入队交给主线程。
 				// POST {"teleport":true} = 先把人放到地狱再跑,只测这一段时用
-				string hrb = ReadBody(ctx).Replace(" ", "");
+				string hrb = payload.Replace(" ", "");
 				if (hrb.Contains("\"teleport\":true")) _hellTpQueue.Enqueue(true);
 				HellRunStart = "";
 				_hellRunQueue.Enqueue(true);
@@ -2756,7 +2706,7 @@ namespace TerraBlind
 			{
 				// POST {"x":列,"y":行} → 把人放到那一格上站着。
 				// 只为【跳过前面的环节单独测后面】用:比如只测地狱那一段,不想每次都从地表跑一遍
-				string tb = ReadBody(ctx).Replace(" ", "");
+				string tb = payload.Replace(" ", "");
 				var txm = System.Text.RegularExpressions.Regex.Match(tb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var tym = System.Text.RegularExpressions.Regex.Match(tb, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (!txm.Success || !tym.Success)
@@ -2787,7 +2737,7 @@ namespace TerraBlind
 			{
 				// 盖房子的唯一入口。rooms=4 是地表那座 21 宽的,rooms=1 是肉山桥起点那间。
 				// 编排整个在 mod 里(HouseBuilder),python 只负责选址和触发。
-				string rbh = ReadBody(ctx).Replace(" ", "");
+				string rbh = payload.Replace(" ", "");
 				int GetH(string k, int dflt)
 				{
 					var m = System.Text.RegularExpressions.Regex.Match(rbh, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
@@ -2815,7 +2765,7 @@ namespace TerraBlind
 			{
 				// 房子就是一个 w×h 的矩形,(x,y) 是左下角。除了"里面全空"没有别的条件:
 				// 脚下是不是实地不管,悬空也行。施工时垫平台上去,垫多高跟选址无关。
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				int Get(string k, int dflt)
 				{
 					var m = System.Text.RegularExpressions.Regex.Match(rb, "\"" + k + "\"\\s*:\\s*(-?\\d+)");
@@ -2846,7 +2796,7 @@ namespace TerraBlind
 			{
 				// Vanilla's own housing test, flood-filled from a point INSIDE the room (not a rectangle). Reports
 				// which of door/table/chair/torch is missing, "no door" is a diagnosis, "the NPC didn't move in" isn't.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
@@ -2855,7 +2805,7 @@ namespace TerraBlind
 			else if (path == "/have")
 			{
 				// How many of an item id are held. The material precondition, asked directly.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var im = System.Text.RegularExpressions.Regex.Match(rb, "\"id\"\\s*:\\s*(\\d+)");
 				if (!im.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
 				else
@@ -2872,7 +2822,7 @@ namespace TerraBlind
 			{
 				// Where an NPC is, by type id (omit type for all actives). Needed to wait for a merchant to arrive and
 				// to dig out the cell under the Guide.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var tm = System.Text.RegularExpressions.Regex.Match(rb, "\"type\"\\s*:\\s*(-?\\d+)");
 				body = Predicates.NpcJson(tm.Success ? int.Parse(tm.Groups[1].Value) : -1);
 			}
@@ -2880,7 +2830,7 @@ namespace TerraBlind
 			{
 				// How big is the connected blob of the same tile at (x,y): tree height, ore-vein size, cavity, the
 				// "这棵树多高 / 这堆矿多大" question. For an empty cell it measures the open cavity instead.
-				string rb = ReadBody(ctx).Replace(" ", "");
+				string rb = payload.Replace(" ", "");
 				var xm = System.Text.RegularExpressions.Regex.Match(rb, "\"x\"\\s*:\\s*(-?\\d+)");
 				var ym = System.Text.RegularExpressions.Regex.Match(rb, "\"y\"\\s*:\\s*(-?\\d+)");
 				if (!xm.Success || !ym.Success) { body = "{\"error\":\"bad_params\"}"; status = 400; }
@@ -2910,7 +2860,7 @@ namespace TerraBlind
 			else if (path == "/press")
 			{
 				// {"key":"Jump","mode":"tap|hold|double","frames":20}
-				string pb = ReadBody(ctx);
+				string pb = payload;
 				var km = System.Text.RegularExpressions.Regex.Match(pb, "\"key\"\\s*:\\s*\"([^\"]+)\"");
 				var mm = System.Text.RegularExpressions.Regex.Match(pb, "\"mode\"\\s*:\\s*\"(\\w+)\"");
 				var fm = System.Text.RegularExpressions.Regex.Match(pb, "\"frames\"\\s*:\\s*(\\d+)");
@@ -2931,15 +2881,8 @@ namespace TerraBlind
 				status = 404;
 			}
 
-			byte[] bytes = Encoding.UTF8.GetBytes(body);
-			ctx.Response.StatusCode = status;
-			// /jev 是给人看的页面,其余全是 JSON
-			ctx.Response.ContentType = path == "/jev" ? "text/html; charset=utf-8" : "application/json";
-			ctx.Response.ContentLength64 = bytes.Length;
-			ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
-			ctx.Response.OutputStream.Close();
+			return (status, body);
 		}
-
 		static string ReadBody(HttpListenerContext ctx)
 		{
 			using var sr = new System.IO.StreamReader(ctx.Request.InputStream);

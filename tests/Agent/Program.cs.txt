@@ -1,0 +1,135 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class Tests
+{
+    static readonly JsonArray Tools = JsonNode.Parse("""
+        [{"type":"function","function":{"name":"ask","parameters":{"required":["question"]}}},
+         {"type":"function","function":{"name":"get_state","parameters":{"required":[]}}}]
+        """).AsArray();
+
+    static void Check(bool condition, string message)
+    {
+        if (!condition) throw new Exception(message);
+    }
+
+    static string ToolCall(string id, string name, string args) => new JsonObject
+    {
+        ["id"] = id, ["type"] = "function",
+        ["function"] = new JsonObject { ["name"] = name, ["arguments"] = args }
+    }.ToJsonString();
+
+    static string Reply(params string[] calls) => new JsonObject
+    {
+        ["choices"] = new JsonArray(new JsonObject
+        {
+            ["message"] = new JsonObject
+            {
+                ["content"] = calls.Length == 0 ? "完成了。" : null,
+                ["tool_calls"] = new JsonArray(calls.Select(c => JsonNode.Parse(c)).ToArray())
+            }
+        })
+    }.ToJsonString();
+
+    static async Task Main()
+    {
+        var handler = new FakeHandler();
+        using var http = new HttpClient(handler);
+        var agent = new AgentConversation(http);
+        var spoken = new List<string>();
+        int executions = 0;
+        handler.Responses.Enqueue(Reply(ToolCall("ask1", "ask", "{\"question\":\"要几个？\"}")));
+        handler.Responses.Enqueue(Reply());
+        await agent.RunAsync("收集木头", "http://localhost/v1/", "test-key", "test-model", "system", Tools,
+            (name, args, ct) => { executions++; return Task.FromResult("{\"player_answer\":\"十个\"}"); }, spoken.Add, default);
+        Check(executions == 1, "tool was not executed exactly once");
+        Check(handler.Urls.All(u => u == "http://localhost/v1/chat/completions"), "base URL normalization failed");
+        Check(handler.Requests[1]["messages"].AsArray().Any(m => m?["tool_call_id"]?.ToString() == "ask1" &&
+            m?["content"]?.ToString().Contains("十个") == true), "ask answer was not returned to the same conversation");
+        Console.WriteLine("PASS: tool loop, question continuation, URL and final reply");
+
+        handler.Responses.Enqueue(Reply(ToolCall("bad1", "ask", "{"), ToolCall("bad2", "ask", "{}"), ToolCall("bad3", "unknown", "{}")));
+        handler.Responses.Enqueue(Reply());
+        int previous = executions;
+        await agent.RunAsync("继续", "http://localhost/v1/chat/completions", "test-key", "test-model", "system", Tools,
+            (name, args, ct) => { executions++; return Task.FromResult("ok"); }, spoken.Add, default);
+        Check(executions == previous, "invalid tool arguments executed");
+        var errors = handler.Requests.Last()["messages"].AsArray().Where(m => m?["role"]?.ToString() == "tool" &&
+            m?["tool_call_id"]?.ToString().StartsWith("bad") == true).ToArray();
+        Check(errors.Length == 3 && errors.All(m => m["content"].ToString().Contains("error")), "invalid calls were not returned as errors");
+        Console.WriteLine("PASS: malformed JSON, missing required argument and unknown tool recovery");
+
+        handler.Responses.Enqueue(Reply(ToolCall("state1", "get_state", "{}")));
+        handler.Responses.Enqueue(Reply(ToolCall("state2", "get_state", "{}")));
+        handler.Responses.Enqueue(Reply());
+        await agent.RunAsync("查看", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+            (name, args, ct) => Task.FromResult("fresh state"), spoken.Add, default);
+        var messages = handler.Requests.Last()["messages"].AsArray();
+        Check(messages.First(m => m?["tool_call_id"]?.ToString() == "state1")["content"].ToString().Contains("省略"), "old state was not compacted");
+        Check(messages.First(m => m?["tool_call_id"]?.ToString() == "state2")["content"].ToString() == "fresh state", "latest state was lost");
+        Console.WriteLine("PASS: stale state compaction preserves latest state");
+
+        using var cancel = new CancellationTokenSource();
+        handler.Responses.Enqueue(Reply(ToolCall("cancel1", "ask", "{\"question\":\"继续吗？\"}"), ToolCall("cancel2", "get_state", "{}")));
+        try
+        {
+            await agent.RunAsync("等待", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+                async (name, args, ct) => { cancel.Cancel(); await Task.Delay(1000, ct); return "unreachable"; }, spoken.Add, cancel.Token);
+            throw new Exception("cancellation was ignored");
+        }
+        catch (OperationCanceledException) { }
+        handler.Responses.Enqueue(Reply());
+        await agent.RunAsync("换个任务", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+            (name, args, ct) => Task.FromResult("ok"), spoken.Add, default);
+        messages = handler.Requests.Last()["messages"].AsArray();
+        foreach (string id in new[] { "cancel1", "cancel2" })
+            Check(messages.Count(m => m?["tool_call_id"]?.ToString() == id) == 1, "interrupted history has missing or duplicate tool results");
+        Console.WriteLine("PASS: cancellation and interrupted multi-tool history remain valid");
+
+        handler.Error = true;
+        try
+        {
+            await agent.RunAsync("错误", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+                (name, args, ct) => Task.FromResult("ok"), spoken.Add, default);
+            throw new Exception("HTTP error ignored");
+        }
+        catch (InvalidOperationException ex)
+        {
+            Check(ex.Message.Contains("401") && !ex.Message.Contains("test-key"), "HTTP error was not safely reported");
+        }
+        Console.WriteLine("PASS: API failure reports status and redacts key");
+
+        handler.Error = false;
+        Check(AgentConversation.VisibleText("<think>hidden</think>你好") == "你好", "private thinking leaked into dialogue");
+        for (int i = 0; i < 40; i++) handler.Responses.Enqueue(Reply(ToolCall("limit" + i, "get_state", "{}")));
+        int requestCount = handler.Requests.Count;
+        await agent.RunAsync("循环", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+            (name, args, ct) => Task.FromResult("state"), spoken.Add, default);
+        Check(handler.Requests.Count - requestCount == 40 && spoken.Last().Contains("40"), "turn budget not enforced");
+        Console.WriteLine("PASS: dialogue filtering and bounded task loop");
+    }
+
+    sealed class FakeHandler : HttpMessageHandler
+    {
+        public readonly Queue<string> Responses = new();
+        public readonly List<JsonObject> Requests = new();
+        public readonly List<string> Urls = new();
+        public bool Error;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Check(request.Headers.Authorization?.Parameter == "test-key", "authorization missing");
+            Requests.Add(JsonNode.Parse(await request.Content.ReadAsStringAsync(token)).AsObject());
+            Urls.Add(request.RequestUri.ToString());
+            return new HttpResponseMessage(Error ? HttpStatusCode.Unauthorized : HttpStatusCode.OK)
+            { Content = new StringContent(Error ? "test-key invalid" : Responses.Dequeue(), Encoding.UTF8, "application/json") };
+        }
+    }
+}

@@ -111,7 +111,7 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
-			if (!Enabled) { Release(); return; }
+			if (!Enabled || !AgentPermissions.Dodge) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }

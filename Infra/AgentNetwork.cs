@@ -100,6 +100,14 @@ namespace TerraBlind
 			packet.Write(text); packet.Send();
 		}
 
+		public static bool RelayAgentReply(string text)
+		{
+			if (Main.netMode != NetmodeID.MultiplayerClient || !Config.I.AiClient || _owner < 0) return false;
+			for (int offset = 0; offset < text.Length; offset += 900)
+				Report(text.Substring(offset, System.Math.Min(900, text.Length - offset)));
+			return true;
+		}
+
 		public static void Receive(BinaryReader reader, int sender)
 		{
 			var type = (Message)reader.ReadByte();
@@ -121,7 +129,7 @@ namespace TerraBlind
 				if (type != Message.Request) return;
 				int bot = reader.ReadInt32();
 				string command = reader.ReadString();
-				if (command.Length > 128) return;
+				if (command.Length > 4000) return;
 				if (command == "list")
 				{
 					var bots = new List<string>();
@@ -165,7 +173,11 @@ namespace TerraBlind
 			switch (args[0])
 			{
 				case "status": return Status();
+				case "task":
+					NativeAgent.Submit(command.Length > 5 ? command.Substring(5) : "");
+					return "指令已交给内置 agent。";
 				case "stop":
+					NativeAgent.Stop();
 					Combat.Enabled = false; Dodge.Enabled = false; Combat.Stop();
 					Manual.On = true;
 					StateSnapshotPlayer.StopRemoteTask(); ReplaySystem.Stop(); KeyPress.Clear();
@@ -198,7 +210,7 @@ namespace TerraBlind
 	{
 		public override CommandType Type => CommandType.Chat;
 		public override string Command => "ai";
-		public override string Description => "AI 玩家: /ai list 或 /ai <玩家编号> bind|unbind|status|start|fight|goto X Y|stop";
+		public override string Description => "AI 玩家: /ai list 或 /ai <玩家编号> bind|unbind|status|task 指令|start|fight|goto X Y|stop";
 		public override void Action(CommandCaller caller, string input, string[] args)
 		{
 			if (Main.netMode != NetmodeID.MultiplayerClient)

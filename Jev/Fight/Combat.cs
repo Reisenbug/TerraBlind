@@ -193,7 +193,7 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			AimTarget = null;
-			if (!Enabled) return;
+			if (!Enabled || !AgentPermissions.Attack) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
 			if (BossOnField())
