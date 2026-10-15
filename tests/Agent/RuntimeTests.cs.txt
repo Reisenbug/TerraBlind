@@ -96,6 +96,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: replacement instruction cancels active navigation and completes next task");
 
             await TestNetwork();
+            TestRoleSwitch();
             AgentPermissions.Dodge = AgentPermissions.Attack = false;
             Agent.OnWorldUnload();
             Check(AgentPermissions.Dodge && AgentPermissions.Attack, "world unload did not reset permissions");
@@ -176,6 +177,41 @@ static class RuntimeTests
         Check(ModPacket.Sent.Count == packets, "reply was relayed after owner disconnected");
         Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false; Config.I.AiClient = false;
         Console.WriteLine("PASS: production packet handlers enforce binding, AI execution, reply splitting/routing and disconnect stop");
+    }
+
+    static void TestRoleSwitch()
+    {
+        var network = new AgentNetwork();
+        network.OnWorldLoad();
+        Game.netMode = NetmodeID.MultiplayerClient; Config.I.AiClient = true;
+        ModPacket.Sent.Clear();
+        network.PostUpdateEverything();
+        Check(ModPacket.Sent.Count == 1 && ModPacket.Sent[0].Data[0] == 0, "enabling AI did not register immediately");
+        Game.netMode = NetmodeID.Server; Game.dedServ = true;
+        Receive(0, 1, _ => { });
+        Request(0, "bind");
+        DeliverToAi(ModPacket.Sent.Last().Data);
+        Combat.Enabled = Dodge.Enabled = RecedingNav.Active = true;
+        Config.I.AiClient = false;
+        network.PostUpdateEverything();
+        Check(!Combat.Enabled && !Dodge.Enabled && !RecedingNav.Active, "disabling AI left active operations");
+        var unregister = ModPacket.Sent.Last();
+        Check(unregister.Data[0] == 5, "disabling AI did not unregister");
+        Game.netMode = NetmodeID.Server; Game.dedServ = true;
+        using (var reader = new BinaryReader(new MemoryStream(unregister.Data))) AgentNetwork.Receive(reader, 1);
+        Request(0, "status");
+        using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+            Check(reader.ReadByte() == 4 && reader.ReadString().Contains("不在线"), "disabled AI still registered on server");
+        Game.netMode = NetmodeID.MultiplayerClient; Game.dedServ = false; Config.I.AiClient = true;
+        network.PostUpdateEverything();
+        Check(ModPacket.Sent.Last().Data[0] == 0 && !AgentNetwork.RelayAgentReply("旧主人"), "reenabling retained old binding or failed to register");
+        Game.netMode = NetmodeID.Server; Game.dedServ = true;
+        Receive(0, 1, _ => { });
+        Request(0, "task 不该执行");
+        using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+            Check(reader.ReadByte() == 4 && reader.ReadString().Contains("没有绑定"), "reenabled AI retained server owner");
+        Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false; Config.I.AiClient = false;
+        Console.WriteLine("PASS: live AI toggle registers, stops, unregisters and requires fresh binding");
     }
 
     sealed class NavHandler : HttpMessageHandler

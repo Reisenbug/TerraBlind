@@ -30,7 +30,6 @@ namespace TerraBlind
 
 		public static Config I => ModContent.GetInstance<Config>();
 
-		[ReloadRequired]
 		[DefaultValue(false)]
 		public bool AiClient;
 

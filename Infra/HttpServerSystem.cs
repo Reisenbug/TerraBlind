@@ -74,9 +74,16 @@ namespace TerraBlind
 		private Thread _thread;
 		private volatile bool _running;
 		private bool _announced;
+		private bool _lastAiClient;
 
 		public override void PostUpdateEverything()
 		{
+			if (!Main.dedServ && _lastAiClient != Config.I.AiClient)
+			{
+				_lastAiClient = Config.I.AiClient;
+				if (AgentNetwork.CanAutomate) { if (!_running) StartListener(); }
+				else Unload();
+			}
 			if (!AgentNetwork.CanAutomate) return;
 			if (!_announced && _running)
 			{
@@ -155,6 +162,7 @@ namespace TerraBlind
 		public override void Load()
 		{
 			LatestSnapshot = null;
+			_lastAiClient = Config.I.AiClient;
 			if (Main.dedServ || !Config.I.AiClient) return;
 			StartListener();
 		}

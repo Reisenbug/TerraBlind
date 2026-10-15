@@ -40,7 +40,7 @@ Configs: {
 
 		AiClient: {
 			Label: AI client
-			Tooltip: Enable only on the separate AI client. Requires a mod reload. Enables the local HTTP service and multiplayer AI registration.
+			Tooltip: Enable only on the separate AI client. Takes effect immediately. Disabling stops tasks and removes multiplayer binding.
 		}
 
 		Headers: {

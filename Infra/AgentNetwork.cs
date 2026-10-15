@@ -9,7 +9,7 @@ namespace TerraBlind
 {
 	public class AgentNetwork : ModSystem
 	{
-		enum Message : byte { Register, Request, Execute, Result, Reply }
+		enum Message : byte { Register, Request, Execute, Result, Reply, Unregister }
 		static readonly Dictionary<int, int> Owners = new();
 		static bool _registered;
 		static int _owner = -1;
@@ -63,8 +63,17 @@ namespace TerraBlind
 				}
 				return;
 			}
-			if (Main.netMode != NetmodeID.MultiplayerClient || !Config.I.AiClient
-				|| !Main.LocalPlayer.active) return;
+			if (Main.netMode != NetmodeID.MultiplayerClient || !Main.LocalPlayer.active) return;
+			if (!Config.I.AiClient)
+			{
+				if (_registered)
+				{
+					Run("stop");
+					Packet(Message.Unregister).Send();
+					_registered = false; _owner = -1; _lastStatus = ""; _lastSent = 0;
+				}
+				return;
+			}
 			if (!_registered)
 			{
 				Packet(Message.Register).Send();
@@ -117,6 +126,12 @@ namespace TerraBlind
 				if (type == Message.Register)
 				{
 					Owners.TryAdd(sender, -1);
+					return;
+				}
+				if (type == Message.Unregister)
+				{
+					if (Owners.Remove(sender, out int previousOwner) && previousOwner >= 0)
+						Reply(previousOwner, $"AI[{sender}] 已关闭 AI 身份并解除绑定。");
 					return;
 				}
 				if (type == Message.Result)

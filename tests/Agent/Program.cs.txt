@@ -116,7 +116,7 @@ static class Tests
         Check(handler.Requests.Count - requestCount == 40 && spoken.Last().Contains("40"), "turn budget not enforced");
         Console.WriteLine("PASS: dialogue filtering and bounded task loop");
         await RuntimeTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=12");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=13");
     }
 
     sealed class FakeHandler : HttpMessageHandler
