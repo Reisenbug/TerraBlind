@@ -234,9 +234,9 @@ namespace TerraBlind
             _waitOn = "";
 
             // 蜘蛛网压身体会把移动拖到爬(原版要 20-100 tick 才顶开),一镐就没,所以主动砸
-            SmashWeb(p);
+            if (!StateSpacePlanner.PreserveTerrain) SmashWeb(p);
             // 抢同一帧的 controlUseItem,网优先(网拖慢移动,罐子晚一帧无所谓)
-            if (!p.controlUseItem) SmashPot(p);
+            if (!StateSpacePlanner.PreserveTerrain && !p.controlUseItem) SmashPot(p);
 
             // EXACT (mining): the goal is a solid ore the body can't stand on, arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
@@ -421,6 +421,12 @@ namespace TerraBlind
             // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
             if (Trap.JustTrapped)
             {
+                if (StateSpacePlanner.PreserveTerrain)
+                {
+                    LastStop = "no_progress_preserving_terrain";
+                    Stop();
+                    return;
+                }
                 // 【只观测,不接管】。下面那几条既判断又动手(TryEscape 开搜就返回、Unstick 直接派活),
                 // 换成 switch 会把副作用做两遍。先让它跟着跑,对不对看日志
                 Triage.Observe(new StuckScene

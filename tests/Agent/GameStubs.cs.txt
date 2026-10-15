@@ -87,7 +87,7 @@ namespace TerraBlind
     {
         public static readonly Config I = new();
         public bool AiClient, AgentEnabled = true;
-        public string AgentApiKey = "test-key", AgentModel = "test-model", AgentBaseUrl = "http://localhost/v1", AgentPersona = "test";
+        public string AgentApiKey = "test-key", AgentModel = "test-model", AgentBaseUrl = "http://localhost/v1", AgentPersona = "test", TypeSafeKey = "test-jev-key";
     }
     public static class AgentChat
     {
@@ -95,6 +95,14 @@ namespace TerraBlind
         public static void Say(string text) => Messages.Add(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
+    public static class StateSpacePlanner { public static bool PreserveTerrain; }
+    public sealed class GameWoodHarvest : IWoodHarvestWorld
+    {
+        public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Observe(System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
+        public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Approach(System.Text.Json.Nodes.JsonObject tree, System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
+        public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Chop(System.Text.Json.Nodes.JsonObject tree, System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
+        public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Pickup(System.Text.Json.Nodes.JsonObject tree, System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
+    }
     public static class Cursor
     {
         public static float X, Y;

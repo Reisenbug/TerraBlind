@@ -325,7 +325,7 @@ namespace TerraBlind
 
 		// 只有砍中主干最底下那格整棵树才倒,砍树根/枝杈只掉那点装饰。
 		// 树是同一个 TileType,靠 frameX 区分部位(22=主干 44=左 66=右 88=枝),先找主干再滑到根部
-		private static bool TrySnapTree(ref int wx, ref int wy)
+		internal static bool TrySnapTree(ref int wx, ref int wy)
 		{
 			int bestX = -1, bestY = -1, bestD = int.MaxValue;
 			for (int dx = -SnapRadius; dx <= SnapRadius; dx++)

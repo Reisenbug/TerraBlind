@@ -14,6 +14,7 @@ public static class AgentTools
 {
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
+    static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
     public static void NewTask() => Tracking.Clear();
     public static void Stop()
     {
@@ -21,6 +22,7 @@ public static class AgentTools
         StateSnapshotPlayer.StopRemoteTask();
         FightCoordinator.Stop(); ReplaySystem.Stop(); KeyPress.Clear();
         PlayerCombat.Stop();
+        StateSpacePlanner.PreserveTerrain = false;
         HttpServerSystem.PendingControl = null;
     }
 
@@ -97,7 +99,7 @@ public static class AgentTools
         return result.ToJsonString();
     }, token);
 
-    static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token)
+    internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token)
     {
         var timer = Stopwatch.StartNew();
         while (timer.Elapsed.TotalSeconds < seconds)
@@ -154,6 +156,28 @@ public static class AgentTools
                 break;
             case "mine_vein":
                 result = await MineVein(args, token);
+                break;
+            case "chop_wood":
+                int wantedWood = Int(args, "count");
+                if (wantedWood < 1 || wantedWood > 9999) return "{\"error\":\"count 必须在 1 到 9999 之间。\"}";
+                string key = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
+                if (string.IsNullOrEmpty(key)) return "{\"error\":\"请先配置 Jev 的 TypeSafe Key。\"}";
+                await NativeAgent.OnMain(() => { StateSpacePlanner.PreserveTerrain = true; return true; }, token);
+                try
+                {
+                    var decision = new WoodHarvestDecision(HarvestHttp, key);
+                    result = await WoodHarvest.Run(wantedWood, Text(args, "constraints"), new GameWoodHarvest(), async (scene, ct) =>
+                    {
+                        var clock = Stopwatch.StartNew();
+                        string choice = await decision.Choose(scene, ct);
+                        await NativeAgent.OnMain(() => { DiagLog.Write($"[harvest] jev choice={choice} ms={clock.ElapsedMilliseconds} scene={scene}"); return true; }, ct);
+                        return choice;
+                    }, token);
+                }
+                finally
+                {
+                    await NativeAgent.OnMain(() => { StateSpacePlanner.PreserveTerrain = false; return true; }, token);
+                }
                 break;
             case "mine":
                 result = await Call("/mine", new JsonObject { ["dir"] = Text(args, "dir"),
@@ -232,14 +256,14 @@ public static class AgentTools
         return output;
     }
 
-    static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token)
+    internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)
     {
         var start = await Call("/nav_recede", new JsonObject
         {
             ["gx"] = Int(args, "x"), ["gy"] = Int(args, "y"), ["exact"] = Bool(args, "exact"), ["reach"] = Bool(args, "reach")
         }, token);
         if (Rejected(start)) return start;
-        var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", 180, token);
+        var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token);
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;

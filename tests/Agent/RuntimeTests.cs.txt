@@ -26,7 +26,7 @@ static class RuntimeTests
         {
             Check(DateTime.UtcNow < deadline, "main-thread test timed out");
             Agent.PostUpdateEverything();
-            PlayerCombat.Tick(Game.LocalPlayer);
+            for (int frame = 0; frame < 10; frame++) PlayerCombat.Tick(Game.LocalPlayer);
             await Task.Delay(5);
         }
     }
@@ -259,7 +259,7 @@ static class RuntimeTests
         var result = JsonNode.Parse(await Execute(AgentTools.Execute("fight_player", JsonNode.Parse("{\"player_id\":1,\"seconds\":1}").AsObject(), default)));
         Check(result["outcome"].ToString() == "duration_complete" && result["target_hp_before"].GetValue<int>() == target.statLife
             && result["target_hp_after"].GetValue<int>() == target.statLife && !PlayerCombat.Active && !self.controlUseItem,
-            "PvP tool did not finish or invented damage");
+            "PvP tool did not finish or invented damage: " + result.ToJsonString());
         PlayerCombat.Start(1, 1, 80, out _); PlayerCombat.Tick(self); AgentTools.Stop();
         Check(!PlayerCombat.Active && !self.controlUseItem, "agent stop left PvP firing");
         Game.netMode = NetmodeID.SinglePlayer; Config.I.AiClient = false;

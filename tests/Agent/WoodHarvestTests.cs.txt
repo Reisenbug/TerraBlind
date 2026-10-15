@@ -1,0 +1,120 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class WoodHarvestTests
+{
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    public static async Task Run()
+    {
+        var world = new World();
+        var handler = new JevHandler();
+        using var http = new HttpClient(handler);
+        var decision = new WoodHarvestDecision(http, "test-jev-key");
+        var result = await WoodHarvest.Run(30, "别砍房子旁的树", world, decision.Choose, default);
+        Check(result["outcome"].ToString() == "enough" && result["gained"].GetValue<int>() == 30 && world.Chops == 2,
+            "multi-tree loop did not reach actual additional wood count");
+        Check(handler.Calls == 2 && handler.Scenes.All(s => s["constraints"].ToString() == "别砍房子旁的树")
+            && handler.Scenes.Last()["gained"].GetValue<int>() == 15, "Jev did not receive constraints and real progress");
+        Console.WriteLine("PASS: one harvest delegation gathers multiple trees using Jev choices and measured inventory");
+
+        world = new World { FailFirstApproach = true };
+        handler.Scenes.Clear();
+        result = await WoodHarvest.Run(15, "", world, decision.Choose, default);
+        Check(world.Approaches == 2 && world.Chops == 1 && result["gained"].GetValue<int>() == 15,
+            "failed approach was chopped or recovery did not finish");
+        Check(handler.Scenes.Last()["last_failure"] != null, "recovery decision lacked failure evidence");
+        world = new World { AlwaysFail = true };
+        result = await WoodHarvest.Run(100, "", world, decision.Choose, default);
+        Check(world.Approaches == 4 && world.Chops == 0 && result["outcome"].ToString() == "no_available_trees", "failed targets retried without bound");
+        Console.WriteLine("PASS: harvest recovery supplies failure evidence and bounds retries without chopping unreachable trees");
+
+        world = new World { Drops = 0 };
+        result = await WoodHarvest.Run(15, "", world, decision.Choose, default);
+        Check(result["trees_felled"].GetValue<int>() == 2 && result["gained"].GetValue<int>() == 0
+            && result["outcome"].ToString() != "enough", "felled trees were counted as acquired wood");
+        world = new World();
+        result = await WoodHarvest.Run(15, "保护所有候选树", world, (_, _) => Task.FromResult("stop"), default);
+        Check(world.Approaches == 0 && result["outcome"].ToString() == "needs_agent_decision", "policy stop still acted");
+        Console.WriteLine("PASS: missing drops never satisfy wood goal and policy stop performs no action");
+
+        using var cancel = new CancellationTokenSource();
+        world = new World { Cancel = cancel };
+        try
+        {
+            await WoodHarvest.Run(15, "", world, decision.Choose, cancel.Token);
+            throw new Exception("harvest ignored cancellation");
+        }
+        catch (OperationCanceledException) { }
+        Check(world.Chops == 0, "cancelled approach continued chopping");
+        handler.InvalidChoice = true;
+        try
+        {
+            await WoodHarvest.Run(15, "", new World(), decision.Choose, default);
+            throw new Exception("unlisted Jev choice was accepted");
+        }
+        catch (InvalidOperationException) { }
+        handler.InvalidChoice = false; handler.Timeout = true;
+        try
+        {
+            await WoodHarvest.Run(15, "", new World(), decision.Choose, default);
+            throw new Exception("Jev timeout was ignored");
+        }
+        catch (TimeoutException) { }
+        Console.WriteLine("PASS: harvest cancellation stops follow-up actions and unlisted Jev choices are rejected");
+    }
+
+    sealed class World : IWoodHarvestWorld
+    {
+        readonly HashSet<string> removed = new();
+        public int Wood = 100, Drops = 15, Chops, Approaches;
+        public bool FailFirstApproach, AlwaysFail;
+        public CancellationTokenSource Cancel;
+        public Task<JsonObject> Observe(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            return Task.FromResult(new JsonObject { ["wood"] = Wood,
+                ["trees"] = new JsonArray(new[] { "one", "two" }.Where(id => !removed.Contains(id))
+                    .Select(id => (JsonNode)new JsonObject { ["id"] = id, ["x"] = 10, ["y"] = 20 }).ToArray()) });
+        }
+        public Task<JsonObject> Approach(JsonObject tree, CancellationToken token)
+        {
+            Approaches++;
+            Cancel?.Cancel(); token.ThrowIfCancellationRequested();
+            return Task.FromResult(AlwaysFail || FailFirstApproach && Approaches == 1
+                ? new JsonObject { ["error"] = "cannot_reach_tree" } : new JsonObject { ["ok"] = true });
+        }
+        public Task<JsonObject> Chop(JsonObject tree, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested(); Chops++; removed.Add(tree["id"].ToString());
+            return Task.FromResult(new JsonObject { ["outcome"] = "removed" });
+        }
+        public Task<JsonObject> Pickup(JsonObject tree, CancellationToken token)
+        { token.ThrowIfCancellationRequested(); Wood += Drops; return Task.FromResult(new JsonObject { ["done"] = true }); }
+    }
+
+    sealed class JevHandler : HttpMessageHandler
+    {
+        public int Calls;
+        public bool InvalidChoice, Timeout;
+        public readonly List<JsonObject> Scenes = new();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            if (Timeout) throw new TaskCanceledException("fake provider timeout");
+            Check(request.RequestUri.ToString() == "https://api.typesafe.ai/v1/systemone" && request.Headers.Authorization?.Parameter == "test-jev-key", "wrong Jev endpoint or auth");
+            var payload = JsonNode.Parse(await request.Content.ReadAsStringAsync(token));
+            Check(payload["model"].ToString() == "jev-latest" && payload["questions"]["tree"]["type"].ToString() == "choice", "wrong Jev request contract");
+            var scene = payload["state"].AsObject(); Scenes.Add(scene); Calls++;
+            string choice = InvalidChoice ? "invented" : scene["trees"][0]["id"].ToString();
+            var reply = new JsonObject { ["answers"] = new JsonObject { ["tree"] = new JsonObject { ["choice"] = choice } } };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(reply.ToJsonString(), Encoding.UTF8, "application/json") };
+        }
+    }
+}

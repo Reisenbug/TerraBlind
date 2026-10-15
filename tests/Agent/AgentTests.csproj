@@ -12,6 +12,8 @@
     <Compile Include="../../Agent/AgentTools.cs" Link="AgentTools.cs" />
     <Compile Include="../../Infra/AgentNetwork.cs" Link="AgentNetwork.cs" />
     <Compile Include="../../Flow/PlayerCombat.cs" Link="PlayerCombat.cs" />
+    <Compile Include="../../Agent/WoodHarvest.cs" Link="WoodHarvest.cs" />
+    <Compile Include="WoodHarvestTests.cs.txt" />
     <Compile Include="Program.cs.txt" />
     <Compile Include="RuntimeTests.cs.txt" />
     <Compile Include="GameStubs.cs.txt" />

@@ -2156,8 +2156,17 @@ namespace TerraBlind
 
         public static void StopSteps() { _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; }
 
+        public static bool PreserveTerrain;
+
         static void StartSteps(List<ExecStep> steps)
         {
+            if (PreserveTerrain && steps.Exists(step => step.Dig || step.Pillar || step.Bridge
+                || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))
+            {
+                RecedingNav.LastStop = "terrain_change_forbidden";
+                RecedingNav.Stop();
+                return;
+            }
             StopExec();
             _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false;
             DiagLog.Write($"[ss-steps] start n={steps.Count}");

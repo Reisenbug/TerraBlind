@@ -217,6 +217,21 @@
   {
     "type": "function",
     "function": {
+      "name": "chop_wood",
+      "description": "收集普通 Wood 木材的完整闭环。一次调用自动搜索成熟普通树，Jev 选择目标和失败后的调整，代码接近、选斧、砍树、靠近掉落物并按真实背包增量计数。count 是本次新增数量，不是背包总数；树倒不算木材到手。constraints 原样保留玩家的限制。接近途中禁止挖掘和搭建；无法找到符合限制的可达目标会带进度返回，不保证任意地形可达。需要 TypeSafe Key，不要拆成多轮原语。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "integer", "minimum": 1, "maximum": 9999, "description": "本次需要新增的普通木材数量" },
+          "constraints": { "type": "string", "description": "玩家对地点、树木保护等限制的原话，没有则为空" }
+        },
+        "required": ["count"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "mine_vein",
       "description": "【要攒够多少个矿就用这个,一次搞定】。给矿种和数量,它自己跑完整个循环:找最近的矿脉 → 挖竖井过去(落在矿脉中间) → 站着把射程内同种矿一次挖光 → 不够就去下一个矿脉,直到数量够或附近没了。**不要自己 find_tiles + nav_to + use_item 一颗颗挖**,那要十几轮还容易数错。返回两个数,别搞混:**tiles_removed=清掉了几格(不代表到手)**,**got=真正进背包的东西(这个才算数)**。两者对不上时会给 warn,通常是寻路挖竖井时把矿顺手清了、掉落物没吸到。停止原因:enough=够了/exhausted=附近没了/tool_weak=镐不够硬/interrupted=玩家打断。挖铁/铅/银/钨/铜/锡/金/铂金这些都走这个。",
       "parameters": {
