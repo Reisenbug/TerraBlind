@@ -15,9 +15,10 @@ namespace TerraBlind
 		{
 			string text = string.Join(" ", args);
 			if (string.IsNullOrWhiteSpace(text)) { caller.Reply("usage: /tb <instruction>"); return; }
+			Main.NewText($"<you → TB> {text}", 120, 200, 255);
+			DiagLog.Write($"[agent] instruction: {text}");
 			if (Config.I.AgentEnabled) { NativeAgent.Submit(text); return; }
 			AgentChat.Instructions.Enqueue(text);
-			Main.NewText($"<you → TB> {text}", 120, 200, 255);
 			DiagLog.Write($"[agent] instruction queued: {text}");
 			// push it as an event too, so the agent reacts instantly instead of polling /instruction
 			HttpServerSystem.PushEvent("instruction", "{\"text\":\"" + HttpServerSystem.JsonEscPublic(text) + "\"}");
