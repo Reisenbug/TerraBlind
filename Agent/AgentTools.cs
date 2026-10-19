@@ -118,6 +118,8 @@ public static class AgentTools
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] tool {name} {args}"); return true; }, token);
+        if (name is not ("say" or "ask"))
+            await NativeAgent.OnMain(() => { NativeAgent.Progress("开始执行：" + name, "执行 " + name); return true; }, token);
         if (name == "get_state") return await State(token);
         if (name == "say")
         {
@@ -253,6 +255,7 @@ public static class AgentTools
         }
         string output = await Result(result, before, token);
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] result {name} {output}"); return true; }, token);
+        await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策"); return true; }, token);
         return output;
     }
 

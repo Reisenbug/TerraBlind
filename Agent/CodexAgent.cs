@@ -217,6 +217,8 @@ public sealed class CodexAgent : IDisposable
                 }
                 if (args?["threadId"]?.ToString() != _thread) continue;
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
+                if (method == "error" && args["willRetry"]?.GetValue<bool>() == true)
+                    say("Codex 请求暂时失败，后台正在重试。可用 /tb stop 停止。");
                 if (method == "item/completed" && args["item"]?["type"]?.ToString() == "agentMessage")
                 {
                     string id = args["item"]?["id"]?.ToString();

@@ -94,6 +94,7 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("看看背包");
+            Check(AgentChat.Messages.Count == previous + 1 && NativeAgent.Status == "queued", "task submission did not immediately acknowledge");
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (AgentChat.Messages.Count == previous || NativeAgent.Status != "idle")
             {

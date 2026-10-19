@@ -22,6 +22,7 @@ public class NativeAgent : ModSystem
     TaskCompletionSource<string> _answer;
     string _pending;
     string _system;
+    DateTime _lastFeedback;
     JsonArray _schemas;
     public static string Status { get; private set; } = "idle";
 
@@ -51,6 +52,16 @@ public class NativeAgent : ModSystem
         }
         self.Cancel();
         self._pending = text;
+        Status = "queued";
+        Progress("收到指令，准备处理。", "queued");
+    }
+
+    internal static void Progress(string text, string status)
+    {
+        Status = status;
+        if (_instance != null) _instance._lastFeedback = DateTime.UtcNow;
+        DiagLog.Write("[agent] " + status + " " + text);
+        AgentChat.Say(text);
     }
 
     void Cancel()
@@ -75,6 +86,9 @@ public class NativeAgent : ModSystem
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
+        if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
+            && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
+            Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status);
         if (!Main.gameMenu && Main.LocalPlayer.active && Main.LocalPlayer.dead)
         {
             if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false)
@@ -101,7 +115,7 @@ public class NativeAgent : ModSystem
         var token = _cancel.Token;
         AgentTools.NewTask();
         string system = _system + "\n回复语言风格：" + Config.I.AgentPersona;
-        Status = "thinking";
+        Progress(useCodex ? "正在连接 Codex 并等待响应。" : "正在请求模型。", "等待模型响应");
         DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)}");
         _running = Task.Run(async () =>
         {
