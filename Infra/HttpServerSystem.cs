@@ -970,6 +970,9 @@ namespace TerraBlind
 						if (Terraria.ID.ItemID.Search.ContainsName(nm))
 						{ want = Terraria.ID.ItemID.Search.GetId(nm); break; }
 					var p2 = Main.LocalPlayer;
+					Recipe.FindRecipes();
+					var available = new System.Collections.Generic.HashSet<int>();
+					for (int i = 0; i < Main.numAvailableRecipes; i++) available.Add(Main.availableRecipe[i]);
 					var sbr = new System.Text.StringBuilder();
 					int found = 0;
 					sbr.Append("{\"recipes\":[");
@@ -987,23 +990,30 @@ namespace TerraBlind
 						sbr.Append("{\"makes\":\"").Append(JsonEsc(r.createItem.Name ?? ""))
 						   .Append("\",\"internal\":\"").Append(JsonEsc(inm))
 						   .Append("\",\"amount\":").Append(r.createItem.stack)
+						   .Append(",\"can_craft_now\":").Append(available.Contains(ri) ? "true" : "false")
 						   .Append(",\"ingredients\":[");
 						for (int k = 0; k < r.requiredItem.Count; k++)
 						{
 							var ing = r.requiredItem[k];
 							if (ing == null || ing.type <= 0) continue;
 							if (k > 0) sbr.Append(',');
-							// 背包里现有多少。直接把"还差多少"算好,省得 LLM 自己对账
-							int have = 0;
+							int have = 0, inVoidBag = 0;
 							if (p2 != null)
+							{
 								foreach (var it in p2.inventory)
 									if (it != null && !it.IsAir && it.type == ing.type) have += it.stack;
+								if (p2.useVoidBag())
+									foreach (var it in p2.bank4.item)
+										if (it != null && !it.IsAir && it.type == ing.type) inVoidBag += it.stack;
+							}
 							string iinm = Terraria.ID.ItemID.Search.ContainsId(ing.type)
 								? Terraria.ID.ItemID.Search.GetName(ing.type) : "";
 							sbr.Append("{\"name\":\"").Append(JsonEsc(ing.Name ?? ""))
 							   .Append("\",\"internal\":\"").Append(JsonEsc(iinm))
 							   .Append("\",\"need\":").Append(ing.stack)
-							   .Append(",\"have\":").Append(have).Append('}');
+							   .Append(",\"have\":").Append(have + inVoidBag)
+							   .Append(",\"in_inventory\":").Append(have)
+							   .Append(",\"in_void_bag\":").Append(inVoidBag).Append('}');
 						}
 						sbr.Append("],\"stations\":[");
 						for (int k = 0; k < r.requiredTile.Count; k++)

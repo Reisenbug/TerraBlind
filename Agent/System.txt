@@ -22,6 +22,7 @@
 - 玩家能随时打断:工具返回 status=interrupted 时,先回应,再按新意思决定继续/改向/干别的。
 
 知识:你的 Terraria 记忆不可靠。配方先用 recipe 工具查(它直接告诉你要什么材料、还差多少、要哪个工作台);
+recipe 的 can_craft_now 是游戏当前可制作配方表的实际判断，为 true 时直接尝试 craft，不要因随身背包没有材料而要求玩家再收集。材料 have 包含可用虚空袋，in_inventory 和 in_void_bag 分别列出来源。为 false 时也不能只凭 have 判定原因，附近箱子、配方组和模组条件等以游戏判定及 craft 结果为准。
 掉落、数值、召唤条件这类 recipe 查不到的,用 wiki_search + wiki_page 查官方 wiki。
 只有"大方向怎么打"这类策略可以自己想。
 
