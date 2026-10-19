@@ -16,6 +16,7 @@ public class NativeAgent : ModSystem
     static NativeAgent _instance;
     HttpClient _http;
     AgentConversation _conversation;
+    CodexAgent _codex;
     CancellationTokenSource _cancel;
     Task _running;
     TaskCompletionSource<string> _answer;
@@ -70,6 +71,7 @@ public class NativeAgent : ModSystem
         if (!Config.I.AgentEnabled || !AgentNetwork.CanAutomate)
         {
             Cancel();
+            _codex?.Dispose(); _codex = null;
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
@@ -85,29 +87,38 @@ public class NativeAgent : ModSystem
         string key = Config.I.AgentApiKey?.Trim();
         string model = Config.I.AgentModel?.Trim();
         string url = Config.I.AgentBaseUrl?.Trim();
-        if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(model) ||
-            !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        bool useCodex = Config.I.AgentUseCodex;
+        string codexPath = Config.I.AgentCodexPath;
+        string codexModel = Config.I.AgentCodexModel?.Trim();
+        string cwd = System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent");
+        if (!useCodex && (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(model) ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
         { AgentChat.Say("先在模组配置里填写 Agent API Key、Base URL 和模型名。"); return; }
+        if (!useCodex) { _codex?.Dispose(); _codex = null; }
+        var codex = useCodex ? _codex ??= new CodexAgent() : null;
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask();
         string system = _system + "\n回复语言风格：" + Config.I.AgentPersona;
         Status = "thinking";
+        DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)}");
         _running = Task.Run(async () =>
         {
             try
             {
                 string state = await AgentTools.State(token);
-                await _conversation.RunAsync(goal + "\n现状：" + state, url, key, model, system, _schemas,
-                    (name, args, ct) => AgentTools.Execute(name, args, ct),
-                    text => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); }), token);
+                void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
+                if (useCodex)
+                    await codex.RunAsync(goal + "\n现状：" + state, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
+                else
+                    await _conversation.RunAsync(goal + "\n现状：" + state, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
                 await OnMain(() => { Status = "idle"; return true; }, token);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                string error = ex.Message.Replace(key, "[redacted]");
+                string error = string.IsNullOrEmpty(key) ? ex.Message : ex.Message.Replace(key, "[redacted]");
                 MainQueue.Enqueue(() =>
                 {
                     if (token.IsCancellationRequested) return;
@@ -151,6 +162,7 @@ public class NativeAgent : ModSystem
     {
         Cancel();
         PlayerCombat.Stop();
+        _codex?.Dispose(); _codex = null;
         if (_http != null) _conversation = new AgentConversation(_http);
         AgentPermissions.Reset();
     }
@@ -158,6 +170,7 @@ public class NativeAgent : ModSystem
     public override void Unload()
     {
         Cancel();
+        _codex?.Dispose(); _codex = null;
         _http?.Dispose();
         _instance = null;
         while (MainQueue.TryDequeue(out _)) { }

@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Agent/Conversation.cs" Link="Conversation.cs" />
+    <Compile Include="../../Agent/CodexAgent.cs" Link="CodexAgent.cs" />
+    <Compile Include="CodexTests.cs.txt" />
     <Compile Include="../../Agent/NativeAgent.cs" Link="NativeAgent.cs" />
     <Compile Include="../../Agent/AgentTools.cs" Link="AgentTools.cs" />
     <Compile Include="../../Infra/AgentNetwork.cs" Link="AgentNetwork.cs" />

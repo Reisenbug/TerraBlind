@@ -1,11 +1,19 @@
 # 内置 Agent
 
-在游戏内的模组配置 → TerraBlind → 内置 Agent 中填写：
+默认使用本机 Codex 后端。先安装 Codex CLI 并执行 `codex login`；mod 在首次收到任务时自动启动 `codex app-server`，不需要 Python 或额外终端窗口。在模组配置 → TerraBlind → 内置 Agent 中：
+
+- 使用 Codex 后端：默认开启。
+- Codex 可执行文件路径：留空自动寻找；找不到时填写完整路径。macOS 会优先查找常见安装位置，避开 HUD 启动包装器。
+- Codex 模型名：留空沿用本机 Codex 默认模型，推理强度使用 low。它不使用下面的 API 模型名。
+- 回复语言风格：可填写角色的说话方式。
+
+Codex 使用自己已有的本机认证，不读取 mod 的 Agent API Key。ChatGPT 登录按该账号的套餐权限运行；若 Codex 本身用 API Key 登录，则沿用其 API 认证。它不会自动转用旧 API 后端。登录失败时在终端执行 `codex login`，再重新发任务。
+
+关闭“使用 Codex 后端”后，使用原有 OpenAI 兼容 API 后端，需要填写：
 
 - Agent API Key：通用模型服务商的密钥。
 - Agent Base URL：OpenAI 兼容根地址，例如 `https://api.openai.com/v1`；也接受完整的 `/chat/completions` 地址。
 - Agent 模型名：服务商的准确模型 ID，必须支持 Chat Completions 工具调用。
-- 回复语言风格：可填写角色的说话方式。
 
 这些设置是 ClientSide，只保存在本机 ModConfigs。Jev 仍使用单独的 TypeSafe Key。API Key 不写进源码、不通过多人协议同步。
 
@@ -17,6 +25,10 @@
 ```
 
 Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其他指令会取消旧动作，把新要求交回同一段对话处理。`/tb stop` 和 `/halt` 都会停止当前 agent。离开世界会取消任务并清空本次世界对话。
+
+Codex 使用本地 stdio JSON-RPC，由 mod 管理子进程。每个世界使用独立于编程会话的临时 thread，工作目录为当前保存根目录下的 `TerraBlindAgent`；对话保留到离开世界、关闭 AI 身份／内置 Agent 或后台进程退出。模型、路径或人格变更在下条任务生效，并建立新会话。该进程配置禁用 shell、插件、应用、子代理、记忆、技能发现及网页搜索，并在建 thread 时禁用现有 MCP 服务；使用游戏指令、空环境列表及只读沙箱。全局 Codex 配置和登录不被修改。
+
+取消任务时，mod 立即停止游戏动作，再向 Codex 发送 `turn/interrupt` 并最多等待 3 秒完成收尾；无响应时终止该子进程，下一次任务重建会话。退出世界或关闭 AI 身份时终止该子进程。进程异常会报告失败，不自动重放可能已有副作用的任务。动态工具接口为实验 API，目前按本机 Codex 0.163.0 协议验证。
 
 多人模式：AI 客户端开启 `AiClient`，绑定后由所有者发送 `/ai <编号> task <自然语言>`；提问的回答也走这个入口。回复回传给绑定的所有者。普通玩家客户端不运行 AI 工具。
 
@@ -32,7 +44,7 @@ Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其�
 
 模型请求在后台执行。游戏工具通过主线程队列直接调用共享分发器，不经过本机 HTTP，也不需要 Python。动作完成后返回当前位置、背包真实增减和台账进度。工具参数错误返回模型修正；网络或鉴权错误停止任务并报告。
 
-默认最多执行 40 轮模型调用；历史中旧的大块工具结果会压缩，最近结果保留。用下面的离线测试检查模型协议、工具续接、参数错误、取消和历史完整性，不产生 API 费用：
+旧 API 后端每个任务最多执行 40 轮模型调用，并压缩旧的大块工具结果；Codex 后端的对话与模型执行循环交给 Codex 自身管理。以下离线测试使用协议替身，不产生模型费用：
 
 ```sh
 dotnet run --project tests/Agent/AgentTests.csproj
@@ -41,4 +53,12 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 编译和离线测试不能代替实机验证。建议依次测试纯聊天、询问并回答、合成、导航中停止，以及“Boss 战不自动走位”的许可覆盖。
 
-离线测试共 18 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=18`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat 和 WoodHarvest。采木测试使用假的世界接口和 Jev HTTP 响应，检查多树循环、实际库存进度、失败后的决策上下文、有界重试、取消和非法候选；不调用真实服务。游戏扫描、无损导航守卫、实际挥斧、掉落物拾取和双客户端同步仍需引擎／实机验收。其他测试同样使用 Terraria 对象、动作端点和网络发送替身，不证明真实物理或伤害。
+离线测试共 23 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=23`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat 和 WoodHarvest。Codex 检查工具回调、参数错误、会话复用、打断、缺失登录、连接断开、失败收尾，以及 NativeAgent 不依赖 API Key 的后端选择。采木检查多树循环、库存进度、失败上下文、有界重试和取消。游戏扫描、无损导航守卫、实际挥斧、掉落物拾取和双客户端同步仍需引擎／实机验收。
+
+可选真实 Codex 联调会消耗当前 Codex 登录账号的模型额度，但只提供模拟背包，不连接游戏：
+
+```sh
+dotnet run --project tests/Agent/AgentTests.csproj -- --codex-smoke
+```
+
+完成标记为 `CODEX_SMOKE_COMPLETE checks=4 mock_world=true`：检查真实工具调用、上下文保留、打断和打断后的连续对话。

@@ -8,6 +8,7 @@ namespace Terraria
     public static class Main
     {
         public static bool dedServ, gameMenu;
+        public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static int netMode, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
@@ -87,6 +88,8 @@ namespace TerraBlind
     {
         public static readonly Config I = new();
         public bool AiClient, AgentEnabled = true;
+        public bool AgentUseCodex;
+        public string AgentCodexPath = "", AgentCodexModel = "";
         public string AgentApiKey = "test-key", AgentModel = "test-model", AgentBaseUrl = "http://localhost/v1", AgentPersona = "test", TypeSafeKey = "test-jev-key";
     }
     public static class AgentChat

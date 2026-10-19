@@ -37,6 +37,15 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool AgentEnabled = true;
 
+		[DefaultValue(true)]
+		public bool AgentUseCodex = true;
+
+		[DefaultValue("")]
+		public string AgentCodexPath = "";
+
+		[DefaultValue("")]
+		public string AgentCodexModel = "";
+
 		[DefaultValue("")]
 		public string AgentApiKey = "";
 

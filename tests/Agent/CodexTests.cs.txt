@@ -1,0 +1,207 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class CodexTests
+{
+    static readonly JsonArray Tools = JsonNode.Parse("""
+        [{"type":"function","function":{"name":"get_state","description":"Read current game state","parameters":{"type":"object","properties":{}}}},
+         {"type":"function","function":{"name":"ask","description":"Ask the player","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}}]
+        """).AsArray();
+    static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+
+    public static async Task Run()
+    {
+        var server = new Server();
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        int calls = 0;
+        var spoken = new List<string>();
+        Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        { calls++; return Task.FromResult("{\"wood\":23}"); }
+        await agent.RunAsync("检查背包", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        await agent.RunAsync("继续", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
+        Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
+            && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
+            "game thread did not override instructions/environments/MCP");
+        Check(server.ThreadArgs["dynamicTools"][0]["type"].ToString() == "function" && server.ToolResponses.All(r => r["success"].GetValue<bool>()),
+            "dynamic tool registration/result contract changed");
+        Console.WriteLine("PASS: Codex protocol registers game tools, isolates thread settings, reuses context and deduplicates replies");
+
+        server.ToolName = "unknown";
+        await agent.RunAsync("未知工具", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(calls == 2 && !server.ToolResponses.Last()["success"].GetValue<bool>(), "unknown Codex tool executed");
+        server.ToolName = "ask";
+        await agent.RunAsync("缺少参数", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(calls == 2 && !server.ToolResponses.Last()["success"].GetValue<bool>(), "missing required Codex argument executed");
+        server.ToolName = "get_state";
+        await agent.RunAsync("数组结果", "mock", "/tmp", "", "game instructions", Tools,
+            (_, _, _) => Task.FromResult("[1,2]"), spoken.Add, default);
+        Check(server.ToolResponses.Last()["success"].GetValue<bool>(), "JSON array tool result was rejected");
+        Console.WriteLine("PASS: Codex rejects unknown/malformed calls and accepts non-object tool output");
+
+        using var cancel = new CancellationTokenSource();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = agent.RunAsync("长任务", "mock", "/tmp", "", "game instructions", Tools,
+            async (_, _, token) => { entered.SetResult(true); await Task.Delay(Timeout.Infinite, token); return "unreachable"; }, spoken.Add, cancel.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2)); cancel.Cancel();
+        try { await running; throw new Exception("Codex cancellation ignored"); } catch (OperationCanceledException) { }
+        Check(server.Interrupts == 1 && !server.Stopped, "Codex did not interrupt while preserving reusable session");
+        await agent.RunAsync("新任务", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(server.Threads == 1 && calls == 3, "new Codex task failed after interruption");
+        Console.WriteLine("PASS: Codex interrupts blocked tool calls and accepts a replacement task in the same thread");
+
+        var loggedOut = new Server { LoggedIn = false };
+        using var noLogin = new CodexAgent((_, _) => loggedOut.Connect());
+        try
+        {
+            await noLogin.RunAsync("hello", "mock", "/tmp", "", "system", Tools, Execute, spoken.Add, default);
+            throw new Exception("missing Codex login ignored");
+        }
+        catch (InvalidOperationException ex) { Check(ex.Message.Contains("login"), "login failure is not actionable"); }
+        Check(loggedOut.Stopped, "failed Codex startup leaked process");
+        var broken = new Server { FailTurn = true };
+        using var failed = new CodexAgent((_, _) => broken.Connect());
+        try
+        {
+            await failed.RunAsync("hello", "mock", "/tmp", "", "system", Tools, Execute, spoken.Add, default);
+            throw new Exception("failed Codex turn ignored");
+        }
+        catch (InvalidOperationException ex) { Check(ex.Message.Contains("failed"), "failed turn reported as success"); }
+        Check(broken.Stopped, "failed Codex turn leaked process");
+        var disconnected = new Server();
+        using var connection = disconnected.Connect();
+        var pending = connection.Request("no_reply", new JsonObject(), default);
+        disconnected.Drop();
+        try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Codex EOF did not fail pending request"); }
+        catch (IOException) { }
+        Console.WriteLine("PASS: Codex login/turn failures report errors and dispose owned connection");
+
+        var native = new NativeAgent();
+        var hosted = new Server();
+        Config.I.AgentUseCodex = true; Config.I.AgentApiKey = "";
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => hosted.Connect()));
+        int previous = AgentChat.Messages.Count;
+        try
+        {
+            NativeAgent.Submit("看看背包");
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (AgentChat.Messages.Count == previous || NativeAgent.Status != "idle")
+            {
+                Check(DateTime.UtcNow < deadline, "NativeAgent Codex dispatch timed out");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(AgentChat.Messages.Last() == "完成了" && hosted.ToolResponses.Count == 1, "NativeAgent did not use Codex game tools");
+            native.OnWorldUnload();
+            Check(hosted.Stopped, "world unload did not dispose Codex process");
+        }
+        finally { native.Unload(); Config.I.AgentUseCodex = false; Config.I.AgentApiKey = "test-key"; }
+        Console.WriteLine("PASS: NativeAgent routes through Codex without API key and closes connection on world unload");
+    }
+
+    public static async Task Smoke()
+    {
+        using var agent = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        int calls = 0;
+        var replies = new List<string>();
+        Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            Check(name == "get_state", "smoke attempted unexpected tool: " + name);
+            calls++; Console.WriteLine("CODEX_SMOKE tool=get_state mock_world=true");
+            return Task.FromResult("{\"equipment\":{\"items\":[{\"name\":\"Wood\",\"stack\":23}]}}");
+        }
+        string cwd = Path.Combine(Path.GetTempPath(), "TerraBlindCodexSmoke");
+        const string system = "你是 Terraria 队友。只使用提供的游戏工具，只简短回答，不使用其他能力。";
+        await agent.RunAsync("必须调用 get_state 查看背包，然后只回答木材数量。", "", cwd, "", system, Tools, Execute,
+            text => { replies.Add(text); Console.WriteLine("CODEX_SMOKE reply=" + text); }, timeout.Token);
+        Check(calls == 1 && replies.Last().Contains("23"), "real Codex tool roundtrip did not return mock inventory");
+        await agent.RunAsync("刚才木材有多少？根据已有对话回答，不再调用工具。", "", cwd, "", system, Tools, Execute,
+            text => { replies.Add(text); Console.WriteLine("CODEX_SMOKE reply=" + text); }, timeout.Token);
+        Check(calls == 1 && replies.Last().Contains("23"), "real Codex did not retain conversation context");
+        using var interrupt = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = agent.RunAsync("再次调用 get_state 读取背包。", "", cwd, "", system, Tools,
+            async (name, args, token) =>
+            {
+                Check(name == "get_state", "unexpected tool in interrupt probe");
+                entered.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); return "unreachable";
+            }, replies.Add, interrupt.Token);
+        await entered.Task.WaitAsync(timeout.Token); interrupt.Cancel();
+        try { await running; throw new Exception("real Codex cancellation ignored"); } catch (OperationCanceledException) { }
+        Console.WriteLine("CODEX_SMOKE interrupted=true");
+        await agent.RunAsync("刚才任务取消了。根据已有对话，只回答之前读到的木材数量，不再调用工具。", "", cwd, "", system, Tools, Execute,
+            text => { replies.Add(text); Console.WriteLine("CODEX_SMOKE reply=" + text); }, timeout.Token);
+        Check(calls == 1 && replies.Last().Contains("23"), "real Codex lost context after interruption");
+        Console.WriteLine("CODEX_SMOKE_COMPLETE checks=4 mock_world=true");
+    }
+
+    sealed class Server
+    {
+        readonly Lines _input = new();
+        public int Threads, Interrupts;
+        int _turn;
+        public bool Stopped, LoggedIn = true, FailTurn;
+        public string ToolName = "get_state";
+        public JsonObject ThreadArgs;
+        public readonly List<JsonObject> ToolResponses = new();
+        public void Drop() => _input.End();
+        public CodexConnection Connect() => new(_input, new Writer(Receive), () => { Stopped = true; _input.End(); });
+        void Send(JsonObject message) => _input.Add(message.ToJsonString());
+        void Reply(JsonNode id, JsonObject result) => Send(new JsonObject { ["id"] = id.DeepClone(), ["result"] = result });
+        void Completed(string status) => Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+        { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = "turn" + _turn, ["status"] = status } } });
+        void Receive(string line)
+        {
+            var message = JsonNode.Parse(line).AsObject();
+            string method = message["method"]?.ToString();
+            if (method == "initialized") return;
+            if (method == "initialize") Reply(message["id"], new JsonObject());
+            else if (method == "account/read") Reply(message["id"], new JsonObject { ["account"] = LoggedIn ? new JsonObject { ["type"] = "chatgpt" } : null });
+            else if (method == "config/read") Reply(message["id"], JsonNode.Parse("{\"config\":{\"mcp_servers\":{\"unrelated\":{}}}}").AsObject());
+            else if (method == "thread/start")
+            { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
+            else if (method == "turn/start")
+            {
+                _turn++;
+                Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });
+                if (FailTurn) { Completed("failed"); return; }
+                Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "tool" + _turn, ["params"] = new JsonObject
+                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
+            }
+            else if (method == "turn/interrupt") { Interrupts++; Reply(message["id"], new JsonObject()); Completed("interrupted"); }
+            else if (method == null)
+            {
+                ToolResponses.Add(message["result"].AsObject());
+                var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
+                { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
+                Send(completed); Send(completed); Completed("completed");
+            }
+        }
+    }
+    sealed class Lines : TextReader
+    {
+        readonly Channel<string> _lines = Channel.CreateUnbounded<string>();
+        public void Add(string line) => _lines.Writer.TryWrite(line);
+        public void End() => _lines.Writer.TryComplete();
+        public override ValueTask<string> ReadLineAsync(CancellationToken token) => _lines.Reader.ReadAsync(token);
+    }
+    sealed class Writer : TextWriter
+    {
+        readonly Action<string> _send;
+        public Writer(Action<string> send) => _send = send;
+        public override Encoding Encoding => Encoding.UTF8;
+        public override Task WriteLineAsync(ReadOnlyMemory<char> value, CancellationToken token = default)
+        { token.ThrowIfCancellationRequested(); _send(value.ToString()); return Task.CompletedTask; }
+    }
+}

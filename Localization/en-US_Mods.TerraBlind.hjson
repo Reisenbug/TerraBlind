@@ -54,6 +54,18 @@ Configs: {
 			Label: 启用内置 Agent
 			Tooltip: 使用 /tb 下达指令，无需 Python。关闭后恢复外部脚本入口。
 		}
+		AgentUseCodex: {
+			Label: 使用 Codex 后端
+			Tooltip: 自动启动本机 Codex，使用其现有登录和游戏工具。关闭后使用下方的 API 配置。无需重载。
+		}
+		AgentCodexPath: {
+			Label: Codex 可执行文件路径
+			Tooltip: 留空自动寻找本机 Codex。找不到时填写可执行文件完整路径。需要先在终端执行 codex login。
+		}
+		AgentCodexModel: {
+			Label: Codex 模型名
+			Tooltip: 留空沿用本机 Codex 默认模型。此项与下方 API 模型名分开。
+		}
 		AgentApiKey: {
 			Label: Agent API Key
 			Tooltip: 保存在本机 ModConfigs，不会同步给其他玩家。用于通用 Agent，与 Jev 的 TypeSafe Key 分开。

@@ -39,8 +39,9 @@ static class Tests
         })
     }.ToJsonString();
 
-    static async Task Main()
+    static async Task Main(string[] args)
     {
+        if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
         var handler = new FakeHandler();
         using var http = new HttpClient(handler);
         var agent = new AgentConversation(http);
@@ -117,7 +118,8 @@ static class Tests
         Console.WriteLine("PASS: dialogue filtering and bounded task loop");
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=18");
+        await CodexTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=23");
     }
 
     sealed class FakeHandler : HttpMessageHandler
