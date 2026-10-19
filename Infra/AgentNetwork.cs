@@ -173,7 +173,7 @@ namespace TerraBlind
 				return;
 			}
 			if (Main.netMode != NetmodeID.MultiplayerClient) return;
-			if (type == Message.Reply) Main.NewText(reader.ReadString());
+			if (type == Message.Reply) AgentChat.Display(reader.ReadString());
 			if (type == Message.Execute && Config.I.AiClient)
 			{
 				_owner = reader.ReadInt32();

@@ -96,6 +96,7 @@ namespace TerraBlind
     {
         public static readonly List<string> Messages = new();
         public static void Say(string text) => Messages.Add(text);
+        public static void Display(string text) => Terraria.Main.NewText(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
     public static class StateSpacePlanner { public static bool PreserveTerrain; }
