@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -132,6 +134,7 @@ public sealed class CodexAgent : IDisposable
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("project_doc_max_bytes=0");
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("web_search=\"disabled\"");
         if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
+        ApplySystemProxy(start, HttpClient.DefaultProxy);
         var process = Process.Start(start) ?? throw new IOException("无法启动 Codex。");
         _ = process.StandardError.ReadToEndAsync();
         return new CodexConnection(process.StandardOutput, process.StandardInput, () =>
@@ -139,6 +142,20 @@ public sealed class CodexAgent : IDisposable
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             process.Dispose();
         });
+    }
+
+    internal static void ApplySystemProxy(ProcessStartInfo start, IWebProxy proxy)
+    {
+        if (new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" }
+            .Any(key => start.Environment.TryGetValue(key, out string value) && !string.IsNullOrWhiteSpace(value))) return;
+        foreach (string scheme in new[] { "http", "https" })
+        {
+            var destination = new Uri(scheme + "://chatgpt.com");
+            if (proxy.IsBypassed(destination)) continue;
+            var address = proxy.GetProxy(destination);
+            if (address != null && address != destination)
+                start.Environment[scheme.ToUpperInvariant() + "_PROXY"] = address.AbsoluteUri;
+        }
     }
 
     async Task Ensure(string executable, string cwd, string model, string system, JsonArray tools, CancellationToken token)

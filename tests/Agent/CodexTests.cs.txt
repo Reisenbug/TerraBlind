@@ -19,6 +19,13 @@ static class CodexTests
 
     public static async Task Run()
     {
+        var launch = new System.Diagnostics.ProcessStartInfo();
+        launch.Environment.Clear();
+        CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12345"));
+        Check(launch.Environment["HTTPS_PROXY"] == "http://127.0.0.1:12345/", "system proxy was not forwarded to Codex");
+        launch.Environment["HTTPS_PROXY"] = "http://explicit:8080";
+        CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12346"));
+        Check(launch.Environment["HTTPS_PROXY"] == "http://explicit:8080", "explicit proxy was overwritten");
         var server = new Server();
         using var agent = new CodexAgent((_, _) => server.Connect());
         int calls = 0;
@@ -111,6 +118,9 @@ static class CodexTests
 
     public static async Task Smoke()
     {
+        var launch = new System.Diagnostics.ProcessStartInfo();
+        CodexAgent.ApplySystemProxy(launch, System.Net.Http.HttpClient.DefaultProxy);
+        Console.WriteLine("CODEX_SMOKE https_proxy_configured=" + launch.Environment.ContainsKey("HTTPS_PROXY"));
         using var agent = new CodexAgent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         int calls = 0;
