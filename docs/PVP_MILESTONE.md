@@ -2,6 +2,8 @@
 
 `duel_player` 是连续对战工具，`fight_player` 保留原地攻击行为。没有 PvPAdventure 的类型、反射、网络包或专用规则依赖。
 
+后续 Agent 持续指挥、共享交战状态及动态 instruction 的设计见 [PvP Agent / Jev 协同设计](PVP_AGENT_DESIGN.md)，其中接口尚未实现。
+
 ## 控制循环
 
 Agent 选择目标、首选快捷栏槽、持续时间和 strategy。代码每帧瞄准、检查射界并执行移动；每 24 个游戏帧至多发起一个 Jev 请求，只允许一个在途请求。同一次请求包含两个独立判断：共享 Boss 移动执行器提供的方向/幅度，以及接触近战或发射武器模式。
