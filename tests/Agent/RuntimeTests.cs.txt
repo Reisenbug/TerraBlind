@@ -98,6 +98,7 @@ static class RuntimeTests
 
             await TestNetwork();
             TestRoleSwitch();
+            TestDefaultOwner();
             AgentPermissions.Dodge = AgentPermissions.Attack = false;
             Agent.OnWorldUnload();
             Check(AgentPermissions.Dodge && AgentPermissions.Attack, "world unload did not reset permissions");
@@ -230,6 +231,46 @@ static class RuntimeTests
             Check(reader.ReadByte() == 4 && reader.ReadString().Contains("没有绑定"), "reenabled AI retained server owner");
         Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false; Config.I.AiClient = false;
         Console.WriteLine("PASS: live AI toggle registers, stops, unregisters and requires fresh binding");
+    }
+
+    static void TestDefaultOwner()
+    {
+        var network = new AgentNetwork();
+        string previousName = Game.player[0].name;
+        Game.netMode = NetmodeID.Server; Game.dedServ = true;
+        network.OnWorldLoad();
+        try
+        {
+            Game.player[0].name = "not_the_owner";
+            Game.player[0].active = Game.player[1].active = true;
+            ModPacket.Sent.Clear();
+            Receive(0, 1, _ => { });
+            Check(ModPacket.Sent.Count == 0, "bound to an arbitrary player before Reisenberg joined");
+            Game.player[0].name = "Reisenberg";
+            network.PostUpdateEverything();
+            using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+                Check(reader.ReadByte() == 2 && reader.ReadInt32() == 0 && reader.ReadString() == "status", "late default owner did not auto-bind");
+            Request(0, "unbind");
+            int sent = ModPacket.Sent.Count;
+            network.PostUpdateEverything();
+            Check(ModPacket.Sent.Count == sent, "manual unbind was immediately overridden");
+            Receive(5, 1, _ => { }); Receive(0, 1, _ => { });
+            using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+                Check(reader.ReadByte() == 2 && reader.ReadInt32() == 0, "new AI registration did not default to Reisenberg");
+            Game.player[0].active = false;
+            AgentNetwork.Disconnect(0);
+            using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+                Check(reader.ReadByte() == 2 && reader.ReadInt32() == -1 && reader.ReadString() == "stop", "owner disconnect did not stop AI");
+            Game.player[0].active = true; network.PostUpdateEverything();
+            using (var reader = new BinaryReader(new MemoryStream(ModPacket.Sent.Last().Data)))
+                Check(reader.ReadByte() == 2 && reader.ReadInt32() == 0 && reader.ReadString() == "status", "owner rejoin did not restore binding");
+        }
+        finally
+        {
+            network.OnWorldLoad(); Game.player[0].name = previousName;
+            Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false;
+        }
+        Console.WriteLine("PASS: default Reisenberg owner binds on registration/join, honors unbind and reconnects safely");
     }
 
     static async Task TestPvp()

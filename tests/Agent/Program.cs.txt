@@ -121,7 +121,7 @@ static class Tests
         await WoodHarvestTests.Run();
         await CodexTests.Run();
         await PvpTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=26");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=27");
     }
 
     sealed class FakeHandler : HttpMessageHandler

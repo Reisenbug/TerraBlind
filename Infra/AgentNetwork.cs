@@ -11,6 +11,8 @@ namespace TerraBlind
 	{
 		enum Message : byte { Register, Request, Execute, Result, Reply, Unregister }
 		static readonly Dictionary<int, int> Owners = new();
+		static readonly HashSet<int> PendingDefaultOwners = new();
+		const string DefaultOwnerName = "Reisenberg";
 		static bool _registered;
 		static int _owner = -1;
 		public static int OwnerPlayer => _owner;
@@ -42,7 +44,7 @@ namespace TerraBlind
 		}
 		static void Reset()
 		{
-			Owners.Clear(); _registered = false; _owner = -1;
+			Owners.Clear(); PendingDefaultOwners.Clear(); _registered = false; _owner = -1;
 			_lastStatus = ""; _lastSent = 0;
 			_awaitingReply = false;
 		}
@@ -50,10 +52,11 @@ namespace TerraBlind
 		{
 			if (Main.netMode != NetmodeID.Server) return;
 			Owners.Remove(player);
+			PendingDefaultOwners.Remove(player);
 			foreach (int bot in new List<int>(Owners.Keys))
 				if (Owners[bot] == player)
 				{
-					Owners[bot] = -1; Execute(bot, -1, "stop");
+					Owners[bot] = -1; PendingDefaultOwners.Add(bot); Execute(bot, -1, "stop");
 				}
 		}
 
@@ -63,13 +66,15 @@ namespace TerraBlind
 			{
 				foreach (int bot in new List<int>(Owners.Keys))
 				{
-					if (!Main.player[bot].active) { Owners.Remove(bot); continue; }
+					if (!Main.player[bot].active) { Owners.Remove(bot); PendingDefaultOwners.Remove(bot); continue; }
 					int owner = Owners[bot];
 					if (owner >= 0 && !Main.player[owner].active)
 					{
 						Owners[bot] = -1;
+						PendingDefaultOwners.Add(bot);
 						Execute(bot, -1, "stop");
 					}
+					TryDefaultOwner(bot);
 				}
 				return;
 			}
@@ -101,6 +106,20 @@ namespace TerraBlind
 			if (status == _lastStatus) return;
 			_lastStatus = status; _lastSent = Main.GameUpdateCount;
 			Report(status);
+		}
+
+		static void TryDefaultOwner(int bot)
+		{
+			if (!PendingDefaultOwners.Contains(bot) || Owners[bot] >= 0) return;
+			for (int player = 0; player < Main.maxPlayers; player++)
+			{
+				if (player == bot || !Main.player[player].active || Main.player[player].name != DefaultOwnerName) continue;
+				Owners[bot] = player;
+				PendingDefaultOwners.Remove(bot);
+				Log($"default owner bot={bot} owner={player} name={DefaultOwnerName}");
+				Execute(bot, player, "status");
+				return;
+			}
 		}
 
 		static string Status() => $"流程={StartRun.Phase}/{StartRun.Outcome} {StartRun.Reason}; 寻路={RecedingNav.Active}/{RecedingNav.LastStop}; 战斗={Combat.Enabled}; 闪避={Dodge.Enabled}";
@@ -148,11 +167,13 @@ namespace TerraBlind
 				{ Log($"reject inactive sender={sender}"); return; }
 				if (type == Message.Register)
 				{
-					Owners.TryAdd(sender, -1);
+					if (Owners.TryAdd(sender, -1)) PendingDefaultOwners.Add(sender);
+					TryDefaultOwner(sender);
 					return;
 				}
 				if (type == Message.Unregister)
 				{
+					PendingDefaultOwners.Remove(sender);
 					if (Owners.Remove(sender, out int previousOwner) && previousOwner >= 0)
 						Reply(previousOwner, $"AI[{sender}] 已关闭 AI 身份并解除绑定。");
 					return;
@@ -182,12 +203,14 @@ namespace TerraBlind
 				if (command == "bind" && current == -1)
 				{
 					Owners[bot] = sender;
+					PendingDefaultOwners.Remove(bot);
 					Execute(bot, sender, "status");
 					return;
 				}
 				if (current != sender) { Reply(sender, "你没有绑定此 AI。"); return; }
 				if (command == "unbind")
 				{
+					PendingDefaultOwners.Remove(bot);
 					Owners[bot] = -1; Execute(bot, -1, "stop");
 					Reply(sender, "已解除绑定并停止 AI。"); return;
 				}
