@@ -122,7 +122,7 @@ namespace TerraBlind
 			}
 		}
 
-		static string Status() => $"流程={StartRun.Phase}/{StartRun.Outcome} {StartRun.Reason}; 寻路={RecedingNav.Active}/{RecedingNav.LastStop}; 战斗={Combat.Enabled}; 闪避={Dodge.Enabled}";
+		static string Status() => $"流程={StartRun.Phase}/{StartRun.Outcome} {StartRun.Reason}; 寻路={RecedingNav.Active}/{RecedingNav.LastStop}; 战斗={Combat.Enabled}; 闪避={Dodge.Enabled}; PvP={PvpDuel.Outcome} session={PvpDuel.Session} revision={PvpDuel.Directive?.Revision ?? 0}";
 
 		public static void Request(int bot, string command)
 		{
@@ -246,7 +246,9 @@ namespace TerraBlind
 					{
 						var patch = System.Text.Json.Nodes.JsonNode.Parse(command.Substring(5).Trim()).AsObject();
 						patch["session"] = PvpDuel.Session;
-						return PvpDuel.UpdateDirective(patch, true).ToJsonString();
+						var result = PvpDuel.UpdateDirective(patch, true);
+						return result["error"] != null ? result.ToJsonString()
+							: $"规则已更新：session={PvpDuel.Session} revision={PvpDuel.Directive.Revision}。";
 					}
 					catch (Exception ex) { return "rules 参数错误：" + ex.Message; }
 				case "stop":
@@ -284,7 +286,7 @@ namespace TerraBlind
 	{
 		public override CommandType Type => CommandType.Chat;
 		public override string Command => "ai";
-		public override string Description => "AI 玩家: /ai list 或 /ai <玩家编号> bind|unbind|status|task 指令|start|fight|goto X Y|stop";
+		public override string Description => "AI 玩家: /ai list 或 /ai <玩家编号> bind|unbind|status|task 指令|rules JSON|start|fight|goto X Y|stop";
 		public override void Action(CommandCaller caller, string input, string[] args)
 		{
 			DiagLog.Write($"[ai-net] command mode={Main.netMode} input={input}");

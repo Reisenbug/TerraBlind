@@ -25,6 +25,14 @@ public class NativeAgent : ModSystem
     DateTime _lastFeedback;
     JsonArray _schemas;
     readonly ConcurrentQueue<string> _combatMessages = new();
+    internal static bool CombatMessagesPending => _instance?._combatMessages.IsEmpty == false;
+    internal static JsonArray TakeCombatMessages()
+    {
+        var messages = new JsonArray();
+        if (_instance != null)
+            while (_instance._combatMessages.TryDequeue(out string message)) messages.Add(message);
+        return messages;
+    }
     public static string Status { get; private set; } = "idle";
 
     public override void Load()

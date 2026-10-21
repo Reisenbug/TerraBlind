@@ -126,7 +126,7 @@ public static class AgentTools
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-            or "place_at" or "act" or "interact" or "loot_all" or "craft";
+            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap";
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         try { return await ExecuteCore(name, args, token); }
         finally
@@ -154,6 +154,10 @@ public static class AgentTools
         switch (name)
         {
             case "inventory_swap":
+                var idleClock = Stopwatch.StartNew();
+                while (idleClock.Elapsed.TotalSeconds < 2 && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead
+                    || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
+                    await Task.Delay(50, token);
                 result = await NativeAgent.OnMain(() => PvpInventory.Swap(args), token);
                 break;
             case "combat_observe":
@@ -326,10 +330,16 @@ public static class AgentTools
         var clock = Stopwatch.StartNew();
         while (true)
         {
-            var report = await NativeAgent.OnMain(() => PvpDuel.Session != session
-                ? new JsonObject { ["error"] = "session_mismatch" } : PvpDuel.Report(after, Bool(args, "detailed")), token);
-            if (report["error"] != null || report["active"]?.GetValue<bool>() != true
-                || report["last_event"].GetValue<long>() > after || clock.Elapsed.TotalSeconds >= wait) return report;
+            var report = await NativeAgent.OnMain(() =>
+            {
+                if (PvpDuel.Session != session) return new JsonObject { ["error"] = "session_mismatch" };
+                if (PvpDuel.Active && PvpDuel.EventSequence <= after && !NativeAgent.CombatMessagesPending
+                    && clock.Elapsed.TotalSeconds < wait) return null;
+                var current = PvpDuel.Report(after, Bool(args, "detailed"));
+                current["player_messages"] = NativeAgent.TakeCombatMessages();
+                return current;
+            }, token);
+            if (report != null) return report;
             await Task.Delay(100, token);
         }
     }

@@ -132,6 +132,7 @@ static class CodexTests
                 {
                     if (!PvpDuel.Start(1, 30, 0, 600, "持续交战", out string why,
                         (_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged")))) throw new Exception(why);
+                    NativeAgent.Submit("别追近战");
                 }
                 else PvpDuel.Stop();
                 return true;
@@ -151,6 +152,8 @@ static class CodexTests
                 await Task.Delay(5);
             }
             Check(hosted.Threads == 1 && !PvpDuel.Active, "combat supervision created a second Codex thread or ignored stop");
+            var review = JsonNode.Parse(hosted.Inputs[1].Split("战况：")[1]);
+            Check(review["player_messages"][0].GetValue<string>() == "别追近战", "queued player follow-up was lost before combat review");
         }
         finally
         {
@@ -211,6 +214,7 @@ static class CodexTests
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
         public readonly List<JsonObject> ToolResponses = new();
+        public readonly List<string> Inputs = new();
         public void Drop() => _input.End();
         public CodexConnection Connect() => new(_input, new Writer(Receive), () => { Stopped = true; _input.End(); });
         void Send(JsonObject message) => _input.Add(message.ToJsonString());
@@ -229,6 +233,7 @@ static class CodexTests
             { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
             else if (method == "turn/start")
             {
+                Inputs.Add(message["params"]["input"][0]["text"].ToString());
                 _turn++;
                 Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });
                 if (FailTurn) { Completed("failed"); return; }
