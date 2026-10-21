@@ -15,6 +15,7 @@ public static partial class PvpDuel
     static long eventSequence, requestRevision;
     static int sessionTarget;
     static JsonObject latestScene;
+    static readonly PvpHistory history = new();
     public static long Session { get; private set; }
     public static long EventSequence => eventSequence;
     public static PvpDirective Directive { get; private set; }
@@ -22,7 +23,7 @@ public static partial class PvpDuel
     static void BeginSession(int target)
     {
         Session++; sessionTarget = target;
-        events.Clear(); recentEvents.Clear(); eventSequence = 0; latestScene = null;
+        events.Clear(); recentEvents.Clear(); eventSequence = 0; latestScene = null; history.Reset();
         Event("started", "running");
     }
 
@@ -52,11 +53,19 @@ public static partial class PvpDuel
         ["item_animation"] = player.itemAnimation, ["item_time"] = player.itemTime
     };
 
-    public static JsonObject Report(long afterEvent = 0) => new()
+    static JsonObject Perception(Player self, Player target, bool detailed = false) => new()
+    {
+        ["captured_tick"] = Main.GameUpdateCount, ["units"] = "pixels; velocity=pixels/game_frame",
+        ["self"] = Body(self), ["target"] = Body(target), ["self_mana"] = self.statMana, ["target_mana"] = null,
+        ["history"] = history.ToJson(), ["terrain"] = PvpTerrain.Observe(self, target, detailed)
+    };
+
+    public static JsonObject Report(long afterEvent = 0, bool detailed = false) => new()
     {
         ["session"] = Session, ["tick"] = Main.GameUpdateCount, ["active"] = Active, ["outcome"] = Outcome,
         ["directive"] = Directive?.ToJson(), ["remaining_active_frames"] = frames, ["jev_decisions"] = Decisions,
         ["self"] = Body(Main.LocalPlayer),
+        ["perception"] = Active ? Perception(Main.LocalPlayer, Main.player[sessionTarget], detailed) : null,
         ["target"] = Session == 0 ? null : Body(Main.player[sessionTarget]),
         ["current_mode"] = mode, ["movement_reason"] = movementReason, ["attack_reason"] = attackReason,
         ["scene"] = latestScene?.DeepClone(), ["last_event"] = eventSequence,

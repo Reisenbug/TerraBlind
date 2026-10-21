@@ -52,7 +52,12 @@ namespace Terraria
         public float scale = 1;
         public bool IsAir => stack == 0;
     }
-    public struct Tile { public bool HasUnactuatedTile; public int TileType; }
+    public struct Tile
+    {
+        public bool HasUnactuatedTile, IsActuated, IsHalfBlock;
+        public bool HasTile => HasUnactuatedTile;
+        public int TileType, Slope, LiquidType, LiquidAmount;
+    }
     public class Mount { public bool Active; }
     public class Projectile
     {

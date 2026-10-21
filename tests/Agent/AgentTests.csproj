@@ -18,7 +18,10 @@
     <Compile Include="../../Flow/PvpDuel.cs" Link="PvpDuel.cs" />
     <Compile Include="../../Flow/PvpDirective.cs" Link="PvpDirective.cs" />
     <Compile Include="../../Flow/PvpSession.cs" Link="PvpSession.cs" />
+    <Compile Include="../../Flow/PvpHistory.cs" Link="PvpHistory.cs" />
+    <Compile Include="../../Flow/PvpTerrain.cs" Link="PvpTerrain.cs" />
     <Compile Include="DirectiveTests.cs.txt" />
+    <Compile Include="HistoryTests.cs.txt" />
     <Compile Include="../../Jev/Port/Contracts.cs" Link="Contracts.cs" />
     <Compile Include="../../Jev/Port/DecisionFacts.cs" Link="DecisionFacts.cs" />
     <Compile Include="PvpTests.cs.txt" />

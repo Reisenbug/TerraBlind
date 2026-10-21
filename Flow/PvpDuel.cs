@@ -233,6 +233,7 @@ public static partial class PvpDuel
         }
         if (frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
+        history.Record(self, target, lastAimClear);
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
         var weapons = Weapons(self);
         if (weapons.Count == 0)
@@ -294,6 +295,7 @@ public static partial class PvpDuel
             {
                 ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
                 ["directive"] = Directive.ToJson(), ["session"] = Session,
+                ["perception"] = Perception(self, target),
                 ["movement_state"] = movementState,
                 ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,
                 ["target_vx"] = target.velocity.X, ["target_vy"] = target.velocity.Y,

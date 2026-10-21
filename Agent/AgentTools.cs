@@ -305,7 +305,7 @@ public static class AgentTools
         while (true)
         {
             var report = await NativeAgent.OnMain(() => PvpDuel.Session != session
-                ? new JsonObject { ["error"] = "session_mismatch" } : PvpDuel.Report(after), token);
+                ? new JsonObject { ["error"] = "session_mismatch" } : PvpDuel.Report(after, Bool(args, "detailed")), token);
             if (report["error"] != null || report["active"]?.GetValue<bool>() != true
                 || report["last_event"].GetValue<long>() > after || clock.Elapsed.TotalSeconds >= wait) return report;
             await Task.Delay(100, token);

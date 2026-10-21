@@ -11,6 +11,7 @@
     <Compile Include="../../Jev/Port/Contracts.cs" />
     <Compile Include="../../Jev/Port/GameMovement.cs" />
     <Compile Include="../../Jev/Port/GameSensor.cs" />
+    <Compile Include="../../Flow/PvpTerrain.cs" />
     <Compile Include="Program.cs.txt" />
     <Reference Include="$(TmlPath)/tModLoader.dll" />
     <Reference Include="$(TmlPath)/Libraries/**/*.dll" />

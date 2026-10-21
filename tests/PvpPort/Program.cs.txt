@@ -53,7 +53,20 @@ class Program
         self.miscEquips[3].type = ItemID.SlimySaddle;
         snapshot = sensor.CapturePlayer(self, target, 4, intent, 0);
         Check(snapshot.HasMount && snapshot.AvailableActions.Any(option => option.Intent.VerticalSize == Magnitude.Large), "Equipped mount was not offered");
-        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=10 real_engine_objects=true gameplay_loop=false");
+        Game.tileSolid[TileID.Dirt] = true;
+        for (int y = 124; y <= 130; y++)
+        {
+            var tile = Game.tile[132, y];
+            tile.HasTile = true;
+            tile.TileType = TileID.Dirt;
+        }
+        var trace = TerraBlind.PvpTerrain.Trace(self.Center, target.Center);
+        Check(!trace["clear"].GetValue<bool>() && trace["blocker"]["x"].GetValue<int>() == 132, "real collision did not identify the blocking wall");
+        var terrain = TerraBlind.PvpTerrain.Observe(self, target, true);
+        var window = terrain["tile_windows"][0];
+        Check(window["width"].GetValue<int>() == 65 && window["height"].GetValue<int>() == 41, "tile window dimensions drifted");
+        Check(window["rows"].AsArray().All(row => row.AsArray().Sum(run => run[0].GetValue<int>()) == 65), "RLE lost tile positions");
+        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=13 real_engine_objects=true gameplay_loop=false");
     }
 }
 

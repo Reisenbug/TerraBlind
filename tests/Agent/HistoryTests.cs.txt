@@ -1,0 +1,37 @@
+using System;
+using TerraBlind;
+using Game = Terraria.Main;
+
+static class HistoryTests
+{
+    public static void Run()
+    {
+        var history = new PvpHistory();
+        var self = Game.LocalPlayer; var target = Game.player[1];
+        uint tick = Game.GameUpdateCount;
+        int selfHp = self.statLife, targetHp = target.statLife;
+        try
+        {
+            Game.GameUpdateCount = 100;
+            history.Reset(); target.velocity = new(4, 0); history.Record(self, target, true);
+            self.statLife -= 20; target.statLife -= 5;
+            Game.projectile[0].active = true; Game.projectile[0].damage = 10;
+            Game.projectile[0].owner = self.whoAmI; Game.projectile[0].identity = 99;
+            Game.GameUpdateCount++; target.velocity = new(-4, 0); history.Record(self, target, false);
+            history.Record(self, target, false);
+            var report = history.ToJson();
+            if (report["observed_own_projectiles"].GetValue<int>() != 1 || report["sampled_frames"].GetValue<int>() != 2
+                || report["horizontal_reversals"].GetValue<int>() != 1 || report["confirmed_hits"] != null
+                || report["target_hp_delta"].GetValue<int>() != -5)
+                throw new Exception("history confused HP deltas with hits, duplicated a frame or lost motion evidence");
+            Game.GameUpdateCount = 400; history.Record(self, target, true);
+            if (history.ToJson()["sampled_frames"].GetValue<int>() != 1) throw new Exception("history did not expire old observations");
+        }
+        finally
+        {
+            Game.GameUpdateCount = tick; self.statLife = selfHp; target.statLife = targetHp;
+            Game.projectile[0].active = false; target.velocity = default;
+        }
+        Console.WriteLine("PASS: bounded combat history records reversals and projectile creation without inventing hits");
+    }
+}
