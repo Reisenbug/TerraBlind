@@ -23,6 +23,14 @@ namespace Terraria
     {
         public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
+        public bool controlUp, controlDown, controlHook, ExtraJump;
+        public float wingTime, manaCost = 1;
+        public int statMana = 200, statLifeMax2 = 100, itemTime;
+        public Mount mount = new();
+        public Item HeldItem => inventory[selectedItem];
+        public bool AnyExtraJumpUsable() => ExtraJump;
+        public bool PickAmmo(Item item, out int shot, out float speed, out int damage, out float knockback, out int ammo, bool dontConsume)
+        { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
         public int itemAnimation;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
         public System.Numerics.Vector2 position;
@@ -39,9 +47,13 @@ namespace Terraria
         public int stack, pick, axe, hammer, ammo, damage, useStyle;
         public int type, prefix, useAmmo;
         public float shootSpeed;
+        public int shoot, mana, width = 30, height = 30;
+        public bool noMelee;
+        public float scale = 1;
         public bool IsAir => stack == 0;
     }
     public struct Tile { public bool HasUnactuatedTile; public int TileType; }
+    public class Mount { public bool Active; }
     public class Projectile
     {
         public bool active, arrow, friendly, hostile;
@@ -67,6 +79,8 @@ namespace Terraria.ID
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30; }
     public static class AmmoID { public const int Arrow = 40; }
+    public static class MountID { public const int QueenSlime = 50; }
+    public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
 }
 namespace Terraria.ModLoader
 {

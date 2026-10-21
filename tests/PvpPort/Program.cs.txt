@@ -1,0 +1,63 @@
+using System;
+using System.Linq;
+using System.Reflection;
+using Microsoft.Xna.Framework;
+using Terraria;
+using Terraria.ID;
+using TerraBlind.JevariaCombat;
+using Game = Terraria.Main;
+
+class Program
+{
+    static void Check(bool condition, string message)
+    {
+        if (!condition) throw new Exception(message);
+    }
+
+    static void Main()
+    {
+        Terraria.Program.SavePath = "/tmp/terrablind-pvp-port-tests/world";
+        Run();
+    }
+
+    static void Run()
+    {
+        typeof(Terraria.ModLoader.ExtraJumpLoader).GetMethod("ResizeArrays", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+        Game.maxTilesX = Game.maxTilesY = 300;
+        Game.tile = (Tilemap)Activator.CreateInstance(typeof(Tilemap), BindingFlags.Instance | BindingFlags.NonPublic,
+            null, new object[] { (ushort)300, (ushort)300 }, null);
+        Game.projectile = Enumerable.Range(0, 1000).Select(_ => new Projectile()).ToArray();
+        var self = new Player { active = true, whoAmI = 0, name = "AI", position = new Vector2(2000, 2000), velocity = new Vector2(0, -2) };
+        var target = new Player { active = true, hostile = true, whoAmI = 1, name = "opponent", position = new Vector2(2200, 2000) };
+        Game.player[0] = self; Game.player[1] = target; Game.myPlayer = 0;
+        var sensor = new GameSensor();
+        var snapshot = sensor.CapturePlayer(self, target, 1, DodgeIntent.Idle, 0);
+        var intent = new DodgeIntent(DodgeDirection.UpRight, Magnitude.Small, Magnitude.Small, false);
+        Check(snapshot.AvailableActions.Any(option => option.Intent == intent), "Missing rising movement option");
+        var driver = new GameMovement();
+        driver.Apply(self, intent, snapshot with { CanDoubleJump = true });
+        Check(self.controlRight && self.controlJump, "Shared executor did not press right/jump");
+        driver.Apply(self, intent, snapshot with { Sequence = 2, CanDoubleJump = true });
+        Check(!self.controlJump, "Extra jump did not release the held key");
+        driver.Apply(self, intent, snapshot with { Sequence = 2, CanDoubleJump = true });
+        Check(self.controlJump, "Extra jump did not repress the key");
+        driver.Apply(self, intent, snapshot with { Sequence = 3, CanDoubleJump = true });
+        Check(!self.controlJump, "Next extra jump did not release");
+        driver.Apply(self, intent, snapshot with { Sequence = 3, CanDoubleJump = true });
+        Check(self.controlJump, "Next extra jump did not repress");
+        var solid = new BoundaryDistances(1600, 100, 1600, 1600);
+        var world = new BoundaryDistances(2000, 2000, 2000, 2000);
+        Check(GameMovement.Blocked(1, 0, solid, world, Vector2.Zero), "Boss reserve default changed");
+        Check(!GameMovement.Blocked(1, 0, solid, world, Vector2.Zero, snapshot.MovementReserveScale), "PvP retained the large Boss reserve");
+        Check(GameMovement.Blocked(1, 0, solid with { Right = 10 }, world, Vector2.Zero, snapshot.MovementReserveScale), "PvP ignored a close wall");
+        self.miscEquips[3].type = ItemID.SlimySaddle;
+        snapshot = sensor.CapturePlayer(self, target, 4, intent, 0);
+        Check(snapshot.HasMount && snapshot.AvailableActions.Any(option => option.Intent.VerticalSize == Magnitude.Large), "Equipped mount was not offered");
+        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=10 real_engine_objects=true gameplay_loop=false");
+    }
+}
+
+namespace TerraBlind
+{
+    public static class DiagLog { public static void Write(string text) => Console.WriteLine(text); }
+}

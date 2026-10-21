@@ -93,11 +93,11 @@ public static class DecisionFacts
         (int x, int y) = Components(direction);
         float horizontal = x == 0 ? 0f : (horizontalSize == Magnitude.Medium ? 20f : 12f) * x;
         float horizontalRoom = x < 0
-            ? Room(snapshot.SolidDistances.Left, snapshot.WorldDistances.Left) - GameMovement.HorizontalReserveCells
-            : Room(snapshot.SolidDistances.Right, snapshot.WorldDistances.Right) - GameMovement.HorizontalReserveCells;
+            ? Room(snapshot.SolidDistances.Left, snapshot.WorldDistances.Left) - GameMovement.HorizontalReserveCells * snapshot.MovementReserveScale
+            : Room(snapshot.SolidDistances.Right, snapshot.WorldDistances.Right) - GameMovement.HorizontalReserveCells * snapshot.MovementReserveScale;
         float verticalRoom = y < 0
-            ? Room(snapshot.SolidDistances.Up, snapshot.WorldDistances.Up) - GameMovement.UpperReserveCells
-            : Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down) - GameMovement.LowerReserveCells;
+            ? Room(snapshot.SolidDistances.Up, snapshot.WorldDistances.Up) - GameMovement.UpperReserveCells * snapshot.MovementReserveScale
+            : Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down) - GameMovement.LowerReserveCells * snapshot.MovementReserveScale;
         float travelEstimate = burst ? (y < 0 ? 18f : 22f) : (y < 0 ? 10f : 18f);
         float vertical = y * Math.Max(0f, Math.Min(travelEstimate, verticalRoom));
         Vector2 displacement = new(horizontal * 16f, vertical * 16f);

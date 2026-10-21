@@ -16,7 +16,10 @@
     <Compile Include="../../Flow/PlayerCombat.cs" Link="PlayerCombat.cs" />
     <Compile Include="../../Flow/PvpTactics.cs" Link="PvpTactics.cs" />
     <Compile Include="../../Flow/PvpDuel.cs" Link="PvpDuel.cs" />
+    <Compile Include="../../Jev/Port/Contracts.cs" Link="Contracts.cs" />
+    <Compile Include="../../Jev/Port/DecisionFacts.cs" Link="DecisionFacts.cs" />
     <Compile Include="PvpTests.cs.txt" />
+    <Compile Include="MovementStubs.cs.txt" />
     <Reference Include="FNA">
       <HintPath>$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader/Libraries/FNA/1.0.0/FNA.dll</HintPath>
     </Reference>

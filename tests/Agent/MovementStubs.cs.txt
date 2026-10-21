@@ -1,0 +1,41 @@
+using System;
+using System.Linq;
+using Microsoft.Xna.Framework;
+using Terraria;
+
+namespace TerraBlind.JevariaCombat;
+
+public class GameSensor
+{
+    public const int WorldEdgeCells = 40;
+    public CombatSnapshot CapturePlayer(Player p, Player target, ulong sequence, DodgeIntent previous, long duration)
+    {
+        CombatEntity Entity(Player player) => new(player.whoAmI, player.name, player.Center, player.velocity, new Vector2(20, 40), 0);
+        var enemy = Entity(target);
+        var projectiles = Main.projectile.Where(shot => shot.active && shot.damage > 0 && shot.owner != p.whoAmI
+            && (shot.hostile || shot.friendly && shot.owner == target.whoAmI)).Select(shot =>
+                new CombatEntity(shot.whoAmI, "test", shot.Center, shot.velocity, new Vector2(4), shot.damage)).ToArray();
+        return new CombatSnapshot(sequence, Main.GameUpdateCount, Entity(p), p.statLife, 100, false,
+            enemy, new[] { enemy }, Array.Empty<BossMotion>(), Array.Empty<CombatEntity>(), projectiles,
+            new(1000, 1000, 1000, 1000), new(1000, 1000, 1000, 1000), 1000,
+            false, p.ExtraJump, p.wingTime > 0, false, false, 10, 1, p.HeldItem.Name,
+            new DodgeOption[] { new(DodgeIntent.Idle, null),
+                new(new(DodgeDirection.Right, Magnitude.Small, Magnitude.None, false), null),
+                new(new(DodgeDirection.UpRight, Magnitude.Small, Magnitude.Small, false), null) }, previous, duration);
+    }
+}
+
+public class GameMovement
+{
+    public const int HorizontalReserveCells = 35, UpperReserveCells = 18, LowerReserveCells = 4;
+    public static int Calls;
+    public static bool ExtraJumpObserved;
+    public ActionResult Apply(Player p, DodgeIntent intent, CombatSnapshot snapshot)
+    {
+        Calls++; ExtraJumpObserved = snapshot.CanDoubleJump;
+        p.controlRight = intent.Direction is DodgeDirection.Right or DodgeDirection.UpRight;
+        p.controlLeft = false; p.controlJump = intent.Direction == DodgeDirection.UpRight;
+        return new(intent, intent, "");
+    }
+    public void Release(Player p) { }
+}

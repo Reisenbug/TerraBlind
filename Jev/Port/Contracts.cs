@@ -50,6 +50,7 @@ public sealed record CombatSnapshot(
     DodgeIntent PreviousIntent, long PreviousDurationMs)
 {
     public int MountType { get; init; } = -1;
+    public float MovementReserveScale { get; init; } = 1f;
 }
 
 public sealed record DodgeDecision(

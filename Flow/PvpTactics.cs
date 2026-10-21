@@ -11,7 +11,7 @@ namespace TerraBlind;
 
 public static class PvpTactics
 {
-    public static readonly string[] Choices = { "hold", "approach", "retreat", "jump_approach", "jump_retreat", "left", "right" };
+    public sealed record Decision(string Move, string WeaponMode);
 
     public static Vector2? Aim(Vector2 origin, Vector2 target, Vector2 targetVelocity, float speed,
         float gravity, Func<Vector2, Vector2, bool> clear, float gravityDelay = 0)
@@ -38,35 +38,23 @@ public static class PvpTactics
         return null;
     }
 
-    public static int Direction(string choice, float dx) => choice switch
+    public static async Task<Decision> Choose(HttpClient http, string key, JsonObject scene, CancellationToken token)
     {
-        "approach" or "jump_approach" => Math.Sign(dx),
-        "retreat" or "jump_retreat" => -Math.Sign(dx),
-        "left" => -1, "right" => 1, _ => 0
-    };
-
-    public static async Task<string> Choose(HttpClient http, string key, JsonObject scene, CancellationToken token)
-    {
-        var criteria = new JsonObject
-        {
-            ["hold"] = "保持位置，利用已有射界；不值得移动或没有安全移动候选时选择。",
-            ["approach"] = "向对手接近，缩短距离或寻求射界。",
-            ["retreat"] = "远离对手，拉开弓的射击距离。",
-            ["jump_approach"] = "向对手移动并尝试跳起，跨越小障碍或改变射击高度。",
-            ["jump_retreat"] = "远离对手并尝试跳起，避免近距离压迫。",
-            ["left"] = "向左换侧，尝试绕开遮挡或避让临近弹幕。",
-            ["right"] = "向右换侧，尝试绕开遮挡或避让临近弹幕。"
-        };
-        var allowed = scene["allowed"].AsArray();
-        foreach (string choice in Choices)
-            if (!System.Linq.Enumerable.Any(allowed, node => node.ToString() == choice)) criteria.Remove(choice);
+        var criteria = scene["movement_options"].AsObject();
+        var weapons = scene["weapon_modes"].AsObject();
+        var weaponCriteria = new JsonObject();
+        foreach (var pair in weapons) weaponCriteria[pair.Key] = pair.Value.ToJsonString();
         var body = new JsonObject
         {
             ["model"] = "jev-latest", ["state"] = scene.DeepClone(),
             ["questions"] = new JsonObject { ["move"] = new JsonObject
             {
-                ["type"] = "choice", ["criteria"] = criteria,
-                ["instructions"] = "Terraria 一对一弓箭 PvP，选择接下来短时间的移动意图。遵循 strategy。代码负责弹道瞄准和碰撞检查。坐标单位像素，y向下。aim_clear 表示当前预测弹道可通行。避免贴脸、跌落和近处来弹；被遮挡时尝试换位，而不是长期停着射墙。根据 hp_change、目标移动和上次意图的进展调整，别反复选择没有位移的动作。你不知道对手未来输入，不能假设当前速度会一直保持。"
+                ["type"] = "choice", ["criteria"] = criteria.DeepClone(),
+                ["instructions"] = "Terraria 一对一 PvP，选择短期移动的方向和幅度。遵循 strategy，根据 weapon_modes、当前距离和射界决定接近还是拉开，不要只躲不打。movement_state 是自身机动、威胁弹幕和地形余量。小幅向上会正常跳跃/飞行并使用可用额外跳；中幅可能用钩爪，大幅竖直可能用坐骑。需要升高越过遮挡或跟上对手时主动选向上，不要一直停在地面射墙。留意临近弹幕、hp_change、上次动作是否真有位移，不重复被挡的动作。坐标y向下。只知道对手当前运动，不知道其未来按键。"
+            }, ["weapon"] = new JsonObject
+            {
+                ["type"] = "choice", ["criteria"] = weaponCriteria,
+                ["instructions"] = "Terraria PvP，此刻用接触近战还是发射武器远程交战？根据距离、高差、双方移动、地形射界、血量、strategy 和各候选的实际属性判断。接触近战需真正够到目标，远程需可行射界或换位；不要只比较面板伤害。切换应有局势依据，避免无意义来回切换。只选择提供的模式。"
             } }
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.typesafe.ai/v1/systemone");
@@ -76,7 +64,9 @@ public static class PvpTactics
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Jev HTTP " + (int)response.StatusCode);
         var result = JsonNode.Parse(await response.Content.ReadAsStringAsync(token));
         string selected = result?["answers"]?["move"]?["choice"]?.GetValue<string>();
+        string weapon = result?["answers"]?["weapon"]?["choice"]?.GetValue<string>();
         if (selected == null || !criteria.ContainsKey(selected)) throw new InvalidOperationException("Jev 未返回有效移动候选。");
-        return selected;
+        if (weapon == null || !weapons.ContainsKey(weapon)) throw new InvalidOperationException("Jev 未返回有效武器模式。");
+        return new Decision(selected, weapon);
     }
 }

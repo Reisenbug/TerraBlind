@@ -385,7 +385,7 @@
     "type": "function",
     "function": {
       "name": "fight",
-      "description": "用武器持续攻击附近最近的敌对 NPC，不会攻击玩家。攻击玩家请用 fight_player。这个工具阻塞打一阵子并报告，期间玩家能打断。",
+      "description": "用武器持续攻击附近最近的敌对 NPC，不会攻击玩家。与玩家对战请用 duel_player。这个工具阻塞打一阵子并报告，期间玩家能打断。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -405,12 +405,12 @@
     "type": "function",
     "function": {
       "name": "duel_player",
-      "description": "实验性一对一弓箭对战：锁定快捷栏的一把弓，Jev 连续选择接近、拉开、跳跃和换侧，代码观察自身箭矢运动并计算提前量及地形遮挡。需要 TypeSafe Key、双方 PvP 开启且非同队、允许自动攻击和移动。不挖掘搭建、不自动换武器。只支持弓箭原型，复杂追踪/多阶段箭弹道未支持；可能无法绕过复杂地形。失效、死亡、超距或服务失败会停止。返回前后实际血量与 Jev 决策次数，不代表造成伤害。",
+      "description": "实验性一对一对战：Jev 连续选择移动幅度及接触近战/发射武器模式，按模式切换快捷栏武器。复用 Boss 战移动执行器，包括额外跳、飞行、可用钩爪和史莱姆坐骑；没有全局绕路。代码瞄准并检查射界，观察自身箭矢运动，普通直线/抛物线弹道为近似模型，复杂追踪/反弹/鼠标控制武器未完整支持。需要 TypeSafe Key、双方 PvP 开启且非同队、允许自动攻击和移动。不挖掘搭建。失效、死亡、超距或服务失败会停止。返回前后实际血量与 Jev 决策次数，不代表造成伤害。",
       "parameters": {
         "type": "object",
         "properties": {
           "player_id": { "type": "integer", "description": "目标玩家编号；打我时用 agent.instruction_player_id" },
-          "slot": { "type": "integer", "description": "固定使用的弓的快捷栏槽0到9，默认当前槽" },
+          "slot": { "type": "integer", "description": "首选武器快捷栏槽0到9，默认当前槽；Jev 可选择近战或发射模式并切换对应武器" },
           "seconds": { "type": "number", "description": "持续秒数，默认30，最大120" },
           "max_dist": { "type": "integer", "description": "最大距离格数，默认120，最大200" },
           "strategy": { "type": "string", "description": "本轮打法和玩家限制，交给 Jev 持续参考" }
@@ -423,7 +423,7 @@
     "type": "function",
     "function": {
       "name": "fight_player",
-      "description": "仅原地攻击指定玩家，不移动、不检查地形遮挡。有弓且玩家要求对战或打我时优先用 duel_player；不要因没明说走位就选本工具。player_id 用 other_players 编号；打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开 PvP 且不能同一非零队伍。返回实际执行结果和目标前后血量。",
+      "description": "仅原地攻击指定玩家，不移动、不检查地形遮挡。玩家要求对战或打我时优先用 duel_player；只有明确要求原地攻击才选本工具。player_id 用 other_players 编号；打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开 PvP 且不能同一非零队伍。返回实际执行结果和目标前后血量。",
       "parameters": {
         "type": "object",
         "properties": {

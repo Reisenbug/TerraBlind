@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
+using Port = TerraBlind.JevariaCombat;
 using V = System.Numerics.Vector2;
 
 namespace TerraBlind;
@@ -15,14 +16,20 @@ namespace TerraBlind;
 public static class PvpDuel
 {
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
+    static readonly Port.GameSensor Sensor = new();
+    static Port.GameMovement Movement = new();
     static CancellationTokenSource lifetime;
-    static Task<string> pending;
-    static Func<JsonObject, CancellationToken, Task<string>> choose;
+    static Task<PvpTactics.Decision> pending;
+    static Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> choose;
     static readonly Stopwatch requestClock = new();
     static readonly Dictionary<int, (int Identity, Vector2 Velocity, int Samples)> arrows = new();
+    static Dictionary<string, Port.DodgeOption> options;
+    static Port.CombatSnapshot requestSnapshot, appliedSnapshot;
+    static Port.DodgeIntent intent = Port.DodgeIntent.Idle;
     static Vector2 requestSelf, requestTarget, lastPosition;
-    static int frames, slot, weaponType, weaponPrefix, choiceAge, nextDecision, lastHp, lastTargetHp, observedType;
-    static string key, strategy, choice;
+    static int frames, preferredSlot, activeWeapon, choiceAge, nextDecision, lastHp, lastTargetHp, observedType;
+    static string key, strategy, mode, movementReason;
+    static ulong sequence;
     static float speed, gravity, gravityDelay, range;
     public static int Target { get; private set; } = -1;
     public static bool Active => Target >= 0;
@@ -30,8 +37,24 @@ public static class PvpDuel
     public static int Decisions { get; private set; }
     static V N(Vector2 value) => new(value.X, value.Y);
 
+    static Dictionary<string, int> Weapons(Player self)
+    {
+        var result = new Dictionary<string, int>();
+        for (int index = 0; index < 10; index++)
+        {
+            int slot = (preferredSlot + index) % 10;
+            var item = self.inventory[slot];
+            if (item.IsAir || item.damage <= 0 || item.useStyle <= 0 || item.ammo > 0
+                || item.pick > 0 || item.axe > 0 || item.hammer > 0
+                || item.useAmmo > 0 && !self.HasAmmo(item) || item.mana * self.manaCost > self.statMana) continue;
+            if (!item.noMelee) result.TryAdd("melee", slot);
+            if (item.shoot > 0) result.TryAdd("ranged", slot);
+        }
+        return result;
+    }
+
     public static bool Start(int target, int seconds, int weaponSlot, float maxDistance, string instructions, out string reason,
-        Func<JsonObject, CancellationToken, Task<string>> decide = null)
+        Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> decide = null)
     {
         Stop();
         var self = Main.LocalPlayer;
@@ -39,60 +62,49 @@ public static class PvpDuel
         if (reason == "" && (!self.active || self.dead)) reason = "self_dead";
         if (reason == "" && (!AgentPermissions.Attack || !AgentPermissions.Dodge)) reason = "combat_permission_denied";
         if (reason == "" && string.IsNullOrWhiteSpace(Config.I.TypeSafeKey)) reason = "missing_jev_key";
-        if (reason == "" && (weaponSlot < 0 || weaponSlot > 9 || self.inventory[weaponSlot].IsAir
-            || self.inventory[weaponSlot].useAmmo != AmmoID.Arrow)) reason = "prototype_requires_bow_in_hotbar";
+        preferredSlot = Math.Clamp(weaponSlot, 0, 9);
+        var weapons = Weapons(self);
+        if (reason == "" && weapons.Count == 0) reason = "no_usable_weapon_in_hotbar";
         if (reason == "" && Vector2.Distance(self.Center, Main.player[target].Center) > maxDistance * 16) reason = "out_of_range";
         if (reason != "") { Outcome = reason; return false; }
         AgentTools.Stop();
+        Movement = new Port.GameMovement();
         self.hostile = true;
         NetMessage.SendData(MessageID.TogglePVP, number: self.whoAmI);
-        slot = weaponSlot; weaponType = self.inventory[slot].type; weaponPrefix = self.inventory[slot].prefix;
+        mode = weapons.ContainsKey("ranged") ? "ranged" : "melee";
+        self.selectedItem = weapons[mode]; activeWeapon = -1;
         frames = Math.Clamp(seconds, 1, 120) * 60; range = maxDistance * 16;
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
-        speed = Math.Max(1, self.inventory[slot].shootSpeed); gravity = gravityDelay = 0; observedType = 0;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
-        choice = "hold"; choiceAge = 999; nextDecision = 0; Decisions = 0; arrows.Clear();
-        foreach (var projectile in Main.projectile)
-            if (projectile.active) arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, int.MaxValue);
+        intent = Port.DodgeIntent.Idle; appliedSnapshot = requestSnapshot = null;
+        choiceAge = 999; nextDecision = 0; Decisions = 0; sequence = 0; movementReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
         lifetime = new CancellationTokenSource(); Target = target; Outcome = "running";
-        DiagLog.Write($"[pvp] start target={target} slot={slot} weapon={weaponType} seconds={seconds} strategy={strategy}");
+        DiagLog.Write($"[pvp] start target={target} preferred_slot={preferredSlot} seconds={seconds} strategy={strategy}");
         return true;
+    }
+
+    static void ClearControls(Player self)
+    {
+        self.controlLeft = self.controlRight = self.controlUp = self.controlDown = false;
+        self.controlJump = self.controlHook = self.controlUseItem = false;
     }
 
     public static void Stop(string outcome = "stopped")
     {
         if (Active)
         {
-            var self = Main.LocalPlayer;
-            self.controlLeft = self.controlRight = self.controlJump = self.controlUseItem = false;
+            Movement.Release(Main.LocalPlayer); ClearControls(Main.LocalPlayer);
             Outcome = outcome;
             DiagLog.Write($"[pvp] stop outcome={outcome} decisions={Decisions}");
         }
         Target = -1;
         lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
         if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-        pending = null; arrows.Clear();
+        pending = null; arrows.Clear(); appliedSnapshot = null;
     }
 
     static bool Clear(Vector2 from, Vector2 to) => Collision.CanHitLine(from, 4, 4, to, 4, 4);
-
-    static bool CanMove(Player self, int direction, bool jump)
-    {
-        if (direction == 0) return true;
-        Vector2 destination = new(self.position.X + direction * 24, self.position.Y);
-        if (destination.X < 32 || destination.X + self.width > Main.maxTilesX * 16 - 32) return false;
-        if (Collision.SolidCollision(destination, self.width, self.height) && !jump) return false;
-        if (jump && Collision.SolidCollision(new Vector2(self.position.X, self.position.Y - 24), self.width, self.height)) return false;
-        if (self.velocity.Y != 0) return true;
-        for (int y = 0; y < 5; y++)
-        {
-            int tx = (int)((self.Center.X + direction * 32) / 16), ty = (int)((self.Bottom.Y + y * 16) / 16);
-            if (WorldGen.InWorld(tx, ty) && Main.tile[tx, ty].HasUnactuatedTile
-                && (Main.tileSolid[Main.tile[tx, ty].TileType] || Main.tileSolidTop[Main.tile[tx, ty].TileType])) return true;
-        }
-        return false;
-    }
 
     static void ObserveArrows(Player self)
     {
@@ -122,40 +134,73 @@ public static class PvpDuel
         }
     }
 
+    static bool Attack(Player self, Player target)
+    {
+        self.controlUseItem = false;
+        var item = self.HeldItem;
+        float shotSpeed = item.shootSpeed;
+        int shotType = item.shoot;
+        if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return false;
+        if (activeWeapon != item.type)
+        {
+            activeWeapon = item.type; speed = shotSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
+            foreach (var projectile in Main.projectile)
+                if (projectile.active) arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, int.MaxValue);
+        }
+        Vector2 point = target.Center;
+        bool clear;
+        if (mode == "melee")
+        {
+            float reach = Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f);
+            clear = Vector2.Distance(self.Center, target.Center) <= reach + target.width / 2f && Clear(self.Center, target.Center);
+        }
+        else
+        {
+            ObserveArrows(self);
+            if (observedType == 0)
+            {
+                speed = shotSpeed;
+                if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults)) speed *= defaults.extraUpdates + 1;
+            }
+            V? aim = PvpTactics.Aim(N(self.Center), N(target.Center), N(target.velocity), speed, gravity,
+                (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), gravityDelay);
+            clear = aim.HasValue || observedType == 0 && Clear(self.Center, target.Center);
+            if (aim.HasValue) point = new Vector2(aim.Value.X, aim.Value.Y);
+        }
+        if (!self.controlHook) Cursor.AimPx(point.X, point.Y);
+        self.direction = target.Center.X < self.Center.X ? -1 : 1;
+        self.controlUseItem = clear && !self.controlHook;
+        if (self.controlUseItem && self.itemAnimation == 0) self.releaseUseItem = true;
+        return clear;
+    }
+
     public static void Tick(Player self)
     {
         if (!Active) return;
         string reason = PlayerCombat.TargetReason(self, Target);
         if (reason == "" && (!self.active || self.dead)) reason = "self_dead";
         if (reason == "" && (!AgentPermissions.Attack || !AgentPermissions.Dodge || !self.hostile)) reason = "combat_permission_denied";
-        if (reason == "" && (self.inventory[slot].type != weaponType || self.inventory[slot].prefix != weaponPrefix)) reason = "weapon_changed";
         if (reason != "") { Stop(reason); return; }
         if (frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
-        if (!self.HasAmmo(self.inventory[slot])) { Stop("no_ammo"); return; }
-        self.selectedItem = slot;
-        ObserveArrows(self);
-        V? aim = PvpTactics.Aim(N(self.Center), N(target.Center), N(target.velocity), speed, gravity,
-            (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), gravityDelay);
-        bool aimClear = aim.HasValue;
-        Vector2 point = aim.HasValue ? new Vector2(aim.Value.X, aim.Value.Y) : target.Center;
-        Cursor.AimPx(point.X, point.Y);
-        self.direction = target.Center.X < self.Center.X ? -1 : 1;
-        bool probe = observedType == 0 && Clear(self.Center, target.Center);
-        self.controlUseItem = aimClear || probe;
-        if (self.controlUseItem && self.itemAnimation == 0) self.releaseUseItem = true;
-
+        var weapons = Weapons(self);
+        if (weapons.Count == 0) { Stop("no_usable_weapon_in_hotbar"); return; }
         if (pending?.IsCompleted == true)
         {
             try
             {
-                string result = pending.GetAwaiter().GetResult();
-                if (Array.IndexOf(PvpTactics.Choices, result) < 0) throw new InvalidOperationException("invalid_choice");
-                if (requestClock.Elapsed.TotalSeconds <= 1.5 && Vector2.Distance(self.Center, requestSelf) < 160
-                    && Vector2.Distance(target.Center, requestTarget) < 240)
-                { choice = result; choiceAge = 0; Decisions++; }
-                DiagLog.Write($"[pvp] choice={result} accepted={choiceAge == 0} ms={requestClock.ElapsedMilliseconds} self={self.Center} target={target.Center} speed={speed:0.##} gravity={gravity:0.###} aim_clear={aimClear}");
+                var result = pending.GetAwaiter().GetResult();
+                if (!options.TryGetValue(result.Move, out var selected) || !weapons.ContainsKey(result.WeaponMode))
+                    throw new InvalidOperationException("invalid_choice");
+                bool fresh = requestClock.Elapsed.TotalSeconds <= 1.5 && Vector2.Distance(self.Center, requestSelf) < 160
+                    && Vector2.Distance(target.Center, requestTarget) < 240;
+                if (fresh)
+                {
+                    intent = selected.Intent; appliedSnapshot = requestSnapshot;
+                    mode = result.WeaponMode; choiceAge = 0; Decisions++;
+                }
+                DiagLog.Write($"[pvp] choice={result.Move} mode={result.WeaponMode} accepted={fresh} ms={requestClock.ElapsedMilliseconds}");
             }
             catch (Exception ex)
             {
@@ -164,44 +209,59 @@ public static class PvpDuel
             }
             pending = null;
         }
+        if (!weapons.ContainsKey(mode)) { foreach (string available in weapons.Keys) { mode = available; break; } nextDecision = 0; }
+        int slot = weapons[mode];
+        if (self.selectedItem != slot && self.itemAnimation == 0 && self.itemTime == 0)
+        {
+            self.selectedItem = slot;
+            DiagLog.Write($"[pvp] weapon mode={mode} slot={slot} name={self.HeldItem.Name}");
+        }
+        if (choiceAge++ <= 90 && appliedSnapshot != null)
+        {
+            var result = Movement.Apply(self, intent, appliedSnapshot with
+            { CanDoubleJump = self.AnyExtraJumpUsable(), CanFly = self.wingTime > 0 });
+            if (result.Reason != movementReason)
+            {
+                movementReason = result.Reason;
+                DiagLog.Write($"[pvp] movement={result.Applied} reason={result.Reason} vel={self.velocity} mount={self.mount.Active}");
+            }
+        }
+        else { Movement.Release(self); ClearControls(self); }
+        bool aimClear = self.selectedItem == slot && Attack(self, target);
+        if (self.selectedItem != slot) self.controlUseItem = false;
         if (pending == null && --nextDecision <= 0)
         {
-            var allowed = new JsonArray();
-            foreach (string candidate in PvpTactics.Choices)
-                if (CanMove(self, PvpTactics.Direction(candidate, target.Center.X - self.Center.X), candidate.StartsWith("jump"))) allowed.Add(candidate);
-            var threats = new JsonArray();
-            foreach (var projectile in Main.projectile)
+            requestSnapshot = Sensor.CapturePlayer(self, target, ++sequence, intent, choiceAge * 1000 / 60);
+            options = new Dictionary<string, Port.DodgeOption>();
+            var criteria = new JsonObject();
+            foreach (var option in requestSnapshot.AvailableActions)
             {
-                if (!projectile.active || projectile.damage <= 0 || projectile.owner == self.whoAmI) continue;
-                bool enemyPlayer = projectile.friendly && projectile.owner >= 0 && projectile.owner < Main.maxPlayers
-                    && Main.player[projectile.owner].active && Main.player[projectile.owner].hostile
-                    && (self.team == 0 || self.team != Main.player[projectile.owner].team);
-                if ((!projectile.hostile && !enemyPlayer) || Vector2.Distance(projectile.Center, self.Center) > 500) continue;
-                threats.Add(new JsonObject { ["dx"] = projectile.Center.X - self.Center.X, ["dy"] = projectile.Center.Y - self.Center.Y,
-                    ["vx"] = projectile.velocity.X * (projectile.extraUpdates + 1), ["vy"] = projectile.velocity.Y * (projectile.extraUpdates + 1) });
-                if (threats.Count >= 12) break;
+                string id = "m" + options.Count;
+                options[id] = option; criteria[id] = Port.DecisionFacts.Describe(option, requestSnapshot);
+            }
+            var modes = new JsonObject();
+            foreach (var pair in weapons)
+            {
+                var item = self.inventory[pair.Value];
+                modes[pair.Key] = new JsonObject { ["slot"] = pair.Value, ["name"] = item.Name, ["damage"] = item.damage,
+                    ["shoot_speed"] = item.shootSpeed, ["projectile_type"] = item.shoot,
+                    ["description"] = pair.Key == "melee" ? "接触近战，需要靠近并直接够到目标。" : "发射武器，需射界；适合保持距离或封锁路线。" };
             }
             var scene = new JsonObject
             {
-                ["strategy"] = strategy, ["allowed"] = allowed, ["dx"] = target.Center.X - self.Center.X,
-                ["dy"] = target.Center.Y - self.Center.Y, ["target_vx"] = target.velocity.X, ["target_vy"] = target.velocity.Y,
-                ["self_vx"] = self.velocity.X, ["self_vy"] = self.velocity.Y,
+                ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
+                ["movement_state"] = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "")),
+                ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,
                 ["self_hp"] = self.statLife, ["target_hp"] = target.statLife,
                 ["hp_change"] = self.statLife - lastHp, ["target_hp_change"] = target.statLife - lastTargetHp,
-                ["previous_choice"] = choice, ["moved_pixels"] = Vector2.Distance(self.Center, lastPosition),
-                ["aim_clear"] = aimClear, ["nearby_projectiles"] = threats,
-                ["weapon"] = self.inventory[slot].Name, ["trajectory_observed"] = observedType != 0
+                ["previous_move"] = intent.ToString(), ["movement_result"] = movementReason,
+                ["moved_pixels"] = Vector2.Distance(self.Center, lastPosition), ["aim_clear"] = aimClear,
+                ["trajectory_observed"] = observedType != 0
             };
-            lastHp = self.statLife; lastTargetHp = target.statLife; lastPosition = requestSelf = self.Center; requestTarget = target.Center;
+            lastHp = self.statLife; lastTargetHp = target.statLife;
+            lastPosition = requestSelf = self.Center; requestTarget = target.Center;
             DiagLog.Write("[pvp] scene " + scene.ToJsonString());
-            nextDecision = 24; requestClock.Restart();
-            pending = choose(scene, lifetime.Token);
+            nextDecision = 24; requestClock.Restart(); pending = choose(scene, lifetime.Token);
         }
-        choiceAge++;
-        int horizontal = choiceAge <= 60 ? PvpTactics.Direction(choice, target.Center.X - self.Center.X) : 0;
-        bool jump = choiceAge <= 60 && choice.StartsWith("jump") && self.velocity.Y == 0 && !self.controlJump;
-        if (!CanMove(self, horizontal, jump)) { horizontal = 0; nextDecision = 0; }
-        self.controlLeft = horizontal < 0; self.controlRight = horizontal > 0;
-        self.controlJump = jump;
     }
 }

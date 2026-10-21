@@ -76,10 +76,31 @@ public sealed class GameSensor : ICombatSensor
             }
         }
 
+        return CaptureScene(player, sequence, previous, previousDurationMs,
+            Entity(boss.whoAmI, BossName(boss), boss.Center, boss.velocity, boss.width, boss.height, boss.damage),
+            bosses, motion, parts, false, 1f);
+    }
+
+    public CombatSnapshot CapturePlayer(Player player, Player target, ulong sequence, DodgeIntent previous, long durationMs)
+    {
+        var opponent = Entity(target.whoAmI, target.name, target.Center, target.velocity, target.width, target.height, target.HeldItem.damage);
+        return CaptureScene(player, sequence, previous, durationMs, opponent,
+            new[] { opponent }, Array.Empty<BossMotion>(), Array.Empty<CombatEntity>(), true, .075f);
+    }
+
+    static CombatSnapshot CaptureScene(Player player, ulong sequence, DodgeIntent previous, long previousDurationMs,
+        CombatEntity target, IReadOnlyList<CombatEntity> targets, IReadOnlyList<BossMotion> motion,
+        IReadOnlyList<CombatEntity> parts, bool pvp, float reserveScale)
+    {
         var projectiles = new List<CombatEntity>();
         foreach (Projectile projectile in Main.projectile)
         {
-            if (!projectile.active || !projectile.hostile || projectile.damage <= 0) continue;
+            if (!projectile.active || projectile.damage <= 0) continue;
+            bool enemy = pvp && projectile.friendly && projectile.owner != player.whoAmI
+                && projectile.owner >= 0 && projectile.owner < Main.maxPlayers
+                && Main.player[projectile.owner].active && Main.player[projectile.owner].hostile
+                && (player.team == 0 || player.team != Main.player[projectile.owner].team);
+            if (!projectile.hostile && !enemy) continue;
             projectiles.Add(Entity(projectile.whoAmI, projectile.Name, projectile.Center,
                 projectile.velocity * (projectile.extraUpdates + 1), projectile.width,
                 projectile.height, projectile.damage));
@@ -110,15 +131,14 @@ public sealed class GameSensor : ICombatSensor
             Entity(player.whoAmI, player.name, player.Center, player.velocity,
                 player.width, player.height, 0), player.statLife,
             player.statLifeMax2, player.lifeRegen < 0,
-            Entity(boss.whoAmI, BossName(boss), boss.Center, boss.velocity,
-                boss.width, boss.height, boss.damage), bosses, motion, parts, projectiles,
+            target, targets, motion, parts, projectiles,
             solid, world, ScanPlatformBelow(box),
             player.dashType > 0 && player.dashDelay == 0,
             player.AnyExtraJumpUsable(), player.wingTime > 0f,
             hasHook, hasMount,
             shotSpeed, shotType, player.HeldItem.Name,
-            GameMovement.AvailableActions(player, solid, world, hasHook, hasMount),
-            previous, previousDurationMs) { MountType = mountType };
+            GameMovement.AvailableActions(player, solid, world, hasHook, hasMount, reserveScale),
+            previous, previousDurationMs) { MountType = mountType, MovementReserveScale = reserveScale };
     }
 
     private static CombatEntity Entity(int id, string name, Vector2 center,
