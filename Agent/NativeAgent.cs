@@ -176,6 +176,7 @@ public class NativeAgent : ModSystem
     {
         Cancel();
         PlayerCombat.Stop();
+        PvpDuel.Stop();
         _codex?.Dispose(); _codex = null;
         if (_http != null) _conversation = new AgentConversation(_http);
         AgentPermissions.Reset();

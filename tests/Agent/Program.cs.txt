@@ -42,6 +42,7 @@ static class Tests
     static async Task Main(string[] args)
     {
         if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
+        if (args.Contains("--pvp-smoke")) { await PvpTests.Smoke(); return; }
         var handler = new FakeHandler();
         using var http = new HttpClient(handler);
         var agent = new AgentConversation(http);
@@ -119,7 +120,8 @@ static class Tests
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();
         await CodexTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=23");
+        await PvpTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=26");
     }
 
     sealed class FakeHandler : HttpMessageHandler

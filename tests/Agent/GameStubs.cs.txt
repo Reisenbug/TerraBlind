@@ -13,23 +13,47 @@ namespace Terraria
         public static uint GameUpdateCount;
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
+        public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
+        public static Tile[,] tile = new Tile[1000, 1000];
+        public static bool[] tileSolid = { false, true }, tileSolidTop = { false, false };
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
     public class Player
     {
-        public bool active = true, dead, hostile, controlUseItem;
+        public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
+        public bool HasAmmunition = true;
+        public int itemAnimation;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
         public System.Numerics.Vector2 position;
         public string name = "test";
-        public (float X, float Y) velocity;
+        public Microsoft.Xna.Framework.Vector2 velocity;
+        public Microsoft.Xna.Framework.Vector2 Center => new(position.X + width / 2f, position.Y + height / 2f);
+        public Microsoft.Xna.Framework.Vector2 Bottom => new(Center.X, position.Y + height);
+        public bool HasAmmo(Item item) => HasAmmunition;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
     }
     public class Item
     {
         public string Name = "";
         public int stack, pick, axe, hammer, ammo, damage, useStyle;
+        public int type, prefix, useAmmo;
+        public float shootSpeed;
         public bool IsAir => stack == 0;
+    }
+    public struct Tile { public bool HasUnactuatedTile; public int TileType; }
+    public class Projectile
+    {
+        public bool active, arrow, friendly, hostile;
+        public int owner, damage, identity, whoAmI, type, extraUpdates;
+        public Microsoft.Xna.Framework.Vector2 velocity, Center;
+    }
+    public static class WorldGen { public static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < 1000 && y < 1000; }
+    public static class Collision
+    {
+        public static bool Clear = true;
+        public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => Clear;
+        public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => false;
     }
     public static class NetMessage
     {
@@ -42,6 +66,7 @@ namespace Terraria.ID
 {
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30; }
+    public static class AmmoID { public const int Arrow = 40; }
 }
 namespace Terraria.ModLoader
 {

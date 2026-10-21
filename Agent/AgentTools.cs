@@ -22,6 +22,7 @@ public static class AgentTools
         StateSnapshotPlayer.StopRemoteTask();
         FightCoordinator.Stop(); ReplaySystem.Stop(); KeyPress.Clear();
         PlayerCombat.Stop();
+        PvpDuel.Stop();
         StateSpacePlanner.PreserveTerrain = false;
         HttpServerSystem.PendingControl = null;
     }
@@ -52,7 +53,7 @@ public static class AgentTools
             ["auto_attack"] = AgentPermissions.Attack, ["player_id"] = Main.LocalPlayer.whoAmI,
             ["pvp"] = Main.LocalPlayer.hostile, ["team"] = Main.LocalPlayer.team,
             ["instruction_player_id"] = AgentNetwork.OwnerPlayer,
-            ["pvp_target"] = PlayerCombat.Target
+            ["pvp_target"] = PvpDuel.Active ? PvpDuel.Target : PlayerCombat.Target
         };
         var players = new JsonArray();
         for (int id = 0; id < Main.maxPlayers; id++)
@@ -224,6 +225,33 @@ public static class AgentTools
                 {
                     result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token);
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
+                }
+                break;
+            case "duel_player":
+                int duelTarget = Int(args, "player_id", -1);
+                int duelSeconds = Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 30), 1, 120);
+                result = await NativeAgent.OnMain(() =>
+                {
+                    int weaponSlot = Int(args, "slot", Main.LocalPlayer.selectedItem);
+                    if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 120), 1, 200), Text(args, "strategy"), out string reason))
+                        return new JsonObject { ["error"] = reason };
+                    return new JsonObject { ["target_player"] = duelTarget, ["target_hp_before"] = Main.player[duelTarget].statLife,
+                        ["self_hp_before"] = Main.LocalPlayer.statLife };
+                }, token);
+                if (!Rejected(result))
+                {
+                    var duelTimer = Stopwatch.StartNew();
+                    while (await NativeAgent.OnMain(() => PvpDuel.Active, token) && duelTimer.Elapsed.TotalSeconds < duelSeconds + 3)
+                        await Task.Delay(150, token);
+                    await NativeAgent.OnMain(() =>
+                    {
+                        if (PvpDuel.Active) PvpDuel.Stop("timeout");
+                        result["outcome"] = PvpDuel.Outcome;
+                        result["target_hp_after"] = Main.player[duelTarget].statLife;
+                        result["self_hp_after"] = Main.LocalPlayer.statLife;
+                        result["jev_decisions"] = PvpDuel.Decisions;
+                        return true;
+                    }, token);
                 }
                 break;
             case "fight_player":

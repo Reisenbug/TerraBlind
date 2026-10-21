@@ -404,6 +404,24 @@
   {
     "type": "function",
     "function": {
+      "name": "duel_player",
+      "description": "实验性一对一弓箭对战：锁定快捷栏的一把弓，Jev 连续选择接近、拉开、跳跃和换侧，代码观察自身箭矢运动并计算提前量及地形遮挡。需要 TypeSafe Key、双方 PvP 开启且非同队、允许自动攻击和移动。不挖掘搭建、不自动换武器。只支持弓箭原型，复杂追踪/多阶段箭弹道未支持；可能无法绕过复杂地形。失效、死亡、超距或服务失败会停止。返回前后实际血量与 Jev 决策次数，不代表造成伤害。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "player_id": { "type": "integer", "description": "目标玩家编号；打我时用 agent.instruction_player_id" },
+          "slot": { "type": "integer", "description": "固定使用的弓的快捷栏槽0到9，默认当前槽" },
+          "seconds": { "type": "number", "description": "持续秒数，默认30，最大120" },
+          "max_dist": { "type": "integer", "description": "最大距离格数，默认120，最大200" },
+          "strategy": { "type": "string", "description": "本轮打法和玩家限制，交给 Jev 持续参考" }
+        },
+        "required": ["player_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "fight_player",
       "description": "攻击指定玩家。player_id 用 other_players 的编号；玩家说打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开启 PvP 且不能是同一非零队伍。用快捷栏武器原地持续瞄准使用，不追人、不保证命中。返回实际执行结果和目标前后血量。",
       "parameters": {

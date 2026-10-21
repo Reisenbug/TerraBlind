@@ -14,6 +14,12 @@
     <Compile Include="../../Agent/AgentTools.cs" Link="AgentTools.cs" />
     <Compile Include="../../Infra/AgentNetwork.cs" Link="AgentNetwork.cs" />
     <Compile Include="../../Flow/PlayerCombat.cs" Link="PlayerCombat.cs" />
+    <Compile Include="../../Flow/PvpTactics.cs" Link="PvpTactics.cs" />
+    <Compile Include="../../Flow/PvpDuel.cs" Link="PvpDuel.cs" />
+    <Compile Include="PvpTests.cs.txt" />
+    <Reference Include="FNA">
+      <HintPath>$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader/Libraries/FNA/1.0.0/FNA.dll</HintPath>
+    </Reference>
     <Compile Include="../../Agent/WoodHarvest.cs" Link="WoodHarvest.cs" />
     <Compile Include="WoodHarvestTests.cs.txt" />
     <Compile Include="Program.cs.txt" />

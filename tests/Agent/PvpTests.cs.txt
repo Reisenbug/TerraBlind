@@ -1,0 +1,140 @@
+using System;
+using System.Net;
+using System.Net.Http;
+using System.Numerics;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+using Game = Terraria.Main;
+
+static class PvpTests
+{
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+
+    public static async Task Run()
+    {
+        var origin = new Vector2(0, 0);
+        var target = new Vector2(300, 0);
+        var straight = PvpTactics.Aim(origin, target, Vector2.Zero, 10, 0, (_, _) => true);
+        Check(straight.HasValue && Math.Abs(straight.Value.Y) < .01f, "straight projectile aim drifted");
+        var arc = PvpTactics.Aim(origin, target, Vector2.Zero, 10, .1f, (_, _) => true);
+        Check(arc.HasValue && arc.Value.Y < -30, "gravity did not produce elevated aim");
+        var delayed = PvpTactics.Aim(origin, target, Vector2.Zero, 10, .1f, (_, _) => true, 20);
+        Check(delayed.HasValue && delayed.Value.Y > arc.Value.Y, "delayed gravity treated as immediate drop");
+        var moving = PvpTactics.Aim(origin, target, new Vector2(0, -2), 10, 0, (_, _) => true);
+        Check(moving.HasValue && moving.Value.Y < -30, "moving target was not led");
+        Check(PvpTactics.Aim(origin, target, Vector2.Zero, 10, 0, (_, _) => false) == null, "blocked projectile path was accepted");
+        Check(PvpTactics.Aim(origin, target, Vector2.Zero, 0, 0, (_, _) => true) == null, "invalid projectile speed accepted");
+        Console.WriteLine("PASS: PvP aiming handles straight/curved/delayed-drop trajectories, target lead and obstruction");
+
+        using var handler = new DecisionHandler();
+        using var http = new HttpClient(handler);
+        var scene = new JsonObject { ["allowed"] = new JsonArray("hold", "retreat"), ["strategy"] = "保持距离" };
+        string selected = await PvpTactics.Choose(http, "fake-key", scene, default);
+        Check(selected == "retreat" && handler.Request["state"]["strategy"].ToString() == "保持距离", "strategy not passed to Jev");
+        Check(handler.Request["questions"]["move"]["criteria"].AsObject().Count == 2, "blocked choices were offered to Jev");
+        handler.Choice = "approach";
+        try { await PvpTactics.Choose(http, "fake-key", scene, default); throw new Exception("unlisted move accepted"); }
+        catch (InvalidOperationException) { }
+        Console.WriteLine("PASS: PvP Jev request preserves strategy, filters unavailable moves and rejects invalid choices");
+
+        Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
+        Config.I.AiClient = true;
+        AgentPermissions.Reset();
+        var self = Game.LocalPlayer; var other = Game.player[1];
+        self.active = other.active = self.hostile = other.hostile = true;
+        self.dead = other.dead = false; self.team = other.team = 0;
+        self.position = new Vector2(200, 400); other.position = new Vector2(600, 400);
+        self.velocity = Microsoft.Xna.Framework.Vector2.Zero;
+        self.inventory[0] = new Terraria.Item { type = 99, stack = 1, useAmmo = Terraria.ID.AmmoID.Arrow, shootSpeed = 10, Name = "test bow" };
+        for (int x = 0; x < 100; x++) Game.tile[x, 27] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+        self.HasAmmunition = true;
+        bool Start(Func<JsonObject, CancellationToken, Task<string>> choose) => PvpDuel.Start(1, 30, 0, 120, "拉扯", out _, choose);
+        try
+        {
+            Check(Start((_, _) => Task.FromResult("approach")), "duel failed to start");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(self.controlRight && !self.controlLeft && self.controlUseItem && PvpDuel.Decisions == 1, "duel did not move and fire concurrently");
+            Terraria.Collision.Clear = false; PvpDuel.Tick(self);
+            Check(!self.controlUseItem, "duel fired into fully blocked trajectory");
+            Terraria.Collision.Clear = true;
+            AgentTools.Stop();
+            Check(!PvpDuel.Active && !self.controlRight && !self.controlJump && !self.controlUseItem, "stop left duel controls held");
+
+            var delayedChoice = new TaskCompletionSource<string>();
+            Check(Start((_, _) => delayedChoice.Task), "delayed duel start failed");
+            PvpDuel.Tick(self); other.position += new Vector2(400, 0); delayedChoice.SetResult("approach");
+            PvpDuel.Tick(self);
+            Check(PvpDuel.Decisions == 0 && !self.controlRight, "outdated scene decision was applied");
+            PvpDuel.Stop(); other.position = new Vector2(600, 400);
+
+            JsonObject observed = null;
+            Check(Start((state, _) => { observed = state; return Task.FromResult("hold"); }), "observation duel start failed");
+            Game.projectile[0] = new Terraria.Projectile { active = true, arrow = true, friendly = true, owner = self.whoAmI, damage = 10,
+                whoAmI = 0, identity = 1, type = 1, velocity = new Microsoft.Xna.Framework.Vector2(12, 0) };
+            Game.projectile[1] = new Terraria.Projectile { active = true, friendly = true, owner = other.whoAmI, damage = 10,
+                Center = self.Center + new Microsoft.Xna.Framework.Vector2(30, 0) };
+            PvpDuel.Tick(self);
+            Check(observed["trajectory_observed"].GetValue<bool>() && observed["nearby_projectiles"].AsArray().Count == 1,
+                "own arrow observation or enemy friendly projectile detection failed");
+            self.HasAmmunition = false; PvpDuel.Tick(self);
+            Check(!PvpDuel.Active && PvpDuel.Outcome == "no_ammo", "duel did not stop without ammunition");
+            self.HasAmmunition = true;
+            Check(Start((_, _) => Task.FromException<string>(new HttpRequestException("fake failure"))), "failure duel start failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(!PvpDuel.Active && PvpDuel.Outcome == "jev_request_failed", "Jev failure left duel running");
+            Check(Start((_, _) => Task.FromResult("hold")), "permission duel start failed");
+            AgentPermissions.Dodge = false; PvpDuel.Tick(self);
+            Check(!PvpDuel.Active && !self.controlUseItem, "movement permission did not stop duel");
+        }
+        finally
+        {
+            PvpDuel.Stop(); AgentPermissions.Reset(); Terraria.Collision.Clear = true;
+            Game.projectile[0].active = Game.projectile[1].active = false;
+            Game.netMode = Terraria.ID.NetmodeID.SinglePlayer; Config.I.AiClient = false;
+        }
+        Console.WriteLine("PASS: production duel moves/fires, observes arrows and enemy shots, rejects stale decisions, and releases controls on stop/failure/denial");
+    }
+
+    sealed class DecisionHandler : HttpMessageHandler
+    {
+        public JsonObject Request;
+        public string Choice = "retreat";
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Check(request.Headers.Authorization?.Parameter == "fake-key", "Jev authentication missing");
+            Request = JsonNode.Parse(await request.Content.ReadAsStringAsync(token)).AsObject();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(new JsonObject { ["answers"] = new JsonObject { ["move"] = new JsonObject { ["choice"] = Choice } } }.ToJsonString()) };
+        }
+    }
+
+    public static async Task Smoke()
+    {
+        string configPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library/Application Support/Terraria/tModLoader/ModConfigs/TerraBlind_Config.json");
+        var config = JsonNode.Parse(await System.IO.File.ReadAllTextAsync(configPath));
+        string key = config["TypeSafeKey"]?.GetValue<string>();
+        Check(!string.IsNullOrWhiteSpace(key), "No configured TypeSafe key for live smoke");
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        for (int i = 0; i < 3; i++)
+        {
+            var scene = new JsonObject
+            {
+                ["strategy"] = "弓箭一对一对战，保持射击距离，被遮挡时换位。",
+                ["allowed"] = new JsonArray(Array.ConvertAll(PvpTactics.Choices, value => (JsonNode)JsonValue.Create(value))),
+                ["dx"] = i == 0 ? 700 : 70, ["dy"] = i == 2 ? -100 : 0,
+                ["self_hp"] = i == 1 ? 50 : 100, ["target_hp"] = 100,
+                ["aim_clear"] = i != 2, ["target_vx"] = -3, ["target_vy"] = 0,
+                ["previous_choice"] = "hold", ["moved_pixels"] = 0,
+                ["nearby_projectiles"] = new JsonArray()
+            };
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            string choice = await PvpTactics.Choose(http, key, scene, default);
+            Check(Array.IndexOf(PvpTactics.Choices, choice) >= 0, "invalid live decision");
+            Console.WriteLine($"PVP_SMOKE scene={i} choice={choice} ms={clock.ElapsedMilliseconds} mock_world=true");
+        }
+        Console.WriteLine("PVP_SMOKE_COMPLETE checks=3 mock_world=true");
+    }
+}
