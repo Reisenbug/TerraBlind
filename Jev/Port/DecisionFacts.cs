@@ -57,11 +57,13 @@ public static class DecisionFacts
         return JsonSerializer.Serialize(state);
     }
 
-    public static string Describe(DodgeOption option, CombatSnapshot snapshot)
+    public static string Describe(DodgeOption option, CombatSnapshot snapshot, bool pvp = false)
     {
+        if (pvp && option.Intent.Direction == DodgeDirection.Stay)
+            return "Hold position if it offers a useful firing angle or melee reach; otherwise reposition.";
         bool pillion = snapshot.MountType == MountID.QueenSlime;
         return RouteDescription(option.Intent.Direction, snapshot, option.Intent.HorizontalSize,
-            option.Intent.VerticalSize == Magnitude.Large) + " " + ActionDescription(option,
+            option.Intent.VerticalSize == Magnitude.Large, pvp) + " " + ActionDescription(option,
             pillion ? "Gelatinous Pillion" : "Slimy Saddle",
             pillion ? "It has faster horizontal steering and a short flight time" : "It has poor horizontal steering");
     }
@@ -87,7 +89,7 @@ public static class DecisionFacts
     }
 
     private static string RouteDescription(DodgeDirection direction, CombatSnapshot snapshot,
-        Magnitude horizontalSize, bool burst)
+        Magnitude horizontalSize, bool burst, bool pvp)
     {
         if (direction == DodgeDirection.Stay) return DirectionDescription(direction);
         (int x, int y) = Components(direction);
@@ -108,6 +110,7 @@ public static class DecisionFacts
             {
                 float current = Vector2.Distance(boss.Center, snapshot.Player.Center);
                 float after = Vector2.Distance(boss.Center + boss.Velocity * 36f, playerAfter);
+                if (pvp) return $"{boss.Name}: approximate distance {current:0} -> {after:0} pixels; an estimate, not a guaranteed position";
                 return $"{boss.Name}: {(after - current > 5f * 16f ? "opens space" :
                     after - current < -5f * 16f ? "closes space" : "little separation change")}";
             }));
@@ -126,7 +129,7 @@ public static class DecisionFacts
             $"{horizontal:0} cells right, {vertical:0} cells down. " +
             (burst ? "Mount for faster vertical travel while holding W or S. " :
                 y == 0 ? "Ordinary horizontal travel. " : "Ordinary vertical travel. ") +
-            $"Boss clearance trend if current motion continues: {(bossClearance.Length == 0 ? "no nearby boss" : bossClearance)}. " +
+            $"{(pvp ? "Opponent distance" : "Boss clearance trend if current motion continues")}: {(bossClearance.Length == 0 ? "no nearby boss" : bossClearance)}. " +
             $"Projectile corridor: {(exposed == 0 ? "clear" : exposed < 3 ? "exposed" : "crowded")}. " +
             $"Available room beyond reserve: horizontal {(x == 0 ? 0f : Math.Max(0f, horizontalRoom)):0}, " +
             $"vertical {(y == 0 ? 0f : Math.Max(0f, verticalRoom)):0} cells.";

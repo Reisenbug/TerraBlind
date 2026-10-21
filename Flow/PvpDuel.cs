@@ -28,9 +28,10 @@ public static class PvpDuel
     static Port.DodgeIntent intent = Port.DodgeIntent.Idle;
     static Vector2 requestSelf, requestTarget, lastPosition;
     static int frames, preferredSlot, activeWeapon, choiceAge, nextDecision, lastHp, lastTargetHp, observedType;
-    static string key, strategy, mode, movementReason;
+    static string key, strategy, mode, movementReason, attackReason;
     static ulong sequence;
     static float speed, gravity, gravityDelay, range;
+    static bool waitingForRespawn;
     public static int Target { get; private set; } = -1;
     public static bool Active => Target >= 0;
     public static string Outcome { get; private set; } = "idle";
@@ -77,9 +78,9 @@ public static class PvpDuel
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
         intent = Port.DodgeIntent.Idle; appliedSnapshot = requestSnapshot = null;
-        choiceAge = 999; nextDecision = 0; Decisions = 0; sequence = 0; movementReason = "";
+        choiceAge = 999; nextDecision = 0; Decisions = 0; sequence = 0; movementReason = attackReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
-        lifetime = new CancellationTokenSource(); Target = target; Outcome = "running";
+        lifetime = new CancellationTokenSource(); waitingForRespawn = false; Target = target; Outcome = "running";
         DiagLog.Write($"[pvp] start target={target} preferred_slot={preferredSlot} seconds={seconds} strategy={strategy}");
         return true;
     }
@@ -98,7 +99,7 @@ public static class PvpDuel
             Outcome = outcome;
             DiagLog.Write($"[pvp] stop outcome={outcome} decisions={Decisions}");
         }
-        Target = -1;
+        Target = -1; waitingForRespawn = false;
         lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
         if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
         pending = null; arrows.Clear(); appliedSnapshot = null;
@@ -134,16 +135,29 @@ public static class PvpDuel
         }
     }
 
+    static float MeleeReach(Player self, Player target, Item item)
+        => Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f) + target.width / 2f;
+
+    static Vector2? ShotAim(Player self, Player target, Item item)
+    {
+        float shotSpeed = item.shootSpeed;
+        int shotType = item.shoot;
+        if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return null;
+        bool observed = activeWeapon == item.type && observedType != 0;
+        if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults)) shotSpeed *= defaults.extraUpdates + 1;
+        V? aim = PvpTactics.Aim(N(self.Center), N(target.Center), N(target.velocity), observed ? speed : shotSpeed,
+            observed ? gravity : 0, (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), observed ? gravityDelay : 0);
+        return aim.HasValue ? new Vector2(aim.Value.X, aim.Value.Y)
+            : !observed && Clear(self.Center, target.Center) ? target.Center : null;
+    }
+
     static bool Attack(Player self, Player target)
     {
         self.controlUseItem = false;
         var item = self.HeldItem;
-        float shotSpeed = item.shootSpeed;
-        int shotType = item.shoot;
-        if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return false;
         if (activeWeapon != item.type)
         {
-            activeWeapon = item.type; speed = shotSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
+            activeWeapon = item.type; speed = item.shootSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
             foreach (var projectile in Main.projectile)
                 if (projectile.active) arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, int.MaxValue);
         }
@@ -151,26 +165,25 @@ public static class PvpDuel
         bool clear;
         if (mode == "melee")
         {
-            float reach = Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f);
-            clear = Vector2.Distance(self.Center, target.Center) <= reach + target.width / 2f && Clear(self.Center, target.Center);
+            clear = Vector2.Distance(self.Center, target.Center) <= MeleeReach(self, target, item) && Clear(self.Center, target.Center);
         }
         else
         {
             ObserveArrows(self);
-            if (observedType == 0)
-            {
-                speed = shotSpeed;
-                if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults)) speed *= defaults.extraUpdates + 1;
-            }
-            V? aim = PvpTactics.Aim(N(self.Center), N(target.Center), N(target.velocity), speed, gravity,
-                (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), gravityDelay);
-            clear = aim.HasValue || observedType == 0 && Clear(self.Center, target.Center);
-            if (aim.HasValue) point = new Vector2(aim.Value.X, aim.Value.Y);
+            Vector2? aim = ShotAim(self, target, item);
+            clear = aim.HasValue;
+            if (aim.HasValue) point = aim.Value;
         }
         if (!self.controlHook) Cursor.AimPx(point.X, point.Y);
         self.direction = target.Center.X < self.Center.X ? -1 : 1;
         self.controlUseItem = clear && !self.controlHook;
         if (self.controlUseItem && self.itemAnimation == 0) self.releaseUseItem = true;
+        string reason = self.controlHook ? "grappling" : clear ? "attacking" : mode == "melee" ? "melee_out_of_reach_or_blocked" : "no_clear_shot";
+        if (reason != attackReason)
+        {
+            attackReason = reason;
+            DiagLog.Write($"[pvp] attack={reason} mode={mode} weapon={item.Name} distance={Vector2.Distance(self.Center, target.Center):0} animation={self.itemAnimation}");
+        }
         return clear;
     }
 
@@ -178,9 +191,32 @@ public static class PvpDuel
     {
         if (!Active) return;
         string reason = PlayerCombat.TargetReason(self, Target);
-        if (reason == "" && (!self.active || self.dead)) reason = "self_dead";
+        if (reason == "" && !self.active) reason = "self_inactive";
         if (reason == "" && (!AgentPermissions.Attack || !AgentPermissions.Dodge || !self.hostile)) reason = "combat_permission_denied";
         if (reason != "") { Stop(reason); return; }
+        if (self.dead)
+        {
+            if (!waitingForRespawn)
+            {
+                Movement.Release(self); ClearControls(self);
+                lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
+                if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                pending = null; appliedSnapshot = null; intent = Port.DodgeIntent.Idle;
+                waitingForRespawn = true; Outcome = "waiting_for_respawn";
+                NativeAgent.Progress("倒下了，复活后继续这轮对战。", "等待复活");
+                DiagLog.Write($"[pvp] paused target={Target} remaining_frames={frames}");
+            }
+            return;
+        }
+        if (waitingForRespawn)
+        {
+            waitingForRespawn = false; Outcome = "running";
+            Movement = new Port.GameMovement(); nextDecision = 0; choiceAge = 999;
+            activeWeapon = -1; arrows.Clear(); attackReason = "";
+            lastHp = self.statLife; lastTargetHp = Main.player[Target].statLife; lastPosition = self.Center;
+            NativeAgent.Progress("复活了，继续对战。", "执行 duel_player");
+            DiagLog.Write($"[pvp] resumed target={Target} remaining_frames={frames}");
+        }
         if (frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
@@ -237,7 +273,7 @@ public static class PvpDuel
             foreach (var option in requestSnapshot.AvailableActions)
             {
                 string id = "m" + options.Count;
-                options[id] = option; criteria[id] = Port.DecisionFacts.Describe(option, requestSnapshot);
+                options[id] = option; criteria[id] = Port.DecisionFacts.Describe(option, requestSnapshot, true);
             }
             var modes = new JsonObject();
             foreach (var pair in weapons)
@@ -245,13 +281,21 @@ public static class PvpDuel
                 var item = self.inventory[pair.Value];
                 modes[pair.Key] = new JsonObject { ["slot"] = pair.Value, ["name"] = item.Name, ["damage"] = item.damage,
                     ["shoot_speed"] = item.shootSpeed, ["projectile_type"] = item.shoot,
+                    ["can_attack_now"] = pair.Key == "melee"
+                        ? Vector2.Distance(self.Center, target.Center) <= MeleeReach(self, target, item) && Clear(self.Center, target.Center)
+                        : ShotAim(self, target, item).HasValue,
+                    ["contact_reach_pixels"] = pair.Key == "melee" ? MeleeReach(self, target, item) : (float?)null,
                     ["description"] = pair.Key == "melee" ? "接触近战，需要靠近并直接够到目标。" : "发射武器，需射界；适合保持距离或封锁路线。" };
             }
+            var movementState = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "")).AsObject();
+            movementState.Remove("threats");
+            movementState.Remove("boss_notes");
             var scene = new JsonObject
             {
                 ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
-                ["movement_state"] = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "")),
+                ["movement_state"] = movementState,
                 ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,
+                ["target_vx"] = target.velocity.X, ["target_vy"] = target.velocity.Y,
                 ["self_hp"] = self.statLife, ["target_hp"] = target.statLife,
                 ["hp_change"] = self.statLife - lastHp, ["target_hp_change"] = target.statLife - lastTargetHp,
                 ["previous_move"] = intent.ToString(), ["movement_result"] = movementReason,

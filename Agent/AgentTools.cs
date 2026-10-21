@@ -233,7 +233,7 @@ public static class AgentTools
                 result = await NativeAgent.OnMain(() =>
                 {
                     int weaponSlot = Int(args, "slot", Main.LocalPlayer.selectedItem);
-                    if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 120), 1, 200), Text(args, "strategy"), out string reason))
+                    if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 300), 1, 600), Text(args, "strategy"), out string reason))
                         return new JsonObject { ["error"] = reason };
                     return new JsonObject { ["target_player"] = duelTarget, ["target_hp_before"] = Main.player[duelTarget].statLife,
                         ["self_hp_before"] = Main.LocalPlayer.statLife };
@@ -241,7 +241,11 @@ public static class AgentTools
                 if (!Rejected(result))
                 {
                     var duelTimer = Stopwatch.StartNew();
-                    while (await NativeAgent.OnMain(() => PvpDuel.Active, token) && duelTimer.Elapsed.TotalSeconds < duelSeconds + 3)
+                    while (await NativeAgent.OnMain(() =>
+                    {
+                        if (Main.LocalPlayer.dead) duelTimer.Stop(); else duelTimer.Start();
+                        return PvpDuel.Active;
+                    }, token) && duelTimer.Elapsed.TotalSeconds < duelSeconds + 3)
                         await Task.Delay(150, token);
                     await NativeAgent.OnMain(() =>
                     {

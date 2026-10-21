@@ -97,15 +97,55 @@ static class PvpTests
             AgentPermissions.Reset();
             self.inventory[1] = new Terraria.Item { type = 100, stack = 1, damage = 10, useStyle = 1, Name = "test sword" };
             self.ExtraJump = true;
-            Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m2", "melee"))), "mixed weapon duel failed");
+            Check(Start((state, _) => { observed = state; return Task.FromResult(new PvpTactics.Decision("m2", "melee")); }), "mixed weapon duel failed");
             PvpDuel.Tick(self); self.itemAnimation = 5; PvpDuel.Tick(self);
+            Check(!observed["weapon_modes"]["melee"]["can_attack_now"].GetValue<bool>()
+                && observed["weapon_modes"]["ranged"]["can_attack_now"].GetValue<bool>(), "Jev was not told melee cannot reach while ranged can attack");
+            Check(observed["movement_state"]["threats"] == null && !observed["movement_options"].ToJsonString().Contains("Boss clearance"),
+                "PvP inherited Boss contact damage or clearance instructions");
             Check(self.selectedItem == 0 && !self.controlUseItem, "weapon switched during animation or fired in wrong mode");
             self.itemAnimation = 0; PvpDuel.Tick(self);
             Check(self.selectedItem == 1 && !self.controlUseItem && self.controlJump && JevariaCombatExtraJump(),
                 "Jev weapon/movement judgment did not reach the driver or melee fired out of reach");
             other.position = self.position + new Vector2(30, 0); PvpDuel.Tick(self);
             Check(self.controlUseItem, "in-range melee did not attack");
+            for (int tick = 0; tick < 25; tick++) PvpDuel.Tick(self);
+            Check(observed["weapon_modes"]["melee"]["can_attack_now"].GetValue<bool>(), "in-range melee was not offered as attackable");
             PvpDuel.Stop(); self.ExtraJump = false;
+            other.position = self.position + new Vector2(400, 0);
+            Check(Start((state, _) => { observed = state; return Task.FromResult(new PvpTactics.Decision("m1",
+                state["weapon_modes"]["melee"]["can_attack_now"].GetValue<bool>() ? "melee" : "ranged")); }), "adaptive weapon duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(self.selectedItem == 0 && self.controlUseItem, "out-of-reach opponent did not receive ranged attacks");
+            other.position = self.position + new Vector2(30, 0);
+            for (int tick = 0; tick < 26; tick++) PvpDuel.Tick(self);
+            Check(self.selectedItem == 1 && self.controlUseItem, "near opponent did not allow melee switch");
+            other.position = self.position + new Vector2(400, 0);
+            for (int tick = 0; tick < 26; tick++) PvpDuel.Tick(self);
+            Check(self.selectedItem == 0 && self.controlUseItem, "leaving melee range kept chasing with an idle sword");
+            var dyingDecision = new TaskCompletionSource<PvpTactics.Decision>();
+            PvpDuel.Stop();
+            Check(Start((_, _) => dyingDecision.Task), "respawn duel failed");
+            PvpDuel.Tick(self); self.dead = true;
+            for (int tick = 0; tick < 2000; tick++) PvpDuel.Tick(self);
+            Check(PvpDuel.Active && PvpDuel.Outcome == "waiting_for_respawn" && !self.controlUseItem && !self.controlRight,
+                "death cancelled the duel, consumed its budget, or left controls pressed");
+            var native = new NativeAgent();
+            using var nativeCancel = new CancellationTokenSource();
+            typeof(NativeAgent).GetField("_running", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(native, new TaskCompletionSource<bool>().Task);
+            typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(native, nativeCancel);
+            native.PostUpdateEverything();
+            Check(!nativeCancel.IsCancellationRequested && PvpDuel.Active, "NativeAgent cancelled the paused PvP tool on death");
+            dyingDecision.SetResult(new("m1", "melee"));
+            self.dead = false; PvpDuel.Tick(self);
+            Check(PvpDuel.Active && PvpDuel.Outcome == "running" && PvpDuel.Decisions == 0,
+                "respawn did not resume or reused a decision from before death");
+            PvpDuel.Stop();
+            Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "stop while dead duel failed");
+            self.dead = true; PvpDuel.Tick(self); AgentTools.Stop(); self.dead = false;
+            Check(!PvpDuel.Active, "manual stop failed while waiting for respawn");
         }
         finally
         {
@@ -145,13 +185,16 @@ static class PvpTests
         {
             var scene = new JsonObject
             {
-                ["strategy"] = "弓箭一对一对战，保持射击距离，被遮挡时换位。",
+                ["strategy"] = "持续追击目标，近距离用 Volcano 接触近战；利用跳跃、额外跳追上并躲避攻击。",
                 ["movement_options"] = new JsonObject { ["stay"] = "保持", ["left"] = "向左小幅移动", ["right"] = "向右小幅移动",
                     ["up"] = "向上跳跃或使用额外跳", ["up_right"] = "向右跳跃，必要时使用额外跳或飞行" },
                 ["weapon_modes"] = new JsonObject {
-                    ["melee"] = new JsonObject { ["name"] = "铜短剑", ["damage"] = 5, ["description"] = "需要在40像素内够到目标" },
-                    ["ranged"] = new JsonObject { ["name"] = "木弓", ["damage"] = 4, ["shoot_speed"] = 6, ["description"] = "木箭，需要射界" } },
-                ["dx"] = i == 0 ? 700 : 70, ["dy"] = i == 2 ? -100 : 0,
+                    ["melee"] = new JsonObject { ["name"] = "Volcano", ["damage"] = 40, ["contact_reach_pixels"] = 60,
+                        ["can_attack_now"] = i == 1, ["description"] = "接触近战，需要够到目标" },
+                    ["ranged"] = new JsonObject { ["name"] = "Molten Fury", ["damage"] = 31, ["shoot_speed"] = 8,
+                        ["can_attack_now"] = true, ["description"] = "弓箭，需要射界" } },
+                ["current_mode"] = "melee",
+                ["dx"] = i == 1 ? 30 : 400, ["dy"] = 0,
                 ["self_hp"] = i == 1 ? 50 : 100, ["target_hp"] = 100,
                 ["aim_clear"] = i != 2, ["target_vx"] = -3, ["target_vy"] = 0,
                 ["previous_choice"] = "hold", ["moved_pixels"] = 0,
@@ -160,6 +203,7 @@ static class PvpTests
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var choice = await PvpTactics.Choose(http, key, scene, default);
             Check(scene["movement_options"].AsObject().ContainsKey(choice.Move), "invalid live decision");
+            if (i != 1) Check(choice.WeaponMode == "ranged", "Live Jev kept out-of-reach melee despite an attackable ranged weapon");
             Console.WriteLine($"PVP_SMOKE scene={i} choice={choice.Move} mode={choice.WeaponMode} ms={clock.ElapsedMilliseconds} mock_world=true");
         }
         Console.WriteLine("PVP_SMOKE_COMPLETE checks=3 mock_world=true");

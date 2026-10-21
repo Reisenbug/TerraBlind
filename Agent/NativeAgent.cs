@@ -91,7 +91,9 @@ public class NativeAgent : ModSystem
             Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status);
         if (!Main.gameMenu && Main.LocalPlayer.active && Main.LocalPlayer.dead)
         {
-            if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false)
+            bool continuingDuel = PvpDuel.Active;
+            if (continuingDuel) PvpDuel.Tick(Main.LocalPlayer);
+            if (!continuingDuel && _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false)
             { Cancel(); AgentChat.Say("倒下了，这个任务先停下。"); }
             return;
         }
