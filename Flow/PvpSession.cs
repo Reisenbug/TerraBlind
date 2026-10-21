@@ -14,11 +14,35 @@ public static partial class PvpDuel
     static readonly Dictionary<string, (ulong Tick, JsonObject Entry)> recentEvents = new();
     static long eventSequence, requestRevision;
     static int sessionTarget;
+    static long actionCounter, actionLease, actionSession;
+    public static bool ExternalAction => actionLease != 0;
     static JsonObject latestScene;
     static readonly PvpHistory history = new();
     public static long Session { get; private set; }
     public static long EventSequence => eventSequence;
     public static PvpDirective Directive { get; private set; }
+
+    public static long BeginAction(string kind)
+    {
+        if (!Active) return 0;
+        if (ExternalAction) throw new InvalidOperationException("combat_action_busy");
+        actionLease = ++actionCounter; actionSession = Session;
+        Movement.Release(Main.LocalPlayer); ClearControls(Main.LocalPlayer);
+        lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
+        if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+        pending = null; Outcome = "paused_for_action";
+        Event("action_started", kind);
+        return actionLease;
+    }
+
+    public static void EndAction(long lease)
+    {
+        if (lease == 0 || lease != actionLease || !Active || actionSession != Session) return;
+        Halt.All(); actionLease = 0; ClearControls(Main.LocalPlayer);
+        Movement = new JevariaCombat.GameMovement(); appliedSnapshot = null; fireIntent = false;
+        Outcome = Main.LocalPlayer.dead ? "waiting_for_respawn" : "running";
+        Event("action_finished", "Resampling the changed world before resuming combat.");
+    }
 
     public static void InventoryChanged()
     {
@@ -97,6 +121,7 @@ public static partial class PvpDuel
         ["perception"] = Active ? Perception(Main.LocalPlayer, Main.player[sessionTarget], detailed) : null,
         ["target"] = Session == 0 ? null : Body(Main.player[sessionTarget]),
         ["current_mode"] = mode, ["movement_reason"] = movementReason, ["attack_reason"] = attackReason,
+        ["action_owner"] = ExternalAction ? "agent_tool" : "combat",
         ["scene"] = latestScene?.DeepClone(), ["last_event"] = eventSequence,
         ["events_truncated"] = events.Count > 0 && afterEvent < events.Peek()["seq"].GetValue<long>() - 1,
         ["events"] = new JsonArray(events.Where(entry => entry["seq"].GetValue<long>() > afterEvent).Select(entry => entry.DeepClone()).ToArray())

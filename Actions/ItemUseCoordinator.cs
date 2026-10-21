@@ -243,6 +243,11 @@ namespace TerraBlind
 
 			float worldX = req.TargetWx * 16f + 8f;
 			float worldY = req.TargetWy * 16f + 8f;
+			if (!PvpActionRules.AllowedAt(p, p.inventory[slot], req.TargetWx, req.TargetWy))
+			{
+				Outcome = "no_progress"; Reason = "combat_constraint"; _active = null;
+				p.controlUseItem = false; return;
+			}
 			Cursor.AimPx(worldX, worldY);
 			p.selectedItem = slot;
 

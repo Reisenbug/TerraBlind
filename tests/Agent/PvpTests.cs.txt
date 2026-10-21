@@ -140,6 +140,21 @@ static class PvpTests
             Check(self.selectedItem == 0 && self.controlUseItem, "leaving melee range kept chasing with an idle sword");
             var dyingDecision = new TaskCompletionSource<PvpTactics.Decision>();
             PvpDuel.Stop();
+            Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "external action duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            long lease = PvpDuel.BeginAction("mine");
+            int remaining = PvpDuel.Report()["remaining_active_frames"].GetValue<int>();
+            self.controlUseItem = true;
+            PvpDuel.Tick(self);
+            Check(PvpDuel.ExternalAction && self.controlUseItem && PvpDuel.Report()["remaining_active_frames"].GetValue<int>() == remaining,
+                "combat stole tool input or spent its activity budget while suspended");
+            PvpDuel.EndAction(lease);
+            Check(!PvpDuel.ExternalAction && PvpDuel.Active && !self.controlUseItem, "external action failed to release input and resume");
+            lease = PvpDuel.BeginAction("place_at"); PvpDuel.Stop();
+            Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "replacement session failed");
+            PvpDuel.EndAction(lease);
+            Check(PvpDuel.Active && !PvpDuel.ExternalAction && PvpDuel.Outcome == "running", "old action finally modified a new session");
+            PvpDuel.Stop();
             self.inventory[2] = new Terraria.Item { type = 101, stack = 1, damage = 1, useStyle = 1,
                 noMelee = true, shoot = 1, shootSpeed = 20, Name = "fast low-damage weapon" };
             Check(Start((state, _) => Task.FromResult(new PvpTactics.Decision("m1",
@@ -194,6 +209,7 @@ static class PvpTests
             Game.netMode = Terraria.ID.NetmodeID.SinglePlayer; Config.I.AiClient = false;
         }
         Console.WriteLine("PASS: production duel revalidates displacement, dispatches without a 24-frame delay, retains valid movement, switches weapons and cancels stale instructions; movement adapter stubbed");
+        Console.WriteLine("PASS: external action leases preserve tool input and activity budget, resume once and reject old-session cleanup");
     }
 
     static bool JevariaCombatExtraJump() => TerraBlind.JevariaCombat.GameMovement.ExtraJumpObserved;

@@ -113,7 +113,7 @@ public static partial class PvpDuel
             Event("stopped", outcome);
             DiagLog.Write($"[pvp] stop outcome={outcome} decisions={Decisions}");
         }
-        Target = -1; waitingForRespawn = false;
+        Target = -1; waitingForRespawn = false; actionLease = 0;
         lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
         if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
         pending = null; arrows.Clear(); appliedSnapshot = null;
@@ -261,6 +261,7 @@ public static partial class PvpDuel
             NativeAgent.Progress("复活了，继续对战。", "执行 duel_player");
             DiagLog.Write($"[pvp] resumed target={Target} remaining_frames={frames}");
         }
+        if (ExternalAction) return;
         if (frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
         history.Record(self, target, lastAimClear);
@@ -379,6 +380,7 @@ public static partial class PvpDuel
 
     public static void ApplyInputs(Player self)
     {
+        if (ExternalAction) return;
         if (!Active || self.dead || waitingForRespawn || !AgentPermissions.Attack || !AgentPermissions.Dodge)
         { ClearControls(self); return; }
         var weapons = Weapons(self);

@@ -39,7 +39,29 @@ class Program
         }
         finally { system.Unload(); }
         if (BackgroundAutomation.Installed) throw new Exception("Background hook leaked after unload");
-        Console.WriteLine("BACKGROUND_CHECKS_COMPLETE checks=6 real_engine_hook=true gameplay_loop=false");
+        var mining = new PvpMiningRules();
+        try
+        {
+            mining.Load();
+            if (!mining.Installed) throw new Exception("Mining input hook did not install");
+            var player = Terraria.Main.LocalPlayer;
+            var pick = new Item { type = 1, pick = 35, stack = 1 };
+            if (PvpActionRules.AllowedAt(player, pick, 10, 10)) throw new Exception("Mining allowed without player permission");
+            player.PickTile(10, 10, 35);
+            var update = PvpDuel.Directive.Update(System.Text.Json.Nodes.JsonNode.Parse("""
+                {"constraints":{"allow_mining":true,"allow_placing":true,"denied_types":[2],
+                 "protected_rects":[{"x":10,"y":10,"w":1,"h":1}]}}
+                """).AsObject(), true);
+            if (update["error"] != null || !PvpActionRules.AllowedAt(player, pick, 9, 10)
+                || PvpActionRules.AllowedAt(player, pick, 10, 10)) throw new Exception("Protected mining region ignored");
+            if (PvpActionRules.AllowedAt(player, new Item { type = 2, damage = 20, stack = 1 }, 9, 9)) throw new Exception("Generic item use bypassed weapon restriction");
+            Terraria.ObjectData.TileObjectData.Initialize();
+            var bench = new Item { type = 3, createTile = Terraria.ID.TileID.WorkBenches, stack = 1 };
+            if (PvpActionRules.AllowedAt(player, bench, 9, 10)) throw new Exception("Multi-tile placement crossed protected region");
+        }
+        finally { mining.Unload(); }
+        if (mining.Installed) throw new Exception("Mining input hook leaked after unload");
+        Console.WriteLine("BACKGROUND_CHECKS_COMPLETE checks=13 real_engine_hook=true gameplay_loop=false");
     }
 }
 
@@ -47,6 +69,7 @@ namespace TerraBlind
 {
     public class Config { public static Config I = new(); public bool AiClient; }
     public static class AgentNetwork { public static bool CanAutomate => true; }
+    public static class PvpDuel { public static bool Active = true; public static PvpDirective Directive = new("test"); }
     public static class DiagLog { public static void Write(string text) => Console.WriteLine(text); }
     public class StateSnapshotPlayer : Terraria.ModLoader.ModPlayer
     {

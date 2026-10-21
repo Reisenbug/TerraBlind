@@ -108,6 +108,11 @@ public static class AgentTools
         while (timer.Elapsed.TotalSeconds < seconds)
         {
             await Task.Delay(150, token);
+            if (await NativeAgent.OnMain(() => PvpDuel.Active && Main.LocalPlayer.dead, token))
+            {
+                await Call(stop, null, token);
+                return new JsonObject { ["outcome"] = "interrupted_by_death" };
+            }
             var status = await Call(path, null, token);
             if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
                 return status;
@@ -119,6 +124,19 @@ public static class AgentTools
     }
 
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+    {
+        bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
+            or "place_at" or "act" or "interact" or "loot_all" or "craft";
+        long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
+        try { return await ExecuteCore(name, args, token); }
+        finally
+        {
+            if (lease != 0 && !token.IsCancellationRequested)
+                await NativeAgent.OnMain(() => { PvpDuel.EndAction(lease); return true; }, token);
+        }
+    }
+
+    static async Task<string> ExecuteCore(string name, JsonObject args, CancellationToken token)
     {
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] tool {name} {args}"); return true; }, token);
         if (name is not ("say" or "ask"))

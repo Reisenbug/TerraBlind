@@ -524,10 +524,16 @@ namespace TerraBlind
 					$"helldeck={HellDeck.IsRunning} nav={RecedingNav.Active} mine={MineCoordinator.IsActive}");
 
 			// 战斗排在所有早退分支【之前】:铺桥/挖矿那些分支自己 return,挂在后面永远轮不到
-			if (PvpDuel.Active) { PvpDuel.ApplyInputs(Player); return; }
-			Dodge.Tick();
-			Combat.Tick();
-			if (PlayerCombat.Active) { PlayerCombat.Tick(Player); return; }
+			if (PvpDuel.Active)
+			{
+				if (!PvpDuel.ExternalAction) { PvpDuel.ApplyInputs(Player); return; }
+			}
+			else
+			{
+				Dodge.Tick();
+				Combat.Tick();
+				if (PlayerCombat.Active) { PlayerCombat.Tick(Player); return; }
+			}
 
 			// semantic place: drives its cell queue through ItemUseCoordinator. Ticked before the coordinator block
 			// below so a cell it starts this frame gets swung at immediately.

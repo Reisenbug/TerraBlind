@@ -9,6 +9,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Infra/BackgroundAutomation.cs" />
+    <Compile Include="../../Flow/PvpActionRules.cs" />
+    <Compile Include="../../Flow/PvpDirective.cs" />
     <Compile Include="Program.cs.txt" />
     <Reference Include="$(TmlPath)/tModLoader.dll" />
     <Reference Include="$(TmlPath)/Libraries/**/*.dll" />
