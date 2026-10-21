@@ -167,9 +167,7 @@ namespace TerraBlind
 				for (int i = 0; i < 10; i++)
 					if (p.inventory[i] == null || p.inventory[i].IsAir) { hb = i; break; }
 				if (hb < 0) hb = 0;   // no empty hotbar slot → displace slot 0 (its item goes to the backpack slot)
-				var tmp = p.inventory[hb];
-				p.inventory[hb] = p.inventory[slot];
-				p.inventory[slot] = tmp;
+				PvpInventory.SwapSlots(slot, hb);
 				slot = hb;
 			}
 

@@ -1,0 +1,39 @@
+using System;
+using System.Linq;
+using System.Text.Json.Nodes;
+using TerraBlind;
+using Game = Terraria.Main;
+
+static class InventoryTests
+{
+    public static void Run()
+    {
+        var self = Game.LocalPlayer;
+        var old0 = self.inventory[0]; var old12 = self.inventory[12];
+        int net = Game.netMode;
+        try
+        {
+            Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
+            self.inventory[0] = new Terraria.Item { type = 1, prefix = 2, stack = 1, Name = "weapon" };
+            self.inventory[12] = new Terraria.Item { type = 3, stack = 20, Name = "blocks" };
+            var args = new JsonObject { ["src"] = 12, ["dst"] = 0,
+                ["expected_src"] = new JsonObject { ["type"] = 3, ["prefix"] = 0, ["stack"] = 20 },
+                ["expected_dst"] = new JsonObject { ["type"] = 1, ["prefix"] = 2, ["stack"] = 1 } };
+            self.itemAnimation = 1;
+            if (PvpInventory.Swap(args)["error"]?.ToString() != "inventory_busy") throw new Exception("inventory swapped during animation");
+            self.itemAnimation = 0;
+            int sent = Terraria.NetMessage.Details.Count;
+            var result = PvpInventory.Swap(args);
+            if (result["ok"] == null || self.inventory[0].type != 3 || self.inventory[12].type != 1
+                || !Terraria.NetMessage.Details.Skip(sent).Select(message => message.Slot).SequenceEqual(new float[] { 12, 0 }))
+                throw new Exception("inventory swap lost an item or did not synchronize both actual slots");
+            if (PvpInventory.Swap(args)["error"]?.ToString() != "stale_inventory") throw new Exception("stale expected items were swapped again");
+            if (PvpInventory.Snapshot()[0]["prefix"].GetValue<int>() != 0) throw new Exception("snapshot omitted exact prefix");
+        }
+        finally
+        {
+            self.itemAnimation = 0; self.inventory[0] = old0; self.inventory[12] = old12; Game.netMode = net;
+        }
+        Console.WriteLine("PASS: inventory swap validates busy/stale states, preserves both items and emits two slot syncs");
+    }
+}

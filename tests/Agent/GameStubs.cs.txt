@@ -78,14 +78,15 @@ namespace Terraria
     public static class NetMessage
     {
         public static readonly List<(int Message, int Player)> Sent = new();
-        public static void SendData(int msgType, int remoteClient = -1, int ignoreClient = -1, object text = null, int number = 0)
-            => Sent.Add((msgType, number));
+        public static readonly List<(int Message, int Player, float Slot)> Details = new();
+        public static void SendData(int msgType, int remoteClient = -1, int ignoreClient = -1, object text = null, int number = 0, float number2 = 0)
+        { Sent.Add((msgType, number)); Details.Add((msgType, number, number2)); }
     }
 }
 namespace Terraria.ID
 {
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
-    public static class MessageID { public const int TogglePVP = 30; }
+    public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
     public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
@@ -148,6 +149,8 @@ namespace TerraBlind
         public static void Display(string text) => Terraria.Main.NewText(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
+    public static class ItemUseCoordinator { public static bool IsActive; }
+    public static class PlaceAnywhere { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {

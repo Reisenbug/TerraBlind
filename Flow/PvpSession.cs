@@ -20,6 +20,15 @@ public static partial class PvpDuel
     public static long EventSequence => eventSequence;
     public static PvpDirective Directive { get; private set; }
 
+    public static void InventoryChanged()
+    {
+        if (!Active) return;
+        lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
+        if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+        pending = null; fireIntent = false; Main.LocalPlayer.controlUseItem = false;
+        Event("inventory_changed", "Weapon references invalidated; resampling before the next attack.");
+    }
+
     static void BeginSession(int target)
     {
         Session++; sessionTarget = target;
@@ -69,6 +78,7 @@ public static partial class PvpDuel
             var item = self.inventory[slot];
             if (item.IsAir || item.damage <= 0 || item.ammo > 0 || item.pick > 0 || item.axe > 0 || item.hammer > 0) continue;
             result.Add(new JsonObject { ["slot"] = slot, ["type"] = item.type, ["prefix"] = item.prefix,
+                ["stack"] = item.stack,
                 ["name"] = item.Name, ["damage_before_target_defense"] = self.GetWeaponDamage(item),
                 ["hotbar"] = slot < 10, ["allowed"] = Directive?.AllowsWeapon(item.type) ?? true,
                 ["has_ammo"] = item.useAmmo == 0 || self.HasAmmo(item), ["mana_cost_estimate"] = item.mana * self.manaCost,

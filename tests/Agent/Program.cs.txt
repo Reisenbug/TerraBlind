@@ -123,7 +123,8 @@ static class Tests
         await PvpTests.Run();
         DirectiveTests.Run();
         HistoryTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=30");
+        InventoryTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=31");
     }
 
     sealed class FakeHandler : HttpMessageHandler

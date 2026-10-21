@@ -20,8 +20,10 @@
     <Compile Include="../../Flow/PvpSession.cs" Link="PvpSession.cs" />
     <Compile Include="../../Flow/PvpHistory.cs" Link="PvpHistory.cs" />
     <Compile Include="../../Flow/PvpTerrain.cs" Link="PvpTerrain.cs" />
+    <Compile Include="../../Flow/PvpInventory.cs" Link="PvpInventory.cs" />
     <Compile Include="DirectiveTests.cs.txt" />
     <Compile Include="HistoryTests.cs.txt" />
+    <Compile Include="InventoryTests.cs.txt" />
     <Compile Include="../../Jev/Port/Contracts.cs" Link="Contracts.cs" />
     <Compile Include="../../Jev/Port/DecisionFacts.cs" Link="DecisionFacts.cs" />
     <Compile Include="PvpTests.cs.txt" />

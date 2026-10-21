@@ -123,8 +123,7 @@ namespace TerraBlind
 			{
 				int src = swap.src, dst = swap.dst;
 				if (src < 0 || src > 57 || dst < 0 || dst > 57 || src == dst) continue;
-				var inv = Main.LocalPlayer.inventory;
-				(inv[src], inv[dst]) = (inv[dst], inv[src]);
+				PvpInventory.SwapSlots(src, dst);
 			}
 			while (_startRunQueue.TryDequeue(out _))
 				StartRunStart = StartRun.Start(out string srw2) ? "" : srw2;

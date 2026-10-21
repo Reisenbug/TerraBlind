@@ -70,6 +70,7 @@ public static class AgentTools
         }
         state["other_players"] = players;
         state["combat"] = PvpDuel.Report();
+        state["inventory_slots"] = PvpInventory.Snapshot();
         return state.ToJsonString();
     }, token);
 
@@ -134,6 +135,9 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "inventory_swap":
+                result = await NativeAgent.OnMain(() => PvpInventory.Swap(args), token);
+                break;
             case "combat_observe":
                 result = await ObserveCombat(args, token);
                 break;
