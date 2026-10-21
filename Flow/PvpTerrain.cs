@@ -13,10 +13,22 @@ public static class PvpTerrain
         Vector2 point = target.Center, velocity = target.velocity;
         for (int frame = 1; frame <= 30; frame++)
         {
+            Vector2 previous = point;
             velocity.Y += acceleration.Value;
             point += velocity;
-            int x = (int)(point.X / 16), y = (int)((point.Y + target.height / 2f) / 16);
-            if (Support(x, y)) return (new Vector2(point.X, y * 16 - target.height / 2f), frame);
+            int steps = Math.Max(1, (int)Math.Ceiling(Vector2.Distance(previous, point) / 4));
+            for (int step = 1; step <= steps; step++)
+            {
+                Vector2 sample = Vector2.Lerp(previous, point, step / (float)steps);
+                int x = (int)(sample.X / 16), y = (int)((sample.Y + target.height / 2f) / 16);
+                if (Support(x, y) && previous.Y + target.height / 2f <= y * 16)
+                {
+                    var landing = new Vector2(sample.X, y * 16 - target.height / 2f);
+                    if (!Collision.SolidCollision(landing - new Vector2(target.width / 2f, target.height / 2f), target.width, target.height))
+                        return (landing, frame);
+                }
+                if (Collision.SolidCollision(sample - new Vector2(target.width / 2f, target.height / 2f), target.width, target.height)) return null;
+            }
         }
         return null;
     }
@@ -42,6 +54,8 @@ public static class PvpTerrain
 
     public static JsonObject Trace(Vector2 from, Vector2 to)
     {
+        if (Collision.CanHitLine(from, 4, 4, to, 4, 4))
+            return new JsonObject { ["clear"] = true, ["collision_model"] = "engine_line_probe" };
         int steps = Math.Max(1, (int)Math.Ceiling(Vector2.Distance(from, to) / 4f));
         Vector2 previous = from;
         for (int i = 1; i <= steps; i++)
@@ -67,7 +81,8 @@ public static class PvpTerrain
             }
             previous = point;
         }
-        return new JsonObject { ["clear"] = true, ["collision_model"] = "four_pixel_line_probe" };
+        return new JsonObject { ["clear"] = false, ["collision_model"] = "engine_line_probe",
+            ["blocker_unknown"] = "whole_line_failed_without_identified_subsegment" };
     }
 
     public static JsonObject Observe(Player self, Player target, bool detailed = false)
