@@ -1,0 +1,56 @@
+using System;
+using System.Reflection;
+using Terraria;
+using TerraBlind;
+
+class Program
+{
+    static void Main()
+    {
+        Terraria.Program.SavePath = "/tmp/terrablind-background-tests/world";
+        MainThread();
+    }
+
+    static void MainThread()
+    {
+        Terraria.Main.dedServ = false;
+        var system = new BackgroundAutomation();
+        try
+        {
+            system.Load();
+            if (!BackgroundAutomation.Installed) throw new Exception("Background input hook was not installed");
+            var apply = typeof(BackgroundAutomation).GetMethod("Apply", BindingFlags.Static | BindingFlags.NonPublic);
+            var player = new Player();
+            var controller = new StateSnapshotPlayer();
+            Terraria.ModLoader.ContentInstance.Register(controller);
+            typeof(Player).GetField("modPlayers", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(player, new Terraria.ModLoader.ModPlayer[] { controller });
+            Terraria.Main.myPlayer = 0; Terraria.Main.player[0] = player;
+            Terraria.Main.netMode = 1; Terraria.Main.gameMenu = false; Config.I.AiClient = true;
+            object Invoke(bool focus) => apply.Invoke(null, new object[] { focus, player });
+            if ((bool)Invoke(false) || StateSnapshotPlayer.Calls != 1) throw new Exception("Unfocused AI did not execute or spoofed focus");
+            if (!(bool)Invoke(true) || StateSnapshotPlayer.Calls != 1) throw new Exception("Focused AI was executed twice");
+            Config.I.AiClient = false;
+            Invoke(false);
+            if (StateSnapshotPlayer.Calls != 1) throw new Exception("Human client executed background controls");
+            Config.I.AiClient = true; Terraria.Main.netMode = 0;
+            Invoke(false);
+            if (StateSnapshotPlayer.Calls != 1) throw new Exception("Single-player focus behavior changed");
+        }
+        finally { system.Unload(); }
+        if (BackgroundAutomation.Installed) throw new Exception("Background hook leaked after unload");
+        Console.WriteLine("BACKGROUND_CHECKS_COMPLETE checks=6 real_engine_hook=true gameplay_loop=false");
+    }
+}
+
+namespace TerraBlind
+{
+    public class Config { public static Config I = new(); public bool AiClient; }
+    public static class AgentNetwork { public static bool CanAutomate => true; }
+    public static class DiagLog { public static void Write(string text) => Console.WriteLine(text); }
+    public class StateSnapshotPlayer : Terraria.ModLoader.ModPlayer
+    {
+        public static int Calls;
+        public override void SetControls() => Calls++;
+    }
+}

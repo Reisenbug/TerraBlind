@@ -423,7 +423,7 @@
     "type": "function",
     "function": {
       "name": "fight_player",
-      "description": "攻击指定玩家。player_id 用 other_players 的编号；玩家说打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开启 PvP 且不能是同一非零队伍。用快捷栏武器原地持续瞄准使用，不追人、不保证命中。返回实际执行结果和目标前后血量。",
+      "description": "仅原地攻击指定玩家，不移动、不检查地形遮挡。有弓且玩家要求对战或打我时优先用 duel_player；不要因没明说走位就选本工具。player_id 用 other_players 编号；打我时用 agent.instruction_player_id。自动开启自身 PvP 并保持，目标也必须开 PvP 且不能同一非零队伍。返回实际执行结果和目标前后血量。",
       "parameters": {
         "type": "object",
         "properties": {

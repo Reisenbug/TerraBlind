@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-background-tests/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-background-tests/bin/</OutputPath>
+    <TmlPath>$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader</TmlPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Infra/BackgroundAutomation.cs" />
+    <Compile Include="Program.cs.txt" />
+    <Reference Include="$(TmlPath)/tModLoader.dll" />
+    <Reference Include="$(TmlPath)/Libraries/**/*.dll" />
+    <Reference Remove="$(TmlPath)/Libraries/Native/**" />
+    <Reference Remove="$(TmlPath)/Libraries/**/runtime*/**" />
+    <Reference Remove="$(TmlPath)/Libraries/**/*.resources.dll" />
+    <Reference Remove="$(TmlPath)/Libraries/tModCodeAssist/**" />
+  </ItemGroup>
+</Project>
