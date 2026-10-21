@@ -71,7 +71,7 @@ public static partial class PvpDuel
         if (result["error"] != null) return result;
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
         if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-        pending = null; nextDecision = 0;
+        pending = null;
         if (!Directive.AllowsWeapon(Main.LocalPlayer.HeldItem.type)) Main.LocalPlayer.controlUseItem = false;
         Event("directive_updated", "revision=" + Directive.Revision);
         result["session"] = Session;

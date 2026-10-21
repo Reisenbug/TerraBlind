@@ -72,8 +72,16 @@ static class PvpTests
             Check(Start((_, _) => delayedChoice.Task), "delayed duel start failed");
             PvpDuel.Tick(self); other.position += new Vector2(400, 0); delayedChoice.SetResult(new("m1", "ranged"));
             PvpDuel.Tick(self);
-            Check(PvpDuel.Decisions == 0 && !self.controlRight, "outdated scene decision was applied");
+            Check(PvpDuel.Decisions == 1 && self.controlRight, "world displacement discarded a still-valid movement direction");
             PvpDuel.Stop(); other.position = new Vector2(600, 400);
+            int requests = 0;
+            var slowFollowup = new TaskCompletionSource<PvpTactics.Decision>();
+            Check(Start((_, _) => ++requests == 1 ? Task.FromResult(new PvpTactics.Decision("m1", "ranged")) : slowFollowup.Task), "continuous movement duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(requests == 2, "completed request still waited an extra 24 frames");
+            for (int tick = 0; tick < 120; tick++) PvpDuel.Tick(self);
+            Check(self.controlRight && PvpDuel.Active, "live-valid direction expired solely after 90 frames");
+            PvpDuel.Stop(); slowFollowup.SetResult(new("m1", "ranged"));
 
             JsonObject observed = null;
             Check(Start((state, _) => { observed = state; return Task.FromResult(new PvpTactics.Decision("m0", "ranged")); }), "observation duel start failed");
@@ -167,7 +175,7 @@ static class PvpTests
             Game.projectile[0].active = Game.projectile[1].active = false;
             Game.netMode = Terraria.ID.NetmodeID.SinglePlayer; Config.I.AiClient = false;
         }
-        Console.WriteLine("PASS: production duel dispatches movement, switches melee/ranged, checks reach/animation, rejects stale decisions and releases controls; movement adapter stubbed");
+        Console.WriteLine("PASS: production duel revalidates displacement, dispatches without a 24-frame delay, retains valid movement, switches weapons and cancels stale instructions; movement adapter stubbed");
     }
 
     static bool JevariaCombatExtraJump() => TerraBlind.JevariaCombat.GameMovement.ExtraJumpObserved;

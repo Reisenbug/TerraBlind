@@ -94,13 +94,13 @@ public class NativeAgent : ModSystem
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
+        if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
             && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
             Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status);
         if (!Main.gameMenu && Main.LocalPlayer.active && Main.LocalPlayer.dead)
         {
             bool continuingDuel = PvpDuel.Active;
-            if (continuingDuel) PvpDuel.Tick(Main.LocalPlayer);
             if (!continuingDuel && _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false)
             { Cancel(); AgentChat.Say("倒下了，这个任务先停下。"); }
             return;

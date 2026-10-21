@@ -27,7 +27,8 @@ public static partial class PvpDuel
     static Port.CombatSnapshot requestSnapshot, appliedSnapshot;
     static Port.DodgeIntent intent = Port.DodgeIntent.Idle;
     static Vector2 requestSelf, requestTarget, lastPosition;
-    static int frames, preferredSlot, activeWeapon, choiceAge, nextDecision, lastHp, lastTargetHp, observedType;
+    static int frames, preferredSlot, activeWeapon, choiceAge, lastHp, lastTargetHp, observedType;
+    static bool lastAimClear;
     static string key, strategy, mode, movementReason, attackReason;
     static ulong sequence;
     static float speed, gravity, gravityDelay, range;
@@ -80,7 +81,7 @@ public static partial class PvpDuel
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
         intent = Port.DodgeIntent.Idle; appliedSnapshot = requestSnapshot = null;
-        choiceAge = 999; nextDecision = 0; Decisions = 0; sequence = 0; movementReason = attackReason = "";
+        choiceAge = 999; Decisions = 0; sequence = 0; movementReason = attackReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
         lifetime = new CancellationTokenSource(); waitingForRespawn = false; Target = target; Outcome = "running";
         BeginSession(target);
@@ -194,6 +195,12 @@ public static partial class PvpDuel
 
     public static void Tick(Player self)
     {
+        Update(self);
+        ApplyInputs(self);
+    }
+
+    public static void Update(Player self)
+    {
         if (!Active) return;
         string reason = PlayerCombat.TargetReason(self, Target);
         if (reason == "" && !self.active) reason = "self_inactive";
@@ -218,7 +225,7 @@ public static partial class PvpDuel
         {
             waitingForRespawn = false; Outcome = "running";
             Event("respawn", Outcome);
-            Movement = new Port.GameMovement(); nextDecision = 0; choiceAge = 999;
+            Movement = new Port.GameMovement(); choiceAge = 999;
             activeWeapon = -1; arrows.Clear(); attackReason = "";
             lastHp = self.statLife; lastTargetHp = Main.player[Target].statLife; lastPosition = self.Center;
             NativeAgent.Progress("复活了，继续对战。", "执行 duel_player");
@@ -239,16 +246,16 @@ public static partial class PvpDuel
             try
             {
                 var result = pending.GetAwaiter().GetResult();
-                if (!options.TryGetValue(result.Move, out var selected) || !weapons.ContainsKey(result.WeaponMode))
+                if (!options.TryGetValue(result.Move, out var selected))
                     throw new InvalidOperationException("invalid_choice");
-                bool fresh = requestRevision == Directive.Revision && requestClock.Elapsed.TotalSeconds <= 1.5 && Vector2.Distance(self.Center, requestSelf) < 160
-                    && Vector2.Distance(target.Center, requestTarget) < 240;
+                bool fresh = requestRevision == Directive.Revision;
                 if (fresh)
                 {
                     intent = selected.Intent; appliedSnapshot = requestSnapshot;
-                    mode = result.WeaponMode; choiceAge = 0; Decisions++;
+                    if (weapons.ContainsKey(result.WeaponMode)) mode = result.WeaponMode;
+                    choiceAge = 0; Decisions++;
                 }
-                DiagLog.Write($"[pvp] choice={result.Move} mode={result.WeaponMode} accepted={fresh} ms={requestClock.ElapsedMilliseconds}");
+                DiagLog.Write($"[pvp] choice={result.Move} mode={result.WeaponMode} accepted={fresh} ms={requestClock.ElapsedMilliseconds} self_delta={Vector2.Distance(self.Center, requestSelf):0} target_delta={Vector2.Distance(target.Center, requestTarget):0} attack_available={weapons.ContainsKey(result.WeaponMode)}");
             }
             catch (Exception ex)
             {
@@ -257,27 +264,8 @@ public static partial class PvpDuel
             }
             pending = null;
         }
-        if (!weapons.ContainsKey(mode)) { foreach (string available in weapons.Keys) { mode = available; break; } nextDecision = 0; }
-        int slot = weapons[mode];
-        if (self.selectedItem != slot && self.itemAnimation == 0 && self.itemTime == 0)
-        {
-            self.selectedItem = slot;
-            DiagLog.Write($"[pvp] weapon mode={mode} slot={slot} name={self.HeldItem.Name}");
-        }
-        if (choiceAge++ <= 90 && appliedSnapshot != null)
-        {
-            var result = Movement.Apply(self, intent, appliedSnapshot with
-            { CanDoubleJump = self.AnyExtraJumpUsable(), CanFly = self.wingTime > 0 });
-            if (result.Reason != movementReason)
-            {
-                movementReason = result.Reason;
-                DiagLog.Write($"[pvp] movement={result.Applied} reason={result.Reason} vel={self.velocity} mount={self.mount.Active}");
-            }
-        }
-        else { Movement.Release(self); ClearControls(self); }
-        bool aimClear = self.selectedItem == slot && Attack(self, target);
-        if (self.selectedItem != slot) self.controlUseItem = false;
-        if (pending == null && --nextDecision <= 0)
+        choiceAge++;
+        if (pending == null)
         {
             requestSnapshot = Sensor.CapturePlayer(self, target, ++sequence, intent, choiceAge * 1000 / 60);
             options = new Dictionary<string, Port.DodgeOption>();
@@ -312,7 +300,7 @@ public static partial class PvpDuel
                 ["self_hp"] = self.statLife, ["target_hp"] = target.statLife,
                 ["hp_change"] = self.statLife - lastHp, ["target_hp_change"] = target.statLife - lastTargetHp,
                 ["previous_move"] = intent.ToString(), ["movement_result"] = movementReason,
-                ["moved_pixels"] = Vector2.Distance(self.Center, lastPosition), ["aim_clear"] = aimClear,
+                ["moved_pixels"] = Vector2.Distance(self.Center, lastPosition), ["aim_clear"] = lastAimClear,
                 ["trajectory_observed"] = observedType != 0
             };
             lastHp = self.statLife; lastTargetHp = target.statLife;
@@ -320,7 +308,35 @@ public static partial class PvpDuel
             requestRevision = Directive.Revision;
             latestScene = (JsonObject)scene.DeepClone();
             DiagLog.Write("[pvp] scene " + scene.ToJsonString());
-            nextDecision = 24; requestClock.Restart(); pending = choose(scene, lifetime.Token);
+            requestClock.Restart(); pending = choose(scene, lifetime.Token);
         }
+    }
+
+    public static void ApplyInputs(Player self)
+    {
+        if (!Active || self.dead || waitingForRespawn || !AgentPermissions.Attack || !AgentPermissions.Dodge)
+        { ClearControls(self); return; }
+        var weapons = Weapons(self);
+        if (weapons.Count == 0) { ClearControls(self); return; }
+        if (!weapons.ContainsKey(mode)) foreach (string available in weapons.Keys) { mode = available; break; }
+        int slot = weapons[mode];
+        if (self.selectedItem != slot && self.itemAnimation == 0 && self.itemTime == 0)
+        {
+            self.selectedItem = slot;
+            DiagLog.Write($"[pvp] weapon mode={mode} slot={slot} name={self.HeldItem.Name}");
+        }
+        if (appliedSnapshot != null)
+        {
+            var result = Movement.Apply(self, intent, appliedSnapshot with
+            { CanDoubleJump = self.AnyExtraJumpUsable(), CanFly = self.wingTime > 0 });
+            if (result.Reason != movementReason)
+            {
+                movementReason = result.Reason;
+                DiagLog.Write($"[pvp] movement={result.Applied} reason={result.Reason} vel={self.velocity} mount={self.mount.Active}");
+            }
+        }
+        else { Movement.Release(self); ClearControls(self); }
+        lastAimClear = self.selectedItem == slot && Attack(self, Main.player[Target]);
+        if (self.selectedItem != slot) self.controlUseItem = false;
     }
 }
