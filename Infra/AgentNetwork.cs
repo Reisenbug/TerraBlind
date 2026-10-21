@@ -16,6 +16,14 @@ namespace TerraBlind
 		public static int OwnerPlayer => _owner;
 		static string _lastStatus = "";
 		static uint _lastSent;
+		static bool _awaitingReply;
+		static uint _requestTick;
+
+		static void Log(string text)
+		{
+			DiagLog.Write("[ai-net] " + text);
+			ModContent.GetInstance<TerraBlind>().Logger.Info("[ai-net] " + text);
+		}
 		public static bool CanAutomate => !Main.dedServ
 			&& (Main.netMode == NetmodeID.SinglePlayer || Config.I.AiClient);
 
@@ -36,6 +44,7 @@ namespace TerraBlind
 		{
 			Owners.Clear(); _registered = false; _owner = -1;
 			_lastStatus = ""; _lastSent = 0;
+			_awaitingReply = false;
 		}
 		public static void Disconnect(int player)
 		{
@@ -65,6 +74,12 @@ namespace TerraBlind
 				return;
 			}
 			if (Main.netMode != NetmodeID.MultiplayerClient || !Main.LocalPlayer.active) return;
+			if (_awaitingReply && Main.GameUpdateCount - _requestTick >= 600)
+			{
+				_awaitingReply = false;
+				Log("reply timeout");
+				AgentChat.Display("AI 请求已发出，但10秒内未收到服务器回复。请检查双方日志中的 [ai-net]。");
+			}
 			if (!Config.I.AiClient)
 			{
 				if (_registered)
@@ -77,6 +92,7 @@ namespace TerraBlind
 			}
 			if (!_registered)
 			{
+				Log($"register player={Main.myPlayer}");
 				Packet(Message.Register).Send();
 				_registered = true;
 			}
@@ -91,8 +107,11 @@ namespace TerraBlind
 
 		public static void Request(int bot, string command)
 		{
+			Log($"request player={Main.myPlayer} bot={bot} action={command.Split(' ')[0]}");
 			var packet = Packet(Message.Request);
 			packet.Write(bot); packet.Write(command); packet.Send();
+			_requestTick = Main.GameUpdateCount; _awaitingReply = true;
+			AgentChat.Display(command == "list" ? "正在向服务器查询 AI 玩家……" : "AI 请求已发往服务器。");
 		}
 		static void Execute(int bot, int owner, string command)
 		{
@@ -101,6 +120,7 @@ namespace TerraBlind
 		}
 		static void Reply(int player, string text)
 		{
+			Log($"reply to={player} chars={text.Length}");
 			var packet = Packet(Message.Reply);
 			packet.Write(text); packet.Send(player);
 		}
@@ -121,9 +141,11 @@ namespace TerraBlind
 		public static void Receive(BinaryReader reader, int sender)
 		{
 			var type = (Message)reader.ReadByte();
+			if (type != Message.Result) Log($"receive mode={Main.netMode} sender={sender} type={type}");
 			if (Main.netMode == NetmodeID.Server)
 			{
-				if (sender < 0 || sender >= Main.maxPlayers || !Main.player[sender].active) return;
+				if (sender < 0 || sender >= Main.maxPlayers || !Main.player[sender].active)
+				{ Log($"reject inactive sender={sender}"); return; }
 				if (type == Message.Register)
 				{
 					Owners.TryAdd(sender, -1);
@@ -173,7 +195,11 @@ namespace TerraBlind
 				return;
 			}
 			if (Main.netMode != NetmodeID.MultiplayerClient) return;
-			if (type == Message.Reply) AgentChat.Display(reader.ReadString());
+			if (type == Message.Reply)
+			{
+				_awaitingReply = false;
+				AgentChat.Display(reader.ReadString());
+			}
 			if (type == Message.Execute && Config.I.AiClient)
 			{
 				_owner = reader.ReadInt32();
@@ -230,6 +256,7 @@ namespace TerraBlind
 		public override string Description => "AI 玩家: /ai list 或 /ai <玩家编号> bind|unbind|status|task 指令|start|fight|goto X Y|stop";
 		public override void Action(CommandCaller caller, string input, string[] args)
 		{
+			DiagLog.Write($"[ai-net] command mode={Main.netMode} input={input}");
 			if (Main.netMode != NetmodeID.MultiplayerClient)
 			{ caller.Reply("/ai 用于多人游戏。"); return; }
 			if (args.Length == 1 && args[0] == "list") { AgentNetwork.Request(-1, "list"); return; }

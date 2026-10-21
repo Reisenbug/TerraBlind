@@ -177,6 +177,22 @@ static class RuntimeTests
         int packets = ModPacket.Sent.Count;
         Receive(3, 1, writer => writer.Write("不应转发"));
         Check(ModPacket.Sent.Count == packets, "reply was relayed after owner disconnected");
+        Game.netMode = NetmodeID.MultiplayerClient; Game.dedServ = false; Config.I.AiClient = false;
+        Game.LocalPlayer.active = true;
+        new AiCommand().Action(new CommandCaller(), "/ai list", new[] { "list" });
+        Check(Game.Chat.Last().Contains("查询"), "list command had no immediate acknowledgement");
+        var listPacket = ModPacket.Sent.Last();
+        Game.netMode = NetmodeID.Server; Game.dedServ = true;
+        using (var reader = new BinaryReader(new MemoryStream(listPacket.Data))) AgentNetwork.Receive(reader, 0);
+        var listReply = ModPacket.Sent.Last();
+        Check(listReply.Recipient == 0 && listReply.Data[0] == 4, "server did not reply to list request");
+        Game.netMode = NetmodeID.MultiplayerClient; Game.dedServ = false;
+        using (var reader = new BinaryReader(new MemoryStream(listReply.Data))) AgentNetwork.Receive(reader, 256);
+        int chatCount = Game.Chat.Count;
+        Game.GameUpdateCount += 600; network.PostUpdateEverything();
+        Check(Game.Chat.Count == chatCount, "completed list request reported timeout");
+        AgentNetwork.Request(-1, "list"); Game.GameUpdateCount += 600; network.PostUpdateEverything();
+        Check(Game.Chat.Last().Contains("10秒"), "missing server reply stayed silent");
         Game.netMode = NetmodeID.SinglePlayer; Game.dedServ = false; Config.I.AiClient = false;
         Console.WriteLine("PASS: production packet handlers enforce binding, AI execution, reply splitting/routing and disconnect stop");
     }

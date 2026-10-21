@@ -9,7 +9,7 @@ namespace Terraria
     {
         public static bool dedServ, gameMenu;
         public static string SavePath = "/tmp/terrablind-agent-test-world";
-        public static int netMode, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
+        public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
@@ -72,9 +72,11 @@ namespace Terraria.ModLoader
 {
     public class Mod
     {
+        public TestLogger Logger = new();
         public byte[] GetFileBytes(string path) => File.ReadAllBytes(path);
         public ModPacket GetPacket() => new();
     }
+    public class TestLogger { public void Info(string text) { } }
     public class ModSystem
     {
         public Mod Mod = new();
