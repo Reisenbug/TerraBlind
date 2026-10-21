@@ -66,7 +66,17 @@ class Program
         var window = terrain["tile_windows"][0];
         Check(window["width"].GetValue<int>() == 65 && window["height"].GetValue<int>() == 41, "tile window dimensions drifted");
         Check(window["rows"].AsArray().All(row => row.AsArray().Sum(run => run[0].GetValue<int>()) == 65), "RLE lost tile positions");
-        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=13 real_engine_objects=true gameplay_loop=false");
+        for (int x = 130; x <= 142; x++)
+        {
+            var tile = Game.tile[x, 140]; tile.HasTile = true; tile.TileType = TileID.Dirt;
+        }
+        target.velocity = new Vector2(0, 4);
+        var landing = TerraBlind.PvpTerrain.Landing(target, .4f);
+        Check(landing.HasValue && landing.Value.Point.Y + target.height / 2f == 140 * 16, "falling estimate did not use actual support height");
+        target.position.Y = 140 * 16 - target.height; target.velocity = new Vector2(4, 0);
+        var exit = TerraBlind.PvpTerrain.PlatformExit(target);
+        Check(exit.HasValue && exit.Value.X == 142 * 16 + 8, "platform edge was invented or misplaced");
+        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=15 real_engine_objects=true gameplay_loop=false");
     }
 }
 

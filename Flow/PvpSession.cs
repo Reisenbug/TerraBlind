@@ -57,8 +57,27 @@ public static partial class PvpDuel
     {
         ["captured_tick"] = Main.GameUpdateCount, ["units"] = "pixels; velocity=pixels/game_frame",
         ["self"] = Body(self), ["target"] = Body(target), ["self_mana"] = self.statMana, ["target_mana"] = null,
-        ["history"] = history.ToJson(), ["terrain"] = PvpTerrain.Observe(self, target, detailed)
+        ["history"] = history.ToJson(), ["terrain"] = PvpTerrain.Observe(self, target, detailed),
+        ["inventory_weapons"] = InventoryWeapons(self)
     };
+
+    static JsonArray InventoryWeapons(Player self)
+    {
+        var result = new JsonArray();
+        for (int slot = 0; slot < 50; slot++)
+        {
+            var item = self.inventory[slot];
+            if (item.IsAir || item.damage <= 0 || item.ammo > 0 || item.pick > 0 || item.axe > 0 || item.hammer > 0) continue;
+            result.Add(new JsonObject { ["slot"] = slot, ["type"] = item.type, ["prefix"] = item.prefix,
+                ["name"] = item.Name, ["damage_before_target_defense"] = self.GetWeaponDamage(item),
+                ["hotbar"] = slot < 10, ["allowed"] = Directive?.AllowsWeapon(item.type) ?? true,
+                ["has_ammo"] = item.useAmmo == 0 || self.HasAmmo(item), ["mana_cost_estimate"] = item.mana * self.manaCost,
+                ["use_time"] = item.useTime, ["use_animation"] = item.useAnimation, ["channel"] = item.channel,
+                ["projectile_type"] = item.shoot, ["base_shoot_speed"] = item.shootSpeed,
+                ["trajectory_support"] = item.shoot == 0 ? "contact_reach_estimate" : "simple_trajectory_estimate_not_all_mod_behaviors" });
+        }
+        return result;
+    }
 
     public static JsonObject Report(long afterEvent = 0, bool detailed = false) => new()
     {

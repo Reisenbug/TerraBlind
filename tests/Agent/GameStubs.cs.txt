@@ -39,6 +39,7 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 Center => new(position.X + width / 2f, position.Y + height / 2f);
         public Microsoft.Xna.Framework.Vector2 Bottom => new(Center.X, position.Y + height);
         public bool HasAmmo(Item item) => HasAmmunition;
+        public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
     }
     public class Item
@@ -48,6 +49,8 @@ namespace Terraria
         public int type, prefix, useAmmo;
         public float shootSpeed;
         public int shoot, mana, width = 30, height = 30;
+        public int useTime, useAnimation;
+        public bool channel;
         public bool noMelee;
         public float scale = 1;
         public bool IsAir => stack == 0;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json.Nodes;
@@ -24,11 +25,14 @@ public static partial class PvpDuel
     static readonly Stopwatch requestClock = new();
     static readonly Dictionary<int, (int Identity, Vector2 Velocity, int Samples)> arrows = new();
     static Dictionary<string, Port.DodgeOption> options;
+    static Dictionary<string, (int Slot, int Type, int Prefix)> requestItems;
     static Port.CombatSnapshot requestSnapshot, appliedSnapshot;
     static Port.DodgeIntent intent = Port.DodgeIntent.Idle;
     static Vector2 requestSelf, requestTarget, lastPosition;
     static int frames, preferredSlot, activeWeapon, choiceAge, lastHp, lastTargetHp, observedType;
-    static bool lastAimClear;
+    static bool lastAimClear, fireIntent = true;
+    static string aimKind = "velocity";
+    static int plannedType, plannedPrefix, activePrefix;
     static string key, strategy, mode, movementReason, attackReason;
     static ulong sequence;
     static float speed, gravity, gravityDelay, range;
@@ -50,8 +54,12 @@ public static partial class PvpDuel
             if (item.IsAir || item.damage <= 0 || item.useStyle <= 0 || item.ammo > 0
                 || item.pick > 0 || item.axe > 0 || item.hammer > 0
                 || item.useAmmo > 0 && !self.HasAmmo(item) || item.mana * self.manaCost > self.statMana) continue;
-            if (!item.noMelee) result.TryAdd("melee", slot);
-            if (item.shoot > 0) result.TryAdd("ranged", slot);
+            void Add(string category)
+            {
+                if (!result.TryAdd(category, slot)) result[category + "_" + slot + "_" + item.type + "_" + item.prefix] = slot;
+            }
+            if (!item.noMelee) Add("melee");
+            if (item.shoot > 0) Add("ranged");
         }
         return result;
     }
@@ -77,6 +85,7 @@ public static partial class PvpDuel
         NetMessage.SendData(MessageID.TogglePVP, number: self.whoAmI);
         mode = weapons.ContainsKey("ranged") ? "ranged" : "melee";
         self.selectedItem = weapons[mode]; activeWeapon = -1;
+        aimKind = "velocity"; fireIntent = true; plannedType = self.HeldItem.type; plannedPrefix = self.HeldItem.prefix;
         frames = Math.Clamp(seconds, 1, 120) * 60; range = maxDistance * 16;
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
@@ -143,32 +152,51 @@ public static partial class PvpDuel
     static float MeleeReach(Player self, Player target, Item item)
         => Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f) + target.width / 2f;
 
-    static Vector2? ShotAim(Player self, Player target, Item item)
+    static PvpTactics.ShotSolution? SolveShot(Player self, Player target, Item item, string kind)
     {
         float shotSpeed = item.shootSpeed;
         int shotType = item.shoot;
         if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return null;
-        bool observed = activeWeapon == item.type && observedType != 0;
+        bool observed = activeWeapon == item.type && activePrefix == item.prefix && observedType != 0;
         if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults)) shotSpeed *= defaults.extraUpdates + 1;
-        V? aim = PvpTactics.Aim(N(self.Center), N(target.Center), N(target.velocity), observed ? speed : shotSpeed,
-            observed ? gravity : 0, (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), observed ? gravityDelay : 0);
-        return aim.HasValue ? new Vector2(aim.Value.X, aim.Value.Y)
-            : !observed && Clear(self.Center, target.Center) ? target.Center : null;
+        Vector2 point = target.Center, velocity = target.velocity;
+        if (kind == "landing")
+        {
+            var landing = PvpTerrain.Landing(target, history.FallingAcceleration());
+            if (!landing.HasValue) return null;
+            point = landing.Value.Point; velocity = Vector2.Zero;
+        }
+        if (kind == "exit")
+        {
+            var exit = PvpTerrain.PlatformExit(target);
+            if (!exit.HasValue) return null;
+            point = exit.Value; velocity = Vector2.Zero;
+        }
+        return PvpTactics.Solve(N(self.Center), N(point), N(velocity), observed ? speed : shotSpeed,
+            observed ? gravity : 0, (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), observed ? gravityDelay : 0, kind);
     }
+
+    static Vector2? ShotAim(Player self, Player target, Item item, string kind = null)
+    {
+        var aim = SolveShot(self, target, item, kind ?? aimKind);
+        return aim.HasValue ? new Vector2(aim.Value.Point.X, aim.Value.Point.Y) : null;
+    }
+
+    static bool ContactMode(string value) => value.StartsWith("melee", StringComparison.Ordinal);
 
     static bool Attack(Player self, Player target)
     {
         self.controlUseItem = false;
         var item = self.HeldItem;
-        if (activeWeapon != item.type)
+        if (activeWeapon != item.type || activePrefix != item.prefix)
         {
-            activeWeapon = item.type; speed = item.shootSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
+            activeWeapon = item.type; activePrefix = item.prefix; speed = item.shootSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
             foreach (var projectile in Main.projectile)
                 if (projectile.active) arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, int.MaxValue);
         }
         Vector2 point = target.Center;
         bool clear;
-        if (mode == "melee")
+        if (ContactMode(mode))
         {
             clear = Vector2.Distance(self.Center, target.Center) <= MeleeReach(self, target, item) && Clear(self.Center, target.Center);
         }
@@ -181,9 +209,11 @@ public static partial class PvpDuel
         }
         if (!self.controlHook) Cursor.AimPx(point.X, point.Y);
         self.direction = target.Center.X < self.Center.X ? -1 : 1;
-        self.controlUseItem = clear && !self.controlHook;
+        self.controlUseItem = clear && !self.controlHook && fireIntent && item.type == plannedType && item.prefix == plannedPrefix;
         if (self.controlUseItem && self.itemAnimation == 0) self.releaseUseItem = true;
-        string reason = self.controlHook ? "grappling" : clear ? "attacking" : mode == "melee" ? "melee_out_of_reach_or_blocked" : "no_clear_shot";
+        string reason = self.controlHook ? "grappling" : !fireIntent ? "plan_reposition_without_firing"
+            : item.type != plannedType || item.prefix != plannedPrefix ? "weapon_reference_changed"
+            : clear ? "attacking" : ContactMode(mode) ? "melee_out_of_reach_or_blocked" : "no_clear_shot";
         if (reason != attackReason)
         {
             attackReason = reason;
@@ -253,7 +283,15 @@ public static partial class PvpDuel
                 if (fresh)
                 {
                     intent = selected.Intent; appliedSnapshot = requestSnapshot;
-                    if (weapons.ContainsKey(result.WeaponMode)) mode = result.WeaponMode;
+                    fireIntent = result.Fire && requestItems.TryGetValue(result.WeaponMode, out var itemRef)
+                        && weapons.TryGetValue(result.WeaponMode, out int currentSlot) && currentSlot == itemRef.Slot
+                        && self.inventory[currentSlot].type == itemRef.Type && self.inventory[currentSlot].prefix == itemRef.Prefix;
+                    if (fireIntent)
+                    {
+                        mode = result.WeaponMode; plannedType = self.inventory[weapons[mode]].type;
+                        plannedPrefix = self.inventory[weapons[mode]].prefix;
+                    }
+                    aimKind = result.Aim;
                     choiceAge = 0; Decisions++;
                 }
                 DiagLog.Write($"[pvp] choice={result.Move} mode={result.WeaponMode} accepted={fresh} ms={requestClock.ElapsedMilliseconds} self_delta={Vector2.Distance(self.Center, requestSelf):0} target_delta={Vector2.Distance(target.Center, requestTarget):0} attack_available={weapons.ContainsKey(result.WeaponMode)}");
@@ -277,16 +315,40 @@ public static partial class PvpDuel
                 options[id] = option; criteria[id] = Port.DecisionFacts.Describe(option, requestSnapshot, true);
             }
             var modes = new JsonObject();
+            requestItems = new();
             foreach (var pair in weapons)
             {
                 var item = self.inventory[pair.Value];
-                modes[pair.Key] = new JsonObject { ["slot"] = pair.Value, ["name"] = item.Name, ["damage"] = item.damage,
+                requestItems[pair.Key] = (pair.Value, item.type, item.prefix);
+                var aimChoices = new JsonObject();
+                bool contact = ContactMode(pair.Key);
+                if (contact)
+                    aimChoices["body"] = new JsonObject { ["clear"] = Vector2.Distance(self.Center, target.Center) <= MeleeReach(self, target, item) && Clear(self.Center, target.Center),
+                        ["flight_frames"] = 0, ["assumption"] = "Current contact reach only; pursuing does not require selecting this weapon." };
+                else
+                {
+                    var aimKinds = new List<string> { "body", "velocity" };
+                    if (history.ToJson()["horizontal_reversals"]?.GetValue<int>() > 0) aimKinds.Add("brake");
+                    if (PvpTerrain.Landing(target, history.FallingAcceleration()).HasValue) aimKinds.Add("landing");
+                    if (PvpTerrain.PlatformExit(target).HasValue) aimKinds.Add("exit");
+                    foreach (string kind in aimKinds)
+                    {
+                        var solution = SolveShot(self, target, item, kind);
+                        aimChoices[kind] = new JsonObject { ["clear"] = solution.HasValue, ["flight_frames"] = solution?.FlightFrames,
+                            ["assumption"] = kind switch { "body" => "Target stays at current position.",
+                                "brake" => "Target stops after 6 frames; hypothetical reversal coverage.",
+                                "landing" => "Extrapolate measured falling acceleration to sampled support within 30 frames; no future jump/dash/mod physics is known.",
+                                "exit" => "Cover a real nearby platform edge in the current travel direction; target may choose not to cross it.",
+                                _ => "Target continues current velocity; a dash reversal can defeat this." },
+                            ["trajectory_source"] = activeWeapon == item.type && observedType != 0 ? "observed_arrow_model" : "estimated_weapon_ammo_speed" };
+                    }
+                }
+                modes[pair.Key] = new JsonObject { ["slot"] = pair.Value, ["name"] = item.Name, ["damage"] = self.GetWeaponDamage(item),
+                    ["type"] = item.type, ["prefix"] = item.prefix, ["aims"] = aimChoices,
                     ["shoot_speed"] = item.shootSpeed, ["projectile_type"] = item.shoot,
-                    ["can_attack_now"] = pair.Key == "melee"
-                        ? Vector2.Distance(self.Center, target.Center) <= MeleeReach(self, target, item) && Clear(self.Center, target.Center)
-                        : ShotAim(self, target, item).HasValue,
-                    ["contact_reach_pixels"] = pair.Key == "melee" ? MeleeReach(self, target, item) : (float?)null,
-                    ["description"] = pair.Key == "melee" ? "接触近战，需要靠近并直接够到目标。" : "发射武器，需射界；适合保持距离或封锁路线。" };
+                    ["can_attack_now"] = aimChoices.Any(aim => aim.Value["clear"]?.GetValue<bool>() == true),
+                    ["contact_reach_pixels"] = contact ? MeleeReach(self, target, item) : (float?)null,
+                    ["description"] = contact ? "接触近战，需要靠近并直接够到目标。" : "发射武器，需射界；追近/后退/跳跃都可以同时射击。" };
             }
             var movementState = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "")).AsObject();
             movementState.Remove("threats");
@@ -295,6 +357,7 @@ public static partial class PvpDuel
             {
                 ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
                 ["directive"] = Directive.ToJson(), ["session"] = Session,
+                ["candidate_rotation"] = sequence,
                 ["perception"] = Perception(self, target),
                 ["movement_state"] = movementState,
                 ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,

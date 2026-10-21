@@ -7,6 +7,31 @@ namespace TerraBlind;
 
 public static class PvpTerrain
 {
+    public static (Vector2 Point, float Frames)? Landing(Player target, float? acceleration)
+    {
+        if (acceleration == null || target.velocity.Y <= 0) return null;
+        Vector2 point = target.Center, velocity = target.velocity;
+        for (int frame = 1; frame <= 30; frame++)
+        {
+            velocity.Y += acceleration.Value;
+            point += velocity;
+            int x = (int)(point.X / 16), y = (int)((point.Y + target.height / 2f) / 16);
+            if (Support(x, y)) return (new Vector2(point.X, y * 16 - target.height / 2f), frame);
+        }
+        return null;
+    }
+
+    public static Vector2? PlatformExit(Player target)
+    {
+        if (Math.Abs(target.velocity.X) < .5f) return null;
+        int x = (int)(target.Center.X / 16), y = (int)(target.Bottom.Y / 16), direction = Math.Sign(target.velocity.X);
+        if (!Support(x, y) && !Support(x, ++y)) return null;
+        for (int step = 1; step <= 12; step++)
+            if (!Support(x + step * direction, y))
+                return new Vector2((x + (step - 1) * direction) * 16 + 8, y * 16 - target.height / 2f);
+        return null;
+    }
+
     static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
     static bool Support(int x, int y)
     {

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Numerics;
@@ -24,6 +25,10 @@ static class PvpTests
         Check(delayed.HasValue && delayed.Value.Y > arc.Value.Y, "delayed gravity treated as immediate drop");
         var moving = PvpTactics.Aim(origin, target, new Vector2(0, -2), 10, 0, (_, _) => true);
         Check(moving.HasValue && moving.Value.Y < -30, "moving target was not led");
+        var bodyAim = PvpTactics.Solve(origin, target, new Vector2(0, -2), 10, 0, (_, _) => true, kind: "body");
+        var velocityAim = PvpTactics.Solve(origin, target, new Vector2(0, -2), 10, 0, (_, _) => true);
+        Check(bodyAim.HasValue && velocityAim.HasValue && Math.Abs(bodyAim.Value.Point.Y) < .01f
+            && velocityAim.Value.Point.Y < -60 && velocityAim.Value.FlightFrames > 20, "aim intents collapsed or prediction still stops at 20 frames");
         Check(PvpTactics.Aim(origin, target, Vector2.Zero, 10, 0, (_, _) => false) == null, "blocked projectile path was accepted");
         Check(PvpTactics.Aim(origin, target, Vector2.Zero, 0, 0, (_, _) => true) == null, "invalid projectile speed accepted");
         Console.WriteLine("PASS: PvP aiming handles straight/curved/delayed-drop trajectories, target lead and obstruction");
@@ -34,7 +39,8 @@ static class PvpTests
             ["weapon_modes"] = new JsonObject { ["ranged"] = "bow" }, ["strategy"] = "保持距离" };
         var selected = await PvpTactics.Choose(http, "fake-key", scene, default);
         Check(selected.Move == "retreat" && selected.WeaponMode == "ranged" && handler.Request["state"]["strategy"].ToString() == "保持距离", "strategy or weapon judgment missing");
-        Check(handler.Request["questions"]["move"]["criteria"].AsObject().Count == 2, "blocked choices were offered to Jev");
+        Check(handler.Request["state"]["plans"].AsObject().All(pair => pair.Value["move"].ToString() is "hold" or "retreat"),
+            "blocked choices were offered to Jev");
         handler.Choice = "approach";
         try { await PvpTactics.Choose(http, "fake-key", scene, default); throw new Exception("unlisted move accepted"); }
         catch (InvalidOperationException) { }
@@ -134,6 +140,18 @@ static class PvpTests
             Check(self.selectedItem == 0 && self.controlUseItem, "leaving melee range kept chasing with an idle sword");
             var dyingDecision = new TaskCompletionSource<PvpTactics.Decision>();
             PvpDuel.Stop();
+            self.inventory[2] = new Terraria.Item { type = 101, stack = 1, damage = 1, useStyle = 1,
+                noMelee = true, shoot = 1, shootSpeed = 20, Name = "fast low-damage weapon" };
+            Check(Start((state, _) => Task.FromResult(new PvpTactics.Decision("m1",
+                state["weapon_modes"].AsObject().First(pair => pair.Value["type"].GetValue<int>() == 101).Key, "body"))), "multi-weapon duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(self.selectedItem == 2 && self.controlRight && self.controlUseItem,
+                "Jev could not select a specific lower-damage weapon while approaching");
+            PvpDuel.Stop(); self.inventory[2].stack = 0;
+            Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "", "body", false))), "no-fire plan duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(self.controlRight && !self.controlUseItem, "reposition-only plan either fired or stopped moving");
+            PvpDuel.Stop();
             Check(Start((_, _) => dyingDecision.Task), "respawn duel failed");
             PvpDuel.Tick(self); self.dead = true;
             for (int tick = 0; tick < 2000; tick++) PvpDuel.Tick(self);
@@ -189,9 +207,10 @@ static class PvpTests
         {
             Check(request.Headers.Authorization?.Parameter == "fake-key", "Jev authentication missing");
             Request = JsonNode.Parse(await request.Content.ReadAsStringAsync(token)).AsObject();
+            string selected = Request["state"]["plans"].AsObject().FirstOrDefault(pair => pair.Value["move"].ToString() == Choice
+                && pair.Value["weapon"].ToString() == Mode).Key ?? "invalid";
             return new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent(new JsonObject { ["answers"] = new JsonObject { ["move"] = new JsonObject { ["choice"] = Choice },
-                ["weapon"] = new JsonObject { ["choice"] = Mode } } }.ToJsonString()) };
+            { Content = new StringContent(new JsonObject { ["answers"] = new JsonObject { ["plan"] = new JsonObject { ["choice"] = selected } } }.ToJsonString()) };
         }
     }
 

@@ -68,4 +68,14 @@ public sealed class PvpHistory
                     ["target_vx"] = pair.sample.Velocity.X, ["target_vy"] = pair.sample.Velocity.Y }).ToArray())
         };
     }
+
+    public float? FallingAcceleration()
+    {
+        var recent = samples.TakeLast(4).ToArray();
+        if (recent.Length < 4 || recent.Any(sample => sample.Velocity.Y <= 0)) return null;
+        var acceleration = recent.Zip(recent.Skip(1), (a, b) => b.Tick > a.Tick
+            ? (b.Velocity.Y - a.Velocity.Y) / (b.Tick - a.Tick) : 0).ToArray();
+        float average = acceleration.Average();
+        return average > .01f && acceleration.All(value => Math.Abs(value - average) < .05f) ? average : null;
+    }
 }
