@@ -1,0 +1,79 @@
+extern alias engine;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.Xna.Framework;
+using ReLogic.Graphics;
+using TerraBlind;
+
+class Program
+{
+    static void Main()
+    {
+        var font = Terraria.GameContent.FontAssets.MouseText.Value;
+        foreach (char c in "AI[1] second_R 所有者=-1正在查询服务器。中文长消息尾行 alpha beta\n".Distinct())
+            font.SpriteCharacters[c] = new DynamicSpriteFont.SpriteCharacterData(null, new Rectangle(0, 0, 10, 16), default, new Vector3(0, 10, 0));
+        engine::Terraria.Utils.WordwrapString("AI[1]", font, 700, 10, out int index);
+        if (index != 0) throw new Exception("Unexpected installed engine wrapping contract");
+        foreach (string text in new[] { "AI[1] second_R 所有者=-1", "正在查询服务器。", "alpha\nbeta", string.Concat(Enumerable.Repeat("中文长消息", 40)) + "尾行" })
+        {
+            Terraria.Main.Chat.Clear();
+            AgentChat.Display(text);
+            string actual = string.Concat(Terraria.Main.Chat).Replace(" ", "").Replace("\n", "").Replace("-", "");
+            string expected = text.Replace(" ", "").Replace("\n", "").Replace("-", "");
+            if (Terraria.Main.Chat.Count == 0 || actual != expected) throw new Exception("Chat text lost: " + text);
+            Console.WriteLine($"CHAT_CHECK chars={text.Length} displayed_lines={Terraria.Main.Chat.Count}");
+        }
+        Console.WriteLine("CHAT_CHECKS_COMPLETE checks=4 real_engine_wrap=true renderer_stub=true");
+    }
+}
+
+namespace Terraria
+{
+    public static class Main
+    {
+        public static int screenWidth = 1280;
+        public static float UIScale = 1;
+        public static readonly List<string> Chat = new();
+        public static void NewText(string text, byte r, byte g, byte b) => Chat.Add(text);
+    }
+    public static class Utils
+    {
+        public static string[] WordwrapString(string text, DynamicSpriteFont font, int width, int maxLines, out int count)
+            => engine::Terraria.Utils.WordwrapString(text, font, width, maxLines, out count);
+    }
+}
+namespace Terraria.GameContent
+{
+    public static class FontAssets
+    {
+        public static readonly Font MouseText = new();
+        public class Font { public DynamicSpriteFont Value = new(0, 16, '?'); }
+    }
+}
+namespace Terraria.ModLoader
+{
+    public class ModSystem { public virtual void PostUpdateEverything() { } public virtual void OnWorldUnload() { } }
+    public enum CommandType { Chat }
+    public class CommandCaller { public void Reply(string text) { } }
+    public abstract class ModCommand
+    {
+        public abstract CommandType Type { get; }
+        public abstract string Command { get; }
+        public abstract string Description { get; }
+        public abstract string Usage { get; }
+        public abstract void Action(CommandCaller caller, string input, string[] args);
+    }
+}
+namespace TerraBlind
+{
+    public class Config { public static Config I = new(); public bool AgentEnabled; }
+    public static class NativeAgent { public static void Submit(string text) { } }
+    public static class DiagLog { public static void Write(string text) { } }
+    public static class AgentNetwork { public static bool RelayAgentReply(string text) => false; }
+    public static class HttpServerSystem
+    {
+        public static string JsonEscPublic(string text) => text;
+        public static void PushEvent(string type, string text) { }
+    }
+}

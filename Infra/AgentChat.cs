@@ -37,8 +37,9 @@ namespace TerraBlind
 		public static void Display(string text, byte r = 255, byte g = 255, byte b = 255)
 		{
 			int width = System.Math.Max(100, System.Math.Min(700, (int)(Main.screenWidth / Main.UIScale) - 40));
-			var lines = Utils.WordwrapString(text, FontAssets.MouseText.Value, width, text.Length + 1, out int count);
-			for (int i = 0; i < count; i++) Main.NewText(lines[i], r, g, b);
+			var lines = Utils.WordwrapString(text, FontAssets.MouseText.Value, width, text.Length + 1, out _);
+			foreach (string line in lines)
+				if (line != null) Main.NewText(line, r, g, b);
 		}
 
 		public override void PostUpdateEverything()

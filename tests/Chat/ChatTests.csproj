@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-chat-tests/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-chat-tests/bin/</OutputPath>
+    <TmlPath>$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader</TmlPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Infra/AgentChat.cs" />
+    <Compile Include="Program.cs.txt" />
+    <Reference Include="tModLoader" Aliases="engine"><HintPath>$(TmlPath)/tModLoader.dll</HintPath></Reference>
+    <Reference Include="ReLogic"><HintPath>$(TmlPath)/Libraries/ReLogic/1.0.0/ReLogic.dll</HintPath></Reference>
+    <Reference Include="FNA"><HintPath>$(TmlPath)/Libraries/FNA/1.0.0/FNA.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
