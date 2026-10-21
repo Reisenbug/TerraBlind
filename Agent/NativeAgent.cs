@@ -24,6 +24,7 @@ public class NativeAgent : ModSystem
     string _system;
     DateTime _lastFeedback;
     JsonArray _schemas;
+    readonly ConcurrentQueue<string> _combatMessages = new();
     public static string Status { get; private set; } = "idle";
 
     public override void Load()
@@ -50,6 +51,12 @@ public class NativeAgent : ModSystem
             self._answer.TrySetResult(text); self._answer = null;
             Status = "running"; return;
         }
+        if (PvpDuel.Active && self._running?.IsCompleted == false)
+        {
+            self._combatMessages.Enqueue(text);
+            Progress("收到，下一轮战况判断会处理这条要求；停止请直接说 stop。", "战斗指令已排队");
+            return;
+        }
         self.Cancel();
         self._pending = text;
         Status = "queued";
@@ -69,7 +76,8 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
-        if (stopActions) AgentTools.Stop();
+        if (stopActions || PvpDuel.Active) AgentTools.Stop();
+        while (_combatMessages.TryDequeue(out _)) { }
         _answer?.TrySetCanceled(); _answer = null;
         Status = "idle";
     }
@@ -125,10 +133,20 @@ public class NativeAgent : ModSystem
             {
                 string state = await AgentTools.State(token);
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
-                if (useCodex)
-                    await codex.RunAsync(goal + "\n现状：" + state, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
-                else
-                    await _conversation.RunAsync(goal + "\n现状：" + state, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
+                string input = goal + "\n现状：" + state;
+                while (true)
+                {
+                    if (useCodex)
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
+                    else
+                        await _conversation.RunAsync(input, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
+                    var watch = await OnMain(() => PvpDuel.Active ? new JsonObject { ["session"] = PvpDuel.Session,
+                        ["after_event"] = PvpDuel.EventSequence, ["wait_seconds"] = 3d } : null, token);
+                    if (watch == null) break;
+                    var report = await AgentTools.ObserveCombat(watch, token);
+                    input = "原目标：" + goal + "\n持续战斗复盘，角色仍由 Jev 控制。检查效果，必要时更新 instruction、武器限制或操作，任务结束才停止。\n战况：" + report.ToJsonString();
+                    while (_combatMessages.TryDequeue(out string message)) input += "\n玩家补充：" + message;
+                }
                 await OnMain(() => { Status = "idle"; return true; }, token);
             }
             catch (OperationCanceledException) { }

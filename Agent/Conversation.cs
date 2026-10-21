@@ -14,7 +14,7 @@ public sealed class AgentConversation
 {
     readonly HttpClient _http;
     readonly List<JsonObject> _history = new();
-    static readonly HashSet<string> Bulky = new() { "get_state", "find_tiles", "wiki_page", "item_info" };
+    static readonly HashSet<string> Bulky = new() { "get_state", "find_tiles", "wiki_page", "item_info", "combat_observe", "combat_start", "duel_player", "combat_update" };
 
     public AgentConversation(HttpClient http) => _http = http;
 
@@ -82,7 +82,7 @@ public sealed class AgentConversation
                     _history.Add(ToolResult(id, result));
                 }
             }
-            say("这个任务已经执行了 40 轮，我先停下。需要的话叫我继续。");
+            say("本轮已执行 40 次判断，将返回宿主检查任务状态。");
         }
         finally
         {

@@ -241,6 +241,14 @@ namespace TerraBlind
 				case "task":
 					NativeAgent.Submit(command.Length > 5 ? command.Substring(5) : "");
 					return "指令已交给内置 agent。";
+				case "rules":
+					try
+					{
+						var patch = System.Text.Json.Nodes.JsonNode.Parse(command.Substring(5).Trim()).AsObject();
+						patch["session"] = PvpDuel.Session;
+						return PvpDuel.UpdateDirective(patch, true).ToJsonString();
+					}
+					catch (Exception ex) { return "rules 参数错误：" + ex.Message; }
 				case "stop":
 					NativeAgent.Stop();
 					PlayerCombat.Stop();

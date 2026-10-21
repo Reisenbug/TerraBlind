@@ -57,6 +57,9 @@ public static class PvpTactics
                 ["instructions"] = "Terraria PvP，选择此刻实际用于攻击的武器，不是进入持续近战追击或远程状态。优先选择 can_attack_now=true 的模式；近战够不到而远程可打时，继续远程消耗，进入 contact_reach_pixels 再考虑切近战。strategy 说近距离用剑，并不等于隔几百像素也拿剑空追。若都暂时打不到，根据地形和 strategy 选择准备使用的武器。不要只比较面板伤害。每轮根据实际距离重新判断，不因 current_mode 是 melee 就延续近战。只选择提供的模式。"
             } }
         };
+        foreach (var question in body["questions"].AsObject())
+            question.Value["instructions"] = question.Value["instructions"].ToString()
+                + " Follow directive.player_goal and directive.instructions (general and the relevant section). Player constraints override Agent preferences. Movement toward an opponent may be combined with ranged fire; closing distance never requires holding a melee weapon.";
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.typesafe.ai/v1/systemone");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
         request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");

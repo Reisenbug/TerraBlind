@@ -114,6 +114,51 @@ static class CodexTests
         }
         finally { native.Unload(); Config.I.AgentUseCodex = false; Config.I.AgentApiKey = "test-key"; }
         Console.WriteLine("PASS: NativeAgent routes through Codex without API key and closes connection on world unload");
+        native = new NativeAgent(); hosted = new Server();
+        var self = Terraria.Main.LocalPlayer; var opponent = Terraria.Main.player[1];
+        self.dead = opponent.dead = false; self.active = opponent.active = self.hostile = opponent.hostile = true;
+        self.team = opponent.team = 0;
+        self.inventory[0] = new Terraria.Item { type = 99, stack = 1, damage = 20, useStyle = 1, noMelee = true, shoot = 1, shootSpeed = 10 };
+        Config.I.AgentUseCodex = Config.I.AiClient = true;
+        Terraria.Main.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => hosted.Connect()));
+        hosted.AfterTool = count =>
+        {
+            _ = NativeAgent.OnMain(() =>
+            {
+                if (count == 1)
+                {
+                    if (!PvpDuel.Start(1, 30, 0, 600, "持续交战", out string why,
+                        (_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged")))) throw new Exception(why);
+                }
+                else PvpDuel.Stop();
+                return true;
+            }, default);
+        };
+        try
+        {
+            NativeAgent.Submit("持续交战并复盘");
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (hosted.ToolResponses.Count < 2 || NativeAgent.Status != "idle")
+            {
+                Check(DateTime.UtcNow < deadline, "supervised combat timeout status=" + NativeAgent.Status + " responses=" + hosted.ToolResponses.Count
+                    + " active=" + PvpDuel.Active + " outcome=" + PvpDuel.Outcome + " messages=" + string.Join(";", AgentChat.Messages.TakeLast(5)));
+                native.PostUpdateEverything();
+                Terraria.Main.GameUpdateCount++;
+                if (PvpDuel.Active) PvpDuel.Tick(self);
+                await Task.Delay(5);
+            }
+            Check(hosted.Threads == 1 && !PvpDuel.Active, "combat supervision created a second Codex thread or ignored stop");
+        }
+        finally
+        {
+            native.OnWorldUnload(); native.Unload();
+            Config.I.AgentUseCodex = Config.I.AiClient = false;
+            Terraria.Main.netMode = Terraria.ID.NetmodeID.SinglePlayer;
+        }
+        Console.WriteLine("PASS: NativeAgent resumes combat review on the same Codex thread after a final response, then stops");
     }
 
     public static async Task Smoke()
@@ -163,6 +208,7 @@ static class CodexTests
         int _turn;
         public bool Stopped, LoggedIn = true, FailTurn;
         public string ToolName = "get_state";
+        public Action<int> AfterTool;
         public JsonObject ThreadArgs;
         public readonly List<JsonObject> ToolResponses = new();
         public void Drop() => _input.End();
@@ -193,6 +239,7 @@ static class CodexTests
             else if (method == null)
             {
                 ToolResponses.Add(message["result"].AsObject());
+                AfterTool?.Invoke(ToolResponses.Count);
                 var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
                 { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };

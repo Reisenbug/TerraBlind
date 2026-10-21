@@ -29,7 +29,7 @@ public sealed class PvpDirective
 
     public JsonObject Update(JsonObject patch, bool fromPlayer = false)
     {
-        if (!fromPlayer && patch["expected_revision"]?.GetValue<long>() != Revision)
+        if (!fromPlayer && (!long.TryParse(patch["expected_revision"]?.ToString(), out long expected) || expected != Revision))
             return new JsonObject { ["error"] = "revision_conflict", ["revision"] = Revision };
         try
         {

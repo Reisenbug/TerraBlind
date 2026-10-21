@@ -86,7 +86,8 @@ static class PvpTests
             Check(observed["trajectory_observed"].GetValue<bool>() && observed["movement_state"]["incoming_projectiles"].AsArray().Count == 1,
                 "own arrow observation or enemy friendly projectile detection failed");
             self.HasAmmunition = false; PvpDuel.Tick(self);
-            Check(!PvpDuel.Active && PvpDuel.Outcome == "no_usable_weapon_in_hotbar", "duel did not stop without ammunition");
+            Check(PvpDuel.Active && !self.controlUseItem && PvpDuel.Report()["events"].ToJsonString().Contains("no_usable_weapon"),
+                "missing ammunition was not reported to the supervising Agent");
             self.HasAmmunition = true;
             Check(Start((_, _) => Task.FromException<PvpTactics.Decision>(new HttpRequestException("fake failure"))), "failure duel start failed");
             PvpDuel.Tick(self); PvpDuel.Tick(self);
@@ -146,6 +147,19 @@ static class PvpTests
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "stop while dead duel failed");
             self.dead = true; PvpDuel.Tick(self); AgentTools.Stop(); self.dead = false;
             Check(!PvpDuel.Active, "manual stop failed while waiting for respawn");
+            var stale = new TaskCompletionSource<PvpTactics.Decision>();
+            JsonObject directiveScene = null;
+            Check(Start((state, _) => { directiveScene = state; return stale.Task; }), "directive duel failed");
+            PvpDuel.Tick(self);
+            long session = PvpDuel.Session;
+            var update = PvpDuel.UpdateDirective(new JsonObject { ["session"] = session, ["expected_revision"] = 0,
+                ["instructions"] = new JsonObject { ["aim"] = "封落点" },
+                ["constraints"] = new JsonObject { ["denied_types"] = new JsonArray(99, 100) } });
+            Check(update["ok"] != null && !self.controlUseItem && PvpDuel.Active, "restriction update restarted duel or allowed forbidden input");
+            stale.SetResult(new("m1", "ranged")); PvpDuel.Tick(self);
+            Check(PvpDuel.Decisions == 0 && !self.controlUseItem, "old decision survived instruction update");
+            Check(PvpDuel.Report()["directive"]["instructions"]["aim"].ToString() == "封落点", "report omitted active instruction");
+            PvpDuel.Stop();
         }
         finally
         {

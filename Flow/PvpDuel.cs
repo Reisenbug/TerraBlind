@@ -13,7 +13,7 @@ using V = System.Numerics.Vector2;
 
 namespace TerraBlind;
 
-public static class PvpDuel
+public static partial class PvpDuel
 {
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
     static readonly Port.GameSensor Sensor = new();
@@ -45,6 +45,7 @@ public static class PvpDuel
         {
             int slot = (preferredSlot + index) % 10;
             var item = self.inventory[slot];
+            if (Directive != null && !Directive.AllowsWeapon(item.type)) continue;
             if (item.IsAir || item.damage <= 0 || item.useStyle <= 0 || item.ammo > 0
                 || item.pick > 0 || item.axe > 0 || item.hammer > 0
                 || item.useAmmo > 0 && !self.HasAmmo(item) || item.mana * self.manaCost > self.statMana) continue;
@@ -58,6 +59,7 @@ public static class PvpDuel
         Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> decide = null)
     {
         Stop();
+        Directive = new PvpDirective(instructions);
         var self = Main.LocalPlayer;
         reason = PlayerCombat.TargetReason(self, target);
         if (reason == "" && (!self.active || self.dead)) reason = "self_dead";
@@ -81,6 +83,7 @@ public static class PvpDuel
         choiceAge = 999; nextDecision = 0; Decisions = 0; sequence = 0; movementReason = attackReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
         lifetime = new CancellationTokenSource(); waitingForRespawn = false; Target = target; Outcome = "running";
+        BeginSession(target);
         DiagLog.Write($"[pvp] start target={target} preferred_slot={preferredSlot} seconds={seconds} strategy={strategy}");
         return true;
     }
@@ -97,6 +100,7 @@ public static class PvpDuel
         {
             Movement.Release(Main.LocalPlayer); ClearControls(Main.LocalPlayer);
             Outcome = outcome;
+            Event("stopped", outcome);
             DiagLog.Write($"[pvp] stop outcome={outcome} decisions={Decisions}");
         }
         Target = -1; waitingForRespawn = false;
@@ -182,6 +186,7 @@ public static class PvpDuel
         if (reason != attackReason)
         {
             attackReason = reason;
+            Event("attack_state", reason);
             DiagLog.Write($"[pvp] attack={reason} mode={mode} weapon={item.Name} distance={Vector2.Distance(self.Center, target.Center):0} animation={self.itemAnimation}");
         }
         return clear;
@@ -203,6 +208,7 @@ public static class PvpDuel
                 if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
                 pending = null; appliedSnapshot = null; intent = Port.DodgeIntent.Idle;
                 waitingForRespawn = true; Outcome = "waiting_for_respawn";
+                Event("death", Outcome);
                 NativeAgent.Progress("倒下了，复活后继续这轮对战。", "等待复活");
                 DiagLog.Write($"[pvp] paused target={Target} remaining_frames={frames}");
             }
@@ -211,6 +217,7 @@ public static class PvpDuel
         if (waitingForRespawn)
         {
             waitingForRespawn = false; Outcome = "running";
+            Event("respawn", Outcome);
             Movement = new Port.GameMovement(); nextDecision = 0; choiceAge = 999;
             activeWeapon = -1; arrows.Clear(); attackReason = "";
             lastHp = self.statLife; lastTargetHp = Main.player[Target].statLife; lastPosition = self.Center;
@@ -221,7 +228,12 @@ public static class PvpDuel
         var target = Main.player[Target];
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
         var weapons = Weapons(self);
-        if (weapons.Count == 0) { Stop("no_usable_weapon_in_hotbar"); return; }
+        if (weapons.Count == 0)
+        {
+            Movement.Release(self); ClearControls(self);
+            Event("no_usable_weapon", "Check restrictions, ammunition and mana.");
+            return;
+        }
         if (pending?.IsCompleted == true)
         {
             try
@@ -229,7 +241,7 @@ public static class PvpDuel
                 var result = pending.GetAwaiter().GetResult();
                 if (!options.TryGetValue(result.Move, out var selected) || !weapons.ContainsKey(result.WeaponMode))
                     throw new InvalidOperationException("invalid_choice");
-                bool fresh = requestClock.Elapsed.TotalSeconds <= 1.5 && Vector2.Distance(self.Center, requestSelf) < 160
+                bool fresh = requestRevision == Directive.Revision && requestClock.Elapsed.TotalSeconds <= 1.5 && Vector2.Distance(self.Center, requestSelf) < 160
                     && Vector2.Distance(target.Center, requestTarget) < 240;
                 if (fresh)
                 {
@@ -293,6 +305,7 @@ public static class PvpDuel
             var scene = new JsonObject
             {
                 ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
+                ["directive"] = Directive.ToJson(), ["session"] = Session,
                 ["movement_state"] = movementState,
                 ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,
                 ["target_vx"] = target.velocity.X, ["target_vy"] = target.velocity.Y,
@@ -304,6 +317,8 @@ public static class PvpDuel
             };
             lastHp = self.statLife; lastTargetHp = target.statLife;
             lastPosition = requestSelf = self.Center; requestTarget = target.Center;
+            requestRevision = Directive.Revision;
+            latestScene = (JsonObject)scene.DeepClone();
             DiagLog.Write("[pvp] scene " + scene.ToJsonString());
             nextDecision = 24; requestClock.Restart(); pending = choose(scene, lifetime.Token);
         }

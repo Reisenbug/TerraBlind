@@ -69,6 +69,7 @@ public static class AgentTools
             });
         }
         state["other_players"] = players;
+        state["combat"] = PvpDuel.Report();
         return state.ToJsonString();
     }, token);
 
@@ -133,6 +134,19 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "combat_observe":
+                result = await ObserveCombat(args, token);
+                break;
+            case "combat_update":
+                result = await NativeAgent.OnMain(() => PvpDuel.UpdateDirective(args), token);
+                break;
+            case "combat_stop":
+                result = await NativeAgent.OnMain(() =>
+                {
+                    if (args["session"]?.GetValue<long>() != PvpDuel.Session) return new JsonObject { ["error"] = "session_mismatch" };
+                    PvpDuel.Stop("agent_stopped"); return PvpDuel.Report();
+                }, token);
+                break;
             case "set_combat":
                 result = await NativeAgent.OnMain(() =>
                 {
@@ -227,6 +241,7 @@ public static class AgentTools
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
                 }
                 break;
+            case "combat_start":
             case "duel_player":
                 int duelTarget = Int(args, "player_id", -1);
                 int duelSeconds = Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 30), 1, 120);
@@ -235,28 +250,15 @@ public static class AgentTools
                     int weaponSlot = Int(args, "slot", Main.LocalPlayer.selectedItem);
                     if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 300), 1, 600), Text(args, "strategy"), out string reason))
                         return new JsonObject { ["error"] = reason };
-                    return new JsonObject { ["target_player"] = duelTarget, ["target_hp_before"] = Main.player[duelTarget].statLife,
-                        ["self_hp_before"] = Main.LocalPlayer.statLife };
+                    if (args["constraints"] != null || args["instructions"] != null)
+                    {
+                        var patch = new JsonObject { ["session"] = PvpDuel.Session, ["expected_revision"] = PvpDuel.Directive.Revision,
+                            ["constraints"] = args["constraints"]?.DeepClone(), ["instructions"] = args["instructions"]?.DeepClone() };
+                        var updated = PvpDuel.UpdateDirective(patch);
+                        if (updated["error"] != null) { PvpDuel.Stop("invalid_directive"); return updated; }
+                    }
+                    return PvpDuel.Report();
                 }, token);
-                if (!Rejected(result))
-                {
-                    var duelTimer = Stopwatch.StartNew();
-                    while (await NativeAgent.OnMain(() =>
-                    {
-                        if (Main.LocalPlayer.dead) duelTimer.Stop(); else duelTimer.Start();
-                        return PvpDuel.Active;
-                    }, token) && duelTimer.Elapsed.TotalSeconds < duelSeconds + 3)
-                        await Task.Delay(150, token);
-                    await NativeAgent.OnMain(() =>
-                    {
-                        if (PvpDuel.Active) PvpDuel.Stop("timeout");
-                        result["outcome"] = PvpDuel.Outcome;
-                        result["target_hp_after"] = Main.player[duelTarget].statLife;
-                        result["self_hp_after"] = Main.LocalPlayer.statLife;
-                        result["jev_decisions"] = PvpDuel.Decisions;
-                        return true;
-                    }, token);
-                }
                 break;
             case "fight_player":
                 int target = Int(args, "player_id", -1);
@@ -289,6 +291,25 @@ public static class AgentTools
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] result {name} {output}"); return true; }, token);
         await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策"); return true; }, token);
         return output;
+    }
+
+    internal static async Task<JsonObject> ObserveCombat(JsonObject args, CancellationToken token)
+    {
+        long session = args["session"]?.GetValue<long>() ?? 0;
+        long after = args["after_event"]?.GetValue<long>() ?? 0;
+        if (!double.TryParse(args["wait_seconds"]?.ToString() ?? "3", System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out double requestedWait) || !double.IsFinite(requestedWait))
+            return new JsonObject { ["error"] = "invalid_wait_seconds" };
+        double wait = Math.Clamp(requestedWait, 0, 5);
+        var clock = Stopwatch.StartNew();
+        while (true)
+        {
+            var report = await NativeAgent.OnMain(() => PvpDuel.Session != session
+                ? new JsonObject { ["error"] = "session_mismatch" } : PvpDuel.Report(after), token);
+            if (report["error"] != null || report["active"]?.GetValue<bool>() != true
+                || report["last_event"].GetValue<long>() > after || clock.Elapsed.TotalSeconds >= wait) return report;
+            await Task.Delay(100, token);
+        }
     }
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)
