@@ -13,9 +13,10 @@ public sealed class PvpHistory
         int SelfHp, int TargetHp, bool Firing, bool Clear, int Projectiles);
     readonly Queue<Sample> samples = new();
     readonly HashSet<(int Slot, int Identity, int Owner)> knownShots = new();
+    public int StationaryFrames { get; private set; }
     public void Reset()
     {
-        samples.Clear(); knownShots.Clear();
+        samples.Clear(); knownShots.Clear(); StationaryFrames = 0;
         foreach (var shot in Main.projectile)
             if (shot.active) knownShots.Add((shot.whoAmI, shot.identity, shot.owner));
     }
@@ -24,6 +25,7 @@ public sealed class PvpHistory
     {
         ulong tick = Main.GameUpdateCount;
         if (samples.Count > 0 && samples.Last().Tick == tick) return;
+        StationaryFrames = samples.Count > 0 && Vector2.Distance(samples.Last().Self, self.Center) < .5f ? StationaryFrames + 1 : 0;
         int created = 0;
         var active = new HashSet<(int Slot, int Identity, int Owner)>();
         foreach (var shot in Main.projectile)

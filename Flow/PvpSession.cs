@@ -83,16 +83,23 @@ public static partial class PvpDuel
         ["id"] = player.whoAmI, ["name"] = player.name, ["hp"] = player.statLife, ["max_hp"] = player.statLifeMax2,
         ["x"] = player.Center.X, ["y"] = player.Center.Y, ["vx"] = player.velocity.X, ["vy"] = player.velocity.Y,
         ["dead"] = player.dead, ["held_type"] = player.HeldItem.type, ["held_name"] = player.HeldItem.Name,
+        ["width"] = player.width, ["height"] = player.height, ["pvp"] = player.hostile, ["team"] = player.team,
         ["item_animation"] = player.itemAnimation, ["item_time"] = player.itemTime
     };
 
-    static JsonObject Perception(Player self, Player target, bool detailed = false) => new()
+    static JsonObject Perception(Player self, Player target, bool detailed = false, JevariaCombat.CombatSnapshot snapshot = null)
     {
-        ["captured_tick"] = Main.GameUpdateCount, ["units"] = "pixels; velocity=pixels/game_frame",
-        ["self"] = Body(self), ["target"] = Body(target), ["self_mana"] = self.statMana, ["target_mana"] = null,
-        ["history"] = history.ToJson(), ["terrain"] = PvpTerrain.Observe(self, target, detailed),
-        ["inventory_weapons"] = InventoryWeapons(self)
-    };
+        snapshot ??= Sensor.CapturePlayer(self, target, sequence, intent, choiceAge * 1000 / 60);
+        var movement = JsonNode.Parse(JevariaCombat.DecisionFacts.State(snapshot, "")).AsObject();
+        movement.Remove("threats"); movement.Remove("boss_notes");
+        return new JsonObject
+        {
+            ["captured_tick"] = Main.GameUpdateCount, ["units"] = "pixels; velocity=pixels/game_frame",
+            ["self"] = Body(self), ["target"] = Body(target), ["self_mana"] = self.statMana, ["target_mana"] = null,
+            ["movement_state"] = movement, ["history"] = history.ToJson(), ["terrain"] = PvpTerrain.Observe(self, target, detailed),
+            ["inventory_weapons"] = InventoryWeapons(self)
+        };
+    }
 
     static JsonArray InventoryWeapons(Player self)
     {
@@ -122,7 +129,10 @@ public static partial class PvpDuel
         ["target"] = Session == 0 ? null : Body(Main.player[sessionTarget]),
         ["current_mode"] = mode, ["movement_reason"] = movementReason, ["attack_reason"] = attackReason,
         ["action_owner"] = ExternalAction ? "agent_tool" : "combat",
-        ["scene"] = latestScene?.DeepClone(), ["last_event"] = eventSequence,
+        ["scene"] = detailed ? latestScene?.DeepClone() : null, ["last_event"] = eventSequence,
+        ["selected_aim"] = aimKind, ["fire_intent"] = fireIntent,
+        ["request_tick"] = latestScene?["captured_tick"]?.DeepClone(),
+        ["weapon_options_at_request"] = latestScene?["weapon_modes"]?.DeepClone(),
         ["events_truncated"] = events.Count > 0 && afterEvent < events.Peek()["seq"].GetValue<long>() - 1,
         ["events"] = new JsonArray(events.Where(entry => entry["seq"].GetValue<long>() > afterEvent).Select(entry => entry.DeepClone()).ToArray())
     };

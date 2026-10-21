@@ -163,6 +163,13 @@ static class PvpTests
             Check(self.selectedItem == 2 && self.controlRight && self.controlUseItem,
                 "Jev could not select a specific lower-damage weapon while approaching");
             PvpDuel.Stop(); self.inventory[2].stack = 0;
+            Check(Start((state, _) => Task.FromResult(new PvpTactics.Decision("m1",
+                state["weapon_modes"].AsObject().Count > 0 ? "ranged" : "", "body", state["weapon_modes"].AsObject().Count > 0))), "unarmed movement duel failed");
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            self.HasAmmunition = false;
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(PvpDuel.Active && self.controlRight && !self.controlUseItem, "no-ammunition state stopped evasive movement");
+            self.HasAmmunition = true; PvpDuel.Stop();
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "", "body", false))), "no-fire plan duel failed");
             PvpDuel.Tick(self); PvpDuel.Tick(self);
             Check(self.controlRight && !self.controlUseItem, "reposition-only plan either fired or stopped moving");

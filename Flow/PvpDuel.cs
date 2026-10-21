@@ -33,6 +33,7 @@ public static partial class PvpDuel
     static bool lastAimClear, fireIntent = true;
     static string aimKind = "velocity";
     static int plannedType, plannedPrefix, activePrefix;
+    static int observedHp;
     static string key, strategy, mode, movementReason, attackReason;
     static ulong sequence;
     static float speed, gravity, gravityDelay, range;
@@ -89,6 +90,7 @@ public static partial class PvpDuel
         frames = Math.Clamp(seconds, 1, 120) * 60; range = maxDistance * 16;
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
+        observedHp = self.statLife;
         intent = Port.DodgeIntent.Idle; appliedSnapshot = requestSnapshot = null;
         choiceAge = 999; Decisions = 0; sequence = 0; movementReason = attackReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
@@ -264,14 +266,16 @@ public static partial class PvpDuel
         if (ExternalAction) return;
         if (frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
+        if (self.statLife < observedHp) Event("self_damaged", "HP decreased; inspect current threats and recent outcomes.");
+        observedHp = self.statLife;
         history.Record(self, target, lastAimClear);
+        if (history.StationaryFrames >= 60 && intent.Direction != Port.DodgeDirection.Stay)
+            Event("movement_stalled", "Movement was requested but position barely changed for 60 sampled frames.");
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
         var weapons = Weapons(self);
         if (weapons.Count == 0)
         {
-            Movement.Release(self); ClearControls(self);
             Event("no_usable_weapon", "Check restrictions, ammunition and mana.");
-            return;
         }
         if (pending?.IsCompleted == true)
         {
@@ -359,7 +363,7 @@ public static partial class PvpDuel
                 ["strategy"] = strategy, ["movement_options"] = criteria, ["weapon_modes"] = modes, ["current_mode"] = mode,
                 ["directive"] = Directive.ToJson(), ["session"] = Session,
                 ["candidate_rotation"] = sequence,
-                ["perception"] = Perception(self, target),
+                ["perception"] = Perception(self, target, false, requestSnapshot), ["captured_tick"] = Main.GameUpdateCount,
                 ["movement_state"] = movementState,
                 ["dx"] = target.Center.X - self.Center.X, ["dy"] = target.Center.Y - self.Center.Y,
                 ["target_vx"] = target.velocity.X, ["target_vy"] = target.velocity.Y,
@@ -383,15 +387,6 @@ public static partial class PvpDuel
         if (ExternalAction) return;
         if (!Active || self.dead || waitingForRespawn || !AgentPermissions.Attack || !AgentPermissions.Dodge)
         { ClearControls(self); return; }
-        var weapons = Weapons(self);
-        if (weapons.Count == 0) { ClearControls(self); return; }
-        if (!weapons.ContainsKey(mode)) foreach (string available in weapons.Keys) { mode = available; break; }
-        int slot = weapons[mode];
-        if (self.selectedItem != slot && self.itemAnimation == 0 && self.itemTime == 0)
-        {
-            self.selectedItem = slot;
-            DiagLog.Write($"[pvp] weapon mode={mode} slot={slot} name={self.HeldItem.Name}");
-        }
         if (appliedSnapshot != null)
         {
             var result = Movement.Apply(self, intent, appliedSnapshot with
@@ -399,10 +394,20 @@ public static partial class PvpDuel
             if (result.Reason != movementReason)
             {
                 movementReason = result.Reason;
+                if (result.Reason.Contains("blocked") || result.Reason.Contains("boundary")) Event("movement_blocked", result.Reason);
                 DiagLog.Write($"[pvp] movement={result.Applied} reason={result.Reason} vel={self.velocity} mount={self.mount.Active}");
             }
         }
         else { Movement.Release(self); ClearControls(self); }
+        var weapons = Weapons(self);
+        if (weapons.Count == 0) { self.controlUseItem = false; lastAimClear = false; return; }
+        if (!weapons.ContainsKey(mode)) foreach (string available in weapons.Keys) { mode = available; break; }
+        int slot = weapons[mode];
+        if (self.selectedItem != slot && self.itemAnimation == 0 && self.itemTime == 0)
+        {
+            self.selectedItem = slot;
+            DiagLog.Write($"[pvp] weapon mode={mode} slot={slot} name={self.HeldItem.Name}");
+        }
         lastAimClear = self.selectedItem == slot && Attack(self, Main.player[Target]);
         if (self.selectedItem != slot) self.controlUseItem = false;
     }
