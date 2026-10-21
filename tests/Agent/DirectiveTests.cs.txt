@@ -1,0 +1,26 @@
+using System;
+using System.Text.Json.Nodes;
+using TerraBlind;
+
+static class DirectiveTests
+{
+    static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+    public static void Run()
+    {
+        var directive = new PvpDirective("只用允许的武器");
+        Check(directive.AllowsWeapon(1) && !directive.AllowsTerrain(false, 10, 10), "incorrect default constraints");
+        JsonObject Patch(string json, bool player = false) => directive.Update(JsonNode.Parse(json).AsObject(), player);
+        Check(Patch("{\"constraints\":{\"allowed_types\":[1,2],\"allow_mining\":true,\"protected_rects\":[{\"x\":10,\"y\":10,\"w\":3,\"h\":3}]}}", true)["ok"] != null,
+            "player rules rejected");
+        Check(!directive.AllowsWeapon(3) && directive.AllowsTerrain(false, 9, 9) && !directive.AllowsTerrain(false, 10, 10), "player rules not enforced");
+        Check(Patch("{\"expected_revision\":1,\"constraints\":{\"allowed_types\":[2,3]},\"instructions\":{\"aim\":\"封落点\"}}")["ok"] != null,
+            "agent patch rejected");
+        Check(!directive.AllowsWeapon(1) && directive.AllowsWeapon(2) && !directive.AllowsWeapon(3), "agent widened player whitelist");
+        Check(Patch("{\"expected_revision\":1,\"instructions\":{\"aim\":\"过期\"}}")["error"] != null && directive.Revision == 2, "stale revision accepted");
+        Check(Patch("{\"expected_revision\":2,\"instructions\":{\"aim\":\"更改\"},\"constraints\":{\"allow_mining\":\"wrong\"}}")["error"] != null
+            && directive.ToJson()["instructions"]["aim"].ToString() == "封落点", "invalid patch was partially applied");
+        Patch("{\"expected_revision\":2,\"constraints\":{\"allowed_types\":[]},\"instructions\":{\"aim\":null}}");
+        Check(!directive.AllowsWeapon(2) && directive.ToJson()["instructions"]["aim"] == null, "empty whitelist or cleared instruction ignored");
+        Console.WriteLine("PASS: combat directives enforce player/agent intersections, revision, atomic validation and protected terrain");
+    }
+}
