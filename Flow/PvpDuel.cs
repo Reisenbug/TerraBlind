@@ -38,6 +38,7 @@ public static partial class PvpDuel
     static ulong sequence;
     static float speed, gravity, gravityDelay, range;
     static bool waitingForRespawn;
+    public static bool UntilStopped { get; private set; }
     public static int Target { get; private set; } = -1;
     public static bool Active => Target >= 0;
     public static string Outcome { get; private set; } = "idle";
@@ -66,7 +67,7 @@ public static partial class PvpDuel
     }
 
     public static bool Start(int target, int seconds, int weaponSlot, float maxDistance, string instructions, out string reason,
-        Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> decide = null)
+        Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> decide = null, bool untilStopped = false)
     {
         Stop();
         Directive = new PvpDirective(instructions);
@@ -87,6 +88,7 @@ public static partial class PvpDuel
         mode = weapons.ContainsKey("ranged") ? "ranged" : "melee";
         self.selectedItem = weapons[mode]; activeWeapon = -1;
         aimKind = "velocity"; fireIntent = true; plannedType = self.HeldItem.type; plannedPrefix = self.HeldItem.prefix;
+        UntilStopped = untilStopped;
         frames = Math.Clamp(seconds, 1, 120) * 60; range = maxDistance * 16;
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
@@ -235,10 +237,11 @@ public static partial class PvpDuel
     {
         if (!Active) return;
         string reason = PlayerCombat.TargetReason(self, Target);
+        if (reason == "target_dead") reason = "";
         if (reason == "" && !self.active) reason = "self_inactive";
         if (reason == "" && (!AgentPermissions.Attack || !AgentPermissions.Dodge || !self.hostile)) reason = "combat_permission_denied";
         if (reason != "") { Stop(reason); return; }
-        if (self.dead)
+        if (self.dead || Main.player[Target].dead)
         {
             if (!waitingForRespawn)
             {
@@ -246,9 +249,9 @@ public static partial class PvpDuel
                 lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
                 if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
                 pending = null; appliedSnapshot = null; intent = Port.DodgeIntent.Idle;
-                waitingForRespawn = true; Outcome = "waiting_for_respawn";
+                waitingForRespawn = true; Outcome = self.dead ? "waiting_for_respawn" : "waiting_for_target_respawn";
                 Event("death", Outcome);
-                NativeAgent.Progress("倒下了，复活后继续这轮对战。", "等待复活");
+                NativeAgent.Progress("有人倒下了，双方复活后继续对战。", "等待复活");
                 DiagLog.Write($"[pvp] paused target={Target} remaining_frames={frames}");
             }
             return;
@@ -264,7 +267,7 @@ public static partial class PvpDuel
             DiagLog.Write($"[pvp] resumed target={Target} remaining_frames={frames}");
         }
         if (ExternalAction) return;
-        if (frames-- <= 0) { Stop("duration_complete"); return; }
+        if (!UntilStopped && frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
         if (self.statLife < observedHp) Event("self_damaged", "HP decreased; inspect current threats and recent outcomes.");
         observedHp = self.statLife;
@@ -386,7 +389,7 @@ public static partial class PvpDuel
     public static void ApplyInputs(Player self)
     {
         if (ExternalAction) return;
-        if (!Active || self.dead || waitingForRespawn || !AgentPermissions.Attack || !AgentPermissions.Dodge)
+        if (!Active || self.dead || Main.player[Target].dead || waitingForRespawn || !AgentPermissions.Attack || !AgentPermissions.Dodge)
         { ClearControls(self); return; }
         if (appliedSnapshot != null)
         {

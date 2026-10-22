@@ -222,6 +222,23 @@ static class PvpTests
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "stop while dead duel failed");
             self.dead = true; PvpDuel.Tick(self); AgentTools.Stop(); self.dead = false;
             Check(!PvpDuel.Active, "manual stop failed while waiting for respawn");
+            Check(PvpDuel.Start(1, 1, 0, 120, "直到喊停", out _,
+                (_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged")), untilStopped: true), "unlimited duel failed");
+            for (int tick = 0; tick < 120; tick++) PvpDuel.Tick(self);
+            Check(PvpDuel.Active && PvpDuel.Report()["remaining_active_frames"] == null,
+                "until-stopped duel retained the finite duration limit");
+            int decisionsBeforeDeath = PvpDuel.Decisions;
+            other.dead = true;
+            for (int tick = 0; tick < 2000; tick++) PvpDuel.Tick(self);
+            Check(PvpDuel.Active && PvpDuel.Outcome == "waiting_for_target_respawn"
+                && PvpDuel.Decisions == decisionsBeforeDeath && !self.controlUseItem && !self.controlRight,
+                "target death ended combat, requested decisions or left inputs held");
+            self.dead = true; PvpDuel.Tick(self); self.dead = false; PvpDuel.Tick(self);
+            Check(PvpDuel.Active && !self.controlUseItem, "combat resumed before the target respawned");
+            other.dead = false; PvpDuel.Tick(self);
+            Check(PvpDuel.Active && PvpDuel.Outcome == "running", "target respawn did not resume the same session");
+            PvpDuel.Stop();
+            Check(!PvpDuel.Active, "explicit stop failed for unlimited combat");
             var stale = new TaskCompletionSource<PvpTactics.Decision>();
             JsonObject directiveScene = null;
             Check(Start((state, _) => { directiveScene = state; return stale.Task; }), "directive duel failed");

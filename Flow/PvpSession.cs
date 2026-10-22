@@ -132,7 +132,8 @@ public static partial class PvpDuel
     public static JsonObject Report(long afterEvent = 0, bool detailed = false) => new()
     {
         ["session"] = Session, ["tick"] = Main.GameUpdateCount, ["active"] = Active, ["outcome"] = Outcome,
-        ["directive"] = Directive?.ToJson(), ["remaining_active_frames"] = frames, ["jev_decisions"] = Decisions,
+        ["directive"] = Directive?.ToJson(), ["remaining_active_frames"] = UntilStopped ? (int?)null : frames,
+        ["until_stopped"] = UntilStopped, ["jev_decisions"] = Decisions,
         ["self"] = Body(Main.LocalPlayer),
         ["perception"] = Active ? Perception(Main.LocalPlayer, Main.player[sessionTarget], detailed) : null,
         ["target"] = Session == 0 ? null : Body(Main.player[sessionTarget]),

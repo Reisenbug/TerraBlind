@@ -1,7 +1,7 @@
 [
   { "type":"function", "function": { "name":"combat_reposition", "description":"执行具体换位，临时接管Jev，最多导航8秒后恢复对战，返回实际位移、导航结果和最新combat_after_action。x/y照抄最近perception.terrain.stance_probes的像素坐标，不是格坐标。执行前重新检查512像素内的支撑及身体空间；失效时返回新探测点。探测点并非可达路径，不保证成功；失败应换方案。导航中地形权限仍受约束。", "parameters":{"type":"object","properties":{"session":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]} } },
   { "type":"function", "function": { "name":"inventory_swap", "description":"交换自己背包/快捷栏两个槽(0..49)，包含快捷栏武器整理。暂停战斗输入并最多等2秒让动画结束。expected_src和expected_dst必须包含inventory_slots里刚查询的type/prefix/stack；不一致或仍忙则返回错误，不会悄悄换错物品。成功返回实际前后值并同步两个槽，再恢复战斗。", "parameters":{"type":"object","properties":{"src":{"type":"integer"},"dst":{"type":"integer"},"expected_src":{"type":"object"},"expected_dst":{"type":"object"}},"required":["src","dst","expected_src","expected_dst"]} } },
-  { "type": "function", "function": { "name": "combat_start", "description": "启动持续PvP，立即返回session/revision和战况；不等待整场结束。角色持续战斗，Agent可观察与修改instruction。", "parameters": { "type": "object", "properties": { "player_id": {"type":"integer"}, "seconds":{"type":"number"}, "max_dist":{"type":"integer"}, "strategy":{"type":"string"}, "instructions":{"type":"object"}, "constraints":{"type":"object"} }, "required":["player_id"] } } },
+  { "type": "function", "function": { "name": "combat_start", "description": "启动持续PvP，立即返回战况。玩家要求直到喊停时必须until_stopped=true，此时忽略seconds，不因任一方死亡结束，等待复活继续；指定时长则until_stopped=false使用seconds。角色由Jev持续控制，设置完结束本轮。", "parameters": { "type": "object", "properties": { "player_id": {"type":"integer"}, "until_stopped":{"type":"boolean"}, "seconds":{"type":"number"}, "max_dist":{"type":"integer"}, "strategy":{"type":"string"}, "instructions":{"type":"object"}, "constraints":{"type":"object"} }, "required":["player_id"] } } },
   { "type": "function", "function": { "name": "combat_update", "description": "不中断对战地修改战术和限制。expected_revision抄报告。instructions分区general/movement/weapon/aim/terrain/inventory：字符串替换，null清除。constraints支持allowed_types/denied_types物品类型列表、allow_mining/allow_placing、protected_rects[x,y,w,h对象]；不能放宽玩家限制。空白名单禁止所有武器，null撤销Agent自己的白名单。", "parameters": { "type":"object", "properties": { "session":{"type":"integer"}, "expected_revision":{"type":"integer"}, "instructions":{"type":"object"}, "constraints":{"type":"object"} }, "required":["session","expected_revision"] } } },
   { "type": "function", "function": { "name": "combat_stop", "description": "结束指定战斗并释放控制，返回最终战况。", "parameters": { "type":"object", "properties": { "session":{"type":"integer"} }, "required":["session"] } } },
   {
@@ -417,6 +417,7 @@
           "player_id": { "type": "integer", "description": "目标玩家编号；打我时用 agent.instruction_player_id" },
           "slot": { "type": "integer", "description": "首选武器快捷栏槽0到9，默认当前槽；Jev 可选择近战或发射模式并切换对应武器" },
           "seconds": { "type": "number", "description": "持续秒数，默认30，最大120" },
+          "until_stopped": { "type": "boolean", "description": "直到玩家喊停时设true，忽略seconds，不因死亡结束" },
           "max_dist": { "type": "integer", "description": "最大交战距离格数，默认300，最大600；不是弹道射程或全局寻路能力" },
           "strategy": { "type": "string", "description": "本轮打法和玩家限制，交给 Jev 持续参考" }
         },

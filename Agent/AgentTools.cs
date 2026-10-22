@@ -317,7 +317,8 @@ public static class AgentTools
                 result = await NativeAgent.OnMain(() =>
                 {
                     int weaponSlot = Int(args, "slot", Main.LocalPlayer.selectedItem);
-                    if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 300), 1, 600), Text(args, "strategy"), out string reason))
+                    if (!PvpDuel.Start(duelTarget, duelSeconds, weaponSlot, Math.Clamp(Int(args, "max_dist", 300), 1, 600), Text(args, "strategy"), out string reason,
+                        untilStopped: Bool(args, "until_stopped")))
                         return new JsonObject { ["error"] = reason };
                     if (args["constraints"] != null || args["instructions"] != null)
                     {
