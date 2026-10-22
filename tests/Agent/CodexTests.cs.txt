@@ -109,6 +109,7 @@ static class CodexTests
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(AgentChat.Messages.Last() == "完成了" && hosted.ToolResponses.Count == 1, "NativeAgent did not use Codex game tools");
+            Check(hosted.ThreadArgs["model"].ToString() == "gpt-6-luna", "game Agent did not select Luna when model was unset");
             native.OnWorldUnload();
             Check(hosted.Stopped, "world unload did not dispose Codex process");
         }

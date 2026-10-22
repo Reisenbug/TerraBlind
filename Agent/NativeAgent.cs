@@ -119,6 +119,7 @@ public class NativeAgent : ModSystem
         bool useCodex = Config.I.AgentUseCodex;
         string codexPath = Config.I.AgentCodexPath;
         string codexModel = Config.I.AgentCodexModel?.Trim();
+        if (string.IsNullOrEmpty(codexModel)) codexModel = "gpt-6-luna";
         string cwd = System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent");
         if (!useCodex && (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(model) ||
             !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
