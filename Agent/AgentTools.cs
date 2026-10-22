@@ -126,9 +126,21 @@ public static class AgentTools
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap";
+            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition";
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
-        try { return await ExecuteCore(name, args, token); }
+        try
+        {
+            string output = await ExecuteCore(name, args, token);
+            if (lease != 0)
+                return await NativeAgent.OnMain(() =>
+                {
+                    PvpDuel.EndAction(lease);
+                    var result = JsonNode.Parse(output) as JsonObject ?? new JsonObject { ["action_result"] = output };
+                    result["combat_after_action"] = PvpDuel.Report();
+                    return result.ToJsonString();
+                }, token);
+            return output;
+        }
         finally
         {
             if (lease != 0 && !token.IsCancellationRequested)
@@ -153,6 +165,27 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "combat_reposition":
+                var destination = await NativeAgent.OnMain(() =>
+                {
+                    if (!PvpDuel.Active || args["session"]?.GetValue<long>() != PvpDuel.Session)
+                        return new JsonObject { ["error"] = "session_mismatch" };
+                    var report = PvpDuel.Report();
+                    float x = args["x"].GetValue<float>(), y = args["y"].GetValue<float>();
+                    if (!PvpTerrain.ValidStance(Main.LocalPlayer, x, y))
+                        return new JsonObject { ["error"] = "stance_no_longer_valid", ["current_probes"] = report["perception"]["terrain"]["stance_probes"].DeepClone() };
+                    return new JsonObject { ["x"] = (int)(x / 16),
+                        ["y"] = (int)(y / 16),
+                        ["before_x"] = Main.LocalPlayer.Center.X, ["before_y"] = Main.LocalPlayer.Center.Y,
+                        ["before_line_clear"] = report["perception"]["terrain"]["direct_line"]["clear"].DeepClone() };
+                }, token);
+                if (destination["error"] != null) { result = destination; break; }
+                result = await Navigate(destination, token, 8);
+                result["requested_destination"] = destination;
+                result["displacement_pixels"] = await NativeAgent.OnMain(() => Microsoft.Xna.Framework.Vector2.Distance(
+                    Main.LocalPlayer.Center, new Microsoft.Xna.Framework.Vector2(destination["before_x"].GetValue<float>(),
+                        destination["before_y"].GetValue<float>())), token);
+                break;
             case "inventory_swap":
                 var idleClock = Stopwatch.StartNew();
                 while (idleClock.Elapsed.TotalSeconds < 2 && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead

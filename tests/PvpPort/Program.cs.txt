@@ -76,7 +76,12 @@ class Program
         target.position.Y = 140 * 16 - target.height; target.velocity = new Vector2(4, 0);
         var exit = TerraBlind.PvpTerrain.PlatformExit(target);
         Check(exit.HasValue && exit.Value.X == 142 * 16 + 8, "platform edge was invented or misplaced");
-        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=15 real_engine_objects=true gameplay_loop=false");
+        float stanceX = 136 * 16 + 8, stanceY = 140 * 16 - self.height / 2f;
+        Check(TerraBlind.PvpTerrain.ValidStance(self, stanceX, stanceY), "supported free stance rejected");
+        var support = Game.tile[136, 140]; support.HasTile = false;
+        Check(!TerraBlind.PvpTerrain.ValidStance(self, stanceX, stanceY), "removed support accepted for recovery");
+        Check(!TerraBlind.PvpTerrain.ValidStance(self, float.NaN, stanceY), "nonfinite recovery coordinate accepted");
+        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=18 real_engine_objects=true gameplay_loop=false");
     }
 }
 

@@ -85,6 +85,14 @@ public static class PvpTerrain
             ["blocker_unknown"] = "whole_line_failed_without_identified_subsegment" };
     }
 
+    public static bool ValidStance(Player self, float x, float y)
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y) || Vector2.Distance(self.Center, new Vector2(x, y)) > 512) return false;
+        int cellX = (int)(x / 16), supportY = (int)((y + self.height / 2f) / 16);
+        return Support(cellX, supportY) && !Collision.SolidCollision(
+            new Vector2(x - self.width / 2f, y - self.height / 2f), self.width, self.height);
+    }
+
     public static JsonObject Observe(Player self, Player target, bool detailed = false)
     {
         var probes = new JsonArray();
