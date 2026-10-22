@@ -70,7 +70,14 @@ static class PvpTests
             Check(self.controlRight && !self.controlLeft && self.controlUseItem && PvpDuel.Decisions == 1, "duel did not move and fire concurrently");
             Terraria.Collision.Clear = false; PvpDuel.Tick(self);
             Check(!self.controlUseItem, "duel fired into fully blocked trajectory");
+            for (int tick = 0; tick < 181; tick++) PvpDuel.Tick(self);
+            var blocked = PvpDuel.Report();
+            Check(blocked["recovery"]["required"].GetValue<bool>()
+                && blocked["events"].AsArray().Any(entry => entry["kind"].GetValue<string>() == "recovery_required"),
+                "persistent obstruction never requested concrete recovery");
             Terraria.Collision.Clear = true;
+            PvpDuel.Tick(self);
+            Check(!PvpDuel.Report()["recovery"]["required"].GetValue<bool>(), "recovery remained required after line opened");
             AgentTools.Stop();
             Check(!PvpDuel.Active && !self.controlRight && !self.controlJump && !self.controlUseItem, "stop left duel controls held");
 

@@ -18,6 +18,7 @@ public static partial class PvpDuel
     public static bool ExternalAction => actionLease != 0;
     static JsonObject latestScene;
     static readonly PvpHistory history = new();
+    static int obstructedFrames;
     public static long Session { get; private set; }
     public static long EventSequence => eventSequence;
     public static PvpDirective Directive { get; private set; }
@@ -56,7 +57,7 @@ public static partial class PvpDuel
     static void BeginSession(int target)
     {
         Session++; sessionTarget = target;
-        events.Clear(); recentEvents.Clear(); eventSequence = 0; latestScene = null; history.Reset();
+        events.Clear(); recentEvents.Clear(); eventSequence = 0; latestScene = null; history.Reset(); obstructedFrames = 0;
         Event("started", "running");
     }
 
@@ -101,6 +102,13 @@ public static partial class PvpDuel
         };
     }
 
+    static void TrackObstruction(Player self, Player target)
+    {
+        if (Clear(self.Center, target.Center) || lastAimClear) obstructedFrames = 0;
+        else if (++obstructedFrames == 180)
+            Event("recovery_required", "No firing line for 180 active frames. Execute and verify a concrete recovery action; instruction edits are not movement.");
+    }
+
     static JsonArray InventoryWeapons(Player self)
     {
         var result = new JsonArray();
@@ -129,6 +137,9 @@ public static partial class PvpDuel
         ["target"] = Session == 0 ? null : Body(Main.player[sessionTarget]),
         ["current_mode"] = mode, ["movement_reason"] = movementReason, ["attack_reason"] = attackReason,
         ["action_owner"] = ExternalAction ? "agent_tool" : "combat",
+        ["recovery"] = new JsonObject { ["required"] = obstructedFrames >= 180,
+            ["blocked_active_frames"] = obstructedFrames,
+            ["next_step"] = "Choose a fresh stance probe for combat_reposition, or inspect inventory/tools and execute an allowed alternative. No clear probes does not prove enclosure. Do not repeat instruction-only updates as recovery." },
         ["scene"] = detailed ? latestScene?.DeepClone() : null, ["last_event"] = eventSequence,
         ["selected_aim"] = aimKind, ["fire_intent"] = fireIntent,
         ["request_tick"] = latestScene?["captured_tick"]?.DeepClone(),

@@ -269,6 +269,7 @@ public static partial class PvpDuel
         if (self.statLife < observedHp) Event("self_damaged", "HP decreased; inspect current threats and recent outcomes.");
         observedHp = self.statLife;
         history.Record(self, target, lastAimClear);
+        TrackObstruction(self, target);
         if (history.StationaryFrames >= 60 && intent.Direction != Port.DodgeDirection.Stay)
             Event("movement_stalled", "Movement was requested but position barely changed for 60 sampled frames.");
         if (Vector2.Distance(self.Center, target.Center) > range) { Stop("out_of_range"); return; }
