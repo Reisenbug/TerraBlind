@@ -71,12 +71,12 @@ public class NativeAgent : ModSystem
         Progress("收到指令，准备处理。", "queued");
     }
 
-    internal static void Progress(string text, string status)
+    internal static void Progress(string text, string status, bool visible = true)
     {
         Status = status;
         if (_instance != null) _instance._lastFeedback = DateTime.UtcNow;
         DiagLog.Write("[agent] " + status + " " + text);
-        AgentChat.Say(text);
+        if (visible) AgentChat.Say(text);
     }
 
     void Cancel()
@@ -105,12 +105,9 @@ public class NativeAgent : ModSystem
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
             && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
-            Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status);
+            Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status, !PvpDuel.Active);
         if (!Main.gameMenu && Main.LocalPlayer.active && Main.LocalPlayer.dead)
         {
-            bool continuingDuel = PvpDuel.Active;
-            if (!continuingDuel && _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false)
-            { Cancel(); AgentChat.Say("倒下了，这个任务先停下。"); }
             return;
         }
         if (_pending == null || _running != null && !_running.IsCompleted) return;
@@ -148,8 +145,15 @@ public class NativeAgent : ModSystem
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
+                    bool died = await OnMain(() => Main.LocalPlayer.dead, token);
+                    if (died)
+                    {
+                        while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
+                        input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
                     var watch = await OnMain(() => PvpDuel.Active ? new JsonObject { ["session"] = PvpDuel.Session,
-                        ["after_event"] = PvpDuel.EventSequence, ["wait_seconds"] = 3d } : null, token);
+                        ["after_event"] = PvpDuel.EventSequence, ["wait_seconds"] = 30d } : null, token);
                     if (watch == null) break;
                     var report = await AgentTools.ObserveCombat(watch, token);
                     input = "原目标：" + goal + "\n持续战斗复盘，角色仍由 Jev 控制。检查效果，必要时更新 instruction、武器限制或操作，任务结束才停止。\n战况：" + report.ToJsonString();

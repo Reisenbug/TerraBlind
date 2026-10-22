@@ -108,7 +108,7 @@ public static class AgentTools
         while (timer.Elapsed.TotalSeconds < seconds)
         {
             await Task.Delay(150, token);
-            if (await NativeAgent.OnMain(() => PvpDuel.Active && Main.LocalPlayer.dead, token))
+            if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
             {
                 await Call(stop, null, token);
                 return new JsonObject { ["outcome"] = "interrupted_by_death" };
@@ -125,6 +125,14 @@ public static class AgentTools
 
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
+        if (name is not ("say" or "ask" or "get_state" or "combat_observe" or "combat_stop")
+            && await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
+        {
+            while (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
+            return new JsonObject { ["outcome"] = "interrupted_by_death",
+                ["detail"] = "Respawned; re-evaluate this action against fresh state instead of replaying its old arguments.",
+                ["state_after_respawn"] = JsonNode.Parse(await State(token)) }.ToJsonString();
+        }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition";
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
@@ -152,7 +160,8 @@ public static class AgentTools
     {
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] tool {name} {args}"); return true; }, token);
         if (name is not ("say" or "ask"))
-            await NativeAgent.OnMain(() => { NativeAgent.Progress("开始执行：" + name, "执行 " + name); return true; }, token);
+            await NativeAgent.OnMain(() => { NativeAgent.Progress("开始执行：" + name, "执行 " + name,
+                !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
         if (name == "get_state") return await State(token);
         if (name == "say")
         {
@@ -348,7 +357,8 @@ public static class AgentTools
         }
         string output = await Result(result, before, token);
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] result {name} {output}"); return true; }, token);
-        await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策"); return true; }, token);
+        await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
+            !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
         return output;
     }
 
@@ -356,18 +366,18 @@ public static class AgentTools
     {
         long session = args["session"]?.GetValue<long>() ?? 0;
         long after = args["after_event"]?.GetValue<long>() ?? 0;
-        if (!double.TryParse(args["wait_seconds"]?.ToString() ?? "3", System.Globalization.NumberStyles.Float,
+        if (!double.TryParse(args["wait_seconds"]?.ToString() ?? "30", System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out double requestedWait) || !double.IsFinite(requestedWait))
             return new JsonObject { ["error"] = "invalid_wait_seconds" };
-        double wait = Math.Clamp(requestedWait, 0, 5);
+        double wait = Math.Clamp(requestedWait, 15, 30);
         var clock = Stopwatch.StartNew();
         while (true)
         {
             var report = await NativeAgent.OnMain(() =>
             {
                 if (PvpDuel.Session != session) return new JsonObject { ["error"] = "session_mismatch" };
-                if (PvpDuel.Active && PvpDuel.EventSequence <= after && !NativeAgent.CombatMessagesPending
-                    && clock.Elapsed.TotalSeconds < wait) return null;
+                if (PvpDuel.Active && !NativeAgent.CombatMessagesPending && clock.Elapsed.TotalSeconds < wait
+                    && (clock.Elapsed.TotalSeconds < 10 || !PvpDuel.NeedsReview(after))) return null;
                 var current = PvpDuel.Report(after, Bool(args, "detailed"));
                 current["player_messages"] = NativeAgent.TakeCombatMessages();
                 return current;

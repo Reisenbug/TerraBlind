@@ -21,6 +21,8 @@ public static partial class PvpDuel
     static int obstructedFrames;
     public static long Session { get; private set; }
     public static long EventSequence => eventSequence;
+    public static bool NeedsReview(long after) => events.Any(entry => entry["seq"].GetValue<long>() > after
+        && entry["kind"].GetValue<string>() is "recovery_required" or "no_usable_weapon" or "action_finished" or "respawn" or "directive_updated");
     public static PvpDirective Directive { get; private set; }
 
     public static long BeginAction(string kind)

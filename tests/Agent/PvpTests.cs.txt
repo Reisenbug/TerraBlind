@@ -68,6 +68,7 @@ static class PvpTests
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "duel failed to start");
             PvpDuel.Tick(self); PvpDuel.Tick(self);
             Check(self.controlRight && !self.controlLeft && self.controlUseItem && PvpDuel.Decisions == 1, "duel did not move and fire concurrently");
+            Check(!PvpDuel.NeedsReview(0), "ordinary attack updates unnecessarily woke the strategic Agent");
             Terraria.Collision.Clear = false; PvpDuel.Tick(self);
             Check(!self.controlUseItem, "duel fired into fully blocked trajectory");
             for (int tick = 0; tick < 181; tick++) PvpDuel.Tick(self);
@@ -75,6 +76,7 @@ static class PvpTests
             Check(blocked["recovery"]["required"].GetValue<bool>()
                 && blocked["events"].AsArray().Any(entry => entry["kind"].GetValue<string>() == "recovery_required"),
                 "persistent obstruction never requested concrete recovery");
+            Check(PvpDuel.NeedsReview(0), "persistent obstruction did not wake strategic review");
             Terraria.Collision.Clear = true;
             PvpDuel.Tick(self);
             Check(!PvpDuel.Report()["recovery"]["required"].GetValue<bool>(), "recovery remained required after line opened");
@@ -194,11 +196,29 @@ static class PvpTests
                 .SetValue(native, nativeCancel);
             native.PostUpdateEverything();
             Check(!nativeCancel.IsCancellationRequested && PvpDuel.Active, "NativeAgent cancelled the paused PvP tool on death");
+            int chatCount = AgentChat.Messages.Count;
+            NativeAgent.Progress("开始执行：combat_observe", "执行 combat_observe", false);
+            Check(AgentChat.Messages.Count == chatCount && NativeAgent.Status == "执行 combat_observe",
+                "silent combat progress either obscured chat or lost status");
             dyingDecision.SetResult(new("m1", "melee"));
             self.dead = false; PvpDuel.Tick(self);
             Check(PvpDuel.Active && PvpDuel.Outcome == "running" && PvpDuel.Decisions == 0,
                 "respawn did not resume or reused a decision from before death");
             PvpDuel.Stop();
+            self.dead = true; native.PostUpdateEverything();
+            Check(!nativeCancel.IsCancellationRequested, "death cancelled Agent work after the duel had stopped");
+            var staleAction = AgentTools.Execute("inventory_swap", new JsonObject(), default);
+            for (int step = 0; step < 5; step++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(!staleAction.IsCompleted, "dead player executed a world action before respawn");
+            self.dead = false;
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            while (!staleAction.IsCompleted)
+            {
+                Check(DateTime.UtcNow < deadline, "respawn action gate failed to return fresh state");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(JsonNode.Parse(await staleAction)["outcome"].ToString() == "interrupted_by_death",
+                "respawn replayed stale inventory arguments rather than requesting reevaluation");
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "stop while dead duel failed");
             self.dead = true; PvpDuel.Tick(self); AgentTools.Stop(); self.dead = false;
             Check(!PvpDuel.Active, "manual stop failed while waiting for respawn");
