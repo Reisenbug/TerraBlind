@@ -132,15 +132,36 @@ static class CodexTests
                 {
                     if (!PvpDuel.Start(1, 30, 0, 600, "持续交战", out string why,
                         (_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged")))) throw new Exception(why);
-                    NativeAgent.Submit("别追近战");
                 }
-                else PvpDuel.Stop();
                 return true;
             }, default);
         };
         try
         {
             NativeAgent.Submit("持续交战并复盘");
+            async Task WaitParked(int turns)
+            {
+                var until = DateTime.UtcNow.AddSeconds(5);
+                while (hosted.ToolResponses.Count < turns || NativeAgent.Status != "等待战斗指令（不调用模型）")
+                {
+                    Check(DateTime.UtcNow < until, "combat Agent failed to park after turn " + turns);
+                    native.PostUpdateEverything(); Terraria.Main.GameUpdateCount++;
+                    await Task.Delay(5);
+                }
+            }
+            await WaitParked(1);
+            Terraria.Main.GameUpdateCount += 60 * 60 * 60;
+            for (int i = 0; i < 70; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(hosted.ToolResponses.Count == 1 && PvpDuel.Active, "elapsed game time caused a periodic model request");
+            NativeAgent.Submit("别追近战");
+            await WaitParked(2);
+            Terraria.Collision.Clear = false;
+            for (int i = 0; i < 181; i++) native.PostUpdateEverything();
+            await WaitParked(3);
+            for (int i = 0; i < 100; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(hosted.ToolResponses.Count == 3, "persistent obstruction repeatedly requested automatic Agent help");
+            Terraria.Collision.Clear = true;
+            PvpDuel.Stop();
             var deadline = DateTime.UtcNow.AddSeconds(8);
             while (hosted.ToolResponses.Count < 2 || NativeAgent.Status != "idle")
             {
@@ -161,7 +182,7 @@ static class CodexTests
             Config.I.AgentUseCodex = Config.I.AiClient = false;
             Terraria.Main.netMode = Terraria.ID.NetmodeID.SinglePlayer;
         }
-        Console.WriteLine("PASS: NativeAgent resumes combat review on the same Codex thread after a final response, then stops");
+        Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
     public static async Task Smoke()

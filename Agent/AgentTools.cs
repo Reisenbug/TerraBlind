@@ -203,7 +203,8 @@ public static class AgentTools
                 result = await NativeAgent.OnMain(() => PvpInventory.Swap(args), token);
                 break;
             case "combat_observe":
-                result = await ObserveCombat(args, token);
+                result = new JsonObject { ["error"] = "polling_disabled",
+                    ["detail"] = "End this turn. Jev continues combat; code waits for player instructions or a bounded recovery request." };
                 break;
             case "combat_update":
                 result = await NativeAgent.OnMain(() => PvpDuel.UpdateDirective(args), token);
@@ -360,31 +361,6 @@ public static class AgentTools
         await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
             !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
         return output;
-    }
-
-    internal static async Task<JsonObject> ObserveCombat(JsonObject args, CancellationToken token)
-    {
-        long session = args["session"]?.GetValue<long>() ?? 0;
-        long after = args["after_event"]?.GetValue<long>() ?? 0;
-        if (!double.TryParse(args["wait_seconds"]?.ToString() ?? "30", System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double requestedWait) || !double.IsFinite(requestedWait))
-            return new JsonObject { ["error"] = "invalid_wait_seconds" };
-        double wait = Math.Clamp(requestedWait, 15, 30);
-        var clock = Stopwatch.StartNew();
-        while (true)
-        {
-            var report = await NativeAgent.OnMain(() =>
-            {
-                if (PvpDuel.Session != session) return new JsonObject { ["error"] = "session_mismatch" };
-                if (PvpDuel.Active && !NativeAgent.CombatMessagesPending && clock.Elapsed.TotalSeconds < wait
-                    && (clock.Elapsed.TotalSeconds < 10 || !PvpDuel.NeedsReview(after))) return null;
-                var current = PvpDuel.Report(after, Bool(args, "detailed"));
-                current["player_messages"] = NativeAgent.TakeCombatMessages();
-                return current;
-            }, token);
-            if (report != null) return report;
-            await Task.Delay(100, token);
-        }
     }
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)

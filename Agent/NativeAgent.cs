@@ -139,6 +139,7 @@ public class NativeAgent : ModSystem
                 string state = await AgentTools.State(token);
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
                 string input = goal + "\n现状：" + state;
+                long recoverySession = -1;
                 while (true)
                 {
                     if (useCodex)
@@ -146,18 +147,31 @@ public class NativeAgent : ModSystem
                     else
                         await _conversation.RunAsync(input, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
-                    if (died)
+                    if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
                         while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
                         input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
                         continue;
                     }
-                    var watch = await OnMain(() => PvpDuel.Active ? new JsonObject { ["session"] = PvpDuel.Session,
-                        ["after_event"] = PvpDuel.EventSequence, ["wait_seconds"] = 30d } : null, token);
-                    if (watch == null) break;
-                    var report = await AgentTools.ObserveCombat(watch, token);
-                    input = "原目标：" + goal + "\n持续战斗复盘，角色仍由 Jev 控制。检查效果，必要时更新 instruction、武器限制或操作，任务结束才停止。\n战况：" + report.ToJsonString();
-                    while (_combatMessages.TryDequeue(out string message)) input += "\n玩家补充：" + message;
+                    JsonObject report;
+                    while (true)
+                    {
+                        report = await OnMain(() =>
+                        {
+                            if (!PvpDuel.Active) return new JsonObject { ["ended"] = true };
+                            Status = "等待战斗指令（不调用模型）";
+                            bool requested = CombatMessagesPending;
+                            if (!requested && (!PvpDuel.RecoveryRequired || recoverySession == PvpDuel.Session)) return null;
+                            if (!requested) recoverySession = PvpDuel.Session;
+                            var current = PvpDuel.Report();
+                            current["player_messages"] = TakeCombatMessages();
+                            return current;
+                        }, token);
+                        if (report != null) break;
+                        await Task.Delay(250, token);
+                    }
+                    if (report["ended"] != null) break;
+                    input = "原目标：" + goal + "\n按玩家补充或本会话唯一一次自动受阻求助处理。完成具体操作或说明限制后结束本轮，不轮询、不等待、不重启战斗；Jev会继续控制。\n战况：" + report.ToJsonString();
                 }
                 await OnMain(() => { Status = "idle"; return true; }, token);
             }

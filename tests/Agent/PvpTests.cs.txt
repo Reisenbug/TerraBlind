@@ -68,7 +68,7 @@ static class PvpTests
             Check(Start((_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged"))), "duel failed to start");
             PvpDuel.Tick(self); PvpDuel.Tick(self);
             Check(self.controlRight && !self.controlLeft && self.controlUseItem && PvpDuel.Decisions == 1, "duel did not move and fire concurrently");
-            Check(!PvpDuel.NeedsReview(0), "ordinary attack updates unnecessarily woke the strategic Agent");
+            Check(!PvpDuel.RecoveryRequired, "ordinary attack updates unnecessarily woke the strategic Agent");
             Terraria.Collision.Clear = false; PvpDuel.Tick(self);
             Check(!self.controlUseItem, "duel fired into fully blocked trajectory");
             for (int tick = 0; tick < 181; tick++) PvpDuel.Tick(self);
@@ -76,7 +76,7 @@ static class PvpTests
             Check(blocked["recovery"]["required"].GetValue<bool>()
                 && blocked["events"].AsArray().Any(entry => entry["kind"].GetValue<string>() == "recovery_required"),
                 "persistent obstruction never requested concrete recovery");
-            Check(PvpDuel.NeedsReview(0), "persistent obstruction did not wake strategic review");
+            Check(PvpDuel.RecoveryRequired, "persistent obstruction did not wake strategic review");
             Terraria.Collision.Clear = true;
             PvpDuel.Tick(self);
             Check(!PvpDuel.Report()["recovery"]["required"].GetValue<bool>(), "recovery remained required after line opened");

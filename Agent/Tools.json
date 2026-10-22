@@ -2,7 +2,6 @@
   { "type":"function", "function": { "name":"combat_reposition", "description":"执行具体换位，临时接管Jev，最多导航8秒后恢复对战，返回实际位移、导航结果和最新combat_after_action。x/y照抄最近perception.terrain.stance_probes的像素坐标，不是格坐标。执行前重新检查512像素内的支撑及身体空间；失效时返回新探测点。探测点并非可达路径，不保证成功；失败应换方案。导航中地形权限仍受约束。", "parameters":{"type":"object","properties":{"session":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]} } },
   { "type":"function", "function": { "name":"inventory_swap", "description":"交换自己背包/快捷栏两个槽(0..49)，包含快捷栏武器整理。暂停战斗输入并最多等2秒让动画结束。expected_src和expected_dst必须包含inventory_slots里刚查询的type/prefix/stack；不一致或仍忙则返回错误，不会悄悄换错物品。成功返回实际前后值并同步两个槽，再恢复战斗。", "parameters":{"type":"object","properties":{"src":{"type":"integer"},"dst":{"type":"integer"},"expected_src":{"type":"object"},"expected_dst":{"type":"object"}},"required":["src","dst","expected_src","expected_dst"]} } },
   { "type": "function", "function": { "name": "combat_start", "description": "启动持续PvP，立即返回session/revision和战况；不等待整场结束。角色持续战斗，Agent可观察与修改instruction。", "parameters": { "type": "object", "properties": { "player_id": {"type":"integer"}, "seconds":{"type":"number"}, "max_dist":{"type":"integer"}, "strategy":{"type":"string"}, "instructions":{"type":"object"}, "constraints":{"type":"object"} }, "required":["player_id"] } } },
-  { "type": "function", "function": { "name": "combat_observe", "description": "低频战术观察，角色由Jev持续控制，不需靠此工具维持动作。wait_seconds限制15..30秒；普通开火/停火和受伤不提前唤醒，重要事件最早10秒唤醒，玩家补充或会话结束立即返回。稳定时结束本轮回复，宿主会自动等待再复盘，不要连续轮询。返回双方状态、历史、阻挡和射界；detailed=true附带原始方块窗口，可站点不保证可达，HP变化不等于自己的命中。", "parameters": { "type":"object", "properties": { "session":{"type":"integer"}, "after_event":{"type":"integer"}, "wait_seconds":{"type":"number"}, "detailed":{"type":"boolean"} }, "required":["session"] } } },
   { "type": "function", "function": { "name": "combat_update", "description": "不中断对战地修改战术和限制。expected_revision抄报告。instructions分区general/movement/weapon/aim/terrain/inventory：字符串替换，null清除。constraints支持allowed_types/denied_types物品类型列表、allow_mining/allow_placing、protected_rects[x,y,w,h对象]；不能放宽玩家限制。空白名单禁止所有武器，null撤销Agent自己的白名单。", "parameters": { "type":"object", "properties": { "session":{"type":"integer"}, "expected_revision":{"type":"integer"}, "instructions":{"type":"object"}, "constraints":{"type":"object"} }, "required":["session","expected_revision"] } } },
   { "type": "function", "function": { "name": "combat_stop", "description": "结束指定战斗并释放控制，返回最终战况。", "parameters": { "type":"object", "properties": { "session":{"type":"integer"} }, "required":["session"] } } },
   {
@@ -411,7 +410,7 @@
     "type": "function",
     "function": {
       "name": "duel_player",
-      "description": "持续PvP兼容入口，立即返回session、directive版本与战况，不阻塞整场。优先用combat_start，以combat_observe/update继续指挥。Jev联合选择移动、快捷栏具体武器及瞄准意图，可以追近同时远程消耗。共享额外跳/飞行/钩爪/史莱姆坐骑控制，无全局绕路保证。弹道为近似模型，不保证复杂追踪/反弹/鼠标控制武器。自身死亡等待复活，工具接管后会恢复；目标死亡、失效、超距或服务失败等看outcome。HP变化不代表自己的伤害。",
+      "description": "持续PvP兼容入口，立即返回session、directive版本与战况，不阻塞整场。优先用combat_start，设置完结束本轮，不轮询；已有会话用combat_update。Jev联合选择移动、快捷栏具体武器及瞄准意图，可以追近同时远程消耗。共享额外跳/飞行/钩爪/史莱姆坐骑控制，无全局绕路保证。弹道为近似模型，不保证复杂追踪/反弹/鼠标控制武器。自身死亡等待复活，工具接管后会恢复；目标死亡、失效、超距或服务失败等看outcome。HP变化不代表自己的伤害。",
       "parameters": {
         "type": "object",
         "properties": {
