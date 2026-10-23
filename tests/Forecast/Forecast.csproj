@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../tModLoader.targets" />
+  <PropertyGroup>
+    <AssemblyName>Forecast</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-forecast-build/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-forecast-build/bin/</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Perception/VanillaFrame.cs" />
+    <Compile Include="../../Perception/VanillaPrediction.cs" />
+    <Compile Include="../../Perception/VanillaForecastHeadless.cs" />
+    <Compile Include="Engine.cs.txt" />
+  </ItemGroup>
+</Project>

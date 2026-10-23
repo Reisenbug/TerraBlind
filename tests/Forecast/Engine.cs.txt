@@ -1,0 +1,143 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text.Json.Nodes;
+using Microsoft.Xna.Framework;
+using Terraria;
+using Terraria.ID;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Forecast;
+
+public sealed class Forecast : Mod { }
+
+public sealed class Engine : ModSystem
+{
+    const int X = 500, Y = 400;
+    readonly Rectangle area = new(X - 30, Y - 65, 120, 100);
+    JsonObject checkpoint;
+    Player source;
+    public override void Load() => Main.OnEnginePreload += Run;
+    public override void Unload() => Main.OnEnginePreload -= Run;
+
+    void Run()
+    {
+        if (!Main.dedServ || !Terraria.Program.LaunchParameters.TryGetValue("-vanillaforecastport", out string value)) return;
+        VanillaFrame.RequireWorker();
+        var listener = new TcpListener(IPAddress.Loopback, int.Parse(value));
+        listener.Start();
+        Console.WriteLine("VANILLA_FORECAST_READY");
+        try
+        {
+            using var client = listener.AcceptTcpClient(); client.NoDelay = true;
+            using var reader = new StreamReader(client.GetStream());
+            using var writer = new StreamWriter(client.GetStream()) { AutoFlush = true };
+            string line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                var request = JsonNode.Parse(line).AsObject();
+                if (request["command"]?.GetValue<string>() == "close") { writer.WriteLine("{\"closed\":true}"); break; }
+                try { writer.WriteLine(Handle(request).ToJsonString()); }
+                catch (Exception error) { writer.WriteLine(new JsonObject { ["error"] = error.ToString() }.ToJsonString()); }
+            }
+            Environment.Exit(0);
+        }
+        catch (Exception error) { Console.WriteLine(error); Environment.Exit(1); }
+        finally { listener.Stop(); }
+    }
+
+    JsonObject Handle(JsonObject request)
+    {
+        string command = request["command"].GetValue<string>();
+        if (command == "reset")
+        {
+            Setup(request);
+            checkpoint = VanillaFrame.Capture(source, area);
+            return new JsonObject { ["initial"] = VanillaPrediction.Observe(source), ["snapshot"] = checkpoint.DeepClone() };
+        }
+        if (command == "load")
+        {
+            var incoming = request["snapshot"].AsObject();
+            source = VanillaFrame.RestoreInWorker(incoming);
+            checkpoint = (JsonObject)incoming.DeepClone();
+            return new JsonObject { ["initial"] = VanillaPrediction.Observe(source) };
+        }
+        if (checkpoint == null) throw new InvalidOperationException("reset_required");
+        int[] controls = request["controls"]?.AsArray().Select(node => node.GetValue<int>()).ToArray() ?? Array.Empty<int>();
+        if (command == "predict")
+        {
+            var original = VanillaFrame.CaptureFields(source);
+            var result = new VanillaPrediction(checkpoint).Predict(controls);
+            result["source_unchanged"] = JsonNode.DeepEquals(original, VanillaFrame.CaptureFields(source));
+            result["checkpoint_restored"] = JsonNode.DeepEquals(checkpoint,
+                VanillaFrame.Capture(Main.player[source.whoAmI], area));
+            return result;
+        }
+        if (command == "actual")
+        {
+            var trace = new JsonArray();
+            Main.player[source.whoAmI] = source;
+            foreach (int control in controls) { VanillaPrediction.Advance(source, (VanillaKeys)control); trace.Add(VanillaPrediction.Observe(source)); }
+            return new JsonObject { ["frames"] = trace };
+        }
+        throw new ArgumentException("unknown_command");
+    }
+
+    void Setup(JsonObject request)
+    {
+        Main.gameMenu = false;
+        Main.myPlayer = 255;
+        Main.rand = new Terraria.Utilities.UnifiedRandom(73);
+        VanillaFrame.RestoreFields(WorldGen.genRand, VanillaFrame.CaptureFields(new Terraria.Utilities.UnifiedRandom(81)));
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in Main.item) item.active = false;
+        for (int x = area.Left; x < area.Right; x++)
+        for (int y = area.Top; y < area.Bottom; y++)
+        {
+            var tile = Main.tile[x, y]; tile.ClearEverything();
+            if (y >= Y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        }
+        source = new Player { whoAmI = 0, active = true, name = "Forecast subject", statLife = 400, statLifeMax = 400, ConsumedLifeCrystals = 15 };
+        source.position = new Vector2(X * 16, Y * 16 - source.height);
+        source.fallStart = (int)(source.position.Y / 16);
+        Main.player[0] = source;
+        int slot = 3;
+        if (request["equipment"] is JsonArray items)
+            foreach (var item in items) source.armor[slot++].SetDefaults(item.GetValue<int>());
+        for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+        if (request["buffs"] is JsonArray buffs)
+            foreach (var buff in buffs) source.AddBuff(buff[0].GetValue<int>(), buff[1].GetValue<int>());
+        string terrain = request["terrain"]?.GetValue<string>() ?? "flat";
+        if (terrain == "ceiling")
+            for (int x = X - 3; x < X + 18; x++) { var tile = Main.tile[x, Y - 6]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        if (terrain is "half" or "slope")
+            for (int x = X + 2; x < X + 12; x++)
+            {
+                var tile = Main.tile[x, Y - 1]; tile.HasTile = true; tile.TileType = TileID.Dirt;
+                if (terrain == "half") tile.IsHalfBlock = true;
+                else tile.Slope = SlopeType.SlopeDownRight;
+            }
+        if (terrain == "honey_block")
+            for (int x = X - 2; x < X + 20; x++) { var tile = Main.tile[x, Y]; tile.TileType = TileID.HoneyBlock; }
+        if (terrain == "honey")
+            for (int x = X - 2; x < X + 20; x++)
+            for (int y = Y - 4; y < Y; y++) { var tile = Main.tile[x, y]; tile.LiquidType = LiquidID.Honey; tile.LiquidAmount = 255; }
+        if (terrain == "embedded")
+        {
+            var tile = Main.tile[X, Y - 2]; tile.HasTile = true; tile.TileType = TileID.Dirt;
+        }
+        if (terrain is "honey" or "honey_block")
+            for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+        if (request["airborne"]?.GetValue<bool>() == true)
+        {
+            source.position.Y -= request["airborne_height"]?.GetValue<int>() ?? 320;
+            source.velocity.Y = 3; source.fallStart = (int)(source.position.Y / 16);
+        }
+        if (request["pre_controls"] is JsonArray prior)
+            foreach (var key in prior) VanillaPrediction.Advance(source, (VanillaKeys)key.GetValue<int>());
+    }
+}
