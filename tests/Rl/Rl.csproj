@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../tModLoader.targets" />
+  <PropertyGroup>
+    <AssemblyName>Rl</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-rl-build/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-rl-build/bin/</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Engine.cs.txt" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,5 @@
+displayName = TerraBlind RL Laboratory
+author = Reisenbug
+version = 0.1
+side = Server
+buildIgnore = *.py, *.md, *.csproj, bin/*, obj/*, __pycache__/*

@@ -1,0 +1,175 @@
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text.Json.Nodes;
+using Microsoft.Xna.Framework;
+using Terraria;
+using Terraria.ID;
+using Terraria.ModLoader;
+
+namespace Rl;
+
+public sealed class Rl : Mod { }
+
+public sealed class TrainingWorld : ModSystem
+{
+    Player subject;
+    Vector2 goal;
+    int frames, gear, updates;
+    bool entered, finished;
+    Random random = new(0);
+    const int StartX = 300, Floor = 400;
+    bool Grounded => Collision.SolidCollision(subject.position + new Vector2(0, 1), subject.width, subject.height);
+
+    public override void Load() => Main.OnEnginePreload += Run;
+    public override void Unload() => Main.OnEnginePreload -= Run;
+
+    void Run()
+    {
+        if (entered || !Main.dedServ || !Terraria.Program.LaunchParameters.ContainsKey("-rlport")) return;
+        entered = true;
+        int port = int.Parse(Terraria.Program.LaunchParameters["-rlport"]);
+        var listener = new TcpListener(IPAddress.Loopback, port);
+        listener.Start();
+        Mod.Logger.Info($"RL_READY port={port} engine={typeof(Player).Assembly.GetName().Version} mode=explicit_Player_Update");
+        try
+        {
+            using var client = listener.AcceptTcpClient();
+            client.NoDelay = true;
+            using var reader = new StreamReader(client.GetStream());
+            using var writer = new StreamWriter(client.GetStream()) { AutoFlush = true };
+            string line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                try
+                {
+                    var request = JsonNode.Parse(line).AsObject();
+                    string command = request["command"]?.GetValue<string>();
+                    if (command == "close") { writer.WriteLine("{\"closed\":true}"); break; }
+                    JsonObject response = command switch
+                    {
+                        "reset" => Reset(request),
+                        "step" => Step(request),
+                        _ => throw new ArgumentException("unknown_command")
+                    };
+                    writer.WriteLine(response.ToJsonString());
+                }
+                catch (Exception error)
+                {
+                    writer.WriteLine(new JsonObject { ["error"] = error.ToString() }.ToJsonString());
+                }
+            }
+            Mod.Logger.Info($"RL_CLOSED player_updates={updates}");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            Mod.Logger.Error(error);
+            Environment.Exit(1);
+        }
+        finally { listener.Stop(); }
+    }
+
+    JsonObject Reset(JsonObject request)
+    {
+        gear = request["gear"]?.GetValue<int>() ?? 0;
+        if (gear < 0 || gear > 3) throw new ArgumentException("gear_must_be_0_to_3");
+        random = new Random(request["seed"]?.GetValue<int>() ?? 0);
+        for (int x = StartX - 15; x < StartX + 85; x++)
+        for (int y = Floor - 50; y < Floor + 25; y++)
+        {
+            var tile = Main.tile[x, y]; tile.ClearEverything();
+            if (y >= Floor) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        }
+        int height = request["height"]?.GetValue<int>() ?? random.Next(0, gear == 0 ? 5 : 7);
+        int distance = request["distance"]?.GetValue<int>() ?? random.Next(10, 24);
+        if (height < 0 || height > 14 || distance < 6 || distance > 40) throw new ArgumentException("invalid_scenario");
+        int ledge = StartX + distance;
+        for (int x = ledge; x < StartX + 75; x++)
+        for (int y = Floor - height; y < Floor; y++)
+        {
+            var tile = Main.tile[x, y]; tile.HasTile = true; tile.TileType = TileID.Dirt;
+        }
+        subject = new Player { whoAmI = 0, active = true, name = "RL subject", statLife = 400, statLifeMax = 400 };
+        Main.player[0] = subject;
+        if (gear is 1 or 3) subject.armor[3].SetDefaults(ItemID.CloudinaBottle);
+        if (gear is 2 or 3) subject.armor[4].SetDefaults(ItemID.ShinyRedBalloon);
+        subject.position = new Vector2(StartX * 16, Floor * 16 - subject.height);
+        goal = new Vector2((ledge + 4) * 16, (Floor - height) * 16 - subject.height / 2f);
+        frames = 0; finished = false;
+        for (int i = 0; i < 3; i++) Advance(0);
+        if (Math.Abs(subject.position.X - StartX * 16) > 1 || Math.Abs(subject.Bottom.Y - Floor * 16) > 1)
+            throw new InvalidOperationException($"reset_displaced x={subject.position.X} bottom={subject.Bottom.Y}");
+        frames = 0;
+        return Response(0, false, false, height, distance);
+    }
+
+    void Advance(int action)
+    {
+        subject.controlLeft = action % 3 == 1;
+        subject.controlRight = action % 3 == 2;
+        subject.controlJump = action >= 3;
+        subject.controlUseItem = subject.controlUseTile = subject.controlHook = subject.controlMount = false;
+        subject.immune = true; subject.immuneTime = 60;
+        subject.statLife = subject.statLifeMax2 = 400;
+        subject.Update(0);
+        updates++; frames++;
+    }
+
+    JsonObject Step(JsonObject request)
+    {
+        if (subject == null || finished) throw new InvalidOperationException("reset_required");
+        int action = request["action"].GetValue<int>();
+        if (action < 0 || action > 5) throw new ArgumentException("invalid_action");
+        float before = Vector2.Distance(subject.Center, goal);
+        bool success = false, failed = false;
+        for (int i = 0; i < 4; i++)
+        {
+            Advance(action);
+            success = Math.Abs(subject.Center.X - goal.X) < 22 && Math.Abs(subject.Center.Y - goal.Y) < 10 && Grounded;
+            failed = subject.dead || subject.position.Y > Floor * 16 + 100
+                || subject.position.X < (StartX - 13) * 16 || subject.position.X > (StartX + 79) * 16;
+            if (success || failed || frames >= 480) break;
+        }
+        bool timeout = frames >= 480 && !success && !failed;
+        finished = success || failed || timeout;
+        float reward = (before - Vector2.Distance(subject.Center, goal)) / 16f - .04f;
+        if (success) reward += 20;
+        if (failed) reward -= 10;
+        return Response(reward, success || failed, timeout);
+    }
+
+    JsonObject Response(float reward, bool terminated, bool truncated, int height = -1, int distance = -1)
+    {
+        var observation = new JsonArray();
+        observation.Add((goal.X - subject.Center.X) / 640f);
+        observation.Add((goal.Y - subject.Center.Y) / 240f);
+        observation.Add(subject.velocity.X / 16f); observation.Add(subject.velocity.Y / 16f);
+        observation.Add(Grounded ? 1f : 0f);
+        observation.Add(subject.AnyExtraJumpUsable() ? 1f : 0f);
+        observation.Add(subject.jump / 30f);
+        int cx = (int)(subject.Center.X / 16), cy = (int)(subject.Center.Y / 16);
+        for (int y = -6; y <= 4; y++)
+        for (int x = -5; x <= 7; x++)
+        {
+            int tx = cx + x, ty = cy + y;
+            bool solid = tx < 0 || ty < 0 || tx >= Main.maxTilesX || ty >= Main.maxTilesY;
+            if (!solid)
+            {
+                var tile = Main.tile[tx, ty];
+                solid = tile.HasUnactuatedTile && Main.tileSolid[tile.TileType];
+            }
+            observation.Add(solid ? 1f : 0f);
+        }
+        return new JsonObject { ["observation"] = observation, ["reward"] = reward, ["terminated"] = terminated,
+            ["truncated"] = truncated, ["info"] = new JsonObject {
+                ["success"] = terminated && !subject.dead && Math.Abs(subject.Center.X - goal.X) < 22 && Math.Abs(subject.Center.Y - goal.Y) < 10,
+                ["x"] = subject.Center.X, ["y"] = subject.Center.Y, ["vx"] = subject.velocity.X, ["vy"] = subject.velocity.Y,
+                ["goal_x"] = goal.X, ["goal_y"] = goal.Y, ["frames"] = frames, ["gear"] = gear,
+                ["extra_jump_available"] = subject.AnyExtraJumpUsable(), ["height"] = height, ["distance"] = distance,
+                ["player_width"] = subject.width, ["player_height"] = subject.height,
+                ["floor_y"] = Floor * 16, ["start_x"] = StartX * 16,
+                ["engine_player_updates"] = updates, ["net_mode"] = Main.netMode, ["my_player"] = Main.myPlayer } };
+    }
+}
