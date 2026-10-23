@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TerraBlind · RL 移动实验</title>
+<style>
+body{margin:0;background:#121721;color:#e4eaf3;font:16px system-ui,sans-serif}main{max-width:1120px;margin:36px auto;padding:0 24px}h1{font-size:28px;margin-bottom:8px}p{color:#aebcd0;line-height:1.7}.controls{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:24px 0}select,button{padding:9px 14px;background:#263448;color:white;border:1px solid #475b75;border-radius:7px;font:inherit}input{flex:1;min-width:150px}.views{display:grid;grid-template-columns:1fr 1fr;gap:16px}article{background:#1b2432;border:1px solid #354359;border-radius:10px;overflow:hidden}article h2{font-size:17px;margin:16px}canvas{display:block;width:100%;background:#101923}article div{margin:12px 16px;font-size:14px;color:#b8c7da}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;margin:24px 0}th,td{text-align:left;border-bottom:1px solid #354359;padding:10px}th{color:#9fb6d3}.good{color:#6ee7b7}.note{border-left:3px solid #fbbf24;padding:0 16px}@media(max-width:700px){.views{grid-template-columns:1fr}}
+</style>
+<main>
+<h1>RL：角色学会跳上台阶了吗？</h1>
+<p id="summary"></p>
+<p class="note">真实 tModLoader 的角色运动数据示意回放，不是游戏录像。每个采样点来自实际 Player.Update；其他实体和完整世界帧未运行。组合装备没有参加训练，不等于已证明通用适应。</p>
+<div class="controls">
+<label>装备 <select id="gear"><option value="0">普通角色</option><option value="1">云朵瓶</option><option value="2">红气球</option><option value="3">云朵瓶＋红气球（留出）</option></select></label>
+<label>台阶 <select id="height"><option value="0">平地</option><option value="3">3 格</option><option value="5" selected>5 格</option></select></label>
+<button id="play">播放</button><input type="range" id="frame" min="0" max="480" value="0"><span id="time"></span>
+</div>
+<section class="views"><article><h2>随机按键基线</h2><canvas id="random" width="520" height="330"></canvas><div id="random-info"></div></article><article><h2>PPO 训练后</h2><canvas id="trained" width="520" height="330"></canvas><div id="trained-info"></div></article></section>
+<h2>固定测试集到达率</h2><p>两组使用相同场景；每种装备、每种高度 10 局。回放展示其中一局，表格展示全部测试。</p>
+<table><thead><tr><th>装备</th><th>台阶</th><th>随机按键</th><th>训练后</th></tr></thead><tbody id="results"></tbody></table>
+</main>
+<script>
+const data=__DATA__;
+const names=['普通角色','云朵瓶','红气球','云朵瓶＋红气球（留出）'];
+const keys=['松键','左','右','跳','左＋跳','右＋跳'];
+const el=id=>document.getElementById(id);
+el('summary').textContent=`训练 ${data.actual_steps.toLocaleString()} 个决策步，用时 ${data.elapsed_seconds.toFixed(1)} 秒，约 ${Math.round(data.steps_per_second)} 步／秒。每个动作最多推进 4 个角色帧。`;
+for(let i=0;i<data.trained.length;i++){
+ const a=data.random_baseline[i],b=data.trained[i],row=document.createElement('tr');
+ for(const value of [names[b.gear],`${b.height} 格`,`${a.successes}/${a.episodes}`,`${b.successes}/${b.episodes}`]){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}
+ el('results').append(row);
+}
+function draw(policy){
+ const run=data.replays.find(r=>r.policy===policy&&r.gear===+el('gear').value&&r.height===+el('height').value);
+ const t=+el('frame').value,points=run.trajectory;
+ const point=points.filter(p=>p.frames<=t).at(-1)||points[0];
+ const canvas=el(policy),c=canvas.getContext('2d');c.clearRect(0,0,520,330);
+ const scale=.8,origin=points[0].start_x-60,floor=points[0].floor_y;
+ const X=x=>(x-origin)*scale,Y=y=>285+(y-floor)*scale;
+ c.fillStyle='#43566b';c.fillRect(0,Y(floor),520,330-Y(floor));
+ const ledge=points[0].start_x+run.distance*16;
+ c.fillStyle='#6c8a66';c.fillRect(X(ledge),Y(floor-run.height*16),520,run.height*16*scale);
+ c.strokeStyle='#253347';c.lineWidth=1;
+ for(let x=points[0].start_x-64;x<points[0].start_x+700;x+=16){c.beginPath();c.moveTo(X(x),0);c.lineTo(X(x),330);c.stroke()}
+ c.strokeStyle=policy==='random'?'#fbbf24':'#60a5fa';c.lineWidth=2;c.beginPath();
+ for(const [i,p]of points.entries()){if(p.frames>t)break;i?c.lineTo(X(p.x),Y(p.y)):c.moveTo(X(p.x),Y(p.y))}c.stroke();
+ c.fillStyle='#6ee7b7';c.beginPath();c.arc(X(point.goal_x),Y(point.goal_y),10,0,Math.PI*2);c.fill();
+ c.fillStyle=policy==='random'?'#fbbf24':'#60a5fa';c.fillRect(X(point.x-point.player_width/2),Y(point.y-point.player_height/2),point.player_width*scale,point.player_height*scale);
+ const ended=t>=points.at(-1).frames;
+ el(policy+'-info').textContent=`第 ${point.frames} 帧 · 按键：${keys[point.action]} · 速度 (${point.vx.toFixed(1)}, ${point.vy.toFixed(1)})${ended?' · '+(run.success?'到达':'未到达'):''}`;
+}
+function render(){el('time').textContent=(+el('frame').value/60).toFixed(1)+' 秒';draw('random');draw('trained')}
+let playing=false,last=0;
+el('play').onclick=()=>{playing=!playing;el('play').textContent=playing?'暂停':'播放';if(+el('frame').value>=480)el('frame').value=0};
+for(const id of ['gear','height'])el(id).onchange=()=>{el('frame').value=0;render()};el('frame').oninput=render;
+function tick(now){if(playing&&now-last>=1000/60){el('frame').value=Math.min(480,+el('frame').value+1);last=now;if(+el('frame').value===480){playing=false;el('play').textContent='播放'}render()}requestAnimationFrame(tick)}
+render();requestAnimationFrame(tick);
+</script>
+</html>
