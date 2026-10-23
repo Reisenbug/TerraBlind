@@ -66,6 +66,47 @@ public sealed class Engine : ModSystem
             return new JsonObject { ["initial"] = VanillaPrediction.Observe(source) };
         }
         if (checkpoint == null) throw new InvalidOperationException("reset_required");
+        if (command == "navigate")
+        {
+            var trace = new JsonArray();
+            var plans = new JsonArray();
+            int[] continuation = null;
+            var goal = new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>());
+            int limit = Math.Clamp(request["limit"]?.GetValue<int>() ?? 240, 8, 600);
+            bool reached = false;
+            float maximumError = 0;
+            for (int frame = 0; frame < limit;)
+            {
+                var snapshotTimer = System.Diagnostics.Stopwatch.StartNew();
+                checkpoint = VanillaFrame.Capture(source, VanillaLocalPlanner.SnapshotArea(source, goal));
+                double snapshotMs = snapshotTimer.Elapsed.TotalMilliseconds;
+                var before = VanillaFrame.CaptureFields(source);
+                var plan = new VanillaLocalPlanner().Plan(checkpoint, goal, continuation);
+                plan["snapshot_ms"] = snapshotMs;
+                plan["snapshot_tiles"] = checkpoint["tiles"].AsArray().Count;
+                if (!JsonNode.DeepEquals(before, VanillaFrame.CaptureFields(source))) throw new InvalidOperationException("planner_mutated_source");
+                plans.Add(plan);
+                if (plan["status"].GetValue<string>() != "planned") break;
+                var keys = plan["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+                Main.player[source.whoAmI] = source;
+                int count = Math.Min(VanillaLocalPlanner.ExecuteFrames, limit - frame);
+                for (int i = 0; i < count; i++)
+                {
+                    VanillaPrediction.Advance(source, (VanillaKeys)keys[i]);
+                    var expected = plan["forecast"]["frames"][i];
+                    float error = Vector2.Distance(source.position, new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>()));
+                    maximumError = Math.Max(error, maximumError);
+                    if (error > .001f) throw new InvalidOperationException("execution_diverged_from_prediction");
+                    trace.Add(VanillaPrediction.Observe(source)); frame++;
+                    if (source.dead) throw new InvalidOperationException("navigation_died");
+                    if (Vector2.Distance(source.position, goal) <= 20 && Math.Abs(source.velocity.Y) < .01f) { reached = true; break; }
+                }
+                continuation = keys.Skip(count).ToArray();
+                if (reached) break;
+            }
+            checkpoint = VanillaFrame.Capture(source, area);
+            return new JsonObject { ["reached"] = reached, ["trace"] = trace, ["plans"] = plans, ["max_error"] = maximumError };
+        }
         int[] controls = request["controls"]?.AsArray().Select(node => node.GetValue<int>()).ToArray() ?? Array.Empty<int>();
         if (command == "predict")
         {
@@ -130,6 +171,19 @@ public sealed class Engine : ModSystem
         {
             var tile = Main.tile[X, Y - 2]; tile.HasTile = true; tile.TileType = TileID.Dirt;
         }
+        if (terrain is "ledge" or "wall")
+        {
+            int height = request["height"]?.GetValue<int>() ?? 12;
+            for (int x = X + 9; x < X + (terrain == "ledge" ? 38 : 12); x++)
+            for (int y = Y - height; y < Y; y++) { var tile = Main.tile[x, y]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        }
+        if (terrain == "lava_gap")
+            for (int x = X + 7; x < X + 20; x++)
+            for (int y = Y; y < Y + 12; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= Y + 10) { tile.LiquidType = LiquidID.Lava; tile.LiquidAmount = 255; }
+            }
         if (terrain is "honey" or "honey_block")
             for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
         if (request["airborne"]?.GetValue<bool>() == true)

@@ -42,7 +42,7 @@ def compare(expected, actual):
         raise AssertionError(f"Frame count mismatch: {len(expected)} != {len(actual)}")
     maximum = 0
     for frame, (a, b) in enumerate(zip(expected, actual)):
-        for key in ("x", "y", "vx", "vy", "wing_time", "grav_dir", "hp", "jump", "dash_delay"):
+        for key in ("x", "y", "vx", "vy", "wing_time", "grav_dir", "hp", "jump", "dash_delay", "available_jumps"):
             error = abs(a[key] - b[key])
             maximum = max(maximum, error)
             if error > .001:
@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--root", type=Path, default=Path("/tmp/terrablind-forecast-lab"))
     parser.add_argument("--port", type=int, default=19042)
     parser.add_argument("--case", action="append", default=[])
+    parser.add_argument("--navigation", action="store_true")
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -88,6 +89,10 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.navigation:
+            from navigation import run
+            run(worker, args.root)
+            return
         controls = [6] * 18 + [2] * 3 + [6] * 20 + [2] * 31
         repeated_jumps = ([6] * 12 + [2] * 2) * 7 + [2] * 2
         cases = [
