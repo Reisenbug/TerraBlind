@@ -56,34 +56,48 @@ public sealed class VanillaPrediction
         finally { Main.myPlayer = originalPlayer; player.isControlledByFilm = film; Main.hasFocus = focus; }
     }
 
-    public static JsonObject Observe(Player player) => new()
+    public static JsonObject Observe(Player player, bool detailed = true)
     {
-        ["x"] = player.position.X, ["y"] = player.position.Y, ["vx"] = player.velocity.X, ["vy"] = player.velocity.Y,
-        ["hp"] = player.statLife, ["dead"] = player.dead, ["grav_dir"] = player.gravDir,
-        ["wing_time"] = player.wingTime, ["jump"] = player.jump, ["dash_delay"] = player.dashDelay,
-        ["wet"] = player.wet, ["honey_wet"] = player.honeyWet,
-        ["frozen"] = player.frozen, ["webbed"] = player.webbed,
-        ["control_right"] = player.controlRight, ["control_jump"] = player.controlJump,
-        ["grounded"] = Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height),
-        ["buff_types"] = new JsonArray(player.buffType.Select(value => JsonValue.Create(value)).ToArray()),
-        ["buff_times"] = new JsonArray(player.buffTime.Select(value => JsonValue.Create(value)).ToArray()),
-        ["extra_jumps"] = new JsonArray(player.ExtraJumps.ToArray().Select(value => (JsonNode)VanillaFrame.CaptureFields(value)).ToArray())
-    };
+        int available = 0;
+        foreach (var jump in player.ExtraJumps) if (jump.Available) available++;
+        var result = new JsonObject
+        {
+            ["x"] = player.position.X, ["y"] = player.position.Y, ["vx"] = player.velocity.X, ["vy"] = player.velocity.Y,
+            ["hp"] = player.statLife, ["dead"] = player.dead, ["grav_dir"] = player.gravDir,
+            ["wing_time"] = player.wingTime, ["jump"] = player.jump, ["dash_delay"] = player.dashDelay,
+            ["available_jumps"] = available, ["wet"] = player.wet, ["honey_wet"] = player.honeyWet,
+            ["frozen"] = player.frozen, ["webbed"] = player.webbed,
+            ["control_right"] = player.controlRight, ["control_jump"] = player.controlJump,
+            ["grounded"] = Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height),
+        };
+        if (!detailed) return result;
+        result["buff_types"] = new JsonArray(player.buffType.Select(value => JsonValue.Create(value)).ToArray());
+        result["buff_times"] = new JsonArray(player.buffTime.Select(value => JsonValue.Create(value)).ToArray());
+        result["extra_jumps"] = new JsonArray(player.ExtraJumps.ToArray().Select(value => (JsonNode)VanillaFrame.CaptureFields(value)).ToArray());
+        return result;
+    }
 
-    public JsonObject Predict(int[] controls)
+    public JsonObject Predict(int[] controls, bool detailed = true)
     {
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 120) throw new ArgumentException("horizon_must_be_1_to_120");
         var trace = new JsonArray();
         var timer = Stopwatch.StartNew();
         string outcome = "complete";
+        double restore = 0, update = 0, observe = 0, cleanup = 0;
         try
         {
+            long tick = Stopwatch.GetTimestamp();
             var player = VanillaFrame.RestoreInWorker(checkpoint);
+            restore = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
             foreach (int control in controls)
             {
+                tick = Stopwatch.GetTimestamp();
                 Advance(player, (VanillaKeys)control);
-                trace.Add(Observe(player));
+                update += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
+                tick = Stopwatch.GetTimestamp();
+                trace.Add(Observe(player, detailed));
+                observe += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 if (player.dead) { outcome = "dead"; break; }
                 if (Main.projectile.Any(projectile => projectile.active) || Main.npc.Any(npc => npc.active)
                     || Main.item.Any(item => item.active)) { outcome = "unsupported_dynamic_spawn"; break; }
@@ -91,8 +105,14 @@ public sealed class VanillaPrediction
                 if (!interior.Contains(player.Hitbox)) { outcome = "outside_observed_world"; break; }
             }
         }
-        finally { VanillaFrame.RestoreInWorker(checkpoint); }
+        finally
+        {
+            long tick = Stopwatch.GetTimestamp();
+            VanillaFrame.RestoreInWorker(checkpoint);
+            cleanup = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
+        }
         return new JsonObject { ["outcome"] = outcome, ["frames"] = trace, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+            ["timing"] = new JsonObject { ["restore_ms"] = restore, ["update_ms"] = update, ["observe_ms"] = observe, ["cleanup_ms"] = cleanup },
             ["scope"] = "isolated vanilla player updates; world actors and wiring are unsupported" };
     }
 }
