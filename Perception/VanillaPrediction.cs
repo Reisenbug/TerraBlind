@@ -77,7 +77,7 @@ public sealed class VanillaPrediction
         return result;
     }
 
-    public JsonObject Predict(int[] controls, bool detailed = true)
+    public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false)
     {
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 120) throw new ArgumentException("horizon_must_be_1_to_120");
@@ -85,6 +85,7 @@ public sealed class VanillaPrediction
         var timer = Stopwatch.StartNew();
         string outcome = "complete";
         double restore = 0, update = 0, observe = 0, cleanup = 0;
+        JsonObject end = null;
         try
         {
             long tick = Stopwatch.GetTimestamp();
@@ -104,6 +105,8 @@ public sealed class VanillaPrediction
                 var interior = area; interior.Inflate(-32, -32);
                 if (!interior.Contains(player.Hitbox)) { outcome = "outside_observed_world"; break; }
             }
+            if (captureEnd && outcome == "complete")
+                end = VanillaFrame.Capture(player, new Rectangle(area.X / 16, area.Y / 16, area.Width / 16, area.Height / 16));
         }
         finally
         {
@@ -112,6 +115,7 @@ public sealed class VanillaPrediction
             cleanup = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
         }
         return new JsonObject { ["outcome"] = outcome, ["frames"] = trace, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+            ["end_snapshot"] = end,
             ["timing"] = new JsonObject { ["restore_ms"] = restore, ["update_ms"] = update, ["observe_ms"] = observe, ["cleanup_ms"] = cleanup },
             ["scope"] = "isolated vanilla player updates; world actors and wiring are unsupported" };
     }

@@ -162,6 +162,32 @@ public static class VanillaFrame
             ["scope"] = "vanilla movement only; no active mounts, grapples, actors, item use or world wiring" };
     }
 
+    public static bool ContextMatches(JsonObject state, Player player)
+    {
+        if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0 || player.itemAnimation > 0 || player.itemTime > 0)
+            return false;
+        if (!JsonNode.DeepEquals(state["inventory"], Items(player.inventory))
+            || !JsonNode.DeepEquals(state["armor"], Items(player.armor))
+            || !JsonNode.DeepEquals(state["misc_equips"], Items(player.miscEquips))) return false;
+        int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
+        var tiles = state["tiles"].AsArray();
+        var bounds = new Rectangle(x0 * 16, y0 * 16, width * 16, state["area"][3].GetValue<int>() * 16);
+        if (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
+            || Main.projectile.Any(projectile => projectile.active && bounds.Intersects(projectile.Hitbox))
+            || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox))) return false;
+        for (int i = 0; i < tiles.Count; i++)
+        {
+            var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles[i];
+            if (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire) return false;
+            if ((tile.HasTile ? 1 : 0) != data[0].GetValue<int>() || tile.TileType != data[1].GetValue<int>()
+                || tile.WallType != data[2].GetValue<int>() || tile.TileFrameX != data[3].GetValue<int>()
+                || tile.TileFrameY != data[4].GetValue<int>() || (int)tile.Slope != data[5].GetValue<int>()
+                || (tile.IsHalfBlock ? 1 : 0) != data[6].GetValue<int>() || (tile.IsActuated ? 1 : 0) != data[7].GetValue<int>()
+                || tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>()) return false;
+        }
+        return true;
+    }
+
     public static Player RestoreInWorker(JsonObject state)
     {
         RequireWorker();
