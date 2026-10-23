@@ -20,6 +20,8 @@ public sealed class Engine : ModSystem
     readonly Rectangle area = new(X - 30, Y - 65, 120, 100);
     JsonObject checkpoint;
     Player source;
+    public Player Source => source;
+    public Rectangle Area => area;
     public override void Load() => Main.OnEnginePreload += Run;
     public override void Unload() => Main.OnEnginePreload -= Run;
 
@@ -52,6 +54,48 @@ public sealed class Engine : ModSystem
     JsonObject Handle(JsonObject request)
     {
         string command = request["command"].GetValue<string>();
+        if (command == "async_cleanup")
+        {
+            Setup(new JsonObject());
+            var snapshot = VanillaFrame.Capture(source, area);
+            var fake = new JsonObject { ["status"] = "planned", ["anchor"] = VanillaPrediction.Observe(source),
+                ["controls"] = new JsonArray(Enumerable.Repeat(2, 90).Select(key => JsonValue.Create(key)).ToArray()) };
+            var controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0);
+            controller.Poll(VanillaAsyncMovement.LeadFrames, source, 0);
+            if (controller.Accepted != 1 || controller.InputAt(31) != 2) throw new InvalidOperationException("contract_plan_not_installed");
+            controller.Request(snapshot, 30, source.position, 0);
+            source.velocity.X += 1;
+            controller.Poll(60, source, 0);
+            if (controller.Status != "state_changed:vx" || controller.InputAt(61) != 0)
+                throw new InvalidOperationException("rejected_plan_kept_old_inputs");
+            source.velocity.X = 0;
+            controller.Request(snapshot, 60, source.position, 0);
+            Main.projectile[0].SetDefaults(ProjectileID.WoodenArrowFriendly);
+            Main.projectile[0].active = true; Main.projectile[0].Center = source.Center;
+            controller.Poll(90, source, 0);
+            Main.projectile[0].active = false;
+            if (controller.Status != "context_changed" || controller.InputAt(91) != 0)
+                throw new InvalidOperationException("new_projectile_did_not_invalidate_plan");
+            return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
+        }
+        if (command == "plan")
+        {
+            var state = request["snapshot"].AsObject();
+            try
+            {
+                var prefix = request["prefix"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+                var advanced = new VanillaPrediction(state).Predict(prefix, false, true);
+                if (advanced["end_snapshot"] is not JsonObject future)
+                    return new JsonObject { ["status"] = "unsafe_handoff" };
+                var anchor = VanillaPrediction.Observe(VanillaFrame.RestoreInWorker(future));
+                var result = new VanillaLocalPlanner().Plan(future,
+                    new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()));
+                result["anchor"] = anchor;
+                return result;
+            }
+            finally { VanillaFrame.RestoreInWorker(state); }
+        }
         if (command == "reset")
         {
             Setup(request);
@@ -127,10 +171,10 @@ public sealed class Engine : ModSystem
         throw new ArgumentException("unknown_command");
     }
 
-    void Setup(JsonObject request)
+    public void Setup(JsonObject request, bool worker = true)
     {
         Main.gameMenu = false;
-        Main.myPlayer = 255;
+        if (worker) Main.myPlayer = 255;
         Main.rand = new Terraria.Utilities.UnifiedRandom(73);
         VanillaFrame.RestoreFields(WorldGen.genRand, VanillaFrame.CaptureFields(new Terraria.Utilities.UnifiedRandom(81)));
         foreach (var npc in Main.npc) npc.active = false;
@@ -143,13 +187,20 @@ public sealed class Engine : ModSystem
             if (y >= Y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
         }
         source = new Player { whoAmI = 0, active = true, name = "Forecast subject", statLife = 400, statLifeMax = 400, ConsumedLifeCrystals = 15 };
+        if (!worker)
+        {
+            VanillaFrame.RestoreFields(Main.LocalPlayer, VanillaFrame.CaptureFields(source));
+            source = Main.LocalPlayer;
+            foreach (var item in source.armor.Concat(source.inventory).Concat(source.miscEquips)) item.SetDefaults(ItemID.None);
+        }
         source.position = new Vector2(X * 16, Y * 16 - source.height);
         source.fallStart = (int)(source.position.Y / 16);
         Main.player[0] = source;
         int slot = 3;
         if (request["equipment"] is JsonArray items)
             foreach (var item in items) source.armor[slot++].SetDefaults(item.GetValue<int>());
-        for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+        if (!worker) Main.ActivePlayerFileData.Player = source;
+        if (worker) for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
         if (request["buffs"] is JsonArray buffs)
             foreach (var buff in buffs) source.AddBuff(buff[0].GetValue<int>(), buff[1].GetValue<int>());
         string terrain = request["terrain"]?.GetValue<string>() ?? "flat";
@@ -184,14 +235,14 @@ public sealed class Engine : ModSystem
                 var tile = Main.tile[x, y]; tile.ClearEverything();
                 if (y >= Y + 10) { tile.LiquidType = LiquidID.Lava; tile.LiquidAmount = 255; }
             }
-        if (terrain is "honey" or "honey_block")
+        if (worker && terrain is ("honey" or "honey_block"))
             for (int i = 0; i < 3; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
         if (request["airborne"]?.GetValue<bool>() == true)
         {
             source.position.Y -= request["airborne_height"]?.GetValue<int>() ?? 320;
             source.velocity.Y = 3; source.fallStart = (int)(source.position.Y / 16);
         }
-        if (request["pre_controls"] is JsonArray prior)
+        if (worker && request["pre_controls"] is JsonArray prior)
             foreach (var key in prior) VanillaPrediction.Advance(source, (VanillaKeys)key.GetValue<int>());
     }
 }

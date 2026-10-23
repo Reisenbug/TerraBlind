@@ -1,0 +1,233 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Net.Sockets;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using Terraria;
+using Terraria.IO;
+using Terraria.GameInput;
+using Terraria.ModLoader;
+using TerraBlind;
+using MonoMod.Cil;
+
+namespace Forecast;
+
+public sealed class Client : ModSystem
+{
+    bool enabled;
+    Engine fixture;
+    int tick, scenario, warmup;
+    int keys;
+    Task<JsonObject> pending;
+    JsonArray actual = new(), results = new();
+    TcpClient connection;
+    StreamReader reader;
+    StreamWriter writer;
+    readonly (string name, string setup)[] cases = {
+        ("flat", "{}"), ("half", "{\"terrain\":\"half\"}"),
+        ("ceiling", "{\"terrain\":\"ceiling\"}"), ("honey", "{\"terrain\":\"honey\"}"),
+        ("cloud", "{\"equipment\":[53]}"), ("wings", "{\"equipment\":[493]}"),
+        ("featherfall", "{\"airborne\":true,\"buffs\":[[8,600]]}"),
+        ("gravity", "{\"buffs\":[[18,600]]}"), ("frozen", "{\"buffs\":[[47,35]]}")
+    };
+    int[] controls;
+    bool started;
+    int menuTicks;
+    bool asynchronous;
+    VanillaAsyncMovement movement;
+    Microsoft.Xna.Framework.Vector2 goal;
+    bool arrived;
+    int revision;
+    readonly string[] asyncCases = { "flat", "wings_ledge", "late", "revision", "terrain", "knockback" };
+
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-forecastclient");
+        if (!enabled) return;
+        asynchronous = Terraria.Program.LaunchParameters.ContainsKey("-forecastasync");
+        string root = Path.GetFullPath(Terraria.Program.LaunchParameters["-tmlsavedirectory"]);
+        if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("client_requires_temporary_save_root");
+        On_Player.ResetControls += Input;
+        On_TriggersSet.CopyInto += CopyInput;
+        On_Main.Update += Update;
+        IL_Main.DoUpdate += AllowBackgroundTest;
+    }
+
+    static void AllowBackgroundTest(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus"))
+            || !cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchLdsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("background_pause_boundary_missing");
+        cursor.EmitDelegate<Func<bool, bool>>(_ => true);
+    }
+
+    void Update(On_Main.orig_Update original, Main main, Microsoft.Xna.Framework.GameTime gameTime)
+    {
+        original(main, gameTime);
+        if (!enabled || started) return;
+        if (++menuTicks % 60 == 1) Console.WriteLine("FORECAST_CLIENT_MENU " + Main.menuMode);
+        if (Main.menuMode != 0) return;
+        started = true;
+        Start();
+    }
+
+    void Start()
+    {
+        if (Terraria.Social.SocialAPI.Cloud != null)
+        {
+            Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        }
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Forecast.wld"), false).SetAsActive();
+        var file = PlayerFileData.CreateAndSave(new Player { name = "Forecast client" });
+        if (file.IsCloudSave || !file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new InvalidOperationException("player_not_isolated");
+        Player.LoadPlayer(file.Path, false).SetAsActive();
+        Main.autoPause = false;
+        WorldGen.playWorld();
+    }
+
+    void Input(On_Player.orig_ResetControls original, Player player)
+    {
+        original(player);
+        ApplyInput(player);
+    }
+
+    void CopyInput(On_TriggersSet.orig_CopyInto original, TriggersSet triggers, Player player)
+    {
+        original(triggers, player);
+        ApplyInput(player);
+    }
+
+    void ApplyInput(Player player)
+    {
+        if (player.whoAmI != Main.myPlayer) return;
+        player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
+        player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || Main.gameMenu) return;
+        try
+        {
+            if (fixture == null)
+            {
+                connection = new TcpClient("127.0.0.1", 19042) { NoDelay = true };
+                reader = new StreamReader(connection.GetStream()); writer = new StreamWriter(connection.GetStream()) { AutoFlush = true };
+                fixture = new Engine();
+                if (asynchronous) BeginAsync(); else Begin();
+                return;
+            }
+            if (asynchronous) { StepAsync(); return; }
+            if (warmup > 0)
+            {
+                if (--warmup != 0) return;
+                var snapshot = VanillaFrame.Capture(fixture.Source, fixture.Area);
+                pending = Task.Run(() =>
+                {
+                    Call(new JsonObject { ["command"] = "load", ["snapshot"] = snapshot });
+                    return Call(new JsonObject { ["command"] = "predict", ["controls"] = new JsonArray(controls.Select(key => JsonValue.Create(key)).ToArray()) });
+                });
+                keys = controls[0]; return;
+            }
+            if (tick < controls.Length)
+            {
+                actual.Add(VanillaPrediction.Observe(fixture.Source)); tick++;
+                keys = tick < controls.Length ? controls[tick] : 0;
+            }
+            if (tick != controls.Length || !pending.IsCompleted) return;
+            var forecast = pending.GetAwaiter().GetResult();
+            results.Add(new JsonObject { ["name"] = cases[scenario].name, ["predicted"] = forecast, ["actual"] = actual });
+            File.WriteAllText(Path.Combine(Main.SavePath, "client-result.json"), results.ToJsonString());
+            Console.WriteLine("FORECAST_CLIENT_CASE " + cases[scenario].name);
+            if (++scenario == cases.Length)
+            {
+                Call(new JsonObject { ["command"] = "close" });
+                Console.WriteLine("FORECAST_CLIENT_COMPLETE"); Environment.Exit(0);
+            }
+            Begin();
+        }
+        catch (Exception error) { Console.WriteLine("FORECAST_CLIENT_FAILED " + error); Environment.Exit(1); }
+    }
+
+    void Begin()
+    {
+        fixture.Setup(JsonNode.Parse(cases[scenario].setup).AsObject(), false);
+        controls = Enumerable.Range(0, 72).Select(i => cases[scenario].name == "gravity" ? (i is 0 or 26 ? 8 : 0) : (i < 18 || i is >= 21 and < 41 ? 6 : 2)).ToArray();
+        tick = 0; warmup = 6; keys = 0; actual = new JsonArray();
+    }
+
+    void BeginAsync()
+    {
+        string name = asyncCases[scenario];
+        fixture.Setup(name == "wings_ledge" ? JsonNode.Parse("{\"terrain\":\"ledge\",\"height\":12,\"equipment\":[493]}").AsObject() : new JsonObject(), false);
+        goal = fixture.Source.position + new Microsoft.Xna.Framework.Vector2(22 * 16, name == "wings_ledge" ? -12 * 16 : 0);
+        tick = 0; warmup = 6; keys = 0; revision = 0; arrived = false; actual = new JsonArray();
+        movement = new VanillaAsyncMovement(request => pending = Task.Run(async () =>
+        {
+            if (name == "late") await Task.Delay(1000);
+            return Call(request);
+        }));
+    }
+
+    void StepAsync()
+    {
+        if (warmup > 0) { if (--warmup != 0) return; }
+        else tick++;
+        string name = asyncCases[scenario];
+        bool negative = scenario >= 2;
+        if (tick == 15)
+        {
+            if (name == "revision") revision++;
+            if (name == "terrain") Main.tile[498, 400].TileType = Terraria.ID.TileID.Stone;
+            if (name == "knockback") fixture.Source.velocity.X += 2;
+        }
+        movement.Poll(tick, fixture.Source, revision);
+        var observation = VanillaPrediction.Observe(fixture.Source);
+        observation["tick"] = tick; observation["world_tick"] = Main.GameUpdateCount;
+        observation["status"] = movement.Status; actual.Add(observation);
+        observation["lead_frames"] = movement.PlanningLead; observation["response_frames"] = movement.ResponseFrames;
+        if (Microsoft.Xna.Framework.Vector2.Distance(fixture.Source.position, goal) <= 20 && Math.Abs(fixture.Source.velocity.Y) < .01f) arrived = true;
+        bool finished = negative ? movement.Rejected > 0 : arrived && !movement.Busy;
+        if (!finished && tick >= 600 && !movement.Busy) finished = true;
+        if (finished)
+        {
+            results.Add(new JsonObject { ["name"] = name, ["reached"] = arrived, ["accepted"] = movement.Accepted,
+                ["rejected"] = movement.Rejected, ["status"] = movement.Status, ["lead_frames"] = movement.PlanningLead, ["trace"] = actual });
+            File.WriteAllText(Path.Combine(Main.SavePath, "async-result.json"), results.ToJsonString());
+            Console.WriteLine($"FORECAST_ASYNC_CASE {name} reached={arrived} accepted={movement.Accepted} rejected={movement.Rejected} status={movement.Status}");
+            if (++scenario == asyncCases.Length)
+            {
+                Call(new JsonObject { ["command"] = "close" });
+                Console.WriteLine("FORECAST_CLIENT_COMPLETE"); Environment.Exit(0);
+            }
+            BeginAsync(); return;
+        }
+        if (!movement.Busy && (!negative || tick == 0))
+        {
+            var snapshot = VanillaFrame.Capture(fixture.Source, VanillaLocalPlanner.SnapshotArea(fixture.Source, goal));
+            movement.Request(snapshot, tick, goal, revision);
+        }
+        keys = movement.InputAt(tick + 1);
+    }
+
+    JsonObject Call(JsonObject request)
+    {
+        writer.WriteLine(request.ToJsonString());
+        var result = JsonNode.Parse(reader.ReadLine() ?? throw new IOException("worker_disconnected")).AsObject();
+        if (result["error"] != null) throw new InvalidOperationException(result["error"].GetValue<string>());
+        return result;
+    }
+
+    public override void Unload()
+    {
+        if (!enabled) return;
+        On_Player.ResetControls -= Input;
+        On_TriggersSet.CopyInto -= CopyInput;
+        On_Main.Update -= Update;
+        IL_Main.DoUpdate -= AllowBackgroundTest;
+        reader?.Dispose(); writer?.Dispose(); connection?.Dispose();
+    }
+}

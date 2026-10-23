@@ -93,6 +93,9 @@ def main():
             from navigation import run
             run(worker, args.root)
             return
+        cleanup = worker.call("async_cleanup")
+        assert cleanup["passed"]
+        print("ASYNC_REJECTION_CLEANUP_CONTRACT_PASS", flush=True)
         controls = [6] * 18 + [2] * 3 + [6] * 20 + [2] * 31
         repeated_jumps = ([6] * 12 + [2] * 2) * 7 + [2] * 2
         cases = [
