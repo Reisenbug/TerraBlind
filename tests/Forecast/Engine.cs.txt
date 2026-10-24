@@ -164,6 +164,30 @@ public sealed class Engine : ModSystem
             plant.HasTile = true; plant.TileType = TileID.Cobweb;
             controller.Poll(1 + controller.PlanningLead, source, 0);
             if (controller.Status != "context_changed") throw new InvalidOperationException("web_change_was_ignored");
+            Setup(new JsonObject()); source.controlRight = true;
+            snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            fake["forecast"]["frames"] = new JsonArray(Enumerable.Range(0, 90).Select(_ => (JsonNode)VanillaPrediction.Observe(source)).ToArray());
+            delayed = new System.Threading.Tasks.TaskCompletionSource<JsonObject>(); calls = 0;
+            controller = new VanillaAsyncMovement(_ => ++calls == 1
+                ? System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()) : delayed.Task);
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
+            controller.Request(snapshot, 1, source.position, 0);
+            int arrival = 1 + controller.PlanningLead + 3;
+            for (int frame = 2; frame < arrival; frame++) controller.Poll(frame, source, 0);
+            delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(arrival, source, 0);
+            if (controller.Accepted != 2 || controller.InputAt(arrival + 1) != 2)
+                throw new InvalidOperationException("matching_late_route_was_discarded");
+            delayed = new System.Threading.Tasks.TaskCompletionSource<JsonObject>(); calls = 0;
+            controller = new VanillaAsyncMovement(_ => ++calls == 1
+                ? System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()) : delayed.Task);
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
+            controller.Request(snapshot, 1, source.position, 0); arrival = 1 + controller.PlanningLead + 3;
+            source.controlRight = false; source.controlLeft = true;
+            for (int frame = 2; frame < arrival; frame++) controller.Poll(frame, source, 0);
+            delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(arrival, source, 0);
+            if (controller.Accepted != 1 || controller.LastRejection != "late_result")
+                throw new InvalidOperationException("different_input_history_accepted_late_route");
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "plan")

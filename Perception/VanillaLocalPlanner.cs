@@ -90,37 +90,37 @@ public sealed class VanillaLocalPlanner
         string selected = "none";
         JsonObject selectedForecast = null;
         double restoreMs = 0, updateMs = 0, observeMs = 0, cleanupMs = 0;
+        var frames = new List<VanillaPrediction.MovementSample>(Horizon);
         try
         {
         foreach (var candidate in candidates)
         {
-            var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false);
+            var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames);
             var timing = forecast["timing"];
             restoreMs += timing["restore_ms"].GetValue<double>();
             updateMs += timing["update_ms"].GetValue<double>();
             observeMs += timing["observe_ms"].GetValue<double>();
             cleanupMs += timing["cleanup_ms"].GetValue<double>();
-            var frames = forecast["frames"].AsArray();
-            int damage = Math.Max(0, hp - frames.Min(frame => frame["hp"].GetValue<int>()));
+            int damage = Math.Max(0, hp - frames.Min(frame => frame.Hp));
             bool safe = forecast["outcome"].GetValue<string>() == "complete"
-                && damage == 0 && frames.All(frame => !frame["dead"].GetValue<bool>());
+                && damage == 0 && frames.All(frame => !frame.Dead);
             double score = double.PositiveInfinity;
             if (safe)
             {
-                double distance(JsonNode frame)
+                double distance(VanillaPrediction.MovementSample frame)
                 {
-                    var position = new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>());
+                    var position = frame.Position;
                     if (field == null) return Vector2.Distance(goal, position);
                     var cell = ((int)((position.X + player.width / 2f) / 16), (int)((position.Y + player.height) / 16) - 1);
                     return field.TryGetValue(cell, out int cost) ? cost * 16d : missing + Vector2.Distance(goal, position);
                 }
                 score = transit ? distance(frames[^1]) + .1 * frames.Average(distance)
                     : frames.Average(distance) + .25 * distance(frames[^1]);
-                score += Math.Max(0, wings - frames[^1]["wing_time"].GetValue<float>()) * .02;
-                score += Math.Max(0, jumps - frames[^1]["available_jumps"].GetValue<int>()) * 2;
+                score += Math.Max(0, wings - frames[^1].WingTime) * .02;
+                score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
                 if (score < best - .01)
                 {
-                    best = score; selected = candidate.name; chosen = candidate.keys; selectedForecast = forecast;
+                    best = score; selected = candidate.name; chosen = candidate.keys;
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
@@ -128,11 +128,11 @@ public sealed class VanillaLocalPlanner
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (safe && candidate.name is "walk" or "continue"
                 && (candidate.name != "continue" || jumps == 0 && wings == 0)
-                && frames.All(frame => frame["grounded"].GetValue<bool>())
-                && frames.Skip(6).All(frame => Math.Abs(frame["vx"].GetValue<float>()) > .1f))
+                && frames.All(frame => frame.Grounded)
+                && frames.Skip(6).All(frame => Math.Abs(frame.Velocity.X) > .1f))
             {
                 var end = frames[^1];
-                var endPosition = new Vector2(end["x"].GetValue<float>(), end["y"].GetValue<float>());
+                var endPosition = end.Position;
                 bool progress = Vector2.Distance(goal, endPosition) < Vector2.Distance(goal, player.position) - 16;
                 if (field != null)
                 {
@@ -143,6 +143,15 @@ public sealed class VanillaLocalPlanner
                 }
                 if (progress) break;
             }
+        }
+        if (chosen.Length > 0)
+        {
+            selectedForecast = prediction.Predict(chosen, false, restoreAfter: false);
+            var timing = selectedForecast["timing"];
+            restoreMs += timing["restore_ms"].GetValue<double>();
+            updateMs += timing["update_ms"].GetValue<double>();
+            observeMs += timing["observe_ms"].GetValue<double>();
+            cleanupMs += timing["cleanup_ms"].GetValue<double>();
         }
         }
         finally

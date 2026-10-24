@@ -13,6 +13,8 @@ public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down 
 
 public sealed class VanillaPrediction
 {
+    public readonly record struct MovementSample(Vector2 Position, Vector2 Velocity, int Hp, bool Dead,
+        float WingTime, int AvailableJumps, bool Grounded);
     readonly JsonObject checkpoint;
     readonly Rectangle area;
     readonly VanillaFrame.WorkerState compiled;
@@ -68,6 +70,7 @@ public sealed class VanillaPrediction
             ["hp"] = player.statLife, ["dead"] = player.dead, ["grav_dir"] = player.gravDir,
             ["wing_time"] = player.wingTime, ["jump"] = player.jump, ["dash_delay"] = player.dashDelay,
             ["available_jumps"] = available, ["wet"] = player.wet, ["honey_wet"] = player.honeyWet,
+            ["jump_state"] = Convert.ToBase64String(System.Runtime.InteropServices.MemoryMarshal.AsBytes(player.ExtraJumps)),
             ["frozen"] = player.frozen, ["webbed"] = player.webbed,
             ["run_speed"] = player.maxRunSpeed, ["run_accel"] = player.runAcceleration,
             ["run_slowdown"] = player.runSlowdown, ["move_speed"] = player.moveSpeed,
@@ -88,11 +91,13 @@ public sealed class VanillaPrediction
         return result;
     }
 
-    public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true)
+    public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true,
+        System.Collections.Generic.List<MovementSample> samples = null)
     {
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 120) throw new ArgumentException("horizon_must_be_1_to_120");
         var trace = new JsonArray();
+        samples?.Clear();
         var timer = Stopwatch.StartNew();
         string outcome = "complete";
         double restore = 0, update = 0, observe = 0, cleanup = 0;
@@ -108,7 +113,14 @@ public sealed class VanillaPrediction
                 Advance(player, (VanillaKeys)control);
                 update += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 tick = Stopwatch.GetTimestamp();
-                trace.Add(Observe(player, detailed));
+                if (samples == null) trace.Add(Observe(player, detailed));
+                else
+                {
+                    int available = 0;
+                    foreach (var jump in player.ExtraJumps) if (jump.Available) available++;
+                    samples.Add(new MovementSample(player.position, player.velocity, player.statLife, player.dead,
+                        player.wingTime, available, Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height)));
+                }
                 observe += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 if (player.dead) { outcome = "dead"; break; }
                 if (Main.projectile.Any(projectile => projectile.active) || Main.npc.Any(npc => npc.active)
