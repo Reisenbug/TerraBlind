@@ -15,6 +15,19 @@ public class BackgroundAutomation : ModSystem
     {
         if (Main.dedServ) return;
         IL_Player.Update += Patch;
+        IL_Main.DoUpdate += PatchBackgroundPause;
+    }
+
+    static bool LocalNavigation => Main.netMode == NetmodeID.SinglePlayer
+        && (RecedingNav.Active || VanillaNavigationDemo.Active);
+
+    static void PatchBackgroundPause(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus"))
+            || !cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchLdsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("TerraBlind 未找到单人后台寻路的暂停入口。");
+        cursor.EmitDelegate<Func<bool, bool>>(focused => focused || LocalNavigation);
     }
 
     static void Patch(ILContext il)
@@ -32,8 +45,8 @@ public class BackgroundAutomation : ModSystem
 
     static bool Apply(bool focused, Player player)
     {
-        bool background = !focused && !Main.gameMenu && Main.netMode == NetmodeID.MultiplayerClient
-            && Config.I.AiClient && AgentNetwork.CanAutomate && player == Main.LocalPlayer;
+        bool background = !focused && !Main.gameMenu && AgentNetwork.CanAutomate && player == Main.LocalPlayer
+            && (LocalNavigation || Main.netMode == NetmodeID.MultiplayerClient && Config.I.AiClient);
         if (background != wasBackground)
         {
             wasBackground = background;
@@ -46,6 +59,7 @@ public class BackgroundAutomation : ModSystem
     public override void Unload()
     {
         if (Installed) IL_Player.Update -= Patch;
+        IL_Main.DoUpdate -= PatchBackgroundPause;
         Installed = false; wasBackground = false;
     }
 }

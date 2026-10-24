@@ -55,6 +55,8 @@ def main():
         command.append("-vnavcontinuitycheck")
     if circuit:
         command.append("-vnavcircuitcheck")
+    if "--background" in sys.argv:
+        command.append("-vnavbackgroundcheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -68,7 +70,7 @@ def main():
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 if show and process.poll() is None:
                     keep = True
-                raise RuntimeError(f"Demo failed; inspect {root / 'demo-client.log'}")
+                raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
             time.sleep(.25)
         else:
             raise TimeoutError("Demo did not complete within 240 seconds")
@@ -77,6 +79,9 @@ def main():
             assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
+            if "--background" in sys.argv:
+                samples = json.loads((root / "descent-trace.json").read_text())
+                assert samples and all(not sample["focused"] for sample in samples)
             print("NATURAL_CONTINUITY_CHECK_COMPLETE" if continuity else "NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
             if show:
                 keep = True

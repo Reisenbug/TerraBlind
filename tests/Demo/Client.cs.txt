@@ -62,8 +62,11 @@ public sealed class Driver : ModSystem
     static void Background(ILContext il)
     {
         var cursor = new ILCursor(il);
-        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus"))
-            || !cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchLdsfld<Main>("hasFocus")))
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("background_pause_boundary_missing");
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbackgroundcheck"))
+            cursor.EmitDelegate<Action>(() => Main.hasFocus = false);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchLdsfld<Main>("hasFocus")))
             throw new InvalidOperationException("background_pause_boundary_missing");
         cursor.EmitDelegate<Func<bool, bool>>(_ => true);
     }
@@ -228,6 +231,7 @@ public sealed class Driver : ModSystem
         ticks++;
         var sample = VanillaPrediction.Observe(player);
         sample["phase"] = VanillaDescentRun.Instance.Status;
+        sample["focused"] = Main.hasFocus;
         sample["nav_stop"] = RecedingNav.LastStop;
         sample["macro"] = StateSpacePlanner.ExecRunning;
         sample["engine"] = VanillaNavigationDemo.Active;
