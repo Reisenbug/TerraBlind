@@ -196,7 +196,7 @@ namespace TerraBlind
                 return _cachedField;
             }
             _prevField = _cachedField; _prevGoal = _cachedGoal;
-            _cachedField = BuildField(gx, gy, sx, sy, bigMargin: true);
+            _cachedField = BuildCachedField(gx, gy, sx, sy);
             _cachedGoal = (gx, gy);
             return _cachedField;
         }
@@ -218,8 +218,16 @@ namespace TerraBlind
         // reference when done, the old field keeps serving replans until the swap, never a null window.
         public static void Rebuild(int gx, int gy, int sx, int sy)
         {
-            var f = BuildField(gx, gy, sx, sy, bigMargin: true);
+            var f = BuildCachedField(gx, gy, sx, sy);
             _cachedField = f; _cachedGoal = (gx, gy);
+        }
+
+        static Dictionary<(int, int), int> BuildCachedField(int gx, int gy, int sx, int sy)
+        {
+            var field = BuildField(gx, gy, sx, sy, bigMargin: !VanillaNavBridge.Enabled);
+            if (VanillaNavBridge.Enabled && !field.ContainsKey((sx, sy)))
+                field = BuildField(gx, gy, sx, sy, bigMargin: true);
+            return field;
         }
 
         // the field priced digs with the pick power captured at build time, a pick upgrade mid-nav makes those
