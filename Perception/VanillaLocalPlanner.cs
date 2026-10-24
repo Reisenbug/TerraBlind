@@ -25,7 +25,7 @@ public sealed class VanillaLocalPlanner
         return new Rectangle(left, top, right - left, bottom - top);
     }
 
-    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonArray guidance = null)
+    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonArray guidance = null, bool terminal = false)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -34,11 +34,11 @@ public sealed class VanillaLocalPlanner
         int hp = player.statLife;
         float wings = player.wingTime;
         int jumps = VanillaPrediction.Observe(player, false)["available_jumps"].GetValue<int>();
-        var field = guidance?.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
+        var field = terminal ? null : guidance?.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
         int direction = goal.X >= player.position.X ? 2 : 1;
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
-        bool transit = snapshot["navigation"]?.GetValue<bool>() == true && guidance?.Count > 0;
+        bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && guidance?.Count > 0;
         var prediction = new VanillaPrediction(snapshot);
         var candidates = new List<(string name, int[] keys)>();
         if (continuation?.Length > 0)

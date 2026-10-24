@@ -98,7 +98,11 @@ public sealed class VanillaNavigationDemo : ModSystem
     VanillaAsyncMovement ConnectMovement(VanillaWorkerConnection connection)
         => new(request =>
         {
-            if (NavigationOwned) request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
+            if (NavigationOwned)
+            {
+                request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
+                request["terminal"] = VanillaNavBridge.Terminal;
+            }
             return Task.Run(() => connection.Send(request));
         });
 

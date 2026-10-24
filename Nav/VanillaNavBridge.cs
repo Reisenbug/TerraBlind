@@ -9,6 +9,7 @@ namespace TerraBlind;
 public static class VanillaNavBridge
 {
     public static bool Enabled;
+    public static bool Terminal { get; private set; }
     static Dictionary<(int, int), int> field;
     static Vector2? failedAt;
     static int bestH = int.MaxValue;
@@ -17,13 +18,18 @@ public static class VanillaNavBridge
     public static void Reset()
     {
         if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
-        failedAt = null; bestH = int.MaxValue; field = null;
+        failedAt = null; bestH = int.MaxValue; field = null; Terminal = false;
     }
 
     public static bool Tick(Player player, int gx, int gy)
     {
-        if (!Enabled || StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || ItemUseCoordinator.IsActive) return false;
+        if (!Enabled) return false;
         var demo = VanillaNavigationDemo.Instance;
+        if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || ItemUseCoordinator.IsActive)
+        {
+            if (demo.NavigationOwned) demo.Stop("地形操作接管");
+            return false;
+        }
         if (failedAt.HasValue && Vector2.Distance(player.position, failedAt.Value) < 24) return false;
         if (player.itemTime > 0 || player.itemAnimation > 0 || player.controlUseItem) return true;
         field = MazeWand.PeekFieldOrNull(gx, gy);
@@ -38,6 +44,9 @@ public static class VanillaNavBridge
             failedAt = player.position; demo.Stop("局部移动无进展，交给挖掘/搭建"); return false;
         }
         Vector2? target = null;
+        var destination = new Vector2(gx * 16 + 8 - player.width / 2, (gy + 1) * 16 - player.height);
+        Terminal = Math.Abs(cx - gx) + Math.Abs(cy - gy) <= 12
+            && !Collision.SolidCollision(destination, player.width, player.height);
         var cell = (x: cx, y: cy);
         for (int i = 0; i < 24 && cell != (gx, gy); i++)
         {
@@ -48,6 +57,7 @@ public static class VanillaNavBridge
             if (Vector2.Distance(player.position, position) < 40) continue;
             if (!Collision.SolidCollision(position, player.width, player.height)) target = position;
         }
+        if (Terminal) target = destination;
         if (!target.HasValue)
         {
             if (demo.NavigationOwned) demo.Stop("前方需要改变地形");
