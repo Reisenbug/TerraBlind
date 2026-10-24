@@ -18,6 +18,9 @@ public sealed class VanillaLocalPlanner
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
         int left = Math.Max(0, (int)Math.Floor(Math.Min(player.position.X, goal.X) / 16) - 8);
         int right = Math.Min(Main.maxTilesX, (int)Math.Ceiling(Math.Max(player.position.X, goal.X) / 16) + 10);
+        float reach = Math.Max(Math.Abs(player.velocity.X), Math.Max(player.maxRunSpeed, player.accRunSpeed)) * Horizon + player.width + 32;
+        left = Math.Min(left, Math.Max(0, (int)Math.Floor((player.position.X - reach) / 16)));
+        right = Math.Max(right, Math.Min(Main.maxTilesX, (int)Math.Ceiling((player.position.X + reach) / 16)));
         int top = Math.Max(0, (int)Math.Floor(Math.Min(player.position.Y, goal.Y) / 16) - 30);
         int bottom = Math.Min(Main.maxTilesY, (int)Math.Ceiling(Math.Max(player.position.Y, goal.Y) / 16) + 24);
         if (right - left > 160 || bottom - top > 160 || right <= left || bottom <= top)
@@ -45,6 +48,10 @@ public sealed class VanillaLocalPlanner
             candidates.Add(("continue", Enumerable.Range(0, Horizon)
                 .Select(i => i < continuation.Length ? continuation[i] : transit ? continuation[^1] : 0).ToArray()));
         candidates.Add(("wait", new int[Horizon]));
+        if (jumps > 0 || wings > 0)
+            foreach (int release in new[] { 6, 18, 30 })
+                candidates.Add(($"travel_{release}", Enumerable.Range(0, Horizon)
+                    .Select(i => direction | (i == release ? 0 : 4)).ToArray()));
         candidates.Add(("walk", Enumerable.Repeat(direction, Horizon).ToArray()));
         candidates.Add(("drop", Enumerable.Repeat(direction | 16, Horizon).ToArray()));
         candidates.Add(("vertical_drop", Enumerable.Repeat(16, Horizon).ToArray()));
@@ -120,6 +127,7 @@ public sealed class VanillaLocalPlanner
                 ["score"] = safe ? JsonValue.Create(score) : null, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (safe && candidate.name is "walk" or "continue"
+                && (candidate.name != "continue" || jumps == 0 && wings == 0)
                 && frames.All(frame => frame["grounded"].GetValue<bool>())
                 && frames.Skip(6).All(frame => Math.Abs(frame["vx"].GetValue<float>()) > .1f))
             {

@@ -23,6 +23,8 @@ public sealed class VanillaAsyncMovement
     int requestRevision;
     int currentRevision = -1;
     JsonObject context;
+    JsonObject lastRequest;
+    JsonArray observations = new();
     public int Accepted { get; private set; }
     public int Rejected { get; private set; }
     public string Status { get; private set; } = "idle";
@@ -31,6 +33,7 @@ public sealed class VanillaAsyncMovement
     public JsonObject LastResult { get; private set; }
     public string LastMismatch { get; private set; }
     public string LastRejection { get; private set; }
+    public JsonObject LastDivergence { get; private set; }
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) => send = transport;
 
@@ -39,8 +42,16 @@ public sealed class VanillaAsyncMovement
 
     public void Poll(long tick, Player player, int revision)
     {
+        int applied = InputAt(tick);
         foreach (long old in inputs.Keys.Where(key => key <= tick).ToArray()) inputs.Remove(old);
         if (revision != currentRevision) { inputs.Clear(); currentRevision = revision; }
+        if (pending != null)
+        {
+            var sample = VanillaPrediction.Observe(player, false);
+            sample["tick"] = tick; sample["scheduled_keys"] = applied;
+            observations.Add(sample);
+            if (observations.Count > 120) observations.RemoveAt(0);
+        }
         if (pending == null || !pending.IsCompleted) return;
         if (!completionObserved)
         {
@@ -70,7 +81,14 @@ public sealed class VanillaAsyncMovement
         if (!VanillaFrame.ContextMatches(context, player, out string difference, result["forecast"]?["frames"]?.AsArray()))
         { LastMismatch = difference; Reject("context_changed"); return; }
         if (!planned) { Reject("no_safe_plan"); return; }
-        if (!matches) { LastMismatch = mismatch; Reject(reason); return; }
+        if (!matches)
+        {
+            LastMismatch = mismatch;
+            LastDivergence = new JsonObject { ["reason"] = reason, ["tick"] = tick, ["handoff"] = handoff,
+                ["request"] = lastRequest.DeepClone(), ["anchor"] = result["anchor"].DeepClone(),
+                ["actual"] = VanillaPrediction.Observe(player), ["observed"] = observations.DeepClone() };
+            Reject(reason); return;
+        }
         var controls = result["controls"].AsArray();
         AcceptedRoute = result["forecast"]["frames"].AsArray().Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
         inputs.Clear();
@@ -117,6 +135,7 @@ public sealed class VanillaAsyncMovement
             ["continuation"] = new JsonArray(Enumerable.Range(1, VanillaLocalPlanner.Horizon)
                 .TakeWhile(i => inputs.ContainsKey(handoff + i)).Select(i => JsonValue.Create(InputAt(handoff + i))).ToArray()) };
         context = request["snapshot"].AsObject();
+        lastRequest = request; observations = new JsonArray(); LastDivergence = null;
         pending = send(request); Status = "planning"; return true;
     }
 }

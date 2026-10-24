@@ -74,6 +74,10 @@ public sealed class VanillaPrediction
             ["gravity"] = player.gravity, ["fall_speed"] = player.maxFallSpeed, ["jump_boost"] = player.jumpSpeedBoost,
             ["no_fall_damage"] = player.noFallDmg, ["merman"] = player.merman,
             ["fall_start"] = player.fallStart,
+            ["direction"] = player.direction, ["release_jump"] = player.releaseJump,
+            ["item_animation"] = player.itemAnimation, ["item_time"] = player.itemTime,
+            ["keys"] = (player.controlLeft ? 1 : 0) | (player.controlRight ? 2 : 0) | (player.controlJump ? 4 : 0)
+                | (player.controlUp ? 8 : 0) | (player.controlDown ? 16 : 0), ["use_item"] = player.controlUseItem,
             ["control_right"] = player.controlRight, ["control_jump"] = player.controlJump,
             ["grounded"] = Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height),
         };

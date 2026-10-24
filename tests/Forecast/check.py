@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--port", type=int, default=19042)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--navigation", action="store_true")
+    parser.add_argument("--replay", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -91,6 +92,26 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.replay:
+            report = json.loads(args.replay.read_text())
+            request = report["request"]
+            expected = worker.call("replay", snapshot=request["snapshot"], controls=request["prefix"])
+            start = report["handoff"] - len(request["prefix"])
+            for actual in report["observed"]:
+                index = actual["tick"] - start - 1
+                if not 0 <= index < len(expected["frames"]):
+                    continue
+                predicted = expected["frames"][index]
+                differences = {key: [predicted[key], actual[key]] for key in
+                               ("x", "y", "vx", "vy", "direction", "keys", "use_item", "release_jump", "jump", "available_jumps", "item_animation")
+                               if predicted[key] != actual[key]}
+                if differences:
+                    row = dict(index=index, differences=differences, predicted=predicted, actual=actual)
+                    (args.root / "replay-result.json").write_text(json.dumps(row, indent=2))
+                    print("FIRST_REPLAY_DIFFERENCE", index, differences, flush=True)
+                    return
+            print("REPLAY_PREFIX_MATCHED", flush=True)
+            return
         if args.navigation:
             from navigation import run
             run(worker, args.root)

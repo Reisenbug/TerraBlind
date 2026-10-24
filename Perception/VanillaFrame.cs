@@ -208,7 +208,11 @@ public static class VanillaFrame
                 || tile.TileFrameY != data[4].GetValue<int>() || (int)tile.Slope != data[5].GetValue<int>()
                 || (tile.IsHalfBlock ? 1 : 0) != data[6].GetValue<int>() || (tile.IsActuated ? 1 : 0) != data[7].GetValue<int>()
                 || tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>())
-            { difference = $"tile ({x0 + i % width},{y0 + i / width})"; return false; }
+            {
+                difference = $"tile ({x0 + i % width},{y0 + i / width}): {data.ToJsonString()} -> "
+                    + $"[{(tile.HasTile ? 1 : 0)},{tile.TileType},{tile.WallType},{tile.TileFrameX},{tile.TileFrameY},{(int)tile.Slope},{(tile.IsHalfBlock ? 1 : 0)},{(tile.IsActuated ? 1 : 0)},{tile.LiquidType},{tile.LiquidAmount}]";
+                return false;
+            }
         }
         difference = null;
         return true;
