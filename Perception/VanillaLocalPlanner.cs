@@ -13,22 +13,24 @@ public sealed class VanillaLocalPlanner
     public const int Horizon = 90;
     public const int ExecuteFrames = 8;
 
-    public static Rectangle SnapshotArea(Player player, Vector2 goal)
+    public static Rectangle SnapshotArea(Player player, Vector2 goal, int leadFrames = 0)
     {
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
         int left = Math.Max(0, (int)Math.Floor(Math.Min(player.position.X, goal.X) / 16) - 8);
         int right = Math.Min(Main.maxTilesX, (int)Math.Ceiling(Math.Max(player.position.X, goal.X) / 16) + 10);
-        float reach = Math.Max(Math.Abs(player.velocity.X), Math.Max(player.maxRunSpeed, player.accRunSpeed)) * Horizon + player.width + 32;
+        float reach = Math.Max(Math.Abs(player.velocity.X), Math.Max(player.maxRunSpeed, player.accRunSpeed))
+            * (Horizon + leadFrames) + player.width + 32;
         left = Math.Min(left, Math.Max(0, (int)Math.Floor((player.position.X - reach) / 16)));
         right = Math.Max(right, Math.Min(Main.maxTilesX, (int)Math.Ceiling((player.position.X + reach) / 16)));
         int top = Math.Max(0, (int)Math.Floor(Math.Min(player.position.Y, goal.Y) / 16) - 30);
         int bottom = Math.Min(Main.maxTilesY, (int)Math.Ceiling(Math.Max(player.position.Y, goal.Y) / 16) + 24);
-        if (right - left > 160 || bottom - top > 160 || right <= left || bottom <= top)
+        if (right - left > 256 || bottom - top > 160 || right <= left || bottom <= top)
             throw new ArgumentException("goal_requires_larger_than_local_snapshot");
         return new Rectangle(left, top, right - left, bottom - top);
     }
 
-    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false)
+    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
+        int travelDirection = 0)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -47,7 +49,8 @@ public sealed class VanillaLocalPlanner
             for (int i = 0; i < values.Length; i += 3) field.Add((values[i], values[i + 1]), values[i + 2]);
         }
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
-        int direction = goal.X >= player.position.X ? 2 : 1;
+        int direction = !terminal && travelDirection != 0 ? (travelDirection > 0 ? 2 : 1)
+            : goal.X >= player.position.X ? 2 : 1;
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
         bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && field?.Count > 0;
         var prediction = new VanillaPrediction(snapshot);
@@ -99,10 +102,15 @@ public sealed class VanillaLocalPlanner
         JsonObject selectedForecast = null;
         double restoreMs = 0, updateMs = 0, observeMs = 0, cleanupMs = 0;
         var frames = new List<VanillaPrediction.MovementSample>(Horizon);
+        bool forwardProgress = false;
+        bool Forward((string name, int[] keys) candidate) => candidate.keys.All(key => (key & 3) == direction);
+        var ordered = transit ? candidates.OrderBy(candidate => Forward(candidate) ? 0 : 1).ToArray() : candidates.ToArray();
         try
         {
-        foreach (var candidate in candidates)
+        foreach (var candidate in ordered)
         {
+            bool forward = Forward(candidate);
+            if (transit && !forward && forwardProgress) break;
             var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames);
             var timing = forecast["timing"];
             restoreMs += timing["restore_ms"].GetValue<double>();
@@ -112,6 +120,7 @@ public sealed class VanillaLocalPlanner
             int damage = Math.Max(0, hp - frames.Min(frame => frame.Hp));
             bool safe = forecast["outcome"].GetValue<string>() == "complete"
                 && damage == 0 && frames.All(frame => !frame.Dead);
+            bool progress = safe && forward && (frames[^1].Position.X - player.position.X) * (direction == 2 ? 1 : -1) >= 16;
             double score = double.PositiveInfinity;
             if (safe)
             {
@@ -126,13 +135,15 @@ public sealed class VanillaLocalPlanner
                     : frames.Average(distance) + .25 * distance(frames[^1]);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
-                if (score < best - .01)
+                if (transit && progress && !forwardProgress) best = double.PositiveInfinity;
+                if ((!transit || !forwardProgress || progress) && score < best - .01)
                 {
                     best = score; selected = candidate.name; chosen = candidate.keys;
                 }
+                forwardProgress |= progress;
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
-                ["score"] = safe ? JsonValue.Create(score) : null, ["outcome"] = forecast["outcome"].DeepClone(),
+                ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (safe && candidate.name is "walk" or "continue"
                 && (candidate.name != "continue" || jumps == 0 && wings == 0)
@@ -141,15 +152,15 @@ public sealed class VanillaLocalPlanner
             {
                 var end = frames[^1];
                 var endPosition = end.Position;
-                bool progress = Vector2.Distance(goal, endPosition) < Vector2.Distance(goal, player.position) - 16;
+                bool towardGoal = Vector2.Distance(goal, endPosition) < Vector2.Distance(goal, player.position) - 16;
                 if (field != null)
                 {
                     var startCell = ((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16) - 1);
                     var endCell = ((int)((endPosition.X + player.width / 2f) / 16), (int)((endPosition.Y + player.height) / 16) - 1);
-                    progress = field.TryGetValue(startCell, out int startCost) && field.TryGetValue(endCell, out int endCost)
+                    towardGoal = field.TryGetValue(startCell, out int startCost) && field.TryGetValue(endCell, out int endCost)
                         && endCost < startCost;
                 }
-                if (progress) break;
+                if (towardGoal && (!transit || forwardProgress)) break;
             }
         }
         if (chosen.Length > 0)

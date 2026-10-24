@@ -70,6 +70,20 @@ public sealed class Engine : ModSystem
             var packedPlan = new VanillaLocalPlanner().Plan(snapshot, goal, guidance: JsonValue.Create(VanillaFrame.PackInts(packedGuidance)));
             if (!JsonNode.DeepEquals(walk["controls"], packedPlan["controls"]))
                 throw new InvalidOperationException("packed_guidance_changed_decision");
+            var staleGoal = new VanillaLocalPlanner().Plan(snapshot, source.position - new Vector2(32, 0),
+                guidance: guidance, travelDirection: 1);
+            if (staleGoal["controls"].AsArray().Any(key => (key.GetValue<int>() & 3) != 2))
+                throw new InvalidOperationException("stale_waypoint_reversed_travel");
+            if (walk["candidates"].AsArray().Any(candidate => candidate["name"].GetValue<string>().StartsWith("retreat")
+                || candidate["name"].GetValue<string>() == "wait"))
+                throw new InvalidOperationException("fallback_competed_with_safe_forward_route");
+            var queuedSnapshot = VanillaFrame.Capture(source, VanillaLocalPlanner.SnapshotArea(source, goal, 90), true);
+            var handoff = new VanillaPrediction(queuedSnapshot).Predict(Enumerable.Repeat(2, 90).ToArray(), false, true);
+            if (handoff["end_snapshot"] is not JsonObject future)
+                throw new InvalidOperationException("queued_motion_left_snapshot");
+            var afterHandoff = new VanillaLocalPlanner().Plan(future, goal, guidance: guidance, travelDirection: 1);
+            if (afterHandoff["candidates"].AsArray().Any(candidate => candidate["outcome"].GetValue<string>() == "outside_observed_world"))
+                throw new InvalidOperationException("snapshot_omitted_handoff_distance");
             var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
             foreach (var plan in new[] { walk, continued })
                 if (plan["status"]?.GetValue<string>() != "planned"
@@ -214,7 +228,8 @@ public sealed class Engine : ModSystem
                 var result = new VanillaLocalPlanner().Plan(future,
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
-                    guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true);
+                    guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true,
+                    travelDirection: request["travel_direction"]?.GetValue<int>() ?? 0);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

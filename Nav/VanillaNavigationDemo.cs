@@ -27,6 +27,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     public int RoutePoints => route.Length;
     public string PlannerStatus => movement?.Status ?? Status;
     public JsonObject PlannerResult => movement?.LastResult;
+    internal bool HasQueuedMovement => movement?.HasInputAt(tick + 1) == true;
     public string PlannerRejection => movement?.LastRejection;
     public string PlannerMismatch => movement?.LastMismatch;
     public int PlanAccepted => movement?.Accepted ?? 0;
@@ -107,6 +108,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
                 request["terminal"] = VanillaNavBridge.Terminal;
+                request["travel_direction"] = VanillaNavBridge.TravelDirection;
             }
             return Task.Run(() => connection.Send(request));
         });
@@ -214,7 +216,8 @@ public sealed class VanillaNavigationDemo : ModSystem
                 if (player.itemAnimation > 0 || player.itemTime > 0) return;
                 long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
-                var snapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, goal), NavigationOwned);
+                var snapshot = VanillaFrame.Capture(player,
+                    VanillaLocalPlanner.SnapshotArea(player, goal, movement.PlanningLead), NavigationOwned);
                 captureMs = System.Diagnostics.Stopwatch.GetElapsedTime(captureStart).TotalMilliseconds;
                 captureBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
                 long requestStart = System.Diagnostics.Stopwatch.GetTimestamp();
