@@ -66,6 +66,8 @@ def main():
     worlds = args.root / "Worlds"
     worlds.mkdir(exist_ok=True)
     world = worlds / "Forecast.wld"
+    if not world.exists() and (worlds / "World.wld").exists():
+        world = worlds / "World.wld"
     if not world.exists():
         previous = Path("/tmp/terrablind-rl-lab/Worlds/World.wld")
         if previous.exists():
@@ -96,6 +98,9 @@ def main():
         cleanup = worker.call("async_cleanup")
         assert cleanup["passed"]
         print("ASYNC_REJECTION_CLEANUP_CONTRACT_PASS", flush=True)
+        transit = worker.call("transit_contract")
+        assert transit["passed"]
+        print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)
         controls = [6] * 18 + [2] * 3 + [6] * 20 + [2] * 31
         repeated_jumps = ([6] * 12 + [2] * 2) * 7 + [2] * 2
         cases = [
@@ -117,6 +122,7 @@ def main():
             ("wings_mid_flight", {"equipment": [493], "pre_controls": [6] * 30}),
             ("five_jump_baseline", {}),
             ("fall_damage", {"airborne": True, "airborne_height": 640}),
+            ("sandstorm_fall_recovery", {"airborne": True, "airborne_height": 640, "equipment": [857]}),
             ("featherfall_landing", {"airborne": True, "airborne_height": 640, "buffs": [[8, 600]]}),
         ]
         results = []
@@ -131,6 +137,8 @@ def main():
                 sequence = [2] * 72
             if name in ("fall_damage", "featherfall_landing"):
                 sequence = [0] * 120
+            if name == "sandstorm_fall_recovery":
+                sequence = [0] * 48 + [4] * 6 + [0] * 66
             if name == "gravitation":
                 sequence = [8] + [0] * 25 + [8] + [0] * 45
             if name == "tabi_dash":
@@ -147,6 +155,10 @@ def main():
             compare(prediction["frames"], repeat["frames"])
             actual = worker.call("actual", controls=sequence)
             error = compare(prediction["frames"], actual["frames"])
+            if name == "sandstorm_fall_recovery":
+                assert min(frame["hp"] for frame in actual["frames"]) == initial["initial"]["hp"]
+                assert any(frame["available_jumps"] < initial["initial"]["available_jumps"] for frame in actual["frames"])
+                assert any(frame["grounded"] for frame in actual["frames"]), "Recovery did not land"
             if name in ("wings_mid_flight", "five_extra_jumps"):
                 worker.call("load", snapshot=initial["snapshot"])
                 transferred = worker.call("predict", controls=sequence)

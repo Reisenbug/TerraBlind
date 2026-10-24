@@ -13,6 +13,14 @@ using MonoMod.Cil;
 
 namespace Forecast;
 
+public sealed class NoFixtureSpawns : GlobalNPC
+{
+    public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
+    {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-forecastclient")) maxSpawns = 0;
+    }
+}
+
 public sealed class Client : ModSystem
 {
     bool enabled;

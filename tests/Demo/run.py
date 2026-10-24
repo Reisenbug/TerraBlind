@@ -10,11 +10,17 @@ import time
 
 
 def main():
-    root = Path("/tmp/terrablind-demo-app")
+    routed = "--route" in sys.argv
+    descent = "--descent" in sys.argv
+    root = Path("/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     (root / "Worlds").mkdir(parents=True, exist_ok=True)
     source_world = Path("/tmp/terrablind-forecast-lab/Worlds/Forecast.wld")
     if not source_world.exists() and (source_world.parent / "World.wld").exists():
         source_world = source_world.parent / "World.wld"
+    if descent:
+        source_world = Path("/tmp/terrablind-descent-world/Worlds/World.wld")
+        if not source_world.exists():
+            raise RuntimeError("Generate the fixed-seed world with tests/Demo/world.py first")
     if not source_world.exists():
         mods = source_world.parent.parent / "Mods"
         mods.mkdir(parents=True, exist_ok=True)
@@ -24,27 +30,33 @@ def main():
             source_world = source_world.parent / "World.wld"
     shutil.copy2(source_world, root / "Worlds/Demo.wld")
     (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
-    (root / "config.json").write_text(json.dumps(dict(Fullscreen=False, DisplayWidth=1100, DisplayHeight=720,
-        Language="en-US", AutoPause=False, CloudSavingDefault=False, ThrottleWhenInactive=False,
-        LastLaunchedTModLoaderVersion="2026.8.3.0")))
+    user_root = Path.home() / "Library/Application Support/Terraria/tModLoader"
+    user_config = user_root / "config.json"
+    settings = json.loads(user_config.read_text()) if user_config.exists() else {}
+    settings["CloudSavingDefault"] = False
+    (root / "config.json").write_text(json.dumps(settings))
+    if (user_root / "input profiles.json").exists():
+        shutil.copy2(user_root / "input profiles.json", root / "input profiles.json")
     (root / "demo-result.json").unlink(missing_ok=True)
     tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
     show = "--show" in sys.argv
     command = [str(tml / "dotnet_arm64/dotnet"), str(tml / "tModLoader.dll"), "-nosteam",
-               "-tmlsavedirectory", str(root), "-vnavdemocheck"]
+               "-tmlsavedirectory", str(root), "-vnavdescentcheck" if descent else "-vnavdemocheck"]
     if show:
         command.append("-vnavshow")
     if "--wings" in sys.argv:
         command.append("-vnavwingsonly")
+    if routed:
+        command.append("-vnavroutecheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     keep = False
     try:
-        deadline = time.monotonic() + 240
+        deadline = time.monotonic() + (1000 if descent else 240)
         while time.monotonic() < deadline:
             output = (root / "demo-client.log").read_text()
-            if "VNAV_DEMO_COMPLETE" in output:
+            if ("VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 if show and process.poll() is None:
@@ -53,10 +65,19 @@ def main():
             time.sleep(.25)
         else:
             raise TimeoutError("Demo did not complete within 240 seconds")
+        if descent:
+            row = json.loads((root / "descent-result.json").read_text())
+            assert row["done"] and row["hp"] > 0 and row["y"] >= row["underworld"]
+            print("NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
+            if show:
+                keep = True
+            return
         rows = json.loads((root / "demo-result.json").read_text())
         expected = [1] if "--wings" in sys.argv else [0, 1]
-        assert len(rows) == len(expected) and all(row["reached"] and row["hp"] == 400 and row["route_points"] > 1 for row in rows)
-        assert all((root / f"demo-{index}.png").exists() for index in expected)
+        assert len(rows) == len(expected) and all(row["reached"] and row["hp"] == 400 for row in rows)
+        if not routed:
+            assert all(row["route_points"] > 1 for row in rows)
+            assert all((root / f"demo-{index}.png").exists() for index in expected)
         print("VISIBLE_VNAV_DEMO_CHECKS_COMPLETE", json.dumps(rows), flush=True)
         if show:
             keep = True

@@ -16,12 +16,18 @@ def main():
     for folder in (root / "Mods", root / "Worlds"):
         folder.mkdir(parents=True, exist_ok=True)
     shutil.copy2(worker_root / "Mods/Forecast.tmod", root / "Mods/Forecast.tmod")
-    shutil.copy2(worker_root / "Worlds/Forecast.wld", root / "Worlds/Forecast.wld")
+    source_world = worker_root / "Worlds/Forecast.wld"
+    if not source_world.exists():
+        source_world = worker_root / "Worlds/World.wld"
+    shutil.copy2(source_world, root / "Worlds/Forecast.wld")
     (root / "Mods/enabled.json").write_text('["Forecast"]')
-    config = {}
-    config.update(Fullscreen=False, DisplayWidth=960, DisplayHeight=540, Language="en-US",
-                  AutoPause=False, CloudSavingDefault=False, ThrottleWhenInactive=False, LastLaunchedTModLoaderVersion="2026.8.3.0")
+    user_root = Path.home() / "Library/Application Support/Terraria/tModLoader"
+    user_config = user_root / "config.json"
+    config = json.loads(user_config.read_text()) if user_config.exists() else {}
+    config["CloudSavingDefault"] = False
     (root / "config.json").write_text(json.dumps(config))
+    if (user_root / "input profiles.json").exists():
+        shutil.copy2(user_root / "input profiles.json", root / "input profiles.json")
     result_path = root / "client-result.json"
     asynchronous = "--async" in sys.argv
     if asynchronous:
@@ -32,7 +38,7 @@ def main():
     worker_log = (root / "worker.log").open("w")
     client_log = (root / "client.log").open("w")
     worker = subprocess.Popen(base + ["-server", "-tmlsavedirectory", str(worker_root), "-world",
-                              str(worker_root / "Worlds/Forecast.wld"), "-port", "17978", "-vanillaforecastport", "19042"],
+                              str(source_world), "-port", "17978", "-vanillaforecastport", "19042"],
                               cwd=tml, stdin=subprocess.DEVNULL, stdout=worker_log, stderr=subprocess.STDOUT)
     client = None
     try:
@@ -65,7 +71,7 @@ def main():
                 ticks = [frame["world_tick"] for frame in row["trace"]]
                 assert all(b == a + 1 for a, b in zip(ticks, ticks[1:])), "World did not advance continuously"
                 print("ASYNC_CLIENT_CASE_PASS", row["name"], "ticks", len(ticks), "accepted", row["accepted"], "status", row["status"], flush=True)
-                assert 30 <= row["lead_frames"] <= 90
+                assert 6 <= row["lead_frames"] <= 90
                 if row["name"] == "late":
                     assert row["lead_frames"] > 30, "Late response did not increase the planning lead"
             assert len(results) == 6

@@ -37,11 +37,15 @@ public sealed class Driver : ModSystem
     readonly Caller caller = new();
     readonly JsonArray results = new();
     JsonArray trace = new();
+    bool routed;
+    bool descent;
 
     public override void Load()
     {
-        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck");
+        descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
+        enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
         if (!enabled) return;
+        routed = Terraria.Program.LaunchParameters.ContainsKey("-vnavroutecheck");
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavwingsonly")) trial = 1;
         string root = Path.GetFullPath(Terraria.Program.LaunchParameters["-tmlsavedirectory"]);
         if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
@@ -82,6 +86,11 @@ public sealed class Driver : ModSystem
         foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
         int slot = 3;
         foreach (int item in trial == 0 ? new[] { ItemID.SandstorminaBottle } : new[] { ItemID.AngelWings }) player.armor[slot++].SetDefaults(item);
+        if (routed)
+        {
+            player.inventory[1].SetDefaults(ItemID.MoltenPickaxe);
+            player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 500;
+        }
         foreach (var npc in Main.npc) npc.active = false;
         foreach (var projectile in Main.projectile) projectile.active = false;
         foreach (var item in Main.item) item.active = false;
@@ -92,6 +101,15 @@ public sealed class Driver : ModSystem
             bool boundary = x is 455 or 574 || y is 310 or 444;
             if (boundary || y >= 400 || x is >= 509 and < 540 && y >= 388)
             { tile.HasTile = true; tile.TileType = boundary ? TileID.Stone : TileID.Dirt; }
+        }
+        if (routed && trial == 1)
+        {
+            for (int x = 456; x < 574; x++)
+            for (int y = 388; y < 400; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y == 390 || x is >= 509 and < 512 && y >= 390) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
         }
         player.position = new Vector2(500 * 16, 400 * 16 - player.height);
         player.fallStart = (int)(player.position.Y / 16); player.velocity = Vector2.Zero;
@@ -104,13 +122,15 @@ public sealed class Driver : ModSystem
         if (!enabled || Main.gameMenu) return;
         try
         {
+            if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
             if (warmup-- > 0) return;
             var demo = VanillaNavigationDemo.Instance;
             if (!started)
             {
-                ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav 522 388", new[] { "522", "388" });
-                if (!VanillaNavigationDemo.Active) throw new InvalidOperationException(caller.Last);
+                string[] args = routed ? new[] { "route", "522", trial == 0 ? "387" : "399" } : new[] { "522", "388" };
+                ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
+                if (!(routed ? RecedingNav.Active : VanillaNavigationDemo.Active)) throw new InvalidOperationException(caller.Last);
                 started = true;
             }
             ticks++;
@@ -119,6 +139,8 @@ public sealed class Driver : ModSystem
             sample["rejection"] = demo.PlannerRejection;
             sample["mismatch"] = demo.PlannerMismatch;
             sample["accepted"] = demo.PlanAccepted; sample["rejected"] = demo.PlanRejected;
+            sample["recede"] = RecedingNav.Active; sample["macro"] = StateSpacePlanner.ExecRunning;
+            sample["last_stop"] = RecedingNav.LastStop;
             if (demo.PlannerResult is JsonObject plan)
             {
                 sample["selected"] = plan["selected"]?.DeepClone();
@@ -127,13 +149,13 @@ public sealed class Driver : ModSystem
             }
             trace.Add(sample);
             if (ticks % 30 == 0) File.WriteAllText(Path.Combine(Main.SavePath, $"trace-{trial}.json"), trace.ToJsonString());
-            if (VanillaNavigationDemo.Active)
+            if (routed ? RecedingNav.Active : VanillaNavigationDemo.Active)
             {
                 if (ticks > 9000) throw new TimeoutException(demo.Status);
                 return;
             }
-            if (!demo.Reached) throw new InvalidOperationException(demo.Status);
-            if (demo.RoutePoints < 2 || !shot) throw new InvalidOperationException("route_was_not_drawn");
+            if (!(routed ? RecedingNav.LastStop == "done" : demo.Reached)) throw new InvalidOperationException(demo.Status + ":" + RecedingNav.LastStop);
+            if (!routed && (demo.RoutePoints < 2 || !shot)) throw new InvalidOperationException("route_was_not_drawn");
             results.Add(new JsonObject { ["equipment"] = trial == 0 ? "sandstorm" : "wings", ["ticks"] = ticks,
                 ["reached"] = true, ["hp"] = Main.LocalPlayer.statLife, ["route_points"] = demo.RoutePoints });
             File.WriteAllText(Path.Combine(Main.SavePath, "demo-result.json"), results.ToJsonString());
@@ -153,6 +175,61 @@ public sealed class Driver : ModSystem
             if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    void Descent()
+    {
+        var player = Main.LocalPlayer;
+        if (!prepared)
+        {
+            player.ConsumedLifeCrystals = 15; player.statLife = player.statLifeMax = 400;
+            foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
+            player.armor[0].SetDefaults(ItemID.MoltenHelmet); player.armor[1].SetDefaults(ItemID.MoltenBreastplate); player.armor[2].SetDefaults(ItemID.MoltenGreaves);
+            int slot = 3;
+            foreach (int item in new[] { ItemID.SandstorminaBottle, ItemID.NeptunesShell, ItemID.CobaltShield, ItemID.HermesBoots, ItemID.BandofRegeneration }) player.armor[slot++].SetDefaults(item);
+            player.inventory[0].SetDefaults(ItemID.Starfury);
+            player.inventory[1].SetDefaults(ItemID.MoltenPickaxe);
+            player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 999;
+            player.inventory[3].SetDefaults(ItemID.Torch); player.inventory[3].stack = 999;
+            player.inventory[4].SetDefaults(ItemID.HealingPotion); player.inventory[4].stack = 50;
+            player.inventory[5].SetDefaults(ItemID.Cobweb); player.inventory[5].stack = 999;
+            prepared = true; warmup = 10; return;
+        }
+        if (warmup-- > 0) return;
+        if (!started)
+        {
+            ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav descent", new[] { "descent" });
+            if (!VanillaDescentRun.Instance.Active) throw new InvalidOperationException(caller.Last);
+            started = true;
+        }
+        ticks++;
+        var sample = VanillaPrediction.Observe(player);
+        sample["phase"] = VanillaDescentRun.Instance.Status;
+        sample["nav_stop"] = RecedingNav.LastStop;
+        sample["macro"] = StateSpacePlanner.ExecRunning;
+        sample["engine"] = VanillaNavigationDemo.Active;
+        sample["rejection"] = VanillaNavigationDemo.Instance.PlannerRejection;
+        sample["mismatch"] = VanillaNavigationDemo.Instance.PlannerMismatch;
+        if (VanillaNavigationDemo.Instance.PlannerResult is JsonObject plan)
+        {
+            sample["compute_ms"] = plan["request_compute_ms"]?.DeepClone();
+            sample["roundtrip_ms"] = plan["roundtrip_ms"]?.DeepClone();
+            sample["selected"] = plan["selected"]?.DeepClone();
+            sample["timing"] = plan["timing"]?.DeepClone();
+        }
+        if (ticks % 6 == 0) { trace.Add(sample); if (trace.Count > 600) trace.RemoveAt(0); }
+        if (ticks % 120 == 0)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
+            Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={VanillaDescentRun.Instance.Status} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
+        }
+        if (VanillaDescentRun.Instance.Active && ticks < 54000) return;
+        if (VanillaDescentRun.Instance.Status != "done") throw new InvalidOperationException(VanillaDescentRun.Instance.Status);
+        File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
+            ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
+            ["underworld"] = Main.UnderworldLayer }.ToJsonString());
+        Console.WriteLine("VNAV_DESCENT_COMPLETE"); enabled = false;
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
     }
 
     public override void PostDrawInterface(SpriteBatch batch)

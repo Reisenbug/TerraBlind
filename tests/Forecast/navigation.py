@@ -27,7 +27,10 @@ def run(worker, root):
         (root / "navigation.json").write_text(json.dumps(rows, indent=2))
         times = [plan["elapsed_ms"] for plan in result["plans"]]
         print("NAVIGATION_CASE", name, "reached", result["reached"], "frames", len(result["trace"]),
-              "median_plan_ms", round(statistics.median(times), 2), flush=True)
+              "median_plan_ms", round(statistics.median(times), 2),
+              "median_snapshot_ms", round(statistics.median(plan["snapshot_ms"] for plan in result["plans"]), 2),
+              "median_restore_ms", round(statistics.median(plan["timing"]["restore_ms"] for plan in result["plans"]), 2),
+              "median_update_ms", round(statistics.median(plan["timing"]["update_ms"] for plan in result["plans"]), 2), flush=True)
         assert result["reached"] == expected, f"{name}: reached={result['reached']} expected={expected}"
         assert result["max_error"] <= .001
         assert all(frame["hp"] >= initial["hp"] and not frame["dead"] for frame in result["trace"])
