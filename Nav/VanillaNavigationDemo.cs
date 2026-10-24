@@ -108,7 +108,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
                 request["terminal"] = VanillaNavBridge.Terminal;
-                request["travel_direction"] = VanillaNavBridge.TravelDirection;
+                request["route_direction"] = VanillaNavBridge.RouteDirection;
             }
             return Task.Run(() => connection.Send(request));
         });

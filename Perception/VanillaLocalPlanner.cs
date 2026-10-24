@@ -30,7 +30,7 @@ public sealed class VanillaLocalPlanner
     }
 
     public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
-        int travelDirection = 0)
+        int routeDirection = 0)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -49,7 +49,7 @@ public sealed class VanillaLocalPlanner
             for (int i = 0; i < values.Length; i += 3) field.Add((values[i], values[i + 1]), values[i + 2]);
         }
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
-        int direction = !terminal && travelDirection != 0 ? (travelDirection > 0 ? 2 : 1)
+        int direction = !terminal && routeDirection != 0 ? (routeDirection > 0 ? 2 : 1)
             : goal.X >= player.position.X ? 2 : 1;
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
         bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && field?.Count > 0;

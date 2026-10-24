@@ -10,7 +10,7 @@ public static class VanillaNavBridge
 {
     public static bool Enabled;
     public static bool Terminal { get; private set; }
-    public static int TravelDirection { get; private set; }
+    public static int RouteDirection { get; private set; }
     static Dictionary<(int, int), int> field;
     static Vector2? failedAt;
     static int bestH = int.MaxValue;
@@ -19,7 +19,7 @@ public static class VanillaNavBridge
     public static void Reset()
     {
         if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
-        failedAt = null; bestH = int.MaxValue; field = null; Terminal = false; TravelDirection = 0;
+        failedAt = null; bestH = int.MaxValue; field = null; Terminal = false; RouteDirection = 0;
     }
 
     public static bool Tick(Player player, int gx, int gy)
@@ -36,7 +36,6 @@ public static class VanillaNavBridge
         field = MazeWand.PeekFieldOrNull(gx, gy);
         if (field == null) return false;
         int cx = (int)(player.Center.X / 16), cy = (int)(player.Bottom.Y / 16) - 1;
-        TravelDirection = Math.Sign(gx * 16 + 8 - player.Center.X);
         if (field.TryGetValue((cx, cy), out int h) && h < bestH)
         { bestH = h; progressAt = Main.GameUpdateCount; }
         if (demo.NavigationOwned && !demo.PlannerReady) progressAt = Main.GameUpdateCount;
@@ -66,6 +65,7 @@ public static class VanillaNavBridge
             if (demo.NavigationOwned) demo.Stop("前方需要改变地形");
             return false;
         }
+        RouteDirection = Math.Sign(target.Value.X - player.position.X);
         if (demo.NavigationOwned) demo.UpdateNavigationGoal(target.Value);
         else
         {
