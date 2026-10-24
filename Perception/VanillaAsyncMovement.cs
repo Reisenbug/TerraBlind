@@ -37,11 +37,17 @@ public sealed class VanillaAsyncMovement
     public string LastMismatch { get; private set; }
     public string LastRejection { get; private set; }
     public JsonObject LastDivergence { get; private set; }
+    public string ActivePlan { get; private set; } = "none";
+    public Vector2 ActiveGoal { get; private set; }
+    public Vector2 ActiveAnchor { get; private set; }
+    long activeStart;
+    int activeOffset;
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) => send = transport;
 
     public int InputAt(long tick) => inputs.TryGetValue(tick, out int key) ? key : 0;
     public bool HasInputAt(long tick) => inputs.ContainsKey(tick);
+    public int PlanFrameAt(long tick) => HasInputAt(tick) ? checked((int)(tick - activeStart)) + activeOffset : -1;
 
     public void Poll(long tick, Player player, int revision)
     {
@@ -108,6 +114,10 @@ public sealed class VanillaAsyncMovement
         AcceptedRoute = forecast.Skip(offset).Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
         inputs.Clear();
         long start = rebase || catchUp ? tick : handoff;
+        activeStart = start + 1; activeOffset = offset;
+        ActivePlan = result["selected"]?.GetValue<string>() ?? "unknown";
+        ActiveGoal = new Vector2(lastRequest["x"].GetValue<float>(), lastRequest["y"].GetValue<float>());
+        ActiveAnchor = new Vector2(result["anchor"]["x"].GetValue<float>(), result["anchor"]["y"].GetValue<float>());
         for (int i = offset; i < controls.Count; i++) inputs[start + i - offset + 1] = controls[i].GetValue<int>();
         if (catchUp) LateAccepted++;
         else if (rebase && tick != handoff) Rebased++;
@@ -117,7 +127,7 @@ public sealed class VanillaAsyncMovement
     static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
     {
         reason = null; mismatch = null;
-        var actual = VanillaPrediction.Observe(player);
+        var actual = VanillaPrediction.Observe(player, !navigation);
         foreach (string key in new[] { "x", "y", "vx", "vy", "wing_time" })
             if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .01f)
             { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "state_changed:" + key; return false; }
@@ -140,14 +150,14 @@ public sealed class VanillaAsyncMovement
 
     void Reject(string reason, bool clear = true) { if (clear) inputs.Clear(); Rejected++; Status = reason; LastRejection = reason; pending = null; }
 
-    public bool Request(JsonObject snapshot, long tick, Vector2 goal, int revision)
+    public bool Request(JsonObject snapshot, long tick, Vector2 goal, int revision, bool takeOwnership = false)
     {
         if (pending != null) return false;
         if (revision != currentRevision) { inputs.Clear(); currentRevision = revision; }
         requestedAt = tick; completionObserved = false;
         handoff = tick + PlanningLead; requestRevision = revision;
         var prefix = new JsonArray(Enumerable.Range(1, PlanningLead).Select(i => JsonValue.Create(InputAt(tick + i))).ToArray());
-        var request = new JsonObject { ["command"] = "plan", ["snapshot"] = snapshot.DeepClone(),
+        var request = new JsonObject { ["command"] = "plan", ["snapshot"] = takeOwnership ? snapshot : snapshot.DeepClone(),
             ["prefix"] = prefix, ["x"] = goal.X, ["y"] = goal.Y,
             ["continuation"] = new JsonArray(Enumerable.Range(1, VanillaLocalPlanner.Horizon)
                 .TakeWhile(i => inputs.ContainsKey(handoff + i)).Select(i => JsonValue.Create(InputAt(handoff + i))).ToArray()) };

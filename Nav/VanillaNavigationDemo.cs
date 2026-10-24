@@ -16,6 +16,9 @@ namespace TerraBlind;
 
 public sealed class VanillaNavigationDemo : ModSystem
 {
+    public readonly record struct ControlFrame(int Keys, bool Queued, string Plan, int Index,
+        bool Terminal, Vector2 Goal, Vector2 PlanGoal, Vector2 Anchor);
+    public ControlFrame LastControl { get; private set; }
     public static VanillaNavigationDemo Instance => ModContent.GetInstance<VanillaNavigationDemo>();
     public static bool Active => Instance.running;
     public string Status { get; private set; } = "未启动";
@@ -115,6 +118,9 @@ public sealed class VanillaNavigationDemo : ModSystem
     {
         if (!running || player != Main.LocalPlayer) return;
         int keys = movement?.InputAt(tick + 1) ?? 0;
+        LastControl = new ControlFrame(keys, movement?.HasInputAt(tick + 1) == true, movement?.ActivePlan ?? "none",
+            movement?.PlanFrameAt(tick + 1) ?? -1, VanillaNavBridge.Terminal, goal,
+            movement?.ActiveGoal ?? Vector2.Zero, movement?.ActiveAnchor ?? Vector2.Zero);
         player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
         player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
         player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
@@ -213,7 +219,7 @@ public sealed class VanillaNavigationDemo : ModSystem
                 captureBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
                 long requestStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 allocatedStart = GC.GetAllocatedBytesForCurrentThread();
-                movement.Request(snapshot, tick, goal, 0);
+                movement.Request(snapshot, tick, goal, 0, takeOwnership: true);
                 requestMs = System.Diagnostics.Stopwatch.GetElapsedTime(requestStart).TotalMilliseconds;
                 requestBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
             }

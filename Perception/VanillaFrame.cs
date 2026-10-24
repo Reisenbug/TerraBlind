@@ -49,6 +49,14 @@ public static class VanillaFrame
         };
         if (type.IsArray)
         {
+            var source = (Array)value;
+            Type element = type.GetElementType();
+            if (source.Length >= 16 && element.IsPrimitive && element != typeof(IntPtr) && element != typeof(UIntPtr))
+            {
+                var bytes = new byte[System.Buffer.ByteLength(source)];
+                System.Buffer.BlockCopy(source, 0, bytes, 0, bytes.Length);
+                return new JsonObject { ["array_bytes"] = Convert.ToBase64String(bytes), ["length"] = source.Length };
+            }
             var array = new JsonArray();
             foreach (object item in (Array)value) array.Add(Encode(item, type.GetElementType()));
             return array;
@@ -73,6 +81,14 @@ public static class VanillaFrame
         };
         if (type.IsArray)
         {
+            if (node is JsonObject packed)
+            {
+                var array = Array.CreateInstance(type.GetElementType(), packed["length"].GetValue<int>());
+                var bytes = Convert.FromBase64String(packed["array_bytes"].GetValue<string>());
+                if (bytes.Length != System.Buffer.ByteLength(array)) throw new InvalidOperationException("array_buffer_size_mismatch");
+                System.Buffer.BlockCopy(bytes, 0, array, 0, bytes.Length);
+                return array;
+            }
             var result = Array.CreateInstance(type.GetElementType(), node.AsArray().Count);
             for (int i = 0; i < result.Length; i++) result.SetValue(Decode(node[i], type.GetElementType()), i);
             return result;
@@ -178,7 +194,7 @@ public static class VanillaFrame
             ["collision"] = CaptureStatics(typeof(Collision)), ["random"] = CaptureFields(Main.rand),
             ["scene"] = CaptureFields(Main.SceneMetrics),
             ["world_random"] = CaptureFields(WorldGen.genRand), ["area"] = new JsonArray(area.X, area.Y, area.Width, area.Height),
-            ["tiles"] = Convert.ToBase64String(System.Runtime.InteropServices.MemoryMarshal.AsBytes(tiles.AsSpan())),
+            ["tiles"] = PackInts(tiles),
             ["tile_encoding"] = "i32-native",
             ["omitted_player_references"] = new JsonArray(Fields(typeof(Player)).Where(field => !Supported(field.FieldType))
                 .Select(field => JsonValue.Create(field.Name)).ToArray()),
@@ -193,9 +209,19 @@ public static class VanillaFrame
     {
         if (state["tiles"] is JsonArray rows)
             return rows.SelectMany(row => row.AsArray().Select(value => value.GetValue<int>())).ToArray();
-        var bytes = Convert.FromBase64String(state["tiles"].GetValue<string>());
+        var values = UnpackInts(state["tiles"].GetValue<string>());
         int expected = state["area"][2].GetValue<int>() * state["area"][3].GetValue<int>() * 10;
-        if (bytes.Length != expected * sizeof(int)) throw new InvalidOperationException("tile_buffer_size_mismatch");
+        if (values.Length != expected) throw new InvalidOperationException("tile_buffer_size_mismatch");
+        return values;
+    }
+
+    internal static string PackInts(int[] values)
+        => Convert.ToBase64String(System.Runtime.InteropServices.MemoryMarshal.AsBytes(values.AsSpan()));
+
+    internal static int[] UnpackInts(string value)
+    {
+        var bytes = Convert.FromBase64String(value);
+        if (bytes.Length % sizeof(int) != 0) throw new InvalidOperationException("integer_buffer_size_mismatch");
         return System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(bytes.AsSpan()).ToArray();
     }
 

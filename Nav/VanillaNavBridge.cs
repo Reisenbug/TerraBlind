@@ -77,16 +77,16 @@ public static class VanillaNavBridge
         return true;
     }
 
-    public static JsonArray CaptureGuidance(JsonObject snapshot)
+    public static string CaptureGuidance(JsonObject snapshot)
     {
-        var result = new JsonArray();
-        if (field == null) return result;
+        if (field == null) return null;
+        var result = new List<int>();
         int x0 = snapshot["area"][0].GetValue<int>(), y0 = snapshot["area"][1].GetValue<int>();
         int width = snapshot["area"][2].GetValue<int>(), height = snapshot["area"][3].GetValue<int>();
         for (int x = x0; x < x0 + width; x++)
         for (int y = y0; y < y0 + height; y++)
-            if (field.TryGetValue((x, y), out int cost)) result.Add(new JsonArray(x, y, cost));
-        return result;
+            if (field.TryGetValue((x, y), out int cost)) { result.Add(x); result.Add(y); result.Add(cost); }
+        return VanillaFrame.PackInts(result.ToArray());
     }
 
     public static void TerrainAction() { failedAt = null; bestH = int.MaxValue; }

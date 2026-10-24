@@ -66,6 +66,10 @@ public sealed class Engine : ModSystem
             for (int y = area.Top; y < area.Bottom; y++) guidance.Add(new JsonArray(x, y, area.Right - x));
             var goal = source.position + new Vector2(22 * 16, 0);
             var walk = new VanillaLocalPlanner().Plan(snapshot, goal, guidance: guidance);
+            var packedGuidance = guidance.SelectMany(row => row.AsArray().Select(value => value.GetValue<int>())).ToArray();
+            var packedPlan = new VanillaLocalPlanner().Plan(snapshot, goal, guidance: JsonValue.Create(VanillaFrame.PackInts(packedGuidance)));
+            if (!JsonNode.DeepEquals(walk["controls"], packedPlan["controls"]))
+                throw new InvalidOperationException("packed_guidance_changed_decision");
             var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
             foreach (var plan in new[] { walk, continued })
                 if (plan["status"]?.GetValue<string>() != "planned"
@@ -210,7 +214,7 @@ public sealed class Engine : ModSystem
                 var result = new VanillaLocalPlanner().Plan(future,
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
-                    guidance: request["guidance"]?.AsArray(), terminal: request["terminal"]?.GetValue<bool>() == true);
+                    guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

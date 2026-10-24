@@ -28,7 +28,7 @@ public sealed class VanillaLocalPlanner
         return new Rectangle(left, top, right - left, bottom - top);
     }
 
-    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonArray guidance = null, bool terminal = false)
+    public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -37,11 +37,19 @@ public sealed class VanillaLocalPlanner
         int hp = player.statLife;
         float wings = player.wingTime;
         int jumps = VanillaPrediction.Observe(player, false)["available_jumps"].GetValue<int>();
-        var field = terminal ? null : guidance?.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
+        Dictionary<(int, int), int> field = null;
+        if (!terminal && guidance is JsonArray rows)
+            field = rows.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
+        else if (!terminal && guidance != null)
+        {
+            field = new();
+            var values = VanillaFrame.UnpackInts(guidance.GetValue<string>());
+            for (int i = 0; i < values.Length; i += 3) field.Add((values[i], values[i + 1]), values[i + 2]);
+        }
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
         int direction = goal.X >= player.position.X ? 2 : 1;
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
-        bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && guidance?.Count > 0;
+        bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && field?.Count > 0;
         var prediction = new VanillaPrediction(snapshot);
         var candidates = new List<(string name, int[] keys)>();
         if (continuation?.Length > 0)
