@@ -54,40 +54,53 @@ public sealed class VanillaAsyncMovement
         }
         if (pending.IsFaulted || pending.IsCanceled) { _ = pending.Exception; Reject("worker_error"); return; }
         if (revision != requestRevision) { Reject("revision_changed"); return; }
-        if (tick > handoff)
+        if (tick < handoff && inputs.Count > 0) return;
+        if (tick > handoff && inputs.Count > 0) { Reject("late_result", false); return; }
+        var result = pending.GetAwaiter().GetResult();
+        bool navigation = context["navigation"]?.GetValue<bool>() == true;
+        bool planned = result["status"]?.GetValue<string>() == "planned";
+        string reason = null, mismatch = null;
+        bool matches = planned && StateMatches(player, result["anchor"].AsObject(), navigation, out reason, out mismatch);
+        bool rebase = navigation && inputs.Count == 0 && matches;
+        if (tick > handoff && !rebase)
         {
             Reject("late_result", false); return;
         }
-        if (tick < handoff) return;
-        var result = pending.GetAwaiter().GetResult();
+        if (tick < handoff && !rebase) return;
         if (!VanillaFrame.ContextMatches(context, player, out string difference, result["forecast"]?["frames"]?.AsArray()))
         { LastMismatch = difference; Reject("context_changed"); return; }
+        if (!planned) { Reject("no_safe_plan"); return; }
+        if (!matches) { LastMismatch = mismatch; Reject(reason); return; }
+        var controls = result["controls"].AsArray();
+        AcceptedRoute = result["forecast"]["frames"].AsArray().Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
+        inputs.Clear();
+        long start = rebase ? tick : handoff;
+        for (int i = 0; i < controls.Count; i++) inputs[start + i + 1] = controls[i].GetValue<int>();
+        Accepted++; Status = "accepted"; LastRejection = null; LastMismatch = null; pending = null;
+    }
+
+    static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
+    {
+        reason = null; mismatch = null;
         var actual = VanillaPrediction.Observe(player);
-        if (result["status"]?.GetValue<string>() != "planned") { Reject("no_safe_plan"); return; }
-        var anchor = result["anchor"].AsObject();
-        bool navigation = context["navigation"]?.GetValue<bool>() == true;
         foreach (string key in new[] { "x", "y", "vx", "vy", "wing_time" })
             if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .01f)
-            { LastMismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; Reject("state_changed:" + key); return; }
+            { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "state_changed:" + key; return false; }
         foreach (string key in new[] { "hp", "dead", "grav_dir", "jump", "fall_start", "available_jumps", "frozen", "webbed", "buff_types", "buff_times", "extra_jumps" })
         {
             if (navigation && key is "hp" or "buff_types" or "buff_times") continue;
             if (!JsonNode.DeepEquals(actual[key], anchor[key]))
-            { LastMismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; Reject("state_changed:" + key); return; }
+            { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "state_changed:" + key; return false; }
         }
         if (navigation)
         {
             foreach (string key in new[] { "run_speed", "run_accel", "run_slowdown", "move_speed", "gravity", "fall_speed", "jump_boost" })
                 if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .0001f)
-                { LastMismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; Reject("physics_changed:" + key); return; }
+                { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "physics_changed:" + key; return false; }
             foreach (string key in new[] { "wet", "honey_wet", "no_fall_damage", "merman" })
-                if (!JsonNode.DeepEquals(actual[key], anchor[key])) { Reject("physics_changed:" + key); return; }
+                if (!JsonNode.DeepEquals(actual[key], anchor[key])) { reason = "physics_changed:" + key; return false; }
         }
-        var controls = result["controls"].AsArray();
-        AcceptedRoute = result["forecast"]["frames"].AsArray().Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
-        inputs.Clear();
-        for (int i = 0; i < controls.Count; i++) inputs[handoff + i + 1] = controls[i].GetValue<int>();
-        Accepted++; Status = "accepted"; LastRejection = null; pending = null;
+        return true;
     }
 
     void Reject(string reason, bool clear = true) { if (clear) inputs.Clear(); Rejected++; Status = reason; LastRejection = reason; pending = null; }

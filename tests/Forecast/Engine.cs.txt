@@ -137,6 +137,13 @@ public sealed class Engine : ModSystem
             controller.Poll(60, source, 0);
             if (controller.Status != "context_changed") throw new InvalidOperationException("navigation_ignored_terrain_change");
             Main.item[0].active = false;
+            Setup(new JsonObject());
+            snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
+            if (controller.Accepted != 1 || controller.InputAt(2) != 2)
+                throw new InvalidOperationException("matching_state_waited_for_handoff");
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "plan")
