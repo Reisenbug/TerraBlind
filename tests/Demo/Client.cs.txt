@@ -40,11 +40,15 @@ public sealed class Driver : ModSystem
     bool routed;
     bool descent;
     bool continuity;
+    int continuityLeg;
+    int[] offsets = { 180 };
+    int barrierTiles;
 
     public override void Load()
     {
         descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
         continuity = Terraria.Program.LaunchParameters.ContainsKey("-vnavcontinuitycheck");
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcircuitcheck")) offsets = new[] { 180, 360, -180 };
         enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
         if (!enabled) return;
         routed = Terraria.Program.LaunchParameters.ContainsKey("-vnavroutecheck");
@@ -114,6 +118,7 @@ public sealed class Driver : ModSystem
             }
         }
         player.position = new Vector2(500 * 16, 400 * 16 - player.height);
+        barrierTiles = Enumerable.Range(456, 118).Sum(x => Enumerable.Range(390, 10).Count(y => Main.tile[x, y].HasTile));
         player.fallStart = (int)(player.position.Y / 16); player.velocity = Vector2.Zero;
         ticks = 0; warmup = 8; started = false; shot = false; prepared = true; trace = new JsonArray();
         Main.NewText(trial == 0 ? "演示1：只用沙暴瓶登上12格高台" : "演示2：翅膀登上同一个高台", Color.LightGreen);
@@ -157,6 +162,15 @@ public sealed class Driver : ModSystem
                 return;
             }
             if (!(routed ? RecedingNav.LastStop == "done" : demo.Reached)) throw new InvalidOperationException(demo.Status + ":" + RecedingNav.LastStop);
+            if (routed && trial == 1)
+            {
+                int remaining = Enumerable.Range(456, 118).Sum(x => Enumerable.Range(390, 10).Count(y => Main.tile[x, y].HasTile));
+                if (remaining >= barrierTiles) throw new InvalidOperationException("enclosure_was_not_mined");
+                int lastMacro = -1;
+                for (int i = 0; i < trace.Count; i++) if (trace[i]["macro"].GetValue<bool>()) lastMacro = i;
+                if (lastMacro < 0 || !trace.Skip(lastMacro + 1).Any(frame => frame["accepted"].GetValue<int>() > 0))
+                    throw new InvalidOperationException("engine_did_not_resume_after_mining");
+            }
             if (!routed && (demo.RoutePoints < 2 || !shot)) throw new InvalidOperationException("route_was_not_drawn");
             results.Add(new JsonObject { ["equipment"] = trial == 0 ? "sandstorm" : "wings", ["ticks"] = ticks,
                 ["reached"] = true, ["hp"] = Main.LocalPlayer.statLife, ["route_points"] = demo.RoutePoints });
@@ -203,7 +217,7 @@ public sealed class Driver : ModSystem
             string[] args = new[] { "descent" };
             if (continuity)
             {
-                int x = Main.spawnTileX + 180, y = Math.Max(10, Main.spawnTileY - 60);
+                int x = Main.spawnTileX + offsets[continuityLeg], y = Math.Max(10, Main.spawnTileY - 60);
                 while (y < Main.maxTilesY - 200 && !Predicates.IsGround(x, y)) y++;
                 args = new[] { "route", x.ToString(), (y - 1).ToString() };
             }
@@ -238,9 +252,17 @@ public sealed class Driver : ModSystem
         if ((continuity ? RecedingNav.Active : VanillaDescentRun.Instance.Active) && ticks < 54000) return;
         if ((continuity ? RecedingNav.LastStop : VanillaDescentRun.Instance.Status) != "done")
             throw new InvalidOperationException(continuity ? RecedingNav.LastStop : VanillaDescentRun.Instance.Status);
+        if (continuity)
+        {
+            results.Add(new JsonObject { ["offset"] = offsets[continuityLeg], ["tick"] = ticks,
+                ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16 });
+            File.WriteAllText(Path.Combine(Main.SavePath, "continuity-legs.json"), results.ToJsonString());
+            Console.WriteLine($"VNAV_CONTINUITY_LEG_PASS offset={offsets[continuityLeg]} tick={ticks}");
+            if (++continuityLeg < offsets.Length) { started = false; return; }
+        }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
-            ["underworld"] = Main.UnderworldLayer }.ToJsonString());
+            ["underworld"] = Main.UnderworldLayer, ["legs"] = results.DeepClone() }.ToJsonString());
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
     }

@@ -12,6 +12,8 @@ import time
 def main():
     routed = "--route" in sys.argv
     continuity = "--continuity" in sys.argv
+    circuit = "--circuit" in sys.argv
+    continuity |= circuit
     descent = "--descent" in sys.argv or continuity
     root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     (root / "Worlds").mkdir(parents=True, exist_ok=True)
@@ -51,6 +53,8 @@ def main():
         command.append("-vnavroutecheck")
     if continuity:
         command.append("-vnavcontinuitycheck")
+    if circuit:
+        command.append("-vnavcircuitcheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -71,6 +75,8 @@ def main():
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
             assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
+            if circuit:
+                assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
             print("NATURAL_CONTINUITY_CHECK_COMPLETE" if continuity else "NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
             if show:
                 keep = True
