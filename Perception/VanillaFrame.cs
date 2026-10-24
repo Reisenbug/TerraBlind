@@ -156,16 +156,18 @@ public static class VanillaFrame
             || Main.projectile.Any(projectile => projectile.active && bounds.Intersects(projectile.Hitbox))
             || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox))))
             throw new NotSupportedException("dynamic_entities_in_snapshot");
-        var tiles = new JsonArray();
+        var tiles = new int[area.Width * area.Height * 10];
         for (int y = area.Top; y < area.Bottom; y++)
         for (int x = area.Left; x < area.Right; x++)
         {
             var tile = Main.tile[x, y];
             if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
                 throw new NotSupportedException("wiring_in_snapshot");
-            tiles.Add(new JsonArray(tile.HasTile ? 1 : 0, (int)tile.TileType, (int)tile.WallType,
-                (int)tile.TileFrameX, (int)tile.TileFrameY, (int)tile.Slope, tile.IsHalfBlock ? 1 : 0,
-                tile.IsActuated ? 1 : 0, (int)tile.LiquidType, (int)tile.LiquidAmount));
+            int offset = ((y - area.Top) * area.Width + x - area.Left) * 10;
+            tiles[offset] = tile.HasTile ? 1 : 0; tiles[offset + 1] = tile.TileType; tiles[offset + 2] = tile.WallType;
+            tiles[offset + 3] = tile.TileFrameX; tiles[offset + 4] = tile.TileFrameY; tiles[offset + 5] = (int)tile.Slope;
+            tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
+            tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
         }
         return new JsonObject { ["navigation"] = navigation, ["engine"] = EngineId, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
             ["game_mode"] = Main.GameMode,
@@ -176,7 +178,8 @@ public static class VanillaFrame
             ["collision"] = CaptureStatics(typeof(Collision)), ["random"] = CaptureFields(Main.rand),
             ["scene"] = CaptureFields(Main.SceneMetrics),
             ["world_random"] = CaptureFields(WorldGen.genRand), ["area"] = new JsonArray(area.X, area.Y, area.Width, area.Height),
-            ["tiles"] = tiles,
+            ["tiles"] = Convert.ToBase64String(System.Runtime.InteropServices.MemoryMarshal.AsBytes(tiles.AsSpan())),
+            ["tile_encoding"] = "i32-native",
             ["omitted_player_references"] = new JsonArray(Fields(typeof(Player)).Where(field => !Supported(field.FieldType))
                 .Select(field => JsonValue.Create(field.Name)).ToArray()),
             ["scope"] = navigation ? "vanilla navigation physics; enemies and wiring effects are not predicted"
@@ -185,6 +188,16 @@ public static class VanillaFrame
 
     public static bool ContextMatches(JsonObject state, Player player)
         => ContextMatches(state, player, out _);
+
+    internal static int[] ReadTiles(JsonObject state)
+    {
+        if (state["tiles"] is JsonArray rows)
+            return rows.SelectMany(row => row.AsArray().Select(value => value.GetValue<int>())).ToArray();
+        var bytes = Convert.FromBase64String(state["tiles"].GetValue<string>());
+        int expected = state["area"][2].GetValue<int>() * state["area"][3].GetValue<int>() * 10;
+        if (bytes.Length != expected * sizeof(int)) throw new InvalidOperationException("tile_buffer_size_mismatch");
+        return System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(bytes.AsSpan()).ToArray();
+    }
 
     static bool HarmlessDecoration(bool present, int type) => !present || type < TileID.Count
         && Main.tileCut[type] && !Main.tileSolid[type] && !Main.tileSolidTop[type] && !Main.tileRope[type]
@@ -203,7 +216,7 @@ public static class VanillaFrame
             || !JsonNode.DeepEquals(state["armor"], Items(player.armor))
             || !JsonNode.DeepEquals(state["misc_equips"], Items(player.miscEquips))) return false;
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
-        var tiles = state["tiles"].AsArray();
+        var tiles = ReadTiles(state);
         var bounds = new Rectangle(x0 * 16, y0 * 16, width * 16, state["area"][3].GetValue<int>() * 16);
         difference = "dynamic entity";
         if (!navigation && (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
@@ -220,23 +233,23 @@ public static class VanillaFrame
                 for (int y = fy - 2; y <= fy + 5; y++) corridor.Add((x, y));
             }
         }
-        for (int i = 0; i < tiles.Count; i++)
+        for (int i = 0; i < tiles.Length / 10; i++)
         {
             if (corridor != null && !corridor.Contains((x0 + i % width, y0 + i / width))) continue;
-            var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles[i];
+            var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
             if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }
-            if (tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>())
+            if (tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
             { difference = $"liquid ({x0 + i % width},{y0 + i / width}): {data[8]}/{data[9]} -> {tile.LiquidType}/{tile.LiquidAmount}"; return false; }
-            if (navigation && HarmlessDecoration(data[0].GetValue<int>() != 0, data[1].GetValue<int>())
+            if (navigation && HarmlessDecoration(data[0] != 0, data[1])
                 && HarmlessDecoration(tile.HasTile, tile.TileType)) continue;
-            if ((tile.HasTile ? 1 : 0) != data[0].GetValue<int>() || tile.TileType != data[1].GetValue<int>()
-                || tile.WallType != data[2].GetValue<int>() || tile.TileFrameX != data[3].GetValue<int>()
-                || tile.TileFrameY != data[4].GetValue<int>() || (int)tile.Slope != data[5].GetValue<int>()
-                || (tile.IsHalfBlock ? 1 : 0) != data[6].GetValue<int>() || (tile.IsActuated ? 1 : 0) != data[7].GetValue<int>()
-                || tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>())
+            if ((tile.HasTile ? 1 : 0) != data[0] || tile.TileType != data[1]
+                || tile.WallType != data[2] || tile.TileFrameX != data[3]
+                || tile.TileFrameY != data[4] || (int)tile.Slope != data[5]
+                || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7]
+                || tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
             {
-                difference = $"tile ({x0 + i % width},{y0 + i / width}): {data.ToJsonString()} -> "
+                difference = $"tile ({x0 + i % width},{y0 + i / width}): [{string.Join(",", data.ToArray())}] -> "
                     + $"[{(tile.HasTile ? 1 : 0)},{tile.TileType},{tile.WallType},{tile.TileFrameX},{tile.TileFrameY},{(int)tile.Slope},{(tile.IsHalfBlock ? 1 : 0)},{(tile.IsActuated ? 1 : 0)},{tile.LiquidType},{tile.LiquidAmount}]";
                 return false;
             }
@@ -269,15 +282,15 @@ public static class VanillaFrame
         RestoreFields(Main.rand, state["random"].AsObject());
         RestoreFields(WorldGen.genRand, state["world_random"].AsObject());
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
-        var tiles = state["tiles"].AsArray();
-        for (int i = 0; i < tiles.Count; i++)
+        var tiles = ReadTiles(state);
+        for (int i = 0; i < tiles.Length / 10; i++)
         {
-            var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles[i];
-            tile.ClearEverything(); tile.HasTile = data[0].GetValue<int>() != 0;
-            tile.TileType = (ushort)data[1].GetValue<int>(); tile.WallType = (ushort)data[2].GetValue<int>();
-            tile.TileFrameX = (short)data[3].GetValue<int>(); tile.TileFrameY = (short)data[4].GetValue<int>();
-            tile.Slope = (SlopeType)data[5].GetValue<int>(); tile.IsHalfBlock = data[6].GetValue<int>() != 0;
-            tile.IsActuated = data[7].GetValue<int>() != 0; tile.LiquidType = data[8].GetValue<int>(); tile.LiquidAmount = (byte)data[9].GetValue<int>();
+            var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
+            tile.ClearEverything(); tile.HasTile = data[0] != 0;
+            tile.TileType = (ushort)data[1]; tile.WallType = (ushort)data[2];
+            tile.TileFrameX = (short)data[3]; tile.TileFrameY = (short)data[4];
+            tile.Slope = (SlopeType)data[5]; tile.IsHalfBlock = data[6] != 0;
+            tile.IsActuated = data[7] != 0; tile.LiquidType = data[8]; tile.LiquidAmount = (byte)data[9];
         }
         return player;
     }
@@ -305,7 +318,7 @@ public static class VanillaFrame
             misc = source.miscEquips.Select(item => item.Clone()).ToArray();
             x0 = state["area"][0].GetValue<int>(); y0 = state["area"][1].GetValue<int>(); width = state["area"][2].GetValue<int>();
             gameMode = state["game_mode"].GetValue<int>();
-            tiles = state["tiles"].AsArray().SelectMany(row => row.AsArray().Select(value => value.GetValue<int>())).ToArray();
+            tiles = ReadTiles(state);
         }
 
         static (FieldInfo, object)[] DecodeFields(Type type, JsonObject state, bool isStatic = false)

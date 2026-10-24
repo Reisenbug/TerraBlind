@@ -248,7 +248,7 @@ public sealed class Engine : ModSystem
                 var before = VanillaFrame.CaptureFields(source);
                 var plan = new VanillaLocalPlanner().Plan(checkpoint, goal, continuation);
                 plan["snapshot_ms"] = snapshotMs;
-                plan["snapshot_tiles"] = checkpoint["tiles"].AsArray().Count;
+                plan["snapshot_tiles"] = checkpoint["area"][2].GetValue<int>() * checkpoint["area"][3].GetValue<int>();
                 if (!JsonNode.DeepEquals(before, VanillaFrame.CaptureFields(source))) throw new InvalidOperationException("planner_mutated_source");
                 plans.Add(plan);
                 if (plan["status"].GetValue<string>() != "planned") break;
