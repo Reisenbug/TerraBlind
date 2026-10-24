@@ -132,7 +132,7 @@ public sealed class VanillaAsyncMovement
             foreach (string key in new[] { "run_speed", "run_accel", "run_slowdown", "move_speed", "gravity", "fall_speed", "jump_boost" })
                 if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .0001f)
                 { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "physics_changed:" + key; return false; }
-            foreach (string key in new[] { "wet", "honey_wet", "no_fall_damage", "merman", "jump_state", "release_jump", "direction" })
+            foreach (string key in new[] { "wet", "honey_wet", "no_fall_damage", "merman", "jump_state", "release_jump" })
                 if (!JsonNode.DeepEquals(actual[key], anchor[key])) { reason = "physics_changed:" + key; return false; }
         }
         return true;

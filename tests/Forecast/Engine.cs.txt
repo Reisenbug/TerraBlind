@@ -188,6 +188,12 @@ public sealed class Engine : ModSystem
             delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(arrival, source, 0);
             if (controller.Accepted != 1 || controller.LastRejection != "late_result")
                 throw new InvalidOperationException("different_input_history_accepted_late_route");
+            Setup(new JsonObject()); snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0); source.direction = -source.direction;
+            controller.Poll(1, source, 0);
+            if (controller.Accepted != 1) throw new InvalidOperationException("aim_facing_invalidated_movement");
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "plan")
