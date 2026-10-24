@@ -36,7 +36,17 @@ public static class VanillaFrame
     {
         if (value == null) return null;
         if (Nullable.GetUnderlyingType(type) is Type inner) return Encode(value, inner);
-        if (type.IsPrimitive || type.IsEnum || type == typeof(string)) return JsonSerializer.SerializeToNode(value, type);
+        if (type.IsEnum) return JsonSerializer.SerializeToNode(value, type);
+        if (type.IsPrimitive || type == typeof(string)) return value switch
+        {
+            bool scalar => JsonValue.Create(scalar), byte scalar => JsonValue.Create(scalar),
+            sbyte scalar => JsonValue.Create(scalar), short scalar => JsonValue.Create(scalar),
+            ushort scalar => JsonValue.Create(scalar), int scalar => JsonValue.Create(scalar),
+            uint scalar => JsonValue.Create(scalar), long scalar => JsonValue.Create(scalar),
+            ulong scalar => JsonValue.Create(scalar), float scalar => JsonValue.Create(scalar),
+            double scalar => JsonValue.Create(scalar), char scalar => JsonValue.Create(scalar),
+            string scalar => JsonValue.Create(scalar), _ => JsonSerializer.SerializeToNode(value, type)
+        };
         if (type.IsArray)
         {
             var array = new JsonArray();
@@ -50,7 +60,17 @@ public static class VanillaFrame
     {
         if (node == null) return null;
         if (Nullable.GetUnderlyingType(type) is Type inner) return Decode(node, inner);
-        if (type.IsPrimitive || type.IsEnum || type == typeof(string)) return node.Deserialize(type);
+        if (type.IsEnum) return node.Deserialize(type);
+        if (type.IsPrimitive || type == typeof(string)) return Type.GetTypeCode(type) switch
+        {
+            TypeCode.Boolean => node.GetValue<bool>(), TypeCode.Byte => node.GetValue<byte>(),
+            TypeCode.SByte => node.GetValue<sbyte>(), TypeCode.Int16 => node.GetValue<short>(),
+            TypeCode.UInt16 => node.GetValue<ushort>(), TypeCode.Int32 => node.GetValue<int>(),
+            TypeCode.UInt32 => node.GetValue<uint>(), TypeCode.Int64 => node.GetValue<long>(),
+            TypeCode.UInt64 => node.GetValue<ulong>(), TypeCode.Single => node.GetValue<float>(),
+            TypeCode.Double => node.GetValue<double>(), TypeCode.String => node.GetValue<string>(),
+            _ => node.Deserialize(type)
+        };
         if (type.IsArray)
         {
             var result = Array.CreateInstance(type.GetElementType(), node.AsArray().Count);
