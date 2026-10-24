@@ -20,6 +20,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     public static bool Active => Instance.running;
     public string Status { get; private set; } = "未启动";
     public bool Reached { get; private set; }
+    public bool NavigationOwned { get; private set; }
     public int RoutePoints => route.Length;
     public string PlannerStatus => movement?.Status ?? Status;
     public JsonObject PlannerResult => movement?.LastResult;
@@ -27,6 +28,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     public string PlannerMismatch => movement?.LastMismatch;
     public int PlanAccepted => movement?.Accepted ?? 0;
     public int PlanRejected => movement?.Rejected ?? 0;
+    public bool PlannerReady => movement != null;
     bool running;
     long tick;
     Vector2 goal;
@@ -38,6 +40,9 @@ public sealed class VanillaNavigationDemo : ModSystem
     int previousAccepted;
     int stalled;
     float closest;
+    double captureMs;
+    int loggedAccepted, loggedRejected, idleFrames;
+    int starvedFrames, starvation, longestStarvation;
 
     public override void Load()
     {
@@ -46,20 +51,25 @@ public sealed class VanillaNavigationDemo : ModSystem
         On_TriggersSet.CopyInto += CopyInput;
     }
 
-    public void Start(Vector2 target)
+    public void Start(Vector2 target) => StartCore(target, false);
+    internal void StartNavigation(Vector2 target) => StartCore(target, true);
+    internal void UpdateNavigationGoal(Vector2 target) { goal = target; closest = Vector2.Distance(Main.LocalPlayer.position, goal); }
+
+    void StartCore(Vector2 target, bool navigation)
     {
         var player = Main.LocalPlayer;
         if (Main.netMode != NetmodeID.SinglePlayer || Main.ActiveWorldFileData.IsCloudSave)
             throw new InvalidOperationException("目前是单人本地世界的原版移动实验入口。");
         if (player.dead || player.ghost) throw new InvalidOperationException("请先复活。");
         if (Vector2.Distance(player.position, target) > 60 * 16) throw new InvalidOperationException("请选60格以内的落脚点。");
-        VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, target));
+        VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, target), navigation);
         byte[] package = Mod.GetFileBytes("Assets/VanillaWorker.bin");
-        Halt.All(); NativeAgent.Stop();
-        if (!AxisLock.Take("vanilla-demo", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => running))
+        if (!navigation) { Halt.All(); NativeAgent.Stop(); }
+        if (!navigation && !AxisLock.Take("vanilla-demo", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => running))
             throw new InvalidOperationException("人物控制权被其他动作占用。");
-        running = true; Reached = false; goal = target; tick = 0; stalled = 0;
+        running = true; NavigationOwned = navigation; Reached = false; goal = target; tick = 0; stalled = 0;
         closest = Vector2.Distance(player.position, goal); previousAccepted = 0;
+        loggedAccepted = loggedRejected = idleFrames = starvedFrames = starvation = longestStarvation = 0;
         route = Array.Empty<Vector2>();
         cancellation = new CancellationTokenSource();
         if (worker?.Alive == true)
@@ -74,7 +84,7 @@ public sealed class VanillaNavigationDemo : ModSystem
 
     public void Stop(string reason = "已停止", bool closeWorker = false)
     {
-        running = false; Status = reason;
+        running = false; NavigationOwned = false; Status = reason;
         cancellation?.Cancel(); movement = null;
         if (closeWorker) { worker?.Dispose(); worker = null; }
         if (startup != null)
@@ -85,8 +95,12 @@ public sealed class VanillaNavigationDemo : ModSystem
         AxisLock.Release("vanilla-demo");
     }
 
-    static VanillaAsyncMovement ConnectMovement(VanillaWorkerConnection connection)
-        => new(request => Task.Run(() => connection.Send(request)));
+    VanillaAsyncMovement ConnectMovement(VanillaWorkerConnection connection)
+        => new(request =>
+        {
+            if (NavigationOwned) request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
+            return Task.Run(() => connection.Send(request));
+        });
 
     void ResetInput(On_Player.orig_ResetControls original, Player player) { original(player); ApplyInput(player); }
     void CopyInput(On_TriggersSet.orig_CopyInto original, TriggersSet triggers, Player player) { original(triggers, player); ApplyInput(player); }
@@ -98,6 +112,45 @@ public sealed class VanillaNavigationDemo : ModSystem
         player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
         player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
         player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
+        if (!NavigationOwned) return;
+        if (player.velocity.Y > 0 && !player.noFallDmg && player.gravDir == 1
+            && player.position.Y / 16 - player.fallStart > 20)
+        {
+            var fall = new Vector2(0, player.velocity.Y * 8 + player.gravity * 32);
+            bool landingSoon = Collision.TileCollision(player.position, fall, player.width, player.height).Y < fall.Y;
+            if (landingSoon)
+            {
+                bool available = false;
+                foreach (var jump in player.ExtraJumps) available |= jump.Available;
+                if (available) player.controlJump = player.releaseJump;
+                else if (player.itemAnimation == 0)
+                {
+                    int web = Array.FindIndex(player.inventory, item => item.type == ItemID.Cobweb && item.stack > 0);
+                    if (web >= 0)
+                    {
+                        player.selectedItem = web;
+                        Cursor.AimPx(player.Center.X, player.Bottom.Y + player.velocity.Y);
+                        player.controlUseItem = true;
+                    }
+                }
+                return;
+            }
+        }
+        NPC foe = null;
+        float closestFoe = 320 * 320;
+        foreach (var npc in Main.npc)
+        {
+            if (!npc.active || npc.friendly || npc.damage <= 0 || npc.life <= 0) continue;
+            float distance = Vector2.DistanceSquared(player.Center, npc.Center);
+            if (distance < closestFoe) { closestFoe = distance; foe = npc; }
+        }
+        int weapon = Array.FindIndex(player.inventory, item => item.type == ItemID.Starfury && item.stack > 0);
+        if (foe != null && weapon >= 0 && movement?.Busy == true)
+        {
+            player.selectedItem = weapon;
+            Cursor.AimPx(foe.Center.X, foe.Center.Y);
+            player.controlUseItem = player.releaseUseItem;
+        }
     }
 
     public override void PostUpdateEverything()
@@ -115,12 +168,22 @@ public sealed class VanillaNavigationDemo : ModSystem
             tick++;
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
             movement.Poll(tick, player, 0);
+            if (movement.InputAt(tick + 1) == 0) idleFrames++;
+            if (movement.Accepted > 0 && !movement.HasInputAt(tick + 1))
+            { starvedFrames++; starvation++; longestStarvation = Math.Max(longestStarvation, starvation); }
+            else starvation = 0;
+            if (movement.Accepted != loggedAccepted || movement.Rejected != loggedRejected)
+            {
+                loggedAccepted = movement.Accepted; loggedRejected = movement.Rejected;
+                var result = movement.LastResult;
+                DiagLog.Write($"[engine-nav-timing] tick={tick} capture_ms={captureMs:0.###} compute_ms={result?["request_compute_ms"]} roundtrip_ms={result?["roundtrip_ms"]} breakdown={result?["timing"]?.ToJsonString()} response_frames={movement.ResponseFrames} lead_frames={movement.PlanningLead} zero_input_frames={idleFrames} starved_frames={starvedFrames} longest_starvation={longestStarvation} accepted={loggedAccepted} rejected={loggedRejected} reason={movement.LastRejection} selected={result?["selected"]}");
+            }
             if (movement.Status == "worker_error") throw new IOException("推演进程出错，请查看临时目录中的 worker.log");
             float distance = Vector2.Distance(player.position, goal);
-            if (distance <= 20 && Math.Abs(player.velocity.Y) < .01f)
+            if (!NavigationOwned && distance <= 20 && Math.Abs(player.velocity.Y) < .01f)
             { Reached = true; Stop("已到达目标"); Main.NewText("原版移动实验：已到达目标", Color.LightGreen); return; }
             if (distance < closest - 4) { closest = distance; stalled = 0; } else stalled++;
-            if (stalled > 600 || tick > 1800) { Stop("未能继续接近目标，请换一个落脚点"); return; }
+            if (!NavigationOwned && (stalled > 600 || tick > 1800)) { Stop("未能继续接近目标，请换一个落脚点"); return; }
             if (movement.Accepted != previousAccepted)
             {
                 previousAccepted = movement.Accepted;
@@ -129,7 +192,10 @@ public sealed class VanillaNavigationDemo : ModSystem
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
             if (!movement.Busy)
             {
-                var snapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, goal));
+                if (player.itemAnimation > 0 || player.itemTime > 0) return;
+                long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                var snapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, goal), NavigationOwned);
+                captureMs = System.Diagnostics.Stopwatch.GetElapsedTime(captureStart).TotalMilliseconds;
                 movement.Request(snapshot, tick, goal, 0);
             }
         }
@@ -198,6 +264,21 @@ public sealed class VanillaNavigationCommand : ModCommand
         var demo = VanillaNavigationDemo.Instance;
         if (args.Length == 1 && args[0] == "stop") { demo.Stop(); caller.Reply(demo.Status); return; }
         if (args.Length == 1 && args[0] == "status") { caller.Reply(demo.Status); return; }
+        if (args.Length == 2 && args[0] == "engine" && args[1] is "on" or "off")
+        {
+            VanillaNavBridge.Reset(); VanillaNavBridge.Enabled = args[1] == "on";
+            caller.Reply("现有寻路的引擎移动后端：" + (VanillaNavBridge.Enabled ? "开" : "关")); return;
+        }
+        if (args.Length == 3 && args[0] == "route" && int.TryParse(args[1], out int gx) && int.TryParse(args[2], out int gy))
+        {
+            Halt.All(); NativeAgent.Stop(); VanillaNavBridge.Enabled = true;
+            RecedingNav.Start(gx, gy); caller.Reply("开始带挖掘/搭建的引擎寻路；/halt 停止。"); return;
+        }
+        if (args.Length == 1 && args[0] == "descent")
+        {
+            Halt.All(); NativeAgent.Stop(); VanillaNavBridge.Enabled = true;
+            VanillaDescentRun.Instance.Start(); caller.Reply("开始规划丛林入口→地狱落脚点；/halt 停止。"); return;
+        }
         try
         {
             Vector2 feet;

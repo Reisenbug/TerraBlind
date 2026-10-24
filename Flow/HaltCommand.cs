@@ -23,6 +23,7 @@ namespace TerraBlind
 		// 【由上往下停】。先停编排层再停原语,反过来的话上层下一帧又把原语拉起来
 		public static string All()
 		{
+			VanillaDescentRun.Instance.Stop();
 			VanillaNavigationDemo.Instance.Stop();
 			var was = new System.Collections.Generic.List<string>();
 			if (StartRun.IsRunning) was.Add("主链");

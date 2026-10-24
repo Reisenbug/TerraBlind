@@ -15,6 +15,7 @@ public sealed class VanillaPrediction
 {
     readonly JsonObject checkpoint;
     readonly Rectangle area;
+    readonly VanillaFrame.WorkerState compiled;
     static readonly FieldInfo clock = typeof(Main).GetField("_gameUpdateCount", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("engine_clock_field_missing");
     internal static VanillaKeys PendingKeys { get; private set; }
@@ -32,6 +33,7 @@ public sealed class VanillaPrediction
     {
         VanillaFrame.RequireWorker();
         checkpoint = (JsonObject)state.DeepClone();
+        compiled = new VanillaFrame.WorkerState(checkpoint);
         area = new Rectangle(state["area"][0].GetValue<int>() * 16, state["area"][1].GetValue<int>() * 16,
             state["area"][2].GetValue<int>() * 16, state["area"][3].GetValue<int>() * 16);
     }
@@ -67,6 +69,11 @@ public sealed class VanillaPrediction
             ["wing_time"] = player.wingTime, ["jump"] = player.jump, ["dash_delay"] = player.dashDelay,
             ["available_jumps"] = available, ["wet"] = player.wet, ["honey_wet"] = player.honeyWet,
             ["frozen"] = player.frozen, ["webbed"] = player.webbed,
+            ["run_speed"] = player.maxRunSpeed, ["run_accel"] = player.runAcceleration,
+            ["run_slowdown"] = player.runSlowdown, ["move_speed"] = player.moveSpeed,
+            ["gravity"] = player.gravity, ["fall_speed"] = player.maxFallSpeed, ["jump_boost"] = player.jumpSpeedBoost,
+            ["no_fall_damage"] = player.noFallDmg, ["merman"] = player.merman,
+            ["fall_start"] = player.fallStart,
             ["control_right"] = player.controlRight, ["control_jump"] = player.controlJump,
             ["grounded"] = Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height),
         };
@@ -77,7 +84,7 @@ public sealed class VanillaPrediction
         return result;
     }
 
-    public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false)
+    public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true)
     {
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 120) throw new ArgumentException("horizon_must_be_1_to_120");
@@ -89,7 +96,7 @@ public sealed class VanillaPrediction
         try
         {
             long tick = Stopwatch.GetTimestamp();
-            var player = VanillaFrame.RestoreInWorker(checkpoint);
+            var player = compiled.Restore();
             restore = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
             foreach (int control in controls)
             {
@@ -106,12 +113,13 @@ public sealed class VanillaPrediction
                 if (!interior.Contains(player.Hitbox)) { outcome = "outside_observed_world"; break; }
             }
             if (captureEnd && outcome == "complete")
-                end = VanillaFrame.Capture(player, new Rectangle(area.X / 16, area.Y / 16, area.Width / 16, area.Height / 16));
+                end = VanillaFrame.Capture(player, new Rectangle(area.X / 16, area.Y / 16, area.Width / 16, area.Height / 16),
+                    checkpoint["navigation"]?.GetValue<bool>() == true);
         }
         finally
         {
             long tick = Stopwatch.GetTimestamp();
-            VanillaFrame.RestoreInWorker(checkpoint);
+            if (restoreAfter) compiled.Restore();
             cleanup = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
         }
         return new JsonObject { ["outcome"] = outcome, ["frames"] = trace, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,

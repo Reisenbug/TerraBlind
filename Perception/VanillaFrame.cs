@@ -122,7 +122,7 @@ public static class VanillaFrame
         }
     }
 
-    public static JsonObject Capture(Player player, Rectangle area)
+    public static JsonObject Capture(Player player, Rectangle area, bool navigation = false)
     {
         if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0)
             throw new NotSupportedException("active_mount_or_grapple");
@@ -132,22 +132,22 @@ public static class VanillaFrame
             throw new ArgumentOutOfRangeException(nameof(area));
         var bounds = new Rectangle(area.X * 16, area.Y * 16, area.Width * 16, area.Height * 16);
         if (!bounds.Contains(player.Hitbox)) throw new ArgumentException("player_outside_snapshot");
-        if (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
+        if (!navigation && (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
             || Main.projectile.Any(projectile => projectile.active && bounds.Intersects(projectile.Hitbox))
-            || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox)))
+            || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox))))
             throw new NotSupportedException("dynamic_entities_in_snapshot");
         var tiles = new JsonArray();
         for (int y = area.Top; y < area.Bottom; y++)
         for (int x = area.Left; x < area.Right; x++)
         {
             var tile = Main.tile[x, y];
-            if (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire)
+            if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
                 throw new NotSupportedException("wiring_in_snapshot");
             tiles.Add(new JsonArray(tile.HasTile ? 1 : 0, (int)tile.TileType, (int)tile.WallType,
                 (int)tile.TileFrameX, (int)tile.TileFrameY, (int)tile.Slope, tile.IsHalfBlock ? 1 : 0,
                 tile.IsActuated ? 1 : 0, (int)tile.LiquidType, (int)tile.LiquidAmount));
         }
-        return new JsonObject { ["engine"] = EngineId, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
+        return new JsonObject { ["navigation"] = navigation, ["engine"] = EngineId, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
             ["game_mode"] = Main.GameMode,
             ["player"] = CaptureFields(player),
             ["inventory"] = Items(player.inventory), ["armor"] = Items(player.armor),
@@ -159,32 +159,47 @@ public static class VanillaFrame
             ["tiles"] = tiles,
             ["omitted_player_references"] = new JsonArray(Fields(typeof(Player)).Where(field => !Supported(field.FieldType))
                 .Select(field => JsonValue.Create(field.Name)).ToArray()),
-            ["scope"] = "vanilla movement only; no active mounts, grapples, actors, item use or world wiring" };
+            ["scope"] = navigation ? "vanilla navigation physics; enemies and wiring effects are not predicted"
+                : "vanilla movement only; no active mounts, grapples, actors, item use or world wiring" };
     }
 
     public static bool ContextMatches(JsonObject state, Player player)
         => ContextMatches(state, player, out _);
 
-    public static bool ContextMatches(JsonObject state, Player player, out string difference)
+    public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null)
     {
         difference = "active player state";
-        if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0 || player.itemAnimation > 0 || player.itemTime > 0)
+        bool navigation = state["navigation"]?.GetValue<bool>() == true;
+        if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0
+            || !navigation && (player.itemAnimation > 0 || player.itemTime > 0))
             return false;
         difference = "equipment or inventory";
-        if (!JsonNode.DeepEquals(state["inventory"], Items(player.inventory))
+        if ((!navigation && !JsonNode.DeepEquals(state["inventory"], Items(player.inventory)))
             || !JsonNode.DeepEquals(state["armor"], Items(player.armor))
             || !JsonNode.DeepEquals(state["misc_equips"], Items(player.miscEquips))) return false;
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
         var tiles = state["tiles"].AsArray();
         var bounds = new Rectangle(x0 * 16, y0 * 16, width * 16, state["area"][3].GetValue<int>() * 16);
         difference = "dynamic entity";
-        if (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
+        if (!navigation && (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
             || Main.projectile.Any(projectile => projectile.active && bounds.Intersects(projectile.Hitbox))
-            || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox))) return false;
+            || Main.item.Any(item => item.active && bounds.Intersects(item.Hitbox)))) return false;
+        System.Collections.Generic.HashSet<(int, int)> corridor = null;
+        if (navigation && trajectory != null)
+        {
+            corridor = new();
+            foreach (var frame in trajectory)
+            {
+                int fx = (int)Math.Floor(frame["x"].GetValue<float>() / 16), fy = (int)Math.Floor(frame["y"].GetValue<float>() / 16);
+                for (int x = fx - 2; x <= fx + 3; x++)
+                for (int y = fy - 2; y <= fy + 5; y++) corridor.Add((x, y));
+            }
+        }
         for (int i = 0; i < tiles.Count; i++)
         {
+            if (corridor != null && !corridor.Contains((x0 + i % width, y0 + i / width))) continue;
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles[i];
-            if (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire)
+            if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }
             if (tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>())
             { difference = $"liquid ({x0 + i % width},{y0 + i / width}): {data[8]}/{data[9]} -> {tile.LiquidType}/{tile.LiquidAmount}"; return false; }
@@ -234,6 +249,80 @@ public static class VanillaFrame
             tile.IsActuated = data[7].GetValue<int>() != 0; tile.LiquidType = data[8].GetValue<int>(); tile.LiquidAmount = (byte)data[9].GetValue<int>();
         }
         return player;
+    }
+
+    public sealed class WorkerState
+    {
+        readonly (FieldInfo field, object value)[] playerFields, main, statics, collision, scene, random, worldRandom;
+        readonly Item[] inventory, armor, dye, misc;
+        readonly int[] tiles;
+        readonly int x0, y0, width, gameMode;
+
+        public WorkerState(JsonObject state)
+        {
+            var source = RestoreInWorker(state);
+            playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
+            main = DecodeFields(typeof(Main), state["main"].AsObject(), true);
+            statics = DecodeFields(typeof(Player), state["player_statics"].AsObject(), true);
+            collision = DecodeFields(typeof(Collision), state["collision"].AsObject(), true);
+            scene = DecodeFields(Main.SceneMetrics.GetType(), state["scene"].AsObject());
+            random = DecodeFields(Main.rand.GetType(), state["random"].AsObject());
+            worldRandom = DecodeFields(WorldGen.genRand.GetType(), state["world_random"].AsObject());
+            inventory = source.inventory.Select(item => item.Clone()).ToArray();
+            armor = source.armor.Select(item => item.Clone()).ToArray();
+            dye = source.dye.Select(item => item.Clone()).ToArray();
+            misc = source.miscEquips.Select(item => item.Clone()).ToArray();
+            x0 = state["area"][0].GetValue<int>(); y0 = state["area"][1].GetValue<int>(); width = state["area"][2].GetValue<int>();
+            gameMode = state["game_mode"].GetValue<int>();
+            tiles = state["tiles"].AsArray().SelectMany(row => row.AsArray().Select(value => value.GetValue<int>())).ToArray();
+        }
+
+        static (FieldInfo, object)[] DecodeFields(Type type, JsonObject state, bool isStatic = false)
+            => (isStatic ? type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(field => StaticField(type, field)) : Fields(type).Where(field => Supported(field.FieldType)))
+                .Where(field => state.ContainsKey(isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name))
+                .Select(field => (field, Decode(state[isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name], field.FieldType))).ToArray();
+
+        static object CopyValue(object value)
+        {
+            if (value is not Array array) return value;
+            var copy = (Array)array.Clone();
+            if (array.GetType().GetElementType().IsArray)
+                for (int i = 0; i < copy.Length; i++) copy.SetValue(CopyValue(copy.GetValue(i)), i);
+            return copy;
+        }
+
+        static void Apply(object target, (FieldInfo field, object value)[] values)
+        {
+            foreach (var (field, value) in values) field.SetValue(target, CopyValue(value));
+        }
+
+        public Player Restore()
+        {
+            RequireWorker();
+            Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
+            Apply(Main.SceneMetrics, scene);
+            var player = new Player(); Apply(player, playerFields);
+            player.inventory = inventory.Select(item => item.Clone()).ToArray();
+            player.armor = armor.Select(item => item.Clone()).ToArray();
+            player.dye = dye.Select(item => item.Clone()).ToArray();
+            player.miscEquips = misc.Select(item => item.Clone()).ToArray();
+            Main.player[player.whoAmI] = player;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var projectile in Main.projectile) projectile.active = false;
+            foreach (var item in Main.item) item.active = false;
+            Apply(Main.rand, random); Apply(WorldGen.genRand, worldRandom);
+            for (int i = 0; i < tiles.Length / 10; i++)
+            {
+                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
+                tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
+                tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
+                tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
+                tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
+                tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
+            }
+            return player;
+        }
     }
 
     public static void RequireWorker()

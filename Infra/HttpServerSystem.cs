@@ -3234,6 +3234,24 @@ namespace TerraBlind
 			return sig == null ? "{\"found\":false,\"reason\":\"unknown_biome\"}" : DescentRouteJson(sig, reqBody);
 		}
 
+		public static System.Text.Json.Nodes.JsonObject NavigationDescentGoals()
+		{
+			var timer = System.Diagnostics.Stopwatch.StartNew();
+			var data = ComputeDescent(new ushort[] { Terraria.ID.TileID.JungleGrass }, out string why);
+			if (data == null) throw new System.InvalidOperationException(why);
+			var cell = (x: data.EntX, y: data.EntY);
+			for (int step = 0; step < 20000; step++)
+			{
+				var direction = MazeWand.FieldDir(data.Field, cell.x, cell.y);
+				if (direction == (0, 0)) break;
+				cell = (cell.x + direction.dx, cell.y + direction.dy);
+			}
+			DiagLog.Write($"[engine-nav-goals] elapsed_ms={timer.Elapsed.TotalMilliseconds:0.###}");
+			return new System.Text.Json.Nodes.JsonObject { ["found"] = true,
+				["entrance"] = new System.Text.Json.Nodes.JsonObject { ["x"] = data.EntX, ["y"] = data.EntY },
+				["hell_x"] = cell.x, ["hell_y"] = cell.y };
+		}
+
 		static string DescentRouteJson(ushort[] sigTypes, string reqBody)
 		{
 					var dd = ComputeDescent(sigTypes, out string why);

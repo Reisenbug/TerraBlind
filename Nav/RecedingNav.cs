@@ -155,6 +155,7 @@ namespace TerraBlind
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
+            VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
             _mode = mode;
             // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
@@ -186,6 +187,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            VanillaNavBridge.Reset();
             // 刹车没停稳就被外部叫停:别让 SettleAt 留在后台继续抢控制
             if (_braking) { SettleAt.Stop(); _braking = false; }
             if (Active && LastStop == null) LastStop = "stopped";
@@ -234,9 +236,9 @@ namespace TerraBlind
             _waitOn = "";
 
             // 蜘蛛网压身体会把移动拖到爬(原版要 20-100 tick 才顶开),一镐就没,所以主动砸
-            if (!StateSpacePlanner.PreserveTerrain) SmashWeb(p);
+            if (!VanillaNavigationDemo.Instance.NavigationOwned && !StateSpacePlanner.PreserveTerrain) SmashWeb(p);
             // 抢同一帧的 controlUseItem,网优先(网拖慢移动,罐子晚一帧无所谓)
-            if (!StateSpacePlanner.PreserveTerrain && !p.controlUseItem) SmashPot(p);
+            if (!VanillaNavigationDemo.Instance.NavigationOwned && !StateSpacePlanner.PreserveTerrain && !p.controlUseItem) SmashPot(p);
 
             // EXACT (mining): the goal is a solid ore the body can't stand on, arrival is the tile being MINED OUT.
             // The field digs a shaft toward it; the moment that cell is no longer a block, we've reached (dug) it.
@@ -283,6 +285,8 @@ namespace TerraBlind
                     LastStop = "done"; Stop(); Chatter.Say("[TerraBlind] receding nav done"); return;
                 }
             }
+
+            if (VanillaNavBridge.Tick(p, _goalWx, _goalWy)) return;
 
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
@@ -473,6 +477,7 @@ namespace TerraBlind
             _prevCell = cell;
 
             _altered += res.Altered;
+            if (res.Altered > 0) VanillaNavBridge.TerrainAction();
             if (_altered >= RebuildAltered)
                 RebuildFieldAsync($"altered {_altered} tiles");
 
