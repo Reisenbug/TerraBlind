@@ -13,6 +13,7 @@ public sealed class VanillaAsyncMovement
     public const int LeadFrames = 30;
     readonly Func<JsonObject, Task<JsonObject>> send;
     readonly Dictionary<long, int> inputs = new();
+    readonly Queue<int> responses = new();
     Task<JsonObject> pending;
     long handoff;
     long requestedAt;
@@ -44,13 +45,17 @@ public sealed class VanillaAsyncMovement
         if (!completionObserved)
         {
             ResponseFrames = checked((int)(tick - requestedAt)); completionObserved = true;
+            responses.Enqueue(ResponseFrames);
+            if (responses.Count > 4) responses.Dequeue();
+            int slowest = responses.Max();
+            int lead = Math.Clamp(slowest + 6, 6, 90);
+            if (slowest > PlanningLead || lead < PlanningLead) PlanningLead = lead;
             if (pending.IsCompletedSuccessfully) LastResult = pending.Result;
         }
         if (pending.IsFaulted || pending.IsCanceled) { _ = pending.Exception; Reject("worker_error"); return; }
         if (revision != requestRevision) { Reject("revision_changed"); return; }
         if (tick > handoff)
         {
-            PlanningLead = Math.Clamp(ResponseFrames + 6, PlanningLead, 90);
             Reject("late_result", false); return;
         }
         if (tick < handoff) return;
@@ -95,7 +100,9 @@ public sealed class VanillaAsyncMovement
         handoff = tick + PlanningLead; requestRevision = revision;
         var prefix = new JsonArray(Enumerable.Range(1, PlanningLead).Select(i => JsonValue.Create(InputAt(tick + i))).ToArray());
         var request = new JsonObject { ["command"] = "plan", ["snapshot"] = snapshot.DeepClone(),
-            ["prefix"] = prefix, ["x"] = goal.X, ["y"] = goal.Y };
+            ["prefix"] = prefix, ["x"] = goal.X, ["y"] = goal.Y,
+            ["continuation"] = new JsonArray(Enumerable.Range(1, VanillaLocalPlanner.Horizon)
+                .TakeWhile(i => inputs.ContainsKey(handoff + i)).Select(i => JsonValue.Create(InputAt(handoff + i))).ToArray()) };
         context = request["snapshot"].AsObject();
         pending = send(request); Status = "planning"; return true;
     }

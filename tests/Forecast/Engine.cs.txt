@@ -54,6 +54,24 @@ public sealed class Engine : ModSystem
     JsonObject Handle(JsonObject request)
     {
         string command = request["command"].GetValue<string>();
+        if (command == "transit_contract")
+        {
+            Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots, (int)ItemID.CobaltShield) });
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            var guidance = new JsonArray();
+            for (int x = area.Left; x < area.Right; x++)
+            for (int y = area.Top; y < area.Bottom; y++) guidance.Add(new JsonArray(x, y, area.Right - x));
+            var goal = source.position + new Vector2(22 * 16, 0);
+            var walk = new VanillaLocalPlanner().Plan(snapshot, goal, guidance: guidance);
+            var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
+            foreach (var plan in new[] { walk, continued })
+                if (plan["status"]?.GetValue<string>() != "planned"
+                    || plan["controls"].AsArray().Any(key => key.GetValue<int>() != 2))
+                    throw new InvalidOperationException("transit_inserted_a_stop");
+            if (continued["selected"].GetValue<string>() != "continue") throw new InvalidOperationException("transit_discarded_valid_route");
+            return new JsonObject { ["passed"] = true, ["walk_ms"] = walk["elapsed_ms"].DeepClone(),
+                ["continue_ms"] = continued["elapsed_ms"].DeepClone() };
+        }
         if (command == "async_cleanup")
         {
             Setup(new JsonObject());
@@ -78,6 +96,47 @@ public sealed class Engine : ModSystem
             Main.projectile[0].active = false;
             if (controller.Status != "context_changed" || controller.InputAt(91) != 0)
                 throw new InvalidOperationException("new_projectile_did_not_invalidate_plan");
+            snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0);
+            source.statLife--;
+            controller.Poll(30, source, 0);
+            if (controller.Accepted != 1) throw new InvalidOperationException("navigation_rejected_health_only_change");
+            controller.Request(snapshot, 30, source.position, 0);
+            source.runAcceleration += .01f;
+            controller.Poll(60, source, 0);
+            if (controller.Status != "physics_changed:run_accel") throw new InvalidOperationException("navigation_ignored_movement_change");
+            Setup(new JsonObject());
+            snapshot = VanillaFrame.Capture(source, area);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            var delayed = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+            int calls = 0;
+            controller = new VanillaAsyncMovement(_ => ++calls == 1
+                ? System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()) : delayed.Task);
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(30, source, 0);
+            controller.Request(snapshot, 30, source.position, 0);
+            delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(61, source, 0);
+            if (controller.Status != "late_result" || controller.InputAt(62) != 2 || !controller.HasInputAt(62))
+                throw new InvalidOperationException("late_result_erased_valid_queue");
+            controller.Poll(62, source, 1);
+            if (controller.HasInputAt(63)) throw new InvalidOperationException("revision_kept_old_queue");
+            Setup(new JsonObject());
+            Main.npc[0].SetDefaults(NPCID.BlueSlime); Main.npc[0].active = true; Main.npc[0].Center = source.Center;
+            snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0);
+            Main.npc[0].active = false;
+            Main.item[0].SetDefaults(ItemID.Gel); Main.item[0].active = true; Main.item[0].position = source.position;
+            controller.Poll(30, source, 0);
+            if (controller.Accepted != 1) throw new InvalidOperationException("kill_and_loot_invalidated_navigation");
+            controller.Request(snapshot, 30, source.position, 0);
+            var obstruction = Main.tile[(int)(source.Center.X / 16), (int)(source.Center.Y / 16)];
+            obstruction.HasTile = true; obstruction.TileType = TileID.Stone;
+            controller.Poll(60, source, 0);
+            if (controller.Status != "context_changed") throw new InvalidOperationException("navigation_ignored_terrain_change");
+            Main.item[0].active = false;
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "plan")
@@ -92,7 +151,9 @@ public sealed class Engine : ModSystem
                     return new JsonObject { ["status"] = "unsafe_handoff" };
                 var anchor = VanillaPrediction.Observe(VanillaFrame.RestoreInWorker(future));
                 var result = new VanillaLocalPlanner().Plan(future,
-                    new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()));
+                    new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
+                    continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
+                    guidance: request["guidance"]?.AsArray());
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

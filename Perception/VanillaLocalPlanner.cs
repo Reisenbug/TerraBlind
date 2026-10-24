@@ -38,10 +38,12 @@ public sealed class VanillaLocalPlanner
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
         int direction = goal.X >= player.position.X ? 2 : 1;
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
+        bool transit = snapshot["navigation"]?.GetValue<bool>() == true && guidance?.Count > 0;
         var prediction = new VanillaPrediction(snapshot);
         var candidates = new List<(string name, int[] keys)>();
         if (continuation?.Length > 0)
-            candidates.Add(("continue", Enumerable.Range(0, Horizon).Select(i => i < continuation.Length ? continuation[i] : 0).ToArray()));
+            candidates.Add(("continue", Enumerable.Range(0, Horizon)
+                .Select(i => i < continuation.Length ? continuation[i] : transit ? continuation[^1] : 0).ToArray()));
         candidates.Add(("wait", new int[Horizon]));
         candidates.Add(("walk", Enumerable.Repeat(direction, Horizon).ToArray()));
         candidates.Add(("drop", Enumerable.Repeat(direction | 16, Horizon).ToArray()));
@@ -62,8 +64,9 @@ public sealed class VanillaLocalPlanner
         foreach (int release in new[] { 1, 12, 18, 30, 45 })
             candidates.Add(($"relaunch_{release}", Enumerable.Range(0, Horizon)
                 .Select(i => direction | (i == release ? 0 : 4)).ToArray()));
-        foreach (int stop in new[] { 12, 36, 60 })
-            candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
+        if (!transit)
+            foreach (int stop in new[] { 12, 36, 60 })
+                candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
         int reverse = direction == 2 ? 1 : 2;
         foreach (int retreat in new[] { 12, 30, 48 })
         foreach (int hold in new[] { 18, 60 })
@@ -104,7 +107,8 @@ public sealed class VanillaLocalPlanner
                     var cell = ((int)((position.X + player.width / 2f) / 16), (int)((position.Y + player.height) / 16) - 1);
                     return field.TryGetValue(cell, out int cost) ? cost * 16d : missing + Vector2.Distance(goal, position);
                 }
-                score = frames.Average(distance) + .25 * distance(frames[^1]);
+                score = transit ? distance(frames[^1]) + .1 * frames.Average(distance)
+                    : frames.Average(distance) + .25 * distance(frames[^1]);
                 score += Math.Max(0, wings - frames[^1]["wing_time"].GetValue<float>()) * .02;
                 score += Math.Max(0, jumps - frames[^1]["available_jumps"].GetValue<int>()) * 2;
                 if (score < best - .01)
