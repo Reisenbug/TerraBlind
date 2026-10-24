@@ -43,6 +43,7 @@ public sealed class Driver : ModSystem
     int continuityLeg;
     int[] offsets = { 180 };
     int barrierTiles;
+    StreamWriter controlTrace;
 
     public override void Load()
     {
@@ -189,6 +190,7 @@ public sealed class Driver : ModSystem
         }
         catch (Exception error)
         {
+            controlTrace?.Flush();
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
             enabled = false; VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
             if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(1);
@@ -201,6 +203,8 @@ public sealed class Driver : ModSystem
         var player = Main.LocalPlayer;
         if (!prepared)
         {
+            controlTrace = File.CreateText(Path.Combine(Main.SavePath, "control-trace.csv"));
+            controlTrace.WriteLine("tick,leg,x,y,vx,vy,actual_keys,scheduled_keys,queued,plan,index,terminal,goal_x,goal_y,plan_goal_x,anchor_x,engine,macro,rejection");
             player.ConsumedLifeCrystals = 15; player.statLife = player.statLifeMax = 400;
             foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
             player.armor[0].SetDefaults(ItemID.MoltenHelmet); player.armor[1].SetDefaults(ItemID.MoltenBreastplate); player.armor[2].SetDefaults(ItemID.MoltenGreaves);
@@ -230,6 +234,8 @@ public sealed class Driver : ModSystem
         }
         ticks++;
         var sample = VanillaPrediction.Observe(player);
+        var control = VanillaNavigationDemo.Instance.LastControl;
+        controlTrace.WriteLine(FormattableString.Invariant($"{ticks},{continuityLeg},{player.position.X},{player.position.Y},{player.velocity.X},{player.velocity.Y},{sample["keys"]},{control.Keys},{control.Queued},{control.Plan},{control.Index},{control.Terminal},{control.Goal.X},{control.Goal.Y},{control.PlanGoal.X},{control.Anchor.X},{VanillaNavigationDemo.Active},{StateSpacePlanner.ExecRunning},{VanillaNavigationDemo.Instance.PlannerRejection}"));
         sample["phase"] = VanillaDescentRun.Instance.Status;
         sample["focused"] = Main.hasFocus;
         sample["nav_stop"] = RecedingNav.LastStop;
@@ -250,6 +256,7 @@ public sealed class Driver : ModSystem
         if (ticks % 6 == 0) { trace.Add(sample); if (trace.Count > 600) trace.RemoveAt(0); }
         if (ticks % 120 == 0)
         {
+            controlTrace.Flush();
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={VanillaDescentRun.Instance.Status} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
@@ -268,6 +275,7 @@ public sealed class Driver : ModSystem
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
             ["underworld"] = Main.UnderworldLayer, ["legs"] = results.DeepClone() }.ToJsonString());
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
+        controlTrace.Flush();
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
     }
 
@@ -284,6 +292,7 @@ public sealed class Driver : ModSystem
 
     public override void Unload()
     {
+        controlTrace?.Dispose();
         if (!opened) return;
         On_Main.Update -= Update; IL_Main.DoUpdate -= Background;
     }
