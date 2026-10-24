@@ -1,0 +1,174 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
+using MonoMod.Cil;
+using Terraria;
+using Terraria.ID;
+using Terraria.IO;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Demo;
+
+public sealed class Demo : Mod { }
+
+public sealed class Caller : CommandCaller
+{
+    public CommandType CommandType => CommandType.Chat;
+    public Player Player => Main.LocalPlayer;
+    public string Last;
+    public void Reply(string text, Color color = default) { Last = text; Main.NewText(text, color == default ? Color.White : color); }
+}
+
+public sealed class NoSpawns : GlobalNPC
+{
+    public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
+    { if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck")) maxSpawns = 0; }
+}
+
+public sealed class Driver : ModSystem
+{
+    bool enabled, opened, prepared, started, shot;
+    int trial, ticks, warmup;
+    int menuTicks;
+    readonly Caller caller = new();
+    readonly JsonArray results = new();
+    JsonArray trace = new();
+
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck");
+        if (!enabled) return;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavwingsonly")) trial = 1;
+        string root = Path.GetFullPath(Terraria.Program.LaunchParameters["-tmlsavedirectory"]);
+        if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
+        On_Main.Update += Update;
+        IL_Main.DoUpdate += Background;
+    }
+
+    static void Background(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus"))
+            || !cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchLdsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("background_pause_boundary_missing");
+        cursor.EmitDelegate<Func<bool, bool>>(_ => true);
+    }
+
+    void Update(On_Main.orig_Update original, Main game, GameTime time)
+    {
+        original(game, time);
+        if (!opened && ++menuTicks % 60 == 1) Console.WriteLine("VNAV_DEMO_MENU " + Main.menuMode);
+        if (opened || Main.menuMode != 0) return;
+        opened = true;
+        if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Demo.wld"), false).SetAsActive();
+        var file = PlayerFileData.CreateAndSave(new Player { name = "Vanilla movement demo" });
+        if (file.IsCloudSave || !file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new InvalidOperationException("player_not_isolated");
+        Player.LoadPlayer(file.Path, false).SetAsActive(); Main.autoPause = false;
+        WorldGen.playWorld();
+    }
+
+    void Scene()
+    {
+        Main.dayTime = true; Main.time = 27000; Main.worldSurface = 440; Main.rockLayer = 600;
+        var player = Main.LocalPlayer;
+        var defaults = new Player { active = true, whoAmI = Main.myPlayer, statLife = 400, statLifeMax = 400, ConsumedLifeCrystals = 15 };
+        VanillaFrame.RestoreFields(player, VanillaFrame.CaptureFields(defaults));
+        foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
+        int slot = 3;
+        foreach (int item in trial == 0 ? new[] { ItemID.SandstorminaBottle } : new[] { ItemID.AngelWings }) player.armor[slot++].SetDefaults(item);
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in Main.item) item.active = false;
+        for (int x = 455; x < 575; x++)
+        for (int y = 310; y < 445; y++)
+        {
+            var tile = Main.tile[x, y]; tile.ClearEverything();
+            bool boundary = x is 455 or 574 || y is 310 or 444;
+            if (boundary || y >= 400 || x is >= 509 and < 540 && y >= 388)
+            { tile.HasTile = true; tile.TileType = boundary ? TileID.Stone : TileID.Dirt; }
+        }
+        player.position = new Vector2(500 * 16, 400 * 16 - player.height);
+        player.fallStart = (int)(player.position.Y / 16); player.velocity = Vector2.Zero;
+        ticks = 0; warmup = 8; started = false; shot = false; prepared = true; trace = new JsonArray();
+        Main.NewText(trial == 0 ? "演示1：只用沙暴瓶登上12格高台" : "演示2：翅膀登上同一个高台", Color.LightGreen);
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || Main.gameMenu) return;
+        try
+        {
+            if (!prepared) { Scene(); return; }
+            if (warmup-- > 0) return;
+            var demo = VanillaNavigationDemo.Instance;
+            if (!started)
+            {
+                ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav 522 388", new[] { "522", "388" });
+                if (!VanillaNavigationDemo.Active) throw new InvalidOperationException(caller.Last);
+                started = true;
+            }
+            ticks++;
+            var sample = VanillaPrediction.Observe(Main.LocalPlayer);
+            sample["status"] = demo.PlannerStatus;
+            sample["rejection"] = demo.PlannerRejection;
+            sample["mismatch"] = demo.PlannerMismatch;
+            sample["accepted"] = demo.PlanAccepted; sample["rejected"] = demo.PlanRejected;
+            if (demo.PlannerResult is JsonObject plan)
+            {
+                sample["selected"] = plan["selected"]?.DeepClone();
+                sample["roundtrip_ms"] = plan["roundtrip_ms"]?.DeepClone();
+                sample["compute_ms"] = plan["request_compute_ms"]?.DeepClone();
+            }
+            trace.Add(sample);
+            if (ticks % 30 == 0) File.WriteAllText(Path.Combine(Main.SavePath, $"trace-{trial}.json"), trace.ToJsonString());
+            if (VanillaNavigationDemo.Active)
+            {
+                if (ticks > 9000) throw new TimeoutException(demo.Status);
+                return;
+            }
+            if (!demo.Reached) throw new InvalidOperationException(demo.Status);
+            if (demo.RoutePoints < 2 || !shot) throw new InvalidOperationException("route_was_not_drawn");
+            results.Add(new JsonObject { ["equipment"] = trial == 0 ? "sandstorm" : "wings", ["ticks"] = ticks,
+                ["reached"] = true, ["hp"] = Main.LocalPlayer.statLife, ["route_points"] = demo.RoutePoints });
+            File.WriteAllText(Path.Combine(Main.SavePath, "demo-result.json"), results.ToJsonString());
+            Console.WriteLine($"VNAV_DEMO_CASE_PASS trial={trial} ticks={ticks}");
+            if (++trial < 2) { prepared = false; return; }
+            ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav stop", new[] { "stop" });
+            if (VanillaNavigationDemo.Active || AxisLock.Held(Ax.Move) == "vanilla-demo") throw new InvalidOperationException("stop_did_not_release_control");
+            Console.WriteLine("VNAV_DEMO_COMPLETE cases=2");
+            enabled = false;
+            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
+            Main.NewText("演示已通过。可以输入 /vnav X Y 继续尝试；/vnav stop 停止。", Color.LightGreen);
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine("VNAV_DEMO_FAILED " + error);
+            enabled = false; VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
+            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(1);
+            Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
+        }
+    }
+
+    public override void PostDrawInterface(SpriteBatch batch)
+    {
+        if (!enabled || !started || shot || !VanillaNavigationDemo.Active || VanillaNavigationDemo.Instance.RoutePoints < 2) return;
+        var device = Main.instance.GraphicsDevice;
+        int width = device.PresentationParameters.BackBufferWidth, height = device.PresentationParameters.BackBufferHeight;
+        var pixels = new Color[width * height]; device.GetBackBufferData(pixels);
+        using var texture = new Texture2D(device, width, height); texture.SetData(pixels);
+        using var stream = File.Create(Path.Combine(Main.SavePath, $"demo-{trial}.png")); texture.SaveAsPng(stream, width, height);
+        shot = true;
+    }
+
+    public override void Unload()
+    {
+        if (!opened) return;
+        On_Main.Update -= Update; IL_Main.DoUpdate -= Background;
+    }
+}

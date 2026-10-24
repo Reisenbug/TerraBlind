@@ -55,6 +55,9 @@ public sealed class VanillaLocalPlanner
             candidates.Add(($"repeat_{delay}", Enumerable.Range(0, Horizon)
                 .Select(i => direction | (i >= start && (i - start) % 14 < 12 ? 4 : 0)).ToArray()));
         }
+        foreach (int release in new[] { 1, 12, 18, 30, 45 })
+            candidates.Add(($"relaunch_{release}", Enumerable.Range(0, Horizon)
+                .Select(i => direction | (i == release ? 0 : 4)).ToArray()));
         foreach (int stop in new[] { 12, 36, 60 })
             candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
         if (gravity)

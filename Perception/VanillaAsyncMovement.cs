@@ -26,6 +26,10 @@ public sealed class VanillaAsyncMovement
     public int Rejected { get; private set; }
     public string Status { get; private set; } = "idle";
     public bool Busy => pending != null;
+    public Vector2[] AcceptedRoute { get; private set; } = Array.Empty<Vector2>();
+    public JsonObject LastResult { get; private set; }
+    public string LastMismatch { get; private set; }
+    public string LastRejection { get; private set; }
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) => send = transport;
 
@@ -36,7 +40,11 @@ public sealed class VanillaAsyncMovement
         foreach (long old in inputs.Keys.Where(key => key <= tick).ToArray()) inputs.Remove(old);
         if (revision != currentRevision) { inputs.Clear(); currentRevision = revision; }
         if (pending == null || !pending.IsCompleted) return;
-        if (!completionObserved) { ResponseFrames = checked((int)(tick - requestedAt)); completionObserved = true; }
+        if (!completionObserved)
+        {
+            ResponseFrames = checked((int)(tick - requestedAt)); completionObserved = true;
+            if (pending.IsCompletedSuccessfully) LastResult = pending.Result;
+        }
         if (pending.IsFaulted || pending.IsCanceled) { _ = pending.Exception; Reject("worker_error"); return; }
         if (revision != requestRevision) { Reject("revision_changed"); return; }
         if (tick > handoff)
@@ -45,23 +53,26 @@ public sealed class VanillaAsyncMovement
             Reject("late_result"); return;
         }
         if (tick < handoff) return;
-        if (!VanillaFrame.ContextMatches(context, player)) { Reject("context_changed"); return; }
+        if (!VanillaFrame.ContextMatches(context, player, out string difference))
+        { LastMismatch = difference; Reject("context_changed"); return; }
         var actual = VanillaPrediction.Observe(player);
         var result = pending.GetAwaiter().GetResult();
         if (result["status"]?.GetValue<string>() != "planned") { Reject("no_safe_plan"); return; }
         var anchor = result["anchor"].AsObject();
         foreach (string key in new[] { "x", "y", "vx", "vy", "wing_time" })
             if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .01f)
-            { Reject("state_changed:" + key); return; }
+            { LastMismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; Reject("state_changed:" + key); return; }
         foreach (string key in new[] { "hp", "dead", "grav_dir", "jump", "available_jumps", "frozen", "webbed", "buff_types", "buff_times", "extra_jumps" })
-            if (!JsonNode.DeepEquals(actual[key], anchor[key])) { Reject("state_changed:" + key); return; }
+            if (!JsonNode.DeepEquals(actual[key], anchor[key]))
+            { LastMismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; Reject("state_changed:" + key); return; }
         var controls = result["controls"].AsArray();
+        AcceptedRoute = result["forecast"]["frames"].AsArray().Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
         inputs.Clear();
         for (int i = 0; i < controls.Count; i++) inputs[handoff + i + 1] = controls[i].GetValue<int>();
-        Accepted++; Status = "accepted"; pending = null;
+        Accepted++; Status = "accepted"; LastRejection = null; pending = null;
     }
 
-    void Reject(string reason) { inputs.Clear(); Rejected++; Status = reason; pending = null; }
+    void Reject(string reason) { inputs.Clear(); Rejected++; Status = reason; LastRejection = reason; pending = null; }
 
     public bool Request(JsonObject snapshot, long tick, Vector2 goal, int revision)
     {

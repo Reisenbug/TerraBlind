@@ -439,6 +439,7 @@ namespace TerraBlind
 
 		public override void SetControls()
 		{
+			if (VanillaNavigationDemo.Active) return;
 			if (Player != Main.LocalPlayer || !AgentNetwork.CanAutomate) return;
 
 			// 光标压在 UI 上时 delayUseItem 吞掉这一帧的使用(Player.cs:24410),而它【自锁】:

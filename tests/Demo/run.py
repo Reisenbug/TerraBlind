@@ -1,0 +1,75 @@
+"""Exercise the shipped /vnav entry with the complete mod in a disposable graphical world."""
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+
+def main():
+    root = Path("/tmp/terrablind-demo-app")
+    (root / "Worlds").mkdir(parents=True, exist_ok=True)
+    source_world = Path("/tmp/terrablind-forecast-lab/Worlds/Forecast.wld")
+    if not source_world.exists() and (source_world.parent / "World.wld").exists():
+        source_world = source_world.parent / "World.wld"
+    if not source_world.exists():
+        mods = source_world.parent.parent / "Mods"
+        mods.mkdir(parents=True, exist_ok=True)
+        shutil.copy2("Assets/VanillaWorker.bin", mods / "Forecast.tmod")
+        subprocess.run([sys.executable, "tests/Forecast/check.py", "--case", "flat"], check=True)
+        if not source_world.exists():
+            source_world = source_world.parent / "World.wld"
+    shutil.copy2(source_world, root / "Worlds/Demo.wld")
+    (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
+    (root / "config.json").write_text(json.dumps(dict(Fullscreen=False, DisplayWidth=1100, DisplayHeight=720,
+        Language="en-US", AutoPause=False, CloudSavingDefault=False, ThrottleWhenInactive=False,
+        LastLaunchedTModLoaderVersion="2026.8.3.0")))
+    (root / "demo-result.json").unlink(missing_ok=True)
+    tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
+    show = "--show" in sys.argv
+    command = [str(tml / "dotnet_arm64/dotnet"), str(tml / "tModLoader.dll"), "-nosteam",
+               "-tmlsavedirectory", str(root), "-vnavdemocheck"]
+    if show:
+        command.append("-vnavshow")
+    if "--wings" in sys.argv:
+        command.append("-vnavwingsonly")
+    log = (root / "demo-client.log").open("w")
+    process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
+                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    keep = False
+    try:
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            output = (root / "demo-client.log").read_text()
+            if "VNAV_DEMO_COMPLETE" in output:
+                break
+            if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
+                if show and process.poll() is None:
+                    keep = True
+                raise RuntimeError(f"Demo failed; inspect {root / 'demo-client.log'}")
+            time.sleep(.25)
+        else:
+            raise TimeoutError("Demo did not complete within 240 seconds")
+        rows = json.loads((root / "demo-result.json").read_text())
+        expected = [1] if "--wings" in sys.argv else [0, 1]
+        assert len(rows) == len(expected) and all(row["reached"] and row["hp"] == 400 and row["route_points"] > 1 for row in rows)
+        assert all((root / f"demo-{index}.png").exists() for index in expected)
+        print("VISIBLE_VNAV_DEMO_CHECKS_COMPLETE", json.dumps(rows), flush=True)
+        if show:
+            keep = True
+            print("DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
+    finally:
+        if not keep and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.kill(); process.wait(timeout=8)
+        log.close()
+
+
+if __name__ == "__main__":
+    main()

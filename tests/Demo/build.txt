@@ -1,0 +1,5 @@
+displayName = TerraBlind Movement Demo Check
+author = Reisenbug
+version = 0.1
+modReferences = TerraBlind
+buildIgnore = *.py, *.md, *.csproj, bin/*, obj/*, __pycache__/*

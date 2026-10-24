@@ -59,6 +59,7 @@ public sealed class Engine : ModSystem
             Setup(new JsonObject());
             var snapshot = VanillaFrame.Capture(source, area);
             var fake = new JsonObject { ["status"] = "planned", ["anchor"] = VanillaPrediction.Observe(source),
+                ["forecast"] = new JsonObject { ["frames"] = new JsonArray(VanillaPrediction.Observe(source)) },
                 ["controls"] = new JsonArray(Enumerable.Repeat(2, 90).Select(key => JsonValue.Create(key)).ToArray()) };
             var controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
             controller.Request(snapshot, 0, source.position, 0);
@@ -81,6 +82,7 @@ public sealed class Engine : ModSystem
         }
         if (command == "plan")
         {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             var state = request["snapshot"].AsObject();
             try
             {
@@ -92,6 +94,7 @@ public sealed class Engine : ModSystem
                 var result = new VanillaLocalPlanner().Plan(future,
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()));
                 result["anchor"] = anchor;
+                result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;
             }
             finally { VanillaFrame.RestoreInWorker(state); }

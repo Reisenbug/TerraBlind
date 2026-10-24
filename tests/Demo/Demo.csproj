@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../tModLoader.targets" />
+  <PropertyGroup>
+    <AssemblyName>Demo</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IntermediateOutputPath>/tmp/terrablind-demo-build/obj/</IntermediateOutputPath>
+    <OutputPath>/tmp/terrablind-demo-build/bin/</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="TerraBlind"><HintPath>../../bin/Debug/net8.0/TerraBlind.dll</HintPath></Reference>
+    <Compile Include="Client.cs.txt" />
+  </ItemGroup>
+</Project>
