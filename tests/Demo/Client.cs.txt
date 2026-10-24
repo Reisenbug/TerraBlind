@@ -39,10 +39,12 @@ public sealed class Driver : ModSystem
     JsonArray trace = new();
     bool routed;
     bool descent;
+    bool continuity;
 
     public override void Load()
     {
         descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
+        continuity = Terraria.Program.LaunchParameters.ContainsKey("-vnavcontinuitycheck");
         enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
         if (!enabled) return;
         routed = Terraria.Program.LaunchParameters.ContainsKey("-vnavroutecheck");
@@ -198,8 +200,15 @@ public sealed class Driver : ModSystem
         if (warmup-- > 0) return;
         if (!started)
         {
-            ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav descent", new[] { "descent" });
-            if (!VanillaDescentRun.Instance.Active) throw new InvalidOperationException(caller.Last);
+            string[] args = new[] { "descent" };
+            if (continuity)
+            {
+                int x = Main.spawnTileX + 180, y = Math.Max(10, Main.spawnTileY - 60);
+                while (y < Main.maxTilesY - 200 && !Predicates.IsGround(x, y)) y++;
+                args = new[] { "route", x.ToString(), (y - 1).ToString() };
+            }
+            ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
+            if (!(continuity ? RecedingNav.Active : VanillaDescentRun.Instance.Active)) throw new InvalidOperationException(caller.Last);
             started = true;
         }
         ticks++;
@@ -210,6 +219,9 @@ public sealed class Driver : ModSystem
         sample["engine"] = VanillaNavigationDemo.Active;
         sample["rejection"] = VanillaNavigationDemo.Instance.PlannerRejection;
         sample["mismatch"] = VanillaNavigationDemo.Instance.PlannerMismatch;
+        sample["use_item"] = player.controlUseItem;
+        sample["held_item"] = player.HeldItem.type;
+        sample["hostiles"] = Main.npc.Count(npc => npc.active && !npc.friendly && npc.damage > 0);
         if (VanillaNavigationDemo.Instance.PlannerResult is JsonObject plan)
         {
             sample["compute_ms"] = plan["request_compute_ms"]?.DeepClone();
@@ -223,12 +235,13 @@ public sealed class Driver : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={VanillaDescentRun.Instance.Status} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
-        if (VanillaDescentRun.Instance.Active && ticks < 54000) return;
-        if (VanillaDescentRun.Instance.Status != "done") throw new InvalidOperationException(VanillaDescentRun.Instance.Status);
+        if ((continuity ? RecedingNav.Active : VanillaDescentRun.Instance.Active) && ticks < 54000) return;
+        if ((continuity ? RecedingNav.LastStop : VanillaDescentRun.Instance.Status) != "done")
+            throw new InvalidOperationException(continuity ? RecedingNav.LastStop : VanillaDescentRun.Instance.Status);
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
             ["underworld"] = Main.UnderworldLayer }.ToJsonString());
-        Console.WriteLine("VNAV_DESCENT_COMPLETE"); enabled = false;
+        Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
     }
 

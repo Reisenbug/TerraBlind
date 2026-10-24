@@ -11,8 +11,9 @@ import time
 
 def main():
     routed = "--route" in sys.argv
-    descent = "--descent" in sys.argv
-    root = Path("/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
+    continuity = "--continuity" in sys.argv
+    descent = "--descent" in sys.argv or continuity
+    root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     (root / "Worlds").mkdir(parents=True, exist_ok=True)
     source_world = Path("/tmp/terrablind-forecast-lab/Worlds/Forecast.wld")
     if not source_world.exists() and (source_world.parent / "World.wld").exists():
@@ -48,6 +49,8 @@ def main():
         command.append("-vnavwingsonly")
     if routed:
         command.append("-vnavroutecheck")
+    if continuity:
+        command.append("-vnavcontinuitycheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -56,7 +59,7 @@ def main():
         deadline = time.monotonic() + (1000 if descent else 240)
         while time.monotonic() < deadline:
             output = (root / "demo-client.log").read_text()
-            if ("VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
+            if ("VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 if show and process.poll() is None:
@@ -67,8 +70,8 @@ def main():
             raise TimeoutError("Demo did not complete within 240 seconds")
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
-            assert row["done"] and row["hp"] > 0 and row["y"] >= row["underworld"]
-            print("NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
+            assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
+            print("NATURAL_CONTINUITY_CHECK_COMPLETE" if continuity else "NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
             if show:
                 keep = True
             return

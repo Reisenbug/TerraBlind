@@ -145,7 +145,8 @@ public sealed class VanillaNavigationDemo : ModSystem
             if (distance < closestFoe) { closestFoe = distance; foe = npc; }
         }
         int weapon = Array.FindIndex(player.inventory, item => item.type == ItemID.Starfury && item.stack > 0);
-        if (foe != null && weapon >= 0 && movement?.Busy == true)
+        if (foe != null && weapon >= 0 && movement?.Busy == true
+            && movement.HasInputAt(tick + movement.PlanningLead + player.inventory[weapon].useAnimation + 6))
         {
             player.selectedItem = weapon;
             Cursor.AimPx(foe.Center.X, foe.Center.Y);
