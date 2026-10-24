@@ -267,9 +267,9 @@ namespace TerraBlind
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
-            var pq = new SortedSet<(int cost, int x, int y)>();
+            var pq = new PriorityQueue<(int x, int y), (int cost, int x, int y)>();
             dist[(gx, gy)] = 0;
-            pq.Add((0, gx, gy));
+            pq.Enqueue((gx, gy), (0, gx, gy));
 
             int[] dxs = { 1, -1, 0, 0 };
             int[] dys = { 0, 0, 1, -1 };
@@ -277,9 +277,9 @@ namespace TerraBlind
             var sw = System.Diagnostics.Stopwatch.StartNew();
             while (pq.Count > 0)
             {
-                var cur = pq.Min;
-                pq.Remove(cur);
-                var (cost, cx, cy) = cur;
+                pq.TryDequeue(out var cur, out var priority);
+                var (cx, cy) = cur;
+                int cost = priority.cost;
                 if (!closed.Add((cx, cy))) continue;
 
                 for (int i = 0; i < 4; i++)
@@ -296,7 +296,7 @@ namespace TerraBlind
                     int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
-                    pq.Add((nc, nx, ny));
+                    pq.Enqueue((nx, ny), (nc, nx, ny));
                 }
             }
             // 谁建的、在不在主线程:一次 ~500ms,重建风暴看得见却归不了因。
@@ -317,6 +317,7 @@ namespace TerraBlind
             catch { }
             bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
             EventLog.W(Ev.Field, $"goal=({gx},{gy}) {sw.Elapsed.TotalMilliseconds:0}ms cells={dist.Count} {(mainThread ? "MAIN" : "bg")}");
+            DiagLog.Write($"[field-timing] goal=({gx},{gy}) elapsed_ms={sw.Elapsed.TotalMilliseconds:0.###} cells={dist.Count} main={mainThread}");
             return dist;
         }
 
@@ -329,17 +330,17 @@ namespace TerraBlind
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
-            var pq = new SortedSet<(int cost, int x, int y)>();
-            foreach (var (sx0, sy0) in sources) { dist[(sx0, sy0)] = 0; pq.Add((0, sx0, sy0)); }
+            var pq = new PriorityQueue<(int x, int y), (int cost, int x, int y)>();
+            foreach (var (sx0, sy0) in sources) { dist[(sx0, sy0)] = 0; pq.Enqueue((sx0, sy0), (0, sx0, sy0)); }
 
             int[] dxs = { 1, -1, 0, 0 };
             int[] dys = { 0, 0, 1, -1 };
             var sw = System.Diagnostics.Stopwatch.StartNew();
             while (pq.Count > 0)
             {
-                var cur = pq.Min;
-                pq.Remove(cur);
-                var (cost, cx, cy) = cur;
+                pq.TryDequeue(out var cur, out var priority);
+                var (cx, cy) = cur;
+                int cost = priority.cost;
                 if (!closed.Add((cx, cy))) continue;
 
                 for (int i = 0; i < 4; i++)
@@ -355,7 +356,7 @@ namespace TerraBlind
                     int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
-                    pq.Add((nc, nx, ny));
+                    pq.Enqueue((nx, ny), (nc, nx, ny));
                 }
             }
             DiagLog.Write($"[descent-field] sources={sources.Count} dist={dist.Count} ms={sw.Elapsed.TotalMilliseconds:0}");
