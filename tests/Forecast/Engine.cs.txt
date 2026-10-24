@@ -153,6 +153,17 @@ public sealed class Engine : ModSystem
             controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
             if (controller.Accepted != 1 || controller.InputAt(2) != 2)
                 throw new InvalidOperationException("matching_state_waited_for_handoff");
+            Setup(new JsonObject());
+            var plant = Main.tile[(int)(source.Center.X / 16), (int)(source.Center.Y / 16)];
+            plant.HasTile = true; plant.TileType = TileID.Plants;
+            snapshot = VanillaFrame.Capture(source, area, true); fake["anchor"] = VanillaPrediction.Observe(source);
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0); plant.ClearEverything(); controller.Poll(1, source, 0);
+            if (controller.Accepted != 1) throw new InvalidOperationException("cut_plant_invalidated_navigation");
+            controller.Request(snapshot, 1, source.position, 0);
+            plant.HasTile = true; plant.TileType = TileID.Cobweb;
+            controller.Poll(1 + controller.PlanningLead, source, 0);
+            if (controller.Status != "context_changed") throw new InvalidOperationException("web_change_was_ignored");
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "plan")

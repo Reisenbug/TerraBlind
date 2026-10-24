@@ -166,6 +166,11 @@ public static class VanillaFrame
     public static bool ContextMatches(JsonObject state, Player player)
         => ContextMatches(state, player, out _);
 
+    static bool HarmlessDecoration(bool present, int type) => !present || type < TileID.Count
+        && Main.tileCut[type] && !Main.tileSolid[type] && !Main.tileSolidTop[type] && !Main.tileRope[type]
+        && type != TileID.Cobweb && TileID.Sets.TouchDamageImmediate[type] == 0
+        && !TileID.Sets.TouchDamageHot[type] && !TileID.Sets.TouchDamageBleeding[type];
+
     public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null)
     {
         difference = "active player state";
@@ -203,6 +208,8 @@ public static class VanillaFrame
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }
             if (tile.LiquidType != data[8].GetValue<int>() || tile.LiquidAmount != data[9].GetValue<int>())
             { difference = $"liquid ({x0 + i % width},{y0 + i / width}): {data[8]}/{data[9]} -> {tile.LiquidType}/{tile.LiquidAmount}"; return false; }
+            if (navigation && HarmlessDecoration(data[0].GetValue<int>() != 0, data[1].GetValue<int>())
+                && HarmlessDecoration(tile.HasTile, tile.TileType)) continue;
             if ((tile.HasTile ? 1 : 0) != data[0].GetValue<int>() || tile.TileType != data[1].GetValue<int>()
                 || tile.WallType != data[2].GetValue<int>() || tile.TileFrameX != data[3].GetValue<int>()
                 || tile.TileFrameY != data[4].GetValue<int>() || (int)tile.Slope != data[5].GetValue<int>()
