@@ -57,6 +57,8 @@ def main():
         command.append("-vnavcircuitcheck")
     if "--background" in sys.argv:
         command.append("-vnavbackgroundcheck")
+    if "--old-nav" in sys.argv:
+        command.append("-vnavoldnavcheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
