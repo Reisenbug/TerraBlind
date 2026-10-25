@@ -125,7 +125,7 @@ public static class VanillaNavBridge
         if (demo.PlanAccepted == 0 && demo.PlanRejected == 0) progressAt = Main.GameUpdateCount;
         bool blocked = demo.PlannerRejection == "no_safe_plan" && !demo.HasQueuedMovement;
         if (player.velocity.Y == 0 && player.itemAnimation == 0 && player.itemTime == 0 && (needTerrain || blocked || movementBlocked && stable >= 3
-            || Main.GameUpdateCount - progressAt > 180))
+            || Main.GameUpdateCount - progressAt > 180 && !demo.HasQueuedMovement))
         {
             phase = Phase.Braking; phaseAt = Main.GameUpdateCount; needTerrain = false;
             Terminal = true; RouteDirection = 0; demo.UpdateNavigationGoal(player.position);

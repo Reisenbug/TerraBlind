@@ -246,7 +246,7 @@ public sealed class Engine : ModSystem
             controller.Request(snapshot, 30, source.position, 0);
             source.velocity.X += 1;
             controller.Poll(60, source, 0);
-            if (controller.Status != "state_changed:vx" || controller.InputAt(61) != 0)
+            if (controller.Status != "state_changed:vx" || controller.InputAt(61) != 0 || controller.ActiveResult != null)
                 throw new InvalidOperationException("rejected_plan_kept_old_inputs");
             source.velocity.X = 0;
             controller.Request(snapshot, 60, source.position, 0);
@@ -277,10 +277,26 @@ public sealed class Engine : ModSystem
             controller.Request(snapshot, 0, source.position, 0); controller.Poll(30, source, 0);
             controller.Request(snapshot, 30, source.position, 0);
             delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(61, source, 0);
-            if (controller.Status != "late_result" || controller.InputAt(62) != 2 || !controller.HasInputAt(62))
+            if (controller.Status != "late_result" || controller.InputAt(62) != 2 || !controller.HasInputAt(62)
+                || controller.ActiveResult == null)
                 throw new InvalidOperationException("late_result_erased_valid_queue");
             controller.Poll(62, source, 1);
             if (controller.HasInputAt(63)) throw new InvalidOperationException("revision_kept_old_queue");
+            if (controller.ActiveResult != null) throw new InvalidOperationException("revision_kept_active_result");
+            Setup(new JsonObject());
+            snapshot = VanillaFrame.Capture(source, area, true);
+            fake["anchor"] = VanillaPrediction.Observe(source);
+            fake["route_progress"] = 10;
+            controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
+            fake["route_progress"] = 0;
+            controller.Request(snapshot, 1, source.position, 0); controller.Poll(2, source, 0);
+            if (controller.LastResult["route_progress"].GetValue<int>() != 0
+                || controller.ActiveResult["route_progress"].GetValue<int>() != 10 || controller.Accepted != 1)
+                throw new InvalidOperationException("early_pending_result_replaced_active_result");
+            controller.Poll(1 + controller.PlanningLead, source, 0);
+            if (controller.ActiveResult["route_progress"].GetValue<int>() != 0 || controller.Accepted != 2)
+                throw new InvalidOperationException("handoff_did_not_replace_active_result");
             Setup(new JsonObject());
             Main.npc[0].SetDefaults(NPCID.BlueSlime); Main.npc[0].active = true; Main.npc[0].Center = source.Center;
             snapshot = VanillaFrame.Capture(source, area, true);

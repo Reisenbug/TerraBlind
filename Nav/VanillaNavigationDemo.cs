@@ -26,7 +26,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     public bool NavigationOwned { get; private set; }
     public int RoutePoints => route.Length;
     public string PlannerStatus => movement?.Status ?? Status;
-    public JsonObject PlannerResult => movement?.LastResult;
+    public JsonObject PlannerResult => movement?.ActiveResult;
     internal bool HasQueuedMovement => movement?.HasInputAt(tick + 1) == true;
     public string PlannerRejection => movement?.LastRejection;
     public string PlannerMismatch => movement?.LastMismatch;
