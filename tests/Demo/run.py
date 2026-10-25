@@ -16,6 +16,10 @@ def main():
     continuity |= circuit
     descent = "--descent" in sys.argv or continuity
     root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
+    if "--root" in sys.argv:
+        root = Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
+        if not (root.is_relative_to("/tmp") or root.is_relative_to("/private/tmp")):
+            raise ValueError("Test root must be temporary")
     (root / "Worlds").mkdir(parents=True, exist_ok=True)
     source_world = Path("/tmp/terrablind-forecast-lab/Worlds/Forecast.wld")
     if not source_world.exists() and (source_world.parent / "World.wld").exists():
@@ -44,6 +48,9 @@ def main():
     (root / "config.json").write_text(json.dumps(settings))
     if (user_root / "input profiles.json").exists():
         shutil.copy2(user_root / "input profiles.json", root / "input profiles.json")
+    if "--prepare-only" in sys.argv:
+        print("PREPARED_TEST_ROOT", root, flush=True)
+        return
     (root / "demo-result.json").unlink(missing_ok=True)
     tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
     show = "--show" in sys.argv or manual
@@ -59,6 +66,8 @@ def main():
         command.append("-vnavwingsonly")
     if routed:
         command.append("-vnavroutecheck")
+    if "--recording" in sys.argv:
+        command.append("-navrecordcheck")
     if continuity:
         command.append("-vnavcontinuitycheck")
     if circuit:

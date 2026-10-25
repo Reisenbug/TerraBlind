@@ -199,6 +199,7 @@ public sealed class Driver : ModSystem
         barrierTiles = Enumerable.Range(456, 118).Sum(x => Enumerable.Range(390, 10).Count(y => Main.tile[x, y].HasTile));
         player.fallStart = (int)(player.position.Y / 16); player.velocity = Vector2.Zero;
         ticks = 0; warmup = 8; started = false; shot = false; prepared = true; trace = new JsonArray();
+        if (Terraria.Program.LaunchParameters.ContainsKey("-navrecordcheck")) NavigationRecording.Start("human", 522, 399);
         Main.NewText(routed ? $"挖掘测试：{(trial == 0 ? "沙暴瓶" : "翅膀")}，相同封闭通道"
             : trial == 0 ? "演示1：只用沙暴瓶登上12格高台" : "演示2：翅膀登上同一个高台", Color.LightGreen);
     }
@@ -214,6 +215,11 @@ public sealed class Driver : ModSystem
             var demo = VanillaNavigationDemo.Instance;
             if (!started)
             {
+                if (Terraria.Program.LaunchParameters.ContainsKey("-navrecordcheck"))
+                {
+                    NavigationRecording.Stop("human_fixture_idle");
+                    NavigationRecording.Start("bot", 522, 399);
+                }
                 string[] args = routed ? new[] { "route", "522", "399" } : new[] { "522", "388" };
                 ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
                 if (!(routed ? RecedingNav.Active : VanillaNavigationDemo.Active)) throw new InvalidOperationException(caller.Last);
@@ -242,6 +248,15 @@ public sealed class Driver : ModSystem
                 return;
             }
             if (!(routed ? RecedingNav.LastStop == "done" : demo.Reached)) throw new InvalidOperationException(demo.Status + ":" + RecedingNav.LastStop);
+            if (Terraria.Program.LaunchParameters.ContainsKey("-navrecordcheck"))
+            {
+                string directory = NavigationRecording.Stop("fixture_done");
+                var rows = File.ReadLines(Path.Combine(directory, "frames.jsonl")).Select(line => JsonNode.Parse(line)).ToArray();
+                if (rows.Length == 0 || rows.Any(row => row["input"] == null || row["before"] == null || row["after"] == null)
+                    || !rows.Any(row => row["terrain_changes"].AsArray().Any(change => change["before"][0].GetValue<bool>() && !change["after"][0].GetValue<bool>())))
+                    throw new InvalidOperationException("navigation_recording_missing_inputs_or_real_mining");
+                Console.WriteLine($"NAV_RECORDING_CONTRACT_PASS trial={trial} frames={rows.Length} directory={directory}");
+            }
             if (routed)
             {
                 int remaining = Enumerable.Range(456, 118).Sum(x => Enumerable.Range(390, 10).Count(y => Main.tile[x, y].HasTile));
