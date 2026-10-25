@@ -265,6 +265,7 @@ public sealed class Driver : ModSystem
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualcheck"))
                 {
                     VanillaNavBridge.Enabled = true;
+                    Player.SavePlayer(Main.ActivePlayerFileData);
                     if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualstart"))
                         ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
                     enabled = false;
