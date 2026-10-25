@@ -10,6 +10,7 @@ public sealed class AgentTaskPlan
     readonly List<JsonObject> _steps = new();
     string _goal;
     int _cursor;
+    public int Cursor => _cursor;
     public bool Incomplete => _steps.Count > _cursor;
 
     public void Reset() { _steps.Clear(); _goal = null; _cursor = 0; }

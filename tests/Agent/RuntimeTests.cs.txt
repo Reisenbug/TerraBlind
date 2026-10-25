@@ -135,6 +135,32 @@ static class RuntimeTests
             NativeAgent.Stop();
             Console.WriteLine("PASS: model ending does not complete a registered goal; follow-up retains task cursor");
 
+            using (var continuationHttp = new HttpClient(new ContinuationHandler()))
+            {
+                var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+                var previousConversation = field.GetValue(Agent);
+                field.SetValue(Agent, new AgentConversation(continuationHttp));
+                try
+                {
+                    Game.LocalPlayer.statLifeMax = 300;
+                    await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                        {"goal":"two stages","steps":[
+                          {"id":"first","description":"first milestone","conditions":[{"kind":"permanent_health","count":300}]},
+                          {"id":"last","description":"final requirements","conditions":[{"kind":"permanent_health","count":300}]}]}
+                        """).AsObject(), default));
+                    NativeAgent.Submit("执行两个阶段");
+                    await PumpUntil(() => NativeAgent.Status == "idle");
+                    Check(AgentTools.Plan.Snapshot()["status"].ToString() == "completed", "host did not continue after verified progress");
+                }
+                finally
+                {
+                    field.SetValue(Agent, previousConversation);
+                    Game.LocalPlayer.statLifeMax = 100;
+                    AgentTools.Plan.Reset();
+                }
+            }
+            Console.WriteLine("PASS: verified progress resumes the next model turn and finishes both steps without another player message");
+
             await TestNetwork();
             TestRoleSwitch();
             TestDefaultOwner();
@@ -360,6 +386,28 @@ static class RuntimeTests
         Check(!PlayerCombat.Active && !self.controlUseItem, "agent stop left PvP firing");
         Game.netMode = NetmodeID.SinglePlayer; Config.I.AiClient = false;
         Console.WriteLine("PASS: production PvP validates players/teams/permissions, syncs toggle, aims, stops and reports actual HP");
+    }
+
+    sealed class ContinuationHandler : HttpMessageHandler
+    {
+        int calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = calls++;
+            Check(call < 4, "host retried without verified progress");
+            string id = call < 2 ? "first" : "last";
+            var message = new JsonObject { ["content"] = "阶段结束" };
+            if (call % 2 == 0)
+                message["tool_calls"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "step-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "task_step",
+                        ["arguments"] = new JsonObject { ["id"] = id, ["action"] = "verify" }.ToJsonString() }
+                });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject
+                { ["message"] = message }) }.ToJsonString(), Encoding.UTF8, "application/json") });
+        }
     }
 
     sealed class NavHandler : HttpMessageHandler

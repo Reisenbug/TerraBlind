@@ -143,6 +143,7 @@ public class NativeAgent : ModSystem
                 long recoverySession = -1;
                 while (true)
                 {
+                    int cursorBefore = await OnMain(() => AgentTools.Plan.Cursor, token);
                     if (useCodex)
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
                     else
@@ -152,6 +153,16 @@ public class NativeAgent : ModSystem
                     {
                         while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
                         input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
+                    bool progressed = await OnMain(() => AgentTools.Plan.Incomplete
+                        && AgentTools.Plan.Cursor > cursorBefore
+                        && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
+                        && !PvpDuel.Active, token);
+                    if (progressed)
+                    {
+                        input = "原目标：" + goal + "\n上一轮已有步骤通过实际验证，但计划尚未完成。继续当前步骤；不要重做已完成步骤。若受阻请报告实际原因，不要空转。\n现状："
+                            + await AgentTools.State(token);
                         continue;
                     }
                     JsonObject report;
