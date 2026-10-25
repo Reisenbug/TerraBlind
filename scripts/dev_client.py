@@ -35,6 +35,7 @@ def prepare(save, world=None, player=None):
         copy_missing(USER_SAVES / name, save / name)
     for config in (USER_SAVES / "ModConfigs").glob("TerraBlind*.json"):
         copy_missing(config, save / "ModConfigs" / config.name)
+    copy_missing(REPO / ".env", save / "ModSources/TerraBlind/.env")
     enabled = save / "Mods/enabled.json"
     mods = json.loads(enabled.read_text()) if enabled.exists() else []
     if "TerraBlind" not in mods:
