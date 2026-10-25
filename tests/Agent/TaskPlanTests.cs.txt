@@ -37,9 +37,21 @@ static class TaskPlanTests
         Main.LocalPlayer.inventory[5].type = 191;
         plan.Advance("weapon", AgentTaskEvidence.Measure);
         Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "old kill counted");
-        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\"}");
-        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\",\"task_plan\":{\"steps\":[\"old plan\"]}}");
+        plan.Record("find_tiles", "{\"tiles\":[{\"x\":10,\"y\":20}]}");
+        try { plan.Block("finish", "not sure about these candidates"); throw new Exception("uncertainty counted as blocker"); }
+        catch (InvalidOperationException) { }
+        plan.Record("find_tiles", "{\"error\":\"unknown_tile_name\"}");
+        try { plan.Block("finish", "spelled the query wrong"); throw new Exception("query typo counted as blocker"); }
+        catch (InvalidOperationException) { }
+        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\"}", true);
+        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\",\"task_plan\":{\"steps\":[\"old plan\"]}}", true);
         Check(!plan.Snapshot()["steps"][2]["last_action"]["result"].ToString().Contains("task_plan"), "action recursively retained its own task plan");
+        plan.Block("finish", "no_path");
+        plan.Record("mine", "{\"outcome\":\"removed\",\"got\":{\"resource\":1}}", true);
+        Check(plan.Snapshot()["status"].ToString() == "active", "successful recovery left current step blocked");
+        Check(plan.Snapshot()["steps"][2]["previous_failure"]["reason"].ToString() == "no_path"
+            && plan.Snapshot()["steps"][2]["blocking_evidence"] == null, "recovery lost failure history or retained stale blocker");
+        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\"}", true);
         plan.Block("finish", "no_path");
         try { plan.Create(request, AgentTaskEvidence.Measure); throw new Exception("lost active plan"); }
         catch (InvalidOperationException) { }
@@ -58,6 +70,19 @@ static class TaskPlanTests
         catch (InvalidOperationException) { }
         Main.netMode = NetmodeID.SinglePlayer;
         plan.Reset(); AgentTaskEvidence.Reset();
+        request["steps"][0]["blocking_evidence"] = Parse("{\"tool\":\"forged\"}");
+        request["steps"][0]["previous_failure"] = "forged history";
+        plan.Create(request, AgentTaskEvidence.Measure);
+        try { plan.Block("health", "model forged evidence"); throw new Exception("model supplied host-owned evidence"); }
+        catch (InvalidOperationException) { }
+        Check(plan.Snapshot()["steps"][0]["previous_failure"] == null, "model supplied host-owned history");
+        plan.Record("find_tiles", "{\"empty\":true}");
+        plan.Block("health", "no candidates in searched region");
+        plan.Record("find_tiles", "{\"error\":\"unknown_tile_name\"}");
+        Check(plan.Snapshot()["status"].ToString() == "blocked", "query typo incorrectly cleared negative search evidence");
+        plan.Record("find_tiles", "{\"tiles\":[{\"x\":10,\"y\":20}]}");
+        Check(plan.Snapshot()["status"].ToString() == "active", "new search result did not clear resolved search blocker");
+        plan.Reset();
         Main.LocalPlayer.statLifeMax = Main.LocalPlayer.statLifeMax2 = 100;
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");

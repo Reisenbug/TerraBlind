@@ -31,17 +31,20 @@ public sealed class AgentTaskPlan
             if (string.IsNullOrWhiteSpace(id) || !ids.Add(id) || string.IsNullOrWhiteSpace(step["description"]?.GetValue<string>())
                 || step["conditions"] is not JsonArray conditions || conditions.Count == 0)
                 throw new InvalidOperationException("步骤需要唯一 id、description 和非空 conditions。");
-            var copy = (JsonObject)step.DeepClone();
-            copy["status"] = "pending";
-            foreach (var condition in copy["conditions"].AsArray())
+            var copy = new JsonObject { ["id"] = id, ["description"] = step["description"].DeepClone(),
+                ["status"] = "pending", ["conditions"] = new JsonArray() };
+            foreach (var condition in conditions)
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
                 if (kind is not ("permanent_health" or "item" or "npc_kills") || check["count"]?.GetValue<int>() is not > 0
                     || kind != "permanent_health" && check["type"]?.GetValue<int>() is not > 0)
                     throw new InvalidOperationException("条件仅支持 permanent_health、item、npc_kills，count/type 必须为正数。");
-                int value = measure(check);
-                if (kind == "npc_kills") check["baseline"] = value;
+                var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
+                if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
+                int value = measure(verified);
+                if (kind == "npc_kills") verified["baseline"] = value;
+                copy["conditions"].AsArray().Add(verified);
             }
             parsed.Add(copy);
         }
@@ -77,13 +80,15 @@ public sealed class AgentTaskPlan
         return result;
     }
 
-    public void Record(string tool, string output)
+    public void Record(string tool, string output, bool action = false)
     {
         if (!Incomplete) return;
+        JsonObject facts = null;
         try
         {
             if (JsonNode.Parse(output) is JsonObject result)
             {
+                facts = result;
                 result.Remove("task_plan");
                 output = result.ToJsonString();
             }
@@ -94,12 +99,31 @@ public sealed class AgentTaskPlan
             ["tool"] = tool, ["result"] = output.Length <= 6000 ? output : output[..6000],
             ["utc"] = DateTime.UtcNow.ToString("O")
         };
+        bool failed = facts != null && (facts["empty"]?.ToString() == "true" || action &&
+            (facts["error"] != null || facts["ok"]?.ToString() == "false" || facts["accepted"]?.ToString() == "false"
+             || facts["done"]?.ToString() == "false" || facts["status"]?.ToString() is "failed" or "stopped_short"
+             || facts["outcome"]?.ToString() is "timeout" or "no_progress" or "stalled" or "unbreakable" or "out_of_reach"
+                 or "no_tiles" or "stuck" or "partial" or "not_placed" or "interrupted_by_death"));
+        if (failed) _steps[_cursor]["blocking_evidence"] = _steps[_cursor]["last_action"].DeepClone();
+        else if (facts != null && facts["error"] == null && (action || _steps[_cursor]["blocking_evidence"]?["tool"]?.ToString() == tool))
+        {
+            if (_steps[_cursor]["status"]?.ToString() == "blocked")
+            {
+                _steps[_cursor]["previous_failure"] = new JsonObject { ["reason"] = _steps[_cursor]["failure"]?.DeepClone(),
+                    ["evidence"] = _steps[_cursor]["blocking_evidence"]?.DeepClone() };
+                _steps[_cursor].Remove("failure");
+                _steps[_cursor]["status"] = "active";
+            }
+            _steps[_cursor].Remove("blocking_evidence");
+        }
     }
 
     public JsonObject Block(string id, string reason)
     {
         if (!Incomplete || _steps[_cursor]["id"]?.GetValue<string>() != id || string.IsNullOrWhiteSpace(reason))
             throw new InvalidOperationException("阻塞报告需要当前步骤 id 和实际原因。");
+        if (_steps[_cursor]["blocking_evidence"] == null)
+            throw new InvalidOperationException("尚无实际阻塞证据。成功查询到候选或参数拼错不等于无法执行；先尝试可用动作、修正参数或向玩家询问缺失决策。");
         _steps[_cursor]["status"] = "blocked";
         _steps[_cursor]["failure"] = reason;
         return Snapshot();

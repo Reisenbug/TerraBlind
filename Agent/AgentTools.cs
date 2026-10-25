@@ -144,7 +144,20 @@ public static class AgentTools
         {
             string output = await ExecuteCore(name, args, token);
             if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step"))
-                await NativeAgent.OnMain(() => { Plan.Record(name, output); return true; }, token);
+                output = await NativeAgent.OnMain(() =>
+                {
+                    Plan.Record(name, output, external || name is "fight" or "fight_player");
+                    try
+                    {
+                        if (JsonNode.Parse(output) is JsonObject result && result.ContainsKey("task_plan"))
+                        {
+                            result["task_plan"] = Plan.Snapshot();
+                            return result.ToJsonString();
+                        }
+                    }
+                    catch (System.Text.Json.JsonException) { }
+                    return output;
+                }, token);
             if (lease != 0)
                 return await NativeAgent.OnMain(() =>
                 {
