@@ -62,10 +62,8 @@ namespace TerraBlind
 			if (PlaceAction.ResolveSlot(itemName) < 0)
 			{ why = $"背包里没有{itemName}"; Outcome = "no_item"; Reason = why;
 			  DiagLog.Write($"[placeany] NO_ITEM {itemName}"); return false; }
-			// 岩浆格现在放得下 -- 按下去那一帧会先抹掉液体(Concessions.ClearLavaForPlacement)。
-			// 只有【会被烧掉】的东西还得拦:平台放进去当场没,人以为搭上了其实还在往下掉
-			if (Predicates.IsLava(tx, ty) && Concessions.BurnsInLava(_item))
-			{ why = $"({tx},{ty})是熔岩,{_item}放进去会被烧掉"; Outcome = "stuck"; Reason = why;
+			if (Predicates.IsLava(tx, ty))
+			{ why = $"({tx},{ty})是岩浆,不能放置"; Outcome = "stuck"; Reason = why;
 			  DiagLog.Write($"[placeany] STUCK {why}"); return false; }
 			// 【多格家具走 vanilla 的判据,不走单格锚点】。HasAnchor/BlockAnchor 是给方块平台用的
 			// (四邻随便哪格有东西就算有锚),而工作台这种 2x1 要的是【每一列正下方都有合格支撑】。
@@ -134,7 +132,7 @@ namespace TerraBlind
 
 		static bool Free(int x, int y)
 			=> Predicates.InBounds(x, y) && !Occupied(x, y)
-			   && !(Predicates.IsLava(x, y) && Concessions.BurnsInLava(_item))
+			   && !Predicates.IsLava(x, y)
 			   && !_bad.Contains((x, y));
 
 		// 先试【绕开身子】的一条,不行再退回原来那条。两侧悬空时人根本让不开:

@@ -254,7 +254,6 @@ namespace TerraBlind
             if (p == null || !p.active) return res;
             // 地形在【两次搜索之间】会变(挖了/放了),所以每次进来清一次;搜索【内部】不变
             ClearPlaceCache();
-            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             var holdOptions = BuildHoldOptions();
 
@@ -704,7 +703,7 @@ namespace TerraBlind
                 // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
                 // 长 bridge 的标记是"没帧、不挖、不是柱"(EdgeToSteps 同一组合),别借 pillar 表示
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
-                if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey) && !LavaSurvivable) continue;
+                if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
                 yield return e;
             }
             }
@@ -1146,7 +1145,7 @@ namespace TerraBlind
             for (int c = footL; c <= footR; c++)
             {
                 int land = FallLanding(c, y, tiles);
-                if (land == LandLava && !LavaSurvivable) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆,而身上没方块堤不出来"); return null; }
+                if (land == LandLava) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆"); return null; }
                 if (land == LandVoid) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})下方{FallProbe}行探不到底"); return null; }
             }
             // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
@@ -1186,7 +1185,7 @@ namespace TerraBlind
             foreach (int c in new[] { leftCol, rightCol })
             {
                 int land = FallLanding(c, ccy + 1, new List<(int, int)>());
-                if (land == LandLava && !LavaSurvivable) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆,而身上没方块堤不出来"); return null; }
+                if (land == LandLava) { SegLog($"[ss-digup] NULL: 脚下({c})往下是岩浆"); return null; }
             }
 
             int prevTop = ccy - 2;
@@ -1481,9 +1480,7 @@ namespace TerraBlind
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
             var t = Main.tile[wx, wy];
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
-            // 岩浆格只能放方块(平台会被烧),而方块的锚点比平台严:只认四邻实心,不认斜角也不认墙。
-            // 用平台那套 3x3 判的话,场说能放、手放不上,人对着同一格反复挥
-            if (Predicates.IsLava(wx, wy)) return MazeWand.BlockAnchor(wx, wy);
+            if (Predicates.IsLava(wx, wy)) return false;
             for (int dx = -1; dx <= 1; dx++)
                 for (int dy = -1; dy <= 1; dy++)
                 {
@@ -1802,9 +1799,9 @@ namespace TerraBlind
             }
             if (frames.Count == 0) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 一帧都没有"); return null; }
             // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
-            if (FallHitsLava(frames) && !LavaSurvivable)
+            if (FallHitsLava(frames))
             {
-                SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆,而身上没方块堤不出来");
+                SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
                 return null;
             }
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
@@ -1860,7 +1857,7 @@ namespace TerraBlind
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
             // 掉进岩浆这把就完了,得重开。所以这条边【不发】。物理 Step 把岩浆当空气,
             // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
-            if (FallHitsLava(frames) && !LavaSurvivable) return null;
+            if (FallHitsLava(frames)) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
             // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
@@ -1869,16 +1866,6 @@ namespace TerraBlind
 
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
-        // 掉进岩浆还有救吗。身上有方块就有。SurvivalReflex.LavaLevee 会往碰着人的
-        // 岩浆格里填方块,一格格把人抬出来(Concessions 那边让方块放得进岩浆)。
-        //
-        // 【只管"掉进去",不管"当路走"】。这个判据只用在下落类的门上:落点是岩浆时
-        // 从"这条边不存在"放宽成"能走"。H 场那边照旧把岩浆记 Impassable --
-        // 松了的话贪心会主动领着人趟岩浆湖,每趟一次就要填一路方块,那是另一个坑。
-        // 每次 Plan() 开头取一次。写成属性的话它会在【每条边】上扫 58 格背包 --
-        // jplaceL 一次搜索就调 35 万次,那是又一个 20 秒
-        static bool _lavaSurvivable;
-        static bool LavaSurvivable => _lavaSurvivable;
 
         static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames)
         {
@@ -2546,9 +2533,6 @@ namespace TerraBlind
             var field = MazeWand.GetField(goalWx, goalWy);
             var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            // 贪心不走 Plan(),得自己取一次。不取的话读到的是上一次 A* 留下的旧值。
-            // 一周期一次,不在边上,不贵
-            _lavaSurvivable = Unstick.BlockItem(p) >= 0;
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
             {

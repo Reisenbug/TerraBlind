@@ -207,6 +207,15 @@ namespace TerraBlind
 			}
 			_idleFrames = 0;
 
+			if (!LavaSafety.CanMine(tx, ty))
+			{
+				p.controlUseItem = p.controlLeft = p.controlRight = p.controlDown = false;
+				Finish("lava_risk", $"挖掘({tx},{ty})可能释放岩浆");
+				DiagLog.Write($"[mine] lava_risk at ({tx},{ty})");
+				if (RecedingNav.Active) { RecedingNav.LastStop = "lava_risk"; RecedingNav.Stop(); }
+				return;
+			}
+
 			// the target tile supports an attached object above (chest/tree/etc.) → Terraria won't let it break;
 			// swinging forever would hang. abort now (don't wait out StallMax) so closed-loop replan routes around.
 			if (!Terraria.WorldGen.CanKillTile(tx, ty))

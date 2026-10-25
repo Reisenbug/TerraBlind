@@ -266,7 +266,6 @@ namespace TerraBlind
             // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
             // 边全被拒,只剩回头路,循环。
             _fieldPickPower = BestPickPower();
-            _fieldLavaSurvivable = Unstick.BlockItem(Main.LocalPlayer) >= 0;
             // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
             int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
@@ -334,7 +333,6 @@ namespace TerraBlind
         public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
         {
             _fieldPickPower = BestPickPower();
-            _fieldLavaSurvivable = Unstick.BlockItem(Main.LocalPlayer) >= 0;
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
@@ -392,7 +390,6 @@ namespace TerraBlind
         static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
         // 建场那一刻身上有没有方块。DropLands 是【逐格】调的(110万格),
         // 在里面扫 58 格背包会把建场从 1.5s 拖成几十秒。所以和 pickPower 一样,建场前取一次
-        static bool _fieldLavaSurvivable;
 
         // 全身上下最好的镐力。【背包也算】-- 只扫热键栏的话镐在背包里就等于 pickPower=0,
         // 所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"
@@ -507,17 +504,13 @@ namespace TerraBlind
 
         // 从 (x,y) 掉下去,落不落得住。探到实处/平台=落得住;探完 DropProbe 还没底=不算,那是无底洞。
         //
-        // 岩浆【不再是"落不住"】:身上有方块时掉进去有救(SurvivalReflex.LavaLevee 填方块把人抬出来)。
-        // 没方块才照旧算落不住。那种情况下去了是真出不来。
-        // 注意这只放宽"往下掉",岩浆当【通路】那条(StepCost/StandPenalty)照旧 Impassable:
-        // 松了的话贪心会主动领人趟岩浆湖,一路填方块过去。
         static bool DropLands(int x, int y)
         {
             for (int k = 1; k <= DropProbe; k++)
             {
                 int yy = y + k;
                 if (yy >= Main.maxTilesY) return false;
-                if (IsLava(x, yy)) return _fieldLavaSurvivable;
+                if (IsLava(x, yy)) return false;
                 if (PathPlanner.IsFloorPublic(x, yy) || SolidAnyShape(x, yy)) return true;
             }
             return false;
@@ -527,10 +520,8 @@ namespace TerraBlind
         // 放得住吗。【判据跟着料走】:
         //   平台 -> PlatformAnchor:3x3 邻域(含斜角),任何 tile 或背景墙(宽松)
         //   方块 -> BlockAnchor:只认【四邻】的实心,背景墙【也认】(严格在邻域,不在墙)
-        // 岩浆格只能用方块(平台放进去当场烧没),所以那些格按方块的规则判 --
-        // 按平台判的话场说能放、执行放不上,人对着同一格反复挥手。
         public static bool AnchorFor(int x, int y)
-            => IsLava(x, y) ? BlockAnchor(x, y) : PlatformAnchor(x, y);
+            => !IsLava(x, y) && PlatformAnchor(x, y);
 
         // 方块放得住吗。四邻(不含斜角)有实心,【或者本格有背景墙】。
         //

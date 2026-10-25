@@ -145,6 +145,7 @@ namespace TerraBlind
         public static int CostFrames(int x, int y)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
+            if (!LavaSafety.CanMine(x, y)) return Unmineable;
             var p = Main.LocalPlayer;
             if (p == null) return Unmineable;
             int slot = -1;

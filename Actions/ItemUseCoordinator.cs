@@ -241,6 +241,12 @@ namespace TerraBlind
 				}
 			}
 
+			if ((_placeType >= 0 && LavaSafety.IsLava(req.TargetWx, req.TargetWy))
+				|| (IsCollectTool(p.inventory[slot]) && !LavaSafety.CanMine(SnappedWx, SnappedWy)))
+			{
+				Outcome = "no_progress"; Reason = "lava_risk"; _active = null;
+				p.controlUseItem = false; return;
+			}
 			float worldX = req.TargetWx * 16f + 8f;
 			float worldY = req.TargetWy * 16f + 8f;
 			if (!PvpActionRules.AllowedAt(p, p.inventory[slot], req.TargetWx, req.TargetWy))
@@ -257,12 +263,9 @@ namespace TerraBlind
 
 			if (p.itemTime == 0)
 			{
-				// 按下去的【同一帧】抹掉目标格的岩浆。早抹邻格会流回来,门重新关上;
-				// 只对放置的东西做(_placeType>=0),挖掘不碰液体
 				// 目标格和人自己重叠时 vanilla 会拒(Collision.EmptyTile),这是【原版规则,不绕】:
 				// 试过把碰撞箱临时缩成 0 骗过那道门,结果是人被封在方块里时 vanilla 的挤出
 				// 算炸,一帧飞几千格到地图边缘。人要放东西就自己让开。
-				if (_placeType >= 0) Concessions.ClearLavaForPlacement(req.TargetWx, req.TargetWy);
 				p.controlUseItem = true;
 			}
 		}

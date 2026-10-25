@@ -1,0 +1,78 @@
+using System;
+using TerraBlind;
+using Terraria;
+using Terraria.ID;
+
+int checks = 0;
+void Check(bool condition, string name)
+{
+    if (!condition) throw new Exception(name);
+    checks++;
+}
+void Reset()
+{
+    for (int x = 0; x < Main.maxTilesX; x++)
+    for (int y = 0; y < Main.maxTilesY; y++) Main.tile[x, y] = new Tile();
+    Main.tile[4, 4].HasTile = true;
+}
+
+Reset();
+Check(LavaSafety.CanMine(4, 4), "dry_rock");
+for (int dx = -1; dx <= 1; dx++)
+for (int dy = -1; dy <= 1; dy++)
+{
+    Reset();
+    Main.tile[4 + dx, 4 + dy].LiquidType = LiquidID.Lava;
+    Main.tile[4 + dx, 4 + dy].LiquidAmount = 1;
+    Check(!LavaSafety.CanMine(4, 4), $"lava_contact_{dx}_{dy}");
+}
+foreach (int liquid in new[] { 0, 2 })
+{
+    Reset();
+    Main.tile[4, 3].LiquidType = liquid;
+    Main.tile[4, 3].LiquidAmount = 255;
+    Check(LavaSafety.CanMine(4, 4), $"non_lava_{liquid}");
+}
+Reset();
+Main.tile[4, 4].TileType = TileID.Hellstone;
+Check(!LavaSafety.CanMine(4, 4), "hellstone_releases_lava");
+Reset();
+Check(LavaSafety.CanMine(4, 4), "before_liquid_change");
+Main.tile[4, 3].LiquidType = LiquidID.Lava;
+Main.tile[4, 3].LiquidAmount = 100;
+Check(!LavaSafety.CanMine(4, 4), "after_liquid_change");
+Check(!LavaSafety.CanMine(0, 4), "world_edge");
+Check(!LavaSafety.CanMine(-1, 4), "outside_world");
+Check(Main.tile[4, 3].LiquidAmount == 100, "safety_check_preserves_liquid");
+Reset();
+Main.tile[6, 4].LiquidType = LiquidID.Lava;
+Main.tile[6, 4].LiquidAmount = 255;
+Main.tile[5, 4].HasTile = true;
+Check(LavaSafety.CanMine(4, 4), "outer_layer_of_double_seal");
+Main.tile[4, 4].HasTile = false;
+Check(!LavaSafety.CanMine(5, 4), "last_layer_of_double_seal");
+Reset();
+Main.tile[4, 3].LiquidType = LiquidID.Lava;
+Check(LavaSafety.CanMine(4, 4), "empty_liquid_type_is_safe");
+Check(!LavaSafety.IsLava(4, 3), "empty_cell_is_not_lava");
+Console.WriteLine($"LAVA_SAFETY_CHECKS_COMPLETE checks={checks}");
+
+namespace Terraria
+{
+    public static class Main
+    {
+        public const int maxTilesX = 10, maxTilesY = 10;
+        public static readonly Tile[,] tile = new Tile[maxTilesX, maxTilesY];
+    }
+    public class Tile
+    {
+        public bool HasTile;
+        public int TileType, LiquidType;
+        public byte LiquidAmount;
+    }
+}
+namespace Terraria.ID
+{
+    public static class TileID { public const int Hellstone = 58; }
+    public static class LiquidID { public const int Lava = 1; }
+}

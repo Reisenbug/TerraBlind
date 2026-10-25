@@ -36,21 +36,23 @@ namespace TerraBlind
 			}
 			_prevPx = p.position.X; _prevPy = p.position.Y;
 
-			// 碰到之前先凝固液面,排在所有岩浆处理最前面:进去之后就得跟浮力赛跑,深池出不来
-			if (Config.I.FreezeLavaUnderFeet) Concessions.FreezeLavaBeneath(p);
-
 			bool touchingLava = TouchesLava(p);
 			bool inLava = p.lavaWet || touchingLava;
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
 			bool emergency = inLava || lowHp;
 
-			// 泡着就按跳:岩浆里跳能抵消下沉,给放置争取时间。
+			if (inLava && RecedingNav.Active)
+			{
+				RecedingNav.LastStop = "lava_emergency";
+				RecedingNav.Stop();
+				MineCoordinator.Stop();
+				p.controlUseItem = p.controlDown = false;
+			}
+			// 泡着就按跳,并把危险交给上层处理。
 			// 【只在自己拿着 Jump 时按】-- 不然会和寻路派发的跳跃边打架
 			if (inLava && AxisLock.Take(Owner, Ax.Jump, () => TouchesLava(Main.LocalPlayer)))
 				p.controlJump = true;
-			// 垫脚下一格,别再往下沉。脱离岩浆就立刻放锁。拿着不放寻路一步都走不了
-			if (touchingLava) LavaLevee(p);
-			else AxisLock.Release(Owner);
+			if (!touchingLava) AxisLock.Release(Owner);
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
@@ -85,10 +87,6 @@ namespace TerraBlind
 			}
 		}
 
-		// 岩浆里往脚下堤方块,一格一格垫到 lavaWet 消失。放置走 PlaceAction,
-		// 按下去那帧 ClearLavaForPlacement 抹掉液体,否则 vanilla 的 CheckLavaBlocking 一路拒
-		static int _leveeWait;
-
 		// 碰撞箱碰到岩浆没有。【一滴都算】 -- 零点几格的岩浆和满格一样能困住人,
 		// 而 lavaWet 在那种深度下会是假的。扫碰撞箱盖到的每一格,LiquidAmount>0 就算碰上。
 		static bool TouchesLava(Player p)
@@ -107,64 +105,8 @@ namespace TerraBlind
 			return false;
 		}
 
-		const string Owner = "lava-levee";
+		const string Owner = "survival-reflex";
 
-		// 泡在岩浆里时【只做一件事:别再往下沉】--- 往脚下那一格放一块方块,踩住。
-		//
-		// 【不再填一片】。上一版扫碰撞箱盖到的所有岩浆格挨个填,人升一格、碰撞箱又盖到新的一格、
-		// 接着填 --- 填出一个 5 列宽 6 行高的实心坨把自己封在里面(日志 57696~57735 连填 14 块)。
-		// 封住之后寻路的边全被自己的砖挡死,泛洪只剩 1 格,A* 无目标,Commitment 在 1057<->1065
-		// 之间无限往返。
-		//
-		// 现在只垫脚下一列:人踩住就不沉了,四周和头顶保持空的,剩下的交给寻路 ---
-		// 规划器现在能在岩浆里放方块(EmitPlace 按格选料),岩浆和普通地形没区别了。
-		static void LavaLevee(Player p)
-		{
-			if (PlaceAction.IsRunning) { _leveeWait = 0; return; }
-			// 要 Use 也要 Move:放一格要 90 帧,期间寻路把人挪走就 out_of_reach 作废
-			// (日志 29503 开填、29625 报"被挪开了",一块没放成)
-			if (!AxisLock.Take(Owner, Ax.Use | Ax.Move, () => TouchesLava(Main.LocalPlayer)))
-			{
-				if (_leveeBlocked != AxisLock.Held(Ax.Move))
-				{
-					_leveeBlocked = AxisLock.Held(Ax.Move);
-					DiagLog.Write($"[lava-levee] 等 {_leveeBlocked} 放开控制权 ({AxisLock.Dump()})");
-				}
-				return;
-			}
-			_leveeBlocked = "";
-			if (_leveeWait > 0) { _leveeWait--; return; }
-
-			int cx = ActExecutor.OriginCx(p), fy = ActExecutor.OriginCy(p) + 1;
-			// 脚下已经踩实了就不用垫 --- 人不沉了,接下来是寻路的事
-			if (!Predicates.InBounds(cx, fy)) return;
-			if (Main.tile[cx, fy].HasTile) { AxisLock.Release(Owner); return; }
-			// 方块的锚点比平台严(只认四邻实心)。没锚就放不上,与其对着空气挥手,
-			// 不如放开控制权让寻路去找有锚的地方
-			if (!MazeWand.BlockAnchor(cx, fy)) { AxisLock.Release(Owner); return; }
-
-			int block = Unstick.BlockItem(p);
-			if (block < 0)
-			{
-				if (!_leveeNoItem)
-				{
-					_leveeNoItem = true;
-					DiagLog.Write("[lava-levee] 泡在岩浆里但身上一块方块都没有");
-				}
-				return;
-			}
-			_leveeNoItem = false;
-			if (PlaceAction.Start(block.ToString(), cx, fy, 1, 0, 0, true, out string why))
-			{
-				_leveeWait = LeveeCooldown;
-				DiagLog.Write($"[lava-levee] 垫脚下({cx},{fy}) item={block}");
-			}
-			else
-				DiagLog.Write($"[lava-levee] 垫({cx},{fy})开不了工: {why}");
-		}
-		const int LeveeCooldown = 6;
-		static bool _leveeNoItem;
-		static string _leveeBlocked = "";
 
 
 		static NPC ClosestFoe(Player p, float rangePx)
