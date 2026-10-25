@@ -127,16 +127,35 @@ public sealed class VanillaNavigationDemo : ModSystem
         player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
         player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
         if (!NavigationOwned) return;
+        if (ProtectFall(player)) return;
+        Defend(player);
+    }
+
+    internal static bool ProtectFall(Player player)
+    {
         if (player.velocity.Y > 0 && !player.noFallDmg && player.gravDir == 1
             && player.position.Y / 16 - player.fallStart > 20)
         {
-            var fall = new Vector2(0, player.velocity.Y * 8 + player.gravity * 32);
-            bool landingSoon = Collision.TileCollision(player.position, fall, player.width, player.height).Y < fall.Y;
+            var position = player.position;
+            var velocity = player.velocity;
+            bool landingSoon = false;
+            for (int frame = 0; frame < 8; frame++)
+            {
+                var step = Collision.TileCollision(position, velocity, player.width, player.height);
+                if (step.Y < velocity.Y) { landingSoon = true; break; }
+                position += step;
+                velocity.Y = Math.Min(velocity.Y + player.gravity, player.maxFallSpeed);
+            }
             if (landingSoon)
             {
                 bool available = false;
                 foreach (var jump in player.ExtraJumps) available |= jump.Available;
-                if (available) player.controlJump = player.releaseJump;
+                if (available)
+                {
+                    player.controlDown = false;
+                    player.controlJump = player.releaseJump;
+                    if (player.releaseJump) DiagLog.Write($"[nav-fall] extra jump at ({player.Center.X / 16:0.##},{player.Bottom.Y / 16:0.##})");
+                }
                 else if (player.itemAnimation == 0)
                 {
                     int web = Array.FindIndex(player.inventory, item => item.type == ItemID.Cobweb && item.stack > 0);
@@ -147,9 +166,14 @@ public sealed class VanillaNavigationDemo : ModSystem
                         player.controlUseItem = true;
                     }
                 }
-                return;
+                return true;
             }
         }
+        return false;
+    }
+
+    void Defend(Player player)
+    {
         NPC foe = null;
         float closestFoe = 320 * 320;
         foreach (var npc in Main.npc)
