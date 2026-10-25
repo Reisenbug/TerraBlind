@@ -93,8 +93,13 @@ namespace TerraBlind
 			if (_watchType >= 0)
 			{
 				var wt = Main.tile[SnappedWx, SnappedWy];
-				if (!wt.HasTile || wt.TileType != _watchType)
+				if (!wt.HasTile || wt.TileType != _watchType && !req.Strict)
 				{ DiagLog.Write($"[item_use] removed ({SnappedWx},{SnappedWy}) after {_elapsed}f"); Outcome = "removed"; _active = null; return; }
+				if (wt.TileType != _watchType)
+				{
+					DiagLog.Write($"[item_use] changed ({SnappedWx},{SnappedWy}) type={_watchType}->{wt.TileType}; continue strict mining");
+					_watchType = wt.TileType;
+				}
 
 				if (_elapsed >= ProgressGrace && TileMineDamage(p, SnappedWx, SnappedWy) <= 0)
 				{
