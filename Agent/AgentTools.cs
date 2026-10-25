@@ -111,6 +111,11 @@ public static class AgentTools
     internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token)
     {
         var stopArgs = stop == "/fight" ? new JsonObject { ["active"] = false } : null;
+        async Task StopAction()
+        {
+            var result = await Call(stop, stopArgs, token);
+            if (Rejected(result)) throw new InvalidOperationException($"{stop} 停止动作被拒绝：{result}");
+        }
         try
         {
             var timer = Stopwatch.StartNew();
@@ -119,7 +124,7 @@ public static class AgentTools
                 await Task.Delay(150, token);
                 if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
                 {
-                    await Call(stop, stopArgs, token);
+                    await StopAction();
                     return new JsonObject { ["outcome"] = "interrupted_by_death" };
                 }
                 var status = await Call(path, null, token);
@@ -127,7 +132,7 @@ public static class AgentTools
                 if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
                     return status;
             }
-            await Call(stop, stopArgs, token);
+            await StopAction();
             var final = await Call(path, null, token);
             final["outcome"] = "timeout";
             return final;
@@ -135,7 +140,7 @@ public static class AgentTools
         catch (OperationCanceledException) { throw; }
         catch (Exception failure)
         {
-            try { await Call(stop, stopArgs, token); }
+            try { await StopAction(); }
             catch (OperationCanceledException) { throw; }
             catch (Exception cleanup) { throw new AggregateException("读取执行状态失败，停止动作也失败。", failure, cleanup); }
             throw;

@@ -260,6 +260,11 @@ static class RuntimeTests
             var cleanupFailure = await Execute(AgentTools.Wait("/item_use_status", "active", "/item_use_stop", 1, default).ContinueWith(task => task.Exception, TaskScheduler.Default));
             Check(cleanupFailure != null && cleanupFailure.ToString().Contains("fixture cleanup failed") && cleanupFailure.ToString().Contains("fixture status failed"),
                 "cleanup failure hid original polling error");
+            HttpServerSystem.Handler = (path, _) => (500, path == "/item_use_stop"
+                ? "{\"error\":\"fixture cleanup rejected\"}" : "{\"error\":\"fixture status rejected\"}");
+            var rejectedCleanup = await Execute(AgentTools.Wait("/item_use_status", "active", "/item_use_stop", 1, default).ContinueWith(task => task.Exception, TaskScheduler.Default));
+            Check(rejectedCleanup != null && rejectedCleanup.ToString().Contains("fixture cleanup rejected") && rejectedCleanup.ToString().Contains("fixture status rejected"),
+                "rejected cleanup was reported as successful");
             string before = AgentTools.Plan.Snapshot().ToJsonString();
             using var cancel = new CancellationTokenSource(); cancel.Cancel();
             try { await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "stale action" }, cancel.Token)); throw new Exception("cancelled tool ran"); }
