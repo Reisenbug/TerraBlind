@@ -120,11 +120,13 @@ public static class VanillaNavBridge
         }
         if (demo.PlanAccepted == 0 && demo.PlanRejected == 0) progressAt = Main.GameUpdateCount;
         bool blocked = demo.PlannerRejection == "no_safe_plan" && !demo.HasQueuedMovement;
-        if (player.itemAnimation == 0 && player.itemTime == 0 && (needTerrain || blocked
+        if (player.velocity.Y == 0 && player.itemAnimation == 0 && player.itemTime == 0 && (needTerrain || blocked
             || Main.GameUpdateCount - progressAt > 180))
         {
             phase = Phase.Braking; phaseAt = Main.GameUpdateCount; needTerrain = false;
             Terminal = true; RouteDirection = 0; demo.UpdateNavigationGoal(player.position);
+            demo.PauseForTerrain();
+            DiagLog.Write($"[engine-terrain-brake] vx={player.velocity.X:0.###} vy={player.velocity.Y:0.###}; retired movement queue");
         }
     }
 
@@ -226,6 +228,13 @@ public static class VanillaNavBridge
 
     static void MinePassage(Player player, int gx, int gy)
     {
+        if (player.velocity.Y != 0 || !Reach.CanMine(player, edit.X, edit.Y)
+            || edit.Y >= (int)Math.Floor(player.Bottom.Y / 16))
+        {
+            DiagLog.Write($"[engine-mine] release ({edit.X},{edit.Y}) vy={player.velocity.Y:0.###} reachable={Reach.CanMine(player, edit.X, edit.Y)}");
+            EndMining(player);
+            return;
+        }
         if (Main.tile[edit.X, edit.Y].HasTile)
         {
             if (!ItemUseCoordinator.IsActive || Main.GameUpdateCount - phaseAt > 600)
@@ -241,6 +250,11 @@ public static class VanillaNavBridge
             edit = next; StartEdit(); phaseAt = Main.GameUpdateCount;
             return;
         }
+        EndMining(player);
+    }
+
+    static void EndMining(Player player)
+    {
         ItemUseCoordinator.Stop(); player.controlUseItem = false;
         phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
     }
