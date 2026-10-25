@@ -55,6 +55,29 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "damage_cutoff_contract")
+        {
+            Setup(new JsonObject());
+            var controlsToTest = Enumerable.Repeat(2, 180).ToArray();
+            var safeState = VanillaFrame.Capture(source, area, true);
+            var safeFull = new VanillaPrediction(safeState).Predict(controlsToTest, false);
+            var safeCutoff = new VanillaPrediction(safeState).Predict(controlsToTest, false, stopOnDamage: true);
+            if (!JsonNode.DeepEquals(safeFull["frames"], safeCutoff["frames"]))
+                throw new InvalidOperationException("damage_cutoff_changed_safe_route");
+            var spike = Main.tile[X + 3, Y - 1]; spike.HasTile = true; spike.TileType = TileID.Spikes;
+            var dangerState = VanillaFrame.Capture(source, area, true);
+            var full = new VanillaPrediction(dangerState).Predict(controlsToTest, false);
+            var cutoff = new VanillaPrediction(dangerState).Predict(controlsToTest, false, stopOnDamage: true);
+            var all = full["frames"].AsArray(); var shortened = cutoff["frames"].AsArray();
+            int firstHurt = all.ToList().FindIndex(frame => frame["hp"].GetValue<int>() < 400);
+            if (firstHurt < 0 || cutoff["outcome"].GetValue<string>() != "damaged" || shortened.Count != firstHurt + 1)
+                throw new InvalidOperationException("damage_cutoff_did_not_stop_at_first_hit");
+            for (int i = 0; i < shortened.Count; i++)
+                if (!JsonNode.DeepEquals(all[i], shortened[i])) throw new InvalidOperationException("damage_cutoff_changed_prefix");
+            if (!JsonNode.DeepEquals(dangerState, VanillaFrame.Capture(Main.player[source.whoAmI], area, true)))
+                throw new InvalidOperationException("damage_cutoff_failed_to_restore_state");
+            return new JsonObject { ["passed"] = true, ["full_frames"] = all.Count, ["cutoff_frames"] = shortened.Count };
+        }
         if (command == "falling_shelf_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });

@@ -92,7 +92,7 @@ public sealed class VanillaPrediction
     }
 
     public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true,
-        System.Collections.Generic.List<MovementSample> samples = null)
+        System.Collections.Generic.List<MovementSample> samples = null, bool stopOnDamage = false)
     {
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 240) throw new ArgumentException("horizon_must_be_1_to_240");
@@ -106,6 +106,7 @@ public sealed class VanillaPrediction
         {
             long tick = Stopwatch.GetTimestamp();
             var player = compiled.Restore();
+            int initialHp = player.statLife;
             restore = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
             foreach (int control in controls)
             {
@@ -123,6 +124,7 @@ public sealed class VanillaPrediction
                 }
                 observe += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 if (player.dead) { outcome = "dead"; break; }
+                if (stopOnDamage && player.statLife < initialHp) { outcome = "damaged"; break; }
                 if (Main.projectile.Any(projectile => projectile.active) || Main.npc.Any(npc => npc.active)
                     || Main.item.Any(item => item.active)) { outcome = "unsupported_dynamic_spawn"; break; }
                 var interior = area; interior.Inflate(-32, -32);

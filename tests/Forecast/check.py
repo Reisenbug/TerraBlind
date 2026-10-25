@@ -62,6 +62,7 @@ def main():
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
+    parser.add_argument("--benchmark", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -94,6 +95,16 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.benchmark:
+            request = json.loads(args.benchmark.read_text())["request"]
+            results = []
+            for run in range(10):
+                result = worker.call(**request)
+                results.append(result)
+                print("PLANNER_BENCHMARK", "run=", run, "compute_ms=", result.get("request_compute_ms"),
+                      "selected=", result.get("selected"), "progress=", result.get("route_progress"), flush=True)
+            (args.root / "planner-benchmark.json").write_text(json.dumps(results))
+            return
         if args.terrain_probe:
             request = json.loads(args.terrain_probe.read_text())["request"]
             request["command"] = "terrain_probe"
@@ -154,6 +165,9 @@ def main():
         cleanup = worker.call("async_cleanup")
         assert cleanup["passed"]
         print("ASYNC_REJECTION_CLEANUP_CONTRACT_PASS", flush=True)
+        cutoff = worker.call("damage_cutoff_contract")
+        assert cutoff["passed"]
+        print("DAMAGE_CUTOFF_CONTRACT_PASS", cutoff, flush=True)
         transit = worker.call("transit_contract")
         assert transit["passed"]
         print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)

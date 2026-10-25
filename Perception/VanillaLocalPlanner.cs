@@ -115,7 +115,7 @@ public sealed class VanillaLocalPlanner
         foreach (var candidate in candidates)
         {
             bool forward = Forward(candidate);
-            var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames);
+            var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames, stopOnDamage: true);
             var timing = forecast["timing"];
             restoreMs += timing["restore_ms"].GetValue<double>();
             updateMs += timing["update_ms"].GetValue<double>();
@@ -146,6 +146,7 @@ public sealed class VanillaLocalPlanner
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
+                ["simulated_frames"] = frames.Count,
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (safe && candidate.name is "walk" or "continue"
