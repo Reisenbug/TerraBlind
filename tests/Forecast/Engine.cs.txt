@@ -54,6 +54,131 @@ public sealed class Engine : ModSystem
     JsonObject Handle(JsonObject request)
     {
         string command = request["command"].GetValue<string>();
+        if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "falling_shelf_contract")
+        {
+            Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
+            for (int x = area.Left; x < area.Right; x++)
+            for (int y = Y; y < area.Bottom; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= Y + 25) { tile.LiquidType = LiquidID.Lava; tile.LiquidAmount = 255; }
+                if (x >= X + 14 && y == Y + 4) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            source.velocity.Y = 6;
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            var walk = new VanillaPrediction(snapshot).Predict(Enumerable.Repeat(2, VanillaLocalPlanner.Horizon).ToArray(), false);
+            var plan = new VanillaLocalPlanner().Plan(snapshot, new Vector2((X + 22) * 16, (Y + 4) * 16 - source.height), terminal: true);
+            if (plan["status"].GetValue<string>() != "planned") throw new InvalidOperationException("falling_shelf_no_plan");
+            var frames = plan["forecast"]["frames"].AsArray();
+            bool OnShelf(JsonNode frame) => frame["grounded"].GetValue<bool>()
+                && frame["x"].GetValue<float>() >= (X + 14) * 16 - source.width
+                && Math.Abs(frame["y"].GetValue<float>() - ((Y + 4) * 16 - source.height)) < .01f;
+            if (walk["frames"].AsArray().Any(OnShelf) || !frames.Any(OnShelf)
+                || !frames.Any(frame => frame["available_jumps"].GetValue<int>() == 0)
+                || frames.Any(frame => frame["hp"].GetValue<int>() < 400))
+                throw new InvalidOperationException("falling_shelf_jump_not_used_for_traversal");
+            source = VanillaFrame.RestoreInWorker(snapshot);
+            float error = 0;
+            var keys = plan["controls"].AsArray();
+            for (int i = 0; i < keys.Count; i++)
+            {
+                VanillaPrediction.Advance(source, (VanillaKeys)keys[i].GetValue<int>());
+                error = Math.Max(error, Vector2.Distance(source.position,
+                    new Vector2(frames[i]["x"].GetValue<float>(), frames[i]["y"].GetValue<float>())));
+            }
+            if (error > .001f) throw new InvalidOperationException("falling_shelf_replay_diverged");
+            return new JsonObject { ["passed"] = true, ["selected"] = plan["selected"].DeepClone(),
+                ["max_error"] = error, ["compute_ms"] = plan["elapsed_ms"].DeepClone() };
+        }
+        if (command == "terrain_contract")
+        {
+            int passed = 0;
+            float error = 0;
+            foreach (int mode in new[] { 0, 1, 2, 3 })
+            {
+                bool place = mode == 1;
+                Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
+                source.inventory[0].SetDefaults(place ? ItemID.WoodPlatform : ItemID.MoltenPickaxe);
+                source.inventory[0].stack = 999;
+                int x = X + 3, y = Y - 1;
+                if (!place) { var tile = Main.tile[x, y]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                var targets = new JsonArray();
+                for (int xx = x; xx <= x + (mode == 2 ? 2 : 0); xx++)
+                for (int yy = mode == 2 ? Y - 3 : y; yy <= y; yy++)
+                {
+                    targets.Add(new JsonArray(xx, yy));
+                    if (!place) { var tile = Main.tile[xx, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+                if (mode == 3) { var tile = Main.tile[x, y]; tile.TileType = TileID.JungleGrass; }
+                var snapshot = VanillaFrame.Capture(source, area, true);
+                var guidance = new JsonArray();
+                for (int xx = area.Left; xx < area.Right; xx++)
+                for (int yy = area.Top; yy < area.Bottom; yy++) guidance.Add(new JsonArray(xx, yy, area.Right - xx));
+                var edit = new JsonObject { ["snapshot"] = snapshot, ["tile_x"] = x, ["tile_y"] = y,
+                    ["tile_type"] = place ? (int)TileID.Platforms : -1, ["wait_frames"] = 24,
+                    ["tiles"] = targets,
+                    ["x"] = source.position.X + 22 * 16, ["y"] = source.position.Y,
+                    ["guidance"] = guidance, ["route_direction"] = 1 };
+                var plan = VanillaTerrainPlan.Build(edit);
+                if (plan["status"].GetValue<string>() != "planned") throw new InvalidOperationException("terrain_contract:" + plan.ToJsonString());
+                if (!Main.tile[x, y].HasTile && !place || Main.tile[x, y].HasTile && place)
+                    throw new InvalidOperationException("terrain_probe_mutated_world");
+                source = VanillaFrame.RestoreInWorker(snapshot);
+                if (place) WorldGen.PlaceTile(x, y, TileID.Platforms, mute: true, plr: source.whoAmI);
+                else foreach (var target in targets)
+                {
+                    int tx = target[0].GetValue<int>(), ty = target[1].GetValue<int>();
+                    WorldGen.KillTile(tx, ty, noItem: true);
+                    if (mode == 3) WorldGen.KillTile(tx, ty, noItem: true);
+                }
+                var controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_transport"));
+                if (!controller.InstallTerrain(plan, source, 0, source.position + new Vector2(22 * 16, 0)))
+                    throw new InvalidOperationException("terrain_handoff_rejected_matching_state");
+                source.itemAnimation = 22; source.itemTime = 10;
+                var editControls = plan["controls"].AsArray();
+                for (int i = 0; i < editControls.Count; i++)
+                {
+                    int key = controller.InputAt(i + 1);
+                    VanillaPrediction.Advance(source, (VanillaKeys)key);
+                    var expected = plan["forecast"]["frames"][i];
+                    error = Math.Max(error, Vector2.Distance(source.position,
+                        new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>())));
+                    if (error > .001f || source.dead) throw new InvalidOperationException("terrain_execution_diverged");
+                }
+                if (mode == 2 && source.position.X < (x + 3) * 16)
+                    throw new InvalidOperationException("mined_passage_not_traversed");
+                passed++;
+            }
+            Setup(new JsonObject());
+            for (int x = X - 4; x <= X + 20; x++)
+            for (int y = Y; y <= Y + 20; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= Y + 8) { tile.LiquidType = LiquidID.Lava; tile.LiquidAmount = 255; }
+            }
+            var seal = Main.tile[X, Y]; seal.HasTile = true; seal.TileType = TileID.Dirt;
+            var unsafeState = VanillaFrame.Capture(source, area, true);
+            var unsafeEdit = new JsonObject { ["snapshot"] = unsafeState, ["tile_x"] = X, ["tile_y"] = Y,
+                ["tile_type"] = -1, ["wait_frames"] = 60, ["x"] = source.position.X, ["y"] = source.position.Y + 100,
+                ["route_direction"] = 0 };
+            if (VanillaTerrainPlan.Build(unsafeEdit)["status"].GetValue<string>() != "unsafe_edit_wait")
+                throw new InvalidOperationException("unsafe_terrain_wait_was_accepted");
+            passed++;
+            Setup(new JsonObject());
+            source.inventory[0].SetDefaults(ItemID.MoltenPickaxe);
+            source.itemAnimation = 10; source.itemTime = 5;
+            var activePick = VanillaFrame.Capture(source, area, true);
+            var dirt = Main.tile[X + 3, Y];
+            dirt.TileFrameY += 18;
+            if (!VanillaFrame.ContextMatches(activePick, source))
+                throw new InvalidOperationException("cosmetic_dirt_frame_invalidated_navigation");
+            dirt.HasTile = false;
+            if (VanillaFrame.ContextMatches(activePick, source))
+                throw new InvalidOperationException("removed_support_did_not_invalidate_navigation");
+            passed++;
+            return new JsonObject { ["passed"] = true, ["cases"] = passed, ["max_error"] = error };
+        }
         if (command == "replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
                 request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray());
@@ -226,7 +351,8 @@ public sealed class Engine : ModSystem
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
                     guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true,
-                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0);
+                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0,
+                    mining: request["mining"]?.GetValue<bool>() == true);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

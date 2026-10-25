@@ -122,6 +122,12 @@ def main():
         transit = worker.call("transit_contract")
         assert transit["passed"]
         print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)
+        terrain = worker.call("terrain_contract")
+        assert terrain["passed"]
+        print("TERRAIN_NATIVE_CONTROLS_CONTRACT_PASS", terrain, flush=True)
+        shelf = worker.call("falling_shelf_contract")
+        assert shelf["passed"]
+        print("FALLING_SHELF_CONTRACT_PASS", shelf, flush=True)
         controls = [6] * 18 + [2] * 3 + [6] * 20 + [2] * 31
         repeated_jumps = ([6] * 12 + [2] * 2) * 7 + [2] * 2
         cases = [
@@ -218,8 +224,8 @@ def main():
         assert by_name["featherfall_landing"]["final"]["hp"] == by_name["featherfall_landing"]["initial"]["hp"], "Featherfall failed to prevent damage"
         initial = worker.call("reset")
         expected = worker.call("predict", controls=[2] * 48)
-        invalid = [("predict", dict(controls=[]), "horizon_must_be_1_to_120"),
-                   ("predict", dict(controls=[2] * 121), "horizon_must_be_1_to_120"),
+        invalid = [("predict", dict(controls=[]), "horizon_must_be_1_to_240"),
+                   ("predict", dict(controls=[2] * 241), "horizon_must_be_1_to_240"),
                    ("predict", dict(controls=[3]), "invalid_keys"),
                    ("predict", dict(controls=[32]), "invalid_keys"),
                    ("load", dict(snapshot=dict(initial["snapshot"], engine="different-engine")), "engine_mismatch")]

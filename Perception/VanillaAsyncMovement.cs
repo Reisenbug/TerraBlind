@@ -42,11 +42,58 @@ public sealed class VanillaAsyncMovement
     public Vector2 ActiveAnchor { get; private set; }
     long activeStart;
     int activeOffset;
+    JsonArray activeForecast;
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) => send = transport;
 
     public int InputAt(long tick) => inputs.TryGetValue(tick, out int key) ? key : 0;
     public bool HasInputAt(long tick) => inputs.ContainsKey(tick);
+    public void TerrainChanged(int x, int y, Player player, long tick)
+    {
+        if (pending != null)
+        {
+            _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+            pending = null;
+        }
+        if (activeForecast == null) return;
+        var changed = new Rectangle(x * 16 - 16, y * 16 - 16, 48, 48);
+        for (int i = activeOffset; i < activeForecast.Count; i++)
+        {
+            long at = activeStart + i - activeOffset;
+            if (at <= tick) continue;
+            var frame = activeForecast[i];
+            var body = new Rectangle((int)frame["x"].GetValue<float>(), (int)frame["y"].GetValue<float>(), player.width, player.height);
+            if (!body.Intersects(changed)) continue;
+            foreach (long key in inputs.Keys.Where(key => key >= at).ToArray()) inputs.Remove(key);
+            break;
+        }
+    }
+    public bool InstallTerrain(JsonObject result, Player player, long tick, Vector2 goal)
+    {
+        var frames = result["forecast"]["frames"].AsArray();
+        int offset = -1;
+        for (int i = 0; i <= result["wait_frames"].GetValue<int>(); i++)
+        {
+            var anchor = i == 0 ? result["anchor"].AsObject() : frames[i - 1].AsObject();
+            if (StateMatches(player, anchor, true, out var reason, out var mismatch)) { offset = i; break; }
+            LastMismatch = mismatch ?? reason;
+        }
+        if (offset < 0) return false;
+        if (!VanillaFrame.ContextMatches(result["context"].AsObject(), player, out var difference, frames))
+        { LastMismatch = difference; return false; }
+        LastMismatch = null;
+        inputs.Clear(); history.Clear(); pending = null; currentRevision = 0;
+        context = result["context"].AsObject(); LastResult = result;
+        lastRequest = new JsonObject { ["snapshot"] = context.DeepClone(), ["x"] = goal.X, ["y"] = goal.Y };
+        var controls = result["controls"].AsArray();
+        for (int i = offset; i < controls.Count; i++) inputs[tick + i - offset + 1] = controls[i].GetValue<int>();
+        activeStart = tick + 1; activeOffset = offset; ActivePlan = result["selected"].GetValue<string>();
+        activeForecast = frames;
+        ActiveGoal = goal; ActiveAnchor = player.position;
+        AcceptedRoute = frames.Skip(offset).Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
+        Accepted++; Status = "accepted";
+        return true;
+    }
     public int PlanFrameAt(long tick) => HasInputAt(tick) ? checked((int)(tick - activeStart)) + activeOffset : -1;
 
     public void Poll(long tick, Player player, int revision)
@@ -102,7 +149,7 @@ public sealed class VanillaAsyncMovement
         if (tick < handoff && !rebase) return;
         if (!VanillaFrame.ContextMatches(context, player, out string difference, result["forecast"]?["frames"]?.AsArray()))
         { LastMismatch = difference; Reject("context_changed"); return; }
-        if (!planned) { Reject("no_safe_plan"); return; }
+        if (!planned) { Reject("no_safe_plan", false); return; }
         if (!matches)
         {
             LastMismatch = mismatch;
@@ -115,6 +162,7 @@ public sealed class VanillaAsyncMovement
         inputs.Clear();
         long start = rebase || catchUp ? tick : handoff;
         activeStart = start + 1; activeOffset = offset;
+        activeForecast = forecast;
         ActivePlan = result["selected"]?.GetValue<string>() ?? "unknown";
         ActiveGoal = new Vector2(lastRequest["x"].GetValue<float>(), lastRequest["y"].GetValue<float>());
         ActiveAnchor = new Vector2(result["anchor"]["x"].GetValue<float>(), result["anchor"]["y"].GetValue<float>());

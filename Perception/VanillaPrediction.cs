@@ -95,7 +95,7 @@ public sealed class VanillaPrediction
         System.Collections.Generic.List<MovementSample> samples = null)
     {
         VanillaFrame.RequireWorker();
-        if (controls.Length == 0 || controls.Length > 120) throw new ArgumentException("horizon_must_be_1_to_120");
+        if (controls.Length == 0 || controls.Length > 240) throw new ArgumentException("horizon_must_be_1_to_240");
         var trace = new JsonArray();
         samples?.Clear();
         var timer = Stopwatch.StartNew();

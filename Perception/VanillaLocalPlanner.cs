@@ -10,7 +10,7 @@ namespace TerraBlind;
 
 public sealed class VanillaLocalPlanner
 {
-    public const int Horizon = 90;
+    public const int Horizon = 180;
     public const int ExecuteFrames = 8;
 
     public static Rectangle SnapshotArea(Player player, Vector2 goal, int leadFrames = 0)
@@ -24,13 +24,16 @@ public sealed class VanillaLocalPlanner
         right = Math.Max(right, Math.Min(Main.maxTilesX, (int)Math.Ceiling((player.position.X + reach) / 16)));
         int top = Math.Max(0, (int)Math.Floor(Math.Min(player.position.Y, goal.Y) / 16) - 30);
         int bottom = Math.Min(Main.maxTilesY, (int)Math.Ceiling(Math.Max(player.position.Y, goal.Y) / 16) + 24);
-        if (right - left > 256 || bottom - top > 160 || right <= left || bottom <= top)
+        bottom = Math.Max(bottom, Math.Min(Main.maxTilesY,
+            (int)Math.Ceiling((player.position.Y + player.maxFallSpeed * (Horizon + leadFrames) + player.height + 32) / 16)));
+        top = Math.Min(top, Math.Max(0, (int)Math.Floor((player.position.Y + Math.Min(0, player.velocity.Y) * (Horizon + leadFrames) - 32) / 16)));
+        if (right - left > 256 || bottom - top > 256 || right <= left || bottom <= top)
             throw new ArgumentException("goal_requires_larger_than_local_snapshot");
         return new Rectangle(left, top, right - left, bottom - top);
     }
 
     public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
-        int routeDirection = 0)
+        int routeDirection = 0, bool mining = false)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -90,11 +93,12 @@ public sealed class VanillaLocalPlanner
         foreach (int hold in new[] { 18, 60 })
             candidates.Add(($"retreat_{retreat}_{hold}", Enumerable.Range(0, Horizon)
                 .Select(i => (i < retreat ? reverse : direction) | (i >= retreat && i < retreat + hold ? 4 : 0)).ToArray()));
-        foreach (int delay in new[] { 6, 18, 36, 54, 72 })
+        foreach (int delay in new[] { 6, 18, 36, 54, 72, 96, 120, 144, 162 })
             candidates.Add(($"landing_jump_{delay}", Enumerable.Range(0, Horizon)
                 .Select(i => direction | (i >= delay && i < delay + 12 ? 4 : 0)).ToArray()));
         if (gravity)
             candidates.Add(("invert", Enumerable.Range(0, Horizon).Select(i => direction | (i == 0 ? 8 : 0)).ToArray()));
+        if (mining) candidates.RemoveAll(candidate => candidate.name is not "walk" and not "wait");
         var diagnostics = new JsonArray();
         double best = double.PositiveInfinity;
         int[] chosen = Array.Empty<int>();
@@ -117,6 +121,11 @@ public sealed class VanillaLocalPlanner
             int damage = Math.Max(0, hp - frames.Min(frame => frame.Hp));
             bool safe = forecast["outcome"].GetValue<string>() == "complete"
                 && damage == 0 && frames.All(frame => !frame.Dead);
+            if (transit && safe)
+            {
+                var end = frames[^1];
+                safe = end.Grounded || end.Velocity.Y == 0 || end.WingTime > 0 || end.AvailableJumps > 0;
+            }
             bool progress = safe && forward && (frames[^1].Position.X - player.position.X) * (direction == 2 ? 1 : -1) >= 16;
             double score = double.PositiveInfinity;
             if (safe)

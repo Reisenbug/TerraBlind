@@ -10,6 +10,8 @@
     <Compile Include="../../Perception/VanillaFrame.cs" />
     <Compile Include="../../Perception/VanillaPrediction.cs" />
     <Compile Include="../../Perception/VanillaLocalPlanner.cs" />
+    <Compile Include="../../Perception/VanillaTerrainPlan.cs" />
+    <Compile Include="../../Core/LavaSafety.cs" />
     <Compile Include="../../Perception/VanillaAsyncMovement.cs" />
     <Compile Include="../../Perception/VanillaForecastHeadless.cs" />
     <Compile Include="Engine.cs.txt" />

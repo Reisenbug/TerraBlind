@@ -162,8 +162,9 @@ public static class VanillaFrame
     {
         if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0)
             throw new NotSupportedException("active_mount_or_grapple");
-        if (player.itemAnimation > 0 || player.itemTime > 0) throw new NotSupportedException("active_item_use");
-        if (area.Width < 8 || area.Height < 8 || area.Width > 160 || area.Height > 160
+        if ((player.itemAnimation > 0 || player.itemTime > 0)
+            && !(navigation && player.HeldItem.pick > 0)) throw new NotSupportedException("active_item_use");
+        if (area.Width < 8 || area.Height < 8 || area.Width > 256 || area.Height > 256
             || area.X < 0 || area.Y < 0 || area.Right > Main.maxTilesX || area.Bottom > Main.maxTilesY)
             throw new ArgumentOutOfRangeException(nameof(area));
         var bounds = new Rectangle(area.X * 16, area.Y * 16, area.Width * 16, area.Height * 16);
@@ -270,8 +271,9 @@ public static class VanillaFrame
             if (navigation && HarmlessDecoration(data[0] != 0, data[1])
                 && HarmlessDecoration(tile.HasTile, tile.TileType)) continue;
             if ((tile.HasTile ? 1 : 0) != data[0] || tile.TileType != data[1]
-                || tile.WallType != data[2] || tile.TileFrameX != data[3]
-                || tile.TileFrameY != data[4] || (int)tile.Slope != data[5]
+                || (!navigation || Main.tileFrameImportant[tile.TileType])
+                    && (tile.WallType != data[2] || tile.TileFrameX != data[3] || tile.TileFrameY != data[4])
+                || (int)tile.Slope != data[5]
                 || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7]
                 || tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
             {
