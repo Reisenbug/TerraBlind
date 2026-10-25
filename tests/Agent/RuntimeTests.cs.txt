@@ -208,6 +208,7 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: verified progress resumes the next model turn and finishes both steps without another player message");
             await TestPartialProgress();
+            await TestToolFailureEvidence();
 
             await TestNetwork();
             TestRoleSwitch();
@@ -219,6 +220,54 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestToolFailureEvidence()
+    {
+        await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+            {"goal":"failure evidence","steps":[{"id":"health","description":"300 health","conditions":[{"kind":"permanent_health","count":300}]}]}
+            """).AsObject(), default));
+        try
+        {
+            HttpServerSystem.Handler = (_, _) => throw new IOException("fixture dispatch failed");
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "fixture" }, default)));
+            Check(result["error"]?.ToString() == "tool_exception" && result["detail"].ToString().Contains("fixture dispatch failed"),
+                "tool exception was not returned with actionable detail");
+            Check(result["task_plan"]["steps"][0]["blocking_evidence"]["tool"].ToString() == "craft", "tool exception evidence not retained in plan");
+            await Execute(AgentTools.Execute("task_step", new JsonObject { ["id"] = "health", ["action"] = "block", ["reason"] = "fixture dispatch failed" }, default));
+            int stops = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/item_use") ItemUseCoordinator.IsActive = true;
+                if (path == "/item_use_status") throw new IOException("fixture status failed");
+                if (path == "/item_use_stop") { stops++; ItemUseCoordinator.IsActive = false; }
+                return (200, "{\"ok\":true}");
+            };
+            var interrupted = JsonNode.Parse(await Execute(AgentTools.Execute("use_item", new JsonObject { ["slot"] = 0, ["x"] = 0, ["y"] = 0 }, default)));
+            Check(stops == 1 && !ItemUseCoordinator.IsActive && interrupted["detail"].ToString().Contains("fixture status failed"),
+                "failed polling left its action active or lost original error");
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/item_use") ItemUseCoordinator.IsActive = true;
+                if (path == "/item_use_status") return (500, "{\"error\":\"fixture status rejected\"}");
+                if (path == "/item_use_stop") { stops++; ItemUseCoordinator.IsActive = false; }
+                return (200, "{\"ok\":true}");
+            };
+            var rejectedStatus = JsonNode.Parse(await Execute(AgentTools.Execute("use_item", new JsonObject { ["slot"] = 0, ["x"] = 0, ["y"] = 0 }, default)));
+            Check(stops == 2 && !ItemUseCoordinator.IsActive && rejectedStatus["error"]?.ToString() == "tool_exception"
+                && rejectedStatus["detail"].ToString().Contains("fixture status rejected"), "status rejection appeared as normal completion or left action running");
+            HttpServerSystem.Handler = (path, _) => throw new IOException(path == "/item_use_stop" ? "fixture cleanup failed" : "fixture status failed");
+            var cleanupFailure = await Execute(AgentTools.Wait("/item_use_status", "active", "/item_use_stop", 1, default).ContinueWith(task => task.Exception, TaskScheduler.Default));
+            Check(cleanupFailure != null && cleanupFailure.ToString().Contains("fixture cleanup failed") && cleanupFailure.ToString().Contains("fixture status failed"),
+                "cleanup failure hid original polling error");
+            string before = AgentTools.Plan.Snapshot().ToJsonString();
+            using var cancel = new CancellationTokenSource(); cancel.Cancel();
+            try { await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "stale action" }, cancel.Token)); throw new Exception("cancelled tool ran"); }
+            catch (OperationCanceledException) { }
+            Check(AgentTools.Plan.Snapshot().ToJsonString() == before, "cancelled tool contaminated task evidence");
+        }
+        finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
+        Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
     }
 
     static async Task TestPartialProgress()

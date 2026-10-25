@@ -110,23 +110,36 @@ public static class AgentTools
 
     internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token)
     {
-        var timer = Stopwatch.StartNew();
-        while (timer.Elapsed.TotalSeconds < seconds)
+        var stopArgs = stop == "/fight" ? new JsonObject { ["active"] = false } : null;
+        try
         {
-            await Task.Delay(150, token);
-            if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
+            var timer = Stopwatch.StartNew();
+            while (timer.Elapsed.TotalSeconds < seconds)
             {
-                await Call(stop, stop == "/fight" ? new JsonObject { ["active"] = false } : null, token);
-                return new JsonObject { ["outcome"] = "interrupted_by_death" };
+                await Task.Delay(150, token);
+                if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
+                {
+                    await Call(stop, stopArgs, token);
+                    return new JsonObject { ["outcome"] = "interrupted_by_death" };
+                }
+                var status = await Call(path, null, token);
+                if (Rejected(status)) throw new InvalidOperationException($"{path} 状态查询被拒绝：{status}");
+                if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
+                    return status;
             }
-            var status = await Call(path, null, token);
-            if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
-                return status;
+            await Call(stop, stopArgs, token);
+            var final = await Call(path, null, token);
+            final["outcome"] = "timeout";
+            return final;
         }
-        await Call(stop, stop == "/fight" ? new JsonObject { ["active"] = false } : null, token);
-        var final = await Call(path, null, token);
-        final["outcome"] = "timeout";
-        return final;
+        catch (OperationCanceledException) { throw; }
+        catch (Exception failure)
+        {
+            try { await Call(stop, stopArgs, token); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception cleanup) { throw new AggregateException("读取执行状态失败，停止动作也失败。", failure, cleanup); }
+            throw;
+        }
     }
 
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
@@ -141,6 +154,7 @@ public static class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition";
+        bool action = external || name is "fight" or "fight_player";
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         try
         {
@@ -148,7 +162,7 @@ public static class AgentTools
             if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step"))
                 output = await NativeAgent.OnMain(() =>
                 {
-                    Plan.Record(name, output, external || name is "fight" or "fight_player");
+                    Plan.Record(name, output, action);
                     try
                     {
                         if (JsonNode.Parse(output) is JsonObject result && result.ContainsKey("task_plan"))
@@ -169,6 +183,19 @@ public static class AgentTools
                     return result.ToJsonString();
                 }, token);
             return output;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return await NativeAgent.OnMain(() =>
+            {
+                var result = new JsonObject { ["error"] = "tool_exception", ["tool"] = name, ["detail"] = ex.Message };
+                Plan.Record(name, result.ToJsonString(), action);
+                result["task_plan"] = Plan.Snapshot();
+                DiagLog.Write($"[agent] tool_exception {name}: {ex.Message}");
+                NativeAgent.Progress("执行失败：" + name, "等待模型决策", false);
+                return result.ToJsonString();
+            }, token);
         }
         finally
         {
