@@ -68,6 +68,8 @@ def main():
         command.append("-vnavroutecheck")
     if "--recording" in sys.argv:
         command.append("-navrecordcheck")
+    if "--baseline" in sys.argv:
+        command.extend(["-vnavbaseline", sys.argv[sys.argv.index("--baseline") + 1]])
     if continuity:
         command.append("-vnavcontinuitycheck")
     if circuit:

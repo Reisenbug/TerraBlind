@@ -73,6 +73,58 @@ public sealed class Driver : ModSystem
     double phaseStart;
     Vector2 phasePosition, previousPosition;
 
+    static void RestoreBaseline(Player player, string directory)
+    {
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "metadata.json")));
+        if (meta["world_width"].GetValue<int>() != Main.maxTilesX || meta["world_height"].GetValue<int>() != Main.maxTilesY)
+            throw new InvalidOperationException("baseline_world_dimensions_differ");
+        using (var reader = new BinaryReader(File.OpenRead(Path.Combine(directory, "initial-terrain.bin"))))
+        {
+            if (reader.ReadInt32() != 1) throw new InvalidOperationException("baseline_terrain_version");
+            int x0 = reader.ReadInt32(), y0 = reader.ReadInt32(), width = reader.ReadInt32(), height = reader.ReadInt32();
+            for (int y = y0; y < y0 + height; y++)
+            for (int x = x0; x < x0 + width; x++)
+            {
+                var tile = Main.tile[x, y];
+                tile.HasTile = reader.ReadBoolean(); tile.TileType = reader.ReadUInt16(); tile.WallType = reader.ReadUInt16();
+                tile.TileFrameX = reader.ReadInt16(); tile.TileFrameY = reader.ReadInt16();
+                tile.Slope = (SlopeType)reader.ReadByte();
+                tile.IsHalfBlock = reader.ReadBoolean(); tile.IsActuated = reader.ReadBoolean();
+                tile.LiquidType = reader.ReadInt32(); tile.LiquidAmount = reader.ReadByte();
+            }
+        }
+        void RestoreItems(Item[] items, JsonArray values)
+        {
+            for (int i = 0; i < items.Length; i++)
+            {
+                items[i].SetDefaults(values[i][0].GetValue<int>());
+                int prefix = values[i][1].GetValue<int>();
+                if (prefix != 0) items[i].Prefix(prefix);
+                items[i].stack = values[i][2].GetValue<int>();
+            }
+        }
+        RestoreItems(player.inventory, meta["inventory"].AsArray());
+        RestoreItems(player.armor, meta["armor"].AsArray());
+        RestoreItems(player.miscEquips, meta["misc_equips"].AsArray());
+        var state = meta["start"];
+        player.position = new Vector2(state["x"].GetValue<float>(), state["y"].GetValue<float>());
+        player.velocity = new Vector2(state["vx"].GetValue<float>(), state["vy"].GetValue<float>());
+        player.statLife = state["hp"].GetValue<int>(); player.gravDir = state["grav_dir"].GetValue<float>();
+        player.wingTime = state["wing_time"].GetValue<float>(); player.jump = state["jump"].GetValue<int>();
+        player.fallStart = state["fall_start"].GetValue<int>(); player.releaseJump = state["release_jump"].GetValue<bool>();
+        for (int i = 0; i < player.ExtraJumps.Length; i++)
+        {
+            object jump = player.ExtraJumps[i];
+            VanillaFrame.RestoreFields(jump, state["extra_jumps"][i].AsObject());
+            player.ExtraJumps[i] = (Terraria.DataStructures.ExtraJumpState)jump;
+        }
+        for (int i = 0; i < player.buffType.Length; i++)
+        { player.buffType[i] = state["buff_types"][i].GetValue<int>(); player.buffTime[i] = state["buff_times"][i].GetValue<int>(); }
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in Main.item) item.active = false;
+    }
+
     string TimingPhase(Player player, VanillaNavigationDemo demo)
     {
         string stage = VanillaNavBridge.Stage;
@@ -110,12 +162,15 @@ public sealed class Driver : ModSystem
         routeClock.Stop();
         var totals = new JsonObject();
         foreach (var pair in timingTotals) totals[pair.Key] = pair.Value;
-        File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), new JsonObject {
+        string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
             ["game_frames"] = ticks, ["limit_ms"] = continuity ? null : 150000,
             ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
             ["phase_ms"] = totals, ["segments"] = timingSegments.DeepClone(),
-            ["plans"] = planTimings.DeepClone() }.ToJsonString());
+            ["plans"] = planTimings.DeepClone() }.ToJsonString();
+        File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), report);
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastDirectory != null)
+            File.WriteAllText(Path.Combine(NavigationRecording.LastDirectory, "route-timing.json"), report);
     }
 
     public override void Load()
@@ -281,6 +336,7 @@ public sealed class Driver : ModSystem
         }
         catch (Exception error)
         {
+            if (NavigationRecording.Active) NavigationRecording.Stop(error.Message);
             if (descent) SaveTiming(false, error.Message);
             controlTrace?.Flush();
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
@@ -349,12 +405,21 @@ public sealed class Driver : ModSystem
                 routeClock.Start(); timingPhase = "command_setup"; phaseStart = 0;
                 phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
             }
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline))
+            {
+                RestoreBaseline(player, baseline);
+                routeClock.Restart();
+                NavigationRecording.Start("bot", 3383, 1069);
+                Console.WriteLine("VNAV_BASELINE_RECORDING " + NavigationRecording.LastDirectory);
+            }
             ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck")) VanillaNavBridge.Enabled = false;
             if (!RecedingNav.Active) throw new InvalidOperationException(caller.Last);
             started = true;
         }
         ticks++;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
+        { RecedingNav.LastStop = "done"; RecedingNav.Stop(); }
         if (VanillaNavBridge.Enabled && RecedingNav.Active && (StateSpacePlanner.ExecRunning
             || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
             throw new InvalidOperationException("legacy_executor_in_native_route");

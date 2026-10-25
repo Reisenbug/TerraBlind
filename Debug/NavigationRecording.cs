@@ -28,6 +28,7 @@ public sealed class NavigationRecording : ModSystem
     static JsonArray damage = new();
     static bool lastFocus, lastPause;
     public static string LastDirectory { get; private set; }
+    public static string LastReason { get; private set; }
     public static bool Active => frames != null;
 
     public override void Load() => On_Main.Update += UpdateClock;
@@ -70,7 +71,7 @@ public sealed class NavigationRecording : ModSystem
         if (mode == "human" && (RecedingNav.Active || VanillaNavigationDemo.Active))
             throw new InvalidOperationException("先 /halt 停止自动控制，再录制人工操作。");
         var p = Main.LocalPlayer;
-        controller = mode; goal = new Vector2(gx, gy); count = 0; overheadMs = 0;
+        controller = mode; goal = new Vector2(gx, gy); count = 0; overheadMs = 0; LastReason = null;
         pauseTimeline.Clear(); lastFocus = Main.hasFocus; lastPause = Main.gamePaused;
         pauseTimeline.Add(new JsonObject { ["wall_ms"] = 0, ["focused"] = lastFocus, ["paused"] = lastPause });
         before = input = null; damage = new(); tiles.Clear();
@@ -111,6 +112,7 @@ public sealed class NavigationRecording : ModSystem
     {
         if (!Active) return LastDirectory;
         clock.Stop(); frames.Dispose(); frames = null;
+        LastReason = reason;
         var p = Main.LocalPlayer;
         metadata["reason"] = reason; metadata["frames"] = count;
         metadata["wall_ms"] = clock.Elapsed.TotalMilliseconds; metadata["recording_overhead_ms"] = overheadMs;
