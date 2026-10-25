@@ -33,6 +33,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     public int PlanAccepted => movement?.Accepted ?? 0;
     public int PlanRejected => movement?.Rejected ?? 0;
     public bool PlannerReady => movement != null;
+    internal bool WorkerReady => worker?.Alive == true;
+    bool terrainPaused;
     bool running;
     long tick;
     Vector2 goal;
@@ -60,6 +62,19 @@ public sealed class VanillaNavigationDemo : ModSystem
     public void Start(Vector2 target) => StartCore(target, false);
     internal void StartNavigation(Vector2 target) => StartCore(target, true);
     internal void UpdateNavigationGoal(Vector2 target) { goal = target; closest = Vector2.Distance(Main.LocalPlayer.position, goal); }
+    internal void PauseForTerrain()
+    {
+        terrainPaused = true; movement = null; Status = "推演地形动作";
+    }
+    internal Task<JsonObject> PrepareTerrain(JsonObject request) => Task.Run(() => worker.Send(request));
+    internal void TerrainChanged(int x, int y) => movement?.TerrainChanged(x, y, Main.LocalPlayer, tick);
+    internal bool ResumeTerrain(JsonObject result)
+    {
+        movement = ConnectMovement(worker);
+        if (!movement.InstallTerrain(result, Main.LocalPlayer, tick, goal)) return false;
+        terrainPaused = false; Status = "执行地形改变后的引擎轨迹";
+        return true;
+    }
 
     void StartCore(Vector2 target, bool navigation)
     {
@@ -73,7 +88,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         if (!navigation) { Halt.All(); NativeAgent.Stop(); }
         if (!navigation && !AxisLock.Take("vanilla-demo", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => running))
             throw new InvalidOperationException("人物控制权被其他动作占用。");
-        running = true; NavigationOwned = navigation; Reached = false; goal = target; tick = 0; stalled = 0;
+        running = true; NavigationOwned = navigation; terrainPaused = false; Reached = false; goal = target; tick = 0; stalled = 0;
         closest = Vector2.Distance(player.position, goal); previousAccepted = 0;
         loggedAccepted = loggedRejected = idleFrames = starvedFrames = starvation = longestStarvation = 0;
         route = Array.Empty<Vector2>();
@@ -90,7 +105,7 @@ public sealed class VanillaNavigationDemo : ModSystem
 
     public void Stop(string reason = "已停止", bool closeWorker = false)
     {
-        running = false; NavigationOwned = false; Status = reason;
+        running = false; NavigationOwned = false; terrainPaused = false; Status = reason;
         cancellation?.Cancel(); movement = null;
         if (closeWorker) { worker?.Dispose(); worker = null; }
         if (startup != null)
@@ -109,6 +124,7 @@ public sealed class VanillaNavigationDemo : ModSystem
                 request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
                 request["terminal"] = VanillaNavBridge.Terminal;
                 request["route_direction"] = VanillaNavBridge.RouteDirection;
+                request["mining"] = VanillaNavBridge.Mining;
             }
             return Task.Run(() => connection.Send(request));
         });
@@ -119,78 +135,16 @@ public sealed class VanillaNavigationDemo : ModSystem
     void ApplyInput(Player player)
     {
         if (!running || player != Main.LocalPlayer) return;
-        int keys = movement?.InputAt(tick + 1) ?? 0;
+        int keys = terrainPaused ? 0 : movement?.InputAt(tick + 1) ?? 0;
         LastControl = new ControlFrame(keys, movement?.HasInputAt(tick + 1) == true, movement?.ActivePlan ?? "none",
             movement?.PlanFrameAt(tick + 1) ?? -1, VanillaNavBridge.Terminal, goal,
             movement?.ActiveGoal ?? Vector2.Zero, movement?.ActiveAnchor ?? Vector2.Zero);
         player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
         player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
         player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
-        if (!NavigationOwned) return;
-        if (ProtectFall(player)) return;
-        Defend(player);
+        if (NavigationOwned) VanillaNavBridge.ApplyTerrainUse(player);
     }
 
-    internal static bool ProtectFall(Player player)
-    {
-        if (player.velocity.Y > 0 && !player.noFallDmg && player.gravDir == 1
-            && player.position.Y / 16 - player.fallStart > 20)
-        {
-            var position = player.position;
-            var velocity = player.velocity;
-            bool landingSoon = false;
-            for (int frame = 0; frame < 8; frame++)
-            {
-                var step = Collision.TileCollision(position, velocity, player.width, player.height);
-                if (step.Y < velocity.Y) { landingSoon = true; break; }
-                position += step;
-                velocity.Y = Math.Min(velocity.Y + player.gravity, player.maxFallSpeed);
-            }
-            if (landingSoon)
-            {
-                bool available = false;
-                foreach (var jump in player.ExtraJumps) available |= jump.Available;
-                if (available)
-                {
-                    player.controlDown = false;
-                    player.controlJump = player.releaseJump;
-                    if (player.releaseJump) DiagLog.Write($"[nav-fall] extra jump at ({player.Center.X / 16:0.##},{player.Bottom.Y / 16:0.##})");
-                }
-                else if (player.itemAnimation == 0)
-                {
-                    int web = Array.FindIndex(player.inventory, item => item.type == ItemID.Cobweb && item.stack > 0);
-                    if (web >= 0)
-                    {
-                        player.selectedItem = web;
-                        Cursor.AimPx(player.Center.X, player.Bottom.Y + player.velocity.Y);
-                        player.controlUseItem = true;
-                    }
-                }
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void Defend(Player player)
-    {
-        NPC foe = null;
-        float closestFoe = 320 * 320;
-        foreach (var npc in Main.npc)
-        {
-            if (!npc.active || npc.friendly || npc.damage <= 0 || npc.life <= 0) continue;
-            float distance = Vector2.DistanceSquared(player.Center, npc.Center);
-            if (distance < closestFoe) { closestFoe = distance; foe = npc; }
-        }
-        int weapon = Array.FindIndex(player.inventory, item => item.type == ItemID.Starfury && item.stack > 0);
-        if (foe != null && weapon >= 0 && movement?.Busy == true
-            && movement.HasInputAt(tick + movement.PlanningLead + player.inventory[weapon].useAnimation + 6))
-        {
-            player.selectedItem = weapon;
-            Cursor.AimPx(foe.Center.X, foe.Center.Y);
-            player.controlUseItem = player.releaseUseItem;
-        }
-    }
 
     public override void PostUpdateEverything()
     {
@@ -206,6 +160,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             var player = Main.LocalPlayer;
             tick++;
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
+            if (terrainPaused) return;
             movement.Poll(tick, player, 0);
             if (movement.InputAt(tick + 1) == 0) idleFrames++;
             if (movement.Accepted > 0 && !movement.HasInputAt(tick + 1))
@@ -237,7 +192,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
             if (!movement.Busy)
             {
-                if (player.itemAnimation > 0 || player.itemTime > 0) return;
+                if ((player.itemAnimation > 0 || player.itemTime > 0) && !(NavigationOwned && player.HeldItem.pick > 0)) return;
                 long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
                 var snapshot = VanillaFrame.Capture(player,

@@ -286,7 +286,11 @@ namespace TerraBlind
                 }
             }
 
-            if (VanillaNavBridge.Tick(p, _goalWx, _goalWy)) return;
+            if (VanillaNavBridge.Enabled)
+            {
+                VanillaNavBridge.Tick(p, _goalWx, _goalWy);
+                return;
+            }
 
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))

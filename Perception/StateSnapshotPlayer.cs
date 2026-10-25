@@ -439,14 +439,6 @@ namespace TerraBlind
 
 		public override void SetControls()
 		{
-			ApplyAutomationControls();
-			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && VanillaNavBridge.Enabled
-				&& RecedingNav.Active && !VanillaNavigationDemo.Active)
-				VanillaNavigationDemo.ProtectFall(Player);
-		}
-
-		void ApplyAutomationControls()
-		{
 			MazeWand.MarkMainThread();
 			if (VanillaNavigationDemo.Active)
 			{
