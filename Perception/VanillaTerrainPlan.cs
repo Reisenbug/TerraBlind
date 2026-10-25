@@ -60,8 +60,19 @@ public static class VanillaTerrainPlan
                 new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                 guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
             if (plan["status"].GetValue<string>() != "planned") return plan;
+            double movementProgress = plan["route_progress"].GetValue<double>(), editProgress = 0;
+            var field = VanillaLocalPlanner.ReadGuidance(request["guidance"]);
+            var waitEnd = prefix["frames"].AsArray()[^1];
+            var startCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            var waitCell = VanillaLocalPlanner.FootCell(new Vector2(waitEnd["x"].GetValue<float>(), waitEnd["y"].GetValue<float>()),
+                player.width, player.height);
+            if (field != null && field.TryGetValue(startCell, out int startCost) && field.TryGetValue(waitCell, out int waitCost))
+                editProgress = (startCost - waitCost) * 16d;
+            plan["movement_progress"] = movementProgress;
+            plan["edit_progress"] = editProgress;
+            plan["route_progress"] = movementProgress + editProgress;
             if (request["guidance"] != null && plan["route_progress"].GetValue<double>() <= 0)
-                return new JsonObject { ["status"] = "edit_does_not_open_route" };
+                return new JsonObject { ["status"] = "edit_does_not_open_route", ["movement_progress"] = movementProgress, ["edit_progress"] = editProgress };
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);
             foreach (var control in plan["controls"].AsArray()) controls.Add(control.DeepClone());

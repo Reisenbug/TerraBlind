@@ -44,15 +44,7 @@ public sealed class VanillaLocalPlanner
         int hp = player.statLife;
         float wings = player.wingTime;
         int jumps = VanillaPrediction.Observe(player, false)["available_jumps"].GetValue<int>();
-        Dictionary<(int, int), int> field = null;
-        if (!terminal && guidance is JsonArray rows)
-            field = rows.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
-        else if (!terminal && guidance != null)
-        {
-            field = new();
-            var values = VanillaFrame.UnpackInts(guidance.GetValue<string>());
-            for (int i = 0; i < values.Length; i += 3) field.Add((values[i], values[i + 1]), values[i + 2]);
-        }
+        var field = terminal ? null : ReadGuidance(guidance);
         double missing = field?.Count > 0 ? field.Values.Max() * 16d + 10000 : 0;
         int direction = !terminal && routeDirection != 0 ? (routeDirection > 0 ? 2 : 1)
             : goal.X >= player.position.X ? 2 : 1;
@@ -196,5 +188,16 @@ public sealed class VanillaLocalPlanner
             ["forecast"] = selectedForecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs,
                 ["observe_ms"] = observeMs, ["cleanup_ms"] = cleanupMs } };
+    }
+
+    internal static Dictionary<(int, int), int> ReadGuidance(JsonNode guidance)
+    {
+        if (guidance == null) return null;
+        if (guidance is JsonArray rows)
+            return rows.ToDictionary(row => (row[0].GetValue<int>(), row[1].GetValue<int>()), row => row[2].GetValue<int>());
+        var field = new Dictionary<(int, int), int>();
+        var values = VanillaFrame.UnpackInts(guidance.GetValue<string>());
+        for (int i = 0; i < values.Length; i += 3) field.Add((values[i], values[i + 1]), values[i + 2]);
+        return field;
     }
 }

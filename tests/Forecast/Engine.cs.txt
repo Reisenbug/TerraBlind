@@ -101,7 +101,7 @@ public sealed class Engine : ModSystem
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
             passed++;
-            foreach (int mode in new[] { 0, 1, 2, 3, 4 })
+            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5 })
             {
                 bool place = mode == 1;
                 Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
@@ -117,7 +117,7 @@ public sealed class Engine : ModSystem
                     if (!place) { var tile = Main.tile[xx, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
                 }
                 if (mode == 3) { var tile = Main.tile[x, y]; tile.TileType = TileID.JungleGrass; }
-                if (mode == 4)
+                if (mode is 4 or 5)
                 {
                     x = X; y = Y;
                     targets = new JsonArray(new JsonArray(X, Y), new JsonArray(X + 1, Y));
@@ -125,14 +125,17 @@ public sealed class Engine : ModSystem
                 var snapshot = VanillaFrame.Capture(source, area, true);
                 var guidance = new JsonArray();
                 for (int xx = area.Left; xx < area.Right; xx++)
-                for (int yy = area.Top; yy < area.Bottom; yy++) guidance.Add(new JsonArray(xx, yy, area.Right - xx));
+                for (int yy = area.Top; yy < area.Bottom; yy++) guidance.Add(new JsonArray(xx, yy, mode == 5 ? area.Bottom - yy : area.Right - xx));
                 var edit = new JsonObject { ["snapshot"] = snapshot, ["tile_x"] = x, ["tile_y"] = y,
                     ["tile_type"] = place ? (int)TileID.Platforms : -1, ["wait_frames"] = 24,
                     ["tiles"] = targets,
-                    ["x"] = source.position.X + 22 * 16, ["y"] = source.position.Y,
+                    ["x"] = source.position.X + (mode == 5 ? 0 : 22 * 16), ["y"] = source.position.Y + (mode == 5 ? 16 : 0),
                     ["guidance"] = guidance, ["route_direction"] = 1 };
                 var plan = VanillaTerrainPlan.Build(edit);
                 if (plan["status"].GetValue<string>() != "planned") throw new InvalidOperationException("terrain_contract:" + plan.ToJsonString());
+                if (mode == 5 && (plan["edit_progress"].GetValue<double>() != 16
+                    || plan["movement_progress"].GetValue<double>() != 0 || plan["route_progress"].GetValue<double>() != 16))
+                    throw new InvalidOperationException("support_removal_progress_not_counted");
                 if (!Main.tile[x, y].HasTile && !place || Main.tile[x, y].HasTile && place)
                     throw new InvalidOperationException("terrain_probe_mutated_world");
                 source = VanillaFrame.RestoreInWorker(snapshot);
