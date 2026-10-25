@@ -72,7 +72,7 @@ namespace TerraBlind
             });
         }
 
-        static void RebuildFieldAsync(string why)
+        internal static void RebuildFieldAsync(string why)
         {
             if (_rebuilding) return;
             _rebuilding = true; _altered = 0;

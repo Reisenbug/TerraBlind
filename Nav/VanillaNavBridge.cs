@@ -15,11 +15,12 @@ public static class VanillaNavBridge
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining;
     public static bool Mining => phase == Phase.Mining;
-    public static string Stage => phase.ToString();
+    public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
     enum Phase { Moving, Braking, Preparing, Using, Mining }
     readonly record struct Edit(int X, int Y, int Type, int Slot);
     static Phase phase;
     static Dictionary<(int, int), int> field;
+    static Dictionary<(int, int), int> refreshSource;
     static readonly List<(int x, int y)> corridor = new();
     static readonly Queue<Edit> edits = new();
     static readonly Queue<Edit> batch = new();
@@ -35,7 +36,7 @@ public static class VanillaNavBridge
     {
         if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
         if (phase is Phase.Using or Phase.Mining) ItemUseCoordinator.Stop();
-        phase = Phase.Moving; field = null; preparing = null; prepared = preparation = null;
+        phase = Phase.Moving; field = refreshSource = null; preparing = null; prepared = preparation = null;
         edits.Clear(); batch.Clear(); corridor.Clear(); Terminal = false; RouteDirection = 0;
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
     }
@@ -60,6 +61,8 @@ public static class VanillaNavBridge
         var demo = VanillaNavigationDemo.Instance;
         field = MazeWand.PeekFieldOrNull(gx, gy);
         if (field == null) return;
+        if (refreshSource != null && !ReferenceEquals(refreshSource, field))
+        { refreshSource = null; bestH = int.MaxValue; progressAt = Main.GameUpdateCount; }
         if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
         { Fail("legacy_movement_conflict"); return; }
         stable = Math.Abs(player.velocity.X) < .01f && player.velocity.Y == 0
@@ -77,7 +80,7 @@ public static class VanillaNavBridge
             {
                 demo.UpdateNavigationGoal(routeGoal);
                 demo.PauseForTerrain();
-                CollectEdits(player, gx, gy);
+                if (!CollectEdits(player, gx, gy)) return;
                 phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
                 Prepare(player);
             }
@@ -87,7 +90,7 @@ public static class VanillaNavBridge
         var destination = new Vector2(gx * 16 + 8 - player.width / 2, (gy + 1) * 16 - player.height);
         Terminal = Math.Abs(cx - gx) + Math.Abs(cy - gy) <= 12
             && !Collision.SolidCollision(destination, player.width, player.height);
-        BuildCorridor(cx, cy, gx, gy);
+        if (!BuildCorridor(cx, cy, gx, gy)) return;
         Vector2? target = Terminal ? destination : null;
         foreach (var cell in corridor)
         {
@@ -110,7 +113,7 @@ public static class VanillaNavBridge
         if (!demo.WorkerReady) { progressAt = Main.GameUpdateCount; return; }
         if (player.velocity.Y == 0)
         {
-            CollectEdits(player, gx, gy);
+            if (!CollectEdits(player, gx, gy)) return;
             if (edits.TryPeek(out var first) && first.Type < 0 && first.Y < (int)Math.Floor(player.Bottom.Y / 16))
             {
                 edit = first; phase = Phase.Mining; phaseAt = Main.GameUpdateCount;
@@ -131,23 +134,38 @@ public static class VanillaNavBridge
         }
     }
 
-    static void BuildCorridor(int cx, int cy, int gx, int gy)
+    static bool BuildCorridor(int cx, int cy, int gx, int gy)
     {
         corridor.Clear();
         var cell = (x: cx, y: cy);
+        var visited = new HashSet<(int, int)> { cell };
         for (int i = 0; i < 24 && cell != (gx, gy); i++)
         {
             var direction = MazeWand.FieldDir(field, cell.x, cell.y);
-            if (direction == (0, 0)) break;
+            if (direction == (0, 0)) return RefreshCorridor(cx, cy, "missing direction");
             cell = (cell.x + direction.dx, cell.y + direction.dy);
+            if (!visited.Add(cell)) return RefreshCorridor(cx, cy, "cycle");
             corridor.Add(cell);
         }
+        return true;
     }
 
-    static void CollectEdits(Player player, int gx, int gy)
+    static bool RefreshCorridor(int cx, int cy, string reason)
+    {
+        if (!ReferenceEquals(refreshSource, field))
+        {
+            refreshSource = field;
+            DiagLog.Write($"[engine-corridor-refresh] cell=({cx},{cy}) reason={reason}");
+            RecedingNav.RebuildFieldAsync("engine corridor " + reason);
+        }
+        corridor.Clear();
+        return false;
+    }
+
+    static bool CollectEdits(Player player, int gx, int gy)
     {
         edits.Clear();
-        BuildCorridor((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16) - 1, gx, gy);
+        if (!BuildCorridor((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16) - 1, gx, gy)) return false;
         int pick = Array.FindIndex(player.inventory, 0, 10, item => !item.IsAir && item.pick > 0);
         var seen = new HashSet<(int, int)>();
         foreach (var cell in corridor)
@@ -166,7 +184,7 @@ public static class VanillaNavBridge
             }
         }
         int platform = NavCoordinator.FindPlatformSlot(player);
-        if (platform < 0) return;
+        if (platform < 0) { LogEmptyCorridor(player); return true; }
         int type = player.inventory[platform].createTile;
         foreach (var cell in corridor)
         {
@@ -176,6 +194,15 @@ public static class VanillaNavBridge
                 || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))) continue;
             edits.Enqueue(new Edit(x, y, type, platform));
         }
+        LogEmptyCorridor(player);
+        return true;
+    }
+
+    static void LogEmptyCorridor(Player player)
+    {
+        if (edits.Count != 0 || phase != Phase.Braking) return;
+        DiagLog.Write($"[engine-empty-corridor] player=({player.Center.X / 16:0.###},{player.Bottom.Y / 16:0.###}) route=({routeGoal.X / 16:0.###},{routeGoal.Y / 16:0.###}) nodes="
+            + string.Join(";", corridor.Select(cell => $"{cell.x},{cell.y}:{(field.TryGetValue(cell, out int h) ? h : -1)}")));
     }
 
     static void Prepare(Player player)
@@ -187,7 +214,8 @@ public static class VanillaNavBridge
             var result = preparing.GetAwaiter().GetResult(); preparing = null;
             if (result["status"]?.GetValue<string>() == "planned")
             {
-                bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference);
+                bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference,
+                    result["forecast"]["frames"].AsArray());
                 if (stable < 3 || !matches)
                 { Fail("terrain_start_changed:" + (stable < 3 ? "moving" : difference)); return; }
                 prepared = result;
@@ -245,7 +273,7 @@ public static class VanillaNavBridge
         var demo = VanillaNavigationDemo.Instance;
         demo.TerrainChanged(edit.X, edit.Y);
         DiagLog.Write($"[engine-mine] removed ({edit.X},{edit.Y}) frames={Main.GameUpdateCount - phaseAt} vx={player.velocity.X:0.##}");
-        CollectEdits(player, gx, gy);
+        if (!CollectEdits(player, gx, gy)) { EndMining(player); return; }
         if (edits.TryPeek(out var next) && next.Type < 0 && next.Y < (int)Math.Floor(player.Bottom.Y / 16))
         {
             edit = next; StartEdit(); phaseAt = Main.GameUpdateCount;
