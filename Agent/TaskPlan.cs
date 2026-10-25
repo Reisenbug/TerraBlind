@@ -80,6 +80,15 @@ public sealed class AgentTaskPlan
     public void Record(string tool, string output)
     {
         if (!Incomplete) return;
+        try
+        {
+            if (JsonNode.Parse(output) is JsonObject result)
+            {
+                result.Remove("task_plan");
+                output = result.ToJsonString();
+            }
+        }
+        catch (System.Text.Json.JsonException) { }
         _steps[_cursor]["last_action"] = new JsonObject
         {
             ["tool"] = tool, ["result"] = output.Length <= 6000 ? output : output[..6000],

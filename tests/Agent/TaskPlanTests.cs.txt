@@ -38,6 +38,8 @@ static class TaskPlanTests
         plan.Advance("weapon", AgentTaskEvidence.Measure);
         Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "old kill counted");
         plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\"}");
+        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\",\"task_plan\":{\"steps\":[\"old plan\"]}}");
+        Check(!plan.Snapshot()["steps"][2]["last_action"]["result"].ToString().Contains("task_plan"), "action recursively retained its own task plan");
         plan.Block("finish", "no_path");
         try { plan.Create(request, AgentTaskEvidence.Measure); throw new Exception("lost active plan"); }
         catch (InvalidOperationException) { }
