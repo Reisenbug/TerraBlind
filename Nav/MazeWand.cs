@@ -468,6 +468,8 @@ namespace TerraBlind
             // 取左右里实心行少的那侧。人可以站偏,挑便宜的那半边走。
             if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
             bool horizontal = cx != nx;
+            if (!wall && VanillaNavBridge.Enabled)
+                return (horizontal ? MoveSide : cy > ny ? MoveDown : MoveUp) + MediumExtra(cx, cy);
             // 进这一格要不要自己造落脚点,由 CellKind 一处说了算。原来三个方向各判各的
             // (往下 DropLands、往上 nearSupport、横向不判),同一格在不同方向价钱不一样。
             var kind = wall ? Cell.Solid : CellKind.Of(cx, cy);

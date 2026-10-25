@@ -95,7 +95,7 @@ public sealed class Engine : ModSystem
         {
             int passed = 0;
             float error = 0;
-            foreach (int mode in new[] { 0, 1, 2, 3 })
+            foreach (int mode in new[] { 0, 1, 2, 3, 4 })
             {
                 bool place = mode == 1;
                 Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
@@ -111,6 +111,11 @@ public sealed class Engine : ModSystem
                     if (!place) { var tile = Main.tile[xx, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
                 }
                 if (mode == 3) { var tile = Main.tile[x, y]; tile.TileType = TileID.JungleGrass; }
+                if (mode == 4)
+                {
+                    x = X; y = Y;
+                    targets = new JsonArray(new JsonArray(X, Y), new JsonArray(X + 1, Y));
+                }
                 var snapshot = VanillaFrame.Capture(source, area, true);
                 var guidance = new JsonArray();
                 for (int xx = area.Left; xx < area.Right; xx++)
@@ -351,8 +356,7 @@ public sealed class Engine : ModSystem
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
                     guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true,
-                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0,
-                    mining: request["mining"]?.GetValue<bool>() == true);
+                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

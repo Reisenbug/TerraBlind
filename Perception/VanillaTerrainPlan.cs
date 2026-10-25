@@ -21,11 +21,12 @@ public static class VanillaTerrainPlan
             if (type < 0)
             {
                 var targets = request["tiles"] as JsonArray ?? new JsonArray(new JsonArray(x, y));
-                foreach (var target in targets)
+                for (int index = 0; index < targets.Count; index++)
                 {
+                    var target = targets[index];
                     x = target[0].GetValue<int>(); y = target[1].GetValue<int>();
-                    if (targets.Count > 1 && y >= (int)Math.Floor(player.Bottom.Y / 16))
-                        return new JsonObject { ["status"] = "batch_changes_support" };
+                    if (targets.Count > 1 && y > (int)Math.Floor(player.Bottom.Y / 16))
+                        return new JsonObject { ["status"] = "batch_changes_multiple_support_rows" };
                     if (!LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y))
                         return new JsonObject { ["status"] = "unsafe_mining" };
                     int originalType = Main.tile[x, y].TileType;
@@ -33,6 +34,8 @@ public static class VanillaTerrainPlan
                     if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType != originalType)
                         WorldGen.KillTile(x, y, noItem: true);
                     if (Main.tile[x, y].HasTile) return new JsonObject { ["status"] = "mining_rejected" };
+                    if (index < targets.Count - 1 && Collision.TileCollision(player.position, new Vector2(0, 1), player.width, player.height).Y != 0)
+                        return new JsonObject { ["status"] = "batch_loses_support_before_final_edit" };
                 }
             }
             else

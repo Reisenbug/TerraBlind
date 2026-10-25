@@ -124,7 +124,6 @@ public sealed class VanillaNavigationDemo : ModSystem
                 request["guidance"] = VanillaNavBridge.CaptureGuidance(request["snapshot"].AsObject());
                 request["terminal"] = VanillaNavBridge.Terminal;
                 request["route_direction"] = VanillaNavBridge.RouteDirection;
-                request["mining"] = VanillaNavBridge.Mining;
             }
             return Task.Run(() => connection.Send(request));
         });

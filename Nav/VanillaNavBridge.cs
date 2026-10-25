@@ -14,7 +14,6 @@ public static class VanillaNavBridge
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining;
-    public static bool Mining => phase == Phase.Mining;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
     enum Phase { Moving, Braking, Preparing, Using, Mining }
     readonly record struct Edit(int X, int Y, int Type, int Slot);
@@ -111,20 +110,21 @@ public static class VanillaNavBridge
         }
         else demo.UpdateNavigationGoal(routeGoal);
         if (!demo.WorkerReady) { progressAt = Main.GameUpdateCount; return; }
-        if (player.velocity.Y == 0)
+        bool movementBlocked = demo.PlanAccepted > 0 && demo.PlannerResult?["route_progress"]?.GetValue<double>() <= 0;
+        if (player.velocity.Y == 0 && stable >= 3 && movementBlocked)
         {
             if (!CollectEdits(player, gx, gy)) return;
             if (edits.TryPeek(out var first) && first.Type < 0 && first.Y < (int)Math.Floor(player.Bottom.Y / 16))
             {
                 edit = first; phase = Phase.Mining; phaseAt = Main.GameUpdateCount;
                 StartEdit(); demo.TerrainChanged(edit.X, edit.Y);
-                DiagLog.Write($"[engine-mine] start ({edit.X},{edit.Y}) distance={Vector2.Distance(player.Center, new Vector2(edit.X * 16 + 8, edit.Y * 16 + 8)):0.##} vx={player.velocity.X:0.##}");
+                DiagLog.Write($"[engine-mine] start ({edit.X},{edit.Y}) after native progress={demo.PlannerResult?["route_progress"]} selected={demo.LastControl.Plan}");
                 return;
             }
         }
         if (demo.PlanAccepted == 0 && demo.PlanRejected == 0) progressAt = Main.GameUpdateCount;
         bool blocked = demo.PlannerRejection == "no_safe_plan" && !demo.HasQueuedMovement;
-        if (player.velocity.Y == 0 && player.itemAnimation == 0 && player.itemTime == 0 && (needTerrain || blocked
+        if (player.velocity.Y == 0 && player.itemAnimation == 0 && player.itemTime == 0 && (needTerrain || blocked || movementBlocked && stable >= 3
             || Main.GameUpdateCount - progressAt > 180))
         {
             phase = Phase.Braking; phaseAt = Main.GameUpdateCount; needTerrain = false;
@@ -217,12 +217,21 @@ public static class VanillaNavBridge
                 bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference,
                     result["forecast"]["frames"].AsArray());
                 if (stable < 3 || !matches)
-                { Fail("terrain_start_changed:" + (stable < 3 ? "moving" : difference)); return; }
-                prepared = result;
-                StartEdit();
-                phase = Phase.Using; phaseAt = Main.GameUpdateCount; useAt = uint.MaxValue;
-                DiagLog.Write($"[engine-terrain] {(edit.Type < 0 ? "mine" : "place")} ({edit.X},{edit.Y}) prepared");
-                return;
+                {
+                    if (stable < 3) { Fail("terrain_start_changed:moving"); return; }
+                    DiagLog.Write("[engine-terrain-retry] " + difference);
+                    var retry = new[] { edit }.Concat(batch).Concat(edits).ToArray();
+                    edits.Clear(); batch.Clear();
+                    foreach (var target in retry) edits.Enqueue(target);
+                }
+                else
+                {
+                    prepared = result;
+                    StartEdit();
+                    phase = Phase.Using; phaseAt = Main.GameUpdateCount; useAt = uint.MaxValue;
+                    DiagLog.Write($"[engine-terrain] {(edit.Type < 0 ? "mine" : "place")} ({edit.X},{edit.Y}) prepared tiles={batch.Count + 1}");
+                    return;
+                }
             }
         }
         if (edits.Count == 0) { Fail("no_safe_terrain_action"); return; }
@@ -233,6 +242,15 @@ public static class VanillaNavBridge
         if (edit.Type < 0 && edit.Y < supportY)
         {
             while (edits.TryPeek(out var next) && next.Type < 0 && next.Y < supportY)
+            {
+                batch.Enqueue(edits.Dequeue());
+                targets.Add(new JsonArray(next.X, next.Y));
+            }
+        }
+        else if (edit.Type < 0 && edit.Y == supportY)
+        {
+            while (edits.TryPeek(out var next) && next.Type < 0 && next.Y == supportY
+                && next.X * 16 < player.Right.X && (next.X + 1) * 16 > player.Left.X)
             {
                 batch.Enqueue(edits.Dequeue());
                 targets.Add(new JsonArray(next.X, next.Y));

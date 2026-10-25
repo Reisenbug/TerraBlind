@@ -33,7 +33,7 @@ public sealed class VanillaLocalPlanner
     }
 
     public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
-        int routeDirection = 0, bool mining = false)
+        int routeDirection = 0)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -98,12 +98,20 @@ public sealed class VanillaLocalPlanner
                 .Select(i => direction | (i >= delay && i < delay + 12 ? 4 : 0)).ToArray()));
         if (gravity)
             candidates.Add(("invert", Enumerable.Range(0, Horizon).Select(i => direction | (i == 0 ? 8 : 0)).ToArray()));
-        if (mining) candidates.RemoveAll(candidate => candidate.name is not "walk" and not "wait");
         var diagnostics = new JsonArray();
         double best = double.PositiveInfinity;
         int[] chosen = Array.Empty<int>();
         string selected = "none";
         JsonObject selectedForecast = null;
+        double chosenProgress = 0;
+        bool selectedAdvances = false;
+        double Distance(Vector2 position)
+        {
+            if (field == null) return Vector2.Distance(goal, position);
+            var cell = ((int)((position.X + player.width / 2f) / 16), (int)((position.Y + player.height) / 16) - 1);
+            return field.TryGetValue(cell, out int cost) ? cost * 16d : missing + Vector2.Distance(goal, position);
+        }
+        double startDistance = Distance(player.position);
         double restoreMs = 0, updateMs = 0, observeMs = 0, cleanupMs = 0;
         var frames = new List<VanillaPrediction.MovementSample>(Horizon);
         bool Forward((string name, int[] keys) candidate) => candidate.keys.All(key => (key & 3) == direction);
@@ -130,20 +138,16 @@ public sealed class VanillaLocalPlanner
             double score = double.PositiveInfinity;
             if (safe)
             {
-                double distance(VanillaPrediction.MovementSample frame)
-                {
-                    var position = frame.Position;
-                    if (field == null) return Vector2.Distance(goal, position);
-                    var cell = ((int)((position.X + player.width / 2f) / 16), (int)((position.Y + player.height) / 16) - 1);
-                    return field.TryGetValue(cell, out int cost) ? cost * 16d : missing + Vector2.Distance(goal, position);
-                }
-                score = transit ? distance(frames[^1]) + .1 * frames.Average(distance)
-                    : frames.Average(distance) + .25 * distance(frames[^1]);
+                double advance = startDistance - Distance(frames[^1].Position);
+                bool advances = !transit || advance > .01;
+                score = transit ? Distance(frames[^1].Position) + .1 * frames.Average(frame => Distance(frame.Position))
+                    : frames.Average(frame => Distance(frame.Position)) + .25 * Distance(frames[^1].Position);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
-                if (score < best - .01)
+                if (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01)
                 {
                     best = score; selected = candidate.name; chosen = candidate.keys;
+                    selectedAdvances = advances; chosenProgress = advance;
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
@@ -184,6 +188,7 @@ public sealed class VanillaLocalPlanner
             cleanupMs += Stopwatch.GetElapsedTime(cleanupStart).TotalMilliseconds;
         }
         return new JsonObject { ["status"] = chosen.Length == 0 ? "no_safe_candidate" : "planned", ["selected"] = selected,
+            ["route_progress"] = chosenProgress,
             ["controls"] = new JsonArray(chosen.Select(key => JsonValue.Create(key)).ToArray()),
             ["forecast"] = selectedForecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs,
