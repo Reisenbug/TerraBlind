@@ -141,6 +141,7 @@ public class NativeAgent : ModSystem
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
                 string input = goal + "\n现状：" + state;
                 long recoverySession = -1;
+                int noProgressContinuations = 0;
                 while (true)
                 {
                     int cursorBefore = await OnMain(() => AgentTools.Plan.Cursor, token);
@@ -156,12 +157,13 @@ public class NativeAgent : ModSystem
                         continue;
                     }
                     bool progressed = await OnMain(() => AgentTools.Plan.Incomplete
-                        && AgentTools.Plan.Cursor > cursorBefore
                         && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
                         && !PvpDuel.Active, token);
-                    if (progressed)
+                    int cursorAfter = await OnMain(() => AgentTools.Plan.Cursor, token);
+                    if (cursorAfter > cursorBefore) noProgressContinuations = 0;
+                    if (progressed && (cursorAfter > cursorBefore || noProgressContinuations++ < 1))
                     {
-                        input = "原目标：" + goal + "\n上一轮已有步骤通过实际验证，但计划尚未完成。继续当前步骤；不要重做已完成步骤。若受阻请报告实际原因，不要空转。\n现状："
+                        input = "原目标：" + goal + "\n计划尚未完成，请实际执行当前步骤，不能只建立计划或说准备行动就结束。不要重做已完成步骤；若没有可执行办法，task_step block 记录实际原因。未推进步骤时宿主仅额外续接一次，不会无限空转。\n现状："
                             + await AgentTools.State(token);
                         continue;
                     }

@@ -121,6 +121,11 @@ static class RuntimeTests
             Console.WriteLine("PASS: replacement instruction cancels active navigation and completes next task");
 
             await PumpUntil(() => NativeAgent.Status == "idle");
+            var pauseHandler = new ContinuationLimitHandler();
+            using var pauseHttp = new HttpClient(pauseHandler);
+            var conversationField = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+            var originalConversation = conversationField.GetValue(Agent);
+            conversationField.SetValue(Agent, new AgentConversation(pauseHttp));
             await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
                 {"goal":"unfinished goal","steps":[{"id":"health","description":"300 permanent health","conditions":[{"kind":"permanent_health","count":300}]}]}
                 """).AsObject(), default));
@@ -129,6 +134,8 @@ static class RuntimeTests
             var paused = JsonNode.Parse(await Execute(AgentTools.State(default)));
             Check(paused["task_plan"]["current_step"].ToString() == "health" && AgentTools.Plan.Incomplete,
                 "model final reply discarded unfinished task or marked it completed");
+            Check(pauseHandler.Calls == 2, "no-progress continuation did not stop after one extra turn");
+            conversationField.SetValue(Agent, originalConversation);
             AgentTools.NewTask();
             Check(AgentTools.Plan.Incomplete, "continuation cleared task cursor");
             AgentTools.Plan.Reset();
@@ -386,6 +393,17 @@ static class RuntimeTests
         Check(!PlayerCombat.Active && !self.controlUseItem, "agent stop left PvP firing");
         Game.netMode = NetmodeID.SinglePlayer; Config.I.AiClient = false;
         Console.WriteLine("PASS: production PvP validates players/teams/permissions, syncs toggle, aims, stops and reports actual HP");
+    }
+
+    sealed class ContinuationLimitHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Check(++Calls <= 2, "unbounded continuation without progress");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"准备执行\"}}]}") });
+        }
     }
 
     sealed class ContinuationHandler : HttpMessageHandler
