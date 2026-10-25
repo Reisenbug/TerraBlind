@@ -195,7 +195,7 @@
     "type": "function",
     "function": {
       "name": "nav_to",
-      "description": "移动到目标方块坐标，等待到达、失败或超时。exact 用于矿石或实心目标，reach 用于开箱等交互目标。返回真实状态和物品增减。",
+      "description": "移动到目标方块坐标，等待到达、失败或超时。exact 用于矿石或实心目标，reach 用于开箱等交互目标。生命水晶、罐子等非实心物体即使传exact也会转换为reach，接近后还需use_item等工具实际采集，不能把导航到达当收集成功。返回真实状态和物品增减。",
       "parameters": {
         "type": "object",
         "properties": {

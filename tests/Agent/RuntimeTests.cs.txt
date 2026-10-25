@@ -102,6 +102,26 @@ static class RuntimeTests
             Check(crafted["state"]["pos"]["x"].GetValue<int>() == 12 && crafted["state"]["pos"]["y"].GetValue<int>() == 34, "tool position is not taken from player origin");
             Console.WriteLine("PASS: craft adapter reports measured inventory delta and player origin");
 
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede")
+                {
+                    var request = JsonNode.Parse(payload);
+                    bool solid = Game.tile[100, 100].TileType == 1;
+                    Check(request["exact"].GetValue<bool>() == solid && request["reach"].GetValue<bool>() != solid,
+                        "navigation mode does not match live target solidity");
+                }
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+            };
+            var adapted = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100, ["exact"] = true }, default));
+            Check(adapted["mode_adjustment"] != null && adapted["done"].GetValue<bool>(), "non-solid target did not use interaction reach");
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            var solidResult = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100, ["exact"] = true }, default));
+            Check(solidResult["mode_adjustment"] == null && !solidResult["done"].GetValue<bool>(), "solid mining target changed modes or ignored arrival check");
+            Game.tile[100, 100] = default;
+            Console.WriteLine("PASS: live non-solid targets switch exact mining to interaction reach; solid targets retain mining and arrival checks");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);
@@ -111,13 +131,14 @@ static class RuntimeTests
                 if (path == "/nav_recede") RecedingNav.Active = true;
                 return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
             };
+            int navCallsBefore = HttpServerSystem.Calls.Count(p => p == "/nav_recede");
             NativeAgent.Submit("移动");
             await PumpUntil(() => RecedingNav.Active);
             int stops = Halt.Stops;
             NativeAgent.Submit("换个任务");
             Check(!RecedingNav.Active && Halt.Stops == stops + 1, "replacement task did not stop old navigation");
             await PumpUntil(() => AgentChat.Messages.Contains("新任务完成"));
-            Check(HttpServerSystem.Calls.Count(p => p == "/nav_recede") == 1, "old navigation restarted after cancellation");
+            Check(HttpServerSystem.Calls.Count(p => p == "/nav_recede") == navCallsBefore + 1, "old navigation restarted after cancellation");
             Console.WriteLine("PASS: replacement instruction cancels active navigation and completes next task");
 
             await PumpUntil(() => NativeAgent.Status == "idle");

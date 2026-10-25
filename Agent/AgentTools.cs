@@ -383,17 +383,28 @@ public static class AgentTools
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)
     {
-        var start = await Call("/nav_recede", new JsonObject
+        var request = await NativeAgent.OnMain(() =>
         {
-            ["gx"] = Int(args, "x"), ["gy"] = Int(args, "y"), ["exact"] = Bool(args, "exact"), ["reach"] = Bool(args, "reach")
+            int x = Int(args, "x"), y = Int(args, "y");
+            bool reach = Bool(args, "reach"), exact = Bool(args, "exact");
+            if (exact && WorldGen.InWorld(x, y))
+            {
+                var tile = Main.tile[x, y];
+                if (tile.HasTile && (!tile.HasUnactuatedTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]))
+                    reach = true;
+            }
+            return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach };
         }, token);
+        var start = await Call("/nav_recede", request, token);
         if (Rejected(start)) return start;
         var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token);
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));
-            bool arrived = Bool(args, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
+            bool arrived = Bool(request, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
+            if (Bool(request, "reach") && !Bool(args, "reach"))
+                result["mode_adjustment"] = "non_solid_target_use_reach_then_use_tool";
             if (Bool(result, "done") && !arrived)
             { result["done"] = false; result["status"] = "stopped_short"; result["dist"] = distance; }
             return result;

@@ -154,6 +154,13 @@ public sealed class Driver : ModSystem
                     Check(!result["verified"].GetValue<bool>(), "historical_kill_counted"); KillQueen(); Call("task_step", Step("finish")); break;
                 case 9:
                     Check(result["verified"].GetValue<bool>() && result["status"].ToString() == "completed", "fresh_kill_not_verified");
+                    int hx = (int)player.Center.X / 16 - 3, hy = (int)player.Bottom.Y / 16 - 1;
+                    WorldGen.PlaceObject(hx, hy, TileID.Heart);
+                    Check(Main.tile[hx, hy].HasTile && Main.tile[hx, hy].TileType == TileID.Heart, "heart_fixture_missing");
+                    Call("nav_to", new JsonObject { ["x"] = hx, ["y"] = hy, ["exact"] = true });
+                    break;
+                case 10:
+                    Check(result["done"]?.GetValue<bool>() == true && result["mode_adjustment"] != null, "heart_navigation_not_adapted");
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
                     {
                         player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
@@ -168,7 +175,7 @@ public sealed class Driver : ModSystem
                         Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true max_seconds=180");
                         break;
                     }
-                    Finish(true, "AGENT_ENGINE_COMPLETE checks=6 model_calls=0 controlled_fixture=true"); break;
+                    Finish(true, "AGENT_ENGINE_COMPLETE checks=7 model_calls=0 controlled_fixture=true"); break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }

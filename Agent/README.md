@@ -55,11 +55,11 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 编译和离线测试不能代替实机验证。建议依次测试纯聊天、询问并回答、合成、导航中停止，以及“Boss 战不自动走位”的许可覆盖。
 
-真实客户端定向检查：先 `python3 scripts/dev_client.py build --role agent`，再运行 `python3 tests/Agent/Engine/run.py`。它复制 `/tmp/terrablind-descent-world/Worlds/World.wld` 到唯一临时目录，沿用用户画面和按键设置，只加载正式包与测试模组。预置生命水晶、合成材料和铁砧，通过正式 AgentTools 验证吃水晶、合成荆棘旋刃、历史击杀不计入以及本次 NPC 死亡回调；蜂王由测试代码瞬杀，不能视为 AI 战斗胜利，也没有测试自主收集材料。成功标记 `AGENT_ENGINE_COMPLETE checks=6 model_calls=0 controlled_fixture=true`，结果与日志位于输出的临时目录。测试结束由启动器关闭自己创建的进程，不注册自动重启服务。
+真实客户端定向检查：先 `python3 scripts/dev_client.py build --role agent`，再运行 `python3 tests/Agent/Engine/run.py`。它复制 `/tmp/terrablind-descent-world/Worlds/World.wld` 到唯一临时目录，沿用用户画面和按键设置，只加载正式包与测试模组。预置生命水晶、合成材料和铁砧，通过正式 AgentTools 验证吃水晶、合成荆棘旋刃、历史击杀不计入、本次 NPC 死亡回调，以及非实心生命水晶的 exact 参数转换为接近模式；蜂王由测试代码瞬杀，不能视为 AI 战斗胜利，也没有测试自主收集材料。成功标记 `AGENT_ENGINE_COMPLETE checks=7 model_calls=0 controlled_fixture=true`，结果与日志位于输出的临时目录。测试结束由启动器关闭自己创建的进程，不注册自动重启服务。
 
 附加 `--live` 会在上述检查后清空随身背包、还原100永久血与铜制初始工具，向真实 Codex 发送300血、荆棘旋刃、蜂王任务，最多运行180秒，消耗当前账号模型额度。测试场地仍是检查后的世界（含铁砧和历史击杀），不是原始开荒验收。它在结束时写 `agent-live-result.json`，捕获成功不代表任务成功，必须检查其中的真实状态、计划与日志。
 
-离线测试共 35 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=35`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat 和 WoodHarvest。Codex 检查工具回调、参数错误、会话复用、打断、缺失登录、连接断开、失败收尾，以及 NativeAgent 不依赖 API Key 的后端选择。任务计划检查真实条件验证、失败游标保留、拒绝跳步、模型结束不代表目标完成，以及验证推进后无需玩家再次发消息即可续接。采木检查多树循环、库存进度、失败上下文、有界重试和取消。游戏扫描、无损导航守卫、实际挥斧、掉落物拾取和双客户端同步仍需引擎／实机验收。
+离线测试共 36 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=36`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat 和 WoodHarvest。Codex 检查工具回调、参数错误、会话复用、打断、缺失登录、连接断开、失败收尾，以及 NativeAgent 不依赖 API Key 的后端选择。任务计划检查真实条件验证、失败游标保留、拒绝跳步、模型结束不代表目标完成，以及验证推进后无需玩家再次发消息即可续接。导航适配检查非实心目标使用接近模式、实心目标保持采矿模式，并保留实际到达校验。采木检查多树循环、库存进度、失败上下文、有界重试和取消。游戏扫描、无损导航守卫、实际挥斧、掉落物拾取和双客户端同步仍需引擎／实机验收。
 
 可选真实 Codex 联调会消耗当前 Codex 登录账号的模型额度，但只提供模拟背包，不连接游戏：
 
