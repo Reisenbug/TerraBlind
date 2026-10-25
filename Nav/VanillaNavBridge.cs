@@ -70,7 +70,7 @@ public static class VanillaNavBridge
         if (phase == Phase.Mining) { MinePassage(player, gx, gy); return; }
         if (phase == Phase.Preparing) { Prepare(player); return; }
         if (phase == Phase.Using) { FinishEdit(player); return; }
-        int cx = (int)(player.Center.X / 16), cy = (int)(player.Bottom.Y / 16) - 1;
+        var (cx, cy) = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
         if (field.TryGetValue((cx, cy), out int h) && h < bestH)
         { bestH = h; progressAt = Main.GameUpdateCount; }
         if (phase == Phase.Braking)
@@ -165,7 +165,8 @@ public static class VanillaNavBridge
     static bool CollectEdits(Player player, int gx, int gy)
     {
         edits.Clear();
-        if (!BuildCorridor((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16) - 1, gx, gy)) return false;
+        var cellAtPlayer = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+        if (!BuildCorridor(cellAtPlayer.x, cellAtPlayer.y, gx, gy)) return false;
         int pick = Array.FindIndex(player.inventory, 0, 10, item => !item.IsAir && item.pick > 0);
         var seen = new HashSet<(int, int)>();
         foreach (var cell in corridor)

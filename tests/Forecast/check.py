@@ -60,6 +60,7 @@ def main():
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--navigation", action="store_true")
     parser.add_argument("--replay", type=Path)
+    parser.add_argument("--obstruction", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -92,6 +93,28 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.obstruction:
+            request = json.loads(args.obstruction.read_text())["request"]
+            original_continuation = request.get("continuation", [])
+            results = []
+            for direction in (-1, 1):
+                request["route_direction"] = direction
+                key = 2 if direction > 0 else 1
+                variants = [("original", original_continuation)]
+                for delay in (12, 30, 48):
+                    variants.append((f"turn_{delay}", [3 - key] * delay + [key] * (180 - delay)))
+                    variants.append((f"lift_{delay}", [4] * delay + [key | 4] * (180 - delay)))
+                variants.append(("brake", [key] * 36 + [0] * 144))
+                for name, controls in variants:
+                    request["continuation"] = controls
+                    result = worker.call(**request)
+                    frames = (result.get("forecast") or {}).get("frames", [])
+                    results.append(dict(direction=direction, variant=name, result=result))
+                    print("OBSTRUCTION_DIRECTION", direction, name, "selected=", result.get("selected"),
+                          "progress=", result.get("route_progress"), "end=",
+                          {key: frames[-1][key] for key in ("x", "y", "hp")} if frames else None, flush=True)
+            (args.root / "obstruction-probe.json").write_text(json.dumps(results))
+            return
         if args.replay:
             report = json.loads(args.replay.read_text())
             request = report["request"]

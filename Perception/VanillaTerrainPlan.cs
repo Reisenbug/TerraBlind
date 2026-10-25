@@ -59,6 +59,8 @@ public static class VanillaTerrainPlan
                 new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                 guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
             if (plan["status"].GetValue<string>() != "planned") return plan;
+            if (request["guidance"] != null && plan["route_progress"].GetValue<double>() <= 0)
+                return new JsonObject { ["status"] = "edit_does_not_open_route" };
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);
             foreach (var control in plan["controls"].AsArray()) controls.Add(control.DeepClone());

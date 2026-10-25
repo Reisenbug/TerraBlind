@@ -51,6 +51,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     long captureBytes, requestBytes;
     int loggedAccepted, loggedRejected, idleFrames;
     int starvedFrames, starvation, longestStarvation;
+    readonly System.Collections.Generic.HashSet<(int, int)> recordedObstructions = new();
 
     public override void Load()
     {
@@ -92,6 +93,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         closest = Vector2.Distance(player.position, goal); previousAccepted = 0;
         loggedAccepted = loggedRejected = idleFrames = starvedFrames = starvation = longestStarvation = 0;
         route = Array.Empty<Vector2>();
+        recordedObstructions.Clear();
         cancellation = new CancellationTokenSource();
         if (worker?.Alive == true)
         {
@@ -169,6 +171,15 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 loggedAccepted = movement.Accepted; loggedRejected = movement.Rejected;
                 var result = movement.LastResult;
+                var cell = ((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16));
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline")
+                    && result?["status"]?.GetValue<string>() == "planned"
+                    && result["route_progress"]?.GetValue<double>() <= 0 && recordedObstructions.Add(cell))
+                {
+                    string path = Path.Combine(Main.SavePath, $"native-obstruction-{Main.GameUpdateCount}.json");
+                    string report = new JsonObject { ["request"] = movement.LastRequest.DeepClone(), ["result"] = result.DeepClone() }.ToJsonString();
+                    _ = Task.Run(() => File.WriteAllText(path, report));
+                }
                 if (movement.LastDivergence is JsonObject divergence)
                 {
                     string path = Path.Combine(Main.SavePath, $"vanilla-divergence-{Main.GameUpdateCount}.json");

@@ -95,6 +95,12 @@ public sealed class Engine : ModSystem
         {
             int passed = 0;
             float error = 0;
+            Setup(new JsonObject { ["terrain"] = "half" });
+            for (int i = 0; i < 30; i++) VanillaPrediction.Advance(source, VanillaKeys.Right);
+            var halfCell = VanillaLocalPlanner.FootCell(source.position, source.width, source.height);
+            if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
+                throw new InvalidOperationException("halfbrick_foot_cell_wrong");
+            passed++;
             foreach (int mode in new[] { 0, 1, 2, 3, 4 })
             {
                 bool place = mode == 1;

@@ -12,6 +12,8 @@ public sealed class VanillaLocalPlanner
 {
     public const int Horizon = 180;
     public const int ExecuteFrames = 8;
+    public static (int x, int y) FootCell(Vector2 position, int width, int height)
+        => ((int)Math.Floor((position.X + width / 2f) / 16), (int)Math.Floor((position.Y + height - 1) / 16));
 
     public static Rectangle SnapshotArea(Player player, Vector2 goal, int leadFrames = 0)
     {
@@ -85,10 +87,11 @@ public sealed class VanillaLocalPlanner
         foreach (int release in new[] { 1, 12, 18, 30, 45 })
             candidates.Add(($"relaunch_{release}", Enumerable.Range(0, Horizon)
                 .Select(i => direction | (i == release ? 0 : 4)).ToArray()));
-        if (!transit)
-            foreach (int stop in new[] { 12, 36, 60 })
-                candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
+        foreach (int stop in new[] { 12, 36, 60 })
+            candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
         int reverse = direction == 2 ? 1 : 2;
+        foreach (int stop in new[] { 12, 36, 60 })
+            candidates.Add(($"reverse_brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? reverse : 0).ToArray()));
         foreach (int retreat in new[] { 12, 30, 48 })
         foreach (int hold in new[] { 18, 60 })
             candidates.Add(($"retreat_{retreat}_{hold}", Enumerable.Range(0, Horizon)
@@ -108,7 +111,7 @@ public sealed class VanillaLocalPlanner
         double Distance(Vector2 position)
         {
             if (field == null) return Vector2.Distance(goal, position);
-            var cell = ((int)((position.X + player.width / 2f) / 16), (int)((position.Y + player.height) / 16) - 1);
+            var cell = FootCell(position, player.width, player.height);
             return field.TryGetValue(cell, out int cost) ? cost * 16d : missing + Vector2.Distance(goal, position);
         }
         double startDistance = Distance(player.position);
@@ -163,8 +166,8 @@ public sealed class VanillaLocalPlanner
                 bool towardGoal = Vector2.Distance(goal, endPosition) < Vector2.Distance(goal, player.position) - 16;
                 if (field != null)
                 {
-                    var startCell = ((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16) - 1);
-                    var endCell = ((int)((endPosition.X + player.width / 2f) / 16), (int)((endPosition.Y + player.height) / 16) - 1);
+                    var startCell = FootCell(player.position, player.width, player.height);
+                    var endCell = FootCell(endPosition, player.width, player.height);
                     towardGoal = field.TryGetValue(startCell, out int startCost) && field.TryGetValue(endCell, out int endCost)
                         && endCost < startCost;
                 }

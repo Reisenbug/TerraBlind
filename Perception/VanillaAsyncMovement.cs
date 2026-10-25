@@ -34,6 +34,7 @@ public sealed class VanillaAsyncMovement
     public bool Busy => pending != null;
     public Vector2[] AcceptedRoute { get; private set; } = Array.Empty<Vector2>();
     public JsonObject LastResult { get; private set; }
+    internal JsonObject LastRequest => lastRequest;
     public string LastMismatch { get; private set; }
     public string LastRejection { get; private set; }
     public JsonObject LastDivergence { get; private set; }
