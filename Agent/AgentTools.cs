@@ -283,6 +283,8 @@ public static class AgentTools
                 }
                 break;
             case "mine":
+                result = await CollectNonSolidTarget(Int(args, "target_x"), Int(args, "target_y"), token);
+                if (result != null) break;
                 result = await Call("/mine", new JsonObject { ["dir"] = Text(args, "dir"),
                     ["target_wx"] = Int(args, "target_x"), ["target_wy"] = Int(args, "target_y") }, token);
                 if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token);
@@ -379,6 +381,34 @@ public static class AgentTools
         await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
             !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
         return output;
+    }
+
+    static async Task<JsonObject> CollectNonSolidTarget(int x, int y, CancellationToken token)
+    {
+        var target = await NativeAgent.OnMain(() =>
+        {
+            if (!WorldGen.InWorld(x, y)) return null;
+            var tile = Main.tile[x, y];
+            if (!tile.HasUnactuatedTile || Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) return null;
+            int Power(Item item) => Main.tileAxe[tile.TileType] ? item.axe : Main.tileHammer[tile.TileType] ? item.hammer : item.pick;
+            int slot = Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
+                .FirstOrDefault(i => !Main.LocalPlayer.inventory[i].IsAir && Power(Main.LocalPlayer.inventory[i]) > 0, -1);
+            return new JsonObject { ["slot"] = slot };
+        }, token);
+        if (target == null) return null;
+        if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
+        if (!await NativeAgent.OnMain(() => Reach.CanInteract(Main.LocalPlayer, x, y), token))
+        {
+            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = true }, token, 30);
+            if (approach["done"]?.GetValue<bool>() != true)
+                return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
+        }
+        var result = await Call("/item_use", new JsonObject { ["target_wx"] = x, ["target_wy"] = y,
+            ["slot"] = target["slot"].DeepClone(), ["strict"] = true }, token);
+        if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 15, token);
+        if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
+        result["mode_adjustment"] = "non_solid_target_use_collect_tool";
+        return result;
     }
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)

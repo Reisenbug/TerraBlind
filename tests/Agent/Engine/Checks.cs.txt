@@ -21,6 +21,7 @@ public sealed class Driver : ModSystem
     bool liveRunning;
     DateTime liveStart;
     int phase, ticks;
+    int heartX, heartY;
     Task<string> pending;
     readonly JsonArray results = new();
 
@@ -154,13 +155,24 @@ public sealed class Driver : ModSystem
                     Check(!result["verified"].GetValue<bool>(), "historical_kill_counted"); KillQueen(); Call("task_step", Step("finish")); break;
                 case 9:
                     Check(result["verified"].GetValue<bool>() && result["status"].ToString() == "completed", "fresh_kill_not_verified");
-                    int hx = (int)player.Center.X / 16 - 3, hy = (int)player.Bottom.Y / 16 - 1;
-                    WorldGen.PlaceObject(hx, hy, TileID.Heart);
-                    Check(Main.tile[hx, hy].HasTile && Main.tile[hx, hy].TileType == TileID.Heart, "heart_fixture_missing");
-                    Call("nav_to", new JsonObject { ["x"] = hx, ["y"] = hy, ["exact"] = true });
+                    heartX = (int)player.Center.X / 16 - 3; heartY = (int)player.Bottom.Y / 16 - 1;
+                    WorldGen.PlaceObject(heartX, heartY, TileID.Heart);
+                    Check(Main.tile[heartX, heartY].HasTile && Main.tile[heartX, heartY].TileType == TileID.Heart, "heart_fixture_missing");
+                    Call("nav_to", new JsonObject { ["x"] = heartX, ["y"] = heartY, ["exact"] = true });
                     break;
                 case 10:
                     Check(result["done"]?.GetValue<bool>() == true && result["mode_adjustment"] != null, "heart_navigation_not_adapted");
+                    player.inventory[3].SetDefaults(ItemID.CopperPickaxe);
+                    Call("mine", new JsonObject { ["dir"] = "left", ["target_x"] = heartX, ["target_y"] = heartY });
+                    break;
+                case 11:
+                    Check(result["outcome"]?.ToString() == "removed" && !Main.tile[heartX, heartY].HasTile, "heart_not_mined");
+                    int crystalSlot = Array.FindIndex(player.inventory, item => item.type == ItemID.LifeCrystal && item.stack > 0);
+                    Check(crystalSlot >= 0, "crystal_drop_not_collected");
+                    Call("use_item", new JsonObject { ["slot"] = crystalSlot, ["x"] = heartX, ["y"] = heartY, ["duration_ticks"] = 45 });
+                    break;
+                case 12:
+                    Check(player.statLifeMax == 140 && player.ConsumedLifeCrystals == 2, "mined_crystal_not_used");
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
                     {
                         player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
@@ -175,7 +187,7 @@ public sealed class Driver : ModSystem
                         Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true max_seconds=180");
                         break;
                     }
-                    Finish(true, "AGENT_ENGINE_COMPLETE checks=7 model_calls=0 controlled_fixture=true"); break;
+                    Finish(true, "AGENT_ENGINE_COMPLETE checks=9 model_calls=0 controlled_fixture=true"); break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }

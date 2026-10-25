@@ -16,6 +16,7 @@ namespace Terraria
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
         public static bool[] tileSolid = { false, true }, tileSolidTop = { false, false };
+        public static bool[] tileAxe = { false, false }, tileHammer = { false, false };
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }

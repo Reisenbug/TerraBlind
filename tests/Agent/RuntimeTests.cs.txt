@@ -122,6 +122,25 @@ static class RuntimeTests
             Game.tile[100, 100] = default;
             Console.WriteLine("PASS: live non-solid targets switch exact mining to interaction reach; solid targets retain mining and arrival checks");
 
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+            var noTool = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 100, ["target_y"] = 100 }, default)));
+            Check(noTool["error"]?.ToString() == "no_collect_tool", "non-solid mining succeeded without a tool");
+            Game.LocalPlayer.inventory[6] = new Terraria.Item { stack = 1, pick = 50 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path is "/item_use" or "/item_use_status", "non-solid collection used tunnel mining");
+                if (path == "/item_use")
+                {
+                    var request = JsonNode.Parse(payload);
+                    Check(request["slot"].GetValue<int>() == 6 && request["strict"].GetValue<bool>(), "collection failed to select real tool and strict coordinates");
+                }
+                return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+            };
+            var collected = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 100, ["target_y"] = 100 }, default)));
+            Check(collected["outcome"].ToString() == "removed" && collected["mode_adjustment"] != null, "non-solid collection invented tunnel completion");
+            Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[100, 100] = default;
+            Console.WriteLine("PASS: non-solid mining selects an actual collect tool, rejects missing tools and preserves measured removal outcome");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);

@@ -264,7 +264,7 @@
     "type": "function",
     "function": {
       "name": "mine",
-      "description": "【挖穿过去】。从人当前位置朝一个方向一路挖到目标格,自己开竖井/横井,人在哪、该挖哪几格全由它算。**目标够不着、埋在实心块里、要往下挖到深处的矿,一律用这个,别用 use_item**(那个只挥一格,够不着就报 out_of_reach)。也【不用】先 nav_to:寻路站不上去的地方正是该用它的地方。dir 选朝哪个方向挖(down 往下开竖井最常用),target_x/y 给要挖到的那一格。等挖完才返回。返回 outcome:done=挖通了/stalled=挥了半天一格没掉(镐不够硬,换更好的镐)/unbreakable=那格上面压着东西原版不许破坏(换镐没用,先清上面)/out_of_reach=中途够不着了/no_tiles=这个方向没东西可挖/no_pickaxe=背包前十格没镐;mined=实际挖掉几格,got=挖到了什么。",
+      "description": "【挖穿过去】。从人当前位置朝一个方向一路挖到目标格,自己开竖井/横井。目标为实心矿块时用于开通道。若目标是生命水晶、罐子、树等非实心物体，自动改成接近并选择背包中对应的镐/斧/锤，实际挥动直到目标消失或报告失败；removed只代表方块消失，是否入包必须看got或背包。dir选朝向，target_x/y必须是真实坐标。返回outcome:done=通道完成、removed=目标消失、stalled/no_progress=没有采集进展、unbreakable=结构阻挡、out_of_reach=够不着；no_collect_tool=没有相应工具。不能把done或removed当作已经收集到目标物品。",
       "parameters": {
         "type": "object",
         "properties": {
