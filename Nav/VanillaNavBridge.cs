@@ -213,6 +213,7 @@ public static class VanillaNavBridge
         {
             if (!preparing.IsCompleted) return;
             var result = preparing.GetAwaiter().GetResult(); preparing = null;
+            DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
             if (result["status"]?.GetValue<string>() == "planned")
             {
                 bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference,
