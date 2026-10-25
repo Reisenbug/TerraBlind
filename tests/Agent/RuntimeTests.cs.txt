@@ -207,6 +207,7 @@ static class RuntimeTests
                 }
             }
             Console.WriteLine("PASS: verified progress resumes the next model turn and finishes both steps without another player message");
+            await TestPartialProgress();
 
             await TestNetwork();
             TestRoleSwitch();
@@ -218,6 +219,39 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestPartialProgress()
+    {
+        var handler = new PartialProgressHandler();
+        using var http = new HttpClient(handler);
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        field.SetValue(Agent, new AgentConversation(http));
+        try
+        {
+            Game.LocalPlayer.statLifeMax = 100;
+            await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                {"goal":"partial progress","steps":[{"id":"health","description":"160 permanent health","conditions":[{"kind":"permanent_health","count":160}]}]}
+                """).AsObject(), default));
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path is "/item_use" or "/item_use_status", "unexpected partial-progress endpoint");
+                if (path == "/item_use") Game.LocalPlayer.statLifeMax += 20;
+                return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"n/a\"}" : "{\"ok\":true}");
+            };
+            NativeAgent.Submit("逐步提高永久血量到160");
+            await PumpUntil(() => handler.Calls >= 2 && NativeAgent.Status is "paused" or "idle");
+            Check(Game.LocalPlayer.statLifeMax == 160 && AgentTools.Plan.Snapshot()["status"].ToString() == "completed",
+                $"partial progress stopped early: hp={Game.LocalPlayer.statLifeMax} calls={handler.Calls} status={NativeAgent.Status}");
+            Check(handler.Calls == 6, "partial progress caused extra model turns");
+        }
+        finally
+        {
+            NativeAgent.Stop(); field.SetValue(Agent, previous);
+            Game.LocalPlayer.statLifeMax = 100; AgentTools.Plan.Reset(); HttpServerSystem.Handler = null;
+        }
+        Console.WriteLine("PASS: measured progress within one step resumes three turns without another player instruction");
     }
 
     static void Receive(int type, int sender, Action<BinaryWriter> payload)
@@ -465,6 +499,27 @@ static class RuntimeTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject
                 { ["message"] = message }) }.ToJsonString(), Encoding.UTF8, "application/json") });
+        }
+    }
+
+    sealed class PartialProgressHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 6, "partial-progress loop exceeded expected budget");
+            var message = new JsonObject { ["content"] = "本轮结束" };
+            if (call % 2 == 0)
+            {
+                var calls = new JsonArray(new JsonObject { ["id"] = "use-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "use_item", ["arguments"] = "{\"x\":0,\"y\":0,\"slot\":0}" } });
+                if (call == 4) calls.Add(new JsonObject { ["id"] = "verify-final", ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "task_step", ["arguments"] = "{\"id\":\"health\",\"action\":\"verify\"}" } });
+                message["tool_calls"] = calls;
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
         }
     }
 

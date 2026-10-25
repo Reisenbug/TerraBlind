@@ -47,6 +47,7 @@ public static class AgentTools
 
     public static Task<string> State(CancellationToken token) => NativeAgent.OnMain(() =>
     {
+        Plan.Observe(AgentTaskEvidence.Measure);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
         state["agent"] = new JsonObject
         {
@@ -87,6 +88,7 @@ public static class AgentTools
 
     static Task<string> Result(JsonObject result, Dictionary<string, int> before, CancellationToken token) => NativeAgent.OnMain(() =>
     {
+        Plan.Observe(AgentTaskEvidence.Measure);
         var player = Main.LocalPlayer;
         var now = Inventory();
         var got = new JsonObject(); var lost = new JsonObject(); var progress = new JsonObject();

@@ -144,7 +144,7 @@ public class NativeAgent : ModSystem
                 int noProgressContinuations = 0;
                 while (true)
                 {
-                    int cursorBefore = await OnMain(() => AgentTools.Plan.Cursor, token);
+                    int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
                     if (useCodex)
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
                     else
@@ -156,14 +156,14 @@ public class NativeAgent : ModSystem
                         input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
                         continue;
                     }
-                    bool progressed = await OnMain(() => AgentTools.Plan.Incomplete
+                    bool canContinue = await OnMain(() => AgentTools.Plan.Incomplete
                         && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
                         && !PvpDuel.Active, token);
-                    int cursorAfter = await OnMain(() => AgentTools.Plan.Cursor, token);
-                    if (cursorAfter > cursorBefore) noProgressContinuations = 0;
-                    if (progressed && (cursorAfter > cursorBefore || noProgressContinuations++ < 1))
+                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token);
+                    if (progressed) noProgressContinuations = 0;
+                    if (canContinue && (progressed || noProgressContinuations++ < 1))
                     {
-                        input = "原目标：" + goal + "\n计划尚未完成，请实际执行当前步骤，不能只建立计划或说准备行动就结束。不要重做已完成步骤；若没有可执行办法，task_step block 记录实际原因。未推进步骤时宿主仅额外续接一次，不会无限空转。\n现状："
+                        input = "原目标：" + goal + "\n计划尚未完成，请实际执行当前步骤，不能只建立计划或说准备行动就结束。不要重做已完成步骤；若没有可执行办法，task_step block 记录实际原因。未取得完成条件的实际进展时宿主仅额外续接一次，不会无限空转。\n现状："
                             + await AgentTools.State(token);
                         continue;
                     }

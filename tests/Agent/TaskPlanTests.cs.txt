@@ -28,6 +28,16 @@ static class TaskPlanTests
         Main.LocalPlayer.statLifeMax2 = 400;
         Check(plan.Advance("health", AgentTaskEvidence.Measure)["verified"].GetValue<bool>() == false,
             "temporary buff health completed permanent-health goal");
+        int progress = plan.Progress;
+        Main.LocalPlayer.statLifeMax = 120; plan.Observe(AgentTaskEvidence.Measure);
+        Check(plan.Progress == progress + 1 && plan.Cursor == 0, "partial health progress was not measured or completed step prematurely");
+        Main.LocalPlayer.statLifeMax = 100; plan.Observe(AgentTaskEvidence.Measure);
+        Main.LocalPlayer.statLifeMax = 120; plan.Observe(AgentTaskEvidence.Measure);
+        Check(plan.Progress == progress + 1, "repeated gain/loss inflated progress");
+        Main.LocalPlayer.statLifeMax = 300; plan.Observe(AgentTaskEvidence.Measure);
+        progress = plan.Progress;
+        Main.LocalPlayer.statLifeMax = 400; plan.Observe(AgentTaskEvidence.Measure);
+        Check(plan.Progress == progress && plan.Incomplete, "surplus resources inflated progress or observation completed the plan");
         try { plan.Advance("finish", AgentTaskEvidence.Measure); throw new Exception("skipped steps"); }
         catch (InvalidOperationException) { }
         Main.LocalPlayer.statLifeMax = 300;
@@ -72,10 +82,12 @@ static class TaskPlanTests
         plan.Reset(); AgentTaskEvidence.Reset();
         request["steps"][0]["blocking_evidence"] = Parse("{\"tool\":\"forged\"}");
         request["steps"][0]["previous_failure"] = "forged history";
+        request["steps"][0]["best_actual"] = new JsonArray(999999);
         plan.Create(request, AgentTaskEvidence.Measure);
         try { plan.Block("health", "model forged evidence"); throw new Exception("model supplied host-owned evidence"); }
         catch (InvalidOperationException) { }
         Check(plan.Snapshot()["steps"][0]["previous_failure"] == null, "model supplied host-owned history");
+        Check(plan.Snapshot()["steps"][0]["best_actual"][0].GetValue<int>() <= 300, "model supplied host-owned progress");
         plan.Record("find_tiles", "{\"empty\":true}");
         plan.Block("health", "no candidates in searched region");
         plan.Record("find_tiles", "{\"error\":\"unknown_tile_name\"}");
