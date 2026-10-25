@@ -65,6 +65,58 @@ public sealed class Driver : ModSystem
     StreamWriter controlTrace;
     JsonObject recordedPlan;
     System.Threading.Tasks.Task<JsonObject> descentGoals;
+    readonly System.Diagnostics.Stopwatch routeClock = new();
+    readonly JsonArray timingSegments = new();
+    readonly JsonArray planTimings = new();
+    readonly System.Collections.Generic.Dictionary<string, double> timingTotals = new();
+    string timingPhase;
+    double phaseStart;
+    Vector2 phasePosition, previousPosition;
+
+    string TimingPhase(Player player, VanillaNavigationDemo demo)
+    {
+        string stage = VanillaNavBridge.Stage;
+        if (stage != "Moving") return stage;
+        if (!VanillaNavigationDemo.Active) return "field_setup";
+        if (!demo.PlannerReady) return "worker_startup";
+        if (!demo.LastControl.Queued) return "queue_empty";
+        if (Vector2.DistanceSquared(player.position, previousPosition) > .0625f) return "moving";
+        return demo.LastControl.Keys == 0 ? "planned_wait" : "blocked_input";
+    }
+
+    void RecordPhase(string next, Player player)
+    {
+        if (next == timingPhase) return;
+        double now = routeClock.Elapsed.TotalMilliseconds;
+        if (timingPhase != null)
+        {
+            double duration = now - phaseStart;
+            timingTotals.TryGetValue(timingPhase, out double total);
+            timingTotals[timingPhase] = total + duration;
+            timingSegments.Add(new JsonObject { ["phase"] = timingPhase, ["start_ms"] = phaseStart,
+                ["end_ms"] = now, ["duration_ms"] = duration, ["from_x"] = phasePosition.X / 16,
+                ["from_y"] = phasePosition.Y / 16, ["to_x"] = player.Center.X / 16,
+                ["to_y"] = player.Bottom.Y / 16,
+                ["end_plan"] = VanillaNavigationDemo.Instance.LastControl.Plan,
+                ["end_rejection"] = VanillaNavigationDemo.Instance.PlannerRejection });
+        }
+        timingPhase = next; phaseStart = now; phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
+    }
+
+    void SaveTiming(bool done, string reason)
+    {
+        if (!routeClock.IsRunning) return;
+        RecordPhase(null, Main.LocalPlayer);
+        routeClock.Stop();
+        var totals = new JsonObject();
+        foreach (var pair in timingTotals) totals[pair.Key] = pair.Value;
+        File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), new JsonObject {
+            ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
+            ["game_frames"] = ticks, ["limit_ms"] = continuity ? null : 150000,
+            ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
+            ["phase_ms"] = totals, ["segments"] = timingSegments.DeepClone(),
+            ["plans"] = planTimings.DeepClone() }.ToJsonString());
+    }
 
     public override void Load()
     {
@@ -214,6 +266,7 @@ public sealed class Driver : ModSystem
         }
         catch (Exception error)
         {
+            if (descent) SaveTiming(false, error.Message);
             controlTrace?.Flush();
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
             enabled = false; VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
@@ -228,7 +281,7 @@ public sealed class Driver : ModSystem
         if (!prepared)
         {
             controlTrace = File.CreateText(Path.Combine(Main.SavePath, "control-trace.csv"));
-            controlTrace.WriteLine("tick,leg,x,y,vx,vy,actual_keys,scheduled_keys,queued,plan,index,terminal,goal_x,goal_y,plan_goal_x,anchor_x,engine,macro,rejection,hp,dead,fall_start");
+            controlTrace.WriteLine("tick,leg,x,y,vx,vy,actual_keys,scheduled_keys,queued,plan,index,terminal,goal_x,goal_y,plan_goal_x,anchor_x,engine,macro,rejection,hp,dead,fall_start,wall_ms,phase,use_item,hostiles,compute_ms,roundtrip_ms");
             player.ConsumedLifeCrystals = 15; player.statLife = player.statLifeMax = 400;
             foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
             player.armor[0].SetDefaults(ItemID.MoltenHelmet); player.armor[1].SetDefaults(ItemID.MoltenBreastplate); player.armor[2].SetDefaults(ItemID.MoltenGreaves);
@@ -260,7 +313,8 @@ public sealed class Driver : ModSystem
                 int x = goals["entrance"]["x"].GetValue<int>(), y = goals["entrance"]["y"].GetValue<int>();
                 player.Teleport(new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height));
                 player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
-                args = new[] { "route", goals["hell_x"].ToString(), goals["hell_y"].ToString() };
+                args = new[] { "route", "3383", "1069" };
+                goals["hell_x"] = 3383; goals["hell_y"] = 1069;
                 Console.WriteLine("VNAV_DESCENT_GOALS " + goals.ToJsonString());
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualcheck"))
                 {
@@ -275,6 +329,11 @@ public sealed class Driver : ModSystem
                     return;
                 }
             }
+            if (!routeClock.IsRunning)
+            {
+                routeClock.Start(); timingPhase = "command_setup"; phaseStart = 0;
+                phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
+            }
             ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck")) VanillaNavBridge.Enabled = false;
             if (!RecedingNav.Active) throw new InvalidOperationException(caller.Last);
@@ -286,7 +345,10 @@ public sealed class Driver : ModSystem
             throw new InvalidOperationException("legacy_executor_in_native_route");
         var sample = VanillaPrediction.Observe(player);
         var control = VanillaNavigationDemo.Instance.LastControl;
-        controlTrace.WriteLine(FormattableString.Invariant($"{ticks},{continuityLeg},{player.position.X},{player.position.Y},{player.velocity.X},{player.velocity.Y},{sample["keys"]},{control.Keys},{control.Queued},{control.Plan},{control.Index},{control.Terminal},{control.Goal.X},{control.Goal.Y},{control.PlanGoal.X},{control.Anchor.X},{VanillaNavigationDemo.Active},{StateSpacePlanner.ExecRunning},{VanillaNavigationDemo.Instance.PlannerRejection},{player.statLife},{player.dead},{player.fallStart}"));
+        var timingDemo = VanillaNavigationDemo.Instance;
+        RecordPhase(TimingPhase(player, timingDemo), player);
+        previousPosition = player.position;
+        controlTrace.WriteLine(FormattableString.Invariant($"{ticks},{continuityLeg},{player.position.X},{player.position.Y},{player.velocity.X},{player.velocity.Y},{sample["keys"]},{control.Keys},{control.Queued},{control.Plan},{control.Index},{control.Terminal},{control.Goal.X},{control.Goal.Y},{control.PlanGoal.X},{control.Anchor.X},{VanillaNavigationDemo.Active},{StateSpacePlanner.ExecRunning},{timingDemo.PlannerRejection},{player.statLife},{player.dead},{player.fallStart},{routeClock.Elapsed.TotalMilliseconds},{timingPhase},{player.controlUseItem},{Main.npc.Count(npc => npc.active && !npc.friendly && npc.damage > 0)},{timingDemo.PlannerResult?["request_compute_ms"]},{timingDemo.PlannerResult?["roundtrip_ms"]}"));
         sample["phase"] = continuity ? "continuity" : "jungle_descent";
         sample["focused"] = Main.hasFocus;
         sample["nav_stop"] = RecedingNav.LastStop;
@@ -302,6 +364,11 @@ public sealed class Driver : ModSystem
             if (!ReferenceEquals(plan, recordedPlan))
             {
                 recordedPlan = plan;
+                planTimings.Add(new JsonObject { ["observed_ms"] = routeClock.Elapsed.TotalMilliseconds,
+                    ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
+                    ["compute_ms"] = plan["request_compute_ms"]?.DeepClone(),
+                    ["roundtrip_ms"] = plan["roundtrip_ms"]?.DeepClone(),
+                    ["selected"] = plan["selected"]?.DeepClone(), ["timing"] = plan["timing"]?.DeepClone() });
                 string selected = plan["selected"]?.GetValue<string>() ?? "none";
                 if (selected == "wait" || selected.StartsWith("retreat"))
                     File.WriteAllText(Path.Combine(Main.SavePath, $"fallback-plan-{ticks}.json"), plan.ToJsonString());
@@ -316,9 +383,10 @@ public sealed class Driver : ModSystem
         {
             controlTrace.Flush();
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
-            Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={VanillaDescentRun.Instance.Status} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
+            Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
+        if (!continuity && routeClock.Elapsed.TotalSeconds > 150) throw new TimeoutException("route_exceeded_150_seconds");
         if (RecedingNav.Active && ticks < 54000) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (continuity)
@@ -332,6 +400,7 @@ public sealed class Driver : ModSystem
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
             ["underworld"] = Main.UnderworldLayer, ["legs"] = results.DeepClone() }.ToJsonString());
+        SaveTiming(true, "done");
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         controlTrace.Flush();
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);

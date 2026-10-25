@@ -15,6 +15,7 @@ public static class VanillaNavBridge
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining;
     public static bool Mining => phase == Phase.Mining;
+    public static string Stage => phase.ToString();
     enum Phase { Moving, Braking, Preparing, Using, Mining }
     readonly record struct Edit(int X, int Y, int Type, int Slot);
     static Phase phase;
