@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-	<Import Project="..\tModLoader.targets" />
+	<Import Project="$(TmlTargetsPath)" />
 
 	<PropertyGroup>
 		<AssemblyName>TerraBlind</AssemblyName>

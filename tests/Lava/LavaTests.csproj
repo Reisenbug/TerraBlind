@@ -3,8 +3,6 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <IntermediateOutputPath>/tmp/terrablind-lava-tests/obj/</IntermediateOutputPath>
-    <OutputPath>/tmp/terrablind-lava-tests/bin/</OutputPath>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Core/LavaSafety.cs" />

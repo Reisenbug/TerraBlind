@@ -1,5 +1,7 @@
 bin/
 obj/
+__pycache__/
+AGENTS.override.md
 *.user
 .vs/
 .idea/

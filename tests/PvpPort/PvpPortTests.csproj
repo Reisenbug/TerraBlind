@@ -3,8 +3,6 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <IntermediateOutputPath>/tmp/terrablind-pvp-port-tests/obj/</IntermediateOutputPath>
-    <OutputPath>/tmp/terrablind-pvp-port-tests/bin/</OutputPath>
     <TmlPath>$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader</TmlPath>
   </PropertyGroup>
   <ItemGroup>

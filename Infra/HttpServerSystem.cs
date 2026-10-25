@@ -69,12 +69,32 @@ namespace TerraBlind
 		const int LootRoom = 8;
 		private static volatile bool _quickHealRequested;
 
-		private const string Prefix = "http://127.0.0.1:17878/";
+		private static string Prefix
+		{
+			get
+			{
+				int port = 17878;
+				if (Terraria.Program.LaunchParameters.TryGetValue("-tbhttpport", out string value)
+					&& (!int.TryParse(value, out port) || port < 1 || port > 65535))
+					throw new ArgumentException("-tbhttpport must be an integer from 1 to 65535");
+				return $"http://127.0.0.1:{port}/";
+			}
+		}
 		private HttpListener _listener;
 		private Thread _thread;
 		private volatile bool _running;
 		private bool _announced;
 		private bool _lastAiClient;
+
+		public override void PostUpdateInput()
+		{
+			if (!Main.dedServ && Terraria.Program.LaunchParameters.TryGetValue("-tbdevrole", out string role))
+			{
+				Terraria.Program.LaunchParameters.TryGetValue("-tbdevbuild", out string build);
+				string title = $"TerraBlind [{role}] {build}";
+				if (Main.instance.Window.Title != title) Main.instance.Window.Title = title;
+			}
+		}
 
 		public override void PostUpdateEverything()
 		{

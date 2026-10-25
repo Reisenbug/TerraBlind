@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <TmlTargetsPath Condition="'$(TmlTargetsPath)' == ''">$(HOME)/Library/Application Support/Steam/steamapps/common/tModLoader/tMLMod.targets</TmlTargetsPath>
+  </PropertyGroup>
+</Project>
