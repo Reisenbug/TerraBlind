@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(TmlTargetsPath)" />
+  <PropertyGroup>
+    <AssemblyName>Engine</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="TerraBlind"><HintPath>../../../bin/Debug/net8.0/TerraBlind.dll</HintPath></Reference>
+    <Compile Include="Checks.cs.txt" />
+  </ItemGroup>
+</Project>

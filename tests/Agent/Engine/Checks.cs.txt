@@ -1,0 +1,190 @@
+using System;
+using System.IO;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
+using MonoMod.Cil;
+using Terraria;
+using Terraria.DataStructures;
+using Terraria.ID;
+using Terraria.IO;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Engine;
+
+public sealed class Engine : Mod { }
+
+public sealed class Driver : ModSystem
+{
+    bool enabled, opened;
+    bool liveRunning;
+    DateTime liveStart;
+    int phase, ticks;
+    Task<string> pending;
+    readonly JsonArray results = new();
+
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentenginecheck");
+        if (!enabled) return;
+        string root = Path.GetFullPath(Main.SavePath);
+        if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
+        On_Main.Update += Update;
+        IL_Main.DoUpdate += Focus;
+    }
+
+    static void Focus(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("focus_boundary_missing");
+        cursor.EmitDelegate<Action>(() => Main.hasFocus = true);
+    }
+
+    void Update(On_Main.orig_Update original, Main game, GameTime time)
+    {
+        original(game, time);
+        if (opened || Main.menuMode != 0) return;
+        opened = true;
+        if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
+        var file = PlayerFileData.CreateAndSave(new Player { name = "Agent engine check" });
+        if (file.IsCloudSave || !file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new InvalidOperationException("player_not_isolated");
+        Player.LoadPlayer(file.Path, false).SetAsActive(); Main.autoPause = false;
+        WorldGen.playWorld();
+    }
+
+    static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException(message); }
+    void Call(string tool, JsonObject args) => pending = AgentTools.Execute(tool, args, default);
+    static JsonObject Step(string id) => new() { ["id"] = id, ["action"] = "verify" };
+
+    static void KillQueen()
+    {
+        int id = NPC.NewNPC(new EntitySource_Misc("AgentChecks"), (int)Main.LocalPlayer.Center.X + 500,
+            (int)Main.LocalPlayer.Center.Y, NPCID.QueenBee);
+        Check(id < Main.maxNPCs, "npc_spawn_failed");
+        Main.npc[id].StrikeInstantKill();
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || Main.gameMenu || !Main.LocalPlayer.active) return;
+        try
+        {
+            if (liveRunning)
+            {
+                if (pending != null)
+                {
+                    if (!pending.IsCompleted) return;
+                    var state = JsonNode.Parse(pending.GetAwaiter().GetResult());
+                    pending = null;
+                    NativeAgent.Stop();
+                    File.WriteAllText(Path.Combine(Main.SavePath, "agent-live-result.json"), new JsonObject
+                    { ["elapsed_seconds"] = (DateTime.UtcNow - liveStart).TotalSeconds,
+                        ["state"] = state, ["controlled_engine_checks_passed"] = true }.ToJsonString());
+                    Finish(true, "AGENT_LIVE_CAPTURED bounded_probe=true goal_success_requires_state_verification=true");
+                    return;
+                }
+                double seconds = (DateTime.UtcNow - liveStart).TotalSeconds;
+                if (++ticks % 120 == 0) Console.WriteLine($"AGENT_LIVE_PROGRESS seconds={seconds:0.0} status={NativeAgent.Status}");
+                if (seconds >= 180 || seconds >= 10 && NativeAgent.Status is "failed" or "paused" or "idle" or "waiting for answer")
+                    pending = AgentTools.State(default);
+                return;
+            }
+            if (++ticks > 3600) throw new TimeoutException("engine_check_frame_limit");
+            Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60;
+            if (pending != null && !pending.IsCompleted) return;
+            JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
+            pending = null;
+            Console.WriteLine($"AGENT_ENGINE_PHASE phase={phase} frame={ticks}");
+            if (result != null) results.Add(new JsonObject { ["phase"] = phase, ["result"] = result.DeepClone() });
+            var player = Main.LocalPlayer;
+            switch (phase++)
+            {
+                case 0:
+                    Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                    player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                    for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                    player.inventory[0].SetDefaults(ItemID.LifeCrystal);
+                    player.inventory[1].SetDefaults(ItemID.JungleSpores); player.inventory[1].stack = 12;
+                    player.inventory[2].SetDefaults(ItemID.Stinger); player.inventory[2].stack = 9;
+                    int x = (int)player.Center.X / 16, y = (int)player.Bottom.Y / 16;
+                    for (int tx = x - 6; tx <= x + 6; tx++)
+                    for (int ty = y - 5; ty <= y + 2; ty++)
+                    {
+                        var tile = Main.tile[tx, ty];
+                        tile.ClearEverything();
+                        if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                    }
+                    player.position.Y = y * 16 - player.height; player.velocity = Vector2.Zero;
+                    WorldGen.PlaceObject(x + 2, y - 1, TileID.Anvils);
+                    Check(Main.tile[x + 2, y - 1].TileType == TileID.Anvils, "anvil_fixture_missing");
+                    Main.playerInventory = true;
+                    KillQueen();
+                    Call("task_plan", new JsonObject { ["goal"] = "controlled engine verification", ["replace"] = true,
+                        ["steps"] = JsonNode.Parse($$"""
+                        [{"id":"health","description":"consume crystal","conditions":[{"kind":"permanent_health","count":120}]},
+                         {"id":"weapon","description":"craft weapon","conditions":[{"kind":"item","type":{{ItemID.ThornChakram}},"count":1}]},
+                         {"id":"finish","description":"fresh kill and final requirements","conditions":[{"kind":"permanent_health","count":120},{"kind":"item","type":{{ItemID.ThornChakram}},"count":1},{"kind":"npc_kills","type":{{NPCID.QueenBee}},"count":1}]}]
+                        """) });
+                    break;
+                case 1:
+                    Check(result["error"] == null, "plan_rejected"); Call("task_step", Step("health")); break;
+                case 2:
+                    Check(!result["verified"].GetValue<bool>(), "unearned_health_passed");
+                    Call("use_item", new JsonObject { ["slot"] = 0, ["x"] = (int)player.Center.X / 16,
+                        ["y"] = (int)player.Center.Y / 16, ["duration_ticks"] = 45 }); break;
+                case 3:
+                    Check(player.ConsumedLifeCrystals == 1 && player.statLifeMax == 120, "crystal_not_consumed");
+                    Call("task_step", Step("health")); break;
+                case 4:
+                    Check(result["verified"].GetValue<bool>(), "real_health_not_verified");
+                    Call("recipe", new JsonObject { ["name"] = "ThornChakram" }); break;
+                case 5:
+                    Console.WriteLine($"AGENT_ENGINE_STATION adjacent={player.adjTile[TileID.Anvils]} inventory_open={Main.playerInventory}");
+                    Call("craft", new JsonObject { ["name"] = "ThornChakram", ["amount"] = 1 }); break;
+                case 6:
+                    Check(result["error"] == null, "craft_rejected"); Call("task_step", Step("weapon")); break;
+                case 7:
+                    Check(result["verified"].GetValue<bool>(), "crafted_weapon_not_verified"); Call("task_step", Step("finish")); break;
+                case 8:
+                    Check(!result["verified"].GetValue<bool>(), "historical_kill_counted"); KillQueen(); Call("task_step", Step("finish")); break;
+                case 9:
+                    Check(result["verified"].GetValue<bool>() && result["status"].ToString() == "completed", "fresh_kill_not_verified");
+                    if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
+                    {
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        Config.I.AgentUseCodex = true;
+                        AgentPermissions.Attack = AgentPermissions.Dodge = true;
+                        NativeAgent.Submit("搞到300血同时搓个荆棘旋刃，然后召唤蜂王打蜂王。请建立新的任务计划，按实际状态执行。合理的中间步骤自己决定，失败时保留证据。");
+                        liveRunning = true; liveStart = DateTime.UtcNow;
+                        Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true max_seconds=180");
+                        break;
+                    }
+                    Finish(true, "AGENT_ENGINE_COMPLETE checks=6 model_calls=0 controlled_fixture=true"); break;
+            }
+        }
+        catch (Exception error) { Finish(false, error.ToString()); }
+    }
+
+    void Finish(bool ok, string detail)
+    {
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject
+        { ["ok"] = ok, ["detail"] = detail, ["frames"] = ticks, ["results"] = results }.ToJsonString());
+        Console.WriteLine(detail);
+        enabled = false;
+    }
+
+    public override void Unload()
+    {
+        if (!enabled) return;
+        On_Main.Update -= Update; IL_Main.DoUpdate -= Focus;
+    }
+}
