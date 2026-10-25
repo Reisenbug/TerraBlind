@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--navigation", action="store_true")
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--obstruction", type=Path)
+    parser.add_argument("--terrain-probe", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -93,6 +94,17 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.terrain_probe:
+            request = json.loads(args.terrain_probe.read_text())["request"]
+            request["command"] = "terrain_probe"
+            result = worker.call(**request)
+            (args.root / "terrain-probe.json").write_text(json.dumps(result))
+            for row in result["results"]:
+                plan = row["result"]
+                print("TERRAIN_PROBE", row["x"], row["y"], "wait=", row["wait"],
+                      "clear=", row["clear"],
+                      "status=", plan.get("status"), "progress=", plan.get("route_progress"), flush=True)
+            return
         if args.obstruction:
             request = json.loads(args.obstruction.read_text())["request"]
             original_continuation = request.get("continuation", [])

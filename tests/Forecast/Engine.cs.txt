@@ -363,6 +363,70 @@ public sealed class Engine : ModSystem
             if (controller.Accepted != 1) throw new InvalidOperationException("aim_facing_invalidated_movement");
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
+        if (command == "terrain_probe")
+        {
+            var state = request["snapshot"].AsObject();
+            try
+            {
+                var prefix = request["prefix"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+                var future = new VanillaPrediction(state).Predict(prefix, false, true)["end_snapshot"].AsObject();
+                var player = VanillaFrame.RestoreInWorker(future);
+                int left = (int)Math.Floor(player.Left.X / 16), right = (int)Math.Floor((player.Right.X - 1) / 16);
+                int bottom = (int)Math.Floor(player.Bottom.Y / 16);
+                var clearing = new JsonArray();
+                for (int yy = bottom; yy <= bottom + 2; yy++)
+                for (int xx = left - 1; xx <= right + 1; xx++)
+                {
+                    var tile = Main.tile[xx, yy];
+                    if (tile.HasTile && Main.tileCut[tile.TileType] && !Main.tileSolid[tile.TileType])
+                        clearing.Add(new JsonArray(xx, yy));
+                }
+                var results = new JsonArray();
+                for (int y = bottom; y <= bottom + 1; y++)
+                for (int x = left; x <= right; x++)
+                foreach (int wait in new[] { 1, 24 })
+                foreach (bool clear in new[] { false, true })
+                {
+                    var targets = clear ? (JsonArray)clearing.DeepClone() : new JsonArray();
+                    if (!targets.Any(tile => tile[0].GetValue<int>() == x && tile[1].GetValue<int>() == y))
+                        targets.Add(new JsonArray(x, y));
+                    var probe = new JsonObject { ["command"] = "terrain_plan", ["snapshot"] = future.DeepClone(),
+                        ["tile_x"] = x, ["tile_y"] = y, ["tile_type"] = -1, ["wait_frames"] = wait,
+                        ["tiles"] = targets,
+                        ["x"] = request["x"].DeepClone(), ["y"] = request["y"].DeepClone(),
+                        ["route_direction"] = request["route_direction"].DeepClone(), ["guidance"] = request["guidance"].DeepClone() };
+                    var result = VanillaTerrainPlan.Build(probe);
+                    if (result["status"].GetValue<string>() == "planned")
+                    {
+                        var actual = VanillaFrame.RestoreInWorker(future);
+                        foreach (var target in targets)
+                        {
+                            int tx = target[0].GetValue<int>(), ty = target[1].GetValue<int>();
+                            int before = Main.tile[tx, ty].TileType;
+                            WorldGen.KillTile(tx, ty, noItem: true);
+                            if (Main.tile[tx, ty].HasTile && Main.tile[tx, ty].TileType != before)
+                                WorldGen.KillTile(tx, ty, noItem: true);
+                        }
+                        float error = 0;
+                        int initialHp = actual.statLife;
+                        var replayKeys = result["controls"].AsArray();
+                        for (int i = 0; i < replayKeys.Count; i++)
+                        {
+                            VanillaPrediction.Advance(actual, (VanillaKeys)replayKeys[i].GetValue<int>());
+                            var expected = result["forecast"]["frames"][i];
+                            error = Math.Max(error, Vector2.Distance(actual.position,
+                                new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>())));
+                            if (error > .001f || actual.statLife < initialHp || actual.dead)
+                                throw new InvalidOperationException("terrain_probe_replay_diverged");
+                        }
+                        result["replay_max_error"] = error;
+                    }
+                    results.Add(new JsonObject { ["x"] = x, ["y"] = y, ["wait"] = wait, ["clear"] = clear, ["tiles"] = targets.DeepClone(), ["result"] = result });
+                }
+                return new JsonObject { ["results"] = results };
+            }
+            finally { VanillaFrame.RestoreInWorker(state); }
+        }
         if (command == "plan")
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();

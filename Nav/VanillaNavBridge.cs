@@ -184,6 +184,9 @@ public static class VanillaNavBridge
                     edits.Enqueue(new Edit(x, y, -1, pick));
             }
         }
+        var mining = edits.OrderBy(candidate => IsClearing(candidate) ? 0 : 1).ToArray();
+        edits.Clear();
+        foreach (var candidate in mining) edits.Enqueue(candidate);
         int platform = NavCoordinator.FindPlatformSlot(player);
         if (platform < 0) { LogEmptyCorridor(player); return true; }
         int type = player.inventory[platform].createTile;
@@ -204,6 +207,13 @@ public static class VanillaNavBridge
         if (edits.Count != 0 || phase != Phase.Braking) return;
         DiagLog.Write($"[engine-empty-corridor] player=({player.Center.X / 16:0.###},{player.Bottom.Y / 16:0.###}) route=({routeGoal.X / 16:0.###},{routeGoal.Y / 16:0.###}) nodes="
             + string.Join(";", corridor.Select(cell => $"{cell.x},{cell.y}:{(field.TryGetValue(cell, out int h) ? h : -1)}")));
+    }
+
+    static bool IsClearing(Edit candidate)
+    {
+        var tile = Main.tile[candidate.X, candidate.Y];
+        return candidate.Type < 0 && Main.tileCut[tile.TileType]
+            && !Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
     }
 
     static void Prepare(Player player)
@@ -241,7 +251,20 @@ public static class VanillaNavBridge
         batch.Clear();
         var targets = new JsonArray(new JsonArray(edit.X, edit.Y));
         int supportY = (int)Math.Floor(player.Bottom.Y / 16);
-        if (edit.Type < 0 && edit.Y < supportY)
+        if (IsClearing(edit))
+        {
+            while (edits.TryPeek(out var next) && IsClearing(next))
+            {
+                batch.Enqueue(edits.Dequeue());
+                targets.Add(new JsonArray(next.X, next.Y));
+            }
+            if (edits.TryPeek(out var obstacle) && obstacle.Type < 0 && obstacle.Y <= supportY)
+            {
+                batch.Enqueue(edits.Dequeue());
+                targets.Add(new JsonArray(obstacle.X, obstacle.Y));
+            }
+        }
+        else if (edit.Type < 0 && edit.Y < supportY)
         {
             while (edits.TryPeek(out var next) && next.Type < 0 && next.Y < supportY)
             {
