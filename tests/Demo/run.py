@@ -34,6 +34,10 @@ def main():
     shutil.copy2(source_world, root / "Worlds/Demo.wld")
     (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
     user_root = Path.home() / "Library/Application Support/Terraria/tModLoader"
+    manual = "--manual" in sys.argv
+    if manual or descent:
+        shutil.copy2(user_root / "Mods/DragonLens.tmod", root / "Mods/DragonLens.tmod")
+        (root / "Mods/enabled.json").write_text('["TerraBlind","Demo","DragonLens"]')
     user_config = user_root / "config.json"
     settings = json.loads(user_config.read_text()) if user_config.exists() else {}
     settings["CloudSavingDefault"] = False
@@ -42,11 +46,15 @@ def main():
         shutil.copy2(user_root / "input profiles.json", root / "input profiles.json")
     (root / "demo-result.json").unlink(missing_ok=True)
     tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
-    show = "--show" in sys.argv
+    show = "--show" in sys.argv or manual
     command = [str(tml / "dotnet_arm64/dotnet"), str(tml / "tModLoader.dll"), "-nosteam",
                "-tmlsavedirectory", str(root), "-vnavdescentcheck" if descent else "-vnavdemocheck"]
     if show:
         command.append("-vnavshow")
+    if manual:
+        command.append("-vnavmanualcheck")
+        if "--autostart" in sys.argv:
+            command.append("-vnavmanualstart")
     if "--wings" in sys.argv:
         command.append("-vnavwingsonly")
     if routed:
@@ -67,6 +75,10 @@ def main():
         deadline = time.monotonic() + (1000 if descent else 240)
         while time.monotonic() < deadline:
             output = (root / "demo-client.log").read_text()
+            if manual and "VNAV_MANUAL_READY" in output:
+                keep = True
+                print("MANUAL_WINDOW_READY pid=", process.pid, flush=True)
+                return
             if ("VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
