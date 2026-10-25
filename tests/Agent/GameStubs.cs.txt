@@ -25,7 +25,7 @@ namespace Terraria
         public bool HasAmmunition = true;
         public bool controlUp, controlDown, controlHook, ExtraJump;
         public float wingTime, manaCost = 1;
-        public int statMana = 200, statLifeMax2 = 100, itemTime;
+        public int statMana = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
         public Item HeldItem => inventory[selectedItem];
         public bool AnyExtraJumpUsable() => ExtraJump;
@@ -42,6 +42,7 @@ namespace Terraria
         public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
     }
+    public class NPC { public int type; }
     public class Item
     {
         public string Name = "";
@@ -93,6 +94,7 @@ namespace Terraria.ID
 }
 namespace Terraria.ModLoader
 {
+    public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }
     public class Mod
     {
         public TestLogger Logger = new();

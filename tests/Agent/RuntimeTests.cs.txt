@@ -120,6 +120,21 @@ static class RuntimeTests
             Check(HttpServerSystem.Calls.Count(p => p == "/nav_recede") == 1, "old navigation restarted after cancellation");
             Console.WriteLine("PASS: replacement instruction cancels active navigation and completes next task");
 
+            await PumpUntil(() => NativeAgent.Status == "idle");
+            await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                {"goal":"unfinished goal","steps":[{"id":"health","description":"300 permanent health","conditions":[{"kind":"permanent_health","count":300}]}]}
+                """).AsObject(), default));
+            NativeAgent.Submit("继续未完成目标");
+            await PumpUntil(() => NativeAgent.Status == "paused");
+            var paused = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(paused["task_plan"]["current_step"].ToString() == "health" && AgentTools.Plan.Incomplete,
+                "model final reply discarded unfinished task or marked it completed");
+            AgentTools.NewTask();
+            Check(AgentTools.Plan.Incomplete, "continuation cleared task cursor");
+            AgentTools.Plan.Reset();
+            NativeAgent.Stop();
+            Console.WriteLine("PASS: model ending does not complete a registered goal; follow-up retains task cursor");
+
             await TestNetwork();
             TestRoleSwitch();
             TestDefaultOwner();

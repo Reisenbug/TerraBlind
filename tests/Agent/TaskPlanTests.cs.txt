@@ -1,0 +1,63 @@
+using System;
+using System.Text.Json.Nodes;
+using TerraBlind;
+using Terraria;
+using Terraria.ID;
+
+static class TaskPlanTests
+{
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
+    static JsonObject Parse(string text) => JsonNode.Parse(text).AsObject();
+
+    public static void Run()
+    {
+        var plan = new AgentTaskPlan();
+        var hook = new AgentTaskEvidence();
+        Main.netMode = NetmodeID.SinglePlayer;
+        AgentTaskEvidence.Reset();
+        hook.OnKill(new NPC { type = 222 });
+        var request = Parse("""
+        {"goal":"test long task","steps":[
+          {"id":"health","description":"increase permanent health","conditions":[{"kind":"permanent_health","count":300}]},
+          {"id":"weapon","description":"obtain weapon","conditions":[{"kind":"item","type":191,"count":1}]},
+          {"id":"finish","description":"all final requirements","conditions":[{"kind":"permanent_health","count":300},{"kind":"item","type":191,"count":1},{"kind":"npc_kills","type":222,"count":1}]}
+        ]}
+        """);
+        plan.Create(request, AgentTaskEvidence.Measure);
+        Main.LocalPlayer.statLifeMax = 100;
+        Main.LocalPlayer.statLifeMax2 = 400;
+        Check(plan.Advance("health", AgentTaskEvidence.Measure)["verified"].GetValue<bool>() == false,
+            "temporary buff health completed permanent-health goal");
+        try { plan.Advance("finish", AgentTaskEvidence.Measure); throw new Exception("skipped steps"); }
+        catch (InvalidOperationException) { }
+        Main.LocalPlayer.statLifeMax = 300;
+        plan.Advance("health", AgentTaskEvidence.Measure);
+        Main.LocalPlayer.inventory[5] = new Item { type = 999, Name = "same name", stack = 1 };
+        Check(!plan.Advance("weapon", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "wrong type counted");
+        Main.LocalPlayer.inventory[5].type = 191;
+        plan.Advance("weapon", AgentTaskEvidence.Measure);
+        Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "old kill counted");
+        plan.Record("nav_to", "{\"status\":\"failed\",\"reason\":\"no_path\"}");
+        plan.Block("finish", "no_path");
+        try { plan.Create(request, AgentTaskEvidence.Measure); throw new Exception("lost active plan"); }
+        catch (InvalidOperationException) { }
+        var snapshot = plan.Snapshot();
+        snapshot["steps"][2]["failure"] = "modified externally";
+        Check(plan.Snapshot()["steps"][2]["failure"].ToString() == "no_path", "snapshot aliases mutable plan");
+        Check(plan.Snapshot()["steps"][2]["last_action"]["result"].ToString().Contains("no_path"), "failure evidence lost");
+        hook.OnKill(new NPC { type = 222 });
+        Main.LocalPlayer.inventory[5].stack = 0;
+        Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "spent final weapon ignored");
+        Main.LocalPlayer.inventory[5].stack = 1;
+        plan.Advance("finish", AgentTaskEvidence.Measure);
+        Check(!plan.Incomplete && plan.Snapshot()["status"].ToString() == "completed", "could not resume verified step");
+        Main.netMode = NetmodeID.MultiplayerClient;
+        try { new AgentTaskPlan().Create(request, AgentTaskEvidence.Measure); throw new Exception("unverified multiplayer kill accepted"); }
+        catch (InvalidOperationException) { }
+        Main.netMode = NetmodeID.SinglePlayer;
+        plan.Reset(); AgentTaskEvidence.Reset();
+        Main.LocalPlayer.statLifeMax = Main.LocalPlayer.statLifeMax2 = 100;
+        Main.LocalPlayer.inventory[5] = new Item();
+        Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
+    }
+}

@@ -174,7 +174,13 @@ public class NativeAgent : ModSystem
                     if (report["ended"] != null) break;
                     input = "原目标：" + goal + "\n按玩家补充或本会话唯一一次自动受阻求助处理。完成具体操作或说明限制后结束本轮，不轮询、不等待、不重启战斗；Jev会继续控制。\n战况：" + report.ToJsonString();
                 }
-                await OnMain(() => { Status = "idle"; return true; }, token);
+                await OnMain(() =>
+                {
+                    if (AgentTools.Plan.Incomplete)
+                        Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    else Status = "idle";
+                    return true;
+                }, token);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
@@ -183,6 +189,7 @@ public class NativeAgent : ModSystem
                 MainQueue.Enqueue(() =>
                 {
                     if (token.IsCancellationRequested) return;
+                    AgentTools.Plan.Record("host_failure", error);
                     AgentTools.Stop(); Status = "failed";
                     DiagLog.Write("[agent] " + error);
                     AgentChat.Say("这次没执行完：" + error);
@@ -222,6 +229,8 @@ public class NativeAgent : ModSystem
     public override void OnWorldUnload()
     {
         Cancel();
+        AgentTools.Plan.Reset();
+        AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();
         _codex?.Dispose(); _codex = null;

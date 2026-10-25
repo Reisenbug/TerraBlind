@@ -12,6 +12,7 @@ namespace TerraBlind;
 
 public static class AgentTools
 {
+    internal static readonly AgentTaskPlan Plan = new();
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
@@ -71,6 +72,8 @@ public static class AgentTools
         state["other_players"] = players;
         state["combat"] = PvpDuel.Report();
         state["inventory_slots"] = PvpInventory.Snapshot();
+        state["task_plan"] = Plan.Snapshot();
+        state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
         return state.ToJsonString();
     }, token);
 
@@ -98,6 +101,7 @@ public static class AgentTools
             ["hp"] = player.statLife, ["on_ground"] = player.velocity.Y == 0f
         };
         result["got"] = got; result["lost"] = lost;
+        result["task_plan"] = Plan.Snapshot();
         if (progress.Count > 0) result["进度"] = progress;
         return result.ToJsonString();
     }, token);
@@ -139,6 +143,8 @@ public static class AgentTools
         try
         {
             string output = await ExecuteCore(name, args, token);
+            if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step"))
+                await NativeAgent.OnMain(() => { Plan.Record(name, output); return true; }, token);
             if (lease != 0)
                 return await NativeAgent.OnMain(() =>
                 {
@@ -174,6 +180,17 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "task_plan":
+                result = await NativeAgent.OnMain(() => Plan.Create(args, AgentTaskEvidence.Measure), token);
+                break;
+            case "task_step":
+                result = await NativeAgent.OnMain(() => Text(args, "action") switch
+                {
+                    "verify" => Plan.Advance(Text(args, "id"), AgentTaskEvidence.Measure),
+                    "block" => Plan.Block(Text(args, "id"), Text(args, "reason")),
+                    _ => throw new InvalidOperationException("action 必须是 verify 或 block。")
+                }, token);
+                break;
             case "combat_reposition":
                 var destination = await NativeAgent.OnMain(() =>
                 {
