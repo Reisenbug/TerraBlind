@@ -1,9 +1,12 @@
 using System;
 using System.IO;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
@@ -25,6 +28,13 @@ public sealed class Engine : ModSystem
     public override void Load() => Main.OnEnginePreload += Run;
     public override void Unload() => Main.OnEnginePreload -= Run;
 
+    sealed class Work
+    {
+        public JsonObject Request;
+        public long Id;
+        public int Cancelled;
+    }
+
     void Run()
     {
         if (!Main.dedServ || !Terraria.Program.LaunchParameters.TryGetValue("-vanillaforecastport", out string value)) return;
@@ -37,13 +47,46 @@ public sealed class Engine : ModSystem
             using var client = listener.AcceptTcpClient(); client.NoDelay = true;
             using var reader = new StreamReader(client.GetStream());
             using var writer = new StreamWriter(client.GetStream()) { AutoFlush = true };
-            string line;
-            while ((line = reader.ReadLine()) != null)
+            using var incoming = new BlockingCollection<Work>();
+            var requests = new ConcurrentDictionary<long, Work>();
+            long anonymousId = 0;
+            _ = Task.Run(() =>
             {
-                var request = JsonNode.Parse(line).AsObject();
+                try
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        var request = JsonNode.Parse(line).AsObject();
+                        long id = request["request_id"]?.GetValue<long>() ?? Interlocked.Decrement(ref anonymousId);
+                        if (request["command"]?.GetValue<string>() == "cancel")
+                        {
+                            if (requests.TryGetValue(id, out var cancelled)) Interlocked.Exchange(ref cancelled.Cancelled, 1);
+                            continue;
+                        }
+                        var work = new Work { Request = request, Id = id };
+                        requests[id] = work; incoming.Add(work);
+                    }
+                }
+                catch (Exception error) { Console.WriteLine(error); }
+                finally { incoming.CompleteAdding(); }
+            });
+            foreach (var work in incoming.GetConsumingEnumerable())
+            {
+                var request = work.Request;
                 if (request["command"]?.GetValue<string>() == "close") { writer.WriteLine("{\"closed\":true}"); break; }
-                try { writer.WriteLine(Handle(request).ToJsonString()); }
+                VanillaPrediction.CancellationRequested = () => Volatile.Read(ref work.Cancelled) != 0;
+                try
+                {
+                    if (Terraria.Program.LaunchParameters.ContainsKey("-forecasttrace")) Console.WriteLine("FORECAST_REQUEST_STARTED " + work.Id);
+                    VanillaPrediction.CheckCancellation();
+                    var result = Handle(request); result["request_id"] = work.Id;
+                    writer.WriteLine(result.ToJsonString());
+                }
+                catch (OperationCanceledException)
+                { writer.WriteLine(new JsonObject { ["status"] = "cancelled", ["request_id"] = work.Id }.ToJsonString()); }
                 catch (Exception error) { writer.WriteLine(new JsonObject { ["error"] = error.ToString() }.ToJsonString()); }
+                finally { VanillaPrediction.CancellationRequested = null; requests.TryRemove(work.Id, out _); }
             }
             Environment.Exit(0);
         }
@@ -55,6 +98,52 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "route_reuse_contract")
+        {
+            Setup(new JsonObject());
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            var keys = Enumerable.Repeat(2, 180).ToArray();
+            var forecast = new VanillaPrediction(snapshot).Predict(keys, false);
+            var plan = new JsonObject { ["status"] = "planned", ["selected"] = "reuse_walk", ["wait_frames"] = 0,
+                ["context"] = snapshot.DeepClone(), ["anchor"] = VanillaPrediction.Observe(source, false),
+                ["forecast"] = forecast, ["route_progress"] = 100d,
+                ["controls"] = new JsonArray(keys.Select(key => JsonValue.Create(key)).ToArray()) };
+            var controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_replanning"));
+            if (!controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0)))
+                throw new InvalidOperationException("reuse_install_failed");
+            double checksMs = 0;
+            int firstRequest = -1;
+            for (int frame = 1; frame <= 180; frame++)
+            {
+                VanillaPrediction.Advance(source, (VanillaKeys)controller.InputAt(frame));
+                controller.Poll(frame, source, 0);
+                var expected = forecast["frames"][frame - 1];
+                if (Vector2.Distance(source.position, new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>())) > .001f)
+                    throw new InvalidOperationException("reused_route_diverged");
+                long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool needsPlan = controller.NeedsPlan(frame, source, false);
+                checksMs += System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                if (needsPlan) { firstRequest = frame; break; }
+            }
+            if (firstRequest != 138) throw new InvalidOperationException("reuse_did_not_preserve_planning_runway:" + firstRequest);
+            foreach (string change in new[] { "velocity", "tile", "equipment", "distant_tile" })
+            {
+                source = VanillaFrame.RestoreInWorker(snapshot);
+                controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_replanning"));
+                controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0));
+                if (change == "velocity") source.velocity.X += 1;
+                if (change == "equipment") source.armor[3].SetDefaults(ItemID.SandstorminaBottle);
+                if (change is "tile" or "distant_tile")
+                {
+                    var tile = Main.tile[X + (change == "tile" ? 1 : 80), Y - 1];
+                    tile.HasTile = true; tile.TileType = TileID.Stone;
+                }
+                bool needsPlan = controller.NeedsPlan(0, source, false);
+                if (needsPlan != (change != "distant_tile")) throw new InvalidOperationException("reuse_invalidation:" + change);
+            }
+            return new JsonObject { ["passed"] = true, ["first_request_frame"] = firstRequest,
+                ["validation_total_ms"] = checksMs, ["validated_frames"] = firstRequest, ["max_error"] = 0 };
+        }
         if (command == "damage_cutoff_contract")
         {
             Setup(new JsonObject());
@@ -387,6 +476,18 @@ public sealed class Engine : ModSystem
             controller.Request(snapshot, 0, source.position, 0); source.direction = -source.direction;
             controller.Poll(1, source, 0);
             if (controller.Accepted != 1) throw new InvalidOperationException("aim_facing_invalidated_movement");
+            foreach (bool terrainChange in new[] { false, true })
+            {
+                CancellationToken received = default;
+                delayed = new TaskCompletionSource<JsonObject>();
+                controller = new VanillaAsyncMovement((_, token) => { received = token; return delayed.Task; });
+                controller.Request(snapshot, 0, source.position, 0);
+                if (terrainChange) controller.TerrainChanged(X, Y, source, 1);
+                else controller.Poll(1, source, 1);
+                if (!received.IsCancellationRequested || controller.Busy)
+                    throw new InvalidOperationException("obsolete_request_was_not_cancelled");
+                delayed.SetCanceled();
+            }
             return new JsonObject { ["passed"] = true, ["scope"] = "coordinator contract with a synthetic transport, not movement validation" };
         }
         if (command == "terrain_probe")

@@ -43,6 +43,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
     VanillaAsyncMovement movement;
+    CancellationTokenSource terrainCancellation;
+    Task<JsonObject> terrainRequest;
     int previousAccepted;
     int stalled;
     float closest;
@@ -65,9 +67,25 @@ public sealed class VanillaNavigationDemo : ModSystem
     internal void UpdateNavigationGoal(Vector2 target) { goal = target; closest = Vector2.Distance(Main.LocalPlayer.position, goal); }
     internal void PauseForTerrain()
     {
+        movement?.CancelPending();
         terrainPaused = true; movement = null; Status = "推演地形动作";
     }
-    internal Task<JsonObject> PrepareTerrain(JsonObject request) => Task.Run(() => worker.Send(request));
+    internal void CancelTerrain()
+    {
+        var cancelled = terrainCancellation; terrainCancellation = null;
+        cancelled?.Cancel();
+        if (terrainRequest != null)
+            _ = terrainRequest.ContinueWith(task => { _ = task.Exception; cancelled?.Dispose(); }, TaskScheduler.Default);
+        else cancelled?.Dispose();
+        terrainRequest = null;
+    }
+    internal Task<JsonObject> PrepareTerrain(JsonObject request)
+    {
+        CancelTerrain();
+        terrainCancellation = new CancellationTokenSource();
+        var token = terrainCancellation.Token;
+        return terrainRequest = Task.Run(() => worker.Send(request, token));
+    }
     internal void TerrainChanged(int x, int y) => movement?.TerrainChanged(x, y, Main.LocalPlayer, tick);
     internal bool ResumeTerrain(JsonObject result)
     {
@@ -108,7 +126,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     public void Stop(string reason = "已停止", bool closeWorker = false)
     {
         running = false; NavigationOwned = false; terrainPaused = false; Status = reason;
-        cancellation?.Cancel(); movement = null;
+        cancellation?.Cancel(); movement?.CancelPending(); movement = null; CancelTerrain();
         if (closeWorker) { worker?.Dispose(); worker = null; }
         if (startup != null)
         {
@@ -119,7 +137,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     }
 
     VanillaAsyncMovement ConnectMovement(VanillaWorkerConnection connection)
-        => new(request =>
+        => new((request, token) =>
         {
             if (NavigationOwned)
             {
@@ -127,7 +145,7 @@ public sealed class VanillaNavigationDemo : ModSystem
                 request["terminal"] = VanillaNavBridge.Terminal;
                 request["route_direction"] = VanillaNavBridge.RouteDirection;
             }
-            return Task.Run(() => connection.Send(request));
+            return Task.Run(() => connection.Send(request, token));
         });
 
     void ResetInput(On_Player.orig_ResetControls original, Player player) { original(player); ApplyInput(player); }
@@ -200,7 +218,7 @@ public sealed class VanillaNavigationDemo : ModSystem
                 route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
             }
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
-            if (!movement.Busy)
+            if (!movement.Busy && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal)))
             {
                 if ((player.itemAnimation > 0 || player.itemTime > 0) && !(NavigationOwned && player.HeldItem.pick > 0)) return;
                 long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();

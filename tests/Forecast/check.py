@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--cancel-probe", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
@@ -80,6 +81,8 @@ def main():
     command = [str(tml / "dotnet_arm64/dotnet"), "tModLoader.dll", "-server", "-nosteam",
                "-tmlsavedirectory", str(args.root), "-world", str(world), "-autocreate", "1",
                "-port", "17978", "-vanillaforecastport", str(args.port)]
+    if args.cancel_probe:
+        command.append("-forecasttrace")
     log = (args.root / "engine.log").open("w")
     process = subprocess.Popen(command, cwd=tml, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     worker = None
@@ -95,6 +98,33 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.cancel_probe:
+            request = json.loads(args.cancel_probe.read_text())["request"]
+            baseline = worker.call(**request)
+            latencies = []
+            for request_id in range(100, 104):
+                request["request_id"] = request_id
+                worker.stream.write(json.dumps(request) + "\n")
+                worker.stream.flush()
+                deadline = time.monotonic() + 5
+                while f"FORECAST_REQUEST_STARTED {request_id}" not in (args.root / "engine.log").read_text():
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("Cancellation test request did not start")
+                    time.sleep(.005)
+                time.sleep(.05)
+                started = time.perf_counter()
+                worker.stream.write(json.dumps(dict(command="cancel", request_id=request_id)) + "\n")
+                worker.stream.flush()
+                cancelled = json.loads(worker.stream.readline())
+                elapsed = (time.perf_counter() - started) * 1000
+                assert cancelled["status"] == "cancelled" and cancelled["request_id"] == request_id, cancelled
+                assert elapsed < 500, elapsed
+                latencies.append(elapsed)
+                resumed = worker.call(**{key: value for key, value in request.items() if key != "request_id"})
+                assert resumed["controls"] == baseline["controls"]
+                assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
+            print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
+            return
         if args.benchmark:
             request = json.loads(args.benchmark.read_text())["request"]
             results = []
@@ -165,6 +195,9 @@ def main():
         cleanup = worker.call("async_cleanup")
         assert cleanup["passed"]
         print("ASYNC_REJECTION_CLEANUP_CONTRACT_PASS", flush=True)
+        reuse = worker.call("route_reuse_contract")
+        assert reuse["passed"]
+        print("ROUTE_REUSE_CONTRACT_PASS", reuse, flush=True)
         cutoff = worker.call("damage_cutoff_contract")
         assert cutoff["passed"]
         print("DAMAGE_CUTOFF_CONTRACT_PASS", cutoff, flush=True)

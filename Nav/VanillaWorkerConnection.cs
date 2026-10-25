@@ -16,6 +16,8 @@ public sealed class VanillaWorkerConnection : IDisposable
     StreamReader reader;
     StreamWriter writer;
     readonly SemaphoreSlim serial = new(1);
+    readonly SemaphoreSlim writes = new(1);
+    long nextRequest;
     TextWriter log;
     readonly object lifetime = new();
     bool started, disposed;
@@ -61,15 +63,35 @@ public sealed class VanillaWorkerConnection : IDisposable
         catch { worker.client?.Dispose(); worker.Dispose(); throw; }
     }
 
-    public async Task<JsonObject> Send(JsonObject request)
+    async Task Write(JsonObject request)
     {
-        await serial.WaitAsync();
+        await writes.WaitAsync();
+        try { await writer.WriteLineAsync(request.ToJsonString()); }
+        finally { writes.Release(); }
+    }
+
+    async Task Cancel(long id)
+    {
+        try { await Write(new JsonObject { ["command"] = "cancel", ["request_id"] = id }); }
+        catch (Exception error) when (error is IOException or ObjectDisposedException) { }
+    }
+
+    public async Task<JsonObject> Send(JsonObject request, CancellationToken cancellation = default)
+    {
+        await serial.WaitAsync(cancellation);
         try
         {
             var timer = Stopwatch.StartNew();
-            await writer.WriteLineAsync(request.ToJsonString());
+            cancellation.ThrowIfCancellationRequested();
+            long id = Interlocked.Increment(ref nextRequest);
+            request["request_id"] = id;
+            await Write(request);
+            using var registration = cancellation.Register(() => _ = Cancel(id));
             string line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20));
             var result = JsonNode.Parse(line ?? throw new IOException("推演连接已断开")).AsObject();
+            cancellation.ThrowIfCancellationRequested();
+            if (result["request_id"]?.GetValue<long>() != id && result["error"] == null)
+                throw new IOException("推演响应与请求不匹配");
             if (result["error"] != null) throw new InvalidOperationException(result["error"].GetValue<string>());
             result["roundtrip_ms"] = timer.Elapsed.TotalMilliseconds;
             return result;

@@ -231,7 +231,8 @@ public static class VanillaFrame
         && type != TileID.Cobweb && TileID.Sets.TouchDamageImmediate[type] == 0
         && !TileID.Sets.TouchDamageHot[type] && !TileID.Sets.TouchDamageBleeding[type];
 
-    public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null)
+    public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null,
+        int[] cachedTiles = null, int firstFrame = 0, int frameCount = int.MaxValue)
     {
         difference = "active player state";
         bool navigation = state["navigation"]?.GetValue<bool>() == true;
@@ -243,7 +244,7 @@ public static class VanillaFrame
             || !JsonNode.DeepEquals(state["armor"], Items(player.armor))
             || !JsonNode.DeepEquals(state["misc_equips"], Items(player.miscEquips))) return false;
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
-        var tiles = ReadTiles(state);
+        var tiles = cachedTiles ?? ReadTiles(state);
         var bounds = new Rectangle(x0 * 16, y0 * 16, width * 16, state["area"][3].GetValue<int>() * 16);
         difference = "dynamic entity";
         if (!navigation && (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
@@ -253,16 +254,19 @@ public static class VanillaFrame
         if (navigation && trajectory != null)
         {
             corridor = new();
-            foreach (var frame in trajectory)
+            foreach (var frame in trajectory.Skip(firstFrame).Take(frameCount))
             {
                 int fx = (int)Math.Floor(frame["x"].GetValue<float>() / 16), fy = (int)Math.Floor(frame["y"].GetValue<float>() / 16);
                 for (int x = fx - 2; x <= fx + 3; x++)
                 for (int y = fy - 2; y <= fy + 5; y++) corridor.Add((x, y));
             }
         }
-        for (int i = 0; i < tiles.Length / 10; i++)
+        var indices = corridor == null ? Enumerable.Range(0, tiles.Length / 10)
+            : corridor.Where(cell => cell.Item1 >= x0 && cell.Item1 < x0 + width
+                && cell.Item2 >= y0 && cell.Item2 < y0 + tiles.Length / 10 / width)
+                .Select(cell => (cell.Item2 - y0) * width + cell.Item1 - x0);
+        foreach (int i in indices)
         {
-            if (corridor != null && !corridor.Contains((x0 + i % width, y0 + i / width))) continue;
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
             if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }

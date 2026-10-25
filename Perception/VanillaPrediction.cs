@@ -13,6 +13,11 @@ public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down 
 
 public sealed class VanillaPrediction
 {
+    internal static Func<bool> CancellationRequested { get; set; }
+    internal static void CheckCancellation()
+    {
+        if (CancellationRequested?.Invoke() == true) throw new OperationCanceledException();
+    }
     public readonly record struct MovementSample(Vector2 Position, Vector2 Velocity, int Hp, bool Dead,
         float WingTime, int AvailableJumps, bool Grounded);
     readonly JsonObject checkpoint;
@@ -42,6 +47,7 @@ public sealed class VanillaPrediction
 
     public static void Advance(Player player, VanillaKeys keys)
     {
+        CheckCancellation();
         VanillaFrame.RequireWorker();
         if (((int)keys & ~31) != 0 || keys.HasFlag(VanillaKeys.Left) && keys.HasFlag(VanillaKeys.Right))
             throw new ArgumentException("invalid_keys");
@@ -94,6 +100,7 @@ public sealed class VanillaPrediction
     public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true,
         System.Collections.Generic.List<MovementSample> samples = null, bool stopOnDamage = false)
     {
+        CheckCancellation();
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > 240) throw new ArgumentException("horizon_must_be_1_to_240");
         var trace = new JsonArray();

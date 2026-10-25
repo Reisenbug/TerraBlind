@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
@@ -11,11 +12,12 @@ namespace TerraBlind;
 public sealed class VanillaAsyncMovement
 {
     public const int LeadFrames = 30;
-    readonly Func<JsonObject, Task<JsonObject>> send;
+    readonly Func<JsonObject, CancellationToken, Task<JsonObject>> send;
     readonly Dictionary<long, int> inputs = new();
     readonly Dictionary<long, int> history = new();
     readonly Queue<int> responses = new();
     Task<JsonObject> pending;
+    CancellationTokenSource pendingCancellation;
     long handoff;
     long requestedAt;
     bool completionObserved;
@@ -45,18 +47,55 @@ public sealed class VanillaAsyncMovement
     long activeStart;
     int activeOffset;
     JsonArray activeForecast;
+    JsonObject activeContext;
+    int[] activeTiles;
+    int activeUsefulEnd;
 
-    public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) => send = transport;
+    public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) : this((request, _) => transport(request)) { }
+    public VanillaAsyncMovement(Func<JsonObject, CancellationToken, Task<JsonObject>> transport) => send = transport;
+
+    public void CancelPending()
+    {
+        var task = pending; var cancellation = pendingCancellation;
+        pending = null; pendingCancellation = null;
+        cancellation?.Cancel();
+        if (task == null) { cancellation?.Dispose(); return; }
+        _ = task.ContinueWith(completed => { _ = completed.Exception; cancellation?.Dispose(); }, TaskScheduler.Default);
+    }
 
     public int InputAt(long tick) => inputs.TryGetValue(tick, out int key) ? key : 0;
     public bool HasInputAt(long tick) => inputs.ContainsKey(tick);
+    public bool NeedsPlan(long tick, Player player, bool terminal)
+    {
+        if (terminal || ActiveResult == null || activeContext == null
+            || ActiveResult["route_progress"]?.GetValue<double>() <= 0
+            || inputs.Count <= PlanningLead + 12) return true;
+        int index = checked((int)(tick - activeStart)) + activeOffset;
+        if (activeUsefulEnd - index <= PlanningLead + 12) return true;
+        var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
+            : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
+        if (expected == null) return true;
+        if (!StateMatches(player, expected, true, out string reason, out string mismatch))
+        {
+            LastMismatch = mismatch; Reject(reason); return true;
+        }
+        if (!VanillaFrame.ContextMatches(activeContext, player, out string difference, activeForecast,
+            activeTiles, Math.Max(0, index + 1), 12))
+        {
+            LastMismatch = difference; Reject("context_changed"); return true;
+        }
+        return false;
+    }
+
+    static int LastMovingFrame(JsonArray frames)
+    {
+        for (int i = frames.Count - 1; i >= 0; i--)
+            if (Math.Abs(frames[i]["vx"].GetValue<float>()) + Math.Abs(frames[i]["vy"].GetValue<float>()) > .01f) return i;
+        return -1;
+    }
     public void TerrainChanged(int x, int y, Player player, long tick)
     {
-        if (pending != null)
-        {
-            _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-            pending = null;
-        }
+        CancelPending();
         if (activeForecast == null) return;
         var changed = new Rectangle(x * 16 - 16, y * 16 - 16, 48, 48);
         for (int i = activeOffset; i < activeForecast.Count; i++)
@@ -85,13 +124,16 @@ public sealed class VanillaAsyncMovement
         if (!VanillaFrame.ContextMatches(result["context"].AsObject(), player, out var difference, frames))
         { LastMismatch = difference; return false; }
         LastMismatch = null;
-        inputs.Clear(); history.Clear(); pending = null; currentRevision = 0;
+        CancelPending();
+        inputs.Clear(); history.Clear(); currentRevision = 0;
         context = result["context"].AsObject(); LastResult = result; ActiveResult = result;
         lastRequest = new JsonObject { ["snapshot"] = context.DeepClone(), ["x"] = goal.X, ["y"] = goal.Y };
         var controls = result["controls"].AsArray();
         for (int i = offset; i < controls.Count; i++) inputs[tick + i - offset + 1] = controls[i].GetValue<int>();
         activeStart = tick + 1; activeOffset = offset; ActivePlan = result["selected"].GetValue<string>();
         activeForecast = frames;
+        activeContext = context; activeTiles = VanillaFrame.ReadTiles(context);
+        activeUsefulEnd = LastMovingFrame(frames);
         ActiveGoal = goal; ActiveAnchor = player.position;
         AcceptedRoute = frames.Skip(offset).Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
         Accepted++; Status = "accepted";
@@ -106,7 +148,11 @@ public sealed class VanillaAsyncMovement
             | (player.controlUp ? 8 : 0) | (player.controlDown ? 16 : 0);
         foreach (long old in history.Keys.Where(key => key < tick - 120).ToArray()) history.Remove(old);
         foreach (long old in inputs.Keys.Where(key => key <= tick).ToArray()) inputs.Remove(old);
-        if (revision != currentRevision) { inputs.Clear(); ActiveResult = null; currentRevision = revision; }
+        if (revision != currentRevision)
+        {
+            if (pending != null) Reject("revision_changed");
+            inputs.Clear(); ActiveResult = null; currentRevision = revision;
+        }
         if (pending != null)
         {
             var sample = VanillaPrediction.Observe(player, false);
@@ -166,6 +212,8 @@ public sealed class VanillaAsyncMovement
         long start = rebase || catchUp ? tick : handoff;
         activeStart = start + 1; activeOffset = offset;
         activeForecast = forecast;
+        activeContext = context; activeTiles = VanillaFrame.ReadTiles(context);
+        activeUsefulEnd = LastMovingFrame(forecast);
         ActiveResult = result;
         ActivePlan = result["selected"]?.GetValue<string>() ?? "unknown";
         ActiveGoal = new Vector2(lastRequest["x"].GetValue<float>(), lastRequest["y"].GetValue<float>());
@@ -174,6 +222,7 @@ public sealed class VanillaAsyncMovement
         if (catchUp) LateAccepted++;
         else if (rebase && tick != handoff) Rebased++;
         Accepted++; Status = "accepted"; LastRejection = null; LastMismatch = null; pending = null;
+        pendingCancellation?.Dispose(); pendingCancellation = null;
     }
 
     static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
@@ -200,7 +249,7 @@ public sealed class VanillaAsyncMovement
         return true;
     }
 
-    void Reject(string reason, bool clear = true) { if (clear) { inputs.Clear(); ActiveResult = null; } Rejected++; Status = reason; LastRejection = reason; pending = null; }
+    void Reject(string reason, bool clear = true) { if (clear) { inputs.Clear(); ActiveResult = null; } Rejected++; Status = reason; LastRejection = reason; CancelPending(); }
 
     public bool Request(JsonObject snapshot, long tick, Vector2 goal, int revision, bool takeOwnership = false)
     {
@@ -215,6 +264,7 @@ public sealed class VanillaAsyncMovement
                 .TakeWhile(i => inputs.ContainsKey(handoff + i)).Select(i => JsonValue.Create(InputAt(handoff + i))).ToArray()) };
         context = request["snapshot"].AsObject();
         lastRequest = request; observations = new JsonArray(); LastDivergence = null;
-        pending = send(request); Status = "planning"; return true;
+        pendingCancellation = new CancellationTokenSource();
+        pending = send(request, pendingCancellation.Token); Status = "planning"; return true;
     }
 }
