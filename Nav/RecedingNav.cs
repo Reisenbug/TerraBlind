@@ -477,7 +477,9 @@ namespace TerraBlind
             _prevCell = cell;
 
             _altered += res.Altered;
-            if (res.Altered > 0) VanillaNavBridge.TerrainAction();
+            if (res.Steps.Exists(step => step.Dig || step.Pillar || step.Bridge
+                || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))
+                VanillaNavBridge.TerrainAction();
             if (_altered >= RebuildAltered)
                 RebuildFieldAsync($"altered {_altered} tiles");
 

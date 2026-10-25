@@ -74,9 +74,6 @@ public sealed class Engine : ModSystem
                 guidance: guidance, routeDirection: 1);
             if (staleGoal["controls"].AsArray().Any(key => (key.GetValue<int>() & 3) != 2))
                 throw new InvalidOperationException("stale_waypoint_reversed_travel");
-            if (walk["candidates"].AsArray().Any(candidate => candidate["name"].GetValue<string>().StartsWith("retreat")
-                || candidate["name"].GetValue<string>() == "wait"))
-                throw new InvalidOperationException("fallback_competed_with_safe_forward_route");
             var queuedSnapshot = VanillaFrame.Capture(source, VanillaLocalPlanner.SnapshotArea(source, goal, 90), true);
             var handoff = new VanillaPrediction(queuedSnapshot).Predict(Enumerable.Repeat(2, 90).ToArray(), false, true);
             if (handoff["end_snapshot"] is not JsonObject future)

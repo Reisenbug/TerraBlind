@@ -11,6 +11,7 @@ public static class VanillaNavBridge
     public static bool Enabled;
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
+    public static bool TerrainOwned { get; private set; }
     static Dictionary<(int, int), int> field;
     static Vector2? failedAt;
     static int bestH = int.MaxValue;
@@ -19,14 +20,15 @@ public static class VanillaNavBridge
     public static void Reset()
     {
         if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
-        failedAt = null; bestH = int.MaxValue; field = null; Terminal = false; RouteDirection = 0;
+        failedAt = null; bestH = int.MaxValue; field = null; Terminal = false; RouteDirection = 0; TerrainOwned = false;
     }
 
     public static bool Tick(Player player, int gx, int gy)
     {
         if (!Enabled) return false;
         var demo = VanillaNavigationDemo.Instance;
-        if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || ItemUseCoordinator.IsActive)
+        if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || ItemUseCoordinator.IsActive
+            || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
         {
             if (demo.NavigationOwned) demo.Stop("地形操作接管");
             return false;
@@ -42,21 +44,29 @@ public static class VanillaNavBridge
         if (demo.NavigationOwned && demo.PlannerReady && Main.GameUpdateCount - progressAt > 240)
         {
             DiagLog.Write($"[engine-nav] no H progress at ({cx},{cy}); yielding to terrain actions");
-            failedAt = player.position; demo.Stop("局部移动无进展，交给挖掘/搭建"); return false;
+            TerrainAction(); return false;
         }
         Vector2? target = null;
         var destination = new Vector2(gx * 16 + 8 - player.width / 2, (gy + 1) * 16 - player.height);
         Terminal = Math.Abs(cx - gx) + Math.Abs(cy - gy) <= 12
             && !Collision.SolidCollision(destination, player.width, player.height);
         var cell = (x: cx, y: cy);
+        bool blocked = false;
         for (int i = 0; i < 24 && cell != (gx, gy); i++)
         {
             var direction = MazeWand.FieldDir(field, cell.x, cell.y);
             if (direction == (0, 0)) break;
             cell = (cell.x + direction.dx, cell.y + direction.dy);
             var position = new Vector2(cell.x * 16 + 8 - player.width / 2, (cell.y + 1) * 16 - player.height);
+            if (Collision.SolidCollision(position, player.width, player.height)) { blocked = true; continue; }
             if (Vector2.Distance(player.position, position) < 40) continue;
-            if (!Collision.SolidCollision(position, player.width, player.height)) target = position;
+            target = position;
+        }
+        if (TerrainOwned)
+        {
+            if (blocked || !target.HasValue) return false;
+            TerrainOwned = false;
+            DiagLog.Write($"[engine-nav-owner] movement: corridor clear at ({cx},{cy})");
         }
         if (Terminal) target = destination;
         if (!target.HasValue)
@@ -92,5 +102,10 @@ public static class VanillaNavBridge
         return VanillaFrame.PackInts(result.ToArray());
     }
 
-    public static void TerrainAction() { failedAt = null; bestH = int.MaxValue; }
+    public static void TerrainAction()
+    {
+        if (!TerrainOwned) DiagLog.Write("[engine-nav-owner] terrain");
+        TerrainOwned = true; failedAt = null; bestH = int.MaxValue;
+        if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop("地形操作接管");
+    }
 }

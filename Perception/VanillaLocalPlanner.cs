@@ -102,15 +102,12 @@ public sealed class VanillaLocalPlanner
         JsonObject selectedForecast = null;
         double restoreMs = 0, updateMs = 0, observeMs = 0, cleanupMs = 0;
         var frames = new List<VanillaPrediction.MovementSample>(Horizon);
-        bool forwardProgress = false;
         bool Forward((string name, int[] keys) candidate) => candidate.keys.All(key => (key & 3) == direction);
-        var ordered = transit ? candidates.OrderBy(candidate => Forward(candidate) ? 0 : 1).ToArray() : candidates.ToArray();
         try
         {
-        foreach (var candidate in ordered)
+        foreach (var candidate in candidates)
         {
             bool forward = Forward(candidate);
-            if (transit && !forward && forwardProgress) break;
             var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames);
             var timing = forecast["timing"];
             restoreMs += timing["restore_ms"].GetValue<double>();
@@ -135,12 +132,10 @@ public sealed class VanillaLocalPlanner
                     : frames.Average(distance) + .25 * distance(frames[^1]);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
-                if (transit && progress && !forwardProgress) best = double.PositiveInfinity;
-                if ((!transit || !forwardProgress || progress) && score < best - .01)
+                if (score < best - .01)
                 {
                     best = score; selected = candidate.name; chosen = candidate.keys;
                 }
-                forwardProgress |= progress;
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
@@ -160,7 +155,7 @@ public sealed class VanillaLocalPlanner
                     towardGoal = field.TryGetValue(startCell, out int startCost) && field.TryGetValue(endCell, out int endCost)
                         && endCost < startCost;
                 }
-                if (towardGoal && (!transit || forwardProgress)) break;
+                if (towardGoal) break;
             }
         }
         if (chosen.Length > 0)
