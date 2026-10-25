@@ -50,6 +50,30 @@ static class RuntimeTests
             Check(queued.IsCanceled && !executed, "cancelled main-thread callback executed");
             Console.WriteLine("PASS: cancelled queued game operation never executes");
 
+            string previousKey = Config.I.AgentApiKey;
+            Config.I.AgentApiKey = "";
+            NativeAgent.Submit("检查配置失败");
+            Agent.PostUpdateEverything();
+            Check(NativeAgent.Status == "failed", "invalid configuration left task queued");
+            Config.I.AgentApiKey = previousKey;
+            NativeAgent.Stop();
+            Console.WriteLine("PASS: invalid configuration terminates queued task as failed");
+
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path == "/fight" && JsonNode.Parse(payload)["active"]?.GetValue<bool>() == false,
+                    "death cleanup restarted fight instead of stopping it");
+                return (200, "{\"active\":false}");
+            };
+            Game.LocalPlayer.dead = true;
+            try
+            {
+                var interrupted = await Execute(AgentTools.Wait("/fight_active", "active", "/fight", 1, default));
+                Check(interrupted["outcome"].ToString() == "interrupted_by_death", "death interruption was not reported");
+            }
+            finally { Game.LocalPlayer.dead = false; HttpServerSystem.Handler = null; }
+            Console.WriteLine("PASS: death during fight sends explicit stop and reports interruption");
+
             int combatStops = Combat.Stops, fightStops = FightCoordinator.Stops;
             await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_dodge"] = false, ["auto_attack"] = false }, default));
             Check(!AgentPermissions.Dodge && !AgentPermissions.Attack, "combat permission was not applied");

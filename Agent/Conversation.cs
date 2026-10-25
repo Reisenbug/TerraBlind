@@ -82,7 +82,7 @@ public sealed class AgentConversation
                     _history.Add(ToolResult(id, result));
                 }
             }
-            say("本轮已执行 40 次判断，将返回宿主检查任务状态。");
+            throw new AgentBudgetExceededException();
         }
         finally
         {
@@ -144,4 +144,9 @@ public sealed class AgentConversation
         }
         return messages;
     }
+}
+
+public sealed class AgentBudgetExceededException : InvalidOperationException
+{
+    public AgentBudgetExceededException() : base("本轮已达到 40 次判断上限，目标尚未验证完成。请检查当前进度后继续。") { }
 }

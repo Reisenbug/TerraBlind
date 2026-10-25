@@ -271,7 +271,7 @@ public sealed class CodexAgent : IDisposable
             foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
                 if (args[field.ToString()] == null) throw new InvalidOperationException("缺少参数：" + field);
             output = await execute(name, args, token);
-            try { success = (JsonNode.Parse(output) as JsonObject)?["error"] == null; } catch (System.Text.Json.JsonException) { }
+            try { success = !AgentTools.Rejected(JsonNode.Parse(output) as JsonObject); } catch (System.Text.Json.JsonException) { }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }

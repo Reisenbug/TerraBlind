@@ -30,8 +30,8 @@ public static class AgentTools
     static int Int(JsonObject args, string key, int fallback = 0) => args[key]?.GetValue<int>() ?? fallback;
     static string Text(JsonObject args, string key) => args[key]?.GetValue<string>() ?? "";
     static bool Bool(JsonObject args, string key) => args[key]?.GetValue<bool>() ?? false;
-    static bool Rejected(JsonObject result) => result["error"] != null ||
-        result["ok"]?.ToString() == "false" || result["accepted"]?.ToString() == "false";
+    internal static bool Rejected(JsonObject result) => result != null && (result["error"] != null ||
+        result["ok"]?.ToString() == "false" || result["accepted"]?.ToString() == "false");
 
     static Task<JsonObject> Call(string path, JsonObject args, CancellationToken token) => NativeAgent.OnMain(() =>
     {
@@ -110,7 +110,7 @@ public static class AgentTools
             await Task.Delay(150, token);
             if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
             {
-                await Call(stop, null, token);
+                await Call(stop, stop == "/fight" ? new JsonObject { ["active"] = false } : null, token);
                 return new JsonObject { ["outcome"] = "interrupted_by_death" };
             }
             var status = await Call(path, null, token);

@@ -113,9 +113,14 @@ static class Tests
         Check(AgentConversation.VisibleText("<think>hidden</think>你好") == "你好", "private thinking leaked into dialogue");
         for (int i = 0; i < 40; i++) handler.Responses.Enqueue(Reply(ToolCall("limit" + i, "get_state", "{}")));
         int requestCount = handler.Requests.Count;
-        await agent.RunAsync("循环", "http://localhost/v1", "test-key", "test-model", "system", Tools,
-            (name, args, ct) => Task.FromResult("state"), spoken.Add, default);
-        Check(handler.Requests.Count - requestCount == 40 && spoken.Last().Contains("40"), "turn budget not enforced");
+        try
+        {
+            await agent.RunAsync("循环", "http://localhost/v1", "test-key", "test-model", "system", Tools,
+                (name, args, ct) => Task.FromResult("state"), spoken.Add, default);
+            throw new Exception("exhausted budget returned as completed");
+        }
+        catch (AgentBudgetExceededException ex) { Check(ex.Message.Contains("40"), "budget failure lacks limit"); }
+        Check(handler.Requests.Count - requestCount == 40, "turn budget not enforced");
         Console.WriteLine("PASS: dialogue filtering and bounded task loop");
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();

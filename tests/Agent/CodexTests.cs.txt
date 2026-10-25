@@ -52,6 +52,13 @@ static class CodexTests
         await agent.RunAsync("数组结果", "mock", "/tmp", "", "game instructions", Tools,
             (_, _, _) => Task.FromResult("[1,2]"), spoken.Add, default);
         Check(server.ToolResponses.Last()["success"].GetValue<bool>(), "JSON array tool result was rejected");
+        foreach (string rejected in new[] { "{\"ok\":false}", "{\"accepted\":false}", "{\"error\":\"blocked\"}" })
+        {
+            await agent.RunAsync("被拒绝的操作", "mock", "/tmp", "", "game instructions", Tools,
+                (_, _, _) => Task.FromResult(rejected), spoken.Add, default);
+            Check(!server.ToolResponses.Last()["success"].GetValue<bool>(), "Codex marked rejected tool output successful: " + rejected);
+            Check(server.ToolResponses.Last()["contentItems"][0]["text"].ToString() == rejected, "Codex lost rejection details");
+        }
         Console.WriteLine("PASS: Codex rejects unknown/malformed calls and accepts non-object tool output");
 
         using var cancel = new CancellationTokenSource();

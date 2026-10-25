@@ -123,7 +123,7 @@ public class NativeAgent : ModSystem
         string cwd = System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent");
         if (!useCodex && (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(model) ||
             !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
-        { AgentChat.Say("先在模组配置里填写 Agent API Key、Base URL 和模型名。"); return; }
+        { Progress("先在模组配置里填写 Agent API Key、Base URL 和模型名。", "failed"); return; }
         if (!useCodex) { _codex?.Dispose(); _codex = null; }
         var codex = useCodex ? _codex ??= new CodexAgent() : null;
         _cancel?.Dispose();
