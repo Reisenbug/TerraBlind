@@ -87,6 +87,9 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
+    public static class ItemID { }
+    public static class NPCID { }
+    public static class TileID { }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int Arrow = 40; }

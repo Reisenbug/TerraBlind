@@ -227,6 +227,16 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "game_catalog":
+                string kind = Text(args, "kind");
+                Type constants = kind switch
+                {
+                    "item" => typeof(Terraria.ID.ItemID), "npc" => typeof(Terraria.ID.NPCID), "tile" => typeof(Terraria.ID.TileID),
+                    _ => throw new ArgumentException("kind 必须是 item、npc 或 tile。")
+                };
+                result = AgentCatalog.Query(constants, Text(args, "name"));
+                result["kind"] = kind;
+                break;
             case "task_plan":
                 result = await NativeAgent.OnMain(() => Plan.Create(args, AgentTaskEvidence.Measure), token);
                 break;

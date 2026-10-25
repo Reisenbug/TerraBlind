@@ -5,6 +5,8 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Agent/Catalog.cs" Link="Catalog.cs" />
+    <Compile Include="CatalogTests.cs.txt" />
     <Compile Include="../../Agent/TaskPlan.cs" Link="TaskPlan.cs" />
     <Compile Include="../../Agent/TaskEvidence.cs" Link="TaskEvidence.cs" />
     <Compile Include="TaskPlanTests.cs.txt" />
