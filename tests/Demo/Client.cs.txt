@@ -59,6 +59,7 @@ public sealed class Driver : ModSystem
     bool routed;
     bool descent;
     bool continuity;
+    bool unlimited;
     int continuityLeg;
     int[] offsets = { 180 };
     int barrierTiles;
@@ -199,7 +200,7 @@ public sealed class Driver : ModSystem
         foreach (var pair in timingTotals) totals[pair.Key] = pair.Value;
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
-            ["game_frames"] = ticks, ["limit_ms"] = continuity ? null : 150000,
+            ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null : 150000,
             ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
             ["phase_ms"] = totals, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
@@ -211,6 +212,7 @@ public sealed class Driver : ModSystem
     public override void Load()
     {
         descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
+        unlimited = Terraria.Program.LaunchParameters.ContainsKey("-vnavnotimelimit");
         continuity = Terraria.Program.LaunchParameters.ContainsKey("-vnavcontinuitycheck");
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcircuitcheck")) offsets = new[] { 180, 360, -180 };
         enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
@@ -502,8 +504,8 @@ public sealed class Driver : ModSystem
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
-        if (!continuity && routeClock.Elapsed.TotalSeconds > 150) throw new TimeoutException("route_exceeded_150_seconds");
-        if (RecedingNav.Active && ticks < 54000) return;
+        if (!continuity && !unlimited && routeClock.Elapsed.TotalSeconds > 150) throw new TimeoutException("route_exceeded_150_seconds");
+        if (RecedingNav.Active && (unlimited || ticks < 54000)) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (continuity)
         {

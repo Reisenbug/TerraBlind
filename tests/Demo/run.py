@@ -12,6 +12,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
+    unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
     continuity |= circuit
@@ -81,12 +82,14 @@ def main():
         command.append("-vnavoldnavcheck")
     if worker_check:
         command.append("-vnavworkercheck")
+    if unlimited:
+        command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     keep = False
     try:
-        deadline = time.monotonic() + (1000 if descent else 240)
+        deadline = float("inf") if unlimited else time.monotonic() + (1000 if descent else 240)
         while time.monotonic() < deadline:
             output = (root / "demo-client.log").read_text()
             if manual and "VNAV_MANUAL_READY" in output:
