@@ -94,6 +94,11 @@ public sealed class VanillaNavigationDemo : ModSystem
         terrainPaused = false; Status = "执行地形改变后的引擎轨迹";
         return true;
     }
+    internal void ReplanAfterTerrain()
+    {
+        movement = ConnectMovement(worker);
+        terrainPaused = false; Status = "地形已变化，重新推演";
+    }
 
     void StartCore(Vector2 target, bool navigation)
     {

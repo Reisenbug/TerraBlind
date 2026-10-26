@@ -24,6 +24,18 @@ public static class VanillaTerrainPlan
                     return new JsonObject { ["status"] = "unsafe_arrival" };
                 player = VanillaFrame.RestoreInWorker(approach["end_snapshot"].AsObject());
                 if (player.velocity != Vector2.Zero) return new JsonObject { ["status"] = "arrival_not_settled" };
+                var arrivalState = approach["end_snapshot"].AsObject();
+                var movement = new VanillaLocalPlanner().Plan(arrivalState,
+                    new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
+                    guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
+                if (movement["status"].GetValue<string>() == "planned" && movement["route_progress"].GetValue<double>() > 0)
+                {
+                    movement["terrain_required"] = false;
+                    movement["context"] = arrivalState.DeepClone();
+                    movement["anchor"] = VanillaPrediction.Observe(player, false);
+                    movement["wait_frames"] = 0;
+                    return movement;
+                }
             }
             var anchor = VanillaPrediction.Observe(player, false);
             int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();

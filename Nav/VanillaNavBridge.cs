@@ -278,8 +278,17 @@ public static class VanillaNavBridge
             DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
             if (result["status"]?.GetValue<string>() == "planned")
             {
+                var checkedFrames = result["forecast"]["frames"].AsArray();
+                if (preparation["arrival"] != null)
+                {
+                    checkedFrames = checkedFrames.DeepClone().AsArray();
+                    checkedFrames.Add(result["anchor"].DeepClone());
+                    foreach (var target in preparation["tiles"].AsArray())
+                        checkedFrames.Add(new JsonObject { ["x"] = target[0].GetValue<int>() * 16f,
+                            ["y"] = target[1].GetValue<int>() * 16f });
+                }
                 bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference,
-                    preparation["arrival"] == null ? result["forecast"]["frames"].AsArray() : null);
+                    checkedFrames);
                 if (matches && preparation["arrival"] != null)
                     matches = VanillaAsyncMovement.StateMatches(player, result["anchor"].AsObject(), true, out _, out difference);
                 if (stable < 3 || !matches)
@@ -292,6 +301,15 @@ public static class VanillaNavBridge
                 }
                 else
                 {
+                    if (result["terrain_required"]?.GetValue<bool>() == false)
+                    {
+                        var demo = VanillaNavigationDemo.Instance;
+                        if (!demo.ResumeTerrain(result)) demo.ReplanAfterTerrain();
+                        edits.Clear(); batch.Clear(); prepared = preparation = null;
+                        phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+                        DiagLog.Write("[engine-terrain-skipped] unedited route advances " + result["route_progress"]);
+                        return;
+                    }
                     prepared = result;
                     StartEdit();
                     phase = Phase.Using; phaseAt = Main.GameUpdateCount; useAt = uint.MaxValue;
@@ -427,10 +445,14 @@ public static class VanillaNavBridge
                 return;
             }
             ItemUseCoordinator.Stop(); player.controlUseItem = false;
-            if (!VanillaNavigationDemo.Instance.ResumeTerrain(prepared))
-            { Fail("terrain_handoff_changed:" + VanillaNavigationDemo.Instance.PlannerMismatch); return; }
+            bool resumed = VanillaNavigationDemo.Instance.ResumeTerrain(prepared);
+            if (!resumed)
+            {
+                DiagLog.Write("[engine-terrain-replan] " + VanillaNavigationDemo.Instance.PlannerMismatch);
+                VanillaNavigationDemo.Instance.ReplanAfterTerrain();
+            }
             var end = prepared["forecast"]["frames"].AsArray()[^1];
-            needTerrain = Vector2.Distance(player.position,
+            needTerrain = resumed && Vector2.Distance(player.position,
                 new Vector2(end["x"].GetValue<float>(), end["y"].GetValue<float>())) < 16;
             prepared = preparation = null; phase = Phase.Moving; bestH = int.MaxValue;
             progressAt = Main.GameUpdateCount;

@@ -128,7 +128,7 @@ public sealed class Driver : ModSystem
     string TimingPhase(Player player, VanillaNavigationDemo demo)
     {
         string stage = VanillaNavBridge.Stage;
-        if (stage != "Moving") return stage;
+        if (stage is not "Moving" and not "Approaching") return stage;
         if (!VanillaNavigationDemo.Active) return "field_setup";
         if (!demo.PlannerReady) return "worker_startup";
         if (!demo.LastControl.Queued) return "queue_empty";
