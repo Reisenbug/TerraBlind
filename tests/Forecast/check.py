@@ -256,6 +256,9 @@ def main():
         transit = worker.call("transit_contract")
         assert transit["passed"]
         print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)
+        descent_region = worker.call("contact_descent_region")
+        assert descent_region["passed"] and descent_region["cases"] == 12
+        print("CONTACT_DESCENT_REGION_PASS", descent_region, flush=True)
         terrain = worker.call("terrain_contract")
         assert terrain["passed"]
         print("TERRAIN_NATIVE_CONTROLS_CONTRACT_PASS", terrain, flush=True)

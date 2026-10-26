@@ -194,7 +194,6 @@ public sealed class VanillaAsyncMovement
     {
         ContactDescentLanded = false;
         if (activeForecast?.Count is not > 0 || !HasInputAt(tick + 1)
-            || player.velocity.Y == 0 && !ReferenceEquals(descentPlan, ActiveResult)
             || inputs.Any(input => input.Key > tick && input.Value != 0)) return false;
         var end = activeForecast[^1];
         if (end["vx"].GetValue<float>() != 0 || end["vy"].GetValue<float>() != 0) return false;

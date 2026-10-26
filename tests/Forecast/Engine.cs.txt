@@ -98,6 +98,60 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "contact_descent_region")
+        {
+            Setup(new JsonObject());
+            var landing = source.position;
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            int passed = 0;
+            foreach (int offset in new[] { -24, 24 })
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                player.position += new Vector2(offset, -64);
+                player.velocity = new Vector2(0, 2);
+                player.fallStart = (int)(player.position.Y / 16);
+                if (!VanillaContactRegion.SafeDescent(player, landing))
+                    throw new InvalidOperationException("safe_shifted_descent_rejected");
+                var anchor = VanillaPrediction.Observe(player, false);
+                var endpoint = anchor.DeepClone();
+                endpoint["x"] = landing.X; endpoint["y"] = landing.Y;
+                endpoint["vx"] = 0f; endpoint["vy"] = 0f;
+                var plan = new JsonObject { ["selected"] = "contact_region", ["wait_frames"] = 0,
+                    ["context"] = VanillaFrame.Capture(player, area, true), ["anchor"] = anchor,
+                    ["forecast"] = new JsonObject { ["frames"] = new JsonArray(endpoint) },
+                    ["controls"] = new JsonArray(0), ["route_progress"] = 1 };
+                var controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_request"));
+                if (!controller.InstallTerrain(plan, player, 0, landing))
+                    throw new InvalidOperationException("contact_region_install_failed");
+                player.position.Y = landing.Y; player.velocity = Vector2.Zero;
+                if (!VanillaContactRegion.SafeDescent(player, landing))
+                    throw new InvalidOperationException("safe_shifted_landing_rejected");
+                if (!controller.CurrentMatches(0, player) || !controller.NeedsPlan(0, player, false)
+                    || !controller.ContactDescentLanded)
+                    throw new InvalidOperationException("early_shifted_landing_did_not_handoff");
+                passed += 3;
+            }
+            foreach (string hazard in new[] { "lava", "spike", "wall", "gap", "fall_damage", "horizontal_speed" })
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                player.position += new Vector2(48, -64);
+                player.velocity = new Vector2(0, 2);
+                player.fallStart = (int)(player.position.Y / 16);
+                int x = (int)(player.position.X / 16), y = (int)((landing.Y + player.height) / 16);
+                if (hazard == "lava") { var tile = Main.tile[x, y - 1]; tile.LiquidType = LiquidID.Lava; tile.LiquidAmount = 255; }
+                if (hazard == "spike") { var tile = Main.tile[x, y]; tile.HasTile = true; tile.TileType = TileID.Spikes; }
+                if (hazard == "wall") { var tile = Main.tile[x, y - 3]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                if (hazard == "gap")
+                    for (int tx = (int)(landing.X / 16) + 1; tx <= x + 2; tx++) Main.tile[tx, y].ClearEverything();
+                if (hazard == "fall_damage") player.fallStart = (int)(landing.Y / 16) - 100;
+                if (hazard == "horizontal_speed") player.velocity.X = 1;
+                if (VanillaContactRegion.SafeDescent(player, landing))
+                    throw new InvalidOperationException("unsafe_shifted_descent_accepted:" + hazard);
+                passed++;
+            }
+            VanillaFrame.RestoreInWorker(snapshot);
+            return new JsonObject { ["passed"] = true, ["cases"] = passed };
+        }
         if (command == "contact_descent_replay")
         {
             var evidence = request["evidence"].AsObject();

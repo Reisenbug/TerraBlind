@@ -80,10 +80,10 @@ public static class VanillaContactRegion
     public static bool SafeDescent(Player player, Vector2 landing)
     {
         if (player.gravDir != 1 || player.velocity.X != 0 || player.velocity.Y < 0 || player.jump > 0
-            || Math.Abs(player.position.X - landing.X) > .01f
             || player.position.Y > landing.Y || landing.Y - player.position.Y > 512
             || !player.noFallDmg && (int)(landing.Y / 16) - player.fallStart > 25 + player.extraFall
-            || !Supported(landing, player.width, player.height)) return false;
+            || !ConnectedSupport(landing, new Vector2(player.position.X, landing.Y), player.width, player.height)) return false;
+        landing.X = player.position.X;
         if (player.position.Y < landing.Y && player.velocity.Y == 0
             && Supported(player.position, player.width, player.height)) return false;
         int steps = Math.Max(1, (int)Math.Ceiling((landing.Y - player.position.Y) / 2));
