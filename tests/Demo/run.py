@@ -15,7 +15,8 @@ def main():
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
-    continuity |= circuit
+    journey = "--journey" in sys.argv
+    continuity |= circuit or journey
     descent = "--descent" in sys.argv or continuity
     root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     if "--root" in sys.argv:
@@ -75,6 +76,10 @@ def main():
         command.append("-vnavcontinuitycheck")
     if circuit:
         command.append("-vnavcircuitcheck")
+    if journey:
+        command.append("-vnavjourneycheck")
+    if "--cloud" in sys.argv:
+        command.append("-vnavcloudcheck")
     if "--background" in sys.argv:
         command.append("-vnavbackgroundcheck")
     if "--old-nav" in sys.argv:
@@ -110,6 +115,8 @@ def main():
             assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
+            if journey:
+                assert [leg["kind"] for leg in row["legs"]] == ["main", "crystal", "chest", "spore", "main_return", "surface"]
             if "--background" in sys.argv:
                 samples = json.loads((root / "descent-trace.json").read_text())
                 assert samples and all(not sample["focused"] for sample in samples)
