@@ -259,10 +259,10 @@ namespace TerraBlind
 			{
 				Cursor.AimTile(tx, ty);
 				p.selectedItem = slot;
+				p.controlUseItem = true;
 				if (p.itemTime == 0)
 				{
 					ReadyTick = Main.GameUpdateCount;
-					p.controlUseItem = true;
 				}
 			}
 			finally { if (boosted) Concessions.LongArmEnd(); }
