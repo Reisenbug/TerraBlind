@@ -495,28 +495,7 @@ public static class VanillaNavBridge
         batch.Clear();
         var targets = new JsonArray(new JsonArray(edit.X, edit.Y));
         int supportY = (int)Math.Floor(player.Bottom.Y / 16);
-        if (IsClearing(edit))
-        {
-            while (edits.TryPeek(out var next) && IsClearing(next))
-            {
-                batch.Enqueue(edits.Dequeue());
-                targets.Add(new JsonArray(next.X, next.Y));
-            }
-            if (edits.TryPeek(out var obstacle) && obstacle.Type < 0 && obstacle.Y <= supportY)
-            {
-                batch.Enqueue(edits.Dequeue());
-                targets.Add(new JsonArray(obstacle.X, obstacle.Y));
-            }
-        }
-        else if (edit.Type < 0 && edit.Y < supportY)
-        {
-            while (edits.TryPeek(out var next) && next.Type < 0 && next.Y < supportY)
-            {
-                batch.Enqueue(edits.Dequeue());
-                targets.Add(new JsonArray(next.X, next.Y));
-            }
-        }
-        else if (edit.Type < 0 && edit.Y == supportY)
+        if (edit.Type < 0 && edit.Y <= supportY)
         {
             var remaining = edits.ToArray();
             var group = VanillaTerrainPlan.MiningBatch((edit.X, edit.Y),

@@ -590,6 +590,10 @@ public sealed class Engine : ModSystem
             miningBatch = VanillaTerrainPlan.MiningBatch((10, 20), new[] { (11, 20), (12, 20) }, 160, 190, 20);
             if (!miningBatch.SequenceEqual(new[] { (12, 20), (10, 20), (11, 20) }))
                 throw new InvalidOperationException("same_row_side_was_mistaken_for_support");
+            miningBatch = VanillaTerrainPlan.MiningBatch((9, 19),
+                new[] { (8, 18), (9, 18), (9, 20), (10, 20) }, 160, 180, 20);
+            if (!miningBatch.SequenceEqual(new[] { (9, 19), (9, 18), (9, 20) }))
+                throw new InvalidOperationException("side_opening_split_or_removed_current_support");
             passed++;
             Setup(new JsonObject { ["terrain"] = "half" });
             for (int i = 0; i < 30; i++) VanillaPrediction.Advance(source, VanillaKeys.Right);

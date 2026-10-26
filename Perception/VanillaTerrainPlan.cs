@@ -16,11 +16,16 @@ public static class VanillaTerrainPlan
     public static (int x, int y)[] MiningBatch((int x, int y) first, (int x, int y)[] available,
         float left, float right, int supportY)
     {
-        if (first.y != supportY) return new[] { first };
+        if (first.y > supportY) return new[] { first };
         bool Supports((int x, int y) cell) => cell.y == supportY && cell.x * 16 < right && (cell.x + 1) * 16 > left;
         var sides = available.Where(cell => cell.y <= supportY && !Supports(cell)
             && cell.x * 16 < right + 16 && (cell.x + 1) * 16 > left - 16);
         var supports = available.Where(Supports);
+        if (!Supports(first))
+        {
+            if (first.x * 16 >= right + 16 || (first.x + 1) * 16 <= left - 16) return new[] { first };
+            return new[] { first }.Concat(sides).Distinct().ToArray();
+        }
         return sides.Concat(new[] { first }).Concat(supports).Distinct().ToArray();
     }
 

@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
     parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
+    parser.add_argument("--replace-tiles", action="store_true")
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -127,7 +128,8 @@ def main():
                 request = dict(capture["request"], tile_x=attempt["x"], tile_y=attempt["y"],
                                tile_type=attempt["type"], tiles=attempt["tiles"])
                 if args.clear_tile:
-                    request.update(tile_type=-1, tiles=args.clear_tile + (attempt["tiles"] if attempt["type"] < 0 else []))
+                    request.update(tile_type=-1, tiles=args.clear_tile +
+                                   (attempt["tiles"] if attempt["type"] < 0 and not args.replace_tiles else []))
                 if args.reverse_tiles:
                     request["tiles"] = list(reversed(request["tiles"]))
                 result = worker.call(**request)
