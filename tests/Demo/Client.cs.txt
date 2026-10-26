@@ -70,6 +70,8 @@ public sealed class Driver : ModSystem
     readonly JsonArray timingSegments = new();
     readonly JsonArray planTimings = new();
     readonly System.Collections.Generic.Dictionary<string, double> timingTotals = new();
+    readonly System.Collections.Generic.Dictionary<string, double> activityTotals = new();
+    double activityAt;
     string timingPhase;
     double phaseStart;
     Vector2 phasePosition, previousPosition;
@@ -198,11 +200,13 @@ public sealed class Driver : ModSystem
         routeClock.Stop();
         var totals = new JsonObject();
         foreach (var pair in timingTotals) totals[pair.Key] = pair.Value;
+        var activity = new JsonObject();
+        foreach (var pair in activityTotals) activity[pair.Key] = pair.Value;
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
             ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null : 150000,
             ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
-            ["phase_ms"] = totals, ["segments"] = timingSegments.DeepClone(),
+            ["phase_ms"] = totals, ["activity_ms"] = activity, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
         File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), report);
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastDirectory != null)
@@ -465,6 +469,13 @@ public sealed class Driver : ModSystem
         var control = VanillaNavigationDemo.Instance.LastControl;
         var timingDemo = VanillaNavigationDemo.Instance;
         RecordPhase(TimingPhase(player, timingDemo), player);
+        bool moved = Vector2.DistanceSquared(player.position, previousPosition) > .0001f;
+        bool pick = player.HeldItem.pick > 0 && (player.controlUseItem || player.itemAnimation > 0);
+        string activity = moved ? pick ? "moving_with_pick" : "moving" : pick ? "stationary_with_pick" : "stationary_without_pick";
+        double activityNow = routeClock.Elapsed.TotalMilliseconds;
+        activityTotals.TryGetValue(activity, out double activityTotal);
+        activityTotals[activity] = activityTotal + activityNow - activityAt;
+        activityAt = activityNow;
         previousPosition = player.position;
         controlTrace.WriteLine(FormattableString.Invariant($"{ticks},{continuityLeg},{player.position.X},{player.position.Y},{player.velocity.X},{player.velocity.Y},{sample["keys"]},{control.Keys},{control.Queued},{control.Plan},{control.Index},{control.Terminal},{control.Goal.X},{control.Goal.Y},{control.PlanGoal.X},{control.Anchor.X},{VanillaNavigationDemo.Active},{StateSpacePlanner.ExecRunning},{timingDemo.PlannerRejection},{player.statLife},{player.dead},{player.fallStart},{routeClock.Elapsed.TotalMilliseconds},{timingPhase},{player.controlUseItem},{Main.npc.Count(npc => npc.active && !npc.friendly && npc.damage > 0)},{timingDemo.PlannerResult?["request_compute_ms"]},{timingDemo.PlannerResult?["roundtrip_ms"]}"));
         sample["phase"] = continuity ? "continuity" : "jungle_descent";
