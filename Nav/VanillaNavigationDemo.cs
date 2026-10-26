@@ -92,6 +92,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         movement = ConnectMovement(worker);
         if (!movement.InstallTerrain(result, Main.LocalPlayer, tick, goal)) return false;
         terrainPaused = false; Status = "执行地形改变后的引擎轨迹";
+        ApplyInput(Main.LocalPlayer, false);
         return true;
     }
     internal void ReplanAfterTerrain()
@@ -156,7 +157,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     void ResetInput(On_Player.orig_ResetControls original, Player player) { original(player); ApplyInput(player); }
     void CopyInput(On_TriggersSet.orig_CopyInto original, TriggersSet triggers, Player player) { original(triggers, player); ApplyInput(player); }
 
-    void ApplyInput(Player player)
+    void ApplyInput(Player player, bool applyTerrainUse = true)
     {
         if (!running || player != Main.LocalPlayer) return;
         int keys = terrainPaused ? 0 : movement?.InputAt(tick + 1) ?? 0;
@@ -166,7 +167,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
         player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
         player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
-        if (NavigationOwned) VanillaNavBridge.ApplyTerrainUse(player);
+        if (NavigationOwned && applyTerrainUse) VanillaNavBridge.ApplyTerrainUse(player);
     }
 
 
