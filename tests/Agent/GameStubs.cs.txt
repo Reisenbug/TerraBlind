@@ -3,6 +3,15 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
+namespace Terraria.Map
+{
+    public static class MapHelper
+    {
+        public static int[] tileOptionCounts = Array.Empty<int>();
+        public static int TileToLookup(int type, int option) => 0;
+    }
+}
+
 namespace Terraria
 {
     public static class Main
@@ -53,6 +62,7 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
     }
+    public static class Lang { public static string GetMapObjectName(int id) => ""; }
     public class Item
     {
         public bool active;

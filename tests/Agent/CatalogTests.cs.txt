@@ -24,6 +24,9 @@ static class CatalogTests
         var byId = AgentCatalog.Query(typeof(Sample), "7");
         Check(byId["matches"].AsArray().Count == 2 && byId["matches"][0]["exact"].GetValue<bool>()
             && !AgentCatalog.Query(typeof(Sample), "9999")["found"].GetValue<bool>(), "numeric lookup lost aliases or included Count");
+        var labeled = AgentCatalog.Query(typeof(Sample), "Placed Tool", id => id == 8 ? new[] { "Placed Tool" } : Array.Empty<string>());
+        Check(labeled["matches"].AsArray().Count == 2 && labeled["matches"][0]["type"].GetValue<int>() == 8
+            && labeled["matches"][0]["display_names"][0].GetValue<string>() == "Placed Tool", "catalog lost game display names or aliases");
         foreach (string name in new[] { "Count", "RuntimeValue", "TextValue", "unknown name" })
             Check(!AgentCatalog.Query(typeof(Sample), name)["found"].GetValue<bool>(), "catalog treated non-ID or unknown data as a match");
         var broad = AgentCatalog.Query(typeof(Sample), "Many");

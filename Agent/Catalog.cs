@@ -9,7 +9,7 @@ public static class AgentCatalog
 {
     static string Key(string name) => name.Replace(" ", "").Replace("_", "").ToLowerInvariant();
 
-    public static JsonObject Query(Type constants, string query)
+    public static JsonObject Query(Type constants, string query, Func<int, string[]> displayNames = null)
     {
         string key = Key(query ?? "");
         if (key.Length == 0) throw new ArgumentException("请给出原版英文内部名称或名称片段。");
@@ -17,15 +17,20 @@ public static class AgentCatalog
         var matches = constants.GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(field => field.IsLiteral && field.Name != "Count" &&
                 (field.FieldType == typeof(int) || field.FieldType == typeof(short) || field.FieldType == typeof(ushort) || field.FieldType == typeof(byte)))
-            .Where(field => numeric ? Convert.ToInt32(field.GetRawConstantValue()) == id : Key(field.Name).Contains(key))
-            .OrderByDescending(field => Key(field.Name) == key).ThenBy(field => field.Name, StringComparer.Ordinal)
+            .Select(field => new { Name = field.Name, Id = Convert.ToInt32(field.GetRawConstantValue()),
+                Labels = displayNames?.Invoke(Convert.ToInt32(field.GetRawConstantValue())) ?? Array.Empty<string>() })
+            .Where(entry => numeric ? entry.Id == id : Key(entry.Name).Contains(key) || entry.Labels.Any(label => Key(label).Contains(key)))
+            .OrderByDescending(entry => Key(entry.Name) == key || entry.Labels.Any(label => Key(label) == key))
+            .ThenBy(entry => entry.Name, StringComparer.Ordinal)
             .ToArray();
         return new JsonObject
         {
             ["found"] = matches.Length > 0, ["total"] = matches.Length, ["truncated"] = matches.Length > 12,
-            ["matches"] = new JsonArray(matches.Take(12).Select(field => (JsonNode)new JsonObject
+            ["matches"] = new JsonArray(matches.Take(12).Select(entry => (JsonNode)new JsonObject
             {
-                ["internal"] = field.Name, ["type"] = Convert.ToInt32(field.GetRawConstantValue()), ["exact"] = numeric || Key(field.Name) == key
+                ["internal"] = entry.Name, ["type"] = entry.Id,
+                ["exact"] = numeric || Key(entry.Name) == key || entry.Labels.Any(label => Key(label) == key),
+                ["display_names"] = new JsonArray(entry.Labels.Select(label => (JsonNode)JsonValue.Create(label)).ToArray())
             }).ToArray()),
             ["source"] = "Loaded vanilla ID constants. Identifier lookup only; not inventory, drop, spawn or kill evidence. Mod-registered IDs and translated names are not included."
         };

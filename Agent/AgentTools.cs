@@ -251,7 +251,12 @@ public static class AgentTools
                     "item" => typeof(Terraria.ID.ItemID), "npc" => typeof(Terraria.ID.NPCID), "tile" => typeof(Terraria.ID.TileID),
                     _ => throw new ArgumentException("kind 必须是 item、npc 或 tile。")
                 };
-                result = AgentCatalog.Query(constants, Text(args, "name"));
+                result = kind == "tile" ? await NativeAgent.OnMain(() => AgentCatalog.Query(constants, Text(args, "name"), type =>
+                    type < 0 || type >= Terraria.Map.MapHelper.tileOptionCounts.Length ? Array.Empty<string>() :
+                    Enumerable.Range(0, Terraria.Map.MapHelper.tileOptionCounts[type])
+                        .Select(option => Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(type, option)))
+                        .Where(label => !string.IsNullOrWhiteSpace(label)).Distinct().ToArray()), token)
+                    : AgentCatalog.Query(constants, Text(args, "name"));
                 result["kind"] = kind;
                 if (kind == "item") await NativeAgent.OnMain(() =>
                 {
