@@ -106,6 +106,7 @@ public static class VanillaNavBridge
             {
                 demo.PauseForTerrain(); phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
                 DiagLog.Write($"[engine-terrain-arrived] ready={preparing?.IsCompleted} lead_frames={Main.GameUpdateCount - progressAt}");
+                if (StartExcavation(player)) return;
                 Prepare(player);
             }
             else if (Main.GameUpdateCount > arrivalAt + 12) CancelPreview();
@@ -300,8 +301,16 @@ public static class VanillaNavBridge
         arrivalAnchor = anchor;
         arrivalAt = Main.GameUpdateCount + (uint)controls.Length;
         phase = Phase.Approaching; phaseAt = progressAt = Main.GameUpdateCount;
-        BeginPreparation(probe, player, controls);
-        DiagLog.Write($"[engine-terrain-prefetch] frames={controls.Length} tile=({edit.X},{edit.Y}) batch={batch.Count + 1}");
+        if (VanillaExcavation.Create(probe, corridor) != null)
+        {
+            preparing = null; preparation = null;
+            DiagLog.Write($"[engine-excavation-prefetch] frames={controls.Length}; corridor checked without movement search");
+        }
+        else
+        {
+            BeginPreparation(probe, player, controls);
+            DiagLog.Write($"[engine-terrain-prefetch] frames={controls.Length} tile=({edit.X},{edit.Y}) batch={batch.Count + 1}");
+        }
     }
 
     static void CancelPreview()
