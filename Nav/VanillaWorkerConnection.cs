@@ -21,11 +21,13 @@ public sealed class VanillaWorkerConnection : IDisposable
     TextWriter log;
     readonly object lifetime = new();
     bool started, disposed;
+    public JsonObject StartupTiming { get; } = new();
     public bool Alive => !disposed && process != null && started && !process.HasExited;
 
     public static async Task<VanillaWorkerConnection> Start(byte[] package, string world, CancellationToken cancellation)
     {
         var worker = new VanillaWorkerConnection();
+        var timer = Stopwatch.StartNew();
         try
         {
             string root = Path.Combine(Path.GetTempPath(), "terrablind-vnav-" + Guid.NewGuid().ToString("N"));
@@ -33,6 +35,7 @@ public sealed class VanillaWorkerConnection : IDisposable
             await File.WriteAllBytesAsync(Path.Combine(root, "Mods", "Forecast.tmod"), package, cancellation);
             await File.WriteAllTextAsync(Path.Combine(root, "Mods", "enabled.json"), "[\"Forecast\"]", cancellation);
             File.Copy(world, Path.Combine(root, "World.wld"));
+            worker.StartupTiming["files_ready_ms"] = timer.Elapsed.TotalMilliseconds;
             var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
             int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
             string assembly = typeof(Terraria.Main).Assembly.Location;
@@ -46,7 +49,17 @@ public sealed class VanillaWorkerConnection : IDisposable
             worker.process.OutputDataReceived += (_, output) =>
             {
                 if (output.Data == null) return;
-                lock (worker.lifetime) worker.log?.WriteLine(output.Data);
+                lock (worker.lifetime)
+                {
+                    double elapsed = timer.Elapsed.TotalMilliseconds;
+                    worker.log?.WriteLine($"[{elapsed:0.000} ms] {output.Data}");
+                    string stage = output.Data.StartsWith("Finding Mods") ? "mods_begin_ms"
+                        : output.Data.StartsWith("Loading world data") ? "world_begin_ms"
+                        : output.Data.StartsWith("Settling liquids") ? "liquids_begin_ms"
+                        : output.Data.Contains("Running engine preload") ? "preload_begin_ms"
+                        : output.Data.Contains("VANILLA_FORECAST_READY") ? "ready_ms" : null;
+                    if (stage != null && !worker.StartupTiming.ContainsKey(stage)) worker.StartupTiming[stage] = elapsed;
+                }
                 if (output.Data.Contains("VANILLA_FORECAST_READY")) ready.TrySetResult(true);
             };
             worker.process.ErrorDataReceived += (_, output) => { if (output.Data != null) lock (worker.lifetime) worker.log?.WriteLine(output.Data); };
@@ -58,6 +71,7 @@ public sealed class VanillaWorkerConnection : IDisposable
             await worker.client.ConnectAsync(IPAddress.Loopback, port, cancellation);
             worker.reader = new StreamReader(worker.client.GetStream());
             worker.writer = new StreamWriter(worker.client.GetStream()) { AutoFlush = true };
+            lock (worker.lifetime) worker.StartupTiming["connected_ms"] = timer.Elapsed.TotalMilliseconds;
             return worker;
         }
         catch { worker.client?.Dispose(); worker.Dispose(); throw; }

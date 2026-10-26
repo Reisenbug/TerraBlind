@@ -109,7 +109,6 @@ public sealed class VanillaNavigationDemo : ModSystem
         if (player.dead || player.ghost) throw new InvalidOperationException("请先复活。");
         if (Vector2.Distance(player.position, target) > 60 * 16) throw new InvalidOperationException("请选60格以内的落脚点。");
         VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, target), navigation);
-        byte[] package = Mod.GetFileBytes("Assets/VanillaWorker.bin");
         if (!navigation) { Halt.All(); NativeAgent.Stop(); }
         if (!navigation && !AxisLock.Take("vanilla-demo", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => running))
             throw new InvalidOperationException("人物控制权被其他动作占用。");
@@ -118,26 +117,48 @@ public sealed class VanillaNavigationDemo : ModSystem
         loggedAccepted = loggedRejected = idleFrames = starvedFrames = starvation = longestStarvation = 0;
         route = Array.Empty<Vector2>();
         recordedObstructions.Clear();
-        cancellation = new CancellationTokenSource();
+        EnsureWorker();
         if (worker?.Alive == true)
         {
             movement = ConnectMovement(worker); Status = "推演中"; return;
         }
+        Status = "正在启动独立推演进程……";
+    }
+
+    void EnsureWorker()
+    {
+        if (worker?.Alive == true || startup != null) return;
+        worker?.Dispose(); worker = null;
+        cancellation?.Dispose();
+        cancellation = new CancellationTokenSource();
+        byte[] package = Mod.GetFileBytes("Assets/VanillaWorker.bin");
         string world = Main.ActiveWorldFileData.Path;
         var token = cancellation.Token;
         startup = Task.Run(() => VanillaWorkerConnection.Start(package, world, token));
-        Status = "正在启动独立推演进程……";
+        DiagLog.Write("[engine-worker-start] prewarm=" + !running);
+    }
+
+    public override void OnWorldLoad()
+    {
+        if (Main.dedServ || Main.netMode != NetmodeID.SinglePlayer || Main.ActiveWorldFileData.IsCloudSave) return;
+        try { EnsureWorker(); }
+        catch (Exception error) { DiagLog.Write("[engine-worker-prewarm-failed] " + DescribeError(error)); }
     }
 
     public void Stop(string reason = "已停止", bool closeWorker = false)
     {
         running = false; NavigationOwned = false; terrainPaused = false; Status = reason;
-        cancellation?.Cancel(); movement?.CancelPending(); movement = null; CancelTerrain();
-        if (closeWorker) { worker?.Dispose(); worker = null; }
-        if (startup != null)
+        movement?.CancelPending(); movement = null; CancelTerrain();
+        if (closeWorker)
         {
-            _ = startup.ContinueWith(task => { if (task.IsCompletedSuccessfully) task.Result.Dispose(); else _ = task.Exception; });
-            startup = null;
+            cancellation?.Cancel();
+            worker?.Dispose(); worker = null;
+            if (startup != null)
+            {
+                _ = startup.ContinueWith(task => { if (task.IsCompletedSuccessfully) task.Result.Dispose(); else _ = task.Exception; });
+                startup = null;
+            }
+            cancellation?.Dispose(); cancellation = null;
         }
         AxisLock.Release("vanilla-demo");
     }
@@ -173,15 +194,17 @@ public sealed class VanillaNavigationDemo : ModSystem
 
     public override void PostUpdateEverything()
     {
-        if (!running) return;
         try
         {
             if (startup != null)
             {
                 if (!startup.IsCompleted) return;
-                worker = startup.GetAwaiter().GetResult(); startup = null;
-                movement = ConnectMovement(worker);
+                var completed = startup; startup = null;
+                worker = completed.GetAwaiter().GetResult();
+                DiagLog.Write("[engine-worker-ready] " + worker.StartupTiming.ToJsonString());
+                if (running) movement = ConnectMovement(worker);
             }
+            if (!running) return;
             var player = Main.LocalPlayer;
             tick++;
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
