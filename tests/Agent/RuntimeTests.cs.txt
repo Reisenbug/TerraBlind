@@ -162,6 +162,39 @@ static class RuntimeTests
                 && treasureCalls.Contains("/collect_treasure_status"), "treasure tool skipped approach or existing verified looting workflow");
             Console.WriteLine("PASS: NPC query preserves filters and treasure delegation approaches before invoking existing looting verification");
 
+            Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
+            Terraria.Lang.MapLabels[16] = "Fixture Resource";
+            int tileQueries = 0;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path == "/find_tiles", "tile resolution dispatched unrelated action");
+                tileQueries++;
+                var request = JsonNode.Parse(payload);
+                if (request["name"].ToString() == "FixtureSource")
+                {
+                    Check(request["n"].GetValue<int>() == 3 && request["max_dist"].GetValue<int>() == 45
+                        || request["n"].GetValue<int>() == 12 && request["max_dist"].GetValue<int>() == 2000, "resolution changed query bounds");
+                    return (200, "{\"tiles\":[{\"x\":100,\"y\":101,\"dist\":1}]}");
+                }
+                return (200, "{\"error\":\"unknown_tile_name\"}");
+            };
+            var aliasArgs = new JsonObject { ["name"] = "FixtureResource", ["n"] = 3, ["max_dist"] = 45 };
+            var aliased = await Execute(AgentTools.FindTiles(aliasArgs, default));
+            Check(aliased["resolved_name"].ToString() == "FixtureSource" && tileQueries == 2
+                && aliasArgs["name"].ToString() == "FixtureResource", "unique map name was not resolved or caller arguments mutated");
+            tileQueries = 0;
+            var resourceScene = await Execute(new GameGather(new[] { new GatherTarget(99, 10, new[] { "FixtureResource" }, Array.Empty<int>()) }).Observe(default));
+            Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 2,
+                "batch gathering did not reuse tile name resolution");
+            Terraria.Lang.MapLabels[32] = "Fixture Resource";
+            tileQueries = 0;
+            var ambiguous = await Execute(AgentTools.FindTiles(aliasArgs, default));
+            Check(ambiguous["error"].ToString() == "unknown_tile_name" && tileQueries == 1
+                && ambiguous["name_candidates"].AsArray().Count == 2, "ambiguous map name guessed a source");
+            Terraria.Lang.MapLabels.Clear();
+            Terraria.Map.MapHelper.tileOptionCounts = Array.Empty<int>();
+            Console.WriteLine("PASS: tile queries reuse unique game map names, preserve bounds and refuse ambiguous source names");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);

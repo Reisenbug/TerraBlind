@@ -8,7 +8,7 @@ namespace Terraria.Map
     public static class MapHelper
     {
         public static int[] tileOptionCounts = Array.Empty<int>();
-        public static int TileToLookup(int type, int option) => 0;
+        public static int TileToLookup(int type, int option) => type * 16 + option;
     }
 }
 
@@ -62,7 +62,11 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
     }
-    public static class Lang { public static string GetMapObjectName(int id) => ""; }
+    public static class Lang
+    {
+        public static Dictionary<int, string> MapLabels = new();
+        public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
+    }
     public class Item
     {
         public bool active;
@@ -114,7 +118,7 @@ namespace Terraria.ID
 {
     public static class ItemID { }
     public static class NPCID { }
-    public static class TileID { }
+    public static class TileID { public const int FixtureSource = 1, FixtureOther = 2; }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int None = 0, Arrow = 40; }

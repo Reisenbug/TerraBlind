@@ -46,7 +46,7 @@ public sealed class GameGather : IGatherWorld
         foreach (var target in _targets.Where(t => scene["counts"][t.ItemType.ToString()].GetValue<int>() < t.Count))
         foreach (string tile in target.Tiles)
         {
-            var found = await AgentTools.Call("/find_tiles", new JsonObject { ["name"] = tile, ["n"] = 12, ["max_dist"] = 2000 }, token);
+            var found = await AgentTools.FindTiles(new JsonObject { ["name"] = tile, ["n"] = 12, ["max_dist"] = 2000 }, token);
             if (found["error"] != null) { scene["error"] = found["error"].DeepClone(); return scene; }
             foreach (var cell in found["tiles"]?.AsArray() ?? new JsonArray())
                 scene["candidates"].AsArray().Add(new JsonObject { ["item_type"] = target.ItemType, ["kind"] = "tile",

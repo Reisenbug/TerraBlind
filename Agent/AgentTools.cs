@@ -251,11 +251,7 @@ public static class AgentTools
                     "item" => typeof(Terraria.ID.ItemID), "npc" => typeof(Terraria.ID.NPCID), "tile" => typeof(Terraria.ID.TileID),
                     _ => throw new ArgumentException("kind 必须是 item、npc 或 tile。")
                 };
-                result = kind == "tile" ? await NativeAgent.OnMain(() => AgentCatalog.Query(constants, Text(args, "name"), type =>
-                    type < 0 || type >= Terraria.Map.MapHelper.tileOptionCounts.Length ? Array.Empty<string>() :
-                    Enumerable.Range(0, Terraria.Map.MapHelper.tileOptionCounts[type])
-                        .Select(option => Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(type, option)))
-                        .Where(label => !string.IsNullOrWhiteSpace(label)).Distinct().ToArray()), token)
+                result = kind == "tile" ? await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token)
                     : AgentCatalog.Query(constants, Text(args, "name"));
                 result["kind"] = kind;
                 if (kind == "item") await NativeAgent.OnMain(() =>
@@ -345,8 +341,11 @@ public static class AgentTools
                 }, token);
                 break;
             case "item_info": case "find_biome": case "find_descent": case "descent_route":
-            case "tile_names": case "find_tiles": case "recipe":
+            case "tile_names": case "recipe":
                 result = await Call("/" + name, args, token);
+                break;
+            case "find_tiles":
+                result = await FindTiles(args, token);
                 break;
             case "nav_to":
                 result = await Navigate(args, token);
@@ -479,6 +478,31 @@ public static class AgentTools
         }
         string output = await Result(result, before, token);
         return await ToolFinished(name, output, token);
+    }
+
+    static JsonObject TileCatalog(string name) => AgentCatalog.Query(typeof(Terraria.ID.TileID), name, type =>
+        type < 0 || type >= Terraria.Map.MapHelper.tileOptionCounts.Length ? Array.Empty<string>() :
+        Enumerable.Range(0, Terraria.Map.MapHelper.tileOptionCounts[type])
+            .Select(option => Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(type, option)))
+            .Where(label => !string.IsNullOrWhiteSpace(label)).Distinct().ToArray());
+
+    internal static async Task<JsonObject> FindTiles(JsonObject args, CancellationToken token)
+    {
+        var result = await Call("/find_tiles", args, token);
+        if (Text(result, "error") != "unknown_tile_name") return result;
+        var catalog = await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token);
+        var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
+        if (catalog["truncated"].GetValue<bool>() || exact.Select(m => m["type"].GetValue<int>()).Distinct().Count() != 1)
+        {
+            result["name_candidates"] = catalog["matches"].DeepClone();
+            return result;
+        }
+        var resolved = (JsonObject)args.DeepClone();
+        resolved["name"] = exact[0]["internal"].GetValue<string>();
+        result = await Call("/find_tiles", resolved, token);
+        result["requested_name"] = Text(args, "name");
+        result["resolved_name"] = resolved["name"].DeepClone();
+        return result;
     }
 
     static async Task<string> ToolFinished(string name, string output, CancellationToken token)
