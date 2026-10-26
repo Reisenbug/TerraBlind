@@ -115,7 +115,12 @@ public static class VanillaTerrainPlan
             var waitCell = VanillaLocalPlanner.FootCell(new Vector2(waitEnd["x"].GetValue<float>(), waitEnd["y"].GetValue<float>()),
                 player.width, player.height);
             if (field != null && field.TryGetValue(startCell, out int startCost) && field.TryGetValue(waitCell, out int waitCost))
+            {
                 editProgress = (startCost - waitCost) * 16d;
+                if (startCell == waitCell && field.TryGetValue((startCell.x, startCell.y + 1), out int belowCost)
+                    && belowCost < startCost)
+                    editProgress += (waitEnd["y"].GetValue<float>() - player.position.Y) * (startCost - belowCost);
+            }
             plan["movement_progress"] = movementProgress;
             plan["edit_progress"] = editProgress;
             plan["route_progress"] = movementProgress + editProgress;
