@@ -270,7 +270,9 @@ public static class VanillaFrame
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
             if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }
-            if (tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
+            bool flowingWater = navigation && (data[9] == 0 || data[8] == LiquidID.Water)
+                && (tile.LiquidAmount == 0 || tile.LiquidType == LiquidID.Water);
+            if (!flowingWater && (tile.LiquidType != data[8] || tile.LiquidAmount != data[9]))
             { difference = $"liquid ({x0 + i % width},{y0 + i / width}): {data[8]}/{data[9]} -> {tile.LiquidType}/{tile.LiquidAmount}"; return false; }
             if (navigation && HarmlessDecoration(data[0] != 0, data[1])
                 && HarmlessDecoration(tile.HasTile, tile.TileType)) continue;
@@ -278,8 +280,7 @@ public static class VanillaFrame
                 || (!navigation || Main.tileFrameImportant[tile.TileType])
                     && (tile.WallType != data[2] || tile.TileFrameX != data[3] || tile.TileFrameY != data[4])
                 || (int)tile.Slope != data[5]
-                || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7]
-                || tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
+                || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7])
             {
                 difference = $"tile ({x0 + i % width},{y0 + i / width}): [{string.Join(",", data.ToArray())}] -> "
                     + $"[{(tile.HasTile ? 1 : 0)},{tile.TileType},{tile.WallType},{tile.TileFrameX},{tile.TileFrameY},{(int)tile.Slope},{(tile.IsHalfBlock ? 1 : 0)},{(tile.IsActuated ? 1 : 0)},{tile.LiquidType},{tile.LiquidAmount}]";

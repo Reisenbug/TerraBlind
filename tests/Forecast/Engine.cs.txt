@@ -126,20 +126,27 @@ public sealed class Engine : ModSystem
                 if (needsPlan) { firstRequest = frame; break; }
             }
             if (firstRequest != 138) throw new InvalidOperationException("reuse_did_not_preserve_planning_runway:" + firstRequest);
-            foreach (string change in new[] { "velocity", "tile", "equipment", "distant_tile" })
+            foreach (string change in new[] { "velocity", "tile", "equipment", "distant_tile", "water", "lava", "wet" })
             {
                 source = VanillaFrame.RestoreInWorker(snapshot);
                 controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_replanning"));
                 controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0));
                 if (change == "velocity") source.velocity.X += 1;
                 if (change == "equipment") source.armor[3].SetDefaults(ItemID.SandstorminaBottle);
+                if (change == "wet") source.wet = !source.wet;
+                if (change is "water" or "lava")
+                {
+                    var tile = Main.tile[X + 1, Y - 1];
+                    tile.LiquidType = change == "water" ? LiquidID.Water : LiquidID.Lava;
+                    tile.LiquidAmount = 128;
+                }
                 if (change is "tile" or "distant_tile")
                 {
                     var tile = Main.tile[X + (change == "tile" ? 1 : 80), Y - 1];
                     tile.HasTile = true; tile.TileType = TileID.Stone;
                 }
                 bool needsPlan = controller.NeedsPlan(0, source, false);
-                if (needsPlan != (change != "distant_tile")) throw new InvalidOperationException("reuse_invalidation:" + change);
+                if (needsPlan != (change is not "distant_tile" and not "water")) throw new InvalidOperationException("reuse_invalidation:" + change);
             }
             return new JsonObject { ["passed"] = true, ["first_request_frame"] = firstRequest,
                 ["validation_total_ms"] = checksMs, ["validated_frames"] = firstRequest, ["max_error"] = 0 };
