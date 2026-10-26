@@ -432,7 +432,7 @@ public sealed class Driver : ModSystem
                     if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualstart"))
                         ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
                     enabled = false;
-                    Main.NewText("手动测试：已关闭刷怪并添加光芒效果。DragonLens 已启用。", Color.LightGreen);
+                    Main.NewText("手动测试：已关闭刷怪并添加光芒效果。", Color.LightGreen);
                     Main.NewText($"自动寻路：/vnav route {args[1]} {args[2]}；停止：/vnav stop", Color.LightGreen);
                     Console.WriteLine("VNAV_MANUAL_READY " + goals.ToJsonString());
                     return;

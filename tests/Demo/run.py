@@ -41,9 +41,6 @@ def main():
     (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
     user_root = Path.home() / "Library/Application Support/Terraria/tModLoader"
     manual = "--manual" in sys.argv
-    if manual or descent:
-        shutil.copy2(user_root / "Mods/DragonLens.tmod", root / "Mods/DragonLens.tmod")
-        (root / "Mods/enabled.json").write_text('["TerraBlind","Demo","DragonLens"]')
     user_config = user_root / "config.json"
     settings = json.loads(user_config.read_text()) if user_config.exists() else {}
     settings["CloudSavingDefault"] = False
