@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -36,6 +37,7 @@ public static class VanillaNavBridge
     static bool useCached, needTerrain;
     static JsonObject previewedRoute, arrivalAnchor;
     static uint arrivalAt;
+    static readonly JsonArray rejectedEdits = new();
 
     public static void Reset()
     {
@@ -51,6 +53,10 @@ public static class VanillaNavBridge
 
     static void Fail(string reason)
     {
+        if (reason == "no_safe_terrain_action" && preparation != null)
+            File.WriteAllText(Path.Combine(Main.SavePath, "vanilla-terrain-failure.json"),
+                new JsonObject { ["request"] = preparation.DeepClone(),
+                    ["attempts"] = rejectedEdits.DeepClone() }.ToJsonString());
         DiagLog.Write("[engine-nav-failed] " + reason);
         RecedingNav.LastStop = reason;
         RecedingNav.Stop();
@@ -200,6 +206,7 @@ public static class VanillaNavBridge
     static bool CollectEdits(Player player, int gx, int gy)
     {
         edits.Clear();
+        rejectedEdits.Clear();
         var cellAtPlayer = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
         if (!BuildCorridor(cellAtPlayer.x, cellAtPlayer.y, gx, gy)) return false;
         int pick = Array.FindIndex(player.inventory, 0, 10, item => !item.IsAir && item.pick > 0);
@@ -295,6 +302,9 @@ public static class VanillaNavBridge
         {
             if (!preparing.IsCompleted) return;
             var result = preparing.GetAwaiter().GetResult(); preparing = null;
+            if (result["status"]?.GetValue<string>() != "planned")
+                rejectedEdits.Add(new JsonObject { ["x"] = edit.X, ["y"] = edit.Y, ["type"] = edit.Type,
+                    ["tiles"] = preparation["tiles"]?.DeepClone(), ["result"] = result.DeepClone() });
             DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
             if (result["status"]?.GetValue<string>() == "planned")
             {
