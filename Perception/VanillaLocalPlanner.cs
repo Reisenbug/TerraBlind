@@ -118,8 +118,10 @@ public sealed class VanillaLocalPlanner
         bool Forward((string name, int[] keys) candidate) => candidate.keys.All(key => (key & 3) == direction);
         try
         {
-        foreach (var candidate in candidates)
+        int primaryCount = candidates.Count;
+        for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
         {
+            var candidate = candidates[candidateIndex];
             bool forward = Forward(candidate);
             var forecast = prediction.Predict(candidate.keys, false, restoreAfter: false, samples: frames, stopOnDamage: true);
             var timing = forecast["timing"];
@@ -239,6 +241,13 @@ public sealed class VanillaLocalPlanner
                 }
                 if (towardGoal) break;
             }
+            if (transit && jumps > 0 && candidateIndex == primaryCount - 1 && !selectedAdvances)
+                foreach (int release in new[] { 12, 30 })
+                foreach (int delay in new[] { 0, 12 })
+                foreach (int travel in new[] { 36, 60, 84 })
+                    candidates.Add(($"relaunch_brake_{release}_{delay}_{travel}", Enumerable.Range(0, Horizon)
+                        .Select(i => (i >= delay && i < delay + travel ? direction : 0)
+                            | (i < 60 && i != release ? 4 : 0)).ToArray()));
         }
         if (chosen.Length > 0)
         {
