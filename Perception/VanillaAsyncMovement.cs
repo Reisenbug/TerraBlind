@@ -35,6 +35,9 @@ public sealed class VanillaAsyncMovement
     public int ContactContinuations { get; private set; }
     public int ContactRetainedFrames { get; private set; }
     public float ContactOffset { get; private set; }
+    public int ContactDescents { get; private set; }
+    public bool ContactDescentLanded { get; private set; }
+    JsonObject descentPlan;
     public string Status { get; private set; } = "idle";
     public bool Busy => pending != null;
     public Vector2[] AcceptedRoute { get; private set; } = Array.Empty<Vector2>();
@@ -139,6 +142,7 @@ public sealed class VanillaAsyncMovement
     public bool CurrentMatches(long tick, Player player)
     {
         if (ActiveResult == null || activeContext == null) return false;
+        if (AllowsContactDescent(tick, player)) return true;
         int index = checked((int)(tick - activeStart)) + activeOffset;
         var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
             : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
@@ -153,6 +157,7 @@ public sealed class VanillaAsyncMovement
     public bool NeedsPlan(long tick, Player player, bool terminal)
     {
         if (ActiveResult == null || activeContext == null) return true;
+        if (AllowsContactDescent(tick, player)) return ContactDescentLanded;
         int index = checked((int)(tick - activeStart)) + activeOffset;
         var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
             : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
@@ -178,6 +183,23 @@ public sealed class VanillaAsyncMovement
         for (int i = frames.Count - 1; i >= 0; i--)
             if (Math.Abs(frames[i]["vx"].GetValue<float>()) + Math.Abs(frames[i]["vy"].GetValue<float>()) > .01f) return i;
         return -1;
+    }
+
+    bool AllowsContactDescent(long tick, Player player)
+    {
+        ContactDescentLanded = false;
+        if (activeForecast?.Count is not > 0 || !HasInputAt(tick + 1)
+            || player.velocity.Y == 0 && !ReferenceEquals(descentPlan, ActiveResult)
+            || inputs.Any(input => input.Key > tick && input.Value != 0)) return false;
+        var end = activeForecast[^1];
+        if (end["vx"].GetValue<float>() != 0 || end["vy"].GetValue<float>() != 0) return false;
+        var landing = new Vector2(end["x"].GetValue<float>(), end["y"].GetValue<float>());
+        if (!VanillaContactRegion.SafeDescent(player, landing)
+            || !VanillaFrame.ContextMatches(activeContext, player, out _, new JsonArray(), activeTiles)) return false;
+        if (!ReferenceEquals(descentPlan, ActiveResult)) { descentPlan = ActiveResult; ContactDescents++; }
+        ContactDescentLanded = player.velocity.Y == 0 && Math.Abs(player.position.Y - landing.Y) < .01f;
+        LastMismatch = null;
+        return true;
     }
 
     bool TryContactContinuation(long tick, int index, Player player, JsonObject expected)

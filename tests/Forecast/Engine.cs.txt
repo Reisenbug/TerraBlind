@@ -98,6 +98,49 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "contact_descent_replay")
+        {
+            var evidence = request["evidence"].AsObject();
+            var snapshot = evidence["snapshot"].AsObject();
+            var player = VanillaFrame.RestoreInWorker(snapshot);
+            var remaining = evidence["remaining_controls"].AsArray();
+            var frames = evidence["active_plan"]["forecast"]["frames"].AsArray();
+            var tail = new JsonArray(frames.Skip(frames.Count - remaining.Count).Select(frame => frame.DeepClone()).ToArray());
+            var plan = new JsonObject { ["status"] = "planned", ["selected"] = "recorded_descent", ["wait_frames"] = 0,
+                ["context"] = snapshot.DeepClone(), ["anchor"] = VanillaPrediction.Observe(player, false),
+                ["route_progress"] = 100, ["forecast"] = new JsonObject { ["frames"] = tail },
+                ["controls"] = remaining.DeepClone() };
+            var controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_request"));
+            if (!controller.InstallTerrain(plan, player, 0, new Vector2(evidence["x"].GetValue<float>(), evidence["y"].GetValue<float>())))
+                throw new InvalidOperationException("descent_install_failed");
+            float maxError = 0;
+            int landedAt = 0, hp = player.statLife;
+            for (int frame = 1; frame < remaining.Count; frame++)
+            {
+                VanillaPrediction.Advance(player, (VanillaKeys)controller.InputAt(frame));
+                controller.Poll(frame, player, 0);
+                if (!controller.CurrentMatches(frame, player) || player.statLife < hp || player.dead)
+                    throw new InvalidOperationException("unsafe_contact_descent:" + frame + ":" + controller.LastMismatch
+                        + ":actual=" + VanillaPrediction.Observe(player, false) + ":landing=" + tail[^1]);
+                maxError = Math.Max(maxError, Math.Abs(player.position.Y - tail[frame - 1]["y"].GetValue<float>()));
+                bool needsPlan = controller.NeedsPlan(frame, player, false);
+                if (controller.ContactDescentLanded) { landedAt = frame; if (!needsPlan) throw new InvalidOperationException("landed_without_handoff"); break; }
+                if (needsPlan) throw new InvalidOperationException("descent_replanned_in_air");
+            }
+            if (landedAt == 0 || maxError < 1 || controller.ContactDescents != 1)
+                throw new InvalidOperationException("descent_replay_did_not_exercise_tolerance");
+            var landing = player.position;
+            player = VanillaFrame.RestoreInWorker(snapshot);
+            var foot = Main.tile[(int)(landing.X / 16), (int)((landing.Y + player.height - 4) / 16)];
+            foot.LiquidType = LiquidID.Lava; foot.LiquidAmount = 255;
+            if (VanillaContactRegion.SafeDescent(player, landing)) throw new InvalidOperationException("descent_ignored_lava");
+            player = VanillaFrame.RestoreInWorker(snapshot);
+            player.fallStart = (int)(landing.Y / 16) - 100;
+            if (VanillaContactRegion.SafeDescent(player, landing)) throw new InvalidOperationException("descent_ignored_fall_damage");
+            VanillaFrame.RestoreInWorker(snapshot);
+            return new JsonObject { ["landed_frame"] = landedAt, ["max_y_deviation"] = maxError, ["hp"] = hp,
+                ["contact_descents"] = controller.ContactDescents, ["hazards_rejected"] = true };
+        }
         if (command == "contact_cycle_replay")
         {
             var player = VanillaFrame.RestoreInWorker(request["snapshot"].AsObject());

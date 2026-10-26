@@ -67,4 +67,19 @@ public static class VanillaContactRegion
             if (!Supported(Vector2.Lerp(from, to, i / (float)steps), width, height)) return false;
         return true;
     }
+
+    public static bool SafeDescent(Player player, Vector2 landing)
+    {
+        if (player.gravDir != 1 || player.velocity.X != 0 || player.velocity.Y < 0 || player.jump > 0
+            || Math.Abs(player.position.X - landing.X) > .01f
+            || player.position.Y > landing.Y || landing.Y - player.position.Y > 512
+            || !player.noFallDmg && (int)(landing.Y / 16) - player.fallStart > 25 + player.extraFall
+            || !Supported(landing, player.width, player.height)) return false;
+        if (player.position.Y < landing.Y && player.velocity.Y == 0
+            && Supported(player.position, player.width, player.height)) return false;
+        int steps = Math.Max(1, (int)Math.Ceiling((landing.Y - player.position.Y) / 2));
+        for (int i = 0; i <= steps; i++)
+            if (!SafeBody(Vector2.Lerp(player.position, landing, i / (float)steps), player.width, player.height)) return false;
+        return true;
+    }
 }

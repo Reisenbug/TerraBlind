@@ -102,7 +102,9 @@ public static class VanillaNavBridge
         }
         if (phase == Phase.Approaching)
         {
-            if (stable >= 3 && VanillaAsyncMovement.StateMatches(player, arrivalAnchor, true, out _, out _))
+            if (stable >= 3 && (VanillaAsyncMovement.StateMatches(player, arrivalAnchor, true, out _, out _)
+                || demo.ContactDescentLanded && VanillaContactRegion.ConnectedSupport(player.position,
+                    new Vector2(arrivalAnchor["x"].GetValue<float>(), arrivalAnchor["y"].GetValue<float>()), player.width, player.height)))
             {
                 demo.PauseForTerrain(); phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
                 DiagLog.Write($"[engine-terrain-arrived] ready={preparing?.IsCompleted} lead_frames={Main.GameUpdateCount - progressAt}");

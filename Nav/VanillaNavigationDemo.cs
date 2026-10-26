@@ -40,6 +40,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     Vector2 goal;
     Vector2[] route = Array.Empty<Vector2>();
     readonly VanillaContactOverlay contactOverlay = new();
+    public bool ContactDescentLanded => movement?.ContactDescentLanded == true;
     JsonObject recordedDivergence;
     CancellationTokenSource cancellation;
     Task<VanillaWorkerConnection> startup;
@@ -215,6 +216,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             tick++;
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
             if (terrainPaused) return;
+            int descentCount = movement.ContactDescents;
             movement.Poll(tick, player, 0);
             if (movement.ResponseFrames > 0) responseFrames = movement.ResponseFrames;
             if (NavigationOwned) VanillaNavBridge.Prefetch(player, movement, tick);
@@ -252,6 +254,8 @@ public sealed class VanillaNavigationDemo : ModSystem
             int contactCount = movement.ContactContinuations;
             bool needsPlan = !VanillaNavBridge.ApproachingTerrain
                 && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal));
+            if (movement.ContactDescents != descentCount)
+                DiagLog.Write($"[engine-contact-descent] x={player.position.X:0.###} y={player.position.Y:0.###} vy={player.velocity.Y:0.###}; retaining safe descent despite timing differences");
             if (movement.LastDivergence is JsonObject divergence && !ReferenceEquals(divergence, recordedDivergence))
             {
                 recordedDivergence = divergence;
