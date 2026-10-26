@@ -32,7 +32,7 @@ public static class AgentCatalog
                 ["exact"] = numeric || Key(entry.Name) == key || entry.Labels.Any(label => Key(label) == key),
                 ["display_names"] = new JsonArray(entry.Labels.Select(label => (JsonNode)JsonValue.Create(label)).ToArray())
             }).ToArray()),
-            ["source"] = "Loaded vanilla ID constants. Identifier lookup only; not inventory, drop, spawn or kill evidence. Mod-registered IDs and translated names are not included."
+            ["source"] = "Loaded vanilla ID constants and any supplied current-language map labels. Lookup only; not inventory, drop, spawn or kill evidence. Mod-registered IDs are not included."
         };
     }
 }
