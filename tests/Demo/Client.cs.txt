@@ -72,6 +72,41 @@ public sealed class Driver : ModSystem
     string timingPhase;
     double phaseStart;
     Vector2 phasePosition, previousPosition;
+    object prewarming;
+
+    void WorkerLifecycle()
+    {
+        var demo = VanillaNavigationDemo.Instance;
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var startupField = typeof(VanillaNavigationDemo).GetField("startup", flags);
+        var workerField = typeof(VanillaNavigationDemo).GetField("worker", flags);
+        var worker = workerField.GetValue(demo) as VanillaWorkerConnection;
+        if (++ticks > 5400) throw new TimeoutException("worker_prewarm_timeout");
+        if (ticks == 1)
+        {
+            prewarming = startupField.GetValue(demo);
+            if (prewarming == null) throw new InvalidOperationException("world_prewarm_not_started");
+            demo.Stop();
+            if (!ReferenceEquals(prewarming, startupField.GetValue(demo)))
+                throw new InvalidOperationException("stop_cancelled_prewarm");
+        }
+        if (worker == null) return;
+        var start = typeof(VanillaNavigationDemo).GetMethod("StartNavigation", flags);
+        for (int task = 0; task < 2; task++)
+        {
+            start.Invoke(demo, new object[] { Main.LocalPlayer.position });
+            if (!demo.PlannerReady || !ReferenceEquals(worker, workerField.GetValue(demo)))
+                throw new InvalidOperationException("task_did_not_reuse_worker");
+            demo.Stop();
+            if (!worker.Alive) throw new InvalidOperationException("stop_closed_worker");
+        }
+        demo.OnWorldUnload();
+        if (worker.Alive || workerField.GetValue(demo) != null || startupField.GetValue(demo) != null)
+            throw new InvalidOperationException("world_unload_leaked_worker");
+        Console.WriteLine("VNAV_WORKER_COMPLETE tasks=2 starts=1 pending_stop=preserved unload=closed");
+        enabled = false;
+        Environment.Exit(0);
+    }
 
     static void RestoreBaseline(Player player, string directory)
     {
@@ -264,6 +299,7 @@ public sealed class Driver : ModSystem
         if (!enabled || Main.gameMenu) return;
         try
         {
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
             if (warmup-- > 0) return;
@@ -337,11 +373,11 @@ public sealed class Driver : ModSystem
         catch (Exception error)
         {
             if (NavigationRecording.Active) NavigationRecording.Stop(error.Message);
-            if (descent) SaveTiming(false, error.Message);
+            if (descent && routeClock.IsRunning) SaveTiming(false, error.Message);
             controlTrace?.Flush();
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
-            enabled = false; VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
-            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(1);
+            enabled = false;
+            RecedingNav.Stop(); VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
     }
@@ -421,7 +457,7 @@ public sealed class Driver : ModSystem
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
         { RecedingNav.LastStop = "done"; RecedingNav.Stop(); }
         if (VanillaNavBridge.Enabled && RecedingNav.Active && (StateSpacePlanner.ExecRunning
-            || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
+            || MineCoordinator.IsActive && !VanillaNavBridge.OwnsExcavation || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
             throw new InvalidOperationException("legacy_executor_in_native_route");
         var sample = VanillaPrediction.Observe(player);
         var control = VanillaNavigationDemo.Instance.LastControl;

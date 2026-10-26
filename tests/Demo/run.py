@@ -11,6 +11,7 @@ import time
 
 def main():
     routed = "--route" in sys.argv
+    worker_check = "--worker-startup" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
     continuity |= circuit
@@ -78,6 +79,8 @@ def main():
         command.append("-vnavbackgroundcheck")
     if "--old-nav" in sys.argv:
         command.append("-vnavoldnavcheck")
+    if worker_check:
+        command.append("-vnavworkercheck")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -90,15 +93,19 @@ def main():
                 keep = True
                 print("MANUAL_WINDOW_READY pid=", process.pid, flush=True)
                 return
-            if ("VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
+            if ("VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
-                if show and process.poll() is None:
+                if process.poll() is None:
                     keep = True
+                    print("FAILED_DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
                 raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
             time.sleep(.25)
         else:
             raise TimeoutError("Demo did not complete within 240 seconds")
+        if worker_check:
+            print("WORKER_LIFECYCLE_CHECK_COMPLETE", flush=True)
+            return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
             assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
@@ -121,6 +128,10 @@ def main():
         if show:
             keep = True
             print("DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
+    except Exception:
+        if process.poll() is None:
+            keep = True
+        raise
     finally:
         if not keep and process.poll() is None:
             process.terminate()
