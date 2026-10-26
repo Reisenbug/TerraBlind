@@ -254,6 +254,10 @@ public sealed class VanillaLocalPlanner
                     candidates.Add(($"relaunch_brake_{release}_{delay}_{travel}", Enumerable.Range(0, Horizon)
                         .Select(i => (i >= delay && i < delay + travel ? direction : 0)
                             | (i < 60 && i != release ? 4 : 0)).ToArray()));
+                foreach (int hold in new[] { 6, 18, 60 })
+                foreach (int stop in new[] { 12, 36, 60 })
+                    candidates.Add(($"reverse_jump_brake_{hold}_{stop}", Enumerable.Range(0, Horizon)
+                        .Select(i => (i < stop ? reverse : 0) | (i < hold ? 4 : 0)).ToArray()));
             }
         }
         if (chosen.Length > 0)
