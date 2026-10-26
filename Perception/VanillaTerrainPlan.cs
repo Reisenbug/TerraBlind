@@ -174,9 +174,39 @@ public static class VanillaTerrainPlan
                 || prefix["frames"].AsArray().Any(frame => frame["dead"].GetValue<bool>()
                     || frame["hp"].GetValue<int>() < player.statLife))
                 return new JsonObject { ["status"] = "unsafe_edit_wait" };
-            var plan = new VanillaLocalPlanner().Plan(prefix["end_snapshot"].AsObject(),
+            JsonArray nextPlacement = null;
+            var settled = prefix["end_snapshot"].AsObject();
+            bool TryNextPlacement()
+            {
+                double start = clock.Elapsed.TotalMilliseconds;
+                var standing = VanillaFrame.RestoreInWorker(settled);
+                try
+                {
+                    if (type >= 0 || request["y"].GetValue<float>() >= standing.position.Y
+                        || !standing.inventory.Any(item => item.stack > 0 && item.createTile == Terraria.ID.TileID.Platforms))
+                        return false;
+                    int supportY = (int)(standing.Bottom.Y / 16) - 1;
+                    int left = (int)(standing.Left.X / 16), right = (int)((standing.Right.X - 1) / 16);
+                    for (int column = left; column <= right; column++)
+                    {
+                        var step = JumpPlacement(new JsonObject { ["snapshot"] = settled.DeepClone(),
+                            ["tile_x"] = column, ["tile_y"] = supportY, ["tile_type"] = (int)Terraria.ID.TileID.Platforms });
+                        if (step["status"]?.GetValue<string>() != "planned") continue;
+                        nextPlacement = new JsonArray(column, supportY);
+                        return true;
+                    }
+                    return false;
+                }
+                finally
+                {
+                    VanillaFrame.RestoreInWorker(settled);
+                    timing["next_placement_ms"] = clock.Elapsed.TotalMilliseconds - start;
+                }
+            }
+            var plan = new VanillaLocalPlanner().Plan(settled,
                 new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
-                guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
+                guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>(),
+                terrainContinuation: TryNextPlacement);
             Mark("edited_plan_ms");
             if (plan["status"].GetValue<string>() != "planned") return plan;
             double movementProgress = plan["route_progress"].GetValue<double>(), editProgress = 0;
@@ -197,30 +227,13 @@ public static class VanillaTerrainPlan
             plan["route_progress"] = movementProgress + editProgress;
             if (request["guidance"] != null && plan["route_progress"].GetValue<double>() <= 0)
             {
-                JsonArray nextPlacement = null;
-                var settled = prefix["end_snapshot"].AsObject();
-                var standing = VanillaFrame.RestoreInWorker(settled);
-                if (type < 0 && request["y"].GetValue<float>() < standing.position.Y
-                    && standing.inventory.Any(item => item.stack > 0 && item.createTile == Terraria.ID.TileID.Platforms))
-                {
-                    int supportY = (int)(standing.Bottom.Y / 16) - 1;
-                    int left = (int)(standing.Left.X / 16), right = (int)((standing.Right.X - 1) / 16);
-                    for (int column = left; column <= right; column++)
-                    {
-                        var step = JumpPlacement(new JsonObject { ["snapshot"] = settled.DeepClone(),
-                            ["tile_x"] = column, ["tile_y"] = supportY, ["tile_type"] = (int)Terraria.ID.TileID.Platforms });
-                        if (step["status"]?.GetValue<string>() != "planned") continue;
-                        nextPlacement = new JsonArray(column, supportY);
-                        break;
-                    }
-                }
+                if (nextPlacement == null && timing["next_placement_ms"] == null) TryNextPlacement();
                 if (nextPlacement == null)
                 {
                     plan["status"] = "edit_does_not_open_route";
                     return plan;
                 }
                 plan["next_jump_place"] = nextPlacement;
-                Mark("next_placement_ms");
             }
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);

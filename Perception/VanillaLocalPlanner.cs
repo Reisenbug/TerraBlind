@@ -35,7 +35,8 @@ public sealed class VanillaLocalPlanner
     }
 
     public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
-        int routeDirection = 0, bool preferContinuation = false, bool continuationOnly = false)
+        int routeDirection = 0, bool preferContinuation = false, bool continuationOnly = false,
+        Func<bool> terrainContinuation = null)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -263,6 +264,7 @@ public sealed class VanillaLocalPlanner
             }
             if (transit && candidateIndex == primaryCount - 1 && !selectedAdvances)
             {
+                if (chosen.Length > 0 && terrainContinuation?.Invoke() == true) break;
                 foreach (int stop in new[] { 24, 48 })
                     candidates.Add(($"brake_refined_{stop}", Enumerable.Range(0, Horizon)
                         .Select(i => i < stop ? direction : 0).ToArray()));

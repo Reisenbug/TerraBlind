@@ -801,6 +801,10 @@ public sealed class Engine : ModSystem
             if (afterHandoff["candidates"].AsArray().Any(candidate => candidate["outcome"].GetValue<string>() == "outside_observed_world"))
                 throw new InvalidOperationException("snapshot_omitted_handoff_distance");
             var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
+            var withTerrainOption = new VanillaLocalPlanner().Plan(snapshot, goal, guidance: guidance,
+                terrainContinuation: () => throw new InvalidOperationException("terrain_replaced_advancing_mobility"));
+            if (!JsonNode.DeepEquals(walk["controls"], withTerrainOption["controls"]))
+                throw new InvalidOperationException("terrain_option_changed_free_movement");
             var repaired = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
                 preferContinuation: true, continuationOnly: true);
             if (repaired["selected"].GetValue<string>() != "continue" || repaired["candidates"].AsArray().Count != 1)
