@@ -365,8 +365,9 @@ public sealed class Engine : ModSystem
             if (!controller.NeedsPlan(0, source, false) || controller.HasInputAt(1))
                 throw new InvalidOperationException("recovery_executed_unvalidated_controls");
             controller.Request(VanillaFrame.Capture(source, area, true), 0, source.position + new Vector2(600, 0), 0);
-            if (repairRequest["recover"]?.GetValue<bool>() != true || repairRequest["prefix"].AsArray().Count != 60
-                || repairRequest["continuation"].AsArray().Count != 180)
+            if (repairRequest["recover"]?.GetValue<bool>() != true || repairRequest["prefix"].AsArray().Count != 24
+                || repairRequest["continuation"].AsArray().Count != 180 || controller.PlanningLead != 60
+                || repairRequest["continuation_only"]?.GetValue<bool>() != true)
                 throw new InvalidOperationException("recovery_lost_remaining_controls");
             controller.CancelPending();
             source = VanillaFrame.RestoreInWorker(snapshot);
@@ -680,11 +681,15 @@ public sealed class Engine : ModSystem
                 throw new InvalidOperationException("snapshot_omitted_handoff_distance");
             var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
             var repaired = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
-                preferContinuation: true);
+                preferContinuation: true, continuationOnly: true);
             if (repaired["selected"].GetValue<string>() != "continue" || repaired["candidates"].AsArray().Count != 1)
                 throw new InvalidOperationException("recovery_repeated_full_search");
             var spike = Main.tile[X + 3, Y - 1]; spike.HasTile = true; spike.TileType = TileID.Spikes;
             var hazardous = VanillaFrame.Capture(source, area, true);
+            var quickRejected = new VanillaLocalPlanner().Plan(hazardous, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
+                preferContinuation: true, continuationOnly: true);
+            if (quickRejected["status"].GetValue<string>() != "no_safe_candidate" || quickRejected["candidates"].AsArray().Count != 1)
+                throw new InvalidOperationException("unsafe_repair_did_not_return_promptly");
             var rejectedRepair = new VanillaLocalPlanner().Plan(hazardous, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
                 preferContinuation: true);
             if (rejectedRepair["selected"].GetValue<string>() == "continue" || rejectedRepair["candidates"].AsArray().Count <= 1)
@@ -734,6 +739,12 @@ public sealed class Engine : ModSystem
             movingController.NeedsPlan(30, source, false);
             if (movingController.ActiveResult != null || movingController.HasInputAt(31))
                 throw new InvalidOperationException("active_obstruction_kept_movement");
+            movingController.Request(VanillaFrame.Capture(source, area, true), 30, source.position + new Vector2(300, 0), 0);
+            var repairRequest = movingController.LastRequest;
+            if (repairRequest["prefix"].AsArray().Count != 24 || repairRequest["continuation_only"]?.GetValue<bool>() != true
+                || repairRequest["continuation"].AsArray().Count != 150 || movingController.PlanningLead != 30)
+                throw new InvalidOperationException($"repair_handoff_mismatch: prefix={repairRequest["prefix"].AsArray().Count} remaining={repairRequest["continuation"]?.AsArray().Count} normal_lead={movingController.PlanningLead}");
+            movingController.CancelPending();
             Setup(new JsonObject());
             var snapshot = VanillaFrame.Capture(source, area);
             var fake = new JsonObject { ["status"] = "planned", ["anchor"] = VanillaPrediction.Observe(source),
@@ -955,7 +966,8 @@ public sealed class Engine : ModSystem
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
                     guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true,
                     routeDirection: request["route_direction"]?.GetValue<int>() ?? 0,
-                    preferContinuation: request["recover"]?.GetValue<bool>() == true);
+                    preferContinuation: request["recover"]?.GetValue<bool>() == true,
+                    continuationOnly: request["continuation_only"]?.GetValue<bool>() == true);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

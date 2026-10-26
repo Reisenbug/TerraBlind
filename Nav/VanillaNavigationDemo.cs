@@ -228,6 +228,8 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 loggedAccepted = movement.Accepted; loggedRejected = movement.Rejected;
                 var result = movement.LastResult;
+                if (movement.LastRequest?["continuation_only"]?.GetValue<bool>() == true)
+                    DiagLog.Write($"[engine-route-repair] status={result?["status"]} selected={result?["selected"]} rejection={movement.LastRejection} prefix_frames={movement.LastRequest["prefix"]?.AsArray().Count} roundtrip_ms={result?["roundtrip_ms"]}");
                 var cell = ((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16));
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline")
                     && result?["status"]?.GetValue<string>() == "planned"

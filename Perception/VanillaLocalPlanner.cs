@@ -35,7 +35,7 @@ public sealed class VanillaLocalPlanner
     }
 
     public JsonObject Plan(JsonObject snapshot, Vector2 goal, int[] continuation = null, JsonNode guidance = null, bool terminal = false,
-        int routeDirection = 0, bool preferContinuation = false)
+        int routeDirection = 0, bool preferContinuation = false, bool continuationOnly = false)
     {
         VanillaFrame.RequireWorker();
         if (!float.IsFinite(goal.X) || !float.IsFinite(goal.Y)) throw new ArgumentException("invalid_goal");
@@ -237,6 +237,11 @@ public sealed class VanillaLocalPlanner
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (forecast["dynamic_spawn"] != null) diagnostics[^1]["dynamic_spawn"] = forecast["dynamic_spawn"].DeepClone();
+            if (continuationOnly)
+            {
+                if (!selectedAdvances) { chosen = Array.Empty<int>(); selected = "none"; }
+                break;
+            }
             if (preferContinuation && candidate.name == "continue" && safe && chosenProgress > 0) break;
             if (candidateIndex >= primaryCount && selectedAdvances) break;
             if (safe && candidate.name is "walk" or "continue"

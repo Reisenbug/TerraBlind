@@ -57,6 +57,7 @@ public sealed class VanillaAsyncMovement
     int[] activeTiles;
     int activeUsefulEnd;
     int[] recovery;
+    Vector2? recoveryLanding;
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) : this((request, _) => transport(request)) { }
     public VanillaAsyncMovement(Func<JsonObject, CancellationToken, Task<JsonObject>> transport, int planningLead = LeadFrames)
@@ -120,8 +121,12 @@ public sealed class VanillaAsyncMovement
     {
         var remaining = Enumerable.Range(1, VanillaLocalPlanner.Horizon)
             .TakeWhile(i => inputs.ContainsKey(tick + i)).Select(i => InputAt(tick + i)).ToArray();
+        Vector2? landing = null;
+        if (ActiveResult != null && activeForecast?.Count > 0 && activeForecast[^1]["vy"].GetValue<float>() == 0
+            && activeForecast[^1]["grounded"]?.GetValue<bool>() == true)
+            landing = new Vector2(activeForecast[^1]["x"].GetValue<float>(), activeForecast[^1]["y"].GetValue<float>());
         Reject(reason);
-        recovery = remaining;
+        recovery = remaining; recoveryLanding = landing;
     }
     public bool TryArrival(long tick, out int[] controls, out JsonObject anchor)
     {
@@ -172,7 +177,7 @@ public sealed class VanillaAsyncMovement
             activeTiles, Math.Max(0, index + 1), 12))
         {
             LastMismatch = difference; RecordAirborneDivergence(player, tick, "context_changed");
-            Reject("context_changed"); return true;
+            RecoverRoute(tick, "context_changed"); return true;
         }
         return terminal || ActiveResult["route_progress"]?.GetValue<double>() <= 0
             || inputs.Count <= PlanningLead + 12 || activeUsefulEnd - index <= PlanningLead + 12;
@@ -406,7 +411,7 @@ public sealed class VanillaAsyncMovement
         return true;
     }
 
-    void Reject(string reason, bool clear = true) { recovery = null; if (clear) { inputs.Clear(); ActiveResult = null; } Rejected++; Status = reason; LastRejection = reason; CancelPending(); }
+    void Reject(string reason, bool clear = true) { recovery = null; recoveryLanding = null; if (clear) { inputs.Clear(); ActiveResult = null; } Rejected++; Status = reason; LastRejection = reason; CancelPending(); }
 
     void RejectResponse(string reason, Player player, long tick, bool navigation)
     {
@@ -421,8 +426,11 @@ public sealed class VanillaAsyncMovement
         if (pending != null) return false;
         if (revision != currentRevision) { inputs.Clear(); ActiveResult = null; recovery = null; currentRevision = revision; }
         requestedAt = tick; completionObserved = false;
-        handoff = tick + PlanningLead; requestRevision = revision;
-        var prefix = new JsonArray(Enumerable.Range(1, PlanningLead).Select(i => JsonValue.Create(InputAt(tick + i))).ToArray());
+        bool repair = recovery?.Length > 0;
+        if (repair && recoveryLanding.HasValue) goal = recoveryLanding.Value;
+        int lead = repair ? 24 : PlanningLead;
+        handoff = tick + lead; requestRevision = revision;
+        var prefix = new JsonArray(Enumerable.Range(1, lead).Select(i => JsonValue.Create(InputAt(tick + i))).ToArray());
         var request = new JsonObject { ["command"] = "plan", ["snapshot"] = takeOwnership ? snapshot : snapshot.DeepClone(),
             ["prefix"] = prefix, ["x"] = goal.X, ["y"] = goal.Y,
             ["continuation"] = new JsonArray(Enumerable.Range(1, VanillaLocalPlanner.Horizon)
@@ -430,8 +438,9 @@ public sealed class VanillaAsyncMovement
         if (recovery?.Length > 0)
         {
             request["recover"] = true;
+            request["continuation_only"] = true;
             request["continuation"] = new JsonArray(recovery.Select(key => JsonValue.Create(key)).ToArray());
-            recovery = null;
+            recovery = null; recoveryLanding = null;
         }
         context = request["snapshot"].AsObject();
         lastRequest = request; observations = new JsonArray(); LastDivergence = null;
