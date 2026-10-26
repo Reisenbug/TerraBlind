@@ -2450,7 +2450,6 @@ namespace TerraBlind
 								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 								var t = Main.tile[x, y];
 								if (!t.HasTile || t.TileType != wantType) continue;
-								if (InHive(x, y)) continue;   // 蜂巢里的不捡,进去出不来
 								// 箱子是 2x2 一个 TileID,只有左上角那格(frameX%36==0 && frameY%36==0)算锚点。
 								// 去重到它,顺便用 frameX 认出是哪种箱子。
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
@@ -2469,6 +2468,7 @@ namespace TerraBlind
 					{
 						if (i > 0) fsb.Append(',');
 						fsb.Append($"{{\"x\":{found[i].x},\"y\":{found[i].y},\"dist\":{System.Math.Abs(found[i].x - pcx) + System.Math.Abs(found[i].y - pcy)}");
+						fsb.Append(",\"near_hive_wall\":").Append(InHive(found[i].x, found[i].y) ? "true" : "false");
 						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
 						fsb.Append("}");
 					}

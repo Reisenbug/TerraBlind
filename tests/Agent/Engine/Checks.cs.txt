@@ -22,6 +22,7 @@ public sealed class Driver : ModSystem
     DateTime liveStart;
     int phase, ticks;
     int heartX, heartY;
+    JsonObject gatherRequest;
     Task<string> pending;
     readonly JsonArray results = new();
 
@@ -94,7 +95,7 @@ public sealed class Driver : ModSystem
                     pending = AgentTools.State(default);
                 return;
             }
-            if (++ticks > 3600) throw new TimeoutException("engine_check_frame_limit");
+            if (++ticks > 7200) throw new TimeoutException("engine_check_frame_limit");
             Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60;
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
@@ -113,7 +114,7 @@ public sealed class Driver : ModSystem
                     player.inventory[1].SetDefaults(ItemID.JungleSpores); player.inventory[1].stack = 12;
                     player.inventory[2].SetDefaults(ItemID.Stinger); player.inventory[2].stack = 9;
                     int x = (int)player.Center.X / 16, y = (int)player.Bottom.Y / 16;
-                    for (int tx = x - 6; tx <= x + 6; tx++)
+                    for (int tx = x - 24; tx <= x + 24; tx++)
                     for (int ty = y - 5; ty <= y + 2; ty++)
                     {
                         var tile = Main.tile[tx, ty];
@@ -158,6 +159,11 @@ public sealed class Driver : ModSystem
                     heartX = (int)player.Center.X / 16 - 3; heartY = (int)player.Bottom.Y / 16 - 1;
                     WorldGen.PlaceObject(heartX, heartY, TileID.Heart);
                     Check(Main.tile[heartX, heartY].HasTile && Main.tile[heartX, heartY].TileType == TileID.Heart, "heart_fixture_missing");
+                    var hiveTile = Main.tile[heartX, heartY]; hiveTile.WallType = WallID.HiveUnsafe;
+                    var scan = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":20}").Body);
+                    Check(scan["tiles"]?.AsArray().Count == 1 && scan["tiles"][0]["near_hive_wall"]?.GetValue<bool>() == true,
+                        "hive_wall_silently_filtered_resource");
+                    hiveTile.WallType = WallID.None;
                     Call("nav_to", new JsonObject { ["x"] = heartX, ["y"] = heartY, ["exact"] = true });
                     break;
                 case 10:
@@ -173,6 +179,41 @@ public sealed class Driver : ModSystem
                     break;
                 case 12:
                     Check(player.statLifeMax == 140 && player.ConsumedLifeCrystals == 2, "mined_crystal_not_used");
+                    for (int slot = 0; slot < player.inventory.Length; slot++)
+                        if (player.inventory[slot].type is ItemID.Gel or ItemID.LifeCrystal) player.inventory[slot].TurnToAir();
+                    heartX = (int)player.Center.X / 16 - 3; heartY = (int)player.Bottom.Y / 16 - 1;
+                    WorldGen.PlaceObject(heartX, heartY, TileID.Heart);
+                    Check(Main.tile[heartX, heartY].HasTile, "gather_heart_fixture_missing");
+                    int slime = NPC.NewNPC(new EntitySource_Misc("AgentChecks"), (int)player.Center.X + 64,
+                        (int)player.Bottom.Y - 32, NPCID.BlueSlime);
+                    Check(slime < Main.maxNPCs, "gather_npc_fixture_missing");
+                    AgentPermissions.Attack = true;
+                    gatherRequest = new JsonObject { ["seconds"] = 60, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = 1, ["tile_names"] = new JsonArray("Heart") },
+                        new JsonObject { ["item_type"] = (int)ItemID.Gel, ["count"] = 1, ["npc_types"] = new JsonArray((int)NPCID.BlueSlime) }) };
+                    Call("task_plan", JsonNode.Parse($$"""
+                        {"goal":"verify NPC presence","steps":[{"id":"spawn","description":"live NPC present","conditions":[{"kind":"npc_alive","type":{{NPCID.BlueSlime}},"count":1}]}]}
+                        """).AsObject());
+                    break;
+                case 13:
+                    Check(result["error"] == null, "presence_plan_rejected"); Call("task_step", Step("spawn")); break;
+                case 14:
+                    Check(result["verified"]?.GetValue<bool>() == true, "live_spawn_not_verified"); Call("gather", gatherRequest); break;
+                case 15:
+                    Check(result["ok"]?.GetValue<bool>() == true, "mixed_gather_failed");
+                    Check(Array.Exists(player.inventory, item => item.type == ItemID.LifeCrystal && item.stack >= 1)
+                        && Array.Exists(player.inventory, item => item.type == ItemID.Gel && item.stack >= 1), "mixed_gather_inventory_missing");
+                    int gel = 0;
+                    foreach (var item in player.inventory) if (item.type == ItemID.Gel) gel += item.stack;
+                    int drop = Item.NewItem(new EntitySource_Misc("AgentChecks"), new Rectangle((int)player.Center.X + 128,
+                        (int)player.Bottom.Y - 128, 16, 16), ItemID.Gel, 1);
+                    Check(drop < Main.maxItems, "airborne_drop_fixture_missing");
+                    Main.item[drop].velocity = new Vector2(1, -2);
+                    Call("gather", new JsonObject { ["seconds"] = 30, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.Gel, ["count"] = gel + 1 }) });
+                    break;
+                case 16:
+                    Check(result["ok"]?.GetValue<bool>() == true, "airborne_drop_pickup_failed");
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
                     {
                         player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
@@ -187,7 +228,7 @@ public sealed class Driver : ModSystem
                         Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true max_seconds=180");
                         break;
                     }
-                    Finish(true, "AGENT_ENGINE_COMPLETE checks=9 model_calls=0 controlled_fixture=true"); break;
+                    Finish(true, "AGENT_ENGINE_COMPLETE checks=13 model_calls=0 controlled_fixture=true"); break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }

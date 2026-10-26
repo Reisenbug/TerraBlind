@@ -142,6 +142,26 @@ static class RuntimeTests
             Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[100, 100] = default;
             Console.WriteLine("PASS: non-solid mining selects an actual collect tool, rejects missing tools and preserves measured removal outcome");
 
+            var treasureCalls = new System.Collections.Generic.List<string>();
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                treasureCalls.Add(path);
+                if (path == "/npc_find")
+                {
+                    Check(JsonNode.Parse(payload)["type"].GetValue<int>() == 77, "NPC query changed requested type");
+                    return (200, "{\"npcs\":[{\"idx\":4,\"type\":77}]}");
+                }
+                if (path == "/nav_recede") Check(JsonNode.Parse(payload)["reach"].GetValue<bool>(), "treasure approach did not use interaction reach");
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/collect_treasure_status"
+                    ? "{\"running\":false,\"outcome\":\"done\"}" : "{\"ok\":true}");
+            };
+            var npcs = JsonNode.Parse(await Execute(AgentTools.Execute("npc_find", new JsonObject { ["type"] = 77 }, default)));
+            Check(npcs["npcs"][0]["type"].GetValue<int>() == 77, "NPC query did not return observed entities");
+            var treasure = JsonNode.Parse(await Execute(AgentTools.Execute("collect_treasure", new JsonObject { ["x"] = 100, ["y"] = 100 }, default)));
+            Check(treasure["outcome"].ToString() == "done" && treasureCalls.IndexOf("/nav_recede_done") < treasureCalls.IndexOf("/collect_treasure")
+                && treasureCalls.Contains("/collect_treasure_status"), "treasure tool skipped approach or existing verified looting workflow");
+            Console.WriteLine("PASS: NPC query preserves filters and treasure delegation approaches before invoking existing looting verification");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);
