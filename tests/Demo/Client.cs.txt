@@ -78,6 +78,13 @@ public sealed class Driver : ModSystem
     Vector2 phasePosition, previousPosition;
     object prewarming;
 
+    static void FinishProcess(int exitCode)
+    {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavkeepopen")) return;
+        VanillaNavigationDemo.Instance.OnWorldUnload();
+        Environment.Exit(exitCode);
+    }
+
     void WorkerLifecycle()
     {
         var demo = VanillaNavigationDemo.Instance;
@@ -374,7 +381,7 @@ public sealed class Driver : ModSystem
             if (VanillaNavigationDemo.Active || AxisLock.Held(Ax.Move) == "vanilla-demo") throw new InvalidOperationException("stop_did_not_release_control");
             Console.WriteLine("VNAV_DEMO_COMPLETE cases=2");
             enabled = false;
-            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
+            FinishProcess(0);
             Main.NewText("演示已通过。可以输入 /vnav X Y 继续尝试；/vnav stop 停止。", Color.LightGreen);
         }
         catch (Exception error)
@@ -385,6 +392,7 @@ public sealed class Driver : ModSystem
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
             enabled = false;
             RecedingNav.Stop(); VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
+            FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
     }
@@ -552,7 +560,7 @@ public sealed class Driver : ModSystem
         SaveTiming(true, "done");
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         controlTrace.Flush();
-        if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
+        FinishProcess(0);
     }
 
     public override void PostDrawInterface(SpriteBatch batch)

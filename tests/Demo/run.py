@@ -57,6 +57,8 @@ def main():
                "-tmlsavedirectory", str(root), "-vnavdescentcheck" if descent else "-vnavdemocheck"]
     if show:
         command.append("-vnavshow")
+    if "--keep-open" in sys.argv:
+        command.append("-vnavkeepopen")
     if manual:
         command.append("-vnavmanualcheck")
         if "--autostart" in sys.argv:
@@ -84,7 +86,7 @@ def main():
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-    keep = False
+    keep = "--keep-open" in sys.argv
     try:
         deadline = float("inf") if unlimited else time.monotonic() + (1000 if descent else 240)
         while time.monotonic() < deadline:
@@ -96,9 +98,6 @@ def main():
             if ("VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
-                if process.poll() is None:
-                    keep = True
-                    print("FAILED_DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
                 raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
             time.sleep(.25)
         else:
@@ -115,8 +114,6 @@ def main():
                 samples = json.loads((root / "descent-trace.json").read_text())
                 assert samples and all(not sample["focused"] for sample in samples)
             print("NATURAL_CONTINUITY_CHECK_COMPLETE" if continuity else "NATURAL_DESCENT_CHECK_COMPLETE", row, flush=True)
-            if show:
-                keep = True
             return
         rows = json.loads((root / "demo-result.json").read_text())
         expected = [1] if "--wings" in sys.argv else [0, 1]
@@ -125,20 +122,18 @@ def main():
             assert all(row["route_points"] > 1 for row in rows)
             assert all((root / f"demo-{index}.png").exists() for index in expected)
         print("VISIBLE_VNAV_DEMO_CHECKS_COMPLETE", json.dumps(rows), flush=True)
-        if show:
-            keep = True
+        if keep:
             print("DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
-    except Exception:
-        if process.poll() is None:
-            keep = True
-        raise
     finally:
         if not keep and process.poll() is None:
-            process.terminate()
             try:
                 process.wait(timeout=8)
             except subprocess.TimeoutExpired:
-                process.kill(); process.wait(timeout=8)
+                process.terminate()
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    process.kill(); process.wait(timeout=8)
         log.close()
 
 

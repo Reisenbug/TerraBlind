@@ -12,6 +12,7 @@ with tempfile.TemporaryDirectory(prefix="terrablind-demo-failure-", dir="/tmp") 
     (root / "Mods").mkdir()
     process = Mock(pid=12345)
     process.poll.return_value = None
+    process.wait.side_effect = [run.subprocess.TimeoutExpired("test-client", 8), 0]
 
     def launch(*args, **kwargs):
         kwargs["stdout"].write("VNAV_DEMO_FAILED unsupported_wire_fixture\n")
@@ -28,6 +29,6 @@ with tempfile.TemporaryDirectory(prefix="terrablind-demo-failure-", dir="/tmp") 
             assert "Demo failed" in str(error)
         else:
             raise AssertionError("Runner must still report failure")
-    process.terminate.assert_not_called()
+    process.terminate.assert_called_once()
     process.kill.assert_not_called()
-    print("DEMO_FAILURE_PRESERVES_CLIENT_PASS")
+    print("DEMO_FAILURE_CLOSES_CLIENT_PASS")
