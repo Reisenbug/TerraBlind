@@ -39,6 +39,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     long tick;
     Vector2 goal;
     Vector2[] route = Array.Empty<Vector2>();
+    readonly VanillaContactOverlay contactOverlay = new();
     CancellationTokenSource cancellation;
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
@@ -299,6 +300,8 @@ public sealed class VanillaNavigationDemo : ModSystem
         var batch = Main.spriteBatch;
         batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
             DepthStencilState.None, RasterizerState.CullNone, null, Main.GameViewMatrix.TransformationMatrix);
+        contactOverlay.Draw(batch, Main.LocalPlayer, LastControl.Queued ? movement?.ActiveResult?["forecast"]?["frames"] as JsonArray : null,
+            movement?.PlanFrameAt(tick) ?? -1);
         for (int i = 1; i < route.Length; i++)
         {
             var delta = route[i] - route[i - 1];
@@ -314,6 +317,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     {
         if (Main.gameMenu || Status == "未启动") return;
         Utils.DrawBorderString(batch, "原版移动实验：" + Status, new Vector2(24, 92), Color.Cyan, .85f);
+        Utils.DrawBorderString(batch, "绿：安全脚底中心范围（4px采样）  青：有效路线有落脚点  黄：预计最后落脚点\n红：危险禁入格  灰：斜砖未验证  白：人物碰撞箱",
+            new Vector2(24, 116), Color.White, .7f);
     }
 
     public override void OnWorldUnload() { Stop(closeWorker: true); route = Array.Empty<Vector2>(); Status = "未启动"; }
