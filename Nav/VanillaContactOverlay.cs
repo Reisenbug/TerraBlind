@@ -89,7 +89,9 @@ internal sealed class VanillaContactOverlay
 
     internal void Draw(SpriteBatch batch, Player player, JsonArray frames, int first)
     {
-        Refresh(player);
+        bool up = Collision.up, down = Collision.down;
+        try { Refresh(player); }
+        finally { Collision.up = up; Collision.down = down; }
         foreach (var box in hazards)
             batch.Draw(TextureAssets.MagicPixel.Value, new Rectangle(box.X - (int)Main.screenPosition.X,
                 box.Y - (int)Main.screenPosition.Y, box.Width, box.Height), Color.Red * .45f);
