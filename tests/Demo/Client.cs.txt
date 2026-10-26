@@ -60,6 +60,7 @@ public sealed class Driver : ModSystem
     bool descent;
     bool continuity;
     bool unlimited;
+    int routeGoalX = 3383, routeGoalY = 1069;
     int continuityLeg;
     int[] offsets = { 180 };
     int barrierTiles;
@@ -205,7 +206,7 @@ public sealed class Driver : ModSystem
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
             ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null : 150000,
-            ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
+            ["goal_x"] = continuity ? null : routeGoalX, ["goal_y"] = continuity ? null : routeGoalY,
             ["phase_ms"] = totals, ["activity_ms"] = activity, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
         File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), report);
@@ -450,8 +451,20 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline))
             {
                 RestoreBaseline(player, baseline);
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreversecheck"))
+                {
+                    routeGoalX = (int)(player.Center.X / 16); routeGoalY = (int)(player.Bottom.Y / 16);
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                    player.Teleport(new Vector2(3382 * 16 - player.width / 2f, 1068 * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+                    if (Collision.SolidCollision(player.position, player.width, player.height))
+                        throw new InvalidOperationException("reverse_start_inside_terrain");
+                    Console.WriteLine($"VNAV_REVERSE_ROUTE start=(3382,1068) goal=({routeGoalX},{routeGoalY}) baseline={baseline}");
+                }
+                phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
+                previousPosition = player.position;
                 routeClock.Restart();
-                NavigationRecording.Start("bot", 3383, 1069);
+                NavigationRecording.Start("bot", routeGoalX, routeGoalY);
                 Console.WriteLine("VNAV_BASELINE_RECORDING " + NavigationRecording.LastDirectory);
             }
             ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
