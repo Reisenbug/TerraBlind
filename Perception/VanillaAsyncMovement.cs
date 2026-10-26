@@ -92,7 +92,26 @@ public sealed class VanillaAsyncMovement
         for (int i = 0; i < 12; i++) inputs[tick + i] = 4;
         return true;
     }
-    internal void DiscardRoute(long tick) => RecoverRoute(tick, "terrain_approach_changed");
+    internal void DiscardRoute(Player player, long tick)
+    {
+        RecordAirborneDivergence(player, tick, "terrain_approach_changed");
+        RecoverRoute(tick, "terrain_approach_changed");
+    }
+
+    void RecordAirborneDivergence(Player player, long tick, string reason)
+    {
+        if (player.velocity.Y == 0 || activeContext == null
+            || !Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline")) return;
+        var area = activeContext["area"];
+        LastDivergence = new JsonObject { ["reason"] = reason, ["mismatch"] = LastMismatch, ["tick"] = tick,
+            ["actual"] = VanillaPrediction.Observe(player), ["active_plan"] = ActiveResult?.DeepClone(),
+            ["active_context"] = activeContext.DeepClone(),
+            ["snapshot"] = VanillaFrame.Capture(player, new Rectangle(area[0].GetValue<int>(), area[1].GetValue<int>(),
+                area[2].GetValue<int>(), area[3].GetValue<int>()), true),
+            ["x"] = ActiveGoal.X, ["y"] = ActiveGoal.Y,
+            ["remaining_controls"] = new JsonArray(Enumerable.Range(1, VanillaLocalPlanner.Horizon)
+                .TakeWhile(i => inputs.ContainsKey(tick + i)).Select(i => JsonValue.Create(InputAt(tick + i))).ToArray()) };
+    }
 
     void RecoverRoute(long tick, string reason)
     {
@@ -123,9 +142,13 @@ public sealed class VanillaAsyncMovement
         int index = checked((int)(tick - activeStart)) + activeOffset;
         var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
             : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
-        return expected != null && StateMatches(player, expected, true, out _, out _)
-            && VanillaFrame.ContextMatches(activeContext, player, out _, activeForecast,
-                activeTiles, Math.Max(0, index + 1), 12);
+        if (expected == null) { LastMismatch = "missing_expected_frame"; return false; }
+        if (!StateMatches(player, expected, true, out string reason, out string mismatch))
+        { LastMismatch = mismatch ?? reason; return false; }
+        bool matches = VanillaFrame.ContextMatches(activeContext, player, out string difference, activeForecast,
+            activeTiles, Math.Max(0, index + 1), 12);
+        LastMismatch = matches ? null : difference;
+        return matches;
     }
     public bool NeedsPlan(long tick, Player player, bool terminal)
     {
@@ -137,13 +160,14 @@ public sealed class VanillaAsyncMovement
         if (!StateMatches(player, expected, true, out string reason, out string mismatch))
         {
             if (reason == "state_changed:x" && TryContactContinuation(tick, index, player, expected)) return true;
-            LastMismatch = mismatch; RecoverRoute(tick, reason);
+            LastMismatch = mismatch ?? reason; RecordAirborneDivergence(player, tick, reason); RecoverRoute(tick, reason);
             return true;
         }
         if (!VanillaFrame.ContextMatches(activeContext, player, out string difference, activeForecast,
             activeTiles, Math.Max(0, index + 1), 12))
         {
-            LastMismatch = difference; Reject("context_changed"); return true;
+            LastMismatch = difference; RecordAirborneDivergence(player, tick, "context_changed");
+            Reject("context_changed"); return true;
         }
         return terminal || ActiveResult["route_progress"]?.GetValue<double>() <= 0
             || inputs.Count <= PlanningLead + 12 || activeUsefulEnd - index <= PlanningLead + 12;

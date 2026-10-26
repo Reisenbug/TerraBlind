@@ -40,6 +40,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     Vector2 goal;
     Vector2[] route = Array.Empty<Vector2>();
     readonly VanillaContactOverlay contactOverlay = new();
+    JsonObject recordedDivergence;
     CancellationTokenSource cancellation;
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
@@ -234,12 +235,6 @@ public sealed class VanillaNavigationDemo : ModSystem
                     string report = new JsonObject { ["request"] = movement.LastRequest.DeepClone(), ["result"] = result.DeepClone() }.ToJsonString();
                     _ = Task.Run(() => File.WriteAllText(path, report));
                 }
-                if (movement.LastDivergence is JsonObject divergence)
-                {
-                    string path = Path.Combine(Main.SavePath, $"vanilla-divergence-{Main.GameUpdateCount}.json");
-                    string report = divergence.ToJsonString();
-                    _ = Task.Run(() => File.WriteAllText(path, report));
-                }
                 DiagLog.Write($"[engine-nav-timing] tick={tick} capture_ms={captureMs:0.###} request_ms={requestMs:0.###} capture_bytes={captureBytes} request_bytes={requestBytes} compute_ms={result?["request_compute_ms"]} roundtrip_ms={result?["roundtrip_ms"]} breakdown={result?["timing"]?.ToJsonString()} response_frames={movement.ResponseFrames} lead_frames={movement.PlanningLead} zero_input_frames={idleFrames} starved_frames={starvedFrames} longest_starvation={longestStarvation} accepted={loggedAccepted} rejected={loggedRejected} caught_up={movement.LateAccepted} rebased={movement.Rebased} reason={movement.LastRejection} selected={result?["selected"]}");
             }
             if (movement.Status == "worker_error") throw new IOException("推演进程出错，请查看临时目录中的 worker.log");
@@ -257,6 +252,13 @@ public sealed class VanillaNavigationDemo : ModSystem
             int contactCount = movement.ContactContinuations;
             bool needsPlan = !VanillaNavBridge.ApproachingTerrain
                 && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal));
+            if (movement.LastDivergence is JsonObject divergence && !ReferenceEquals(divergence, recordedDivergence))
+            {
+                recordedDivergence = divergence;
+                string path = Path.Combine(Main.SavePath, $"vanilla-divergence-{Main.GameUpdateCount}.json");
+                string report = divergence.ToJsonString();
+                _ = Task.Run(() => File.WriteAllText(path, report));
+            }
             if (movement.ContactContinuations != contactCount)
             {
                 route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
