@@ -95,6 +95,20 @@ static class TaskPlanTests
         plan.Record("find_tiles", "{\"tiles\":[{\"x\":10,\"y\":20}]}");
         Check(plan.Snapshot()["status"].ToString() == "active", "new search result did not clear resolved search blocker");
         plan.Reset();
+        var originalNpc = Main.npc[0];
+        try
+        {
+            Main.npc[0] = new NPC { type = 222, active = false };
+            plan.Create(Parse("""
+                {"goal":"confirm spawn","steps":[{"id":"spawn","description":"NPC is alive","conditions":[{"kind":"npc_alive","type":222,"count":1}]}]}
+                """), AgentTaskEvidence.Measure);
+            Check(!plan.Advance("spawn", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "item use without spawn was treated as summoning");
+            Main.npc[0].active = true; Main.npc[0].life = 0;
+            Check(!plan.Advance("spawn", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "dead NPC proved spawn success");
+            Main.npc[0].life = 100;
+            Check(plan.Advance("spawn", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "real active living NPC did not verify presence");
+        }
+        finally { Main.npc[0] = originalNpc; plan.Reset(); }
         Main.LocalPlayer.statLifeMax = Main.LocalPlayer.statLifeMax2 = 100;
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
