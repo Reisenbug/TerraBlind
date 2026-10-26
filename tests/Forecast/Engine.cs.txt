@@ -338,7 +338,7 @@ public sealed class Engine : ModSystem
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
             passed++;
-            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 })
+            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
             {
                 bool place = mode == 1;
                 Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
@@ -357,6 +357,17 @@ public sealed class Engine : ModSystem
                     for (int yy = Y - 25; yy < Y - 3; yy++)
                     { var tile = Main.tile[x, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
                 if (mode == 3) { var tile = Main.tile[x, y]; tile.TileType = TileID.JungleGrass; }
+                if (mode == 10)
+                {
+                    Main.tile[x, y].ClearEverything();
+                    WorldGen.PlaceTile(x, y, TileID.Pots, mute: true, forced: true);
+                    targets.Clear();
+                    for (int xx = x - 1; xx <= x + 1; xx++)
+                    for (int yy = y - 1; yy <= y; yy++)
+                        if (Main.tile[xx, yy].HasTile && Main.tile[xx, yy].TileType == TileID.Pots)
+                            targets.Add(new JsonArray(xx, yy));
+                    if (targets.Count != 4) throw new InvalidOperationException("pot_fixture_not_placed");
+                }
                 if (mode is 4 or 5 or 8 or 9)
                 {
                     x = X; y = Y;

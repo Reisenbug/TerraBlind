@@ -63,11 +63,14 @@ public static class VanillaTerrainPlan
                 {
                     var target = targets[index];
                     x = target[0].GetValue<int>(); y = target[1].GetValue<int>();
+                    if (!Main.tile[x, y].HasTile) continue;
                     bool solid = Main.tileSolid[Main.tile[x, y].TileType] || Main.tileSolidTop[Main.tile[x, y].TileType];
                     if (targets.Count > 1 && solid && y > (int)Math.Floor(player.Bottom.Y / 16))
                         return new JsonObject { ["status"] = "batch_changes_multiple_support_rows" };
-                    if (!LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y))
-                        return new JsonObject { ["status"] = "unsafe_mining" };
+                    bool lavaSafe = LavaSafety.CanMine(x, y), killable = WorldGen.CanKillTile(x, y);
+                    if (!lavaSafe || !killable)
+                        return new JsonObject { ["status"] = "unsafe_mining", ["x"] = x, ["y"] = y,
+                            ["lava_safe"] = lavaSafe, ["killable"] = killable, ["tile_type"] = Main.tile[x, y].TileType };
                     int originalType = Main.tile[x, y].TileType;
                     WorldGen.KillTile(x, y, noItem: true);
                     if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType != originalType)
