@@ -646,6 +646,14 @@ public sealed class Driver : ModSystem
         }
         if (Main.GameUpdateCount - journeyActionAt > 300)
         {
+            File.WriteAllText(Path.Combine(Main.SavePath, "journey-interaction-failure.json"), new JsonObject {
+                ["kind"] = target.Kind, ["item"] = target.Item,
+                ["before"] = journeyItemBefore, ["after"] = count,
+                ["outcome"] = ItemUseCoordinator.Outcome, ["reason"] = ItemUseCoordinator.Reason,
+                ["active"] = ItemUseCoordinator.IsActive, ["focused"] = Main.hasFocus,
+                ["reachable"] = Reach.CanMine(player, target.X, target.Y),
+                ["target_present"] = Main.tile[target.X, target.Y].HasTile,
+                ["player"] = VanillaPrediction.Observe(player) }.ToJsonString());
             ItemUseCoordinator.Stop();
             throw new InvalidOperationException("journey_resource_not_collected:" + target.Kind);
         }
