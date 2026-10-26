@@ -195,7 +195,7 @@ static class RuntimeTests
             Terraria.Lang.MapLabels[32] = "Fixture Resource";
             tileQueries = 0;
             var ambiguous = await Execute(AgentTools.FindTiles(aliasArgs, default));
-            Check(ambiguous["error"].ToString() == "unknown_tile_name" && tileQueries == 1
+            Check(ambiguous["error"].ToString() == "ambiguous_tile_name" && tileQueries == 0
                 && ambiguous["name_candidates"].AsArray().Count == 2, "ambiguous map name guessed a source");
             Terraria.Lang.MapLabels.Clear();
             Terraria.Map.MapHelper.tileOptionCounts = Array.Empty<int>();

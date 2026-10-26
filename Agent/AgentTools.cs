@@ -490,7 +490,11 @@ public static class AgentTools
     {
         var catalog = await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token);
         var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
-        if (catalog["truncated"].GetValue<bool>() || exact.Select(m => m["type"].GetValue<int>()).Distinct().Count() != 1)
+        int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
+        if (catalog["truncated"].GetValue<bool>() || types > 1)
+            return new JsonObject { ["error"] = "ambiguous_tile_name", ["requested_name"] = Text(args, "name"),
+                ["name_candidates"] = catalog["matches"].DeepClone() };
+        if (types == 0)
         {
             var unresolved = await Call("/find_tiles", args, token);
             if (Text(unresolved, "error") is "unknown_tile_name" or "bad_params")
