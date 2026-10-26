@@ -62,6 +62,9 @@ def main():
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
+    parser.add_argument("--terrain-replay", type=Path)
+    parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
+    parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -100,6 +103,23 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.terrain_replay:
+            capture = json.loads(args.terrain_replay.read_text())
+            results = []
+            for attempt in capture["attempts"]:
+                request = dict(capture["request"], tile_x=attempt["x"], tile_y=attempt["y"],
+                               tile_type=attempt["type"], tiles=attempt["tiles"])
+                if args.clear_tile:
+                    request.update(tile_type=-1, tiles=args.clear_tile + (attempt["tiles"] if attempt["type"] < 0 else []))
+                result = worker.call(**request)
+                if args.expect_terrain_planned:
+                    assert result["status"] == "planned", result
+                    initial_hp = request["snapshot"]["player"]["Terraria.Player:statLife"]
+                    assert all(not frame["dead"] and frame["hp"] >= initial_hp for frame in result["forecast"]["frames"])
+                results.append(dict(x=attempt["x"], y=attempt["y"], type=attempt["type"], result=result))
+                print("TERRAIN_REPLAY", attempt["x"], attempt["y"], result["status"], flush=True)
+            args.terrain_replay.with_suffix(".replayed.json").write_text(json.dumps(results))
+            return
         if args.cancel_probe:
             request = json.loads(args.cancel_probe.read_text())["request"]
             baseline = worker.call(**request)

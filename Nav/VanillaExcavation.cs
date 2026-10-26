@@ -16,6 +16,7 @@ internal sealed class VanillaExcavation
         if (!Predicates.InBounds(x, y)) return false;
         var tile = Main.tile[x, y];
         return tile.HasTile && !tile.IsActuated && Main.tileSolid[tile.TileType]
+            && TileID.Sets.TouchDamageImmediate[tile.TileType] == 0
             && !Main.tileSolidTop[tile.TileType] && !tile.IsHalfBlock && tile.Slope == 0
             && tile.TileType is not TileID.Spikes and not TileID.WoodenSpikes and not TileID.Hellstone and not TileID.Meteorite;
     }
@@ -29,7 +30,8 @@ internal sealed class VanillaExcavation
             var tile = Main.tile[cell.x, cell.y];
             if (LavaSafety.IsLava(cell.x, cell.y)) return false;
             if (!tile.HasTile || tile.IsActuated) continue;
-            if (tile.TileType is TileID.Spikes or TileID.WoodenSpikes or TileID.Hellstone or TileID.Meteorite)
+            if (TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
+                || tile.TileType is TileID.Spikes or TileID.WoodenSpikes or TileID.Hellstone or TileID.Meteorite)
                 return false;
             if (Predicates.IsWall(cell.x, cell.y)
                 && (!LavaSafety.CanMine(cell.x, cell.y) || !WorldGen.CanKillTile(cell.x, cell.y)

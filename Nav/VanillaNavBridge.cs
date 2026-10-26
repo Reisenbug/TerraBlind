@@ -215,12 +215,12 @@ public static class VanillaNavBridge
         {
             float px = cell.x * 16 + 8 - player.width / 2;
             int left = (int)(px / 16), right = (int)((px + player.width - 1) / 16);
-            for (int y = cell.y - 2; y <= cell.y; y++)
+            for (int y = cell.y - 2; y <= cell.y + 1; y++)
             for (int x = left; x <= right; x++)
             {
-                if (pick < 0 || !seen.Add((x, y)) || !Predicates.InBounds(x, y)) continue;
+                if (pick < 0 || !Predicates.InBounds(x, y)) continue;
                 var tile = Main.tile[x, y];
-                if (tile.HasTile && !tile.IsActuated && (Main.tileSolid[tile.TileType] || Main.tileCut[tile.TileType])
+                if (VanillaTerrainPlan.IsRouteObstacle(tile, y > cell.y) && seen.Add((x, y))
                     && LavaSafety.CanMine(x, y) && WorldGen.CanKillTile(x, y) && Reach.CanMine(player, x, y)
                     && DigTable.CostFrames(x, y) < DigTable.Unmineable)
                     edits.Enqueue(new Edit(x, y, -1, pick));
@@ -254,7 +254,7 @@ public static class VanillaNavBridge
     static bool IsClearing(Edit candidate)
     {
         var tile = Main.tile[candidate.X, candidate.Y];
-        return candidate.Type < 0 && Main.tileCut[tile.TileType]
+        return candidate.Type < 0 && (Main.tileCut[tile.TileType] || Terraria.ID.TileID.Sets.TouchDamageImmediate[tile.TileType] > 0)
             && !Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
     }
 

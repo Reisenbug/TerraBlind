@@ -8,6 +8,11 @@ namespace TerraBlind;
 
 public static class VanillaTerrainPlan
 {
+    public static bool IsRouteObstacle(Tile tile, bool belowFeet)
+        => tile.HasTile && !tile.IsActuated
+            && (Terraria.ID.TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
+                || !belowFeet && (Main.tileSolid[tile.TileType] || Main.tileCut[tile.TileType]));
+
     public static (int x, int y)[] MiningBatch((int x, int y) first, (int x, int y)[] available,
         float left, float right, int supportY)
     {
@@ -105,7 +110,10 @@ public static class VanillaTerrainPlan
             plan["edit_progress"] = editProgress;
             plan["route_progress"] = movementProgress + editProgress;
             if (request["guidance"] != null && plan["route_progress"].GetValue<double>() <= 0)
-                return new JsonObject { ["status"] = "edit_does_not_open_route", ["movement_progress"] = movementProgress, ["edit_progress"] = editProgress };
+            {
+                plan["status"] = "edit_does_not_open_route";
+                return plan;
+            }
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);
             foreach (var control in plan["controls"].AsArray()) controls.Add(control.DeepClone());
