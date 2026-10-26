@@ -223,7 +223,7 @@ public static class AgentTools
             return "ok";
         }
         if (name == "ask") return new JsonObject { ["player_answer"] = await NativeAgent.Ask(AgentConversation.VisibleText(Text(args, "question")), token) }.ToJsonString();
-        if (name is "wiki_search" or "wiki_page") return await ReadWiki(name, args, token);
+        if (name is "wiki_search" or "wiki_page") return await ToolFinished(name, await ReadWiki(name, args, token), token);
         var before = await NativeAgent.OnMain(Inventory, token);
         JsonObject result;
         switch (name)
@@ -478,6 +478,11 @@ public static class AgentTools
             default: throw new InvalidOperationException($"未知工具: {name}");
         }
         string output = await Result(result, before, token);
+        return await ToolFinished(name, output, token);
+    }
+
+    static async Task<string> ToolFinished(string name, string output, CancellationToken token)
+    {
         await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] result {name} {output}"); return true; }, token);
         await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
             !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
