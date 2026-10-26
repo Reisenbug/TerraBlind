@@ -654,7 +654,8 @@ public sealed class Engine : ModSystem
         }
         if (command == "replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
-                request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray());
+                request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
+                captureEnd: request["capture_end"]?.GetValue<bool>() == true);
         if (command == "transit_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots, (int)ItemID.CobaltShield) });
