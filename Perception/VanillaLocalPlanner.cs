@@ -258,6 +258,12 @@ public sealed class VanillaLocalPlanner
                 foreach (int stop in new[] { 12, 36, 60 })
                     candidates.Add(($"reverse_jump_brake_{hold}_{stop}", Enumerable.Range(0, Horizon)
                         .Select(i => (i < stop ? reverse : 0) | (i < hold ? 4 : 0)).ToArray()));
+                if (jumps > 0)
+                foreach (int travelDirection in new[] { direction, reverse })
+                foreach (int stop in new[] { 12, 36, 60 })
+                foreach (int delay in new[] { 36, 72, 108, 144 })
+                    candidates.Add(($"landing_brake_{travelDirection}_{stop}_{delay}", Enumerable.Range(0, Horizon)
+                        .Select(i => (i < stop ? travelDirection : 0) | (i >= delay && i < delay + 12 ? 4 : 0)).ToArray()));
             }
         }
         if (chosen.Length > 0)
