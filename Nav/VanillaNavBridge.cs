@@ -67,7 +67,7 @@ public static class VanillaNavBridge
 
     static void Fail(string reason)
     {
-        if (reason == "no_safe_terrain_action" && preparation != null)
+        if ((reason == "no_safe_terrain_action" || reason == "terrain_planning_timeout") && preparation != null)
             File.WriteAllText(Path.Combine(Main.SavePath, "vanilla-terrain-failure.json"),
                 new JsonObject { ["request"] = preparation.DeepClone(),
                     ["attempts"] = rejectedEdits.DeepClone() }.ToJsonString());
@@ -375,7 +375,8 @@ public static class VanillaNavBridge
 
     static void Prepare(Player player)
     {
-        if (Main.GameUpdateCount - phaseAt > 900) { Fail("terrain_planning_timeout"); return; }
+        if (preparing?.IsCompleted != true && Main.GameUpdateCount - phaseAt > 900)
+        { Fail("terrain_planning_timeout"); return; }
         if (waitingPlacementTools)
         {
             if (stable < 2 || player.itemTime > 0 || player.itemAnimation > 0) return;
@@ -544,6 +545,7 @@ public static class VanillaNavBridge
             && player.Hitbox.Intersects(new Rectangle(edit.X * 16, edit.Y * 16, 16, 16)))
             preparation["jump_place"] = true;
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
+        phaseAt = Main.GameUpdateCount;
     }
 
     static void StartEdit()
