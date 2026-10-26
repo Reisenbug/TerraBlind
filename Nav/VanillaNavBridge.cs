@@ -252,10 +252,12 @@ public static class VanillaNavBridge
         int platform = NavCoordinator.FindPlatformSlot(player);
         if (platform < 0) { LogEmptyCorridor(player); return true; }
         int type = player.inventory[platform].createTile;
+        var placements = new HashSet<(int, int)>();
         foreach (var cell in corridor)
+        foreach (int offset in new[] { 0, -1, 1 })
         {
-            int x = cell.x, y = cell.y + 1;
-            if (!Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
+            int x = cell.x + offset, y = cell.y + 1;
+            if (!placements.Add((x, y)) || !Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
                 || !Reach.CanPlace(player, x, y) || !MazeWand.AnchorFor(x, y)
                 || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))) continue;
             edits.Enqueue(new Edit(x, y, type, platform));
@@ -270,11 +272,19 @@ public static class VanillaNavBridge
         DiagLog.Write($"[engine-empty-corridor] player=({player.Center.X / 16:0.###},{player.Bottom.Y / 16:0.###}) route=({routeGoal.X / 16:0.###},{routeGoal.Y / 16:0.###}) nodes="
             + string.Join(";", corridor.Select(cell => $"{cell.x},{cell.y}:{(field.TryGetValue(cell, out int h) ? h : -1)}")));
         DiagLog.Write($"[engine-empty-platforms] slot={NavCoordinator.FindPlatformSlot(player)} candidates="
-            + string.Join(";", corridor.Where(cell => Predicates.InBounds(cell.x, cell.y + 1)).Select(cell =>
+            + string.Join(";", corridor.SelectMany(cell => new[] { -1, 0, 1 }.Select(offset => (x: cell.x + offset, y: cell.y)))
+                .Distinct().Where(cell => Predicates.InBounds(cell.x, cell.y + 1)).Select(cell =>
             {
                 int x = cell.x, y = cell.y + 1;
                 return $"{x},{y}:occupied={Main.tile[x, y].HasTile},lava={LavaSafety.IsLava(x, y)},reach={Reach.CanPlace(player, x, y)},anchor={MazeWand.AnchorFor(x, y)},body={player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))}";
             })));
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline"))
+        {
+            var snapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, routeGoal, 90), true);
+            File.WriteAllText(Path.Combine(Main.SavePath, $"vanilla-empty-corridor-{Main.GameUpdateCount}.json"),
+                new JsonObject { ["snapshot"] = snapshot, ["x"] = routeGoal.X, ["y"] = routeGoal.Y,
+                    ["route_direction"] = RouteDirection, ["guidance"] = CaptureGuidance(snapshot) }.ToJsonString());
+        }
     }
 
     static bool IsClearing(Edit candidate)
