@@ -205,6 +205,21 @@ public sealed class Engine : ModSystem
                 || repairRequest["continuation"].AsArray().Count != 180)
                 throw new InvalidOperationException("recovery_lost_remaining_controls");
             controller.CancelPending();
+            source = VanillaFrame.RestoreInWorker(snapshot);
+            var pendingPlan = new TaskCompletionSource<JsonObject>();
+            controller = new VanillaAsyncMovement(_ => pendingPlan.Task);
+            controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0));
+            for (int frame = 1; frame <= 145; frame++)
+            {
+                VanillaPrediction.Advance(source, (VanillaKeys)controller.InputAt(frame));
+                controller.Poll(frame, source, 0);
+            }
+            controller.Request(VanillaFrame.Capture(source, area, true), 145, source.position + new Vector2(600, 0), 0);
+            source.wet = !source.wet;
+            if (!controller.Busy || !controller.NeedsPlan(145, source, false)
+                || controller.HasInputAt(146) || controller.Busy)
+                throw new InvalidOperationException("pending_search_bypassed_active_route_validation");
+            pendingPlan.SetResult(new JsonObject());
             return new JsonObject { ["passed"] = true, ["first_request_frame"] = firstRequest,
                 ["validation_total_ms"] = checksMs, ["validated_frames"] = firstRequest, ["max_error"] = 0 };
         }

@@ -248,8 +248,9 @@ public sealed class VanillaNavigationDemo : ModSystem
                 route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
             }
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
-            if (!VanillaNavBridge.ApproachingTerrain && !movement.Busy
-                && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal)))
+            bool needsPlan = !VanillaNavBridge.ApproachingTerrain
+                && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal));
+            if (needsPlan && !movement.Busy)
             {
                 if ((player.itemAnimation > 0 || player.itemTime > 0) && !(NavigationOwned && player.HeldItem.pick > 0)) return;
                 long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();

@@ -103,11 +103,8 @@ public sealed class VanillaAsyncMovement
     }
     public bool NeedsPlan(long tick, Player player, bool terminal)
     {
-        if (terminal || ActiveResult == null || activeContext == null
-            || ActiveResult["route_progress"]?.GetValue<double>() <= 0
-            || inputs.Count <= PlanningLead + 12) return true;
+        if (ActiveResult == null || activeContext == null) return true;
         int index = checked((int)(tick - activeStart)) + activeOffset;
-        if (activeUsefulEnd - index <= PlanningLead + 12) return true;
         var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
             : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
         if (expected == null) return true;
@@ -121,7 +118,8 @@ public sealed class VanillaAsyncMovement
         {
             LastMismatch = difference; Reject("context_changed"); return true;
         }
-        return false;
+        return terminal || ActiveResult["route_progress"]?.GetValue<double>() <= 0
+            || inputs.Count <= PlanningLead + 12 || activeUsefulEnd - index <= PlanningLead + 12;
     }
 
     static int LastMovingFrame(JsonArray frames)
