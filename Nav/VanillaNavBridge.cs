@@ -23,6 +23,7 @@ public static class VanillaNavBridge
     static float placementStartY;
     static int placementJumpFrames;
     static uint placementInputAt;
+    static bool continuingPlacement;
     static VanillaExcavation excavation;
     static int excavationKeys, excavationSlot, excavationX, excavationY;
     readonly record struct Edit(int X, int Y, int Type, int Slot);
@@ -59,6 +60,7 @@ public static class VanillaNavBridge
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
         previewedRoute = arrivalAnchor = null;
         skippedEdit = null;
+        continuingPlacement = false;
     }
 
     static void Fail(string reason)
@@ -127,12 +129,14 @@ public static class VanillaNavBridge
             placementAirborne |= player.velocity.Y != 0;
             if (placementAirborne && player.velocity.Y == 0 && VanillaContactRegion.Supported(player.position, player.width, player.height))
             {
+                if (stable < 2) return;
                 var tile = Main.tile[edit.X, edit.Y];
                 bool success = tile.HasTile && tile.TileType == edit.Type && player.position.Y < placementStartY;
                 player.controlJump = player.controlUseItem = false;
                 DiagLog.Write($"[engine-jump-place-end] tile=({edit.X},{edit.Y}) success={success} rise={placementStartY - player.position.Y} frames={Main.GameUpdateCount - phaseAt}");
                 if (!success) { Fail("jump_place_failed"); return; }
                 prepared = preparation = null; edits.Clear(); batch.Clear();
+                if (ContinuePlacement(player)) return;
                 phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
                 demo.ReplanAfterTerrain();
             }
@@ -279,8 +283,9 @@ public static class VanillaNavBridge
         var placements = new HashSet<(int, int)>();
         foreach (var cell in corridor)
         foreach (int offset in new[] { 0, -1, 1 })
+        foreach (int vertical in new[] { 0, -1, 1 })
         {
-            int x = cell.x + offset, y = cell.y + 1;
+            int x = cell.x + offset, y = cell.y + 1 + vertical;
             if (!placements.Add((x, y)) || !Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
                 || !Reach.CanPlace(player, x, y) || !MazeWand.AnchorFor(x, y)
                 || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))
@@ -377,6 +382,14 @@ public static class VanillaNavBridge
                 rejectedEdits.Add(new JsonObject { ["x"] = edit.X, ["y"] = edit.Y, ["type"] = edit.Type,
                     ["tiles"] = preparation["tiles"]?.DeepClone(), ["result"] = result.DeepClone() });
             DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
+            if (continuingPlacement && result["status"]?.GetValue<string>() != "planned")
+            {
+                continuingPlacement = false; prepared = preparation = null;
+                phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+                VanillaNavigationDemo.Instance.ReplanAfterTerrain();
+                return;
+            }
+            continuingPlacement = false;
             if (result["status"]?.GetValue<string>() == "planned")
             {
                 if (result["jump_place"]?.GetValue<bool>() == true)
@@ -435,6 +448,24 @@ public static class VanillaNavBridge
         }
         if (edits.Count == 0) { Fail("no_safe_terrain_action"); return; }
         BeginPreparation(player, player, null);
+    }
+
+    static bool ContinuePlacement(Player player)
+    {
+        if (player.position.Y <= routeGoal.Y || player.velocity != Vector2.Zero
+            || !VanillaContactRegion.SafeBody(player.position - new Vector2(0, 16), player.width, player.height)) return false;
+        int slot = NavCoordinator.FindPlatformSlot(player);
+        if (slot < 0 || player.inventory[slot].createTile != Terraria.ID.TileID.Platforms) return false;
+        int x = edit.X, y = (int)(player.Bottom.Y / 16) - 1;
+        if (!Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
+            || !Reach.CanPlace(player, x, y) || !MazeWand.AnchorFor(x, y)
+            || !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))) return false;
+        edits.Enqueue(new Edit(x, y, Terraria.ID.TileID.Platforms, slot));
+        phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
+        continuingPlacement = true;
+        BeginPreparation(player, player, null);
+        DiagLog.Write($"[engine-placement-continue] next=({x},{y}) target_y={routeGoal.Y / 16:0.##}");
+        return true;
     }
 
     static void BeginPreparation(Player player, Player capturePlayer, int[] arrival)
