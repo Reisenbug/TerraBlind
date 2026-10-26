@@ -83,7 +83,7 @@ internal sealed class VanillaContactOverlay
     static void Line(SpriteBatch batch, Vector2 from, Vector2 to, Color color, float width = 2)
     {
         var delta = to - from;
-        batch.Draw(TextureAssets.MagicPixel.Value, from - Main.screenPosition, null, color,
+        batch.Draw(TextureAssets.MagicPixel.Value, from - Main.screenPosition, new Rectangle(0, 0, 1, 1), color,
             delta.ToRotation(), Vector2.Zero, new Vector2(Math.Max(2, delta.Length()), width), SpriteEffects.None, 0);
     }
 
