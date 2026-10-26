@@ -24,6 +24,7 @@ public static class VanillaNavBridge
     static int placementJumpFrames;
     static uint placementInputAt;
     static bool continuingPlacement;
+    static bool waitingPlacementTools;
     static VanillaExcavation excavation;
     static int excavationKeys, excavationSlot, excavationX, excavationY;
     readonly record struct Edit(int X, int Y, int Type, int Slot);
@@ -61,6 +62,7 @@ public static class VanillaNavBridge
         previewedRoute = arrivalAnchor = null;
         skippedEdit = null;
         continuingPlacement = false;
+        waitingPlacementTools = false;
     }
 
     static void Fail(string reason)
@@ -374,6 +376,11 @@ public static class VanillaNavBridge
     static void Prepare(Player player)
     {
         if (Main.GameUpdateCount - phaseAt > 900) { Fail("terrain_planning_timeout"); return; }
+        if (waitingPlacementTools)
+        {
+            if (stable < 2 || player.itemTime > 0 || player.itemAnimation > 0) return;
+            waitingPlacementTools = false;
+        }
         if (preparing != null)
         {
             if (!preparing.IsCompleted) return;
@@ -681,6 +688,18 @@ public static class VanillaNavBridge
                 return;
             }
             ItemUseCoordinator.Stop(); player.controlUseItem = false;
+            if (prepared["next_jump_place"] is JsonArray nextPlacement)
+            {
+                int platform = NavCoordinator.FindPlatformSlot(player);
+                if (platform < 0) { Fail("missing_platform_after_mining"); return; }
+                edits.Clear(); batch.Clear();
+                edits.Enqueue(new Edit(nextPlacement[0].GetValue<int>(), nextPlacement[1].GetValue<int>(),
+                    player.inventory[platform].createTile, platform));
+                prepared = preparation = null;
+                phase = Phase.Preparing; phaseAt = Main.GameUpdateCount; waitingPlacementTools = true;
+                DiagLog.Write($"[engine-mine-to-placement] next=({nextPlacement[0]},{nextPlacement[1]})");
+                return;
+            }
             bool resumed = VanillaNavigationDemo.Instance.ResumeTerrain(prepared);
             if (!resumed)
             {

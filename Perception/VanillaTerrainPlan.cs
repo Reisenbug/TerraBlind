@@ -175,8 +175,29 @@ public static class VanillaTerrainPlan
             plan["route_progress"] = movementProgress + editProgress;
             if (request["guidance"] != null && plan["route_progress"].GetValue<double>() <= 0)
             {
-                plan["status"] = "edit_does_not_open_route";
-                return plan;
+                JsonArray nextPlacement = null;
+                var settled = prefix["end_snapshot"].AsObject();
+                var standing = VanillaFrame.RestoreInWorker(settled);
+                if (type < 0 && request["y"].GetValue<float>() < standing.position.Y
+                    && standing.inventory.Any(item => item.stack > 0 && item.createTile == Terraria.ID.TileID.Platforms))
+                {
+                    int supportY = (int)(standing.Bottom.Y / 16) - 1;
+                    int left = (int)(standing.Left.X / 16), right = (int)((standing.Right.X - 1) / 16);
+                    for (int column = left; column <= right; column++)
+                    {
+                        var step = JumpPlacement(new JsonObject { ["snapshot"] = settled.DeepClone(),
+                            ["tile_x"] = column, ["tile_y"] = supportY, ["tile_type"] = (int)Terraria.ID.TileID.Platforms });
+                        if (step["status"]?.GetValue<string>() != "planned") continue;
+                        nextPlacement = new JsonArray(column, supportY);
+                        break;
+                    }
+                }
+                if (nextPlacement == null)
+                {
+                    plan["status"] = "edit_does_not_open_route";
+                    return plan;
+                }
+                plan["next_jump_place"] = nextPlacement;
             }
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);
