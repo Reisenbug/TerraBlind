@@ -51,6 +51,8 @@ public sealed class VanillaLocalPlanner
         bool gravity = player.buffType.Contains(Terraria.ID.BuffID.Gravitation);
         bool transit = !terminal && snapshot["navigation"]?.GetValue<bool>() == true && field?.Count > 0;
         var prediction = new VanillaPrediction(snapshot);
+        VanillaPrediction dryPrediction = null;
+        var dryFrames = new List<VanillaPrediction.MovementSample>();
         var candidates = new List<(string name, int[] keys)>();
         if (continuation?.Length > 0)
             candidates.Add(("continue", Enumerable.Range(0, Horizon)
@@ -126,6 +128,8 @@ public sealed class VanillaLocalPlanner
                 && damage == 0 && frames.All(frame => !frame.Dead);
             double settlementMs = 0;
             int settlementFrames = 0;
+            double dryCheckMs = 0;
+            int dryDamage = 0;
             if (safe && (frames[^1].Grounded || frames[^1].Velocity.Y == 0))
             {
                 long settlementStart = Stopwatch.GetTimestamp();
@@ -153,11 +157,46 @@ public sealed class VanillaLocalPlanner
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
                 if (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01)
                 {
-                    best = score; selected = candidate.name; chosen = candidate.keys;
-                    selectedAdvances = advances; chosenProgress = advance;
+                    if (snapshot["navigation"]?.GetValue<bool>() == true && !player.noFallDmg && frames.Any(frame => frame.Wet))
+                    {
+                        long dryStart = Stopwatch.GetTimestamp();
+                        if (dryPrediction == null)
+                        {
+                            var dry = snapshot.DeepClone().AsObject();
+                            var tiles = VanillaFrame.ReadTiles(dry);
+                            for (int i = 0; i < tiles.Length; i += 10)
+                                if (tiles[i + 8] == Terraria.ID.LiquidID.Water) tiles[i + 9] = 0;
+                            dry["tiles"] = VanillaFrame.PackInts(tiles);
+                            dryPrediction = new VanillaPrediction(dry);
+                        }
+                        var dryResult = dryPrediction.Predict(candidate.keys, false, restoreAfter: false,
+                            samples: dryFrames, stopOnDamage: true);
+                        dryDamage = Math.Max(0, hp - dryFrames.Min(frame => frame.Hp));
+                        safe = dryResult["outcome"].GetValue<string>() == "complete" && dryDamage == 0;
+                        if (transit && safe)
+                        {
+                            var dryEnd = dryFrames[^1];
+                            safe = dryEnd.Grounded || dryEnd.Velocity.Y == 0 || dryEnd.WingTime > 0 || dryEnd.AvailableJumps > 0;
+                        }
+                        if (safe && (dryFrames[^1].Grounded || dryFrames[^1].Velocity.Y == 0))
+                        {
+                            var landed = Main.player[player.whoAmI];
+                            VanillaPrediction.Advance(landed, VanillaKeys.None);
+                            dryDamage = Math.Max(dryDamage, hp - landed.statLife);
+                            safe = dryDamage == 0 && !landed.dead;
+                        }
+                        dryCheckMs = Stopwatch.GetElapsedTime(dryStart).TotalMilliseconds;
+                        if (!safe) progress = false;
+                    }
+                    if (safe)
+                    {
+                        best = score; selected = candidate.name; chosen = candidate.keys;
+                        selectedAdvances = advances; chosenProgress = advance;
+                    }
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
+                ["dry_check_ms"] = dryCheckMs, ["dry_hp_loss"] = dryDamage,
                 ["simulated_frames"] = frames.Count,
                 ["settlement_frames"] = settlementFrames, ["settlement_ms"] = settlementMs,
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),

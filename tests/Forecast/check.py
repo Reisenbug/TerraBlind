@@ -231,6 +231,9 @@ def main():
         landing = worker.call("landing_probe", expect_rejected=True)
         assert landing["candidate_rejected"] and landing["safe_extra_jump"]
         print("LANDING_SETTLEMENT_CONTRACT_PASS", landing, flush=True)
+        water_fall = worker.call("water_fall_contract")
+        assert water_fall["passed"]
+        print("WATER_FALL_CONTRACT_PASS", water_fall, flush=True)
         transit = worker.call("transit_contract")
         assert transit["passed"]
         print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)

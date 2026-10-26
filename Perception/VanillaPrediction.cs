@@ -19,7 +19,7 @@ public sealed class VanillaPrediction
         if (CancellationRequested?.Invoke() == true) throw new OperationCanceledException();
     }
     public readonly record struct MovementSample(Vector2 Position, Vector2 Velocity, int Hp, bool Dead,
-        float WingTime, int AvailableJumps, bool Grounded);
+        float WingTime, int AvailableJumps, bool Grounded, bool Wet);
     readonly JsonObject checkpoint;
     readonly Rectangle area;
     readonly VanillaFrame.WorkerState compiled;
@@ -127,7 +127,7 @@ public sealed class VanillaPrediction
                     int available = 0;
                     foreach (var jump in player.ExtraJumps) if (jump.Available) available++;
                     samples.Add(new MovementSample(player.position, player.velocity, player.statLife, player.dead,
-                        player.wingTime, available, Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height)));
+                        player.wingTime, available, Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height), player.wet));
                 }
                 observe += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 if (player.dead) { outcome = "dead"; break; }

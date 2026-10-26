@@ -98,6 +98,32 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "water_fall_contract")
+        {
+            Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle) });
+            for (int x = X + 3; x < area.Right; x++)
+            for (int y = Y; y < Y + 30; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= Y + 28) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            }
+            var wet = VanillaFrame.Capture(source, area, true);
+            var keys = Enumerable.Repeat(2, 180).ToArray();
+            var wetRun = new VanillaPrediction(wet).Predict(keys, false);
+            var wetFrames = wetRun["frames"].AsArray();
+            if (wetFrames.Any(frame => frame["hp"].GetValue<int>() < 400))
+                throw new InvalidOperationException("wet_fixture_not_safe");
+            var plan = new VanillaLocalPlanner().Plan(wet,
+                new Vector2(wetFrames[^1]["x"].GetValue<float>(), wetFrames[^1]["y"].GetValue<float>()),
+                keys, preferContinuation: true);
+            var candidate = plan["candidates"][0];
+            if (candidate["safe"].GetValue<bool>() || candidate["dry_hp_loss"].GetValue<int>() <= 0)
+                throw new InvalidOperationException("planner_relied_on_water_for_fall_survival");
+            if (plan["status"].GetValue<string>() != "planned")
+                throw new InvalidOperationException("no_safe_alternative_to_water_landing");
+            return new JsonObject { ["passed"] = true, ["candidate"] = candidate.DeepClone(),
+                ["selected"] = plan["selected"].DeepClone() };
+        }
         if (command == "landing_probe")
         {
             var recorded = request["plan"]?.AsObject();
