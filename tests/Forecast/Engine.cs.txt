@@ -148,6 +148,18 @@ public sealed class Engine : ModSystem
                 bool needsPlan = controller.NeedsPlan(0, source, false);
                 if (needsPlan != (change is not "distant_tile" and not "water")) throw new InvalidOperationException("reuse_invalidation:" + change);
             }
+            source = VanillaFrame.RestoreInWorker(snapshot);
+            JsonObject repairRequest = null;
+            controller = new VanillaAsyncMovement(request => { repairRequest = request; return Task.FromResult(new JsonObject()); });
+            controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0));
+            source.velocity.X += .1f;
+            if (!controller.NeedsPlan(0, source, false) || controller.HasInputAt(1))
+                throw new InvalidOperationException("recovery_executed_unvalidated_controls");
+            controller.Request(VanillaFrame.Capture(source, area, true), 0, source.position + new Vector2(600, 0), 0);
+            if (repairRequest["recover"]?.GetValue<bool>() != true || repairRequest["prefix"].AsArray().Count != 6
+                || repairRequest["continuation"].AsArray().Count != 180)
+                throw new InvalidOperationException("recovery_lost_remaining_controls");
+            controller.CancelPending();
             return new JsonObject { ["passed"] = true, ["first_request_frame"] = firstRequest,
                 ["validation_total_ms"] = checksMs, ["validated_frames"] = firstRequest, ["max_error"] = 0 };
         }
@@ -225,7 +237,7 @@ public sealed class Engine : ModSystem
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
             passed++;
-            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6, 7 })
+            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8 })
             {
                 bool place = mode == 1;
                 Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
@@ -244,10 +256,19 @@ public sealed class Engine : ModSystem
                     for (int yy = Y - 25; yy < Y - 3; yy++)
                     { var tile = Main.tile[x, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
                 if (mode == 3) { var tile = Main.tile[x, y]; tile.TileType = TileID.JungleGrass; }
-                if (mode is 4 or 5)
+                if (mode is 4 or 5 or 8)
                 {
                     x = X; y = Y;
                     targets = new JsonArray(new JsonArray(X, Y), new JsonArray(X + 1, Y));
+                }
+                if (mode == 8)
+                {
+                    var side = Main.tile[X + 2, Y - 1]; side.HasTile = true; side.TileType = TileID.Dirt;
+                    var group = VanillaTerrainPlan.MiningBatch((X, Y), new[] { (X + 1, Y), (X + 2, Y - 1) },
+                        source.Left.X, source.Right.X, Y);
+                    targets = new JsonArray(group.Select(cell => (JsonNode)new JsonArray(cell.x, cell.y)).ToArray());
+                    if (group.Length != 3 || group[0] != (X + 2, Y - 1))
+                        throw new InvalidOperationException("native_passage_batch_missing_side");
                 }
                 var snapshot = VanillaFrame.Capture(source, area, true);
                 var guidance = new JsonArray();
@@ -381,6 +402,18 @@ public sealed class Engine : ModSystem
             if (afterHandoff["candidates"].AsArray().Any(candidate => candidate["outcome"].GetValue<string>() == "outside_observed_world"))
                 throw new InvalidOperationException("snapshot_omitted_handoff_distance");
             var continued = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 12).ToArray(), guidance);
+            var repaired = new VanillaLocalPlanner().Plan(snapshot, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
+                preferContinuation: true);
+            if (repaired["selected"].GetValue<string>() != "continue" || repaired["candidates"].AsArray().Count != 1)
+                throw new InvalidOperationException("recovery_repeated_full_search");
+            var spike = Main.tile[X + 3, Y - 1]; spike.HasTile = true; spike.TileType = TileID.Spikes;
+            var hazardous = VanillaFrame.Capture(source, area, true);
+            var rejectedRepair = new VanillaLocalPlanner().Plan(hazardous, goal, Enumerable.Repeat(2, 180).ToArray(), guidance,
+                preferContinuation: true);
+            if (rejectedRepair["selected"].GetValue<string>() == "continue" || rejectedRepair["candidates"].AsArray().Count <= 1)
+                throw new InvalidOperationException("recovery_accepted_hazardous_continuation");
+            source = VanillaFrame.RestoreInWorker(snapshot);
+            Console.WriteLine("RECOVERY_PLAN_CHECK safe_ms=" + repaired["elapsed_ms"] + " fallback_ms=" + rejectedRepair["elapsed_ms"]);
             foreach (var plan in new[] { walk, continued })
                 if (plan["status"]?.GetValue<string>() != "planned"
                     || plan["controls"].AsArray().Any(key => (key.GetValue<int>() & 3) != 2))
@@ -617,7 +650,8 @@ public sealed class Engine : ModSystem
                     new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                     continuation: request["continuation"]?.AsArray().Select(key => key.GetValue<int>()).ToArray(),
                     guidance: request["guidance"], terminal: request["terminal"]?.GetValue<bool>() == true,
-                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0);
+                    routeDirection: request["route_direction"]?.GetValue<int>() ?? 0,
+                    preferContinuation: request["recover"]?.GetValue<bool>() == true);
                 result["anchor"] = anchor;
                 result["request_compute_ms"] = timer.Elapsed.TotalMilliseconds;
                 return result;

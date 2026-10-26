@@ -237,7 +237,7 @@ public static class VanillaNavBridge
         {
             if (!movement.CurrentMatches(tick, player))
             {
-                movement.DiscardRoute();
+                movement.DiscardRoute(tick);
                 CancelPreview();
             }
             return;
