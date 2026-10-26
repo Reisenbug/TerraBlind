@@ -124,6 +124,18 @@ public sealed class VanillaLocalPlanner
             int damage = Math.Max(0, hp - frames.Min(frame => frame.Hp));
             bool safe = forecast["outcome"].GetValue<string>() == "complete"
                 && damage == 0 && frames.All(frame => !frame.Dead);
+            double settlementMs = 0;
+            int settlementFrames = 0;
+            if (safe && (frames[^1].Grounded || frames[^1].Velocity.Y == 0))
+            {
+                long settlementStart = Stopwatch.GetTimestamp();
+                var settled = Main.player[player.whoAmI];
+                VanillaPrediction.Advance(settled, VanillaKeys.None);
+                settlementMs = Stopwatch.GetElapsedTime(settlementStart).TotalMilliseconds;
+                updateMs += settlementMs; settlementFrames = 1;
+                damage = Math.Max(damage, hp - settled.statLife);
+                safe = damage == 0 && !settled.dead;
+            }
             if (transit && safe)
             {
                 var end = frames[^1];
@@ -147,6 +159,7 @@ public sealed class VanillaLocalPlanner
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
                 ["simulated_frames"] = frames.Count,
+                ["settlement_frames"] = settlementFrames, ["settlement_ms"] = settlementMs,
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (preferContinuation && candidate.name == "continue" && safe && chosenProgress > 0) break;

@@ -63,6 +63,8 @@ def main():
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--landing-probe", type=Path)
+    parser.add_argument("--expect-landing-rejected", action="store_true")
     parser.add_argument("--cancel-probe", type=Path)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
@@ -124,6 +126,11 @@ def main():
                 assert resumed["controls"] == baseline["controls"]
                 assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
             print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
+            return
+        if args.landing_probe:
+            result = worker.call("landing_probe", plan=json.loads(args.landing_probe.read_text()),
+                                 expect_rejected=args.expect_landing_rejected)
+            print("LANDING_PROBE", result, flush=True)
             return
         if args.benchmark:
             request = json.loads(args.benchmark.read_text())["request"]
@@ -201,6 +208,9 @@ def main():
         cutoff = worker.call("damage_cutoff_contract")
         assert cutoff["passed"]
         print("DAMAGE_CUTOFF_CONTRACT_PASS", cutoff, flush=True)
+        landing = worker.call("landing_probe", expect_rejected=True)
+        assert landing["candidate_rejected"] and landing["safe_extra_jump"]
+        print("LANDING_SETTLEMENT_CONTRACT_PASS", landing, flush=True)
         transit = worker.call("transit_contract")
         assert transit["passed"]
         print("TRANSIT_CONTINUITY_CONTRACT_PASS", transit, flush=True)

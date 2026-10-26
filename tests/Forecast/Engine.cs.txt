@@ -98,6 +98,51 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "landing_probe")
+        {
+            var recorded = request["plan"]?.AsObject();
+            if (recorded == null)
+            {
+                Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle) });
+                for (int x = area.Left; x < area.Right; x++)
+                for (int y = Y; y < Y + 30; y++)
+                    if (x > X + 2 || y > Y) Main.tile[x, y].ClearEverything();
+                var initial = VanillaFrame.Capture(source, area, true);
+                var trial = new VanillaPrediction(initial).Predict(Enumerable.Repeat(2, 181).ToArray(), false);
+                int hurt = trial["frames"].AsArray().ToList().FindIndex(frame => frame["hp"].GetValue<int>() < 400);
+                if (hurt < 1 || hurt >= 180) throw new InvalidOperationException("landing_fixture_did_not_fall");
+                var delayed = Enumerable.Repeat(0, 180 - hurt).Concat(Enumerable.Repeat(2, hurt)).ToArray();
+                recorded = new JsonObject { ["context"] = initial,
+                    ["controls"] = new JsonArray(delayed.Select(key => JsonValue.Create(key)).ToArray()) };
+            }
+            var state = recorded["context"].AsObject();
+            var keys = recorded["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+            var extended = new VanillaPrediction(state).Predict(keys.Concat(new[] { 0 }).ToArray(), false);
+            var frames = extended["frames"].AsArray();
+            int before = frames[keys.Length - 1]["hp"].GetValue<int>(), after = frames[keys.Length]["hp"].GetValue<int>();
+            if (before <= after) throw new InvalidOperationException("landing_damage_not_reproduced");
+            var end = frames[keys.Length - 1];
+            var goal = new Vector2(end["x"].GetValue<float>(), end["y"].GetValue<float>());
+            var plan = new VanillaLocalPlanner().Plan(state, goal, keys, preferContinuation: true);
+            bool rejected = !plan["candidates"][0]["safe"].GetValue<bool>();
+            if (request["expect_rejected"]?.GetValue<bool>() == true && !rejected)
+                throw new InvalidOperationException("planner_accepted_delayed_fall_damage");
+            var jumpKeys = (int[])keys.Clone();
+            for (int i = jumpKeys.Length - 10; i < jumpKeys.Length; i++) jumpKeys[i] |= 4;
+            var jump = new VanillaPrediction(state).Predict(jumpKeys.Concat(new[] { 0 }).ToArray(), false);
+            if (jump["frames"].AsArray().Any(frame => frame["hp"].GetValue<int>() < before))
+                throw new InvalidOperationException("extra_jump_did_not_reset_fall_damage");
+            var jumpPlan = new VanillaLocalPlanner().Plan(state, goal, jumpKeys, preferContinuation: true);
+            if (!jumpPlan["candidates"][0]["safe"].GetValue<bool>())
+                throw new InvalidOperationException("landing_check_rejected_safe_extra_jump");
+            if (!JsonNode.DeepEquals(state, VanillaFrame.Capture(Main.player[0],
+                new Rectangle(state["area"][0].GetValue<int>(), state["area"][1].GetValue<int>(),
+                    state["area"][2].GetValue<int>(), state["area"][3].GetValue<int>()), true)))
+                throw new InvalidOperationException("landing_check_did_not_restore_state");
+            return new JsonObject { ["last_planned_hp"] = before, ["next_frame_hp"] = after,
+                ["candidate_rejected"] = rejected, ["safe_extra_jump"] = true,
+                ["candidate"] = plan["candidates"][0].DeepClone() };
+        }
         if (command == "route_reuse_contract")
         {
             Setup(new JsonObject());
