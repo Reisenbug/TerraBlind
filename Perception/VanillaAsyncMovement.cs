@@ -53,7 +53,11 @@ public sealed class VanillaAsyncMovement
     int[] recovery;
 
     public VanillaAsyncMovement(Func<JsonObject, Task<JsonObject>> transport) : this((request, _) => transport(request)) { }
-    public VanillaAsyncMovement(Func<JsonObject, CancellationToken, Task<JsonObject>> transport) => send = transport;
+    public VanillaAsyncMovement(Func<JsonObject, CancellationToken, Task<JsonObject>> transport, int planningLead = LeadFrames)
+    {
+        send = transport;
+        PlanningLead = Math.Clamp(planningLead, 6, 90);
+    }
 
     public void CancelPending()
     {

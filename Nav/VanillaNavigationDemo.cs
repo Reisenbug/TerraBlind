@@ -43,6 +43,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
     VanillaAsyncMovement movement;
+    int responseFrames;
     CancellationTokenSource terrainCancellation;
     Task<JsonObject> terrainRequest;
     int previousAccepted;
@@ -153,6 +154,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         {
             cancellation?.Cancel();
             worker?.Dispose(); worker = null;
+            responseFrames = 0;
             if (startup != null)
             {
                 _ = startup.ContinueWith(task => { if (task.IsCompletedSuccessfully) task.Result.Dispose(); else _ = task.Exception; });
@@ -173,7 +175,7 @@ public sealed class VanillaNavigationDemo : ModSystem
                 request["route_direction"] = VanillaNavBridge.RouteDirection;
             }
             return Task.Run(() => connection.Send(request, token));
-        });
+        }, Math.Clamp(responseFrames + 6, VanillaAsyncMovement.LeadFrames, 90));
 
     void ResetInput(On_Player.orig_ResetControls original, Player player) { original(player); ApplyInput(player); }
     void CopyInput(On_TriggersSet.orig_CopyInto original, TriggersSet triggers, Player player) { original(triggers, player); ApplyInput(player); }
@@ -210,6 +212,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
             if (terrainPaused) return;
             movement.Poll(tick, player, 0);
+            if (movement.ResponseFrames > 0) responseFrames = movement.ResponseFrames;
             if (NavigationOwned) VanillaNavBridge.Prefetch(player, movement, tick);
             if (movement.InputAt(tick + 1) == 0) idleFrames++;
             if (movement.Accepted > 0 && !movement.HasInputAt(tick + 1))
