@@ -394,9 +394,22 @@ public static class VanillaNavBridge
             {
                 if (result["jump_place"]?.GetValue<bool>() == true)
                 {
-                    if (!VanillaAsyncMovement.StateMatches(player, result["anchor"].AsObject(), true, out _, out _)
-                        || !VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player))
-                    { Fail("jump_place_start_changed"); return; }
+                    bool matchesStart = VanillaAsyncMovement.StateMatches(player, result["anchor"].AsObject(), true,
+                        out string startReason, out string startDifference);
+                    if (matchesStart) matchesStart = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player,
+                        out startDifference, result["validation_frames"].AsArray());
+                    if (!matchesStart)
+                    {
+                        DiagLog.Write($"[engine-jump-place-retry] {startDifference ?? startReason}");
+                        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline"))
+                            File.WriteAllText(Path.Combine(Main.SavePath, $"jump-place-rejected-{Main.GameUpdateCount}.json"),
+                                new JsonObject { ["request"] = preparation.DeepClone(), ["result"] = result.DeepClone(),
+                                    ["actual"] = VanillaPrediction.Observe(player), ["reason"] = startDifference ?? startReason }.ToJsonString());
+                        prepared = preparation = null; edits.Clear(); batch.Clear();
+                        phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+                        VanillaNavigationDemo.Instance.ReplanAfterTerrain();
+                        return;
+                    }
                     phase = Phase.JumpPlacing; phaseAt = Main.GameUpdateCount;
                     placementAirborne = false; placementStartY = player.position.Y;
                     placementJumpFrames = result["jump_frames"].GetValue<int>();

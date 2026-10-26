@@ -98,6 +98,33 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "jump_place_context")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var plan = VanillaTerrainPlan.Build(request);
+            if (plan["status"]?.GetValue<string>() != "planned") throw new InvalidOperationException("context_probe_requires_plan");
+            var trajectory = plan["validation_frames"].AsArray();
+            try
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                if (!VanillaFrame.ContextMatches(snapshot, player, out _, trajectory))
+                    throw new InvalidOperationException("unchanged_placement_context_rejected");
+                int farX = snapshot["area"][0].GetValue<int>() + 2, farY = snapshot["area"][1].GetValue<int>() + 2;
+                if (trajectory.Any(frame => Math.Abs(frame["x"].GetValue<float>() / 16 - farX) < 8
+                    && Math.Abs(frame["y"].GetValue<float>() / 16 - farY) < 8))
+                    throw new InvalidOperationException("probe_tile_not_outside_trajectory");
+                var far = Main.tile[farX, farY]; far.LiquidType = LiquidID.Lava; far.LiquidAmount = 255;
+                if (VanillaFrame.ContextMatches(snapshot, player) || !VanillaFrame.ContextMatches(snapshot, player, out _, trajectory))
+                    throw new InvalidOperationException("unrelated_lava_did_not_stay_outside_placement_context");
+                player = VanillaFrame.RestoreInWorker(snapshot);
+                var target = Main.tile[request["tile_x"].GetValue<int>(), request["tile_y"].GetValue<int>()];
+                target.LiquidType = LiquidID.Lava; target.LiquidAmount = 255;
+                if (VanillaFrame.ContextMatches(snapshot, player, out _, trajectory))
+                    throw new InvalidOperationException("placement_context_ignored_target_lava");
+                return new JsonObject { ["passed"] = true, ["cases"] = 3 };
+            }
+            finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
         if (command == "placement_sequence")
         {
             var snapshot = request["snapshot"].AsObject();

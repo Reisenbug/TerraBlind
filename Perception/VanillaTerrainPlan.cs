@@ -52,6 +52,7 @@ public static class VanillaTerrainPlan
             return new JsonObject { ["status"] = "unsettled_unplaced_jump" };
         player = VanillaFrame.RestoreInWorker(state);
         int placedAt = -1;
+        var validation = fallback["frames"].DeepClone().AsArray();
         for (int frame = 0; frame < keys.Length; frame++)
         {
             if (placedAt < 0 && player.velocity.Y < 0
@@ -63,6 +64,7 @@ public static class VanillaTerrainPlan
                 placedAt = frame;
             }
             VanillaPrediction.Advance(player, (VanillaKeys)keys[frame]);
+            validation.Add(VanillaPrediction.Observe(player, false));
             if (player.dead || player.statLife < hp)
                 return new JsonObject { ["status"] = "unsafe_jump_place" };
         }
@@ -70,7 +72,8 @@ public static class VanillaTerrainPlan
             || !VanillaContactRegion.Supported(player.position, player.width, player.height))
             return new JsonObject { ["status"] = "jump_place_does_not_raise_support" };
         return new JsonObject { ["status"] = "planned", ["jump_place"] = true, ["jump_frames"] = 6,
-            ["place_after"] = placedAt, ["anchor"] = anchor, ["rise"] = startY - player.position.Y };
+            ["place_after"] = placedAt, ["anchor"] = anchor, ["rise"] = startY - player.position.Y,
+            ["validation_frames"] = validation };
     }
 
     public static JsonObject Build(JsonObject request)

@@ -23,7 +23,11 @@ def main():
         plan = worker.call("terrain_plan", snapshot=snapshot, jump_place=True,
                            tile_x=args.tile[0], tile_y=args.tile[1], tile_type=19)
         assert plan["status"] == "planned" and plan["jump_place"] and plan["rise"] > 0, plan
-        print(json.dumps({"production_plan": plan}, ensure_ascii=False))
+        print(json.dumps({"production_plan": {key: plan[key] for key in ("status", "jump_frames", "place_after", "rise")}}, ensure_ascii=False))
+        context = worker.call("jump_place_context", snapshot=snapshot, jump_place=True,
+                              tile_x=args.tile[0], tile_y=args.tile[1], tile_type=19)
+        assert context["passed"] and context["cases"] == 3
+        print(json.dumps({"placement_context": context}))
         for hold in (6, 12, 18):
             for place_after in (0, 1, 2, 4, 8, 12, 18):
                 result = worker.call("placement_sequence", snapshot=snapshot,
