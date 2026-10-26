@@ -98,6 +98,22 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "contact_cycle_replay")
+        {
+            var player = VanillaFrame.RestoreInWorker(request["snapshot"].AsObject());
+            var progress = new VanillaContactRegion.Progress();
+            var field = VanillaLocalPlanner.ReadGuidance(request["guidance"]);
+            var events = new JsonArray();
+            foreach (var sample in request["samples"].AsArray())
+            {
+                player.position = new Vector2(sample["x"].GetValue<float>(), sample["y"].GetValue<float>());
+                player.velocity = new Vector2(sample["vx"].GetValue<float>(), sample["vy"].GetValue<float>());
+                var cell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+                if (field.TryGetValue(cell, out int cost) && progress.ReturnedWithoutProgress(player, cost))
+                    events.Add(sample.DeepClone());
+            }
+            return new JsonObject { ["events"] = events };
+        }
         if (command == "contact_replay")
         {
             var snapshot = request["snapshot"].AsObject();

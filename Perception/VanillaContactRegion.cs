@@ -7,6 +7,27 @@ namespace TerraBlind;
 
 public static class VanillaContactRegion
 {
+    public sealed class Progress
+    {
+        bool grounded, hasContact;
+        Vector2 lastContact;
+        int lastCost;
+
+        public bool ReturnedWithoutProgress(Player player, int cost)
+        {
+            bool supported = player.velocity.Y == 0 && Supported(player.position, player.width, player.height);
+            bool landed = supported && !grounded;
+            grounded = supported;
+            if (!landed) return false;
+            bool repeated = hasContact && cost >= lastCost && Math.Abs(player.velocity.X) < .01f
+                && ConnectedSupport(lastContact, player.position, player.width, player.height);
+            lastContact = player.position; lastCost = cost; hasContact = true;
+            return repeated;
+        }
+
+        public void Reset() { grounded = hasContact = false; }
+    }
+
     public static bool Hazard(int x, int y)
     {
         var tile = Main.tile[x, y];

@@ -33,6 +33,8 @@ public static class VanillaNavBridge
     static Edit edit;
     static Vector2 routeGoal, lastPosition;
     static int bestH = int.MaxValue, stable;
+    static readonly VanillaContactRegion.Progress contactProgress = new();
+    static Dictionary<(int, int), int> contactField;
     static uint progressAt, phaseAt, useAt;
     static bool useCached, needTerrain;
     static JsonObject previewedRoute, arrivalAnchor;
@@ -46,6 +48,7 @@ public static class VanillaNavBridge
         if (excavation != null) MineCoordinator.Stop();
         excavation = null;
         phase = Phase.Moving; field = refreshSource = null; preparing = null; prepared = preparation = null;
+        contactProgress.Reset(); contactField = null;
         edits.Clear(); batch.Clear(); corridor.Clear(); Terminal = false; RouteDirection = 0;
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
         previewedRoute = arrivalAnchor = null;
@@ -75,6 +78,8 @@ public static class VanillaNavBridge
         var demo = VanillaNavigationDemo.Instance;
         field = MazeWand.PeekFieldOrNull(gx, gy);
         if (field == null) return;
+        if (phase != Phase.Moving || !ReferenceEquals(contactField, field)) contactProgress.Reset();
+        contactField = field;
         if (refreshSource != null && !ReferenceEquals(refreshSource, field))
         { refreshSource = null; bestH = int.MaxValue; progressAt = Main.GameUpdateCount; }
         if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive && excavation == null || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
@@ -110,6 +115,12 @@ public static class VanillaNavBridge
         if (phase == Phase.Preparing) { Prepare(player); return; }
         if (phase == Phase.Using) { FinishEdit(player); return; }
         var (cx, cy) = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+        if (phase == Phase.Moving && field.TryGetValue((cx, cy), out int contactCost)
+            && contactProgress.ReturnedWithoutProgress(player, contactCost))
+        {
+            needTerrain = true;
+            DiagLog.Write($"[engine-contact-cycle] cell=({cx},{cy}) cost={contactCost}; returned to same support without progress");
+        }
         if (field.TryGetValue((cx, cy), out int h) && h < bestH)
         { bestH = h; progressAt = Main.GameUpdateCount; }
         if (phase == Phase.Braking)
