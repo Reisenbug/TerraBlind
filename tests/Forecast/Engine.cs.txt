@@ -178,6 +178,28 @@ public sealed class Engine : ModSystem
                 if (candidate["safe"].GetValue<bool>() || candidate["coast_hp_loss"].GetValue<int>() <= 0)
                     throw new InvalidOperationException("planner_accepted_unsafe_queue_exhaustion");
                 Console.WriteLine("COAST_SURVIVAL_PASS hp_loss=" + candidate["coast_hp_loss"]);
+                var falling = new VanillaPrediction(state).Predict(delayedKeys, false, true)["end_snapshot"].AsObject();
+                var guarded = VanillaFrame.RestoreInWorker(falling);
+                CancellationToken pendingToken = default;
+                var unanswered = new TaskCompletionSource<JsonObject>();
+                var controller = new VanillaAsyncMovement((_, token) => { pendingToken = token; return unanswered.Task; }, 60);
+                controller.Poll(0, guarded, 0);
+                controller.Request(falling, 0, goal, 0);
+                int interventions = 0;
+                for (int i = 1; i <= 90; i++)
+                {
+                    if (controller.ProtectFall(guarded, i)) interventions++;
+                    VanillaPrediction.Advance(guarded, (VanillaKeys)controller.InputAt(i));
+                    controller.Poll(i, guarded, 0);
+                    if (guarded.statLife < 400 || guarded.dead)
+                        throw new InvalidOperationException("empty_queue_fall_guard_failed frame=" + i + " interventions=" + interventions
+                            + " state=" + VanillaPrediction.Observe(guarded, false));
+                }
+                if (interventions != 1 || !pendingToken.IsCancellationRequested)
+                    throw new InvalidOperationException("fall_guard_did_not_replace_pending_plan");
+                unanswered.SetCanceled();
+                VanillaFrame.RestoreInWorker(state);
+                Console.WriteLine("EMPTY_QUEUE_FALL_GUARD_PASS interventions=" + interventions);
             }
             if (!JsonNode.DeepEquals(state, VanillaFrame.Capture(Main.player[0],
                 new Rectangle(state["area"][0].GetValue<int>(), state["area"][1].GetValue<int>(),

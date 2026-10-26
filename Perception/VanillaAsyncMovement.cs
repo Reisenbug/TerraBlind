@@ -70,6 +70,25 @@ public sealed class VanillaAsyncMovement
 
     public int InputAt(long tick) => inputs.TryGetValue(tick, out int key) ? key : 0;
     public bool HasInputAt(long tick) => inputs.ContainsKey(tick);
+    internal bool ProtectFall(Player player, long tick)
+    {
+        if (HasInputAt(tick) || player.gravDir != 1 || player.velocity.Y <= 0
+            || !player.releaseJump || !player.AnyExtraJumpUsable()) return false;
+        var step = new Vector2(player.velocity.X, Math.Max(player.velocity.Y, player.maxFallSpeed));
+        bool dangerousFall = !player.noFallDmg && player.position.Y / 16 - player.fallStart > 25 + player.extraFall;
+        bool danger = false;
+        var position = player.position;
+        for (int i = 0; i < 8 && !danger; i++)
+        {
+            var allowed = Collision.TileCollision(position, step, player.width, player.height);
+            position += allowed;
+            danger = dangerousFall && allowed.Y < step.Y || Collision.LavaCollision(position, player.width, player.height);
+        }
+        if (!danger) return false;
+        Reject("emergency_jump");
+        for (int i = 0; i < 12; i++) inputs[tick + i] = 4;
+        return true;
+    }
     internal void DiscardRoute(long tick) => RecoverRoute(tick, "terrain_approach_changed");
 
     void RecoverRoute(long tick, string reason)

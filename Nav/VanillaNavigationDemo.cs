@@ -183,6 +183,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     void ApplyInput(Player player, bool applyTerrainUse = true)
     {
         if (!running || player != Main.LocalPlayer) return;
+        if (NavigationOwned && !terrainPaused && movement?.ProtectFall(player, tick + 1) == true)
+            DiagLog.Write($"[engine-emergency-jump] tick={tick} x={player.position.X:0.##} y={player.position.Y:0.##} vy={player.velocity.Y:0.##} fall_start={player.fallStart}");
         int keys = terrainPaused ? 0 : movement?.InputAt(tick + 1) ?? 0;
         LastControl = new ControlFrame(keys, movement?.HasInputAt(tick + 1) == true, movement?.ActivePlan ?? "none",
             movement?.PlanFrameAt(tick + 1) ?? -1, VanillaNavBridge.Terminal, goal,
