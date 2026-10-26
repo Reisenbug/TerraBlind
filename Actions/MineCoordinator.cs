@@ -11,6 +11,7 @@ namespace TerraBlind
 		public int StartWx, StartWy;   // cell the player stood on when mining began, defines the valid box with Target
 		public int TargetWx, TargetWy; // landing cell from the planner, mining ends when the player stands here
 		public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // planned tiles (fallback when the live hitbox window slides past an obstacle, e.g. a slope half-brick that lifted the player)
+		public bool OnlyPlannedTiles;
 	}
 
 	public class MineCoordinator : ModSystem
@@ -33,6 +34,7 @@ namespace TerraBlind
 		public static string Outcome = "idle";
 		public static string Reason = "";
 		public static int MinedCount;
+		public static uint ReadyTick { get; private set; } = uint.MaxValue;
 
 		public static void Start(MineRequest r)
 		{
@@ -43,6 +45,7 @@ namespace TerraBlind
 			Outcome = "running";
 			Reason = "";
 			MinedCount = 0;
+			ReadyTick = uint.MaxValue;
 		}
 
 		public static void Stop()
@@ -88,6 +91,8 @@ namespace TerraBlind
 			if (req == null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Finish("stopped", "no_player"); return; }
+			bool Required(int x, int y) => DigSolid(x, y)
+				&& (!req.OnlyPlannedTiles || req.MineTiles?.Contains((x, y)) == true);
 
 			int slot = FindPickaxeSlot(p);
 			if (slot < 0) { Finish("no_pickaxe", "背包前十格没有镐"); return; }
@@ -130,12 +135,12 @@ namespace TerraBlind
 					int loRow = System.Math.Max(footR - 4, System.Math.Min(footR - 2, req.TargetWy));
 					int hiRow = System.Math.Min(footR + 2, System.Math.Max(footR, req.TargetWy));
 					for (int y = hiRow; y >= loRow; y--)
-						if (DigSolid(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
+						if (Required(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
 					// fallback: live window empty but planner still lists an un-mined cell ahead → aim at it (covers
 					// obstacles the live hitbox slid past, e.g. a slope half-brick that lifted the player).
 					if (remaining == 0 && req.MineTiles != null)
 						foreach (var (mwx, mwy) in req.MineTiles)
-							if (DigSolid(mwx, mwy) && ((req.Dir == MineDir.Right && mwx >= pcx) || (req.Dir == MineDir.Left && mwx <= pcx)))
+							if (Required(mwx, mwy) && ((req.Dir == MineDir.Right && mwx >= pcx) || (req.Dir == MineDir.Left && mwx <= pcx)))
 							{ remaining++; tx = mwx; ty = mwy; break; }
 					if (req.Dir == MineDir.Right) p.controlRight = true; else p.controlLeft = true;
 					// done = reached OR passed the target column (don't require pfeet exact: a slope/half-brick at the
@@ -156,7 +161,7 @@ namespace TerraBlind
 					// on a full block footR is air (DigSolid false) so this is a harmless no-op there.
 					for (int row = footR; row <= footR + 1; row++)
 						for (int x = leftC; x <= rightC; x++) // 2 body columns
-							if (DigSolid(x, row)) { remaining++; if (tx == int.MinValue) { tx = x; ty = row; } }
+							if (Required(x, row)) { remaining++; if (tx == int.MinValue) { tx = x; ty = row; } }
 					CenterInShaft(p, leftC, rightC);
 					p.controlDown = true; // drop through platforms in the shaft
 					done = pfeet >= req.TargetWy; // sank to (or below) the landing cell
@@ -167,7 +172,7 @@ namespace TerraBlind
 					// one dig-up cycle clears the 2 rows above the head so the pillar step can lift 2 tiles.
 					for (int y = headR - 1; y >= headR - 2; y--)
 						for (int x = leftC; x <= rightC; x++)
-							if (DigSolid(x, y)) { remaining++; if (ty == int.MinValue) { tx = x; ty = y; } }
+							if (Required(x, y)) { remaining++; if (ty == int.MinValue) { tx = x; ty = y; } }
 					CenterInShaft(p, leftC, rightC);
 					done = remaining == 0; // headroom cleared → let the pillar step take over
 					break;
@@ -255,7 +260,10 @@ namespace TerraBlind
 				Cursor.AimTile(tx, ty);
 				p.selectedItem = slot;
 				if (p.itemTime == 0)
+				{
+					ReadyTick = Main.GameUpdateCount;
 					p.controlUseItem = true;
+				}
 			}
 			finally { if (boosted) Concessions.LongArmEnd(); }
 		}

@@ -13,10 +13,13 @@ public static class VanillaNavBridge
     public static bool Enabled;
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
-    public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining;
+    public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining or Phase.Excavating;
     public static bool ApproachingTerrain => phase == Phase.Approaching;
+    public static bool OwnsExcavation => phase == Phase.Excavating && excavation != null;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
-    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining }
+    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating }
+    static VanillaExcavation excavation;
+    static int excavationKeys, excavationSlot, excavationX, excavationY;
     readonly record struct Edit(int X, int Y, int Type, int Slot);
     static Phase phase;
     static Dictionary<(int, int), int> field;
@@ -38,6 +41,8 @@ public static class VanillaNavBridge
     {
         if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
         if (phase is Phase.Using or Phase.Mining) ItemUseCoordinator.Stop();
+        if (excavation != null) MineCoordinator.Stop();
+        excavation = null;
         phase = Phase.Moving; field = refreshSource = null; preparing = null; prepared = preparation = null;
         edits.Clear(); batch.Clear(); corridor.Clear(); Terminal = false; RouteDirection = 0;
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
@@ -66,11 +71,24 @@ public static class VanillaNavBridge
         if (field == null) return;
         if (refreshSource != null && !ReferenceEquals(refreshSource, field))
         { refreshSource = null; bestH = int.MaxValue; progressAt = Main.GameUpdateCount; }
-        if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
+        if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive && excavation == null || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
         { Fail("legacy_movement_conflict"); return; }
         stable = Math.Abs(player.velocity.X) < .01f && player.velocity.Y == 0
             && Vector2.DistanceSquared(lastPosition, player.position) < .0001f ? stable + 1 : 0;
         lastPosition = player.position;
+        if (phase == Phase.Excavating)
+        {
+            if (MineCoordinator.IsActive) { ApplyTerrainUse(player); return; }
+            DiagLog.Write($"[engine-excavation-end] outcome={MineCoordinator.Outcome} reason={MineCoordinator.Reason} frames={Main.GameUpdateCount - phaseAt}");
+            bool completed = MineCoordinator.Outcome == "done";
+            MineCoordinator.Stop(); excavation = null;
+            player.controlUseItem = player.controlLeft = player.controlRight = player.controlDown = false;
+            var current = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            if (completed && BuildCorridor(current.x, current.y, gx, gy) && StartExcavation(player)) return;
+            demo.ReplanAfterTerrain(); phase = Phase.Moving;
+            bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+            return;
+        }
         if (phase == Phase.Approaching)
         {
             if (stable >= 3 && VanillaAsyncMovement.StateMatches(player, arrivalAnchor, true, out _, out _))
@@ -95,6 +113,7 @@ public static class VanillaNavBridge
                 demo.UpdateNavigationGoal(routeGoal);
                 demo.PauseForTerrain();
                 if (!CollectEdits(player, gx, gy)) return;
+                if (StartExcavation(player)) return;
                 phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
                 Prepare(player);
             }
@@ -129,6 +148,7 @@ public static class VanillaNavBridge
         if (player.velocity.Y == 0 && stable >= 3 && movementBlocked)
         {
             if (!CollectEdits(player, gx, gy)) return;
+            if (StartExcavation(player)) return;
             if (edits.TryPeek(out var first) && first.Type < 0 && first.Y < (int)Math.Floor(player.Bottom.Y / 16))
             {
                 edit = first; phase = Phase.Mining; phaseAt = Main.GameUpdateCount;
@@ -311,6 +331,7 @@ public static class VanillaNavBridge
                         return;
                     }
                     prepared = result;
+                    if (edit.Type < 0 && StartExcavation(player)) return;
                     StartEdit();
                     phase = Phase.Using; phaseAt = Main.GameUpdateCount; useAt = uint.MaxValue;
                     DiagLog.Write($"[engine-terrain] {(edit.Type < 0 ? "mine" : "place")} ({edit.X},{edit.Y}) prepared tiles={batch.Count + 1}");
@@ -382,6 +403,23 @@ public static class VanillaNavBridge
         useAt = uint.MaxValue;
     }
 
+    static bool StartExcavation(Player player)
+    {
+        var candidate = VanillaExcavation.Create(player, corridor);
+        if (candidate == null) return false;
+        var demo = VanillaNavigationDemo.Instance;
+        demo.CancelTerrain(); demo.PauseForTerrain();
+        ItemUseCoordinator.Stop(); preparing = null; prepared = preparation = null;
+        edits.Clear(); batch.Clear(); arrivalAnchor = null;
+        excavation = candidate;
+        MineCoordinator.Start(candidate.Request);
+        phase = Phase.Excavating; phaseAt = Main.GameUpdateCount; useAt = uint.MaxValue;
+        DiagLog.Write($"[engine-excavation-start] dir={candidate.Request.Dir} start=({candidate.Request.StartWx},{candidate.Request.StartWy}) target=({candidate.Request.TargetWx},{candidate.Request.TargetWy}) tiles={candidate.Request.MineTiles.Count} cells="
+            + string.Join(";", candidate.Request.MineTiles.Select(cell => $"{cell.wx},{cell.wy}")));
+        ApplyTerrainUse(player);
+        return true;
+    }
+
     static void MinePassage(Player player, int gx, int gy)
     {
         if (player.velocity.Y != 0 || !Reach.CanMine(player, edit.X, edit.Y)
@@ -417,6 +455,35 @@ public static class VanillaNavBridge
 
     public static void ApplyTerrainUse(Player player)
     {
+        if (phase == Phase.Excavating)
+        {
+            player.delayUseItem = player.mouseInterface = false;
+            Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
+            if (useAt != Main.GameUpdateCount)
+            {
+                useAt = Main.GameUpdateCount;
+                player.controlLeft = player.controlRight = player.controlDown = player.controlUseItem = false;
+                if (excavation.Safe()) MineCoordinator.ApplyControls();
+                else
+                {
+                    DiagLog.Write("[engine-excavation-abort] floor or hazard changed");
+                    MineCoordinator.Stop();
+                }
+                excavationKeys = (player.controlLeft ? 1 : 0) | (player.controlRight ? 2 : 0)
+                    | (player.controlDown ? 16 : 0);
+                useCached = player.controlUseItem;
+                excavationSlot = player.selectedItem;
+                excavationX = (int)Math.Floor(Main.MouseWorld.X / 16);
+                excavationY = (int)Math.Floor(Main.MouseWorld.Y / 16);
+            }
+            player.controlLeft = (excavationKeys & 1) != 0;
+            player.controlRight = (excavationKeys & 2) != 0;
+            player.controlDown = (excavationKeys & 16) != 0;
+            player.controlUseItem = useCached;
+            player.selectedItem = excavationSlot;
+            Cursor.AimTile(excavationX, excavationY);
+            return;
+        }
         if (phase is not Phase.Using and not Phase.Mining) return;
         player.delayUseItem = player.mouseInterface = false;
         Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
