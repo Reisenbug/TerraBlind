@@ -989,6 +989,17 @@ public sealed class Engine : ModSystem
                 throw new InvalidOperationException("different_input_history_accepted_late_route");
             Setup(new JsonObject()); snapshot = VanillaFrame.Capture(source, area, true);
             fake["anchor"] = VanillaPrediction.Observe(source);
+            var idle = (JsonObject)fake.DeepClone();
+            idle["controls"] = new JsonArray(Enumerable.Repeat(0, 90).Select(key => JsonValue.Create(key)).ToArray());
+            delayed = new TaskCompletionSource<JsonObject>(); calls = 0;
+            controller = new VanillaAsyncMovement(_ => ++calls == 1
+                ? Task.FromResult((JsonObject)idle.DeepClone()) : delayed.Task);
+            controller.Request(snapshot, 0, source.position, 0); controller.Poll(1, source, 0);
+            controller.Request(snapshot, 1, source.position, 0); arrival = 1 + controller.PlanningLead + 3;
+            for (int frame = 2; frame < arrival; frame++) controller.Poll(frame, source, 0);
+            delayed.SetResult((JsonObject)fake.DeepClone()); controller.Poll(arrival, source, 0);
+            if (controller.Accepted != 2 || controller.InputAt(arrival + 1) != 2 || controller.Rebased != 2)
+                throw new InvalidOperationException("idle_tail_rejected_matching_late_route");
             controller = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult((JsonObject)fake.DeepClone()));
             controller.Request(snapshot, 0, source.position, 0); source.direction = -source.direction;
             controller.Poll(1, source, 0);

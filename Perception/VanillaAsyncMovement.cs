@@ -346,7 +346,8 @@ public sealed class VanillaAsyncMovement
         string reason = null, mismatch = null;
         var anchor = offset > 0 ? forecast[offset - 1].AsObject() : result["anchor"]?.AsObject();
         bool matches = planned && StateMatches(player, anchor, navigation, out reason, out mismatch);
-        bool rebase = navigation && inputs.Count == 0 && matches;
+        bool idleTail = tick >= handoff && player.velocity == Vector2.Zero && inputs.Values.All(key => key == 0);
+        bool rebase = navigation && (inputs.Count == 0 || idleTail) && matches;
         bool catchUp = offset > 0 && matches;
         if (tick > handoff && !rebase && !catchUp)
         {
