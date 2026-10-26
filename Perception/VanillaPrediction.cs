@@ -107,6 +107,8 @@ public sealed class VanillaPrediction
         samples?.Clear();
         var timer = Stopwatch.StartNew();
         string outcome = "complete";
+        bool navigation = checkpoint["navigation"]?.GetValue<bool>() == true;
+        JsonObject spawned = null;
         double restore = 0, update = 0, observe = 0, cleanup = 0;
         JsonObject end = null;
         try
@@ -133,7 +135,14 @@ public sealed class VanillaPrediction
                 if (player.dead) { outcome = "dead"; break; }
                 if (stopOnDamage && player.statLife < initialHp) { outcome = "damaged"; break; }
                 if (Main.projectile.Any(projectile => projectile.active) || Main.npc.Any(npc => npc.active)
-                    || Main.item.Any(item => item.active)) { outcome = "unsupported_dynamic_spawn"; break; }
+                    || !navigation && Main.item.Any(item => item.active))
+                {
+                    spawned = new JsonObject {
+                        ["items"] = new JsonArray(Main.item.Where(item => item.active).Take(8).Select(item => JsonValue.Create(item.type)).ToArray()),
+                        ["npcs"] = new JsonArray(Main.npc.Where(npc => npc.active).Take(8).Select(npc => JsonValue.Create(npc.type)).ToArray()),
+                        ["projectiles"] = new JsonArray(Main.projectile.Where(projectile => projectile.active).Take(8).Select(projectile => JsonValue.Create(projectile.type)).ToArray()) };
+                    outcome = "unsupported_dynamic_spawn"; break;
+                }
                 var interior = area; interior.Inflate(-32, -32);
                 if (!interior.Contains(player.Hitbox)) { outcome = "outside_observed_world"; break; }
             }
@@ -148,6 +157,7 @@ public sealed class VanillaPrediction
             cleanup = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
         }
         return new JsonObject { ["outcome"] = outcome, ["frames"] = trace, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+            ["dynamic_spawn"] = spawned,
             ["end_snapshot"] = end,
             ["timing"] = new JsonObject { ["restore_ms"] = restore, ["update_ms"] = update, ["observe_ms"] = observe, ["cleanup_ms"] = cleanup },
             ["scope"] = "isolated vanilla player updates; world actors and wiring are unsupported" };

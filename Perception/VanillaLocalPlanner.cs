@@ -223,6 +223,7 @@ public sealed class VanillaLocalPlanner
                 ["settlement_frames"] = settlementFrames, ["settlement_ms"] = settlementMs,
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
+            if (forecast["dynamic_spawn"] != null) diagnostics[^1]["dynamic_spawn"] = forecast["dynamic_spawn"].DeepClone();
             if (preferContinuation && candidate.name == "continue" && safe && chosenProgress > 0) break;
             if (candidateIndex >= primaryCount && selectedAdvances) break;
             if (safe && candidate.name is "walk" or "continue"

@@ -378,6 +378,20 @@ public sealed class Engine : ModSystem
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
             passed++;
+            Setup(new JsonObject());
+            for (int xx = X; xx <= X + 3; xx++)
+            for (int yy = Y - 3; yy < Y; yy++)
+            { var web = Main.tile[xx, yy]; web.HasTile = true; web.TileType = TileID.Cobweb; }
+            var webs = VanillaFrame.Capture(source, area);
+            var webControls = Enumerable.Repeat(2, 180).ToArray();
+            var strictWeb = new VanillaPrediction(webs).Predict(webControls, false);
+            if (strictWeb["outcome"].GetValue<string>() != "unsupported_dynamic_spawn"
+                || !strictWeb["dynamic_spawn"]["items"].AsArray().Any(item => item.GetValue<int>() == ItemID.Cobweb))
+                throw new InvalidOperationException("web_drop_fixture_did_not_spawn_loot");
+            webs["navigation"] = true;
+            if (new VanillaPrediction(webs).Predict(webControls, false)["outcome"].GetValue<string>() != "complete")
+                throw new InvalidOperationException("web_loot_stopped_navigation");
+            passed++;
             foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
             {
                 bool place = mode == 1;
