@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--terrain-replay", type=Path)
     parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
     parser.add_argument("--expect-terrain-planned", action="store_true")
+    parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -105,6 +106,18 @@ def main():
             raise TimeoutError("Worker startup timed out")
         if args.terrain_replay:
             capture = json.loads(args.terrain_replay.read_text())
+            if args.movement_only:
+                request = capture["request"]
+                result = worker.call("plan", snapshot=request["snapshot"], prefix=[0],
+                                     x=request["x"], y=request["y"], guidance=request["guidance"],
+                                     route_direction=request["route_direction"])
+                args.terrain_replay.with_suffix(".movement.json").write_text(json.dumps(result))
+                print("MOVEMENT_REPLAY", result["status"], result.get("selected"), result.get("route_progress"), flush=True)
+                if args.expect_terrain_planned:
+                    assert result["status"] == "planned" and result["route_progress"] > 0
+                    hp = request["snapshot"]["player"]["Terraria.Player:statLife"]
+                    assert all(not frame["dead"] and frame["hp"] >= hp for frame in result["forecast"]["frames"])
+                return
             results = []
             for attempt in capture["attempts"]:
                 request = dict(capture["request"], tile_x=attempt["x"], tile_y=attempt["y"],

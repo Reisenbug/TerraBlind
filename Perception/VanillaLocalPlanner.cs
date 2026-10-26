@@ -83,6 +83,10 @@ public sealed class VanillaLocalPlanner
                 .Select(i => direction | (i == release ? 0 : 4)).ToArray()));
         foreach (int stop in new[] { 12, 36, 60 })
             candidates.Add(($"brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? direction : 0).ToArray()));
+        foreach (int hold in new[] { 6, 18, 60 })
+        foreach (int stop in new[] { 12, 36, 60 })
+            candidates.Add(($"jump_brake_{hold}_{stop}", Enumerable.Range(0, Horizon)
+                .Select(i => (i < stop ? direction : 0) | (i < hold ? 4 : 0)).ToArray()));
         int reverse = direction == 2 ? 1 : 2;
         foreach (int stop in new[] { 12, 36, 60 })
             candidates.Add(($"reverse_brake_{stop}", Enumerable.Range(0, Horizon).Select(i => i < stop ? reverse : 0).ToArray()));
