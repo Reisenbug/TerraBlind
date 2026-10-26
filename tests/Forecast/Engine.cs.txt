@@ -161,6 +161,24 @@ public sealed class Engine : ModSystem
             var jumpPlan = new VanillaLocalPlanner().Plan(state, goal, jumpKeys, preferContinuation: true);
             if (!jumpPlan["candidates"][0]["safe"].GetValue<bool>())
                 throw new InvalidOperationException("landing_check_rejected_safe_extra_jump");
+            if (request["plan"] == null)
+            {
+                var delayedKeys = new int[12].Concat(keys).Take(180).ToArray();
+                var coast = new VanillaPrediction(state).Predict(delayedKeys.Concat(new int[60]).ToArray(), false);
+                var coastFrames = coast["frames"].AsArray();
+                if (coastFrames.Take(180).Any(frame => frame["hp"].GetValue<int>() < 400)
+                    || !coastFrames.Skip(180).Any(frame => frame["hp"].GetValue<int>() < 400))
+                    throw new InvalidOperationException("coast_fixture_did_not_delay_damage");
+                var guidance = new JsonArray();
+                for (int xx = area.Left; xx < area.Right; xx++)
+                for (int yy = area.Top; yy < area.Bottom; yy++)
+                    guidance.Add(new JsonArray(xx, yy, area.Right - xx));
+                var coastPlan = new VanillaLocalPlanner().Plan(state, goal, delayedKeys, guidance);
+                var candidate = coastPlan["candidates"][0];
+                if (candidate["safe"].GetValue<bool>() || candidate["coast_hp_loss"].GetValue<int>() <= 0)
+                    throw new InvalidOperationException("planner_accepted_unsafe_queue_exhaustion");
+                Console.WriteLine("COAST_SURVIVAL_PASS hp_loss=" + candidate["coast_hp_loss"]);
+            }
             if (!JsonNode.DeepEquals(state, VanillaFrame.Capture(Main.player[0],
                 new Rectangle(state["area"][0].GetValue<int>(), state["area"][1].GetValue<int>(),
                     state["area"][2].GetValue<int>(), state["area"][3].GetValue<int>()), true)))

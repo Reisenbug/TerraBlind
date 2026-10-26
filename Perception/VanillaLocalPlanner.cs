@@ -134,6 +134,8 @@ public sealed class VanillaLocalPlanner
             int settlementFrames = 0;
             double dryCheckMs = 0;
             int dryDamage = 0;
+            int coastDamage = 0;
+            double coastMs = 0;
             if (safe && (frames[^1].Grounded || frames[^1].Velocity.Y == 0))
             {
                 long settlementStart = Stopwatch.GetTimestamp();
@@ -161,7 +163,20 @@ public sealed class VanillaLocalPlanner
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
                 if (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01)
                 {
-                    if (snapshot["navigation"]?.GetValue<bool>() == true && !player.noFallDmg && frames.Any(frame => frame.Wet))
+                    if (transit)
+                    {
+                        long coastStart = Stopwatch.GetTimestamp();
+                        var coasting = Main.player[player.whoAmI];
+                        for (int i = 0; i < 90; i++)
+                        {
+                            VanillaPrediction.Advance(coasting, VanillaKeys.None);
+                            coastDamage = Math.Max(coastDamage, hp - coasting.statLife);
+                            if (coastDamage > 0 || coasting.dead) { safe = false; break; }
+                        }
+                        coastMs = Stopwatch.GetElapsedTime(coastStart).TotalMilliseconds;
+                        updateMs += coastMs;
+                    }
+                    if (safe && snapshot["navigation"]?.GetValue<bool>() == true && !player.noFallDmg && frames.Any(frame => frame.Wet))
                     {
                         long dryStart = Stopwatch.GetTimestamp();
                         if (dryPrediction == null)
@@ -200,6 +215,7 @@ public sealed class VanillaLocalPlanner
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
+                ["coast_ms"] = coastMs, ["coast_hp_loss"] = coastDamage,
                 ["dry_check_ms"] = dryCheckMs, ["dry_hp_loss"] = dryDamage,
                 ["simulated_frames"] = frames.Count,
                 ["settlement_frames"] = settlementFrames, ["settlement_ms"] = settlementMs,
