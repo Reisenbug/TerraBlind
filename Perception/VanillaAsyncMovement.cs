@@ -327,16 +327,16 @@ public sealed class VanillaAsyncMovement
             Reject("late_result", false); return;
         }
         if (tick < handoff && !rebase) return;
-        if (!VanillaFrame.ContextMatches(context, player, out string difference, result["forecast"]?["frames"]?.AsArray()))
-        { LastMismatch = difference; Reject("context_changed"); return; }
         if (!planned) { Reject("no_safe_plan", false); return; }
+        if (!VanillaFrame.ContextMatches(context, player, out string difference, result["forecast"]?["frames"]?.AsArray()))
+        { LastMismatch = difference; RejectResponse("context_changed", player, tick, navigation); return; }
         if (!matches)
         {
             LastMismatch = mismatch;
             LastDivergence = new JsonObject { ["reason"] = reason, ["tick"] = tick, ["handoff"] = handoff,
                 ["request"] = lastRequest.DeepClone(), ["anchor"] = result["anchor"].DeepClone(),
                 ["actual"] = VanillaPrediction.Observe(player), ["observed"] = observations.DeepClone() };
-            Reject(reason); return;
+            RejectResponse(reason, player, tick, navigation); return;
         }
         AcceptedRoute = forecast.Skip(offset).Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
         inputs.Clear();
@@ -385,6 +385,14 @@ public sealed class VanillaAsyncMovement
     }
 
     void Reject(string reason, bool clear = true) { recovery = null; if (clear) { inputs.Clear(); ActiveResult = null; } Rejected++; Status = reason; LastRejection = reason; CancelPending(); }
+
+    void RejectResponse(string reason, Player player, long tick, bool navigation)
+    {
+        string mismatch = LastMismatch;
+        bool valid = navigation && CurrentMatches(tick, player);
+        LastMismatch = mismatch;
+        Reject(reason, !valid);
+    }
 
     public bool Request(JsonObject snapshot, long tick, Vector2 goal, int revision, bool takeOwnership = false)
     {

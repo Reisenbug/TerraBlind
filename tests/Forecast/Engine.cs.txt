@@ -665,6 +665,33 @@ public sealed class Engine : ModSystem
         if (command == "async_cleanup")
         {
             Setup(new JsonObject());
+            var movingState = VanillaFrame.Capture(source, area, true);
+            var movingKeys = Enumerable.Repeat(2, 180).ToArray();
+            var movingForecast = new VanillaPrediction(movingState).Predict(movingKeys, false);
+            source = VanillaFrame.RestoreInWorker(movingState);
+            var active = new JsonObject { ["status"] = "planned", ["selected"] = "moving_contract",
+                ["wait_frames"] = 0, ["context"] = movingState.DeepClone(), ["route_progress"] = 100,
+                ["anchor"] = VanillaPrediction.Observe(source, false), ["forecast"] = movingForecast,
+                ["controls"] = new JsonArray(movingKeys.Select(key => JsonValue.Create(key)).ToArray()) };
+            var stale = active.DeepClone().AsObject();
+            stale["anchor"] = movingForecast["frames"][29].DeepClone();
+            stale["anchor"]["x"] = stale["anchor"]["x"].GetValue<float>() + 16;
+            var movingController = new VanillaAsyncMovement(_ => System.Threading.Tasks.Task.FromResult(stale));
+            if (!movingController.InstallTerrain(active, source, 0, source.position + new Vector2(300, 0)))
+                throw new InvalidOperationException("moving_contract_install_failed");
+            movingController.Request(movingState, 0, source.position + new Vector2(300, 0), 0);
+            for (int frame = 1; frame <= 30; frame++)
+                VanillaPrediction.Advance(source, (VanillaKeys)movingController.InputAt(frame));
+            movingController.Poll(30, source, 0);
+            if (movingController.LastRejection != "state_changed:x" || movingController.ActiveResult == null
+                || movingController.InputAt(31) != 2 || !movingController.CurrentMatches(30, source))
+                throw new InvalidOperationException("pending_mismatch_erased_valid_movement");
+            var block = Main.tile[(int)(source.Center.X / 16), (int)(source.Center.Y / 16)];
+            block.HasTile = true; block.TileType = TileID.Stone;
+            movingController.NeedsPlan(30, source, false);
+            if (movingController.ActiveResult != null || movingController.HasInputAt(31))
+                throw new InvalidOperationException("active_obstruction_kept_movement");
+            Setup(new JsonObject());
             var snapshot = VanillaFrame.Capture(source, area);
             var fake = new JsonObject { ["status"] = "planned", ["anchor"] = VanillaPrediction.Observe(source),
                 ["forecast"] = new JsonObject { ["frames"] = new JsonArray(VanillaPrediction.Observe(source)) },
