@@ -59,6 +59,15 @@ public sealed class Driver : ModSystem
     bool routed;
     bool descent;
     bool continuity;
+    bool journey, journeyActionStarted;
+    uint journeyActionAt;
+    int journeyItemBefore;
+    double journeyLegStartedMs;
+    readonly record struct JourneyStop(string Kind, int X, int Y, int Item = 0);
+    readonly JourneyStop[] journeyStops = {
+        new("main", 3459, 454), new("crystal", 3358, 475, ItemID.LifeCrystal),
+        new("chest", 3339, 496), new("spore", 3348, 515, ItemID.JungleSpores),
+        new("main_return", 3459, 454), new("surface", 3384, 243) };
     bool unlimited;
     int routeGoalX = 3383, routeGoalY = 1069;
     int continuityLeg;
@@ -226,6 +235,8 @@ public sealed class Driver : ModSystem
         descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
         unlimited = Terraria.Program.LaunchParameters.ContainsKey("-vnavnotimelimit");
         continuity = Terraria.Program.LaunchParameters.ContainsKey("-vnavcontinuitycheck");
+        journey = Terraria.Program.LaunchParameters.ContainsKey("-vnavjourneycheck");
+        continuity |= journey;
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcircuitcheck")) offsets = new[] { 180, 360, -180 };
         enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
         if (!enabled) return;
@@ -421,7 +432,15 @@ public sealed class Driver : ModSystem
         if (!started)
         {
             string[] args;
-            if (continuity)
+            if (journey)
+            {
+                var goal = JourneyApproach(player);
+                routeGoalX = goal.X; routeGoalY = goal.Y;
+                journeyLegStartedMs = routeClock.Elapsed.TotalMilliseconds;
+                args = new[] { "route", goal.X.ToString(), goal.Y.ToString() };
+                Console.WriteLine($"VNAV_JOURNEY_START leg={continuityLeg} kind={journeyStops[continuityLeg].Kind} goal=({goal.X},{goal.Y})");
+            }
+            else if (continuity)
             {
                 int x = Main.spawnTileX + offsets[continuityLeg], y = Math.Max(10, Main.spawnTileY - 60);
                 while (y < Main.maxTilesY - 200 && !Predicates.IsGround(x, y)) y++;
@@ -456,7 +475,7 @@ public sealed class Driver : ModSystem
                 routeClock.Start(); timingPhase = "command_setup"; phaseStart = 0;
                 phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
             }
-            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline))
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline) && (!journey || continuityLeg == 0))
             {
                 RestoreBaseline(player, baseline);
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
@@ -482,13 +501,14 @@ public sealed class Driver : ModSystem
                 NavigationRecording.Start("bot", routeGoalX, routeGoalY);
                 Console.WriteLine("VNAV_BASELINE_RECORDING " + NavigationRecording.LastDirectory);
             }
+            else if (journey) NavigationRecording.Start("bot", routeGoalX, routeGoalY);
             ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck")) VanillaNavBridge.Enabled = false;
             if (!RecedingNav.Active) throw new InvalidOperationException(caller.Last);
             started = true;
         }
         ticks++;
-        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
+        if (RecedingNav.Active && Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
         { RecedingNav.LastStop = "done"; RecedingNav.Stop(); }
         if (VanillaNavBridge.Enabled && RecedingNav.Active && (StateSpacePlanner.ExecRunning
             || MineCoordinator.IsActive && !VanillaNavBridge.OwnsExcavation || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
@@ -548,11 +568,16 @@ public sealed class Driver : ModSystem
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (continuity)
         {
-            results.Add(new JsonObject { ["offset"] = offsets[continuityLeg], ["tick"] = ticks,
+            if (journey && !JourneyInteraction(player)) return;
+            results.Add(new JsonObject { ["offset"] = journey ? null : offsets[continuityLeg],
+                ["kind"] = journey ? journeyStops[continuityLeg].Kind : null, ["tick"] = ticks,
+                ["wall_ms"] = journey ? routeClock.Elapsed.TotalMilliseconds - journeyLegStartedMs : null,
                 ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16 });
             File.WriteAllText(Path.Combine(Main.SavePath, "continuity-legs.json"), results.ToJsonString());
-            Console.WriteLine($"VNAV_CONTINUITY_LEG_PASS offset={offsets[continuityLeg]} tick={ticks}");
-            if (++continuityLeg < offsets.Length) { started = false; return; }
+            Console.WriteLine($"VNAV_CONTINUITY_LEG_PASS leg={continuityLeg} tick={ticks}");
+            if (NavigationRecording.Active) NavigationRecording.Stop("leg_complete");
+            journeyActionStarted = false;
+            if (++continuityLeg < (journey ? journeyStops.Length : offsets.Length)) { started = false; return; }
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
@@ -561,6 +586,70 @@ public sealed class Driver : ModSystem
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         controlTrace.Flush();
         FinishProcess(0);
+    }
+
+    Point JourneyApproach(Player player)
+    {
+        var target = journeyStops[continuityLeg];
+        if (target.Kind is "main" or "main_return" or "surface") return new Point(target.X, target.Y);
+        var tile = Main.tile[target.X, target.Y];
+        bool present = tile.HasTile && (target.Kind == "crystal" ? tile.TileType == TileID.Heart
+            : target.Kind == "chest" ? TileID.Sets.BasicChest[tile.TileType]
+            : tile.TileType == TileID.JunglePlants && tile.TileFrameX == 144);
+        if (!present) throw new InvalidOperationException("journey_resource_missing:" + target.Kind);
+        var probe = new Player { width = player.width, height = player.height, inventory = player.inventory,
+            selectedItem = 1, blockRange = player.blockRange };
+        Point? best = null;
+        float bestDistance = float.MaxValue;
+        for (int y = target.Y - 3; y <= target.Y + 5; y++)
+        for (int x = target.X - 4; x <= target.X + 5; x++)
+        {
+            probe.position = new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height);
+            if (!VanillaContactRegion.Supported(probe.position, probe.width, probe.height)) continue;
+            bool reachable = target.Kind == "chest" ? probe.IsInInteractionRangeToMultiTileHitbox(target.X, target.Y)
+                : Reach.CanMine(probe, target.X, target.Y);
+            float distance = Vector2.DistanceSquared(probe.Center, new Vector2(target.X * 16 + 8, target.Y * 16 + 8));
+            if (!reachable || distance >= bestDistance) continue;
+            bestDistance = distance; best = new Point(x, y);
+        }
+        return best ?? throw new InvalidOperationException("journey_no_interaction_stance:" + target.Kind);
+    }
+
+    bool JourneyInteraction(Player player)
+    {
+        var target = journeyStops[continuityLeg];
+        if (target.Kind is "main" or "main_return" or "surface") return true;
+        if (target.Kind == "chest")
+        {
+            int chest = Chest.FindChest(target.X, target.Y);
+            if (chest < 0 || !player.IsInInteractionRangeToMultiTileHitbox(target.X, target.Y))
+                throw new InvalidOperationException("journey_chest_out_of_range");
+            player.OpenChest(target.X, target.Y, chest);
+            if (player.chest != chest) throw new InvalidOperationException("journey_chest_not_opened");
+            Console.WriteLine($"VNAV_JOURNEY_INTERACTION kind=chest chest={chest} tile=({target.X},{target.Y})");
+            player.chest = -1;
+            return true;
+        }
+        int count = player.inventory.Where(item => item.type == target.Item).Sum(item => item.stack);
+        if (!journeyActionStarted)
+        {
+            player.selectedItem = 1;
+            if (!Reach.CanMine(player, target.X, target.Y)) throw new InvalidOperationException("journey_resource_out_of_range");
+            journeyItemBefore = count; journeyActionAt = Main.GameUpdateCount; journeyActionStarted = true;
+            ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = target.X, TargetWy = target.Y, Slot = 1, Strict = true });
+        }
+        if (count > journeyItemBefore)
+        {
+            ItemUseCoordinator.Stop();
+            Console.WriteLine($"VNAV_JOURNEY_INTERACTION kind={target.Kind} item={target.Item} before={journeyItemBefore} after={count}");
+            return true;
+        }
+        if (Main.GameUpdateCount - journeyActionAt > 300)
+        {
+            ItemUseCoordinator.Stop();
+            throw new InvalidOperationException("journey_resource_not_collected:" + target.Kind);
+        }
+        return false;
     }
 
     public override void PostDrawInterface(SpriteBatch batch)
