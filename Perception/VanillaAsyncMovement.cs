@@ -73,7 +73,7 @@ public sealed class VanillaAsyncMovement
         var remaining = Enumerable.Range(1, VanillaLocalPlanner.Horizon)
             .TakeWhile(i => inputs.ContainsKey(tick + i)).Select(i => InputAt(tick + i)).ToArray();
         Reject(reason);
-        recovery = remaining; PlanningLead = 6;
+        recovery = remaining; PlanningLead = 12;
     }
     public bool TryArrival(long tick, out int[] controls, out JsonObject anchor)
     {

@@ -12,10 +12,10 @@ public static class VanillaTerrainPlan
         float left, float right, int supportY)
     {
         if (first.y != supportY) return new[] { first };
-        var sides = available.Where(cell => cell.y < supportY
+        bool Supports((int x, int y) cell) => cell.y == supportY && cell.x * 16 < right && (cell.x + 1) * 16 > left;
+        var sides = available.Where(cell => cell.y <= supportY && !Supports(cell)
             && cell.x * 16 < right + 16 && (cell.x + 1) * 16 > left - 16);
-        var supports = available.Where(cell => cell.y == supportY
-            && cell.x * 16 < right && (cell.x + 1) * 16 > left);
+        var supports = available.Where(Supports);
         return sides.Concat(new[] { first }).Concat(supports).Distinct().ToArray();
     }
 
