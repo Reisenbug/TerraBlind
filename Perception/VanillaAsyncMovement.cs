@@ -141,7 +141,7 @@ public sealed class VanillaAsyncMovement
     {
         var frames = result["forecast"]["frames"].AsArray();
         int offset = -1;
-        for (int i = 0; i <= result["wait_frames"].GetValue<int>(); i++)
+        for (int i = result["wait_frames"].GetValue<int>(); i >= 0; i--)
         {
             var anchor = i == 0 ? result["anchor"].AsObject() : frames[i - 1].AsObject();
             if (StateMatches(player, anchor, true, out var reason, out var mismatch)) { offset = i; break; }

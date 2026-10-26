@@ -214,6 +214,11 @@ public sealed class Engine : ModSystem
         {
             int passed = 0;
             float error = 0;
+            var miningBatch = VanillaTerrainPlan.MiningBatch((10, 20),
+                new[] { (11, 20), (12, 19), (10, 21), (15, 19) }, 160, 190, 20);
+            if (!miningBatch.SequenceEqual(new[] { (12, 19), (10, 20), (11, 20) }))
+                throw new InvalidOperationException("passage_batch_does_not_clear_side_before_support");
+            passed++;
             Setup(new JsonObject { ["terrain"] = "half" });
             for (int i = 0; i < 30; i++) VanillaPrediction.Advance(source, VanillaKeys.Right);
             var halfCell = VanillaLocalPlanner.FootCell(source.position, source.width, source.height);
@@ -303,11 +308,14 @@ public sealed class Engine : ModSystem
                     throw new InvalidOperationException("terrain_handoff_rejected_matching_state");
                 source.itemAnimation = 22; source.itemTime = 10;
                 var editControls = plan["controls"].AsArray();
-                for (int i = 0; i < editControls.Count; i++)
+                int installedOffset = controller.PlanFrameAt(1);
+                if (mode == 2 && installedOffset != 24)
+                    throw new InvalidOperationException("stationary_terrain_wait_was_not_skipped:" + installedOffset);
+                for (int i = 0; controller.HasInputAt(i + 1); i++)
                 {
                     int key = controller.InputAt(i + 1);
                     VanillaPrediction.Advance(source, (VanillaKeys)key);
-                    var expected = plan["forecast"]["frames"][i];
+                    var expected = plan["forecast"]["frames"][controller.PlanFrameAt(i + 1)];
                     error = Math.Max(error, Vector2.Distance(source.position,
                         new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>())));
                     if (error > .001f || source.dead) throw new InvalidOperationException("terrain_execution_diverged");

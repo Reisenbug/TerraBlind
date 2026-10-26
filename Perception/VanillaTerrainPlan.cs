@@ -8,6 +8,17 @@ namespace TerraBlind;
 
 public static class VanillaTerrainPlan
 {
+    public static (int x, int y)[] MiningBatch((int x, int y) first, (int x, int y)[] available,
+        float left, float right, int supportY)
+    {
+        if (first.y != supportY) return new[] { first };
+        var sides = available.Where(cell => cell.y < supportY
+            && cell.x * 16 < right + 16 && (cell.x + 1) * 16 > left - 16);
+        var supports = available.Where(cell => cell.y == supportY
+            && cell.x * 16 < right && (cell.x + 1) * 16 > left);
+        return sides.Concat(new[] { first }).Concat(supports).Distinct().ToArray();
+    }
+
     public static JsonObject Build(JsonObject request)
     {
         VanillaFrame.RequireWorker();

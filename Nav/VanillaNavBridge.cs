@@ -351,12 +351,18 @@ public static class VanillaNavBridge
         }
         else if (edit.Type < 0 && edit.Y == supportY)
         {
-            while (edits.TryPeek(out var next) && next.Type < 0 && next.Y == supportY
-                && next.X * 16 < player.Right.X && (next.X + 1) * 16 > player.Left.X)
-            {
-                batch.Enqueue(edits.Dequeue());
-                targets.Add(new JsonArray(next.X, next.Y));
-            }
+            var remaining = edits.ToArray();
+            var group = VanillaTerrainPlan.MiningBatch((edit.X, edit.Y),
+                remaining.Where(candidate => candidate.Type < 0).Select(candidate => (candidate.X, candidate.Y)).ToArray(),
+                player.Left.X, player.Right.X, supportY);
+            var candidates = new[] { edit }.Concat(remaining).ToDictionary(candidate => (candidate.X, candidate.Y, candidate.Type));
+            edit = candidates[(group[0].x, group[0].y, -1)];
+            targets.Clear();
+            foreach (var cell in group) targets.Add(new JsonArray(cell.x, cell.y));
+            foreach (var cell in group.Skip(1)) batch.Enqueue(candidates[(cell.x, cell.y, -1)]);
+            edits.Clear();
+            foreach (var candidate in remaining)
+                if (candidate.Type >= 0 || !group.Contains((candidate.X, candidate.Y))) edits.Enqueue(candidate);
         }
         var snapshot = VanillaFrame.Capture(capturePlayer, VanillaLocalPlanner.SnapshotArea(capturePlayer, routeGoal, 90), true);
         int wait = player.inventory[edit.Slot].useAnimation + 2;
