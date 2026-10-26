@@ -98,6 +98,45 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "placement_sequence")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();
+            int placeAt = request["place_after"].GetValue<int>();
+            var sequence = request["controls"].AsArray();
+            if (placeAt < 0 || placeAt >= sequence.Count || sequence.Count > 240)
+                throw new ArgumentException("invalid_placement_sequence");
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                int hp = player.statLife;
+                var trace = new JsonArray();
+                bool placed = false;
+                string status = "complete";
+                for (int frame = 0; frame < sequence.Count; frame++)
+                {
+                    if (frame == placeAt)
+                    {
+                        if (player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
+                        { status = "body_blocks_placement"; break; }
+                        if (LavaSafety.IsLava(x, y) || Main.tile[x, y].HasTile)
+                        { status = "occupied_or_lava"; break; }
+                        WorldGen.PlaceTile(x, y, TileID.Platforms, mute: true, plr: player.whoAmI);
+                        placed = Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms;
+                        if (!placed) { status = "placement_rejected"; break; }
+                    }
+                    VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>());
+                    trace.Add(VanillaPrediction.Observe(player, false));
+                    if (player.dead || player.statLife < hp) { status = "damaged"; break; }
+                }
+                return new JsonObject { ["status"] = status, ["placed"] = placed, ["frames"] = trace,
+                    ["supported"] = VanillaContactRegion.Supported(player.position, player.width, player.height),
+                    ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+                    ["scope"] = "geometry probe using WorldGen placement; item reach and use timing are not validated" };
+            }
+            finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
         if (command == "contact_descent_region")
         {
             Setup(new JsonObject());
