@@ -438,11 +438,13 @@ namespace TerraBlind
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
                 digCells++;
+                if (!LavaSafety.CanMine(cx, cy - r)) return Impassable;
                 if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return Impassable;   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
                 digCells++;
+                if (!LavaSafety.CanMine(cx, cy - 3)) return Impassable;
                 if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
             }
             bool wall = digCells > 0;
@@ -580,7 +582,8 @@ namespace TerraBlind
         static bool ColumnWidenable(int c, int cy)
         {
             for (int r = 0; r < 3; r++)
-                if (SolidAnyShape(c, cy - r) && !DigTable.MineableWith(c, cy - r, _fieldPickPower)) return false;
+                if (SolidAnyShape(c, cy - r)
+                    && (!LavaSafety.CanMine(c, cy - r) || !DigTable.MineableWith(c, cy - r, _fieldPickPower))) return false;
             return true;
         }
 
