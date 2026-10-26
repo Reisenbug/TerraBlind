@@ -126,12 +126,13 @@ static class Tests
         TaskPlanTests.Run();
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();
+        await GatherTests.Run();
         await CodexTests.Run();
         await PvpTests.Run();
         DirectiveTests.Run();
         HistoryTests.Run();
         InventoryTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=40");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=45");
     }
 
     sealed class FakeHandler : HttpMessageHandler

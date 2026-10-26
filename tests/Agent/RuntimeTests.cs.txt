@@ -74,10 +74,11 @@ static class RuntimeTests
             finally { Game.LocalPlayer.dead = false; HttpServerSystem.Handler = null; }
             Console.WriteLine("PASS: death during fight sends explicit stop and reports interruption");
 
-            int combatStops = Combat.Stops, fightStops = FightCoordinator.Stops;
+            int combatStops = Combat.Stops;
+            FightCoordinator.Start(20);
             await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_dodge"] = false, ["auto_attack"] = false }, default));
             Check(!AgentPermissions.Dodge && !AgentPermissions.Attack, "combat permission was not applied");
-            Check(Combat.Stops == combatStops + 1 && FightCoordinator.Stops == fightStops + 1, "active attack was not stopped");
+            Check(Combat.Stops == combatStops + 1 && !FightCoordinator.IsActive, "active attack was not stopped");
             int calls = HttpServerSystem.Calls.Count;
             string denied = await Execute(AgentTools.Execute("fight", new JsonObject(), default));
             Check(denied.Contains("error") && HttpServerSystem.Calls.Count == calls, "forbidden fight reached game dispatcher");

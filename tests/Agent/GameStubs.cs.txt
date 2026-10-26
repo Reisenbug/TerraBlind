@@ -14,6 +14,9 @@ namespace Terraria
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
+        public static int maxNPCs = 20, maxItems = 20;
+        public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
+        public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
         public static bool[] tileSolid = { false, true }, tileSolidTop = { false, false };
         public static bool[] tileAxe = { false, false }, tileHammer = { false, false };
@@ -43,9 +46,19 @@ namespace Terraria
         public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
     }
-    public class NPC { public int type; }
+    public class NPC
+    {
+        public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
+        public bool active, friendly, townNPC;
+        public Microsoft.Xna.Framework.Vector2 position;
+        public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
+    }
     public class Item
     {
+        public bool active;
+        public Microsoft.Xna.Framework.Vector2 velocity;
+        public Microsoft.Xna.Framework.Vector2 position;
+        public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
         public string Name = "";
         public int stack, pick, axe, hammer, ammo, damage, useStyle;
         public int type, prefix, useAmmo;
@@ -92,7 +105,7 @@ namespace Terraria.ID
     public static class TileID { }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
-    public static class AmmoID { public const int Arrow = 40; }
+    public static class AmmoID { public const int None = 0, Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
     public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
 }
@@ -155,7 +168,7 @@ namespace TerraBlind
         public static void Display(string text) => Terraria.Main.NewText(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
-    public static class ItemUseCoordinator { public static bool IsActive; }
+    public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
     public static class PlaceAnywhere { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
@@ -176,7 +189,6 @@ namespace TerraBlind
         public static string All() { Stops++; RecedingNav.Active = false; return "stopped"; }
     }
     public static class StateSnapshotPlayer { public static void StopRemoteTask() { } }
-    public static class FightCoordinator { public static int Stops; public static void Stop() => Stops++; }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
@@ -197,6 +209,7 @@ namespace TerraBlind
         public static bool Active;
         public static string LastStop = "";
         public static void Start(int x, int y) => Active = true;
+        public static void Stop() => Active = false;
     }
     public static class StateSerializer { public static string ToJson(object snapshot) => "{}"; }
     public static class ActExecutor

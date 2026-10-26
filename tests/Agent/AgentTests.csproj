@@ -5,6 +5,10 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Agent/Gather.cs" Link="Gather.cs" />
+    <Compile Include="../../Agent/GameGather.cs" Link="GameGather.cs" />
+    <Compile Include="../../Flow/FightCoordinator.cs" Link="FightCoordinator.cs" />
+    <Compile Include="GatherTests.cs.txt" />
     <Compile Include="../../Agent/Catalog.cs" Link="Catalog.cs" />
     <Compile Include="CatalogTests.cs.txt" />
     <Compile Include="../../Agent/TaskPlan.cs" Link="TaskPlan.cs" />

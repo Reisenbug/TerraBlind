@@ -1,6 +1,9 @@
 [
+  { "type":"function", "function": { "name":"gather", "description":"按真实随身背包总数收集1..8种物品。targets每项给item_type/count，以及查证过的来源tile_names和/或npc_types；来源关系由Agent查配方/Wiki决定，代码不猜掉落。循环扫描来源、采集方块、攻击指定类型敌人和接近目标掉落物。会优先现成掉落物与附近目标敌人，材料齐了才ok=true；击杀或方块消失不算入包。默认120秒，最多180秒，每个候选最多两次；没有当前来源会返回source_unavailable，请换区域/来源。NPC追击与拾取依赖现有导航，不保证复杂地形或生成尚未出现的敌人。", "parameters":{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"item_type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1,"maximum":9999},"tile_names":{"type":"array","items":{"type":"string"}},"npc_types":{"type":"array","items":{"type":"integer","minimum":1}}},"required":["item_type","count"]}},"seconds":{"type":"integer","minimum":1,"maximum":180}},"required":["targets"]} } },
+  { "type":"function", "function": { "name":"npc_find", "description":"查询当前已生成且活跃的NPC，给type可按NPC类型过滤；不填返回全部。结果含idx/type/name/cell/life。只能证明当前存在，不会强制刷新或召唤。", "parameters":{"type":"object","properties":{"type":{"type":"integer","minimum":1}}} } },
+  { "type":"function", "function": { "name":"collect_treasure", "description":"接近指定箱子，再调用现有搜刮流程开箱、取物并验收。x/y为箱子任意一格，内部归一锚点；陷阱、锁定、占用和未能取空等原因以结果为准。返回got/lost，不能把导航到达当作已经拿到物品。", "parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]} } },
   { "type":"function", "function": { "name":"game_catalog", "description":"从当前加载的原版 ItemID/NPCID/TileID 常量查编号。kind区分item/npc/tile，不能互换；name用英文内部名称或片段，忽略大小写、空格和下划线，精确匹配排最前，最多12条。用于建立完成条件前确认编号，不能把查到编号当已持有、已掉落、已召唤或已击杀。只覆盖原版常量，不包含模组注册名或中文译名。", "parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["item","npc","tile"]},"name":{"type":"string","minLength":1}},"required":["kind","name"]} } },
-  { "type":"function", "function": { "name":"task_plan", "description":"为多阶段目标建立宿主管理的有序计划。先查询真实配方、物品/NPC类型和知识再建计划。每步 conditions 全部满足才能验证完成。已有未完成计划默认拒绝替换，继续时读取 get_state.task_plan；replace=true 会丢弃旧计划。permanent_health=count 为永久血上限；item=随身背包中 type 的数量；npc_kills=建计划后击杀指定 NPC 类型的次数，仅单人支持。步骤完成是历史里程碑；最后一步应重复所有最终仍需满足的条件，避免中途消耗物品却误报完成。", "parameters":{"type":"object","properties":{"goal":{"type":"string"},"replace":{"type":"boolean"},"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["permanent_health","item","npc_kills"]},"type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1}},"required":["kind","count"]}}},"required":["id","description","conditions"]}}},"required":["goal","steps"]} } },
+  { "type":"function", "function": { "name":"task_plan", "description":"建立有序计划，条件均由游戏状态验证。permanent_health=永久血上限，item=随身背包数量，npc_alive=指定类型活跃且存活的NPC数量，可验证召唤后实际出现，npc_kills=建计划后的本次击杀次数（仅单人）。npc_alive只证明当前存在，不证明由谁召唤；不要把它作为击杀后的最终条件。完成步骤是历史里程碑，最终步骤应重复最终仍需满足的条件。未完成计划默认拒绝替换，replace=true会丢弃旧计划。", "parameters":{"type":"object","properties":{"goal":{"type":"string"},"replace":{"type":"boolean"},"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["permanent_health","item","npc_kills","npc_alive"]},"type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1}},"required":["kind","count"]}}},"required":["id","description","conditions"]}}},"required":["goal","steps"]} } },
   { "type":"function", "function": { "name":"task_step", "description":"操作当前计划步骤。verify 由游戏真实状态验证 conditions，失败会返回实际值且不推进游标；block 必须附实际 reason，保存阻塞原因和最后动作结果。不允许自行声明成功或跳步骤；死亡/导航失败后读取原计划，依据新状态改方案，再 verify。", "parameters":{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["verify","block"]},"reason":{"type":"string"}},"required":["id","action"]} } },
   { "type":"function", "function": { "name":"combat_reposition", "description":"执行具体换位，临时接管Jev，最多导航8秒后恢复对战，返回实际位移、导航结果和最新combat_after_action。x/y照抄最近perception.terrain.stance_probes的像素坐标，不是格坐标。执行前重新检查512像素内的支撑及身体空间；失效时返回新探测点。探测点并非可达路径，不保证成功；失败应换方案。导航中地形权限仍受约束。", "parameters":{"type":"object","properties":{"session":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]} } },
   { "type":"function", "function": { "name":"inventory_swap", "description":"交换自己背包/快捷栏两个槽(0..49)，包含快捷栏武器整理。暂停战斗输入并最多等2秒让动画结束。expected_src和expected_dst必须包含inventory_slots里刚查询的type/prefix/stack；不一致或仍忙则返回错误，不会悄悄换错物品。成功返回实际前后值并同步两个槽，再恢复战斗。", "parameters":{"type":"object","properties":{"src":{"type":"integer"},"dst":{"type":"integer"},"expected_src":{"type":"object"},"expected_dst":{"type":"object"}},"required":["src","dst","expected_src","expected_dst"]} } },
@@ -393,7 +396,7 @@
     "type": "function",
     "function": {
       "name": "fight",
-      "description": "用武器持续攻击附近最近的敌对 NPC，不会攻击玩家。与玩家对战请用 duel_player。这个工具阻塞打一阵子并报告，期间玩家能打断。",
+      "description": "用武器持续攻击附近敌对NPC；npc_types可限定目标类型，省略才攻击最近敌人。不攻击玩家。它负责定点攻击，不提供复杂追击或刷怪闭环；要按材料数量收集用gather。与玩家对战用combat_start。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -401,6 +404,7 @@
             "type": "integer",
             "description": "锁敌半径(格),默认25"
           },
+          "npc_types": {"type":"array","minItems":1,"items":{"type":"integer","minimum":1}},
           "seconds": {
             "type": "number",
             "description": "打多久(秒),默认10;还有敌人可以再调一次"

@@ -34,7 +34,7 @@ public static class AgentTools
     internal static bool Rejected(JsonObject result) => result != null && (result["error"] != null ||
         result["ok"]?.ToString() == "false" || result["accepted"]?.ToString() == "false");
 
-    static Task<JsonObject> Call(string path, JsonObject args, CancellationToken token) => NativeAgent.OnMain(() =>
+    internal static Task<JsonObject> Call(string path, JsonObject args, CancellationToken token) => NativeAgent.OnMain(() =>
     {
         token.ThrowIfCancellationRequested();
         var response = HttpServerSystem.Dispatch(path, args?.ToJsonString(new System.Text.Json.JsonSerializerOptions
@@ -158,7 +158,8 @@ public static class AgentTools
                 ["state_after_respawn"] = JsonNode.Parse(await State(token)) }.ToJsonString();
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition";
+            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
+            or "gather" or "collect_treasure";
         bool action = external || name is "fight" or "fight_player";
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         try
@@ -227,6 +228,22 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "gather":
+                var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))
+                    .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
+                        t["tile_names"]?.AsArray().Select(n => n.GetValue<string>()).ToArray() ?? Array.Empty<string>(),
+                        t["npc_types"]?.AsArray().Select(n => n.GetValue<int>()).ToArray() ?? Array.Empty<int>())).ToArray();
+                result = await Gather.Run(targets, Int(args, "seconds", 120), new GameGather(targets), token);
+                break;
+            case "npc_find":
+                result = await Call("/npc_find", args, token);
+                break;
+            case "collect_treasure":
+                result = await Navigate(new JsonObject { ["x"] = Int(args, "x"), ["y"] = Int(args, "y"), ["reach"] = true }, token, 60);
+                if (result["done"]?.GetValue<bool>() != true) break;
+                result = await Call("/collect_treasure", args, token);
+                if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
+                break;
             case "game_catalog":
                 string kind = Text(args, "kind");
                 Type constants = kind switch
@@ -340,7 +357,7 @@ public static class AgentTools
                 }
                 break;
             case "mine":
-                result = await CollectNonSolidTarget(Int(args, "target_x"), Int(args, "target_y"), token);
+                result = await CollectTarget(Int(args, "target_x"), Int(args, "target_y"), token);
                 if (result != null) break;
                 result = await Call("/mine", new JsonObject { ["dir"] = Text(args, "dir"),
                     ["target_wx"] = Int(args, "target_x"), ["target_wy"] = Int(args, "target_y") }, token);
@@ -379,7 +396,14 @@ public static class AgentTools
             case "fight":
                 if (!await NativeAgent.OnMain(() => AgentPermissions.Attack, token))
                     return "{\"error\":\"玩家禁止自动攻击，请先确认是否修改许可。\"}";
-                result = await Call("/fight", args, token);
+                if (args["npc_types"] is JsonArray npcTypes)
+                {
+                    int[] types = npcTypes.Select(n => n.GetValue<int>()).ToArray();
+                    if (types.Length == 0 || types.Any(t => t <= 0)) throw new ArgumentException("npc_types 不能为空且编号必须为正数。");
+                    result = await NativeAgent.OnMain(() =>
+                    { FightCoordinator.Start(Int(args, "max_dist", 40), types); return new JsonObject { ["ok"] = true }; }, token);
+                }
+                else result = await Call("/fight", args, token);
                 if (!Rejected(result))
                 {
                     result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token);
@@ -440,13 +464,13 @@ public static class AgentTools
         return output;
     }
 
-    static async Task<JsonObject> CollectNonSolidTarget(int x, int y, CancellationToken token)
+    internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true)
     {
         var target = await NativeAgent.OnMain(() =>
         {
             if (!WorldGen.InWorld(x, y)) return null;
             var tile = Main.tile[x, y];
-            if (!tile.HasUnactuatedTile || Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) return null;
+            if (!tile.HasUnactuatedTile || nonSolidOnly && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) return null;
             int Power(Item item) => Main.tileAxe[tile.TileType] ? item.axe : Main.tileHammer[tile.TileType] ? item.hammer : item.pick;
             int slot = Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
                 .FirstOrDefault(i => !Main.LocalPlayer.inventory[i].IsAir && Power(Main.LocalPlayer.inventory[i]) > 0, -1);
@@ -464,7 +488,7 @@ public static class AgentTools
             ["slot"] = target["slot"].DeepClone(), ["strict"] = true }, token);
         if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 15, token);
         if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
-        result["mode_adjustment"] = "non_solid_target_use_collect_tool";
+        result["mode_adjustment"] = "target_use_collect_tool";
         return result;
     }
 

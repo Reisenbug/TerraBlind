@@ -1,6 +1,7 @@
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
+using System.Collections.Generic;
 
 namespace TerraBlind
 {
@@ -10,20 +11,23 @@ namespace TerraBlind
         private static volatile int _framesLeft;
         private static float _maxDistTiles = 20f;
         private const int TimeoutFrames = 360;
+        private static HashSet<int> _types;
 
         public static bool IsActive => _active && _framesLeft > 0;
 
-        public static void Start(float maxDistTiles)
+        public static void Start(float maxDistTiles, int[] types = null)
         {
             _maxDistTiles = maxDistTiles;
             _framesLeft = TimeoutFrames;
             _active = true;
+            _types = types == null ? null : new HashSet<int>(types);
         }
 
         public static void Stop()
         {
             _active = false;
             _framesLeft = 0;
+            _types = null;
         }
 
         public static void Tick(Player p)
@@ -59,6 +63,7 @@ namespace TerraBlind
             {
                 NPC npc = Main.npc[i];
                 if (npc == null || !npc.active) continue;
+                if (_types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
                 float ncx = npc.position.X + npc.width / 2f;
