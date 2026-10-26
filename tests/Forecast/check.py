@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--terrain-replay", type=Path)
     parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
     parser.add_argument("--replace-tiles", action="store_true")
+    parser.add_argument("--settled-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -107,6 +108,16 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.settled_probe:
+            request = json.loads(args.settled_probe.read_text())["request"]
+            result = worker.call("settled_probe", snapshot=request["snapshot"], prefix=request["prefix"])
+            plan = worker.call(**request)
+            result["selected"] = plan["selected"]
+            assert plan["selected"] == "wait" and plan["route_progress"] <= 0, plan["selected"]
+            args.settled_probe.with_suffix(".settlement.json").write_text(json.dumps(result))
+            print("REAL_SETTLEMENT_PROBE", {"supported": result["supported"],
+                  "before": result["state"], "released_end": result["released"][-1]}, flush=True)
+            return
         if args.terrain_replay:
             capture = json.loads(args.terrain_replay.read_text())
             if args.route_direction is not None:

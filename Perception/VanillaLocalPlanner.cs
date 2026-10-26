@@ -172,7 +172,8 @@ public sealed class VanillaLocalPlanner
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
                 if (reachedContact && !selectedContact || reachedContact == selectedContact
-                    && (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01))
+                    && (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01
+                        || !advances && !selectedAdvances && candidate.name == "wait" && score <= best + .01))
                 {
                     if (transit)
                     {
