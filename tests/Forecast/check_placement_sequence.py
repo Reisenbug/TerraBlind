@@ -20,6 +20,10 @@ def main():
     worker = Worker(args.port)
     try:
         initial = worker.call("load", snapshot=snapshot)["initial"]
+        plan = worker.call("terrain_plan", snapshot=snapshot, jump_place=True,
+                           tile_x=args.tile[0], tile_y=args.tile[1], tile_type=19)
+        assert plan["status"] == "planned" and plan["jump_place"] and plan["rise"] > 0, plan
+        print(json.dumps({"production_plan": plan}, ensure_ascii=False))
         for hold in (6, 12, 18):
             for place_after in (0, 1, 2, 4, 8, 12, 18):
                 result = worker.call("placement_sequence", snapshot=snapshot,

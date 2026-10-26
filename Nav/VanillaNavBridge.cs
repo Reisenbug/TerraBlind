@@ -14,11 +14,15 @@ public static class VanillaNavBridge
     public static bool Enabled;
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
-    public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining or Phase.Excavating;
+    public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining or Phase.Excavating or Phase.JumpPlacing;
     public static bool ApproachingTerrain => phase == Phase.Approaching;
     public static bool OwnsExcavation => phase == Phase.Excavating && excavation != null;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
-    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating }
+    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating, JumpPlacing }
+    static bool placementAirborne;
+    static float placementStartY;
+    static int placementJumpFrames;
+    static uint placementInputAt;
     static VanillaExcavation excavation;
     static int excavationKeys, excavationSlot, excavationX, excavationY;
     readonly record struct Edit(int X, int Y, int Type, int Slot);
@@ -31,6 +35,8 @@ public static class VanillaNavBridge
     static Task<JsonObject> preparing;
     static JsonObject preparation, prepared;
     static Edit edit;
+    static Edit? skippedEdit;
+    static Vector2 skippedPosition;
     static Vector2 routeGoal, lastPosition;
     static int bestH = int.MaxValue, stable;
     static readonly VanillaContactRegion.Progress contactProgress = new();
@@ -52,6 +58,7 @@ public static class VanillaNavBridge
         edits.Clear(); batch.Clear(); corridor.Clear(); Terminal = false; RouteDirection = 0;
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
         previewedRoute = arrivalAnchor = null;
+        skippedEdit = null;
     }
 
     static void Fail(string reason)
@@ -115,6 +122,23 @@ public static class VanillaNavBridge
             return;
         }
         if (phase == Phase.Mining) { MinePassage(player, gx, gy); return; }
+        if (phase == Phase.JumpPlacing)
+        {
+            placementAirborne |= player.velocity.Y != 0;
+            if (placementAirborne && player.velocity.Y == 0 && VanillaContactRegion.Supported(player.position, player.width, player.height))
+            {
+                var tile = Main.tile[edit.X, edit.Y];
+                bool success = tile.HasTile && tile.TileType == edit.Type && player.position.Y < placementStartY;
+                player.controlJump = player.controlUseItem = false;
+                DiagLog.Write($"[engine-jump-place-end] tile=({edit.X},{edit.Y}) success={success} rise={placementStartY - player.position.Y} frames={Main.GameUpdateCount - phaseAt}");
+                if (!success) { Fail("jump_place_failed"); return; }
+                prepared = preparation = null; edits.Clear(); batch.Clear();
+                phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+                demo.ReplanAfterTerrain();
+            }
+            else if (Main.GameUpdateCount - phaseAt > 180) Fail("jump_place_timeout");
+            return;
+        }
         if (phase == Phase.Preparing) { Prepare(player); return; }
         if (phase == Phase.Using) { FinishEdit(player); return; }
         var (cx, cy) = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
@@ -259,7 +283,8 @@ public static class VanillaNavBridge
             int x = cell.x + offset, y = cell.y + 1;
             if (!placements.Add((x, y)) || !Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
                 || !Reach.CanPlace(player, x, y) || !MazeWand.AnchorFor(x, y)
-                || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))) continue;
+                || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))
+                    && (type != Terraria.ID.TileID.Platforms || y != (int)(player.Bottom.Y / 16) - 1 || routeGoal.Y >= player.position.Y)) continue;
             edits.Enqueue(new Edit(x, y, type, platform));
         }
         LogEmptyCorridor(player);
@@ -315,6 +340,8 @@ public static class VanillaNavBridge
             selectedItem = player.selectedItem, blockRange = player.blockRange };
         var destination = VanillaLocalPlanner.FootCell(routeGoal, player.width, player.height);
         if (!CollectEdits(probe, destination.x, destination.y) || edits.Count == 0) return;
+        if (edits.TryPeek(out var firstEdit) && firstEdit.Type == Terraria.ID.TileID.Platforms
+            && probe.Hitbox.Intersects(new Rectangle(firstEdit.X * 16, firstEdit.Y * 16, 16, 16))) return;
         movement.CancelPending();
         arrivalAnchor = anchor;
         arrivalAt = Main.GameUpdateCount + (uint)controls.Length;
@@ -352,6 +379,18 @@ public static class VanillaNavBridge
             DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
             if (result["status"]?.GetValue<string>() == "planned")
             {
+                if (result["jump_place"]?.GetValue<bool>() == true)
+                {
+                    if (!VanillaAsyncMovement.StateMatches(player, result["anchor"].AsObject(), true, out _, out _)
+                        || !VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player))
+                    { Fail("jump_place_start_changed"); return; }
+                    phase = Phase.JumpPlacing; phaseAt = Main.GameUpdateCount;
+                    placementAirborne = false; placementStartY = player.position.Y;
+                    placementJumpFrames = result["jump_frames"].GetValue<int>();
+                    placementInputAt = uint.MaxValue;
+                    DiagLog.Write($"[engine-jump-place] tile=({edit.X},{edit.Y}) predicted_place_after={result["place_after"]} rise={result["rise"]}");
+                    return;
+                }
                 var checkedFrames = result["forecast"]["frames"].AsArray();
                 if (preparation["arrival"] != null)
                 {
@@ -377,6 +416,7 @@ public static class VanillaNavBridge
                 {
                     if (result["terrain_required"]?.GetValue<bool>() == false)
                     {
+                        skippedEdit = edit; skippedPosition = player.position;
                         var demo = VanillaNavigationDemo.Instance;
                         if (!demo.ResumeTerrain(result)) demo.ReplanAfterTerrain();
                         edits.Clear(); batch.Clear(); prepared = preparation = null;
@@ -447,6 +487,11 @@ public static class VanillaNavBridge
             ["x"] = routeGoal.X, ["y"] = routeGoal.Y, ["route_direction"] = RouteDirection,
             ["guidance"] = CaptureGuidance(snapshot) };
         if (arrival != null) preparation["arrival"] = new JsonArray(arrival.Select(key => JsonValue.Create(key)).ToArray());
+        if (skippedEdit == edit && VanillaContactRegion.ConnectedSupport(skippedPosition, player.position, player.width, player.height))
+            preparation["skip_unedited"] = true;
+        if (arrival == null && edit.Type == Terraria.ID.TileID.Platforms
+            && player.Hitbox.Intersects(new Rectangle(edit.X * 16, edit.Y * 16, 16, 16)))
+            preparation["jump_place"] = true;
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
     }
 
@@ -509,6 +554,25 @@ public static class VanillaNavBridge
 
     public static void ApplyTerrainUse(Player player)
     {
+        if (phase == Phase.JumpPlacing)
+        {
+            if (placementInputAt == uint.MaxValue) placementInputAt = Main.GameUpdateCount;
+            player.controlLeft = player.controlRight = player.controlDown = false;
+            player.controlJump = Main.GameUpdateCount - placementInputAt < placementJumpFrames;
+            player.controlUseItem = false;
+            player.selectedItem = edit.Slot;
+            player.delayUseItem = player.mouseInterface = false;
+            Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
+            var tile = Main.tile[edit.X, edit.Y];
+            if (!tile.HasTile && player.velocity.Y < 0 && !LavaSafety.IsLava(edit.X, edit.Y)
+                && !player.Hitbox.Intersects(new Rectangle(edit.X * 16, edit.Y * 16, 16, 16))
+                && Reach.CanPlace(player, edit.X, edit.Y) && MazeWand.AnchorFor(edit.X, edit.Y))
+            {
+                Cursor.AimTile(edit.X, edit.Y);
+                player.controlUseItem = true;
+            }
+            return;
+        }
         if (phase == Phase.Excavating)
         {
             player.delayUseItem = player.mouseInterface = false;
@@ -563,6 +627,7 @@ public static class VanillaNavBridge
         bool changed = edit.Type < 0 ? !tile.HasTile : tile.HasTile && tile.TileType == edit.Type;
         if (changed)
         {
+            skippedEdit = null;
             if (batch.TryDequeue(out var next))
             {
                 DiagLog.Write($"[engine-terrain] changed ({edit.X},{edit.Y}); next ({next.X},{next.Y}) without replanning");

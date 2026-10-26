@@ -31,12 +31,55 @@ public static class VanillaTerrainPlan
             player.width, player.height, player.gravDir).Y <= player.position.Y;
     }
 
+    static JsonObject JumpPlacement(JsonObject request)
+    {
+        var state = request["snapshot"].AsObject();
+        var player = VanillaFrame.RestoreInWorker(state);
+        int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();
+        int type = request["tile_type"].GetValue<int>();
+        if (type != Terraria.ID.TileID.Platforms || player.velocity != Vector2.Zero || player.gravDir != 1
+            || !player.releaseJump || !VanillaContactRegion.Supported(player.position, player.width, player.height))
+            return new JsonObject { ["status"] = "unsafe_jump_place_start" };
+        var anchor = VanillaPrediction.Observe(player, false);
+        int hp = player.statLife;
+        float startY = player.position.Y;
+        var keys = Enumerable.Range(0, 120).Select(i => i < 6 ? 4 : 0).ToArray();
+        var fallback = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
+        if (fallback["outcome"].GetValue<string>() != "complete")
+            return new JsonObject { ["status"] = "unsafe_unplaced_jump" };
+        var fallbackEnd = fallback["frames"].AsArray()[^1];
+        if (fallbackEnd["vy"].GetValue<float>() != 0)
+            return new JsonObject { ["status"] = "unsettled_unplaced_jump" };
+        player = VanillaFrame.RestoreInWorker(state);
+        int placedAt = -1;
+        for (int frame = 0; frame < keys.Length; frame++)
+        {
+            if (placedAt < 0 && player.velocity.Y < 0
+                && !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
+            {
+                if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)) break;
+                WorldGen.PlaceTile(x, y, type, mute: true, plr: player.whoAmI);
+                if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != type) break;
+                placedAt = frame;
+            }
+            VanillaPrediction.Advance(player, (VanillaKeys)keys[frame]);
+            if (player.dead || player.statLife < hp)
+                return new JsonObject { ["status"] = "unsafe_jump_place" };
+        }
+        if (placedAt < 0 || player.position.Y >= startY || player.velocity.Y != 0
+            || !VanillaContactRegion.Supported(player.position, player.width, player.height))
+            return new JsonObject { ["status"] = "jump_place_does_not_raise_support" };
+        return new JsonObject { ["status"] = "planned", ["jump_place"] = true, ["jump_frames"] = 6,
+            ["place_after"] = placedAt, ["anchor"] = anchor, ["rise"] = startY - player.position.Y };
+    }
+
     public static JsonObject Build(JsonObject request)
     {
         VanillaFrame.RequireWorker();
         var state = request["snapshot"].AsObject();
         try
         {
+            if (request["jump_place"]?.GetValue<bool>() == true) return JumpPlacement(request);
             var player = VanillaFrame.RestoreInWorker(state);
             if (request["arrival"] is JsonArray arrival)
             {
@@ -48,16 +91,19 @@ public static class VanillaTerrainPlan
                 player = VanillaFrame.RestoreInWorker(approach["end_snapshot"].AsObject());
                 if (player.velocity != Vector2.Zero) return new JsonObject { ["status"] = "arrival_not_settled" };
                 var arrivalState = approach["end_snapshot"].AsObject();
-                var movement = new VanillaLocalPlanner().Plan(arrivalState,
-                    new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
-                    guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
-                if (movement["status"].GetValue<string>() == "planned" && movement["route_progress"].GetValue<double>() > 0)
+                if (request["skip_unedited"]?.GetValue<bool>() != true)
                 {
-                    movement["terrain_required"] = false;
-                    movement["context"] = arrivalState.DeepClone();
-                    movement["anchor"] = VanillaPrediction.Observe(player, false);
-                    movement["wait_frames"] = 0;
-                    return movement;
+                    var movement = new VanillaLocalPlanner().Plan(arrivalState,
+                        new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
+                        guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
+                    if (movement["status"].GetValue<string>() == "planned" && movement["route_progress"].GetValue<double>() > 0)
+                    {
+                        movement["terrain_required"] = false;
+                        movement["context"] = arrivalState.DeepClone();
+                        movement["anchor"] = VanillaPrediction.Observe(player, false);
+                        movement["wait_frames"] = 0;
+                        return movement;
+                    }
                 }
             }
             var anchor = VanillaPrediction.Observe(player, false);
