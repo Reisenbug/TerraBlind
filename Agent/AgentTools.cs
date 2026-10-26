@@ -488,18 +488,18 @@ public static class AgentTools
 
     internal static async Task<JsonObject> FindTiles(JsonObject args, CancellationToken token)
     {
-        var result = await Call("/find_tiles", args, token);
-        if (Text(result, "error") != "unknown_tile_name") return result;
         var catalog = await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token);
         var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
         if (catalog["truncated"].GetValue<bool>() || exact.Select(m => m["type"].GetValue<int>()).Distinct().Count() != 1)
         {
-            result["name_candidates"] = catalog["matches"].DeepClone();
-            return result;
+            var unresolved = await Call("/find_tiles", args, token);
+            if (Text(unresolved, "error") is "unknown_tile_name" or "bad_params")
+                unresolved["name_candidates"] = catalog["matches"].DeepClone();
+            return unresolved;
         }
         var resolved = (JsonObject)args.DeepClone();
         resolved["name"] = exact[0]["internal"].GetValue<string>();
-        result = await Call("/find_tiles", resolved, token);
+        var result = await Call("/find_tiles", resolved, token);
         result["requested_name"] = Text(args, "name");
         result["resolved_name"] = resolved["name"].DeepClone();
         return result;

@@ -75,7 +75,7 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 离线测试共 47 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=47`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖工具协议、取消隔离、真实条件验证、有限续接、采集预算、NPC 类型过滤、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
 
-`find_tiles` 遇到 unknown_tile_name 时，使用当前游戏地图显示名和原版编号查询回退。只有精确匹配且类型唯一时才转换为内部名并重试一次，保持 n/max_dist 等参数不变；返回 requested_name/resolved_name。有歧义或只有近似匹配时仍返回错误和 name_candidates。`gather` 的方块源使用同一入口，不要求模型反复手动换名。这不建立物品到掉落来源的关系，也没有根据300血目标自动推导或执行采集。
+`find_tiles` 在搜索前使用当前游戏地图显示名和原版编号解析名称。只有精确匹配且类型唯一时才转换为内部名，保持 n/max_dist 等参数不变，单次调用搜索入口；返回 requested_name/resolved_name。有歧义或只有近似匹配时保留旧入口行为，名称错误时附 name_candidates。`gather` 的方块源使用同一入口，不要求模型反复手动换名。这不建立物品到掉落来源的关系，也没有根据300血目标自动推导或执行采集。
 
 `gather` 接受最多8种资源的目标随身库存，每项包含 `item_type`、`count`，以及由 agent 根据知识查询提供的 `tile_names`／`npc_types`。代码优先拾取所需掉落物，再选择附近目标敌人和方块；每个候选最多两次，总计最多32次动作，单次委托最多180秒。结束时以真实背包数量判断是否足够。没有候选只表示当前扫描未找到，不表示整个世界不存在。拾取会等待掉落物落稳并重新读取位置；接近仍依赖现有导航。
 

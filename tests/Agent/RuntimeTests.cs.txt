@@ -180,12 +180,18 @@ static class RuntimeTests
             };
             var aliasArgs = new JsonObject { ["name"] = "FixtureResource", ["n"] = 3, ["max_dist"] = 45 };
             var aliased = await Execute(AgentTools.FindTiles(aliasArgs, default));
-            Check(aliased["resolved_name"].ToString() == "FixtureSource" && tileQueries == 2
+            Check(aliased["resolved_name"].ToString() == "FixtureSource" && tileQueries == 1
                 && aliasArgs["name"].ToString() == "FixtureResource", "unique map name was not resolved or caller arguments mutated");
             tileQueries = 0;
             var resourceScene = await Execute(new GameGather(new[] { new GatherTarget(99, 10, new[] { "FixtureResource" }, Array.Empty<int>()) }).Observe(default));
-            Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 2,
+            Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 1,
                 "batch gathering did not reuse tile name resolution");
+            var spaced = (JsonObject)aliasArgs.DeepClone();
+            spaced["name"] = "Fixture Resource";
+            tileQueries = 0;
+            var spacedResult = await Execute(AgentTools.FindTiles(spaced, default));
+            Check(spacedResult["resolved_name"].ToString() == "FixtureSource" && tileQueries == 1,
+                "display name containing spaces reached legacy parser");
             Terraria.Lang.MapLabels[32] = "Fixture Resource";
             tileQueries = 0;
             var ambiguous = await Execute(AgentTools.FindTiles(aliasArgs, default));
