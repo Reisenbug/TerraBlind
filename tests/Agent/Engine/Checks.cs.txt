@@ -214,6 +214,12 @@ public sealed class Driver : ModSystem
                     break;
                 case 16:
                     Check(result["ok"]?.GetValue<bool>() == true, "airborne_drop_pickup_failed");
+                    Call("game_catalog", new JsonObject { ["kind"] = "item", ["name"] = "LifeCrystal" });
+                    break;
+                case 17:
+                    Check(result["matches"][0]["places_tile"]["type"].GetValue<int>() == TileID.Heart
+                        && result["matches"][0]["places_tile"]["names"][0]["internal"].GetValue<string>() == "Heart",
+                        "loaded_item_tile_definition_missing");
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
                     {
                         player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
@@ -221,14 +227,32 @@ public sealed class Driver : ModSystem
                         player.inventory[0].SetDefaults(ItemID.CopperShortsword);
                         player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
                         player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        int liveX = (int)player.Center.X / 16, liveY = (int)player.Bottom.Y / 16;
+                        for (int tx = liveX - 24; tx <= liveX + 24; tx++)
+                        for (int ty = liveY - 5; ty <= liveY + 2; ty++)
+                        {
+                            var tile = Main.tile[tx, ty];
+                            tile.ClearEverything();
+                            if (ty >= liveY) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                        }
+                        WorldGen.PlaceObject(liveX - 3, liveY - 1, TileID.Anvils);
+                        for (int i = 0; i < 10; i++)
+                        {
+                            int crystalX = liveX + 2 + i * 2;
+                            WorldGen.PlaceObject(crystalX, liveY - 1, TileID.Heart);
+                            Check(Main.tile[crystalX, liveY - 1].HasTile && Main.tile[crystalX, liveY - 1].TileType == TileID.Heart,
+                                "live_resource_fixture_missing");
+                        }
                         Config.I.AgentUseCodex = true;
                         AgentPermissions.Attack = AgentPermissions.Dodge = true;
                         NativeAgent.Submit("搞到300血同时搓个荆棘旋刃，然后召唤蜂王打蜂王。请建立新的任务计划，按实际状态执行。合理的中间步骤自己决定，失败时保留证据。");
                         liveRunning = true; liveStart = DateTime.UtcNow;
-                        Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true max_seconds=180");
+                        Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true placed_hearts=10 max_seconds=180");
                         break;
                     }
-                    Finish(true, "AGENT_ENGINE_COMPLETE checks=13 model_calls=0 controlled_fixture=true"); break;
+                    Finish(true, "AGENT_ENGINE_COMPLETE checks=14 model_calls=0 controlled_fixture=true"); break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }

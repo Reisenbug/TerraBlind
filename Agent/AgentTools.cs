@@ -253,6 +253,21 @@ public static class AgentTools
                 };
                 result = AgentCatalog.Query(constants, Text(args, "name"));
                 result["kind"] = kind;
+                if (kind == "item") await NativeAgent.OnMain(() =>
+                {
+                    foreach (var match in result["matches"].AsArray())
+                    {
+                        var item = new Item();
+                        item.SetDefaults(match["type"].GetValue<int>());
+                        match["places_tile"] = item.createTile < 0 ? null : new JsonObject
+                        {
+                            ["type"] = item.createTile,
+                            ["names"] = AgentCatalog.Query(typeof(Terraria.ID.TileID), item.createTile.ToString())["matches"].DeepClone(),
+                            ["detail"] = "Item placement definition only; not proof of harvesting drops or an existing world tile."
+                        };
+                    }
+                    return true;
+                }, token);
                 break;
             case "task_plan":
                 result = await NativeAgent.OnMain(() => Plan.Create(args, AgentTaskEvidence.Measure), token);

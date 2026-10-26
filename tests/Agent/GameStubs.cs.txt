@@ -62,6 +62,8 @@ namespace Terraria
         public string Name = "";
         public int stack, pick, axe, hammer, ammo, damage, useStyle;
         public int type, prefix, useAmmo;
+        public int createTile = -1;
+        public void SetDefaults(int itemType) { type = itemType; createTile = -1; }
         public float shootSpeed;
         public int shoot, mana, width = 30, height = 30;
         public int useTime, useAnimation;
