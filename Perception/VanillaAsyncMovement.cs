@@ -32,6 +32,9 @@ public sealed class VanillaAsyncMovement
     public int Rejected { get; private set; }
     public int LateAccepted { get; private set; }
     public int Rebased { get; private set; }
+    public int ContactContinuations { get; private set; }
+    public int ContactRetainedFrames { get; private set; }
+    public float ContactOffset { get; private set; }
     public string Status { get; private set; } = "idle";
     public bool Busy => pending != null;
     public Vector2[] AcceptedRoute { get; private set; } = Array.Empty<Vector2>();
@@ -133,6 +136,7 @@ public sealed class VanillaAsyncMovement
         if (expected == null) return true;
         if (!StateMatches(player, expected, true, out string reason, out string mismatch))
         {
+            if (reason == "state_changed:x" && TryContactContinuation(tick, index, player, expected)) return true;
             LastMismatch = mismatch; RecoverRoute(tick, reason);
             return true;
         }
@@ -150,6 +154,51 @@ public sealed class VanillaAsyncMovement
         for (int i = frames.Count - 1; i >= 0; i--)
             if (Math.Abs(frames[i]["vx"].GetValue<float>()) + Math.Abs(frames[i]["vy"].GetValue<float>()) > .01f) return i;
         return -1;
+    }
+
+    bool TryContactContinuation(long tick, int index, Player player, JsonObject expected)
+    {
+        if (player.gravDir != 1 || player.velocity.Y != 0 || index < 0
+            || expected["grounded"]?.GetValue<bool>() != true
+            || !StateMatches(player, expected, true, out _, out _, ignoreHorizontalPosition: true)) return false;
+        var original = new Vector2(expected["x"].GetValue<float>(), expected["y"].GetValue<float>());
+        if (!VanillaContactRegion.ConnectedSupport(original, player.position, player.width, player.height)) return false;
+        float shift = player.position.X - original.X;
+        var previous = player.position;
+        int end = index;
+        for (int i = index + 1; i < activeForecast.Count; i++)
+        {
+            long at = activeStart + i - activeOffset;
+            if (!inputs.TryGetValue(at, out int keys) || (keys & ~3) != 0) break;
+            var frame = activeForecast[i];
+            if (frame["grounded"]?.GetValue<bool>() != true || frame["vy"].GetValue<float>() != 0) break;
+            var before = activeForecast[i - 1];
+            float speed = Math.Max(Math.Abs(before["vx"].GetValue<float>()), player.accRunSpeed) + player.runAcceleration;
+            int direction = keys == 1 ? -1 : keys == 2 ? 1 : Math.Sign(before["vx"].GetValue<float>());
+            var originalBefore = new Vector2(before["x"].GetValue<float>(), before["y"].GetValue<float>());
+            var clearance = new Vector2(direction * speed, 0);
+            if (!VanillaContactRegion.ConnectedSupport(originalBefore, originalBefore + clearance, player.width, player.height)
+                || !VanillaContactRegion.ConnectedSupport(previous, previous + clearance, player.width, player.height)) break;
+            var position = new Vector2(frame["x"].GetValue<float>() + shift, frame["y"].GetValue<float>());
+            if (!VanillaContactRegion.ConnectedSupport(previous, position, player.width, player.height)) break;
+            previous = position; end = i;
+        }
+        if (end == index) return false;
+        CancelPending();
+        var translated = new JsonArray();
+        foreach (var sample in activeForecast.Take(end + 1))
+        {
+            var frame = sample.DeepClone(); frame["x"] = frame["x"].GetValue<float>() + shift; translated.Add(frame);
+        }
+        foreach (long key in inputs.Keys.Where(key => key > activeStart + end - activeOffset).ToArray()) inputs.Remove(key);
+        activeForecast = translated;
+        ActiveResult = ActiveResult.DeepClone().AsObject();
+        ActiveResult["forecast"]["frames"] = translated.DeepClone();
+        activeUsefulEnd = LastMovingFrame(translated);
+        AcceptedRoute = translated.Skip(index + 1).Select(frame => new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>())).ToArray();
+        ContactContinuations++; ContactRetainedFrames = end - index; ContactOffset = shift;
+        LastMismatch = LastRejection = null;
+        return true;
     }
     public void TerrainChanged(int x, int y, Player player, long tick)
     {
@@ -283,13 +332,17 @@ public sealed class VanillaAsyncMovement
         pendingCancellation?.Dispose(); pendingCancellation = null;
     }
 
-    internal static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
+    internal static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch,
+        bool ignoreHorizontalPosition = false)
     {
         reason = null; mismatch = null;
         var actual = VanillaPrediction.Observe(player, !navigation);
         foreach (string key in new[] { "x", "y", "vx", "vy", "wing_time" })
+        {
+            if (ignoreHorizontalPosition && key == "x") continue;
             if (Math.Abs(actual[key].GetValue<float>() - anchor[key].GetValue<float>()) > .01f)
             { mismatch = $"{key}: actual={actual[key]} predicted={anchor[key]}"; reason = "state_changed:" + key; return false; }
+        }
         foreach (string key in new[] { "hp", "dead", "grav_dir", "jump", "fall_start", "available_jumps", "frozen", "webbed", "buff_types", "buff_times", "extra_jumps" })
         {
             if (navigation && key is "hp" or "buff_types" or "buff_times" or "extra_jumps") continue;

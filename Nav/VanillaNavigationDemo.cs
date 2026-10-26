@@ -254,8 +254,14 @@ public sealed class VanillaNavigationDemo : ModSystem
                 route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
             }
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
+            int contactCount = movement.ContactContinuations;
             bool needsPlan = !VanillaNavBridge.ApproachingTerrain
                 && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal));
+            if (movement.ContactContinuations != contactCount)
+            {
+                route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
+                DiagLog.Write($"[engine-contact-continue] offset_x={movement.ContactOffset} retained_frames={movement.ContactRetainedFrames}");
+            }
             if (needsPlan && !movement.Busy)
             {
                 if ((player.itemAnimation > 0 || player.itemTime > 0) && !(NavigationOwned && player.HeldItem.pick > 0)) return;

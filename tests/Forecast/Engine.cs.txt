@@ -98,6 +98,45 @@ public sealed class Engine : ModSystem
     {
         string command = request["command"].GetValue<string>();
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
+        if (command == "contact_replay")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var results = new JsonArray();
+            foreach (int direction in new[] { 1, 2 })
+            foreach (int offset in new[] { -8, 8 })
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                var keys = Enumerable.Repeat(direction, 90).ToArray();
+                var forecast = new VanillaPrediction(snapshot).Predict(keys, false);
+                if (forecast["outcome"].GetValue<string>() != "complete") continue;
+                var plan = new JsonObject { ["status"] = "planned", ["selected"] = "contact_replay", ["wait_frames"] = 0,
+                    ["context"] = snapshot.DeepClone(), ["anchor"] = VanillaPrediction.Observe(player, false),
+                    ["forecast"] = forecast, ["route_progress"] = 100d,
+                    ["controls"] = new JsonArray(keys.Select(key => JsonValue.Create(key)).ToArray()) };
+                var controller = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_request"));
+                if (!controller.InstallTerrain(plan, player, 0, player.position + new Vector2(300, 0)))
+                    throw new InvalidOperationException("contact_install_failed");
+                VanillaPrediction.Advance(player, (VanillaKeys)controller.InputAt(1));
+                player.position.X += offset;
+                controller.Poll(1, player, 0);
+                controller.NeedsPlan(1, player, false);
+                int retained = controller.ContactRetainedFrames;
+                int hp = player.statLife;
+                for (int frame = 2; frame <= retained + 1; frame++)
+                {
+                    VanillaPrediction.Advance(player, (VanillaKeys)controller.InputAt(frame));
+                    if (player.dead || player.statLife < hp || !controller.CurrentMatches(frame, player))
+                        throw new InvalidOperationException("contact_continuation_diverged:" + frame + " direction=" + direction
+                            + " offset=" + offset + " actual=" + VanillaPrediction.Observe(player, false)
+                            + " expected=" + controller.ActiveResult["forecast"]["frames"][frame - 1]);
+                }
+                results.Add(new JsonObject { ["direction"] = direction, ["offset"] = offset,
+                    ["retained_frames"] = retained, ["accepted"] = controller.ContactContinuations,
+                    ["hp"] = player.statLife, ["x"] = player.position.X, ["y"] = player.position.Y });
+            }
+            VanillaFrame.RestoreInWorker(snapshot);
+            return new JsonObject { ["cases"] = results };
+        }
         if (command == "water_fall_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle) });

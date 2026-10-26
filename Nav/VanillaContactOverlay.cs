@@ -6,7 +6,6 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Terraria;
 using Terraria.GameContent;
-using Terraria.ID;
 
 namespace TerraBlind;
 
@@ -18,26 +17,6 @@ internal sealed class VanillaContactOverlay
     readonly List<Rectangle> unverified = new();
     ulong updated;
     Point origin;
-
-    internal static bool Hazard(int x, int y)
-    {
-        var tile = Main.tile[x, y];
-        return LavaSafety.IsLava(x, y) || tile.HasTile && !tile.IsActuated
-            && (TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
-                || tile.TileType is TileID.Spikes or TileID.WoodenSpikes or TileID.Hellstone or TileID.Meteorite);
-    }
-
-    internal static bool SafeBody(Vector2 position, int width, int height)
-    {
-        if (Collision.SolidCollision(position, width, height)) return false;
-        int left = (int)Math.Floor(position.X / 16), right = (int)Math.Floor((position.X + width - .01f) / 16);
-        int top = (int)Math.Floor(position.Y / 16), bottom = (int)Math.Floor((position.Y + height) / 16);
-        if (left < 1 || top < 1 || right >= Main.maxTilesX - 1 || bottom >= Main.maxTilesY - 1) return false;
-        for (int x = left; x <= right; x++)
-        for (int y = top; y <= bottom; y++)
-            if (Hazard(x, y)) return false;
-        return true;
-    }
 
     void Refresh(Player player)
     {
@@ -51,7 +30,7 @@ internal sealed class VanillaContactOverlay
         for (int y = Math.Max(1, center.Y - 18); y <= Math.Min(Main.maxTilesY - 2, center.Y + 24); y++)
         {
             var tile = Main.tile[x, y];
-            if (Hazard(x, y)) { hazards.Add(new Rectangle(x * 16, y * 16, 16, 16)); continue; }
+            if (VanillaContactRegion.Hazard(x, y)) { hazards.Add(new Rectangle(x * 16, y * 16, 16, 16)); continue; }
             if (!tile.HasTile || tile.IsActuated || !Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) continue;
             if (tile.Slope != 0) { unverified.Add(new Rectangle(x * 16, y * 16, 16, 16)); continue; }
             if (Main.tileSolidTop[tile.TileType] && tile.TileFrameY != 0) continue;
@@ -61,8 +40,7 @@ internal sealed class VanillaContactOverlay
             for (int cx = min; cx <= max; cx += 4)
             {
                 var position = new Vector2(cx - player.width / 2f, feet - player.height);
-                if (!SafeBody(position, player.width, player.height)) continue;
-                if (Collision.TileCollision(position, Vector2.UnitY, player.width, player.height).Y != 0) continue;
+                if (!VanillaContactRegion.Supported(position, player.width, player.height)) continue;
                 if (!samples.TryGetValue(feet, out var row)) samples[feet] = row = new SortedSet<int>();
                 row.Add(cx);
             }
