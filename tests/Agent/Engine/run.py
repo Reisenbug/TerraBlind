@@ -11,7 +11,9 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
+    mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
     args = parser.parse_args()
     root = Path("/tmp") / ("terrablind-agent-engine-" + str(time.time_ns()))
     (root / "Mods").mkdir(parents=True)
@@ -37,6 +39,8 @@ def main():
         "-tmlsavedirectory", str(root), "-agentenginecheck", "-tbhttpport", str(port)]
     if args.live:
         command.append("-agentlivecheck")
+    if args.batch:
+        command.append("-agentbatchcheck")
     with (root / "client.log").open("w") as log:
         process = subprocess.Popen(command, cwd=tml,
             env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),

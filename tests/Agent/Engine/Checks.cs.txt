@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using MonoMod.Cil;
@@ -22,6 +24,7 @@ public sealed class Driver : ModSystem
     DateTime liveStart;
     int phase, ticks;
     int heartX, heartY;
+    int expectedCrystals;
     JsonObject gatherRequest;
     Task<string> pending;
     readonly JsonArray results = new();
@@ -107,6 +110,20 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck"))
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        PrepareResources(player);
+                        expectedCrystals = 10;
+                        phase = 21;
+                        Console.WriteLine("AGENT_BATCH_STARTED placed_hearts=10 initial_crystals=0 model_calls=0 navigation=teleport_stub");
+                        pending = BatchGather(expectedCrystals);
+                        break;
+                    }
                     AgentPermissions.Attack = AgentPermissions.Dodge = false;
                     player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
                     for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
@@ -227,9 +244,25 @@ public sealed class Driver : ModSystem
                     Call("game_catalog", new JsonObject { ["kind"] = "tile", ["name"] = Lang.GetItemNameValue(ItemID.LifeCrystal) });
                     break;
                 case 19:
-                    Check(result["matches"][0]["type"].GetValue<int>() == TileID.Heart
-                        && result["matches"][0]["internal"].GetValue<string>() == "Heart"
-                        && result["matches"][0]["exact"].GetValue<bool>(), "map_display_name_did_not_resolve_tile");
+                    Check(result["matches"].AsArray().Any(m => m["type"].GetValue<int>() == TileID.Heart && m["exact"].GetValue<bool>())
+                        && result["matches"].AsArray().Any(m => m["type"].GetValue<int>() == TileID.LifeCrystalBoulder && m["exact"].GetValue<bool>()),
+                        "map_display_name_did_not_retain_ambiguity");
+                    Call("find_tiles", new JsonObject { ["name"] = Lang.GetItemNameValue(ItemID.LifeCrystal), ["n"] = 1, ["max_dist"] = 2000 });
+                    break;
+                case 20:
+                    Check(result["error"]?.GetValue<string>() == "ambiguous_tile_name" && result["name_candidates"]?.AsArray().Count >= 2,
+                        "tile_search_guessed_ambiguous_map_display_name");
+                    PrepareResources(player);
+                    expectedCrystals = 10;
+                    foreach (var item in player.inventory)
+                        if (item.type == ItemID.LifeCrystal) expectedCrystals += item.stack;
+                    Call("gather", new JsonObject { ["seconds"] = 90, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = expectedCrystals,
+                            ["tile_names"] = new JsonArray("Heart") }) });
+                    break;
+                case 21:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["targets"][0]["actual"].GetValue<int>() >= expectedCrystals,
+                        "batch_crystal_collection_failed");
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
                     {
                         player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
@@ -239,22 +272,7 @@ public sealed class Driver : ModSystem
                         player.inventory[2].SetDefaults(ItemID.CopperAxe);
                         Main.playerInventory = false;
                         for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
-                        int liveX = (int)player.Center.X / 16, liveY = (int)player.Bottom.Y / 16;
-                        for (int tx = liveX - 24; tx <= liveX + 24; tx++)
-                        for (int ty = liveY - 5; ty <= liveY + 2; ty++)
-                        {
-                            var tile = Main.tile[tx, ty];
-                            tile.ClearEverything();
-                            if (ty >= liveY) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
-                        }
-                        WorldGen.PlaceObject(liveX - 3, liveY - 1, TileID.Anvils);
-                        for (int i = 0; i < 10; i++)
-                        {
-                            int crystalX = liveX + 2 + i * 2;
-                            WorldGen.PlaceObject(crystalX, liveY - 1, TileID.Heart);
-                            Check(Main.tile[crystalX, liveY - 1].HasTile && Main.tile[crystalX, liveY - 1].TileType == TileID.Heart,
-                                "live_resource_fixture_missing");
-                        }
+                        PrepareResources(player);
                         Config.I.AgentUseCodex = true;
                         AgentPermissions.Attack = AgentPermissions.Dodge = true;
                         NativeAgent.Submit("搞到300血同时搓个荆棘旋刃，然后召唤蜂王打蜂王。请建立新的任务计划，按实际状态执行。合理的中间步骤自己决定，失败时保留证据。");
@@ -262,10 +280,65 @@ public sealed class Driver : ModSystem
                         Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true placed_hearts=10 max_seconds=180");
                         break;
                     }
-                    Finish(true, "AGENT_ENGINE_COMPLETE checks=15 model_calls=0 controlled_fixture=true"); break;
+                    Finish(true, Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck")
+                        ? "AGENT_BATCH_COMPLETE checks=1 model_calls=0 controlled_fixture=true collected_crystals=10 navigation=teleport_stub"
+                        : "AGENT_ENGINE_COMPLETE checks=17 model_calls=0 controlled_fixture=true"); break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }
+    }
+
+    static async Task<string> BatchGather(int wanted)
+    {
+        var targets = new[] { new GatherTarget(ItemID.LifeCrystal, wanted, new[] { "Heart" }, Array.Empty<int>()) };
+        return (await Gather.Run(targets, 90, new ArrivedGather(targets), default)).ToJsonString();
+    }
+
+    sealed class ArrivedGather : IGatherWorld
+    {
+        readonly GameGather world;
+        public ArrivedGather(GatherTarget[] targets) => world = new GameGather(targets);
+        public Task<JsonObject> Observe(CancellationToken token) => world.Observe(token);
+        public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            var arrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Main.QueueMainThreadAction(() =>
+            {
+                if (token.IsCancellationRequested) { arrived.TrySetCanceled(token); return; }
+                try
+                {
+                    var player = Main.LocalPlayer;
+                    player.position.X = candidate["x"].GetValue<int>() * 16 - player.width / 2;
+                    player.velocity = Vector2.Zero;
+                    Console.WriteLine($"AGENT_BATCH_ARRIVED x={candidate["x"]} y={candidate["y"]} navigation=teleport_stub");
+                    arrived.TrySetResult(true);
+                }
+                catch (Exception error) { arrived.TrySetException(error); }
+            });
+            await arrived.Task.WaitAsync(token);
+            return await world.Act(candidate, token);
+        }
+        public Task Stop(CancellationToken token) => world.Stop(token);
+    }
+
+    static void PrepareResources(Player player)
+    {
+        int x = (int)player.Center.X / 16, y = (int)player.Bottom.Y / 16;
+        for (int tx = x - 24; tx <= x + 24; tx++)
+        for (int ty = y - 5; ty <= y + 2; ty++)
+        {
+            var tile = Main.tile[tx, ty];
+            tile.ClearEverything();
+            if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        }
+        WorldGen.PlaceObject(x - 3, y - 1, TileID.Anvils);
+        for (int i = 0; i < 10; i++)
+        {
+            int crystalX = x + 2 + i * 2;
+            WorldGen.PlaceObject(crystalX, y - 1, TileID.Heart);
+            Check(Main.tile[crystalX, y - 1].HasTile && Main.tile[crystalX, y - 1].TileType == TileID.Heart,
+                "resource_fixture_missing");
+        }
     }
 
     void Finish(bool ok, string detail)

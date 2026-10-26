@@ -44,7 +44,7 @@ Codex 使用本地 stdio JSON-RPC，由 mod 管理子进程。每个世界使用
 
 也可用数字编号反查原版名称。物品结果的 `places_tile` 来自主线程读取的游戏物品放置定义，含方块编号和内部名称；不可放置时为 null。它不证明挖掉该方块会掉落原物品，也不证明世界中存在该方块。引擎检查验证 DirtBlock 对应 Dirt、LifeCrystal 不可放置；不能用此关系反查生命水晶来源。累计14组定向检查。
 
-方块查询还匹配 `MapHelper` 与 `Lang.GetMapObjectName` 提供的当前语言地图图例，返回 `display_names`，按显示名精确匹配优先。没有地图标签的方块仍只能按内部名或编号查询；这不是完整掉落数据库。第15组引擎检查验证游戏显示的 Life Crystal 能反查到内部名 Heart，而不是误选 LifeCrystalBoulder。
+方块查询还匹配 `MapHelper` 与 `Lang.GetMapObjectName` 提供的当前语言地图图例，返回 `display_names`，按显示名精确匹配优先。没有地图标签的方块仍只能按内部名或编号查询；这不是完整掉落数据库。Heart 与 LifeCrystalBoulder 的地图图例同为 Life Crystal，查询必须保留两项，不能把排在第一项视为来源已确认。
 
 工具异常会以 tool_exception 和具体原因返回，并记录在计划中。等待动作期间，状态查询报错或被拒绝会停止该动作；停止异常或被拒绝也会一并报告，不伪称停止成功。取消请求仍向上传递，不写入可能已被新指令接管的计划。
 
@@ -75,7 +75,11 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 离线测试共 47 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=47`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖工具协议、取消隔离、真实条件验证、有限续接、采集预算、NPC 类型过滤、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
 
-`find_tiles` 在搜索前使用当前游戏地图显示名和原版编号解析名称。只有精确匹配且类型唯一时才转换为内部名，保持 n/max_dist 等参数不变，单次调用搜索入口；返回 requested_name/resolved_name。有歧义或只有近似匹配时保留旧入口行为，名称错误时附 name_candidates。`gather` 的方块源使用同一入口，不要求模型反复手动换名。这不建立物品到掉落来源的关系，也没有根据300血目标自动推导或执行采集。
+`find_tiles` 在搜索前使用当前游戏地图显示名和原版编号解析名称。只有精确匹配且类型唯一时才转换为内部名，保持 n/max_dist 等参数不变，单次调用搜索入口；返回 requested_name/resolved_name。有多个精确类型时返回 ambiguous_tile_name 和 name_candidates，不执行搜索。只有近似匹配时保留旧入口行为，名称错误时附候选。`gather` 的方块源使用同一入口，不要求模型反复手动换名。这不建立物品到掉落来源的关系，也没有根据300血目标自动推导或执行采集。
+
+单独验证批量执行：`python3 tests/Agent/Engine/run.py --batch`。跳过此前的单物件检查，一次放置10颗 Heart，初始背包没有水晶，调用一次正式 Gather.Run 和 GameGather；不再补放水晶、不调用模型。测试适配器在每个动作前传送到目标旁，标记 navigation=teleport_stub，隔离尚在另一工作区迭代的导航。真实挥镐、掉落与拾取仍由游戏执行，仅背包达到10颗才写 `AGENT_BATCH_COMPLETE`，限时90秒。它不验证导航、agent 自主查知识、选择来源、使用水晶或完整任务。
+
+2026-10-26 该批量检查实测通过：10次动作，12201毫秒，真实水晶库存0→10，model_calls=0、navigation=teleport_stub。带真实导航的前一次检查约101秒仅取得7颗，未达标；两项结果不可混为真实导航通过。成功检查结束后客户端退出日志仍出现macOS原生异常，功能完成记录不等于退出过程正常。
 
 `gather` 接受最多8种资源的目标随身库存，每项包含 `item_type`、`count`，以及由 agent 根据知识查询提供的 `tile_names`／`npc_types`。代码优先拾取所需掉落物，再选择附近目标敌人和方块；每个候选最多两次，总计最多32次动作，单次委托最多180秒。结束时以真实背包数量判断是否足够。没有候选只表示当前扫描未找到，不表示整个世界不存在。拾取会等待掉落物落稳并重新读取位置；接近仍依赖现有导航。
 
