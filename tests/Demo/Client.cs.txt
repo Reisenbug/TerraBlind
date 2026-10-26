@@ -451,6 +451,13 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline))
             {
                 RestoreBaseline(player, baseline);
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
+                {
+                    int bottle = Array.FindIndex(player.armor, item => item.type == ItemID.SandstorminaBottle);
+                    if (bottle < 0) throw new InvalidOperationException("baseline_missing_sandstorm_slot");
+                    player.armor[bottle].SetDefaults(ItemID.CloudinaBottle);
+                    Console.WriteLine($"VNAV_EQUIPMENT_OVERRIDE slot={bottle} item={ItemID.CloudinaBottle}");
+                }
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreversecheck"))
                 {
                     routeGoalX = (int)(player.Center.X / 16); routeGoalY = (int)(player.Bottom.Y / 16);

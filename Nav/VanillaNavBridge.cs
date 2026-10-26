@@ -269,6 +269,12 @@ public static class VanillaNavBridge
         if (edits.Count != 0 || phase != Phase.Braking) return;
         DiagLog.Write($"[engine-empty-corridor] player=({player.Center.X / 16:0.###},{player.Bottom.Y / 16:0.###}) route=({routeGoal.X / 16:0.###},{routeGoal.Y / 16:0.###}) nodes="
             + string.Join(";", corridor.Select(cell => $"{cell.x},{cell.y}:{(field.TryGetValue(cell, out int h) ? h : -1)}")));
+        DiagLog.Write($"[engine-empty-platforms] slot={NavCoordinator.FindPlatformSlot(player)} candidates="
+            + string.Join(";", corridor.Where(cell => Predicates.InBounds(cell.x, cell.y + 1)).Select(cell =>
+            {
+                int x = cell.x, y = cell.y + 1;
+                return $"{x},{y}:occupied={Main.tile[x, y].HasTile},lava={LavaSafety.IsLava(x, y)},reach={Reach.CanPlace(player, x, y)},anchor={MazeWand.AnchorFor(x, y)},body={player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))}";
+            })));
     }
 
     static bool IsClearing(Edit candidate)
