@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--pick-type", type=int, required=True)
+    parser.add_argument("--interrupted", action="store_true")
     args = parser.parse_args()
     rows = list(csv.DictReader((args.root / "control-trace.csv").open()))
     recordings = list((args.root / "NavigationRecordings").glob("*/frames.jsonl"))
@@ -22,6 +23,8 @@ def main():
     aligned = 0
     with recordings[0].open(encoding="utf-8-sig") as stream:
         for i, line in enumerate(stream):
+            if args.interrupted and i + 1 >= len(rows):
+                break
             frame = json.loads(line)
             current, previous = rows[i + 1], rows[i]
             state = frame["after"]
@@ -52,10 +55,15 @@ def main():
             reason = current["rejection"]
             if reason and reason not in episode["rejection_markers"]:
                 episode["rejection_markers"].append(reason)
-    recorded = json.loads((args.root / "route-timing.json").read_text())["activity_ms"]["stationary_without_pick"]
-    if abs(sum(phases.values()) - recorded) > 100:
-        raise ValueError("Reconstructed idle time differs from runtime accounting by over 100ms")
+    accounting_verified = False
+    if not args.interrupted:
+        recorded = json.loads((args.root / "route-timing.json").read_text())["activity_ms"]["stationary_without_pick"]
+        if abs(sum(phases.values()) - recorded) > 100:
+            raise ValueError("Reconstructed idle time differs from runtime accounting by over 100ms")
+        accounting_verified = True
     print(json.dumps({"aligned_frames": aligned, "idle_ms": sum(phases.values()),
+                      "interrupted": args.interrupted, "runtime_accounting_verified": accounting_verified,
+                      "covered_wall_ms": float(rows[aligned]["wall_ms"]) - float(rows[0]["wall_ms"]),
                       "phase_ms": phases, "wet_overlap_ms": wet_phases,
                       "wet_rejection_marker_ms": wet_rejection,
                       "note": "Wet overlap and rejection markers are observations, not causal attribution.",
