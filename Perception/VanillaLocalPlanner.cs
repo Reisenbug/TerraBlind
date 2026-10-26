@@ -224,6 +224,7 @@ public sealed class VanillaLocalPlanner
                 ["score"] = safe ? JsonValue.Create(score) : null, ["forward_progress"] = progress, ["outcome"] = forecast["outcome"].DeepClone(),
                 ["elapsed_ms"] = forecast["elapsed_ms"].DeepClone(), ["timing"] = forecast["timing"].DeepClone() });
             if (preferContinuation && candidate.name == "continue" && safe && chosenProgress > 0) break;
+            if (candidateIndex >= primaryCount && selectedAdvances) break;
             if (safe && candidate.name is "walk" or "continue"
                 && (candidate.name != "continue" || jumps == 0 && wings == 0)
                 && frames.All(frame => frame.Grounded)
@@ -241,13 +242,19 @@ public sealed class VanillaLocalPlanner
                 }
                 if (towardGoal) break;
             }
-            if (transit && jumps > 0 && candidateIndex == primaryCount - 1 && !selectedAdvances)
+            if (transit && candidateIndex == primaryCount - 1 && !selectedAdvances)
+            {
+                foreach (int stop in new[] { 24, 48 })
+                    candidates.Add(($"brake_refined_{stop}", Enumerable.Range(0, Horizon)
+                        .Select(i => i < stop ? direction : 0).ToArray()));
+                if (jumps > 0)
                 foreach (int release in new[] { 12, 30 })
                 foreach (int delay in new[] { 0, 12 })
                 foreach (int travel in new[] { 36, 60, 84 })
                     candidates.Add(($"relaunch_brake_{release}_{delay}_{travel}", Enumerable.Range(0, Horizon)
                         .Select(i => (i >= delay && i < delay + travel ? direction : 0)
                             | (i < 60 && i != release ? 4 : 0)).ToArray()));
+            }
         }
         if (chosen.Length > 0)
         {
