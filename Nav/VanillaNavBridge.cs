@@ -209,6 +209,12 @@ public static class VanillaNavBridge
         rejectedEdits.Clear();
         var cellAtPlayer = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
         if (!BuildCorridor(cellAtPlayer.x, cellAtPlayer.y, gx, gy)) return false;
+        if (corridor.Count > 0)
+        {
+            var end = corridor[^1];
+            routeGoal = new Vector2(end.x * 16 + 8 - player.width / 2, (end.y + 1) * 16 - player.height);
+            RouteDirection = corridor.Select(cell => Math.Sign(cell.x - cellAtPlayer.x)).FirstOrDefault(direction => direction != 0);
+        }
         int pick = Array.FindIndex(player.inventory, 0, 10, item => !item.IsAir && item.pick > 0);
         var seen = new HashSet<(int, int)>();
         foreach (var cell in corridor)
@@ -400,7 +406,7 @@ public static class VanillaNavBridge
         preparation = new JsonObject { ["command"] = "terrain_plan", ["snapshot"] = snapshot,
             ["tile_x"] = edit.X, ["tile_y"] = edit.Y, ["tile_type"] = edit.Type, ["wait_frames"] = wait,
             ["tiles"] = targets,
-            ["x"] = routeGoal.X, ["y"] = routeGoal.Y, ["route_direction"] = Math.Sign(routeGoal.X - player.position.X),
+            ["x"] = routeGoal.X, ["y"] = routeGoal.Y, ["route_direction"] = RouteDirection,
             ["guidance"] = CaptureGuidance(snapshot) };
         if (arrival != null) preparation["arrival"] = new JsonArray(arrival.Select(key => JsonValue.Create(key)).ToArray());
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);

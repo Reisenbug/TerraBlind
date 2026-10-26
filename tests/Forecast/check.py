@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
+    parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -106,6 +107,8 @@ def main():
             raise TimeoutError("Worker startup timed out")
         if args.terrain_replay:
             capture = json.loads(args.terrain_replay.read_text())
+            if args.route_direction is not None:
+                capture["request"]["route_direction"] = args.route_direction
             if args.movement_only:
                 request = capture["request"]
                 result = worker.call("plan", snapshot=request["snapshot"], prefix=[0],
