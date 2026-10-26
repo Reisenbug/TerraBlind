@@ -313,7 +313,8 @@ public sealed class VanillaNavigationDemo : ModSystem
         batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
             DepthStencilState.None, RasterizerState.CullNone, null, Main.GameViewMatrix.TransformationMatrix);
         contactOverlay.Draw(batch, Main.LocalPlayer, LastControl.Queued ? movement?.ActiveResult?["forecast"]?["frames"] as JsonArray : null,
-            movement?.PlanFrameAt(tick) ?? -1);
+            movement?.PlanFrameAt(tick) ?? -1,
+            LastControl.Queued ? movement?.ActiveResult?["goal_contact_region"] as JsonArray : null);
         for (int i = 1; i < route.Length; i++)
         {
             var delta = route[i] - route[i - 1];
@@ -329,7 +330,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     {
         if (Main.gameMenu || Status == "未启动") return;
         Utils.DrawBorderString(batch, "原版移动实验：" + Status, new Vector2(24, 92), Color.Cyan, .85f);
-        Utils.DrawBorderString(batch, "绿：安全脚底中心范围（4px采样）  青：有效路线有落脚点  黄：预计最后落脚点\n红：危险禁入格  灰：斜砖未验证  白：人物碰撞箱",
+        Utils.DrawBorderString(batch, "绿：安全脚底中心范围（4px采样）  青：有效路线有落脚点  黄：目标支撑范围（不保证全部可达）\n红：危险禁入格  灰：斜砖未验证  白：人物碰撞箱",
             new Vector2(24, 116), Color.White, .7f);
     }
 

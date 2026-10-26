@@ -296,8 +296,10 @@ public sealed class VanillaLocalPlanner
             VanillaFrame.RestoreInWorker(snapshot);
             cleanupMs += Stopwatch.GetElapsedTime(cleanupStart).TotalMilliseconds;
         }
+        var goalRange = goalSupported ? VanillaContactRegion.SupportRange(goal, player.width, player.height) : Vector2.Zero;
         return new JsonObject { ["status"] = chosen.Length == 0 ? "no_safe_candidate" : "planned", ["selected"] = selected,
             ["goal_supported"] = goalSupported, ["goal_contact"] = selectedContact,
+            ["goal_contact_region"] = goalSupported ? new JsonArray(goalRange.X, goalRange.Y, goal.Y) : null,
             ["route_progress"] = chosenProgress,
             ["controls"] = new JsonArray(chosen.Select(key => JsonValue.Create(key)).ToArray()),
             ["forecast"] = selectedForecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,

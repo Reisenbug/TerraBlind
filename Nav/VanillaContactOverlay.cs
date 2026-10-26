@@ -65,7 +65,7 @@ internal sealed class VanillaContactOverlay
             delta.ToRotation(), Vector2.Zero, new Vector2(Math.Max(2, delta.Length()), width), SpriteEffects.None, 0);
     }
 
-    internal void Draw(SpriteBatch batch, Player player, JsonArray frames, int first)
+    internal void Draw(SpriteBatch batch, Player player, JsonArray frames, int first, JsonArray goalRegion)
     {
         bool up = Collision.up, down = Collision.down;
         try { Refresh(player); }
@@ -85,10 +85,14 @@ internal sealed class VanillaContactOverlay
             foreach (var p in contacts.Where(p => p.X >= surface.Left && p.X <= surface.Right && Math.Abs(p.Y - surface.Y) < .1f))
                 Line(batch, p - new Vector2(1, 4), p + new Vector2(1, -4), Color.Cyan);
         }
-        if (contacts.Length > 0)
+        if (goalRegion != null)
         {
-            var target = contacts[^1];
-            Line(batch, target - new Vector2(6, 0), target + new Vector2(6, 0), Color.Yellow, 4);
+            float y = goalRegion[2].GetValue<float>() + player.height;
+            var left = new Vector2(goalRegion[0].GetValue<float>() + player.width / 2f, y);
+            var right = new Vector2(goalRegion[1].GetValue<float>() + player.width / 2f, y);
+            Line(batch, left, right, Color.Yellow, 4);
+            Line(batch, left - new Vector2(0, 5), left + new Vector2(0, 5), Color.Yellow);
+            Line(batch, right - new Vector2(0, 5), right + new Vector2(0, 5), Color.Yellow);
         }
         var body = player.Hitbox;
         Line(batch, new Vector2(body.Left, body.Top), new Vector2(body.Right, body.Top), Color.White);

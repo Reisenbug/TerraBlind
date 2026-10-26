@@ -68,6 +68,15 @@ public static class VanillaContactRegion
         return true;
     }
 
+    public static Vector2 SupportRange(Vector2 anchor, int width, int height)
+    {
+        float left = anchor.X, right = anchor.X;
+        if (!Supported(anchor, width, height)) return new Vector2(left, right);
+        while (left > anchor.X - 256 && Supported(new Vector2(left - 2, anchor.Y), width, height)) left -= 2;
+        while (right < anchor.X + 256 && Supported(new Vector2(right + 2, anchor.Y), width, height)) right += 2;
+        return new Vector2(left, right);
+    }
+
     public static bool SafeDescent(Player player, Vector2 landing)
     {
         if (player.gravDir != 1 || player.velocity.X != 0 || player.velocity.Y < 0 || player.jump > 0
