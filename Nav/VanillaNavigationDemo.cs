@@ -42,6 +42,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     readonly VanillaContactOverlay contactOverlay = new();
     public bool ContactDescentLanded => movement?.ContactDescentLanded == true;
     JsonObject recordedDivergence;
+    JsonObject loggedRepairResult;
     CancellationTokenSource cancellation;
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
@@ -228,8 +229,13 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 loggedAccepted = movement.Accepted; loggedRejected = movement.Rejected;
                 var result = movement.LastResult;
-                if (movement.LastRequest?["continuation_only"]?.GetValue<bool>() == true)
+                if (movement.LastRequest?["continuation_only"]?.GetValue<bool>() == true && result != null && !movement.Busy
+                    && !ReferenceEquals(result, loggedRepairResult)
+                    && JsonNode.DeepEquals(result["request_id"], movement.LastRequest["request_id"]))
+                {
+                    loggedRepairResult = result;
                     DiagLog.Write($"[engine-route-repair] status={result?["status"]} selected={result?["selected"]} rejection={movement.LastRejection} prefix_frames={movement.LastRequest["prefix"]?.AsArray().Count} roundtrip_ms={result?["roundtrip_ms"]}");
+                }
                 var cell = ((int)(player.Center.X / 16), (int)(player.Bottom.Y / 16));
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline")
                     && result?["status"]?.GetValue<string>() == "planned"
