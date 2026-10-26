@@ -181,6 +181,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
             if (terrainPaused) return;
             movement.Poll(tick, player, 0);
+            if (NavigationOwned) VanillaNavBridge.Prefetch(player, movement, tick);
             if (movement.InputAt(tick + 1) == 0) idleFrames++;
             if (movement.Accepted > 0 && !movement.HasInputAt(tick + 1))
             { starvedFrames++; starvation++; longestStarvation = Math.Max(longestStarvation, starvation); }
@@ -218,7 +219,8 @@ public sealed class VanillaNavigationDemo : ModSystem
                 route = movement.AcceptedRoute.Select(point => point + player.Size / 2).ToArray();
             }
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
-            if (!movement.Busy && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal)))
+            if (!VanillaNavBridge.ApproachingTerrain && !movement.Busy
+                && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal)))
             {
                 if ((player.itemAnimation > 0 || player.itemTime > 0) && !(NavigationOwned && player.HeldItem.pick > 0)) return;
                 long captureStart = System.Diagnostics.Stopwatch.GetTimestamp();

@@ -15,6 +15,16 @@ public static class VanillaTerrainPlan
         try
         {
             var player = VanillaFrame.RestoreInWorker(state);
+            if (request["arrival"] is JsonArray arrival)
+            {
+                if (arrival.Count < 1 || arrival.Count > 90) throw new ArgumentOutOfRangeException("arrival");
+                var approach = new VanillaPrediction(state).Predict(arrival.Select(key => key.GetValue<int>()).ToArray(),
+                    false, true, stopOnDamage: true);
+                if (approach["outcome"].GetValue<string>() != "complete")
+                    return new JsonObject { ["status"] = "unsafe_arrival" };
+                player = VanillaFrame.RestoreInWorker(approach["end_snapshot"].AsObject());
+                if (player.velocity != Vector2.Zero) return new JsonObject { ["status"] = "arrival_not_settled" };
+            }
             var anchor = VanillaPrediction.Observe(player, false);
             int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();
             int type = request["tile_type"].GetValue<int>();

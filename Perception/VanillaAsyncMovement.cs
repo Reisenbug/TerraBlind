@@ -65,6 +65,33 @@ public sealed class VanillaAsyncMovement
 
     public int InputAt(long tick) => inputs.TryGetValue(tick, out int key) ? key : 0;
     public bool HasInputAt(long tick) => inputs.ContainsKey(tick);
+    internal void DiscardRoute() => Reject("terrain_approach_changed");
+    public bool TryArrival(long tick, out int[] controls, out JsonObject anchor)
+    {
+        controls = null; anchor = null;
+        if (ActiveResult == null || activeForecast == null || activeUsefulEnd < 0) return false;
+        int end = activeUsefulEnd + 3;
+        int start = checked((int)(tick - activeStart)) + activeOffset + 1;
+        int count = end - start + 1;
+        if (end >= activeForecast.Count || count < 12 || count > 90) return false;
+        var arrival = activeForecast[end].AsObject();
+        if (arrival["vx"].GetValue<float>() != 0 || arrival["vy"].GetValue<float>() != 0) return false;
+        if (!Enumerable.Range(1, count).All(i => inputs.ContainsKey(tick + i))) return false;
+        controls = Enumerable.Range(1, count).Select(i => InputAt(tick + i)).ToArray();
+        anchor = arrival;
+        return true;
+    }
+
+    public bool CurrentMatches(long tick, Player player)
+    {
+        if (ActiveResult == null || activeContext == null) return false;
+        int index = checked((int)(tick - activeStart)) + activeOffset;
+        var expected = index < 0 ? ActiveResult["anchor"]?.AsObject()
+            : index < activeForecast.Count ? activeForecast[index].AsObject() : null;
+        return expected != null && StateMatches(player, expected, true, out _, out _)
+            && VanillaFrame.ContextMatches(activeContext, player, out _, activeForecast,
+                activeTiles, Math.Max(0, index + 1), 12);
+    }
     public bool NeedsPlan(long tick, Player player, bool terminal)
     {
         if (terminal || ActiveResult == null || activeContext == null
@@ -225,7 +252,7 @@ public sealed class VanillaAsyncMovement
         pendingCancellation?.Dispose(); pendingCancellation = null;
     }
 
-    static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
+    internal static bool StateMatches(Player player, JsonObject anchor, bool navigation, out string reason, out string mismatch)
     {
         reason = null; mismatch = null;
         var actual = VanillaPrediction.Observe(player, !navigation);

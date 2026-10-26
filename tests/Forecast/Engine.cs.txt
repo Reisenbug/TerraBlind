@@ -213,7 +213,7 @@ public sealed class Engine : ModSystem
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
             passed++;
-            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5 })
+            foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6 })
             {
                 bool place = mode == 1;
                 Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots) });
@@ -223,7 +223,7 @@ public sealed class Engine : ModSystem
                 if (!place) { var tile = Main.tile[x, y]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
                 var targets = new JsonArray();
                 for (int xx = x; xx <= x + (mode == 2 ? 2 : 0); xx++)
-                for (int yy = mode == 2 ? Y - 3 : y; yy <= y; yy++)
+                for (int yy = mode is 2 or 6 ? Y - 3 : y; yy <= y; yy++)
                 {
                     targets.Add(new JsonArray(xx, yy));
                     if (!place) { var tile = Main.tile[xx, yy]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
@@ -243,14 +243,41 @@ public sealed class Engine : ModSystem
                     ["tiles"] = targets,
                     ["x"] = source.position.X + (mode == 5 ? 0 : 22 * 16), ["y"] = source.position.Y + (mode == 5 ? 16 : 0),
                     ["guidance"] = guidance, ["route_direction"] = 1 };
+                int[] arrival = null;
+                if (mode == 6)
+                {
+                    var walk = Enumerable.Repeat(2, 180).ToArray();
+                    var approach = new VanillaPrediction(snapshot).Predict(walk, false);
+                    var arriving = new JsonObject { ["selected"] = "arrival", ["wait_frames"] = 0,
+                        ["context"] = snapshot.DeepClone(), ["anchor"] = VanillaPrediction.Observe(source, false),
+                        ["forecast"] = approach, ["controls"] = new JsonArray(walk.Select(key => JsonValue.Create(key)).ToArray()) };
+                    var approaching = new VanillaAsyncMovement(_ => throw new InvalidOperationException("unexpected_transport"));
+                    if (!approaching.InstallTerrain(arriving, source, 0, source.position + new Vector2(300, 0))
+                        || !approaching.TryArrival(0, out arrival, out var expectedArrival))
+                        throw new InvalidOperationException("terrain_arrival_not_extracted");
+                    edit["arrival"] = new JsonArray(arrival.Select(key => JsonValue.Create(key)).ToArray());
+                    Console.WriteLine("TERRAIN_PREFETCH_LEAD frames=" + arrival.Length);
+                }
                 var plan = VanillaTerrainPlan.Build(edit);
                 if (plan["status"].GetValue<string>() != "planned") throw new InvalidOperationException("terrain_contract:" + plan.ToJsonString());
+                if (arrival != null && !JsonNode.DeepEquals(snapshot, VanillaFrame.Capture(Main.player[source.whoAmI], area, true)))
+                    throw new InvalidOperationException("terrain_arrival_did_not_restore_snapshot");
                 if (mode == 5 && (plan["edit_progress"].GetValue<double>() != 16
                     || plan["movement_progress"].GetValue<double>() != 0 || plan["route_progress"].GetValue<double>() != 16))
                     throw new InvalidOperationException("support_removal_progress_not_counted");
                 if (!Main.tile[x, y].HasTile && !place || Main.tile[x, y].HasTile && place)
                     throw new InvalidOperationException("terrain_probe_mutated_world");
                 source = VanillaFrame.RestoreInWorker(snapshot);
+                if (arrival != null)
+                {
+                    foreach (int key in arrival) VanillaPrediction.Advance(source, (VanillaKeys)key);
+                    if (!VanillaAsyncMovement.StateMatches(source, plan["anchor"].AsObject(), true, out _, out _))
+                        throw new InvalidOperationException("terrain_arrival_anchor_differs");
+                    source.velocity.X += 1;
+                    if (VanillaAsyncMovement.StateMatches(source, plan["anchor"].AsObject(), true, out _, out _))
+                        throw new InvalidOperationException("terrain_changed_arrival_accepted");
+                    source.velocity.X -= 1;
+                }
                 if (place) WorldGen.PlaceTile(x, y, TileID.Platforms, mute: true, plr: source.whoAmI);
                 else foreach (var target in targets)
                 {

@@ -14,8 +14,9 @@ public static class VanillaNavBridge
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining;
+    public static bool ApproachingTerrain => phase == Phase.Approaching;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
-    enum Phase { Moving, Braking, Preparing, Using, Mining }
+    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining }
     readonly record struct Edit(int X, int Y, int Type, int Slot);
     static Phase phase;
     static Dictionary<(int, int), int> field;
@@ -30,6 +31,8 @@ public static class VanillaNavBridge
     static int bestH = int.MaxValue, stable;
     static uint progressAt, phaseAt, useAt;
     static bool useCached, needTerrain;
+    static JsonObject previewedRoute, arrivalAnchor;
+    static uint arrivalAt;
 
     public static void Reset()
     {
@@ -38,6 +41,7 @@ public static class VanillaNavBridge
         phase = Phase.Moving; field = refreshSource = null; preparing = null; prepared = preparation = null;
         edits.Clear(); batch.Clear(); corridor.Clear(); Terminal = false; RouteDirection = 0;
         bestH = int.MaxValue; stable = 0; needTerrain = false; useAt = uint.MaxValue;
+        previewedRoute = arrivalAnchor = null;
     }
 
     static void Fail(string reason)
@@ -67,6 +71,17 @@ public static class VanillaNavBridge
         stable = Math.Abs(player.velocity.X) < .01f && player.velocity.Y == 0
             && Vector2.DistanceSquared(lastPosition, player.position) < .0001f ? stable + 1 : 0;
         lastPosition = player.position;
+        if (phase == Phase.Approaching)
+        {
+            if (stable >= 3 && VanillaAsyncMovement.StateMatches(player, arrivalAnchor, true, out _, out _))
+            {
+                demo.PauseForTerrain(); phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
+                DiagLog.Write($"[engine-terrain-arrived] ready={preparing?.IsCompleted} lead_frames={Main.GameUpdateCount - progressAt}");
+                Prepare(player);
+            }
+            else if (Main.GameUpdateCount > arrivalAt + 12) CancelPreview();
+            return;
+        }
         if (phase == Phase.Mining) { MinePassage(player, gx, gy); return; }
         if (phase == Phase.Preparing) { Prepare(player); return; }
         if (phase == Phase.Using) { FinishEdit(player); return; }
@@ -216,6 +231,43 @@ public static class VanillaNavBridge
             && !Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
     }
 
+    public static void Prefetch(Player player, VanillaAsyncMovement movement, long tick)
+    {
+        if (phase == Phase.Approaching)
+        {
+            if (!movement.CurrentMatches(tick, player))
+            {
+                movement.DiscardRoute();
+                CancelPreview();
+            }
+            return;
+        }
+        if (phase != Phase.Moving || Terminal || field == null || player.itemAnimation != 0 || player.itemTime != 0
+            || ReferenceEquals(previewedRoute, movement.ActiveResult)
+            || !movement.CurrentMatches(tick, player)
+            || !movement.TryArrival(tick, out var controls, out var anchor)) return;
+        previewedRoute = movement.ActiveResult;
+        var probe = new Player { position = new Vector2(anchor["x"].GetValue<float>(), anchor["y"].GetValue<float>()),
+            width = player.width, height = player.height, inventory = player.inventory,
+            selectedItem = player.selectedItem, blockRange = player.blockRange };
+        var destination = VanillaLocalPlanner.FootCell(routeGoal, player.width, player.height);
+        if (!CollectEdits(probe, destination.x, destination.y) || edits.Count == 0) return;
+        movement.CancelPending();
+        arrivalAnchor = anchor;
+        arrivalAt = Main.GameUpdateCount + (uint)controls.Length;
+        phase = Phase.Approaching; phaseAt = progressAt = Main.GameUpdateCount;
+        BeginPreparation(probe, player, controls);
+        DiagLog.Write($"[engine-terrain-prefetch] frames={controls.Length} tile=({edit.X},{edit.Y}) batch={batch.Count + 1}");
+    }
+
+    static void CancelPreview()
+    {
+        VanillaNavigationDemo.Instance.CancelTerrain();
+        preparing = null; preparation = prepared = arrivalAnchor = null;
+        edits.Clear(); batch.Clear(); phase = Phase.Moving;
+        DiagLog.Write("[engine-terrain-prefetch-cancel] arrival changed");
+    }
+
     static void Prepare(Player player)
     {
         if (Main.GameUpdateCount - phaseAt > 900) { Fail("terrain_planning_timeout"); return; }
@@ -227,7 +279,9 @@ public static class VanillaNavBridge
             if (result["status"]?.GetValue<string>() == "planned")
             {
                 bool matches = VanillaFrame.ContextMatches(preparation["snapshot"].AsObject(), player, out var difference,
-                    result["forecast"]["frames"].AsArray());
+                    preparation["arrival"] == null ? result["forecast"]["frames"].AsArray() : null);
+                if (matches && preparation["arrival"] != null)
+                    matches = VanillaAsyncMovement.StateMatches(player, result["anchor"].AsObject(), true, out _, out difference);
                 if (stable < 3 || !matches)
                 {
                     if (stable < 3) { Fail("terrain_start_changed:moving"); return; }
@@ -247,6 +301,11 @@ public static class VanillaNavBridge
             }
         }
         if (edits.Count == 0) { Fail("no_safe_terrain_action"); return; }
+        BeginPreparation(player, player, null);
+    }
+
+    static void BeginPreparation(Player player, Player capturePlayer, int[] arrival)
+    {
         edit = edits.Dequeue();
         batch.Clear();
         var targets = new JsonArray(new JsonArray(edit.X, edit.Y));
@@ -281,13 +340,14 @@ public static class VanillaNavBridge
                 targets.Add(new JsonArray(next.X, next.Y));
             }
         }
-        var snapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, routeGoal, 90), true);
+        var snapshot = VanillaFrame.Capture(capturePlayer, VanillaLocalPlanner.SnapshotArea(capturePlayer, routeGoal, 90), true);
         int wait = player.inventory[edit.Slot].useAnimation + 2;
         preparation = new JsonObject { ["command"] = "terrain_plan", ["snapshot"] = snapshot,
             ["tile_x"] = edit.X, ["tile_y"] = edit.Y, ["tile_type"] = edit.Type, ["wait_frames"] = wait,
             ["tiles"] = targets,
             ["x"] = routeGoal.X, ["y"] = routeGoal.Y, ["route_direction"] = Math.Sign(routeGoal.X - player.position.X),
             ["guidance"] = CaptureGuidance(snapshot) };
+        if (arrival != null) preparation["arrival"] = new JsonArray(arrival.Select(key => JsonValue.Create(key)).ToArray());
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
     }
 
