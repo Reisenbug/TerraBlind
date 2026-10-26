@@ -67,6 +67,7 @@ def main():
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
+    parser.add_argument("--reverse-tiles", action="store_true")
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -127,6 +128,8 @@ def main():
                                tile_type=attempt["type"], tiles=attempt["tiles"])
                 if args.clear_tile:
                     request.update(tile_type=-1, tiles=args.clear_tile + (attempt["tiles"] if attempt["type"] < 0 else []))
+                if args.reverse_tiles:
+                    request["tiles"] = list(reversed(request["tiles"]))
                 result = worker.call(**request)
                 if args.expect_terrain_planned:
                     assert result["status"] == "planned", result

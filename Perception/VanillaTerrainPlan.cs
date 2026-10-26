@@ -24,6 +24,13 @@ public static class VanillaTerrainPlan
         return sides.Concat(new[] { first }).Concat(supports).Distinct().ToArray();
     }
 
+    internal static bool HasSupport(Player player)
+    {
+        if (Collision.TileCollision(player.position, Vector2.UnitY, player.width, player.height).Y == 0) return true;
+        return Collision.SlopeCollision(player.position + Vector2.UnitY, Vector2.UnitY,
+            player.width, player.height, player.gravDir).Y <= player.position.Y;
+    }
+
     public static JsonObject Build(JsonObject request)
     {
         VanillaFrame.RequireWorker();
@@ -76,7 +83,7 @@ public static class VanillaTerrainPlan
                     if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType != originalType)
                         WorldGen.KillTile(x, y, noItem: true);
                     if (Main.tile[x, y].HasTile) return new JsonObject { ["status"] = "mining_rejected" };
-                    if (solid && index < targets.Count - 1 && Collision.TileCollision(player.position, new Vector2(0, 1), player.width, player.height).Y != 0)
+                    if (solid && index < targets.Count - 1 && !HasSupport(player))
                         return new JsonObject { ["status"] = "batch_loses_support_before_final_edit" };
                 }
             }

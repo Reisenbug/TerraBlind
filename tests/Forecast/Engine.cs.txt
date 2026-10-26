@@ -261,13 +261,13 @@ public sealed class Engine : ModSystem
             }
             source = VanillaFrame.RestoreInWorker(snapshot);
             JsonObject repairRequest = null;
-            controller = new VanillaAsyncMovement(request => { repairRequest = request; return Task.FromResult(new JsonObject()); });
+            controller = new VanillaAsyncMovement((request, _) => { repairRequest = request; return Task.FromResult(new JsonObject()); }, 60);
             controller.InstallTerrain(plan, source, 0, source.position + new Vector2(600, 0));
             source.velocity.X += .1f;
             if (!controller.NeedsPlan(0, source, false) || controller.HasInputAt(1))
                 throw new InvalidOperationException("recovery_executed_unvalidated_controls");
             controller.Request(VanillaFrame.Capture(source, area, true), 0, source.position + new Vector2(600, 0), 0);
-            if (repairRequest["recover"]?.GetValue<bool>() != true || repairRequest["prefix"].AsArray().Count != 12
+            if (repairRequest["recover"]?.GetValue<bool>() != true || repairRequest["prefix"].AsArray().Count != 60
                 || repairRequest["continuation"].AsArray().Count != 180)
                 throw new InvalidOperationException("recovery_lost_remaining_controls");
             controller.CancelPending();
@@ -377,6 +377,18 @@ public sealed class Engine : ModSystem
             var halfCell = VanillaLocalPlanner.FootCell(source.position, source.width, source.height);
             if (halfCell.y != Y - 1 || Math.Abs(source.Bottom.Y - (Y * 16 - 8)) > .01f)
                 throw new InvalidOperationException("halfbrick_foot_cell_wrong");
+            passed++;
+            Setup(new JsonObject());
+            for (int xx = X - 1; xx <= X + 3; xx++) Main.tile[xx, Y].ClearEverything();
+            var slope = Main.tile[X, Y];
+            slope.HasTile = true; slope.TileType = TileID.Ash; slope.Slope = SlopeType.SlopeDownRight;
+            source.position = new Vector2(X * 16 + 12, Y * 16 + 12 - source.height);
+            if (Collision.TileCollision(source.position, Vector2.UnitY, source.width, source.height).Y == 0
+                || !VanillaTerrainPlan.HasSupport(source))
+                throw new InvalidOperationException("slope_support_not_detected");
+            slope.ClearEverything();
+            if (VanillaTerrainPlan.HasSupport(source))
+                throw new InvalidOperationException("removed_slope_still_supports_player");
             passed++;
             Setup(new JsonObject());
             for (int xx = X; xx <= X + 3; xx++)
