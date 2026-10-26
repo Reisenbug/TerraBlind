@@ -411,7 +411,8 @@ namespace TerraBlind
             // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
-                if (IsLava(cx, cy - r)) return Impassable;
+            for (int dx = -1; dx <= 1; dx++)
+                if (IsLava(cx + dx, cy - r)) return Impassable;
             // 压力板踩下去就触发,有的连着岩浆陷阱。能绕就绕,绕不开也别当免费。
             for (int r = 0; r < 3; r++)
             {
