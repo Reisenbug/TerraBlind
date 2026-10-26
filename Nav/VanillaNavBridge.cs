@@ -388,7 +388,7 @@ public static class VanillaNavBridge
             if (result["status"]?.GetValue<string>() != "planned")
                 rejectedEdits.Add(new JsonObject { ["x"] = edit.X, ["y"] = edit.Y, ["type"] = edit.Type,
                     ["tiles"] = preparation["tiles"]?.DeepClone(), ["result"] = result.DeepClone() });
-            DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count}");
+            DiagLog.Write($"[engine-terrain-result] ({edit.X},{edit.Y}) type={edit.Type} batch={batch.Count + 1} status={result["status"]} remaining={edits.Count} timing={result["terrain_timing"]?.ToJsonString()}");
             if (continuingPlacement && result["status"]?.GetValue<string>() != "planned")
             {
                 continuingPlacement = false; prepared = preparation = null;

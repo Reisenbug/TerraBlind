@@ -78,12 +78,30 @@ public static class VanillaTerrainPlan
 
     public static JsonObject Build(JsonObject request)
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var timing = new JsonObject();
+        var result = BuildTimed(request, timing, clock);
+        timing["total_ms"] = clock.Elapsed.TotalMilliseconds;
+        result["terrain_timing"] = timing;
+        return result;
+    }
+
+    static JsonObject BuildTimed(JsonObject request, JsonObject timing, System.Diagnostics.Stopwatch clock)
+    {
         VanillaFrame.RequireWorker();
         var state = request["snapshot"].AsObject();
+        double previous = 0;
+        void Mark(string name)
+        {
+            double now = clock.Elapsed.TotalMilliseconds;
+            timing[name] = now - previous;
+            previous = now;
+        }
         try
         {
             if (request["jump_place"]?.GetValue<bool>() == true) return JumpPlacement(request);
             var player = VanillaFrame.RestoreInWorker(state);
+            Mark("restore_ms");
             if (request["arrival"] is JsonArray arrival)
             {
                 if (arrival.Count < 1 || arrival.Count > 90) throw new ArgumentOutOfRangeException("arrival");
@@ -94,11 +112,13 @@ public static class VanillaTerrainPlan
                 player = VanillaFrame.RestoreInWorker(approach["end_snapshot"].AsObject());
                 if (player.velocity != Vector2.Zero) return new JsonObject { ["status"] = "arrival_not_settled" };
                 var arrivalState = approach["end_snapshot"].AsObject();
+                Mark("arrival_ms");
                 if (request["skip_unedited"]?.GetValue<bool>() != true)
                 {
                     var movement = new VanillaLocalPlanner().Plan(arrivalState,
                         new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                         guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
+                    Mark("unedited_plan_ms");
                     if (movement["status"].GetValue<string>() == "planned" && movement["route_progress"].GetValue<double>() > 0)
                     {
                         movement["terrain_required"] = false;
@@ -149,6 +169,7 @@ public static class VanillaTerrainPlan
             int wait = request["wait_frames"].GetValue<int>();
             if (wait < 1 || wait > 90) throw new ArgumentOutOfRangeException("wait_frames");
             var prefix = new VanillaPrediction(edited).Predict(new int[wait], false, true);
+            Mark("edit_and_wait_ms");
             if (prefix["outcome"].GetValue<string>() != "complete"
                 || prefix["frames"].AsArray().Any(frame => frame["dead"].GetValue<bool>()
                     || frame["hp"].GetValue<int>() < player.statLife))
@@ -156,6 +177,7 @@ public static class VanillaTerrainPlan
             var plan = new VanillaLocalPlanner().Plan(prefix["end_snapshot"].AsObject(),
                 new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()),
                 guidance: request["guidance"], routeDirection: request["route_direction"].GetValue<int>());
+            Mark("edited_plan_ms");
             if (plan["status"].GetValue<string>() != "planned") return plan;
             double movementProgress = plan["route_progress"].GetValue<double>(), editProgress = 0;
             var field = VanillaLocalPlanner.ReadGuidance(request["guidance"]);
@@ -198,6 +220,7 @@ public static class VanillaTerrainPlan
                     return plan;
                 }
                 plan["next_jump_place"] = nextPlacement;
+                Mark("next_placement_ms");
             }
             var controls = new JsonArray();
             for (int i = 0; i < wait; i++) controls.Add(0);
@@ -213,6 +236,11 @@ public static class VanillaTerrainPlan
             plan["selected"] = "terrain:" + plan["selected"].GetValue<string>();
             return plan;
         }
-        finally { VanillaFrame.RestoreInWorker(state); }
+        finally
+        {
+            double start = clock.Elapsed.TotalMilliseconds;
+            VanillaFrame.RestoreInWorker(state);
+            timing["cleanup_ms"] = clock.Elapsed.TotalMilliseconds - start;
+        }
     }
 }
