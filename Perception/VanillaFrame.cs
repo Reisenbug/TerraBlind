@@ -392,6 +392,7 @@ public static class VanillaFrame
         public int CapturedTileChanges { get; private set; }
         public int RestoredTileWrites { get; private set; }
         public double FieldsMs { get; private set; }
+        public double PlayerConstructorMs { get; private set; }
         public double ItemsMs { get; private set; }
         public double TilesMs { get; private set; }
 
@@ -530,7 +531,10 @@ public static class VanillaFrame
             var timer = System.Diagnostics.Stopwatch.StartNew();
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);
-            var player = new Player(); Apply(player, playerFields);
+            long constructorStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            var player = new Player();
+            PlayerConstructorMs = System.Diagnostics.Stopwatch.GetElapsedTime(constructorStarted).TotalMilliseconds;
+            Apply(player, playerFields);
             hitTile.Restore(player.hitTile); hitReplace.Restore(player.hitReplace);
             FieldsMs = timer.Elapsed.TotalMilliseconds;
             timer.Restart();

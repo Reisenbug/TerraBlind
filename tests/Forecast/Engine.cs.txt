@@ -291,6 +291,7 @@ public sealed class Engine : ModSystem
         var layers = new JsonArray();
         double restoreMs = 0, updateMs = 0, captureMs = 0;
         double restoreFields = 0, restoreItems = 0, restoreTiles = 0;
+        double playerConstructors = 0;
         double captureFields = 0, captureItems = 0, captureTiles = 0;
         float Distance(Player player)
         {
@@ -334,6 +335,7 @@ public sealed class Engine : ModSystem
             ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs,
                 ["restore_fields_ms"] = restoreFields, ["restore_items_ms"] = restoreItems, ["restore_tiles_ms"] = restoreTiles,
+                ["player_constructor_ms"] = playerConstructors,
                 ["capture_fields_ms"] = captureFields, ["capture_items_ms"] = captureItems, ["capture_tiles_ms"] = captureTiles }
         };
         try
@@ -386,6 +388,7 @@ public sealed class Engine : ModSystem
                         var player = checkpoint.Restore(knownWorld);
                         knownWorld = null;
                         restoreFields += checkpoint.FieldsMs; restoreItems += checkpoint.ItemsMs; restoreTiles += checkpoint.TilesMs;
+                        playerConstructors += checkpoint.PlayerConstructorMs;
                         tileWrites += checkpoint.RestoredTileWrites;
                         restoreMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         expanded++; shared += parent.Controls.Length;
