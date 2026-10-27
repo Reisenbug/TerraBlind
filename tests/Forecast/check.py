@@ -193,6 +193,10 @@ def main():
             request = dict(snapshot=snapshot, jump_place=True, tile_x=x, tile_y=y, tile_type=19)
             if args.route_direction is not None:
                 request["route_direction"] = args.route_direction
+            held = json.loads(json.dumps(snapshot))
+            held["player"]["Terraria.Player:releaseJump"] = False
+            rejected = worker.call("terrain_plan", **dict(request, snapshot=held), search_jump_place=True)
+            assert rejected["status"] == "unsafe_jump_place_start" and not rejected["start"]["release_jump"]
             old = worker.call("terrain_plan", **request)
             plan = worker.call("terrain_plan", **request, search_jump_place=True)
             assert plan["status"] == "planned", (old["status"], plan["status"], end)

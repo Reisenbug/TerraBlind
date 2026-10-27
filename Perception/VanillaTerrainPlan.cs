@@ -36,10 +36,16 @@ public static class VanillaTerrainPlan
             player.width, player.height, player.gravDir).Y <= player.position.Y;
     }
 
+    static bool CanStartJumpPlacement(Player player, int type)
+        => type == Terraria.ID.TileID.Platforms && player.velocity == Vector2.Zero && player.gravDir == 1
+            && player.releaseJump && VanillaContactRegion.Supported(player.position, player.width, player.height);
+
     static JsonObject SearchJumpPlacement(JsonObject request)
     {
         var state = request["snapshot"].AsObject();
         var player = VanillaFrame.RestoreInWorker(state);
+        if (!CanStartJumpPlacement(player, request["tile_type"].GetValue<int>()))
+            return new JsonObject { ["status"] = "unsafe_jump_place_start", ["start"] = VanillaPrediction.Observe(player, false) };
         float startY = player.position.Y;
         int width = player.width, height = player.height;
         var schedules = new[] { 6, 18, 60, -18, -30, -45 };
@@ -86,8 +92,7 @@ public static class VanillaTerrainPlan
         var player = VanillaFrame.RestoreInWorker(state);
         int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();
         int type = request["tile_type"].GetValue<int>();
-        if (type != Terraria.ID.TileID.Platforms || player.velocity != Vector2.Zero || player.gravDir != 1
-            || !player.releaseJump || !VanillaContactRegion.Supported(player.position, player.width, player.height))
+        if (!CanStartJumpPlacement(player, type))
             return new JsonObject { ["status"] = "unsafe_jump_place_start" };
         var anchor = VanillaPrediction.Observe(player, false);
         int hp = player.statLife;

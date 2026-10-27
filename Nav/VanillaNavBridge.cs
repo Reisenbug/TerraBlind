@@ -386,7 +386,7 @@ public static class VanillaNavBridge
         { Fail("terrain_planning_timeout"); return; }
         if (waitingPlacementTools)
         {
-            if (stable < 2 || player.itemTime > 0 || player.itemAnimation > 0) return;
+            if (stable < 2 || !player.releaseJump || player.itemTime > 0 || player.itemAnimation > 0) return;
             waitingPlacementTools = false;
         }
         if (preparing != null)
@@ -491,8 +491,7 @@ public static class VanillaNavBridge
             || !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))) return false;
         edits.Enqueue(new Edit(x, y, Terraria.ID.TileID.Platforms, slot));
         phase = Phase.Preparing; phaseAt = Main.GameUpdateCount;
-        continuingPlacement = true;
-        BeginPreparation(player, player, null);
+        continuingPlacement = waitingPlacementTools = true;
         DiagLog.Write($"[engine-placement-continue] next=({x},{y}) target_y={routeGoal.Y / 16:0.##}");
         return true;
     }
@@ -533,6 +532,7 @@ public static class VanillaNavBridge
         {
             preparation["jump_place"] = true;
             preparation["search_jump_place"] = true;
+            DiagLog.Write($"[engine-jump-place-request] tile=({edit.X},{edit.Y}) continuing={continuingPlacement} release_jump={player.releaseJump} item_time={player.itemTime} item_animation={player.itemAnimation}");
         }
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
         phaseAt = Main.GameUpdateCount;
