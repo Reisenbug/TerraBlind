@@ -68,6 +68,7 @@ def main():
     parser.add_argument("--region-beam", type=int, default=6)
     parser.add_argument("--region-airborne", action="store_true")
     parser.add_argument("--region-seed", type=int)
+    parser.add_argument("--region-reference", action="store_true")
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -129,7 +130,8 @@ def main():
         else:
             raise TimeoutError("Worker startup timed out")
         if args.region_probe:
-            source = json.loads(args.region_probe.read_text())["request"]
+            evidence = json.loads(args.region_probe.read_text())
+            source = evidence["request"]
             assert args.region is not None
             state = source["snapshot"]
             if source.get("prefix"):
@@ -139,6 +141,22 @@ def main():
                 rng = random.Random(args.region_seed)
                 args.region[0] += rng.randint(-32, 32)
                 args.region[1] += rng.randint(-32, 32)
+            if args.region_reference:
+                reference = worker.call("replay", snapshot=state,
+                                        controls=evidence["result"]["controls"][:args.region_horizon], capture_end=True)
+                (args.root / "region-reference.json").write_text(json.dumps(reference))
+                x, y, width, height = args.region
+                player_width = state["player"]["Terraria.Entity:width"]
+                player_height = state["player"]["Terraria.Entity:height"]
+                hits = [i + 1 for i, frame in enumerate(reference["frames"])
+                        if x <= frame["x"] + player_width / 2 <= x + width
+                        and y <= frame["y"] + player_height <= y + height
+                        and (args.region_airborne or frame["vy"] == 0)]
+                support = None
+                if hits:
+                    support = worker.call("settled_probe", snapshot=state,
+                                          prefix=evidence["result"]["controls"][:hits[0]])["supported"]
+                print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
             result = worker.call("region_search", snapshot=state, region=args.region,
                                  horizon=args.region_horizon, beam=args.region_beam,
                                  require_support=not args.region_airborne)
@@ -153,7 +171,7 @@ def main():
                 result["replay_verified"] = True
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
-                                          if key not in ("end_snapshot", "controls")}, flush=True)
+                                          if key not in ("end_snapshot", "controls", "layers")}, flush=True)
             return
         if args.placement_order_probe:
             evidence = json.loads(args.placement_order_probe.read_text())
