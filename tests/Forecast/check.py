@@ -64,6 +64,18 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root, quantum=
     require_support = True
     if result is None or result["status"] not in ("reached", "snapshot_required"):
         (root / "region-corridor-movement.json").write_text(json.dumps(result))
+        placements = []
+        for candidate in corridor["platform_candidates"][:3]:
+            result = worker.call("region_search", snapshot=state, region=candidate["region"], horizon=horizon,
+                beam=beam, require_support=True, placement_tile=candidate["tile"], quantum=quantum)
+            placements.append(dict(candidate=candidate, result=result))
+            if result["status"] == "reached":
+                corridor["selected_platform"] = candidate
+                break
+            if result["status"] == "snapshot_required":
+                break
+        (root / "region-corridor-placement.json").write_text(json.dumps(placements))
+    if result is None or result["status"] not in ("reached", "snapshot_required"):
         attempts = []
         candidates = corridor["excavation_candidates"]
         priorities = sorted(candidates, key=lambda candidate: abs(candidate["path_step"] - 4))[:1]

@@ -113,8 +113,19 @@ public sealed class Engine : ModSystem
                 var position = new Vector2(footX - player.width / 2f, footY - player.height);
                 if (!observed.Contains(new Rectangle((int)position.X, (int)position.Y, player.width, player.height))
                     || !VanillaContactRegion.SafeBody(position, player.width, player.height)) continue;
+                int leftFoot = footX, rightFoot = footX;
+                for (int offset = 1; offset < 8 + player.width / 2; offset++)
+                {
+                    if (!VanillaContactRegion.SafeBody(position - new Vector2(offset, 0), player.width, player.height)) break;
+                    leftFoot = footX - offset;
+                }
+                for (int offset = 1; offset < 8 + player.width / 2; offset++)
+                {
+                    if (!VanillaContactRegion.SafeBody(position + new Vector2(offset, 0), player.width, player.height)) break;
+                    rightFoot = footX + offset;
+                }
                 placements.Add(new JsonObject { ["tile"] = new JsonArray(x, y),
-                    ["region"] = new JsonArray(footX, footY, 0, 0), ["execution_verified"] = false });
+                    ["region"] = new JsonArray(leftFoot, footY, rightFoot - leftFoot, 0), ["execution_verified"] = false });
             }
             int validated = 0;
             var invalid = new JsonArray();
@@ -166,7 +177,22 @@ public sealed class Engine : ModSystem
             cell = next[0]; threshold = field[cell];
             path.Add(new JsonArray(cell.Item1, cell.Item2));
         }
-        var surfaces = RegionSurfaces(request)["surfaces"].AsArray();
+        var extracted = RegionSurfaces(request);
+        var surfaces = extracted["surfaces"].AsArray();
+        var platformCandidates = new JsonArray();
+        if (player.inventory.Any(item => !item.IsAir && item.stack > 0 && item.createTile == TileID.Platforms))
+        foreach (var candidate in extracted["platform_candidates"].AsArray())
+        {
+            var tile = candidate["tile"].AsArray();
+            if (!field.TryGetValue((tile[0].GetValue<int>(), tile[1].GetValue<int>() - 1), out int cost) || cost >= startCost) continue;
+            var copy = candidate.DeepClone().AsObject();
+            copy["field_cost"] = cost;
+            platformCandidates.Add(copy);
+        }
+        var preferred = path[Math.Min(4, path.Count - 1)].AsArray();
+        int preferredCost = field[(preferred[0].GetValue<int>(), preferred[1].GetValue<int>())];
+        platformCandidates = new JsonArray(platformCandidates.OrderBy(candidate =>
+            Math.Abs(candidate["field_cost"].GetValue<int>() - preferredCost)).Select(candidate => candidate.DeepClone()).ToArray());
         var regions = new JsonArray();
         foreach (var surface in surfaces)
         {
@@ -234,7 +260,8 @@ public sealed class Engine : ModSystem
         }
         VanillaFrame.RestoreInWorker(initial);
         return new JsonObject { ["goal_regions"] = regions, ["start_cost"] = startCost,
-            ["threshold_cost"] = threshold, ["gradient_path"] = path, ["excavation_candidates"] = excavations };
+            ["threshold_cost"] = threshold, ["gradient_path"] = path, ["excavation_candidates"] = excavations,
+            ["platform_candidates"] = platformCandidates };
     }
 
     static JsonObject RegionSearch(JsonObject request)
