@@ -14,6 +14,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
+    mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
     args = parser.parse_args()
     root = Path("/tmp") / ("terrablind-agent-engine-" + str(time.time_ns()))
     (root / "Mods").mkdir(parents=True)
@@ -41,13 +42,15 @@ def main():
         command.append("-agentlivecheck")
     if args.batch:
         command.append("-agentbatchcheck")
+    if args.health_live:
+        command.append("-agenthealthcheck")
     with (root / "client.log").open("w") as log:
         process = subprocess.Popen(command, cwd=tml,
             env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         print("AGENT_ENGINE_PID", process.pid, flush=True)
         try:
-            deadline = time.monotonic() + (300 if args.live else 180)
+            deadline = time.monotonic() + (300 if args.live or args.health_live else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break

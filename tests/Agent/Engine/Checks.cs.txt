@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,6 +29,10 @@ public sealed class Driver : ModSystem
     JsonObject gatherRequest;
     Task<string> pending;
     readonly JsonArray results = new();
+    delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
+    delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
+    StartHook navigationHook;
+    bool HealthLive => Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
 
     public override void Load()
     {
@@ -37,6 +42,21 @@ public sealed class Driver : ModSystem
         if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
         On_Main.Update += Update;
         IL_Main.DoUpdate += Focus;
+        if (HealthLive)
+        {
+            navigationHook = NavigateWithoutPlanning;
+            MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), navigationHook);
+        }
+    }
+
+    static void NavigateWithoutPlanning(OriginalStart original, int x, int y, RecedingNav.Mode mode)
+    {
+        var player = Main.LocalPlayer;
+        player.position = new Vector2(x * 16 - player.width / 2, y * 16 - player.height);
+        player.velocity = Vector2.Zero;
+        RecedingNav.Active = false;
+        RecedingNav.LastStop = "done";
+        Console.WriteLine($"AGENT_HEALTH_NAV x={x} y={y} mode={mode} navigation=teleport_stub");
     }
 
     static void Focus(ILContext il)
@@ -80,6 +100,7 @@ public sealed class Driver : ModSystem
         {
             if (liveRunning)
             {
+                if (HealthLive) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
                 if (pending != null)
                 {
                     if (!pending.IsCompleted) return;
@@ -88,7 +109,11 @@ public sealed class Driver : ModSystem
                     NativeAgent.Stop();
                     File.WriteAllText(Path.Combine(Main.SavePath, "agent-live-result.json"), new JsonObject
                     { ["elapsed_seconds"] = (DateTime.UtcNow - liveStart).TotalSeconds,
-                        ["state"] = state, ["controlled_engine_checks_passed"] = true }.ToJsonString());
+                        ["state"] = state, ["controlled_engine_checks_passed"] = !HealthLive,
+                        ["navigation"] = HealthLive ? "teleport_stub" : "real",
+                        ["health_goal_met"] = state["permanent_max_health"]?.GetValue<int>() >= 300,
+                        ["health_goal_verified"] = state["permanent_max_health"]?.GetValue<int>() >= 300
+                            && state["task_plan"]?["status"]?.ToString() == "completed" }.ToJsonString());
                     Finish(true, "AGENT_LIVE_CAPTURED bounded_probe=true goal_success_requires_state_verification=true");
                     return;
                 }
@@ -110,6 +135,23 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (HealthLive)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        PrepareResources(player);
+                        Config.I.AgentUseCodex = true;
+                        NativeAgent.Submit("把永久生命上限提升到300。请建立任务计划，按实际状态执行并验证结果，合理的中间步骤自己决定。");
+                        liveRunning = true; liveStart = DateTime.UtcNow;
+                        Console.WriteLine("AGENT_HEALTH_LIVE_STARTED initial_hp=100 placed_hearts=10 max_seconds=180 navigation=teleport_stub");
+                        break;
+                    }
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck"))
                     {
                         AgentPermissions.Attack = AgentPermissions.Dodge = false;
