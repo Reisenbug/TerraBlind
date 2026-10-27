@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--settled-probe", type=Path)
     parser.add_argument("--jump-place-probe", type=Path)
     parser.add_argument("--expect-slope-start", action="store_true")
+    parser.add_argument("--placement-order-probe", type=Path)
     parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
@@ -119,6 +120,23 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.placement_order_probe:
+            evidence = json.loads(args.placement_order_probe.read_text())
+            request, old = evidence["request"], evidence["result"]
+            def replay(plan):
+                return worker.call("placement_sequence", snapshot=request["snapshot"],
+                                   tile_x=plan["tile_x"], tile_y=plan["tile_y"],
+                                   place_after=plan["place_after"], controls=plan["controls"])
+            assert replay(old)["status"] == "body_blocks_placement"
+            plan = worker.call(**request)
+            assert plan["status"] == "planned", plan["status"]
+            actual = replay(plan)
+            assert actual["status"] == "complete" and actual["placed"] and actual["supported"]
+            assert abs(actual["frames"][-1]["y"] + 42 - plan["tile_y"] * 16) < .1
+            args.placement_order_probe.with_suffix(".order-replay.json").write_text(json.dumps(plan))
+            print("PLACEMENT_ORDER_PASS", old["tile_x"], old["tile_y"], "->",
+                  plan["tile_x"], plan["tile_y"], "rise", plan["rise"], flush=True)
+            return
         if args.terminal_progress_probe:
             evidence = json.loads(args.terminal_progress_probe.read_text())
             old = evidence["result"]

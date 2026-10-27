@@ -128,19 +128,20 @@ public static class VanillaTerrainPlan
         player = VanillaFrame.RestoreInWorker(state);
         int placedAt = -1;
         var validation = fallback["frames"].DeepClone().AsArray();
+        bool CanPlaceNow() => player.Left.X / 16 - reachX <= x && player.Right.X / 16 + reachX - 1 >= x
+            && player.Top.Y / 16 - reachY <= y && player.Bottom.Y / 16 + reachY - 2 >= y
+            && !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16));
         for (int frame = 0; frame < keys.Length; frame++)
         {
-            if (placedAt < 0 && player.velocity.Y < 0
-                && player.Left.X / 16 - reachX <= x && player.Right.X / 16 + reachX - 1 >= x
-                && player.Top.Y / 16 - reachY <= y && player.Bottom.Y / 16 + reachY - 2 >= y
-                && !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
+            bool use = placedAt < 0 && player.velocity.Y < 0 && CanPlaceNow();
+            VanillaPrediction.Advance(player, (VanillaKeys)keys[frame]);
+            if (use && CanPlaceNow())
             {
                 if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)) break;
                 WorldGen.PlaceTile(x, y, type, mute: true, plr: player.whoAmI);
                 if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != type) break;
                 placedAt = frame;
             }
-            VanillaPrediction.Advance(player, (VanillaKeys)keys[frame]);
             validation.Add(VanillaPrediction.Observe(player, false));
             if (player.dead || player.statLife < hp)
                 return new JsonObject { ["status"] = "unsafe_jump_place" };

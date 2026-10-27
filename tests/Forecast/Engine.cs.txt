@@ -175,6 +175,7 @@ public sealed class Engine : ModSystem
                 string status = "complete";
                 for (int frame = 0; frame < sequence.Count; frame++)
                 {
+                    VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>());
                     if (frame == placeAt)
                     {
                         if (player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
@@ -185,7 +186,6 @@ public sealed class Engine : ModSystem
                         placed = Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms;
                         if (!placed) { status = "placement_rejected"; break; }
                     }
-                    VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>());
                     trace.Add(VanillaPrediction.Observe(player, false));
                     if (player.dead || player.statLife < hp) { status = "damaged"; break; }
                 }
