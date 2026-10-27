@@ -65,7 +65,11 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
     if result is None or result["status"] not in ("reached", "snapshot_required"):
         (root / "region-corridor-movement.json").write_text(json.dumps(result))
         attempts = []
-        for candidate in corridor["excavation_candidates"][:3]:
+        candidates = corridor["excavation_candidates"]
+        priorities = sorted(candidates, key=lambda candidate: abs(candidate["path_step"] - 4))[:1]
+        priorities += [candidate for candidate in reversed(candidates) if candidate["path_step"] <= 2
+                       and candidate not in priorities]
+        for candidate in priorities:
             require_support = False
             if candidate["movement_blocked_by"] is None:
                 transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
@@ -97,6 +101,30 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
     return result, corridor, require_support
 
 
+def plan_observed_corridor(worker, state, guidance, args, root):
+    started = time.monotonic()
+    expansions = []
+    while True:
+        result, corridor, supported = plan_corridor(worker, state, args.region, guidance,
+                                                    args.region_horizon, args.region_beam, root)
+        if result["status"] != "snapshot_required" or not args.region_world:
+            break
+        expanded = worker.call("expand_snapshot", snapshot=state, missing_tile=result["missing_tile"])
+        if expanded["status"] != "expanded":
+            result["expansion"] = expanded
+            break
+        expansions.append(dict(previous_area=state["area"], missing_tile=result["missing_tile"],
+                               area=expanded["snapshot"]["area"]))
+        state = expanded["snapshot"]
+        (root / "region-expanded-snapshot.json").write_text(json.dumps(state))
+    if args.region_world:
+        import hashlib
+        result["world_source"] = dict(path=str(args.region_world),
+            sha256=hashlib.sha256(args.region_world.read_bytes()).hexdigest(), expansions=expansions)
+    result["planning_wall_ms"] = (time.monotonic() - started) * 1000
+    return state, result, corridor, supported
+
+
 def verify_region(worker, state, result, root):
     replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
                          use_slots=result["use_slots"], placement_tile=result["placement_tile"],
@@ -125,11 +153,10 @@ def run_corridor_chain(worker, state, source, args):
     for step in range(args.region_chain_steps):
         root = args.root / f"chain-{step:02d}"
         root.mkdir(exist_ok=True)
-        result, corridor, supported = plan_corridor(worker, state, args.region, source["guidance"],
-                                                     args.region_horizon, args.region_beam, root)
+        state, result, corridor, supported = plan_observed_corridor(worker, state, source["guidance"], args, root)
         summary = dict(step=step, status=result["status"], start_cost=corridor["start_cost"],
                        frames=len(result["controls"]), planning_ms=result["planning_wall_ms"],
-                       cleared_count=result["cleared_count"], require_support=supported)
+                       cleared_count=result.get("cleared_count", 0), require_support=supported)
         report["steps"].append(summary)
         (root / "result.json").write_text(json.dumps(result))
         if result["status"] != "reached" or not result["controls"]:
@@ -305,24 +332,8 @@ def main():
                 print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
             search_requires_support = not args.region_airborne
             if args.region_corridor:
-                result, corridor, search_requires_support = plan_corridor(worker, state, args.region,
-                    source.get("guidance"), args.region_horizon, args.region_beam, args.root)
-                expansions = []
-                while result["status"] == "snapshot_required" and args.region_world:
-                    expanded = worker.call("expand_snapshot", snapshot=state, missing_tile=result["missing_tile"])
-                    if expanded["status"] != "expanded":
-                        result["expansion"] = expanded
-                        break
-                    expansions.append(dict(previous_area=state["area"], missing_tile=result["missing_tile"],
-                                           area=expanded["snapshot"]["area"]))
-                    state = expanded["snapshot"]
-                    (args.root / "region-expanded-snapshot.json").write_text(json.dumps(state))
-                    result, corridor, search_requires_support = plan_corridor(worker, state, args.region,
-                        source.get("guidance"), args.region_horizon, args.region_beam, args.root)
-                if args.region_world:
-                    import hashlib
-                    result["world_source"] = dict(path=str(args.region_world),
-                        sha256=hashlib.sha256(args.region_world.read_bytes()).hexdigest(), expansions=expansions)
+                state, result, corridor, search_requires_support = plan_observed_corridor(worker, state,
+                    source.get("guidance"), args, args.root)
                 print("REGION_CORRIDOR", corridor, flush=True)
             else:
                 result = worker.call("region_search", snapshot=state, region=args.region,

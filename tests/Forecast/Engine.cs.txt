@@ -181,11 +181,14 @@ public sealed class Engine : ModSystem
             }
         }
         var excavations = new JsonArray();
+        var passageTiles = new System.Collections.Generic.HashSet<Point>();
+        int pathStep = 0;
         var snapshotArea = initial["area"].AsArray();
         var observed = new Rectangle(snapshotArea[0].GetValue<int>() * 16, snapshotArea[1].GetValue<int>() * 16,
             snapshotArea[2].GetValue<int>() * 16, snapshotArea[3].GetValue<int>() * 16);
         foreach (var point in path.Skip(1))
         {
+            pathStep++;
             int cx = point[0].GetValue<int>(), cy = point[1].GetValue<int>();
             int footX = cx * 16 + 8, footY = cy * 16 + 1;
             var body = new Rectangle(footX - 4 - player.width / 2, footY - player.height,
@@ -203,7 +206,10 @@ public sealed class Engine : ModSystem
                 safe &= LavaSafety.CanMine(tx, ty) && WorldGen.CanKillTile(tx, ty);
                 blockers.Add(new JsonArray(tx, ty));
             }
-            if (blockers.Count == 0 || !safe) continue;
+            if (!safe) break;
+            foreach (var blocker in blockers)
+                passageTiles.Add(new Point(blocker[0].GetValue<int>(), blocker[1].GetValue<int>()));
+            if (passageTiles.Count == 0) continue;
             JsonArray movementBlockedBy = null;
             foreach (var blocker in blockers)
             {
@@ -220,7 +226,8 @@ public sealed class Engine : ModSystem
                 }
             }
             excavations.Add(new JsonObject { ["goal_region"] = new JsonArray(footX - 4, footY, 8, 15),
-                ["mining_tiles"] = blockers, ["field_cost"] = field[(cx, cy)],
+                ["mining_tiles"] = new JsonArray(passageTiles.Select(tile => (JsonNode)new JsonArray(tile.X, tile.Y)).ToArray()),
+                ["path_step"] = pathStep, ["field_cost"] = field[(cx, cy)],
                 ["movement_blocked_by"] = movementBlockedBy,
                 ["body_sweep"] = new JsonArray(body.X, body.Y, body.Width, body.Height),
                 ["reason"] = "solid collision inside player body sweep at descending field cell" });
