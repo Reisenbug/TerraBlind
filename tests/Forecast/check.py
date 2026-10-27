@@ -137,12 +137,17 @@ def main():
             evidence = json.loads(args.platform_anchor_probe.read_text())
             request = evidence["request"]
             bad = evidence["result"]
+            anchor = worker.call("platform_anchor", snapshot=request["snapshot"],
+                                 tile_x=bad["tile_x"], tile_y=bad["tile_y"])
+            assert not anchor["native"] and not anchor["planner"], anchor
             rejected = worker.call(**dict(request, jump_place=True, search_jump_place=False,
                                          tile_x=bad["tile_x"], tile_y=bad["tile_y"]))
             assert rejected["status"] == "unanchored_platform", rejected["status"]
             replacement = worker.call(**request)
             if replacement["status"] == "planned":
                 x, y = replacement["tile_x"], replacement["tile_y"]
+                anchor = worker.call("platform_anchor", snapshot=request["snapshot"], tile_x=x, tile_y=y)
+                assert anchor["native"] and anchor["planner"], anchor
                 snapshot = request["snapshot"]
                 x0, y0, width, height = snapshot["area"]
                 raw = base64.b64decode(snapshot["tiles"])

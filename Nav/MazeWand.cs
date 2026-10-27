@@ -523,7 +523,7 @@ namespace TerraBlind
         const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
         // 放得住吗。【判据跟着料走】:
-        //   平台 -> PlatformAnchor:3x3 邻域(含斜角),任何 tile 或背景墙(宽松)
+        //   平台 -> PlatformAnchor:本格背景墙,或四邻背景墙/可附着方块
         //   方块 -> BlockAnchor:只认【四邻】的实心,背景墙【也认】(严格在邻域,不在墙)
         public static bool AnchorFor(int x, int y)
             => !IsLava(x, y) && PlatformAnchor(x, y);
@@ -552,8 +552,6 @@ namespace TerraBlind
             return false;
         }
 
-        // a platform placed at (x,y) would have something to attach to, same 3x3 neighborhood rule as the planner's
-        // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
         public static bool PlatformAnchor(int x, int y) => VanillaTerrainPlan.HasPlatformAnchor(x, y);
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)

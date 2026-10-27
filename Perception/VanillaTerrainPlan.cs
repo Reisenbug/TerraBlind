@@ -10,13 +10,17 @@ public static class VanillaTerrainPlan
 {
     public static bool HasPlatformAnchor(int x, int y)
     {
+        if (Main.tile[x, y].WallType > 0) return true;
         for (int dx = -1; dx <= 1; dx++)
         for (int dy = -1; dy <= 1; dy++)
         {
+            if (Math.Abs(dx) + Math.Abs(dy) != 1) continue;
             int nx = x + dx, ny = y + dy;
             if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
             var tile = Main.tile[nx, ny];
-            if (tile.HasTile || tile.WallType > 0) return true;
+            if (tile.WallType > 0 || tile.HasTile && (Main.tileSolid[tile.TileType]
+                || Terraria.ID.TileID.Sets.IsBeam[tile.TileType] || Main.tileRope[tile.TileType]
+                || tile.TileType == Terraria.ID.TileID.MinecartTrack)) return true;
         }
         return false;
     }

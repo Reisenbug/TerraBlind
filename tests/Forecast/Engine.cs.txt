@@ -97,6 +97,22 @@ public sealed class Engine : ModSystem
     JsonObject Handle(JsonObject request)
     {
         string command = request["command"].GetValue<string>();
+        if (command == "platform_anchor")
+        {
+            var player = VanillaFrame.RestoreInWorker(request["snapshot"].AsObject());
+            int x = request["tile_x"].GetValue<int>(), y = request["tile_y"].GetValue<int>();
+            player.inventory[player.selectedItem].SetDefaults(ItemID.WoodPlatform);
+            int previousX = Player.tileTargetX, previousY = Player.tileTargetY;
+            try
+            {
+                Player.tileTargetX = x; Player.tileTargetY = y;
+                var method = typeof(Player).GetMethod("PlaceThing_Tiles_BlockPlacementForAssortedThings",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                bool native = (bool)method.Invoke(player, new object[] { false });
+                return new JsonObject { ["native"] = native, ["planner"] = VanillaTerrainPlan.HasPlatformAnchor(x, y) };
+            }
+            finally { Player.tileTargetX = previousX; Player.tileTargetY = previousY; }
+        }
         if (command == "terrain_plan") return VanillaTerrainPlan.Build(request);
         if (command == "settled_probe")
         {
