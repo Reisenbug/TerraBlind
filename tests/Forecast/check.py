@@ -144,10 +144,12 @@ def main():
                                  require_support=not args.region_airborne)
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, require_support=not args.region_airborne)
-            if result["status"] == "reached" and result["controls"]:
+            if result["controls"]:
                 replay = worker.call("replay", snapshot=state, controls=result["controls"], capture_end=True)
                 assert replay["outcome"] == "complete"
-                assert replay["end_snapshot"]["player"] == result["end_snapshot"]["player"]
+                differences = [key for key in result["end_snapshot"]
+                               if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
+                assert not differences, differences
                 result["replay_verified"] = True
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
@@ -517,6 +519,9 @@ def main():
         descent_region = worker.call("contact_descent_region")
         assert descent_region["passed"] and descent_region["cases"] == 12
         print("CONTACT_DESCENT_REGION_PASS", descent_region, flush=True)
+        branch = worker.call("worker_state_contract")
+        assert branch["passed"] and branch["changed_tiles"] == 1
+        print("WORKER_STATE_CONTRACT_PASS", branch, flush=True)
         terrain = worker.call("terrain_contract")
         assert terrain["passed"]
         print("TERRAIN_NATIVE_CONTROLS_CONTRACT_PASS", terrain, flush=True)

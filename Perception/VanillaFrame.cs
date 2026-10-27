@@ -334,6 +334,8 @@ public static class VanillaFrame
         readonly Item[] inventory, armor, dye, misc;
         readonly int[] tiles;
         readonly int x0, y0, width, gameMode;
+        public int CapturedTileChanges { get; private set; }
+        public int RestoredTileWrites { get; private set; }
 
         public WorkerState(JsonObject state)
         {
@@ -359,6 +361,43 @@ public static class VanillaFrame
                     .Where(field => StaticField(type, field)) : Fields(type).Where(field => Supported(field.FieldType)))
                 .Where(field => state.ContainsKey(isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name))
                 .Select(field => (field, Decode(state[isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name], field.FieldType))).ToArray();
+
+        WorkerState(WorkerState template, Player source)
+        {
+            RequireWorker();
+            playerFields = CaptureValues(source, template.playerFields);
+            main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
+            collision = CaptureValues(null, template.collision); scene = CaptureValues(Main.SceneMetrics, template.scene);
+            random = CaptureValues(Main.rand, template.random); worldRandom = CaptureValues(WorldGen.genRand, template.worldRandom);
+            inventory = source.inventory.Select(item => item.Clone()).ToArray();
+            armor = source.armor.Select(item => item.Clone()).ToArray();
+            dye = source.dye.Select(item => item.Clone()).ToArray();
+            misc = source.miscEquips.Select(item => item.Clone()).ToArray();
+            x0 = template.x0; y0 = template.y0; width = template.width; gameMode = Main.GameMode;
+            tiles = template.tiles;
+            for (int i = 0; i < tiles.Length / 10; i++)
+            {
+                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
+                if (TileMatches(tile, tiles, offset)) continue;
+                if (CapturedTileChanges++ == 0) tiles = (int[])tiles.Clone();
+                tiles[offset] = tile.HasTile ? 1 : 0; tiles[offset + 1] = tile.TileType; tiles[offset + 2] = tile.WallType;
+                tiles[offset + 3] = tile.TileFrameX; tiles[offset + 4] = tile.TileFrameY; tiles[offset + 5] = (int)tile.Slope;
+                tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
+                tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
+            }
+        }
+
+        static (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
+            => template.Select(entry => (entry.field, CopyValue(entry.field.GetValue(source)))).ToArray();
+
+        public WorkerState CaptureCurrent(Player player) => new(this, player);
+
+        static bool TileMatches(Tile tile, int[] values, int offset)
+            => tile.HasTile == (values[offset] != 0) && tile.TileType == values[offset + 1]
+                && tile.WallType == values[offset + 2] && tile.TileFrameX == values[offset + 3]
+                && tile.TileFrameY == values[offset + 4] && (int)tile.Slope == values[offset + 5]
+                && tile.IsHalfBlock == (values[offset + 6] != 0) && tile.IsActuated == (values[offset + 7] != 0)
+                && tile.LiquidType == values[offset + 8] && tile.LiquidAmount == values[offset + 9];
 
         static object CopyValue(object value)
         {
@@ -389,9 +428,12 @@ public static class VanillaFrame
             foreach (var projectile in Main.projectile) projectile.active = false;
             foreach (var item in Main.item) item.active = false;
             Apply(Main.rand, random); Apply(WorldGen.genRand, worldRandom);
+            RestoredTileWrites = 0;
             for (int i = 0; i < tiles.Length / 10; i++)
             {
                 var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
+                if (TileMatches(tile, tiles, offset)) continue;
+                RestoredTileWrites++;
                 tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
                 tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
                 tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
