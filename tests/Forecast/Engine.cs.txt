@@ -259,10 +259,22 @@ public sealed class Engine : ModSystem
         bool Edited() => miningTiles.Length > 0 ? miningTiles.All(tile => !Main.tile[tile.X, tile.Y].HasTile) : Placed();
         int MiningDamage(Player player) => player.hitTile.data
             .Where(hit => hit.type == 1 && miningTiles.Contains(new Point(hit.X, hit.Y))).Sum(hit => hit.damage);
-        Point? Target(Player player) => placement ?? miningTiles
-            .Where(tile => Main.tile[tile.X, tile.Y].HasTile && LavaSafety.CanMine(tile.X, tile.Y))
-            .OrderBy(tile => Vector2.DistanceSquared(player.Center, tile.ToWorldCoordinates()))
-            .Select(tile => (Point?)tile).FirstOrDefault();
+        Point? Target(Player player)
+        {
+            if (placement != null) return placement;
+            var foot = player.Bottom;
+            var destination = goalRegions.Select(goal => new Vector2(Math.Clamp(foot.X, goal.Left, goal.Right),
+                Math.Clamp(foot.Y, goal.Top, goal.Bottom))).OrderBy(point => Vector2.DistanceSquared(foot, point)).First();
+            var delta = destination - foot;
+            if (delta.LengthSquared() > 16 * 16) delta = Vector2.Normalize(delta) * 16;
+            var next = player.Hitbox;
+            next.Offset((int)Math.Round(delta.X), (int)Math.Round(delta.Y));
+            var sweep = Rectangle.Union(player.Hitbox, next);
+            return miningTiles.Where(tile => Main.tile[tile.X, tile.Y].HasTile && LavaSafety.CanMine(tile.X, tile.Y)
+                    && sweep.Intersects(new Rectangle(tile.X * 16, tile.Y * 16, 16, 16)))
+                .OrderBy(tile => Vector2.DistanceSquared(player.Center, tile.ToWorldCoordinates()))
+                .Select(tile => (Point?)tile).FirstOrDefault();
+        }
         if (region.Width < 0 || region.Height < 0 || horizon < 1 || horizon > 240
             || beam < 1 || beam > 16 || quantum < 1 || quantum > 12)
             throw new ArgumentException("invalid_region_search_budget");
@@ -1697,6 +1709,41 @@ public sealed class Engine : ModSystem
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
+        if (command == "snapshot_expansion_contract")
+        {
+            Setup(new JsonObject { ["terrain"] = "flat" });
+            int x = area.Left - 1, y = Y - 5;
+            var tile = Main.tile[x, y];
+            tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Stone;
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            var expanded = Handle(new JsonObject { ["command"] = "expand_snapshot", ["snapshot"] = snapshot,
+                ["missing_tile"] = new JsonArray(x, y) });
+            if (expanded["status"]?.GetValue<string>() != "expanded")
+                throw new InvalidOperationException("snapshot_expansion_failed");
+            tile.ClearEverything();
+            VanillaFrame.RestoreInWorker(expanded["snapshot"].AsObject());
+            if (!tile.HasTile || tile.TileType != TileID.Stone)
+                throw new InvalidOperationException("expanded_snapshot_missing_source_tile");
+            if (!VanillaFrame.WorkerBounds.Contains(area) || !VanillaFrame.WorkerBounds.Contains(x, y))
+                throw new InvalidOperationException("expanded_snapshot_missing_previous_area");
+            return new JsonObject { ["passed"] = true };
+        }
+        if (command == "expand_snapshot")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var bounds = snapshot["area"].AsArray();
+            var missing = request["missing_tile"].AsArray();
+            int x = missing[0].GetValue<int>(), y = missing[1].GetValue<int>();
+            var current = new Rectangle(bounds[0].GetValue<int>(), bounds[1].GetValue<int>(),
+                bounds[2].GetValue<int>(), bounds[3].GetValue<int>());
+            if (current.Contains(x, y)) throw new ArgumentException("missing_tile_already_observed");
+            var expanded = Rectangle.Union(current, Rectangle.Intersect(new Rectangle(x - 16, y - 16, 33, 33),
+                new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)));
+            if (expanded.Width > 256 || expanded.Height > 256)
+                return new JsonObject { ["status"] = "snapshot_size_limit" };
+            return new JsonObject { ["status"] = "expanded",
+                ["snapshot"] = VanillaFrame.Capture(VanillaFrame.RestoreInWorker(snapshot), expanded, true) };
         }
         if (command == "region_boundary_contract")
         {

@@ -177,6 +177,7 @@ def main():
     parser.add_argument("--region-corridor", action="store_true")
     parser.add_argument("--region-chain-steps", type=int, default=0)
     parser.add_argument("--region-end-probe", type=Path)
+    parser.add_argument("--region-world", type=Path)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -212,6 +213,9 @@ def main():
     worlds = args.root / "Worlds"
     worlds.mkdir(exist_ok=True)
     world = worlds / "Forecast.wld"
+    if args.region_world:
+        world = worlds / "RegionSource.wld"
+        shutil.copy2(args.region_world, world)
     if not world.exists() and (worlds / "World.wld").exists():
         world = worlds / "World.wld"
     if not world.exists():
@@ -303,6 +307,22 @@ def main():
             if args.region_corridor:
                 result, corridor, search_requires_support = plan_corridor(worker, state, args.region,
                     source.get("guidance"), args.region_horizon, args.region_beam, args.root)
+                expansions = []
+                while result["status"] == "snapshot_required" and args.region_world:
+                    expanded = worker.call("expand_snapshot", snapshot=state, missing_tile=result["missing_tile"])
+                    if expanded["status"] != "expanded":
+                        result["expansion"] = expanded
+                        break
+                    expansions.append(dict(previous_area=state["area"], missing_tile=result["missing_tile"],
+                                           area=expanded["snapshot"]["area"]))
+                    state = expanded["snapshot"]
+                    (args.root / "region-expanded-snapshot.json").write_text(json.dumps(state))
+                    result, corridor, search_requires_support = plan_corridor(worker, state, args.region,
+                        source.get("guidance"), args.region_horizon, args.region_beam, args.root)
+                if args.region_world:
+                    import hashlib
+                    result["world_source"] = dict(path=str(args.region_world),
+                        sha256=hashlib.sha256(args.region_world.read_bytes()).hexdigest(), expansions=expansions)
                 print("REGION_CORRIDOR", corridor, flush=True)
             else:
                 result = worker.call("region_search", snapshot=state, region=args.region,
@@ -321,7 +341,7 @@ def main():
                 assert result["placed"] and result["consumed"] == 1
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
-                                          if key not in ("end_snapshot", "controls", "layers", "use_slots", "use_targets")}, flush=True)
+                                          if key not in ("end_snapshot", "controls", "layers", "use_slots", "use_targets", "world_random_indices")}, flush=True)
             return
         if args.native_mining_probe:
             result = worker.call("native_mining_probe")
@@ -716,6 +736,9 @@ def main():
         branch = worker.call("worker_state_contract")
         assert branch["passed"] and branch["changed_tiles"] == 2
         print("WORKER_STATE_CONTRACT_PASS", branch, flush=True)
+        expansion = worker.call("snapshot_expansion_contract")
+        assert expansion["passed"]
+        print("SNAPSHOT_EXPANSION_CONTRACT_PASS", expansion, flush=True)
         terrain = worker.call("terrain_contract")
         assert terrain["passed"]
         print("TERRAIN_NATIVE_CONTROLS_CONTRACT_PASS", terrain, flush=True)
