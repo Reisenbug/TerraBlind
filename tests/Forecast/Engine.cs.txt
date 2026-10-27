@@ -617,6 +617,9 @@ public sealed class Engine : ModSystem
             hazard.IsActuated = false; hazard.TileType = TileID.JungleVines;
             if (VanillaTerrainPlan.IsRouteObstacle(hazard, false))
                 throw new InvalidOperationException("passable_vines_collected_as_obstruction");
+            hazard.TileType = TileID.Platforms;
+            if (VanillaTerrainPlan.IsRouteObstacle(hazard, false) || VanillaTerrainPlan.IsRouteObstacle(hazard, true))
+                throw new InvalidOperationException("passable_platform_collected_as_obstruction");
             hazard.TileType = TileID.Cobweb;
             if (!VanillaTerrainPlan.IsRouteObstacle(hazard, false))
                 throw new InvalidOperationException("movement_obstructing_web_ignored");

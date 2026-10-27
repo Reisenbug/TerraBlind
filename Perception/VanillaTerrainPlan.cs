@@ -28,7 +28,8 @@ public static class VanillaTerrainPlan
     public static bool IsRouteObstacle(Tile tile, bool belowFeet)
         => tile.HasTile && !tile.IsActuated
             && (Terraria.ID.TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
-                || !belowFeet && (Main.tileSolid[tile.TileType] || tile.TileType == Terraria.ID.TileID.Cobweb));
+                || !belowFeet && (Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]
+                    || tile.TileType == Terraria.ID.TileID.Cobweb));
 
     public static (int x, int y)[] MiningBatch((int x, int y) first, (int x, int y)[] available,
         float left, float right, int supportY)
