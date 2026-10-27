@@ -75,6 +75,7 @@ def main():
     parser.add_argument("--expect-redundant-opening", action="store_true")
     parser.add_argument("--ceiling-loop-probe", type=Path)
     parser.add_argument("--platform-anchor-probe", type=Path)
+    parser.add_argument("--terminal-progress-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -117,6 +118,21 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.terminal_progress_probe:
+            evidence = json.loads(args.terminal_progress_probe.read_text())
+            old = evidence["result"]
+            result = worker.call(**evidence["request"])
+            assert result["status"] == "planned"
+            assert any(key & 4 for key in old["controls"])
+            assert not any(key & 4 for key in result["controls"]), result["selected"]
+            old_end = old["forecast"]["frames"][-1]
+            end = result["forecast"]["frames"][-1]
+            goal = evidence["request"]
+            distance = lambda frame: (frame["x"] - goal["x"]) ** 2 + (frame["y"] - goal["y"]) ** 2
+            assert distance(end) <= distance(old_end) + .01
+            args.terminal_progress_probe.with_suffix(".terminal-replay.json").write_text(json.dumps(result))
+            print("TERMINAL_PROGRESS_PASS", old["selected"], "->", result["selected"], flush=True)
+            return
         if args.platform_anchor_probe:
             evidence = json.loads(args.platform_anchor_probe.read_text())
             request = evidence["request"]

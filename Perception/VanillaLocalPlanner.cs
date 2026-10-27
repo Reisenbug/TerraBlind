@@ -193,7 +193,7 @@ public sealed class VanillaLocalPlanner
                 bool advances = !transit || advance > .01 || reachedContact;
                 score = reachedContact ? Vector2.Distance(goal, frames[^1].Position)
                     : transit ? Distance(frames[^1].Position) + .1 * frames.Average(frame => Distance(frame.Position))
-                    : frames.Average(frame => Distance(frame.Position)) + .25 * Distance(frames[^1].Position);
+                    : Distance(frames[^1].Position);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
                 bool sameEnd = Vector2.DistanceSquared(frames[^1].Position, selectedEnd) <= 4;
