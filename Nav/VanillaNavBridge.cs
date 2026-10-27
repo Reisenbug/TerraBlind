@@ -138,6 +138,17 @@ public static class VanillaNavBridge
                 if (stable < 2) return;
                 var tile = Main.tile[edit.X, edit.Y];
                 bool success = tile.HasTile && tile.TileType == edit.Type && player.position.Y < placementStartY;
+                if (!success)
+                {
+                    bool held = player.controlJump;
+                    int next = (int)(Main.GameUpdateCount - placementInputAt);
+                    for (int i = Math.Max(0, next); i < placementControls.Length; i++)
+                    {
+                        bool pressed = (placementControls[i] & 4) != 0;
+                        if (pressed && !held) return;
+                        held = pressed;
+                    }
+                }
                 player.controlJump = player.controlUseItem = false;
                 DiagLog.Write($"[engine-jump-place-end] tile=({edit.X},{edit.Y}) success={success} rise={placementStartY - player.position.Y} frames={Main.GameUpdateCount - phaseAt}");
                 if (!success) { Fail("jump_place_failed"); return; }
