@@ -1601,6 +1601,7 @@ public sealed class Engine : ModSystem
             tile.HasTile = true; tile.TileType = TileID.Platforms; tile.LiquidAmount = 71;
             tile.WallType = WallID.DirtUnsafe; tile.TileFrameX = 18; tile.TileFrameY = 36;
             tile.Slope = SlopeType.SlopeDownRight; tile.IsActuated = true; tile.LiquidType = LiquidID.Honey;
+            tile.TileFrameNumber = 2;
             var edge = Main.tile[area.Right - 1, area.Bottom - 1];
             edge.HasTile = true; edge.TileType = TileID.Stone; edge.IsHalfBlock = true;
             player.position.X += 7; player.buffTime[0] += 17; player.inventory[0].stack += 3;
@@ -1615,6 +1616,8 @@ public sealed class Engine : ModSystem
             parent.Restore(parent);
             if (parent.RestoredTileWrites != 0) throw new InvalidOperationException("unchanged_world_rewritten");
             player = child.Restore(parent);
+            if (Main.tile[X + 5, Y - 5].TileFrameNumber != 2)
+                throw new InvalidOperationException($"branch_frame_number_lost:{Main.tile[X + 5, Y - 5].TileFrameNumber}");
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("branch_restore_changed_state");
             player.buffTime[0]++; player.inventory[0].stack++;

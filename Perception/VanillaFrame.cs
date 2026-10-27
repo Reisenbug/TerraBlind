@@ -479,6 +479,20 @@ public static class VanillaFrame
         static (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
             => template.Select(entry => (entry.field, CopyValue(entry.field.GetValue(source)))).ToArray();
 
+        void RestoreColumns<T>(T[][] columns, T[][] known) where T : unmanaged, ITileData
+        {
+            var data = Main.tile.GetData<T>();
+            for (int x = 0; x < width; x++)
+            {
+                if (known != null && ReferenceEquals(columns[x], known[x])) continue;
+                var current = data.AsSpan((x0 + x) * Main.tile.Height + y0, columns[x].Length);
+                if (System.Runtime.InteropServices.MemoryMarshal.AsBytes(current)
+                    .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(columns[x].AsSpan()))) continue;
+                columns[x].AsSpan().CopyTo(current);
+                RestoredTileWrites += columns[x].Length;
+            }
+        }
+
         public WorkerState CaptureCurrent(Player player) => new(this, player);
 
         static bool TileMatches(Tile tile, int[] values, int offset)
@@ -526,19 +540,10 @@ public static class VanillaFrame
             RestoredTileWrites = 0;
             bool known = knownWorld != null && knownWorld.x0 == x0 && knownWorld.y0 == y0
                 && knownWorld.width == width && knownWorld.tiles.Length == tiles.Length;
-            bool identical = known && ReferenceEquals(tiles, knownWorld.tiles);
-            for (int i = 0; !identical && i < tiles.Length / 10; i++)
-            {
-                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
-                if (known ? tiles.AsSpan(offset, 10).SequenceEqual(knownWorld.tiles.AsSpan(offset, 10))
-                    : TileMatches(tile, tiles, offset)) continue;
-                RestoredTileWrites++;
-                tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
-                tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
-                tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
-                tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
-                tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
-            }
+            RestoreColumns(tileTypes, known ? knownWorld.tileTypes : null);
+            RestoreColumns(wallTypes, known ? knownWorld.wallTypes : null);
+            RestoreColumns(tileStates, known ? knownWorld.tileStates : null);
+            RestoreColumns(liquids, known ? knownWorld.liquids : null);
             TilesMs = timer.Elapsed.TotalMilliseconds;
             return player;
         }
