@@ -1,10 +1,12 @@
 """Compare engine forks against the original live laboratory player, without RL."""
 
 import argparse
+import base64
 import json
 import shutil
 import socket
 import subprocess
+import struct
 import time
 from pathlib import Path
 
@@ -67,6 +69,7 @@ def main():
     parser.add_argument("--replace-tiles", action="store_true")
     parser.add_argument("--settled-probe", type=Path)
     parser.add_argument("--jump-place-probe", type=Path)
+    parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -109,6 +112,37 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.feather_probe:
+            initial = worker.call("reset", airborne=True, airborne_height=320, buffs=[[8, 600]])
+            snapshot = initial["snapshot"]
+            coast = worker.call("replay", snapshot=snapshot, controls=[2] * 180)
+            hover = worker.call("replay", snapshot=snapshot, controls=[10] * 180)
+            assert coast["outcome"] == hover["outcome"] == "complete"
+            a, b = coast["frames"][-1], hover["frames"][-1]
+            assert b["y"] < a["y"] - 16, (a["y"], b["y"])
+            plan = worker.call("plan", snapshot=snapshot, prefix=[0],
+                               x=initial["initial"]["x"] + 500, y=initial["initial"]["y"] + 40)
+            report = dict(coast_end=a, hover_end=b, selected=plan.get("selected"), plan=plan)
+            (args.root / "feather-probe.json").write_text(json.dumps(report))
+            assert plan["status"] == "planned" and plan["selected"].startswith("feather_"), plan.get("selected")
+            snapshot["navigation"] = True
+            x0, y0, width, height = snapshot["area"]
+            gx = int((initial["initial"]["x"] + 510) // 16)
+            gy = int((initial["initial"]["y"] + 82) // 16)
+            cells = [value for x in range(x0, x0 + width) for y in range(y0, y0 + height)
+                     for value in (x, y, abs(x - gx) + abs(y - gy))]
+            guidance = base64.b64encode(struct.pack(f"<{len(cells)}i", *cells)).decode()
+            transit = worker.call("plan", snapshot=snapshot, prefix=[0], guidance=guidance,
+                                  x=gx * 16 - 10, y=gy * 16 - 42, route_direction=1)
+            report["transit"] = transit
+            (args.root / "feather-probe.json").write_text(json.dumps(report))
+            glide = next(candidate for candidate in transit["candidates"] if candidate["name"] == "feather_glide")
+            assert transit["status"] == "planned" and glide["safe"] and glide["field_progress"] > 0, glide
+            assert glide["coast_hp_loss"] == 0 and glide["coast_ms"] > 0, glide
+            print("FEATHER_CONTROL_PASS", {"coast_y": a["y"], "hover_y": b["y"],
+                  "selected": plan["selected"], "transit_selected": transit["selected"],
+                  "transit_glide_progress": glide["field_progress"]}, flush=True)
+            return
         if args.jump_place_probe:
             capture = json.loads(args.jump_place_probe.read_text())
             snapshot = capture.get("request", capture)["snapshot"]

@@ -66,6 +66,13 @@ public sealed class VanillaLocalPlanner
         candidates.Add(("walk", Enumerable.Repeat(direction, Horizon).ToArray()));
         candidates.Add(("drop", Enumerable.Repeat(direction | 16, Horizon).ToArray()));
         candidates.Add(("vertical_drop", Enumerable.Repeat(16, Horizon).ToArray()));
+        if (player.slowFall)
+        {
+            candidates.Add(("feather_glide", Enumerable.Repeat(direction | 8, Horizon).ToArray()));
+            foreach (int stop in new[] { 12, 36, 60 })
+                candidates.Add(($"feather_brake_{stop}", Enumerable.Range(0, Horizon)
+                    .Select(i => (i < stop ? direction : 0) | 8).ToArray()));
+        }
         foreach (int delay in new[] { 0, 12, 24, 36 })
         foreach (int hold in new[] { 6, 18, 60 })
         {
@@ -156,7 +163,8 @@ public sealed class VanillaLocalPlanner
             if (transit && safe)
             {
                 var end = frames[^1];
-                safe = end.Grounded || end.Velocity.Y == 0 || end.WingTime > 0 || end.AvailableJumps > 0;
+                safe = end.Grounded || end.Velocity.Y == 0 || end.WingTime > 0 || end.AvailableJumps > 0
+                    || Main.player[player.whoAmI].slowFall;
             }
             bool progress = safe && forward && (frames[^1].Position.X - player.position.X) * (direction == 2 ? 1 : -1) >= 16;
             bool reachedContact = seekContact && safe && frames[^1].Velocity.Y == 0
@@ -207,7 +215,8 @@ public sealed class VanillaLocalPlanner
                         if (transit && safe)
                         {
                             var dryEnd = dryFrames[^1];
-                            safe = dryEnd.Grounded || dryEnd.Velocity.Y == 0 || dryEnd.WingTime > 0 || dryEnd.AvailableJumps > 0;
+                            safe = dryEnd.Grounded || dryEnd.Velocity.Y == 0 || dryEnd.WingTime > 0 || dryEnd.AvailableJumps > 0
+                                || Main.player[player.whoAmI].slowFall;
                         }
                         if (safe && (dryFrames[^1].Grounded || dryFrames[^1].Velocity.Y == 0))
                         {
