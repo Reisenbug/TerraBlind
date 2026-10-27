@@ -55,6 +55,96 @@ def compare(expected, actual):
     return maximum
 
 
+def plan_corridor(worker, state, region, guidance, horizon, beam, root):
+    started = time.monotonic()
+    corridor = worker.call("region_corridor", snapshot=state, region=region, guidance=guidance)
+    (root / "region-corridor.json").write_text(json.dumps(corridor))
+    result = worker.call("region_search", snapshot=state, region=region, horizon=horizon, beam=beam,
+                         require_support=True, goal_regions=corridor["goal_regions"]) if corridor["goal_regions"] else None
+    require_support = True
+    if result is None or result["status"] != "reached":
+        (root / "region-corridor-movement.json").write_text(json.dumps(result))
+        attempts = []
+        for candidate in corridor["excavation_candidates"][:3]:
+            require_support = False
+            if candidate["movement_blocked_by"] is None:
+                transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
+                                      horizon=horizon, beam=beam, require_support=False)
+                attempts.append(dict(candidate=candidate, mode="movement", result=transit))
+                if transit["status"] == "reached":
+                    result = transit
+                    corridor["selected_local_transit"] = candidate["goal_region"]
+                    break
+            else:
+                attempts.append(dict(candidate=candidate, mode="movement_blocked_geometry", result=None))
+            result = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
+                                 horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"])
+            attempts.append(dict(candidate=candidate, mode="mining", result=result))
+            if result["status"] == "reached":
+                corridor["selected_excavation"] = candidate
+                break
+        (root / "region-corridor-excavation.json").write_text(json.dumps(attempts))
+    if result is None:
+        raise RuntimeError("no_corridor_surface_or_safe_excavation_candidate")
+    result["planning_wall_ms"] = (time.monotonic() - started) * 1000
+    return result, corridor, require_support
+
+
+def verify_region(worker, state, result, root):
+    replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
+                         use_slots=result["use_slots"], placement_tile=result["placement_tile"],
+                         mining_tile=result["mining_tile"], use_targets=result["use_targets"])
+    assert replay["outcome"] == "complete", replay["outcome"]
+    differences = [key for key in result["end_snapshot"]
+                   if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
+    if differences:
+        (root / "region-replay-failure.json").write_text(json.dumps(dict(result=result, replay=replay, differences=differences)))
+    assert not differences, differences
+    result["replay_verified"] = True
+    return replay["end_snapshot"]
+
+
+def run_corridor_chain(worker, state, source, args):
+    import math
+    data = base64.b64decode(source["guidance"])
+    values = struct.unpack("=" + "i" * (len(data) // 4), data)
+    field = {(values[i], values[i + 1]): values[i + 2] for i in range(0, len(values), 3)}
+    report = dict(status="running", source=str(args.region_probe), region=args.region,
+                  requested_steps=args.region_chain_steps, scope="isolated sequential replay with fixed initial guidance", steps=[])
+    (args.root / "region-chain.json").write_text(json.dumps(report))
+    for step in range(args.region_chain_steps):
+        root = args.root / f"chain-{step:02d}"
+        root.mkdir(exist_ok=True)
+        result, corridor, supported = plan_corridor(worker, state, args.region, source["guidance"],
+                                                     args.region_horizon, args.region_beam, root)
+        summary = dict(step=step, status=result["status"], start_cost=corridor["start_cost"],
+                       frames=len(result["controls"]), planning_ms=result["planning_wall_ms"],
+                       cleared_count=result["cleared_count"], require_support=supported)
+        report["steps"].append(summary)
+        (root / "result.json").write_text(json.dumps(result))
+        if result["status"] != "reached" or not result["controls"]:
+            report["status"] = "stopped"
+            break
+        state = verify_region(worker, state, result, root)
+        player = state["player"]
+        position = player["Terraria.Entity:position"]
+        foot = (math.floor((position["Microsoft.Xna.Framework.Vector2:X"] + player["Terraria.Entity:width"] / 2) / 16),
+                math.floor((position["Microsoft.Xna.Framework.Vector2:Y"] + player["Terraria.Entity:height"] - 1) / 16))
+        summary["end_cost"] = field.get(foot)
+        summary["foot_cell"] = foot
+        summary["replay_verified"] = True
+        (root / "result.json").write_text(json.dumps(result))
+        assert summary["end_cost"] is not None and summary["end_cost"] < summary["start_cost"], summary
+        print("CORRIDOR_CHAIN_STEP", summary, flush=True)
+        (args.root / "region-chain.json").write_text(json.dumps(report))
+    else:
+        report["status"] = "steps_completed"
+    report["total_frames"] = sum(step["frames"] for step in report["steps"] if step.get("replay_verified"))
+    report["total_planning_ms"] = sum(step["planning_ms"] for step in report["steps"])
+    (args.root / "region-chain.json").write_text(json.dumps(report))
+    print("CORRIDOR_CHAIN_RESULT", report, flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path("/tmp/terrablind-forecast-lab"))
@@ -75,6 +165,7 @@ def main():
     parser.add_argument("--region-mine", type=int, nargs=2)
     parser.add_argument("--region-mine-tile", type=int, nargs=2, action="append")
     parser.add_argument("--region-corridor", action="store_true")
+    parser.add_argument("--region-chain-steps", type=int, default=0)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -144,6 +235,18 @@ def main():
             state = source["snapshot"]
             if source.get("prefix"):
                 state = worker.call("replay", snapshot=state, controls=source["prefix"], capture_end=True)["end_snapshot"]
+            if args.region_chain_steps:
+                if not 1 <= args.region_chain_steps <= 20:
+                    raise ValueError("region-chain-steps must be between 1 and 20")
+                try:
+                    run_corridor_chain(worker, state, source, args)
+                except Exception as error:
+                    path = args.root / "region-chain.json"
+                    report = json.loads(path.read_text()) if path.exists() else {}
+                    report.update(status="error", error=str(error))
+                    path.write_text(json.dumps(report))
+                    raise
+                return
             if args.region_seed is not None:
                 import random
                 rng = random.Random(args.region_seed)
@@ -163,11 +266,6 @@ def main():
                 args.region = random.Random(args.region_surface_seed).choice(result["surfaces"])
             planning_started = time.monotonic()
             corridor = None
-            if args.region_corridor:
-                corridor = worker.call("region_corridor", snapshot=state, region=args.region,
-                                       guidance=source.get("guidance"))
-                (args.root / "region-corridor.json").write_text(json.dumps(corridor))
-                print("REGION_CORRIDOR", corridor, flush=True)
             if args.region_reference:
                 reference = worker.call("replay", snapshot=state,
                                         controls=evidence["result"]["controls"][:args.region_horizon], capture_end=True)
@@ -185,37 +283,15 @@ def main():
                                           prefix=evidence["result"]["controls"][:hits[0]])["supported"]
                 print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
             search_requires_support = not args.region_airborne
-            result = worker.call("region_search", snapshot=state, region=args.region,
-                                 horizon=args.region_horizon, beam=args.region_beam,
-                                 require_support=not args.region_airborne, placement_tile=args.region_place,
-                                 mining_tile=args.region_mine, mining_tiles=args.region_mine_tile,
-                                 goal_regions=corridor["goal_regions"] if corridor else None) if not corridor or corridor["goal_regions"] else None
-            if corridor and (result is None or result["status"] != "reached"):
-                (args.root / "region-corridor-movement.json").write_text(json.dumps(result))
-                attempts = []
-                for candidate in corridor["excavation_candidates"][:3]:
-                    search_requires_support = False
-                    if candidate["movement_blocked_by"] is None:
-                        transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                              horizon=args.region_horizon, beam=args.region_beam, require_support=False)
-                        attempts.append(dict(candidate=candidate, mode="movement", result=transit))
-                        if transit["status"] == "reached":
-                            result = transit
-                            corridor["selected_local_transit"] = candidate["goal_region"]
-                            break
-                    else:
-                        attempts.append(dict(candidate=candidate, mode="movement_blocked_geometry", result=None))
-                    trial = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                        horizon=args.region_horizon, beam=args.region_beam,
-                                        require_support=False, mining_tiles=candidate["mining_tiles"])
-                    attempts.append(dict(candidate=candidate, mode="mining", result=trial))
-                    result = trial
-                    if trial["status"] == "reached":
-                        corridor["selected_excavation"] = candidate
-                        break
-                (args.root / "region-corridor-excavation.json").write_text(json.dumps(attempts))
-                if result is None:
-                    raise RuntimeError("no_corridor_surface_or_safe_excavation_candidate")
+            if args.region_corridor:
+                result, corridor, search_requires_support = plan_corridor(worker, state, args.region,
+                    source.get("guidance"), args.region_horizon, args.region_beam, args.root)
+                print("REGION_CORRIDOR", corridor, flush=True)
+            else:
+                result = worker.call("region_search", snapshot=state, region=args.region,
+                                     horizon=args.region_horizon, beam=args.region_beam,
+                                     require_support=not args.region_airborne, placement_tile=args.region_place,
+                                     mining_tile=args.region_mine, mining_tiles=args.region_mine_tile)
             result["planning_wall_ms"] = (time.monotonic() - planning_started) * 1000
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,
@@ -223,18 +299,7 @@ def main():
             if corridor:
                 result["test_input"]["corridor"] = corridor
             if result["controls"]:
-                replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
-                                     use_slots=result["use_slots"], placement_tile=result["placement_tile"],
-                                     mining_tile=result["mining_tile"], use_targets=result["use_targets"])
-                assert replay["outcome"] == "complete"
-                differences = [key for key in result["end_snapshot"]
-                               if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
-                if differences:
-                    failure = dict(result=result, replay=replay, differences=differences)
-                    (args.root / "region-replay-failure.json").write_text(json.dumps(failure))
-                assert not differences, {key: dict(expected=result["end_snapshot"][key],
-                                                   actual=replay["end_snapshot"].get(key)) for key in differences}
-                result["replay_verified"] = True
+                verify_region(worker, state, result, args.root)
             if args.region_place and result["status"] == "reached":
                 assert result["placed"] and result["consumed"] == 1
             (args.root / "region-search.json").write_text(json.dumps(result))
