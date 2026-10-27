@@ -41,10 +41,26 @@ public static class VanillaContactRegion
         int left = (int)Math.Floor(position.X / 16), right = (int)Math.Floor((position.X + width - .01f) / 16);
         int top = (int)Math.Floor(position.Y / 16), bottom = (int)Math.Floor((position.Y + height) / 16);
         if (left < 1 || top < 1 || right >= Main.maxTilesX - 1 || bottom >= Main.maxTilesY - 1) return false;
-        if (Collision.SolidCollision(position, width, height)) return false;
         for (int x = left; x <= right; x++)
         for (int y = top; y <= bottom; y++)
+        {
             if (Hazard(x, y)) return false;
+            var tile = Main.tile[x, y];
+            if (!tile.HasTile || tile.IsActuated || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]) continue;
+            float x1 = Math.Max(position.X, x * 16), x2 = Math.Min(position.X + width, x * 16 + 16);
+            float y1 = Math.Max(position.Y, y * 16 + (tile.IsHalfBlock ? 8 : 0));
+            float y2 = Math.Min(position.Y + height, y * 16 + 16);
+            if (x1 >= x2 || y1 >= y2) continue;
+            bool intersects = tile.Slope switch
+            {
+                SlopeType.SlopeDownLeft => y2 - y * 16 > x1 - x * 16,
+                SlopeType.SlopeDownRight => y2 - y * 16 > x * 16 + 16 - x2,
+                SlopeType.SlopeUpLeft => y1 - y * 16 < x * 16 + 16 - x1,
+                SlopeType.SlopeUpRight => y1 - y * 16 < x2 - x * 16,
+                _ => true
+            };
+            if (intersects) return false;
+        }
         return true;
     }
 

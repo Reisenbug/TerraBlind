@@ -303,6 +303,11 @@ public sealed class Engine : ModSystem
                 return MathF.Sqrt(dx * dx + dy * dy);
             });
         }
+        bool Reached(Player player) => requireSupport
+            ? Distance(player) <= .5f && player.velocity.Y == 0
+                && VanillaContactRegion.SafeBody(player.position, player.width, player.height)
+                && VanillaTerrainPlan.HasSupport(player)
+            : Distance(player) == 0;
         (int, int, bool, int, float, bool, int) Mode(Player player)
         {
             int available = 0;
@@ -365,7 +370,7 @@ public sealed class Engine : ModSystem
             int hp = start.statLife;
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
             var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
-            if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
+            if (Reached(start))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
             VanillaFrame.WorkerState knownWorld = null;
@@ -416,8 +421,7 @@ public sealed class Engine : ModSystem
                                 && !Main.projectile.Any(projectile => projectile.active)
                                 && !Main.npc.Any(npc => npc.active);
                             if (!safe) break;
-                            reached = Distance(player) == 0
-                                && (!requireSupport || player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player));
+                            reached = Reached(player);
                             if (reached) break;
                         }
                         if (!safe) continue;
@@ -1720,6 +1724,32 @@ public sealed class Engine : ModSystem
                 var a = snapshot["area"].AsArray();
                 return new JsonObject { ["outcome"] = "complete", ["world_random_indices"] = randomIndices, ["end_snapshot"] = VanillaFrame.Capture(player,
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
+            }
+            finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
+        if (command == "slope_body_contract")
+        {
+            Setup(new JsonObject { ["terrain"] = "flat" });
+            var snapshot = VanillaFrame.Capture(source, area, true);
+            int checkedBodies = 0;
+            try
+            {
+                var tile = Main.tile[X + 5, Y - 5];
+                tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Stone;
+                foreach (var slope in new[] { SlopeType.SlopeDownRight, SlopeType.SlopeDownLeft,
+                    SlopeType.SlopeUpRight, SlopeType.SlopeUpLeft })
+                foreach (int dx in new[] { 2, 10 })
+                foreach (int dy in new[] { 3, 11 })
+                {
+                    tile.Slope = slope;
+                    var position = new Vector2((X + 5) * 16 + dx, (Y - 5) * 16 + dy);
+                    var native = Collision.SlopeCollision(position, Vector2.Zero, 2, 2);
+                    bool corrected = native.X != position.X || native.Y != position.Y;
+                    if (VanillaContactRegion.SafeBody(position, 2, 2) == corrected)
+                        throw new InvalidOperationException($"slope_body_mismatch:{slope}:{dx},{dy}");
+                    checkedBodies++;
+                }
+                return new JsonObject { ["passed"] = true, ["cases"] = checkedBodies };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
         }

@@ -751,6 +751,9 @@ def main():
         branch = worker.call("worker_state_contract")
         assert branch["passed"] and branch["changed_tiles"] == 2
         print("WORKER_STATE_CONTRACT_PASS", branch, flush=True)
+        slopes = worker.call("slope_body_contract")
+        assert slopes["passed"] and slopes["cases"] == 16
+        print("SLOPE_BODY_CONTRACT_PASS", slopes, flush=True)
         expansion = worker.call("snapshot_expansion_contract")
         assert expansion["passed"]
         print("SNAPSHOT_EXPANSION_CONTRACT_PASS", expansion, flush=True)
