@@ -73,6 +73,7 @@ public sealed class VanillaLocalPlanner
                 candidates.Add(($"feather_brake_{stop}", Enumerable.Range(0, Horizon)
                     .Select(i => (i < stop ? direction : 0) | 8).ToArray()));
         }
+        int travelCandidates = candidates.Count;
         foreach (int delay in new[] { 0, 12, 24, 36 })
         foreach (int hold in new[] { 6, 18, 60 })
         {
@@ -115,6 +116,8 @@ public sealed class VanillaLocalPlanner
         double chosenProgress = 0;
         bool selectedAdvances = false;
         bool selectedContact = false;
+        bool selectedFlows = false;
+        string searchEnd = "exhausted";
         bool goalSupported = player.gravDir == 1 && VanillaContactRegion.Supported(goal, player.width, player.height);
         bool seekContact = transit && goalSupported
             && !VanillaContactRegion.ConnectedSupport(player.position, goal, player.width, player.height);
@@ -233,6 +236,8 @@ public sealed class VanillaLocalPlanner
                         best = score; selected = candidate.name; chosen = candidate.keys;
                         selectedAdvances = advances; selectedContact = reachedContact;
                         chosenProgress = reachedContact ? Math.Max(advance, Vector2.Distance(player.position, frames[^1].Position)) : advance;
+                        selectedFlows = frames.TakeLast(12).All(frame =>
+                            frame.Velocity.X * (direction == 2 ? 1 : -1) > .1f);
                     }
                 }
             }
@@ -254,6 +259,12 @@ public sealed class VanillaLocalPlanner
                 break;
             }
             if (preferContinuation && candidate.name == "continue" && safe && chosenProgress > 0) break;
+            if (transit && candidateIndex >= travelCandidates - 1 && selectedAdvances && selectedFlows
+                && chosenProgress >= player.width * 4)
+            {
+                searchEnd = "flowing_route";
+                break;
+            }
             if (candidateIndex >= primaryCount && selectedAdvances) break;
             if (safe && candidate.name is "walk" or "continue"
                 && (candidate.name != "continue" || jumps == 0 && wings == 0)
@@ -317,7 +328,7 @@ public sealed class VanillaLocalPlanner
         return new JsonObject { ["status"] = chosen.Length == 0 ? "no_safe_candidate" : "planned", ["selected"] = selected,
             ["goal_supported"] = goalSupported, ["goal_contact"] = selectedContact,
             ["goal_contact_region"] = goalSupported ? new JsonArray(goalRange.X, goalRange.Y, goal.Y) : null,
-            ["route_progress"] = chosenProgress,
+            ["route_progress"] = chosenProgress, ["search_end"] = searchEnd,
             ["controls"] = new JsonArray(chosen.Select(key => JsonValue.Create(key)).ToArray()),
             ["forecast"] = selectedForecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs,
