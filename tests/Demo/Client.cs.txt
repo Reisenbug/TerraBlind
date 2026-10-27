@@ -221,7 +221,8 @@ public sealed class Driver : ModSystem
         foreach (var pair in activityTotals) activity[pair.Key] = pair.Value;
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
-            ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null : 150000,
+            ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null :
+                Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal") ? 60000 : 150000,
             ["goal_x"] = continuity ? null : routeGoalX, ["goal_y"] = continuity ? null : routeGoalY,
             ["phase_ms"] = totals, ["activity_ms"] = activity, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
@@ -573,7 +574,9 @@ public sealed class Driver : ModSystem
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
-        if (!continuity && !unlimited && routeClock.Elapsed.TotalSeconds > 150) throw new TimeoutException("route_exceeded_150_seconds");
+        int routeLimitSeconds = Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal") ? 60 : 150;
+        if (!continuity && !unlimited && routeClock.Elapsed.TotalSeconds > routeLimitSeconds)
+            throw new TimeoutException($"route_exceeded_{routeLimitSeconds}_seconds");
         if (RecedingNav.Active && (unlimited || ticks < 54000)) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (continuity)

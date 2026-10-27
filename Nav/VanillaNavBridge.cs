@@ -338,6 +338,7 @@ public static class VanillaNavBridge
             return;
         }
         if (phase != Phase.Moving || Terminal || field == null || player.itemAnimation != 0 || player.itemTime != 0
+            || !needTerrain && movement.ActiveResult?["route_progress"]?.GetValue<double>() > 0
             || ReferenceEquals(previewedRoute, movement.ActiveResult)
             || !movement.CurrentMatches(tick, player)
             || !movement.TryArrival(tick, out var controls, out var anchor)) return;

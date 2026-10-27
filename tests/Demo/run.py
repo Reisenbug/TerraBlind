@@ -118,6 +118,9 @@ def main():
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
             assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or row["y"] >= row["underworld"])
+            if recorded_goal:
+                timing = json.loads((root / "route-timing.json").read_text())
+                assert timing["wall_ms"] <= 60000, timing
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
             if journey:
