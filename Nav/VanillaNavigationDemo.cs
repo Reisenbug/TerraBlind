@@ -367,10 +367,11 @@ public sealed class VanillaNavigationCommand : ModCommand
             VanillaNavBridge.Reset(); VanillaNavBridge.Enabled = args[1] == "on";
             caller.Reply("现有寻路的引擎移动后端：" + (VanillaNavBridge.Enabled ? "开" : "关")); return;
         }
-        if (args.Length == 3 && args[0] == "route" && int.TryParse(args[1], out int gx) && int.TryParse(args[2], out int gy))
+        if (args.Length == 3 && args[0] is "route" or "reach" && int.TryParse(args[1], out int gx) && int.TryParse(args[2], out int gy))
         {
             Halt.All(); NativeAgent.Stop(); VanillaNavBridge.Enabled = true;
-            RecedingNav.Start(gx, gy); caller.Reply("开始带挖掘/搭建的引擎寻路；/halt 停止。"); return;
+            RecedingNav.Start(gx, gy, args[0] == "reach" ? RecedingNav.Mode.Reach : RecedingNav.Mode.Snap);
+            caller.Reply("开始带挖掘/搭建的引擎寻路；/halt 停止。"); return;
         }
         if (args.Length == 1 && args[0] == "descent")
         {

@@ -437,7 +437,8 @@ public sealed class Driver : ModSystem
                 var goal = JourneyApproach(player);
                 routeGoalX = goal.X; routeGoalY = goal.Y;
                 journeyLegStartedMs = routeClock.Elapsed.TotalMilliseconds;
-                args = new[] { "route", goal.X.ToString(), goal.Y.ToString() };
+                bool resource = journeyStops[continuityLeg].Kind is "crystal" or "chest" or "spore";
+                args = new[] { resource ? "reach" : "route", goal.X.ToString(), goal.Y.ToString() };
                 Console.WriteLine($"VNAV_JOURNEY_START leg={continuityLeg} kind={journeyStops[continuityLeg].Kind} goal=({goal.X},{goal.Y})");
             }
             else if (continuity)
@@ -597,22 +598,7 @@ public sealed class Driver : ModSystem
             : target.Kind == "chest" ? TileID.Sets.BasicChest[tile.TileType]
             : tile.TileType == TileID.JunglePlants && tile.TileFrameX == 144);
         if (!present) throw new InvalidOperationException("journey_resource_missing:" + target.Kind);
-        var probe = new Player { width = player.width, height = player.height, inventory = player.inventory,
-            selectedItem = 1, blockRange = player.blockRange };
-        Point? best = null;
-        float bestDistance = float.MaxValue;
-        for (int y = target.Y - 3; y <= target.Y + 5; y++)
-        for (int x = target.X - 4; x <= target.X + 5; x++)
-        {
-            probe.position = new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height);
-            if (!VanillaContactRegion.Supported(probe.position, probe.width, probe.height)) continue;
-            bool reachable = target.Kind == "chest" ? probe.IsInInteractionRangeToMultiTileHitbox(target.X, target.Y)
-                : Reach.CanMine(probe, target.X, target.Y);
-            float distance = Vector2.DistanceSquared(probe.Center, new Vector2(target.X * 16 + 8, target.Y * 16 + 8));
-            if (!reachable || distance >= bestDistance) continue;
-            bestDistance = distance; best = new Point(x, y);
-        }
-        return best ?? throw new InvalidOperationException("journey_no_interaction_stance:" + target.Kind);
+        return new Point(target.X, target.Y);
     }
 
     bool JourneyInteraction(Player player)
