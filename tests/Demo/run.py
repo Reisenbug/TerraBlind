@@ -16,8 +16,11 @@ def main():
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
     journey = "--journey" in sys.argv
+    recorded_goal = "--recorded-goal" in sys.argv
+    if recorded_goal and ("--baseline" not in sys.argv or journey or continuity or circuit):
+        raise ValueError("--recorded-goal requires --baseline and a single route")
     continuity |= circuit or journey
-    descent = "--descent" in sys.argv or continuity
+    descent = "--descent" in sys.argv or continuity or recorded_goal
     root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     if "--root" in sys.argv:
         root = Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
@@ -72,6 +75,8 @@ def main():
         command.append("-navrecordcheck")
     if "--baseline" in sys.argv:
         command.extend(["-vnavbaseline", sys.argv[sys.argv.index("--baseline") + 1]])
+    if recorded_goal:
+        command.append("-vnavrecordedgoal")
     if continuity:
         command.append("-vnavcontinuitycheck")
     if circuit:
@@ -112,7 +117,7 @@ def main():
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
-            assert row["done"] and row["hp"] > 0 and (continuity or row["y"] >= row["underworld"])
+            assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or row["y"] >= row["underworld"])
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
             if journey:

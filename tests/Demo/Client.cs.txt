@@ -479,6 +479,13 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline) && (!journey || continuityLeg == 0))
             {
                 RestoreBaseline(player, baseline);
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal"))
+                {
+                    var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(baseline, "metadata.json")));
+                    routeGoalX = metadata["goal_x"].GetValue<int>(); routeGoalY = metadata["goal_y"].GetValue<int>();
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                    Console.WriteLine($"VNAV_RECORDED_GOAL goal=({routeGoalX},{routeGoalY})");
+                }
                 foreach (var accessory in player.armor.Where(item => item.type == ItemID.NeptunesShell)) accessory.TurnToAir();
                 Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE removed=NeptunesShell");
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
