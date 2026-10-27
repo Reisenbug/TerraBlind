@@ -55,12 +55,12 @@ def compare(expected, actual):
     return maximum
 
 
-def plan_corridor(worker, state, region, guidance, horizon, beam, root):
+def plan_corridor(worker, state, region, guidance, horizon, beam, root, quantum=6):
     started = time.monotonic()
     corridor = worker.call("region_corridor", snapshot=state, region=region, guidance=guidance)
     (root / "region-corridor.json").write_text(json.dumps(corridor))
     result = worker.call("region_search", snapshot=state, region=region, horizon=horizon, beam=beam,
-                         require_support=True, goal_regions=corridor["goal_regions"]) if corridor["goal_regions"] else None
+                         require_support=True, goal_regions=corridor["goal_regions"], quantum=quantum) if corridor["goal_regions"] else None
     require_support = True
     if result is None or result["status"] not in ("reached", "snapshot_required"):
         (root / "region-corridor-movement.json").write_text(json.dumps(result))
@@ -73,7 +73,7 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
             require_support = False
             if candidate["movement_blocked_by"] is None:
                 transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                      horizon=horizon, beam=beam, require_support=False)
+                                      horizon=horizon, beam=beam, require_support=False, quantum=quantum)
                 attempts.append(dict(candidate=candidate, mode="movement", result=transit))
                 if transit["status"] == "reached":
                     result = transit
@@ -82,12 +82,12 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
             else:
                 attempts.append(dict(candidate=candidate, mode="movement_blocked_geometry", result=None))
             result = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                 horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"])
+                                 horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"], quantum=quantum)
             attempts.append(dict(candidate=candidate, mode="mining", result=result))
             if result["status"] == "snapshot_required":
                 boundary = worker.call("region_boundary_contract", snapshot=state, region=candidate["goal_region"],
                     horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"],
-                    missing_tile=result["missing_tile"])
+                    missing_tile=result["missing_tile"], quantum=quantum)
                 assert boundary["passed"]
                 result["boundary_contract"] = boundary
                 break
@@ -106,7 +106,7 @@ def plan_observed_corridor(worker, state, guidance, args, root):
     expansions = []
     while True:
         result, corridor, supported = plan_corridor(worker, state, args.region, guidance,
-                                                    args.region_horizon, args.region_beam, root)
+                                                    args.region_horizon, args.region_beam, root, args.region_quantum)
         if result["status"] != "snapshot_required" or not args.region_world:
             break
         expanded = worker.call("expand_snapshot", snapshot=state, missing_tile=result["missing_tile"])
@@ -134,7 +134,7 @@ def verify_region(worker, state, result, root):
                    if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
     if differences:
         checkpoint_replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
-            use_slots=result["use_slots"], use_targets=result["use_targets"], checkpoint_frames=6)
+            use_slots=result["use_slots"], use_targets=result["use_targets"], checkpoint_frames=result.get("quantum", 6))
         (root / "region-replay-failure.json").write_text(json.dumps(dict(result=result, replay=replay,
             checkpoint_replay=checkpoint_replay, differences=differences)))
     assert not differences, differences
@@ -148,6 +148,7 @@ def run_corridor_chain(worker, state, source, args):
     values = struct.unpack("=" + "i" * (len(data) // 4), data)
     field = {(values[i], values[i + 1]): values[i + 2] for i in range(0, len(values), 3)}
     report = dict(status="running", source=str(args.region_probe), region=args.region,
+                  quantum=args.region_quantum, beam=args.region_beam,
                   requested_steps=args.region_chain_steps, scope="isolated sequential replay with fixed initial guidance", steps=[])
     (args.root / "region-chain.json").write_text(json.dumps(report))
     for step in range(args.region_chain_steps):
@@ -192,6 +193,7 @@ def main():
     parser.add_argument("--region-probe", type=Path)
     parser.add_argument("--region", type=int, nargs=4)
     parser.add_argument("--region-horizon", type=int, default=90)
+    parser.add_argument("--region-quantum", type=int, choices=(6, 12))
     parser.add_argument("--region-beam", type=int, default=6)
     parser.add_argument("--region-airborne", action="store_true")
     parser.add_argument("--region-seed", type=int)
@@ -234,6 +236,8 @@ def main():
     parser.add_argument("--expect-landing-rejected", action="store_true")
     parser.add_argument("--cancel-probe", type=Path)
     args = parser.parse_args()
+    if args.region_quantum is None:
+        args.region_quantum = 12 if args.region_corridor or args.region_chain_steps else 6
     args.root.mkdir(parents=True, exist_ok=True)
     (args.root / "Mods").mkdir(exist_ok=True)
     (args.root / "Mods/enabled.json").write_text('["Forecast"]')
@@ -339,7 +343,7 @@ def main():
                 result = worker.call("region_search", snapshot=state, region=args.region,
                                      horizon=args.region_horizon, beam=args.region_beam,
                                      require_support=not args.region_airborne, placement_tile=args.region_place,
-                                     mining_tile=args.region_mine, mining_tiles=args.region_mine_tile)
+                                     mining_tile=args.region_mine, mining_tiles=args.region_mine_tile, quantum=args.region_quantum)
             result["planning_wall_ms"] = (time.monotonic() - planning_started) * 1000
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,

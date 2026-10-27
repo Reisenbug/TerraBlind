@@ -46,7 +46,7 @@ public sealed class Engine : ModSystem
             Console.WriteLine($"RANDOM_TILE_FRAME {traceRandom} {x},{y} reset={reset} {before}->{WorldRandomIndex()}");
     }
 
-    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, Point[] Targets, int[] RandomIndices, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump, int MiningDamage,
+    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, Point[] Targets, int[] RandomIndices, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump, int MiningDamage, int ClearedTiles,
         (int horizontal, int vertical, bool jumping, int available, float gravity, bool placed, int terrainType) Mode);
 
     static JsonObject RegionSurfaces(JsonObject request)
@@ -316,6 +316,7 @@ public sealed class Engine : ModSystem
         JsonObject Finish(RegionNode node, bool reached) => new()
         {
             ["status"] = reached ? "reached" : "budget_exhausted",
+            ["quantum"] = quantum,
             ["distance"] = node.Distance,
             ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()),
             ["world_random_indices"] = new JsonArray(node.RandomIndices.Select(value => JsonValue.Create(value)).ToArray()),
@@ -363,7 +364,7 @@ public sealed class Engine : ModSystem
             }
             int hp = start.statLife;
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
-            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), Mode(start));
+            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
             if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
@@ -427,7 +428,8 @@ public sealed class Engine : ModSystem
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
-                            parent.Uses.Concat(uses).ToArray(), parent.Targets.Concat(targets).ToArray(), parent.RandomIndices.Concat(randomIndices).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player), Mode(player));
+                            parent.Uses.Concat(uses).ToArray(), parent.Targets.Concat(targets).ToArray(), parent.RandomIndices.Concat(randomIndices).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player),
+                            miningTiles.Count(tile => !Main.tile[tile.X, tile.Y].HasTile), Mode(player));
                         if (node.Distance < best.Distance) best = node;
                         if (reached) return Finish(node, true);
                         next.Add(node);
@@ -457,6 +459,7 @@ public sealed class Engine : ModSystem
                         ["velocity"] = new JsonArray(node.Velocity.X, node.Velocity.Y),
                         ["release_jump"] = node.ReleaseJump,
                         ["mining_damage"] = node.MiningDamage,
+                        ["cleared_tiles"] = node.ClearedTiles,
                         ["distance"] = node.Distance, ["mode"] = node.Mode.ToString(),
                         ["retained"] = frontier.Contains(node),
                         ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()) }).ToArray()),
