@@ -25,6 +25,102 @@ public sealed class Engine : ModSystem
     Player source;
     public Player Source => source;
     public Rectangle Area => area;
+
+    sealed record RegionNode(JsonObject State, int[] Controls, float Distance);
+
+    static JsonObject RegionSearch(JsonObject request)
+    {
+        var initial = request["snapshot"].AsObject();
+        var bounds = request["region"].AsArray();
+        var region = new Rectangle(bounds[0].GetValue<int>(), bounds[1].GetValue<int>(),
+            bounds[2].GetValue<int>(), bounds[3].GetValue<int>());
+        int horizon = request["horizon"]?.GetValue<int>() ?? 90;
+        int beam = request["beam"]?.GetValue<int>() ?? 6;
+        int quantum = request["quantum"]?.GetValue<int>() ?? 6;
+        bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
+        if (region.Width <= 0 || region.Height <= 0 || horizon < 1 || horizon > 240
+            || beam < 1 || beam > 16 || quantum < 1 || quantum > 12)
+            throw new ArgumentException("invalid_region_search_budget");
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        int expanded = 0, simulated = 0, shared = 0;
+        double restoreMs = 0, updateMs = 0, captureMs = 0;
+        float Distance(Player player)
+        {
+            var point = player.Bottom;
+            float dx = Math.Max(region.Left - point.X, Math.Max(0, point.X - region.Right));
+            float dy = Math.Max(region.Top - point.Y, Math.Max(0, point.Y - region.Bottom));
+            return MathF.Sqrt(dx * dx + dy * dy);
+        }
+        JsonObject Finish(RegionNode node, bool reached) => new()
+        {
+            ["status"] = reached ? "reached" : "budget_exhausted",
+            ["distance"] = node.Distance,
+            ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()),
+            ["end_snapshot"] = node.State.DeepClone(),
+            ["expanded"] = expanded, ["simulated_frames"] = simulated, ["reused_prefix_frames"] = shared,
+            ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+            ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs }
+        };
+        try
+        {
+            var start = VanillaFrame.RestoreInWorker(initial);
+            int hp = start.statLife;
+            var a = initial["area"].AsArray();
+            var tiles = new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>());
+            var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
+            var best = new RegionNode(initial, Array.Empty<int>(), Distance(start));
+            if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
+                return Finish(best, true);
+            var frontier = new System.Collections.Generic.List<RegionNode> { best };
+            bool gravity = start.buffType.Contains(BuffID.Gravitation);
+            int[] actions = gravity ? new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18, 8, 9, 10 }
+                : new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18 };
+            for (int depth = 0; depth < horizon && frontier.Count > 0; depth += quantum)
+            {
+                var next = new System.Collections.Generic.List<RegionNode>();
+                foreach (var parent in frontier)
+                {
+                    var checkpoint = new VanillaFrame.WorkerState(parent.State);
+                    foreach (int keys in actions)
+                    {
+                        VanillaPrediction.CheckCancellation();
+                        long at = System.Diagnostics.Stopwatch.GetTimestamp();
+                        var player = checkpoint.Restore();
+                        restoreMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+                        expanded++; shared += parent.Controls.Length;
+                        int count = 0;
+                        bool safe = true, reached = false;
+                        for (; count < Math.Min(quantum, horizon - depth);)
+                        {
+                            at = System.Diagnostics.Stopwatch.GetTimestamp();
+                            VanillaPrediction.Advance(player, (VanillaKeys)keys);
+                            updateMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+                            count++; simulated++;
+                            safe = !player.dead && player.statLife >= hp && interior.Contains(player.Hitbox)
+                                && !Main.projectile.Any(projectile => projectile.active)
+                                && !Main.npc.Any(npc => npc.active);
+                            if (!safe) break;
+                            reached = Distance(player) == 0
+                                && (!requireSupport || player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player));
+                            if (reached) break;
+                        }
+                        if (!safe) continue;
+                        at = System.Diagnostics.Stopwatch.GetTimestamp();
+                        var state = VanillaFrame.Capture(player, tiles, true);
+                        captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+                        var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(keys, count)).ToArray(), Distance(player));
+                        if (node.Distance < best.Distance) best = node;
+                        if (reached) return Finish(node, true);
+                        next.Add(node);
+                    }
+                }
+                frontier = next.OrderBy(node => node.Distance).Take(beam).ToList();
+            }
+            return Finish(best, false);
+        }
+        finally { VanillaFrame.RestoreInWorker(initial); }
+    }
+
     public override void Load() => Main.OnEnginePreload += Run;
     public override void Unload() => Main.OnEnginePreload -= Run;
 
@@ -1131,6 +1227,7 @@ public sealed class Engine : ModSystem
             }
             finally { VanillaFrame.RestoreInWorker(state); }
         }
+        if (command == "region_search") return RegionSearch(request);
         if (command == "plan")
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();

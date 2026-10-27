@@ -62,6 +62,12 @@ def main():
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--navigation", action="store_true")
     parser.add_argument("--replay", type=Path)
+    parser.add_argument("--region-probe", type=Path)
+    parser.add_argument("--region", type=int, nargs=4)
+    parser.add_argument("--region-horizon", type=int, default=90)
+    parser.add_argument("--region-beam", type=int, default=6)
+    parser.add_argument("--region-airborne", action="store_true")
+    parser.add_argument("--region-seed", type=int)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -122,6 +128,31 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.region_probe:
+            source = json.loads(args.region_probe.read_text())["request"]
+            assert args.region is not None
+            state = source["snapshot"]
+            if source.get("prefix"):
+                state = worker.call("replay", snapshot=state, controls=source["prefix"], capture_end=True)["end_snapshot"]
+            if args.region_seed is not None:
+                import random
+                rng = random.Random(args.region_seed)
+                args.region[0] += rng.randint(-32, 32)
+                args.region[1] += rng.randint(-32, 32)
+            result = worker.call("region_search", snapshot=state, region=args.region,
+                                 horizon=args.region_horizon, beam=args.region_beam,
+                                 require_support=not args.region_airborne)
+            result["test_input"] = dict(source=str(args.region_probe), region=args.region,
+                                        seed=args.region_seed, require_support=not args.region_airborne)
+            if result["status"] == "reached" and result["controls"]:
+                replay = worker.call("replay", snapshot=state, controls=result["controls"], capture_end=True)
+                assert replay["outcome"] == "complete"
+                assert replay["end_snapshot"]["player"] == result["end_snapshot"]["player"]
+                result["replay_verified"] = True
+            (args.root / "region-search.json").write_text(json.dumps(result))
+            print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
+                                          if key not in ("end_snapshot", "controls")}, flush=True)
+            return
         if args.placement_order_probe:
             evidence = json.loads(args.placement_order_probe.read_text())
             request, old = evidence["request"], evidence["result"]
