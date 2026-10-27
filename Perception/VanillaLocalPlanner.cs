@@ -117,6 +117,7 @@ public sealed class VanillaLocalPlanner
         bool selectedAdvances = false;
         bool selectedContact = false;
         bool selectedFlows = false;
+        Vector2 selectedEnd = player.position;
         string searchEnd = "exhausted";
         bool goalSupported = player.gravDir == 1 && VanillaContactRegion.Supported(goal, player.width, player.height);
         bool seekContact = transit && goalSupported
@@ -182,9 +183,12 @@ public sealed class VanillaLocalPlanner
                     : frames.Average(frame => Distance(frame.Position)) + .25 * Distance(frames[^1].Position);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
-                if (reachedContact && !selectedContact || reachedContact == selectedContact
+                bool sameEnd = Vector2.DistanceSquared(frames[^1].Position, selectedEnd) <= 4;
+                bool idleDominates = sameEnd && !advances && !selectedAdvances && selected == "wait"
+                    && advance <= chosenProgress + .01;
+                if (!idleDominates && (reachedContact && !selectedContact || reachedContact == selectedContact
                     && (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01
-                        || !advances && !selectedAdvances && candidate.name == "wait" && score <= best + .01))
+                        || sameEnd && !advances && !selectedAdvances && candidate.name == "wait" && advance >= chosenProgress - .01)))
                 {
                     if (transit)
                     {
@@ -234,6 +238,7 @@ public sealed class VanillaLocalPlanner
                     if (safe)
                     {
                         best = score; selected = candidate.name; chosen = candidate.keys;
+                        selectedEnd = frames[^1].Position;
                         selectedAdvances = advances; selectedContact = reachedContact;
                         chosenProgress = reachedContact ? Math.Max(advance, Vector2.Distance(player.position, frames[^1].Position)) : advance;
                         selectedFlows = frames.TakeLast(12).All(frame =>

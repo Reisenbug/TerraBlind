@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--settled-probe", type=Path)
     parser.add_argument("--jump-place-probe", type=Path)
     parser.add_argument("--feather-probe", action="store_true")
+    parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -112,6 +113,20 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.stalled_jump_probe:
+            evidence = json.loads(args.stalled_jump_probe.read_text())
+            old = evidence["result"]
+            assert old["route_progress"] <= 0 and any(key & 4 for key in old["controls"])
+            result = worker.call(**evidence["request"])
+            args.stalled_jump_probe.with_suffix(".stalled-replay.json").write_text(json.dumps(result))
+            assert result["status"] == "planned" and result["selected"] == "wait", result["selected"]
+            assert all(key == 0 for key in result["controls"]), result["controls"]
+            assert result["route_progress"] >= old["route_progress"] - .01
+            hp = result["anchor"]["hp"]
+            assert all(not frame["dead"] and frame["hp"] >= hp for frame in result["forecast"]["frames"])
+            print("STALLED_JUMP_PASS", args.stalled_jump_probe.name,
+                  old["selected"], "->", result["selected"], "progress", result["route_progress"], flush=True)
+            return
         if args.feather_probe:
             initial = worker.call("reset", airborne=True, airborne_height=320, buffs=[[8, 600]])
             snapshot = initial["snapshot"]
