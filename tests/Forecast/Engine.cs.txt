@@ -1410,6 +1410,44 @@ public sealed class Engine : ModSystem
             }
             finally { VanillaFrame.RestoreInWorker(state); }
         }
+        if (command == "native_mining_probe")
+        {
+            Setup(new JsonObject());
+            source.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            var target = new Point(X + 2, Y - 1);
+            var targetTile = Main.tile[target.X, target.Y];
+            targetTile.HasTile = true;
+            targetTile.TileType = TileID.Stone;
+            int Damage(Player player) => player.hitTile.data.Where(hit => hit.type == 1
+                && hit.X == target.X && hit.Y == target.Y).Select(hit => hit.damage).DefaultIfEmpty().Max();
+            var initial = VanillaFrame.Capture(source, area, true);
+            var result = new JsonArray();
+            foreach (int checkpointMode in new[] { 0, 1, 2 })
+            {
+                var parent = new VanillaFrame.WorkerState(initial);
+                var player = parent.Restore();
+                int firstDamage = 0, restoredDamage = 0, frames = 0;
+                for (; frames < 120 && Main.tile[target.X, target.Y].HasTile; frames++)
+                {
+                    VanillaPrediction.Advance(player, VanillaKeys.None, 0, target);
+                    if (firstDamage == 0) firstDamage = Damage(player);
+                    if (checkpointMode != 0 && (frames + 1) % 6 == 0)
+                    {
+                        if (checkpointMode == 1)
+                        {
+                            parent = parent.CaptureCurrent(player);
+                            player = parent.Restore();
+                        }
+                        else player = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(player, area, true));
+                        if (restoredDamage == 0) restoredDamage = Damage(player);
+                    }
+                }
+                result.Add(new JsonObject { ["checkpoint_mode"] = checkpointMode,
+                    ["broken"] = !Main.tile[target.X, target.Y].HasTile, ["frames"] = frames,
+                    ["first_damage"] = firstDamage, ["restored_damage"] = restoredDamage });
+            }
+            return new JsonObject { ["results"] = result };
+        }
         if (command == "worker_state_contract")
         {
             Setup(new JsonObject { ["terrain"] = "flat" });

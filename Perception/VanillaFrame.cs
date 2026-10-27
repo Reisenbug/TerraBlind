@@ -12,6 +12,44 @@ namespace TerraBlind;
 
 public static class VanillaFrame
 {
+    sealed class MiningState
+    {
+        static readonly FieldInfo order = typeof(HitTile).GetField("order", BindingFlags.Instance | BindingFlags.NonPublic);
+        static readonly FieldInfo buffer = typeof(HitTile).GetField("bufferLocation", BindingFlags.Instance | BindingFlags.NonPublic);
+        readonly int[] values;
+
+        public MiningState(HitTile source)
+        {
+            int count = source.data.Length;
+            values = new int[2 + count * 6];
+            values[0] = count; values[1] = (int)buffer.GetValue(source);
+            ((int[])order.GetValue(source)).CopyTo(values, 2);
+            for (int i = 0; i < count; i++)
+            {
+                var hit = source.data[i]; int offset = 2 + count + i * 5;
+                values[offset] = hit.X; values[offset + 1] = hit.Y; values[offset + 2] = hit.damage;
+                values[offset + 3] = hit.type; values[offset + 4] = hit.timeToLive;
+            }
+        }
+
+        public MiningState(string packed) => values = UnpackInts(packed);
+        public string Pack() => PackInts(values);
+
+        public void Restore(HitTile target)
+        {
+            int count = target.data.Length;
+            if (values.Length != 2 + count * 6 || values[0] != count)
+                throw new InvalidOperationException("mining_state_size_mismatch");
+            buffer.SetValue(target, values[1]);
+            order.SetValue(target, values.AsSpan(2, count).ToArray());
+            for (int i = 0; i < count; i++)
+            {
+                var hit = target.data[i]; int offset = 2 + count + i * 5;
+                hit.X = values[offset]; hit.Y = values[offset + 1]; hit.damage = values[offset + 2];
+                hit.type = values[offset + 3]; hit.timeToLive = values[offset + 4];
+            }
+        }
+    }
     static readonly ConcurrentDictionary<Type, FieldInfo[]> fields = new();
     static readonly ConcurrentDictionary<Type, bool> supported = new();
     static readonly string[] mainFields = { "dayTime", "time", "windSpeedCurrent", "windSpeedTarget", "raining", "maxRaining",
@@ -190,6 +228,8 @@ public static class VanillaFrame
         return new JsonObject { ["navigation"] = navigation, ["engine"] = EngineId, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
             ["game_mode"] = Main.GameMode,
             ["player"] = CaptureFields(player),
+            ["hit_tile"] = new MiningState(player.hitTile).Pack(),
+            ["hit_replace"] = new MiningState(player.hitReplace).Pack(),
             ["inventory"] = Items(player.inventory), ["armor"] = Items(player.armor),
             ["dye"] = Items(player.dye), ["misc_equips"] = Items(player.miscEquips),
             ["main"] = CaptureStatics(typeof(Main)), ["player_statics"] = CaptureStatics(typeof(Player)),
@@ -305,6 +345,8 @@ public static class VanillaFrame
         RestoreFields(Main.SceneMetrics, state["scene"].AsObject());
         var player = new Player();
         RestoreFields(player, state["player"].AsObject());
+        if (state["hit_tile"] is JsonValue hits) new MiningState(hits.GetValue<string>()).Restore(player.hitTile);
+        if (state["hit_replace"] is JsonValue replaces) new MiningState(replaces.GetValue<string>()).Restore(player.hitReplace);
         RestoreItems(player.inventory, state["inventory"].AsArray());
         RestoreItems(player.armor, state["armor"].AsArray());
         RestoreItems(player.dye, state["dye"].AsArray());
@@ -333,6 +375,7 @@ public static class VanillaFrame
     {
         readonly (FieldInfo field, object value)[] playerFields, main, statics, collision, scene, random, worldRandom;
         readonly Item[] inventory, armor, dye, misc;
+        readonly MiningState hitTile, hitReplace;
         readonly int[] tiles;
         readonly TileTypeData[][] tileTypes;
         readonly WallTypeData[][] wallTypes;
@@ -348,6 +391,7 @@ public static class VanillaFrame
         public WorkerState(JsonObject state)
         {
             var source = RestoreInWorker(state);
+            hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
             main = DecodeFields(typeof(Main), state["main"].AsObject(), true);
             statics = DecodeFields(typeof(Player), state["player_statics"].AsObject(), true);
@@ -378,6 +422,7 @@ public static class VanillaFrame
         {
             RequireWorker();
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = CaptureValues(source, template.playerFields);
             main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
             collision = CaptureValues(null, template.collision); scene = CaptureValues(Main.SceneMetrics, template.scene);
@@ -464,6 +509,7 @@ public static class VanillaFrame
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);
             var player = new Player(); Apply(player, playerFields);
+            hitTile.Restore(player.hitTile); hitReplace.Restore(player.hitReplace);
             FieldsMs = timer.Elapsed.TotalMilliseconds;
             timer.Restart();
             player.inventory = inventory.Select(item => item.Clone()).ToArray();

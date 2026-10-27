@@ -82,6 +82,7 @@ def main():
     parser.add_argument("--expect-slope-start", action="store_true")
     parser.add_argument("--placement-order-probe", type=Path)
     parser.add_argument("--native-placement-probe", type=Path)
+    parser.add_argument("--native-mining-probe", action="store_true")
     parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
@@ -196,6 +197,16 @@ def main():
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
                                           if key not in ("end_snapshot", "controls", "layers", "use_slots")}, flush=True)
+            return
+        if args.native_mining_probe:
+            result = worker.call("native_mining_probe")
+            (args.root / "native-mining.json").write_text(json.dumps(result))
+            print("NATIVE_MINING_RESULT", result, flush=True)
+            baseline, native, serialized = result["results"]
+            assert baseline["broken"] and baseline["first_damage"] > 0, baseline
+            for restored in (native, serialized):
+                assert restored["broken"] and restored["frames"] == baseline["frames"], restored
+                assert restored["restored_damage"] == baseline["first_damage"], restored
             return
         if args.native_placement_probe:
             evidence = json.loads(args.native_placement_probe.read_text())
