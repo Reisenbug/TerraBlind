@@ -275,6 +275,17 @@ public static class VanillaNavBridge
         }
         int pick = Array.FindIndex(player.inventory, 0, 10, item => !item.IsAir && item.pick > 0);
         var seen = new HashSet<(int, int)>();
+        void AddMine(int x, int y, bool belowFeet)
+        {
+            if (pick < 0 || !Predicates.InBounds(x, y)) return;
+            if (VanillaTerrainPlan.IsRouteObstacle(Main.tile[x, y], belowFeet) && seen.Add((x, y))
+                && LavaSafety.CanMine(x, y) && WorldGen.CanKillTile(x, y) && Reach.CanMine(player, x, y)
+                && DigTable.CostFrames(x, y) < DigTable.Unmineable)
+                edits.Enqueue(new Edit(x, y, -1, pick));
+        }
+        if (routeGoal.Y < player.position.Y)
+            for (int x = (int)Math.Floor(player.Left.X / 16); x <= (int)Math.Floor((player.Right.X - 1) / 16); x++)
+                AddMine(x, (int)Math.Floor(player.Top.Y / 16) - 1, false);
         foreach (var cell in corridor)
         {
             float px = cell.x * 16 + 8 - player.width / 2;
@@ -282,12 +293,7 @@ public static class VanillaNavBridge
             for (int y = cell.y - 2; y <= cell.y + 1; y++)
             for (int x = left; x <= right; x++)
             {
-                if (pick < 0 || !Predicates.InBounds(x, y)) continue;
-                var tile = Main.tile[x, y];
-                if (VanillaTerrainPlan.IsRouteObstacle(tile, y > cell.y) && seen.Add((x, y))
-                    && LavaSafety.CanMine(x, y) && WorldGen.CanKillTile(x, y) && Reach.CanMine(player, x, y)
-                    && DigTable.CostFrames(x, y) < DigTable.Unmineable)
-                    edits.Enqueue(new Edit(x, y, -1, pick));
+                AddMine(x, y, y > cell.y);
             }
         }
         var mining = edits.OrderBy(candidate => IsClearing(candidate) ? 0 : 1).ToArray();

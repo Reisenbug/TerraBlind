@@ -75,6 +75,7 @@ def main():
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
     parser.add_argument("--expect-redundant-opening", action="store_true")
+    parser.add_argument("--expect-next-placement", action="store_true")
     parser.add_argument("--ceiling-loop-probe", type=Path)
     parser.add_argument("--platform-anchor-probe", type=Path)
     parser.add_argument("--terminal-progress-probe", type=Path)
@@ -219,7 +220,19 @@ def main():
                 results.append(dict(tiles=cells, result=plan))
                 print("OPENING_PROBE", cells, plan["status"], plan.get("route_progress"), flush=True)
             args.opening_probe.with_suffix(".opening.json").write_text(json.dumps(results))
-            assert results[-1]["result"]["status"] == "planned" and results[-1]["result"]["route_progress"] > 0
+            final = results[-1]["result"]
+            assert final["status"] == "planned"
+            if args.expect_next_placement:
+                assert all(row["result"]["status"] != "planned" for row in results[:-1])
+                x, y = final["next_jump_place"]
+                standing = worker.call("replay", snapshot=final["context"],
+                                       controls=[0] * final["wait_frames"], capture_end=True)
+                jump = worker.call("terrain_plan", snapshot=standing["end_snapshot"],
+                                   tile_x=x, tile_y=y, tile_type=19, jump_place=True)
+                assert jump["status"] == "planned" and jump["rise"] > 0
+                print("OPENING_PLACEMENT_PASS", jump["rise"], flush=True)
+                return
+            assert final["route_progress"] > 0
             if args.expect_redundant_opening:
                 assert all(row["result"]["route_progress"] == results[0]["result"]["route_progress"]
                            and row["result"]["controls"] == results[0]["result"]["controls"] for row in results[1:])
