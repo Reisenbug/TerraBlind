@@ -77,6 +77,8 @@ def main():
         command.extend(["-vnavbaseline", sys.argv[sys.argv.index("--baseline") + 1]])
     if recorded_goal:
         command.append("-vnavrecordedgoal")
+    if "--snapshot" in sys.argv:
+        command.extend(["-vnavsnapshot", sys.argv[sys.argv.index("--snapshot") + 1]])
     if continuity:
         command.append("-vnavcontinuitycheck")
     if circuit:

@@ -182,6 +182,36 @@ public sealed class Driver : ModSystem
         }
         for (int i = 0; i < player.buffType.Length; i++)
         { player.buffType[i] = state["buff_types"][i].GetValue<int>(); player.buffTime[i] = state["buff_times"][i].GetValue<int>(); }
+        if (Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string snapshotPath))
+        {
+            var capture = JsonNode.Parse(File.ReadAllText(snapshotPath));
+            var snapshot = (capture["request"] ?? capture)["snapshot"].AsObject();
+            if (snapshot["engine"].GetValue<string>() != VanillaFrame.EngineId
+                || snapshot["world_width"].GetValue<int>() != Main.maxTilesX
+                || snapshot["world_height"].GetValue<int>() != Main.maxTilesY)
+                throw new InvalidOperationException("snapshot_engine_or_world_mismatch");
+            int who = player.whoAmI;
+            VanillaFrame.RestoreFields(player, snapshot["player"].AsObject());
+            player.whoAmI = who;
+            RestoreItems(player.inventory, snapshot["inventory"].AsArray());
+            RestoreItems(player.armor, snapshot["armor"].AsArray());
+            RestoreItems(player.dye, snapshot["dye"].AsArray());
+            RestoreItems(player.miscEquips, snapshot["misc_equips"].AsArray());
+            int x0 = snapshot["area"][0].GetValue<int>(), y0 = snapshot["area"][1].GetValue<int>();
+            int width = snapshot["area"][2].GetValue<int>();
+            var bytes = Convert.FromBase64String(snapshot["tiles"].GetValue<string>());
+            var tiles = new int[bytes.Length / sizeof(int)]; Buffer.BlockCopy(bytes, 0, tiles, 0, bytes.Length);
+            for (int i = 0; i < tiles.Length / 10; i++)
+            {
+                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
+                tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
+                tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
+                tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
+                tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
+                tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
+            }
+            Console.WriteLine($"VNAV_SNAPSHOT_START x={player.position.X} y={player.position.Y} source={snapshotPath}");
+        }
         foreach (var npc in Main.npc) npc.active = false;
         foreach (var projectile in Main.projectile) projectile.active = false;
         foreach (var item in Main.item) item.active = false;
