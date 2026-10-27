@@ -98,7 +98,10 @@ def verify_region(worker, state, result, root):
     differences = [key for key in result["end_snapshot"]
                    if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
     if differences:
-        (root / "region-replay-failure.json").write_text(json.dumps(dict(result=result, replay=replay, differences=differences)))
+        checkpoint_replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
+            use_slots=result["use_slots"], use_targets=result["use_targets"], checkpoint_frames=6)
+        (root / "region-replay-failure.json").write_text(json.dumps(dict(result=result, replay=replay,
+            checkpoint_replay=checkpoint_replay, differences=differences)))
     assert not differences, differences
     result["replay_verified"] = True
     return replay["end_snapshot"]
