@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
     parser.add_argument("--expect-redundant-opening", action="store_true")
+    parser.add_argument("--ceiling-loop-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -115,6 +116,18 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.ceiling_loop_probe:
+            evidence = json.loads(args.ceiling_loop_probe.read_text())
+            result = worker.call(**evidence["request"])
+            args.ceiling_loop_probe.with_suffix(".ceiling-replay.json").write_text(json.dumps(result))
+            old_name = evidence["result"]["selected"]
+            old_candidate = next(candidate for candidate in result["candidates"] if candidate["name"] == old_name)
+            assert old_candidate["repeated_ceiling_contact"] and not old_candidate["safe"], old_candidate
+            assert result["status"] == "planned" and result["selected"] != old_name, result["selected"]
+            selected = next(candidate for candidate in result["candidates"] if candidate["name"] == result["selected"])
+            assert selected["safe"] and not selected["repeated_ceiling_contact"]
+            print("CEILING_LOOP_PASS", old_name, "->", result["selected"], flush=True)
+            return
         if args.opening_probe:
             source = json.loads(args.opening_probe.read_text())["request"]
             settled = worker.call("replay", snapshot=source["snapshot"], controls=[0] * 90, capture_end=True)

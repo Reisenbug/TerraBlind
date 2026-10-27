@@ -12,6 +12,18 @@ public sealed class VanillaLocalPlanner
 {
     public const int Horizon = 180;
     public const int ExecuteFrames = 8;
+    static bool RepeatsCeilingContact(List<VanillaPrediction.MovementSample> frames)
+    {
+        var contacts = new List<Vector2>();
+        for (int i = 1; i < frames.Count; i++)
+        {
+            if (frames[i - 1].Velocity.Y >= -1 || frames[i].Velocity.Y < 0) continue;
+            var point = frames[i].Position;
+            if (contacts.Any(previous => Vector2.DistanceSquared(previous, point) <= 4)) return true;
+            contacts.Add(point);
+        }
+        return false;
+    }
     public static (int x, int y) FootCell(Vector2 position, int width, int height)
         => ((int)Math.Floor((position.X + width / 2f) / 16), (int)Math.Floor((position.Y + height - 1) / 16));
 
@@ -146,8 +158,9 @@ public sealed class VanillaLocalPlanner
             observeMs += timing["observe_ms"].GetValue<double>();
             cleanupMs += timing["cleanup_ms"].GetValue<double>();
             int damage = Math.Max(0, hp - frames.Min(frame => frame.Hp));
+            bool ceilingLoop = RepeatsCeilingContact(frames);
             bool safe = forecast["outcome"].GetValue<string>() == "complete"
-                && damage == 0 && frames.All(frame => !frame.Dead);
+                && damage == 0 && frames.All(frame => !frame.Dead) && !ceilingLoop;
             double settlementMs = 0;
             int settlementFrames = 0;
             double dryCheckMs = 0;
@@ -247,6 +260,7 @@ public sealed class VanillaLocalPlanner
                 }
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
+                ["repeated_ceiling_contact"] = ceilingLoop,
                 ["end_x"] = frames[^1].Position.X, ["end_y"] = frames[^1].Position.Y,
                 ["field_progress"] = startDistance - Distance(frames[^1].Position),
                 ["goal_distance"] = Vector2.Distance(goal, frames[^1].Position),

@@ -67,6 +67,10 @@ public static class VanillaNavBridge
 
     static void Fail(string reason)
     {
+        if (reason == "jump_place_failed" && preparation != null)
+            File.WriteAllText(Path.Combine(Main.SavePath, "vanilla-jump-placement-failure.json"),
+                new JsonObject { ["request"] = preparation.DeepClone(), ["result"] = prepared?.DeepClone(),
+                    ["actual"] = VanillaPrediction.Observe(Main.LocalPlayer) }.ToJsonString());
         if ((reason == "no_safe_terrain_action" || reason == "terrain_planning_timeout") && preparation != null)
             File.WriteAllText(Path.Combine(Main.SavePath, "vanilla-terrain-failure.json"),
                 new JsonObject { ["request"] = preparation.DeepClone(),
@@ -426,6 +430,7 @@ public static class VanillaNavBridge
                         return;
                     }
                     phase = Phase.JumpPlacing; phaseAt = Main.GameUpdateCount;
+                    prepared = result;
                     placementAirborne = false; placementStartY = player.position.Y;
                     placementControls = result["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray();
                     edit = new Edit(result["tile_x"].GetValue<int>(), result["tile_y"].GetValue<int>(), edit.Type, edit.Slot);
