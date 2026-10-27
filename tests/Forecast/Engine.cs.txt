@@ -292,7 +292,7 @@ public sealed class Engine : ModSystem
                 while (frontier.Count < beam && frontier.Count < ordered.Length)
                 {
                     var candidate = ordered.Except(frontier)
-                        .OrderByDescending(node => frontier.Min(selected => Separation(node, selected))).First();
+                        .OrderBy(node => node.Distance - MathF.Sqrt(frontier.Min(selected => Separation(node, selected)))).First();
                     if (frontier.Min(selected => Separation(candidate, selected)) == 0) break;
                     frontier.Add(candidate);
                 }
