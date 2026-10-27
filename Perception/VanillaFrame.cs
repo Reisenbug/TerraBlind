@@ -12,6 +12,12 @@ namespace TerraBlind;
 
 public static class VanillaFrame
 {
+    internal static Rectangle WorkerBounds { get; private set; }
+    public sealed class SnapshotBoundaryException(int x, int y) : InvalidOperationException($"snapshot_boundary:{x},{y}")
+    {
+        public Point Tile { get; } = new(x, y);
+    }
+
     sealed class MiningState
     {
         static readonly FieldInfo order = typeof(HitTile).GetField("order", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -359,6 +365,7 @@ public static class VanillaFrame
         RestoreFields(WorldGen.genRand, state["world_random"].AsObject());
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
         var tiles = ReadTiles(state);
+        WorkerBounds = new Rectangle(x0, y0, width, tiles.Length / 10 / width);
         for (int i = 0; i < tiles.Length / 10; i++)
         {
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
@@ -519,6 +526,7 @@ public static class VanillaFrame
         public Player Restore(WorkerState knownWorld = null)
         {
             RequireWorker();
+            WorkerBounds = new Rectangle(x0, y0, width, tiles.Length / 10 / width);
             var timer = System.Diagnostics.Stopwatch.StartNew();
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);

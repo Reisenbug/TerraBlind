@@ -18,12 +18,29 @@ public sealed class VanillaForecastHeadless : ModSystem
         IL_Player.UpdateBiomes += SkipVisualTail;
         On_Player.ResetControls += SetControls;
         On_WorldGen.saveToonWhilePlaying += SkipSave;
+        On_WorldGen.KillTile += GuardKillTile;
+        On_WorldGen.TileFrame += GuardTileFrame;
         On_AchievementsHelper.HandleRunning += SkipRunning;
         On_AchievementsHelper.HandleSpecialEvent += SkipAchievement;
         installed = true;
     }
 
     static void SkipSave(On_WorldGen.orig_saveToonWhilePlaying original) { }
+    static void CheckTile(int x, int y)
+    {
+        if (VanillaPrediction.UpdatingPlayer && !VanillaFrame.WorkerBounds.Contains(x, y))
+            throw new VanillaFrame.SnapshotBoundaryException(x, y);
+    }
+    static void GuardKillTile(On_WorldGen.orig_KillTile original, int x, int y, bool fail, bool effectOnly, bool noItem)
+    {
+        CheckTile(x, y);
+        original(x, y, fail, effectOnly, noItem);
+    }
+    static void GuardTileFrame(On_WorldGen.orig_TileFrame original, int x, int y, bool reset, bool noBreak)
+    {
+        CheckTile(x, y);
+        original(x, y, reset, noBreak);
+    }
     static void SetControls(On_Player.orig_ResetControls original, Player player)
     {
         original(player);
@@ -47,6 +64,8 @@ public sealed class VanillaForecastHeadless : ModSystem
         if (installed) IL_Player.UpdateBiomes -= SkipVisualTail;
         if (installed) On_Player.ResetControls -= SetControls;
         if (installed) On_WorldGen.saveToonWhilePlaying -= SkipSave;
+        if (installed) On_WorldGen.KillTile -= GuardKillTile;
+        if (installed) On_WorldGen.TileFrame -= GuardTileFrame;
         if (installed) On_AchievementsHelper.HandleRunning -= SkipRunning;
         if (installed) On_AchievementsHelper.HandleSpecialEvent -= SkipAchievement;
         installed = false;

@@ -445,6 +445,12 @@ public sealed class Engine : ModSystem
             }
             return Finish(best, false);
         }
+        catch (VanillaFrame.SnapshotBoundaryException error)
+        {
+            return new JsonObject { ["status"] = "snapshot_required", ["controls"] = new JsonArray(),
+                ["missing_tile"] = new JsonArray(error.Tile.X, error.Tile.Y),
+                ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds };
+        }
         finally { VanillaFrame.RestoreInWorker(initial); }
     }
 
@@ -1691,6 +1697,26 @@ public sealed class Engine : ModSystem
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
+        if (command == "region_boundary_contract")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var bounds = snapshot["area"].AsArray();
+            var missing = request["missing_tile"].AsArray();
+            var outer = Rectangle.Union(new Rectangle(bounds[0].GetValue<int>(), bounds[1].GetValue<int>(),
+                bounds[2].GetValue<int>(), bounds[3].GetValue<int>()),
+                new Rectangle(missing[0].GetValue<int>() - 1, missing[1].GetValue<int>() - 1, 3, 3));
+            var before = VanillaFrame.Capture(VanillaFrame.RestoreInWorker(snapshot), outer, true);
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var result = RegionSearch(request);
+                if (result["status"]?.GetValue<string>() != "snapshot_required"
+                    || !JsonNode.DeepEquals(result["missing_tile"], missing))
+                    throw new InvalidOperationException("boundary_failure_not_repeatable");
+                var after = VanillaFrame.Capture(VanillaFrame.RestoreInWorker(snapshot), outer, true);
+                if (!JsonNode.DeepEquals(before, after)) throw new InvalidOperationException("boundary_probe_changed_world");
+            }
+            return new JsonObject { ["passed"] = true, ["attempts"] = 2, ["missing_tile"] = missing.DeepClone() };
         }
         if (command == "region_surfaces") return RegionSurfaces(request);
         if (command == "region_corridor") return CorridorRegions(request);

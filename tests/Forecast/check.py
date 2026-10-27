@@ -62,7 +62,7 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
     result = worker.call("region_search", snapshot=state, region=region, horizon=horizon, beam=beam,
                          require_support=True, goal_regions=corridor["goal_regions"]) if corridor["goal_regions"] else None
     require_support = True
-    if result is None or result["status"] != "reached":
+    if result is None or result["status"] not in ("reached", "snapshot_required"):
         (root / "region-corridor-movement.json").write_text(json.dumps(result))
         attempts = []
         for candidate in corridor["excavation_candidates"][:3]:
@@ -80,6 +80,13 @@ def plan_corridor(worker, state, region, guidance, horizon, beam, root):
             result = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
                                  horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"])
             attempts.append(dict(candidate=candidate, mode="mining", result=result))
+            if result["status"] == "snapshot_required":
+                boundary = worker.call("region_boundary_contract", snapshot=state, region=candidate["goal_region"],
+                    horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"],
+                    missing_tile=result["missing_tile"])
+                assert boundary["passed"]
+                result["boundary_contract"] = boundary
+                break
             if result["status"] == "reached":
                 corridor["selected_excavation"] = candidate
                 break

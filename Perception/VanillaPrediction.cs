@@ -27,6 +27,7 @@ public sealed class VanillaPrediction
         ?? throw new InvalidOperationException("engine_clock_field_missing");
     internal static VanillaKeys PendingKeys { get; private set; }
     static int pendingUseSlot = -1;
+    internal static bool UpdatingPlayer { get; private set; }
 
     internal static void ApplyKeys(Player player)
     {
@@ -77,10 +78,12 @@ public sealed class VanillaPrediction
                 Main.SmartCursorWanted_Mouse = false;
             }
             clock.SetValue(null, Convert.ChangeType(Main.GameUpdateCount + 1, clock.FieldType));
+            UpdatingPlayer = true;
             player.Update(player.whoAmI);
         }
         finally
         {
+            UpdatingPlayer = false;
             pendingUseSlot = -1;
             Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smartCursor;
             Main.myPlayer = originalPlayer; player.isControlledByFilm = film; Main.hasFocus = focus;
