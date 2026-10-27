@@ -71,6 +71,8 @@ def main():
     parser.add_argument("--jump-place-probe", type=Path)
     parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--stalled-jump-probe", type=Path)
+    parser.add_argument("--opening-probe", type=Path)
+    parser.add_argument("--expect-redundant-opening", action="store_true")
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -113,6 +115,28 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.opening_probe:
+            source = json.loads(args.opening_probe.read_text())["request"]
+            settled = worker.call("replay", snapshot=source["snapshot"], controls=[0] * 90, capture_end=True)
+            assert settled["outcome"] == "complete"
+            assert len(args.clear_tile) >= 2
+            request = dict(snapshot=settled["end_snapshot"], tile_type=-1, wait_frames=24,
+                           x=source["x"], y=source["y"], guidance=source["guidance"],
+                           route_direction=source["route_direction"])
+            results = []
+            for cells in [[]] + [[cell] for cell in args.clear_tile] + [args.clear_tile]:
+                first = cells[0] if cells else args.clear_tile[0]
+                plan = worker.call("terrain_plan", **request, tile_x=first[0], tile_y=first[1], tiles=cells)
+                results.append(dict(tiles=cells, result=plan))
+                print("OPENING_PROBE", cells, plan["status"], plan.get("route_progress"), flush=True)
+            args.opening_probe.with_suffix(".opening.json").write_text(json.dumps(results))
+            assert results[-1]["result"]["status"] == "planned" and results[-1]["result"]["route_progress"] > 0
+            if args.expect_redundant_opening:
+                assert all(row["result"]["route_progress"] == results[0]["result"]["route_progress"]
+                           and row["result"]["controls"] == results[0]["result"]["controls"] for row in results[1:])
+            else:
+                assert results[-1]["result"]["route_progress"] > results[0]["result"].get("route_progress", 0)
+            return
         if args.stalled_jump_probe:
             evidence = json.loads(args.stalled_jump_probe.read_text())
             old = evidence["result"]

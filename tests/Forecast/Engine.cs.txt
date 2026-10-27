@@ -596,6 +596,12 @@ public sealed class Engine : ModSystem
             hazard.TileType = TileID.JungleThorns; hazard.IsActuated = true;
             if (VanillaTerrainPlan.IsRouteObstacle(hazard, true))
                 throw new InvalidOperationException("actuated_hazard_collected");
+            hazard.IsActuated = false; hazard.TileType = TileID.JungleVines;
+            if (VanillaTerrainPlan.IsRouteObstacle(hazard, false))
+                throw new InvalidOperationException("passable_vines_collected_as_obstruction");
+            hazard.TileType = TileID.Cobweb;
+            if (!VanillaTerrainPlan.IsRouteObstacle(hazard, false))
+                throw new InvalidOperationException("movement_obstructing_web_ignored");
             passed++;
             var miningBatch = VanillaTerrainPlan.MiningBatch((10, 20),
                 new[] { (11, 20), (12, 19), (10, 21), (15, 19) }, 160, 190, 20);
