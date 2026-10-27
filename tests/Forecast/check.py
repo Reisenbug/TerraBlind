@@ -161,13 +161,13 @@ def main():
                 import random
                 assert result["surfaces"], "no_existing_support_in_sample_area"
                 args.region = random.Random(args.region_surface_seed).choice(result["surfaces"])
+            planning_started = time.monotonic()
             corridor = None
             if args.region_corridor:
                 corridor = worker.call("region_corridor", snapshot=state, region=args.region,
                                        guidance=source.get("guidance"))
                 (args.root / "region-corridor.json").write_text(json.dumps(corridor))
                 print("REGION_CORRIDOR", corridor, flush=True)
-                assert corridor["goal_regions"], "no_progress_surface_in_corridor"
             if args.region_reference:
                 reference = worker.call("replay", snapshot=state,
                                         controls=evidence["result"]["controls"][:args.region_horizon], capture_end=True)
@@ -184,14 +184,39 @@ def main():
                     support = worker.call("settled_probe", snapshot=state,
                                           prefix=evidence["result"]["controls"][:hits[0]])["supported"]
                 print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
+            search_requires_support = not args.region_airborne
             result = worker.call("region_search", snapshot=state, region=args.region,
                                  horizon=args.region_horizon, beam=args.region_beam,
                                  require_support=not args.region_airborne, placement_tile=args.region_place,
                                  mining_tile=args.region_mine, mining_tiles=args.region_mine_tile,
-                                 goal_regions=corridor["goal_regions"] if corridor else None)
+                                 goal_regions=corridor["goal_regions"] if corridor else None) if not corridor or corridor["goal_regions"] else None
+            if corridor and (result is None or result["status"] != "reached"):
+                (args.root / "region-corridor-movement.json").write_text(json.dumps(result))
+                attempts = []
+                for candidate in corridor["excavation_candidates"][:3]:
+                    search_requires_support = False
+                    transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
+                                          horizon=args.region_horizon, beam=args.region_beam, require_support=False)
+                    attempts.append(dict(candidate=candidate, mode="movement", result=transit))
+                    if transit["status"] == "reached":
+                        result = transit
+                        corridor["selected_local_transit"] = candidate["goal_region"]
+                        break
+                    trial = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
+                                        horizon=args.region_horizon, beam=args.region_beam,
+                                        require_support=False, mining_tiles=candidate["mining_tiles"])
+                    attempts.append(dict(candidate=candidate, mode="mining", result=trial))
+                    result = trial
+                    if trial["status"] == "reached":
+                        corridor["selected_excavation"] = candidate
+                        break
+                (args.root / "region-corridor-excavation.json").write_text(json.dumps(attempts))
+                if result is None:
+                    raise RuntimeError("no_corridor_surface_or_safe_excavation_candidate")
+            result["planning_wall_ms"] = (time.monotonic() - planning_started) * 1000
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,
-                                        require_support=not args.region_airborne)
+                                        require_support=search_requires_support)
             if corridor:
                 result["test_input"]["corridor"] = corridor
             if result["controls"]:

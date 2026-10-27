@@ -160,8 +160,38 @@ public sealed class Engine : ModSystem
                 if (!eligible && run >= 0) { regions.Add(new JsonArray(run, y, footX - run - 1, 0)); run = -1; }
             }
         }
+        var excavations = new JsonArray();
+        var snapshotArea = initial["area"].AsArray();
+        var observed = new Rectangle(snapshotArea[0].GetValue<int>() * 16, snapshotArea[1].GetValue<int>() * 16,
+            snapshotArea[2].GetValue<int>() * 16, snapshotArea[3].GetValue<int>() * 16);
+        foreach (var point in path.Skip(1))
+        {
+            int cx = point[0].GetValue<int>(), cy = point[1].GetValue<int>();
+            int footX = cx * 16 + 8, footY = cy * 16 + 1;
+            var body = new Rectangle(footX - 4 - player.width / 2, footY - player.height,
+                player.width + 8, player.height + 15);
+            if (!observed.Contains(body)) continue;
+            var blockers = new JsonArray();
+            bool safe = true;
+            for (int tx = body.Left / 16; tx <= (body.Right - 1) / 16; tx++)
+            for (int ty = body.Top / 16; ty <= (body.Bottom - 1) / 16; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                if (!tile.HasTile || tile.IsActuated || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]) continue;
+                var overlap = Rectangle.Intersect(body, new Rectangle(tx * 16, ty * 16, 16, 16));
+                if (!Collision.SolidCollision(new Vector2(overlap.X, overlap.Y), overlap.Width, overlap.Height)) continue;
+                safe &= LavaSafety.CanMine(tx, ty) && WorldGen.CanKillTile(tx, ty);
+                blockers.Add(new JsonArray(tx, ty));
+            }
+            if (blockers.Count == 0 || !safe) continue;
+            excavations.Add(new JsonObject { ["goal_region"] = new JsonArray(footX - 4, footY, 8, 15),
+                ["mining_tiles"] = blockers, ["field_cost"] = field[(cx, cy)],
+                ["body_sweep"] = new JsonArray(body.X, body.Y, body.Width, body.Height),
+                ["reason"] = "solid collision inside player body sweep at descending field cell" });
+        }
+        VanillaFrame.RestoreInWorker(initial);
         return new JsonObject { ["goal_regions"] = regions, ["start_cost"] = startCost,
-            ["threshold_cost"] = threshold, ["gradient_path"] = path };
+            ["threshold_cost"] = threshold, ["gradient_path"] = path, ["excavation_candidates"] = excavations };
     }
 
     static JsonObject RegionSearch(JsonObject request)
