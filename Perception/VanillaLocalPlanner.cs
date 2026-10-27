@@ -185,7 +185,7 @@ public sealed class VanillaLocalPlanner
             }
             var scoreEnd = frames[^1].Position;
             int landingFrames = 0;
-            if (safe && !transit && snapshot["navigation"]?.GetValue<bool>() == true
+            if (safe && snapshot["navigation"]?.GetValue<bool>() == true
                 && wings <= 0 && !gravity && !Main.player[player.whoAmI].slowFall)
             {
                 long landingStart = Stopwatch.GetTimestamp();
@@ -209,7 +209,7 @@ public sealed class VanillaLocalPlanner
                 double advance = startDistance - Distance(scoreEnd);
                 bool advances = !transit || advance > .01 || reachedContact;
                 score = reachedContact ? Vector2.Distance(goal, frames[^1].Position)
-                    : transit ? Distance(frames[^1].Position) + .1 * frames.Average(frame => Distance(frame.Position))
+                    : transit ? Distance(scoreEnd) + .1 * frames.Average(frame => Distance(frame.Position))
                     : Distance(scoreEnd);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
@@ -281,6 +281,7 @@ public sealed class VanillaLocalPlanner
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
                 ["repeated_ceiling_contact"] = ceilingLoop,
                 ["score_end_x"] = scoreEnd.X, ["score_end_y"] = scoreEnd.Y, ["landing_frames"] = landingFrames,
+                ["score_progress"] = startDistance - Distance(scoreEnd),
                 ["end_x"] = frames[^1].Position.X, ["end_y"] = frames[^1].Position.Y,
                 ["field_progress"] = startDistance - Distance(frames[^1].Position),
                 ["goal_distance"] = Vector2.Distance(goal, frames[^1].Position),

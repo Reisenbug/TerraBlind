@@ -78,6 +78,7 @@ def main():
     parser.add_argument("--ceiling-loop-probe", type=Path)
     parser.add_argument("--platform-anchor-probe", type=Path)
     parser.add_argument("--terminal-progress-probe", type=Path)
+    parser.add_argument("--landing-progress-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -136,6 +137,16 @@ def main():
             args.placement_order_probe.with_suffix(".order-replay.json").write_text(json.dumps(plan))
             print("PLACEMENT_ORDER_PASS", old["tile_x"], old["tile_y"], "->",
                   plan["tile_x"], plan["tile_y"], "rise", plan["rise"], flush=True)
+            return
+        if args.landing_progress_probe:
+            evidence = json.loads(args.landing_progress_probe.read_text())
+            result = worker.call(**evidence["request"])
+            old = next(row for row in result["candidates"] if row["name"] == evidence["result"]["selected"])
+            assert old["landing_frames"] > 0 and old["score_progress"] <= 0, old
+            assert result["status"] == "planned" and result["selected"] != old["name"]
+            args.landing_progress_probe.with_suffix(".landing-progress.json").write_text(json.dumps(result))
+            print("LANDING_PROGRESS_PASS", old["name"], "->", result["selected"],
+                  "old_landed_progress", old["score_progress"], "new_progress", result["route_progress"], flush=True)
             return
         if args.terminal_progress_probe:
             evidence = json.loads(args.terminal_progress_probe.read_text())
