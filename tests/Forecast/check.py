@@ -69,6 +69,8 @@ def main():
     parser.add_argument("--region-airborne", action="store_true")
     parser.add_argument("--region-seed", type=int)
     parser.add_argument("--region-reference", action="store_true")
+    parser.add_argument("--region-surfaces", action="store_true")
+    parser.add_argument("--region-surface-seed", type=int)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -141,6 +143,18 @@ def main():
                 rng = random.Random(args.region_seed)
                 args.region[0] += rng.randint(-32, 32)
                 args.region[1] += rng.randint(-32, 32)
+            if args.region_surfaces or args.region_surface_seed is not None:
+                result = worker.call("region_surfaces", snapshot=state, region=args.region, validate_samples=True)
+                result["test_input"] = dict(source=str(args.region_probe), region=args.region, seed=args.region_seed)
+                (args.root / "region-surfaces.json").write_text(json.dumps(result))
+                print("REGION_SURFACES", {key: value for key, value in result.items()
+                                          if key != "platform_candidates"}, "platform_candidates", len(result["platform_candidates"]), flush=True)
+                assert not result["invalid_samples"], result["invalid_samples"]
+                if args.region_surfaces:
+                    return
+                import random
+                assert result["surfaces"], "no_existing_support_in_sample_area"
+                args.region = random.Random(args.region_surface_seed).choice(result["surfaces"])
             if args.region_reference:
                 reference = worker.call("replay", snapshot=state,
                                         controls=evidence["result"]["controls"][:args.region_horizon], capture_end=True)
@@ -161,13 +175,18 @@ def main():
                                  horizon=args.region_horizon, beam=args.region_beam,
                                  require_support=not args.region_airborne)
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
-                                        seed=args.region_seed, require_support=not args.region_airborne)
+                                        seed=args.region_seed, surface_seed=args.region_surface_seed,
+                                        require_support=not args.region_airborne)
             if result["controls"]:
                 replay = worker.call("replay", snapshot=state, controls=result["controls"], capture_end=True)
                 assert replay["outcome"] == "complete"
                 differences = [key for key in result["end_snapshot"]
                                if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
-                assert not differences, differences
+                if differences:
+                    failure = dict(result=result, replay=replay, differences=differences)
+                    (args.root / "region-replay-failure.json").write_text(json.dumps(failure))
+                assert not differences, {key: dict(expected=result["end_snapshot"][key],
+                                                   actual=replay["end_snapshot"].get(key)) for key in differences}
                 result["replay_verified"] = True
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()

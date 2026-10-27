@@ -29,6 +29,103 @@ public sealed class Engine : ModSystem
     sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, float Distance,
         (int horizontal, int vertical, bool jumping, int available, float gravity) Mode);
 
+    static JsonObject RegionSurfaces(JsonObject request)
+    {
+        var initial = request["snapshot"].AsObject();
+        var bounds = request["region"].AsArray();
+        var region = new Rectangle(bounds[0].GetValue<int>(), bounds[1].GetValue<int>(),
+            bounds[2].GetValue<int>(), bounds[3].GetValue<int>());
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var points = new System.Collections.Generic.HashSet<(int x, int y)>();
+        int probes = 0;
+        try
+        {
+            var player = VanillaFrame.RestoreInWorker(initial);
+            if (player.gravDir != 1) throw new NotSupportedException("surface_extraction_requires_normal_gravity");
+            var a = initial["area"].AsArray();
+            var observed = new Rectangle(a[0].GetValue<int>() * 16, a[1].GetValue<int>() * 16,
+                a[2].GetValue<int>() * 16, a[3].GetValue<int>() * 16);
+            if (region.Width <= 0 || region.Height <= 0 || !observed.Contains(region))
+                throw new ArgumentException("surface_region_outside_snapshot");
+            int padding = (player.width + 1) / 2;
+            int left = Math.Max(observed.Left / 16, (region.Left - padding) / 16);
+            int right = Math.Min(observed.Right / 16 - 1, (region.Right + padding) / 16);
+            for (int y = region.Top / 16; y <= Math.Min(observed.Bottom / 16 - 1, region.Bottom / 16); y++)
+            for (int x = left; x <= right; x++)
+            {
+                var tile = Main.tile[x, y];
+                if (!tile.HasTile || tile.IsActuated || !(Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType])) continue;
+                int top = y * 16 + (tile.IsHalfBlock ? 8 : 0);
+                int bottom = tile.Slope == 0 ? top : y * 16 + 16;
+                for (int footY = Math.Max(region.Top, top); footY <= Math.Min(region.Bottom, bottom); footY++)
+                for (int footX = Math.Max(region.Left, x * 16 - padding + 1);
+                    footX <= Math.Min(region.Right, (x + 1) * 16 + padding - 1); footX++)
+                {
+                    if (points.Contains((footX, footY))) continue;
+                    player.position = new Vector2(footX - player.width / 2f, footY - player.height);
+                    player.velocity = Vector2.Zero;
+                    if (!observed.Contains(player.Hitbox)) continue;
+                    probes++;
+                    if (VanillaContactRegion.SafeBody(player.position, player.width, player.height)
+                        && VanillaTerrainPlan.HasSupport(player)) points.Add((footX, footY));
+                }
+            }
+            var regions = new JsonArray();
+            foreach (var row in points.GroupBy(point => point.y).OrderBy(row => row.Key))
+            {
+                int start = -1, end = -1;
+                void Add() { if (start >= 0) regions.Add(new JsonArray(start, row.Key, end - start, 0)); }
+                foreach (int x in row.Select(point => point.x).OrderBy(x => x))
+                {
+                    if (start < 0) start = x;
+                    else if (x != end + 1) { Add(); start = x; }
+                    end = x;
+                }
+                Add();
+            }
+            var placements = new JsonArray();
+            for (int y = Math.Max(1, (region.Top + 15) / 16); y <= Math.Min(Main.maxTilesY - 2, region.Bottom / 16); y++)
+            for (int x = Math.Max(1, region.Left / 16); x <= Math.Min(Main.maxTilesX - 2, region.Right / 16); x++)
+            {
+                int footX = x * 16 + 8, footY = y * 16;
+                if (footX < region.Left || footX > region.Right || Main.tile[x, y].HasTile
+                    || LavaSafety.IsLava(x, y) || !VanillaTerrainPlan.HasPlatformAnchor(x, y)) continue;
+                var position = new Vector2(footX - player.width / 2f, footY - player.height);
+                if (!observed.Contains(new Rectangle((int)position.X, (int)position.Y, player.width, player.height))
+                    || !VanillaContactRegion.SafeBody(position, player.width, player.height)) continue;
+                placements.Add(new JsonObject { ["tile"] = new JsonArray(x, y),
+                    ["region"] = new JsonArray(footX, footY, 0, 0), ["execution_verified"] = false });
+            }
+            int validated = 0;
+            var invalid = new JsonArray();
+            if (request["validate_samples"]?.GetValue<bool>() == true)
+            {
+                var baseline = new VanillaFrame.WorkerState(initial);
+                foreach (var surface in regions)
+                {
+                    int x = surface[0].GetValue<int>(), y = surface[1].GetValue<int>(), width = surface[2].GetValue<int>();
+                    foreach (int footX in new[] { x, x + width / 2, x + width }.Distinct())
+                    {
+                        player = baseline.Restore();
+                        var position = new Vector2(footX - player.width / 2f, y - player.height);
+                        player.position = position; player.velocity = Vector2.Zero; player.jump = 0;
+                        player.fallStart = (int)(position.Y / 16);
+                        int hp = player.statLife;
+                        for (int frame = 0; frame < 12; frame++) VanillaPrediction.Advance(player, VanillaKeys.None);
+                        validated++;
+                        if (Vector2.Distance(player.position, position) > .01f || player.dead || player.statLife < hp)
+                            invalid.Add(new JsonObject { ["x"] = footX, ["y"] = y,
+                                ["end_x"] = player.Bottom.X, ["end_y"] = player.Bottom.Y, ["hp_loss"] = hp - player.statLife });
+                    }
+                }
+            }
+            return new JsonObject { ["surfaces"] = regions, ["platform_candidates"] = placements, ["supported_samples"] = points.Count,
+                ["collision_probes"] = probes, ["validated_samples"] = validated, ["invalid_samples"] = invalid,
+                ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds };
+        }
+        finally { VanillaFrame.RestoreInWorker(initial); }
+    }
+
     static JsonObject RegionSearch(JsonObject request)
     {
         var initial = request["snapshot"].AsObject();
@@ -39,7 +136,7 @@ public sealed class Engine : ModSystem
         int beam = request["beam"]?.GetValue<int>() ?? 6;
         int quantum = request["quantum"]?.GetValue<int>() ?? 6;
         bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
-        if (region.Width <= 0 || region.Height <= 0 || horizon < 1 || horizon > 240
+        if (region.Width < 0 || region.Height < 0 || horizon < 1 || horizon > 240
             || beam < 1 || beam > 16 || quantum < 1 || quantum > 12)
             throw new ArgumentException("invalid_region_search_budget");
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -720,6 +817,11 @@ public sealed class Engine : ModSystem
             int passed = 0;
             float error = 0;
             Setup(new JsonObject { ["terrain"] = "flat" });
+            Collision.down = false; Collision.up = true;
+            var collisionBeforeSupport = VanillaFrame.CaptureStatics(typeof(Collision));
+            VanillaTerrainPlan.HasSupport(source);
+            if (!JsonNode.DeepEquals(collisionBeforeSupport, VanillaFrame.CaptureStatics(typeof(Collision))))
+                throw new InvalidOperationException("support_probe_mutated_collision_state");
             var hazard = Main.tile[X + 5, Y];
             hazard.ClearEverything(); hazard.HasTile = true; hazard.TileType = TileID.JungleThorns;
             if (!VanillaTerrainPlan.IsRouteObstacle(hazard, true))
@@ -1274,6 +1376,7 @@ public sealed class Engine : ModSystem
             parent.Restore();
             return new JsonObject { ["passed"] = true, ["changed_tiles"] = child.CapturedTileChanges };
         }
+        if (command == "region_surfaces") return RegionSurfaces(request);
         if (command == "region_search") return RegionSearch(request);
         if (command == "plan")
         {

@@ -49,9 +49,19 @@ public static class VanillaTerrainPlan
 
     internal static bool HasSupport(Player player)
     {
-        if (Collision.TileCollision(player.position, Vector2.UnitY, player.width, player.height).Y == 0) return true;
-        return Collision.SlopeCollision(player.position + Vector2.UnitY, Vector2.UnitY,
-            player.width, player.height, player.gravDir).Y <= player.position.Y;
+        var previous = (Collision.stair, Collision.stairFall, Collision.honey, Collision.shimmer,
+            Collision.sloping, Collision.landMine, Collision.up, Collision.down);
+        try
+        {
+            if (Collision.TileCollision(player.position, Vector2.UnitY, player.width, player.height).Y == 0) return true;
+            return Collision.SlopeCollision(player.position + Vector2.UnitY, Vector2.UnitY,
+                player.width, player.height, player.gravDir).Y <= player.position.Y;
+        }
+        finally
+        {
+            (Collision.stair, Collision.stairFall, Collision.honey, Collision.shimmer,
+                Collision.sloping, Collision.landMine, Collision.up, Collision.down) = previous;
+        }
     }
 
     static bool CanStartJumpPlacement(Player player, int type)
