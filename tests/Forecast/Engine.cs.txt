@@ -26,7 +26,27 @@ public sealed class Engine : ModSystem
     public Player Source => source;
     public Rectangle Area => area;
 
-    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, Point[] Targets, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump, int MiningDamage,
+    static readonly System.Reflection.FieldInfo RandomIndex = typeof(Terraria.Utilities.UnifiedRandom).GetField("inext", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+    static int WorldRandomIndex() => (int)RandomIndex.GetValue(WorldGen.genRand);
+    static string traceRandom;
+    static void TraceKillTile(On_WorldGen.orig_KillTile original, int x, int y, bool fail, bool effectOnly, bool noItem)
+    {
+        if (traceRandom == null) { original(x, y, fail, effectOnly, noItem); return; }
+        int before = WorldRandomIndex();
+        original(x, y, fail, effectOnly, noItem);
+        if (traceRandom != null)
+            Console.WriteLine($"RANDOM_KILL_TILE {traceRandom} {x},{y} fail={fail} effect={effectOnly} {before}->{WorldRandomIndex()}");
+    }
+    static void TraceTileFrame(On_WorldGen.orig_TileFrame original, int x, int y, bool reset, bool noBreak)
+    {
+        if (traceRandom == null) { original(x, y, reset, noBreak); return; }
+        int before = WorldRandomIndex();
+        original(x, y, reset, noBreak);
+        if (traceRandom != null && before != WorldRandomIndex())
+            Console.WriteLine($"RANDOM_TILE_FRAME {traceRandom} {x},{y} reset={reset} {before}->{WorldRandomIndex()}");
+    }
+
+    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, Point[] Targets, int[] RandomIndices, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump, int MiningDamage,
         (int horizontal, int vertical, bool jumping, int available, float gravity, bool placed, int terrainType) Mode);
 
     static JsonObject RegionSurfaces(JsonObject request)
@@ -278,6 +298,7 @@ public sealed class Engine : ModSystem
             ["status"] = reached ? "reached" : "budget_exhausted",
             ["distance"] = node.Distance,
             ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()),
+            ["world_random_indices"] = new JsonArray(node.RandomIndices.Select(value => JsonValue.Create(value)).ToArray()),
             ["use_slots"] = new JsonArray(node.Uses.Select(slot => JsonValue.Create(slot)).ToArray()),
             ["use_targets"] = new JsonArray(node.Targets.Select(tile => (JsonNode)new JsonArray(tile.X, tile.Y)).ToArray()),
             ["placement_tile"] = placement is Point tile ? new JsonArray(tile.X, tile.Y) : null,
@@ -321,7 +342,7 @@ public sealed class Engine : ModSystem
             }
             int hp = start.statLife;
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
-            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), Mode(start));
+            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), Mode(start));
             if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
@@ -352,13 +373,18 @@ public sealed class Engine : ModSystem
                         int count = 0;
                         var uses = new System.Collections.Generic.List<int>();
                         var targets = new System.Collections.Generic.List<Point>();
+                        var randomIndices = new System.Collections.Generic.List<int>();
                         bool safe = true, reached = false;
                         for (; count < Math.Min(quantum, horizon - depth);)
                         {
                             at = System.Diagnostics.Stopwatch.GetTimestamp();
                             Point? aim = action.use && !Edited() ? Target(player) : null;
                             int slot = aim != null ? useSlot : -1;
+                            randomIndices.Add(WorldRandomIndex());
+                            traceRandom = parent.Controls.Length == 0 && action.keys == 0 && slot >= 0 && count == 0 ? "search" : null;
                             VanillaPrediction.Advance(player, (VanillaKeys)action.keys, slot, aim);
+                            traceRandom = null;
+                            randomIndices.Add(WorldRandomIndex());
                             uses.Add(slot);
                             targets.Add(aim ?? Point.Zero);
                             updateMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
@@ -379,7 +405,7 @@ public sealed class Engine : ModSystem
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
-                            parent.Uses.Concat(uses).ToArray(), parent.Targets.Concat(targets).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player), Mode(player));
+                            parent.Uses.Concat(uses).ToArray(), parent.Targets.Concat(targets).ToArray(), parent.RandomIndices.Concat(randomIndices).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player), Mode(player));
                         if (node.Distance < best.Distance) best = node;
                         if (reached) return Finish(node, true);
                         next.Add(node);
@@ -422,8 +448,8 @@ public sealed class Engine : ModSystem
         finally { VanillaFrame.RestoreInWorker(initial); }
     }
 
-    public override void Load() => Main.OnEnginePreload += Run;
-    public override void Unload() => Main.OnEnginePreload -= Run;
+    public override void Load() { Main.OnEnginePreload += Run; On_WorldGen.TileFrame += TraceTileFrame; On_WorldGen.KillTile += TraceKillTile; }
+    public override void Unload() { Main.OnEnginePreload -= Run; On_WorldGen.TileFrame -= TraceTileFrame; On_WorldGen.KillTile -= TraceKillTile; }
 
     sealed class Work
     {
@@ -1643,11 +1669,16 @@ public sealed class Engine : ModSystem
                 var player = VanillaFrame.RestoreInWorker(snapshot);
                 int hp = player.statLife;
                 int checkpointFrames = request["checkpoint_frames"]?.GetValue<int>() ?? 0;
+                var randomIndices = new JsonArray();
                 var checkpoint = checkpointFrames > 0 ? new VanillaFrame.WorkerState(snapshot) : null;
                 for (int i = 0; i < replayKeys.Count; i++)
                 {
                     if (targets != null) target = new Point(targets[i][0].GetValue<int>(), targets[i][1].GetValue<int>());
+                    randomIndices.Add(WorldRandomIndex());
+                    traceRandom = i == 0 ? "replay" : null;
                     VanillaPrediction.Advance(player, (VanillaKeys)replayKeys[i].GetValue<int>(), uses[i].GetValue<int>(), target);
+                    traceRandom = null;
+                    randomIndices.Add(WorldRandomIndex());
                     if (player.dead || player.statLife < hp) return new JsonObject { ["outcome"] = "damaged" };
                     if (checkpointFrames > 0 && (i + 1) % checkpointFrames == 0)
                     {
@@ -1656,7 +1687,7 @@ public sealed class Engine : ModSystem
                     }
                 }
                 var a = snapshot["area"].AsArray();
-                return new JsonObject { ["outcome"] = "complete", ["end_snapshot"] = VanillaFrame.Capture(player,
+                return new JsonObject { ["outcome"] = "complete", ["world_random_indices"] = randomIndices, ["end_snapshot"] = VanillaFrame.Capture(player,
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
