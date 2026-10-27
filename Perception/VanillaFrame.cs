@@ -337,6 +337,9 @@ public static class VanillaFrame
         readonly int x0, y0, width, gameMode;
         public int CapturedTileChanges { get; private set; }
         public int RestoredTileWrites { get; private set; }
+        public double FieldsMs { get; private set; }
+        public double ItemsMs { get; private set; }
+        public double TilesMs { get; private set; }
 
         public WorkerState(JsonObject state)
         {
@@ -366,14 +369,19 @@ public static class VanillaFrame
         WorkerState(WorkerState template, Player source)
         {
             RequireWorker();
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             playerFields = CaptureValues(source, template.playerFields);
             main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
             collision = CaptureValues(null, template.collision); scene = CaptureValues(Main.SceneMetrics, template.scene);
             random = CaptureValues(Main.rand, template.random); worldRandom = CaptureValues(WorldGen.genRand, template.worldRandom);
+            FieldsMs = timer.Elapsed.TotalMilliseconds;
+            timer.Restart();
             inventory = source.inventory.Select(item => item.Clone()).ToArray();
             armor = source.armor.Select(item => item.Clone()).ToArray();
             dye = source.dye.Select(item => item.Clone()).ToArray();
             misc = source.miscEquips.Select(item => item.Clone()).ToArray();
+            ItemsMs = timer.Elapsed.TotalMilliseconds;
+            timer.Restart();
             x0 = template.x0; y0 = template.y0; width = template.width; gameMode = Main.GameMode;
             tiles = template.tiles;
             for (int i = 0; i < tiles.Length / 10; i++)
@@ -386,6 +394,7 @@ public static class VanillaFrame
                 tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
                 tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
             }
+            TilesMs = timer.Elapsed.TotalMilliseconds;
         }
 
         static (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
@@ -414,26 +423,35 @@ public static class VanillaFrame
             foreach (var (field, value) in values) field.SetValue(target, CopyValue(value));
         }
 
-        public Player Restore()
+        public Player Restore(WorkerState knownWorld = null)
         {
             RequireWorker();
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);
             var player = new Player(); Apply(player, playerFields);
+            FieldsMs = timer.Elapsed.TotalMilliseconds;
+            timer.Restart();
             player.inventory = inventory.Select(item => item.Clone()).ToArray();
             player.armor = armor.Select(item => item.Clone()).ToArray();
             player.dye = dye.Select(item => item.Clone()).ToArray();
             player.miscEquips = misc.Select(item => item.Clone()).ToArray();
+            ItemsMs = timer.Elapsed.TotalMilliseconds;
+            timer.Restart();
             Main.player[player.whoAmI] = player;
             foreach (var npc in Main.npc) npc.active = false;
             foreach (var projectile in Main.projectile) projectile.active = false;
             foreach (var item in Main.item) item.active = false;
             Apply(Main.rand, random); Apply(WorldGen.genRand, worldRandom);
             RestoredTileWrites = 0;
-            for (int i = 0; i < tiles.Length / 10; i++)
+            bool known = knownWorld != null && knownWorld.x0 == x0 && knownWorld.y0 == y0
+                && knownWorld.width == width && knownWorld.tiles.Length == tiles.Length;
+            bool identical = known && ReferenceEquals(tiles, knownWorld.tiles);
+            for (int i = 0; !identical && i < tiles.Length / 10; i++)
             {
                 var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
-                if (TileMatches(tile, tiles, offset)) continue;
+                if (known ? tiles.AsSpan(offset, 10).SequenceEqual(knownWorld.tiles.AsSpan(offset, 10))
+                    : TileMatches(tile, tiles, offset)) continue;
                 RestoredTileWrites++;
                 tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
                 tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
@@ -441,6 +459,7 @@ public static class VanillaFrame
                 tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
                 tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
             }
+            TilesMs = timer.Elapsed.TotalMilliseconds;
             return player;
         }
     }

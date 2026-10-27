@@ -149,6 +149,8 @@ public sealed class Engine : ModSystem
         long tileChanges = 0, tileWrites = 0;
         var layers = new JsonArray();
         double restoreMs = 0, updateMs = 0, captureMs = 0;
+        double restoreFields = 0, restoreItems = 0, restoreTiles = 0;
+        double captureFields = 0, captureItems = 0, captureTiles = 0;
         float Distance(Player player)
         {
             var point = player.Bottom;
@@ -178,7 +180,9 @@ public sealed class Engine : ModSystem
             ["captured_tile_changes"] = tileChanges, ["restored_tile_writes"] = tileWrites,
             ["layers"] = layers,
             ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
-            ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs }
+            ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs,
+                ["restore_fields_ms"] = restoreFields, ["restore_items_ms"] = restoreItems, ["restore_tiles_ms"] = restoreTiles,
+                ["capture_fields_ms"] = captureFields, ["capture_items_ms"] = captureItems, ["capture_tiles_ms"] = captureTiles }
         };
         try
         {
@@ -198,6 +202,7 @@ public sealed class Engine : ModSystem
             if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
+            VanillaFrame.WorkerState knownWorld = null;
             bool gravity = start.buffType.Contains(BuffID.Gravitation);
             int[] actions = gravity ? new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18, 8, 9, 10 }
                 : new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18 };
@@ -213,7 +218,9 @@ public sealed class Engine : ModSystem
                     {
                         VanillaPrediction.CheckCancellation();
                         long at = System.Diagnostics.Stopwatch.GetTimestamp();
-                        var player = checkpoint.Restore();
+                        var player = checkpoint.Restore(knownWorld);
+                        knownWorld = null;
+                        restoreFields += checkpoint.FieldsMs; restoreItems += checkpoint.ItemsMs; restoreTiles += checkpoint.TilesMs;
                         tileWrites += checkpoint.RestoredTileWrites;
                         restoreMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         expanded++; shared += parent.Controls.Length;
@@ -239,6 +246,8 @@ public sealed class Engine : ModSystem
                         if (!safe) continue;
                         at = System.Diagnostics.Stopwatch.GetTimestamp();
                         var state = checkpoint.CaptureCurrent(player);
+                        knownWorld = state;
+                        captureFields += state.FieldsMs; captureItems += state.ItemsMs; captureTiles += state.TilesMs;
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
@@ -1413,12 +1422,12 @@ public sealed class Engine : ModSystem
             var expected = VanillaFrame.Capture(player, area, true);
             var child = parent.CaptureCurrent(player);
             if (child.CapturedTileChanges != 1) throw new InvalidOperationException("branch_tile_delta_mismatch");
-            player = parent.Restore();
+            player = parent.Restore(child);
             if (!JsonNode.DeepEquals(initial, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("child_polluted_parent");
-            parent.Restore();
+            parent.Restore(parent);
             if (parent.RestoredTileWrites != 0) throw new InvalidOperationException("unchanged_world_rewritten");
-            player = child.Restore();
+            player = child.Restore(parent);
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("branch_restore_changed_state");
             player.buffTime[0]++; player.inventory[0].stack++;
