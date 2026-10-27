@@ -57,60 +57,19 @@ def compare(expected, actual):
 
 def plan_corridor(worker, state, region, guidance, horizon, beam, root, quantum=6):
     started = time.monotonic()
-    corridor = worker.call("region_corridor", snapshot=state, region=region, guidance=guidance)
+    result = worker.call("region_plan", snapshot=state, region=region, guidance=guidance,
+                        horizon=horizon, beam=beam, quantum=quantum)
+    corridor = result.pop("corridor")
     (root / "region-corridor.json").write_text(json.dumps(corridor))
-    result = worker.call("region_search", snapshot=state, region=region, horizon=horizon, beam=beam,
-                         require_support=True, goal_regions=corridor["goal_regions"], quantum=quantum) if corridor["goal_regions"] else None
-    require_support = True
-    if result is None or result["status"] not in ("reached", "snapshot_required"):
-        (root / "region-corridor-movement.json").write_text(json.dumps(result))
-        placements = []
-        for candidate in corridor["platform_candidates"][:3]:
-            result = worker.call("region_search", snapshot=state, region=candidate["region"], horizon=horizon,
-                beam=beam, require_support=True, placement_tile=candidate["tile"], quantum=quantum)
-            placements.append(dict(candidate=candidate, result=result))
-            if result["status"] == "reached":
-                corridor["selected_platform"] = candidate
-                break
-            if result["status"] == "snapshot_required":
-                break
-        (root / "region-corridor-placement.json").write_text(json.dumps(placements))
-    if result is None or result["status"] not in ("reached", "snapshot_required"):
-        attempts = []
-        candidates = corridor["excavation_candidates"]
-        priorities = sorted(candidates, key=lambda candidate: abs(candidate["path_step"] - 4))[:1]
-        priorities += [candidate for candidate in reversed(candidates) if candidate["path_step"] <= 2
-                       and candidate not in priorities]
-        for candidate in priorities:
-            require_support = False
-            if candidate["movement_blocked_by"] is None:
-                transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                      horizon=horizon, beam=beam, require_support=False, quantum=quantum)
-                attempts.append(dict(candidate=candidate, mode="movement", result=transit))
-                if transit["status"] == "reached":
-                    result = transit
-                    corridor["selected_local_transit"] = candidate["goal_region"]
-                    break
-            else:
-                attempts.append(dict(candidate=candidate, mode="movement_blocked_geometry", result=None))
-            result = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                 horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"], quantum=quantum)
-            attempts.append(dict(candidate=candidate, mode="mining", result=result))
-            if result["status"] == "snapshot_required":
-                boundary = worker.call("region_boundary_contract", snapshot=state, region=candidate["goal_region"],
-                    horizon=horizon, beam=beam, require_support=False, mining_tiles=candidate["mining_tiles"],
-                    missing_tile=result["missing_tile"], quantum=quantum)
-                assert boundary["passed"]
-                result["boundary_contract"] = boundary
-                break
-            if result["status"] == "reached":
-                corridor["selected_excavation"] = candidate
-                break
-        (root / "region-corridor-excavation.json").write_text(json.dumps(attempts))
-    if result is None:
-        raise RuntimeError("no_corridor_surface_or_safe_excavation_candidate")
+    (root / "region-corridor-attempts.json").write_text(json.dumps(result["attempts"]))
+    if result["status"] == "snapshot_required":
+        boundary = worker.call("region_boundary_contract", snapshot=state, missing_tile=result["missing_tile"],
+                              **result.pop("boundary_request"))
+        assert boundary["passed"]
+        result["boundary_contract"] = boundary
+    result["worker_planning_ms"] = result["planning_wall_ms"]
     result["planning_wall_ms"] = (time.monotonic() - started) * 1000
-    return result, corridor, require_support
+    return result, corridor, result["require_support"]
 
 
 def plan_observed_corridor(worker, state, guidance, args, root):

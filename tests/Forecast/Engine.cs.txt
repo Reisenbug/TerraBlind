@@ -264,6 +264,73 @@ public sealed class Engine : ModSystem
             ["platform_candidates"] = platformCandidates };
     }
 
+    static JsonObject RegionPlan(JsonObject request)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var corridor = CorridorRegions(request);
+        var attempts = new JsonArray();
+        var search = request.DeepClone().AsObject();
+        JsonObject result = null;
+        bool support = true;
+        bool Terminal() => result?["status"]?.GetValue<string>() is "reached" or "snapshot_required";
+        JsonObject Search(string mode, JsonNode region, bool grounded, JsonNode goals = null,
+            JsonNode platform = null, JsonNode mining = null)
+        {
+            support = grounded;
+            search["region"] = region.DeepClone();
+            search["require_support"] = grounded;
+            search["goal_regions"] = goals?.DeepClone();
+            search["placement_tile"] = platform?.DeepClone();
+            search["mining_tiles"] = mining?.DeepClone();
+            result = RegionSearch(search);
+            attempts.Add(new JsonObject { ["mode"] = mode, ["region"] = region.DeepClone(),
+                ["status"] = result["status"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
+                ["expanded"] = result["expanded"]?.DeepClone(), ["frames"] = result["controls"].AsArray().Count });
+            return result;
+        }
+        if (corridor["goal_regions"].AsArray().Count > 0)
+            Search("movement", request["region"], true, corridor["goal_regions"]);
+        if (!Terminal())
+        foreach (var candidate in corridor["platform_candidates"].AsArray().Take(3))
+        {
+            Search("platform", candidate["region"], true, platform: candidate["tile"]);
+            if (result["status"]?.GetValue<string>() == "reached") corridor["selected_platform"] = candidate.DeepClone();
+            if (Terminal()) break;
+        }
+        if (!Terminal())
+        {
+            var candidates = corridor["excavation_candidates"].AsArray();
+            var priorities = candidates.OrderBy(candidate => Math.Abs(candidate["path_step"].GetValue<int>() - 4)).Take(1).ToList();
+            priorities.AddRange(candidates.Reverse().Where(candidate => candidate["path_step"].GetValue<int>() <= 2
+                && !priorities.Contains(candidate)));
+            foreach (var candidate in priorities)
+            {
+                if (candidate["movement_blocked_by"] == null)
+                {
+                    Search("local_movement", candidate["goal_region"], false);
+                    if (result["status"]?.GetValue<string>() == "reached")
+                        corridor["selected_local_transit"] = candidate["goal_region"].DeepClone();
+                    if (Terminal()) break;
+                }
+                Search("mining", candidate["goal_region"], false, mining: candidate["mining_tiles"]);
+                if (result["status"]?.GetValue<string>() == "reached") corridor["selected_excavation"] = candidate.DeepClone();
+                if (Terminal()) break;
+            }
+        }
+        result ??= new JsonObject { ["status"] = "no_local_route", ["controls"] = new JsonArray() };
+        if (result["status"]?.GetValue<string>() == "snapshot_required")
+        {
+            var boundary = search.DeepClone().AsObject();
+            boundary.Remove("snapshot"); boundary.Remove("guidance"); boundary.Remove("command");
+            result["boundary_request"] = boundary;
+        }
+        result["corridor"] = corridor;
+        result["attempts"] = attempts;
+        result["require_support"] = support;
+        result["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
+        return result;
+    }
+
     static JsonObject RegionSearch(JsonObject request)
     {
         var initial = request["snapshot"].AsObject();
@@ -1837,6 +1904,7 @@ public sealed class Engine : ModSystem
         }
         if (command == "region_surfaces") return RegionSurfaces(request);
         if (command == "region_corridor") return CorridorRegions(request);
+        if (command == "region_plan") return RegionPlan(request);
         if (command == "region_search") return RegionSearch(request);
         if (command == "plan")
         {
