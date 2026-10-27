@@ -334,6 +334,10 @@ public static class VanillaFrame
         readonly (FieldInfo field, object value)[] playerFields, main, statics, collision, scene, random, worldRandom;
         readonly Item[] inventory, armor, dye, misc;
         readonly int[] tiles;
+        readonly TileTypeData[][] tileTypes;
+        readonly WallTypeData[][] wallTypes;
+        readonly TileWallWireStateData[][] tileStates;
+        readonly LiquidData[][] liquids;
         readonly int x0, y0, width, gameMode;
         public int CapturedTileChanges { get; private set; }
         public int RestoredTileWrites { get; private set; }
@@ -358,6 +362,10 @@ public static class VanillaFrame
             x0 = state["area"][0].GetValue<int>(); y0 = state["area"][1].GetValue<int>(); width = state["area"][2].GetValue<int>();
             gameMode = state["game_mode"].GetValue<int>();
             tiles = ReadTiles(state);
+            tileTypes = CaptureColumns<TileTypeData>(null, null);
+            wallTypes = CaptureColumns<WallTypeData>(null, null);
+            tileStates = CaptureColumns<TileWallWireStateData>(null, null);
+            liquids = CaptureColumns<LiquidData>(null, null);
         }
 
         static (FieldInfo, object)[] DecodeFields(Type type, JsonObject state, bool isStatic = false)
@@ -384,17 +392,43 @@ public static class VanillaFrame
             timer.Restart();
             x0 = template.x0; y0 = template.y0; width = template.width; gameMode = Main.GameMode;
             tiles = template.tiles;
-            for (int i = 0; i < tiles.Length / 10; i++)
+            var changedColumns = new bool[width];
+            tileTypes = CaptureColumns(template.tileTypes, changedColumns);
+            wallTypes = CaptureColumns(template.wallTypes, changedColumns);
+            tileStates = CaptureColumns(template.tileStates, changedColumns);
+            liquids = CaptureColumns(template.liquids, changedColumns);
+            for (int x = 0; x < width; x++)
             {
-                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
-                if (TileMatches(tile, tiles, offset)) continue;
-                if (CapturedTileChanges++ == 0) tiles = (int[])tiles.Clone();
-                tiles[offset] = tile.HasTile ? 1 : 0; tiles[offset + 1] = tile.TileType; tiles[offset + 2] = tile.WallType;
-                tiles[offset + 3] = tile.TileFrameX; tiles[offset + 4] = tile.TileFrameY; tiles[offset + 5] = (int)tile.Slope;
-                tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
-                tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
+                if (!changedColumns[x]) continue;
+                for (int y = 0; y < tiles.Length / 10 / width; y++)
+                {
+                    var tile = Main.tile[x0 + x, y0 + y]; int offset = (y * width + x) * 10;
+                    if (TileMatches(tile, tiles, offset)) continue;
+                    if (CapturedTileChanges++ == 0) tiles = (int[])tiles.Clone();
+                    tiles[offset] = tile.HasTile ? 1 : 0; tiles[offset + 1] = tile.TileType; tiles[offset + 2] = tile.WallType;
+                    tiles[offset + 3] = tile.TileFrameX; tiles[offset + 4] = tile.TileFrameY; tiles[offset + 5] = (int)tile.Slope;
+                    tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
+                    tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
+                }
             }
             TilesMs = timer.Elapsed.TotalMilliseconds;
+        }
+
+        T[][] CaptureColumns<T>(T[][] previous, bool[] changed) where T : unmanaged, ITileData
+        {
+            var data = Main.tile.GetData<T>();
+            int height = tiles.Length / 10 / width;
+            var result = previous ?? new T[width][];
+            for (int x = 0; x < width; x++)
+            {
+                var current = data.AsSpan((x0 + x) * Main.tile.Height + y0, height);
+                if (previous != null && System.Runtime.InteropServices.MemoryMarshal.AsBytes(current)
+                    .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(previous[x].AsSpan()))) continue;
+                if (ReferenceEquals(result, previous)) result = (T[][])previous.Clone();
+                result[x] = current.ToArray();
+                if (changed != null) changed[x] = true;
+            }
+            return result;
         }
 
         static (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)

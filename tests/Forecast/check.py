@@ -578,7 +578,7 @@ def main():
         assert descent_region["passed"] and descent_region["cases"] == 12
         print("CONTACT_DESCENT_REGION_PASS", descent_region, flush=True)
         branch = worker.call("worker_state_contract")
-        assert branch["passed"] and branch["changed_tiles"] == 1
+        assert branch["passed"] and branch["changed_tiles"] == 2
         print("WORKER_STATE_CONTRACT_PASS", branch, flush=True)
         terrain = worker.call("terrain_contract")
         assert terrain["passed"]

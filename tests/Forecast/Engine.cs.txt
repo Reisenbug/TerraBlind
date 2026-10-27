@@ -1418,10 +1418,16 @@ public sealed class Engine : ModSystem
             var player = parent.Restore();
             var tile = Main.tile[X + 5, Y - 5];
             tile.HasTile = true; tile.TileType = TileID.Platforms; tile.LiquidAmount = 71;
+            tile.WallType = WallID.DirtUnsafe; tile.TileFrameX = 18; tile.TileFrameY = 36;
+            tile.Slope = SlopeType.SlopeDownRight; tile.IsActuated = true; tile.LiquidType = LiquidID.Honey;
+            var edge = Main.tile[area.Right - 1, area.Bottom - 1];
+            edge.HasTile = true; edge.TileType = TileID.Stone; edge.IsHalfBlock = true;
             player.position.X += 7; player.buffTime[0] += 17; player.inventory[0].stack += 3;
             var expected = VanillaFrame.Capture(player, area, true);
             var child = parent.CaptureCurrent(player);
-            if (child.CapturedTileChanges != 1) throw new InvalidOperationException("branch_tile_delta_mismatch");
+            if (child.CapturedTileChanges != 2) throw new InvalidOperationException("branch_tile_delta_mismatch");
+            if (child.CaptureCurrent(player).CapturedTileChanges != 0)
+                throw new InvalidOperationException("unchanged_branch_reported_tile_changes");
             player = parent.Restore(child);
             if (!JsonNode.DeepEquals(initial, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("child_polluted_parent");
