@@ -134,8 +134,13 @@ public sealed class VanillaPrediction
                 observe += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
                 if (player.dead) { outcome = "dead"; break; }
                 if (stopOnDamage && player.statLife < initialHp) { outcome = "damaged"; break; }
-                if (Main.projectile.Any(projectile => projectile.active) || Main.npc.Any(npc => npc.active)
-                    || !navigation && Main.item.Any(item => item.active))
+                bool activeActor = false;
+                foreach (var projectile in Main.projectile)
+                    if (projectile.active) { activeActor = true; break; }
+                if (!activeActor)
+                    foreach (var npc in Main.npc)
+                        if (npc.active) { activeActor = true; break; }
+                if (activeActor || !navigation && Main.item.Any(item => item.active))
                 {
                     spawned = new JsonObject {
                         ["items"] = new JsonArray(Main.item.Where(item => item.active).Take(8).Select(item => JsonValue.Create(item.type)).ToArray()),
