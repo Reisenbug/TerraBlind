@@ -517,6 +517,17 @@ public sealed class Engine : ModSystem
             foreach (var key in request["prefix"].AsArray()) VanillaPrediction.Advance(player, (VanillaKeys)key.GetValue<int>());
             var state = VanillaPrediction.Observe(player);
             bool supported = VanillaTerrainPlan.HasSupport(player);
+            bool safeBody = VanillaContactRegion.SafeBody(player.position, player.width, player.height);
+            bool solidCollision = Collision.SolidCollision(player.position, player.width, player.height);
+            var contacts = new JsonArray();
+            for (int x = (int)Math.Floor(player.position.X / 16); x <= (int)Math.Floor(player.Right.X / 16); x++)
+            for (int y = (int)Math.Floor(player.position.Y / 16); y <= (int)Math.Floor(player.Bottom.Y / 16); y++)
+            {
+                var tile = Main.tile[x, y];
+                if (tile.HasTile || VanillaContactRegion.Hazard(x, y))
+                    contacts.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
+                        ["slope"] = (int)tile.Slope, ["hazard"] = VanillaContactRegion.Hazard(x, y) });
+            }
             bool contactSupported = VanillaContactRegion.Supported(player.position, player.width, player.height);
             var released = new JsonArray();
             for (int i = 0; i < 60; i++)
@@ -525,7 +536,8 @@ public sealed class Engine : ModSystem
                 released.Add(VanillaPrediction.Observe(player, false));
             }
             return new JsonObject { ["state"] = state, ["supported"] = supported,
-                ["contact_supported"] = contactSupported, ["released"] = released };
+                ["contact_supported"] = contactSupported, ["safe_body"] = safeBody,
+                ["solid_collision"] = solidCollision, ["contacts"] = contacts, ["released"] = released };
         }
         if (command == "jump_place_context")
         {

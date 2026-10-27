@@ -166,6 +166,7 @@ def main():
     parser.add_argument("--region-mine-tile", type=int, nargs=2, action="append")
     parser.add_argument("--region-corridor", action="store_true")
     parser.add_argument("--region-chain-steps", type=int, default=0)
+    parser.add_argument("--region-end-probe", type=Path)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -228,6 +229,12 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.region_end_probe:
+            snapshot = json.loads(args.region_end_probe.read_text())["end_snapshot"]
+            result = worker.call("settled_probe", snapshot=snapshot, prefix=[])
+            (args.root / "region-end-probe.json").write_text(json.dumps(result))
+            print("REGION_END_PROBE", {key: value for key, value in result.items() if key != "released"}, flush=True)
+            return
         if args.region_probe:
             evidence = json.loads(args.region_probe.read_text())
             source = evidence["request"]
