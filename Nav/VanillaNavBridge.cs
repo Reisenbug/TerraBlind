@@ -294,6 +294,12 @@ public static class VanillaNavBridge
                     && (type != Terraria.ID.TileID.Platforms || y != (int)(player.Bottom.Y / 16) - 1 || routeGoal.Y >= player.position.Y)) continue;
             edits.Enqueue(new Edit(x, y, type, platform));
         }
+        var ordered = edits.OrderBy(candidate => IsClearing(candidate) ? 0
+            : candidate.Type == Terraria.ID.TileID.Platforms
+                && player.Hitbox.Intersects(new Rectangle(candidate.X * 16, candidate.Y * 16, 16, 16)) ? 1
+            : candidate.Type < 0 ? 2 : 3).ToArray();
+        edits.Clear();
+        foreach (var candidate in ordered) edits.Enqueue(candidate);
         LogEmptyCorridor(player);
         return true;
     }
@@ -594,9 +600,11 @@ public static class VanillaNavBridge
         if (phase == Phase.JumpPlacing)
         {
             if (placementInputAt == uint.MaxValue) placementInputAt = Main.GameUpdateCount;
-            player.controlLeft = player.controlRight = player.controlDown = false;
             int frame = (int)(Main.GameUpdateCount - placementInputAt);
-            player.controlJump = frame < placementControls.Length && (placementControls[frame] & 4) != 0;
+            int keys = frame < placementControls.Length ? placementControls[frame] : 0;
+            player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
+            player.controlJump = (keys & 4) != 0;
+            player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
             player.controlUseItem = false;
             player.selectedItem = edit.Slot;
             player.delayUseItem = player.mouseInterface = false;

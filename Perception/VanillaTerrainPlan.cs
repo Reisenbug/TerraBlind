@@ -43,12 +43,18 @@ public static class VanillaTerrainPlan
         float startY = player.position.Y;
         int width = player.width, height = player.height;
         var schedules = new[] { 6, 18, 60, -18, -30, -45 };
+        int direction = request["route_direction"]?.GetValue<int>() ?? 0;
+        var variants = schedules.Select(schedule => (schedule, travel: 0)).ToList();
+        if (direction != 0)
+            foreach (int travel in new[] { 18, 36 })
+            foreach (int schedule in new[] { 60, -30 }) variants.Add((schedule, travel));
         JsonObject best = null;
-        foreach (int schedule in schedules)
+        foreach (var (schedule, travel) in variants)
         {
             var keys = Enumerable.Range(0, 180)
-                .Select(i => schedule > 0 ? (i < schedule ? 4 : 0)
-                    : (i < 90 && i != -schedule ? 4 : 0)).ToArray();
+                .Select(i => (i < travel ? direction > 0 ? 2 : 1 : 0)
+                    | (schedule > 0 ? (i < schedule ? 4 : 0)
+                    : (i < 90 && i != -schedule ? 4 : 0))).ToArray();
             var free = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
             if (free["outcome"]?.GetValue<string>() != "complete") continue;
             var frames = free["frames"].AsArray();
@@ -86,6 +92,9 @@ public static class VanillaTerrainPlan
         var anchor = VanillaPrediction.Observe(player, false);
         int hp = player.statLife;
         float startY = player.position.Y;
+        int boost = player.inventory.FirstOrDefault(item => !item.IsAir && item.createTile == type)?.tileBoost ?? 0;
+        float reachX = Player.tileRangeX + boost + player.blockRange;
+        float reachY = Player.tileRangeY + boost + player.blockRange;
         var keys = controls ?? Enumerable.Range(0, 120).Select(i => i < 6 ? 4 : 0).ToArray();
         var fallback = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
         if (fallback["outcome"].GetValue<string>() != "complete")
@@ -99,6 +108,8 @@ public static class VanillaTerrainPlan
         for (int frame = 0; frame < keys.Length; frame++)
         {
             if (placedAt < 0 && player.velocity.Y < 0
+                && player.Left.X / 16 - reachX <= x && player.Right.X / 16 + reachX - 1 >= x
+                && player.Top.Y / 16 - reachY <= y && player.Bottom.Y / 16 + reachY - 2 >= y
                 && !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
             {
                 if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)) break;

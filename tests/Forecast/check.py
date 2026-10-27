@@ -191,17 +191,19 @@ def main():
             end = settle["frames"][-1]
             x, y = int((end["x"] + 10) // 16), int((end["y"] + 42) // 16) - 1
             request = dict(snapshot=snapshot, jump_place=True, tile_x=x, tile_y=y, tile_type=19)
+            if args.route_direction is not None:
+                request["route_direction"] = args.route_direction
             old = worker.call("terrain_plan", **request)
             plan = worker.call("terrain_plan", **request, search_jump_place=True)
-            assert old["status"] == plan["status"] == "planned", (old["status"], plan["status"], end)
-            assert plan["rise"] > old["rise"], (old["rise"], plan["rise"])
+            assert plan["status"] == "planned", (old["status"], plan["status"], end)
+            assert plan["rise"] > old.get("rise", 0), (old.get("rise"), plan["rise"])
             replay = worker.call("placement_sequence", snapshot=snapshot,
                                  tile_x=plan["tile_x"], tile_y=plan["tile_y"],
                                  place_after=plan["place_after"], controls=plan["controls"])
             assert replay["status"] == "complete" and replay["placed"] and replay["supported"], replay["status"]
             assert all(not frame["dead"] and frame["hp"] >= end["hp"] for frame in replay["frames"])
             assert abs(replay["frames"][-1]["y"] + 42 - plan["tile_y"] * 16) < .1
-            report = dict(baseline_rise=old["rise"], rise=plan["rise"],
+            report = dict(baseline_status=old["status"], baseline_rise=old.get("rise", 0), rise=plan["rise"],
                           tile=[plan["tile_x"], plan["tile_y"]],
                           elapsed_ms=plan["terrain_timing"]["total_ms"], plan=plan, replay=replay)
             args.jump_place_probe.with_suffix(".jump-place.json").write_text(json.dumps(report))
