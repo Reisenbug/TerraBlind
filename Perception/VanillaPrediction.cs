@@ -13,6 +13,53 @@ public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down 
 
 public sealed class VanillaPrediction
 {
+    public readonly record struct Input(VanillaKeys Keys, int UseSlot = -1, Point? Target = null);
+
+    public static Input[] RegionInputs(JsonObject result)
+    {
+        var keys = result["controls"].AsArray();
+        var uses = result["use_slots"].AsArray();
+        var targets = result["use_targets"] as JsonArray;
+        if (keys.Count is < 1 or > 240 || uses.Count != keys.Count
+            || targets != null && targets.Count != keys.Count)
+            throw new ArgumentException("invalid_region_inputs");
+        Point? fallback = (result["placement_tile"] ?? result["mining_tile"]) is JsonArray tile
+            ? new Point(tile[0].GetValue<int>(), tile[1].GetValue<int>()) : null;
+        var inputs = new Input[keys.Count];
+        for (int i = 0; i < inputs.Length; i++)
+        {
+            int control = keys[i].GetValue<int>(), slot = uses[i].GetValue<int>();
+            Point? target = targets == null ? fallback
+                : new Point(targets[i][0].GetValue<int>(), targets[i][1].GetValue<int>());
+            if ((control & ~31) != 0 || (control & 3) == 3 || slot < -1 || slot >= 58
+                || slot >= 0 && target == null)
+                throw new ArgumentException("invalid_region_input");
+            inputs[i] = new Input((VanillaKeys)control, slot, target);
+        }
+        return inputs;
+    }
+
+    public static void ApplyInput(Player player, Input input)
+    {
+        var keys = input.Keys;
+        player.controlLeft = keys.HasFlag(VanillaKeys.Left); player.controlRight = keys.HasFlag(VanillaKeys.Right);
+        player.controlJump = keys.HasFlag(VanillaKeys.Jump); player.controlUp = keys.HasFlag(VanillaKeys.Up);
+        player.controlDown = keys.HasFlag(VanillaKeys.Down);
+        player.controlUseItem = input.UseSlot >= 0;
+        if (input.UseSlot >= 0)
+        {
+            player.selectedItem = input.UseSlot;
+            if (input.Target is Point aim)
+            {
+                Main.mouseX = (int)(aim.X * 16 + 8 - Main.screenPosition.X);
+                Main.mouseY = (int)(aim.Y * 16 + 8 - Main.screenPosition.Y);
+                if (player.gravDir == -1) Main.mouseY = Main.screenHeight - Main.mouseY;
+                Main.SmartCursorWanted_Mouse = false;
+            }
+        }
+        player.controlUseTile = player.controlHook = player.controlMount = false;
+    }
+
     internal static Func<bool> CancellationRequested { get; set; }
     internal static void CheckCancellation()
     {
@@ -27,17 +74,12 @@ public sealed class VanillaPrediction
         ?? throw new InvalidOperationException("engine_clock_field_missing");
     internal static VanillaKeys PendingKeys { get; private set; }
     static int pendingUseSlot = -1;
+    static Point? pendingTarget;
     internal static bool UpdatingPlayer { get; private set; }
 
     internal static void ApplyKeys(Player player)
     {
-        var keys = PendingKeys;
-        player.controlLeft = keys.HasFlag(VanillaKeys.Left); player.controlRight = keys.HasFlag(VanillaKeys.Right);
-        player.controlJump = keys.HasFlag(VanillaKeys.Jump); player.controlUp = keys.HasFlag(VanillaKeys.Up);
-        player.controlDown = keys.HasFlag(VanillaKeys.Down);
-        player.controlUseItem = pendingUseSlot >= 0;
-        if (pendingUseSlot >= 0) player.selectedItem = pendingUseSlot;
-        player.controlUseTile = player.controlHook = player.controlMount = false;
+        ApplyInput(player, new Input(PendingKeys, pendingUseSlot, pendingTarget));
     }
 
     public VanillaPrediction(JsonObject state)
@@ -70,6 +112,7 @@ public sealed class VanillaPrediction
             Main.hasFocus = false;
             PendingKeys = keys;
             pendingUseSlot = useSlot;
+            pendingTarget = target;
             if (target is Point aim && useSlot >= 0)
             {
                 Main.mouseX = (int)(aim.X * 16 + 8 - Main.screenPosition.X);
@@ -85,6 +128,7 @@ public sealed class VanillaPrediction
         {
             UpdatingPlayer = false;
             pendingUseSlot = -1;
+            pendingTarget = null;
             Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smartCursor;
             Main.myPlayer = originalPlayer; player.isControlledByFilm = film; Main.hasFocus = focus;
         }

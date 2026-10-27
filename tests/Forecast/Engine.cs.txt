@@ -327,6 +327,30 @@ public sealed class Engine : ModSystem
         result["corridor"] = corridor;
         result["attempts"] = attempts;
         result["require_support"] = support;
+        if (result["status"]?.GetValue<string>() == "reached")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var traceTimer = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                result["anchor"] = VanillaPrediction.Observe(player, false);
+                var frames = new JsonArray();
+                foreach (var input in VanillaPrediction.RegionInputs(result))
+                {
+                    VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
+                    frames.Add(VanillaPrediction.Observe(player, false));
+                }
+                var bounds = snapshot["area"].AsArray();
+                var actual = VanillaFrame.Capture(player, new Rectangle(bounds[0].GetValue<int>(),
+                    bounds[1].GetValue<int>(), bounds[2].GetValue<int>(), bounds[3].GetValue<int>()), true);
+                if (!JsonNode.DeepEquals(actual, result["end_snapshot"]))
+                    throw new InvalidOperationException("region_execution_trace_mismatch");
+                result["frames"] = frames;
+            }
+            finally { VanillaFrame.RestoreInWorker(snapshot); }
+            result["execution_trace_ms"] = traceTimer.Elapsed.TotalMilliseconds;
+        }
         result["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
         return result;
     }
@@ -1785,14 +1809,7 @@ public sealed class Engine : ModSystem
         if (command == "region_replay")
         {
             var snapshot = request["snapshot"].AsObject();
-            var replayKeys = request["controls"].AsArray();
-            var uses = request["use_slots"].AsArray();
-            var targets = request["use_targets"] as JsonArray;
-            if (replayKeys.Count == 0 || replayKeys.Count > 240 || replayKeys.Count != uses.Count)
-                throw new ArgumentException("invalid_region_replay_actions");
-            if (targets != null && targets.Count != replayKeys.Count) throw new ArgumentException("invalid_region_replay_targets");
-            Point? target = (request["placement_tile"] ?? request["mining_tile"]) is JsonArray tile
-                ? new Point(tile[0].GetValue<int>(), tile[1].GetValue<int>()) : null;
+            var inputs = VanillaPrediction.RegionInputs(request);
             try
             {
                 var player = VanillaFrame.RestoreInWorker(snapshot);
@@ -1800,12 +1817,11 @@ public sealed class Engine : ModSystem
                 int checkpointFrames = request["checkpoint_frames"]?.GetValue<int>() ?? 0;
                 var randomIndices = new JsonArray();
                 var checkpoint = checkpointFrames > 0 ? new VanillaFrame.WorkerState(snapshot) : null;
-                for (int i = 0; i < replayKeys.Count; i++)
+                for (int i = 0; i < inputs.Length; i++)
                 {
-                    if (targets != null) target = new Point(targets[i][0].GetValue<int>(), targets[i][1].GetValue<int>());
                     randomIndices.Add(WorldRandomIndex());
                     traceRandom = i == 0 ? "replay" : null;
-                    VanillaPrediction.Advance(player, (VanillaKeys)replayKeys[i].GetValue<int>(), uses[i].GetValue<int>(), target);
+                    VanillaPrediction.Advance(player, inputs[i].Keys, inputs[i].UseSlot, inputs[i].Target);
                     traceRandom = null;
                     randomIndices.Add(WorldRandomIndex());
                     if (player.dead || player.statLife < hp) return new JsonObject { ["outcome"] = "damaged" };

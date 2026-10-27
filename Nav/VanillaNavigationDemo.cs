@@ -193,9 +193,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         LastControl = new ControlFrame(keys, movement?.HasInputAt(tick + 1) == true, movement?.ActivePlan ?? "none",
             movement?.PlanFrameAt(tick + 1) ?? -1, VanillaNavBridge.Terminal, goal,
             movement?.ActiveGoal ?? Vector2.Zero, movement?.ActiveAnchor ?? Vector2.Zero);
-        player.controlLeft = (keys & 1) != 0; player.controlRight = (keys & 2) != 0;
-        player.controlJump = (keys & 4) != 0; player.controlUp = (keys & 8) != 0; player.controlDown = (keys & 16) != 0;
-        player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
+        VanillaPrediction.ApplyInput(player, new VanillaPrediction.Input((VanillaKeys)keys));
         if (NavigationOwned && applyTerrainUse) VanillaNavBridge.ApplyTerrainUse(player);
     }
 
