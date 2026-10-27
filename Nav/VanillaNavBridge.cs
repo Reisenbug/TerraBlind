@@ -21,7 +21,7 @@ public static class VanillaNavBridge
     enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating, JumpPlacing }
     static bool placementAirborne;
     static float placementStartY;
-    static int placementJumpFrames;
+    static int[] placementControls = Array.Empty<int>();
     static uint placementInputAt;
     static bool continuingPlacement;
     static bool waitingPlacementTools;
@@ -420,7 +420,8 @@ public static class VanillaNavBridge
                     }
                     phase = Phase.JumpPlacing; phaseAt = Main.GameUpdateCount;
                     placementAirborne = false; placementStartY = player.position.Y;
-                    placementJumpFrames = result["jump_frames"].GetValue<int>();
+                    placementControls = result["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+                    edit = new Edit(result["tile_x"].GetValue<int>(), result["tile_y"].GetValue<int>(), edit.Type, edit.Slot);
                     placementInputAt = uint.MaxValue;
                     DiagLog.Write($"[engine-jump-place] tile=({edit.X},{edit.Y}) predicted_place_after={result["place_after"]} rise={result["rise"]}");
                     return;
@@ -522,7 +523,10 @@ public static class VanillaNavBridge
             preparation["skip_unedited"] = true;
         if (arrival == null && edit.Type == Terraria.ID.TileID.Platforms
             && player.Hitbox.Intersects(new Rectangle(edit.X * 16, edit.Y * 16, 16, 16)))
+        {
             preparation["jump_place"] = true;
+            preparation["search_jump_place"] = true;
+        }
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
         phaseAt = Main.GameUpdateCount;
     }
@@ -590,7 +594,8 @@ public static class VanillaNavBridge
         {
             if (placementInputAt == uint.MaxValue) placementInputAt = Main.GameUpdateCount;
             player.controlLeft = player.controlRight = player.controlDown = false;
-            player.controlJump = Main.GameUpdateCount - placementInputAt < placementJumpFrames;
+            int frame = (int)(Main.GameUpdateCount - placementInputAt);
+            player.controlJump = frame < placementControls.Length && (placementControls[frame] & 4) != 0;
             player.controlUseItem = false;
             player.selectedItem = edit.Slot;
             player.delayUseItem = player.mouseInterface = false;

@@ -36,7 +36,45 @@ public static class VanillaTerrainPlan
             player.width, player.height, player.gravDir).Y <= player.position.Y;
     }
 
-    static JsonObject JumpPlacement(JsonObject request)
+    static JsonObject SearchJumpPlacement(JsonObject request)
+    {
+        var state = request["snapshot"].AsObject();
+        var player = VanillaFrame.RestoreInWorker(state);
+        float startY = player.position.Y;
+        int width = player.width, height = player.height;
+        var schedules = new[] { 6, 18, 60, -18, -30, -45 };
+        JsonObject best = null;
+        foreach (int schedule in schedules)
+        {
+            var keys = Enumerable.Range(0, 180)
+                .Select(i => schedule > 0 ? (i < schedule ? 4 : 0)
+                    : (i < 90 && i != -schedule ? 4 : 0)).ToArray();
+            var free = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
+            if (free["outcome"]?.GetValue<string>() != "complete") continue;
+            var frames = free["frames"].AsArray();
+            var apex = frames.OrderBy(frame => frame["y"].GetValue<float>()).First();
+            int x = (int)((apex["x"].GetValue<float>() + width / 2f) / 16);
+            int firstY = (int)Math.Ceiling((apex["y"].GetValue<float>() + height) / 16);
+            int lastY = (int)((startY + height) / 16) - 1;
+            for (int y = firstY; y <= lastY; y++)
+            {
+                if (best != null && startY - (y * 16 - height) <= best["rise"].GetValue<float>()) break;
+                player = VanillaFrame.RestoreInWorker(state);
+                if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)) continue;
+                WorldGen.PlaceTile(x, y, Terraria.ID.TileID.Platforms, mute: true, plr: player.whoAmI);
+                if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Terraria.ID.TileID.Platforms) continue;
+                var candidate = request.DeepClone().AsObject();
+                candidate["tile_x"] = x; candidate["tile_y"] = y;
+                var plan = JumpPlacement(candidate, keys);
+                if (plan["status"]?.GetValue<string>() != "planned") continue;
+                best = plan;
+                break;
+            }
+        }
+        return best ?? JumpPlacement(request);
+    }
+
+    static JsonObject JumpPlacement(JsonObject request, int[] controls = null)
     {
         var state = request["snapshot"].AsObject();
         var player = VanillaFrame.RestoreInWorker(state);
@@ -48,7 +86,7 @@ public static class VanillaTerrainPlan
         var anchor = VanillaPrediction.Observe(player, false);
         int hp = player.statLife;
         float startY = player.position.Y;
-        var keys = Enumerable.Range(0, 120).Select(i => i < 6 ? 4 : 0).ToArray();
+        var keys = controls ?? Enumerable.Range(0, 120).Select(i => i < 6 ? 4 : 0).ToArray();
         var fallback = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
         if (fallback["outcome"].GetValue<string>() != "complete")
             return new JsonObject { ["status"] = "unsafe_unplaced_jump" };
@@ -74,9 +112,13 @@ public static class VanillaTerrainPlan
                 return new JsonObject { ["status"] = "unsafe_jump_place" };
         }
         if (placedAt < 0 || player.position.Y >= startY || player.velocity.Y != 0
+            || Math.Abs(player.Bottom.Y - y * 16) > 0.1f
             || !VanillaContactRegion.Supported(player.position, player.width, player.height))
             return new JsonObject { ["status"] = "jump_place_does_not_raise_support" };
-        return new JsonObject { ["status"] = "planned", ["jump_place"] = true, ["jump_frames"] = 6,
+        return new JsonObject { ["status"] = "planned", ["jump_place"] = true,
+            ["jump_frames"] = keys.TakeWhile(key => (key & 4) != 0).Count(),
+            ["tile_x"] = x, ["tile_y"] = y,
+            ["controls"] = new JsonArray(keys.Select(key => JsonValue.Create(key)).ToArray()),
             ["place_after"] = placedAt, ["anchor"] = anchor, ["rise"] = startY - player.position.Y,
             ["validation_frames"] = validation };
     }
@@ -104,7 +146,8 @@ public static class VanillaTerrainPlan
         }
         try
         {
-            if (request["jump_place"]?.GetValue<bool>() == true) return JumpPlacement(request);
+            if (request["jump_place"]?.GetValue<bool>() == true)
+                return request["search_jump_place"]?.GetValue<bool>() == true ? SearchJumpPlacement(request) : JumpPlacement(request);
             var player = VanillaFrame.RestoreInWorker(state);
             Mark("restore_ms");
             if (request["arrival"] is JsonArray arrival)

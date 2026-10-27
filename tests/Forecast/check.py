@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--clear-tile", type=int, nargs=2, action="append", default=[])
     parser.add_argument("--replace-tiles", action="store_true")
     parser.add_argument("--settled-probe", type=Path)
+    parser.add_argument("--jump-place-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -108,6 +109,31 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.jump_place_probe:
+            capture = json.loads(args.jump_place_probe.read_text())
+            snapshot = capture.get("request", capture)["snapshot"]
+            settle = worker.call("replay", snapshot=snapshot, controls=[0] * 90, capture_end=True)
+            assert settle["outcome"] == "complete", settle["outcome"]
+            snapshot = settle["end_snapshot"]
+            end = settle["frames"][-1]
+            x, y = int((end["x"] + 10) // 16), int((end["y"] + 42) // 16) - 1
+            request = dict(snapshot=snapshot, jump_place=True, tile_x=x, tile_y=y, tile_type=19)
+            old = worker.call("terrain_plan", **request)
+            plan = worker.call("terrain_plan", **request, search_jump_place=True)
+            assert old["status"] == plan["status"] == "planned", (old["status"], plan["status"], end)
+            assert plan["rise"] > old["rise"], (old["rise"], plan["rise"])
+            replay = worker.call("placement_sequence", snapshot=snapshot,
+                                 tile_x=plan["tile_x"], tile_y=plan["tile_y"],
+                                 place_after=plan["place_after"], controls=plan["controls"])
+            assert replay["status"] == "complete" and replay["placed"] and replay["supported"], replay["status"]
+            assert all(not frame["dead"] and frame["hp"] >= end["hp"] for frame in replay["frames"])
+            assert abs(replay["frames"][-1]["y"] + 42 - plan["tile_y"] * 16) < .1
+            report = dict(baseline_rise=old["rise"], rise=plan["rise"],
+                          tile=[plan["tile_x"], plan["tile_y"]],
+                          elapsed_ms=plan["terrain_timing"]["total_ms"], plan=plan, replay=replay)
+            args.jump_place_probe.with_suffix(".jump-place.json").write_text(json.dumps(report))
+            print("REAL_JUMP_PLACE_PASS", {k: v for k, v in report.items() if k not in ("plan", "replay")}, flush=True)
+            return
         if args.settled_probe:
             request = json.loads(args.settled_probe.read_text())["request"]
             result = worker.call("settled_probe", snapshot=request["snapshot"], prefix=request["prefix"])
