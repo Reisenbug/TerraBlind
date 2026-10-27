@@ -229,6 +229,15 @@ public sealed class VanillaNavigationDemo : ModSystem
             {
                 loggedAccepted = movement.Accepted; loggedRejected = movement.Rejected;
                 var result = movement.LastResult;
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline")
+                    && ReferenceEquals(result, movement.ActiveResult) && result != null
+                    && JsonNode.DeepEquals(result["request_id"], movement.LastRequest?["request_id"]))
+                {
+                    string path = Path.Combine(Main.SavePath, $"native-accepted-{Main.GameUpdateCount}.json");
+                    string report = new JsonObject { ["request"] = movement.LastRequest.DeepClone(),
+                        ["result"] = result.DeepClone(), ["plan_index"] = movement.PlanFrameAt(tick + 1) }.ToJsonString();
+                    _ = Task.Run(() => File.WriteAllText(path, report));
+                }
                 if (movement.LastRequest?["continuation_only"]?.GetValue<bool>() == true && result != null && !movement.Busy
                     && !ReferenceEquals(result, loggedRepairResult)
                     && JsonNode.DeepEquals(result["request_id"], movement.LastRequest["request_id"]))
