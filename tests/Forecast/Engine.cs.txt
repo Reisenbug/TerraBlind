@@ -184,8 +184,24 @@ public sealed class Engine : ModSystem
                 blockers.Add(new JsonArray(tx, ty));
             }
             if (blockers.Count == 0 || !safe) continue;
+            JsonArray movementBlockedBy = null;
+            foreach (var blocker in blockers)
+            {
+                int tx = blocker[0].GetValue<int>(), ty = blocker[1].GetValue<int>();
+                var tile = Main.tile[tx, ty];
+                bool stable = tile.TileType is TileID.Dirt or TileID.Stone or TileID.Mud or TileID.Ash;
+                if (!stable || tile.IsHalfBlock || tile.Slope != 0) continue;
+                if (player.Hitbox.Intersects(new Rectangle(tx * 16, ty * 16, 16, 16))) continue;
+                if (footX - 4 + player.width / 2f > tx * 16 && footX + 4 - player.width / 2f < (tx + 1) * 16
+                    && footY > ty * 16 && footY + 15 - player.height < (ty + 1) * 16)
+                {
+                    movementBlockedBy = new JsonArray(tx, ty);
+                    break;
+                }
+            }
             excavations.Add(new JsonObject { ["goal_region"] = new JsonArray(footX - 4, footY, 8, 15),
                 ["mining_tiles"] = blockers, ["field_cost"] = field[(cx, cy)],
+                ["movement_blocked_by"] = movementBlockedBy,
                 ["body_sweep"] = new JsonArray(body.X, body.Y, body.Width, body.Height),
                 ["reason"] = "solid collision inside player body sweep at descending field cell" });
         }

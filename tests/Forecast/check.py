@@ -195,13 +195,16 @@ def main():
                 attempts = []
                 for candidate in corridor["excavation_candidates"][:3]:
                     search_requires_support = False
-                    transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
-                                          horizon=args.region_horizon, beam=args.region_beam, require_support=False)
-                    attempts.append(dict(candidate=candidate, mode="movement", result=transit))
-                    if transit["status"] == "reached":
-                        result = transit
-                        corridor["selected_local_transit"] = candidate["goal_region"]
-                        break
+                    if candidate["movement_blocked_by"] is None:
+                        transit = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
+                                              horizon=args.region_horizon, beam=args.region_beam, require_support=False)
+                        attempts.append(dict(candidate=candidate, mode="movement", result=transit))
+                        if transit["status"] == "reached":
+                            result = transit
+                            corridor["selected_local_transit"] = candidate["goal_region"]
+                            break
+                    else:
+                        attempts.append(dict(candidate=candidate, mode="movement_blocked_geometry", result=None))
                     trial = worker.call("region_search", snapshot=state, region=candidate["goal_region"],
                                         horizon=args.region_horizon, beam=args.region_beam,
                                         require_support=False, mining_tiles=candidate["mining_tiles"])
