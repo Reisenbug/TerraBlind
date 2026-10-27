@@ -26,8 +26,8 @@ public sealed class Engine : ModSystem
     public Player Source => source;
     public Rectangle Area => area;
 
-    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, float Distance,
-        (int horizontal, int vertical, bool jumping, int available, float gravity) Mode);
+    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump,
+        (int horizontal, int vertical, bool jumping, int available, float gravity, bool placed) Mode);
 
     static JsonObject RegionSurfaces(JsonObject request)
     {
@@ -136,6 +136,11 @@ public sealed class Engine : ModSystem
         int beam = request["beam"]?.GetValue<int>() ?? 6;
         int quantum = request["quantum"]?.GetValue<int>() ?? 6;
         bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
+        Point? placement = request["placement_tile"] is JsonArray place
+            ? new Point(place[0].GetValue<int>(), place[1].GetValue<int>()) : null;
+        int useSlot = -1, initialStock = 0, playerIndex = 0;
+        bool Placed() => placement is Point tile && Main.tile[tile.X, tile.Y].HasTile
+            && Main.tile[tile.X, tile.Y].TileType == TileID.Platforms;
         if (region.Width < 0 || region.Height < 0 || horizon < 1 || horizon > 240
             || beam < 1 || beam > 16 || quantum < 1 || quantum > 12)
             throw new ArgumentException("invalid_region_search_budget");
@@ -151,11 +156,11 @@ public sealed class Engine : ModSystem
             float dy = Math.Max(region.Top - point.Y, Math.Max(0, point.Y - region.Bottom));
             return MathF.Sqrt(dx * dx + dy * dy);
         }
-        (int, int, bool, int, float) Mode(Player player)
+        (int, int, bool, int, float, bool) Mode(Player player)
         {
             int available = 0;
             foreach (var jump in player.ExtraJumps) if (jump.Available) available++;
-            return (Math.Sign(player.velocity.X), Math.Sign(player.velocity.Y), player.jump > 0, available, player.gravDir);
+            return (Math.Sign(player.velocity.X), Math.Sign(player.velocity.Y), player.jump > 0, available, player.gravDir, Placed());
         }
         var a = initial["area"].AsArray();
         var tiles = new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>());
@@ -164,7 +169,11 @@ public sealed class Engine : ModSystem
             ["status"] = reached ? "reached" : "budget_exhausted",
             ["distance"] = node.Distance,
             ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()),
+            ["use_slots"] = new JsonArray(node.Uses.Select(slot => JsonValue.Create(slot)).ToArray()),
+            ["placement_tile"] = placement is Point tile ? new JsonArray(tile.X, tile.Y) : null,
             ["end_snapshot"] = VanillaFrame.Capture(node.State.Restore(), tiles, true),
+            ["placed"] = Placed(),
+            ["consumed"] = useSlot < 0 ? 0 : initialStock - Main.player[playerIndex].inventory[useSlot].stack,
             ["expanded"] = expanded, ["simulated_frames"] = simulated, ["reused_prefix_frames"] = shared,
             ["captured_tile_changes"] = tileChanges, ["restored_tile_writes"] = tileWrites,
             ["layers"] = layers,
@@ -174,9 +183,18 @@ public sealed class Engine : ModSystem
         try
         {
             var start = VanillaFrame.RestoreInWorker(initial);
+            playerIndex = start.whoAmI;
+            if (placement is Point target)
+            {
+                if (!tiles.Contains(target) || Main.tile[target.X, target.Y].HasTile)
+                    throw new ArgumentException("placement_target_outside_snapshot_or_occupied");
+                useSlot = Array.FindIndex(start.inventory, item => !item.IsAir && item.createTile == TileID.Platforms);
+                if (useSlot < 0) throw new InvalidOperationException("missing_platform_item");
+                initialStock = start.inventory[useSlot].stack;
+            }
             int hp = start.statLife;
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
-            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Distance(start), Mode(start));
+            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, Mode(start));
             if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
@@ -189,7 +207,9 @@ public sealed class Engine : ModSystem
                 foreach (var parent in frontier)
                 {
                     var checkpoint = parent.State;
-                    foreach (int keys in actions)
+                    var choices = actions.Select(keys => (keys, use: false));
+                    if (useSlot >= 0 && !parent.Mode.placed) choices = choices.Concat(actions.Select(keys => (keys, use: true)));
+                    foreach (var action in choices)
                     {
                         VanillaPrediction.CheckCancellation();
                         long at = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -198,11 +218,14 @@ public sealed class Engine : ModSystem
                         restoreMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         expanded++; shared += parent.Controls.Length;
                         int count = 0;
+                        var uses = new System.Collections.Generic.List<int>();
                         bool safe = true, reached = false;
                         for (; count < Math.Min(quantum, horizon - depth);)
                         {
                             at = System.Diagnostics.Stopwatch.GetTimestamp();
-                            VanillaPrediction.Advance(player, (VanillaKeys)keys);
+                            int slot = action.use && !Placed() ? useSlot : -1;
+                            VanillaPrediction.Advance(player, (VanillaKeys)action.keys, slot, placement);
+                            uses.Add(slot);
                             updateMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                             count++; simulated++;
                             safe = !player.dead && player.statLife >= hp && interior.Contains(player.Hitbox)
@@ -218,7 +241,8 @@ public sealed class Engine : ModSystem
                         var state = checkpoint.CaptureCurrent(player);
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
-                        var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(keys, count)).ToArray(), Distance(player), Mode(player));
+                        var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
+                            parent.Uses.Concat(uses).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, Mode(player));
                         if (node.Distance < best.Distance) best = node;
                         if (reached) return Finish(node, true);
                         next.Add(node);
@@ -228,6 +252,13 @@ public sealed class Engine : ModSystem
                 var representatives = ordered.GroupBy(node => node.Mode).Select(group => group.First()).ToArray();
                 frontier = representatives.Concat(ordered.Except(representatives)).Take(beam).ToList();
                 layers.Add(new JsonObject { ["frame"] = depth + quantum, ["generated"] = next.Count,
+                    ["candidates"] = new JsonArray(next.Select(node => (JsonNode)new JsonObject {
+                        ["position"] = new JsonArray(node.Position.X, node.Position.Y),
+                        ["velocity"] = new JsonArray(node.Velocity.X, node.Velocity.Y),
+                        ["release_jump"] = node.ReleaseJump,
+                        ["distance"] = node.Distance, ["mode"] = node.Mode.ToString(),
+                        ["retained"] = frontier.Contains(node),
+                        ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()) }).ToArray()),
                     ["retained"] = new JsonArray(frontier.Select(node => (JsonNode)new JsonObject {
                         ["distance"] = node.Distance,
                         ["mode"] = node.Mode.ToString(),
@@ -385,11 +416,17 @@ public sealed class Engine : ModSystem
                 int hp = player.statLife;
                 var trace = new JsonArray();
                 bool placed = false;
+                bool nativeUse = request["native_use"]?.GetValue<bool>() == true;
+                int slot = Array.FindIndex(player.inventory, item => !item.IsAir && item.createTile == TileID.Platforms);
+                if (nativeUse && slot < 0) throw new InvalidOperationException("missing_platform_item");
+                int stock = slot >= 0 ? player.inventory[slot].stack : 0;
                 string status = "complete";
                 for (int frame = 0; frame < sequence.Count; frame++)
                 {
-                    VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>());
-                    if (frame == placeAt)
+                    VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>(),
+                        nativeUse && frame >= placeAt && !placed ? slot : -1, new Point(x, y));
+                    if (nativeUse) placed |= Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms;
+                    if (!nativeUse && frame == placeAt)
                     {
                         if (player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16)))
                         { status = "body_blocks_placement"; break; }
@@ -403,9 +440,11 @@ public sealed class Engine : ModSystem
                     if (player.dead || player.statLife < hp) { status = "damaged"; break; }
                 }
                 return new JsonObject { ["status"] = status, ["placed"] = placed, ["frames"] = trace,
+                    ["consumed"] = slot >= 0 ? stock - player.inventory[slot].stack : 0,
                     ["supported"] = VanillaContactRegion.Supported(player.position, player.width, player.height),
                     ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
-                    ["scope"] = "geometry probe using WorldGen placement; item reach and use timing are not validated" };
+                    ["scope"] = nativeUse ? "native Player.Update item use; isolated engine"
+                        : "geometry probe using WorldGen placement; item reach and use timing are not validated" };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
         }
@@ -1375,6 +1414,30 @@ public sealed class Engine : ModSystem
                 throw new InvalidOperationException("branch_arrays_or_items_aliased");
             parent.Restore();
             return new JsonObject { ["passed"] = true, ["changed_tiles"] = child.CapturedTileChanges };
+        }
+        if (command == "region_replay")
+        {
+            var snapshot = request["snapshot"].AsObject();
+            var replayKeys = request["controls"].AsArray();
+            var uses = request["use_slots"].AsArray();
+            if (replayKeys.Count == 0 || replayKeys.Count > 240 || replayKeys.Count != uses.Count)
+                throw new ArgumentException("invalid_region_replay_actions");
+            Point? target = request["placement_tile"] is JsonArray tile
+                ? new Point(tile[0].GetValue<int>(), tile[1].GetValue<int>()) : null;
+            try
+            {
+                var player = VanillaFrame.RestoreInWorker(snapshot);
+                int hp = player.statLife;
+                for (int i = 0; i < replayKeys.Count; i++)
+                {
+                    VanillaPrediction.Advance(player, (VanillaKeys)replayKeys[i].GetValue<int>(), uses[i].GetValue<int>(), target);
+                    if (player.dead || player.statLife < hp) return new JsonObject { ["outcome"] = "damaged" };
+                }
+                var a = snapshot["area"].AsArray();
+                return new JsonObject { ["outcome"] = "complete", ["end_snapshot"] = VanillaFrame.Capture(player,
+                    new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
+            }
+            finally { VanillaFrame.RestoreInWorker(snapshot); }
         }
         if (command == "region_surfaces") return RegionSurfaces(request);
         if (command == "region_search") return RegionSearch(request);

@@ -163,7 +163,8 @@ public static class VanillaFrame
         if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0)
             throw new NotSupportedException("active_mount_or_grapple");
         if ((player.itemAnimation > 0 || player.itemTime > 0)
-            && !(navigation && player.HeldItem.pick > 0)) throw new NotSupportedException("active_item_use");
+            && !(navigation && (player.HeldItem.pick > 0 || player.HeldItem.createTile >= 0)))
+            throw new NotSupportedException("active_item_use");
         if (area.Width < 8 || area.Height < 8 || area.Width > 256 || area.Height > 256
             || area.X < 0 || area.Y < 0 || area.Right > Main.maxTilesX || area.Bottom > Main.maxTilesY)
             throw new ArgumentOutOfRangeException(nameof(area));

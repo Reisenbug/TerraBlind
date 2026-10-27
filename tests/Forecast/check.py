@@ -71,6 +71,7 @@ def main():
     parser.add_argument("--region-reference", action="store_true")
     parser.add_argument("--region-surfaces", action="store_true")
     parser.add_argument("--region-surface-seed", type=int)
+    parser.add_argument("--region-place", type=int, nargs=2)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -80,6 +81,7 @@ def main():
     parser.add_argument("--jump-place-probe", type=Path)
     parser.add_argument("--expect-slope-start", action="store_true")
     parser.add_argument("--placement-order-probe", type=Path)
+    parser.add_argument("--native-placement-probe", type=Path)
     parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
@@ -173,12 +175,13 @@ def main():
                 print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
             result = worker.call("region_search", snapshot=state, region=args.region,
                                  horizon=args.region_horizon, beam=args.region_beam,
-                                 require_support=not args.region_airborne)
+                                 require_support=not args.region_airborne, placement_tile=args.region_place)
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,
                                         require_support=not args.region_airborne)
             if result["controls"]:
-                replay = worker.call("replay", snapshot=state, controls=result["controls"], capture_end=True)
+                replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
+                                     use_slots=result["use_slots"], placement_tile=result["placement_tile"])
                 assert replay["outcome"] == "complete"
                 differences = [key for key in result["end_snapshot"]
                                if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
@@ -188,9 +191,27 @@ def main():
                 assert not differences, {key: dict(expected=result["end_snapshot"][key],
                                                    actual=replay["end_snapshot"].get(key)) for key in differences}
                 result["replay_verified"] = True
+            if args.region_place and result["status"] == "reached":
+                assert result["placed"] and result["consumed"] == 1
             (args.root / "region-search.json").write_text(json.dumps(result))
             print("REGION_SEARCH_RESULT", {key: value for key, value in result.items()
-                                          if key not in ("end_snapshot", "controls", "layers")}, flush=True)
+                                          if key not in ("end_snapshot", "controls", "layers", "use_slots")}, flush=True)
+            return
+        if args.native_placement_probe:
+            evidence = json.loads(args.native_placement_probe.read_text())
+            request = evidence["request"]
+            plan = worker.call(**request)
+            assert plan["status"] == "planned", plan
+            result = worker.call("placement_sequence", snapshot=request["snapshot"],
+                                 tile_x=plan["tile_x"], tile_y=plan["tile_y"],
+                                 place_after=plan["place_after"], controls=plan["controls"], native_use=True)
+            (args.root / "native-placement.json").write_text(json.dumps(dict(plan=plan, result=result)))
+            assert result["status"] == "complete" and result["placed"] and result["supported"], result
+            assert result["consumed"] == 1, result["consumed"]
+            assert abs(result["frames"][-1]["y"] + request["snapshot"]["player"]["Terraria.Entity:height"]
+                       - plan["tile_y"] * 16) < .1
+            print("NATIVE_PLACEMENT_PASS", dict(tile=[plan["tile_x"], plan["tile_y"]],
+                                               consumed=result["consumed"], elapsed_ms=result["elapsed_ms"]), flush=True)
             return
         if args.placement_order_probe:
             evidence = json.loads(args.placement_order_probe.read_text())

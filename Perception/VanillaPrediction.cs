@@ -26,6 +26,7 @@ public sealed class VanillaPrediction
     static readonly FieldInfo clock = typeof(Main).GetField("_gameUpdateCount", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("engine_clock_field_missing");
     internal static VanillaKeys PendingKeys { get; private set; }
+    static int pendingUseSlot = -1;
 
     internal static void ApplyKeys(Player player)
     {
@@ -33,7 +34,9 @@ public sealed class VanillaPrediction
         player.controlLeft = keys.HasFlag(VanillaKeys.Left); player.controlRight = keys.HasFlag(VanillaKeys.Right);
         player.controlJump = keys.HasFlag(VanillaKeys.Jump); player.controlUp = keys.HasFlag(VanillaKeys.Up);
         player.controlDown = keys.HasFlag(VanillaKeys.Down);
-        player.controlUseItem = player.controlUseTile = player.controlHook = player.controlMount = false;
+        player.controlUseItem = pendingUseSlot >= 0;
+        if (pendingUseSlot >= 0) player.selectedItem = pendingUseSlot;
+        player.controlUseTile = player.controlHook = player.controlMount = false;
     }
 
     public VanillaPrediction(JsonObject state)
@@ -45,13 +48,18 @@ public sealed class VanillaPrediction
             state["area"][2].GetValue<int>() * 16, state["area"][3].GetValue<int>() * 16);
     }
 
-    public static void Advance(Player player, VanillaKeys keys)
+    public static void Advance(Player player, VanillaKeys keys, int useSlot = -1, Point? target = null)
     {
         CheckCancellation();
         VanillaFrame.RequireWorker();
         if (((int)keys & ~31) != 0 || keys.HasFlag(VanillaKeys.Left) && keys.HasFlag(VanillaKeys.Right))
             throw new ArgumentException("invalid_keys");
+        if (useSlot >= 0 && (useSlot >= player.inventory.Length || target == null
+            || player.inventory[useSlot].pick <= 0 && player.inventory[useSlot].createTile < 0))
+            throw new ArgumentException("unsupported_terrain_item_use");
         int originalPlayer = Main.myPlayer;
+        int mouseX = Main.mouseX, mouseY = Main.mouseY;
+        bool smartCursor = Main.SmartCursorWanted_Mouse;
         bool film = player.isControlledByFilm;
         bool focus = Main.hasFocus;
         try
@@ -60,10 +68,23 @@ public sealed class VanillaPrediction
             player.isControlledByFilm = false;
             Main.hasFocus = false;
             PendingKeys = keys;
+            pendingUseSlot = useSlot;
+            if (target is Point aim && useSlot >= 0)
+            {
+                Main.mouseX = (int)(aim.X * 16 + 8 - Main.screenPosition.X);
+                Main.mouseY = (int)(aim.Y * 16 + 8 - Main.screenPosition.Y);
+                if (player.gravDir == -1) Main.mouseY = Main.screenHeight - Main.mouseY;
+                Main.SmartCursorWanted_Mouse = false;
+            }
             clock.SetValue(null, Convert.ChangeType(Main.GameUpdateCount + 1, clock.FieldType));
             player.Update(player.whoAmI);
         }
-        finally { Main.myPlayer = originalPlayer; player.isControlledByFilm = film; Main.hasFocus = focus; }
+        finally
+        {
+            pendingUseSlot = -1;
+            Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smartCursor;
+            Main.myPlayer = originalPlayer; player.isControlledByFilm = film; Main.hasFocus = focus;
+        }
     }
 
     public static JsonObject Observe(Player player, bool detailed = true)
