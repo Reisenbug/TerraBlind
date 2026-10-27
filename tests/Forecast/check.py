@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--region-surfaces", action="store_true")
     parser.add_argument("--region-surface-seed", type=int)
     parser.add_argument("--region-place", type=int, nargs=2)
+    parser.add_argument("--region-mine", type=int, nargs=2)
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -176,13 +177,15 @@ def main():
                 print("REGION_REFERENCE", dict(outcome=reference["outcome"], hits=hits, supported=support), flush=True)
             result = worker.call("region_search", snapshot=state, region=args.region,
                                  horizon=args.region_horizon, beam=args.region_beam,
-                                 require_support=not args.region_airborne, placement_tile=args.region_place)
+                                 require_support=not args.region_airborne, placement_tile=args.region_place,
+                                 mining_tile=args.region_mine)
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,
                                         require_support=not args.region_airborne)
             if result["controls"]:
                 replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
-                                     use_slots=result["use_slots"], placement_tile=result["placement_tile"])
+                                     use_slots=result["use_slots"], placement_tile=result["placement_tile"],
+                                     mining_tile=result["mining_tile"])
                 assert replay["outcome"] == "complete"
                 differences = [key for key in result["end_snapshot"]
                                if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]

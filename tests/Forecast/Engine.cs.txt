@@ -26,8 +26,8 @@ public sealed class Engine : ModSystem
     public Player Source => source;
     public Rectangle Area => area;
 
-    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump,
-        (int horizontal, int vertical, bool jumping, int available, float gravity, bool placed) Mode);
+    sealed record RegionNode(VanillaFrame.WorkerState State, int[] Controls, int[] Uses, float Distance, Vector2 Position, Vector2 Velocity, bool ReleaseJump, int MiningDamage,
+        (int horizontal, int vertical, bool jumping, int available, float gravity, bool placed, int terrainType) Mode);
 
     static JsonObject RegionSurfaces(JsonObject request)
     {
@@ -138,9 +138,17 @@ public sealed class Engine : ModSystem
         bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
         Point? placement = request["placement_tile"] is JsonArray place
             ? new Point(place[0].GetValue<int>(), place[1].GetValue<int>()) : null;
+        Point? mining = request["mining_tile"] is JsonArray mine
+            ? new Point(mine[0].GetValue<int>(), mine[1].GetValue<int>()) : null;
+        if (placement != null && mining != null) throw new ArgumentException("one_terrain_target_per_search");
+        Point? terrainTarget = placement ?? mining;
         int useSlot = -1, initialStock = 0, playerIndex = 0;
         bool Placed() => placement is Point tile && Main.tile[tile.X, tile.Y].HasTile
             && Main.tile[tile.X, tile.Y].TileType == TileID.Platforms;
+        bool Edited() => mining is Point tile ? !Main.tile[tile.X, tile.Y].HasTile : Placed();
+        int MiningDamage(Player player) => mining is Point tile ? player.hitTile.data
+            .Where(hit => hit.type == 1 && hit.X == tile.X && hit.Y == tile.Y)
+            .Select(hit => hit.damage).DefaultIfEmpty().Max() : 0;
         if (region.Width < 0 || region.Height < 0 || horizon < 1 || horizon > 240
             || beam < 1 || beam > 16 || quantum < 1 || quantum > 12)
             throw new ArgumentException("invalid_region_search_budget");
@@ -158,11 +166,12 @@ public sealed class Engine : ModSystem
             float dy = Math.Max(region.Top - point.Y, Math.Max(0, point.Y - region.Bottom));
             return MathF.Sqrt(dx * dx + dy * dy);
         }
-        (int, int, bool, int, float, bool) Mode(Player player)
+        (int, int, bool, int, float, bool, int) Mode(Player player)
         {
             int available = 0;
             foreach (var jump in player.ExtraJumps) if (jump.Available) available++;
-            return (Math.Sign(player.velocity.X), Math.Sign(player.velocity.Y), player.jump > 0, available, player.gravDir, Placed());
+            return (Math.Sign(player.velocity.X), Math.Sign(player.velocity.Y), player.jump > 0, available, player.gravDir, Edited(),
+                mining is Point tile ? Main.tile[tile.X, tile.Y].TileType : -1);
         }
         var a = initial["area"].AsArray();
         var tiles = new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>());
@@ -173,8 +182,10 @@ public sealed class Engine : ModSystem
             ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()),
             ["use_slots"] = new JsonArray(node.Uses.Select(slot => JsonValue.Create(slot)).ToArray()),
             ["placement_tile"] = placement is Point tile ? new JsonArray(tile.X, tile.Y) : null,
+            ["mining_tile"] = mining is Point mineTile ? new JsonArray(mineTile.X, mineTile.Y) : null,
             ["end_snapshot"] = VanillaFrame.Capture(node.State.Restore(), tiles, true),
             ["placed"] = Placed(),
+            ["cleared"] = mining != null && Edited(),
             ["consumed"] = useSlot < 0 ? 0 : initialStock - Main.player[playerIndex].inventory[useSlot].stack,
             ["expanded"] = expanded, ["simulated_frames"] = simulated, ["reused_prefix_frames"] = shared,
             ["captured_tile_changes"] = tileChanges, ["restored_tile_writes"] = tileWrites,
@@ -196,9 +207,19 @@ public sealed class Engine : ModSystem
                 if (useSlot < 0) throw new InvalidOperationException("missing_platform_item");
                 initialStock = start.inventory[useSlot].stack;
             }
+            if (mining is Point mineTarget)
+            {
+                if (!tiles.Contains(mineTarget) || !Main.tile[mineTarget.X, mineTarget.Y].HasTile
+                    || !LavaSafety.CanMine(mineTarget.X, mineTarget.Y) || !WorldGen.CanKillTile(mineTarget.X, mineTarget.Y))
+                    throw new ArgumentException("unsafe_or_missing_mining_target");
+                useSlot = Enumerable.Range(0, start.inventory.Length).Where(slot => start.inventory[slot].pick > 0)
+                    .OrderByDescending(slot => start.inventory[slot].pick).DefaultIfEmpty(-1).First();
+                if (useSlot < 0) throw new InvalidOperationException("missing_pickaxe");
+                initialStock = start.inventory[useSlot].stack;
+            }
             int hp = start.statLife;
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
-            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, Mode(start));
+            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), Mode(start));
             if (best.Distance == 0 && (!requireSupport || start.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(start)))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
@@ -230,8 +251,8 @@ public sealed class Engine : ModSystem
                         for (; count < Math.Min(quantum, horizon - depth);)
                         {
                             at = System.Diagnostics.Stopwatch.GetTimestamp();
-                            int slot = action.use && !Placed() ? useSlot : -1;
-                            VanillaPrediction.Advance(player, (VanillaKeys)action.keys, slot, placement);
+                            int slot = action.use && !Edited() ? useSlot : -1;
+                            VanillaPrediction.Advance(player, (VanillaKeys)action.keys, slot, terrainTarget);
                             uses.Add(slot);
                             updateMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                             count++; simulated++;
@@ -251,7 +272,7 @@ public sealed class Engine : ModSystem
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
-                            parent.Uses.Concat(uses).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, Mode(player));
+                            parent.Uses.Concat(uses).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player), Mode(player));
                         if (node.Distance < best.Distance) best = node;
                         if (reached) return Finish(node, true);
                         next.Add(node);
@@ -265,7 +286,9 @@ public sealed class Engine : ModSystem
                     + Vector2.DistanceSquared(left.Velocity * quantum, right.Velocity * quantum)
                     + (left.Mode.available != right.Mode.available ? 256 : 0)
                     + (left.Mode.placed != right.Mode.placed ? 256 : 0)
-                    + (left.ReleaseJump != right.ReleaseJump ? 64 : 0);
+                    + (left.Mode.terrainType != right.Mode.terrainType ? 256 : 0)
+                    + (left.ReleaseJump != right.ReleaseJump ? 64 : 0)
+                    + MathF.Pow((left.MiningDamage - right.MiningDamage) * .32f, 2);
                 while (frontier.Count < beam && frontier.Count < ordered.Length)
                 {
                     var candidate = ordered.Except(frontier)
@@ -278,6 +301,7 @@ public sealed class Engine : ModSystem
                         ["position"] = new JsonArray(node.Position.X, node.Position.Y),
                         ["velocity"] = new JsonArray(node.Velocity.X, node.Velocity.Y),
                         ["release_jump"] = node.ReleaseJump,
+                        ["mining_damage"] = node.MiningDamage,
                         ["distance"] = node.Distance, ["mode"] = node.Mode.ToString(),
                         ["retained"] = frontier.Contains(node),
                         ["controls"] = new JsonArray(node.Controls.Select(key => JsonValue.Create(key)).ToArray()) }).ToArray()),
@@ -1488,7 +1512,7 @@ public sealed class Engine : ModSystem
             var uses = request["use_slots"].AsArray();
             if (replayKeys.Count == 0 || replayKeys.Count > 240 || replayKeys.Count != uses.Count)
                 throw new ArgumentException("invalid_region_replay_actions");
-            Point? target = request["placement_tile"] is JsonArray tile
+            Point? target = (request["placement_tile"] ?? request["mining_tile"]) is JsonArray tile
                 ? new Point(tile[0].GetValue<int>(), tile[1].GetValue<int>()) : null;
             try
             {
