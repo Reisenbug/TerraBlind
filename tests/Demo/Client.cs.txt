@@ -41,6 +41,13 @@ public sealed class Caller : CommandCaller
 
 public sealed class NoSpawns : GlobalNPC
 {
+    public override void OnSpawn(NPC npc, Terraria.DataStructures.IEntitySource source)
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal") || npc.friendly || npc.damage <= 0) return;
+        Console.WriteLine($"VNAV_SUPPRESSED_SPAWN type={npc.type} source={source.GetType().Name}");
+        npc.active = false;
+    }
+
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck")
