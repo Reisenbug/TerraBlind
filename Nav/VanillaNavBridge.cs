@@ -140,7 +140,7 @@ public static class VanillaNavBridge
                 bool success = tile.HasTile && tile.TileType == edit.Type && player.position.Y < placementStartY;
                 if (!success)
                 {
-                    bool held = player.controlJump;
+                    bool held = !player.releaseJump;
                     int next = (int)(Main.GameUpdateCount - placementInputAt);
                     for (int i = Math.Max(0, next); i < placementControls.Length; i++)
                     {
