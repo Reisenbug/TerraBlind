@@ -126,12 +126,55 @@ public sealed class Engine : ModSystem
         finally { VanillaFrame.RestoreInWorker(initial); }
     }
 
+    static JsonObject CorridorRegions(JsonObject request)
+    {
+        var initial = request["snapshot"].AsObject();
+        var field = VanillaLocalPlanner.ReadGuidance(request["guidance"]);
+        var player = VanillaFrame.RestoreInWorker(initial);
+        var cell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+        if (field == null || !field.TryGetValue(cell, out int startCost))
+            throw new ArgumentException("corridor_start_missing_from_guidance");
+        int threshold = startCost;
+        var path = new JsonArray(new JsonArray(cell.Item1, cell.Item2));
+        for (int step = 0; step < 12; step++)
+        {
+            var next = Enumerable.Range(-1, 3).SelectMany(dx => Enumerable.Range(-1, 3)
+                .Select(dy => (cell.Item1 + dx, cell.Item2 + dy)))
+                .Where(point => field.TryGetValue(point, out int cost) && cost < threshold)
+                .OrderBy(point => field[point]).Take(1).ToArray();
+            if (next.Length == 0) break;
+            cell = next[0]; threshold = field[cell];
+            path.Add(new JsonArray(cell.Item1, cell.Item2));
+        }
+        var surfaces = RegionSurfaces(request)["surfaces"].AsArray();
+        var regions = new JsonArray();
+        foreach (var surface in surfaces)
+        {
+            int x = surface[0].GetValue<int>(), y = surface[1].GetValue<int>(), width = surface[2].GetValue<int>();
+            int run = -1;
+            for (int footX = x; footX <= x + width + 1; footX++)
+            {
+                bool eligible = footX <= x + width && field.TryGetValue((footX / 16, (y - 1) / 16), out int cost)
+                    && cost <= threshold && cost < startCost;
+                if (eligible && run < 0) run = footX;
+                if (!eligible && run >= 0) { regions.Add(new JsonArray(run, y, footX - run - 1, 0)); run = -1; }
+            }
+        }
+        return new JsonObject { ["goal_regions"] = regions, ["start_cost"] = startCost,
+            ["threshold_cost"] = threshold, ["gradient_path"] = path };
+    }
+
     static JsonObject RegionSearch(JsonObject request)
     {
         var initial = request["snapshot"].AsObject();
         var bounds = request["region"].AsArray();
         var region = new Rectangle(bounds[0].GetValue<int>(), bounds[1].GetValue<int>(),
             bounds[2].GetValue<int>(), bounds[3].GetValue<int>());
+        var goalRegions = request["goal_regions"] is JsonArray goals
+            ? goals.Select(goal => new Rectangle(goal[0].GetValue<int>(), goal[1].GetValue<int>(),
+                goal[2].GetValue<int>(), goal[3].GetValue<int>())).ToArray() : new[] { region };
+        if (goalRegions.Length == 0 || goalRegions.Any(goal => goal.Width < 0 || goal.Height < 0))
+            throw new ArgumentException("invalid_goal_regions");
         int horizon = request["horizon"]?.GetValue<int>() ?? 90;
         int beam = request["beam"]?.GetValue<int>() ?? 6;
         int quantum = request["quantum"]?.GetValue<int>() ?? 6;
@@ -167,9 +210,12 @@ public sealed class Engine : ModSystem
         float Distance(Player player)
         {
             var point = player.Bottom;
-            float dx = Math.Max(region.Left - point.X, Math.Max(0, point.X - region.Right));
-            float dy = Math.Max(region.Top - point.Y, Math.Max(0, point.Y - region.Bottom));
-            return MathF.Sqrt(dx * dx + dy * dy);
+            return goalRegions.Min(goal =>
+            {
+                float dx = Math.Max(goal.Left - point.X, Math.Max(0, point.X - goal.Right));
+                float dy = Math.Max(goal.Top - point.Y, Math.Max(0, point.Y - goal.Bottom));
+                return MathF.Sqrt(dx * dx + dy * dy);
+            });
         }
         (int, int, bool, int, float, bool, int) Mode(Player player)
         {
@@ -1548,6 +1594,7 @@ public sealed class Engine : ModSystem
             finally { VanillaFrame.RestoreInWorker(snapshot); }
         }
         if (command == "region_surfaces") return RegionSurfaces(request);
+        if (command == "region_corridor") return CorridorRegions(request);
         if (command == "region_search") return RegionSearch(request);
         if (command == "plan")
         {

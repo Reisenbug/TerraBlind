@@ -74,6 +74,7 @@ def main():
     parser.add_argument("--region-place", type=int, nargs=2)
     parser.add_argument("--region-mine", type=int, nargs=2)
     parser.add_argument("--region-mine-tile", type=int, nargs=2, action="append")
+    parser.add_argument("--region-corridor", action="store_true")
     parser.add_argument("--obstruction", type=Path)
     parser.add_argument("--terrain-probe", type=Path)
     parser.add_argument("--terrain-replay", type=Path)
@@ -160,6 +161,13 @@ def main():
                 import random
                 assert result["surfaces"], "no_existing_support_in_sample_area"
                 args.region = random.Random(args.region_surface_seed).choice(result["surfaces"])
+            corridor = None
+            if args.region_corridor:
+                corridor = worker.call("region_corridor", snapshot=state, region=args.region,
+                                       guidance=source.get("guidance"))
+                (args.root / "region-corridor.json").write_text(json.dumps(corridor))
+                print("REGION_CORRIDOR", corridor, flush=True)
+                assert corridor["goal_regions"], "no_progress_surface_in_corridor"
             if args.region_reference:
                 reference = worker.call("replay", snapshot=state,
                                         controls=evidence["result"]["controls"][:args.region_horizon], capture_end=True)
@@ -179,10 +187,13 @@ def main():
             result = worker.call("region_search", snapshot=state, region=args.region,
                                  horizon=args.region_horizon, beam=args.region_beam,
                                  require_support=not args.region_airborne, placement_tile=args.region_place,
-                                 mining_tile=args.region_mine, mining_tiles=args.region_mine_tile)
+                                 mining_tile=args.region_mine, mining_tiles=args.region_mine_tile,
+                                 goal_regions=corridor["goal_regions"] if corridor else None)
             result["test_input"] = dict(source=str(args.region_probe), region=args.region,
                                         seed=args.region_seed, surface_seed=args.region_surface_seed,
                                         require_support=not args.region_airborne)
+            if corridor:
+                result["test_input"]["corridor"] = corridor
             if result["controls"]:
                 replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
                                      use_slots=result["use_slots"], placement_tile=result["placement_tile"],
