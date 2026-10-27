@@ -249,8 +249,21 @@ public sealed class Engine : ModSystem
                     }
                 }
                 var ordered = next.OrderBy(node => node.Distance).ToArray();
-                var representatives = ordered.GroupBy(node => node.Mode).Select(group => group.First()).ToArray();
-                frontier = representatives.Concat(ordered.Except(representatives)).Take(beam).ToList();
+                frontier = new System.Collections.Generic.List<RegionNode>();
+                if (ordered.Length > 0) frontier.Add(ordered[0]);
+                float Separation(RegionNode left, RegionNode right) =>
+                    Vector2.DistanceSquared(left.Position, right.Position)
+                    + Vector2.DistanceSquared(left.Velocity * quantum, right.Velocity * quantum)
+                    + (left.Mode.available != right.Mode.available ? 256 : 0)
+                    + (left.Mode.placed != right.Mode.placed ? 256 : 0)
+                    + (left.ReleaseJump != right.ReleaseJump ? 64 : 0);
+                while (frontier.Count < beam && frontier.Count < ordered.Length)
+                {
+                    var candidate = ordered.Except(frontier)
+                        .OrderByDescending(node => frontier.Min(selected => Separation(node, selected))).First();
+                    if (frontier.Min(selected => Separation(candidate, selected)) == 0) break;
+                    frontier.Add(candidate);
+                }
                 layers.Add(new JsonObject { ["frame"] = depth + quantum, ["generated"] = next.Count,
                     ["candidates"] = new JsonArray(next.Select(node => (JsonNode)new JsonObject {
                         ["position"] = new JsonArray(node.Position.X, node.Position.Y),
