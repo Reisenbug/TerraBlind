@@ -69,6 +69,7 @@ def main():
     parser.add_argument("--replace-tiles", action="store_true")
     parser.add_argument("--settled-probe", type=Path)
     parser.add_argument("--jump-place-probe", type=Path)
+    parser.add_argument("--expect-slope-start", action="store_true")
     parser.add_argument("--feather-probe", action="store_true")
     parser.add_argument("--stalled-jump-probe", type=Path)
     parser.add_argument("--opening-probe", type=Path)
@@ -248,6 +249,10 @@ def main():
             assert settle["outcome"] == "complete", settle["outcome"]
             snapshot = settle["end_snapshot"]
             end = settle["frames"][-1]
+            support = worker.call("settled_probe", snapshot=snapshot, prefix=[])
+            print("JUMP_START_SUPPORT", {key: support[key] for key in ("supported", "contact_supported")}, flush=True)
+            if args.expect_slope_start:
+                assert support["supported"] and not support["contact_supported"]
             x, y = int((end["x"] + 10) // 16), int((end["y"] + 42) // 16) - 1
             request = dict(snapshot=snapshot, jump_place=True, tile_x=x, tile_y=y, tile_type=19)
             if args.route_direction is not None:
@@ -259,7 +264,10 @@ def main():
             old = worker.call("terrain_plan", **request)
             plan = worker.call("terrain_plan", **request, search_jump_place=True)
             assert plan["status"] == "planned", (old["status"], plan["status"], end)
-            assert plan["rise"] > old.get("rise", 0), (old.get("rise"), plan["rise"])
+            if args.expect_slope_start:
+                assert plan["rise"] >= old.get("rise", 0) and plan["rise"] > 0
+            else:
+                assert plan["rise"] > old.get("rise", 0), (old.get("rise"), plan["rise"])
             replay = worker.call("placement_sequence", snapshot=snapshot,
                                  tile_x=plan["tile_x"], tile_y=plan["tile_y"],
                                  place_after=plan["place_after"], controls=plan["controls"])

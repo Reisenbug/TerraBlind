@@ -55,7 +55,7 @@ public static class VanillaTerrainPlan
 
     static bool CanStartJumpPlacement(Player player, int type)
         => type == Terraria.ID.TileID.Platforms && player.velocity == Vector2.Zero && player.gravDir == 1
-            && player.releaseJump && VanillaContactRegion.Supported(player.position, player.width, player.height);
+            && player.releaseJump && HasSupport(player);
 
     static JsonObject SearchJumpPlacement(JsonObject request)
     {

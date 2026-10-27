@@ -120,13 +120,15 @@ public sealed class Engine : ModSystem
             foreach (var key in request["prefix"].AsArray()) VanillaPrediction.Advance(player, (VanillaKeys)key.GetValue<int>());
             var state = VanillaPrediction.Observe(player);
             bool supported = VanillaTerrainPlan.HasSupport(player);
+            bool contactSupported = VanillaContactRegion.Supported(player.position, player.width, player.height);
             var released = new JsonArray();
             for (int i = 0; i < 60; i++)
             {
                 VanillaPrediction.Advance(player, VanillaKeys.None);
                 released.Add(VanillaPrediction.Observe(player, false));
             }
-            return new JsonObject { ["state"] = state, ["supported"] = supported, ["released"] = released };
+            return new JsonObject { ["state"] = state, ["supported"] = supported,
+                ["contact_supported"] = contactSupported, ["released"] = released };
         }
         if (command == "jump_place_context")
         {
