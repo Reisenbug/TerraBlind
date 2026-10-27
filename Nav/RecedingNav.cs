@@ -254,8 +254,12 @@ namespace TerraBlind
                 if (_braking)
                 {
                     if (SettleAt.IsRunning) return;
-                    DiagLog.Write($"[recede] 停稳了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
-                    _braking = false; LastStop = "done"; Stop(); return;
+                    _braking = false;
+                    if (SettleAt.Outcome == "done" && p.velocity.Y == 0f && Reach.CanInteract(p, _goalWx, _goalWy))
+                    {
+                        DiagLog.Write($"[recede] 停稳了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+                        LastStop = "done"; Stop(); return;
+                    }
                 }
                 // 【够得着 = 手能碰到,按最窄的那把尺子算】。Mode.Reach 的调用方是开箱/挖那种
                 // "凑近了就行"的活,而交互(右键开箱)的范围只有 tileRangeX,不含 blockRange
@@ -266,7 +270,11 @@ namespace TerraBlind
                     DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) vx={p.velocity.X:0.##}");
                     if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead
                         && SettleAt.Start(Predicates.PillarCol(p), out _))
-                    { _braking = true; return; }
+                    {
+                        _braking = true;
+                        if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
+                        return;
+                    }
                     // 不弹聊天框:Reach 会被调用方反复重启(每次都"到了"),弹一次就刷一次屏
                     LastStop = "done"; Stop(); return;
                 }
