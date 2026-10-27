@@ -183,24 +183,43 @@ public sealed class VanillaLocalPlanner
                 safe = end.Grounded || end.Velocity.Y == 0 || end.WingTime > 0 || end.AvailableJumps > 0
                     || Main.player[player.whoAmI].slowFall;
             }
+            var scoreEnd = frames[^1].Position;
+            int landingFrames = 0;
+            if (safe && !transit && snapshot["navigation"]?.GetValue<bool>() == true
+                && wings <= 0 && !gravity && !Main.player[player.whoAmI].slowFall)
+            {
+                long landingStart = Stopwatch.GetTimestamp();
+                var landing = Main.player[player.whoAmI];
+                while (landingFrames < Horizon && (landing.velocity.Y != 0 || !VanillaTerrainPlan.HasSupport(landing)))
+                {
+                    VanillaPrediction.Advance(landing, VanillaKeys.None);
+                    landingFrames++;
+                    if (landing.dead || landing.statLife < hp) { safe = false; break; }
+                }
+                updateMs += Stopwatch.GetElapsedTime(landingStart).TotalMilliseconds;
+                safe &= landing.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(landing);
+                scoreEnd = landing.position;
+            }
             bool progress = safe && forward && (frames[^1].Position.X - player.position.X) * (direction == 2 ? 1 : -1) >= 16;
             bool reachedContact = seekContact && safe && frames[^1].Velocity.Y == 0
                 && VanillaContactRegion.ConnectedSupport(frames[^1].Position, goal, player.width, player.height);
             double score = double.PositiveInfinity;
             if (safe)
             {
-                double advance = startDistance - Distance(frames[^1].Position);
+                double advance = startDistance - Distance(scoreEnd);
                 bool advances = !transit || advance > .01 || reachedContact;
                 score = reachedContact ? Vector2.Distance(goal, frames[^1].Position)
                     : transit ? Distance(frames[^1].Position) + .1 * frames.Average(frame => Distance(frame.Position))
-                    : Distance(frames[^1].Position);
+                    : Distance(scoreEnd);
                 score += Math.Max(0, wings - frames[^1].WingTime) * .02;
                 score += Math.Max(0, jumps - frames[^1].AvailableJumps) * 2;
-                bool sameEnd = Vector2.DistanceSquared(frames[^1].Position, selectedEnd) <= 4;
+                bool sameEnd = Vector2.DistanceSquared(scoreEnd, selectedEnd) <= 4;
                 bool idleDominates = sameEnd && !advances && !selectedAdvances && selected == "wait"
                     && advance <= chosenProgress + .01;
                 if (!idleDominates && (reachedContact && !selectedContact || reachedContact == selectedContact
                     && (advances && !selectedAdvances || advances == selectedAdvances && score < best - .01
+                        || sameEnd && Math.Abs(score - best) <= .01
+                            && candidate.keys.Count(key => (key & 4) != 0) < chosen.Count(key => (key & 4) != 0)
                         || sameEnd && !advances && !selectedAdvances && candidate.name == "wait" && advance >= chosenProgress - .01)))
                 {
                     if (transit)
@@ -251,7 +270,7 @@ public sealed class VanillaLocalPlanner
                     if (safe)
                     {
                         best = score; selected = candidate.name; chosen = candidate.keys;
-                        selectedEnd = frames[^1].Position;
+                        selectedEnd = scoreEnd;
                         selectedAdvances = advances; selectedContact = reachedContact;
                         chosenProgress = reachedContact ? Math.Max(advance, Vector2.Distance(player.position, frames[^1].Position)) : advance;
                         selectedFlows = frames.TakeLast(12).All(frame =>
@@ -261,6 +280,7 @@ public sealed class VanillaLocalPlanner
             }
             diagnostics.Add(new JsonObject { ["name"] = candidate.name, ["safe"] = safe, ["hp_loss"] = damage,
                 ["repeated_ceiling_contact"] = ceilingLoop,
+                ["score_end_x"] = scoreEnd.X, ["score_end_y"] = scoreEnd.Y, ["landing_frames"] = landingFrames,
                 ["end_x"] = frames[^1].Position.X, ["end_y"] = frames[^1].Position.Y,
                 ["field_progress"] = startDistance - Distance(frames[^1].Position),
                 ["goal_distance"] = Vector2.Distance(goal, frames[^1].Position),

@@ -125,8 +125,10 @@ def main():
             assert result["status"] == "planned"
             assert any(key & 4 for key in old["controls"])
             assert not any(key & 4 for key in result["controls"]), result["selected"]
-            old_end = old["forecast"]["frames"][-1]
-            end = result["forecast"]["frames"][-1]
+            previous = next(row for row in result["candidates"] if row["name"] == old["selected"])
+            selected = next(row for row in result["candidates"] if row["name"] == result["selected"])
+            old_end = dict(x=previous["score_end_x"], y=previous["score_end_y"])
+            end = dict(x=selected["score_end_x"], y=selected["score_end_y"])
             goal = evidence["request"]
             distance = lambda frame: (frame["x"] - goal["x"]) ** 2 + (frame["y"] - goal["y"]) ** 2
             assert distance(end) <= distance(old_end) + .01
