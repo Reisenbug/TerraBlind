@@ -228,7 +228,6 @@ public static class VanillaNavBridge
             || Main.GameUpdateCount - progressAt > 180 && !demo.HasQueuedMovement))
         {
             phase = Phase.Braking; phaseAt = Main.GameUpdateCount; needTerrain = false;
-            Terminal = true; RouteDirection = 0; demo.UpdateNavigationGoal(player.position);
             demo.PauseForTerrain();
             DiagLog.Write($"[engine-terrain-brake] vx={player.velocity.X:0.###} vy={player.velocity.Y:0.###}; retired movement queue");
         }
