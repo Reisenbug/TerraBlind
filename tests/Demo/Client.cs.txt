@@ -419,7 +419,7 @@ public sealed class Driver : ModSystem
             foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
             player.armor[0].SetDefaults(ItemID.MoltenHelmet); player.armor[1].SetDefaults(ItemID.MoltenBreastplate); player.armor[2].SetDefaults(ItemID.MoltenGreaves);
             int slot = 3;
-            foreach (int item in new[] { ItemID.SandstorminaBottle, ItemID.NeptunesShell, ItemID.CobaltShield, ItemID.HermesBoots, ItemID.BandofRegeneration }) player.armor[slot++].SetDefaults(item);
+            foreach (int item in new[] { ItemID.SandstorminaBottle, ItemID.CobaltShield, ItemID.HermesBoots, ItemID.BandofRegeneration }) player.armor[slot++].SetDefaults(item);
             player.inventory[0].SetDefaults(ItemID.Starfury);
             player.inventory[1].SetDefaults(ItemID.MoltenPickaxe);
             player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 999;
@@ -479,6 +479,8 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline) && (!journey || continuityLeg == 0))
             {
                 RestoreBaseline(player, baseline);
+                foreach (var accessory in player.armor.Where(item => item.type == ItemID.NeptunesShell)) accessory.TurnToAir();
+                Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE removed=NeptunesShell");
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
                 {
                     int bottle = Array.FindIndex(player.armor, item => item.type == ItemID.SandstorminaBottle);
