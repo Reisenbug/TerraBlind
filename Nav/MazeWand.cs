@@ -554,18 +554,7 @@ namespace TerraBlind
 
         // a platform placed at (x,y) would have something to attach to, same 3x3 neighborhood rule as the planner's
         // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
-        public static bool PlatformAnchor(int x, int y)
-        {
-            for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    int nx = x + dx, ny = y + dy;
-                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
-                    var t = Main.tile[nx, ny];
-                    if (t.HasTile || t.WallType > 0) return true;
-                }
-            return false;
-        }
+        public static bool PlatformAnchor(int x, int y) => VanillaTerrainPlan.HasPlatformAnchor(x, y);
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
         static bool ColumnOpen(int c, int cy)

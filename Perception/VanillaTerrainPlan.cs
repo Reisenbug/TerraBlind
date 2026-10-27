@@ -8,6 +8,19 @@ namespace TerraBlind;
 
 public static class VanillaTerrainPlan
 {
+    public static bool HasPlatformAnchor(int x, int y)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            int nx = x + dx, ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
+            var tile = Main.tile[nx, ny];
+            if (tile.HasTile || tile.WallType > 0) return true;
+        }
+        return false;
+    }
+
     public static bool IsRouteObstacle(Tile tile, bool belowFeet)
         => tile.HasTile && !tile.IsActuated
             && (Terraria.ID.TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
@@ -72,7 +85,7 @@ public static class VanillaTerrainPlan
             {
                 if (best != null && startY - (y * 16 - height) <= best["rise"].GetValue<float>()) break;
                 player = VanillaFrame.RestoreInWorker(state);
-                if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)) continue;
+                if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y) || !HasPlatformAnchor(x, y)) continue;
                 WorldGen.PlaceTile(x, y, Terraria.ID.TileID.Platforms, mute: true, plr: player.whoAmI);
                 if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Terraria.ID.TileID.Platforms) continue;
                 var candidate = request.DeepClone().AsObject();
@@ -94,6 +107,7 @@ public static class VanillaTerrainPlan
         int type = request["tile_type"].GetValue<int>();
         if (!CanStartJumpPlacement(player, type))
             return new JsonObject { ["status"] = "unsafe_jump_place_start" };
+        if (!HasPlatformAnchor(x, y)) return new JsonObject { ["status"] = "unanchored_platform" };
         var anchor = VanillaPrediction.Observe(player, false);
         int hp = player.statLife;
         float startY = player.position.Y;
@@ -223,6 +237,8 @@ public static class VanillaTerrainPlan
             else
             {
                 if (LavaSafety.IsLava(x, y)) return new JsonObject { ["status"] = "unsafe_placement" };
+                if (type == Terraria.ID.TileID.Platforms && !HasPlatformAnchor(x, y))
+                    return new JsonObject { ["status"] = "unanchored_platform" };
                 WorldGen.PlaceTile(x, y, type, mute: true, plr: player.whoAmI);
                 if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != type)
                     return new JsonObject { ["status"] = "placement_rejected" };

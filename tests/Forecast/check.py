@@ -74,6 +74,7 @@ def main():
     parser.add_argument("--opening-probe", type=Path)
     parser.add_argument("--expect-redundant-opening", action="store_true")
     parser.add_argument("--ceiling-loop-probe", type=Path)
+    parser.add_argument("--platform-anchor-probe", type=Path)
     parser.add_argument("--expect-terrain-planned", action="store_true")
     parser.add_argument("--movement-only", action="store_true")
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
@@ -116,6 +117,28 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.platform_anchor_probe:
+            evidence = json.loads(args.platform_anchor_probe.read_text())
+            request = evidence["request"]
+            bad = evidence["result"]
+            rejected = worker.call(**dict(request, jump_place=True, search_jump_place=False,
+                                         tile_x=bad["tile_x"], tile_y=bad["tile_y"]))
+            assert rejected["status"] == "unanchored_platform", rejected["status"]
+            replacement = worker.call(**request)
+            if replacement["status"] == "planned":
+                x, y = replacement["tile_x"], replacement["tile_y"]
+                snapshot = request["snapshot"]
+                x0, y0, width, height = snapshot["area"]
+                raw = base64.b64decode(snapshot["tiles"])
+                tiles = struct.unpack(f"<{len(raw) // 4}i", raw)
+                neighbors = [((yy - y0) * width + xx - x0) * 10
+                             for xx in range(x - 1, x + 2) for yy in range(y - 1, y + 2)
+                             if x0 <= xx < x0 + width and y0 <= yy < y0 + height]
+                assert any(tiles[index] or tiles[index + 2] for index in neighbors)
+            args.platform_anchor_probe.with_suffix(".anchor-replay.json").write_text(json.dumps(replacement))
+            print("PLATFORM_ANCHOR_PASS", rejected["status"], "replacement", replacement["status"],
+                  replacement.get("tile_x"), replacement.get("tile_y"), flush=True)
+            return
         if args.ceiling_loop_probe:
             evidence = json.loads(args.ceiling_loop_probe.read_text())
             result = worker.call(**evidence["request"])
