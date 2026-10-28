@@ -150,6 +150,7 @@ public sealed class Driver : ModSystem
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook navigationHook;
     bool HealthLive => Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
+    bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
 
     public override void Load()
     {
@@ -159,7 +160,7 @@ public sealed class Driver : ModSystem
         if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
         On_Main.Update += Update;
         IL_Main.DoUpdate += Focus;
-        if (HealthLive)
+        if (HealthLive || ScriptCheck)
         {
             navigationHook = NavigateWithoutPlanning;
             MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), navigationHook);
@@ -253,6 +254,35 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (ScriptCheck)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                        foreach (var item in Main.item) item.active = false;
+                        Main.playerInventory = false; PrepareResources(player);
+                        phase = 22;
+                        Call("run_script", new JsonObject { ["seconds"] = 90, ["code"] = $$"""
+                            tool('task_plan', {goal:'script real-engine check',replace:true,steps:[
+                              {id:'health',description:'collect and use crystals',conditions:[{kind:'permanent_health',count:300}]}]});
+                            const gathered = tool('gather', {targets:[{item_type:{{ItemID.LifeCrystal}},count:10,tile_names:['Heart']}]});
+                            if (!gathered.ok) return {error:'collection_failed',gathered};
+                            let state = tool('get_state');
+                            while (state.permanent_max_health < 300) {
+                              const slot = state.inventory_slots.find(i => i.type === {{ItemID.LifeCrystal}} && i.stack > 0);
+                              if (!slot) return {error:'missing_crystal',hp:state.permanent_max_health};
+                              const used = tool('use_item',{slot:slot.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:45});
+                              if (used.error) return {error:'use_failed',used};
+                              const next = tool('get_state');
+                              if (next.permanent_max_health <= state.permanent_max_health) throw new Error('no health progress');
+                              state = next;
+                            }
+                            const verified = tool('task_step',{id:'health',action:'verify'});
+                            return {hp:state.permanent_max_health,verified:verified.verified};
+                            """ });
+                        break;
+                    }
                     if (HealthLive)
                     {
                         AgentPermissions.Attack = AgentPermissions.Dodge = false;
@@ -443,6 +473,17 @@ public sealed class Driver : ModSystem
                     Finish(true, Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck")
                         ? "AGENT_BATCH_COMPLETE checks=1 model_calls=0 controlled_fixture=true collected_crystals=10 navigation=teleport_stub"
                         : "AGENT_ENGINE_COMPLETE checks=17 model_calls=0 controlled_fixture=true"); break;
+                case 22:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["verified"]?.GetValue<bool>() == true
+                        && player.statLifeMax == 300, "script_health_not_verified");
+                    Call("run_script", new JsonObject { ["seconds"] = 1,
+                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:600}}]}); return {unexpected:true};" });
+                    break;
+                case 23:
+                    Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
+                        && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
+                    Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
             }
         }
         catch (Exception error) { Finish(false, error.ToString()); }

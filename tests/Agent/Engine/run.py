@@ -17,6 +17,7 @@ def main():
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
     mode.add_argument("--hornets-wall", action="store_true", help="Same hornet trial with a short stone obstacle")
+    mode.add_argument("--script", action="store_true", help="Real script-tool collection/use/verification and timeout cleanup, no model calls")
     args = parser.parse_args()
     root = Path("/tmp") / ("terrablind-agent-engine-" + str(time.time_ns()))
     (root / "Mods").mkdir(parents=True)
@@ -50,6 +51,8 @@ def main():
         command.append("-agenthornetcheck")
     if args.hornets_wall:
         command.append("-agenthornetwall")
+    if args.script:
+        command.append("-agentscriptcheck")
     with (root / "client.log").open("w") as log:
         process = subprocess.Popen(command, cwd=tml,
             env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),

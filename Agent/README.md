@@ -26,6 +26,28 @@ Codex 使用自己已有的本机认证，不读取 mod 的 Agent API Key。Chat
 
 Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其他指令会取消旧动作，把新要求交回同一段对话处理。`/tb stop` 和 `/halt` 都会停止当前 agent。离开世界会取消任务并清空本次世界对话。
 
+`run_script` 让模型一次提交 JavaScript 函数体，在 mod 内用 Jint 4.17.0 执行，不依赖外部 Node/Python。`tool(name,args={})` 串行等待现有游戏工具返回原生 JS 对象/数组，支持变量、if、for、while、return；`print(value)` 记录调试输出。接口仍使用原工具的名称、参数、权限及完成验证，不直接暴露 Terraria 对象、文件、Shell 或任意网络。它是完整 JS 语法配游戏工具接口，不是自行定义语法的 DSL，也不执行 TypeScript。例子：
+
+```javascript
+const found = tool('find_tiles', {name:'Containers', n:5, max_dist:100});
+if (found.error) return {needs_decision:true, found};
+const failures = [];
+for (const chest of found.tiles) {
+    const taken = tool('collect_treasure', {x:chest.x, y:chest.y});
+    if (taken.error) { failures.push({chest, taken}); continue; }
+    const recipes = tool('recipe', {name:'ThornChakram'});
+    if (recipes.error) return {needs_decision:true, recipes, failures};
+    if (recipes.recipes.some(r => r.can_craft_now)) {
+        return tool('craft', {name:'ThornChakram', amount:1});
+    }
+}
+return {needs_decision:true, failures};
+```
+
+脚本结束只表示代码执行结束，不能替代 `task_step verify`。工具返回 error/ok/outcome 仍要显式检查；失败不回滚已经完成的动作，不自动重放脚本。脚本变量不跨调用保留，任务续接仍读取宿主 task_plan 的真实进度。默认限时120秒，最大180秒，最多100次工具调用、50000条语句、32MB解释器分配、64层递归；代码最多16000字符，返回 JSON 最多16000字符，保留最近12次子调用及最多20条 print。解释器限制是协作式检查，不能抢占阻塞的宿主代码。脚本不支持异步 Promise 返回，禁止嵌套 run_script 和脚本内 ask；需要询问时 return 证据，由模型在脚本外处理。超时取消在途工具并收尾，父任务取消由原有停止机制处理，避免旧脚本误停新任务。
+
+构建会从固定 NuGet 版本恢复 Jint/Acornima 并复制到 lib 后打包进 `.tmod`；生成的 DLL 不提交，授权文本保存在 lib/THIRD_PARTY_LICENSES.txt。正常玩家只需要完整 `.tmod`。`python3 tests/Agent/Engine/run.py --script` 不调用模型：一次脚本采集预置10颗水晶，按真实血量循环使用并验证300血，再验证1秒超时会停止600帧动作。接近由传送替代、角色免伤，不能视为导航或模型自主编写的验收。2026-10-28 实测第一段14次工具调用、19610毫秒、永久血量300且 verified=true；超时段1036毫秒后动作已停。客户端退出仍有既有音效资源错误，功能检查通过不代表退出无异常。
+
 Codex 使用本地 stdio JSON-RPC，由 mod 管理子进程。每个世界使用独立于编程会话的临时 thread，工作目录为当前保存根目录下的 `TerraBlindAgent`；对话保留到离开世界、关闭 AI 身份／内置 Agent 或后台进程退出。模型、路径或人格变更在下条任务生效，并建立新会话。该进程配置禁用 shell、插件、应用、子代理、记忆、技能发现及网页搜索，并在建 thread 时禁用现有 MCP 服务；使用游戏指令、空环境列表及只读沙箱。全局 Codex 配置和登录不被修改。
 
 取消任务时，mod 立即停止游戏动作，再向 Codex 发送 `turn/interrupt` 并最多等待 3 秒完成收尾；无响应时终止该子进程，下一次任务重建会话。退出世界或关闭 AI 身份时终止该子进程。进程异常会报告失败，不自动重放可能已有副作用的任务。动态工具接口为实验 API，目前按本机 Codex 0.163.0 协议验证。
@@ -73,7 +95,7 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 当前 live 场地会重新清空附近地面上方空间与旧掉落物，放置铁砧和10颗可实际采集的生命水晶，关闭背包界面。不会直接给 agent 水晶或替它使用；只隔离验证第一阶段100→300血的执行。尚未预置完整的材料与召唤资源链，不能视为整条任务的受控验收。
 
-离线测试共 49 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=49`。直接链接生产的 Agent 协议、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖工具协议、取消隔离、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
+离线测试共 55 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=55`。直接链接生产的 Agent 协议、脚本解释器、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本组合与分支、资源限额、取消隔离、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
 
 普通 NPC 的 FightCoordinator 在允许 auto_dodge 时，比较24帧内停留、左右移动与起跳的预测碰撞风险，并继续攻击。使用当前弹幕速度、extraUpdates 和附近敌人速度做短时外推，按当前跑速、加速度、重力和方块碰撞估计移动；不推演敌人后续 AI、复杂弹道或完整饰品物理，也不求全局路径。它不调用模型，不能视为已接入 PvP 的完整 Jev 决策。
 
