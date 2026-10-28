@@ -139,6 +139,15 @@ def run_corridor_chain(worker, state, source, args):
             break
         state = verify_region(worker, state, result, root)
         player = state["player"]
+        assert result["require_support"], "Regional controller must not receive an unfinished airborne segment"
+        idle = worker.call("region_replay", snapshot=state, controls=[0] * 6,
+                           use_slots=[-1] * 6, use_targets=[[0, 0]] * 6,
+                           anchor=result["frames"][-1], frames=[result["frames"][-1]] * 6)
+        assert idle["outcome"] == "complete"
+        assert idle["playback_verified"], "Handoff anchor changes while idle"
+        assert idle["end_snapshot"]["player"]["Terraria.Entity:position"] == player["Terraria.Entity:position"], \
+            "Regional handoff drifts while the next request is pending"
+        assert sum(segment["frames"] for segment in result["segments"]) == len(result["controls"])
         position = player["Terraria.Entity:position"]
         foot = (math.floor((position["Microsoft.Xna.Framework.Vector2:X"] + player["Terraria.Entity:width"] / 2) / 16),
                 math.floor((position["Microsoft.Xna.Framework.Vector2:Y"] + player["Terraria.Entity:height"] - 1) / 16))

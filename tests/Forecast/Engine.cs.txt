@@ -393,6 +393,97 @@ public sealed class Engine : ModSystem
     static JsonObject RegionPlan(JsonObject request)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
+        var next = request.DeepClone().AsObject();
+        int remaining = request["horizon"]?.GetValue<int>() ?? 180;
+        var combined = new JsonObject();
+        var segments = new JsonArray();
+        JsonNode initialCost = null;
+        JsonNode initialCorridor = null;
+        int consumed = 0, cleared = 0;
+        bool placed = false;
+        string[] streams = { "controls", "use_slots", "use_targets", "world_random_indices", "frames" };
+        foreach (string stream in streams) combined[stream] = new JsonArray();
+        try
+        {
+            while (remaining > 0)
+            {
+                next["horizon"] = remaining;
+                var part = RegionPlanSegment(next);
+                initialCost ??= part["corridor"]?["start_cost"]?.DeepClone();
+                initialCorridor ??= part["corridor"]?.DeepClone();
+                segments.Add(new JsonObject { ["status"] = part["status"]?.DeepClone(),
+                    ["frames"] = part["controls"].AsArray().Count,
+                    ["planning_ms"] = part["planning_wall_ms"]?.DeepClone(),
+                    ["attempts"] = part["attempts"]?.DeepClone() });
+                if (part["status"]?.GetValue<string>() != "reached")
+                {
+                    part["controls"] = new JsonArray();
+                    part["segments"] = segments;
+                    part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
+                    return part;
+                }
+                int count = part["controls"].AsArray().Count;
+                if (count == 0) break;
+                consumed += part["consumed"]?.GetValue<int>() ?? 0;
+                cleared += part["cleared_count"]?.GetValue<int>() ?? 0;
+                placed |= part["placed"]?.GetValue<bool>() == true;
+                if (combined["anchor"] == null) combined["anchor"] = part["anchor"].DeepClone();
+                foreach (string stream in streams)
+                    foreach (var entry in part[stream].AsArray()) combined[stream].AsArray().Add(entry?.DeepClone());
+                remaining -= count;
+                var end = part["end_snapshot"].AsObject();
+                var player = VanillaFrame.RestoreInWorker(end);
+                int hp = player.statLife;
+                bool stable = false;
+                while (remaining > 0 && player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player)
+                    && !stable)
+                {
+                    var before = VanillaPrediction.Observe(player, false);
+                    combined["world_random_indices"].AsArray().Add(WorldRandomIndex());
+                    VanillaPrediction.Advance(player, VanillaKeys.None);
+                    combined["world_random_indices"].AsArray().Add(WorldRandomIndex());
+                    combined["controls"].AsArray().Add(0);
+                    combined["use_slots"].AsArray().Add(-1);
+                    combined["use_targets"].AsArray().Add(new JsonArray(0, 0));
+                    combined["frames"].AsArray().Add(VanillaPrediction.Observe(player, false));
+                    remaining--;
+                    count++;
+                    if (player.dead || player.statLife < hp) break;
+                    stable = VanillaPrediction.RegionPlayback.MatchesAnchor(player, before, out _)
+                        && Math.Abs(player.velocity.X) <= .001f;
+                }
+                segments[^1]["frames"] = count;
+                var area = end["area"];
+                end = VanillaFrame.Capture(player, new Rectangle(area[0].GetValue<int>(), area[1].GetValue<int>(),
+                    area[2].GetValue<int>(), area[3].GetValue<int>()), true);
+                if (player.dead || player.statLife < hp) break;
+                if (stable && player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player)
+                    && VanillaContactRegion.SafeBody(player.position, player.width, player.height))
+                {
+                    foreach (string stream in streams) part[stream] = combined[stream].DeepClone();
+                    part["anchor"] = combined["anchor"].DeepClone();
+                    part["end_snapshot"] = end;
+                    part["corridor"]["start_cost"] = initialCost?.DeepClone();
+                    part["consumed"] = consumed;
+                    part["cleared_count"] = cleared;
+                    part["placed"] = placed;
+                    part["require_support"] = true;
+                    part["segments"] = segments;
+                    part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
+                    return part;
+                }
+                next["snapshot"] = end.DeepClone();
+            }
+            return new JsonObject { ["status"] = "budget_exhausted", ["controls"] = new JsonArray(),
+                ["corridor"] = initialCorridor, ["attempts"] = new JsonArray(), ["segments"] = segments,
+                ["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds };
+        }
+        finally { VanillaFrame.RestoreInWorker(request["snapshot"].AsObject()); }
+    }
+
+    static JsonObject RegionPlanSegment(JsonObject request)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
         var corridor = CorridorRegions(request);
         var attempts = new JsonArray();
         var search = request.DeepClone().AsObject();

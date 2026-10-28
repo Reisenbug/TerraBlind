@@ -74,6 +74,10 @@ public sealed class VanillaPrediction
             int index = Index(completedTick);
             JsonObject expected = index == -1 ? result["anchor"].AsObject()
                 : index >= 0 && index < inputs.Length ? result["frames"][index].AsObject() : null;
+            return MatchesAnchor(player, expected, out difference);
+        }
+        public static bool MatchesAnchor(Player player, JsonObject expected, out string difference)
+        {
             difference = "missing_region_frame";
             if (expected == null) return false;
             bool matches = VanillaAsyncMovement.StateMatches(player, expected, true, out string reason, out string mismatch);
