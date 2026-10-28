@@ -165,6 +165,9 @@ def main():
     parser.add_argument("--navigation", action="store_true")
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--region-probe", type=Path)
+    parser.add_argument("--reachability-check", action="store_true")
+    parser.add_argument("--reachability-probe", type=Path)
+    parser.add_argument("--reachability-baseline", type=Path)
     parser.add_argument("--region", type=int, nargs=4)
     parser.add_argument("--region-horizon", type=int, default=90)
     parser.add_argument("--region-quantum", type=int, choices=(6, 12))
@@ -248,6 +251,59 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.reachability_check or args.reachability_probe:
+            import random
+            cases = []
+            if args.reachability_probe:
+                source = json.loads(args.reachability_probe.read_text())["request"]
+                state = source["snapshot"]
+                if source.get("prefix"):
+                    state = worker.call("replay", snapshot=state, controls=source["prefix"], capture_end=True)["end_snapshot"]
+                cases.append(("map", state))
+            else:
+                for name, equipment in (("base", []), ("sandstorm", [857])):
+                    cases.append((name, worker.call("reset", equipment=equipment)["snapshot"]))
+            summaries = []
+            for name, state in cases:
+                result = worker.call("reachability", snapshot=state)
+                (args.root / f"reachability-{name}.json").write_text(json.dumps(result))
+                nodes = result["nodes"]
+                if args.reachability_baseline:
+                    baseline = json.loads((args.reachability_baseline / f"reachability-{name}.json").read_text())
+                    for key in ("nodes", "expanded", "merged", "dropped", "unsafe"):
+                        assert result[key] == baseline[key], f"reachability changed: {name}/{key}"
+                origin = nodes[0]
+                assert result["horizon"] == 90 and result["quantum"] == 6
+                assert len(result["layers"]) == 15
+                for layer in result["layers"]:
+                    assert len(layer["nodes"]) <= result["capacity"]
+                picks = [min(nodes, key=lambda n: n["y"]), max(nodes, key=lambda n: abs(n["x"] - origin["x"]))]
+                picks += random.Random(79).sample(nodes[1:], min(3, len(nodes) - 1))
+                for node in picks:
+                    segments = []
+                    current = node
+                    while current["parent"] >= 0:
+                        segments.append([current["keys"]] * 6)
+                        current = nodes[current["parent"]]
+                    controls = [key for segment in reversed(segments) for key in segment]
+                    assert len(controls) == node["frame"]
+                    replay = worker.call("replay", snapshot=state, controls=controls)
+                    assert replay["outcome"] == "complete"
+                    last = replay["frames"][-1]
+                    assert abs(last["x"] + state["player"]["Terraria.Entity:width"] / 2 - node["x"]) < .001
+                    assert abs(last["y"] + state["player"]["Terraria.Entity:height"] - node["y"]) < .001
+                    assert last["available_jumps"] == node["jumps"]
+                summary = dict(name=name, max_horizontal=max(abs(n["x"] - origin["x"]) for n in nodes),
+                               max_rise=origin["y"] - min(n["y"] for n in nodes),
+                               elapsed_ms=result["elapsed_ms"], expanded=result["expanded"],
+                               dropped=result["dropped"], replayed=len(picks))
+                summaries.append(summary)
+                print("REACHABILITY_CASE_PASS", summary, flush=True)
+            if args.reachability_check:
+                assert summaries[1]["max_horizontal"] > summaries[0]["max_horizontal"]
+                assert summaries[1]["max_rise"] > summaries[0]["max_rise"]
+            (args.root / "reachability-summary.json").write_text(json.dumps(summaries))
+            return
         if args.region_end_probe:
             snapshot = json.loads(args.region_end_probe.read_text())["end_snapshot"]
             result = worker.call("settled_probe", snapshot=snapshot, prefix=[])

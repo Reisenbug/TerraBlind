@@ -28,6 +28,89 @@ public sealed class Engine : ModSystem
 
     static readonly System.Reflection.FieldInfo RandomIndex = typeof(Terraria.Utilities.UnifiedRandom).GetField("inext", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
     static int WorldRandomIndex() => (int)RandomIndex.GetValue(WorldGen.genRand);
+
+    sealed record ReachNode(VanillaFrame.WorkerState State, JsonObject Observation, int Parent, int Keys, int Id = -1);
+
+    static System.Collections.Generic.IEnumerable<VanillaPrediction.Segment> ReachOperations(int frames) =>
+        new[] { 0, 1, 2, 4, 5, 6 }.Select(keys =>
+            new VanillaPrediction.Segment(new VanillaPrediction.Input((VanillaKeys)keys), frames));
+
+    static string ReachStateKey(Player player, JsonObject observation) =>
+        FormattableString.Invariant($"{MathF.Floor(player.position.X / 4)},{MathF.Floor(player.position.Y / 4)},{MathF.Round(player.velocity.X * 2)},{MathF.Round(player.velocity.Y * 2)},{player.jump},{player.releaseJump},{player.fallStart},{player.wingTime},{player.gravDir},{player.wet},{player.honeyWet},{observation["jump_state"]}");
+
+    static ReachNode[] RetainReachStates(System.Collections.Generic.IEnumerable<ReachNode> nodes, int capacity) =>
+        nodes.GroupBy(node => (
+            x: (int)MathF.Floor(node.Observation["x"].GetValue<float>() / 16),
+            y: (int)MathF.Floor(node.Observation["y"].GetValue<float>() / 16),
+            jumps: node.Observation["available_jumps"].GetValue<int>()))
+        .SelectMany(group => group.OrderBy(node => Math.Atan2(node.Observation["vy"].GetValue<float>(),
+            node.Observation["vx"].GetValue<float>())).Select((node, rank) =>
+            (node, rank, hash: unchecked((uint)(group.Key.x * 73856093 ^ group.Key.y * 19349663 ^ group.Key.jumps * 83492791)))))
+        .OrderBy(entry => entry.rank).ThenBy(entry => entry.hash).Take(capacity).Select(entry => entry.node).ToArray();
+
+    static JsonObject ExploreReachability(JsonObject request)
+    {
+        var snapshot = request["snapshot"].AsObject();
+        const int quantum = 6, horizon = 90, capacity = 256;
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var nodes = new JsonArray();
+        var layers = new JsonArray();
+        int expanded = 0, merged = 0, dropped = 0, unsafeBranches = 0;
+        var simulation = new VanillaPrediction.BranchSimulation();
+        try
+        {
+            var player = VanillaFrame.RestoreInWorker(snapshot);
+            int hp = player.statLife;
+            var a = snapshot["area"];
+            var interior = new Rectangle((a[0].GetValue<int>() + 2) * 16, (a[1].GetValue<int>() + 2) * 16,
+                (a[2].GetValue<int>() - 4) * 16, (a[3].GetValue<int>() - 4) * 16);
+            JsonObject Display(ReachNode node, int frame) => new()
+            {
+                ["id"] = node.Id, ["parent"] = node.Parent, ["keys"] = node.Keys, ["frame"] = frame,
+                ["x"] = node.Observation["x"].GetValue<float>() + player.width / 2f,
+                ["y"] = node.Observation["y"].GetValue<float>() + player.height,
+                ["vx"] = node.Observation["vx"].DeepClone(), ["vy"] = node.Observation["vy"].DeepClone(),
+                ["jumps"] = node.Observation["available_jumps"].DeepClone()
+            };
+            var root = new ReachNode(new VanillaFrame.WorkerState(snapshot), VanillaPrediction.Observe(player, false), -1, 0, 0);
+            nodes.Add(Display(root, 0));
+            var frontier = new[] { root };
+            bool AcceptFrame(Player candidate) => !candidate.dead && candidate.statLife >= hp && interior.Contains(candidate.Hitbox);
+            for (int frame = quantum; frame <= horizon && frontier.Length > 0; frame += quantum)
+            {
+                var layerTimer = System.Diagnostics.Stopwatch.StartNew();
+                var unique = new System.Collections.Generic.Dictionary<string, ReachNode>();
+                int layerMerged = 0;
+                foreach (var parent in frontier)
+                foreach (var operation in ReachOperations(quantum))
+                {
+                    var trial = simulation.Run(parent.State, operation, AcceptFrame);
+                    player = trial.Player;
+                    expanded++;
+                    if (!trial.Accepted) { unsafeBranches++; continue; }
+                    var observation = VanillaPrediction.Observe(player, false);
+                    string key = ReachStateKey(player, observation);
+                    if (unique.ContainsKey(key)) { layerMerged++; continue; }
+                    var state = simulation.Capture(parent.State, trial);
+                    unique.Add(key, new ReachNode(state, observation, parent.Id, (int)operation.Input.Keys));
+                }
+                var distributed = RetainReachStates(unique.Values, capacity);
+                dropped += unique.Count - distributed.Length; merged += layerMerged;
+                var ids = new JsonArray();
+                frontier = distributed.Select((node, index) => node with { Id = nodes.Count + index }).ToArray();
+                foreach (var node in frontier) { nodes.Add(Display(node, frame)); ids.Add(node.Id); }
+                layers.Add(new JsonObject { ["frame"] = frame, ["nodes"] = ids, ["unique"] = unique.Count,
+                    ["merged"] = layerMerged, ["dropped"] = unique.Count - frontier.Length,
+                    ["elapsed_ms"] = layerTimer.Elapsed.TotalMilliseconds });
+            }
+            return new JsonObject { ["nodes"] = nodes, ["layers"] = layers, ["horizon"] = horizon,
+                ["quantum"] = quantum, ["capacity"] = capacity, ["expanded"] = expanded,
+                ["merged"] = merged, ["dropped"] = dropped, ["unsafe"] = unsafeBranches,
+                ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds, ["restore_ms"] = simulation.RestoreMs,
+                ["update_ms"] = simulation.UpdateMs, ["capture_ms"] = simulation.CaptureMs, ["complete_coverage"] = false };
+        }
+        finally { VanillaFrame.RestoreInWorker(snapshot); }
+    }
     static string traceRandom;
     static void TraceKillTile(On_WorldGen.orig_KillTile original, int x, int y, bool fail, bool effectOnly, bool noItem)
     {
@@ -2034,6 +2117,7 @@ public sealed class Engine : ModSystem
             return new JsonObject { ["passed"] = true, ["attempts"] = 2, ["missing_tile"] = missing.DeepClone() };
         }
         if (command == "region_surfaces") return RegionSurfaces(request);
+        if (command == "reachability") return ExploreReachability(request);
         if (command == "region_corridor") return CorridorRegions(request);
         if (command == "region_plan") return RegionPlan(request);
         if (command == "region_search") return RegionSearch(request);

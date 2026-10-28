@@ -13,6 +13,45 @@ public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down 
 
 public sealed class VanillaPrediction
 {
+    public readonly record struct Segment(Input Input, int Frames);
+    public readonly record struct Trial(Player Player, bool Accepted, int Frames);
+
+    public sealed class BranchSimulation
+    {
+        VanillaFrame.WorkerState knownWorld;
+        public double RestoreMs { get; private set; }
+        public double UpdateMs { get; private set; }
+        public double CaptureMs { get; private set; }
+
+        public Trial Run(VanillaFrame.WorkerState start, Segment operation, Func<Player, bool> acceptFrame)
+        {
+            CheckCancellation();
+            long at = Stopwatch.GetTimestamp();
+            var player = start.Restore(knownWorld);
+            knownWorld = null;
+            RestoreMs += Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+            at = Stopwatch.GetTimestamp();
+            int frames = 0;
+            bool accepted = true;
+            for (; frames < operation.Frames;)
+            {
+                Advance(player, operation.Input.Keys, operation.Input.UseSlot, operation.Input.Target);
+                frames++;
+                if (!acceptFrame(player)) { accepted = false; break; }
+            }
+            UpdateMs += Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+            return new Trial(player, accepted, frames);
+        }
+
+        public VanillaFrame.WorkerState Capture(VanillaFrame.WorkerState start, Trial trial)
+        {
+            long at = Stopwatch.GetTimestamp();
+            knownWorld = start.CaptureCurrent(trial.Player);
+            CaptureMs += Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+            return knownWorld;
+        }
+    }
+
     public sealed class RegionPlayback
     {
         readonly Input[] inputs;

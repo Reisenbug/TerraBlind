@@ -101,7 +101,7 @@ public sealed class VanillaWorkerConnection : IDisposable
             request["request_id"] = id;
             await Write(request);
             using var registration = cancellation.Register(() => _ = Cancel(id));
-            string line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            string line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(request["command"]?.GetValue<string>() == "reachability" ? 120 : 20));
             var result = JsonNode.Parse(line ?? throw new IOException("推演连接已断开")).AsObject();
             cancellation.ThrowIfCancellationRequested();
             if (result["request_id"]?.GetValue<long>() != id && result["error"] == null)
