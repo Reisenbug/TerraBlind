@@ -743,6 +743,7 @@ public sealed class Engine : ModSystem
         using var process = System.Diagnostics.Process.GetCurrentProcess();
         var cpuAt = process.TotalProcessorTime;
         var gcAt = GC.GetTotalPauseDuration();
+        long allocatedAt = GC.GetAllocatedBytesForCurrentThread(), sharedArrayBytes = 0;
         long tileChanges = 0, tileWrites = 0;
         var layers = new JsonArray();
         double restoreMs = 0, updateMs = 0, captureMs = 0;
@@ -808,6 +809,7 @@ public sealed class Engine : ModSystem
             ["rejections"] = rejections,
             ["touch_damage"] = touchDamage,
             ["captured_tile_changes"] = tileChanges, ["restored_tile_writes"] = tileWrites,
+            ["shared_array_bytes"] = sharedArrayBytes,
             ["layers"] = layers,
             ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs,
@@ -859,7 +861,7 @@ public sealed class Engine : ModSystem
             }
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
             long rootAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            rootState = new VanillaFrame.WorkerState(initial, start);
+            rootState = new VanillaFrame.WorkerState(initial, start, request["share_snapshot_arrays"]?.GetValue<bool>() ?? true);
             rootStateMs = System.Diagnostics.Stopwatch.GetElapsedTime(rootAt).TotalMilliseconds;
             var best = new RegionNode(rootState, Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
             if (Reached(start))
@@ -945,6 +947,7 @@ public sealed class Engine : ModSystem
                         if (!safe) continue;
                         at = System.Diagnostics.Stopwatch.GetTimestamp();
                         var state = checkpoint.CaptureCurrent(player);
+                        sharedArrayBytes += state.SharedArrayBytes;
                         knownWorld = state;
                         captureFields += state.FieldsMs; captureItems += state.ItemsMs; captureTiles += state.TilesMs;
                         tileChanges += state.CapturedTileChanges;
@@ -1010,6 +1013,7 @@ public sealed class Engine : ModSystem
                 completed["wall_ms"] = timer.Elapsed.TotalMilliseconds;
                 process.Refresh();
                 completed["timing"]["process_cpu_ms"] = (process.TotalProcessorTime - cpuAt).TotalMilliseconds;
+                completed["timing"]["allocated_bytes"] = GC.GetAllocatedBytesForCurrentThread() - allocatedAt;
                 completed["timing"]["gc_pause_ms"] = (GC.GetTotalPauseDuration() - gcAt).TotalMilliseconds;
             }
         }
@@ -2224,6 +2228,7 @@ public sealed class Engine : ModSystem
             player.position.X += 7; player.buffTime[0] += 17; player.inventory[0].stack += 3;
             var expected = VanillaFrame.Capture(player, area, true);
             var child = parent.CaptureCurrent(player);
+            if (child.SharedArrayBytes <= 0) throw new InvalidOperationException("unchanged_arrays_were_not_shared");
             if (child.CapturedTileChanges != 2) throw new InvalidOperationException("branch_tile_delta_mismatch");
             if (child.CaptureCurrent(player).CapturedTileChanges != 0)
                 throw new InvalidOperationException("unchanged_branch_reported_tile_changes");
@@ -2238,6 +2243,7 @@ public sealed class Engine : ModSystem
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("branch_restore_changed_state");
             player.buffTime[0]++; player.inventory[0].stack++;
+            player.buffImmune[0] = !player.buffImmune[0];
             player = child.Restore();
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("branch_arrays_or_items_aliased");

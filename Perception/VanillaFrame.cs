@@ -415,18 +415,21 @@ public static class VanillaFrame
         readonly TileWallWireStateData[][] tileStates;
         readonly LiquidData[][] liquids;
         readonly int x0, y0, width, gameMode;
+        readonly bool shareArrays;
         public int CapturedTileChanges { get; private set; }
         public int RestoredTileWrites { get; private set; }
         public double FieldsMs { get; private set; }
         public double PlayerConstructorMs { get; private set; }
         public double ItemsMs { get; private set; }
         public double TilesMs { get; private set; }
+        public long SharedArrayBytes { get; private set; }
 
         public WorkerState(JsonObject state) : this(state, RestoreInWorker(state)) { }
 
-        public WorkerState(JsonObject state, Player source)
+        public WorkerState(JsonObject state, Player source, bool shareArrays = true)
         {
             RequireWorker();
+            this.shareArrays = shareArrays;
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
             main = DecodeFields(typeof(Main), state["main"].AsObject(), true);
@@ -458,6 +461,7 @@ public static class VanillaFrame
         {
             RequireWorker();
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            shareArrays = template.shareArrays;
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = CaptureValues(source, template.playerFields);
             main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
@@ -512,8 +516,23 @@ public static class VanillaFrame
             return result;
         }
 
-        static (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
-            => template.Select(entry => (entry.field, CopyValue(entry.field.GetValue(source)))).ToArray();
+        (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
+            => template.Select(entry => (entry.field, CaptureValue(entry.field.GetValue(source), entry.value))).ToArray();
+
+        object CaptureValue(object value, object previous)
+        {
+            if (!shareArrays) return CopyValue(value);
+            bool unchanged = (value, previous) switch {
+                (bool[] current, bool[] saved) => current.AsSpan().SequenceEqual(saved),
+                (int[] current, int[] saved) => current.AsSpan().SequenceEqual(saved),
+                (float[] current, float[] saved) => current.AsSpan().SequenceEqual(saved),
+                (byte[] current, byte[] saved) => current.AsSpan().SequenceEqual(saved),
+                (double[] current, double[] saved) => current.AsSpan().SequenceEqual(saved),
+                _ => false
+            };
+            if (unchanged) SharedArrayBytes += Buffer.ByteLength((Array)value);
+            return unchanged ? previous : CopyValue(value);
+        }
 
         void RestoreColumns<T>(T[][] columns, T[][] known) where T : unmanaged, ITileData
         {
