@@ -22,11 +22,13 @@ public sealed class Engine : Mod { }
 public sealed class HornetTrial : ModSystem
 {
     public static bool Enabled => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck");
+    bool Obstacle => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetwall");
     public static int Target = -1;
     public static bool Killed;
     readonly JsonArray rounds = new();
     readonly HashSet<(int, int)> hostileProjectiles = new();
     int x, floor, tick, spawnedAt, hpBefore, knivesBefore, shots, moves, damageTaken, previousHp;
+    int blockedFrames, blockedAttackFrames;
     bool started, finished;
     double distance;
     Vector2 previousPosition;
@@ -52,6 +54,10 @@ public sealed class HornetTrial : ModSystem
                     { tile.HasTile = true; tile.TileType = TileID.Stone; }
                 }
                 foreach (var npc in Main.npc) npc.active = false;
+                if (Obstacle)
+                    for (int tx = x + 7; tx <= x + 8; tx++)
+                    for (int ty = floor - 5; ty < floor; ty++)
+                    { var tile = Main.tile[tx, ty]; tile.HasTile = true; tile.TileType = TileID.Stone; }
                 foreach (var projectile in Main.projectile) projectile.active = false;
                 foreach (var item in Main.item) item.active = false;
                 foreach (var item in p.inventory) item.TurnToAir();
@@ -61,7 +67,7 @@ public sealed class HornetTrial : ModSystem
                 p.immune = false; p.immuneTime = 0;
                 Main.playerInventory = false;
                 previousHp = p.statLife; previousPosition = p.position;
-                Console.WriteLine("HORNET_TRIAL_START arena=42x12 knives=500 hp=300 immunity=false sequential=3 model_calls=0");
+                Console.WriteLine($"HORNET_TRIAL_START arena=42x12 knives=500 hp=300 immunity=false sequential=3 model_calls=0 obstacle={Obstacle}");
                 Spawn(p); return;
             }
             tick++;
@@ -75,6 +81,8 @@ public sealed class HornetTrial : ModSystem
             if (p.Center.X < (x - 22) * 16 || p.Center.X > (x + 22) * 16 || p.Center.Y < (floor - 13) * 16)
             { Record(p, "left_arena"); Finish(false, "left_arena"); return; }
             int elapsed = tick - spawnedAt;
+            if (elapsed >= 120 && Main.npc[Target].active && !Collision.CanHitLine(p.Center, 4, 4, Main.npc[Target].Center, 4, 4))
+            { blockedFrames++; if (p.controlUseItem) blockedAttackFrames++; }
             if (elapsed == 120) FightCoordinator.Start(60, new[] { (int)NPCID.Hornet });
             if (Killed)
             {
@@ -95,7 +103,7 @@ public sealed class HornetTrial : ModSystem
         if (Target >= Main.maxNPCs) throw new InvalidOperationException("hornet_spawn_failed");
         Killed = false; spawnedAt = tick; hpBefore = p.statLife;
         knivesBefore = p.inventory.Where(i => i.type == ItemID.ThrowingKnife).Sum(i => i.stack);
-        shots = moves = damageTaken = 0; hostileProjectiles.Clear(); distance = 0; previousPosition = p.position; previousHp = p.statLife;
+        shots = moves = damageTaken = blockedFrames = blockedAttackFrames = 0; hostileProjectiles.Clear(); distance = 0; previousPosition = p.position; previousHp = p.statLife;
         Console.WriteLine($"HORNET_SPAWN round={rounds.Count + 1} id={Target} hp={Main.npc[Target].life} side={side}");
     }
 
@@ -105,6 +113,7 @@ public sealed class HornetTrial : ModSystem
             ["frames"] = tick - spawnedAt, ["hp_before"] = hpBefore, ["hp_after"] = p.statLife,
             ["damage_taken"] = damageTaken, ["knives_used"] = shots, ["movement_frames"] = moves,
             ["hostile_projectiles"] = hostileProjectiles.Count,
+            ["line_blocked_frames"] = blockedFrames, ["blocked_attack_frames"] = blockedAttackFrames,
             ["distance_pixels"] = distance, ["target_hp"] = Main.npc[Target].life };
         rounds.Add(result); Console.WriteLine("HORNET_ROUND " + result.ToJsonString());
     }
@@ -114,7 +123,7 @@ public sealed class HornetTrial : ModSystem
         finished = true; FightCoordinator.Stop();
         File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject
         { ["ok"] = ok, ["detail"] = "HORNET_TRIAL_COMPLETE " + outcome, ["rounds"] = rounds,
-            ["model_calls"] = 0, ["immunity"] = false, ["arena_cells"] = "42x12" }.ToJsonString());
+            ["model_calls"] = 0, ["immunity"] = false, ["arena_cells"] = "42x12", ["obstacle"] = Obstacle }.ToJsonString());
     }
 }
 
