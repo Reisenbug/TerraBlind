@@ -272,6 +272,7 @@ public sealed class Engine : ModSystem
         var search = request.DeepClone().AsObject();
         JsonObject result = null;
         bool support = true;
+        bool direct = true;
         bool Terminal() => result?["status"]?.GetValue<string>() is "reached" or "snapshot_required";
         JsonObject Search(string mode, JsonNode region, bool grounded, JsonNode goals = null,
             JsonNode platform = null, JsonNode mining = null)
@@ -282,41 +283,49 @@ public sealed class Engine : ModSystem
             search["goal_regions"] = goals?.DeepClone();
             search["placement_tile"] = platform?.DeepClone();
             search["mining_tiles"] = mining?.DeepClone();
+            search["direct"] = direct;
             result = RegionSearch(search);
             attempts.Add(new JsonObject { ["mode"] = mode, ["region"] = region.DeepClone(),
+                ["direct"] = direct,
                 ["status"] = result["status"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
                 ["expanded"] = result["expanded"]?.DeepClone(), ["frames"] = result["controls"].AsArray().Count });
             return result;
         }
-        if (corridor["goal_regions"].AsArray().Count > 0)
-            Search("movement", request["region"], true, corridor["goal_regions"]);
-        if (!Terminal())
-        foreach (var candidate in corridor["platform_candidates"].AsArray().Take(3))
+        void Explore()
         {
-            Search("platform", candidate["region"], true, platform: candidate["tile"]);
-            if (result["status"]?.GetValue<string>() == "reached") corridor["selected_platform"] = candidate.DeepClone();
-            if (Terminal()) break;
-        }
-        if (!Terminal())
-        {
-            var candidates = corridor["excavation_candidates"].AsArray();
-            var priorities = candidates.OrderBy(candidate => Math.Abs(candidate["path_step"].GetValue<int>() - 4)).Take(1).ToList();
-            priorities.AddRange(candidates.Reverse().Where(candidate => candidate["path_step"].GetValue<int>() <= 2
-                && !priorities.Contains(candidate)));
-            foreach (var candidate in priorities)
+            if (corridor["goal_regions"].AsArray().Count > 0)
+                Search("movement", request["region"], true, corridor["goal_regions"]);
+            if (!Terminal())
+            foreach (var candidate in corridor["platform_candidates"].AsArray().Take(3))
             {
-                if (candidate["movement_blocked_by"] == null)
-                {
-                    Search("local_movement", candidate["goal_region"], false);
-                    if (result["status"]?.GetValue<string>() == "reached")
-                        corridor["selected_local_transit"] = candidate["goal_region"].DeepClone();
-                    if (Terminal()) break;
-                }
-                Search("mining", candidate["goal_region"], false, mining: candidate["mining_tiles"]);
-                if (result["status"]?.GetValue<string>() == "reached") corridor["selected_excavation"] = candidate.DeepClone();
+                Search("platform", candidate["region"], true, platform: candidate["tile"]);
+                if (result["status"]?.GetValue<string>() == "reached") corridor["selected_platform"] = candidate.DeepClone();
                 if (Terminal()) break;
             }
+            if (!Terminal())
+            {
+                var candidates = corridor["excavation_candidates"].AsArray();
+                var priorities = candidates.OrderBy(candidate => Math.Abs(candidate["path_step"].GetValue<int>() - 4)).Take(1).ToList();
+                if (!direct)
+                    priorities.AddRange(candidates.Reverse().Where(candidate => candidate["path_step"].GetValue<int>() <= 2
+                        && !priorities.Contains(candidate)));
+                foreach (var candidate in priorities)
+                {
+                    if (candidate["movement_blocked_by"] == null)
+                    {
+                        Search("local_movement", candidate["goal_region"], false);
+                        if (result["status"]?.GetValue<string>() == "reached")
+                            corridor["selected_local_transit"] = candidate["goal_region"].DeepClone();
+                        if (Terminal()) break;
+                    }
+                    Search("mining", candidate["goal_region"], false, mining: candidate["mining_tiles"]);
+                    if (result["status"]?.GetValue<string>() == "reached") corridor["selected_excavation"] = candidate.DeepClone();
+                    if (Terminal()) break;
+                }
+            }
         }
+        Explore();
+        if (!Terminal()) { direct = false; Explore(); }
         result ??= new JsonObject { ["status"] = "no_local_route", ["controls"] = new JsonArray() };
         if (result["status"]?.GetValue<string>() == "snapshot_required")
         {
@@ -369,6 +378,7 @@ public sealed class Engine : ModSystem
         int horizon = request["horizon"]?.GetValue<int>() ?? 90;
         int beam = request["beam"]?.GetValue<int>() ?? 6;
         int quantum = request["quantum"]?.GetValue<int>() ?? 6;
+        bool direct = request["direct"]?.GetValue<bool>() == true;
         bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
         Point? placement = request["placement_tile"] is JsonArray place
             ? new Point(place[0].GetValue<int>(), place[1].GetValue<int>()) : null;
@@ -495,7 +505,9 @@ public sealed class Engine : ModSystem
             bool gravity = start.buffType.Contains(BuffID.Gravitation);
             int[] actions = gravity ? new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18, 8, 9, 10 }
                 : new[] { 0, 1, 2, 4, 5, 6, 16, 17, 18 };
-            for (int depth = 0; depth < horizon && frontier.Count > 0; depth += quantum)
+            if (direct) actions = actions.Where(keys => (keys & 1) == 0).ToArray();
+            int segment = direct ? horizon : quantum;
+            for (int depth = 0; depth < horizon && frontier.Count > 0; depth += segment)
             {
                 var next = new System.Collections.Generic.List<RegionNode>();
                 foreach (var parent in frontier)
@@ -520,18 +532,28 @@ public sealed class Engine : ModSystem
                         var uses = new System.Collections.Generic.List<int>();
                         var targets = new System.Collections.Generic.List<Point>();
                         var randomIndices = new System.Collections.Generic.List<int>();
+                        var controls = new System.Collections.Generic.List<int>();
                         bool safe = true, reached = false;
-                        for (; count < Math.Min(quantum, horizon - depth);)
+                        for (; count < Math.Min(segment, horizon - depth);)
                         {
                             at = System.Diagnostics.Stopwatch.GetTimestamp();
                             Point? aim = action.use && !Edited() ? Target(player) : null;
                             int slot = aim != null ? useSlot : -1;
                             randomIndices.Add(WorldRandomIndex());
                             traceRandom = parent.Controls.Length == 0 && action.keys == 0 && slot >= 0 && count == 0 ? "search" : null;
-                            VanillaPrediction.Advance(player, (VanillaKeys)action.keys, slot, aim);
+                            int keys = action.keys;
+                            if (direct && (keys & 2) != 0)
+                            {
+                                var foot = player.Bottom;
+                                var destination = goalRegions.OrderBy(goal => Vector2.DistanceSquared(foot,
+                                    new Vector2(Math.Clamp(foot.X, goal.Left, goal.Right), Math.Clamp(foot.Y, goal.Top, goal.Bottom)))).First();
+                                keys = (keys & ~3) | (foot.X < destination.Left ? 2 : foot.X > destination.Right ? 1 : 0);
+                            }
+                            VanillaPrediction.Advance(player, (VanillaKeys)keys, slot, aim);
                             traceRandom = null;
                             randomIndices.Add(WorldRandomIndex());
                             uses.Add(slot);
+                            controls.Add(keys);
                             targets.Add(aim ?? Point.Zero);
                             updateMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                             count++; simulated++;
@@ -549,7 +571,7 @@ public sealed class Engine : ModSystem
                         captureFields += state.FieldsMs; captureItems += state.ItemsMs; captureTiles += state.TilesMs;
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
-                        var node = new RegionNode(state, parent.Controls.Concat(Enumerable.Repeat(action.keys, count)).ToArray(),
+                        var node = new RegionNode(state, parent.Controls.Concat(controls).ToArray(),
                             parent.Uses.Concat(uses).ToArray(), parent.Targets.Concat(targets).ToArray(), parent.RandomIndices.Concat(randomIndices).ToArray(), Distance(player), player.Bottom, player.velocity, player.releaseJump, MiningDamage(player),
                             miningTiles.Count(tile => !Main.tile[tile.X, tile.Y].HasTile), Mode(player));
                         if (node.Distance < best.Distance) best = node;
@@ -575,7 +597,7 @@ public sealed class Engine : ModSystem
                     if (frontier.Min(selected => Separation(candidate, selected)) == 0) break;
                     frontier.Add(candidate);
                 }
-                layers.Add(new JsonObject { ["frame"] = depth + quantum, ["generated"] = next.Count,
+                layers.Add(new JsonObject { ["frame"] = depth + segment, ["generated"] = next.Count,
                     ["candidates"] = new JsonArray(next.Select(node => (JsonNode)new JsonObject {
                         ["position"] = new JsonArray(node.Position.X, node.Position.Y),
                         ["velocity"] = new JsonArray(node.Velocity.X, node.Velocity.Y),
