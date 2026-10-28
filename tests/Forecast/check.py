@@ -169,6 +169,7 @@ def main():
     parser.add_argument("--reachability-probe", type=Path)
     parser.add_argument("--reachability-baseline", type=Path)
     parser.add_argument("--movement-probe", type=Path)
+    parser.add_argument("--movement-baseline", type=Path)
     parser.add_argument("--region", type=int, nargs=4)
     parser.add_argument("--region-horizon", type=int, default=90)
     parser.add_argument("--region-quantum", type=int, choices=(6, 12))
@@ -269,27 +270,43 @@ def main():
             assert surfaces, "no_real_map_destinations"
             near = sorted(surfaces, key=lambda r: abs(r[0]+r[2]/2-x)+abs(r[1]-y))[:4]
             targets = near + random.Random(79).sample([r for r in surfaces if r not in near], min(3, max(0, len(surfaces)-len(near))))
+            output = args.root / ("movement-" + args.movement_probe.stem)
+            output.mkdir(exist_ok=True)
             rows = []
             for index, target in enumerate(targets):
                 row = dict(region=target)
-                for name, enabled in (("previous", False), ("reactive", True)):
+                plans = [("previous", False, [target]), ("reactive", True, [target])]
+                for name, enabled, goals in plans:
                     result = worker.call("region_search", snapshot=state, region=target, horizon=120,
-                                         direct=True, terrain_motion=enabled, require_support=True, exclude_start=True)
-                    row[name] = {k: result.get(k) for k in ("status", "elapsed_ms", "expanded", "simulated_frames")}
-                    (args.root / f"movement-{index}-{name}.json").write_text(json.dumps(result))
-                    if result["status"] == "reached":
+                                         goal_regions=goals, direct=True, terrain_motion=enabled, require_support=True, exclude_start=True)
+                    row[name] = {k: result.get(k) for k in ("status", "elapsed_ms", "wall_ms", "timing", "distance", "expanded", "simulated_frames")}
+                    (output / f"movement-{index}-{name}.json").write_text(json.dumps(result))
+                    if args.movement_baseline:
+                        baseline = json.loads((args.movement_baseline / output.name / f"movement-{index}-{name}.json").read_text())
+                        for key in ("status", "controls", "end_snapshot"):
+                            assert result.get(key) == baseline.get(key), f"movement_changed:{index}:{name}:{key}"
+                    if name == "reactive" and result["status"] != "reached":
+                        neighbors = [r for r in surfaces if abs(r[1]-target[1]) <= 16
+                                     and r[0] <= target[0]+target[2]+24 and r[0]+r[2] >= target[0]-24]
+                        plans.append(("nearby", True, neighbors))
+                    if result["controls"]:
                         replay = worker.call("region_replay", snapshot=state, **{k: result[k] for k in ("controls", "use_slots", "use_targets")})
                         assert replay["outcome"] == "complete"
                         assert replay["end_snapshot"] == result["end_snapshot"], "movement_replay_mismatch"
                         trace = worker.call("replay", snapshot=state, controls=result["controls"])
                         assert trace["outcome"] == "complete"
                         frames = trace["frames"]
+                        distances = [max(target[0]-f["x"]-state["player"]["Terraria.Entity:width"]/2,
+                                         f["x"]+state["player"]["Terraria.Entity:width"]/2-target[0]-target[2], 0)**2
+                                     + (f["y"]+state["player"]["Terraria.Entity:height"]-target[1])**2 for f in frames]
+                        row[name]["closest_frame"] = min(range(len(frames)), key=lambda i: distances[i]) + 1
+                        row[name]["closest_distance"] = min(distances)**.5
                         row[name]["extra_jump_frames"] = [i + 1 for i in range(1, len(frames))
                             if frames[i]["available_jumps"] < frames[i-1]["available_jumps"]]
-                        (args.root / f"movement-{index}-{name}-trace.json").write_text(json.dumps(trace))
+                        (output / f"movement-{index}-{name}-trace.json").write_text(json.dumps(trace))
                 rows.append(row)
                 print("MOVEMENT_PROBE", row, flush=True)
-            (args.root / "movement-summary.json").write_text(json.dumps(rows))
+            (output / "movement-summary.json").write_text(json.dumps(rows))
             assert any(r["reactive"]["status"] == "reached" for r in rows)
             assert all(r["reactive"]["status"] == "reached" for r in rows if r["previous"]["status"] == "reached")
             print("MOVEMENT_PROBE_PASS", len(rows), flush=True)
@@ -436,6 +453,9 @@ def main():
                                           if key not in ("end_snapshot", "controls", "layers", "use_slots", "use_targets", "world_random_indices")}, flush=True)
             return
         if args.native_mining_probe:
+            state_contract = worker.call("worker_state_contract")
+            assert state_contract["passed"]
+            print("WORKER_STATE_REUSE_PASS", state_contract, flush=True)
             result = worker.call("native_mining_probe")
             (args.root / "native-mining.json").write_text(json.dumps(result))
             print("NATIVE_MINING_RESULT", result, flush=True)

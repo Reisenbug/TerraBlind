@@ -422,9 +422,11 @@ public static class VanillaFrame
         public double ItemsMs { get; private set; }
         public double TilesMs { get; private set; }
 
-        public WorkerState(JsonObject state)
+        public WorkerState(JsonObject state) : this(state, RestoreInWorker(state)) { }
+
+        public WorkerState(JsonObject state, Player source)
         {
-            var source = RestoreInWorker(state);
+            RequireWorker();
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
             main = DecodeFields(typeof(Main), state["main"].AsObject(), true);

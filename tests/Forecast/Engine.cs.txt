@@ -545,12 +545,18 @@ public sealed class Engine : ModSystem
             throw new ArgumentException("invalid_region_search_budget");
         var timer = System.Diagnostics.Stopwatch.StartNew();
         int expanded = 0, simulated = 0, shared = 0;
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var cpuAt = process.TotalProcessorTime;
+        var gcAt = GC.GetTotalPauseDuration();
         long tileChanges = 0, tileWrites = 0;
         var layers = new JsonArray();
         double restoreMs = 0, updateMs = 0, captureMs = 0;
         double restoreFields = 0, restoreItems = 0, restoreTiles = 0;
         double playerConstructors = 0;
         double captureFields = 0, captureItems = 0, captureTiles = 0;
+        double initialRestoreMs = 0, rootStateMs = 0, finishRestoreMs = 0, finishSnapshotMs = 0;
+        JsonObject completed = null;
+        VanillaFrame.WorkerState rootState = null;
         float Distance(Player player)
         {
             var point = player.Bottom;
@@ -576,7 +582,17 @@ public sealed class Engine : ModSystem
         }
         var a = initial["area"].AsArray();
         var tiles = new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>());
-        JsonObject Finish(RegionNode node, bool reached) => new()
+        JsonObject EndSnapshot(RegionNode node)
+        {
+            long at = System.Diagnostics.Stopwatch.GetTimestamp();
+            var player = node.State.Restore();
+            finishRestoreMs = System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+            at = System.Diagnostics.Stopwatch.GetTimestamp();
+            var snapshot = VanillaFrame.Capture(player, tiles, true);
+            finishSnapshotMs = System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+            return snapshot;
+        }
+        JsonObject Finish(RegionNode node, bool reached) => completed = new()
         {
             ["status"] = reached ? "reached" : "budget_exhausted",
             ["quantum"] = quantum,
@@ -588,7 +604,7 @@ public sealed class Engine : ModSystem
             ["placement_tile"] = placement is Point tile ? new JsonArray(tile.X, tile.Y) : null,
             ["mining_tile"] = mining is Point mineTile ? new JsonArray(mineTile.X, mineTile.Y) : null,
             ["mining_tiles"] = new JsonArray(miningTiles.Select(tile => (JsonNode)new JsonArray(tile.X, tile.Y)).ToArray()),
-            ["end_snapshot"] = VanillaFrame.Capture(node.State.Restore(), tiles, true),
+            ["end_snapshot"] = EndSnapshot(node),
             ["placed"] = Placed(),
             ["cleared"] = miningTiles.Length > 0 && Edited(),
             ["cleared_count"] = miningTiles.Count(tile => !Main.tile[tile.X, tile.Y].HasTile),
@@ -598,13 +614,18 @@ public sealed class Engine : ModSystem
             ["layers"] = layers,
             ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
             ["timing"] = new JsonObject { ["restore_ms"] = restoreMs, ["update_ms"] = updateMs, ["capture_ms"] = captureMs,
+                ["initial_restore_ms"] = initialRestoreMs, ["finish_restore_ms"] = finishRestoreMs,
+                ["root_state_ms"] = rootStateMs,
+                ["finish_snapshot_ms"] = finishSnapshotMs,
                 ["restore_fields_ms"] = restoreFields, ["restore_items_ms"] = restoreItems, ["restore_tiles_ms"] = restoreTiles,
                 ["player_constructor_ms"] = playerConstructors,
                 ["capture_fields_ms"] = captureFields, ["capture_items_ms"] = captureItems, ["capture_tiles_ms"] = captureTiles }
         };
         try
         {
+            long initialAt = System.Diagnostics.Stopwatch.GetTimestamp();
             var start = VanillaFrame.RestoreInWorker(initial);
+            initialRestoreMs = System.Diagnostics.Stopwatch.GetElapsedTime(initialAt).TotalMilliseconds;
             playerIndex = start.whoAmI;
             if (placement is Point target)
             {
@@ -639,7 +660,10 @@ public sealed class Engine : ModSystem
                         ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds, ["expanded"] = 0 };
             }
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
-            var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
+            long rootAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            rootState = new VanillaFrame.WorkerState(initial, start);
+            rootStateMs = System.Diagnostics.Stopwatch.GetElapsedTime(rootAt).TotalMilliseconds;
+            var best = new RegionNode(rootState, Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
             if (Reached(start))
                 return Finish(best, true);
             var frontier = new System.Collections.Generic.List<RegionNode> { best };
@@ -766,7 +790,20 @@ public sealed class Engine : ModSystem
                 ["missing_tile"] = new JsonArray(error.Tile.X, error.Tile.Y),
                 ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds };
         }
-        finally { VanillaFrame.RestoreInWorker(initial); }
+        finally
+        {
+            long at = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (rootState == null) VanillaFrame.RestoreInWorker(initial);
+            else rootState.Restore();
+            if (completed != null)
+            {
+                completed["timing"]["cleanup_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+                completed["wall_ms"] = timer.Elapsed.TotalMilliseconds;
+                process.Refresh();
+                completed["timing"]["process_cpu_ms"] = (process.TotalProcessorTime - cpuAt).TotalMilliseconds;
+                completed["timing"]["gc_pause_ms"] = (GC.GetTotalPauseDuration() - gcAt).TotalMilliseconds;
+            }
+        }
     }
 
     public override void Load() { Main.OnEnginePreload += Run; On_WorldGen.TileFrame += TraceTileFrame; On_WorldGen.KillTile += TraceKillTile; }
@@ -1942,7 +1979,7 @@ public sealed class Engine : ModSystem
         {
             Setup(new JsonObject { ["terrain"] = "flat" });
             var initial = VanillaFrame.Capture(source, area, true);
-            var parent = new VanillaFrame.WorkerState(initial);
+            var parent = new VanillaFrame.WorkerState(initial, VanillaFrame.RestoreInWorker(initial));
             var player = parent.Restore();
             var tile = Main.tile[X + 5, Y - 5];
             tile.HasTile = true; tile.TileType = TileID.Platforms; tile.LiquidAmount = 71;
