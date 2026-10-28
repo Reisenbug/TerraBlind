@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -17,6 +18,113 @@ using TerraBlind;
 namespace Engine;
 
 public sealed class Engine : Mod { }
+
+public sealed class HornetTrial : ModSystem
+{
+    public static bool Enabled => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck");
+    public static int Target = -1;
+    public static bool Killed;
+    readonly JsonArray rounds = new();
+    readonly HashSet<(int, int)> hostileProjectiles = new();
+    int x, floor, tick, spawnedAt, hpBefore, knivesBefore, shots, moves, damageTaken, previousHp;
+    bool started, finished;
+    double distance;
+    Vector2 previousPosition;
+
+    public override void PostUpdateEverything()
+    {
+        if (!Enabled || finished || Main.gameMenu || !Main.LocalPlayer.active) return;
+        try
+        {
+            var p = Main.LocalPlayer;
+            if (!started)
+            {
+                started = true;
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                AgentPermissions.Attack = AgentPermissions.Dodge = true;
+                Combat.Enabled = Dodge.Enabled = false;
+                x = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16;
+                for (int tx = x - 22; tx <= x + 22; tx++)
+                for (int ty = floor - 13; ty <= floor + 2; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (tx == x - 22 || tx == x + 22 || ty == floor - 13 || ty >= floor)
+                    { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var projectile in Main.projectile) projectile.active = false;
+                foreach (var item in Main.item) item.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.ThrowingKnife); p.inventory[0].stack = 500;
+                p.ConsumedLifeCrystals = 10; p.statLifeMax = p.statLife = 300;
+                p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+                p.immune = false; p.immuneTime = 0;
+                Main.playerInventory = false;
+                previousHp = p.statLife; previousPosition = p.position;
+                Console.WriteLine("HORNET_TRIAL_START arena=42x12 knives=500 hp=300 immunity=false sequential=3 model_calls=0");
+                Spawn(p); return;
+            }
+            tick++;
+            distance += Vector2.Distance(previousPosition, p.position); previousPosition = p.position;
+            if (p.controlLeft || p.controlRight || p.controlJump) moves++;
+            damageTaken += Math.Max(0, previousHp - p.statLife); previousHp = p.statLife;
+            foreach (var projectile in Main.projectile)
+                if (projectile.active && projectile.hostile) hostileProjectiles.Add((projectile.whoAmI, projectile.identity));
+            shots = Math.Max(shots, knivesBefore - p.inventory.Where(i => i.type == ItemID.ThrowingKnife).Sum(i => i.stack));
+            if (p.dead) { Record(p, "player_dead"); Finish(false, "player_dead"); return; }
+            if (p.Center.X < (x - 22) * 16 || p.Center.X > (x + 22) * 16 || p.Center.Y < (floor - 13) * 16)
+            { Record(p, "left_arena"); Finish(false, "left_arena"); return; }
+            int elapsed = tick - spawnedAt;
+            if (elapsed == 120) FightCoordinator.Start(60, new[] { (int)NPCID.Hornet });
+            if (Killed)
+            {
+                Record(p, "killed"); FightCoordinator.Stop();
+                if (rounds.Count == 3) { Finish(true, "three_hornets_killed"); return; }
+                Spawn(p); return;
+            }
+            if (!Main.npc[Target].active) { Record(p, "target_lost"); Finish(false, "target_lost"); return; }
+            if (elapsed >= 1800) { Record(p, "timeout"); Finish(false, "timeout"); }
+        }
+        catch (Exception error) { Finish(false, error.ToString()); }
+    }
+
+    void Spawn(Player p)
+    {
+        int side = rounds.Count % 2 == 0 ? 1 : -1;
+        Target = NPC.NewNPC(new EntitySource_Misc("HornetTrial"), (x + side * 17) * 16, (floor - 6) * 16, NPCID.Hornet);
+        if (Target >= Main.maxNPCs) throw new InvalidOperationException("hornet_spawn_failed");
+        Killed = false; spawnedAt = tick; hpBefore = p.statLife;
+        knivesBefore = p.inventory.Where(i => i.type == ItemID.ThrowingKnife).Sum(i => i.stack);
+        shots = moves = damageTaken = 0; hostileProjectiles.Clear(); distance = 0; previousPosition = p.position; previousHp = p.statLife;
+        Console.WriteLine($"HORNET_SPAWN round={rounds.Count + 1} id={Target} hp={Main.npc[Target].life} side={side}");
+    }
+
+    void Record(Player p, string outcome)
+    {
+        var result = new JsonObject { ["round"] = rounds.Count + 1, ["outcome"] = outcome,
+            ["frames"] = tick - spawnedAt, ["hp_before"] = hpBefore, ["hp_after"] = p.statLife,
+            ["damage_taken"] = damageTaken, ["knives_used"] = shots, ["movement_frames"] = moves,
+            ["hostile_projectiles"] = hostileProjectiles.Count,
+            ["distance_pixels"] = distance, ["target_hp"] = Main.npc[Target].life };
+        rounds.Add(result); Console.WriteLine("HORNET_ROUND " + result.ToJsonString());
+    }
+
+    void Finish(bool ok, string outcome)
+    {
+        finished = true; FightCoordinator.Stop();
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject
+        { ["ok"] = ok, ["detail"] = "HORNET_TRIAL_COMPLETE " + outcome, ["rounds"] = rounds,
+            ["model_calls"] = 0, ["immunity"] = false, ["arena_cells"] = "42x12" }.ToJsonString());
+    }
+}
+
+public sealed class HornetTrialNpcs : GlobalNPC
+{
+    public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
+    { if (HornetTrial.Enabled) { spawnRate = int.MaxValue; maxSpawns = 0; } }
+    public override void OnKill(NPC npc)
+    { if (HornetTrial.Enabled && npc.whoAmI == HornetTrial.Target && npc.type == NPCID.Hornet) HornetTrial.Killed = true; }
+}
 
 public sealed class Driver : ModSystem
 {
@@ -96,6 +204,7 @@ public sealed class Driver : ModSystem
     public override void PostUpdateEverything()
     {
         if (!enabled || Main.gameMenu || !Main.LocalPlayer.active) return;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck")) return;
         try
         {
             if (liveRunning)
