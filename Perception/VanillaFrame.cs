@@ -253,6 +253,32 @@ public static class VanillaFrame
     public static bool ContextMatches(JsonObject state, Player player)
         => ContextMatches(state, player, out _);
 
+    public static JsonObject RefreshFutureTerrain(Player player, JsonObject before, JsonObject after, Rectangle area)
+    {
+        if (!JsonNode.DeepEquals(before["area"], after["area"]))
+            throw new ArgumentException("forecast_terrain_area_mismatch");
+        var live = Capture(player, area, true);
+        var current = ReadTiles(live);
+        var initial = ReadTiles(before);
+        var predicted = ReadTiles(after);
+        var bounds = before["area"];
+        int left = bounds[0].GetValue<int>(), top = bounds[1].GetValue<int>(), width = bounds[2].GetValue<int>();
+        for (int i = 0; i < initial.Length / 10; i++)
+        {
+            int x = left + i % width, y = top + i / width;
+            if (!area.Contains(x, y)) continue;
+            int destination = ((y - area.Y) * area.Width + x - area.X) * 10;
+            for (int field = 0; field < 10; field++)
+                if (initial[i * 10 + field] != predicted[i * 10 + field])
+                    current[destination + field] = predicted[i * 10 + field];
+        }
+        var result = after.DeepClone().AsObject();
+        result["area"] = live["area"].DeepClone();
+        result["tiles"] = PackInts(current);
+        result["tile_encoding"] = "i32-native";
+        return result;
+    }
+
     internal static int[] ReadTiles(JsonObject state)
     {
         if (state["tiles"] is JsonArray rows)

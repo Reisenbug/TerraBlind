@@ -1879,6 +1879,48 @@ public sealed class Engine : ModSystem
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
         }
+        if (command == "refresh_future_terrain_contract")
+        {
+            Setup(new JsonObject { ["terrain"] = "flat" });
+            var mine = new Point(area.Left + 2, area.Top + 2);
+            var liveChange = new Point(mine.X + 1, mine.Y);
+            var platform = new Point(mine.X + 2, mine.Y);
+            var outside = new Point(area.Right + 1, mine.Y);
+            var mineTile = Main.tile[mine.X, mine.Y];
+            var platformTile = Main.tile[platform.X, platform.Y];
+            var liveTile = Main.tile[liveChange.X, liveChange.Y];
+            var outsideTile = Main.tile[outside.X, outside.Y];
+            mineTile.HasTile = true;
+            mineTile.TileType = TileID.Stone;
+            platformTile.HasTile = false;
+            var initial = VanillaFrame.Capture(source, area, true);
+            mineTile.HasTile = false;
+            platformTile.HasTile = true;
+            platformTile.TileType = TileID.Platforms;
+            source.position.X += 16;
+            var future = VanillaFrame.Capture(source, area, true);
+            var actual = VanillaFrame.RestoreInWorker(initial);
+            liveTile.HasTile = true;
+            liveTile.TileType = TileID.Dirt;
+            outsideTile.HasTile = true;
+            outsideTile.TileType = TileID.Glass;
+            mineTile.LiquidType = LiquidID.Water;
+            mineTile.LiquidAmount = 123;
+            var enlarged = new Rectangle(area.X, area.Y, area.Width + 3, area.Height);
+            var merged = VanillaFrame.RefreshFutureTerrain(actual, initial, future, enlarged);
+            if (!JsonNode.DeepEquals(future["player"], merged["player"]))
+                throw new InvalidOperationException("future_player_replaced");
+            VanillaFrame.RestoreInWorker(merged);
+            if (Main.tile[mine.X, mine.Y].HasTile || Main.tile[mine.X, mine.Y].LiquidAmount != 123
+                || !Main.tile[liveChange.X, liveChange.Y].HasTile || Main.tile[liveChange.X, liveChange.Y].TileType != TileID.Dirt
+                || !Main.tile[platform.X, platform.Y].HasTile || Main.tile[platform.X, platform.Y].TileType != TileID.Platforms
+                || !Main.tile[outside.X, outside.Y].HasTile || Main.tile[outside.X, outside.Y].TileType != TileID.Glass)
+                throw new InvalidOperationException("future_terrain_merge_failed");
+            return new JsonObject { ["passed"] = true, ["future_player_preserved"] = true,
+                ["predicted_mining_preserved"] = true, ["live_changes_preserved"] = true,
+                ["predicted_platform_preserved"] = true,
+                ["new_area_observed"] = true, ["flowing_water_preserved"] = true };
+        }
         if (command == "slope_body_contract")
         {
             Setup(new JsonObject { ["terrain"] = "flat" });

@@ -40,11 +40,15 @@ internal sealed class VanillaRegionNavigation : IDisposable
         var p = snapshot["player"];
         float x = p["Terraria.Entity:position"]["Microsoft.Xna.Framework.Vector2:X"].GetValue<float>();
         float y = p["Terraria.Entity:position"]["Microsoft.Xna.Framework.Vector2:Y"].GetValue<float>();
+        var bounds = snapshot["area"];
+        var region = Rectangle.Intersect(new Rectangle((int)Math.Floor(x) - 160, (int)Math.Floor(y) - 192, 320, 384),
+            new Rectangle(bounds[0].GetValue<int>() * 16, bounds[1].GetValue<int>() * 16,
+                bounds[2].GetValue<int>() * 16, bounds[3].GetValue<int>() * 16));
         requested = snapshot;
         cancellation = new CancellationTokenSource();
         var request = new JsonObject { ["command"] = "region_plan", ["snapshot"] = snapshot.DeepClone(),
             ["guidance"] = VanillaNavBridge.CaptureGuidance(snapshot),
-            ["region"] = new JsonArray((int)Math.Floor(x) - 160, (int)Math.Floor(y) - 192, 320, 384),
+            ["region"] = new JsonArray(region.X, region.Y, region.Width, region.Height),
             ["horizon"] = 180, ["beam"] = 6, ["quantum"] = 12 };
         pending = send(request, cancellation.Token);
     }
@@ -79,7 +83,24 @@ internal sealed class VanillaRegionNavigation : IDisposable
                 {
                     playback = candidate; active = result; Accepted++;
                     Status = "执行区域路线，准备下一段";
-                    Request(result["end_snapshot"].AsObject());
+                    var end = result["end_snapshot"].AsObject();
+                    var position = end["player"]["Terraria.Entity:position"];
+                    var destination = new Vector2(position["Microsoft.Xna.Framework.Vector2:X"].GetValue<float>(),
+                        position["Microsoft.Xna.Framework.Vector2:Y"].GetValue<float>());
+                    var a = end["area"];
+                    var observed = new Rectangle(a[0].GetValue<int>() * 16, a[1].GetValue<int>() * 16,
+                        a[2].GetValue<int>() * 16, a[3].GetValue<int>() * 16);
+                    var needed = new Rectangle((int)Math.Floor(destination.X) - 160,
+                        (int)Math.Floor(destination.Y) - 192, 320, 384);
+                    var next = end;
+                    if (!observed.Contains(needed))
+                    {
+                        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                        next = VanillaFrame.RefreshFutureTerrain(player, requested, end,
+                            VanillaLocalPlanner.SnapshotArea(player, destination));
+                        DiagLog.Write($"[region-observation] area={next["area"]} refresh_ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+                    }
+                    Request(next);
                     return;
                 }
                 DiagLog.Write("[region-rejected] " + mismatch);

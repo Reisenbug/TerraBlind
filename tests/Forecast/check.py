@@ -728,6 +728,9 @@ def main():
         slopes = worker.call("slope_body_contract")
         assert slopes["passed"] and slopes["cases"] == 16
         print("SLOPE_BODY_CONTRACT_PASS", slopes, flush=True)
+        refresh = worker.call("refresh_future_terrain_contract")
+        assert refresh["passed"]
+        print("REFRESH_FUTURE_TERRAIN_CONTRACT_PASS", refresh, flush=True)
         expansion = worker.call("snapshot_expansion_contract")
         assert expansion["passed"]
         print("SNAPSHOT_EXPANSION_CONTRACT_PASS", expansion, flush=True)
