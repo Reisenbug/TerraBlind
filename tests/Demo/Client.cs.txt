@@ -646,6 +646,12 @@ public sealed class Driver : ModSystem
             if (!routeClock.IsRunning)
             {
                 routeClock.Start(); timingPhase = "command_setup"; phaseStart = 0;
+                if (Terraria.Program.LaunchParameters.TryGetValue("-vnavregionscheck", out string regionalGoal))
+                {
+                    var coordinates = regionalGoal.Split(',');
+                    routeGoalX = int.Parse(coordinates[0]); routeGoalY = int.Parse(coordinates[1]);
+                    args = new[] { "regions", routeGoalX.ToString(), routeGoalY.ToString() };
+                }
                 phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
             }
             if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline) && (!journey || continuityLeg == 0))
