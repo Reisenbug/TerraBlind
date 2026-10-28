@@ -8,8 +8,16 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="Jint" Version="4.17.0" />
 		<Compile Remove="tests/**/*.cs" />
 	</ItemGroup>
+	<Target Name="BundleScriptRuntime" BeforeTargets="BuildMod" DependsOnTargets="ResolveReferences" Condition="'$(BuildMod)' == 'true'">
+		<ItemGroup>
+			<ScriptRuntimeAssemblies Include="@(ReferencePath)" Condition="'%(Filename)' == 'Jint' Or '%(Filename)' == 'Acornima'" />
+		</ItemGroup>
+		<MakeDir Directories="$(ProjectDir)lib" />
+		<Copy SourceFiles="@(ScriptRuntimeAssemblies)" DestinationFolder="$(ProjectDir)lib" SkipUnchangedFiles="true" />
+	</Target>
 	<Target Name="BundleVanillaWorker" BeforeTargets="Build" Condition="'$(BuildMod)' == 'true'">
 		<PropertyGroup>
 			<VanillaWorkerBuildRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/obj/vanilla-worker'))</VanillaWorkerBuildRoot>

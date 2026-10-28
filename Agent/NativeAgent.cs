@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -225,6 +226,14 @@ public class NativeAgent : ModSystem
             finally { registration.Dispose(); }
         });
         return result.Task;
+    }
+
+    internal static void ValidateTool(string name, JsonObject args)
+    {
+        var schema = _instance?._schemas?.FirstOrDefault(t => t["function"]?["name"]?.ToString() == name);
+        if (schema == null) throw new ArgumentException("未知游戏工具：" + name);
+        foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+            if (args[field.ToString()] == null) throw new ArgumentException("工具缺少必填参数：" + field);
     }
 
     internal static async Task<string> Ask(string question, CancellationToken token)

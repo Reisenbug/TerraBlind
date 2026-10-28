@@ -228,6 +228,10 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "run_script":
+                result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool, Execute,
+                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token);
+                break;
             case "gather":
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))
                     .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
@@ -527,13 +531,21 @@ public static class AgentTools
             int Power(Item item) => Main.tileAxe[tile.TileType] ? item.axe : Main.tileHammer[tile.TileType] ? item.hammer : item.pick;
             int slot = Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
                 .FirstOrDefault(i => !Main.LocalPlayer.inventory[i].IsAir && Power(Main.LocalPlayer.inventory[i]) > 0, -1);
-            return new JsonObject { ["slot"] = slot };
+            bool canMine = false;
+            if (slot >= 0)
+            {
+                int previous = Main.LocalPlayer.selectedItem;
+                try { Main.LocalPlayer.selectedItem = slot; canMine = Reach.CanMine(Main.LocalPlayer, x, y); }
+                finally { Main.LocalPlayer.selectedItem = previous; }
+            }
+            return new JsonObject { ["slot"] = slot, ["in_reach"] = canMine,
+                ["solid"] = Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType] };
         }, token);
         if (target == null) return null;
         if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
-        if (!await NativeAgent.OnMain(() => Reach.CanInteract(Main.LocalPlayer, x, y), token))
+        if (!Bool(target, "in_reach"))
         {
-            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = true }, token, 30);
+            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = Bool(target, "solid") }, token, 30);
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
         }

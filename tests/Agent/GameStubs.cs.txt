@@ -239,7 +239,12 @@ namespace TerraBlind
         public static int OriginCx(Terraria.Player player) => 12;
         public static int OriginCy(Terraria.Player player) => 34;
     }
-    public static class Reach { public static bool CanInteract(Terraria.Player player, int x, int y) => true; }
+    public static class Reach
+    {
+        public static Func<Terraria.Player, int, int, bool> MineTest;
+        public static bool CanInteract(Terraria.Player player, int x, int y) => true;
+        public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
+    }
     public static class HttpServerSystem
     {
         public static object PendingControl, LatestSnapshot;

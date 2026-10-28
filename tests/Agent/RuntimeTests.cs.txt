@@ -142,6 +142,38 @@ static class RuntimeTests
             Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[100, 100] = default;
             Console.WriteLine("PASS: non-solid mining selects an actual collect tool, rejects missing tools and preserves measured removal outcome");
 
+            var beforeRangePosition = Game.LocalPlayer.position;
+            bool approachedForMining = false;
+            try
+            {
+                Game.LocalPlayer.inventory[6] = new Terraria.Item { stack = 1, pick = 50 };
+                Game.tile[12, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+                Reach.MineTest = (player, x, y) =>
+                {
+                    Check(player.selectedItem == 6, "mining distance used a different held tool");
+                    return approachedForMining;
+                };
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        Check(!JsonNode.Parse(payload)["reach"].GetValue<bool>(), "non-solid collection stopped at interaction boundary");
+                        approachedForMining = true; Game.LocalPlayer.position = new(192, 544);
+                    }
+                    if (path == "/item_use") Check(approachedForMining, "interaction range incorrectly bypassed mining approach");
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/item_use_status"
+                        ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+                };
+                var reached = await Execute(AgentTools.CollectTarget(12, 34, default));
+                Check(approachedForMining && reached?["outcome"]?.ToString() == "removed", "collection failed to approach with actual tool distance: " + reached);
+            }
+            finally
+            {
+                Reach.MineTest = null; Game.LocalPlayer.position = beforeRangePosition;
+                Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[12, 34] = default;
+            }
+            Console.WriteLine("PASS: collection measures the selected tool's mining range and approaches beyond interaction distance");
+
             var treasureCalls = new System.Collections.Generic.List<string>();
             HttpServerSystem.Handler = (path, payload) =>
             {
@@ -200,6 +232,34 @@ static class RuntimeTests
             Terraria.Lang.MapLabels.Clear();
             Terraria.Map.MapHelper.tileOptionCounts = Array.Empty<int>();
             Console.WriteLine("PASS: tile queries reuse unique game map names, preserve bounds and refuse ambiguous source names");
+
+            int scriptQueries = 0;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path == "/npc_find", "script bypassed expected production tool adapter");
+                scriptQueries++;
+                Check(JsonNode.Parse(payload)["type"].GetValue<int>() == 77, "script lost dependent argument");
+                return (200, "{\"npcs\":[{\"idx\":4,\"type\":77}]}");
+            };
+            var script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "const r=tool('npc_find',{type:77}); return {target:r.npcs[0].idx};" }, default)));
+            Check(script["ok"].GetValue<bool>() && script["value"]["target"].GetValue<int>() == 4 && scriptQueries == 1,
+                "production script tool failed to compose real dispatcher results");
+            script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "return tool('game_catalog',{kind:'tile'});" }, default)));
+            Check(!script["ok"].GetValue<bool>() && script["detail"].ToString().Contains("name") && scriptQueries == 1,
+                "script bypassed required tool arguments");
+            bool attackBeforeScript = AgentPermissions.Attack;
+            try
+            {
+                AgentPermissions.Attack = false;
+                script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["code"] = "return tool('fight',{max_dist:40,seconds:1});" }, default)));
+                Check(script["value"]?["error"]?.ToString().Contains("禁止") == true && scriptQueries == 1,
+                    "script bypassed existing attack permission");
+            }
+            finally { AgentPermissions.Attack = attackBeforeScript; }
+            Console.WriteLine("PASS: production run_script uses existing dispatcher and registered tool argument validation");
 
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
