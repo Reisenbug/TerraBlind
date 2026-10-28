@@ -193,17 +193,20 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
-    public static async Task ScriptModel()
+    public static async Task ScriptModel(bool fullTools = false, string selectedModel = "")
     {
         string root = Directory.GetCurrentDirectory();
         var names = new[] { "run_script", "get_state", "gather", "say", "game_catalog" };
         var tools = new JsonArray(JsonNode.Parse(File.ReadAllText(Path.Combine(root, "Agent/Tools.json"))).AsArray()
-            .Where(t => names.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
+            .Where(t => fullTools || names.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         string system = File.ReadAllText(Path.Combine(root, "Agent/System.txt"))
             + "\n本次为隔离的脚本组合验收，仅提供所列工具；无需建立任务计划。资源来源已查证：LifeCrystal物品29，方块Heart。";
         string output = Path.Combine(Path.GetTempPath(), "terrablind-script-model-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);
-        Console.WriteLine("SCRIPT_MODEL artifacts=" + output + " mock_world=true");
+        string model = fullTools ? string.IsNullOrEmpty(selectedModel) ? "gpt-6-luna" : selectedModel : "";
+        var entryTools = fullTools ? AgentScript.EntryTools(tools) : tools;
+        if (fullTools) system = AgentScript.Instructions(system, tools);
+        Console.WriteLine($"SCRIPT_MODEL artifacts={output} mock_world=true full_tools={fullTools} model={model} effort=low");
         foreach (bool perItem in new[] { false, true })
         {
             using var agent = new CodexAgent();
@@ -253,7 +256,9 @@ static class CodexTests
                     if (args["text"].ToString().Trim() == "叮") announcements.Add(stock);
                     result = "{\"ok\":true}";
                 }
-                else result = "{\"matches\":[{\"type\":29,\"internal\":\"LifeCrystal\",\"exact\":true}]}";
+                else if (name == "track") result = "{\"outcome\":\"tracking\"}";
+                else if (name == "game_catalog") result = "{\"matches\":[{\"type\":29,\"internal\":\"LifeCrystal\",\"exact\":true}]}";
+                else result = "{\"error\":\"not_simulated\",\"detail\":\"此模拟世界只执行库存查询、gather、say及脚本；其他工具不产生游戏效果。\"}";
                 entry["result"] = result;
                 return result;
             }
@@ -261,11 +266,12 @@ static class CodexTests
                 : "收集10颗生命水晶放在背包里，不要使用。";
             try
             {
-                await agent.RunAsync(goal, "", root, "", system, tools, Execute,
+                await agent.RunAsync(goal, "", root, model, system, entryTools, Execute,
                     reply => events.Add(new JsonObject { ["reply"] = reply }), timeout.Token);
-                Check(stock == 10 && scripts > 0 && actionsInScript > 0, "model did not execute its collection through a script");
+                Check(stock == 10, "model did not reach the requested inventory");
+                Check(!perItem || scripts > 0 && actionsInScript > 0, "model did not compose per-item behavior through a script");
                 Check(!perItem || announcements.SequenceEqual(Enumerable.Range(1, 10)), "model lost per-item collection/behavior order");
-                Console.WriteLine($"PASS: model-authored script per_item={perItem} stock={stock} scripts={scripts} mock_world=true");
+                Console.WriteLine($"PASS: model execution per_item={perItem} stock={stock} scripts={scripts} mock_world=true");
             }
             finally { File.WriteAllText(Path.Combine(output, perItem ? "per-item.json" : "collect.json"), events.ToJsonString()); }
         }
