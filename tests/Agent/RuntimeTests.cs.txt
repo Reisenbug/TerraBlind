@@ -261,6 +261,35 @@ static class RuntimeTests
             finally { AgentPermissions.Attack = attackBeforeScript; }
             Console.WriteLine("PASS: production run_script uses existing dispatcher and registered tool argument validation");
 
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") RecedingNav.Active = true;
+                return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+            };
+            using (var root = new CancellationTokenSource())
+            {
+                var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:100,y:100}});" }, root.Token)));
+                string handle = started["value"]["handle"].ToString();
+                await PumpUntil(() => RecedingNav.Active);
+                var query = JsonNode.Parse(await Execute(AgentTools.Execute("action_query", new JsonObject { ["handle"] = handle }, default)));
+                Check(query["status"].ToString() == "running" && query["observation"]["hp"].GetValue<int>() == Game.LocalPlayer.statLife,
+                    "background action died with the returning script or query lacked current observation");
+                var conflicting = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 0, ["y"] = 0 }, default)));
+                Check(conflicting["error"].ToString() == "action_busy", "foreground action stole managed input");
+                var pausedAction = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
+                    { ["handle"] = handle, ["command"] = "pause" }, default)));
+                Check(pausedAction["status"].ToString() == "paused" && !RecedingNav.Active, "pause failed to stop actual navigation adapter");
+                await Execute(AgentTools.Execute("action_control", new JsonObject { ["handle"] = handle, ["command"] = "resume" }, root.Token));
+                await PumpUntil(() => RecedingNav.Active);
+                root.Cancel();
+                await PumpUntil(() => !AgentTools.Actions.HasActive);
+                Check(!RecedingNav.Active && AgentTools.Actions.Snapshot()[0]["status"].ToString() == "cancelled",
+                    "root cancellation failed to release actual navigation inputs");
+            }
+            AgentTools.Actions.Reset();
+            Console.WriteLine("PASS: production scripts preserve background handles across return, block input conflicts and support pause/resume/root cancellation");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);

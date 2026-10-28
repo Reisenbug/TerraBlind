@@ -127,6 +127,7 @@ static class Tests
         Console.WriteLine("PASS: dialogue filtering and bounded task loop");
         CatalogTests.Run();
         await ScriptTests.Run();
+        await ActionTests.Run();
         TaskPlanTests.Run();
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();
@@ -136,7 +137,7 @@ static class Tests
         DirectiveTests.Run();
         HistoryTests.Run();
         InventoryTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=61");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=68");
     }
 
     sealed class FakeHandler : HttpMessageHandler

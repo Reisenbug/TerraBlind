@@ -1,0 +1,93 @@
+using System;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class ActionTests
+{
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
+    static TaskCompletionSource<bool> Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public static async Task Run()
+    {
+        int stock = 0, attempts = 0, stops = 0, hp = 80;
+        var collecting = Signal(); var cleaning = Signal(); var release = Signal();
+        Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject { ["stock"] = Volatile.Read(ref stock), ["hp"] = hp });
+        async Task<string> Execute(string tool, JsonObject args, CancellationToken token)
+        {
+            if (Interlocked.Increment(ref attempts) == 1)
+            {
+                Interlocked.Exchange(ref stock, 3); collecting.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            Check(stock == 3, "resume discarded collected inventory");
+            Interlocked.Exchange(ref stock, args["count"].GetValue<int>());
+            return "{\"ok\":true,\"outcome\":\"enough\"}";
+        }
+        async Task Stop(Func<bool> owns)
+        {
+            cleaning.TrySetResult(true); await release.Task;
+            Check(owns(), "cleanup lost input ownership before release");
+            Interlocked.Increment(ref stops);
+        }
+        var actions = new ActionTasks(Execute, Observe, Stop);
+        string id = actions.Start("gather", new JsonObject { ["count"] = 10 }, default)["handle"].ToString();
+        await collecting.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var running = await actions.Query(id, 0, default);
+        Check(running["status"].ToString() == "running" && running["observation"]["stock"].GetValue<int>() == 3,
+            "query could not observe inventory while collection was in flight");
+        var pause = actions.Control(id, "pause", null, default);
+        await cleaning.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!pause.IsCompleted && actions.HasActive, "pause released input before cancellation cleanup finished");
+        try { actions.Start("fight", new JsonObject(), default); throw new Exception("overlapping action accepted"); }
+        catch (InvalidOperationException) { }
+        release.TrySetResult(true);
+        var paused = await pause.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(paused["status"].ToString() == "paused" && paused["observation"]["stock"].GetValue<int>() == 3
+            && !actions.HasActive && stops == 1, "pause lost progress or failed to release input");
+        Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
+
+        hp = 100;
+        await actions.Query(id, 0, default);
+        var resumed = await actions.Control(id, "resume", null, default);
+        Check(resumed["handle"].ToString() == id && resumed["attempt"].GetValue<int>() == 2, "resume replaced the task handle");
+        Check(resumed["previous_attempt"]["observation"]["hp"].GetValue<int>() == 80,
+            "fresh observations erased the actual pause-time condition");
+        JsonObject completed;
+        do { completed = await actions.Query(id, 100, default); } while (completed["status"].ToString() == "running");
+        Check(completed["status"].ToString() == "completed" && stock == 10 && attempts == 2 && stops == 2,
+            "resumed gather did not continue its original total inventory target");
+        try { await actions.Control(id, "resume", null, default); throw new Exception("completed action restarted"); }
+        catch (InvalidOperationException) { }
+        Console.WriteLine("PASS: resumed collection retains its handle and total target without replaying completed work");
+
+        foreach (string tool in new[] { "nav_to", "fight" })
+        {
+            var entered = Signal(); int cleaned = 0;
+            async Task<string> Wait(string name, JsonObject args, CancellationToken token)
+            { entered.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); return "{}"; }
+            var tasks = new ActionTasks(Wait, Observe, owns => { if (owns()) cleaned++; return Task.CompletedTask; });
+            using var root = new CancellationTokenSource();
+            string handle = tasks.Start(tool, new JsonObject(), root.Token)["handle"].ToString();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3)); root.Cancel();
+            JsonObject cancelled;
+            do { cancelled = await tasks.Query(handle, 100, default); } while (cancelled["status"].ToString() == "running");
+            Check(cancelled["status"].ToString() == "cancelled" && cleaned == 1 && !tasks.HasActive,
+                "parent cancellation left navigation or fight running");
+        }
+        Console.WriteLine("PASS: navigation and fight handles honor root cancellation and release owned input");
+
+        var staleEntered = Signal(); var staleRelease = Signal(); int staleStops = 0;
+        var stale = new ActionTasks(async (_, _, token) => { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            async owns => { staleEntered.TrySetResult(true); await staleRelease.Task; if (owns()) staleStops++; });
+        string old = stale.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+        var cancelling = stale.Control(old, "cancel", null, default);
+        await staleEntered.Task.WaitAsync(TimeSpan.FromSeconds(3)); stale.Reset();
+        staleRelease.TrySetResult(true);
+        try { await cancelling; } catch (ArgumentException) { }
+        Check(staleStops == 0 && stale.Snapshot().Count == 0, "old world cleanup stopped a new owner or restored stale handles");
+        Console.WriteLine("PASS: world reset invalidates old handles and prevents stale cleanup from changing new input");
+    }
+}

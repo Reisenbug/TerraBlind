@@ -85,7 +85,7 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
-        if (stopActions || PvpDuel.Active) AgentTools.Stop();
+        if (stopActions || PvpDuel.Active || AgentTools.Actions.HasActive) AgentTools.Stop();
         while (_combatMessages.TryDequeue(out _)) { }
         _answer?.TrySetCanceled(); _answer = null;
         Status = "idle";
@@ -103,6 +103,7 @@ public class NativeAgent : ModSystem
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
+        if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
             && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
@@ -202,7 +203,7 @@ public class NativeAgent : ModSystem
                 {
                     if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded))
                         Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
-                    else Status = "idle";
+                    else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
                     return true;
                 }, token);
             }
@@ -263,6 +264,7 @@ public class NativeAgent : ModSystem
         Cancel();
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
+        AgentTools.Actions.Reset();
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();

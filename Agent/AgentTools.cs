@@ -14,11 +14,19 @@ public static class AgentTools
 {
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
+    internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
+        owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default));
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
     public static void NewTask() => Tracking.Clear();
     public static void Stop()
+    {
+        Actions.CancelAll();
+        StopInputs();
+    }
+
+    static void StopInputs()
     {
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
@@ -79,7 +87,16 @@ public static class AgentTools
         var workflows = new JsonObject();
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Snapshot();
         state["script_workflows"] = workflows;
+        state["action_tasks"] = Actions.Snapshot();
         return state.ToJsonString();
+    }, token);
+
+    static Task<JsonObject> ObserveAction(CancellationToken token) => NativeAgent.OnMain(() =>
+    {
+        var player = Main.LocalPlayer;
+        return new JsonObject { ["hp"] = player.statLife, ["dead"] = player.dead,
+            ["pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y },
+            ["inventory_slots"] = PvpInventory.Snapshot(), ["permanent_max_health"] = player.statLifeMax };
     }, token);
 
     static Dictionary<string, int> Inventory()
@@ -165,6 +182,9 @@ public static class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure";
         bool action = external || name is "fight" or "fight_player";
+        if ((action || name is "combat_start" or "combat_reposition") && Actions.Conflicts)
+            return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
+                ["action_tasks"] = Actions.Snapshot() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         try
         {
@@ -245,9 +265,29 @@ public static class AgentTools
                     }
                     return saved;
                 }, token);
-                result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool, Execute,
+                result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool,
+                    (child, childArgs, childToken) => Execute(child, childArgs,
+                        child == "action_start" || child == "action_control" && Text(childArgs, "command") == "resume" ? token : childToken),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow);
                 break;
+            case "action_start":
+                string actionTool = Text(args, "tool");
+                var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
+                NativeAgent.ValidateTool(actionTool, actionArgs);
+                result = Actions.Start(actionTool, actionArgs, token);
+                return result.ToJsonString();
+            case "action_query":
+                result = await Actions.Query(Text(args, "handle"), Int(args, "wait_ms", 0), token);
+                return result.ToJsonString();
+            case "action_control":
+                if (args["args"] is JsonObject resumeArgs)
+                {
+                    string resumeTool = Actions.Snapshot().FirstOrDefault(a => a["handle"]?.ToString() == Text(args, "handle"))?["tool"]?.ToString()
+                        ?? throw new ArgumentException("未知动作句柄。");
+                    NativeAgent.ValidateTool(resumeTool, resumeArgs);
+                }
+                result = await Actions.Control(Text(args, "handle"), Text(args, "command"), args["args"] as JsonObject, token);
+                return result.ToJsonString();
             case "script_progress":
                 var savedProgress = await NativeAgent.OnMain(() => Workflows.TryGetValue(Text(args, "workflow"), out var saved)
                     ? saved : throw new ArgumentException("未知workflow。"), token);
