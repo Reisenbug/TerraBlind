@@ -100,6 +100,7 @@ def verify_region(worker, state, result, root):
     replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
                          use_slots=result["use_slots"], placement_tile=result["placement_tile"],
                          mining_tile=result["mining_tile"], use_targets=result["use_targets"],
+                         thorn_damage_floor=result.get("thorn_damage_floor"),
                          frames=result.get("frames"), anchor=result.get("anchor"))
     assert replay["outcome"] == "complete", replay["outcome"]
     if result.get("frames"):
@@ -133,6 +134,7 @@ def run_corridor_chain(worker, state, source, args):
                        frames=len(result["controls"]), planning_ms=result["planning_wall_ms"],
                        cleared_count=result.get("cleared_count", 0), require_support=supported,
                        consumed=result.get("consumed", 0), backtracks=result.get("backtracks", 0))
+        summary["start_hp"] = state["player"]["Terraria.Player:statLife"]
         report["steps"].append(summary)
         (root / "result.json").write_text(json.dumps(result))
         if result["status"] != "reached" or not result["controls"]:
@@ -140,6 +142,7 @@ def run_corridor_chain(worker, state, source, args):
             break
         state = verify_region(worker, state, result, root)
         player = state["player"]
+        summary["end_hp"] = player["Terraria.Player:statLife"]
         assert result["require_support"], "Regional controller must not receive an unfinished airborne segment"
         idle = worker.call("region_replay", snapshot=state, controls=[0] * 6,
                            use_slots=[-1] * 6, use_targets=[[0, 0]] * 6,
@@ -878,6 +881,9 @@ def main():
         descent_region = worker.call("contact_descent_region")
         assert descent_region["passed"] and descent_region["cases"] == 12
         print("CONTACT_DESCENT_REGION_PASS", descent_region, flush=True)
+        thorns = worker.call("thorn_damage_policy")
+        assert thorns["passed"] and thorns["cases"] == 8
+        print("THORN_DAMAGE_POLICY_PASS", thorns, flush=True)
         branch = worker.call("worker_state_contract")
         assert branch["passed"] and branch["changed_tiles"] == 2
         print("WORKER_STATE_CONTRACT_PASS", branch, flush=True)
