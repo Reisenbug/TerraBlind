@@ -141,6 +141,8 @@ namespace TerraBlind
         }
 
         static volatile bool _fieldReady;
+        static long _startedAt;
+        static bool _startupWalkReported;
         public static void Start(int goalWx, int goalWy, bool exact = false)
             => Start(goalWx, goalWy, exact ? Mode.Mine : Mode.Snap);
 
@@ -155,6 +157,8 @@ namespace TerraBlind
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
+            _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            _startupWalkReported = false;
             VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
             _mode = mode;
@@ -172,8 +176,6 @@ namespace TerraBlind
             StuckSentinel.Reset();
             StateSpacePlanner.ResetLineProgress();
             _altered = 0;
-            // build the big field (110万格 Dijkstra ≈ 1.5s) OFF the main thread so the keypress doesn't freeze the game.
-            // Tick waits on _fieldReady; the player just stands a moment until the compass is built.
             _fieldReady = false;
             int gx = goalWx, gy = goalWy;
             System.Threading.Tasks.Task.Run(() =>
@@ -217,7 +219,7 @@ namespace TerraBlind
         static void TickInner()
         {
             if (!Active) return;
-            if (!_fieldReady) return;          // field still building off-thread → wait (player stands a moment)
+            if (!_fieldReady && (!VanillaNavBridge.RegionsEnabled || _mode != Mode.Snap)) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
 
@@ -234,6 +236,21 @@ namespace TerraBlind
                 return;
             }
             _waitOn = "";
+            if (!_fieldReady)
+            {
+                var destination = new Vector2(_goalWx * 16 + 8 - p.width / 2f, (_goalWy + 1) * 16 - p.height);
+                if (VanillaNavBridge.RegionsEnabled && _mode == Mode.Snap
+                    && VanillaContactRegion.TryWalk(p, destination, out var input))
+                {
+                    VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(input));
+                    if (!_startupWalkReported)
+                    {
+                        DiagLog.Write($"[recede-first-input] source=local_walk field_pending=true elapsed_ms={System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds:0.###}");
+                        _startupWalkReported = true;
+                    }
+                }
+                return;
+            }
 
             // 蜘蛛网压身体会把移动拖到爬(原版要 20-100 tick 才顶开),一镐就没,所以主动砸
             if (!VanillaNavigationDemo.Instance.NavigationOwned && !StateSpacePlanner.PreserveTerrain) SmashWeb(p);

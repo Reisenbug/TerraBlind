@@ -43,6 +43,31 @@ public sealed class FieldTimingCheck : ModSystem
                 player.velocity = Vector2.Zero; player.jump = 0; player.releaseJump = true;
                 var goal = player.position + new Vector2(160, 0);
                 if (!VanillaContactRegion.TryWalk(player, goal, out _)) continue;
+                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+                var startupFields = new[] { "_fieldReady", "_goalWx", "_goalWy", "_mode", "_startedAt", "_startupWalkReported" }
+                    .Select(name => typeof(RecedingNav).GetField(name, flags)).ToArray();
+                var saved = startupFields.Select(field => field.GetValue(null)).ToArray();
+                bool oldRegions = VanillaNavBridge.RegionsEnabled;
+                try
+                {
+                    startupFields[0].SetValue(null, false);
+                    startupFields[1].SetValue(null, x + 600);
+                    startupFields[2].SetValue(null, y - 1);
+                    startupFields[3].SetValue(null, RecedingNav.Mode.Snap);
+                    startupFields[4].SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+                    startupFields[5].SetValue(null, false);
+                    VanillaNavBridge.RegionsEnabled = true; RecedingNav.Active = true;
+                    player.controlRight = false;
+                    RecedingNav.Tick();
+                    if (!player.controlRight) throw new InvalidOperationException("startup_waited_for_global_field");
+                }
+                finally
+                {
+                    RecedingNav.Active = false; VanillaNavBridge.RegionsEnabled = oldRegions;
+                    AxisLock.Release("recede");
+                    for (int i = 0; i < startupFields.Length; i++) startupFields[i].SetValue(null, saved[i]);
+                    player.controlRight = false;
+                }
                 int hp = player.statLife;
                 var origin = player.position;
                 int requests = 0, moving = 0;
@@ -50,6 +75,17 @@ public sealed class FieldTimingCheck : ModSystem
                 Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> send = (request, token) =>
                 { requests++; token.Register(() => pending.TrySetCanceled(token)); return pending.Task; };
                 var type = typeof(VanillaNavigationDemo).Assembly.GetType("TerraBlind.VanillaRegionNavigation", true);
+                var obsolete = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+                Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> delayed = (request, token) =>
+                { token.Register(() => obsolete.TrySetCanceled(token)); return obsolete.Task; };
+                using (var switcher = (IDisposable)Activator.CreateInstance(type, delayed))
+                {
+                    type.GetMethod("Tick").Invoke(switcher, new object[] { player, 0L, goal - new Vector2(0, 160) });
+                    type.GetMethod("Tick").Invoke(switcher, new object[] { player, 1L, goal });
+                    var resumed = (VanillaPrediction.Input)type.GetMethod("InputAt").Invoke(switcher, new object[] { 2L });
+                    if (!obsolete.Task.IsCanceled || resumed.Keys == VanillaKeys.None)
+                        throw new InvalidOperationException("pending_plan_blocked_safe_walk");
+                }
                 using var controller = (IDisposable)Activator.CreateInstance(type, send);
                 for (int frame = 0; frame < 45; frame++)
                 {
