@@ -401,14 +401,31 @@ public sealed class Engine : ModSystem
         JsonNode initialCorridor = null;
         int consumed = 0, cleared = 0;
         bool placed = false;
+        int backtracks = 0;
+        var checkpoints = new System.Collections.Generic.Stack<(JsonObject Request, JsonObject Combined,
+            JsonArray Segments, int Remaining, int Consumed, int Cleared, bool Placed)>();
         string[] streams = { "controls", "use_slots", "use_targets", "world_random_indices", "frames" };
         foreach (string stream in streams) combined[stream] = new JsonArray();
+        bool Backtrack()
+        {
+            if (!checkpoints.TryPop(out var checkpoint)) return false;
+            (next, combined, segments, remaining, consumed, cleared, placed) = checkpoint;
+            backtracks++;
+            return true;
+        }
         try
         {
-            while (remaining > 0)
+            while (true)
             {
+                VanillaPrediction.CheckCancellation();
+                if (remaining <= 0)
+                {
+                    if (Backtrack()) continue;
+                    break;
+                }
                 next["horizon"] = remaining;
                 var part = RegionPlanSegment(next);
+                var priorSegments = segments.DeepClone().AsArray();
                 initialCost ??= part["corridor"]?["start_cost"]?.DeepClone();
                 initialCorridor ??= part["corridor"]?.DeepClone();
                 segments.Add(new JsonObject { ["status"] = part["status"]?.DeepClone(),
@@ -417,13 +434,23 @@ public sealed class Engine : ModSystem
                     ["attempts"] = part["attempts"]?.DeepClone() });
                 if (part["status"]?.GetValue<string>() != "reached")
                 {
+                    if (part["status"]?.GetValue<string>() != "snapshot_required" && Backtrack()) continue;
                     part["controls"] = new JsonArray();
                     part["segments"] = segments;
+                    part["backtracks"] = backtracks;
                     part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
                     return part;
                 }
                 int count = part["controls"].AsArray().Count;
-                if (count == 0) break;
+                if (count == 0)
+                {
+                    if (Backtrack()) continue;
+                    break;
+                }
+                var resume = next.DeepClone().AsObject();
+                resume["search_cursor"] = part["search_cursor"].DeepClone();
+                checkpoints.Push((resume, combined.DeepClone().AsObject(), priorSegments,
+                    remaining, consumed, cleared, placed));
                 consumed += part["consumed"]?.GetValue<int>() ?? 0;
                 cleared += part["cleared_count"]?.GetValue<int>() ?? 0;
                 placed |= part["placed"]?.GetValue<bool>() == true;
@@ -456,7 +483,11 @@ public sealed class Engine : ModSystem
                 var area = end["area"];
                 end = VanillaFrame.Capture(player, new Rectangle(area[0].GetValue<int>(), area[1].GetValue<int>(),
                     area[2].GetValue<int>(), area[3].GetValue<int>()), true);
-                if (player.dead || player.statLife < hp) break;
+                if (player.dead || player.statLife < hp)
+                {
+                    if (Backtrack()) continue;
+                    break;
+                }
                 if (stable && player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player)
                     && VanillaContactRegion.SafeBody(player.position, player.width, player.height))
                 {
@@ -469,14 +500,16 @@ public sealed class Engine : ModSystem
                     part["placed"] = placed;
                     part["require_support"] = true;
                     part["segments"] = segments;
+                    part["backtracks"] = backtracks;
                     part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
                     return part;
                 }
                 next["snapshot"] = end.DeepClone();
+                next.Remove("search_cursor");
             }
             return new JsonObject { ["status"] = "budget_exhausted", ["controls"] = new JsonArray(),
                 ["corridor"] = initialCorridor, ["attempts"] = new JsonArray(), ["segments"] = segments,
-                ["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds };
+                ["backtracks"] = backtracks, ["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds };
         }
         finally { VanillaFrame.RestoreInWorker(request["snapshot"].AsObject()); }
     }
@@ -490,10 +523,14 @@ public sealed class Engine : ModSystem
         JsonObject result = null;
         bool support = true;
         bool direct = true;
+        int cursor = 0, skip = request["search_cursor"]?.GetValue<int>() ?? 0;
         bool Terminal() => result?["status"]?.GetValue<string>() is "reached" or "snapshot_required";
         JsonObject Search(string mode, JsonNode region, bool grounded, JsonNode goals = null,
             JsonNode platform = null, JsonNode mining = null)
         {
+            cursor++;
+            if (cursor <= skip)
+                return result = new JsonObject { ["status"] = "previously_explored", ["controls"] = new JsonArray() };
             support = grounded;
             search["region"] = region.DeepClone();
             search["require_support"] = grounded;
@@ -509,17 +546,20 @@ public sealed class Engine : ModSystem
                 ["expanded"] = result["expanded"]?.DeepClone(), ["frames"] = result["controls"].AsArray().Count });
             return result;
         }
-        void Explore()
+        void Platforms()
         {
-            if (corridor["goal_regions"].AsArray().Count > 0)
-                Search("movement", request["region"], true, corridor["goal_regions"]);
-            if (!Terminal())
             foreach (var candidate in corridor["platform_candidates"].AsArray().Take(3))
             {
                 Search("platform", candidate["region"], true, platform: candidate["tile"]);
                 if (result["status"]?.GetValue<string>() == "reached") corridor["selected_platform"] = candidate.DeepClone();
                 if (Terminal()) break;
             }
+        }
+        void Explore()
+        {
+            if (corridor["goal_regions"].AsArray().Count > 0)
+                Search("movement", request["region"], true, corridor["goal_regions"]);
+            if (!Terminal() && direct) Platforms();
             if (!Terminal())
             {
                 var candidates = corridor["excavation_candidates"].AsArray()
@@ -543,6 +583,7 @@ public sealed class Engine : ModSystem
                     if (Terminal()) break;
                 }
             }
+            if (!Terminal() && !direct) Platforms();
         }
         Explore();
         if (!Terminal()) { direct = false; Explore(); }
@@ -554,6 +595,7 @@ public sealed class Engine : ModSystem
             result["boundary_request"] = boundary;
         }
         result["corridor"] = corridor;
+        result["search_cursor"] = cursor;
         result["attempts"] = attempts;
         result["require_support"] = support;
         if (result["status"]?.GetValue<string>() == "reached")

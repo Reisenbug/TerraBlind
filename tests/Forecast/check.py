@@ -131,7 +131,8 @@ def run_corridor_chain(worker, state, source, args):
         state, result, corridor, supported = plan_observed_corridor(worker, state, source["guidance"], args, root)
         summary = dict(step=step, status=result["status"], start_cost=corridor["start_cost"],
                        frames=len(result["controls"]), planning_ms=result["planning_wall_ms"],
-                       cleared_count=result.get("cleared_count", 0), require_support=supported)
+                       cleared_count=result.get("cleared_count", 0), require_support=supported,
+                       backtracks=result.get("backtracks", 0))
         report["steps"].append(summary)
         (root / "result.json").write_text(json.dumps(result))
         if result["status"] != "reached" or not result["controls"]:
