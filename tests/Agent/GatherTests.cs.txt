@@ -47,6 +47,37 @@ static class GatherTests
             "gather budget did not stop action and preserve timed-out target");
         Console.WriteLine("PASS: gathering deadline cancels a blocked action, stops owned control and preserves target evidence");
         FightFiltering();
+        Evasion();
+    }
+
+    static void Evasion()
+    {
+        var p = Main.LocalPlayer;
+        var oldShots = Main.projectile; var oldNpcs = Main.npc;
+        var oldVelocity = p.velocity; float oldGravity = p.gravity;
+        try
+        {
+            p.velocity = default; p.gravity = 0;
+            Main.npc = Array.Empty<NPC>();
+            var shot = new Projectile { active = true, hostile = true, damage = 10,
+                Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, -120), velocity = new(0, 5) };
+            Main.projectile = new[] { shot };
+            Check(FightCoordinator.Evade(p).Direction != 0, "incoming vertical projectile did not trigger lateral evasion");
+            float wall = p.position.X - 1;
+            Collision.SolidTest = (position, width, height) => position.X < wall;
+            Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected the blocked side");
+            Collision.SolidTest = null;
+            shot.hostile = false;
+            Check(FightCoordinator.Evade(p) == (0, false), "friendly projectile triggered evasion");
+            shot.hostile = true; shot.Center += new Microsoft.Xna.Framework.Vector2(500, 0);
+            Check(FightCoordinator.Evade(p) == (0, false), "non-intersecting projectile caused idle movement");
+        }
+        finally
+        {
+            Main.projectile = oldShots; Main.npc = oldNpcs;
+            p.velocity = oldVelocity; p.gravity = oldGravity; Collision.SolidTest = null;
+        }
+        Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
     }
 
     static void FightFiltering()

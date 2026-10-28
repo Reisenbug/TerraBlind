@@ -38,6 +38,8 @@ namespace Terraria
         public bool HasAmmunition = true;
         public bool controlUp, controlDown, controlHook, ExtraJump;
         public float wingTime, manaCost = 1;
+        public static float jumpSpeed = 5.01f;
+        public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
         public int statMana = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
         public Item HeldItem => inventory[selectedItem];
@@ -59,6 +61,7 @@ namespace Terraria
     {
         public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
         public bool active, friendly, townNPC;
+        public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
     }
@@ -97,6 +100,7 @@ namespace Terraria
     {
         public bool active, arrow, friendly, hostile;
         public int owner, damage, identity, whoAmI, type, extraUpdates;
+        public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
     public static class WorldGen { public static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < 1000 && y < 1000; }
@@ -104,7 +108,8 @@ namespace Terraria
     {
         public static bool Clear = true;
         public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => Clear;
-        public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => false;
+        public static Func<Microsoft.Xna.Framework.Vector2, int, int, bool> SolidTest;
+        public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => SolidTest?.Invoke(position, width, height) ?? false;
     }
     public static class NetMessage
     {

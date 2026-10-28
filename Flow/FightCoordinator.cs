@@ -2,6 +2,8 @@ using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
 using System.Collections.Generic;
+using System;
+using Microsoft.Xna.Framework;
 
 namespace TerraBlind
 {
@@ -12,6 +14,70 @@ namespace TerraBlind
         private static float _maxDistTiles = 20f;
         private const int TimeoutFrames = 360;
         private static HashSet<int> _types;
+        private static bool _moving;
+        private static int _jumpHold;
+
+        private static void ReleaseMovement(Player p)
+        {
+            if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
+            _moving = false; _jumpHold = 0;
+        }
+
+        internal static (int Direction, bool Jump) Evade(Player p)
+        {
+            var shots = new List<Projectile>();
+            var enemies = new List<NPC>();
+            foreach (var shot in Main.projectile)
+                if (shot.active && shot.hostile && shot.damage > 0) shots.Add(shot);
+            foreach (var npc in Main.npc)
+                if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
+                    && Vector2.Distance(npc.Center, p.Center) < 600) enemies.Add(npc);
+            if (shots.Count == 0 && enemies.Count == 0) return (0, false);
+            float Risk(int direction, bool jump)
+            {
+                Vector2 position = p.Center, velocity = p.velocity;
+                if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
+                float score = direction == 0 ? 0 : .01f;
+                if (jump) score += .02f;
+                for (int frame = 1; frame <= 24; frame++)
+                {
+                    float desired = direction * Math.Max(p.maxRunSpeed, p.accRunSpeed);
+                    velocity.X += Math.Clamp(desired - velocity.X, -p.runAcceleration, p.runAcceleration);
+                    var next = position + new Vector2(velocity.X, 0);
+                    if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
+                    else velocity.X = 0;
+                    velocity.Y += p.gravity;
+                    next = position + new Vector2(0, velocity.Y);
+                    if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
+                    else velocity.Y = 0;
+                    foreach (var shot in shots)
+                    {
+                        Vector2 point = shot.Center + shot.velocity * ((shot.extraUpdates + 1) * frame);
+                        if (Math.Abs(point.X - position.X) < (p.width + shot.width) / 2f + 6
+                            && Math.Abs(point.Y - position.Y) < (p.height + shot.height) / 2f + 6)
+                            score += 25 - frame;
+                    }
+                    foreach (var npc in enemies)
+                    {
+                        Vector2 point = npc.Center + npc.velocity * frame;
+                        if (Math.Abs(point.X - position.X) < (p.width + npc.width) / 2f + 4
+                            && Math.Abs(point.Y - position.Y) < (p.height + npc.height) / 2f + 4)
+                            score += 25 - frame;
+                    }
+                }
+                return score;
+            }
+            (int Direction, bool Jump) best = (0, false);
+            float bestRisk = Risk(0, false);
+            foreach (int direction in new[] { -1, 0, 1 })
+            foreach (bool jump in new[] { false, true })
+            {
+                if (jump && p.velocity.Y != 0) continue;
+                float risk = Risk(direction, jump);
+                if (risk < bestRisk) { bestRisk = risk; best = (direction, jump); }
+            }
+            return best;
+        }
 
         public static bool IsActive => _active && _framesLeft > 0;
 
@@ -25,6 +91,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            ReleaseMovement(Main.LocalPlayer);
             _active = false;
             _framesLeft = 0;
             _types = null;
@@ -34,12 +101,26 @@ namespace TerraBlind
         {
             if (!_active || _framesLeft <= 0)
             {
+                ReleaseMovement(p);
                 _active = false;
                 return;
             }
             NPC target = FindNearest(p);
-            if (target == null) { _framesLeft--; return; }
+            if (target == null) { ReleaseMovement(p); _framesLeft--; return; }
             _framesLeft = TimeoutFrames;
+
+            if (AgentPermissions.Dodge)
+            {
+                var evade = Evade(p);
+                if (evade.Jump) _jumpHold = 12;
+                if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
+                p.controlLeft |= evade.Direction < 0;
+                p.controlRight |= evade.Direction > 0;
+                p.controlJump |= _jumpHold > 0;
+                _moving = evade.Direction != 0 || _jumpHold > 0;
+                if (_jumpHold > 0) _jumpHold--;
+            }
+            else ReleaseMovement(p);
 
             int weaponSlot = FindWeaponSlot(p);
             if (weaponSlot < 0) return;
