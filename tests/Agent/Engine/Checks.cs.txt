@@ -172,42 +172,21 @@ public sealed class Driver : ModSystem
     static void NavigateWithoutPlanning(OriginalStart original, int x, int y, RecedingNav.Mode mode)
     {
         var player = Main.LocalPlayer;
-        Vector2? landing = StandingSpot(player, x, y);
-        RecedingNav.Active = false;
-        if (!landing.HasValue)
-        {
-            RecedingNav.LastStop = "no_safe_test_landing";
-            Console.WriteLine($"AGENT_TEST_NAV_REJECTED x={x} y={y} reason=no_supported_clear_landing");
-            return;
-        }
         int previousFall = player.fallStart;
-        player.Teleport(landing.Value);
+        player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f, y * 16 + 8 - player.height / 2f));
         player.velocity = Vector2.Zero;
         player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
+        RecedingNav.Active = false;
         RecedingNav.LastStop = "done";
         Console.WriteLine($"AGENT_TEST_NAV x={x} y={y} mode={mode} landed={player.position} fall_before={previousFall} fall_after={player.fallStart} navigation=teleport_stub");
     }
 
-    static Vector2? StandingSpot(Player player, int x, int y)
-    {
-        for (int radius = 0; radius <= 6; radius++)
-        for (int dy = -radius; dy <= radius; dy++)
-        for (int dx = -radius; dx <= radius; dx++)
+    static string TileStamp(int x, int y) => string.Join(";", Enumerable.Range(-2, 5).SelectMany(dx =>
+        Enumerable.Range(-2, 5).Select(dy =>
         {
-            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != radius) continue;
-            int tx = x + dx, ty = y + dy;
-            if (tx < 3 || ty < 4 || tx >= Main.maxTilesX - 3 || ty >= Main.maxTilesY - 3) continue;
-            var position = new Vector2(tx * 16 + 8 - player.width / 2f, ty * 16 - player.height);
-            if (Collision.SolidCollision(position, player.width, player.height)
-                || !Collision.SolidCollision(position + new Vector2(0, player.height), player.width, 2)) continue;
-            bool liquid = false;
-            for (int bx = (int)(position.X / 16); bx <= (int)((position.X + player.width - 1) / 16); bx++)
-            for (int by = (int)(position.Y / 16); by <= ty; by++)
-                liquid |= Main.tile[bx, by].LiquidAmount > 0;
-            if (!liquid) return position;
-        }
-        return null;
-    }
+            var tile = Main.tile[x + dx, y + dy];
+            return $"{tile.HasTile},{tile.TileType},{tile.TileFrameX},{tile.TileFrameY},{tile.WallType},{tile.LiquidAmount},{tile.LiquidType}";
+        })));
 
     static void Focus(ILContext il)
     {
@@ -291,20 +270,19 @@ public sealed class Driver : ModSystem
                         AgentPermissions.Attack = AgentPermissions.Dodge = false;
                         foreach (var npc in Main.npc) npc.active = false;
                         foreach (var shot in Main.projectile) shot.active = false;
-                        int destX = (int)player.Center.X / 16, destY = (int)player.Bottom.Y / 16 + 300;
-                        for (int tx = destX - 12; tx <= destX + 12; tx++)
-                        for (int ty = destY - 12; ty <= destY + 12; ty++)
-                        {
-                            var tile = Main.tile[tx, ty]; tile.ClearEverything();
-                            if (ty >= destY) { tile.HasTile = true; tile.TileType = TileID.Stone; }
-                        }
+                        var sources = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":5000}").Body);
+                        Check(sources["tiles"]?.AsArray().Count == 1, "existing_crystal_required_for_teleport_check");
+                        heartX = sources["tiles"][0]["x"].GetValue<int>(); heartY = sources["tiles"][0]["y"].GetValue<int>();
+                        string beforeTeleportTiles = TileStamp(heartX, heartY);
                         player.statLifeMax = player.statLife = 100;
                         player.immune = false; player.immuneTime = 0; player.noFallDmg = false;
                         player.velocity.Y = 20;
-                        NavigateWithoutPlanning(null, destX, destY, RecedingNav.Mode.Snap);
+                        NavigateWithoutPlanning(null, heartX, heartY, RecedingNav.Mode.Snap);
                         Check(RecedingNav.LastStop == "done" && player.velocity == Vector2.Zero
                             && player.fallStart == (int)(player.position.Y / 16) && player.fallStart2 == player.fallStart,
                             "teleport_did_not_reset_fall_state");
+                        Check(player.Center == new Vector2(heartX * 16 + 8, heartY * 16 + 8), "teleport_did_not_use_exact_target");
+                        Check(TileStamp(heartX, heartY) == beforeTeleportTiles, "test_teleport_modified_terrain");
                         teleportCheckUntil = ticks + 90; phase = 24;
                         break;
                     }
@@ -541,24 +519,15 @@ public sealed class Driver : ModSystem
                     if (ticks < teleportCheckUntil) { phase = 24; break; }
                     Check(!player.dead && player.statLife == 100 && !player.noFallDmg,
                         "teleport_caused_fall_damage");
-                    int cx = (int)(player.Center.X / 16), cy = (int)(player.Center.Y / 16);
-                    var diagonal = Main.tile[cx + 4, cy + 4]; diagonal.HasTile = true; diagonal.TileType = TileID.Iron;
-                    var axial = Main.tile[cx + 5, cy]; axial.HasTile = true; axial.TileType = TileID.Iron;
-                    var nearest = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Iron\",\"n\":1,\"max_dist\":8}").Body);
-                    Check(nearest["tiles"]?[0]?["x"]?.GetValue<int>() == cx + 5 && nearest["tiles"][0]["dist"].GetValue<int>() == 5,
-                        "tile_scan_truncated_before_nearest_candidate");
-                    var pair = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Iron\",\"n\":2,\"max_dist\":8}").Body);
-                    Check(pair["tiles"][0]["dist"].GetValue<int>() == 5 && pair["tiles"][1]["dist"].GetValue<int>() == 8,
-                        "tile_scan_not_sorted_by_reported_distance");
-                    var beforeRejected = player.position;
-                    for (int tx = cx + 28; tx <= cx + 52; tx++)
-                    for (int ty = cy - 12; ty <= cy + 12; ty++)
-                    { var tile = Main.tile[tx, ty]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Stone; }
-                    NavigateWithoutPlanning(null, cx + 40, cy, RecedingNav.Mode.Snap);
-                    Check(RecedingNav.LastStop == "no_safe_test_landing" && player.position == beforeRejected,
-                        "unsafe_test_teleport_changed_player_position");
-                    results.Add(new JsonObject { ["hp_after_90_frames"] = player.statLife, ["nearest"] = nearest, ["pair"] = pair });
-                    Finish(true, "AGENT_TELEPORT_COMPLETE checks=4 model_calls=0 hp=100 fall_protection=false nearest_distances=5,8 unsafe_landing=rejected");
+                    var nearest = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":5000}").Body);
+                    var many = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":100,\"max_dist\":5000}").Body);
+                    var candidates = many["tiles"].AsArray();
+                    Check(nearest["tiles"][0]["dist"].GetValue<int>() == candidates[0]["dist"].GetValue<int>(), "nearest_query_disagrees_with_sorted_candidates");
+                    for (int i = 1; i < candidates.Count; i++)
+                        Check(candidates[i - 1]["dist"].GetValue<int>() <= candidates[i]["dist"].GetValue<int>(), "tile_scan_not_sorted_by_reported_distance");
+                    results.Add(new JsonObject { ["hp_after_90_frames"] = player.statLife, ["target_x"] = heartX, ["target_y"] = heartY,
+                        ["nearest"] = nearest, ["candidate_count"] = candidates.Count });
+                    Finish(true, "AGENT_TELEPORT_COMPLETE checks=4 model_calls=0 hp=100 fall_protection=false terrain_unchanged=true target=exact");
                     break;
             }
         }

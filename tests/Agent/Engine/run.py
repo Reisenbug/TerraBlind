@@ -18,7 +18,7 @@ def main():
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
     mode.add_argument("--hornets-wall", action="store_true", help="Same hornet trial with a short stone obstacle")
     mode.add_argument("--script", action="store_true", help="Real script-tool collection/use/verification and timeout cleanup, no model calls")
-    mode.add_argument("--teleport-check", action="store_true", help="Regression check for safe landings, fall state and nearest tile ordering")
+    mode.add_argument("--teleport-check", action="store_true", help="Check exact teleports without terrain edits, fall reset and nearest tile ordering")
     args = parser.parse_args()
     root = Path("/tmp") / ("terrablind-agent-engine-" + str(time.time_ns()))
     (root / "Mods").mkdir(parents=True)
