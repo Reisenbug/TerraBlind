@@ -95,7 +95,9 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 当前 live 场地会重新清空附近地面上方空间与旧掉落物，放置铁砧和10颗可实际采集的生命水晶，关闭背包界面。不会直接给 agent 水晶或替它使用；只隔离验证第一阶段100→300血的执行。尚未预置完整的材料与召唤资源链，不能视为整条任务的受控验收。
 
-离线测试共 55 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=55`。直接链接生产的 Agent 协议、脚本解释器、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本组合与分支、资源限额、取消隔离、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
+离线测试共 56 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=56`。直接链接生产的 Agent 协议、脚本解释器、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本组合与分支、逐次采集与行为顺序、资源限额、取消隔离、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
+
+`dotnet run --project tests/Agent/AgentTests.csproj -- --script-model` 是可选真实模型脚本验收，会消耗 Codex 额度，不启动游戏。使用生产系统提示词及其中五项工具定义（run_script/get_state/gather/say/game_catalog），以模拟库存隔离执行细节。模型自行生成代码，分别完成收集10颗，以及每收集一颗立即说“叮”再收下一颗。必须实际在脚本内调用采集，逐次行为的库存序列必须恰好为1..10；只有写脚本建计划不算通过。原始代码、调用层级、返回与回复保存到输出的临时目录。通过标记 `SCRIPT_MODEL_COMPLETE checks=2 mock_world=true` 只证明这两种意图在该模拟工具集上的模型编写与执行，不证明真实采集、完整工具集下的选择或任意任务规划。该入口不会在普通离线测试中调用。
 
 普通 NPC 的 FightCoordinator 在允许 auto_dodge 时，比较24帧内停留、左右移动与起跳的预测碰撞风险，并继续攻击。使用当前弹幕速度、extraUpdates 和附近敌人速度做短时外推，按当前跑速、加速度、重力和方块碰撞估计移动；不推演敌人后续 AI、复杂弹道或完整饰品物理，也不求全局路径。它不调用模型，不能视为已接入 PvP 的完整 Jev 决策。
 

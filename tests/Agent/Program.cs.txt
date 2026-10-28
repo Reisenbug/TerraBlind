@@ -42,6 +42,7 @@ static class Tests
     static async Task Main(string[] args)
     {
         if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
+        if (args.Contains("--script-model")) { await CodexTests.ScriptModel(); return; }
         if (args.Contains("--pvp-smoke")) { await PvpTests.Smoke(); return; }
         var handler = new FakeHandler();
         using var http = new HttpClient(handler);

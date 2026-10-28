@@ -15,7 +15,7 @@
     "type": "function",
     "function": {
       "name": "get_state",
-      "description": "获取当前游戏状态快照:自己血量/位置(像素,除以16得到格坐标)/背包装备，以及 other_players 的编号/名字/位置/血量/PvP/队伍。agent.instruction_player_id 是发指令的绑定玩家编号，agent.player_id 是自己。",
+      "description": "获取当前游戏状态快照:自己血量/位置(像素,除以16得到格坐标)/背包装备，以及 other_players 的编号/名字/位置/血量/PvP/队伍。inventory_slots为随身背包0..49槽数组，每项含slot/type/prefix/stack/name；按物品type筛选并累加stack得到该物品随身总数，空槽type=0，不包含虚空袋。permanent_max_health是永久血上限。agent.instruction_player_id 是发指令的绑定玩家编号，agent.player_id 是自己。",
       "parameters": {
         "type": "object",
         "properties": {}

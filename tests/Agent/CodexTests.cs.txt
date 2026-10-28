@@ -193,6 +193,85 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
+    public static async Task ScriptModel()
+    {
+        string root = Directory.GetCurrentDirectory();
+        var names = new[] { "run_script", "get_state", "gather", "say", "game_catalog" };
+        var tools = new JsonArray(JsonNode.Parse(File.ReadAllText(Path.Combine(root, "Agent/Tools.json"))).AsArray()
+            .Where(t => names.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
+        string system = File.ReadAllText(Path.Combine(root, "Agent/System.txt"))
+            + "\n本次为隔离的脚本组合验收，仅提供所列工具；无需建立任务计划。资源来源已查证：LifeCrystal物品29，方块Heart。";
+        string output = Path.Combine(Path.GetTempPath(), "terrablind-script-model-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(output);
+        Console.WriteLine("SCRIPT_MODEL artifacts=" + output + " mock_world=true");
+        foreach (bool perItem in new[] { false, true })
+        {
+            using var agent = new CodexAgent();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            int stock = 0, scripts = 0, actionsInScript = 0, depth = 0, turns = 0;
+            var announcements = new List<int>();
+            var events = new JsonArray();
+            void Validate(string name, JsonObject args)
+            {
+                var definition = tools.FirstOrDefault(t => t["function"]["name"].ToString() == name)?["function"];
+                if (definition == null) throw new ArgumentException("工具不可用: " + name);
+                foreach (var required in definition["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                    if (!args.ContainsKey(required.ToString())) throw new ArgumentException("缺少参数: " + required);
+            }
+            async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+            {
+                Validate(name, args);
+                if (++turns > 100) throw new InvalidOperationException("验收调用预算已耗尽");
+                var entry = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["inside_script"] = depth > 0 };
+                events.Add(entry);
+                string result;
+                if (name == "run_script")
+                {
+                    scripts++; depth++;
+                    try { result = (await AgentScript.Run(args["code"].ToString(), 30, Validate, Execute,
+                        _ => Task.CompletedTask, token)).ToJsonString(); }
+                    finally { depth--; }
+                }
+                else if (name == "get_state") result = new JsonObject
+                {
+                    ["inventory_slots"] = new JsonArray(new JsonObject { ["slot"] = 0, ["type"] = 29, ["prefix"] = 0,
+                        ["stack"] = stock, ["name"] = "Life Crystal" }), ["permanent_max_health"] = 100
+                }.ToJsonString();
+                else if (name == "gather")
+                {
+                    var target = args["targets"].AsArray().Single();
+                    Check(target["item_type"].GetValue<int>() == 29, "model gathered the wrong item");
+                    int wanted = target["count"].GetValue<int>();
+                    Check(wanted >= stock && wanted <= 10, "model exceeded the requested collection");
+                    if (depth > 0) actionsInScript++;
+                    stock = wanted;
+                    result = new JsonObject { ["ok"] = true, ["outcome"] = "enough", ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = 29, ["wanted"] = wanted, ["actual"] = stock, ["met"] = true }) }.ToJsonString();
+                }
+                else if (name == "say")
+                {
+                    if (args["text"].ToString().Trim() == "叮") announcements.Add(stock);
+                    result = "{\"ok\":true}";
+                }
+                else result = "{\"matches\":[{\"type\":29,\"internal\":\"LifeCrystal\",\"exact\":true}]}";
+                entry["result"] = result;
+                return result;
+            }
+            string goal = perItem ? "收集10颗生命水晶，每收集一颗立刻通过say只说一个字：叮。然后才收下一颗。不要使用水晶。"
+                : "收集10颗生命水晶放在背包里，不要使用。";
+            try
+            {
+                await agent.RunAsync(goal, "", root, "", system, tools, Execute,
+                    reply => events.Add(new JsonObject { ["reply"] = reply }), timeout.Token);
+                Check(stock == 10 && scripts > 0 && actionsInScript > 0, "model did not execute its collection through a script");
+                Check(!perItem || announcements.SequenceEqual(Enumerable.Range(1, 10)), "model lost per-item collection/behavior order");
+                Console.WriteLine($"PASS: model-authored script per_item={perItem} stock={stock} scripts={scripts} mock_world=true");
+            }
+            finally { File.WriteAllText(Path.Combine(output, perItem ? "per-item.json" : "collect.json"), events.ToJsonString()); }
+        }
+        Console.WriteLine("SCRIPT_MODEL_COMPLETE checks=2 mock_world=true");
+    }
+
     public static async Task Smoke()
     {
         var launch = new System.Diagnostics.ProcessStartInfo();
