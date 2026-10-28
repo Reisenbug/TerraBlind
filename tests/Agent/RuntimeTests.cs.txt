@@ -327,6 +327,30 @@ static class RuntimeTests
                 }
             }
             Console.WriteLine("PASS: verified progress resumes the next model turn and finishes both steps without another player message");
+            foreach (bool emptyYield in new[] { false, true })
+            {
+                var handler = new WorkflowHandler(emptyYield);
+                using var workflowHttp = new HttpClient(handler);
+                var previousConversation = conversationField.GetValue(Agent);
+                conversationField.SetValue(Agent, new AgentConversation(workflowHttp));
+                AgentTools.Workflows.Clear();
+                int beforeFirst = AgentChat.Messages.Count(m => m == "workflow-first");
+                try
+                {
+                    NativeAgent.Submit("分两段执行并保存步骤");
+                    await PumpUntil(() => NativeAgent.Status == (emptyYield ? "paused" : "idle"));
+                    Check(handler.Calls == 4, "workflow continuation did not use exactly two model turns");
+                    if (!emptyYield) Check(AgentChat.Messages.Count(m => m == "workflow-first") == beforeFirst + 1
+                        && AgentTools.Workflows["test-flow"].Completed == 2, "workflow continuation repeated completed effects");
+                }
+                finally
+                {
+                    NativeAgent.Stop(); AgentTools.Workflows.Clear();
+                    conversationField.SetValue(Agent, previousConversation);
+                }
+            }
+            Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
+            Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestPartialProgress();
             await TestToolFailureEvidence();
 
@@ -694,6 +718,28 @@ static class RuntimeTests
             }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
+        }
+    }
+
+    sealed class WorkflowHandler(bool emptyYield) : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "workflow model loop exceeded its continuation bound");
+            var message = new JsonObject { ["content"] = "段落结束" };
+            if (call % 2 == 0)
+            {
+                string code = emptyYield ? "return {status:'yield'};" : call == 0
+                    ? "step('first',()=>tool('say',{text:'workflow-first'})); return {status:'yield',completed:1};"
+                    : "step('first',()=>tool('say',{text:'workflow-first'})); step('second',()=>tool('say',{text:'workflow-second'})); return {status:'done'};";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "workflow-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["workflow"] = "test-flow", ["code"] = code }.ToJsonString() } });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
         }
     }
 

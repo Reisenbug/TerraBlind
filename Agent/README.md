@@ -28,6 +28,10 @@ Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其�
 
 模型顶层入口为 `run_script/get_state/say/ask`。完整游戏 API 的名称、说明与参数定义放在系统上下文中，游戏操作由代码里的 `tool(...)` 调用；原分发器和权限检查保留。Codex 与 API 后端使用同一入口，不再把所有游戏操作作为平级模型函数暴露。
 
+跨段脚本传入稳定的 `workflow`，使用 `step(id, fn)` 保存有独立恢复意义的执行步骤。宿主缓存完成步骤的JSON返回值；同名步骤再次出现只读缓存，不重放动作。失败或取消时未完成步骤为uncertain，不能直接重跑；先读取 `get_state.script_workflows` 或 `script_progress`，核对实际状态，再以当前revision明确retry或complete。核对记录附实际随身库存和永久血量，但不替代任务条件验收，也不提供崩溃事务或任意副作用的恰好一次保证。JS变量不保留，只有步骤结果、最近12次调用和最后段落结果由宿主保存；退出世界清空，最多8个workflow、每个128个步骤。
+
+脚本返回 `{status:'yield', completed, blocked, next}` 可要求模型根据新信息续写。宿主只对本轮新yield的workflow续接，完成步骤增加才算进展；无进展最多额外一次，之后paused。`status:'done'` 与 `status:'blocked'` 不自动续接，不等于宿主已验证最终游戏目标。离线61组检查覆盖跨段不重复效果、取消后的不确定步骤、带revision核对、真实调度器中的yield续接与空转上限；长动作句柄仍待实现。
+
 `run_script` 让模型一次提交 JavaScript 函数体，在 mod 内用 Jint 4.17.0 执行，不依赖外部 Node/Python。`tool(name,args={})` 串行等待现有游戏工具返回原生 JS 对象/数组，支持变量、if、for、while、return；`print(value)` 记录调试输出。接口仍使用原工具的名称、参数、权限及完成验证，不直接暴露 Terraria 对象、文件、Shell 或任意网络。它是完整 JS 语法配游戏工具接口，不是自行定义语法的 DSL，也不执行 TypeScript。例子：
 
 ```javascript

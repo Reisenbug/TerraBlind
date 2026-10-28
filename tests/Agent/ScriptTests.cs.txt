@@ -54,6 +54,57 @@ static class ScriptTests
         Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
             && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
         Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
+        var progress = new ScriptProgress();
+        var performed = new List<string>();
+        bool failSecond = true;
+        Task<string> SegmentTool(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "second" && failSecond) { failSecond = false; throw new InvalidOperationException("source_unavailable"); }
+            performed.Add(name);
+            return Task.FromResult("{\"ok\":true}");
+        }
+        const string segmentCode = "step('first',()=>tool('first')); step('announce',()=>tool('say')); return step('second',()=>tool('second'));";
+        Task<JsonObject> RunSegment() => AgentScript.Run(segmentCode, 5, (_, _) => { }, SegmentTool,
+            _ => Task.CompletedTask, default, progress);
+        var interrupted = await RunSegment();
+        Check(!interrupted["ok"].GetValue<bool>() && performed.SequenceEqual(new[] { "first", "say" })
+            && progress.Snapshot()["steps"][2]["status"].ToString() == "uncertain", "workflow lost completed steps or unfinished evidence");
+        var blockedReplay = await RunSegment();
+        Check(!blockedReplay["ok"].GetValue<bool>() && performed.Count == 2,
+            "workflow replayed completed behavior or retried an uncertain step without reconciliation");
+        int revision = progress.Snapshot()["revision"].GetValue<int>();
+        try { progress.Resolve("second", revision - 1, false, null, new JsonObject()); throw new Exception("stale resolution accepted"); }
+        catch (InvalidOperationException) { }
+        progress.Resolve("second", revision, false, null, new JsonObject());
+        var resumed = await RunSegment();
+        Check(resumed["ok"].GetValue<bool>() && performed.SequenceEqual(new[] { "first", "say", "second" }),
+            "workflow did not resume only the remaining action");
+        await RunSegment();
+        Check(performed.Count == 3, "completed segment replay repeated its effects");
+        Console.WriteLine("PASS: host workflow retains effects, rejects stale/uncertain replay and resumes without repeating completed behavior");
+
+        var uncertain = new ScriptProgress();
+        using (var cancellation = new CancellationTokenSource())
+        {
+            async Task<string> CancelStep(string name, JsonObject args, CancellationToken token)
+            { cancellation.Cancel(); await Task.Delay(Timeout.Infinite, token); return "{}"; }
+            try
+            {
+                await AgentScript.Run("return step('pending',()=>tool('wait'));", 5, (_, _) => { }, CancelStep,
+                    _ => Task.CompletedTask, cancellation.Token, uncertain);
+                throw new Exception("workflow swallowed cancellation");
+            }
+            catch (OperationCanceledException) { }
+        }
+        var uncertainState = uncertain.Snapshot();
+        Check(!uncertainState["running"].GetValue<bool>() && uncertainState["steps"][0]["status"].ToString() == "uncertain"
+            && uncertainState["last_segment"]["error"].ToString() == "cancelled", "cancelled workflow lost resumable state");
+        uncertain.Resolve("pending", uncertainState["revision"].GetValue<int>(), true,
+            JsonNode.Parse("{\"observed_complete\":true}"), new JsonObject { ["actual_inventory"] = 1 });
+        var reconciled = await AgentScript.Run("return step('pending',()=>{throw new Error('must not replay')});", 5,
+            (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, uncertain);
+        Check(reconciled["value"]["observed_complete"].GetValue<bool>(), "reconciled action repeated instead of using saved outcome");
+        Console.WriteLine("PASS: cancellation preserves uncertain steps and explicit observed completion avoids replay");
         int stock = 0, stopped = 0;
         var calls = new List<string>();
         Task<string> Execute(string name, JsonObject args, CancellationToken token)

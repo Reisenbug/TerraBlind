@@ -147,6 +147,8 @@ public class NativeAgent : ModSystem
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
+                    var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
+                    int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token);
                     else
@@ -162,10 +164,17 @@ public class NativeAgent : ModSystem
                         && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
                         && !PvpDuel.Active, token);
                     bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token);
+                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
+                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    if (scriptYielded)
+                    {
+                        canContinue = true;
+                        progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
+                    }
                     if (progressed) noProgressContinuations = 0;
                     if (canContinue && (progressed || noProgressContinuations++ < 1))
                     {
-                        input = "原目标：" + goal + "\n计划尚未完成，请实际执行当前步骤，不能只建立计划或说准备行动就结束。不要重做已完成步骤；若没有可执行办法，task_step block 记录实际原因。未取得完成条件的实际进展时宿主仅额外续接一次，不会无限空转。\n现状："
+                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。未取得实际进展时宿主仅额外续接一次。\n现状："
                             + await AgentTools.State(token);
                         continue;
                     }
@@ -191,7 +200,7 @@ public class NativeAgent : ModSystem
                 }
                 await OnMain(() =>
                 {
-                    if (AgentTools.Plan.Incomplete)
+                    if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded))
                         Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
                     else Status = "idle";
                     return true;
@@ -253,6 +262,7 @@ public class NativeAgent : ModSystem
     {
         Cancel();
         AgentTools.Plan.Reset();
+        AgentTools.Workflows.Clear();
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();

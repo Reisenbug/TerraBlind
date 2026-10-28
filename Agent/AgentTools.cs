@@ -13,6 +13,7 @@ namespace TerraBlind;
 public static class AgentTools
 {
     internal static readonly AgentTaskPlan Plan = new();
+    internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
@@ -75,6 +76,9 @@ public static class AgentTools
         state["inventory_slots"] = PvpInventory.Snapshot();
         state["task_plan"] = Plan.Snapshot();
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
+        var workflows = new JsonObject();
+        foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Snapshot();
+        state["script_workflows"] = workflows;
         return state.ToJsonString();
     }, token);
 
@@ -229,8 +233,34 @@ public static class AgentTools
         switch (name)
         {
             case "run_script":
+                var workflow = await NativeAgent.OnMain(() =>
+                {
+                    string id = Text(args, "workflow");
+                    if (id == "") return null;
+                    if (id.Length > 80) throw new ArgumentException("workflow需要1..80字符。");
+                    if (!Workflows.TryGetValue(id, out var saved))
+                    {
+                        if (Workflows.Count >= 8) throw new InvalidOperationException("本世界最多8个workflow。");
+                        Workflows[id] = saved = new ScriptProgress();
+                    }
+                    return saved;
+                }, token);
                 result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool, Execute,
-                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token);
+                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow);
+                break;
+            case "script_progress":
+                var savedProgress = await NativeAgent.OnMain(() => Workflows.TryGetValue(Text(args, "workflow"), out var saved)
+                    ? saved : throw new ArgumentException("未知workflow。"), token);
+                string resolution = Text(args, "action");
+                if (resolution is "retry" or "complete")
+                {
+                    var observed = JsonNode.Parse(await State(token)).AsObject();
+                    result = savedProgress.Resolve(Text(args, "step"), Int(args, "expected_revision", -1), resolution == "complete",
+                        args["value"], new JsonObject { ["inventory_slots"] = observed["inventory_slots"]?.DeepClone(),
+                            ["permanent_max_health"] = observed["permanent_max_health"]?.DeepClone() });
+                }
+                else if (resolution is "" or "get") result = savedProgress.Snapshot();
+                else throw new ArgumentException("action需要get/retry/complete。");
                 break;
             case "gather":
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))

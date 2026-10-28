@@ -26,10 +26,11 @@ public static class AgentScript
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
-        Func<CancellationToken, Task> stop, CancellationToken token)
+        Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null)
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
+        progress?.Begin();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 180)));
         var clock = Stopwatch.StartNew();
@@ -39,12 +40,18 @@ public static class AgentScript
         bool inTool = false;
         Exception hostFailure = null;
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
-        JsonObject Report(string error, string detail, JsonNode value = null) => new()
+        JsonObject Report(string error, string detail, JsonNode value = null)
         {
-            ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
-            ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
-            ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs
-        };
+            var result = new JsonObject
+            {
+                ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
+                ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs
+            };
+            progress?.End(result);
+            if (progress != null) result["workflow"] = progress.Snapshot();
+            return result;
+        }
         try
         {
             return await Task.Run(() =>
@@ -74,6 +81,7 @@ public static class AgentScript
                     long started = clock.ElapsedMilliseconds;
                     inTool = true;
                     string result = execute(name, args, budget.Token).GetAwaiter().GetResult();
+                    progress?.Record(name, args, result);
                     inTool = false;
                     budget.Token.ThrowIfCancellationRequested();
                     entry["elapsed_ms"] = clock.ElapsedMilliseconds - started;
@@ -88,14 +96,30 @@ public static class AgentScript
                     if (logs.Count >= 20) throw new InvalidOperationException("脚本最多print 20次。");
                     logs.Add(Clip(text ?? "null", 1000));
                 }));
+                engine.SetValue("__stepEnter", new Func<string, string>(id =>
+                    (progress ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
+                engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
+                    progress.Complete(id, JsonNode.Parse(json)?["value"])));
                 string wrapper = """
-                    (function(call, log) {
+                    (function(call, log, enter, complete) {
                         delete globalThis.__gameTool;
                         delete globalThis.__gamePrint;
+                        delete globalThis.__stepEnter;
+                        delete globalThis.__stepComplete;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
                         const tool = (name, args = {}) => parse(call(name, stringify(args)));
                         const print = value => log(stringify(value));
+                        const step = (id, action) => {
+                            const saved = parse(enter(id));
+                            if (!saved.execute) return saved.value;
+                            const value = action();
+                            if (value && typeof value.then === 'function') throw new Error('step不支持Promise');
+                            const json = stringify({value});
+                            if (json.length > 8000) throw new Error('step返回值超过8000字符');
+                            complete(id, json);
+                            return value;
+                        };
                         const value = (function() {
                     """ + source + """
 
@@ -104,7 +128,7 @@ public static class AgentScript
                         const result = stringify({value});
                         if (result.length > 16000) throw new Error('返回结果超过16000字符');
                         return result;
-                    })(__gameTool, __gamePrint)
+                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;
@@ -112,14 +136,22 @@ public static class AgentScript
                 return Report(null, "脚本执行结束；任务是否完成仍由task_step verify检查。", JsonNode.Parse(output)?["value"]?.DeepClone());
             }, token);
         }
-        catch (Exception) when (token.IsCancellationRequested) { throw new OperationCanceledException(token); }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
+            progress?.End(new JsonObject { ["error"] = "cancelled", ["detail"] = "执行被取消，未完成步骤需要核对实际状态。" });
+            throw new OperationCanceledException(token);
+        }
         catch (Exception error)
         {
             string cleanup = null;
             if (inTool)
             {
                 try { await stop(token); }
-                catch (Exception) when (token.IsCancellationRequested) { throw new OperationCanceledException(token); }
+                catch (Exception) when (token.IsCancellationRequested)
+                {
+                    progress?.End(new JsonObject { ["error"] = "cancelled", ["detail"] = "清理期间被取消，步骤需要核对。" });
+                    throw new OperationCanceledException(token);
+                }
                 catch (Exception failure) { cleanup = failure.Message; }
             }
             var result = Report(budget.IsCancellationRequested || error is TimeoutException ? "script_timeout" : "script_failed",
