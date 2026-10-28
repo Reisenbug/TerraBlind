@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +10,39 @@ using TerraBlind;
 static class ScriptTests
 {
     static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
+
+    public static async Task Replay(string path)
+    {
+        var events = JsonNode.Parse(File.ReadAllText(path)).AsArray();
+        string code = events.First(e => e?["tool"]?.ToString() == "run_script")["args"]["code"].ToString();
+        foreach (bool overshoot in new[] { false, true })
+        {
+            int stock = 0, attempts = 0;
+            bool interrupted = false;
+            var said = new List<int>();
+            Task<string> Execute(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "get_state") return Task.FromResult(new JsonObject { ["inventory_slots"] = new JsonArray(
+                    new JsonObject { ["type"] = 29, ["stack"] = stock }) }.ToJsonString());
+                if (name == "say") { said.Add(stock); return Task.FromResult("{\"ok\":true}"); }
+                Check(name == "gather" && !interrupted, "generated code continued collecting after an unmet condition");
+                attempts++;
+                if (overshoot) { stock += 2; interrupted = true; }
+                else if (attempts == 4) interrupted = true;
+                else stock++;
+                return Task.FromResult(new JsonObject { ["ok"] = overshoot || !interrupted,
+                    ["outcome"] = !overshoot && interrupted ? "source_unavailable" : "enough",
+                    ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 29, ["actual"] = stock }) }.ToJsonString());
+            }
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && interrupted, "generated code did not return evidence on changed conditions");
+            Check(overshoot ? stock == 2 && attempts == 1 && said.Count == 0
+                : stock == 3 && attempts == 4 && said.SequenceEqual(new[] { 1, 2, 3 }),
+                "generated code falsely announced collection or lost per-item order");
+            Console.WriteLine($"PASS: unchanged model code replay overshoot={overshoot} stock={stock} announcements={said.Count} model_calls=0");
+        }
+        Console.WriteLine("SCRIPT_REPLAY_COMPLETE checks=2 mock_world=true model_calls=0");
+    }
 
     public static async Task Run()
     {

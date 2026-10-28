@@ -99,6 +99,8 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 `dotnet run --project tests/Agent/AgentTests.csproj -- --script-model` 是可选真实模型脚本验收，会消耗 Codex 额度，不启动游戏。使用生产系统提示词及其中五项工具定义（run_script/get_state/gather/say/game_catalog），以模拟库存隔离执行细节。模型自行生成代码，分别完成收集10颗，以及每收集一颗立即说“叮”再收下一颗。必须实际在脚本内调用采集，逐次行为的库存序列必须恰好为1..10；只有写脚本建计划不算通过。原始代码、调用层级、返回与回复保存到输出的临时目录。通过标记 `SCRIPT_MODEL_COMPLETE checks=2 mock_world=true` 只证明这两种意图在该模拟工具集上的模型编写与执行，不证明真实采集、完整工具集下的选择或任意任务规划。该入口不会在普通离线测试中调用。
 
+2026-10-28 此入口两项实测通过，沿用本机默认模型（当时配置 gpt-6-astra），effort=low；并非游戏配置的模型验收。逐颗任务由模型生成一个脚本，内部21次工具调用（一次库存查询、10次采集与10次say），未提供现成代码。`dotnet run --project tests/Agent/AgentTests.csproj -- --script-replay <per-item.json>` 可原样重放该次模型代码，不再调用模型：第四次采集失败时仅前三次说话；一次取得两颗时不伪称完成逐颗行为，立即返回。两种重放均通过，标记 `SCRIPT_REPLAY_COMPLETE checks=2 mock_world=true model_calls=0`。仍不代表真实游戏采集链或其他模型通过。
+
 普通 NPC 的 FightCoordinator 在允许 auto_dodge 时，比较24帧内停留、左右移动与起跳的预测碰撞风险，并继续攻击。使用当前弹幕速度、extraUpdates 和附近敌人速度做短时外推，按当前跑速、加速度、重力和方块碰撞估计移动；不推演敌人后续 AI、复杂弹道或完整饰品物理，也不求全局路径。它不调用模型，不能视为已接入 PvP 的完整 Jev 决策。
 
 当前射界受阻时，同一短时比较还考虑取得射界，碰撞代价优先于射界代价；跳跃估计包含持续按住跳跃的12帧。对受方块碰撞的弹丸，直线被挡时停止攻击；ContentSamples 中 tileCollide=false 的弹丸不套此限制。这仍不是完整弹道遮挡模拟，不保证抛物线、曲线或特殊模组武器的判断正确。
