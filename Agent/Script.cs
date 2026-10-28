@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,18 @@ namespace TerraBlind;
 
 public static class AgentScript
 {
+    public static JsonArray EntryTools(JsonArray tools) => new(tools.Where(t =>
+        t["function"]?["name"]?.ToString() is "run_script" or "get_state" or "say" or "ask")
+        .Select(t => t.DeepClone()).ToArray());
+
+    public static string Instructions(string system, JsonArray tools) =>
+        "游戏操作通过run_script提交JavaScript代码，代码里用tool(name,args)调用下面的游戏API。"
+        + "顶层只提供run_script、get_state、say、ask；其余API不是顶层工具，不要直接发起函数调用。"
+        + "逐次行为、条件和循环应写在代码里，读取真实返回后推进；不能只登记计划或口头承诺。\n"
+        + system + "\n以下是脚本内tool可调用的完整游戏API定义（name、description、parameters），不是执行结果：\n"
+        + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
+            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString();
+
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,

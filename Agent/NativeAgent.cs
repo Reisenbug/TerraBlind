@@ -131,7 +131,8 @@ public class NativeAgent : ModSystem
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask();
-        string system = _system + "\n回复语言风格：" + Config.I.AgentPersona;
+        string system = AgentScript.Instructions(_system + "\n回复语言风格：" + Config.I.AgentPersona, _schemas);
+        var entrySchemas = AgentScript.EntryTools(_schemas);
         Progress(useCodex ? "正在连接 Codex 并等待响应。" : "正在请求模型。", "等待模型响应");
         DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)}");
         _running = Task.Run(async () =>
@@ -147,9 +148,9 @@ public class NativeAgent : ModSystem
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
                     if (useCodex)
-                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token);
                     else
-                        await _conversation.RunAsync(input, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
+                        await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {

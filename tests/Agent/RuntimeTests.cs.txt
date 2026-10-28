@@ -667,8 +667,8 @@ static class RuntimeTests
                 message["tool_calls"] = new JsonArray(new JsonObject
                 {
                     ["id"] = "step-" + call, ["type"] = "function",
-                    ["function"] = new JsonObject { ["name"] = "task_step",
-                        ["arguments"] = new JsonObject { ["id"] = id, ["action"] = "verify" }.ToJsonString() }
+                    ["function"] = new JsonObject { ["name"] = "run_script",
+                        ["arguments"] = new JsonObject { ["code"] = "return tool('task_step'," + new JsonObject { ["id"] = id, ["action"] = "verify" }.ToJsonString() + ");" }.ToJsonString() }
                 });
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject
@@ -687,9 +687,9 @@ static class RuntimeTests
             if (call % 2 == 0)
             {
                 var calls = new JsonArray(new JsonObject { ["id"] = "use-" + call, ["type"] = "function",
-                    ["function"] = new JsonObject { ["name"] = "use_item", ["arguments"] = "{\"x\":0,\"y\":0,\"slot\":0}" } });
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = "return tool('use_item',{x:0,y:0,slot:0});" }.ToJsonString() } });
                 if (call == 4) calls.Add(new JsonObject { ["id"] = "verify-final", ["type"] = "function",
-                    ["function"] = new JsonObject { ["name"] = "task_step", ["arguments"] = "{\"id\":\"health\",\"action\":\"verify\"}" } });
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = "return tool('task_step',{id:'health',action:'verify'});" }.ToJsonString() } });
                 message["tool_calls"] = calls;
             }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -703,7 +703,9 @@ static class RuntimeTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             string message = calls++ == 0
-                ? "{\"content\":null,\"tool_calls\":[{\"id\":\"nav\",\"type\":\"function\",\"function\":{\"name\":\"nav_to\",\"arguments\":\"{\\\"x\\\":100,\\\"y\\\":100}\"}}]}"
+                ? new JsonObject { ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "nav", ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["code"] = "return tool('nav_to',{x:100,y:100});" }.ToJsonString() } }) }.ToJsonString()
                 : "{\"content\":\"新任务完成\"}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent("{\"choices\":[{\"message\":" + message + "}]}", Encoding.UTF8, "application/json") });

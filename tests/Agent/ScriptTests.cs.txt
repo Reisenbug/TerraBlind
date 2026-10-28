@@ -46,6 +46,14 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        var entries = AgentScript.EntryTools(definitions);
+        Check(entries.Count == 4 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask")
+            && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
+        string instructions = AgentScript.Instructions("original-system", definitions);
+        Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
+            && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
+        Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
         int stock = 0, stopped = 0;
         var calls = new List<string>();
         Task<string> Execute(string name, JsonObject args, CancellationToken token)
