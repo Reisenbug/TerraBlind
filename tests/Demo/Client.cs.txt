@@ -205,14 +205,21 @@ public sealed class RegionHandoffCheck : ModSystem
                 : firstFrames + (scenario == "late" ? 5 : 0);
             int missing = 0, hp = player.statLife;
             int initialWaiting = 0, intersegmentWaiting = 0;
+            int firstInputFrame = -1, longestWait = 0, waitRun = 0;
             var clock = System.Diagnostics.Stopwatch.StartNew();
             for (long frame = 1; frame <= frames; frame++)
             {
                 if (!(bool)type.GetMethod("HasInput").Invoke(controller, new object[] { frame }))
                 {
                     missing++;
+                    longestWait = Math.Max(longestWait, ++waitRun);
                     if ((int)type.GetProperty("Accepted").GetValue(controller) == 0) initialWaiting++;
                     else intersegmentWaiting++;
+                }
+                else
+                {
+                    if (firstInputFrame < 0) firstInputFrame = (int)frame;
+                    waitRun = 0;
                 }
                 var input = (VanillaPrediction.Input)inputMethod.Invoke(controller, new object[] { frame });
                 VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
@@ -242,24 +249,25 @@ public sealed class RegionHandoffCheck : ModSystem
             int expectedAccepted = scenario == "worker" ? 4 : scenario == "early" ? results.Count : 1;
             int expectedRejected = scenario is "worker" or "early" ? 0 : 1;
             int expectedMissing = scenario == "worker" ? missing : scenario == "late" ? 5 : 0;
-            if (accepted != expectedAccepted || rejected != expectedRejected || missing != expectedMissing
-                || player.dead || player.statLife < hp)
-                throw new InvalidOperationException($"handoff_failed accepted={accepted} rejected={rejected} missing={missing}");
             var endCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
-            if (!field.TryGetValue(endCell, out int endCost) || endCost >= startCost
-                || scenario == "worker" && intersegmentWaiting != 0)
-                throw new InvalidOperationException($"handoff_progress_failed start={startCost} end={endCost} gaps={intersegmentWaiting}");
+            bool hasEndCost = field.TryGetValue(endCell, out int endCost);
+            bool passed = accepted == expectedAccepted && rejected == expectedRejected && missing == expectedMissing
+                && !player.dead && player.statLife >= hp && hasEndCost && endCost < startCost
+                && (scenario != "worker" || intersegmentWaiting == 0);
             ((IDisposable)controller).Dispose(); controller = null;
             if (scenario != "worker" && !waiting.Task.IsCanceled) throw new InvalidOperationException("pending_request_not_cancelled");
             worker?.Dispose(); worker = null;
-            var report = new JsonObject { ["passed"] = true, ["scenario"] = scenario, ["accepted"] = accepted, ["rejected"] = rejected,
+            var report = new JsonObject { ["passed"] = passed, ["scenario"] = scenario, ["accepted"] = accepted, ["rejected"] = rejected,
                 ["frames"] = frames, ["missing_input_frames"] = missing, ["pending_cancelled"] = scenario != "worker",
                 ["initial_wait_frames"] = initialWaiting, ["intersegment_wait_frames"] = intersegmentWaiting,
+                ["first_input_frame"] = firstInputFrame, ["longest_wait_frames"] = longestWait,
+                ["start_hp"] = hp, ["end_hp"] = player.statLife, ["dead"] = player.dead,
                 ["wall_ms"] = clock.Elapsed.TotalMilliseconds,
                 ["completed_segments"] = scenario == "worker" ? accepted - 1 : scenario == "early" ? accepted : 1,
                 ["start_cost"] = startCost, ["end_cost"] = endCost,
                 ["end"] = VanillaPrediction.Observe(player, false) };
             File.WriteAllText(Path.Combine(Main.SavePath, "region-handoff-result.json"), report.ToJsonString());
+            if (!passed) throw new InvalidOperationException("handoff_failed " + report.ToJsonString());
             Console.WriteLine("REGION_HANDOFF_PASS " + report.ToJsonString());
             Environment.Exit(0);
         }

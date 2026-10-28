@@ -58,7 +58,7 @@ def compare(expected, actual):
 def plan_corridor(worker, state, region, guidance, horizon, beam, root, quantum=6):
     started = time.monotonic()
     result = worker.call("region_plan", snapshot=state, region=region, guidance=guidance,
-                        horizon=horizon, beam=beam, quantum=quantum)
+                        horizon=horizon, beam=beam, quantum=quantum, terrain_motion=True)
     corridor = result.pop("corridor")
     (root / "region-corridor.json").write_text(json.dumps(corridor))
     (root / "region-corridor-attempts.json").write_text(json.dumps(result["attempts"]))
