@@ -206,6 +206,7 @@ public sealed class RegionHandoffCheck : ModSystem
             int missing = 0, hp = player.statLife;
             int initialWaiting = 0, intersegmentWaiting = 0;
             int firstInputFrame = -1, longestWait = 0, waitRun = 0;
+            int completedSegments = 0;
             var clock = System.Diagnostics.Stopwatch.StartNew();
             for (long frame = 1; frame <= frames; frame++)
             {
@@ -223,6 +224,14 @@ public sealed class RegionHandoffCheck : ModSystem
                 }
                 var input = (VanillaPrediction.Input)inputMethod.Invoke(controller, new object[] { frame });
                 VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
+                if (scenario == "worker" && type.GetProperty("Result").GetValue(controller) is JsonObject current
+                    && (int)type.GetMethod("Index").Invoke(controller, new object[] { frame }) == current["controls"].AsArray().Count - 1)
+                {
+                    if (!VanillaPrediction.RegionPlayback.MatchesAnchor(player, current["frames"].AsArray()[^1].AsObject(), out string mismatch))
+                        throw new InvalidOperationException("handoff_endpoint_mismatch:" + mismatch);
+                    completedSegments++;
+                    if (completedSegments == 4) { frames = (int)frame; break; }
+                }
                 if (scenario == "terrain" && frame == firstFrames)
                 {
                     var next = results[1]["frames"][0];
@@ -238,8 +247,6 @@ public sealed class RegionHandoffCheck : ModSystem
                 Tick(frame);
                 if (scenario == "worker")
                 {
-                    if ((int)type.GetProperty("Accepted").GetValue(controller) >= 4)
-                    { frames = (int)frame; break; }
                     double remaining = frame * 1000d / 60 - clock.Elapsed.TotalMilliseconds;
                     if (remaining > 0) System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(remaining));
                 }
@@ -253,7 +260,7 @@ public sealed class RegionHandoffCheck : ModSystem
             bool hasEndCost = field.TryGetValue(endCell, out int endCost);
             bool passed = accepted == expectedAccepted && rejected == expectedRejected && missing == expectedMissing
                 && !player.dead && player.statLife >= hp && hasEndCost && endCost < startCost
-                && (scenario != "worker" || intersegmentWaiting == 0);
+                && (scenario != "worker" || intersegmentWaiting == 0 && completedSegments == 4);
             ((IDisposable)controller).Dispose(); controller = null;
             if (scenario != "worker" && !waiting.Task.IsCanceled) throw new InvalidOperationException("pending_request_not_cancelled");
             worker?.Dispose(); worker = null;
@@ -263,7 +270,7 @@ public sealed class RegionHandoffCheck : ModSystem
                 ["first_input_frame"] = firstInputFrame, ["longest_wait_frames"] = longestWait,
                 ["start_hp"] = hp, ["end_hp"] = player.statLife, ["dead"] = player.dead,
                 ["wall_ms"] = clock.Elapsed.TotalMilliseconds,
-                ["completed_segments"] = scenario == "worker" ? accepted - 1 : scenario == "early" ? accepted : 1,
+                ["completed_segments"] = scenario == "worker" ? completedSegments : scenario == "early" ? accepted : 1,
                 ["start_cost"] = startCost, ["end_cost"] = endCost,
                 ["end"] = VanillaPrediction.Observe(player, false) };
             File.WriteAllText(Path.Combine(Main.SavePath, "region-handoff-result.json"), report.ToJsonString());
