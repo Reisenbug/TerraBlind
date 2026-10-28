@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace TerraBlind;
@@ -13,6 +15,7 @@ public sealed class ScriptProgress
     int revision, segment;
     bool running;
     JsonObject last;
+    static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
     public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield"; } }
@@ -52,7 +55,7 @@ public sealed class ScriptProgress
         {
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "running")
                 throw new InvalidOperationException("step不是当前运行步骤。");
-            if ((value?.ToJsonString().Length ?? 0) > 8000) throw new ArgumentException("step返回值超过8000字符。");
+            if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("step返回值超过8000字符。");
             if (value is JsonObject result && (result["error"] != null || result["ok"]?.ToString() == "false"))
                 throw new InvalidOperationException("step返回失败；保留证据，不能标为完成。");
             step["status"] = "completed"; step["value"] = value?.DeepClone(); revision++;
@@ -67,7 +70,6 @@ public sealed class ScriptProgress
             calls.Enqueue(new JsonObject { ["tool"] = name, ["args"] = Clip(args.ToJsonString()),
                 ["result"] = Clip(result), ["segment"] = segment });
             if (calls.Count > 12) calls.Dequeue();
-            revision++;
         }
     }
 
@@ -86,10 +88,11 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
-            if (running || revision != expectedRevision) throw new InvalidOperationException("workflow状态已改变，请重新读取。");
+            if (steps.Values.Any(s => s["status"].ToString() == "running") || revision != expectedRevision)
+                throw new InvalidOperationException("workflow状态已改变，请重新读取。");
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "uncertain")
                 throw new InvalidOperationException("只能核对uncertain步骤。");
-            if ((value?.ToJsonString().Length ?? 0) > 8000) throw new ArgumentException("核对结果超过8000字符。");
+            if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("核对结果超过8000字符。");
             if (completed)
             {
                 step["status"] = "completed"; step["value"] = value?.DeepClone();

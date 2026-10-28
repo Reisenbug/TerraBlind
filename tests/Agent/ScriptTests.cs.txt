@@ -105,6 +105,20 @@ static class ScriptTests
             (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, uncertain);
         Check(reconciled["value"]["observed_complete"].GetValue<bool>(), "reconciled action repeated instead of using saved outcome");
         Console.WriteLine("PASS: cancellation preserves uncertain steps and explicit observed completion avoids replay");
+        var resolution = new ScriptProgress();
+        resolution.Begin(); resolution.Enter("pending"); resolution.End(new JsonObject { ["error"] = "interrupted" });
+        resolution.Begin();
+        int observedRevision = resolution.Snapshot()["revision"].GetValue<int>();
+        resolution.Record("script_progress", new JsonObject(), "observed");
+        Check(resolution.Snapshot()["revision"].GetValue<int>() == observedRevision, "read telemetry invalidated the revision just returned");
+        resolution.Resolve("pending", observedRevision, true, JsonValue.Create("reconciled"), new JsonObject());
+        Check(!resolution.Enter("pending")["execute"].GetValue<bool>(), "reconciliation within a continuation segment failed");
+        resolution.End(new JsonObject());
+        Console.WriteLine("PASS: progress reads do not invalidate revisions and continuation can reconcile an unfinished step");
+        var unicode = new ScriptProgress(); unicode.Begin(); unicode.Enter("text");
+        unicode.Complete("text", JsonValue.Create(new string('中', 2000))); unicode.End(new JsonObject());
+        Check(unicode.Snapshot()["steps"][0]["value"].ToString().Length == 2000, "host inflated unicode before checking step budget");
+        Console.WriteLine("PASS: host checkpoint budget uses the same unescaped JSON character measure as JavaScript");
         int stock = 0, stopped = 0;
         var calls = new List<string>();
         Task<string> Execute(string name, JsonObject args, CancellationToken token)
