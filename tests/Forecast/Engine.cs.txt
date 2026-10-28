@@ -1814,6 +1814,9 @@ public sealed class Engine : ModSystem
             {
                 var player = VanillaFrame.RestoreInWorker(snapshot);
                 int hp = player.statLife;
+                var playback = request["frames"] is JsonArray ? new VanillaPrediction.RegionPlayback(request, 0) : null;
+                if (playback != null && !playback.Matches(player, 0, out _))
+                    throw new InvalidOperationException("region_playback_anchor_mismatch");
                 int checkpointFrames = request["checkpoint_frames"]?.GetValue<int>() ?? 0;
                 var randomIndices = new JsonArray();
                 var checkpoint = checkpointFrames > 0 ? new VanillaFrame.WorkerState(snapshot) : null;
@@ -1821,7 +1824,12 @@ public sealed class Engine : ModSystem
                 {
                     randomIndices.Add(WorldRandomIndex());
                     traceRandom = i == 0 ? "replay" : null;
-                    VanillaPrediction.Advance(player, inputs[i].Keys, inputs[i].UseSlot, inputs[i].Target);
+                    var input = playback?.At(i + 1) ?? inputs[i];
+                    if (input != inputs[i] || playback != null && playback.At(i + 1) != input)
+                        throw new InvalidOperationException("region_playback_input_mismatch");
+                    VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
+                    if (playback != null && !playback.Matches(player, i + 1, out string mismatch))
+                        throw new InvalidOperationException("region_playback_state_mismatch:" + mismatch);
                     traceRandom = null;
                     randomIndices.Add(WorldRandomIndex());
                     if (player.dead || player.statLife < hp) return new JsonObject { ["outcome"] = "damaged" };
@@ -1832,7 +1840,10 @@ public sealed class Engine : ModSystem
                     }
                 }
                 var a = snapshot["area"].AsArray();
-                return new JsonObject { ["outcome"] = "complete", ["world_random_indices"] = randomIndices, ["end_snapshot"] = VanillaFrame.Capture(player,
+                if (playback != null && (!playback.Complete(inputs.Length) || playback.HasInput(inputs.Length + 1)))
+                    throw new InvalidOperationException("region_playback_end_mismatch");
+                return new JsonObject { ["outcome"] = "complete", ["playback_verified"] = playback != null,
+                    ["world_random_indices"] = randomIndices, ["end_snapshot"] = VanillaFrame.Capture(player,
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }

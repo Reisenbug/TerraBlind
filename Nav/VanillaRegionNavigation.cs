@@ -1,0 +1,104 @@
+using System;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
+using Terraria;
+
+namespace TerraBlind;
+
+internal sealed class VanillaRegionNavigation : IDisposable
+{
+    readonly Func<JsonObject, CancellationToken, Task<JsonObject>> send;
+    CancellationTokenSource cancellation;
+    Task<JsonObject> pending;
+    JsonObject requested, active;
+    VanillaPrediction.RegionPlayback playback;
+    Rectangle? expandedArea;
+    public string Status { get; private set; } = "准备区域寻路";
+    public int Accepted { get; private set; }
+    public int Rejected { get; private set; }
+    public JsonObject Result => active;
+    public VanillaRegionNavigation(Func<JsonObject, CancellationToken, Task<JsonObject>> send) => this.send = send;
+    public bool HasInput(long tick) => playback?.HasInput(tick) == true;
+    public int Index(long tick) => playback?.Index(tick) ?? -1;
+    public VanillaPrediction.Input InputAt(long tick) => playback?.At(tick) ?? new(VanillaKeys.None);
+
+    void Cancel()
+    {
+        var source = cancellation;
+        cancellation = null;
+        source?.Cancel();
+        if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; source?.Dispose(); }, TaskScheduler.Default);
+        else source?.Dispose();
+        pending = null; requested = null;
+    }
+    public void Dispose() { Cancel(); playback = null; active = null; }
+
+    void Request(JsonObject snapshot)
+    {
+        var p = snapshot["player"];
+        float x = p["Terraria.Entity:position"]["Microsoft.Xna.Framework.Vector2:X"].GetValue<float>();
+        float y = p["Terraria.Entity:position"]["Microsoft.Xna.Framework.Vector2:Y"].GetValue<float>();
+        requested = snapshot;
+        cancellation = new CancellationTokenSource();
+        var request = new JsonObject { ["command"] = "region_plan", ["snapshot"] = snapshot.DeepClone(),
+            ["guidance"] = VanillaNavBridge.CaptureGuidance(snapshot),
+            ["region"] = new JsonArray(x - 160, y - 192, 320, 384),
+            ["horizon"] = 180, ["beam"] = 6, ["quantum"] = 12 };
+        pending = send(request, cancellation.Token);
+    }
+
+    public void Tick(Player player, long tick, Vector2 goal)
+    {
+        if (playback != null && !playback.Complete(tick - 1) && !playback.Matches(player, tick, out string difference))
+        {
+            DiagLog.Write("[region-diverged] " + difference);
+            Rejected++; Dispose(); Status = "实际状态偏离，重新规划";
+        }
+        bool executing = playback != null && !playback.Complete(tick);
+        if (pending?.IsCompleted == true && !executing)
+        {
+            var result = pending.GetAwaiter().GetResult();
+            pending = null; cancellation.Dispose(); cancellation = null;
+            string status = result["status"]?.GetValue<string>();
+            DiagLog.Write($"[region-result] status={status} compute_ms={result["planning_wall_ms"]} roundtrip_ms={result["roundtrip_ms"]}");
+            if (status == "snapshot_required")
+            {
+                var a = requested["area"];
+                var tile = result["missing_tile"];
+                expandedArea = Rectangle.Union(new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(),
+                    a[2].GetValue<int>(), a[3].GetValue<int>()),
+                    new Rectangle(tile[0].GetValue<int>() - 16, tile[1].GetValue<int>() - 16, 33, 33));
+            }
+            else if (status == "reached")
+            {
+                var candidate = new VanillaPrediction.RegionPlayback(result, tick);
+                if (candidate.Matches(player, tick, out string mismatch)
+                    && VanillaFrame.ContextMatches(requested, player, out mismatch, result["frames"].AsArray()))
+                {
+                    playback = candidate; active = result; Accepted++;
+                    Status = "执行区域路线，准备下一段";
+                    Request(result["end_snapshot"].AsObject());
+                    return;
+                }
+                DiagLog.Write("[region-rejected] " + mismatch);
+                Rejected++;
+            }
+            else throw new InvalidOperationException("region_no_route:" + status);
+            playback = null; active = null;
+        }
+        if (pending != null) { Status = executing ? "执行区域路线，准备下一段" : "等待区域规划"; return; }
+        if (executing) return;
+        playback = null; active = null;
+        var area = VanillaLocalPlanner.SnapshotArea(player, goal);
+        if (expandedArea is Rectangle expanded)
+        {
+            area = Rectangle.Intersect(Rectangle.Union(area, expanded), new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY));
+            expandedArea = null;
+        }
+        if (area.Width > 256 || area.Height > 256) throw new InvalidOperationException("region_snapshot_size_limit");
+        Request(VanillaFrame.Capture(player, area, true));
+        Status = "等待区域规划";
+    }
+}

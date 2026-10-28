@@ -13,6 +13,44 @@ public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down 
 
 public sealed class VanillaPrediction
 {
+    public sealed class RegionPlayback
+    {
+        readonly Input[] inputs;
+        readonly JsonObject result;
+        readonly long start;
+        public RegionPlayback(JsonObject result, long completedTick)
+        {
+            inputs = RegionInputs(result);
+            if (result["frames"]?.AsArray().Count != inputs.Length || result["anchor"] is not JsonObject)
+                throw new ArgumentException("missing_region_execution_trace");
+            this.result = result;
+            start = completedTick + 1;
+        }
+        public int Index(long tick) => checked((int)(tick - start));
+        public bool HasInput(long tick) => tick >= start && tick < start + inputs.Length;
+        public bool Complete(long tick) => tick >= start + inputs.Length - 1;
+        public Input At(long tick) => HasInput(tick) ? inputs[Index(tick)] : new Input(VanillaKeys.None);
+        public bool Matches(Player player, long completedTick, out string difference)
+        {
+            int index = Index(completedTick);
+            JsonObject expected = index == -1 ? result["anchor"].AsObject()
+                : index >= 0 && index < inputs.Length ? result["frames"][index].AsObject() : null;
+            difference = "missing_region_frame";
+            if (expected == null) return false;
+            bool matches = VanillaAsyncMovement.StateMatches(player, expected, true, out string reason, out string mismatch);
+            difference = mismatch ?? reason;
+            if (!matches) return false;
+            foreach (string key in new[] { "item_animation", "item_time" })
+            {
+                int actual = key == "item_animation" ? player.itemAnimation : player.itemTime;
+                if (actual == expected[key].GetValue<int>()) continue;
+                difference = "state_changed:" + key;
+                return false;
+            }
+            return true;
+        }
+    }
+
     public readonly record struct Input(VanillaKeys Keys, int UseSlot = -1, Point? Target = null);
 
     public static Input[] RegionInputs(JsonObject result)

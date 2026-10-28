@@ -12,6 +12,7 @@ namespace TerraBlind;
 public static class VanillaNavBridge
 {
     public static bool Enabled;
+    public static bool RegionsEnabled;
     public static bool Terminal { get; private set; }
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining or Phase.Excavating or Phase.JumpPlacing;
@@ -93,6 +94,16 @@ public static class VanillaNavBridge
         var demo = VanillaNavigationDemo.Instance;
         field = MazeWand.PeekFieldOrNull(gx, gy);
         if (field == null) return;
+        if (RegionsEnabled)
+        {
+            var cell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            if (!BuildCorridor(cell.x, cell.y, gx, gy)) return;
+            var next = corridor.Count > 0 ? corridor[^1] : (x: gx, y: gy);
+            routeGoal = new Vector2(next.x * 16 + 8 - player.width / 2, (next.y + 1) * 16 - player.height);
+            if (!demo.NavigationOwned) demo.StartNavigation(routeGoal);
+            else demo.UpdateNavigationGoal(routeGoal);
+            return;
+        }
         if (phase != Phase.Moving || !ReferenceEquals(contactField, field)) contactProgress.Reset();
         contactField = field;
         if (refreshSource != null && !ReferenceEquals(refreshSource, field))

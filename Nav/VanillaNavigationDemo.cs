@@ -25,13 +25,13 @@ public sealed class VanillaNavigationDemo : ModSystem
     public bool Reached { get; private set; }
     public bool NavigationOwned { get; private set; }
     public int RoutePoints => route.Length;
-    public string PlannerStatus => movement?.Status ?? Status;
-    public JsonObject PlannerResult => movement?.ActiveResult;
-    internal bool HasQueuedMovement => movement?.HasInputAt(tick + 1) == true;
+    public string PlannerStatus => regions?.Status ?? movement?.Status ?? Status;
+    public JsonObject PlannerResult => regions?.Result ?? movement?.ActiveResult;
+    internal bool HasQueuedMovement => regions?.HasInput(tick + 1) ?? movement?.HasInputAt(tick + 1) == true;
     public string PlannerRejection => movement?.LastRejection;
     public string PlannerMismatch => movement?.LastMismatch;
-    public int PlanAccepted => movement?.Accepted ?? 0;
-    public int PlanRejected => movement?.Rejected ?? 0;
+    public int PlanAccepted => regions?.Accepted ?? movement?.Accepted ?? 0;
+    public int PlanRejected => regions?.Rejected ?? movement?.Rejected ?? 0;
     public bool PlannerReady => movement != null;
     internal bool WorkerReady => worker?.Alive == true;
     bool terrainPaused;
@@ -47,6 +47,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     Task<VanillaWorkerConnection> startup;
     VanillaWorkerConnection worker;
     VanillaAsyncMovement movement;
+    VanillaRegionNavigation regions;
+    JsonObject drawnRegion;
     int responseFrames;
     CancellationTokenSource terrainCancellation;
     Task<JsonObject> terrainRequest;
@@ -118,6 +120,9 @@ public sealed class VanillaNavigationDemo : ModSystem
         if (!navigation && !AxisLock.Take("vanilla-demo", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => running))
             throw new InvalidOperationException("人物控制权被其他动作占用。");
         running = true; NavigationOwned = navigation; terrainPaused = false; Reached = false; goal = target; tick = 0; stalled = 0;
+        regions?.Dispose();
+        regions = navigation && VanillaNavBridge.RegionsEnabled
+            ? new VanillaRegionNavigation((request, token) => Task.Run(() => worker.Send(request, token))) : null;
         closest = Vector2.Distance(player.position, goal); previousAccepted = 0;
         loggedAccepted = loggedRejected = idleFrames = starvedFrames = starvation = longestStarvation = 0;
         route = Array.Empty<Vector2>();
@@ -125,7 +130,7 @@ public sealed class VanillaNavigationDemo : ModSystem
         EnsureWorker();
         if (worker?.Alive == true)
         {
-            movement = ConnectMovement(worker); Status = "推演中"; return;
+            movement = regions == null ? ConnectMovement(worker) : null; Status = "推演中"; return;
         }
         Status = "正在启动独立推演进程……";
     }
@@ -153,6 +158,8 @@ public sealed class VanillaNavigationDemo : ModSystem
     public void Stop(string reason = "已停止", bool closeWorker = false)
     {
         running = false; NavigationOwned = false; terrainPaused = false; Status = reason;
+        regions?.Dispose(); regions = null;
+        drawnRegion = null;
         movement?.CancelPending(); movement = null; CancelTerrain();
         if (closeWorker)
         {
@@ -187,6 +194,28 @@ public sealed class VanillaNavigationDemo : ModSystem
     void ApplyInput(Player player, bool applyTerrainUse = true)
     {
         if (!running || player != Main.LocalPlayer) return;
+        if (regions != null)
+        {
+            var input = regions.InputAt(tick + 1);
+            if (input.UseSlot >= 0)
+            {
+                var item = player.inventory[input.UseSlot];
+                var target = input.Target.Value;
+                if (item.IsAir || item.pick <= 0 && item.createTile < 0
+                    || item.pick > 0 && !LavaSafety.CanMine(target.X, target.Y)
+                    || item.createTile >= 0 && LavaSafety.IsLava(target.X, target.Y))
+                {
+                    RecedingNav.LastStop = "region_item_or_terrain_changed";
+                    RecedingNav.Stop(); Stop("区域路线物品或地形已变化"); return;
+                }
+                player.delayUseItem = player.mouseInterface = false;
+                Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
+            }
+            VanillaPrediction.ApplyInput(player, input);
+            LastControl = new ControlFrame((int)input.Keys, regions.HasInput(tick + 1), "region",
+                regions.Index(tick + 1), false, goal, goal, Vector2.Zero);
+            return;
+        }
         if (NavigationOwned && !terrainPaused && movement?.ProtectFall(player, tick + 1) == true)
             DiagLog.Write($"[engine-emergency-jump] tick={tick} x={player.position.X:0.##} y={player.position.Y:0.##} vy={player.velocity.Y:0.##} fall_start={player.fallStart}");
         int keys = terrainPaused ? 0 : movement?.InputAt(tick + 1) ?? 0;
@@ -208,12 +237,25 @@ public sealed class VanillaNavigationDemo : ModSystem
                 var completed = startup; startup = null;
                 worker = completed.GetAwaiter().GetResult();
                 DiagLog.Write("[engine-worker-ready] " + worker.StartupTiming.ToJsonString());
-                if (running) movement = ConnectMovement(worker);
+                if (running && regions == null) movement = ConnectMovement(worker);
             }
             if (!running) return;
             var player = Main.LocalPlayer;
             tick++;
             if (player.dead || Main.gameMenu) { Stop("人物死亡或离开世界"); return; }
+            if (regions != null)
+            {
+                regions.Tick(player, tick, goal);
+                Status = regions.Status;
+                if (!ReferenceEquals(drawnRegion, regions.Result))
+                {
+                    drawnRegion = regions.Result;
+                    route = drawnRegion?["frames"]?.AsArray().Select(frame =>
+                        new Vector2(frame["x"].GetValue<float>(), frame["y"].GetValue<float>()) + player.Size / 2).ToArray()
+                        ?? Array.Empty<Vector2>();
+                }
+                return;
+            }
             if (terrainPaused) return;
             int descentCount = movement.ContactDescents;
             movement.Poll(tick, player, 0);
@@ -299,7 +341,15 @@ public sealed class VanillaNavigationDemo : ModSystem
                 requestBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
             }
         }
-        catch (Exception error) { Stop("失败：" + DescribeError(error), true); Main.NewText(Status, Color.OrangeRed); }
+        catch (Exception error)
+        {
+            if (regions != null && NavigationOwned)
+            {
+                RecedingNav.LastStop = "region_error:" + DescribeError(error);
+                RecedingNav.Stop();
+            }
+            Stop("失败：" + DescribeError(error), true); Main.NewText(Status, Color.OrangeRed);
+        }
     }
 
     public static string DescribeError(Exception error) => error.GetBaseException().Message switch
@@ -374,9 +424,10 @@ public sealed class VanillaNavigationCommand : ModCommand
             VanillaNavBridge.Reset(); VanillaNavBridge.Enabled = args[1] == "on";
             caller.Reply("现有寻路的引擎移动后端：" + (VanillaNavBridge.Enabled ? "开" : "关")); return;
         }
-        if (args.Length == 3 && args[0] is "route" or "reach" && int.TryParse(args[1], out int gx) && int.TryParse(args[2], out int gy))
+        if (args.Length == 3 && args[0] is "route" or "reach" or "regions" && int.TryParse(args[1], out int gx) && int.TryParse(args[2], out int gy))
         {
             Halt.All(); NativeAgent.Stop(); VanillaNavBridge.Enabled = true;
+            VanillaNavBridge.RegionsEnabled = args[0] == "regions";
             RecedingNav.Start(gx, gy, args[0] == "reach" ? RecedingNav.Mode.Reach : RecedingNav.Mode.Snap);
             caller.Reply("开始带挖掘/搭建的引擎寻路；/halt 停止。"); return;
         }

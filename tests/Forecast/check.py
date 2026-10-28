@@ -99,8 +99,11 @@ def plan_observed_corridor(worker, state, guidance, args, root):
 def verify_region(worker, state, result, root):
     replay = worker.call("region_replay", snapshot=state, controls=result["controls"],
                          use_slots=result["use_slots"], placement_tile=result["placement_tile"],
-                         mining_tile=result["mining_tile"], use_targets=result["use_targets"])
+                         mining_tile=result["mining_tile"], use_targets=result["use_targets"],
+                         frames=result.get("frames"), anchor=result.get("anchor"))
     assert replay["outcome"] == "complete", replay["outcome"]
+    if result.get("frames"):
+        assert replay["playback_verified"]
     differences = [key for key in result["end_snapshot"]
                    if replay["end_snapshot"].get(key) != result["end_snapshot"][key]]
     if differences:
