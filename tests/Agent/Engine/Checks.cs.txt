@@ -151,6 +151,11 @@ public sealed class Driver : ModSystem
     StartHook navigationHook;
     bool HealthLive => Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
     bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
+    bool ModelScript => File.Exists(Path.Combine(Main.SavePath, "model-script.json"));
+    readonly List<int> modelAnnouncements = new();
+    delegate void OriginalSay(string text, bool bot);
+    delegate void SayHook(OriginalSay original, string text, bool bot);
+    SayHook sayHook;
     bool TeleportCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentteleportcheck");
     int teleportCheckUntil;
 
@@ -166,6 +171,16 @@ public sealed class Driver : ModSystem
         {
             navigationHook = NavigateWithoutPlanning;
             MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), navigationHook);
+        }
+        if (ModelScript)
+        {
+            sayHook = (original, text, bot) =>
+            {
+                if (text.Trim() == "叮") modelAnnouncements.Add(Main.LocalPlayer.inventory
+                    .Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack));
+                original(text, bot);
+            };
+            MonoModHooks.Add(typeof(AgentChat).GetMethod("Say"), sayHook);
         }
     }
 
@@ -294,6 +309,16 @@ public sealed class Driver : ModSystem
                         player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
                         foreach (var item in Main.item) item.active = false;
                         Main.playerInventory = false; PrepareResources(player);
+                        if (ModelScript)
+                        {
+                            var events = JsonNode.Parse(File.ReadAllText(Path.Combine(Main.SavePath, "model-script.json"))).AsArray();
+                            string code = events.Single(e => e?["tool"]?.ToString() == "run_script")["args"]["code"].ToString();
+                            results.Add(new JsonObject { ["model_code"] = code, ["placed_crystals"] = 10,
+                                ["initial_crystals"] = 0, ["navigation"] = "teleport_stub" });
+                            phase = 25;
+                            Call("run_script", new JsonObject { ["seconds"] = 120, ["code"] = code });
+                            break;
+                        }
                         phase = 22;
                         Call("run_script", new JsonObject { ["seconds"] = 90, ["code"] = $$"""
                             tool('task_plan', {goal:'script real-engine check',replace:true,steps:[
@@ -514,6 +539,15 @@ public sealed class Driver : ModSystem
                     Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
                         && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
+                case 25:
+                    int crystals = player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    results.Add(new JsonObject { ["actual_crystals"] = crystals, ["permanent_health"] = player.statLifeMax,
+                        ["announcements"] = new JsonArray(modelAnnouncements.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()) });
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["completed"]?.GetValue<int>() == 10
+                        && crystals == 10 && player.statLifeMax == 100, "model_script_collection_not_verified");
+                    Check(modelAnnouncements.SequenceEqual(Enumerable.Range(1, 10)), "model_script_per_item_order_wrong");
+                    Finish(true, "AGENT_MODEL_SCRIPT_COMPLETE checks=2 model_calls=0 placed_crystals=10 inventory=10 announcements=10 hp=100 navigation=teleport_stub");
                     break;
                 case 24:
                     if (ticks < teleportCheckUntil) { phase = 24; break; }
