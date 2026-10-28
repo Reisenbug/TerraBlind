@@ -107,6 +107,8 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 `python3 tests/Agent/Engine/run.py --model-script <per-item.json>` 为上述模型代码的真实引擎重放入口，会启动独立客户端，不再调用模型。要求输入恰好包含一个run_script，原样提取code交给正式AgentTools执行；临时场地放置10颗生命水晶，初始库存0、永久血100，测试传送替代导航。采集、掉落、入包均走游戏，监听实际AgentChat.Say并记录当时库存。只有库存10、血上限仍100、代码返回completed=10且“叮”对应库存严格为1..10才通过；模型原始代码和实际结果保留在报告中。入口完成编译尚不代表该游戏检查已经通过。
 
+2026-10-28 真实引擎重放通过，报告 `/tmp/terrablind-agent-engine-1793189470567463000/agent-engine-result.json`。输入为完整API脚本入口下Astra生成的逐颗脚本，模型输出与实际执行code逐字符相同，SHA256 `a693ff06123ef6ab5f5cf42b6ab3381174b0d0ac0140aef0837c4e3aba26839c`。22次工具调用、18042毫秒，真实库存0→10；实际say对应库存1..10，永久血100。预置10颗水晶仅一次，不补放；没有再次调用模型。标记 `AGENT_MODEL_SCRIPT_COMPLETE checks=2 model_calls=0 placed_crystals=10 inventory=10 announcements=10 hp=100 navigation=teleport_stub`。这证明模型生成的循环、库存分支和逐次行为能通过正式API执行，不证明自然地图探索、Luna可靠性或任意任务均可完成。功能报告产生后客户端仍出现macOS原生退出异常，不能称退出过程正常；测试进程已结束。
+
 普通 NPC 的 FightCoordinator 在允许 auto_dodge 时，比较24帧内停留、左右移动与起跳的预测碰撞风险，并继续攻击。使用当前弹幕速度、extraUpdates 和附近敌人速度做短时外推，按当前跑速、加速度、重力和方块碰撞估计移动；不推演敌人后续 AI、复杂弹道或完整饰品物理，也不求全局路径。它不调用模型，不能视为已接入 PvP 的完整 Jev 决策。
 
 当前射界受阻时，同一短时比较还考虑取得射界，碰撞代价优先于射界代价；跳跃估计包含持续按住跳跃的12帧。对受方块碰撞的弹丸，直线被挡时停止攻击；ContentSamples 中 tileCollide=false 的弹丸不套此限制。这仍不是完整弹道遮挡模拟，不保证抛物线、曲线或特殊模组武器的判断正确。
