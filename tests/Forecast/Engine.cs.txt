@@ -397,17 +397,22 @@ public sealed class Engine : ModSystem
         int remaining = request["horizon"]?.GetValue<int>() ?? 180;
         var combined = new JsonObject();
         var segments = new JsonArray();
+        var searchHistory = new JsonArray();
         JsonNode initialCost = null;
         JsonNode initialCorridor = null;
         int consumed = 0, cleared = 0;
         bool placed = false;
         int backtracks = 0;
+        var failedContinuations = new System.Collections.Generic.List<(int Budget, JsonNode Snapshot)>();
         var checkpoints = new System.Collections.Generic.Stack<(JsonObject Request, JsonObject Combined,
             JsonArray Segments, int Remaining, int Consumed, int Cleared, bool Placed)>();
         string[] streams = { "controls", "use_slots", "use_targets", "world_random_indices", "frames" };
         foreach (string stream in streams) combined[stream] = new JsonArray();
-        bool Backtrack()
+        bool Backtrack(string reason)
         {
+            searchHistory.Add(new JsonObject { ["event"] = "backtrack", ["reason"] = reason,
+                ["depth"] = checkpoints.Count, ["remaining"] = remaining,
+                ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds });
             if (!checkpoints.TryPop(out var checkpoint)) return false;
             (next, combined, segments, remaining, consumed, cleared, placed) = checkpoint;
             backtracks++;
@@ -420,11 +425,32 @@ public sealed class Engine : ModSystem
                 VanillaPrediction.CheckCancellation();
                 if (remaining <= 0)
                 {
-                    if (Backtrack()) continue;
+                    if (Backtrack("horizon_exhausted")) continue;
                     break;
                 }
                 next["horizon"] = remaining;
                 var part = RegionPlanSegment(next);
+                var searchRecord = new JsonObject { ["event"] = "search", ["depth"] = checkpoints.Count,
+                    ["remaining"] = remaining, ["status"] = part["status"]?.DeepClone(),
+                    ["planning_ms"] = part["planning_wall_ms"]?.DeepClone(),
+                    ["attempts"] = part["attempts"]?.DeepClone(), ["frames"] = part["controls"].AsArray().Count };
+                searchHistory.Add(searchRecord);
+                foreach (var failure in failedContinuations.Where(failure => failure.Budget == remaining))
+                {
+                    var differences = new JsonArray();
+                    foreach (var entry in next["snapshot"].AsObject())
+                    {
+                        if (JsonNode.DeepEquals(entry.Value, failure.Snapshot[entry.Key])) continue;
+                        if (entry.Key == "player")
+                        {
+                            foreach (var field in entry.Value.AsObject())
+                                if (!JsonNode.DeepEquals(field.Value, failure.Snapshot["player"][field.Key]))
+                                    differences.Add("player." + field.Key);
+                        }
+                        else differences.Add(entry.Key);
+                    }
+                    searchRecord["previous_failure_differences"] = differences;
+                }
                 var priorSegments = segments.DeepClone().AsArray();
                 initialCost ??= part["corridor"]?["start_cost"]?.DeepClone();
                 initialCorridor ??= part["corridor"]?.DeepClone();
@@ -434,17 +460,20 @@ public sealed class Engine : ModSystem
                     ["attempts"] = part["attempts"]?.DeepClone() });
                 if (part["status"]?.GetValue<string>() != "reached")
                 {
-                    if (part["status"]?.GetValue<string>() != "snapshot_required" && Backtrack()) continue;
+                    if (next["search_cursor"] == null && part["status"]?.GetValue<string>() == "budget_exhausted")
+                        failedContinuations.Add((remaining, next["snapshot"].DeepClone()));
+                    if (part["status"]?.GetValue<string>() != "snapshot_required" && Backtrack("continuation_" + part["status"])) continue;
                     part["controls"] = new JsonArray();
                     part["segments"] = segments;
                     part["backtracks"] = backtracks;
+                    part["search_history"] = searchHistory;
                     part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
                     return part;
                 }
                 int count = part["controls"].AsArray().Count;
                 if (count == 0)
                 {
-                    if (Backtrack()) continue;
+                    if (Backtrack("empty_segment")) continue;
                     break;
                 }
                 var resume = next.DeepClone().AsObject();
@@ -460,6 +489,7 @@ public sealed class Engine : ModSystem
                 remaining -= count;
                 var end = part["end_snapshot"].AsObject();
                 var player = VanillaFrame.RestoreInWorker(end);
+                searchRecord["end"] = VanillaPrediction.Observe(player, false);
                 int hp = player.statLife;
                 bool stable = false;
                 while (remaining > 0 && player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player)
@@ -480,12 +510,15 @@ public sealed class Engine : ModSystem
                         && Math.Abs(player.velocity.X) <= .001f;
                 }
                 segments[^1]["frames"] = count;
+                searchRecord["settled"] = stable;
+                searchRecord["settle_frames"] = count - part["controls"].AsArray().Count;
+                searchRecord["after_settle"] = VanillaPrediction.Observe(player, false);
                 var area = end["area"];
                 end = VanillaFrame.Capture(player, new Rectangle(area[0].GetValue<int>(), area[1].GetValue<int>(),
                     area[2].GetValue<int>(), area[3].GetValue<int>()), true);
                 if (player.dead || player.statLife < hp)
                 {
-                    if (Backtrack()) continue;
+                    if (Backtrack("settling_damage")) continue;
                     break;
                 }
                 if (stable && player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player)
@@ -501,6 +534,7 @@ public sealed class Engine : ModSystem
                     part["require_support"] = true;
                     part["segments"] = segments;
                     part["backtracks"] = backtracks;
+                    part["search_history"] = searchHistory;
                     part["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds;
                     return part;
                 }
@@ -509,7 +543,8 @@ public sealed class Engine : ModSystem
             }
             return new JsonObject { ["status"] = "budget_exhausted", ["controls"] = new JsonArray(),
                 ["corridor"] = initialCorridor, ["attempts"] = new JsonArray(), ["segments"] = segments,
-                ["backtracks"] = backtracks, ["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds };
+                ["backtracks"] = backtracks, ["search_history"] = searchHistory,
+                ["planning_wall_ms"] = timer.Elapsed.TotalMilliseconds };
         }
         finally { VanillaFrame.RestoreInWorker(request["snapshot"].AsObject()); }
     }
@@ -544,6 +579,7 @@ public sealed class Engine : ModSystem
             attempts.Add(new JsonObject { ["mode"] = mode, ["region"] = region.DeepClone(),
                 ["direct"] = direct,
                 ["status"] = result["status"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
+                ["rejections"] = result["rejections"]?.DeepClone(),
                 ["expanded"] = result["expanded"]?.DeepClone(), ["frames"] = result["controls"].AsArray().Count });
             return result;
         }
@@ -679,6 +715,7 @@ public sealed class Engine : ModSystem
             throw new ArgumentException("invalid_region_search_budget");
         var timer = System.Diagnostics.Stopwatch.StartNew();
         int expanded = 0, simulated = 0, shared = 0;
+        var rejections = new JsonObject();
         using var process = System.Diagnostics.Process.GetCurrentProcess();
         var cpuAt = process.TotalProcessorTime;
         var gcAt = GC.GetTotalPauseDuration();
@@ -744,6 +781,7 @@ public sealed class Engine : ModSystem
             ["cleared_count"] = miningTiles.Count(tile => !Main.tile[tile.X, tile.Y].HasTile),
             ["consumed"] = useSlot < 0 ? 0 : initialStock - Main.player[playerIndex].inventory[useSlot].stack,
             ["expanded"] = expanded, ["simulated_frames"] = simulated, ["reused_prefix_frames"] = shared,
+            ["rejections"] = rejections,
             ["captured_tile_changes"] = tileChanges, ["restored_tile_writes"] = tileWrites,
             ["layers"] = layers,
             ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
@@ -864,7 +902,13 @@ public sealed class Engine : ModSystem
                             safe = !player.dead && player.statLife >= hp && interior.Contains(player.Hitbox)
                                 && !Main.projectile.Any(projectile => projectile.active)
                                 && !Main.npc.Any(npc => npc.active);
-                            if (!safe) break;
+                            if (!safe)
+                            {
+                                string reason = player.dead ? "dead" : player.statLife < hp ? "damage_" + (hp - player.statLife)
+                                    : !interior.Contains(player.Hitbox) ? "snapshot_interior" : "dynamic_entity";
+                                rejections[reason] = (rejections[reason]?.GetValue<int>() ?? 0) + 1;
+                                break;
+                            }
                             reached = Reached(player);
                             if (reached) break;
                         }
