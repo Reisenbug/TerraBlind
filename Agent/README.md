@@ -30,7 +30,15 @@ Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其�
 
 跨段脚本传入稳定的 `workflow`，使用 `step(id, fn)` 保存有独立恢复意义的执行步骤。宿主缓存完成步骤的JSON返回值；同名步骤再次出现只读缓存，不重放动作。失败或取消时未完成步骤为uncertain，不能直接重跑；先读取 `get_state.script_workflows` 或 `script_progress`，核对实际状态，再以当前revision明确retry或complete。核对记录附实际随身库存和永久血量，但不替代任务条件验收，也不提供崩溃事务或任意副作用的恰好一次保证。JS变量不保留，只有步骤结果、最近12次调用和最后段落结果由宿主保存；退出世界清空，最多8个workflow、每个128个步骤。
 
-脚本返回 `{status:'yield', completed, blocked, next}` 可要求模型根据新信息续写。宿主只对本轮新yield的workflow续接，完成步骤增加才算进展；无进展最多额外一次，之后paused。`status:'done'` 与 `status:'blocked'` 不自动续接，不等于宿主已验证最终游戏目标。离线61组检查覆盖跨段不重复效果、取消后的不确定步骤、带revision核对、真实调度器中的yield续接与空转上限；长动作句柄仍待实现。
+脚本返回 `{status:'yield', completed, blocked, next}` 可要求模型根据新信息续写。宿主只对本轮新yield的workflow续接，完成步骤增加才算进展；无进展最多额外一次，之后paused。`status:'done'` 与 `status:'blocked'` 不自动续接，不等于宿主已验证最终游戏目标。进度读取和调用日志不增加用于核对的revision；没有运行中step时可在续写段落中核对uncertain步骤。
+
+`action_start({tool,args})` 支持gather/nav_to/fight，立即返回句柄；对应高层执行器在后台运行。`action_query({handle,wait_ms})` 返回任务状态、当前hp/dead/像素位置/类型化库存、工具结果和上次尝试证据；等待最多1000毫秒，查询不重启动作。`action_control({handle,command,args?})` 支持pause/cancel/resume。暂停等待旧动作和输入清理完毕，角色输入一次只归一个任务；其他操作返回action_busy。恢复复用句柄并增加attempt，先读取现场再进入原高层工具；gather保留目标总库存，nav_to/fight重新判断当前现场，不重放旧按键。可整体更新args。已完成任务拒绝恢复；暂停、取消、失败任务均须明确resume。句柄属于当前玩家指令，脚本正常返回不取消，stop/新指令/离开世界取消；退出世界清空，最多32个句柄。查询新状态不会覆盖实际暂停时的证据。默认战斗及导航规则、装备适配和工具自身超时仍适用。
+
+需要监控危险时，脚本启动动作后循环查询并检查实际hp等条件，条件触发后暂停、保存最小业务结果并yield；下一段核对现场后恢复。实时反应速度取决于查询间隔和游戏帧，不把这个循环当逐帧避弹控制器。step返回值最多8000个未转义JSON字符，应保存handle、状态、计数等最小字段，不复制整份get_state或任务计划。完成动作仍需验证任务条件。
+
+`python3 tests/Agent/Engine/run.py --continuation` 不调用模型：真实采集0→3时第一段暂停并yield，第二段跳过已完成启动步骤，复用同一handle恢复到10。2026-10-28 实测报告 `/tmp/terrablind-agent-engine-1793191226792824000/agent-engine-result.json`，两段分别5891/9968毫秒，attempt=2；仅一次预置10颗水晶，导航为teleport_stub。`--workflow-live` 使用Astra/low在测试配置中生成代码，过程中测试模组把血量降至80一秒再恢复100，验证模型根据真实观测暂停、跨段续接、同句柄恢复和最终库存；会消耗模型额度，生产默认模型不变。
+
+2026-10-28 `--workflow-live` 修复后实测通过，报告 `/tmp/terrablind-agent-engine-1793191779968386000/agent-live-result.json`，65.774777秒。模型自行编写两个脚本段落：首次在实际库存3、HP80时暂停；随后确认HP100，复用句柄恢复至库存10、attempt=2，宿主item条件验证通过，计划completed、agent idle。宿主保存track/plan/handle/pause/resume五个完成步骤，模型没有重启任务。首次联调暴露了读取进度导致版本失效、中文JSON转义造成步骤限额不一致，以及后续查询覆盖暂停现场三个问题；已有对应回归检查。仅测试临时场地中的采集与危险监控，导航仍用传送替代；移动/战斗句柄的取消与恢复由独立测试覆盖，不能宣称复杂地形实机验收。客户端功能报告后仍出现缺失声音资源异常，测试进程已退出。
 
 `run_script` 让模型一次提交 JavaScript 函数体，在 mod 内用 Jint 4.17.0 执行，不依赖外部 Node/Python。`tool(name,args={})` 串行等待现有游戏工具返回原生 JS 对象/数组，支持变量、if、for、while、return；`print(value)` 记录调试输出。接口仍使用原工具的名称、参数、权限及完成验证，不直接暴露 Terraria 对象、文件、Shell 或任意网络。它是完整 JS 语法配游戏工具接口，不是自行定义语法的 DSL，也不执行 TypeScript。例子：
 
@@ -101,7 +109,7 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 当前 live 场地会重新清空附近地面上方空间与旧掉落物，放置铁砧和10颗可实际采集的生命水晶，关闭背包界面。不会直接给 agent 水晶或替它使用；只隔离验证第一阶段100→300血的执行。尚未预置完整的材料与召唤资源链，不能视为整条任务的受控验收。
 
-离线测试共 57 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=57`。直接链接生产的 Agent 协议、脚本解释器、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本入口及API元数据、组合与分支、逐次采集与行为顺序、资源限额、取消隔离、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
+离线测试共 68 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=68`。直接链接生产的 Agent 协议、脚本解释器、宿主工作流、后台动作句柄、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本入口及API元数据、组合与分支、逐次采集与行为顺序、跨段续接与核对、暂停/取消/恢复、输入归属和过期清理、资源限额、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
 
 `dotnet run --project tests/Agent/AgentTests.csproj -- --script-model` 是可选真实模型脚本验收，会消耗 Codex 额度，不启动游戏。使用生产系统提示词及其中五项工具定义（run_script/get_state/gather/say/game_catalog），以模拟库存隔离执行细节。模型自行生成代码，分别完成收集10颗，以及每收集一颗立即说“叮”再收下一颗。必须实际在脚本内调用采集，逐次行为的库存序列必须恰好为1..10；只有写脚本建计划不算通过。原始代码、调用层级、返回与回复保存到输出的临时目录。通过标记 `SCRIPT_MODEL_COMPLETE checks=2 mock_world=true` 只证明这两种意图在该模拟工具集上的模型编写与执行，不证明真实采集、完整工具集下的选择或任意任务规划。该入口不会在普通离线测试中调用。
 

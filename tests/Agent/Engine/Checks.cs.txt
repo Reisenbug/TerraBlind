@@ -149,9 +149,15 @@ public sealed class Driver : ModSystem
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook navigationHook;
-    bool HealthLive => Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
+    bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
+    bool HealthLive => WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
+    bool hazardApplied;
+    int hazardUntil, hazardStock;
     bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
     bool ModelScript => File.Exists(Path.Combine(Main.SavePath, "model-script.json"));
+    bool ContinuationCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentcontinuationcheck");
+    string actionHandle;
+    int stockAtPause;
     readonly List<int> modelAnnouncements = new();
     delegate void OriginalSay(string text, bool bot);
     delegate void SayHook(OriginalSay original, string text, bool bot);
@@ -246,6 +252,16 @@ public sealed class Driver : ModSystem
             if (liveRunning)
             {
                 if (HealthLive) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+                if (WorkflowLive)
+                {
+                    int count = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    if (!hazardApplied && count >= 3 && count < 10)
+                    {
+                        hazardApplied = true; hazardUntil = ticks + 60; hazardStock = count;
+                        Console.WriteLine($"AGENT_WORKFLOW_HAZARD stock={count} hp=80 frames=60");
+                    }
+                    if (hazardApplied) Main.LocalPlayer.statLife = ticks < hazardUntil ? 80 : 100;
+                }
                 if (pending != null)
                 {
                     if (!pending.IsCompleted) return;
@@ -259,6 +275,21 @@ public sealed class Driver : ModSystem
                         ["health_goal_met"] = state["permanent_max_health"]?.GetValue<int>() >= 300,
                         ["health_goal_verified"] = state["permanent_max_health"]?.GetValue<int>() >= 300
                             && state["task_plan"]?["status"]?.ToString() == "completed" }.ToJsonString());
+                    if (WorkflowLive)
+                    {
+                        int inventory = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                        var actions = state["action_tasks"].AsArray();
+                        bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
+                            && actions[0]["status"]?.ToString() == "completed"
+                            && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
+                            && actions[0]["previous_attempt"]?["observation"]?["hp"]?.GetValue<int>() < 90;
+                        bool segmented = state["script_workflows"].AsObject().Any(w => w.Value["segment"]?.GetValue<int>() >= 2);
+                        results.Add(new JsonObject { ["hazard_stock"] = hazardStock, ["inventory"] = inventory,
+                            ["resumed_same_handle"] = resumed, ["segmented"] = segmented, ["state"] = state.DeepClone() });
+                        Finish(hazardApplied && inventory == 10 && resumed && segmented,
+                            "AGENT_WORKFLOW_LIVE_RESULT inventory=" + inventory + " resumed=" + resumed + " segmented=" + segmented);
+                        return;
+                    }
                     Finish(true, "AGENT_LIVE_CAPTURED bounded_probe=true goal_success_requires_state_verification=true");
                     return;
                 }
@@ -309,6 +340,25 @@ public sealed class Driver : ModSystem
                         player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
                         foreach (var item in Main.item) item.active = false;
                         Main.playerInventory = false; PrepareResources(player);
+                        if (ContinuationCheck)
+                        {
+                            phase = 26;
+                            Call("run_script", new JsonObject { ["workflow"] = "engine-continuation", ["seconds"] = 90, ["code"] = """
+                                const action=step('start',()=>tool('action_start',{tool:'gather',args:{targets:[{item_type:29,count:10,tile_names:['Heart']}]}}));
+                                for(let i=0;i<80;i++) {
+                                    const q=tool('action_query',{handle:action.handle,wait_ms:200});
+                                    const count=q.observation.inventory_slots.filter(x=>x.type===29).reduce((n,x)=>n+x.stack,0);
+                                    if(count>=3 && q.status==='running') {
+                                        const paused=step('pause',()=>tool('action_control',{handle:action.handle,command:'pause'}));
+                                        if(paused.status!=='paused') throw new Error('not paused');
+                                        return {status:'yield',handle:action.handle,stock:count};
+                                    }
+                                    if(q.status!=='running') throw new Error('ended before pause: '+JSON.stringify(q));
+                                }
+                                throw new Error('pause deadline');
+                                """ });
+                            break;
+                        }
                         if (ModelScript)
                         {
                             var events = JsonNode.Parse(File.ReadAllText(Path.Combine(Main.SavePath, "model-script.json"))).AsArray();
@@ -351,7 +401,13 @@ public sealed class Driver : ModSystem
                         Main.playerInventory = false;
                         for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
                         Config.I.AgentUseCodex = true;
-                        NativeAgent.Submit("把永久生命上限提升到300。请建立任务计划，按实际状态执行并验证结果，合理的中间步骤自己决定。");
+                        if (WorkflowLive)
+                        {
+                            PrepareResources(player);
+                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            NativeAgent.Submit("用宿主workflow与可中断后台任务收集10颗生命水晶，不使用。已查证物品29、来源方块Heart。采集期间持续观察最新血量；低于90就立刻暂停任务，保存进度并return status=yield交回模型。测试环境稍后会恢复血量；下一段确认血量恢复后，恢复同一个句柄继续收集到10，不能重新启动任务或重复已完成步骤。完成后实际验证库存，返回status=done。请自己编写代码实现，不只给计划。");
+                        }
+                        else NativeAgent.Submit("把永久生命上限提升到300。请建立任务计划，按实际状态执行并验证结果，合理的中间步骤自己决定。");
                         liveRunning = true; liveStart = DateTime.UtcNow;
                         Console.WriteLine("AGENT_HEALTH_LIVE_STARTED initial_hp=100 resources=existing_world terrain_setup=false max_seconds=180 navigation=teleport_stub");
                         break;
@@ -539,6 +595,40 @@ public sealed class Driver : ModSystem
                     Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
                         && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
+                case 26:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "yield",
+                        "first_segment_did_not_yield_after_pause");
+                    actionHandle = result["value"]["handle"].ToString();
+                    stockAtPause = player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    Check(stockAtPause >= 3 && stockAtPause < 10 && !RecedingNav.Active && !ItemUseCoordinator.IsActive,
+                        "pause_lost_partial_inventory_or_left_inputs_active");
+                    phase = 27;
+                    Call("run_script", new JsonObject { ["workflow"] = "engine-continuation", ["seconds"] = 90, ["code"] = """
+                        const action=step('start',()=>{throw new Error('completed action start replayed')});
+                        const resumed=step('resume',()=>tool('action_control',{handle:action.handle,command:'resume'}));
+                        if(resumed.handle!==action.handle || resumed.attempt!==2) throw new Error('handle changed');
+                        for(let i=0;i<80;i++) {
+                            const q=tool('action_query',{handle:action.handle,wait_ms:200});
+                            if(q.status==='running') continue;
+                            if(q.status!=='completed') throw new Error(JSON.stringify(q));
+                            const count=q.observation.inventory_slots.filter(x=>x.type===29).reduce((n,x)=>n+x.stack,0);
+                            if(count!==10) throw new Error('inventory mismatch');
+                            step('finish',()=>{tool('say',{text:'continuation-complete'});return {count}});
+                            return {status:'done',handle:action.handle,count,attempt:q.attempt,previous:q.previous_attempt};
+                        }
+                        throw new Error('resume deadline');
+                        """ });
+                    break;
+                case 27:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "done"
+                        && result["value"]?["handle"]?.ToString() == actionHandle
+                        && result["value"]?["previous"]?["status"]?.ToString() == "paused"
+                        && player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack) == 10,
+                        "continuation_did_not_resume_original_intent");
+                    results.Add(new JsonObject { ["stock_at_pause"] = stockAtPause, ["final_inventory"] = 10,
+                        ["same_handle"] = actionHandle, ["attempt"] = 2 });
+                    Finish(true, "AGENT_CONTINUATION_COMPLETE checks=2 model_calls=0 initial=0 final=10 same_handle=true attempt=2 navigation=teleport_stub");
                     break;
                 case 25:
                     int crystals = player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);

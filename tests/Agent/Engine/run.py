@@ -15,9 +15,11 @@ def main():
     mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
+    mode.add_argument("--workflow-live", action="store_true", help="Real model writes monitored gathering, pauses on low HP, then resumes; consumes quota")
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
     mode.add_argument("--hornets-wall", action="store_true", help="Same hornet trial with a short stone obstacle")
     mode.add_argument("--script", action="store_true", help="Real script-tool collection/use/verification and timeout cleanup, no model calls")
+    mode.add_argument("--continuation", action="store_true", help="Pause and resume real gathering across host-persisted script segments")
     mode.add_argument("--model-script", type=Path, help="Replay a saved model per-item.json through real game APIs, without further model calls")
     mode.add_argument("--teleport-check", action="store_true", help="Check exact teleports without terrain edits, fall reset and nearest tile ordering")
     args = parser.parse_args()
@@ -55,12 +57,16 @@ def main():
         command.append("-agentbatchcheck")
     if args.health_live:
         command.append("-agenthealthcheck")
+    if args.workflow_live:
+        command.append("-agentworkflowcheck")
     if args.hornets or args.hornets_wall:
         command.append("-agenthornetcheck")
     if args.hornets_wall:
         command.append("-agenthornetwall")
-    if args.script or args.model_script:
+    if args.script or args.model_script or args.continuation:
         command.append("-agentscriptcheck")
+    if args.continuation:
+        command.append("-agentcontinuationcheck")
     if args.teleport_check:
         command.append("-agentteleportcheck")
     with (root / "client.log").open("w") as log:
@@ -69,7 +75,7 @@ def main():
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         print("AGENT_ENGINE_PID", process.pid, flush=True)
         try:
-            deadline = time.monotonic() + (300 if args.live or args.health_live else 180)
+            deadline = time.monotonic() + (300 if args.live or args.health_live or args.workflow_live else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break
