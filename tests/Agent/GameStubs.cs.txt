@@ -98,7 +98,7 @@ namespace Terraria
     public class Mount { public bool Active; }
     public class Projectile
     {
-        public bool active, arrow, friendly, hostile;
+        public bool active, arrow, friendly, hostile, tileCollide = true;
         public int owner, damage, identity, whoAmI, type, extraUpdates;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
@@ -107,7 +107,8 @@ namespace Terraria
     public static class Collision
     {
         public static bool Clear = true;
-        public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => Clear;
+        public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
+        public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, bool> SolidTest;
         public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => SolidTest?.Invoke(position, width, height) ?? false;
     }

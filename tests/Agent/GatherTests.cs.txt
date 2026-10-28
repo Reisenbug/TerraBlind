@@ -48,6 +48,43 @@ static class GatherTests
         Console.WriteLine("PASS: gathering deadline cancels a blocked action, stops owned control and preserves target evidence");
         FightFiltering();
         Evasion();
+        FiringLane();
+    }
+
+    static void FiringLane()
+    {
+        var p = Main.LocalPlayer;
+        var oldNpcs = Main.npc; var oldShots = Main.projectile; var oldWeapon = p.inventory[0];
+        int oldSlot = p.selectedItem; var oldVelocity = p.velocity; bool oldDodge = AgentPermissions.Dodge;
+        bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var oldSample);
+        try
+        {
+            Main.npc = Array.Empty<NPC>(); Main.projectile = Array.Empty<Projectile>(); p.velocity = default;
+            var target = new NPC { type = 9, active = true, damage = 0, position = new(p.Center.X + 200, p.Center.Y - 10) };
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 77 }; p.selectedItem = 0;
+            Terraria.ID.ContentSamples.ProjectilesByType[77] = new Projectile { tileCollide = true };
+            float clearHeight = p.Center.Y - 45;
+            Collision.LineTest = (from, to) => from.Y < clearHeight;
+            Check(FightCoordinator.Evade(p, target).Jump, "blocked firing lane did not select a jump that exposes target");
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = target; AgentPermissions.Dodge = false;
+            Collision.LineTest = (from, to) => false;
+            FightCoordinator.Start(40, new[] { 9 }); FightCoordinator.Tick(p);
+            Check(!p.controlUseItem, "blocked projectile weapon continued firing into terrain");
+            Terraria.ID.ContentSamples.ProjectilesByType[77].tileCollide = false;
+            FightCoordinator.Tick(p);
+            Check(p.controlUseItem, "wall-passing projectile was incorrectly blocked by line-of-sight guard");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); Main.npc = oldNpcs; Main.projectile = oldShots;
+            p.inventory[0] = oldWeapon; p.selectedItem = oldSlot; p.velocity = oldVelocity;
+            AgentPermissions.Dodge = oldDodge; Collision.LineTest = null; p.controlUseItem = false;
+            if (hadSample) Terraria.ID.ContentSamples.ProjectilesByType[77] = oldSample;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
+        }
+        Console.WriteLine("PASS: NPC combat seeks exposed firing positions, withholds blocked shots and permits wall-passing projectiles");
     }
 
     static void Evasion()

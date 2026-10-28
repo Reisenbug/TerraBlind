@@ -23,8 +23,13 @@ namespace TerraBlind
             _moving = false; _jumpHold = 0;
         }
 
-        internal static (int Direction, bool Jump) Evade(Player p)
+        private static bool NeedsClearLine(Item item) => item.shoot <= 0
+            || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
+
+        internal static (int Direction, bool Jump) Evade(Player p, NPC target = null)
         {
+            bool blocked = target != null && NeedsClearLine(p.HeldItem)
+                && !Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
             var shots = new List<Projectile>();
             var enemies = new List<NPC>();
             foreach (var shot in Main.projectile)
@@ -32,11 +37,12 @@ namespace TerraBlind
             foreach (var npc in Main.npc)
                 if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
                     && Vector2.Distance(npc.Center, p.Center) < 600) enemies.Add(npc);
-            if (shots.Count == 0 && enemies.Count == 0) return (0, false);
+            if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false);
             float Risk(int direction, bool jump)
             {
                 Vector2 position = p.Center, velocity = p.velocity;
                 if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
+                int hold = jump ? 12 : _jumpHold;
                 float score = direction == 0 ? 0 : .01f;
                 if (jump) score += .02f;
                 for (int frame = 1; frame <= 24; frame++)
@@ -46,23 +52,26 @@ namespace TerraBlind
                     var next = position + new Vector2(velocity.X, 0);
                     if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
                     else velocity.X = 0;
+                    if (hold > 0 && velocity.Y < 0)
+                    { velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost; hold--; }
                     velocity.Y += p.gravity;
                     next = position + new Vector2(0, velocity.Y);
                     if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
                     else velocity.Y = 0;
+                    if (blocked && !Collision.CanHitLine(position, 4, 4, target.Center + target.velocity * frame, 4, 4)) score++;
                     foreach (var shot in shots)
                     {
                         Vector2 point = shot.Center + shot.velocity * ((shot.extraUpdates + 1) * frame);
                         if (Math.Abs(point.X - position.X) < (p.width + shot.width) / 2f + 6
                             && Math.Abs(point.Y - position.Y) < (p.height + shot.height) / 2f + 6)
-                            score += 25 - frame;
+                            score += (25 - frame) * 100;
                     }
                     foreach (var npc in enemies)
                     {
                         Vector2 point = npc.Center + npc.velocity * frame;
                         if (Math.Abs(point.X - position.X) < (p.width + npc.width) / 2f + 4
                             && Math.Abs(point.Y - position.Y) < (p.height + npc.height) / 2f + 4)
-                            score += 25 - frame;
+                            score += (25 - frame) * 100;
                     }
                 }
                 return score;
@@ -111,7 +120,7 @@ namespace TerraBlind
 
             if (AgentPermissions.Dodge)
             {
-                var evade = Evade(p);
+                var evade = Evade(p, target);
                 if (evade.Jump) _jumpHold = 12;
                 if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
                 p.controlLeft |= evade.Direction < 0;
@@ -130,7 +139,7 @@ namespace TerraBlind
             Cursor.AimPx(ncx, ncy);
 
             p.selectedItem = weaponSlot;
-            p.controlUseItem = true;
+            p.controlUseItem = !NeedsClearLine(p.HeldItem) || Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
         }
 
         private static NPC FindNearest(Player p)
