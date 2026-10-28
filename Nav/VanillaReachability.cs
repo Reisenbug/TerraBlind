@@ -78,10 +78,10 @@ public sealed class VanillaReachability : ModSystem
     {
         Cancel(); selected = id; forecast = null;
         var sequence = new List<int>();
-        var branch = new Stack<int>();
+        var branch = new Stack<int[]>();
         for (var node = result["nodes"][id]; node["parent"].GetValue<int>() >= 0; node = result["nodes"][node["parent"].GetValue<int>()])
-            branch.Push(node["keys"].GetValue<int>());
-        foreach (int keys in branch) sequence.AddRange(Enumerable.Repeat(keys, 6));
+            branch.Push(node["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray());
+        foreach (var keys in branch) sequence.AddRange(keys);
         controls = sequence.ToArray();
         if (controls.Length == 0) { Status = "起点：0 帧"; return; }
         selecting = true; cancellation = new CancellationTokenSource();
@@ -191,11 +191,11 @@ public sealed class VanillaReachability : ModSystem
         if (snapshot == null || Main.gameMenu) return;
         batch.Draw(TextureAssets.MagicPixel.Value, new Rectangle(16, 142, 600, 94), Color.Black * .8f);
         Utils.DrawBorderString(batch, "90 帧可达探索：" + Status, new Vector2(24, 148), Color.White, .75f);
-        string detail = result == null ? "6 种输入，每段 6 帧；合并近似状态，每层最多保留 256 个" :
-            $"{layer * 6} 帧  青：仍有额外跳跃  橙：已用完  耗时 {result["elapsed_ms"].GetValue<double>() / 1000:0.00}s  截去 {result["dropped"]} 个状态";
+        string detail = result == null ? "18 帧粗展开；碰撞或越过最高点时细调；每层保留 32 个状态" :
+            $"{layer * result["quantum"].GetValue<int>()} 帧  青：仍有额外跳跃  橙：已用完  耗时 {result["elapsed_ms"].GetValue<double>() / 1000:0.00}s  截去 {result["dropped"]} 个状态";
         Utils.DrawBorderString(batch, detail, new Vector2(24, 174), Color.White, .65f);
         batch.Draw(TextureAssets.MagicPixel.Value, slider, Color.DimGray);
-        batch.Draw(TextureAssets.MagicPixel.Value, new Rectangle(slider.X + layer * slider.Width / 15 - 3, slider.Y, 6, slider.Height), Color.White);
+        batch.Draw(TextureAssets.MagicPixel.Value, new Rectangle(slider.X + layer * slider.Width / Math.Max(1, result?["layers"]?.AsArray().Count ?? 15) - 3, slider.Y, 6, slider.Height), Color.White);
         Utils.DrawBorderString(batch, "0                 拖动时间轴                 90 帧", new Vector2(24, 218), Color.White, .6f);
     }
     public override void OnWorldUnload() => Clear();

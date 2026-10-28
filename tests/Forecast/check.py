@@ -265,25 +265,29 @@ def main():
                     cases.append((name, worker.call("reset", equipment=equipment)["snapshot"]))
             summaries = []
             for name, state in cases:
-                result = worker.call("reachability", snapshot=state)
+                result = worker.call("reachability", snapshot=state, coarse=not bool(args.reachability_baseline))
                 (args.root / f"reachability-{name}.json").write_text(json.dumps(result))
                 nodes = result["nodes"]
                 if args.reachability_baseline:
                     baseline = json.loads((args.reachability_baseline / f"reachability-{name}.json").read_text())
-                    for key in ("nodes", "expanded", "merged", "dropped", "unsafe"):
+                    for key in ("expanded", "merged", "dropped", "unsafe"):
                         assert result[key] == baseline[key], f"reachability changed: {name}/{key}"
+                    assert [{k: v for k, v in n.items() if k != "controls"} for n in nodes] == baseline["nodes"]
                 origin = nodes[0]
-                assert result["horizon"] == 90 and result["quantum"] == 6
-                assert len(result["layers"]) == 15
+                assert result["horizon"] == 90
+                assert len(result["layers"]) == 90 // result["quantum"]
                 for layer in result["layers"]:
                     assert len(layer["nodes"]) <= result["capacity"]
-                picks = [min(nodes, key=lambda n: n["y"]), max(nodes, key=lambda n: abs(n["x"] - origin["x"]))]
+                picks = [min(nodes[1:], key=lambda n: n["y"]), max(nodes[1:], key=lambda n: abs(n["x"] - origin["x"]))]
                 picks += random.Random(79).sample(nodes[1:], min(3, len(nodes) - 1))
+                refined_node = next((node for node in nodes[1:] if len(set(node["controls"])) > 1), None)
+                if refined_node:
+                    picks.append(refined_node)
                 for node in picks:
                     segments = []
                     current = node
                     while current["parent"] >= 0:
-                        segments.append([current["keys"]] * 6)
+                        segments.append(current["controls"])
                         current = nodes[current["parent"]]
                     controls = [key for segment in reversed(segments) for key in segment]
                     assert len(controls) == node["frame"]
@@ -296,7 +300,7 @@ def main():
                 summary = dict(name=name, max_horizontal=max(abs(n["x"] - origin["x"]) for n in nodes),
                                max_rise=origin["y"] - min(n["y"] for n in nodes),
                                elapsed_ms=result["elapsed_ms"], expanded=result["expanded"],
-                               dropped=result["dropped"], replayed=len(picks))
+                               dropped=result["dropped"], refined=result["refined"], replayed=len(picks))
                 summaries.append(summary)
                 print("REACHABILITY_CASE_PASS", summary, flush=True)
             if args.reachability_check:
