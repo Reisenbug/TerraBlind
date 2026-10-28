@@ -151,6 +151,8 @@ public sealed class Driver : ModSystem
     StartHook navigationHook;
     bool HealthLive => Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
     bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
+    bool TeleportCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentteleportcheck");
+    int teleportCheckUntil;
 
     public override void Load()
     {
@@ -170,11 +172,41 @@ public sealed class Driver : ModSystem
     static void NavigateWithoutPlanning(OriginalStart original, int x, int y, RecedingNav.Mode mode)
     {
         var player = Main.LocalPlayer;
-        player.position = new Vector2(x * 16 - player.width / 2, y * 16 - player.height);
-        player.velocity = Vector2.Zero;
+        Vector2? landing = StandingSpot(player, x, y);
         RecedingNav.Active = false;
+        if (!landing.HasValue)
+        {
+            RecedingNav.LastStop = "no_safe_test_landing";
+            Console.WriteLine($"AGENT_TEST_NAV_REJECTED x={x} y={y} reason=no_supported_clear_landing");
+            return;
+        }
+        int previousFall = player.fallStart;
+        player.Teleport(landing.Value);
+        player.velocity = Vector2.Zero;
+        player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
         RecedingNav.LastStop = "done";
-        Console.WriteLine($"AGENT_HEALTH_NAV x={x} y={y} mode={mode} navigation=teleport_stub");
+        Console.WriteLine($"AGENT_TEST_NAV x={x} y={y} mode={mode} landed={player.position} fall_before={previousFall} fall_after={player.fallStart} navigation=teleport_stub");
+    }
+
+    static Vector2? StandingSpot(Player player, int x, int y)
+    {
+        for (int radius = 0; radius <= 6; radius++)
+        for (int dy = -radius; dy <= radius; dy++)
+        for (int dx = -radius; dx <= radius; dx++)
+        {
+            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != radius) continue;
+            int tx = x + dx, ty = y + dy;
+            if (tx < 3 || ty < 4 || tx >= Main.maxTilesX - 3 || ty >= Main.maxTilesY - 3) continue;
+            var position = new Vector2(tx * 16 + 8 - player.width / 2f, ty * 16 - player.height);
+            if (Collision.SolidCollision(position, player.width, player.height)
+                || !Collision.SolidCollision(position + new Vector2(0, player.height), player.width, 2)) continue;
+            bool liquid = false;
+            for (int bx = (int)(position.X / 16); bx <= (int)((position.X + player.width - 1) / 16); bx++)
+            for (int by = (int)(position.Y / 16); by <= ty; by++)
+                liquid |= Main.tile[bx, by].LiquidAmount > 0;
+            if (!liquid) return position;
+        }
+        return null;
     }
 
     static void Focus(ILContext il)
@@ -243,7 +275,7 @@ public sealed class Driver : ModSystem
                 return;
             }
             if (++ticks > 7200) throw new TimeoutException("engine_check_frame_limit");
-            Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60;
+            if (!TeleportCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
             pending = null;
@@ -254,6 +286,28 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (TeleportCheck)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        foreach (var npc in Main.npc) npc.active = false;
+                        foreach (var shot in Main.projectile) shot.active = false;
+                        int destX = (int)player.Center.X / 16, destY = (int)player.Bottom.Y / 16 + 300;
+                        for (int tx = destX - 12; tx <= destX + 12; tx++)
+                        for (int ty = destY - 12; ty <= destY + 12; ty++)
+                        {
+                            var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                            if (ty >= destY) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                        }
+                        player.statLifeMax = player.statLife = 100;
+                        player.immune = false; player.immuneTime = 0; player.noFallDmg = false;
+                        player.velocity.Y = 20;
+                        NavigateWithoutPlanning(null, destX, destY, RecedingNav.Mode.Snap);
+                        Check(RecedingNav.LastStop == "done" && player.velocity == Vector2.Zero
+                            && player.fallStart == (int)(player.position.Y / 16) && player.fallStart2 == player.fallStart,
+                            "teleport_did_not_reset_fall_state");
+                        teleportCheckUntil = ticks + 90; phase = 24;
+                        break;
+                    }
                     if (ScriptCheck)
                     {
                         AgentPermissions.Attack = AgentPermissions.Dodge = false;
@@ -293,11 +347,10 @@ public sealed class Driver : ModSystem
                         player.inventory[2].SetDefaults(ItemID.CopperAxe);
                         Main.playerInventory = false;
                         for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
-                        PrepareResources(player);
                         Config.I.AgentUseCodex = true;
                         NativeAgent.Submit("把永久生命上限提升到300。请建立任务计划，按实际状态执行并验证结果，合理的中间步骤自己决定。");
                         liveRunning = true; liveStart = DateTime.UtcNow;
-                        Console.WriteLine("AGENT_HEALTH_LIVE_STARTED initial_hp=100 placed_hearts=10 max_seconds=180 navigation=teleport_stub");
+                        Console.WriteLine("AGENT_HEALTH_LIVE_STARTED initial_hp=100 resources=existing_world terrain_setup=false max_seconds=180 navigation=teleport_stub");
                         break;
                     }
                     if (Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck"))
@@ -483,6 +536,29 @@ public sealed class Driver : ModSystem
                     Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
                         && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
+                case 24:
+                    if (ticks < teleportCheckUntil) { phase = 24; break; }
+                    Check(!player.dead && player.statLife == 100 && !player.noFallDmg,
+                        "teleport_caused_fall_damage");
+                    int cx = (int)(player.Center.X / 16), cy = (int)(player.Center.Y / 16);
+                    var diagonal = Main.tile[cx + 4, cy + 4]; diagonal.HasTile = true; diagonal.TileType = TileID.Iron;
+                    var axial = Main.tile[cx + 5, cy]; axial.HasTile = true; axial.TileType = TileID.Iron;
+                    var nearest = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Iron\",\"n\":1,\"max_dist\":8}").Body);
+                    Check(nearest["tiles"]?[0]?["x"]?.GetValue<int>() == cx + 5 && nearest["tiles"][0]["dist"].GetValue<int>() == 5,
+                        "tile_scan_truncated_before_nearest_candidate");
+                    var pair = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Iron\",\"n\":2,\"max_dist\":8}").Body);
+                    Check(pair["tiles"][0]["dist"].GetValue<int>() == 5 && pair["tiles"][1]["dist"].GetValue<int>() == 8,
+                        "tile_scan_not_sorted_by_reported_distance");
+                    var beforeRejected = player.position;
+                    for (int tx = cx + 28; tx <= cx + 52; tx++)
+                    for (int ty = cy - 12; ty <= cy + 12; ty++)
+                    { var tile = Main.tile[tx, ty]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Stone; }
+                    NavigateWithoutPlanning(null, cx + 40, cy, RecedingNav.Mode.Snap);
+                    Check(RecedingNav.LastStop == "no_safe_test_landing" && player.position == beforeRejected,
+                        "unsafe_test_teleport_changed_player_position");
+                    results.Add(new JsonObject { ["hp_after_90_frames"] = player.statLife, ["nearest"] = nearest, ["pair"] = pair });
+                    Finish(true, "AGENT_TELEPORT_COMPLETE checks=4 model_calls=0 hp=100 fall_protection=false nearest_distances=5,8 unsafe_landing=rejected");
                     break;
             }
         }
