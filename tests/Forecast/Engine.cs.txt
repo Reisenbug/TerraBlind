@@ -508,6 +508,7 @@ public sealed class Engine : ModSystem
         int beam = request["beam"]?.GetValue<int>() ?? 6;
         int quantum = request["quantum"]?.GetValue<int>() ?? 6;
         bool direct = request["direct"]?.GetValue<bool>() == true;
+        bool terrainMotion = request["terrain_motion"]?.GetValue<bool>() == true;
         bool requireSupport = request["require_support"]?.GetValue<bool>() ?? true;
         Point? placement = request["placement_tile"] is JsonArray place
             ? new Point(place[0].GetValue<int>(), place[1].GetValue<int>()) : null;
@@ -655,9 +656,11 @@ public sealed class Engine : ModSystem
                 {
                     var checkpoint = parent.State;
                     bool continueMining = miningTiles.Length > 0 && parent.Uses.Length > 0 && parent.Uses[^1] >= 0;
-                    var choices = actions.Select(keys => (keys, use: continueMining));
+                    var choices = actions.Select(keys => (keys, use: continueMining, reactive: false));
                     if (useSlot >= 0 && !parent.Mode.placed && !continueMining)
-                        choices = choices.Concat(actions.Select(keys => (keys, use: true)));
+                        choices = choices.Concat(actions.Select(keys => (keys, use: true, reactive: false)));
+                    if (direct && terrainMotion && placement == null && miningTiles.Length == 0)
+                        choices = choices.Prepend((keys: 6, use: false, reactive: true));
                     foreach (var action in choices)
                     {
                         VanillaPrediction.CheckCancellation();
@@ -689,6 +692,8 @@ public sealed class Engine : ModSystem
                                 var destination = goalRegions.OrderBy(goal => Vector2.DistanceSquared(foot,
                                     new Vector2(Math.Clamp(foot.X, goal.Left, goal.Right), Math.Clamp(foot.Y, goal.Top, goal.Bottom)))).First();
                                 keys = (keys & ~3) | (foot.X < destination.Left ? 2 : foot.X > destination.Right ? 1 : 0);
+                                if (action.reactive)
+                                    keys = (int)VanillaContactRegion.MoveToward(player, destination, (VanillaKeys)action.keys);
                             }
                             VanillaPrediction.Advance(player, (VanillaKeys)keys, slot, aim);
                             traceRandom = null;

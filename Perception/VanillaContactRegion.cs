@@ -7,6 +7,27 @@ namespace TerraBlind;
 
 public static class VanillaContactRegion
 {
+    public static VanillaKeys MoveToward(Player player, Rectangle destination, VanillaKeys intent)
+    {
+        var foot = player.Bottom;
+        int direction = foot.X < destination.Left ? 1 : foot.X > destination.Right ? -1 : 0;
+        var keys = (intent & ~(VanillaKeys.Left | VanillaKeys.Right | VanillaKeys.Jump))
+            | (direction < 0 ? VanillaKeys.Left : direction > 0 ? VanillaKeys.Right : VanillaKeys.None);
+        if ((intent & VanillaKeys.Jump) == 0) return keys;
+        bool headroom = SafeBody(player.position - new Vector2(0, 2), player.width, player.height);
+        if (!headroom) return keys;
+        if (player.jump > 0 && !player.releaseJump) return keys | VanillaKeys.Jump;
+        if (!player.releaseJump) return keys;
+        bool grounded = player.velocity.Y == 0 && Supported(player.position, player.width, player.height);
+        bool available = grounded;
+        foreach (var jump in player.ExtraJumps) available |= jump.Available;
+        bool higher = foot.Y > destination.Bottom + 1;
+        float lookahead = Math.Max(8, Math.Abs(player.velocity.X) * 3);
+        bool blocked = direction != 0 && !SafeBody(player.position + new Vector2(direction * lookahead, 0), player.width, player.height);
+        return available && (grounded && (higher || blocked) || !grounded && player.velocity.Y >= 0 && (higher || blocked))
+            ? keys | VanillaKeys.Jump : keys;
+    }
+
     public static bool TryWalk(Player player, Vector2 goal, out VanillaKeys keys)
     {
         keys = VanillaKeys.None;

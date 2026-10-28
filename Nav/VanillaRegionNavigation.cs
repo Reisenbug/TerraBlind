@@ -52,6 +52,7 @@ internal sealed class VanillaRegionNavigation : IDisposable
         var request = new JsonObject { ["command"] = "region_plan", ["snapshot"] = snapshot.DeepClone(),
             ["guidance"] = VanillaNavBridge.CaptureGuidance(snapshot),
             ["region"] = new JsonArray(region.X, region.Y, region.Width, region.Height),
+            ["terrain_motion"] = true,
             ["horizon"] = 180, ["beam"] = 6, ["quantum"] = 12 };
         pending = send(request, cancellation.Token);
     }
@@ -66,8 +67,9 @@ internal sealed class VanillaRegionNavigation : IDisposable
         bool executing = playback != null && !playback.Complete(tick);
         bool wasWalking = walkTick == tick;
         walkTick = -1;
-        if (!executing && pending == null && VanillaContactRegion.TryWalk(player, goal, out walkKeys))
+        if (!executing && VanillaContactRegion.TryWalk(player, goal, out walkKeys))
         {
+            if (pending != null) Cancel();
             playback = null; active = null; walkTick = tick + 1;
             settlingWalk = false;
             Status = "沿安全平地连续前进";

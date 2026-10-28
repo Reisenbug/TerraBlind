@@ -168,6 +168,7 @@ def main():
     parser.add_argument("--reachability-check", action="store_true")
     parser.add_argument("--reachability-probe", type=Path)
     parser.add_argument("--reachability-baseline", type=Path)
+    parser.add_argument("--movement-probe", type=Path)
     parser.add_argument("--region", type=int, nargs=4)
     parser.add_argument("--region-horizon", type=int, default=90)
     parser.add_argument("--region-quantum", type=int, choices=(6, 12))
@@ -251,6 +252,48 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.movement_probe:
+            import random
+            source = json.loads(args.movement_probe.read_text())["request"]
+            state = source["snapshot"]
+            if source.get("prefix"):
+                state = worker.call("replay", snapshot=state, controls=source["prefix"], capture_end=True)["end_snapshot"]
+            position = state["player"]["Terraria.Entity:position"]
+            x = position["Microsoft.Xna.Framework.Vector2:X"] + state["player"]["Terraria.Entity:width"] / 2
+            y = position["Microsoft.Xna.Framework.Vector2:Y"] + state["player"]["Terraria.Entity:height"]
+            a = state["area"]
+            left, top = max(a[0] * 16 + 32, int(x) - 192), max(a[1] * 16 + 32, int(y) - 320)
+            right, bottom = min((a[0] + a[2]) * 16 - 32, int(x) + 192), min((a[1] + a[3]) * 16 - 32, int(y) + 96)
+            surfaces = worker.call("region_surfaces", snapshot=state, region=[left, top, right-left, bottom-top])["surfaces"]
+            surfaces = [r for r in surfaces if abs(r[1]-y) > 8 or not r[0]-8 <= x <= r[0]+r[2]+8]
+            assert surfaces, "no_real_map_destinations"
+            near = sorted(surfaces, key=lambda r: abs(r[0]+r[2]/2-x)+abs(r[1]-y))[:4]
+            targets = near + random.Random(79).sample([r for r in surfaces if r not in near], min(3, max(0, len(surfaces)-len(near))))
+            rows = []
+            for index, target in enumerate(targets):
+                row = dict(region=target)
+                for name, enabled in (("previous", False), ("reactive", True)):
+                    result = worker.call("region_search", snapshot=state, region=target, horizon=120,
+                                         direct=True, terrain_motion=enabled, require_support=True, exclude_start=True)
+                    row[name] = {k: result.get(k) for k in ("status", "elapsed_ms", "expanded", "simulated_frames")}
+                    (args.root / f"movement-{index}-{name}.json").write_text(json.dumps(result))
+                    if result["status"] == "reached":
+                        replay = worker.call("region_replay", snapshot=state, **{k: result[k] for k in ("controls", "use_slots", "use_targets")})
+                        assert replay["outcome"] == "complete"
+                        assert replay["end_snapshot"] == result["end_snapshot"], "movement_replay_mismatch"
+                        trace = worker.call("replay", snapshot=state, controls=result["controls"])
+                        assert trace["outcome"] == "complete"
+                        frames = trace["frames"]
+                        row[name]["extra_jump_frames"] = [i + 1 for i in range(1, len(frames))
+                            if frames[i]["available_jumps"] < frames[i-1]["available_jumps"]]
+                        (args.root / f"movement-{index}-{name}-trace.json").write_text(json.dumps(trace))
+                rows.append(row)
+                print("MOVEMENT_PROBE", row, flush=True)
+            (args.root / "movement-summary.json").write_text(json.dumps(rows))
+            assert any(r["reactive"]["status"] == "reached" for r in rows)
+            assert all(r["reactive"]["status"] == "reached" for r in rows if r["previous"]["status"] == "reached")
+            print("MOVEMENT_PROBE_PASS", len(rows), flush=True)
+            return
         if args.reachability_check or args.reachability_probe:
             import random
             cases = []
