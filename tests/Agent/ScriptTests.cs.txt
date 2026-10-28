@@ -45,6 +45,54 @@ static class ScriptTests
             && calls.Count == 7 && result["logs"].AsArray().Count == 1, "script lost data dependencies, failure branch or early return");
         Console.WriteLine("PASS: script composes dependent tools, loops, branches around failed sources and returns after verified craft opportunity");
 
+        foreach (int failAt in new[] { 0, 4 })
+        {
+            int collected = 0, attempts = 0, behaviors = 0;
+            var order = new List<string>();
+            Task<string> Collect(string name, JsonObject args, CancellationToken token)
+            {
+                order.Add(name);
+                if (name == "inventory") return Task.FromResult(new JsonObject { ["count"] = collected }.ToJsonString());
+                if (name == "collect")
+                {
+                    attempts++;
+                    if (attempts == failAt) return Task.FromResult("{\"error\":\"source_unavailable\"}");
+                    collected++;
+                    return Task.FromResult("{\"ok\":true}");
+                }
+                Check(name == "behavior" && args["ordinal"].GetValue<int>() == collected && collected == behaviors + 1,
+                    "per-item behavior ran before collection or after a batched collection");
+                behaviors++;
+                return Task.FromResult("{\"ok\":true}");
+            }
+            result = await AgentScript.Run("""
+                const initial = tool('inventory').count;
+                let completed = 0;
+                while (completed < 10) {
+                    const before = tool('inventory').count;
+                    const gathered = tool('collect', {count:before + 1});
+                    const after = tool('inventory').count;
+                    if (gathered.error || after !== before + 1)
+                        return {completed, gained:after-initial, failure:gathered};
+                    const acted = tool('behavior', {ordinal:completed + 1});
+                    if (!acted.ok) return {completed, failure:acted};
+                    completed++;
+                }
+                return {completed, gained:tool('inventory').count-initial};
+                """, 5, (_, _) => { }, Collect, Stop, default);
+            int expected = failAt == 0 ? 10 : failAt - 1;
+            Check(result["ok"].GetValue<bool>() && result["value"]["completed"].GetValue<int>() == expected
+                && result["value"]["gained"].GetValue<int>() == expected && collected == expected && behaviors == expected,
+                "per-item script lost verified collection progress");
+            Check(failAt == 0 ? result["value"]["failure"] == null
+                : result["value"]["failure"]["error"].ToString() == "source_unavailable",
+                "per-item script hid an unavailable source");
+            for (int i = 0; i < order.Count; i++)
+                if (order[i] == "behavior") Check(i >= 2 && order[i - 1] == "inventory" && order[i - 2] == "collect",
+                    "per-item behavior did not follow collection verification");
+        }
+        Console.WriteLine("PASS: per-item scripts preserve ten collection/behavior pairs and stop with exact progress on source failure (fake tools)");
+
         calls.Clear(); stopped = 0;
         result = await AgentScript.Run("tool('find'); throw new Error('need another plan');", 5, (_, _) => { }, Execute, Stop, default);
         Check(!result["ok"].GetValue<bool>() && stopped == 0 && result["trace"][0]["tool"].ToString() == "find"
