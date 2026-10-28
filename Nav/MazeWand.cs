@@ -186,8 +186,8 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             int sx = p != null ? (int)(p.Center.X / 16f) : gx;
             int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
-            if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
-            if (_prevField != null && _prevGoal == (gx, gy))
+            if (_cachedField != null && _cachedGoal == (gx, gy) && _cachedField.ContainsKey((sx, sy))) return _cachedField;
+            if (_prevField != null && _prevGoal == (gx, gy) && _prevField.ContainsKey((sx, sy)))
             {
                 // promote the other slot rather than rebuild, this is the whole point of keeping two
                 var f = _prevField; var g = _prevGoal;
@@ -224,9 +224,10 @@ namespace TerraBlind
 
         static Dictionary<(int, int), int> BuildCachedField(int gx, int gy, int sx, int sy)
         {
-            var field = BuildField(gx, gy, sx, sy, bigMargin: !VanillaNavBridge.Enabled);
+            var field = BuildField(gx, gy, sx, sy, bigMargin: !VanillaNavBridge.Enabled,
+                stopAtStart: VanillaNavBridge.RegionsEnabled);
             if (VanillaNavBridge.Enabled && !field.ContainsKey((sx, sy)))
-                field = BuildField(gx, gy, sx, sy, bigMargin: true);
+                field = BuildField(gx, gy, sx, sy, bigMargin: true, stopAtStart: VanillaNavBridge.RegionsEnabled);
             return field;
         }
 
@@ -261,7 +262,7 @@ namespace TerraBlind
             return best;
         }
 
-        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
+        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false, bool stopAtStart = false)
         {
             // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
             // 边全被拒,只剩回头路,循环。
@@ -275,8 +276,9 @@ namespace TerraBlind
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
             var pq = new PriorityQueue<(int x, int y), (int cost, int x, int y)>();
+            int Estimate(int x, int y) => stopAtStart ? System.Math.Abs(x - sx) * MoveSide + System.Math.Abs(y - sy) * MoveDown : 0;
             dist[(gx, gy)] = 0;
-            pq.Enqueue((gx, gy), (0, gx, gy));
+            pq.Enqueue((gx, gy), (Estimate(gx, gy), gx, gy));
 
             int[] dxs = { 1, -1, 0, 0 };
             int[] dys = { 0, 0, 1, -1 };
@@ -286,8 +288,9 @@ namespace TerraBlind
             {
                 pq.TryDequeue(out var cur, out var priority);
                 var (cx, cy) = cur;
-                int cost = priority.cost;
+                int cost = dist[cur];
                 if (!closed.Add((cx, cy))) continue;
+                if (stopAtStart && cx == sx && cy == sy) break;
 
                 for (int i = 0; i < 4; i++)
                 {
@@ -303,8 +306,14 @@ namespace TerraBlind
                     int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
-                    pq.Enqueue((nx, ny), (nc, nx, ny));
+                    pq.Enqueue((nx, ny), (nc + Estimate(nx, ny), nx, ny));
                 }
+            }
+            if (stopAtStart)
+            {
+                var unsettled = new List<(int, int)>();
+                foreach (var cell in dist.Keys) if (!closed.Contains(cell)) unsettled.Add(cell);
+                foreach (var cell in unsettled) dist.Remove(cell);
             }
             // 谁建的、在不在主线程:一次 ~500ms,重建风暴看得见却归不了因。
             string who = "?";

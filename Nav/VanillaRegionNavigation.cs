@@ -15,14 +15,17 @@ internal sealed class VanillaRegionNavigation : IDisposable
     JsonObject requested, active;
     VanillaPrediction.RegionPlayback playback;
     Rectangle? expandedArea;
+    VanillaKeys walkKeys;
+    long walkTick = -1;
+    bool settlingWalk;
     public string Status { get; private set; } = "准备区域寻路";
     public int Accepted { get; private set; }
     public int Rejected { get; private set; }
     public JsonObject Result => active;
     public VanillaRegionNavigation(Func<JsonObject, CancellationToken, Task<JsonObject>> send) => this.send = send;
-    public bool HasInput(long tick) => playback?.HasInput(tick) == true;
+    public bool HasInput(long tick) => walkTick == tick || playback?.HasInput(tick) == true;
     public int Index(long tick) => playback?.Index(tick) ?? -1;
-    public VanillaPrediction.Input InputAt(long tick) => playback?.At(tick) ?? new(VanillaKeys.None);
+    public VanillaPrediction.Input InputAt(long tick) => walkTick == tick ? new(walkKeys) : playback?.At(tick) ?? new(VanillaKeys.None);
 
     void Cancel()
     {
@@ -33,7 +36,7 @@ internal sealed class VanillaRegionNavigation : IDisposable
         else source?.Dispose();
         pending = null; requested = null;
     }
-    public void Dispose() { Cancel(); playback = null; active = null; }
+    public void Dispose() { Cancel(); playback = null; active = null; walkTick = -1; settlingWalk = false; }
 
     void Request(JsonObject snapshot)
     {
@@ -61,6 +64,22 @@ internal sealed class VanillaRegionNavigation : IDisposable
             Rejected++; Dispose(); Status = "实际状态偏离，重新规划";
         }
         bool executing = playback != null && !playback.Complete(tick);
+        bool wasWalking = walkTick == tick;
+        walkTick = -1;
+        if (!executing && pending == null && VanillaContactRegion.TryWalk(player, goal, out walkKeys))
+        {
+            playback = null; active = null; walkTick = tick + 1;
+            settlingWalk = false;
+            Status = "沿安全平地连续前进";
+            if (!wasWalking) DiagLog.Write("[region-walk-start] no_worker_request=true");
+            return;
+        }
+        if (wasWalking) { settlingWalk = true; DiagLog.Write("[region-walk-end] terrain_or_goal_requires_planning=true"); }
+        if (settlingWalk)
+        {
+            if (Math.Abs(player.velocity.X) > .01f) { Status = "障碍前减速，准备局部推演"; return; }
+            settlingWalk = false;
+        }
         if (pending?.IsCompleted == true && !executing)
         {
             var result = pending.GetAwaiter().GetResult();

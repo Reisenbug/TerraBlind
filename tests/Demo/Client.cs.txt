@@ -15,6 +15,94 @@ namespace Demo;
 
 public sealed class Demo : Mod { }
 
+public sealed class FieldTimingCheck : ModSystem
+{
+    public override void Load()
+    {
+        if (Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-fieldtimingcheck"))
+            Main.OnEnginePreload += Run;
+    }
+    public override void Unload() => Main.OnEnginePreload -= Run;
+    static void Run()
+    {
+        try
+        {
+            var fixture = JsonNode.Parse(File.ReadAllText(Terraria.Program.LaunchParameters["-fieldtimingcheck"]));
+            var player = VanillaFrame.RestoreInWorker(fixture["request"]["snapshot"].AsObject());
+            Main.myPlayer = player.whoAmI;
+            var start = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            var snapshot = fixture["request"]["snapshot"].AsObject();
+            var area = snapshot["area"].AsArray();
+            int walkChecks = 0;
+            double decisionMs = 0;
+            int decisions = 0;
+            for (int y = area[1].GetValue<int>() + 4; y < area[1].GetValue<int>() + area[3].GetValue<int>() - 4 && walkChecks < 6; y++)
+            for (int x = area[0].GetValue<int>() + 12; x < area[0].GetValue<int>() + area[2].GetValue<int>() - 12 && walkChecks < 6; x++)
+            {
+                player.position = new Vector2(x * 16, y * 16 - player.height);
+                player.velocity = Vector2.Zero; player.jump = 0; player.releaseJump = true;
+                var goal = player.position + new Vector2(160, 0);
+                if (!VanillaContactRegion.TryWalk(player, goal, out _)) continue;
+                int hp = player.statLife;
+                var origin = player.position;
+                int requests = 0, moving = 0;
+                var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+                Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> send = (request, token) =>
+                { requests++; token.Register(() => pending.TrySetCanceled(token)); return pending.Task; };
+                var type = typeof(VanillaNavigationDemo).Assembly.GetType("TerraBlind.VanillaRegionNavigation", true);
+                using var controller = (IDisposable)Activator.CreateInstance(type, send);
+                for (int frame = 0; frame < 45; frame++)
+                {
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    bool walkable = VanillaContactRegion.TryWalk(player, goal, out _);
+                    type.GetMethod("Tick").Invoke(controller, new object[] { player, (long)frame, goal });
+                    var input = (VanillaPrediction.Input)type.GetMethod("InputAt").Invoke(controller, new object[] { (long)frame + 1 });
+                    decisionMs += timer.Elapsed.TotalMilliseconds; decisions++;
+                    if (walkable && requests == 0 && input.Keys == VanillaKeys.None)
+                        throw new InvalidOperationException("quick_walk_controller_gap");
+                    if (input.Keys != VanillaKeys.None) moving++;
+                    VanillaPrediction.Advance(player, input.Keys);
+                    if (player.statLife < hp || player.dead || !VanillaContactRegion.Supported(player.position, player.width, player.height))
+                        throw new InvalidOperationException("quick_walk_left_safe_ground");
+                }
+                if (requests > 1 || moving == 0) throw new InvalidOperationException("quick_walk_request_storm");
+                if (player.position.X <= origin.X) throw new InvalidOperationException("quick_walk_no_progress");
+                walkChecks++;
+                player = VanillaFrame.RestoreInWorker(snapshot);
+            }
+            if (walkChecks == 0) throw new InvalidOperationException("no_real_map_walk_samples");
+            Console.WriteLine($"QUICK_WALK_PASS samples={walkChecks} decisions={decisions} decision_ms={decisionMs:0.###}");
+            player = VanillaFrame.RestoreInWorker(snapshot);
+            var rows = new JsonArray();
+            foreach (int distance in new[] { 60, 600 })
+            foreach (bool wide in new[] { false, true })
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                int gx = start.x + (start.x + distance < Main.maxTilesX - 10 ? distance : -distance);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                var field = MazeWand.BuildField(gx, start.y, start.x, start.y, wide);
+                double elapsed = timer.Elapsed.TotalMilliseconds;
+                timer.Restart();
+                var bounded = MazeWand.BuildField(gx, start.y, start.x, start.y, wide, stopAtStart: true);
+                double boundedMs = timer.Elapsed.TotalMilliseconds;
+                if (!bounded.TryGetValue(start, out int cost) || !field.TryGetValue(start, out int fullCost) || cost != fullCost)
+                    throw new InvalidOperationException("bounded_field_cost_mismatch");
+                var path = MazeWand.TraceFrom(bounded, start.x, start.y, gx, start.y);
+                if (path.Count == 0 || path[^1] != (gx, start.y)) throw new InvalidOperationException("bounded_field_route_incomplete");
+                var row = new JsonObject { ["distance"] = distance, ["wide"] = wide, ["repeat"] = repeat,
+                    ["elapsed_ms"] = elapsed, ["cells"] = field.Count, ["start_reachable"] = field.ContainsKey(start),
+                    ["bounded_ms"] = boundedMs, ["bounded_cells"] = bounded.Count, ["route_cells"] = path.Count };
+                rows.Add(row); Console.WriteLine("FIELD_TIMING " + row.ToJsonString());
+                if (!field.ContainsKey(start)) throw new InvalidOperationException("field_did_not_reach_start");
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "field-timing.json"), rows.ToJsonString());
+            Console.WriteLine("FIELD_TIMING_PASS");
+            Environment.Exit(0);
+        }
+        catch (Exception error) { Console.WriteLine("FIELD_TIMING_FAIL " + error); Environment.Exit(1); }
+    }
+}
+
 public sealed class RegionHandoffCheck : ModSystem
 {
     public override void Load()

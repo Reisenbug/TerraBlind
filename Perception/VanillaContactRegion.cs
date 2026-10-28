@@ -7,6 +7,32 @@ namespace TerraBlind;
 
 public static class VanillaContactRegion
 {
+    public static bool TryWalk(Player player, Vector2 goal, out VanillaKeys keys)
+    {
+        keys = VanillaKeys.None;
+        if (player.dead || player.gravDir != 1 || player.wet || player.mount.Active
+            || player.grapCount > 0 || player.dashDelay < 0 || player.velocity.Y != 0
+            || player.runSlowdown <= 0 || Math.Abs(goal.Y - player.position.Y) > 16) return false;
+        float distance = goal.X - player.position.X;
+        int direction = Math.Sign(distance);
+        float speed = Math.Max(Math.Abs(player.velocity.X), player.maxRunSpeed);
+        float runway = Math.Max(32, speed * speed / player.runSlowdown + speed * 2);
+        if (Math.Abs(distance) < runway || runway > 160) return false;
+        for (float ahead = 0; ahead <= runway + 2; ahead += 2)
+        {
+            var position = player.position + new Vector2(direction * ahead, 0);
+            if (!Supported(position, player.width, player.height)) return false;
+            int bottom = (int)((position.Y + player.height) / 16);
+            for (int x = (int)(position.X / 16); x <= (int)((position.X + player.width) / 16); x++)
+            for (int y = (int)(position.Y / 16); y <= bottom; y++)
+                if (Main.tile[x, y].LiquidAmount > 0 || Main.tile[x, y].HasTile
+                    && Main.tile[x, y].TileType is TileID.Cobweb or TileID.HoneyBlock or TileID.PressurePlates or TileID.WeightedPressurePlate)
+                    return false;
+        }
+        keys = direction < 0 ? VanillaKeys.Left : VanillaKeys.Right;
+        return true;
+    }
+
     public sealed class Progress
     {
         bool grounded, hasContact;
