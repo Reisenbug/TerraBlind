@@ -207,6 +207,7 @@ public sealed class Engine : ModSystem
             }
         }
         var excavations = new JsonArray();
+        var transits = new JsonArray();
         var passageTiles = new System.Collections.Generic.HashSet<Point>();
         int pathStep = 0;
         var snapshotArea = initial["area"].AsArray();
@@ -235,7 +236,13 @@ public sealed class Engine : ModSystem
             if (!safe) break;
             foreach (var blocker in blockers)
                 passageTiles.Add(new Point(blocker[0].GetValue<int>(), blocker[1].GetValue<int>()));
-            if (passageTiles.Count == 0) continue;
+            if (passageTiles.Count == 0)
+            {
+                transits.Add(new JsonObject { ["goal_region"] = new JsonArray(footX - 4, footY, 8, 15),
+                    ["mining_tiles"] = new JsonArray(), ["path_step"] = pathStep,
+                    ["field_cost"] = field[(cx, cy)], ["movement_blocked_by"] = null });
+                continue;
+            }
             JsonArray movementBlockedBy = null;
             foreach (var blocker in blockers)
             {
@@ -261,7 +268,7 @@ public sealed class Engine : ModSystem
         VanillaFrame.RestoreInWorker(initial);
         return new JsonObject { ["goal_regions"] = regions, ["start_cost"] = startCost,
             ["threshold_cost"] = threshold, ["gradient_path"] = path, ["excavation_candidates"] = excavations,
-            ["platform_candidates"] = platformCandidates };
+            ["platform_candidates"] = platformCandidates, ["transit_candidates"] = transits };
     }
 
     static JsonObject RegionPlan(JsonObject request)
@@ -304,7 +311,8 @@ public sealed class Engine : ModSystem
             }
             if (!Terminal())
             {
-                var candidates = corridor["excavation_candidates"].AsArray();
+                var candidates = corridor["excavation_candidates"].AsArray()
+                    .Concat(corridor["transit_candidates"].AsArray()).ToArray();
                 var priorities = candidates.OrderBy(candidate => Math.Abs(candidate["path_step"].GetValue<int>() - 4)).Take(1).ToList();
                 if (!direct)
                     priorities.AddRange(candidates.Reverse().Where(candidate => candidate["path_step"].GetValue<int>() <= 2
@@ -318,6 +326,7 @@ public sealed class Engine : ModSystem
                             corridor["selected_local_transit"] = candidate["goal_region"].DeepClone();
                         if (Terminal()) break;
                     }
+                    if (candidate["mining_tiles"].AsArray().Count == 0) continue;
                     Search("mining", candidate["goal_region"], false, mining: candidate["mining_tiles"]);
                     if (result["status"]?.GetValue<string>() == "reached") corridor["selected_excavation"] = candidate.DeepClone();
                     if (Terminal()) break;

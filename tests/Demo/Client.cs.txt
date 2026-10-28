@@ -15,6 +15,140 @@ namespace Demo;
 
 public sealed class Demo : Mod { }
 
+public sealed class RegionHandoffCheck : ModSystem
+{
+    public override void Load()
+    {
+        if (Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-regionhandoffcheck"))
+            Main.OnEnginePreload += Run;
+    }
+    public override void Unload() => Main.OnEnginePreload -= Run;
+
+    static void Run()
+    {
+        object controller = null;
+        VanillaWorkerConnection worker = null;
+        try
+        {
+            var fixture = JsonNode.Parse(File.ReadAllText(Terraria.Program.LaunchParameters["-regionhandoffcheck"])).AsObject();
+            var snapshot = fixture["snapshot"].AsObject();
+            var results = fixture["results"].AsArray();
+            string scenario = fixture["scenario"]?.GetValue<string>() ?? "early";
+            if (scenario == "worker")
+                worker = VanillaWorkerConnection.Start(ModLoader.GetMod("TerraBlind").GetFileBytes("Assets/VanillaWorker.bin"),
+                    Path.Combine(Main.SavePath, "World.wld"), System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+            var packed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(
+                Convert.FromBase64String(fixture["guidance"].GetValue<string>()).AsSpan()).ToArray();
+            var field = new System.Collections.Generic.Dictionary<(int, int), int>();
+            for (int i = 0; i < packed.Length; i += 3) field[(packed[i], packed[i + 1])] = packed[i + 2];
+            typeof(VanillaNavBridge).GetField("field", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, field);
+            var player = VanillaFrame.RestoreInWorker(snapshot);
+            var startCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            int startCost = field[startCell];
+            var type = typeof(VanillaNavigationDemo).Assembly.GetType("TerraBlind.VanillaRegionNavigation", true);
+            var tickMethod = type.GetMethod("Tick");
+            var inputMethod = type.GetMethod("InputAt");
+            int requests = 0;
+            var waiting = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+            var delayed = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+            async System.Threading.Tasks.Task<JsonObject> SendWorker(JsonObject request, System.Threading.CancellationToken token, int index)
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, $"region-request-{index}.json"), request.ToJsonString());
+                var response = await worker.Send(request, token);
+                File.WriteAllText(Path.Combine(Main.SavePath, $"region-response-{index}.json"), response.ToJsonString());
+                return response;
+            }
+            Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> send = (request, token) =>
+            {
+                int index = requests++;
+                if (worker != null) return SendWorker(request, token, index);
+                if (scenario == "late" && index == 1)
+                {
+                    token.Register(() => delayed.TrySetCanceled(token));
+                    return delayed.Task;
+                }
+                int available = scenario == "early" ? results.Count : scenario == "late" ? 1 : 2;
+                if (index < available) return System.Threading.Tasks.Task.FromResult(results[index].DeepClone().AsObject());
+                token.Register(() => waiting.TrySetCanceled(token));
+                return waiting.Task;
+            };
+            controller = Activator.CreateInstance(type, send);
+            var goal = player.position + new Vector2(0, 160);
+            void Tick(long frame) => tickMethod.Invoke(controller, new object[] { player, frame, goal });
+            Tick(0); Tick(0);
+            int firstFrames = results[0]["controls"].AsArray().Count;
+            int frames = scenario == "worker" ? 1800 : scenario == "early" ? results.Sum(result => result["controls"].AsArray().Count)
+                : firstFrames + (scenario == "late" ? 5 : 0);
+            int missing = 0, hp = player.statLife;
+            int initialWaiting = 0, intersegmentWaiting = 0;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            for (long frame = 1; frame <= frames; frame++)
+            {
+                if (!(bool)type.GetMethod("HasInput").Invoke(controller, new object[] { frame }))
+                {
+                    missing++;
+                    if ((int)type.GetProperty("Accepted").GetValue(controller) == 0) initialWaiting++;
+                    else intersegmentWaiting++;
+                }
+                var input = (VanillaPrediction.Input)inputMethod.Invoke(controller, new object[] { frame });
+                VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
+                if (scenario == "terrain" && frame == firstFrames)
+                {
+                    var next = results[1]["frames"][0];
+                    var tile = Main.tile[(int)Math.Floor(next["x"].GetValue<float>() / 16) - 1,
+                        (int)Math.Floor(next["y"].GetValue<float>() / 16) - 1];
+                    tile.HasTile = !tile.HasTile; tile.TileType = TileID.Stone;
+                }
+                if (scenario == "late" && frame == frames)
+                {
+                    if (delayed.Task.IsCanceled) throw new InvalidOperationException("late_request_cancelled_before_observation");
+                    delayed.SetResult(results[1].DeepClone().AsObject());
+                }
+                Tick(frame);
+                if (scenario == "worker")
+                {
+                    if ((int)type.GetProperty("Accepted").GetValue(controller) >= 4)
+                    { frames = (int)frame; break; }
+                    double remaining = frame * 1000d / 60 - clock.Elapsed.TotalMilliseconds;
+                    if (remaining > 0) System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(remaining));
+                }
+            }
+            int accepted = (int)type.GetProperty("Accepted").GetValue(controller);
+            int rejected = (int)type.GetProperty("Rejected").GetValue(controller);
+            int expectedAccepted = scenario == "worker" ? 4 : scenario == "early" ? results.Count : 1;
+            int expectedRejected = scenario is "worker" or "early" ? 0 : 1;
+            int expectedMissing = scenario == "worker" ? missing : scenario == "late" ? 5 : 0;
+            if (accepted != expectedAccepted || rejected != expectedRejected || missing != expectedMissing
+                || player.dead || player.statLife < hp)
+                throw new InvalidOperationException($"handoff_failed accepted={accepted} rejected={rejected} missing={missing}");
+            var endCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            if (!field.TryGetValue(endCell, out int endCost) || endCost >= startCost
+                || scenario == "worker" && intersegmentWaiting != 0)
+                throw new InvalidOperationException($"handoff_progress_failed start={startCost} end={endCost} gaps={intersegmentWaiting}");
+            ((IDisposable)controller).Dispose(); controller = null;
+            if (scenario != "worker" && !waiting.Task.IsCanceled) throw new InvalidOperationException("pending_request_not_cancelled");
+            worker?.Dispose(); worker = null;
+            var report = new JsonObject { ["passed"] = true, ["scenario"] = scenario, ["accepted"] = accepted, ["rejected"] = rejected,
+                ["frames"] = frames, ["missing_input_frames"] = missing, ["pending_cancelled"] = scenario != "worker",
+                ["initial_wait_frames"] = initialWaiting, ["intersegment_wait_frames"] = intersegmentWaiting,
+                ["wall_ms"] = clock.Elapsed.TotalMilliseconds,
+                ["completed_segments"] = scenario == "worker" ? accepted - 1 : scenario == "early" ? accepted : 1,
+                ["start_cost"] = startCost, ["end_cost"] = endCost,
+                ["end"] = VanillaPrediction.Observe(player, false) };
+            File.WriteAllText(Path.Combine(Main.SavePath, "region-handoff-result.json"), report.ToJsonString());
+            Console.WriteLine("REGION_HANDOFF_PASS " + report.ToJsonString());
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            (controller as IDisposable)?.Dispose();
+            worker?.Dispose();
+            Console.WriteLine("REGION_HANDOFF_FAIL " + error);
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class DamageTrace : ModPlayer
 {
     public override void PostUpdate()

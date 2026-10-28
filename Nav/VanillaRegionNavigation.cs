@@ -44,7 +44,7 @@ internal sealed class VanillaRegionNavigation : IDisposable
         cancellation = new CancellationTokenSource();
         var request = new JsonObject { ["command"] = "region_plan", ["snapshot"] = snapshot.DeepClone(),
             ["guidance"] = VanillaNavBridge.CaptureGuidance(snapshot),
-            ["region"] = new JsonArray(x - 160, y - 192, 320, 384),
+            ["region"] = new JsonArray((int)Math.Floor(x) - 160, (int)Math.Floor(y) - 192, 320, 384),
             ["horizon"] = 180, ["beam"] = 6, ["quantum"] = 12 };
         pending = send(request, cancellation.Token);
     }
