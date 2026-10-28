@@ -731,6 +731,9 @@ def main():
         refresh = worker.call("refresh_future_terrain_contract")
         assert refresh["passed"]
         print("REFRESH_FUTURE_TERRAIN_CONTRACT_PASS", refresh, flush=True)
+        progress = worker.call("region_progress_contract")
+        assert progress["passed"]
+        print("REGION_PROGRESS_CONTRACT_PASS", progress, flush=True)
         expansion = worker.call("snapshot_expansion_contract")
         assert expansion["passed"]
         print("SNAPSHOT_EXPANSION_CONTRACT_PASS", expansion, flush=True)

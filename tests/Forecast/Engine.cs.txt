@@ -291,6 +291,7 @@ public sealed class Engine : ModSystem
             search["placement_tile"] = platform?.DeepClone();
             search["mining_tiles"] = mining?.DeepClone();
             search["direct"] = direct;
+            search["exclude_start"] = true;
             result = RegionSearch(search);
             attempts.Add(new JsonObject { ["mode"] = mode, ["region"] = region.DeepClone(),
                 ["direct"] = direct,
@@ -505,6 +506,18 @@ public sealed class Engine : ModSystem
                 initialStock = start.inventory[useSlot].stack;
             }
             int hp = start.statLife;
+            if (request["exclude_start"]?.GetValue<bool>() == true && (!requireSupport
+                || start.velocity.Y == 0 && VanillaContactRegion.SafeBody(start.position, start.width, start.height)
+                    && VanillaTerrainPlan.HasSupport(start)))
+            {
+                var foot = start.Bottom;
+                float tolerance = requireSupport ? .25f : 0;
+                goalRegions = goalRegions.Where(goal => Vector2.DistanceSquared(foot,
+                    new Vector2(Math.Clamp(foot.X, goal.Left, goal.Right), Math.Clamp(foot.Y, goal.Top, goal.Bottom))) > tolerance).ToArray();
+                if (goalRegions.Length == 0)
+                    return new JsonObject { ["status"] = "no_progress", ["controls"] = new JsonArray(),
+                        ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds, ["expanded"] = 0 };
+            }
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
             var best = new RegionNode(new VanillaFrame.WorkerState(initial), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
             if (Reached(start))
@@ -1878,6 +1891,24 @@ public sealed class Engine : ModSystem
                     new Rectangle(a[0].GetValue<int>(), a[1].GetValue<int>(), a[2].GetValue<int>(), a[3].GetValue<int>()), true) };
             }
             finally { VanillaFrame.RestoreInWorker(snapshot); }
+        }
+        if (command == "region_progress_contract")
+        {
+            Setup(new JsonObject { ["terrain"] = "flat" });
+            var initial = VanillaFrame.Capture(source, area, true);
+            var current = new JsonArray((int)source.Bottom.X - 1, (int)source.Bottom.Y - 1, 2, 2);
+            var search = new JsonObject { ["snapshot"] = initial, ["region"] = current.DeepClone(),
+                ["exclude_start"] = true, ["require_support"] = false, ["horizon"] = 90, ["direct"] = true };
+            var empty = RegionSearch(search);
+            if (empty["status"]?.GetValue<string>() != "no_progress")
+                throw new InvalidOperationException("already_reached_region_not_excluded");
+            search["goal_regions"] = new JsonArray(current.DeepClone(),
+                new JsonArray((int)source.Bottom.X + 64, (int)source.Bottom.Y - 4, 16, 8));
+            var forward = RegionSearch(search);
+            if (forward["status"]?.GetValue<string>() != "reached" || forward["controls"].AsArray().Count == 0)
+                throw new InvalidOperationException("unreached_region_was_not_searched");
+            return new JsonObject { ["passed"] = true, ["empty_status"] = empty["status"].DeepClone(),
+                ["forward_frames"] = forward["controls"].AsArray().Count };
         }
         if (command == "refresh_future_terrain_contract")
         {
