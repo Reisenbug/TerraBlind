@@ -2437,8 +2437,9 @@ namespace TerraBlind
 				{
 					int pcx = (int)(pl.Center.X / 16f), pcy = (int)(pl.Center.Y / 16f);
 					var found = new System.Collections.Generic.List<(int x, int y, string kind)>();
-					for (int r = 0; r <= maxD && found.Count < wantN; r++)
-						for (int dx = -r; dx <= r && found.Count < wantN; dx++)
+					for (int r = 0; r <= maxD; r++)
+					{
+						for (int dx = -r; dx <= r; dx++)
 						{
 							// ring only: interior columns contribute just their top/bottom rows
 							int[] dys = System.Math.Abs(dx) == r
@@ -2460,9 +2461,21 @@ namespace TerraBlind
 									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
 								}
 								else found.Add((x, y, null));
-								if (found.Count >= wantN) break;
 							}
 						}
+						found.Sort((a, b) =>
+						{
+							int da = System.Math.Abs(a.x - pcx) + System.Math.Abs(a.y - pcy);
+							int db = System.Math.Abs(b.x - pcx) + System.Math.Abs(b.y - pcy);
+							int compare = da.CompareTo(db);
+							if (compare != 0) return compare;
+							compare = a.y.CompareTo(b.y);
+							return compare != 0 ? compare : a.x.CompareTo(b.x);
+						});
+						if (found.Count > wantN) found.RemoveRange(wantN, found.Count - wantN);
+						if (found.Count >= wantN && (wantN == 0 || System.Math.Abs(found[wantN - 1].x - pcx)
+							+ System.Math.Abs(found[wantN - 1].y - pcy) <= r)) break;
+					}
 					var fsb = new StringBuilder("{\"tiles\":[");
 					for (int i = 0; i < found.Count; i++)
 					{
