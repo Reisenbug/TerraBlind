@@ -194,6 +194,7 @@ def main():
     parser.add_argument("--region-mine-tile", type=int, nargs=2, action="append")
     parser.add_argument("--region-corridor", action="store_true")
     parser.add_argument("--region-chain-steps", type=int, default=0)
+    parser.add_argument("--region-trace-check", action="store_true")
     parser.add_argument("--region-end-probe", type=Path)
     parser.add_argument("--region-world", type=Path)
     parser.add_argument("--obstruction", type=Path)
@@ -391,6 +392,28 @@ def main():
             state = source["snapshot"]
             if source.get("prefix"):
                 state = worker.call("replay", snapshot=state, controls=source["prefix"], capture_end=True)["end_snapshot"]
+            if args.region_trace_check:
+                reports = []
+                baseline = None
+                for trace in (True, False, False, True):
+                    result = worker.call("region_search", snapshot=state, region=args.region,
+                        horizon=args.region_horizon, beam=args.region_beam, quantum=args.region_quantum,
+                        require_support=not args.region_airborne, placement_tile=args.region_place,
+                        mining_tile=args.region_mine, mining_tiles=args.region_mine_tile, trace_layers=trace)
+                    comparable = {key: result[key] for key in ("status", "controls", "use_slots", "use_targets",
+                                  "end_snapshot", "expanded", "simulated_frames")}
+                    assert result["expanded"] > 0 and result["simulated_frames"] > 0, "trace_check_requires_actual_search"
+                    assert not trace or result["layers"], "trace_check_requires_recorded_layers"
+                    if baseline is None:
+                        baseline = comparable
+                    assert comparable == baseline, "trace_setting_changed_search_result"
+                    assert trace or not result["layers"]
+                    reports.append(dict(trace=trace, elapsed_ms=result["elapsed_ms"],
+                        gc_pause_ms=result["timing"]["gc_pause_ms"], expanded=result["expanded"],
+                        simulated_frames=result["simulated_frames"], result_bytes=len(json.dumps(result))))
+                (args.root / "region-trace-check.json").write_text(json.dumps(reports))
+                print("REGION_TRACE_CHECK_PASS", reports, flush=True)
+                return
             if args.region_chain_steps:
                 if not 1 <= args.region_chain_steps <= 20:
                     raise ValueError("region-chain-steps must be between 1 and 20")

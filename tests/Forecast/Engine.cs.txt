@@ -538,6 +538,7 @@ public sealed class Engine : ModSystem
             search["placement_tile"] = platform?.DeepClone();
             search["mining_tiles"] = mining?.DeepClone();
             search["direct"] = direct;
+            search["trace_layers"] = false;
             search["exclude_start"] = true;
             result = RegionSearch(search);
             attempts.Add(new JsonObject { ["mode"] = mode, ["region"] = region.DeepClone(),
@@ -900,6 +901,7 @@ public sealed class Engine : ModSystem
                     if (frontier.Min(selected => Separation(candidate, selected)) == 0) break;
                     frontier.Add(candidate);
                 }
+                if (request["trace_layers"]?.GetValue<bool>() != false)
                 layers.Add(new JsonObject { ["frame"] = depth + segment, ["generated"] = next.Count,
                     ["candidates"] = new JsonArray(next.Select(node => (JsonNode)new JsonObject {
                         ["position"] = new JsonArray(node.Position.X, node.Position.Y),
