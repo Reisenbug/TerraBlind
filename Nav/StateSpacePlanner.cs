@@ -78,17 +78,19 @@ namespace TerraBlind
 
         // 推进到【下次重规划真正会读到的那个状态】:RecedingNav 在帧跑完且 vy==0 后的第一 tick 重规划,中间至少一个 idle 步。
         // 标最后一帧会撒谎。残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
-        const int SettleMaxFrames = 30;
-        static SSNode SettleNode(SSNode n, PhysicsSimulator.Params ph)
+        const int SettleMaxFrames = 120;
+        static SSNode? SettleNode(SSNode n, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = n.Px, Py = n.Py, Vx = n.Vx, Vy = n.Vy, Grounded = n.Grounded };
             var idle = new PhysicsSimulator.ControlInput();
             for (int f = 0; f < SettleMaxFrames; f++)
             {
                 s = PhysicsSimulator.Step(s, idle, ph);
-                if (s.Grounded) break;
+                if (BodyTouchesLava(s.Px, s.Py)) return null;
+                if (s.Grounded)
+                    return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             }
-            return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
+            return null;
         }
 
         // support includes platforms (solidTop), unlike DigSolid
@@ -1862,16 +1864,7 @@ namespace TerraBlind
 
         static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
-            bool Touches(float px, float py)
-            {
-                int x0 = (int)(px / 16f), x1 = (int)((px + PhysicsSimulator.PlayerW - 1) / 16f);
-                int y0 = (int)(py / 16f), y1 = (int)((py + PhysicsSimulator.PlayerH - 1) / 16f);
-                for (int x = x0; x <= x1; x++)
-                    for (int y = y0; y <= y1; y++)
-                        if (Predicates.IsLava(x, y)) return true;
-                return false;
-            }
-            foreach (var f in frames) if (Touches(f.Px, f.Py)) return true;
+            foreach (var f in frames) if (BodyTouchesLava(f.Px, f.Py)) return true;
             if (frames.Count == 0 || frames[^1].Vy != 0f) return false;
             var last = frames[^1];
             var coast = new PhysicsSimulator.State { Px = last.Px, Py = last.Py,
@@ -1879,12 +1872,22 @@ namespace TerraBlind
             for (int i = 0; i < 60 && (coast.Vx != 0f || coast.Vy != 0f); i++)
             {
                 coast = PhysicsSimulator.Step(coast, default, ph);
-                if (Touches(coast.Px, coast.Py))
+                if (BodyTouchesLava(coast.Px, coast.Py))
                 {
                     SegLog($"[ss-lava-coast] end=({last.Px:0.#},{last.Py:0.#}) vx={last.Vx:0.##} hit_after={i + 1}");
                     return true;
                 }
             }
+            return false;
+        }
+
+        static bool BodyTouchesLava(float px, float py)
+        {
+            int x0 = (int)(px / 16f), x1 = (int)((px + PhysicsSimulator.PlayerW - 1) / 16f);
+            int y0 = (int)(py / 16f), y1 = (int)((py + PhysicsSimulator.PlayerH - 1) / 16f);
+            for (int x = x0; x <= x1; x++)
+                for (int y = y0; y <= y1; y++)
+                    if (Predicates.IsLava(x, y)) return true;
             return false;
         }
 
@@ -2537,7 +2540,9 @@ namespace TerraBlind
                      Expand(ctx, node, ph, goalCx, goalFeetY, BuildHoldOptions(), platformTile, hasPick))
             {
                 bool alters = dig != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var landed = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph);
+                if (!settled.HasValue) continue;
+                var landed = settled.Value;
                 var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (nx == cx && ny == cy) continue;
                 if (field.TryGetValue((nx, ny), out int nH) && nH < curH) return false;   // 有降 H 的路,不卡
@@ -2605,7 +2610,9 @@ namespace TerraBlind
                 // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
                 // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降。它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var landed = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph);
+                if (!settled.HasValue) continue;
+                var landed = settled.Value;
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
