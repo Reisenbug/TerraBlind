@@ -68,10 +68,10 @@ public sealed class NavigationTestTool : ModSystem
         player.velocity = Vector2.Zero;
         player.fallStart = (int)(position.Y / 16);
         Main.mapFullscreen = false;
-        VanillaNavBridge.Enabled = true; VanillaNavBridge.RegionsEnabled = true;
+        VanillaNavBridge.Enabled = false; VanillaNavBridge.RegionsEnabled = false;
         RecedingNav.Start(to.X, to.Y, RecedingNav.Mode.Snap);
-        status = "区域寻路已启动；9 停止";
-        DiagLog.Write($"[nav-test-start] start={from} goal={to} regions=true");
+        status = "旧主干寻路已启动；9 停止";
+        DiagLog.Write($"[nav-test-start] start={from} goal={to} backend=legacy");
     }
 
     Vector2 ScreenPoint(Point tile)
