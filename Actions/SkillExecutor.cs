@@ -134,8 +134,9 @@ namespace TerraBlind
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
 
         // 规划和执行共用这一个判据,否则图里会有执行不了的假边。返回脚能升到的最高行。
-        public static bool CanPillarFrom(int feetCx, int feetCy, out int topFeetY)
+        public static bool CanPillarFrom(float px, float startPy, out int topFeetY)
         {
+            var (feetCx, feetCy) = StateSpacePlanner.StandCell(px, startPy);
             topFeetY = feetCy;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return false;
@@ -144,8 +145,6 @@ namespace TerraBlind
             while (firstPlatformRow > 0 && Main.tile[feetCx, firstPlatformRow].HasTile) firstPlatformRow--;
             if (!PlatAnchor(feetCx, firstPlatformRow)) return false;
 
-            // player box left/right columns when standing centered on feetCx
-            float px = feetCx * 16f + 8f - p.width / 2f;
             int leftCol = (int)(px / 16f);
             int rightCol = (int)((px + p.width - 1) / 16f);
 
@@ -171,7 +170,6 @@ namespace TerraBlind
 
             // jump must not be boxed in at the start (hold=15 vertical rise ≥ 10px, allowing a small left/right nudge)
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            float startPy = feetCy * 16f + 16f - p.height; // feet on (feetCy+1) floor top → top-left py
             bool RiseOk(float ox)
             {
                 var sim = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = px + ox, Py = startPy, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, ph);

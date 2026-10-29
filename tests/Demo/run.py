@@ -13,7 +13,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
-    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check"))
+    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check", "--slope-stall"))
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
@@ -108,6 +108,8 @@ def main():
         command.append("-vnavpillarprobe")
     if "--snapshot-check" in sys.argv:
         command.append("-vnavsnapshotcheck")
+    if "--slope-stall" in sys.argv:
+        command.append("-vnavslopestallcheck")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
@@ -147,6 +149,10 @@ def main():
         if "--snapshot-check" in sys.argv:
             assert "SNAPSHOT_ROUNDTRIP_PASS" in output
             print("SNAPSHOT_CHECK_COMPLETE", flush=True)
+            return
+        if "--slope-stall" in sys.argv:
+            assert "SLOPE_STALL_MEASURED" in output
+            print("SLOPE_STALL_CHECK_COMPLETE", flush=True)
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())

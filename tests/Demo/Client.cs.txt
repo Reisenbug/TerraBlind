@@ -701,6 +701,7 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbridgerecoverycheck")) { BridgeRecovery(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsnapshotcheck")) { SnapshotRoundtrip(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavslopestallcheck")) { SlopeStall(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -831,6 +832,42 @@ public sealed class Driver : ModSystem
             || restoredTile.TileType != originalType || restoredTile.Slope != originalSlope || restoredTile.IsHalfBlock != originalHalf)
             throw new InvalidOperationException("stall_snapshot_roundtrip_failed");
         Console.WriteLine("VNAV_DEMO_COMPLETE SNAPSHOT_ROUNDTRIP_PASS " + path);
+        enabled = false; FinishProcess(0);
+    }
+
+    void SlopeStall()
+    {
+        var p = Main.LocalPlayer;
+        foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+        p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+        p.position = new Vector2(55514, 5686); p.velocity = Vector2.Zero;
+        var support = Main.tile[3470, 358];
+        support.ClearEverything(); support.HasTile = true; support.TileType = TileID.Platforms;
+        foreach (var cell in new[] { (3470, 354), (3470, 353), (3469, 354), (3469, 353) })
+        {
+            var tile = Main.tile[cell.Item1, cell.Item2]; tile.HasTile = false;
+        }
+        for (int y = 352; y <= 358; y++)
+        for (int x = 3468; x <= 3472; x++)
+        {
+            var tile = Main.tile[x, y];
+            if (tile.HasTile) Console.WriteLine($"SLOPE_TILE x={x} y={y} type={tile.TileType} slope={tile.Slope} half={tile.IsHalfBlock}");
+        }
+        var physics = PhysicsSimulator.Params.FromPlayer(p);
+        foreach (float x in new[] { 55510f, 55514f, 55518f, 55522f })
+        {
+            var sim = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = x, Py = p.position.Y,
+                Grounded = true, JumpFramesLeft = 15 }, 0, 15, physics);
+            Console.WriteLine($"SLOPE_RISE x={x} rise={p.position.Y - sim.MinPy}");
+        }
+        bool accepted = SkillExecutor.CanPillarFrom(p.position.X, p.position.Y, out int top);
+        Console.WriteLine($"SLOPE_CANDIDATE accepted={accepted} top={top}");
+        if (accepted) throw new InvalidOperationException("blocked_actual_pillar_start_accepted");
+        if (!SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
+            throw new InvalidOperationException("clear_pillar_start_rejected");
+        routeGoalX = 3384; routeGoalY = 242;
+        snapshotAnchor = p.position; snapshotStationaryFrames = 119; CaptureStall(p);
+        Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
         enabled = false; FinishProcess(0);
     }
 

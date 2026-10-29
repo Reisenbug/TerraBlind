@@ -836,7 +836,7 @@ namespace TerraBlind
                 }
                 // 只发【爬到顶】这一条:一跳升几格由地形定,铺中间落点兑现不了(50条45条MISS)。
                 // 跳得慢就让 pillar 进候选,由代价决定谁赢。门只筛"根本不必搭"
-                bool canPil = SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY);
+                bool canPil = SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int topFeetY);
                 if (_pilLogCell != (ccx, ccy))
                 {
                     _pilLogCell = (ccx, ccy);
@@ -979,7 +979,7 @@ namespace TerraBlind
                 // 墙:跳放候选上面已经无条件发过了,这里只剩兜底。一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
-                    if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(ccx, ccy, out int wallTopFeetY) && wallTopFeetY < ccy)
+                    if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int wallTopFeetY) && wallTopFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                         for (int fy = ccy - 2; fy >= wallTopFeetY; fy -= 2)
