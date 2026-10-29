@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -35,12 +36,7 @@ def main():
         if not source_world.exists():
             raise RuntimeError("Generate the fixed-seed world with tests/Demo/world.py first")
     if not source_world.exists():
-        mods = source_world.parent.parent / "Mods"
-        mods.mkdir(parents=True, exist_ok=True)
-        shutil.copy2("Assets/VanillaWorker.bin", mods / "Forecast.tmod")
-        subprocess.run([sys.executable, "tests/Forecast/check.py", "--case", "flat"], check=True)
-        if not source_world.exists():
-            source_world = source_world.parent / "World.wld"
+        raise RuntimeError(f"Prepare the test world before launching a client: {source_world}")
     shutil.copy2(source_world, root / "Worlds/Demo.wld")
     (root / "Mods").mkdir(parents=True, exist_ok=True)
     (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
@@ -55,6 +51,9 @@ def main():
     if "--prepare-only" in sys.argv:
         print("PREPARED_TEST_ROOT", root, flush=True)
         return
+    for name in ("TerraBlind.tmod", "Demo.tmod"):
+        if not (root / "Mods" / name).exists():
+            raise RuntimeError(f"Missing staged test mod: {root / 'Mods' / name}")
     (root / "demo-result.json").unlink(missing_ok=True)
     tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
     show = "--show" in sys.argv or manual
@@ -106,7 +105,7 @@ def main():
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
-                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     keep = "--keep-open" in sys.argv
     try:
         deadline = float("inf") if unlimited or descent else time.monotonic() + 240
@@ -154,17 +153,24 @@ def main():
         if keep:
             print("DEMO_WINDOW_LEFT_OPEN pid=", process.pid, flush=True)
     finally:
-        if not keep and process.poll() is None:
+        if not keep:
             try:
                 process.wait(timeout=8)
             except subprocess.TimeoutExpired:
-                process.terminate()
+                pass
+            for sig in (signal.SIGTERM, signal.SIGKILL):
                 try:
-                    process.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    process.kill(); process.wait(timeout=8)
+                    os.killpg(process.pid, sig)
+                except ProcessLookupError:
+                    break
+                if sig == signal.SIGTERM:
+                    time.sleep(.5)
+            process.wait(timeout=8)
         log.close()
 
 
 if __name__ == "__main__":
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt(f"test interrupted by signal {signum}")
+    signal.signal(signal.SIGTERM, interrupted)
     main()
