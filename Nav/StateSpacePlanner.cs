@@ -1481,15 +1481,7 @@ namespace TerraBlind
             var t = Main.tile[wx, wy];
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
             if (Predicates.IsLava(wx, wy)) return false;
-            for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    int nx = wx + dx, ny = wy + dy;
-                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
-                    var nb = Main.tile[nx, ny];
-                    if (nb.HasTile || nb.WallType > 0) return true;
-                }
-            return false;
+            return VanillaTerrainPlan.HasPlatformAnchor(wx, wy);
         }
 
         // 临时把一块平台写进 Main.tile,模拟,再还原。那块砖不进节点,只为这一段的落地物理存在。
