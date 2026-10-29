@@ -521,7 +521,7 @@ namespace TerraBlind
             if (_altered >= RebuildAltered)
                 RebuildFieldAsync($"altered {_altered} tiles");
 
-            if (!LegacyNativePrediction.Start(p, res)) DispatchLegacy(res, cell);
+            if (!LegacyNativePrediction.Start(p, res, _goalWx, _goalWy)) DispatchLegacy(res, cell);
         }
 
         static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
