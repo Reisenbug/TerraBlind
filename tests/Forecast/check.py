@@ -417,7 +417,12 @@ def main():
                     assert trace or not result["layers"]
                     if args.region_array_check:
                         assert (result["shared_array_bytes"] > 0) == sharing
+                    allocation_phases = {key: value for key, value in result["timing"].items()
+                                         if key.endswith("_bytes") and key != "allocated_bytes"}
+                    assert all(value >= 0 for value in allocation_phases.values())
+                    assert sum(allocation_phases.values()) <= result["timing"]["allocated_bytes"]
                     reports.append(dict(trace=trace, sharing=sharing, elapsed_ms=result["elapsed_ms"],
+                        allocation_phases=allocation_phases,
                         allocated_bytes=result["timing"]["allocated_bytes"], shared_array_bytes=result["shared_array_bytes"],
                         gc_pause_ms=result["timing"]["gc_pause_ms"], expanded=result["expanded"],
                         simulated_frames=result["simulated_frames"], result_bytes=len(json.dumps(result))))

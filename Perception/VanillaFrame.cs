@@ -423,6 +423,10 @@ public static class VanillaFrame
         public double ItemsMs { get; private set; }
         public double TilesMs { get; private set; }
         public long SharedArrayBytes { get; private set; }
+        public long FieldsBytes { get; private set; }
+        public long PlayerConstructorBytes { get; private set; }
+        public long ItemsBytes { get; private set; }
+        public long TilesBytes { get; private set; }
 
         public WorkerState(JsonObject state) : this(state, RestoreInWorker(state)) { }
 
@@ -461,6 +465,7 @@ public static class VanillaFrame
         {
             RequireWorker();
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
             shareArrays = template.shareArrays;
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = CaptureValues(source, template.playerFields);
@@ -468,12 +473,16 @@ public static class VanillaFrame
             collision = CaptureValues(null, template.collision); scene = CaptureValues(Main.SceneMetrics, template.scene);
             random = CaptureValues(Main.rand, template.random); worldRandom = CaptureValues(WorldGen.genRand, template.worldRandom);
             FieldsMs = timer.Elapsed.TotalMilliseconds;
+            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
             inventory = source.inventory.Select(item => item.Clone()).ToArray();
             armor = source.armor.Select(item => item.Clone()).ToArray();
             dye = source.dye.Select(item => item.Clone()).ToArray();
             misc = source.miscEquips.Select(item => item.Clone()).ToArray();
             ItemsMs = timer.Elapsed.TotalMilliseconds;
+            ItemsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
             x0 = template.x0; y0 = template.y0; width = template.width; gameMode = Main.GameMode;
             tiles = template.tiles;
@@ -497,6 +506,7 @@ public static class VanillaFrame
                 }
             }
             TilesMs = timer.Elapsed.TotalMilliseconds;
+            TilesBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
         }
 
         T[][] CaptureColumns<T>(T[][] previous, bool[] changed) where T : unmanaged, ITileData
@@ -576,20 +586,27 @@ public static class VanillaFrame
             RequireWorker();
             WorkerBounds = new Rectangle(x0, y0, width, tiles.Length / 10 / width);
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);
             long constructorStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            long constructorAllocated = GC.GetAllocatedBytesForCurrentThread();
             var player = new Player();
+            PlayerConstructorBytes = GC.GetAllocatedBytesForCurrentThread() - constructorAllocated;
             PlayerConstructorMs = System.Diagnostics.Stopwatch.GetElapsedTime(constructorStarted).TotalMilliseconds;
             Apply(player, playerFields);
             hitTile.Restore(player.hitTile); hitReplace.Restore(player.hitReplace);
             FieldsMs = timer.Elapsed.TotalMilliseconds;
+            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated - PlayerConstructorBytes;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
             player.inventory = inventory.Select(item => item.Clone()).ToArray();
             player.armor = armor.Select(item => item.Clone()).ToArray();
             player.dye = dye.Select(item => item.Clone()).ToArray();
             player.miscEquips = misc.Select(item => item.Clone()).ToArray();
             ItemsMs = timer.Elapsed.TotalMilliseconds;
+            ItemsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
             Main.player[player.whoAmI] = player;
             foreach (var npc in Main.npc) npc.active = false;
@@ -604,6 +621,7 @@ public static class VanillaFrame
             RestoreColumns(tileStates, known ? knownWorld.tileStates : null);
             RestoreColumns(liquids, known ? knownWorld.liquids : null);
             TilesMs = timer.Elapsed.TotalMilliseconds;
+            TilesBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             return player;
         }
     }

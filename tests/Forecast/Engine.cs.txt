@@ -745,6 +745,8 @@ public sealed class Engine : ModSystem
         var gcAt = GC.GetTotalPauseDuration();
         long allocatedAt = GC.GetAllocatedBytesForCurrentThread(), sharedArrayBytes = 0;
         long tileChanges = 0, tileWrites = 0;
+        long constructorBytes = 0, restoreFieldBytes = 0, restoreItemBytes = 0, restoreTileBytes = 0;
+        long captureFieldBytes = 0, captureItemBytes = 0, captureTileBytes = 0;
         var layers = new JsonArray();
         double restoreMs = 0, updateMs = 0, captureMs = 0;
         double restoreFields = 0, restoreItems = 0, restoreTiles = 0;
@@ -818,6 +820,11 @@ public sealed class Engine : ModSystem
                 ["finish_snapshot_ms"] = finishSnapshotMs,
                 ["restore_fields_ms"] = restoreFields, ["restore_items_ms"] = restoreItems, ["restore_tiles_ms"] = restoreTiles,
                 ["player_constructor_ms"] = playerConstructors,
+                ["player_constructor_bytes"] = constructorBytes,
+                ["restore_fields_bytes"] = restoreFieldBytes, ["restore_items_bytes"] = restoreItemBytes,
+                ["restore_tiles_bytes"] = restoreTileBytes,
+                ["capture_fields_bytes"] = captureFieldBytes, ["capture_items_bytes"] = captureItemBytes,
+                ["capture_tiles_bytes"] = captureTileBytes,
                 ["capture_fields_ms"] = captureFields, ["capture_items_ms"] = captureItems, ["capture_tiles_ms"] = captureTiles }
         };
         try
@@ -893,6 +900,9 @@ public sealed class Engine : ModSystem
                         knownWorld = null;
                         restoreFields += checkpoint.FieldsMs; restoreItems += checkpoint.ItemsMs; restoreTiles += checkpoint.TilesMs;
                         playerConstructors += checkpoint.PlayerConstructorMs;
+                        constructorBytes += checkpoint.PlayerConstructorBytes;
+                        restoreFieldBytes += checkpoint.FieldsBytes; restoreItemBytes += checkpoint.ItemsBytes;
+                        restoreTileBytes += checkpoint.TilesBytes;
                         tileWrites += checkpoint.RestoredTileWrites;
                         restoreMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         expanded++; shared += parent.Controls.Length;
@@ -950,6 +960,8 @@ public sealed class Engine : ModSystem
                         sharedArrayBytes += state.SharedArrayBytes;
                         knownWorld = state;
                         captureFields += state.FieldsMs; captureItems += state.ItemsMs; captureTiles += state.TilesMs;
+                        captureFieldBytes += state.FieldsBytes; captureItemBytes += state.ItemsBytes;
+                        captureTileBytes += state.TilesBytes;
                         tileChanges += state.CapturedTileChanges;
                         captureMs += System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
                         var node = new RegionNode(state, parent.Controls.Concat(controls).ToArray(),
