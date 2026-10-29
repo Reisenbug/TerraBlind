@@ -347,7 +347,6 @@ public sealed class Driver : ModSystem
     bool continuity;
     bool journey, journeyActionStarted;
     bool readmeRoute;
-    int readmeLeg;
     uint journeyActionAt;
     int journeyItemBefore;
     double journeyLegStartedMs;
@@ -760,7 +759,7 @@ public sealed class Driver : ModSystem
                 player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
                 player.inventory[1].SetDefaults(ItemID.Wood); player.inventory[1].stack = 9999;
                 player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 9999;
-                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} spawn=({Main.spawnTileX},{Main.spawnTileY}) gear=none pick=copper godmode=true gills=true teleport=false");
+                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear=none pick=copper godmode=true gills=true start=jungle_entrance");
             }
             prepared = true; warmup = 10; return;
         }
@@ -789,14 +788,9 @@ public sealed class Driver : ModSystem
                 if (!descentGoals.IsCompleted) return;
                 var goals = descentGoals.GetAwaiter().GetResult();
                 int x = goals["entrance"]["x"].GetValue<int>(), y = goals["entrance"]["y"].GetValue<int>();
-                if (!readmeRoute)
-                {
-                    player.Teleport(new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height));
-                    player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
-                }
+                player.Teleport(new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height));
+                player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
                 args = new[] { "route", "3383", "1069" };
-                if (readmeRoute && readmeLeg == 0)
-                    args = new[] { "route", x.ToString(), y.ToString() };
                 if (readmeRoute) { routeGoalX = int.Parse(args[1]); routeGoalY = int.Parse(args[2]); }
                 goals["hell_x"] = 3383; goals["hell_y"] = 1069;
                 Console.WriteLine("VNAV_DESCENT_GOALS " + goals.ToJsonString());
@@ -932,10 +926,9 @@ public sealed class Driver : ModSystem
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (readmeRoute)
         {
-            results.Add(new JsonObject { ["kind"] = readmeLeg == 0 ? "spawn_to_jungle" : "jungle_to_hell",
+            results.Add(new JsonObject { ["kind"] = "jungle_to_hell",
                 ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds });
             Console.WriteLine("README_ROUTE_LEG " + results[^1].ToJsonString());
-            if (++readmeLeg == 1) { started = false; return; }
         }
         if (continuity)
         {

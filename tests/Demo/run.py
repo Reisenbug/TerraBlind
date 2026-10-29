@@ -131,7 +131,7 @@ def main():
             if journey:
                 assert [leg["kind"] for leg in row["legs"]] == ["main", "crystal", "chest", "spore", "main_return", "surface"]
             if "--readme-route" in sys.argv:
-                assert [leg["kind"] for leg in row["legs"]] == ["spawn_to_jungle", "jungle_to_hell"]
+                assert [leg["kind"] for leg in row["legs"]] == ["jungle_to_hell"]
             if "--background" in sys.argv:
                 samples = json.loads((root / "descent-trace.json").read_text())
                 assert samples and all(not sample["focused"] for sample in samples)
