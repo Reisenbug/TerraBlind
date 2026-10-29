@@ -746,10 +746,21 @@ public sealed class Driver : ModSystem
         RecedingNav.Active = true; Unstick.Reset();
         try
         {
+            var recorded = new PhysicsSimulator.State { Px = 54158.96f, Py = 13222, Vx = -2.739999f, Vy = 0, Grounded = true };
+            var physics = PhysicsSimulator.Params.FromPlayer(p);
+            if (BridgeBuilder.CanBrakeOnRow(recorded, physics, 829))
+                throw new InvalidOperationException("recorded_unsafe_bridge_accepted");
+            recorded.Vx = 0;
+            if (!BridgeBuilder.CanBrakeOnRow(recorded, physics, 829))
+                throw new InvalidOperationException("stationary_bridge_rejected");
             if (!BridgeBuilder.Start(ItemID.WoodPlatform.ToString(), "left", 4, x - 100, row, out string why))
                 throw new InvalidOperationException("bridge_start:" + why);
             BridgeBuilder.Tick();
             if (!BridgeBuilder.IsRunning) throw new InvalidOperationException("valid_bridge_aborted");
+            p.velocity.X = .5f; p.controlLeft = p.controlRight = false;
+            BridgeBuilder.Tick();
+            if (!p.controlLeft || p.controlRight) throw new InvalidOperationException("bridge_did_not_brake");
+            p.velocity = Vector2.Zero;
             p.position.Y += 29 * 16;
             BridgeBuilder.Tick();
             if (BridgeBuilder.IsRunning || ItemUseCoordinator.IsActive || BridgeBuilder.Outcome != "bad_stand" || !RecedingNav.Active)
@@ -761,7 +772,7 @@ public sealed class Driver : ModSystem
             while (BridgeBuilder.IsRunning && frames++ < 1000) BridgeBuilder.Tick();
             if (BridgeBuilder.IsRunning || Unstick.Busy || !RecedingNav.Active || BridgeBuilder.Outcome != "stuck")
                 throw new InvalidOperationException("bridge_parent_wait_cycle");
-            Console.WriteLine($"VNAV_DEMO_COMPLETE BRIDGE_RECOVERY_PASS cases=3 unreachable_frames={frames}");
+            Console.WriteLine($"VNAV_DEMO_COMPLETE BRIDGE_RECOVERY_PASS cases=6 unreachable_frames={frames}");
         }
         finally { BridgeBuilder.Stop(); RecedingNav.Active = false; Unstick.Reset(); }
         enabled = false; FinishProcess(0);

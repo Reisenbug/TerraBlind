@@ -132,7 +132,7 @@ def main():
             print("PREVIEW_ISOLATION_CHECK_COMPLETE", flush=True)
             return
         if "--bridge-recovery" in sys.argv:
-            assert "BRIDGE_RECOVERY_PASS cases=3" in output
+            assert "BRIDGE_RECOVERY_PASS cases=6" in output
             print("BRIDGE_RECOVERY_CHECK_COMPLETE", flush=True)
             return
         if descent:

@@ -599,6 +599,8 @@ namespace TerraBlind
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, float goalCx)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            if (!BridgeBuilder.CanBrakeOnRow(new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py,
+                Vx = cur.Vx, Vy = cur.Vy, Grounded = cur.Grounded }, ph, ccy + 1)) yield break;
             // 和 pillar 同样的毛病:只有固定档位就会冲过头/差一截。目标列已知,就补上"正好到"那一档。
             int goalCol = (int)(goalCx / 16f);
             foreach (int dir in new[] { 1, -1 })
