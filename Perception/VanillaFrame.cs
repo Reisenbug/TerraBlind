@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -406,6 +407,38 @@ public static class VanillaFrame
 
     public sealed class WorkerState
     {
+        static readonly Func<Item, Item, Item> restoreItem = CreateItemRestorer();
+
+        static Func<Item, Item, Item> CreateItemRestorer()
+        {
+            var source = Expression.Parameter(typeof(Item), "source");
+            var target = Expression.Parameter(typeof(Item), "target");
+            Expression reusable = Expression.Equal(Expression.Property(source, nameof(Item.ModItem)), Expression.Constant(null));
+            var globals = Expression.Field(source, typeof(Item).GetField("_globals", BindingFlags.Instance | BindingFlags.NonPublic));
+            reusable = Expression.AndAlso(reusable, Expression.OrElse(
+                Expression.Equal(globals, Expression.Constant(null)), Expression.Equal(Expression.ArrayLength(globals), Expression.Constant(0))));
+            var assignments = new System.Collections.Generic.List<Expression>();
+            foreach (var field in Fields(typeof(Item)))
+            {
+                var from = Expression.Field(source, field); var to = Expression.Field(target, field);
+                if (field.IsInitOnly)
+                {
+                    var comparer = typeof(System.Collections.Generic.EqualityComparer<>).MakeGenericType(field.FieldType);
+                    reusable = Expression.AndAlso(reusable, Expression.Call(Expression.Property(null, comparer, "Default"),
+                        comparer.GetMethod("Equals", new[] { field.FieldType, field.FieldType }), from, to));
+                }
+                else assignments.Add(Expression.Assign(to, from));
+            }
+            assignments.Add(target);
+            return Expression.Lambda<Func<Item, Item, Item>>(Expression.Condition(reusable,
+                Expression.Block(assignments), Expression.Call(source, typeof(Item).GetMethod(nameof(Item.Clone)))), source, target).Compile();
+        }
+
+        static void RestoreItems(Item[] source, Item[] target)
+        {
+            for (int i = 0; i < source.Length; i++) target[i] = restoreItem(source[i], target[i]);
+        }
+
         readonly (FieldInfo field, object value)[] playerFields, main, statics, collision, scene, random, worldRandom;
         readonly Item[] inventory, armor, dye, misc;
         readonly MiningState hitTile, hitReplace;
@@ -600,10 +633,10 @@ public static class VanillaFrame
             FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated - PlayerConstructorBytes;
             allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
-            player.inventory = inventory.Select(item => item.Clone()).ToArray();
-            player.armor = armor.Select(item => item.Clone()).ToArray();
-            player.dye = dye.Select(item => item.Clone()).ToArray();
-            player.miscEquips = misc.Select(item => item.Clone()).ToArray();
+            RestoreItems(inventory, player.inventory);
+            RestoreItems(armor, player.armor);
+            RestoreItems(dye, player.dye);
+            RestoreItems(misc, player.miscEquips);
             ItemsMs = timer.Elapsed.TotalMilliseconds;
             ItemsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             allocated = GC.GetAllocatedBytesForCurrentThread();

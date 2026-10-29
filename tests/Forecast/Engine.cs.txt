@@ -2238,6 +2238,10 @@ public sealed class Engine : ModSystem
             var edge = Main.tile[area.Right - 1, area.Bottom - 1];
             edge.HasTile = true; edge.TileType = TileID.Stone; edge.IsHalfBlock = true;
             player.position.X += 7; player.buffTime[0] += 17; player.inventory[0].stack += 3;
+            player.inventory[0].SetNameOverride("branch-item");
+            player.inventory[0].useTime += 7;
+            player.inventory[0].autoReuse = !player.inventory[0].autoReuse;
+            var expectedItem = player.inventory[0].Clone();
             var expected = VanillaFrame.Capture(player, area, true);
             var child = parent.CaptureCurrent(player);
             if (child.SharedArrayBytes <= 0) throw new InvalidOperationException("unchanged_arrays_were_not_shared");
@@ -2250,6 +2254,11 @@ public sealed class Engine : ModSystem
             parent.Restore(parent);
             if (parent.RestoredTileWrites != 0) throw new InvalidOperationException("unchanged_world_rewritten");
             player = child.Restore(parent);
+            for (var type = typeof(Item); type != typeof(object); type = type.BaseType)
+                foreach (var field in type.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly))
+                    if (!Equals(field.GetValue(expectedItem), field.GetValue(player.inventory[0])))
+                        throw new InvalidOperationException("branch_item_field_changed:" + field.Name);
             if (Main.tile[X + 5, Y - 5].TileFrameNumber != 2)
                 throw new InvalidOperationException($"branch_frame_number_lost:{Main.tile[X + 5, Y - 5].TileFrameNumber}");
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
