@@ -819,8 +819,8 @@ public sealed class Engine : ModSystem
                 ["root_state_ms"] = rootStateMs,
                 ["finish_snapshot_ms"] = finishSnapshotMs,
                 ["restore_fields_ms"] = restoreFields, ["restore_items_ms"] = restoreItems, ["restore_tiles_ms"] = restoreTiles,
-                ["player_constructor_ms"] = playerConstructors,
-                ["player_constructor_bytes"] = constructorBytes,
+                ["player_prepare_ms"] = playerConstructors,
+                ["player_prepare_bytes"] = constructorBytes,
                 ["restore_fields_bytes"] = restoreFieldBytes, ["restore_items_bytes"] = restoreItemBytes,
                 ["restore_tiles_bytes"] = restoreTileBytes,
                 ["capture_fields_bytes"] = captureFieldBytes, ["capture_items_bytes"] = captureItemBytes,
@@ -868,7 +868,8 @@ public sealed class Engine : ModSystem
             }
             var interior = new Rectangle((tiles.X + 2) * 16, (tiles.Y + 2) * 16, (tiles.Width - 4) * 16, (tiles.Height - 4) * 16);
             long rootAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            rootState = new VanillaFrame.WorkerState(initial, start, request["share_snapshot_arrays"]?.GetValue<bool>() ?? true);
+            rootState = new VanillaFrame.WorkerState(initial, start, request["share_snapshot_arrays"]?.GetValue<bool>() ?? true,
+                request["reuse_player"]?.GetValue<bool>() ?? true);
             rootStateMs = System.Diagnostics.Stopwatch.GetElapsedTime(rootAt).TotalMilliseconds;
             var best = new RegionNode(rootState, Array.Empty<int>(), Array.Empty<int>(), Array.Empty<Point>(), Array.Empty<int>(), Distance(start), start.Bottom, start.velocity, start.releaseJump, MiningDamage(start), 0, Mode(start));
             if (Reached(start))
@@ -899,8 +900,8 @@ public sealed class Engine : ModSystem
                         var player = checkpoint.Restore(knownWorld);
                         knownWorld = null;
                         restoreFields += checkpoint.FieldsMs; restoreItems += checkpoint.ItemsMs; restoreTiles += checkpoint.TilesMs;
-                        playerConstructors += checkpoint.PlayerConstructorMs;
-                        constructorBytes += checkpoint.PlayerConstructorBytes;
+                        playerConstructors += checkpoint.PlayerPreparationMs;
+                        constructorBytes += checkpoint.PlayerPreparationBytes;
                         restoreFieldBytes += checkpoint.FieldsBytes; restoreItemBytes += checkpoint.ItemsBytes;
                         restoreTileBytes += checkpoint.TilesBytes;
                         tileWrites += checkpoint.RestoredTileWrites;
@@ -2265,7 +2266,15 @@ public sealed class Engine : ModSystem
                 throw new InvalidOperationException("branch_restore_changed_state");
             player.buffTime[0]++; player.inventory[0].stack++;
             player.buffImmune[0] = !player.buffImmune[0];
+            player.bank.item[0].SetDefaults(ItemID.DirtBlock);
+            player.bank.item[0].stack = 42;
+            player.miscDyes[0].SetDefaults(ItemID.RedDye);
+            player.TouchedTiles.Add(new Point(X, Y));
+            player.Loadouts[0].Armor[0].SetDefaults(ItemID.IronHelmet);
             player = child.Restore();
+            if (!player.bank.item[0].IsAir || !player.miscDyes[0].IsAir || player.TouchedTiles.Count != 0
+                || !player.Loadouts[0].Armor[0].IsAir)
+                throw new InvalidOperationException("reused_player_retained_uncaptured_state");
             if (!JsonNode.DeepEquals(expected, VanillaFrame.Capture(player, area, true)))
                 throw new InvalidOperationException("branch_arrays_or_items_aliased");
             parent.Restore();

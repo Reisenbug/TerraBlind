@@ -407,6 +407,60 @@ public static class VanillaFrame
 
     public sealed class WorkerState
     {
+        sealed class WorkerPlayer
+        {
+            static readonly MethodInfo shallowCopy = typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic);
+            static readonly ConcurrentDictionary<Type, Action<object, object>> copiers = new();
+            readonly Player player = new();
+            readonly System.Collections.Generic.List<Action> resets = new();
+
+            public WorkerPlayer()
+            {
+                var visited = new System.Collections.Generic.HashSet<object>(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+                Capture(player, new Player(), visited);
+            }
+
+            void Capture(object target, object twin, System.Collections.Generic.HashSet<object> visited)
+            {
+                if (target == null || ReferenceEquals(target, twin) || target is string || !visited.Add(target)) return;
+                if (target is Array array)
+                {
+                    var saved = (Array)array.Clone();
+                    resets.Add(() => Array.Copy(saved, array, saved.Length));
+                    if (!array.GetType().GetElementType().IsPrimitive)
+                        for (int i = 0; i < array.Length; i++) Capture(array.GetValue(i), ((Array)twin)?.GetValue(i), visited);
+                    return;
+                }
+                Type type = target.GetType();
+                if (type.IsPrimitive || type.IsEnum) return;
+                if (!type.IsValueType)
+                {
+                    var saved = shallowCopy.Invoke(target, null);
+                    var copy = copiers.GetOrAdd(type, CreateCopier);
+                    resets.Add(() => copy(saved, target));
+                }
+                foreach (var field in Fields(type))
+                    if (!field.FieldType.IsPrimitive && !field.FieldType.IsEnum)
+                        Capture(field.GetValue(target), twin == null ? null : field.GetValue(twin), visited);
+            }
+
+            static Action<object, object> CreateCopier(Type type)
+            {
+                var source = Expression.Parameter(typeof(object), "source");
+                var target = Expression.Parameter(typeof(object), "target");
+                var copies = Fields(type).Where(field => !field.IsInitOnly).Select(field =>
+                    (Expression)Expression.Assign(Expression.Field(Expression.Convert(target, type), field),
+                        Expression.Field(Expression.Convert(source, type), field))).Append(Expression.Empty());
+                return Expression.Lambda<Action<object, object>>(Expression.Block(copies), source, target).Compile();
+            }
+
+            public Player Restore()
+            {
+                foreach (var reset in resets) reset();
+                return player;
+            }
+        }
+
         static readonly Func<Item, Item, Item> restoreItem = CreateItemRestorer();
 
         static Func<Item, Item, Item> CreateItemRestorer()
@@ -449,24 +503,27 @@ public static class VanillaFrame
         readonly LiquidData[][] liquids;
         readonly int x0, y0, width, gameMode;
         readonly bool shareArrays;
+        readonly bool reusePlayer;
+        WorkerPlayer workerPlayer;
         public int CapturedTileChanges { get; private set; }
         public int RestoredTileWrites { get; private set; }
         public double FieldsMs { get; private set; }
-        public double PlayerConstructorMs { get; private set; }
+        public double PlayerPreparationMs { get; private set; }
         public double ItemsMs { get; private set; }
         public double TilesMs { get; private set; }
         public long SharedArrayBytes { get; private set; }
         public long FieldsBytes { get; private set; }
-        public long PlayerConstructorBytes { get; private set; }
+        public long PlayerPreparationBytes { get; private set; }
         public long ItemsBytes { get; private set; }
         public long TilesBytes { get; private set; }
 
         public WorkerState(JsonObject state) : this(state, RestoreInWorker(state)) { }
 
-        public WorkerState(JsonObject state, Player source, bool shareArrays = true)
+        public WorkerState(JsonObject state, Player source, bool shareArrays = true, bool reusePlayer = true)
         {
             RequireWorker();
             this.shareArrays = shareArrays;
+            this.reusePlayer = reusePlayer;
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
             main = DecodeFields(typeof(Main), state["main"].AsObject(), true);
@@ -500,6 +557,8 @@ public static class VanillaFrame
             var timer = System.Diagnostics.Stopwatch.StartNew();
             long allocated = GC.GetAllocatedBytesForCurrentThread();
             shareArrays = template.shareArrays;
+            reusePlayer = template.reusePlayer;
+            workerPlayer = template.workerPlayer;
             hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = CaptureValues(source, template.playerFields);
             main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
@@ -624,13 +683,13 @@ public static class VanillaFrame
             Apply(Main.SceneMetrics, scene);
             long constructorStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             long constructorAllocated = GC.GetAllocatedBytesForCurrentThread();
-            var player = new Player();
-            PlayerConstructorBytes = GC.GetAllocatedBytesForCurrentThread() - constructorAllocated;
-            PlayerConstructorMs = System.Diagnostics.Stopwatch.GetElapsedTime(constructorStarted).TotalMilliseconds;
+            var player = reusePlayer ? (workerPlayer ??= new WorkerPlayer()).Restore() : new Player();
+            PlayerPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - constructorAllocated;
+            PlayerPreparationMs = System.Diagnostics.Stopwatch.GetElapsedTime(constructorStarted).TotalMilliseconds;
             Apply(player, playerFields);
             hitTile.Restore(player.hitTile); hitReplace.Restore(player.hitReplace);
             FieldsMs = timer.Elapsed.TotalMilliseconds;
-            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated - PlayerConstructorBytes;
+            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated - PlayerPreparationBytes;
             allocated = GC.GetAllocatedBytesForCurrentThread();
             timer.Restart();
             RestoreItems(inventory, player.inventory);
