@@ -20,7 +20,7 @@ def main():
     if recorded_goal and ("--baseline" not in sys.argv or journey or continuity or circuit):
         raise ValueError("--recorded-goal requires --baseline and a single route")
     continuity |= circuit or journey
-    descent = "--descent" in sys.argv or continuity or recorded_goal
+    descent = "--descent" in sys.argv or continuity or recorded_goal or "--readme-route" in sys.argv
     root = Path("/tmp/terrablind-continuity-check" if continuity else "/tmp/terrablind-descent-check" if descent else "/tmp/terrablind-route-check" if routed else "/tmp/terrablind-demo-app")
     if "--root" in sys.argv:
         root = Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
@@ -42,6 +42,7 @@ def main():
         if not source_world.exists():
             source_world = source_world.parent / "World.wld"
     shutil.copy2(source_world, root / "Worlds/Demo.wld")
+    (root / "Mods").mkdir(parents=True, exist_ok=True)
     (root / "Mods/enabled.json").write_text('["TerraBlind","Demo"]')
     user_root = Path.home() / "Library/Application Support/Terraria/tModLoader"
     manual = "--manual" in sys.argv
@@ -91,6 +92,8 @@ def main():
         command.append("-vnavbackgroundcheck")
     if "--old-nav" in sys.argv:
         command.append("-vnavoldnavcheck")
+    if "--readme-route" in sys.argv:
+        command.extend(["-vnavreadmeroute", "-vnavoldnavcheck"])
     if worker_check:
         command.append("-vnavworkercheck")
     if unlimited:
@@ -127,6 +130,8 @@ def main():
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
             if journey:
                 assert [leg["kind"] for leg in row["legs"]] == ["main", "crystal", "chest", "spore", "main_return", "surface"]
+            if "--readme-route" in sys.argv:
+                assert [leg["kind"] for leg in row["legs"]] == ["spawn_to_jungle", "jungle_to_hell"]
             if "--background" in sys.argv:
                 samples = json.loads((root / "descent-trace.json").read_text())
                 assert samples and all(not sample["focused"] for sample in samples)
