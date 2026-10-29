@@ -159,6 +159,7 @@ namespace TerraBlind
             if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             _startupWalkReported = false;
+            LegacyNativePrediction.Reset();
             VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
             _mode = mode;
@@ -189,6 +190,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            LegacyNativePrediction.Reset();
             VanillaNavBridge.Reset();
             // 刹车没停稳就被外部叫停:别让 SettleAt 留在后台继续抢控制
             if (_braking) { SettleAt.Stop(); _braking = false; }
@@ -314,6 +316,13 @@ namespace TerraBlind
             if (VanillaNavBridge.Enabled)
             {
                 VanillaNavBridge.Tick(p, _goalWx, _goalWy);
+                return;
+            }
+
+            if (LegacyNativePrediction.Poll(p, out var nativePlan))
+            {
+                StuckSentinel.Reset();
+                if (nativePlan != null) DispatchLegacy(nativePlan, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
                 return;
             }
 
@@ -512,6 +521,11 @@ namespace TerraBlind
             if (_altered >= RebuildAltered)
                 RebuildFieldAsync($"altered {_altered} tiles");
 
+            if (!LegacyNativePrediction.Start(p, res)) DispatchLegacy(res, cell);
+        }
+
+        static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
+        {
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;
