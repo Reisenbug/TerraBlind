@@ -144,6 +144,10 @@ def main():
             assert "PILLAR_PROBE_RESULT" in output
             print("PILLAR_PROBE_COMPLETE", flush=True)
             return
+        if "--snapshot-check" in sys.argv:
+            assert "SNAPSHOT_ROUNDTRIP_PASS" in output
+            print("SNAPSHOT_CHECK_COMPLETE", flush=True)
+            return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
             assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or "--reverse" in sys.argv or row["y"] >= row["underworld"])
