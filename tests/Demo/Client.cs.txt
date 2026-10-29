@@ -792,6 +792,16 @@ public sealed class Driver : ModSystem
                 player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
                 args = new[] { "route", "3383", "1069" };
                 if (readmeRoute) { routeGoalX = int.Parse(args[1]); routeGoalY = int.Parse(args[2]); }
+                if (readmeRoute && Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse"))
+                {
+                    routeGoalX = x; routeGoalY = y;
+                    args = new[] { "route", x.ToString(), y.ToString() };
+                    player.Teleport(new Vector2(3383 * 16 + 8 - player.width / 2f, 1070 * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+                    if (Collision.SolidCollision(player.position, player.width, player.height))
+                        throw new InvalidOperationException("reverse_start_inside_terrain");
+                    Console.WriteLine($"README_REVERSE_SETUP start=(3383,1069) goal=({x},{y}) gear=none");
+                }
                 goals["hell_x"] = 3383; goals["hell_y"] = 1069;
                 Console.WriteLine("VNAV_DESCENT_GOALS " + goals.ToJsonString());
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualcheck"))
@@ -926,7 +936,7 @@ public sealed class Driver : ModSystem
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (readmeRoute)
         {
-            results.Add(new JsonObject { ["kind"] = "jungle_to_hell",
+            results.Add(new JsonObject { ["kind"] = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse") ? "hell_to_jungle" : "jungle_to_hell",
                 ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds });
             Console.WriteLine("README_ROUTE_LEG " + results[^1].ToJsonString());
         }

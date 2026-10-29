@@ -94,6 +94,10 @@ def main():
         command.append("-vnavoldnavcheck")
     if "--readme-route" in sys.argv:
         command.extend(["-vnavreadmeroute", "-vnavoldnavcheck"])
+    if "--reverse" in sys.argv:
+        if "--readme-route" not in sys.argv:
+            raise ValueError("--reverse requires --readme-route")
+        command.append("-vnavreadmereverse")
     if worker_check:
         command.append("-vnavworkercheck")
     if unlimited:
@@ -122,7 +126,7 @@ def main():
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
-            assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or row["y"] >= row["underworld"])
+            assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or "--reverse" in sys.argv or row["y"] >= row["underworld"])
             if recorded_goal:
                 timing = json.loads((root / "route-timing.json").read_text())
                 assert timing["wall_ms"] <= 60000, timing
@@ -131,7 +135,7 @@ def main():
             if journey:
                 assert [leg["kind"] for leg in row["legs"]] == ["main", "crystal", "chest", "spore", "main_return", "surface"]
             if "--readme-route" in sys.argv:
-                assert [leg["kind"] for leg in row["legs"]] == ["jungle_to_hell"]
+                assert [leg["kind"] for leg in row["legs"]] == ["hell_to_jungle" if "--reverse" in sys.argv else "jungle_to_hell"]
             if "--background" in sys.argv:
                 samples = json.loads((root / "descent-trace.json").read_text())
                 assert samples and all(not sample["focused"] for sample in samples)
