@@ -372,6 +372,9 @@ public sealed class Driver : ModSystem
     string timingPhase;
     double phaseStart;
     Vector2 phasePosition, previousPosition;
+    Vector2 snapshotAnchor;
+    int snapshotStationaryFrames;
+    bool snapshotSaved;
     object prewarming;
 
     static void FinishProcess(int exitCode)
@@ -462,7 +465,23 @@ public sealed class Driver : ModSystem
         }
         for (int i = 0; i < player.buffType.Length; i++)
         { player.buffType[i] = state["buff_types"][i].GetValue<int>(); player.buffTime[i] = state["buff_times"][i].GetValue<int>(); }
-        if (Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string snapshotPath))
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in Main.item) item.active = false;
+    }
+
+    static void RestoreSnapshot(Player player, string snapshotPath)
+    {
+        void RestoreItems(Item[] items, JsonArray values)
+        {
+            for (int i = 0; i < items.Length; i++)
+            {
+                items[i].SetDefaults(values[i][0].GetValue<int>());
+                int prefix = values[i][1].GetValue<int>();
+                if (prefix != 0) items[i].Prefix(prefix);
+                items[i].stack = values[i][2].GetValue<int>();
+            }
+        }
         {
             var capture = JsonNode.Parse(File.ReadAllText(snapshotPath));
             var snapshot = (capture["request"] ?? capture)["snapshot"].AsObject();
@@ -495,6 +514,34 @@ public sealed class Driver : ModSystem
         foreach (var npc in Main.npc) npc.active = false;
         foreach (var projectile in Main.projectile) projectile.active = false;
         foreach (var item in Main.item) item.active = false;
+    }
+
+    void CaptureStall(Player player)
+    {
+        if (Vector2.DistanceSquared(player.position, snapshotAnchor) > 32 * 32)
+        {
+            snapshotAnchor = player.position;
+            snapshotStationaryFrames = 0;
+            snapshotSaved = false;
+        }
+        if (++snapshotStationaryFrames < 120 || snapshotSaved) return;
+        snapshotSaved = true;
+        try
+        {
+            int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+            var area = Rectangle.Intersect(new Rectangle(x - 64, y - 64, 129, 129),
+                new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY));
+            var fixture = new JsonObject { ["snapshot"] = VanillaFrame.Capture(player, area, true),
+                ["goal_x"] = routeGoalX, ["goal_y"] = routeGoalY, ["tick"] = ticks,
+                ["phase"] = timingPhase, ["macro_running"] = StateSpacePlanner.ExecRunning,
+                ["skill_running"] = SkillExecutor.IsActive, ["bridge_running"] = BridgeBuilder.IsRunning };
+            string directory = Path.Combine(Main.SavePath, "NavSnapshots");
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, $"stall-{ticks}-{x}-{y}.json");
+            File.WriteAllText(path, fixture.ToJsonString());
+            Console.WriteLine("VNAV_STALL_SNAPSHOT " + path);
+        }
+        catch (Exception error) { Console.WriteLine("VNAV_STALL_SNAPSHOT_FAILED " + error.Message); }
     }
 
     string TimingPhase(Player player, VanillaNavigationDemo demo)
@@ -653,6 +700,7 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpreviewcheck")) { PreviewIsolation(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbridgerecoverycheck")) { BridgeRecovery(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsnapshotcheck")) { SnapshotRoundtrip(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -760,6 +808,30 @@ public sealed class Driver : ModSystem
             throw new InvalidOperationException("unanchored_pillar_not_rejected_before_jump");
         Console.WriteLine($"VNAV_DEMO_COMPLETE PILLAR_PROBE_RESULT frames={ticks} remaining={p.inventory[2].stack} x={p.position.X} y={p.position.Y}");
         SkillExecutor.Stop(); enabled = false; FinishProcess(0);
+    }
+
+    void SnapshotRoundtrip()
+    {
+        var p = Main.LocalPlayer;
+        p.position = new Vector2(54223.8f, 16262); p.velocity = Vector2.Zero;
+        p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+        snapshotAnchor = p.position; snapshotStationaryFrames = 119;
+        CaptureStall(p);
+        string path = Directory.GetFiles(Path.Combine(Main.SavePath, "NavSnapshots"), "stall-*.json").Single();
+        Vector2 originalPosition = p.position;
+        var originalTile = Main.tile[3388, 1019];
+        ushort originalType = originalTile.TileType;
+        SlopeType originalSlope = originalTile.Slope;
+        bool originalHalf = originalTile.IsHalfBlock;
+        p.position += new Vector2(100, 100); p.inventory[2].stack = 1;
+        originalTile.ClearEverything();
+        RestoreSnapshot(p, path);
+        var restoredTile = Main.tile[3388, 1019];
+        if (p.position != originalPosition || p.inventory[2].stack != 999 || !restoredTile.HasTile
+            || restoredTile.TileType != originalType || restoredTile.Slope != originalSlope || restoredTile.IsHalfBlock != originalHalf)
+            throw new InvalidOperationException("stall_snapshot_roundtrip_failed");
+        Console.WriteLine("VNAV_DEMO_COMPLETE SNAPSHOT_ROUNDTRIP_PASS " + path);
+        enabled = false; FinishProcess(0);
     }
 
     void BridgeRecovery()
@@ -983,6 +1055,18 @@ public sealed class Driver : ModSystem
                 Console.WriteLine("VNAV_BASELINE_RECORDING " + NavigationRecording.LastDirectory);
             }
             else if (journey) NavigationRecording.Start("bot", routeGoalX, routeGoalY);
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string snapshotPath))
+            {
+                RestoreSnapshot(player, snapshotPath);
+                var fixture = JsonNode.Parse(File.ReadAllText(snapshotPath));
+                if (fixture["goal_x"] != null && fixture["goal_y"] != null)
+                {
+                    routeGoalX = fixture["goal_x"].GetValue<int>();
+                    routeGoalY = fixture["goal_y"].GetValue<int>();
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                }
+                previousPosition = snapshotAnchor = player.position;
+            }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck"))
             {
                 VanillaNavBridge.Enabled = false; VanillaNavBridge.RegionsEnabled = false;
@@ -993,6 +1077,7 @@ public sealed class Driver : ModSystem
             started = true;
         }
         ticks++;
+        if (RecedingNav.Active) CaptureStall(player);
         if (RecedingNav.Active && Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
         { RecedingNav.LastStop = "done"; RecedingNav.Stop(); }
         if (VanillaNavBridge.Enabled && RecedingNav.Active && (StateSpacePlanner.ExecRunning

@@ -13,7 +13,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
-    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe"))
+    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check"))
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
@@ -106,6 +106,8 @@ def main():
         command.append("-vnavbridgerecoverycheck")
     if "--pillar-probe" in sys.argv:
         command.append("-vnavpillarprobe")
+    if "--snapshot-check" in sys.argv:
+        command.append("-vnavsnapshotcheck")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
