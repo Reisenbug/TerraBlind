@@ -28,7 +28,7 @@ public sealed class NavigationTestTool : ModSystem
     {
         if (Main.dedServ || Main.gameMenu) return;
         bool clickLeft = Main.mouseLeft && !left, clickRight = Main.mouseRight && !right;
-        bool pressRun = Main.keyState.IsKeyDown(Keys.F8), pressStop = Main.keyState.IsKeyDown(Keys.F9);
+        bool pressRun = Main.keyState.IsKeyDown(Keys.D8), pressStop = Main.keyState.IsKeyDown(Keys.D9);
         bool begin = pressRun && !run, halt = pressStop && !stop;
         left = Main.mouseLeft; right = Main.mouseRight; run = pressRun; stop = pressStop;
         if (!Enabled || Main.drawingPlayerChat || Main.editSign || Main.editChest) return;
@@ -70,7 +70,7 @@ public sealed class NavigationTestTool : ModSystem
         Main.mapFullscreen = false;
         VanillaNavBridge.Enabled = true; VanillaNavBridge.RegionsEnabled = true;
         RecedingNav.Start(to.X, to.Y, RecedingNav.Mode.Snap);
-        status = "区域寻路已启动；F9 停止";
+        status = "区域寻路已启动；9 停止";
         DiagLog.Write($"[nav-test-start] start={from} goal={to} regions=true");
     }
 
@@ -85,7 +85,7 @@ public sealed class NavigationTestTool : ModSystem
     public override void PostDrawInterface(SpriteBatch batch)
     {
         if (!Enabled || Main.gameMenu) return;
-        Utils.DrawBorderString(batch, "寻路测试：Shift+左键 起点 / Shift+右键 终点 / F8 开始 / F9 停止", new Vector2(24, 160), Color.Cyan, .8f);
+        Utils.DrawBorderString(batch, "寻路测试：Shift+左键 起点 / Shift+右键 终点 / 8 开始 / 9 停止", new Vector2(24, 160), Color.Cyan, .8f);
         Utils.DrawBorderString(batch, $"起点 {start?.ToString() ?? "未选"} → 终点 {goal?.ToString() ?? "未选"}  {status}", new Vector2(24, 184), Color.White, .8f);
         if (start is Point a) Utils.DrawBorderString(batch, "起", ScreenPoint(a), Color.Lime);
         if (goal is Point b) Utils.DrawBorderString(batch, "终", ScreenPoint(b), Color.Yellow);
@@ -101,6 +101,6 @@ public sealed class NavigationTestCommand : ModCommand
     {
         var tool = ModContent.GetInstance<NavigationTestTool>();
         tool.Enabled = !tool.Enabled;
-        caller.Reply(tool.Enabled ? "选点测试已开启：Shift+左键起点，Shift+右键终点，F8开始，F9停止。" : "选点测试已关闭。");
+        caller.Reply(tool.Enabled ? "选点测试已开启：Shift+左键起点，Shift+右键终点，8开始，9停止。" : "选点测试已关闭。");
     }
 }
