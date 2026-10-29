@@ -146,6 +146,13 @@ namespace TerraBlind
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Reason = "no_player"; Finish("stuck"); return; }
+			if (p.Bottom.Y > (_rowWy + 1) * 16f)
+			{
+				Reason = $"left_bridge_row feet={p.Bottom.Y / 16f:0.##} row={_rowWy}";
+				ItemUseCoordinator.Stop();
+				Finish("bad_stand");
+				return;
+			}
 
 			// 卡死判据和"人在哪一列"无关:只看【有没有真铺出格子来】。
 			// 铺出一格就清零,长时间没进展就是卡住了,不管人这会儿在原地还是来回走
@@ -242,6 +249,12 @@ namespace TerraBlind
 		// 以前 5 处 stuck 各自 return,现场只剩一句给人看的话,代码没法据此补救
 		private static void Stuck(Blocker b)
 		{
+			if (RecedingNav.Active)
+			{
+				ItemUseCoordinator.Stop();
+				Finish("stuck");
+				return;
+			}
 			if (Unstick.Handle("bridge", b)) { _frames = 0; _sinceProgress = 0; _walkStall = 0; _reachStall = 0; _digStall = 0; return; }
 			Finish("stuck");
 		}

@@ -101,6 +101,8 @@ def main():
         command.append("-vnavworkercheck")
     if "--preview-isolation" in sys.argv:
         command.append("-vnavpreviewcheck")
+    if "--bridge-recovery" in sys.argv:
+        command.append("-vnavbridgerecoverycheck")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
@@ -115,7 +117,7 @@ def main():
                 keep = True
                 print("MANUAL_WINDOW_READY pid=", process.pid, flush=True)
                 return
-            if ("VNAV_DEMO_COMPLETE" if "--preview-isolation" in sys.argv else "VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
+            if ("VNAV_DEMO_COMPLETE" if "--preview-isolation" in sys.argv or "--bridge-recovery" in sys.argv else "VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
@@ -128,6 +130,10 @@ def main():
         if "--preview-isolation" in sys.argv:
             assert "PREVIEW_ISOLATION_PASS cases=4" in output
             print("PREVIEW_ISOLATION_CHECK_COMPLETE", flush=True)
+            return
+        if "--bridge-recovery" in sys.argv:
+            assert "BRIDGE_RECOVERY_PASS cases=3" in output
+            print("BRIDGE_RECOVERY_CHECK_COMPLETE", flush=True)
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
