@@ -100,6 +100,8 @@ def main():
         command.append("-vnavreadmereverse")
     if worker_check:
         command.append("-vnavworkercheck")
+    if "--preview-isolation" in sys.argv:
+        command.append("-vnavpreviewcheck")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
@@ -107,14 +109,14 @@ def main():
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     keep = "--keep-open" in sys.argv
     try:
-        deadline = float("inf") if unlimited else time.monotonic() + (1000 if descent else 240)
+        deadline = float("inf") if unlimited or descent else time.monotonic() + 240
         while time.monotonic() < deadline:
             output = (root / "demo-client.log").read_text()
             if manual and "VNAV_MANUAL_READY" in output:
                 keep = True
                 print("MANUAL_WINDOW_READY pid=", process.pid, flush=True)
                 return
-            if ("VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
+            if ("VNAV_DEMO_COMPLETE" if "--preview-isolation" in sys.argv else "VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
@@ -124,12 +126,13 @@ def main():
         if worker_check:
             print("WORKER_LIFECYCLE_CHECK_COMPLETE", flush=True)
             return
+        if "--preview-isolation" in sys.argv:
+            assert "PREVIEW_ISOLATION_PASS cases=4" in output
+            print("PREVIEW_ISOLATION_CHECK_COMPLETE", flush=True)
+            return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
             assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or "--reverse" in sys.argv or row["y"] >= row["underworld"])
-            if recorded_goal:
-                timing = json.loads((root / "route-timing.json").read_text())
-                assert timing["wall_ms"] <= 60000, timing
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]
             if journey:

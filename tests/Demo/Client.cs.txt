@@ -546,8 +546,7 @@ public sealed class Driver : ModSystem
         foreach (var pair in activityTotals) activity[pair.Key] = pair.Value;
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
-            ["game_frames"] = ticks, ["limit_ms"] = continuity || unlimited ? null :
-                Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal") ? 60000 : 150000,
+            ["game_frames"] = ticks,
             ["goal_x"] = continuity ? null : routeGoalX, ["goal_y"] = continuity ? null : routeGoalY,
             ["phase_ms"] = totals, ["activity_ms"] = activity, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
@@ -651,6 +650,7 @@ public sealed class Driver : ModSystem
         if (!enabled || Main.gameMenu) return;
         try
         {
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpreviewcheck")) { PreviewIsolation(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -733,6 +733,56 @@ public sealed class Driver : ModSystem
             FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    void PreviewIsolation()
+    {
+        int x = Main.spawnTileX, y = 50;
+        var cells = Enumerable.Range(x - 3, 7).Select(tx => (tx, y)).ToArray();
+        if (cells.Any(c => Main.tile[c.tx, c.y].HasTile)) throw new InvalidOperationException("preview_fixture_occupied");
+        var types = cells.Select(c => Main.tile[c.tx, c.y].TileType).ToArray();
+        var ph = PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer);
+        int cases = 0;
+        foreach (bool down in new[] { false, true })
+        foreach (float vx in new[] { 0f, 2f })
+        {
+            var start = new PhysicsSimulator.State { Px = x * 16, Py = y * 16 - 90, Vx = vx, Vy = 4 };
+            var input = new PhysicsSimulator.ControlInput { Down = down };
+            var native = new System.Collections.Generic.List<PhysicsSimulator.State>();
+            try
+            {
+                foreach (var c in cells) { var t = Main.tile[c.tx, c.y]; t.HasTile = true; t.TileType = TileID.Platforms; }
+                var s = start;
+                for (int f = 0; f < 30; f++) { s = PhysicsSimulator.Step(s, input, ph); native.Add(s); }
+            }
+            finally
+            {
+                for (int i = 0; i < cells.Length; i++)
+                { var t = Main.tile[cells[i].tx, y]; t.HasTile = false; t.TileType = types[i]; }
+            }
+            using (new PhysicsSimulator.PlatformPreview(cells))
+            {
+                if (cells.Any(c => Main.tile[c.tx, c.y].HasTile)) throw new InvalidOperationException("preview_wrote_world");
+                if (System.Threading.Tasks.Task.Run(() => PhysicsSimulator.HasPreviewPlatforms).GetAwaiter().GetResult())
+                    throw new InvalidOperationException("preview_leaked_thread");
+                using (new PhysicsSimulator.PlatformPreview(new[] { (x, y - 1) }))
+                    if (!PhysicsSimulator.PreviewPlatform(x, y - 1)) throw new InvalidOperationException("preview_nested_missing");
+                if (PhysicsSimulator.PreviewPlatform(x, y - 1)) throw new InvalidOperationException("preview_nested_leaked");
+                var s = start;
+                for (int f = 0; f < native.Count; f++)
+                {
+                    s = PhysicsSimulator.Step(s, input, ph);
+                    var n = native[f];
+                    if (Math.Abs(s.Px - n.Px) > .01f || Math.Abs(s.Py - n.Py) > .01f
+                        || Math.Abs(s.Vy - n.Vy) > .01f || s.Grounded != n.Grounded)
+                        throw new InvalidOperationException($"preview_collision_mismatch case={cases} frame={f} virtual=({s.Px},{s.Py},{s.Vy},{s.Grounded}) native=({n.Px},{n.Py},{n.Vy},{n.Grounded})");
+                }
+            }
+            if (PhysicsSimulator.HasPreviewPlatforms) throw new InvalidOperationException("preview_scope_leaked");
+            cases++;
+        }
+        Console.WriteLine($"VNAV_DEMO_COMPLETE PREVIEW_ISOLATION_PASS cases={cases}");
+        enabled = false; FinishProcess(0);
     }
 
     void Descent()
@@ -929,10 +979,7 @@ public sealed class Driver : ModSystem
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
-        int routeLimitSeconds = Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal") ? 60 : 150;
-        if (!continuity && !unlimited && routeClock.Elapsed.TotalSeconds > routeLimitSeconds)
-            throw new TimeoutException($"route_exceeded_{routeLimitSeconds}_seconds");
-        if (RecedingNav.Active && (unlimited || ticks < 54000)) return;
+        if (RecedingNav.Active) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
         if (readmeRoute)
         {

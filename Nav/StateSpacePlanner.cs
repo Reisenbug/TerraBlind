@@ -685,20 +685,8 @@ namespace TerraBlind
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
-            // 把这个节点一路铺出来的桥面【临时】写进世界再展开,展开完还原。
-            // 和 SimulateWithPlatform 同一个手法,只是那个只铺一块,这个铺一整段。
             var laid = ctx.Laid != null && ctx.Laid.TryGetValue(cur, out var lz) ? lz : null;
-            var saved = laid == null ? null : new List<(bool had, ushort type, bool half, Terraria.ID.SlopeType slope)>();
-            if (laid != null)
-                foreach (var (lx, ly) in laid)
-                {
-                    var t = Main.tile[lx, ly];
-                    saved.Add((t.HasTile, t.TileType, t.IsHalfBlock, t.Slope));
-                    t.HasTile = true; t.TileType = (ushort)(platformTile >= 0 ? platformTile : 19);
-                    t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
-                }
-            try
-            {
+            using var preview = new PhysicsSimulator.PlatformPreview(laid);
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
@@ -708,17 +696,6 @@ namespace TerraBlind
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
                 if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
                 yield return e;
-            }
-            }
-            finally
-            {
-                if (laid != null)
-                    for (int i = 0; i < laid.Count; i++)
-                    {
-                        var t = Main.tile[laid[i].Item1, laid[i].Item2];
-                        t.HasTile = saved[i].had; t.TileType = saved[i].type;
-                        t.IsHalfBlock = saved[i].half; t.Slope = saved[i].slope;
-                    }
             }
         }
 
@@ -1472,6 +1449,7 @@ namespace TerraBlind
 
         static bool CanPlaceReal(int wx, int wy)
         {
+            if (PhysicsSimulator.HasPreviewPlatforms) return CanPlaceRealUncached(wx, wy);
             if (_placeCache.TryGetValue((wx, wy), out bool hit)) return hit;
             bool r = CanPlaceRealUncached(wx, wy);
             _placeCache[(wx, wy)] = r;
@@ -1481,13 +1459,15 @@ namespace TerraBlind
         static bool CanPlaceRealUncached(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            if (PhysicsSimulator.PreviewPlatform(wx, wy)) return false;
             var t = Main.tile[wx, wy];
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
             if (Predicates.IsLava(wx, wy)) return false;
-            return VanillaTerrainPlan.HasPlatformAnchor(wx, wy);
+            return VanillaTerrainPlan.HasPlatformAnchor(wx, wy)
+                || PhysicsSimulator.PreviewPlatform(wx - 1, wy) || PhysicsSimulator.PreviewPlatform(wx + 1, wy)
+                || PhysicsSimulator.PreviewPlatform(wx, wy - 1) || PhysicsSimulator.PreviewPlatform(wx, wy + 1);
         }
 
-        // 临时把一块平台写进 Main.tile,模拟,再还原。那块砖不进节点,只为这一段的落地物理存在。
         // 搭桥要精确停在新砖那一格(一块砖只有一格站立空间,走完整段会滑出去掉下)。一次一块,贪心每步重挑。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
@@ -1505,10 +1485,7 @@ namespace TerraBlind
             if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
             DiagLog.Write($"[bridge-dbg] dir={dir} px={cur.Px:0.#} footCols[{lcol}..{rcol}] baseCol={baseCol} placeCx={placeCx} placeCy={placeCy}");
 
-            var t = Main.tile[placeCx, placeCy];
-            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock; var oSlope = t.Slope;
-            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
-            try
+            using var preview = new PhysicsSimulator.PlatformPreview(new[] { (placeCx, placeCy) });
             {
                 var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
                 // 走到【刚好不再压住 baseCol】,不是走到新砖格心:格心那个位置身体还骑在原来那列上,
@@ -1548,22 +1525,13 @@ namespace TerraBlind
                 var node = new SSNode { Px = standPx, Py = standPy, Vx = 0f, Vy = 0f, Grounded = true };
                 return (node, frames);
             }
-            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateWithPlatform(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int cx, int cy, int platformTile)
         {
-            var t = Main.tile[cx, cy];
-            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
-            var oSlope = t.Slope;
-            // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升。人永远够不到,落回原地成自环。
-            // 真平台是 solidTop:上升穿过去,下降接住。
-            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
-            // 【这个窗口里绝不能查地形】。_placeCache/_reachCache 会把"平台在场"的答案存下来,
-            // 还原之后缓存就是错的。SimulateSegment 是纯物理,不碰 CanPlaceReal -- 保持这样。
-            try { return SimulateSegment(cur, dir, hold, ph); }
-            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
+            using var preview = new PhysicsSimulator.PlatformPreview(new[] { (cx, cy) });
+            return SimulateSegment(cur, dir, hold, ph);
         }
 
         // Vanilla placement reach = tileRangeX + 手上那件的 tileBoost + blockRange(Player.cs:38990)。

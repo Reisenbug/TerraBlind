@@ -55,6 +55,7 @@ namespace TerraBlind
 		// SOLID = 踩得住且走不过去。平台是 solidTop 也算地。树/藤/草 HasTile 但不 solid
 		public static bool IsSolid(int x, int y)
 		{
+			if (PhysicsSimulator.PreviewPlatform(x, y)) return true;
 			if (!InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
 			return t.HasTile && Main.tileSolid[t.TileType];
@@ -64,6 +65,7 @@ namespace TerraBlind
 		// 平台能穿过去(不用挖),但站不住桥面的活(要替换成方块),两处都得先认出它
 		public static bool IsPlatform(int x, int y)
 		{
+			if (PhysicsSimulator.PreviewPlatform(x, y)) return true;
 			if (!InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
 			return t.HasTile && Main.tileSolidTop[t.TileType];
@@ -83,6 +85,7 @@ namespace TerraBlind
 		// GROUND = something you can stand ON TOP of: a full solid block or a platform.
 		public static bool IsGround(int x, int y)
 		{
+			if (PhysicsSimulator.PreviewPlatform(x, y)) return true;
 			if (!InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
 			return t.HasTile && (Main.tileSolid[t.TileType] || Main.tileSolidTop[t.TileType]);

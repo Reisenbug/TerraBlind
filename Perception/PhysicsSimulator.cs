@@ -6,6 +6,22 @@ namespace TerraBlind
 {
     public static class PhysicsSimulator
     {
+        [System.ThreadStatic] static HashSet<(int x, int y)> previewPlatforms;
+        public static bool PreviewPlatform(int x, int y) => previewPlatforms?.Contains((x, y)) == true;
+        public static bool HasPreviewPlatforms => previewPlatforms?.Count > 0;
+
+        public sealed class PlatformPreview : System.IDisposable
+        {
+            readonly HashSet<(int x, int y)> previous;
+            public PlatformPreview(IEnumerable<(int x, int y)> tiles)
+            {
+                previous = previewPlatforms;
+                previewPlatforms = previous == null ? new() : new(previous);
+                if (tiles != null) previewPlatforms.UnionWith(tiles);
+            }
+            public void Dispose() => previewPlatforms = previous;
+        }
+
         public const float MaxRunSpeed = 3.0f;
         public const int PlayerW = 20;
         public const int PlayerH = 42;
@@ -280,6 +296,14 @@ namespace TerraBlind
             if (vel.Y >= ph.Gravity && !ft)
                 Terraria.Collision.StepUp(ref pos, ref vel, PlayerW, PlayerH, ref stepSpeed, ref gfxOffY);
             var result = Terraria.Collision.TileCollision(pos, vel, PlayerW, PlayerH, ft, ft, 1);
+            if (!ft && vel.Y >= 0 && previewPlatforms != null)
+                foreach (var (x, y) in previewPlatforms)
+                {
+                    float top = y * 16f;
+                    if (pos.Y + PlayerH <= top && pos.Y + PlayerH + result.Y >= top
+                        && pos.X + result.X + PlayerW > x * 16f && pos.X + result.X < (x + 1) * 16f)
+                        result.Y = top - pos.Y - PlayerH;
+                }
 
             if (vy < 0f && System.Math.Abs(result.Y - vel.Y) > 0.01f) jfl = 0;
 

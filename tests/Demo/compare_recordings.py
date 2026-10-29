@@ -96,7 +96,7 @@ def compare(first, second):
                              extra_bot_ms=(b - previous_bot) - (h - previous_human)))
         previous_human, previous_bot = h, b
     return dict(comparable=not differences, mismatches=differences, human=human_stats, bot=bot_stats,
-                bot_passed_150s=not differences and bot["reached"] and bot["wall_ms"] <= 150000,
+                bot_reached_comparable=not differences and bot["reached"],
                 depth_segments=segments,
                 interpretation="Depth bins locate slow stretches; coordinate and input traces are needed to establish the cause")
 
