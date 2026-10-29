@@ -500,6 +500,14 @@ public sealed class Driver : ModSystem
 
     string TimingPhase(Player player, VanillaNavigationDemo demo)
     {
+        if (!VanillaNavBridge.Enabled)
+        {
+            bool moving = Vector2.DistanceSquared(player.position, previousPosition) > .0625f;
+            if (MineCoordinator.IsActive) return moving ? "legacy_moving_mining" : "legacy_mining";
+            if (SkillExecutor.IsActive || BridgeBuilder.IsRunning) return "legacy_building";
+            if (moving) return "legacy_moving";
+            return StateSpacePlanner.ExecRunning ? "legacy_executing" : "legacy_waiting";
+        }
         string stage = VanillaNavBridge.Stage;
         if (stage is not "Moving" and not "Approaching") return stage;
         if (!VanillaNavigationDemo.Active) return "field_setup";
