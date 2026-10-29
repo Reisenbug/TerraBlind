@@ -150,6 +150,7 @@ namespace TerraBlind
             public List<(float px, float py)> Path = new();
             public List<PathSeg> Segments = new();
             public List<PhysicsSimulator.ControlInput> ExecFrames = new();
+            public bool NativeVerified;
             public float BestPx, BestPy, BestDx, BestDy;
             public float StartPx, StartPy; // the player position this plan was computed from (for lookahead frame realignment)
             public bool Partial;           // true = this leg stops at the nearest grounded node, NOT the final goal (roll again from there)
@@ -2281,7 +2282,8 @@ namespace TerraBlind
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
             // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理。闭环不会按下键。
-            else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
+            else if (_lastExecResult?.NativeVerified != true
+                     && st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
                      && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down
                          || MathF.Abs(fr.Vy) > 0.01f || MathF.Abs(fr.Py - p.position.Y) > 1f))
             {
@@ -3327,6 +3329,7 @@ namespace TerraBlind
             // 把 26 条完全有效的边全否了,人钉在原地反复重规划。
             if (MathF.Abs(p.position.X - res.StartPx) < 0.01f && MathF.Abs(p.position.Y - res.StartPy) < 0.01f)
                 return true;
+            if (res.NativeVerified) return false;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             for (int si = 0; si < res.Steps.Count; si++)
             {

@@ -151,7 +151,7 @@ internal static class LegacyNativePrediction
         }
         var replacement = new StateSpacePlanner.SSResult { Found = true, StartPx = anchor["x"].GetValue<float>(),
             StartPy = anchor["y"].GetValue<float>(), GoalWx = cell.Item1, GoalWy = cell.Item2,
-            CurH = plan.CurH, Altered = 1, CostFrames = frames.Count, ExecFrames = frames };
+            CurH = plan.CurH, Altered = 1, CostFrames = frames.Count, ExecFrames = frames, NativeVerified = true };
         replacement.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
             Frames = frames, LandPx = frames[^1].Px, LandPy = frames[^1].Py });
         return replacement;
@@ -203,6 +203,7 @@ internal static class LegacyNativePrediction
                 frames[i] = frame;
             }
             plan.StartPx = player.position.X; plan.StartPy = player.position.Y;
+            plan.NativeVerified = true;
             plan.Steps[0].LandPx = frames[^1].Px; plan.Steps[0].LandPy = frames[^1].Py;
             ready = plan;
             DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
