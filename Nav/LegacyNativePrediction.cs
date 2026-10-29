@@ -140,7 +140,8 @@ internal static class LegacyNativePrediction
         var controls = proposal["controls"].AsArray();
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
-        for (int i = 0; i < samples.Count; i++)
+        int frameCount = SettledPlacementLength(samples, controls, placeAt);
+        for (int i = 0; i < frameCount; i++)
         {
             int keys = controls[i].GetValue<int>();
             frames.Add(new PhysicsSimulator.ControlInput { Left = (keys & 1) != 0, Right = (keys & 2) != 0,
@@ -155,6 +156,23 @@ internal static class LegacyNativePrediction
         replacement.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
             Frames = frames, LandPx = frames[^1].Px, LandPy = frames[^1].Py });
         return replacement;
+    }
+
+    static int SettledPlacementLength(JsonArray samples, JsonArray controls, int placeAt)
+    {
+        int count = samples.Count;
+        while (count > placeAt + 2 && controls[count - 1].GetValue<int>() == 0
+            && controls[count - 2].GetValue<int>() == 0)
+        {
+            var last = samples[count - 1];
+            var previous = samples[count - 2];
+            if (last["vx"].GetValue<float>() != 0 || last["vy"].GetValue<float>() != 0
+                || previous["vx"].GetValue<float>() != 0 || previous["vy"].GetValue<float>() != 0
+                || last["x"].GetValue<float>() != previous["x"].GetValue<float>()
+                || last["y"].GetValue<float>() != previous["y"].GetValue<float>()) break;
+            count--;
+        }
+        return count;
     }
 
     internal static bool Poll(Player player, out StateSpacePlanner.SSResult ready)
