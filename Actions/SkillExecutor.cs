@@ -244,10 +244,16 @@ namespace TerraBlind
                 if (platformSlot < 0) { DiagLog.Write("[pillar] stop: no platform slot"); Stop(); return; }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
+                bool grounded = p.velocity.Y == 0f && VanillaTerrainPlan.HasSupport(p);
+                if (feetYNow <= _targetWy && grounded)
+                {
+                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
+                    Stop(); return;
+                }
                 // 只有脚踏实地时问"能不能起跳"才有意义:人在空中头顶本来就贴着方块,一算就说跳不起来,
                 // 于是一跳到半路把自己判死。平台其实已经放出去了
                 var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
-                bool onGround = p.velocity.Y == 0f;
+                bool onGround = grounded;
                 bool jumpBlocked = false;
                 if (onGround)
                 {
@@ -284,15 +290,6 @@ namespace TerraBlind
                 // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
                 // 放成功锚点上移,继续找下一格。不回放录制。录制写死一 cycle 2 格,地形一变就错。
                 _totalFrames++;
-                // 脚下真有东西才算到。只比行号会在起步那一帧就"到了"(脚下地面行本来就等于目标行),
-                // 调用方按身体行判又说没到,两边基准差一格 → start/done 空转
-                if (feetYNow <= _targetWy && p.velocity.Y == 0f
-                    && Predicates.IsGround(Pcx(p), feetYNow))
-                {
-                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
-                    Stop(); return;
-                }
-                bool grounded = p.velocity.Y == 0f;
                 if (grounded)
                 {
                     if (_airFrames > 0)   // 刚落地:这一跳到底升了没有

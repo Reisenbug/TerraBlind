@@ -883,6 +883,35 @@ public sealed class Driver : ModSystem
         }
         routeGoalX = 3384; routeGoalY = 242;
         snapshotAnchor = p.position; snapshotStationaryFrames = 119; CaptureStall(p);
+        var edgeSupport = Main.tile[3376, 920];
+        edgeSupport.ClearEverything(); edgeSupport.HasTile = true; edgeSupport.TileType = TileID.Platforms;
+        p.position = new Vector2(54022.67f, 14678); p.velocity = Vector2.Zero; p.controlJump = false;
+        if (Predicates.IsGround(3377, 920) || Collision.TileCollision(p.position, Vector2.UnitY, p.width, p.height).Y != 0)
+            throw new InvalidOperationException("pillar_edge_fixture_does_not_match_recorded_support");
+        SkillExecutor.StartPillarJump(true, 921, true, 3376);
+        SkillExecutor.ApplyControls();
+        if (SkillExecutor.IsActive || p.controlJump)
+            throw new InvalidOperationException("pillar_rejumped_after_supported_arrival");
+        Console.WriteLine("PILLAR_EDGE_COMPLETION_PASS");
+        var simulate = typeof(StateSpacePlanner).GetMethod("SimulateSegment",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        int recovered = 0;
+        using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 368), (3469, 364) }))
+        {
+            var start = new StateSpacePlanner.SSNode { Px = 55497.89f, Py = 5846, Vx = -1.8000009f, Grounded = true };
+            for (int hold = 4; hold <= 28; hold += 2)
+            {
+                object original = simulate.Invoke(null, new object[] { start, 1, hold, physics, null });
+                if (original is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> before
+                    || Math.Abs(before.Item1.Py - 5782) > .1f || brake.Invoke(null, new object[] { before.Item1, before.Item2, physics }) != null) continue;
+                object aimed = simulate.Invoke(null, new object[] { start, 1, hold, physics, 55502f });
+                if (aimed is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> after
+                    || Math.Abs(after.Item1.Py - 5782) > .1f || brake.Invoke(null, new object[] { after.Item1, after.Item2, physics }) == null) continue;
+                recovered++;
+                Console.WriteLine($"JUMP_PLACE_RECOVERED hold={hold} frames={after.Item2.Count} x={after.Item1.Px} y={after.Item1.Py}");
+            }
+        }
+        if (recovered == 0) throw new InvalidOperationException("air_braking_recovered_no_recorded_jump");
         Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
         enabled = false; FinishProcess(0);
     }

@@ -1342,6 +1342,16 @@ namespace TerraBlind
                     if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
                     using var preview = new PhysicsSimulator.PlatformPreview(new[] { (pcxTry, py) });
                     var braked = AppendBrake(trySeg.Value.node, trySeg.Value.frames, ph);
+                    if (!braked.HasValue && dir != 0)
+                    {
+                        var aimed = SimulateSegment(cur, dir, hold, ph, pcxTry * 16f + 8f - PhysicsSimulator.PlayerW / 2f);
+                        if (aimed.HasValue && aimed.Value.node.Grounded
+                            && (int)((aimed.Value.node.Py + PhysicsSimulator.PlayerH) / 16f) == py)
+                        {
+                            braked = AppendBrake(aimed.Value.node, aimed.Value.frames, ph);
+                            if (braked.HasValue) DiagLog.Trc($"[ss-jp-brake] restored platform=({pcxTry},{py}) frames={braked.Value.frames.Count}");
+                        }
+                    }
                     if (!braked.HasValue) { ctx.JpSlidOff++; continue; }
                     placeCx = pcxTry; placeCy = py; seg = braked; break;
                 }
@@ -1716,7 +1726,7 @@ namespace TerraBlind
         // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
         static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph)
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null)
         {
             var s = new PhysicsSimulator.State
             {
@@ -1728,9 +1738,19 @@ namespace TerraBlind
             float startPx = s.Px;
             for (int f = 0; f < MaxSegFrames; f++)
             {
+                int steer = dir;
+                if (landingPx.HasValue)
+                {
+                    float dx = landingPx.Value - s.Px;
+                    float speed = MathF.Abs(s.Vx);
+                    float stopDistance = speed * (speed / (2 * (ph.AccRun + ph.RunSlowdown)) + .5f);
+                    steer = MathF.Abs(dx) < 1f && speed <= ph.RunSlowdown ? 0
+                        : s.Vx * dx > 0 && MathF.Abs(dx) <= stopDistance + 1f ? -Math.Sign(s.Vx)
+                        : Math.Sign(dx);
+                }
                 var input = new PhysicsSimulator.ControlInput
                 {
-                    Right = dir > 0, Left = dir < 0, Jump = f < hold,
+                    Right = steer > 0, Left = steer < 0, Jump = f < hold,
                 };
                 float prevPx = s.Px;
                 s = PhysicsSimulator.Step(s, input, ph);
@@ -1741,8 +1761,11 @@ namespace TerraBlind
                 {
                     // 泰拉的跳跃碰地后不能立刻起跳,至少在地上待一帧,带着残余 vx 滑行。
                     // 规划器原先在触地帧就结束边,漏掉这一帧滑行 → 每条边的落点都比执行短 ~vx*1帧(~3px) → 接缝漂移累积。
-                    var settle = PhysicsSimulator.Step(s, input, ph);
-                    var sf = input; sf.Jump = false; sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
+                    var sf = landingPx.HasValue ? new PhysicsSimulator.ControlInput {
+                        Left = s.Vx > ph.AccRun, Right = s.Vx < -ph.AccRun } : input;
+                    sf.Jump = false;
+                    var settle = PhysicsSimulator.Step(s, sf, ph);
+                    sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
                     frames.Add(sf);
                     s = settle;
                     break;
@@ -2234,7 +2257,7 @@ namespace TerraBlind
                         TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
                 }
                 else
-                    SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
+                    SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy + 1, true, st.TargetCx);
             }
             else if (st.Dig)
             {
