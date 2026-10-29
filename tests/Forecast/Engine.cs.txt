@@ -383,7 +383,7 @@ public sealed class Engine : ModSystem
             {
                 int tx = blocker[0].GetValue<int>(), ty = blocker[1].GetValue<int>();
                 var tile = Main.tile[tx, ty];
-                bool stable = tile.TileType is TileID.Dirt or TileID.Stone or TileID.Mud or TileID.Ash;
+                bool stable = tile.TileType is TileID.Dirt or TileID.Stone or TileID.Mud or TileID.Ash or TileID.JungleGrass;
                 if (!stable || tile.IsHalfBlock || tile.Slope != 0) continue;
                 if (player.Hitbox.Intersects(new Rectangle(tx * 16, ty * 16, 16, 16))) continue;
                 if (footX - 4 + player.width / 2f > tx * 16 && footX + 4 - player.width / 2f < (tx + 1) * 16
