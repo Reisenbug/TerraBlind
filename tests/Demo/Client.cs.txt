@@ -912,8 +912,49 @@ public sealed class Driver : ModSystem
             }
         }
         if (recovered == 0) throw new InvalidOperationException("air_braking_recovered_no_recorded_jump");
+        EscapeResultAdmission(p);
         Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
         enabled = false; FinishProcess(0);
+    }
+
+    void EscapeResultAdmission(Player p)
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(TrapEscape);
+        var search = type.GetField("_search", flags);
+        var generation = type.GetField("_generation", flags);
+        var searchGeneration = type.GetField("_searchGeneration", flags);
+        var startVx = type.GetField("_startVx", flags);
+        foreach (string scenario in new[] { "moved", "velocity", "falling", "reset", "fresh" })
+        {
+            StateSpacePlanner.StopNav();
+            TrapEscape.Reset();
+            p.position = new Vector2(54022.67f, 14678); p.velocity = Vector2.Zero;
+            var cell = (3377, 919);
+            var frame = new PhysicsSimulator.ControlInput { Px = p.position.X, Py = p.position.Y };
+            var result = new StateSpacePlanner.SSResult { Found = true, StartPx = p.position.X,
+                StartPy = p.position.Y, GoalWx = cell.Item1, GoalWy = cell.Item2 };
+            result.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
+                Frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput> { frame } });
+            var completion = new System.Threading.Tasks.TaskCompletionSource<StateSpacePlanner.SSResult>();
+            search.SetValue(null, completion.Task);
+            searchGeneration.SetValue(null, generation.GetValue(null));
+            startVx.SetValue(null, 0f);
+            if (TrapEscape.Poll() || !TrapEscape.Busy) throw new InvalidOperationException("escape_did_not_wait_for_result");
+            if (scenario == "moved") p.position += new Vector2(-6.4f, -64f);
+            if (scenario == "velocity") p.velocity.X = 2f;
+            if (scenario == "falling") p.velocity.Y = 1f;
+            if (scenario == "reset") TrapEscape.Reset();
+            completion.SetResult(result);
+            bool accepted = TrapEscape.Poll();
+            if (accepted != (scenario == "fresh") || TrapEscape.Busy || StateSpacePlanner.StepsActive != accepted)
+                throw new InvalidOperationException($"escape_admission_failed:{scenario}");
+            if (result.Steps[0].Frames[0].Px != frame.Px || result.Steps[0].Frames[0].Py != frame.Py)
+                throw new InvalidOperationException("escape_translated_prediction");
+            Console.WriteLine($"ESCAPE_ADMISSION_PASS scenario={scenario} accepted={accepted}");
+        }
+        StateSpacePlanner.StopNav();
+        TrapEscape.Reset();
     }
 
     void BridgeRecovery()

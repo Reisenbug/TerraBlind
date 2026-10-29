@@ -190,6 +190,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            TrapEscape.Reset();
             LegacyNativePrediction.Reset();
             VanillaNavBridge.Reset();
             // 刹车没停稳就被外部叫停:别让 SettleAt 留在后台继续抢控制
