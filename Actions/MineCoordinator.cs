@@ -217,7 +217,6 @@ namespace TerraBlind
 				p.controlUseItem = p.controlLeft = p.controlRight = p.controlDown = false;
 				Finish("lava_risk", $"挖掘({tx},{ty})可能释放岩浆");
 				DiagLog.Write($"[mine] lava_risk at ({tx},{ty})");
-				if (RecedingNav.Active) { RecedingNav.LastStop = "lava_risk"; RecedingNav.Stop(); }
 				return;
 			}
 

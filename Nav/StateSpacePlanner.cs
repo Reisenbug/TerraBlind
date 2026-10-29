@@ -2199,6 +2199,15 @@ namespace TerraBlind
             if (_ssDispatched)
             {
                 if (busy) return;
+                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome == "lava_risk")
+                {
+                    var from = StandCell(p.position.X, p.position.Y);
+                    PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
+                    _execFailCode = "lava_risk";
+                    DiagLog.Write("[ss-steps] mining refused lava release; reselect route");
+                    StopSteps(); DiagLog.EndRun();
+                    return;
+                }
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
                 // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
                 if (_ssPrevStep != null && _ssPrevStep.Frames != null && _ssPrevStep.Frames.Count > 0)
