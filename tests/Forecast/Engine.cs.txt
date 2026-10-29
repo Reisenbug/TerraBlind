@@ -1884,6 +1884,8 @@ public sealed class Engine : ModSystem
         if (command == "replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
                 request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
+                detailed: request["detailed"]?.GetValue<bool>() ?? true,
+                stopOnDamage: request["stop_on_damage"]?.GetValue<bool>() == true,
                 captureEnd: request["capture_end"]?.GetValue<bool>() == true);
         if (command == "transit_contract")
         {

@@ -972,6 +972,20 @@ def main():
             if not all(result["source_unchanged"] and result["checkpoint_restored"] for result in (prediction, alternate, repeat)):
                 raise AssertionError(f"{name} fork mutated its source or failed to restore its checkpoint")
             compare(prediction["frames"], repeat["frames"])
+            if name in ("flat", "fall_damage"):
+                compact = worker.call("replay", snapshot=initial["snapshot"], controls=sequence,
+                                      detailed=False, stop_on_damage=True)
+                expected = prediction["frames"]
+                first_damage = next((i for i, frame in enumerate(expected)
+                                     if frame["hp"] < initial["initial"]["hp"]), None)
+                expected_count = len(expected) if first_damage is None else first_damage + 1
+                assert len(compact["frames"]) == expected_count
+                assert compact["outcome"] == ("complete" if first_damage is None else "damaged")
+                for predicted, reduced in zip(expected, compact["frames"]):
+                    assert "buff_types" not in reduced
+                    for key in ("x", "y", "vx", "vy", "hp", "dead"):
+                        assert predicted[key] == reduced[key], (name, key)
+                print("LEGACY_COMPACT_REPLAY_PASS", name, expected_count, flush=True)
             actual = worker.call("actual", controls=sequence)
             error = compare(prediction["frames"], actual["frames"])
             if name == "sandstorm_fall_recovery":

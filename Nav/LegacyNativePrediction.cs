@@ -14,6 +14,7 @@ internal static class LegacyNativePrediction
     static CancellationTokenSource cancellation;
     static StateSpacePlanner.SSResult plan;
     static JsonObject snapshot, anchor;
+    static long requestedAt;
 
     internal static void Reset()
     {
@@ -35,6 +36,7 @@ internal static class LegacyNativePrediction
             || frames.Any(frame => frame.Place)) return false;
         try
         {
+            requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             float minX = Math.Min(player.position.X, frames.Min(frame => frame.Px));
             float minY = Math.Min(player.position.Y, frames.Min(frame => frame.Py));
             float maxX = Math.Max(player.Right.X, frames.Max(frame => frame.Px) + player.width);
@@ -48,7 +50,7 @@ internal static class LegacyNativePrediction
             plan = candidate;
             cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             pending = VanillaNavigationDemo.Instance.Observe(new JsonObject {
-                ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
+                ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(), ["detailed"] = false, ["stop_on_damage"] = true,
                 ["controls"] = new JsonArray(frames.Select(frame => JsonValue.Create(
                     (frame.Left ? 1 : 0) | (frame.Right ? 2 : 0) | (frame.Jump ? 4 : 0) | (frame.Down ? 16 : 0))).ToArray())
             }, cancellation.Token);
@@ -80,7 +82,7 @@ internal static class LegacyNativePrediction
             var frames = plan.Steps[0].Frames;
             var last = samples.Count > 0 ? samples[^1] : null;
             bool valid = result["outcome"]?.GetValue<string>() == "complete" && samples.Count == frames.Count
-                && last["hp"].GetValue<int>() >= anchor["hp"].GetValue<int>()
+                && samples.All(frame => frame["hp"].GetValue<int>() >= anchor["hp"].GetValue<int>())
                 && !last["dead"].GetValue<bool>()
                 && Math.Abs(last["x"].GetValue<float>() - frames[^1].Px) <= 16
                 && Math.Abs(last["y"].GetValue<float>() - frames[^1].Py) <= 16;
@@ -101,7 +103,7 @@ internal static class LegacyNativePrediction
             plan.StartPx = player.position.X; plan.StartPy = player.position.Y;
             plan.Steps[0].LandPx = frames[^1].Px; plan.Steps[0].LandPy = frames[^1].Py;
             ready = plan;
-            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count}");
+            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
         }
         catch (Exception error)
         {
