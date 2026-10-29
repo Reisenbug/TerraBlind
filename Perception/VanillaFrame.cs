@@ -588,13 +588,10 @@ public static class VanillaFrame
                 if (!changedColumns[x]) continue;
                 for (int y = 0; y < tiles.Length / 10 / width; y++)
                 {
-                    var tile = Main.tile[x0 + x, y0 + y]; int offset = (y * width + x) * 10;
-                    if (TileMatches(tile, tiles, offset)) continue;
-                    if (CapturedTileChanges++ == 0) tiles = (int[])tiles.Clone();
-                    tiles[offset] = tile.HasTile ? 1 : 0; tiles[offset + 1] = tile.TileType; tiles[offset + 2] = tile.WallType;
-                    tiles[offset + 3] = tile.TileFrameX; tiles[offset + 4] = tile.TileFrameY; tiles[offset + 5] = (int)tile.Slope;
-                    tiles[offset + 6] = tile.IsHalfBlock ? 1 : 0; tiles[offset + 7] = tile.IsActuated ? 1 : 0;
-                    tiles[offset + 8] = tile.LiquidType; tiles[offset + 9] = tile.LiquidAmount;
+                    if (!ColumnCellMatches(tileTypes, template.tileTypes, x, y)
+                        || !ColumnCellMatches(wallTypes, template.wallTypes, x, y)
+                        || !ColumnCellMatches(tileStates, template.tileStates, x, y)
+                        || !ColumnCellMatches(liquids, template.liquids, x, y)) CapturedTileChanges++;
                 }
             }
             TilesMs = timer.Elapsed.TotalMilliseconds;
@@ -652,12 +649,9 @@ public static class VanillaFrame
 
         public WorkerState CaptureCurrent(Player player) => new(this, player);
 
-        static bool TileMatches(Tile tile, int[] values, int offset)
-            => tile.HasTile == (values[offset] != 0) && tile.TileType == values[offset + 1]
-                && tile.WallType == values[offset + 2] && tile.TileFrameX == values[offset + 3]
-                && tile.TileFrameY == values[offset + 4] && (int)tile.Slope == values[offset + 5]
-                && tile.IsHalfBlock == (values[offset + 6] != 0) && tile.IsActuated == (values[offset + 7] != 0)
-                && tile.LiquidType == values[offset + 8] && tile.LiquidAmount == values[offset + 9];
+        static bool ColumnCellMatches<T>(T[][] current, T[][] previous, int x, int y) where T : unmanaged
+            => ReferenceEquals(current[x], previous[x]) || System.Runtime.InteropServices.MemoryMarshal.AsBytes(current[x].AsSpan(y, 1))
+                .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(previous[x].AsSpan(y, 1)));
 
         static object CopyValue(object value)
         {
