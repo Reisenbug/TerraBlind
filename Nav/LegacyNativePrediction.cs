@@ -32,8 +32,12 @@ internal static class LegacyNativePrediction
             || player.itemTime > 0 || !player.releaseJump || candidate.Steps.Count != 1) return false;
         var step = candidate.Steps[0];
         var frames = step.Frames;
-        if (step.Dig || step.Pillar || step.Bridge || frames == null || frames.Count is < 1 or > 240
-            || frames.Any(frame => frame.Place)) return false;
+        if (step.Dig || step.Pillar || step.Bridge || frames == null || frames.Count is < 1 or > 240) return false;
+        var placements = frames.Where(frame => frame.Place).Select(frame => new Point(frame.PlaceCx, frame.PlaceCy)).Distinct().ToArray();
+        if (placements.Length > 1) return false;
+        if (placements.Length == 1 && frames[0].Place) return false;
+        int placeSlot = placements.Length == 0 ? -1 : NavCoordinator.FindPlatformSlot(player);
+        if (placements.Length > 0 && placeSlot < 0) return false;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -49,12 +53,21 @@ internal static class LegacyNativePrediction
             anchor = VanillaPrediction.Observe(player, false);
             plan = candidate;
             cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            pending = VanillaNavigationDemo.Instance.Observe(new JsonObject {
+            var request = new JsonObject {
                 ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(), ["detailed"] = false, ["stop_on_damage"] = true,
                 ["controls"] = new JsonArray(frames.Select(frame => JsonValue.Create(
                     (frame.Left ? 1 : 0) | (frame.Right ? 2 : 0) | (frame.Jump ? 4 : 0) | (frame.Down ? 16 : 0))).ToArray())
-            }, cancellation.Token);
-            DiagLog.Write($"[legacy-native-start] frames={frames.Count} target=({candidate.GoalWx},{candidate.GoalWy})");
+            };
+            if (placements.Length == 1)
+            {
+                request["command"] = "placement_sequence";
+                request["native_use"] = true; request["legacy_use"] = true;
+                request["place_after"] = frames.FindIndex(frame => frame.Place);
+                request["place_slot"] = placeSlot;
+                request["tile_x"] = placements[0].X; request["tile_y"] = placements[0].Y;
+            }
+            pending = VanillaNavigationDemo.Instance.Observe(request, cancellation.Token);
+            DiagLog.Write($"[legacy-native-start] frames={frames.Count} placement={placements.Length == 1} target=({candidate.GoalWx},{candidate.GoalWy})");
             return true;
         }
         catch (Exception error)
@@ -81,7 +94,9 @@ internal static class LegacyNativePrediction
             var samples = result["frames"].AsArray();
             var frames = plan.Steps[0].Frames;
             var last = samples.Count > 0 ? samples[^1] : null;
-            bool valid = result["outcome"]?.GetValue<string>() == "complete" && samples.Count == frames.Count
+            string outcome = (result["outcome"] ?? result["status"])?.GetValue<string>();
+            bool valid = outcome == "complete" && samples.Count == frames.Count
+                && (result["placed"] == null || result["placed"].GetValue<bool>() && result["supported"].GetValue<bool>())
                 && samples.All(frame => frame["hp"].GetValue<int>() >= anchor["hp"].GetValue<int>())
                 && !last["dead"].GetValue<bool>()
                 && Math.Abs(last["x"].GetValue<float>() - frames[^1].Px) <= 16
@@ -90,7 +105,7 @@ internal static class LegacyNativePrediction
             {
                 var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
                 StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
-                DiagLog.Write("[legacy-native-rejected] outcome=" + result["outcome"]);
+                DiagLog.Write("[legacy-native-rejected] outcome=" + outcome);
                 return true;
             }
             for (int i = 0; i < frames.Count; i++)

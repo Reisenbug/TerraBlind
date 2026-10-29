@@ -726,6 +726,13 @@ def main():
             assert replay["status"] == "complete" and replay["placed"] and replay["supported"], replay["status"]
             assert all(not frame["dead"] and frame["hp"] >= end["hp"] for frame in replay["frames"])
             assert abs(replay["frames"][-1]["y"] + 42 - plan["tile_y"] * 16) < .1
+            platform_slot = next(i for i, item in enumerate(snapshot["inventory"]) if item[0] == 94 and item[2] > 0)
+            legacy = worker.call("placement_sequence", snapshot=snapshot, native_use=True, legacy_use=True,
+                                 place_slot=platform_slot, tile_x=plan["tile_x"], tile_y=plan["tile_y"],
+                                 place_after=plan["place_after"], controls=plan["controls"])
+            assert legacy["status"] == "complete" and legacy["placed"] and legacy["supported"], legacy
+            assert legacy["consumed"] == 1, legacy["consumed"]
+            print("LEGACY_NATIVE_PLACEMENT_PASS", legacy["elapsed_ms"], flush=True)
             report = dict(baseline_status=old["status"], baseline_rise=old.get("rise", 0), rise=plan["rise"],
                           tile=[plan["tile_x"], plan["tile_y"]],
                           elapsed_ms=plan["terrain_timing"]["total_ms"], plan=plan, replay=replay)

@@ -1224,14 +1224,20 @@ public sealed class Engine : ModSystem
                 var trace = new JsonArray();
                 bool placed = false;
                 bool nativeUse = request["native_use"]?.GetValue<bool>() == true;
-                int slot = Array.FindIndex(player.inventory, item => !item.IsAir && item.createTile == TileID.Platforms);
-                if (nativeUse && slot < 0) throw new InvalidOperationException("missing_platform_item");
+                bool legacyUse = request["legacy_use"]?.GetValue<bool>() == true;
+                int slot = request["place_slot"]?.GetValue<int>()
+                    ?? Array.FindIndex(player.inventory, item => !item.IsAir && item.createTile == TileID.Platforms);
+                if (nativeUse && (slot < 0 || slot >= player.inventory.Length || player.inventory[slot].createTile != TileID.Platforms))
+                    throw new InvalidOperationException("missing_platform_item");
                 int stock = slot >= 0 ? player.inventory[slot].stack : 0;
                 string status = "complete";
                 for (int frame = 0; frame < sequence.Count; frame++)
                 {
+                    if (legacyUse && frame >= placeAt && !placed
+                        && (LavaSafety.IsLava(x, y) || player.Bottom.Y > y * 16 + 4))
+                    { status = "placement_missed"; break; }
                     VanillaPrediction.Advance(player, (VanillaKeys)sequence[frame].GetValue<int>(),
-                        nativeUse && frame >= placeAt && !placed ? slot : -1, new Point(x, y));
+                        nativeUse && frame >= placeAt && !placed && (!legacyUse || player.itemTime == 0) ? slot : -1, new Point(x, y));
                     if (nativeUse) placed |= Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms;
                     if (!nativeUse && frame == placeAt)
                     {
@@ -1248,7 +1254,7 @@ public sealed class Engine : ModSystem
                 }
                 return new JsonObject { ["status"] = status, ["placed"] = placed, ["frames"] = trace,
                     ["consumed"] = slot >= 0 ? stock - player.inventory[slot].stack : 0,
-                    ["supported"] = VanillaContactRegion.Supported(player.position, player.width, player.height),
+                    ["supported"] = VanillaTerrainPlan.HasSupport(player),
                     ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
                     ["scope"] = nativeUse ? "native Player.Update item use; isolated engine"
                         : "geometry probe using WorldGen placement; item reach and use timing are not validated" };
