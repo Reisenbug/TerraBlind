@@ -1791,7 +1791,7 @@ namespace TerraBlind
             }
             if (frames.Count == 0) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 一帧都没有"); return null; }
             // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
-            if (FallHitsLava(frames))
+            if (FallHitsLava(frames, ph))
             {
                 SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
                 return null;
@@ -1849,7 +1849,7 @@ namespace TerraBlind
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
             // 掉进岩浆这把就完了,得重开。所以这条边【不发】。物理 Step 把岩浆当空气,
             // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
-            if (FallHitsLava(frames)) return null;
+            if (FallHitsLava(frames, ph)) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
             // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
@@ -1859,15 +1859,30 @@ namespace TerraBlind
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
 
-        static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames)
+        static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
-            foreach (var f in frames)
+            bool Touches(float px, float py)
             {
-                int x0 = (int)(f.Px / 16f), x1 = (int)((f.Px + PhysicsSimulator.PlayerW - 1) / 16f);
-                int y0 = (int)(f.Py / 16f), y1 = (int)((f.Py + PhysicsSimulator.PlayerH - 1) / 16f);
+                int x0 = (int)(px / 16f), x1 = (int)((px + PhysicsSimulator.PlayerW - 1) / 16f);
+                int y0 = (int)(py / 16f), y1 = (int)((py + PhysicsSimulator.PlayerH - 1) / 16f);
                 for (int x = x0; x <= x1; x++)
                     for (int y = y0; y <= y1; y++)
                         if (Predicates.IsLava(x, y)) return true;
+                return false;
+            }
+            foreach (var f in frames) if (Touches(f.Px, f.Py)) return true;
+            if (frames.Count == 0 || frames[^1].Vy != 0f) return false;
+            var last = frames[^1];
+            var coast = new PhysicsSimulator.State { Px = last.Px, Py = last.Py,
+                Vx = last.Vx, Vy = last.Vy, Grounded = true };
+            for (int i = 0; i < 60 && (coast.Vx != 0f || coast.Vy != 0f); i++)
+            {
+                coast = PhysicsSimulator.Step(coast, default, ph);
+                if (Touches(coast.Px, coast.Py))
+                {
+                    SegLog($"[ss-lava-coast] end=({last.Px:0.#},{last.Py:0.#}) vx={last.Vx:0.##} hit_after={i + 1}");
+                    return true;
+                }
             }
             return false;
         }
