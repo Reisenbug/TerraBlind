@@ -62,6 +62,8 @@ def main():
                "-tmlsavedirectory", str(root), "-vnavdescentcheck" if descent else "-vnavdemocheck"]
     if show:
         command.append("-vnavshow")
+    if "--trace" in sys.argv:
+        command.append("-vnavtrace")
     if "--keep-open" in sys.argv:
         command.append("-vnavkeepopen")
     if manual:

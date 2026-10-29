@@ -174,6 +174,14 @@ internal static class LegacyNativePrediction
             if (searchingPlacement)
             {
                 var replacement = PlacementResult(result);
+                if (replacement != null && DiagLog.Trace)
+                {
+                    string directory = System.IO.Path.Combine(Main.SavePath, "NavSnapshots");
+                    System.IO.Directory.CreateDirectory(directory);
+                    System.IO.File.WriteAllText(System.IO.Path.Combine(directory, $"native-placement-{Main.GameUpdateCount}.json"),
+                        new JsonObject { ["snapshot"] = snapshot.DeepClone(), ["result"] = result.DeepClone(),
+                            ["goal_x"] = fieldGoalX, ["goal_y"] = fieldGoalY }.ToJsonString());
+                }
                 ready = replacement ?? plan;
                 DiagLog.Write($"[legacy-native-pillar-result] replaced={replacement != null} status={result["status"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
                 return true;

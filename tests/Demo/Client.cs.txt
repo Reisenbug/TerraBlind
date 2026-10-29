@@ -695,6 +695,7 @@ public sealed class Driver : ModSystem
     public override void PostUpdateEverything()
     {
         if (!enabled || Main.gameMenu) return;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavtrace")) DiagLog.Trace = true;
         try
         {
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpreviewcheck")) { PreviewIsolation(); return; }
