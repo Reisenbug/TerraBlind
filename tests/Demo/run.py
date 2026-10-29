@@ -13,6 +13,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
+    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe"))
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
@@ -103,6 +104,8 @@ def main():
         command.append("-vnavpreviewcheck")
     if "--bridge-recovery" in sys.argv:
         command.append("-vnavbridgerecoverycheck")
+    if "--pillar-probe" in sys.argv:
+        command.append("-vnavpillarprobe")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
@@ -117,7 +120,7 @@ def main():
                 keep = True
                 print("MANUAL_WINDOW_READY pid=", process.pid, flush=True)
                 return
-            if ("VNAV_DEMO_COMPLETE" if "--preview-isolation" in sys.argv or "--bridge-recovery" in sys.argv else "VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
+            if ("VNAV_DEMO_COMPLETE" if focused else "VNAV_WORKER_COMPLETE" if worker_check else "VNAV_CONTINUITY_COMPLETE" if continuity else "VNAV_DESCENT_COMPLETE" if descent else "VNAV_DEMO_COMPLETE") in output:
                 break
             if "VNAV_DEMO_FAILED" in output or process.poll() is not None:
                 raise RuntimeError(f"Demo failed (exit={process.poll()}); inspect {root / 'demo-client.log'}")
@@ -134,6 +137,10 @@ def main():
         if "--bridge-recovery" in sys.argv:
             assert "BRIDGE_RECOVERY_PASS cases=6" in output
             print("BRIDGE_RECOVERY_CHECK_COMPLETE", flush=True)
+            return
+        if "--pillar-probe" in sys.argv:
+            assert "PILLAR_PROBE_RESULT" in output
+            print("PILLAR_PROBE_COMPLETE", flush=True)
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())

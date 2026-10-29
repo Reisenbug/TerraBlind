@@ -140,6 +140,9 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return false;
             if (FindPlatformSlot(p) < 0) return false;
+            int firstPlatformRow = SupportRow(feetCx, feetCy + 1) - 1;
+            while (firstPlatformRow > 0 && Main.tile[feetCx, firstPlatformRow].HasTile) firstPlatformRow--;
+            if (!PlatAnchor(feetCx, firstPlatformRow)) return false;
 
             // player box left/right columns when standing centered on feetCx
             float px = feetCx * 16f + 8f - p.width / 2f;
@@ -313,6 +316,12 @@ namespace TerraBlind
                     bool pinnedOk = _pinnedCol != int.MinValue && Predicates.IsSolid(_pinnedCol, SupportRow(_pinnedCol, feetYNow));
                     _pillarCol = pinnedOk ? _pinnedCol : FootedCol(p, feetYNow);
                     _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
+                    while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
+                    if (!PlatAnchor(_pillarCol, _anchorWy))
+                    {
+                        DiagLog.Write($"[pillar] stop: no anchor at ({_pillarCol},{_anchorWy})");
+                        Stop(); return;
+                    }
                     _jumpFramesLeft = JumpHoldFrames;
                     _lastAirVeto = "";
                     _jumps++;
@@ -327,6 +336,12 @@ namespace TerraBlind
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
                 bool canPlace = _anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy);
+                string veto = canPlace ? "OK" : _placeVeto;
+                if (PillarTrace && veto != _lastAirVeto)
+                {
+                    DiagLog.Write($"[pillar-placement] veto={veto} anchor=({_pillarCol},{_anchorWy}) pos=({p.position.X:0.##},{p.position.Y:0.##}) vy={p.velocity.Y:0.##} itemTime={p.itemTime}");
+                    _lastAirVeto = veto;
+                }
                 if (PillarTrace)
                 {
                     int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);

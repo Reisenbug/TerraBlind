@@ -652,6 +652,7 @@ public sealed class Driver : ModSystem
         {
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpreviewcheck")) { PreviewIsolation(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbridgerecoverycheck")) { BridgeRecovery(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -734,6 +735,31 @@ public sealed class Driver : ModSystem
             FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    void PillarProbe()
+    {
+        var p = Main.LocalPlayer;
+        if (!prepared)
+        {
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+            p.position = new Vector2(54223.8f, 16262); p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16);
+            for (int row = 1017; row <= 1019; row++)
+            {
+                var tile = Main.tile[3388, row];
+                Console.WriteLine($"PILLAR_PROBE_TILE x=3388 y={row} has={tile.HasTile} type={tile.TileType} cut={Main.tileCut[tile.TileType]} solid={Main.tileSolid[tile.TileType]} wall={tile.WallType}");
+            }
+            prepared = true; warmup = 8; ticks = 0; return;
+        }
+        if (warmup-- > 0) return;
+        if (!started) { SkillExecutor.StartPillarJump(false, 1004, true, 3388); started = true; return; }
+        if (SkillExecutor.IsActive && ++ticks < 600) return;
+        if (SkillExecutor.IsActive || ticks > 2 || p.inventory[2].stack != 999)
+            throw new InvalidOperationException("unanchored_pillar_not_rejected_before_jump");
+        Console.WriteLine($"VNAV_DEMO_COMPLETE PILLAR_PROBE_RESULT frames={ticks} remaining={p.inventory[2].stack} x={p.position.X} y={p.position.Y}");
+        SkillExecutor.Stop(); enabled = false; FinishProcess(0);
     }
 
     void BridgeRecovery()
