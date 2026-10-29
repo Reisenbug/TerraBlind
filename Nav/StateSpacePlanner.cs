@@ -1244,7 +1244,6 @@ namespace TerraBlind
         // temporary bisection switches: flip one off, rebuild, see which filter was killing valid plans
         const bool F_Gate = true;        // anyProgress gating of placement
         const bool F_Dominance = true;   // velocity dominance pruning
-        const bool F_Brake = false;      // reject jump-place when brake can't settle
         const bool F_LandOnPlat = false; // true killed ~all jump-place (fellThrough) → pillar overuse; 6/2 working ver had no such check
         const bool F_DescentOnly = true; // place only during descent (vy>0)
         const bool F_Trend = true;       // two-phase up-then-left heuristic bias
@@ -1341,7 +1340,10 @@ namespace TerraBlind
                     if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
                     int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
                     if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
-                    placeCx = pcxTry; placeCy = py; seg = trySeg; break;
+                    using var preview = new PhysicsSimulator.PlatformPreview(new[] { (pcxTry, py) });
+                    var braked = AppendBrake(trySeg.Value.node, trySeg.Value.frames, ph);
+                    if (!braked.HasValue) { ctx.JpSlidOff++; continue; }
+                    placeCx = pcxTry; placeCy = py; seg = braked; break;
                 }
                 if (placeCx != int.MinValue) break;
             }
@@ -1357,15 +1359,6 @@ namespace TerraBlind
             }
             if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
 
-            // 落在一格宽的平台上带着残余 vx 下一帧就滑下去了。追加一段反向按键刹车,落点节点取真正停稳的位置。
-            // 只有滑到脱离地面(掉下去)才判这条边无效。
-            if (F_Brake)
-            {
-                var braked = AppendBrake(seg.Value.node, seg.Value.frames, ph);
-                if (braked == null) { ctx.JpSlidOff++; return null; }
-                ctx.JpOk++;
-                return braked.Value;
-            }
             ctx.JpOk++;
             return seg.Value;
         }
@@ -1394,6 +1387,9 @@ namespace TerraBlind
                 if (!CanPlaceReal(fcx, fcy)) continue;
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
+                using var preview = new PhysicsSimulator.PlatformPreview(new[] { (fcx, fcy) });
+                seg = AppendBrake(seg.Value.node, seg.Value.frames, ph);
+                if (!seg.HasValue) { ctx.JpSlidOff++; continue; }
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                 // 【必须真的落在那块平台上】。JumpPlace 早就有这条,横穿版漏了
                 // 平台是 solidTop 只有顶面接人,人从它旁边穿过去继续往下掉,照样 Grounded、H 照样更低,
@@ -1413,7 +1409,6 @@ namespace TerraBlind
             return null;
         }
 
-        const float BrakeVxEps = 0.3f;   // |Vx| below this counts as settled
         const int   BrakeMaxFrames = 30;
 
         // 落在窄平台上带残速要反压刹车。落点节点取【实际】停稳的位置。墙或平台边缘挡住滑动也是合法站位,
@@ -1422,14 +1417,16 @@ namespace TerraBlind
             SSNode land, List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = land.Px, Py = land.Py, Vx = land.Vx, Vy = land.Vy, Grounded = true };
-            for (int k = 0; k < BrakeMaxFrames && MathF.Abs(s.Vx) > BrakeVxEps; k++)
+            for (int k = 0; k < BrakeMaxFrames && s.Vx != 0f; k++)
             {
-                var input = new PhysicsSimulator.ControlInput { Left = s.Vx > 0f, Right = s.Vx < 0f };
+                var input = new PhysicsSimulator.ControlInput {
+                    Left = s.Vx > ph.AccRun, Right = s.Vx < -ph.AccRun };
                 s = PhysicsSimulator.Step(s, input, ph);
-                input.Px = s.Px; input.Py = s.Py;
+                input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
                 frames.Add(input);
                 if (!s.Grounded) return null; // slid off and started falling, not a valid stand
             }
+            if (s.Vx != 0f) return null;
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
         }

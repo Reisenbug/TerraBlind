@@ -865,6 +865,21 @@ public sealed class Driver : ModSystem
         if (accepted) throw new InvalidOperationException("blocked_actual_pillar_start_accepted");
         if (!SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
             throw new InvalidOperationException("clear_pillar_start_rejected");
+        var brake = typeof(StateSpacePlanner).GetMethod("AppendBrake",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 364) }))
+        {
+            foreach (var test in new[] { (55519.973f, 2.0399995f, false), (55504f, .5f, true), (55504f, 0f, true) })
+            {
+                var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
+                var node = new StateSpacePlanner.SSNode { Px = test.Item1, Py = 5782, Vx = test.Item2, Grounded = true };
+                object result = brake.Invoke(null, new object[] { node, frames, physics });
+                Console.WriteLine($"PLATFORM_BRAKE x={test.Item1} vx={test.Item2} accepted={result != null} frames={frames.Count}");
+                if ((result != null) != test.Item3) throw new InvalidOperationException("platform_brake_admission_mismatch");
+                if (result != null && frames.Count > 0 && frames[^1].Vx != 0f)
+                    throw new InvalidOperationException("platform_brake_left_residual_velocity");
+            }
+        }
         routeGoalX = 3384; routeGoalY = 242;
         snapshotAnchor = p.position; snapshotStationaryFrames = 119; CaptureStall(p);
         Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
