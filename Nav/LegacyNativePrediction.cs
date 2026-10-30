@@ -120,6 +120,14 @@ internal static class LegacyNativePrediction
             ["tile_type"] = Terraria.ID.TileID.Platforms, ["route_direction"] = direction,
             ["allow_natural_landing"] = extraJump, ["allow_placement"] = slot >= 0 }, token);
         if (proposal["status"]?.GetValue<string>() != "planned") return proposal;
+        if (proposal["native_frames"] is JsonArray nativeFrames)
+        {
+            var result = new JsonObject { ["status"] = "complete", ["placed"] = true, ["supported"] = true,
+                ["frames"] = nativeFrames.DeepClone(), ["consumed"] = proposal["consumed"].DeepClone() };
+            proposal.Remove("native_frames");
+            result["proposal"] = proposal;
+            return result;
+        }
         if (proposal["jump_place"]?.GetValue<bool>() == false)
         {
             var movement = await forecast.Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = state,
@@ -150,26 +158,29 @@ internal static class LegacyNativePrediction
         if (field == null || !field.TryGetValue(cell, out int cost) || cost >= plan.CurH) return null;
         var proposal = result["proposal"];
         int placeAt = placement ? proposal["place_after"].GetValue<int>() : -1;
+        var placements = proposal["placements"] as JsonArray;
         var controls = proposal["controls"].AsArray();
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
-        int frameCount = SettledPlacementLength(samples, controls, placeAt);
+        int frameCount = SettledPlacementLength(samples, controls, placements?[^1]["frame"].GetValue<int>() ?? placeAt);
         if (!plan.Steps[0].Pillar && field.TryGetValue((plan.GoalWx, plan.GoalWy), out int previousCost)
             && (plan.CurH - cost) / (float)frameCount
                 <= (plan.CurH - previousCost) / Math.Max(1f, plan.CostFrames)) return null;
         for (int i = 0; i < frameCount; i++)
         {
             int keys = controls[i].GetValue<int>();
+            var placed = placements?.FirstOrDefault(item => item["frame"].GetValue<int>() == i);
             frames.Add(new PhysicsSimulator.ControlInput { Left = (keys & 1) != 0, Right = (keys & 2) != 0,
                 Jump = (keys & 4) != 0, Down = (keys & 16) != 0,
                 Px = samples[i]["x"].GetValue<float>(), Py = samples[i]["y"].GetValue<float>(),
                 Vx = samples[i]["vx"].GetValue<float>(), Vy = samples[i]["vy"].GetValue<float>(),
-                Place = i == placeAt, PlaceCx = placement ? proposal["tile_x"].GetValue<int>() : 0,
-                PlaceCy = placement ? proposal["tile_y"].GetValue<int>() : 0 });
+                Place = placements != null ? placed != null : i == placeAt,
+                PlaceCx = placed?["x"].GetValue<int>() ?? (placement ? proposal["tile_x"].GetValue<int>() : 0),
+                PlaceCy = placed?["y"].GetValue<int>() ?? (placement ? proposal["tile_y"].GetValue<int>() : 0) });
         }
         var replacement = new StateSpacePlanner.SSResult { Found = true, StartPx = anchor["x"].GetValue<float>(),
             StartPy = anchor["y"].GetValue<float>(), GoalWx = cell.Item1, GoalWy = cell.Item2,
-            CurH = plan.CurH, Altered = placement ? 1 : 0, CostFrames = frames.Count, ExecFrames = frames, NativeVerified = true };
+            CurH = plan.CurH, Altered = placements?.Count ?? (placement ? 1 : 0), CostFrames = frames.Count, ExecFrames = frames, NativeVerified = true };
         replacement.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
             Frames = frames, LandPx = frames[^1].Px, LandPy = frames[^1].Py });
         return replacement;

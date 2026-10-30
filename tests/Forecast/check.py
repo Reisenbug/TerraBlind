@@ -177,6 +177,7 @@ def main():
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--extra-jump-placement-probe", type=Path)
     parser.add_argument("--natural-jump-probe", type=Path)
+    parser.add_argument("--platform-chain-probe", type=Path)
     parser.add_argument("--extra-jump-position", type=float, nargs=2)
     parser.add_argument("--extra-jump-support", type=int, nargs=2)
     parser.add_argument("--navigation", action="store_true")
@@ -273,6 +274,21 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.platform_chain_probe:
+            snapshot = json.loads(args.platform_chain_probe.read_text())["snapshot"]
+            settled = worker.call("replay", snapshot=snapshot, controls=[0] * 30, capture_end=True)
+            snapshot = settled["end_snapshot"]
+            end = settled["frames"][-1]
+            proposal = worker.call("terrain_plan", snapshot=snapshot, jump_place=True, search_jump_place=True,
+                tile_x=int((end["x"] + 10) // 16), tile_y=int((end["y"] + 42) // 16) - 1, tile_type=19)
+            (args.root / "platform-chain.json").write_text(json.dumps(dict(snapshot=snapshot, proposal=proposal)))
+            assert proposal["status"] == "planned", proposal
+            assert len(proposal.get("placements", [])) >= 2, proposal
+            assert proposal["consumed"] == len(proposal["placements"]), proposal
+            assert all(not frame["dead"] and frame["hp"] == end["hp"] for frame in proposal["native_frames"])
+            print("PLATFORM_CHAIN_PASS", dict(rise=proposal["rise"], placements=proposal["placements"],
+                consumed=proposal["consumed"], planning_ms=proposal["terrain_timing"]["total_ms"]), flush=True)
+            return
         if args.natural_jump_probe:
             captured = json.loads(args.natural_jump_probe.read_text())
             original = captured.get("request", captured)["snapshot"]

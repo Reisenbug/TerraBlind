@@ -126,8 +126,49 @@ public static class VanillaTerrainPlan
                 break;
             }
         }
+        if (request["allow_placement"]?.GetValue<bool>() != false)
+            foreach (int schedule in schedules)
+            {
+                var chain = JumpPlacementChain(state, schedule);
+                if (chain != null && (best == null || chain["rise"].GetValue<float>() > best["rise"].GetValue<float>()))
+                    best = chain;
+            }
         return best ?? (request["allow_placement"]?.GetValue<bool>() == false
             ? new JsonObject { ["status"] = "no_natural_landing" } : JumpPlacement(request));
+    }
+
+    static JsonObject JumpPlacementChain(JsonObject state, int schedule)
+    {
+        var player = VanillaFrame.RestoreInWorker(state);
+        int slot = Array.FindIndex(player.inventory, item => !item.IsAir && item.createTile == Terraria.ID.TileID.Platforms);
+        if (slot < 0) return null;
+        int x = (int)(player.Center.X / 16), y = (int)(player.Bottom.Y / 16) - 1;
+        int hp = player.statLife, stock = player.inventory[slot].stack;
+        float startY = player.position.Y;
+        var controls = new JsonArray();
+        var frames = new JsonArray();
+        var placements = new JsonArray();
+        for (int frame = 0; frame < 180; frame++)
+        {
+            int keys = schedule > 0 ? (frame < schedule ? 4 : 0) : (frame < 90 && frame != -schedule ? 4 : 0);
+            bool use = player.itemTime == 0 && player.Bottom.Y <= y * 16
+                && !Main.tile[x, y].HasTile && !LavaSafety.IsLava(x, y) && HasPlatformAnchor(x, y);
+            VanillaPrediction.Advance(player, (VanillaKeys)keys, use ? slot : -1, new Point(x, y));
+            controls.Add(keys);
+            frames.Add(VanillaPrediction.Observe(player, false));
+            if (player.dead || player.statLife < hp) return null;
+            if (use && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == Terraria.ID.TileID.Platforms)
+            {
+                placements.Add(new JsonObject { ["frame"] = frame, ["x"] = x, ["y"] = y });
+                y--;
+            }
+        }
+        if (placements.Count < 2 || player.velocity != Vector2.Zero || !HasSupport(player)
+            || Math.Abs(player.Bottom.Y - (y + 1) * 16) > 0.1f || player.position.Y >= startY) return null;
+        return new JsonObject { ["status"] = "planned", ["jump_place"] = true,
+            ["rise"] = startY - player.position.Y, ["controls"] = controls, ["placements"] = placements,
+            ["tile_x"] = x, ["tile_y"] = y + 1, ["place_after"] = placements[0]["frame"].GetValue<int>(),
+            ["native_frames"] = frames, ["consumed"] = stock - player.inventory[slot].stack };
     }
 
     static JsonObject JumpPlacement(JsonObject request, int[] controls = null)
