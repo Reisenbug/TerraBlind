@@ -339,6 +339,8 @@ public sealed class Driver : ModSystem
     bool enabled, opened, prepared, started, shot, regionShot;
     int trial, ticks, warmup;
     int menuTicks;
+    StateSpacePlanner.SSResult nudgeReplay;
+    int nudgeReplayTicks;
     readonly Caller caller = new();
     readonly JsonArray results = new();
     JsonArray trace = new();
@@ -839,6 +841,21 @@ public sealed class Driver : ModSystem
     void SlopeStall()
     {
         var p = Main.LocalPlayer;
+        if (nudgeReplay != null)
+        {
+            nudgeReplayTicks++;
+            if (StateSpacePlanner.ExecRunning && nudgeReplayTicks < 180) return;
+            var last = nudgeReplay.ExecFrames[^1];
+            var placement = nudgeReplay.ExecFrames.First(frame => frame.Place);
+            bool placed = Main.tile[placement.PlaceCx, placement.PlaceCy].HasTile
+                && Main.tile[placement.PlaceCx, placement.PlaceCy].TileType == TileID.Platforms;
+            Console.WriteLine($"NUDGE_JUMP_PLACE_REPLAY ticks={nudgeReplayTicks} placed={placed} actual=({p.position.X},{p.position.Y}) expected=({last.Px},{last.Py}) active={StateSpacePlanner.ExecRunning} dead={p.dead} hp={p.statLife} paused={Main.gamePaused} focus={Main.hasFocus} gameTick={Main.GameUpdateCount}");
+            if (!placed || StateSpacePlanner.ExecRunning || Math.Abs(p.position.Y - last.Py) > 1f
+                || Math.Abs(p.position.X - last.Px) > 2f || p.velocity.Y != 0f)
+                throw new InvalidOperationException("recorded_nudge_jump_place_replay_failed");
+            Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
+            enabled = false; FinishProcess(0); return;
+        }
         foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
         p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
         p.position = new Vector2(55514, 5686); p.velocity = Vector2.Zero;
@@ -914,8 +931,6 @@ public sealed class Driver : ModSystem
         if (recovered == 0) throw new InvalidOperationException("air_braking_recovered_no_recorded_jump");
         EscapeResultAdmission(p);
         RecordedJumpPlace(p);
-        Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
-        enabled = false; FinishProcess(0);
     }
 
     void RecordedJumpPlace(Player p)
@@ -950,6 +965,34 @@ public sealed class Driver : ModSystem
             }
         }
         Console.WriteLine($"RECORDED_JUMP_PLACE_TOTAL accepted={accepted}");
+        var nudge = planner.GetMethod("NudgeJumpPlace", flags);
+        var originalStart = new StateSpacePlanner.SSNode { Px = p.position.X, Py = p.position.Y, Grounded = true };
+        var recovered = nudge.Invoke(null, new object[] { ctx, originalStart, -1, 12, physics, (int)TileID.Platforms });
+        if (recovered is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> combined
+            || originalStart.Py - combined.Item1.Py < 48f || combined.Item2[0].Jump
+            || !combined.Item2.Exists(frame => frame.Jump) || !combined.Item2.Exists(frame => frame.Place))
+            throw new InvalidOperationException("recorded_nudge_jump_place_not_recovered");
+        Console.WriteLine($"NUDGE_JUMP_PLACE_PASS frames={combined.Item2.Count} rise={originalStart.Py - combined.Item1.Py}");
+        ctx.DistField = new System.Collections.Generic.Dictionary<(int, int), int> {
+            [(3321, 739)] = 19003, [(3321, 735)] = 18886 };
+        var candidates = (System.Collections.Generic.IEnumerable<(StateSpacePlanner.SSNode node,
+            System.Collections.Generic.List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar,
+            System.Collections.Generic.List<(int, int)> dig)>)planner.GetMethod("OnDemandPlatformEdges", flags)
+                .Invoke(null, new object[] { ctx, originalStart, physics, (int)TileID.Platforms, 0, false, false, 243 * 16f });
+        var edges = candidates.ToArray();
+        if (edges.Any(edge => edge.pillar) || !edges.Any(edge => edge.frames?.Exists(frame => frame.Place) == true
+            && originalStart.Py - edge.node.Py >= 48f))
+            throw new InvalidOperationException("recorded_jump_place_did_not_replace_pillar_fallback");
+        Console.WriteLine($"NUDGE_CANDIDATES_PASS count={edges.Length} pillars={edges.Count(edge => edge.pillar)}");
+        var last = combined.Item2[^1];
+        int targetX = (int)((last.Px + p.width / 2f) / 16f), targetY = (int)((last.Py + p.height) / 16f) - 1;
+        nudgeReplay = new StateSpacePlanner.SSResult { Found = true, StartPx = p.position.X, StartPy = p.position.Y,
+            GoalWx = targetX, GoalWy = targetY, ExecFrames = combined.Item2 };
+        nudgeReplay.Steps.Add(new StateSpacePlanner.ExecStep { Frames = combined.Item2,
+            TargetCx = targetX, TargetCy = targetY, LandPx = last.Px, LandPy = last.Py });
+        p.releaseJump = true; p.itemAnimation = p.itemTime = 0;
+        p.fallStart = p.fallStart2 = (int)(p.position.Y / 16f);
+        StateSpacePlanner.DispatchPlan(nudgeReplay);
     }
 
     void EscapeResultAdmission(Player p)

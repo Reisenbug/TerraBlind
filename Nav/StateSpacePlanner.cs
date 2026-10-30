@@ -820,12 +820,12 @@ namespace TerraBlind
             int gdir = hl < hr ? -1 : 1;                 // gradient-descent horizontal direction (toward lower maze H)
             int targetDir = gdir;
             int maxScan = MaxScan(ph);
+            bool anyVertJumpPlace = false;
 
             // 向上优先【原地跳放】:竖直跳起,弧顶拍一块平台,落上去,一次能升好几格;够不到 VertPlaceMinRise 才退回 pillar。
             // 向上无条件发,不加 upH<curH 的门:坑底正上方那格 H 本来就不低(得先升起来再走出去),加了门就把人钉死在坑底。
             if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && ctx.DistField != null)
             {
-                bool anyVertJumpPlace = false;
                 foreach (int hold in BuildHoldOptions())
                 {
                     var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
@@ -835,6 +835,20 @@ namespace TerraBlind
                     anyVertJumpPlace = true;
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                 }
+                if (!anyVertJumpPlace)
+                    foreach (int dir in new[] { -1, 1 })
+                    {
+                        var seen = new HashSet<(int, int)>();
+                        foreach (int hold in BuildHoldOptions())
+                        {
+                            var jp = NudgeJumpPlace(ctx, cur, dir, hold, ph, platformTile);
+                            if (!jp.HasValue) continue;
+                            var cell = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                            if (ccy - cell.Item2 < VertPlaceMinRise || !seen.Add(cell)) continue;
+                            anyVertJumpPlace = true;
+                            yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
+                        }
+                    }
                 // 只发【爬到顶】这一条:一跳升几格由地形定,铺中间落点兑现不了(50条45条MISS)。
                 // 跳得慢就让 pillar 进候选,由代价决定谁赢。门只筛"根本不必搭"
                 bool canPil = SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int topFeetY);
@@ -980,7 +994,7 @@ namespace TerraBlind
                 // 墙:跳放候选上面已经无条件发过了,这里只剩兜底。一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
-                    if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int wallTopFeetY) && wallTopFeetY < ccy)
+                    if (!anyVertJumpPlace && !anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int wallTopFeetY) && wallTopFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                         for (int fy = ccy - 2; fy >= wallTopFeetY; fy -= 2)
@@ -1291,6 +1305,30 @@ namespace TerraBlind
                             if (CanPlaceReal(ccx + sx, y)) return true;
             }
             return false;
+        }
+
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? NudgeJumpPlace(
+            PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
+        {
+            var state = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx,
+                Vy = cur.Vy, Grounded = cur.Grounded };
+            var prefix = new List<PhysicsSimulator.ControlInput>();
+            for (int i = 0; i < MaxSegFrames && (state.Px - cur.Px) * dir < 4f; i++)
+            {
+                var input = new PhysicsSimulator.ControlInput { Left = dir < 0, Right = dir > 0 };
+                float beforeX = state.Px;
+                state = PhysicsSimulator.Step(state, input, ph);
+                if (!state.Grounded || (state.Px == beforeX && i > 0)) return null;
+                input.Px = state.Px; input.Py = state.Py; input.Vx = state.Vx; input.Vy = state.Vy;
+                prefix.Add(input);
+            }
+            var stopped = AppendBrake(new SSNode { Px = state.Px, Py = state.Py,
+                Vx = state.Vx, Vy = state.Vy, Grounded = state.Grounded }, prefix, ph);
+            if (!stopped.HasValue || FallHitsLava(prefix, ph)) return null;
+            var jump = JumpPlace(ctx, stopped.Value.node, 0, hold, ph, platformTile);
+            if (!jump.HasValue) return null;
+            prefix.AddRange(jump.Value.frames);
+            return (jump.Value.node, prefix);
         }
 
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlace(
@@ -2837,7 +2875,7 @@ namespace TerraBlind
             string pickKind = b.pillar ? "pillar"
                 : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}"
                 : b.frames == null ? "bridge"
-                : b.frames.Exists(f => f.Place) ? (b.frames[0].Jump ? "jumpPlace" : "place")
+                : b.frames.Exists(f => f.Place) ? (b.frames.Exists(f => f.Jump) ? "jumpPlace" : "place")
                 : b.frames.Exists(f => f.Jump) ? "jump" : "walk";
             EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {pickKind} {b.cost:0}f{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
             // 选了要挖的边就把左右两边的账一起打出来。"旁边明明能走却偏要挖"每次都得回答这个
@@ -3349,6 +3387,7 @@ namespace TerraBlind
                 foreach (var f in st.Frames) if (f.Place) { hasPlace = true; break; }
                 if (!hasPlace) continue;                 // 只有放置边对起点像素敏感
                 if (si > 0) break;                       // 只重验第一条:后面那些的起点本来就是预测值
+                if (!st.Frames[0].Jump && st.Frames.Exists(frame => frame.Jump)) return false;
 
                 // 【调同一个函数】,不自己再跑一遍循环。SimulateSegment 有走满步幅就停、撞墙就停、
                 // 落地后滑一帧、AppendBrake 追加刹车等一整套终止逻辑。照抄必然对不齐,
