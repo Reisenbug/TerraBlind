@@ -339,6 +339,7 @@ public sealed class Driver : ModSystem
     bool enabled, opened, prepared, started, shot, regionShot;
     int trial, ticks, warmup;
     int menuTicks;
+    int routeExtraJumps, previousAvailableJumps = -1;
     StateSpacePlanner.SSResult nudgeReplay;
     int nudgeReplayTicks;
     readonly Caller caller = new();
@@ -1151,7 +1152,12 @@ public sealed class Driver : ModSystem
                 player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
                 player.inventory[1].SetDefaults(ItemID.Wood); player.inventory[1].stack = 9999;
                 player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 9999;
-                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear=none pick=copper godmode=true gills=true start=jungle_entrance");
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
+                {
+                    player.armor[3].SetDefaults(ItemID.CloudinaBottle);
+                    Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE slot=3 item=53");
+                }
+                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode=true gills=true start=jungle_entrance");
                 bool reverse = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse");
                 int startX = reverse ? 3383 : 3384, startY = reverse ? 1069 : 242;
                 player.Teleport(new Vector2(startX * 16 + 8 - player.width / 2f, (startY + 1) * 16 - player.height));
@@ -1333,6 +1339,14 @@ public sealed class Driver : ModSystem
             sample["selected"] = plan["selected"]?.DeepClone();
             sample["timing"] = plan["timing"]?.DeepClone();
         }
+        int availableJumps = 0;
+        foreach (var jump in player.ExtraJumps) if (jump.Available) availableJumps++;
+        if (previousAvailableJumps >= 0 && availableJumps < previousAvailableJumps && player.velocity.Y != 0)
+        {
+            routeExtraJumps += previousAvailableJumps - availableJumps;
+            Console.WriteLine($"VNAV_EXTRA_JUMP tick={ticks} used={routeExtraJumps} x={player.position.X} y={player.position.Y}");
+        }
+        previousAvailableJumps = availableJumps;
         if (ticks % 6 == 0) { trace.Add(sample); if (trace.Count > 600) trace.RemoveAt(0); }
         if (ticks % 120 == 0)
         {
@@ -1364,7 +1378,9 @@ public sealed class Driver : ModSystem
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
-            ["underworld"] = Main.UnderworldLayer, ["legs"] = results.DeepClone() }.ToJsonString());
+            ["underworld"] = Main.UnderworldLayer, ["extra_jumps_used"] = routeExtraJumps,
+            ["platforms_remaining"] = player.inventory.Where(item => item.type == ItemID.WoodPlatform).Sum(item => item.stack),
+            ["legs"] = results.DeepClone() }.ToJsonString());
         SaveTiming(true, "done");
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         controlTrace.Flush();

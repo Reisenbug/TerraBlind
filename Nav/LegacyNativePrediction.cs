@@ -34,6 +34,9 @@ internal static class LegacyNativePrediction
         if (Main.netMode != 0 || player.velocity != Vector2.Zero || player.itemAnimation > 0
             || player.itemTime > 0 || !player.releaseJump || candidate.Steps.Count != 1) return false;
         var step = candidate.Steps[0];
+        if (player.AnyExtraJumpUsable() && candidate.GoalWy < ActExecutor.OriginCy(player)
+            && step.Frames?.Exists(frame => frame.Jump) == true)
+            return StartPillar(player, candidate, goalX, goalY);
         if (step.Pillar && step.MineTiles?.Count is not > 0
             && step.TargetCy < ActExecutor.OriginCy(player))
             return StartPillar(player, candidate, goalX, goalY);
@@ -141,6 +144,9 @@ internal static class LegacyNativePrediction
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
         int frameCount = SettledPlacementLength(samples, controls, placeAt);
+        if (!plan.Steps[0].Pillar && field.TryGetValue((plan.GoalWx, plan.GoalWy), out int previousCost)
+            && (plan.CurH - cost) / (float)frameCount
+                <= (plan.CurH - previousCost) / Math.Max(1f, plan.CostFrames)) return null;
         for (int i = 0; i < frameCount; i++)
         {
             int keys = controls[i].GetValue<int>();
@@ -201,6 +207,17 @@ internal static class LegacyNativePrediction
                             ["goal_x"] = fieldGoalX, ["goal_y"] = fieldGoalY }.ToJsonString());
                 }
                 ready = replacement ?? plan;
+                if (replacement != null)
+                {
+                    int available = anchor["available_jumps"]?.GetValue<int>() ?? 0, used = 0;
+                    foreach (var frame in result["frames"].AsArray())
+                    {
+                        int current = frame["available_jumps"]?.GetValue<int>() ?? available;
+                        used += Math.Max(0, available - current);
+                        available = current;
+                    }
+                    DiagLog.Write($"[legacy-native-mobility] extra_used={used} frames={replacement.ExecFrames.Count} from_y={anchor["y"]} to_y={replacement.Steps[0].LandPy}");
+                }
                 DiagLog.Write($"[legacy-native-pillar-result] replaced={replacement != null} status={result["status"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
                 return true;
             }
