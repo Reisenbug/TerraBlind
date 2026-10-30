@@ -355,7 +355,7 @@ def main():
                 tiles[offset:offset + 10] = [1, 19, wall, 0, 0, 0, 0, 0, 0, 0]
                 original["tiles"] = base64.b64encode(struct.pack(f"{len(tiles)}i", *tiles)).decode()
             reports = []
-            for equipment in (0, 53):
+            for equipment in (0, 53, 987, 857):
                 snapshot = json.loads(json.dumps(original))
                 snapshot["armor"][3] = [equipment, 0, int(equipment != 0)]
                 settled = worker.call("replay", snapshot=snapshot, controls=[0] * 30, capture_end=True)
@@ -385,8 +385,9 @@ def main():
                 (args.root / f"extra-jump-placement-{equipment}.json").write_text(json.dumps(
                     dict(snapshot=snapshot, plan=plan, replay=replay, report=report)))
                 print("EXTRA_JUMP_PLACEMENT_MEASURED", report, flush=True)
-            assert reports[0]["extra_used"] == 0 and reports[1]["extra_used"] == 1, reports
-            assert reports[1]["rise"] > reports[0]["rise"], reports
+            assert reports[0]["extra_used"] == 0, reports
+            assert all(report["extra_used"] == 1 for report in reports[1:]), reports
+            assert all(report["rise"] > reports[0]["rise"] for report in reports[1:]), reports
             print("EXTRA_JUMP_PLACEMENT_PASS", reports, flush=True)
             return
         if args.movement_probe:
