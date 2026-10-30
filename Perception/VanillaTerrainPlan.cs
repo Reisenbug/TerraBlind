@@ -70,6 +70,9 @@ public static class VanillaTerrainPlan
 
     static JsonObject SearchJumpPlacement(JsonObject request)
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        double trajectoryMs = 0, placementMs = 0, chainMs = 0;
+        int trajectoryCount = 0, placementCount = 0;
         var state = request["snapshot"].AsObject();
         var player = VanillaFrame.RestoreInWorker(state);
         if (!CanStartJumpPlacement(player, request["tile_type"].GetValue<int>()))
@@ -89,7 +92,10 @@ public static class VanillaTerrainPlan
                 .Select(i => (i < travel ? direction > 0 ? 2 : 1 : 0)
                     | (schedule > 0 ? (i < schedule ? 4 : 0)
                     : (i < 90 && i != -schedule ? 4 : 0))).ToArray();
+            double started = clock.Elapsed.TotalMilliseconds;
             var free = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
+            trajectoryMs += clock.Elapsed.TotalMilliseconds - started;
+            trajectoryCount++;
             if (free["outcome"]?.GetValue<string>() != "complete") continue;
             var frames = free["frames"].AsArray();
             if (request["allow_natural_landing"]?.GetValue<bool>() == true)
@@ -120,7 +126,10 @@ public static class VanillaTerrainPlan
                 if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Terraria.ID.TileID.Platforms) continue;
                 var candidate = request.DeepClone().AsObject();
                 candidate["tile_x"] = x; candidate["tile_y"] = y;
+                started = clock.Elapsed.TotalMilliseconds;
                 var plan = JumpPlacement(candidate, keys);
+                placementMs += clock.Elapsed.TotalMilliseconds - started;
+                placementCount++;
                 if (plan["status"]?.GetValue<string>() != "planned") continue;
                 best = plan;
                 break;
@@ -129,12 +138,18 @@ public static class VanillaTerrainPlan
         if (request["allow_placement"]?.GetValue<bool>() != false)
             foreach (int schedule in schedules)
             {
+                double started = clock.Elapsed.TotalMilliseconds;
                 var chain = JumpPlacementChain(state, schedule);
+                chainMs += clock.Elapsed.TotalMilliseconds - started;
                 if (chain != null && (best == null || chain["rise"].GetValue<float>() > best["rise"].GetValue<float>()))
                     best = chain;
             }
-        return best ?? (request["allow_placement"]?.GetValue<bool>() == false
+        var result = best ?? (request["allow_placement"]?.GetValue<bool>() == false
             ? new JsonObject { ["status"] = "no_natural_landing" } : JumpPlacement(request));
+        result["search_timing"] = new JsonObject { ["trajectories"] = trajectoryCount,
+            ["trajectory_ms"] = trajectoryMs, ["placements"] = placementCount,
+            ["placement_ms"] = placementMs, ["chain_ms"] = chainMs };
+        return result;
     }
 
     static JsonObject JumpPlacementChain(JsonObject state, int schedule)
