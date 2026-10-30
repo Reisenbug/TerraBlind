@@ -178,8 +178,8 @@ internal static class LegacyNativePrediction
     static int SettledPlacementLength(JsonArray samples, JsonArray controls, int placeAt)
     {
         int count = samples.Count;
-        while (count > placeAt + 2 && controls[count - 1].GetValue<int>() == 0
-            && controls[count - 2].GetValue<int>() == 0)
+        while (count > placeAt + 2 && (controls[count - 1].GetValue<int>() & ~4) == 0
+            && (controls[count - 2].GetValue<int>() & ~4) == 0)
         {
             var last = samples[count - 1];
             var previous = samples[count - 2];
