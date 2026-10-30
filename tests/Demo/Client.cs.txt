@@ -915,6 +915,22 @@ public sealed class Driver : ModSystem
         lavaAnchor.LiquidAmount = liquidAmount;
         recordAttempt.Invoke(null, new object[] { p, true });
         Console.WriteLine("NAV_ATTEMPT_PROGRESS_PASS repeated=4 movement=true terrain=true liquid_ignored=true");
+        var escapeTask = new System.Threading.Tasks.TaskCompletionSource<StateSpacePlanner.SSResult>();
+        typeof(TrapEscape).GetField("_search", guardFlags).SetValue(null, escapeTask.Task);
+        typeof(TrapEscape).GetField("_searchGeneration", guardFlags).SetValue(null,
+            typeof(TrapEscape).GetField("_generation", guardFlags).GetValue(null));
+        typeof(RecedingNav).GetField("_failureRecoveryPending", guardFlags).SetValue(null, true);
+        var pollRecovery = typeof(RecedingNav).GetMethod("PollFailureRecovery", guardFlags);
+        RecedingNav.Active = true; RecedingNav.LastStop = null;
+        pollRecovery.Invoke(null, null);
+        if (!RecedingNav.Active || !TrapEscape.Busy)
+            throw new InvalidOperationException("unfinished_escape_not_waited");
+        escapeTask.SetResult(new StateSpacePlanner.SSResult { Found = false });
+        pollRecovery.Invoke(null, null);
+        if (RecedingNav.Active || TrapEscape.Busy || RecedingNav.LastStop != "repeated_action_failure")
+            throw new InvalidOperationException("completed_escape_not_consumed");
+        RecedingNav.LastStop = null;
+        Console.WriteLine("NAV_ESCAPE_COMPLETION_PASS pending_waited=true finished_consumed=true failure_reported=true");
         var brake = typeof(StateSpacePlanner).GetMethod("AppendBrake",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
         using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 364) }))

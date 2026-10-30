@@ -183,6 +183,19 @@ namespace TerraBlind
             }
             return ++_noProgressSteps >= 4;
         }
+
+        static void PollFailureRecovery()
+        {
+            if (TrapEscape.Poll())
+            {
+                _failureRecoveryPending = false;
+                StuckSentinel.Reset(); return;
+            }
+            if (TrapEscape.Busy) return;
+            _failureRecoveryPending = false;
+            LastStop = "repeated_action_failure";
+            Stop();
+        }
         public static void Start(int goalWx, int goalWy, bool exact = false)
             => Start(goalWx, goalWy, exact ? Mode.Mine : Mode.Snap);
 
@@ -370,15 +383,7 @@ namespace TerraBlind
 
             if (_failureRecoveryPending)
             {
-                if (TrapEscape.Poll())
-                {
-                    _failureRecoveryPending = false;
-                    StuckSentinel.Reset(); return;
-                }
-                if (TrapEscape.Busy) return;
-                _failureRecoveryPending = false;
-                LastStop = "repeated_action_failure";
-                Stop(); return;
+                PollFailureRecovery(); return;
             }
 
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
