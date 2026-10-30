@@ -186,8 +186,8 @@ namespace TerraBlind
             var p = Main.LocalPlayer;
             int sx = p != null ? (int)(p.Center.X / 16f) : gx;
             int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
-            if (_cachedField != null && _cachedGoal == (gx, gy) && _cachedField.ContainsKey((sx, sy))) return _cachedField;
-            if (_prevField != null && _prevGoal == (gx, gy) && _prevField.ContainsKey((sx, sy)))
+            if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
+            if (_prevField != null && _prevGoal == (gx, gy))
             {
                 // promote the other slot rather than rebuild, this is the whole point of keeping two
                 var f = _prevField; var g = _prevGoal;
