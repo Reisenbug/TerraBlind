@@ -29,10 +29,11 @@ internal static class LegacyNativePrediction
         searchingPlacement = false;
     }
 
-    internal static bool Start(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY)
+    internal static bool Start(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown = false)
     {
-        if (Main.netMode != 0 || player.velocity != Vector2.Zero || player.itemAnimation > 0
-            || player.itemTime > 0 || !player.releaseJump || candidate.Steps.Count != 1) return false;
+        if (Main.netMode != 0 || player.velocity != Vector2.Zero
+            || !allowItemCooldown && (player.itemAnimation > 0 || player.itemTime > 0)
+            || !player.releaseJump || candidate.Steps.Count != 1) return false;
         var step = candidate.Steps[0];
         if (player.AnyExtraJumpUsable() && candidate.GoalWy < ActExecutor.OriginCy(player)
             && step.Frames?.Exists(frame => frame.Jump) == true)

@@ -2272,6 +2272,13 @@ namespace TerraBlind
             if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
             var st = _ssSteps[_ssStepIdx];
+            if (_ssStepIdx > 0 && _ssStepIdx == _ssSteps.Count - 1 && _ssPrevStep?.Dig == true
+                && MineCoordinator.Outcome == "done" && st.Pillar && st.MineTiles?.Count is not > 0
+                && RecedingNav.UpgradeAfterMining(p, st, EstStepFrames(st, p)))
+            {
+                StopSteps();
+                return;
+            }
             int ccx = (int)(p.Center.X / 16f);
             DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {EdgeKind(st)} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;

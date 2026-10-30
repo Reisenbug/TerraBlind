@@ -526,6 +526,22 @@ namespace TerraBlind
             if (!LegacyNativePrediction.Start(p, res, _goalWx, _goalWy)) DispatchLegacy(res, cell);
         }
 
+        internal static bool UpgradeAfterMining(Player player, StateSpacePlanner.ExecStep step, float frames)
+        {
+            if (!Active || !player.AnyExtraJumpUsable()) return false;
+            var field = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
+            var cell = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
+            if (field == null || !field.TryGetValue(cell, out int cost)) return false;
+            var candidate = new StateSpacePlanner.SSResult { Found = true, StartPx = player.position.X,
+                StartPy = player.position.Y, GoalWx = step.TargetCx, GoalWy = step.TargetCy,
+                CurH = cost, CostFrames = frames };
+            candidate.Steps.Add(step);
+            if (!LegacyNativePrediction.Start(player, candidate, _goalWx, _goalWy, allowItemCooldown: true)) return false;
+            _haveLast = false;
+            DiagLog.Write($"[legacy-native-after-mine] from={cell} target=({step.TargetCx},{step.TargetCy})");
+            return true;
+        }
+
         static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
         {
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
