@@ -106,6 +106,7 @@ public static class VanillaTerrainPlan
                             ["rise"] = rise, ["controls"] = new JsonArray(keys.Select(key => JsonValue.Create(key)).ToArray()) };
                 }
             }
+            if (request["allow_placement"]?.GetValue<bool>() == false) continue;
             var apex = frames.OrderBy(frame => frame["y"].GetValue<float>()).First();
             int x = (int)((apex["x"].GetValue<float>() + width / 2f) / 16);
             int firstY = (int)Math.Ceiling((apex["y"].GetValue<float>() + height) / 16);
@@ -125,7 +126,8 @@ public static class VanillaTerrainPlan
                 break;
             }
         }
-        return best ?? JumpPlacement(request);
+        return best ?? (request["allow_placement"]?.GetValue<bool>() == false
+            ? new JsonObject { ["status"] = "no_natural_landing" } : JumpPlacement(request));
     }
 
     static JsonObject JumpPlacement(JsonObject request, int[] controls = null)

@@ -318,6 +318,13 @@ def main():
                     single = [key | 4 if first <= i <= last else key for i, key in enumerate(keys)]
                     baseline = worker.call("replay", snapshot=state, controls=single, stop_on_damage=True)
                     if baseline["frames"][-1]["y"] - frames[-1]["y"] < 16: continue
+                    empty_inventory = json.loads(json.dumps(state))
+                    empty_inventory["inventory"] = [[0, 0, 0] for item in state["inventory"]]
+                    without_platforms = worker.call("terrain_plan", snapshot=empty_inventory, jump_place=True,
+                        search_jump_place=True, allow_natural_landing=True, allow_placement=False,
+                        route_direction=direction, tile_x=x, tile_y=y - 1, tile_type=19)
+                    assert without_platforms["status"] == "planned", without_platforms
+                    assert without_platforms["jump_place"] is False, without_platforms
                     report = dict(start=[x, y], direction=direction, extra_used=used, rise=proposal["rise"],
                                   normal_end_y=baseline["frames"][-1]["y"], double_end_y=frames[-1]["y"],
                                   planning_ms=proposal["terrain_timing"]["total_ms"])

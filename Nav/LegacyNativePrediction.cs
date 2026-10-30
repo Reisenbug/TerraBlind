@@ -89,7 +89,7 @@ internal static class LegacyNativePrediction
     static bool StartPillar(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY)
     {
         int slot = NavCoordinator.FindPlatformSlot(player);
-        if (slot < 0 || !VanillaTerrainPlan.HasSupport(player)) return false;
+        if (slot < 0 && !player.AnyExtraJumpUsable() || !VanillaTerrainPlan.HasSupport(player)) return false;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -118,7 +118,7 @@ internal static class LegacyNativePrediction
         var proposal = await forecast.Observe(new JsonObject { ["command"] = "terrain_plan", ["snapshot"] = state.DeepClone(),
             ["jump_place"] = true, ["search_jump_place"] = true, ["tile_x"] = x, ["tile_y"] = y - 1,
             ["tile_type"] = Terraria.ID.TileID.Platforms, ["route_direction"] = direction,
-            ["allow_natural_landing"] = extraJump }, token);
+            ["allow_natural_landing"] = extraJump, ["allow_placement"] = slot >= 0 }, token);
         if (proposal["status"]?.GetValue<string>() != "planned") return proposal;
         if (proposal["jump_place"]?.GetValue<bool>() == false)
         {
