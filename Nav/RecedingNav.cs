@@ -143,6 +143,46 @@ namespace TerraBlind
         static volatile bool _fieldReady;
         static long _startedAt;
         static bool _startupWalkReported;
+        static Vector2 _attemptStart;
+        static int _attemptTerrain, _noProgressSteps;
+        static bool _failureRecoveryPending, _failureRecoveryTried;
+
+        static int TerrainStamp(Player player)
+        {
+            var hash = new System.HashCode();
+            int cx = (int)(player.Center.X / 16f), cy = (int)(player.Center.Y / 16f);
+            for (int x = System.Math.Max(0, cx - 6); x <= System.Math.Min(Main.maxTilesX - 1, cx + 6); x++)
+                for (int y = System.Math.Max(0, cy - 6); y <= System.Math.Min(Main.maxTilesY - 1, cy + 6); y++)
+                {
+                    var tile = Main.tile[x, y];
+                    hash.Add(tile.HasTile);
+                    if (!tile.HasTile) continue;
+                    hash.Add(tile.TileType); hash.Add(tile.Slope);
+                    hash.Add(tile.IsHalfBlock); hash.Add(tile.IsActuated);
+                }
+            return hash.ToHashCode();
+        }
+
+        static bool AttemptProgressed(Player player)
+            => Vector2.DistanceSquared(player.position, _attemptStart) >= 1f
+                || TerrainStamp(player) != _attemptTerrain;
+
+        static void BeginAttempt(Player player)
+        {
+            if (AttemptProgressed(player)) { _noProgressSteps = 0; _failureRecoveryTried = false; }
+            _attemptStart = player.position;
+            _attemptTerrain = TerrainStamp(player);
+        }
+
+        static bool RecordAttempt(Player player, bool hit)
+        {
+            if (hit || AttemptProgressed(player))
+            {
+                _noProgressSteps = 0; _failureRecoveryTried = false;
+                return false;
+            }
+            return ++_noProgressSteps >= 4;
+        }
         public static void Start(int goalWx, int goalWy, bool exact = false)
             => Start(goalWx, goalWy, exact ? Mode.Mine : Mode.Snap);
 
@@ -159,6 +199,7 @@ namespace TerraBlind
             if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             _startupWalkReported = false;
+            _noProgressSteps = 0; _failureRecoveryPending = false; _failureRecoveryTried = false;
             LegacyNativePrediction.Reset();
             VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
@@ -214,8 +255,8 @@ namespace TerraBlind
             catch (System.Exception e)
             {
                 EventLog.W(Ev.Fail, $"TICK EXC {e.GetType().Name}: {e.Message} @ {e.StackTrace?.Split('\n')[0]?.Trim()}");
-                Stop();   // 抛了就别装作还在导航 --- 上游据此换别的办法,总比每帧重试同一下强
                 LastStop = "exception";
+                Stop();
             }
         }
 
@@ -327,6 +368,15 @@ namespace TerraBlind
                 return;
             }
 
+            if (_failureRecoveryPending)
+            {
+                if (TrapEscape.Busy) return;
+                _failureRecoveryPending = false;
+                if (TrapEscape.Poll()) { StuckSentinel.Reset(); return; }
+                LastStop = "repeated_action_failure";
+                Stop(); return;
+            }
+
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StateSpacePlanner.NativeReplayMatches(p)) StuckSentinel.Reset();
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
@@ -382,6 +432,7 @@ namespace TerraBlind
             // 上一条边真落到哪了 → 变成连续的失配权重,软性压低老是落空的边。随后整表衰减:不做黑名单、不禁回头
             if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
+                _haveLast = false;
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
                 // 带上原始 px/py 和脚下踩的东西:格号是取整后的结论,差一行可能是真没到,也可能只是
@@ -400,6 +451,24 @@ namespace TerraBlind
                     + $"{(hit ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
                     + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}{gap}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
+                if (RecordAttempt(p, hit))
+                {
+                    EventLog.W(Ev.Fail, $"NO-PROGRESS attempts={_noProgressSteps} at={cell} target={t} recovery_tried={_failureRecoveryTried}");
+                    if (!_failureRecoveryTried)
+                    {
+                        _failureRecoveryTried = true;
+                        var field = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
+                        if (field != null)
+                        {
+                            int h = field.TryGetValue(cell, out int value) ? value : int.MaxValue;
+                            bool dispatched = TrapEscape.TryEscape(field, cell.Item1, cell.Item2, h, _goalWx, _goalWy);
+                            if (TrapEscape.Busy) { _failureRecoveryPending = true; return; }
+                            if (dispatched) { StuckSentinel.Reset(); return; }
+                        }
+                    }
+                    LastStop = "repeated_action_failure";
+                    Stop(); return;
+                }
             }
             StateSpacePlanner.DecayMiss();
 
@@ -544,6 +613,7 @@ namespace TerraBlind
 
         static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
         {
+            BeginAttempt(Main.LocalPlayer);
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;

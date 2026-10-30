@@ -884,6 +884,37 @@ public sealed class Driver : ModSystem
         if (accepted) throw new InvalidOperationException("blocked_actual_pillar_start_accepted");
         if (!SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
             throw new InvalidOperationException("clear_pillar_start_rejected");
+        var lavaAnchor = Main.tile[3470, 357];
+        byte liquidAmount = lavaAnchor.LiquidAmount;
+        int liquidType = lavaAnchor.LiquidType;
+        lavaAnchor.LiquidType = LiquidID.Lava; lavaAnchor.LiquidAmount = 255;
+        if (SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
+            throw new InvalidOperationException("lava_pillar_start_accepted");
+        lavaAnchor.LiquidAmount = liquidAmount; lavaAnchor.LiquidType = liquidType;
+        Console.WriteLine("PILLAR_LAVA_REJECTION_PASS");
+        const System.Reflection.BindingFlags guardFlags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var beginAttempt = typeof(RecedingNav).GetMethod("BeginAttempt", guardFlags);
+        var recordAttempt = typeof(RecedingNav).GetMethod("RecordAttempt", guardFlags);
+        bool FailedAttempt() => (bool)recordAttempt.Invoke(null, new object[] { p, false });
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 1; attempt <= 4; attempt++)
+            if (FailedAttempt() != (attempt == 4)) throw new InvalidOperationException("no_progress_attempt_count");
+        p.position.X += 2f;
+        if (FailedAttempt()) throw new InvalidOperationException("movement_not_counted_as_progress");
+        p.position.X -= 2f;
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 0; attempt < 3; attempt++) FailedAttempt();
+        bool anchorHadTile = lavaAnchor.HasTile;
+        lavaAnchor.HasTile = !anchorHadTile;
+        if (FailedAttempt()) throw new InvalidOperationException("terrain_edit_not_counted_as_progress");
+        lavaAnchor.HasTile = anchorHadTile;
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 0; attempt < 3; attempt++) FailedAttempt();
+        lavaAnchor.LiquidAmount = liquidAmount == 0 ? (byte)1 : (byte)0;
+        if (!FailedAttempt()) throw new InvalidOperationException("flowing_liquid_reset_failure_count");
+        lavaAnchor.LiquidAmount = liquidAmount;
+        recordAttempt.Invoke(null, new object[] { p, true });
+        Console.WriteLine("NAV_ATTEMPT_PROGRESS_PASS repeated=4 movement=true terrain=true liquid_ignored=true");
         var brake = typeof(StateSpacePlanner).GetMethod("AppendBrake",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
         using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 364) }))
