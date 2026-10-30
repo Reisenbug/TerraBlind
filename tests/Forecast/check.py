@@ -176,6 +176,7 @@ def main():
     parser.add_argument("--port", type=int, default=19042)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--extra-jump-placement-probe", type=Path)
+    parser.add_argument("--natural-jump-probe", type=Path)
     parser.add_argument("--extra-jump-position", type=float, nargs=2)
     parser.add_argument("--extra-jump-support", type=int, nargs=2)
     parser.add_argument("--navigation", action="store_true")
@@ -272,6 +273,59 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.natural_jump_probe:
+            captured = json.loads(args.natural_jump_probe.read_text())
+            original = captured.get("request", captured)["snapshot"]
+            ax, ay, width, height = original["area"]
+            data = base64.b64decode(original["tiles"])
+            tiles = struct.unpack(f"{len(data) // 4}i", data)
+            def occupied(x, y):
+                return tiles[((y - ay) * width + x - ax) * 10] != 0
+            starts = [(x, y) for y in range(ay + 22, ay + height - 12)
+                      for x in range(ax + 12, ax + width - 12)
+                      if occupied(x, y) and all(not occupied(xx, yy)
+                          for xx in (x - 1, x) for yy in range(y - 4, y))]
+            origin = original["player"]["Terraria.Entity:position"]
+            starts.sort(key=lambda cell: abs(cell[0] * 16 - origin["Microsoft.Xna.Framework.Vector2:X"])
+                        + abs(cell[1] * 16 - origin["Microsoft.Xna.Framework.Vector2:Y"]))
+            for x, y in starts[:64]:
+                state = json.loads(json.dumps(original))
+                state["armor"][3] = [53, 0, 1]
+                state["player"]["Terraria.Entity:position"] = {
+                    "Microsoft.Xna.Framework.Vector2:X": x * 16 - 2,
+                    "Microsoft.Xna.Framework.Vector2:Y": y * 16 - 42}
+                state["player"]["Terraria.Entity:velocity"] = {
+                    "Microsoft.Xna.Framework.Vector2:X": 0, "Microsoft.Xna.Framework.Vector2:Y": 0}
+                state["player"]["Terraria.Player:fallStart"] = y - 3
+                state["player"]["Terraria.Player:fallStart2"] = y - 3
+                settled = worker.call("replay", snapshot=state, controls=[0] * 30, capture_end=True)
+                if settled["outcome"] != "complete": continue
+                state = settled["end_snapshot"]
+                for direction in (-1, 1):
+                    proposal = worker.call("terrain_plan", snapshot=state, jump_place=True, search_jump_place=True,
+                                           allow_natural_landing=True, route_direction=direction,
+                                           tile_x=x, tile_y=y - 1, tile_type=19)
+                    if proposal["status"] != "planned" or proposal["jump_place"]: continue
+                    keys = proposal["controls"]
+                    replay = worker.call("replay", snapshot=state, controls=keys, stop_on_damage=True)
+                    assert replay["outcome"] == "complete", replay["outcome"]
+                    frames = replay["frames"]
+                    available = [settled["frames"][-1]["available_jumps"]] + [f["available_jumps"] for f in frames]
+                    used = sum(max(0, a - b) for a, b in zip(available, available[1:]))
+                    if used != 1: continue
+                    first = next(i for i, key in enumerate(keys) if key & 4)
+                    last = max(i for i, key in enumerate(keys) if key & 4)
+                    single = [key | 4 if first <= i <= last else key for i, key in enumerate(keys)]
+                    baseline = worker.call("replay", snapshot=state, controls=single, stop_on_damage=True)
+                    if baseline["frames"][-1]["y"] - frames[-1]["y"] < 16: continue
+                    report = dict(start=[x, y], direction=direction, extra_used=used, rise=proposal["rise"],
+                                  normal_end_y=baseline["frames"][-1]["y"], double_end_y=frames[-1]["y"],
+                                  planning_ms=proposal["terrain_timing"]["total_ms"])
+                    (args.root / "natural-jump.json").write_text(json.dumps(dict(
+                        snapshot=state, proposal=proposal, replay=replay, baseline=baseline, report=report)))
+                    print("NATURAL_EXTRA_JUMP_PASS", report, flush=True)
+                    return
+            raise AssertionError("no useful natural extra jump in sampled real terrain")
         if args.extra_jump_placement_probe:
             captured = json.loads(args.extra_jump_placement_probe.read_text())
             original = captured.get("request", captured)["snapshot"]

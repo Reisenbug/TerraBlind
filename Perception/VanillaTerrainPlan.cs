@@ -92,6 +92,20 @@ public static class VanillaTerrainPlan
             var free = new VanillaPrediction(state).Predict(keys, false, stopOnDamage: true);
             if (free["outcome"]?.GetValue<string>() != "complete") continue;
             var frames = free["frames"].AsArray();
+            if (request["allow_natural_landing"]?.GetValue<bool>() == true)
+            {
+                var last = frames[^1];
+                float rise = startY - last["y"].GetValue<float>();
+                if (rise > 0 && last["vx"].GetValue<float>() == 0 && last["vy"].GetValue<float>() == 0
+                    && (best == null || rise >= best["rise"].GetValue<float>()))
+                {
+                    player = VanillaFrame.RestoreInWorker(state);
+                    player.position = new Vector2(last["x"].GetValue<float>(), last["y"].GetValue<float>());
+                    if (HasSupport(player))
+                        best = new JsonObject { ["status"] = "planned", ["jump_place"] = false,
+                            ["rise"] = rise, ["controls"] = new JsonArray(keys.Select(key => JsonValue.Create(key)).ToArray()) };
+                }
+            }
             var apex = frames.OrderBy(frame => frame["y"].GetValue<float>()).First();
             int x = (int)((apex["x"].GetValue<float>() + width / 2f) / 16);
             int firstY = (int)Math.Ceiling((apex["y"].GetValue<float>() + height) / 16);

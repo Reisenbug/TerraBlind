@@ -101,7 +101,7 @@ internal static class LegacyNativePrediction
             plan = candidate; searchingPlacement = true; fieldGoalX = goalX; fieldGoalY = goalY;
             cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             pending = SearchPlacement(snapshot.DeepClone().AsObject(), slot, x, y,
-                Math.Sign(candidate.Steps[0].TargetCx - x), cancellation.Token);
+                Math.Sign(candidate.Steps[0].TargetCx - x), player.AnyExtraJumpUsable(), cancellation.Token);
             DiagLog.Write($"[legacy-native-pillar] target=({candidate.GoalWx},{candidate.GoalWy})");
             return true;
         }
@@ -112,13 +112,22 @@ internal static class LegacyNativePrediction
         }
     }
 
-    static async Task<JsonObject> SearchPlacement(JsonObject state, int slot, int x, int y, int direction, CancellationToken token)
+    static async Task<JsonObject> SearchPlacement(JsonObject state, int slot, int x, int y, int direction, bool extraJump, CancellationToken token)
     {
         var forecast = VanillaNavigationDemo.Instance;
         var proposal = await forecast.Observe(new JsonObject { ["command"] = "terrain_plan", ["snapshot"] = state.DeepClone(),
             ["jump_place"] = true, ["search_jump_place"] = true, ["tile_x"] = x, ["tile_y"] = y - 1,
-            ["tile_type"] = Terraria.ID.TileID.Platforms, ["route_direction"] = direction }, token);
+            ["tile_type"] = Terraria.ID.TileID.Platforms, ["route_direction"] = direction,
+            ["allow_natural_landing"] = extraJump }, token);
         if (proposal["status"]?.GetValue<string>() != "planned") return proposal;
+        if (proposal["jump_place"]?.GetValue<bool>() == false)
+        {
+            var movement = await forecast.Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = state,
+                ["controls"] = proposal["controls"].DeepClone(), ["detailed"] = false, ["stop_on_damage"] = true }, token);
+            movement["status"] = movement["outcome"]?.DeepClone();
+            movement["proposal"] = proposal;
+            return movement;
+        }
         var replay = await forecast.Observe(new JsonObject { ["command"] = "placement_sequence", ["snapshot"] = state,
             ["native_use"] = true, ["legacy_use"] = true, ["place_slot"] = slot,
             ["tile_x"] = proposal["tile_x"].DeepClone(), ["tile_y"] = proposal["tile_y"].DeepClone(),
@@ -129,8 +138,9 @@ internal static class LegacyNativePrediction
 
     static StateSpacePlanner.SSResult PlacementResult(JsonObject result)
     {
-        if (result["status"]?.GetValue<string>() != "complete" || result["placed"]?.GetValue<bool>() != true
-            || result["supported"]?.GetValue<bool>() != true) return null;
+        bool placement = result["proposal"]?["jump_place"]?.GetValue<bool>() != false;
+        if (result["status"]?.GetValue<string>() != "complete"
+            || placement && (result["placed"]?.GetValue<bool>() != true || result["supported"]?.GetValue<bool>() != true)) return null;
         var samples = result["frames"].AsArray();
         if (samples.Count == 0 || samples.Any(frame => frame["dead"].GetValue<bool>()
             || frame["hp"].GetValue<int>() < anchor["hp"].GetValue<int>())) return null;
@@ -139,7 +149,7 @@ internal static class LegacyNativePrediction
         var field = MazeWand.PeekFieldOrNull(fieldGoalX, fieldGoalY);
         if (field == null || !field.TryGetValue(cell, out int cost) || cost >= plan.CurH) return null;
         var proposal = result["proposal"];
-        int placeAt = proposal["place_after"].GetValue<int>();
+        int placeAt = placement ? proposal["place_after"].GetValue<int>() : -1;
         var controls = proposal["controls"].AsArray();
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
@@ -154,11 +164,12 @@ internal static class LegacyNativePrediction
                 Jump = (keys & 4) != 0, Down = (keys & 16) != 0,
                 Px = samples[i]["x"].GetValue<float>(), Py = samples[i]["y"].GetValue<float>(),
                 Vx = samples[i]["vx"].GetValue<float>(), Vy = samples[i]["vy"].GetValue<float>(),
-                Place = i == placeAt, PlaceCx = proposal["tile_x"].GetValue<int>(), PlaceCy = proposal["tile_y"].GetValue<int>() });
+                Place = i == placeAt, PlaceCx = placement ? proposal["tile_x"].GetValue<int>() : 0,
+                PlaceCy = placement ? proposal["tile_y"].GetValue<int>() : 0 });
         }
         var replacement = new StateSpacePlanner.SSResult { Found = true, StartPx = anchor["x"].GetValue<float>(),
             StartPy = anchor["y"].GetValue<float>(), GoalWx = cell.Item1, GoalWy = cell.Item2,
-            CurH = plan.CurH, Altered = 1, CostFrames = frames.Count, ExecFrames = frames, NativeVerified = true };
+            CurH = plan.CurH, Altered = placement ? 1 : 0, CostFrames = frames.Count, ExecFrames = frames, NativeVerified = true };
         replacement.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
             Frames = frames, LandPx = frames[^1].Px, LandPy = frames[^1].Py });
         return replacement;
