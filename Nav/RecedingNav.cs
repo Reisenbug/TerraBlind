@@ -370,9 +370,13 @@ namespace TerraBlind
 
             if (_failureRecoveryPending)
             {
+                if (TrapEscape.Poll())
+                {
+                    _failureRecoveryPending = false;
+                    StuckSentinel.Reset(); return;
+                }
                 if (TrapEscape.Busy) return;
                 _failureRecoveryPending = false;
-                if (TrapEscape.Poll()) { StuckSentinel.Reset(); return; }
                 LastStop = "repeated_action_failure";
                 Stop(); return;
             }
