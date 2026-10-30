@@ -141,6 +141,7 @@ public static class VanillaTerrainPlan
         var validation = fallback["frames"].DeepClone().AsArray();
         bool CanPlaceNow() => player.Left.X / 16 - reachX <= x && player.Right.X / 16 + reachX - 1 >= x
             && player.Top.Y / 16 - reachY <= y && player.Bottom.Y / 16 + reachY - 2 >= y
+            && player.Bottom.Y <= y * 16
             && !player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16));
         for (int frame = 0; frame < keys.Length; frame++)
         {

@@ -175,6 +175,9 @@ def main():
     parser.add_argument("--root", type=Path, default=Path("/tmp/terrablind-forecast-lab"))
     parser.add_argument("--port", type=int, default=19042)
     parser.add_argument("--case", action="append", default=[])
+    parser.add_argument("--extra-jump-placement-probe", type=Path)
+    parser.add_argument("--extra-jump-position", type=float, nargs=2)
+    parser.add_argument("--extra-jump-support", type=int, nargs=2)
     parser.add_argument("--navigation", action="store_true")
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--region-probe", type=Path)
@@ -269,6 +272,62 @@ def main():
                 time.sleep(.25)
         else:
             raise TimeoutError("Worker startup timed out")
+        if args.extra_jump_placement_probe:
+            captured = json.loads(args.extra_jump_placement_probe.read_text())
+            original = captured.get("request", captured)["snapshot"]
+            if args.extra_jump_position:
+                px, py = args.extra_jump_position
+                original["player"]["Terraria.Entity:position"] = {
+                    "Microsoft.Xna.Framework.Vector2:X": px, "Microsoft.Xna.Framework.Vector2:Y": py}
+                original["player"]["Terraria.Entity:velocity"] = {
+                    "Microsoft.Xna.Framework.Vector2:X": 0, "Microsoft.Xna.Framework.Vector2:Y": 0}
+                original["player"]["Terraria.Player:fallStart"] = int(py // 16)
+                original["player"]["Terraria.Player:fallStart2"] = int(py // 16)
+            if args.extra_jump_support:
+                tx, ty = args.extra_jump_support
+                ax, ay, width, height = original["area"]
+                assert ax <= tx < ax + width and ay <= ty < ay + height
+                data = base64.b64decode(original["tiles"])
+                tiles = list(struct.unpack(f"{len(data) // 4}i", data))
+                offset = ((ty - ay) * width + tx - ax) * 10
+                wall = tiles[offset + 2]
+                tiles[offset:offset + 10] = [1, 19, wall, 0, 0, 0, 0, 0, 0, 0]
+                original["tiles"] = base64.b64encode(struct.pack(f"{len(tiles)}i", *tiles)).decode()
+            reports = []
+            for equipment in (0, 53):
+                snapshot = json.loads(json.dumps(original))
+                snapshot["armor"][3] = [equipment, 0, int(equipment != 0)]
+                settled = worker.call("replay", snapshot=snapshot, controls=[0] * 30, capture_end=True)
+                assert settled["outcome"] == "complete", settled["outcome"]
+                snapshot = settled["end_snapshot"]
+                end = settled["frames"][-1]
+                x, y = int((end["x"] + 10) // 16), int((end["y"] + 42) // 16) - 1
+                plan = worker.call("terrain_plan", snapshot=snapshot, jump_place=True,
+                                   search_jump_place=True, tile_x=x, tile_y=y, tile_type=19)
+                assert plan["status"] == "planned", plan
+                slot = next(i for i, item in enumerate(snapshot["inventory"]) if item[0] == 94 and item[2] > 0)
+                replay = worker.call("placement_sequence", snapshot=snapshot, native_use=True, legacy_use=True,
+                                     place_slot=slot, tile_x=plan["tile_x"], tile_y=plan["tile_y"],
+                                     place_after=plan["place_after"], controls=plan["controls"])
+                (args.root / f"extra-jump-placement-{equipment}.json").write_text(json.dumps(
+                    dict(snapshot=snapshot, plan=plan, replay=replay)))
+                print("EXTRA_JUMP_PLACEMENT_PROPOSAL", dict(equipment=equipment, rise=plan["rise"],
+                      place_after=plan["place_after"], tile=[plan["tile_x"], plan["tile_y"]],
+                      status=replay["status"]), flush=True)
+                assert replay["status"] == "complete" and replay["placed"] and replay["supported"], replay
+                assert replay["consumed"] == 1
+                available = [end["available_jumps"]] + [frame["available_jumps"] for frame in replay["frames"]]
+                used = sum(max(0, before - after) for before, after in zip(available, available[1:]))
+                report = dict(equipment=equipment, rise=plan["rise"], extra_used=used,
+                              consumed=replay["consumed"], planning_ms=plan["terrain_timing"]["total_ms"])
+                reports.append(report)
+                (args.root / f"extra-jump-placement-{equipment}.json").write_text(json.dumps(
+                    dict(snapshot=snapshot, plan=plan, replay=replay, report=report)))
+                print("EXTRA_JUMP_PLACEMENT_MEASURED", report, flush=True)
+            assert reports[0]["extra_used"] == 0 and reports[1]["extra_used"] == 1, reports
+            assert reports[1]["rise"] > reports[0]["rise"], reports
+            print("EXTRA_JUMP_PLACEMENT_PASS", reports, flush=True)
+            return
         if args.movement_probe:
             import random
             source = json.loads(args.movement_probe.read_text())["request"]
