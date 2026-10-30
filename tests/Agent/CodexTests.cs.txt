@@ -35,6 +35,8 @@ static class CodexTests
         await agent.RunAsync("检查背包", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         await agent.RunAsync("继续", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
+        Check(agent.TokenUsage["total"]["totalTokens"].GetValue<int>() == 200 && agent.UsageUpdates == 2 && agent.TurnsStarted == 2,
+            "Codex usage telemetry did not preserve cumulative token usage across turns");
         Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
             && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
             "game thread did not override instructions/environments/MCP");
@@ -359,6 +361,10 @@ static class CodexTests
             {
                 ToolResponses.Add(message["result"].AsObject());
                 AfterTool?.Invoke(ToolResponses.Count);
+                var usage = new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["tokenUsage"] = new JsonObject
+                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 } } } };
+                Send(usage); Send(usage);
                 var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
                 { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };

@@ -98,6 +98,10 @@ public sealed class CodexAgent : IDisposable
     readonly Func<string, string, CodexConnection> _connect;
     CodexConnection _rpc;
     string _thread, _signature;
+    JsonObject _usage;
+    public JsonObject TokenUsage => (JsonObject)_usage?.DeepClone();
+    public int UsageUpdates { get; private set; }
+    public int TurnsStarted { get; private set; }
 
     public CodexAgent(Func<string, string, CodexConnection> connect = null) => _connect = connect ?? Launch;
 
@@ -164,6 +168,7 @@ public sealed class CodexAgent : IDisposable
         if (_rpc?.Closed == false && _thread != null && _signature == signature) return;
         Dispose();
         _signature = signature;
+        _usage = null; UsageUpdates = TurnsStarted = 0;
         _rpc = _connect(executable, cwd);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -218,6 +223,7 @@ public sealed class CodexAgent : IDisposable
                 ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = input })
             }, token);
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");
+            TurnsStarted++;
             var delivered = new System.Collections.Generic.HashSet<string>();
             while (true)
             {
@@ -234,6 +240,11 @@ public sealed class CodexAgent : IDisposable
                 }
                 if (args?["threadId"]?.ToString() != _thread) continue;
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
+                if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
+                {
+                    if (usage["total"]?["totalTokens"]?.ToString() != _usage?["total"]?["totalTokens"]?.ToString()) UsageUpdates++;
+                    _usage = (JsonObject)usage.DeepClone();
+                }
                 if (method == "error" && args["willRetry"]?.GetValue<bool>() == true)
                     say("Codex 请求暂时失败，后台正在重试。可用 /tb stop 停止。");
                 if (method == "item/completed" && args["item"]?["type"]?.ToString() == "agentMessage")
