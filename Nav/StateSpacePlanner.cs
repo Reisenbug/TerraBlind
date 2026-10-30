@@ -1055,6 +1055,19 @@ namespace TerraBlind
             return LandVoid;
         }
 
+        static bool CanExcavateBody(float px, float py)
+        {
+            var (left, right) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
+            int top = (int)(py / 16f);
+            int bottom = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
+            for (int x = left; x <= right; x++)
+                for (int y = top; y <= bottom; y++)
+                    if (Predicates.IsLava(x, y)
+                        || (DigSolid(x, y) && DigTable.CostFrames(x, y) >= DigTable.Unmineable))
+                        return false;
+            return true;
+        }
+
         // 身体占的 3 行里,前进方向那一侧有实心 → 挖【最近的一格】。一次只挖一格:
         // 挖完重规划,能走就走,还堵着下一周期再发一条。这就是"挖一格试一格"
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigBodyBlock(PlanCtx ctx, SSNode cur, int ccx, int ccy, int gdir)
@@ -1064,6 +1077,8 @@ namespace TerraBlind
             // 挖完还走不动的话,下一周期会再发一条挖下一格。这就是挖一格试一格
             int nx = ccx + gdir;
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((nx, ccy))) return null;
+            float npx = nx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            if (!CanExcavateBody(npx, cur.Py)) return null;
             var (bl, br) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
             // 从头往脚扫:头顶那格最常是元凶(斜半砖顶高 6px),而且挖它人不会掉下去
             for (int y = ccy - 2; y <= ccy; y++)
@@ -1073,7 +1088,6 @@ namespace TerraBlind
                     int fc = DigTable.CostFrames(c, y);
                     if (fc >= DigTable.Unmineable) continue;   // 这格挖不动,看下一格
                     SegLog($"[ss-digbody] 身体压着的({c},{y})是实心,挖开它 {fc}帧");
-                    float npx = nx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
                     return (node, new List<(int, int)> { (c, y) }, fc);
                 }
@@ -1243,6 +1257,7 @@ namespace TerraBlind
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((x, ccy))) return null;
             float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
             float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
+            if (!CanExcavateBody(npx, npy)) return null;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
             return (node, tiles, cost);
         }
