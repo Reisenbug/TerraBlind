@@ -913,8 +913,43 @@ public sealed class Driver : ModSystem
         }
         if (recovered == 0) throw new InvalidOperationException("air_braking_recovered_no_recorded_jump");
         EscapeResultAdmission(p);
+        RecordedJumpPlace(p);
         Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
         enabled = false; FinishProcess(0);
+    }
+
+    void RecordedJumpPlace(Player p)
+    {
+        var tile = Main.tile[3321, 740];
+        tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Platforms;
+        p.position = new Vector2(53132.4f, 11798); p.velocity = Vector2.Zero;
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var planner = typeof(StateSpacePlanner);
+        planner.GetMethod("ClearPlaceCache", flags).Invoke(null, null);
+        var ctx = new StateSpacePlanner.PlanCtx { TraceJumpPlace = true };
+        var jump = planner.GetMethod("JumpPlace", flags);
+        var physics = PhysicsSimulator.Params.FromPlayer(p);
+        int accepted = 0;
+        foreach (float offset in new[] { 0f, -4f, 4f })
+        foreach (float vx in new[] { 0f, -.2f })
+        for (int hold = 2; hold <= 28; hold += 2)
+        {
+            var start = new StateSpacePlanner.SSNode { Px = p.position.X + offset, Py = p.position.Y, Vx = vx, Grounded = true };
+            if (hold == 2)
+            {
+                var arc = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = start.Px, Py = start.Py,
+                    Vx = vx, Grounded = true, JumpFramesLeft = 15 }, 0, 15, physics);
+                bool pillar = SkillExecutor.CanPillarFrom(start.Px, start.Py, out int top);
+                Console.WriteLine($"RECORDED_RISE offset={offset} vx={vx} rise={start.Py - arc.MinPy} pillar={pillar} top={top}");
+            }
+            object result = jump.Invoke(null, new object[] { ctx, start, 0, hold, physics, (int)TileID.Platforms });
+            if (result is ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> edge)
+            {
+                accepted++;
+                Console.WriteLine($"RECORDED_JUMP_PLACE offset={offset} vx={vx} hold={hold} frames={edge.Item2.Count} rise={p.position.Y - edge.Item1.Py}");
+            }
+        }
+        Console.WriteLine($"RECORDED_JUMP_PLACE_TOTAL accepted={accepted}");
     }
 
     void EscapeResultAdmission(Player p)

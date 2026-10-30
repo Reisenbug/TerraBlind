@@ -241,6 +241,7 @@ namespace TerraBlind
             // "铺一段再跳过去"这条链就永远搜不出来
             public Dictionary<SSNode, List<(int, int)>> Laid;
             public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
+            public bool TraceJumpPlace;
             // coarseStates 那条路线(TrapEscape 脱困)只问"出不出得去",残速无所谓 --
             // 落点同格的边可以只留最便宜的一条。正常规划【不能】开:斜坡连滑要靠残速接力
             public bool Coarse;
@@ -1329,6 +1330,7 @@ namespace TerraBlind
             // 列的顺序:弧顶列优先,再左右邻列。斜坡上能锚住的格通常偏向坡面一列,只扫自己那列会一无所获。
             int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int placeCx = int.MinValue, placeCy = 0;
+            int spots = 0, simulated = 0, rising = 0, brakedCount = 0;
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
             foreach (int pcxTry in new[] { apexFootCx, apexFootCx + 1, apexFootCx - 1 })
             {
@@ -1336,10 +1338,13 @@ namespace TerraBlind
                 {
                     if (!CanPlaceReal(pcxTry, py)) continue;
                     if (!ClearOfBody(minPy, pcxTry, py)) continue;
+                    spots++;
                     var trySeg = SimulateWithPlatform(cur, dir, hold, ph, pcxTry, py, platformTile);
                     if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
+                    simulated++;
                     int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
                     if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
+                    rising++;
                     using var preview = new PhysicsSimulator.PlatformPreview(new[] { (pcxTry, py) });
                     var braked = AppendBrake(trySeg.Value.node, trySeg.Value.frames, ph);
                     if (!braked.HasValue && dir != 0)
@@ -1353,10 +1358,13 @@ namespace TerraBlind
                         }
                     }
                     if (!braked.HasValue) { ctx.JpSlidOff++; continue; }
+                    brakedCount++;
                     placeCx = pcxTry; placeCy = py; seg = braked; break;
                 }
                 if (placeCx != int.MinValue) break;
             }
+            if (ctx.TraceJumpPlace)
+                DiagLog.Write($"[ss-jp-admission] start=({cur.Px},{cur.Py}) vx={cur.Vx} dir={dir} hold={hold} apex=({apexFootCx},{apexFootCy}) spots={spots} landed={simulated} rising={rising} braked={brakedCount}");
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             float probeVy = 0f, probeFootPy = 0f;
             // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,放进来还会用廉价空操作淹没搜索(指数爆炸)。
@@ -1367,7 +1375,11 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} probeVy={probeVy:0.#} probeFootPy={probeFootPy:0.#} platTopPy={placeCy * 16} landFeetCy={landFeetCy}");
                 ctx.JpFellThrough++; return null;
             }
-            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
+            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy))
+            {
+                if (ctx.TraceJumpPlace) DiagLog.Write($"[ss-jp-admission] no_place_frame tile=({placeCx},{placeCy}) dir={dir} hold={hold}");
+                ctx.JpNoSpot++; return null;
+            }
 
             ctx.JpOk++;
             return seg.Value;
@@ -2562,6 +2574,7 @@ namespace TerraBlind
             Trap.FootBlockCol = -1;   // 这一周期重新算。留着上一周期的会在早就走开的地方触发换站位
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            ctx.TraceJumpPlace = DiagLog.Trace && _pilLogCell != (curCx, curCy);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
             // 四邻真相行:场想从这儿往哪降,那里物理上到底是什么。Dijkstra 保证必有一个邻居 H 更低;
