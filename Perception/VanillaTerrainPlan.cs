@@ -117,11 +117,14 @@ public static class VanillaTerrainPlan
             int x = (int)((apex["x"].GetValue<float>() + width / 2f) / 16);
             int firstY = (int)Math.Ceiling((apex["y"].GetValue<float>() + height) / 16);
             int lastY = (int)((startY + height) / 16) - 1;
+            bool restored = false;
             for (int y = firstY; y <= lastY; y++)
             {
                 if (best != null && startY - (y * 16 - height) <= best["rise"].GetValue<float>()) break;
-                player = VanillaFrame.RestoreInWorker(state);
+                if (!restored) player = VanillaFrame.RestoreInWorker(state);
+                restored = true;
                 if (Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y) || !HasPlatformAnchor(x, y)) continue;
+                restored = false;
                 WorldGen.PlaceTile(x, y, Terraria.ID.TileID.Platforms, mute: true, plr: player.whoAmI);
                 if (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Terraria.ID.TileID.Platforms) continue;
                 var candidate = request.DeepClone().AsObject();
