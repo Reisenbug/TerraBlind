@@ -92,6 +92,7 @@ namespace TerraBlind
         static bool CanPlaceNow(Player p, int x, int y)
         {
             if (!Predicates.InBounds(x, y)) { _placeVeto = "oob"; return false; }
+            if (LavaSafety.IsLava(x, y)) { _placeVeto = "lava"; return false; }
             if (Main.tile[x, y].HasTile) { _placeVeto = "occupied"; return false; }
             int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
             int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
@@ -143,6 +144,7 @@ namespace TerraBlind
             if (FindPlatformSlot(p) < 0) return false;
             int firstPlatformRow = SupportRow(feetCx, feetCy + 1) - 1;
             while (firstPlatformRow > 0 && Main.tile[feetCx, firstPlatformRow].HasTile) firstPlatformRow--;
+            if (LavaSafety.IsLava(feetCx, firstPlatformRow)) return false;
             if (!PlatAnchor(feetCx, firstPlatformRow)) return false;
 
             int leftCol = (int)(px / 16f);
@@ -151,7 +153,8 @@ namespace TerraBlind
             // a tree (or other non-cuttable non-solid tile) in the body columns blocks platform placement → the
             // pillar would stall in place. reject the edge so the planner routes around instead of replanning.
             for (int y = feetCy; y >= feetCy - 2; y--)
-                if (BlocksPlacement(leftCol, y) || BlocksPlacement(rightCol, y)) { topFeetY = feetCy; return false; }
+                for (int x = leftCol; x <= rightCol; x++)
+                    if (BlocksPlacement(x, y) || LavaSafety.IsLava(x, y)) { topFeetY = feetCy; return false; }
 
             // 升 2 格后身体新进入 feetY-3/-4 两行,这两行不干净就会把头卡进墙里
             int feetY = feetCy;
@@ -161,6 +164,8 @@ namespace TerraBlind
                 int newRowA = feetY - 3, newRowB = feetY - 4; // rows the body newly enters on the next 2-tile climb
                 bool blocked = IsSolidNonPlatform(leftCol, newRowA) || IsSolidNonPlatform(rightCol, newRowA)
                              || IsSolidNonPlatform(leftCol, newRowB) || IsSolidNonPlatform(rightCol, newRowB);
+                for (int x = leftCol; x <= rightCol; x++)
+                    blocked |= LavaSafety.IsLava(x, newRowA) || LavaSafety.IsLava(x, newRowB);
                 if (blocked) break;
                 feetY -= 2;
                 reached = feetY;
@@ -247,7 +252,7 @@ namespace TerraBlind
                 bool grounded = p.velocity.Y == 0f && VanillaTerrainPlan.HasSupport(p);
                 if (feetYNow <= _targetWy && grounded)
                 {
-                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
+                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} attempts={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
                     Stop(); return;
                 }
                 // 只有脚踏实地时问"能不能起跳"才有意义:人在空中头顶本来就贴着方块,一算就说跳不起来,
@@ -297,7 +302,7 @@ namespace TerraBlind
                         if (feetYNow >= _jumpStartFeetY)
                         {
                             _stalledCycles++;
-                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles} anchor=({_pillarCol},{_anchorWy}) target={_targetWy} veto={_placeVeto} placed={_cyclesDone}");
+                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles} anchor=({_pillarCol},{_anchorWy}) target={_targetWy} veto={_placeVeto} attempts={_cyclesDone}");
                             if (_stalledCycles >= 3) { DiagLog.Write("[pillar] stop: no progress"); Stop(); return; }
                         }
                         else _stalledCycles = 0;
@@ -327,6 +332,11 @@ namespace TerraBlind
                 // 悬空起步时第一跳还没发生,锚点仍是 Start 填的 int.MaxValue --
                 // 拿它当下标就是 IndexOutOfRange(整局刷屏)。等落地那一跳把锚定好再干活
                 if (_anchorWy == int.MaxValue) return;
+                if (LavaSafety.IsLava(_pillarCol, _anchorWy))
+                {
+                    DiagLog.Write($"[pillar] stop: lava at ({_pillarCol},{_anchorWy})");
+                    Stop(); return;
+                }
                 // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
