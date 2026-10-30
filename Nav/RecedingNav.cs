@@ -328,6 +328,7 @@ namespace TerraBlind
             }
 
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
+            if (StateSpacePlanner.NativeReplayMatches(p)) StuckSentinel.Reset();
             if (StuckSentinel.Tick(p, _goalWx, _goalWy))
             {
                 // 【判死之前先叫一次 A*】。sentinel 数满四次说的正是"贪心蹭不动了",

@@ -3616,6 +3616,17 @@ namespace TerraBlind
         static int _fallFrames;
         const int UnplannedFallFrames = 14;   // ~14 帧自由落体 ≈ 4 格,超过一次跳跃的正常落差
 
+        internal static bool NativeReplayMatches(Player player)
+        {
+            if (_lastExecResult?.NativeVerified != true || _execFrames == null
+                || _execIdx < 1 || _execIdx >= _execFrames.Count) return false;
+            var previous = _execFrames[_execIdx - 1];
+            return MathF.Abs(player.position.X - previous.Px) <= 2f
+                && MathF.Abs(player.position.Y - previous.Py) <= 2f
+                && MathF.Abs(player.velocity.X - previous.Vx) <= 0.1f
+                && MathF.Abs(player.velocity.Y - previous.Vy) <= 0.1f;
+        }
+
         public static void ApplyControls()
         {
             if (_walkActive) { WatchUnplannedFall(); WalkTick(); return; }
