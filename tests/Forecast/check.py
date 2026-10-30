@@ -178,6 +178,7 @@ def main():
     parser.add_argument("--extra-jump-placement-probe", type=Path)
     parser.add_argument("--natural-jump-probe", type=Path)
     parser.add_argument("--platform-chain-probe", type=Path)
+    parser.add_argument("--chain-equipment", type=int)
     parser.add_argument("--extra-jump-position", type=float, nargs=2)
     parser.add_argument("--extra-jump-support", type=int, nargs=2)
     parser.add_argument("--navigation", action="store_true")
@@ -276,6 +277,8 @@ def main():
             raise TimeoutError("Worker startup timed out")
         if args.platform_chain_probe:
             snapshot = json.loads(args.platform_chain_probe.read_text())["snapshot"]
+            if args.chain_equipment is not None:
+                snapshot["armor"][3] = [args.chain_equipment, 0, int(args.chain_equipment != 0)]
             settled = worker.call("replay", snapshot=snapshot, controls=[0] * 30, capture_end=True)
             snapshot = settled["end_snapshot"]
             end = settled["frames"][-1]
