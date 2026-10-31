@@ -195,6 +195,28 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
+    public static async Task PlanningProbe()
+    {
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        string system = AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), definitions)
+            + "\n本轮仅做规划预演，游戏工具暂不开放，不执行代码或操作。可以根据API定义说明计划，但不能伪称已经查询、发现或完成。";
+        string input = "先仅做模拟规划，不实际行动。目标：自行寻找装备，合理搭配，击败骷髅王。"
+            + "\n模拟起点：原版普通难度开荒世界，新人物100永久血、铜制初始工具，没有额外装备；地图与资源位置未知。"
+            + "\n说明你准备怎样推进、如何选择和搭配装备、什么时候认为准备足够，以及目前不能确定什么。";
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-planning-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var replies = new JsonArray();
+        using var agent = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        await agent.RunAsync(input, "", root, "gpt-6-astra", system, new JsonArray(),
+            (_, _, _) => throw new InvalidOperationException("planning probe cannot execute tools"),
+            text => { replies.Add(text); Console.WriteLine(text); }, timeout.Token);
+        File.WriteAllText(Path.Combine(root, "planning.json"), new JsonObject { ["model"] = "gpt-6-astra", ["effort"] = "low",
+            ["input"] = input, ["replies"] = replies, ["token_usage"] = agent.TokenUsage,
+            ["host_turns"] = agent.TurnsStarted, ["usage_updates"] = agent.UsageUpdates, ["game_actions"] = 0 }.ToJsonString());
+        Console.WriteLine("PLANNING_PROBE_COMPLETE game_actions=0 report=" + root + "/planning.json");
+    }
+
     public static async Task ScriptModel(bool fullTools = false, string selectedModel = "")
     {
         string root = Directory.GetCurrentDirectory();
