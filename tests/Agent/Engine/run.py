@@ -17,6 +17,7 @@ def main():
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
     mode.add_argument("--workflow-live", action="store_true", help="Real model writes monitored gathering, pauses on low HP, then resumes; consumes quota")
     mode.add_argument("--planning-readonly", action="store_true", help="Real model queries actual game state then proposes an action without executing it")
+    mode.add_argument("--interactions", action="store_true", help="Real equipment swaps and generic NPC dialogue buttons, no model calls")
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
     mode.add_argument("--hornets-wall", action="store_true", help="Same hornet trial with a short stone obstacle")
     mode.add_argument("--script", action="store_true", help="Real script-tool collection/use/verification and timeout cleanup, no model calls")
@@ -62,6 +63,8 @@ def main():
         command.append("-agentworkflowcheck")
     if args.planning_readonly:
         command.append("-agentplanningcheck")
+    if args.interactions:
+        command.append("-agentinteractioncheck")
     if args.hornets or args.hornets_wall:
         command.append("-agenthornetcheck")
     if args.hornets_wall:

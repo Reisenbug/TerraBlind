@@ -176,3 +176,15 @@ dotnet run --project tests/Agent/AgentTests.csproj -- --codex-smoke
 ```
 
 完成标记为 `CODEX_SMOKE_COMPLETE checks=4 mock_world=true`：检查真实工具调用、上下文保留、打断和打断后的连续对话。
+
+### 装备与 NPC 对话
+
+`equipment_list` 和状态中的 `equipment_slots` 返回原版功能装备槽0..9：头、衣、裤、饰品，以及各槽是否解锁。`equip_item` 在背包0..49和指定装备槽之间交换物品，必须提供查询得到的 `expected_inventory`、`expected_equipment`（type/prefix/stack）。用空背包槽交换可以卸下装备。调用原生 ItemSlot 校验与点击逻辑，遵守部位、重复饰品、翅膀冲突、锁定槽及模组装备钩子；光标有物品或正在使用物品时拒绝。装备效果在下一次玩家更新生效。暂不覆盖时装、染料、坐骑、钩爪和模组新增槽。
+
+任务完成条件新增 `equipped`，按真实已解锁功能槽中的物品类型计数；背包、时装及锁定槽不计入。它证明已穿戴，不替代防御、机动性等效果与战斗准备程度的检查。
+
+`npc_dialogue_status` 查询当前对话、实际本地化按钮文字和商店状态。`npc_chat` 的 open 通过原生 NPC 交互打开对话，choose 接受当前按钮1或2与 `expected_text`，close 关闭对话。NPC编号、类型、距离和按钮文字均核对；超距离应先接近。选择经过原生对话处理与 NPCLoader 点击钩子，未硬编码特定 Boss。`button_dispatched` 仅表示点击已送达，模组仍可拦截；召唤后须用真实 NPC 条件验证。打开商店不包含购买能力。多人沿用原生交互与装备同步路径，尚未进行双客户端验收。
+
+`python3 tests/Agent/Engine/run.py --interactions` 不调用模型。受控场景给头盔、云朵瓶并生成老人和商人，验证穿脱及真实防御/二段跳效果、装备完成条件、错误部位、过期快照、重复饰品、锁定槽、过期对话按钮、模组点击拦截、夜间原生召唤、距离限制、商店与关闭。2026-11-01 实测19项通过，标记 `AGENT_INTERACTIONS_COMPLETE checks=19 model_calls=0 equipped_verified=true equipment_effects=true native_dialogue=true boss_summoned=1 merchant_shop=true range_guard=true`。报告目录 `/tmp/terrablind-agent-engine-1793466410582972000`。这不证明自主寻找装备或击败骷髅王。
+
+新增回归后，当前离线测试共72组，标记 `AGENT_CHECKS_COMPLETE groups=72`。其中装备/对话的离线适配器明确拒绝实际操作；上述原生行为由独立客户端检查，不由替身模拟成功。

@@ -19,6 +19,21 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed class ChatHookProbe : GlobalNPC
+{
+    public static int PreCalls, PostCalls;
+    public static bool Block;
+    public override bool PreChatButtonClicked(NPC npc, bool firstButton)
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck") || npc.type != NPCID.OldMan) return true;
+        PreCalls++; return !Block;
+    }
+    public override void OnChatButtonClicked(NPC npc, bool firstButton)
+    {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck") && npc.type == NPCID.OldMan) PostCalls++;
+    }
+}
+
 public sealed class HornetTrial : ModSystem
 {
     public static bool Enabled => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck");
@@ -151,6 +166,9 @@ public sealed class Driver : ModSystem
     StartHook navigationHook;
     bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
     bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
+    bool InteractionCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck");
+    int chatNpc, interactionWait;
+    string chatLabel;
     bool HealthLive => WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
     bool hazardApplied;
     int hazardUntil, hazardStock;
@@ -312,6 +330,22 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (InteractionCheck)
+                    {
+                        Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
+                        foreach (var npc in Main.npc) npc.active = false;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        foreach (var item in player.armor) item.TurnToAir();
+                        Main.mouseItem.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.WoodHelmet);
+                        player.inventory[1].SetDefaults(ItemID.WoodBreastplate);
+                        player.inventory[2].SetDefaults(ItemID.CloudinaBottle);
+                        player.inventory[3].SetDefaults(ItemID.CloudinaBottle);
+                        phase = 45; Call("task_plan", JsonNode.Parse($$"""
+                            {"goal":"actually wear helmet","replace":true,"steps":[{"id":"wear","description":"helmet in functional slot","conditions":[{"kind":"equipped","type":{{ItemID.WoodHelmet}},"count":1}]}]}
+                            """).AsObject());
+                        break;
+                    }
                     if (PlanningReadOnly)
                     {
                         Concessions.Enabled = false;
@@ -609,6 +643,116 @@ public sealed class Driver : ModSystem
                         && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
                     break;
+                case 29:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[0].type == ItemID.WoodHelmet && player.inventory[0].IsAir,
+                        "helmet_not_equipped");
+                    Call("task_step", new JsonObject { ["id"] = "wear", ["action"] = "verify" }); phase = 47;
+                    break;
+                case 30:
+                    Check(result["error"]?.ToString() == "incompatible_equipment" && player.inventory[1].type == ItemID.WoodBreastplate
+                        && player.armor[0].type == ItemID.WoodHelmet, "wrong_armor_slot_changed_items");
+                    var staleEquip = EquipRequest(1, 1); staleEquip["expected_inventory"]["stack"] = 99;
+                    Call("equip_item", staleEquip);
+                    break;
+                case 31:
+                    Check(result["error"]?.ToString() == "stale_equipment", "stale_equipment_was_accepted");
+                    Call("equip_item", EquipRequest(2, 3));
+                    break;
+                case 32:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[3].type == ItemID.CloudinaBottle,
+                        "accessory_not_equipped");
+                    Call("equip_item", EquipRequest(3, 4));
+                    break;
+                case 33:
+                    Check(result["error"]?.ToString() == "incompatible_equipment" && player.inventory[3].type == ItemID.CloudinaBottle,
+                        "duplicate_accessory_was_accepted");
+                    Check(player.statDefense > 0 && player.GetJumpState(ExtraJump.CloudInABottle).Enabled,
+                        "equipment_did_not_affect_real_player");
+                    Call("equip_item", EquipRequest(3, 9));
+                    break;
+                case 34:
+                    Check(result["error"]?.ToString() == "equipment_slot_locked", "locked_accessory_slot_was_accepted");
+                    Call("equip_item", EquipRequest(4, 3));
+                    break;
+                case 35:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[3].IsAir && player.inventory[4].type == ItemID.CloudinaBottle
+                        && Main.mouseItem.IsAir, "unequip_lost_or_duplicated_items");
+                    Main.dayTime = true; Main.time = 1000;
+                    chatNpc = NPC.NewNPC(new EntitySource_Misc("AgentInteractions"), (int)player.Center.X + 40, (int)player.Bottom.Y, NPCID.OldMan);
+                    Check(chatNpc < Main.maxNPCs, "old_man_fixture_missing");
+                    Main.npc[chatNpc].aiStyle = -1;
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan });
+                    break;
+                case 36:
+                    Check(result["open"]?.GetValue<bool>() == true && result["buttons_ready"]?.GetValue<bool>() == true,
+                        "native_dialogue_did_not_open");
+                    Check(!player.GetJumpState(ExtraJump.CloudInABottle).Enabled, "unequipped_accessory_effect_persisted");
+                    Call("npc_chat", new JsonObject { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan,
+                        ["button"] = 1, ["expected_text"] = "not-current" });
+                    break;
+                case 37:
+                    Check(result["error"]?.ToString() == "dialogue_option_changed" && !NPC.AnyNPCs(NPCID.SkeletronHead),
+                        "daytime_or_stale_button_bypassed_native_rules");
+                    Main.dayTime = false; Main.time = 1000;
+                    interactionWait = ticks + 5; phase = 38;
+                    break;
+                case 38:
+                    if (ticks < interactionWait) { phase = 38; break; }
+                    var dialogue = NpcDialogue.Snapshot();
+                    Check(dialogue["buttons"].AsArray().Count > 0, "night_button_missing");
+                    chatLabel = dialogue["buttons"][0]["text"].ToString();
+                    ChatHookProbe.Block = true;
+                    Call("npc_chat", ChooseButton());
+                    break;
+                case 39:
+                    Check(result["ok"]?.GetValue<bool>() == true && ChatHookProbe.PreCalls == 1 && ChatHookProbe.PostCalls == 0
+                        && !NPC.AnyNPCs(NPCID.SkeletronHead), "mod_chat_veto_was_bypassed");
+                    ChatHookProbe.Block = false;
+                    Call("npc_chat", ChooseButton());
+                    break;
+                case 40:
+                    Check(result["ok"]?.GetValue<bool>() == true && ChatHookProbe.PreCalls == 2 && ChatHookProbe.PostCalls == 1,
+                        "native_chat_hooks_not_dispatched_once");
+                    Check(Main.npc.Count(n => n.active && n.type == NPCID.SkeletronHead) == 1, "native_button_did_not_summon_one_boss");
+                    results.Add(new JsonObject { ["defense"] = (int)player.statDefense, ["button"] = chatLabel,
+                        ["pre_hooks"] = ChatHookProbe.PreCalls, ["post_hooks"] = ChatHookProbe.PostCalls,
+                        ["skeletron_count"] = 1, ["cursor_empty"] = Main.mouseItem.IsAir });
+                    foreach (var npc in Main.npc.Where(n => n.active && (n.boss || n.type == NPCID.SkeletronHand))) npc.aiStyle = -1;
+                    chatNpc = NPC.NewNPC(new EntitySource_Misc("AgentInteractions"), (int)player.Center.X + 2000, (int)player.Bottom.Y, NPCID.Merchant);
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant });
+                    break;
+                case 41:
+                    Check(result["error"]?.ToString() == "tool_exception" && result["detail"]?.ToString() == "npc_out_of_reach",
+                        "remote_dialogue_bypassed_range");
+                    Main.npc[chatNpc].position = player.position - new Vector2(40, 0);
+                    Main.npc[chatNpc].aiStyle = -1;
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant });
+                    break;
+                case 42:
+                    Check(result["open"]?.GetValue<bool>() == true && result["buttons"].AsArray().Count > 0,
+                        "merchant_dialogue_not_available");
+                    Call("npc_chat", new JsonObject { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant,
+                        ["button"] = 1, ["expected_text"] = result["buttons"][0]["text"].ToString() });
+                    break;
+                case 43:
+                    Check(result["ok"]?.GetValue<bool>() == true && Main.npcShop > 0, "generic_shop_button_not_dispatched");
+                    Call("npc_chat", new JsonObject { ["action"] = "close" });
+                    break;
+                case 44:
+                    Check(player.talkNPC == -1 && result["open"]?.GetValue<bool>() == false, "dialogue_close_failed");
+                    Finish(true, "AGENT_INTERACTIONS_COMPLETE checks=19 model_calls=0 equipped_verified=true equipment_effects=true native_dialogue=true boss_summoned=1 merchant_shop=true range_guard=true");
+                    break;
+                case 45:
+                    Call("task_step", new JsonObject { ["id"] = "wear", ["action"] = "verify" });
+                    break;
+                case 46:
+                    Check(result["verified"]?.GetValue<bool>() == false, "carried_helmet_falsely_verified_as_worn");
+                    phase = 29; Call("equip_item", EquipRequest(0, 0));
+                    break;
+                case 47:
+                    Check(result["verified"]?.GetValue<bool>() == true, "actually_worn_helmet_not_verified");
+                    phase = 30; Call("equip_item", EquipRequest(1, 0));
+                    break;
                 case 28:
                     Finish(result["ok"]?.GetValue<bool>() == true,
                         "AGENT_PLANNING_READONLY queries=" + result["queries"] + " blocked=" + result["blocked_mutators"] + " game_actions=0");
@@ -680,6 +824,16 @@ public sealed class Driver : ModSystem
         var targets = new[] { new GatherTarget(ItemID.LifeCrystal, wanted, new[] { "Heart" }, Array.Empty<int>()) };
         return (await Gather.Run(targets, 90, new ArrivedGather(targets), default)).ToJsonString();
     }
+
+    static JsonObject EquipRequest(int source, int target)
+    {
+        JsonObject State(Item item) => new() { ["type"] = item.type, ["prefix"] = item.prefix, ["stack"] = item.stack };
+        return new JsonObject { ["inventory_slot"] = source, ["equipment_slot"] = target,
+            ["expected_inventory"] = State(Main.LocalPlayer.inventory[source]), ["expected_equipment"] = State(Main.LocalPlayer.armor[target]) };
+    }
+
+    JsonObject ChooseButton() => new() { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan,
+        ["button"] = 1, ["expected_text"] = chatLabel };
 
     sealed class ArrivedGather : IGatherWorld
     {

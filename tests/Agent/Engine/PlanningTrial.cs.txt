@@ -15,7 +15,7 @@ namespace Engine;
 static class PlanningTrial
 {
     static readonly HashSet<string> ReadTools = new()
-    { "get_state", "boss_status", "game_catalog", "item_info", "recipe", "find_tiles", "npc_find", "find_biome", "tile_names", "wiki_search", "wiki_page" };
+    { "get_state", "boss_status", "equipment_list", "npc_dialogue_status", "game_catalog", "item_info", "recipe", "find_tiles", "npc_find", "find_biome", "tile_names", "wiki_search", "wiki_page" };
 
     public static async Task<string> Run()
     {
