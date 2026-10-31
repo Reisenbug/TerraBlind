@@ -85,7 +85,7 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
-        if (stopActions || PvpDuel.Active || AgentTools.Actions.HasActive) AgentTools.Stop();
+        if (stopActions || PvpDuel.Active || AgentTools.Actions.HasActive || AgentTools.HasBossControlOverride) AgentTools.Stop();
         while (_combatMessages.TryDequeue(out _)) { }
         _answer?.TrySetCanceled(); _answer = null;
         Status = "idle";

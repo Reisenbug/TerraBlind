@@ -85,6 +85,26 @@ static class RuntimeTests
             await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_dodge"] = true }, default));
             Check(AgentPermissions.Dodge && !AgentPermissions.Attack, "partial permission update changed unrelated permission");
             Console.WriteLine("PASS: combat denial stops attack, rejects fight and preserves partial updates");
+            bool previousAttackController = Combat.Enabled, previousMovementController = Dodge.Enabled;
+            var previousNpc = Game.npc[0];
+            Game.npc[0] = new Terraria.NPC { active = true, boss = true, type = 123, life = 75 };
+            try
+            {
+                Combat.Enabled = true; Dodge.Enabled = false;
+                var enabled = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
+                Check(Combat.Enabled && Dodge.Enabled && enabled["boss_control"]["attack_permitted"].GetValue<bool>() == false,
+                    "Boss controller enable bypassed separate attack permission");
+                var status = JsonNode.Parse(await Execute(AgentTools.Execute("boss_status", new JsonObject(), default)));
+                Check(status["active_bosses"].AsArray().Any(b => b["type"].GetValue<int>() == 123 && b["hp"].GetValue<int>() == 75)
+                    && Combat.Enabled && Dodge.Enabled, "Boss status omitted current state or mutated controller flags");
+                await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = false }, default));
+                Check(!Combat.Enabled && !Dodge.Enabled, "Boss controller did not disable");
+                NativeAgent.Stop();
+                Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride,
+                    "Agent stop did not restore existing user controller settings");
+            }
+            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; }
+            Console.WriteLine("PASS: Boss controls expose actual state, preserve independent permissions and restore user settings on stop");
 
             Game.LocalPlayer.inventory[0].Name = "木材";
             Game.LocalPlayer.inventory[0].stack = 20;
@@ -277,6 +297,8 @@ static class RuntimeTests
                     "background action died with the returning script or query lacked current observation");
                 var conflicting = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 0, ["y"] = 0 }, default)));
                 Check(conflicting["error"].ToString() == "action_busy", "foreground action stole managed input");
+                var bossConflict = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
+                Check(bossConflict["error"].ToString() == "action_busy", "Boss controller stole managed action input");
                 var pausedAction = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
                     { ["handle"] = handle, ["command"] = "pause" }, default)));
                 Check(pausedAction["status"].ToString() == "paused" && !RecedingNav.Active, "pause failed to stop actual navigation adapter");

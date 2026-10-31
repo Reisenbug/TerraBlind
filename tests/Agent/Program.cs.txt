@@ -140,7 +140,7 @@ static class Tests
         DirectiveTests.Run();
         HistoryTests.Run();
         InventoryTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=69");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=70");
     }
 
     sealed class FakeHandler : HttpMessageHandler

@@ -60,7 +60,7 @@ namespace Terraria
     public class NPC
     {
         public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
-        public bool active, friendly, townNPC;
+        public bool active, friendly, townNPC, boss;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
@@ -215,11 +215,12 @@ namespace TerraBlind
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
     {
+        public static string Last = "idle";
         public static bool Enabled;
         public static int Stops;
         public static void Stop() => Stops++;
     }
-    public static class Dodge { public static bool Enabled; }
+    public static class Dodge { public static bool Enabled; public static string Last = "idle"; }
     public static class Manual { public static bool On; }
     public static class StartRun
     {

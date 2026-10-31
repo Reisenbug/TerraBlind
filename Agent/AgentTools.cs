@@ -14,6 +14,8 @@ public static class AgentTools
 {
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
+    static (bool Attack, bool Dodge)? bossBefore;
+    internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default));
     static readonly Dictionary<string, int> Tracking = new();
@@ -23,6 +25,10 @@ public static class AgentTools
     public static void Stop()
     {
         Actions.CancelAll();
+        if (bossBefore is { } previous)
+        {
+            Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; bossBefore = null;
+        }
         StopInputs();
     }
 
@@ -88,8 +94,22 @@ public static class AgentTools
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Snapshot();
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Snapshot();
+        state["boss_control"] = BossStatus();
         return state.ToJsonString();
     }, token);
+
+    static JsonObject BossStatus() => new()
+    {
+        ["attack_enabled"] = Combat.Enabled, ["movement_enabled"] = Dodge.Enabled,
+        ["attack_permitted"] = AgentPermissions.Attack, ["movement_permitted"] = AgentPermissions.Dodge,
+        ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
+        ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
+        ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
+        ["other_key_sources"] = "not_checked",
+        ["active_bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0)
+            .Select(n => (JsonNode)new JsonObject { ["type"] = n.type, ["hp"] = n.life,
+                ["x"] = n.Center.X, ["y"] = n.Center.Y }).ToArray())
+    };
 
     static Task<JsonObject> ObserveAction(CancellationToken token) => NativeAgent.OnMain(() =>
     {
@@ -182,7 +202,7 @@ public static class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure";
         bool action = external || name is "fight" or "fight_player";
-        if ((action || name is "combat_start" or "combat_reposition") && Actions.Conflicts)
+        if ((action || name is "combat_start" or "combat_reposition" || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
                 ["action_tasks"] = Actions.Snapshot() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
@@ -400,12 +420,21 @@ public static class AgentTools
             case "set_combat":
                 result = await NativeAgent.OnMain(() =>
                 {
+                    if (args["boss_control"] != null)
+                    {
+                        bossBefore ??= (Combat.Enabled, Dodge.Enabled);
+                        Combat.Enabled = Dodge.Enabled = Bool(args, "boss_control");
+                        if (!Combat.Enabled) Combat.Stop();
+                    }
                     if (args["auto_dodge"] != null) AgentPermissions.Dodge = Bool(args, "auto_dodge");
                     if (args["auto_attack"] != null) AgentPermissions.Attack = Bool(args, "auto_attack");
                     if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); PlayerCombat.Stop(); }
-                    return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack };
+                    return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack,
+                        ["boss_control"] = BossStatus() };
                 }, token);
                 break;
+            case "boss_status":
+                return (await NativeAgent.OnMain(BossStatus, token)).ToJsonString();
             case "track":
                 result = await NativeAgent.OnMain(() =>
                 {

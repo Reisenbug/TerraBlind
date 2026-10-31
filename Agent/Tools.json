@@ -1,4 +1,5 @@
 [
+  { "type":"function", "function": { "name":"boss_status", "description":"只读查询既有Boss控制器：attack_enabled/movement_enabled是开关，attack_permitted/movement_permitted是许可；manual_control与pvp_active表示其他控制模式。active_bosses列实际活跃Boss，位置为像素，attack_state/movement_state为最近状态。该控制器用Jev实时走位并自动攻击，Boss出现后自动识别；不是普通fight或PvP接口。需要TypeSafe Key；config_key_present只检查模组配置，其他密钥来源未检查，false不能断言完全没有Key。未开启可在战前set_combat boss_control:true；开启不代表召唤成功或必胜。", "parameters":{"type":"object","properties":{}} } },
   { "type":"function", "function": { "name":"action_start", "description":"启动可查询、暂停、取消、恢复的后台游戏动作，立即返回handle/status。tool仅支持gather/nav_to/fight；args使用对应游戏API参数。gather按目标总库存恢复，不重置已有收获；nav_to/fight恢复时重新读取现场，不恢复旧按键序列。一次只有一个任务持有输入，其他操作先暂停。句柄保留到离开世界，最多32个。动作绑定当前玩家指令，stop/新指令/离开世界会取消；脚本正常结束不会取消。", "parameters":{"type":"object","properties":{"tool":{"type":"string","enum":["gather","nav_to","fight"]},"args":{"type":"object"}},"required":["tool","args"]} } },
   { "type":"function", "function": { "name":"action_query", "description":"读取后台动作handle的status/attempt/args/result和最新observation，可选wait_ms最多1000毫秒等待进展。status为running/paused/cancelled/completed/failed。completed只表示该工具执行结束，不保证整个目标完成，须看result和实际库存/位置/击杀证据。查询不会重启或重放动作。", "parameters":{"type":"object","properties":{"handle":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":1000}},"required":["handle"]} } },
   { "type":"function", "function": { "name":"action_control", "description":"控制后台任务：pause等待旧动作退出并释放输入后返回；cancel停止并保留证据；resume重新观察当前状态后启动同一高层意图，attempt递增，可选args整体替换原参数。已completed不可resume；paused/cancelled/failed可明确恢复。恢复不会重放调用它的整个脚本，gather继续补足目标总库存。先查询和处理危险，再决定恢复。", "parameters":{"type":"object","properties":{"handle":{"type":"string"},"command":{"type":"string","enum":["pause","cancel","resume"]},"args":{"type":"object"}},"required":["handle","command"]} } },
@@ -401,7 +402,7 @@
     "type": "function",
     "function": {
       "name": "fight",
-      "description": "用武器持续攻击附近敌对NPC；npc_types可限定目标类型，省略才攻击最近敌人。不攻击玩家。它负责定点攻击，不提供复杂追击或刷怪闭环；要按材料数量收集用gather。与玩家对战用combat_start。",
+      "description": "普通NPC战斗：用武器持续攻击附近敌人，许可下进行局部弹幕/接触避让和射界恢复；npc_types可限定类型。不提供完整复杂追击或刷怪闭环，材料收集用gather。已有独立Jev Boss控制器，通过boss_status查询、set_combat boss_control启停，不要把本工具当唯一Boss战能力。与玩家对战用combat_start。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -634,10 +635,13 @@
     "type": "function",
     "function": {
       "name": "set_combat",
-      "description": "设置默认战斗许可。玩家明确要求别自动走位或别攻击时使用。未指定字段保持不变，直到再次修改或离开世界。",
+      "description": "设置战斗许可及既有Boss控制器。auto_dodge/auto_attack只修改许可，不会自己开启控制器。boss_control=true启用Jev Boss走位和自动攻击，false关闭；仍受许可、人工控制、PvP模式和Key是否可用约束。战前先暂停采集/移动，再启用；Boss出现后自动接管，不需fight轮询。不负责召唤或装备，不保证获胜。通过boss_status或返回boss_control读取实际状态。未指定字段保持不变；停止Agent或离开世界会恢复Agent修改前的控制器开关。",
       "parameters": {
         "type": "object",
         "properties": {
+          "boss_control": {
+            "type": "boolean"
+          },
           "auto_dodge": {
             "type": "boolean"
           },
