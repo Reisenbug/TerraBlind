@@ -150,6 +150,7 @@ public sealed class Driver : ModSystem
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook navigationHook;
     bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
+    bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
     bool HealthLive => WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
     bool hazardApplied;
     int hazardUntil, hazardStock;
@@ -299,7 +300,7 @@ public sealed class Driver : ModSystem
                     pending = AgentTools.State(default);
                 return;
             }
-            if (++ticks > 7200) throw new TimeoutException("engine_check_frame_limit");
+            if (++ticks > (PlanningReadOnly ? 18000 : 7200)) throw new TimeoutException("engine_check_frame_limit");
             if (!TeleportCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
@@ -311,6 +312,18 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (PlanningReadOnly)
+                    {
+                        Concessions.Enabled = false;
+                        Combat.Enabled = Dodge.Enabled = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        phase = 28; pending = PlanningTrial.Run();
+                        break;
+                    }
                     if (TeleportCheck)
                     {
                         AgentPermissions.Attack = AgentPermissions.Dodge = false;
@@ -595,6 +608,10 @@ public sealed class Driver : ModSystem
                     Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
                         && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
+                case 28:
+                    Finish(result["ok"]?.GetValue<bool>() == true,
+                        "AGENT_PLANNING_READONLY queries=" + result["queries"] + " blocked=" + result["blocked_mutators"] + " game_actions=0");
                     break;
                 case 26:
                     Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "yield",

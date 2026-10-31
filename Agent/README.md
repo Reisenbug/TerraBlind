@@ -28,6 +28,12 @@ Agent 提问时，下一条 `/tb` 是当前任务的回答。执行中收到其�
 
 模型顶层入口为 `run_script/get_state/say/ask`。完整游戏 API 的名称、说明与参数定义放在系统上下文中，游戏操作由代码里的 `tool(...)` 调用；原分发器和权限检查保留。Codex 与 API 后端使用同一入口，不再把所有游戏操作作为平级模型函数暴露。
 
+“自行寻找装备、合理搭配、自己准备战斗”授权Agent决定常规路线、装备选择、准备数量和开打门槛；明确的装备禁令、地形权限、保护区和停止要求仍优先。技术未知先查询，不把日常选择退回玩家。明确交付任务缺数量、目标实质歧义或需要越过权限时仍须询问。
+
+Boss已有独立实时控制器，`boss_status`和`get_state.boss_control`暴露开关、许可、当前状态及在场Boss。`set_combat({boss_control:true})`开启原有Jev走位和自动攻击，false关闭；auto_dodge/auto_attack只修改许可，二者不能混淆。开启前先释放其他动作输入，不用普通fight或PvP工具维持Boss战。需要可用TypeSafe Key；状态只报告模组配置中是否有Key，其他来源未检查，不输出Key。Agent停止或离开世界时恢复Agent修改前的控制器开关。该接口不负责召唤、穿戴装备或场地建设，也不保证获胜；普通fight本身具备局部避让和射界处理，旧“只定点攻击”描述已更正。
+
+`python3 tests/Agent/Engine/run.py --planning-readonly` 启动独立客户端，允许模型查询真实世界副本、配方、原版编号和Wiki，所有动作在分发前由白名单拒绝；不执行模型提出的下一步。测试起点100血、三件铜工具，关闭测试进程的Concessions补给，不改正式设置。2026-10-31 Astra/low完成7次查询，未尝试或执行修改操作；自行提出先搜刮最近箱子(2057,317)，受阻改试(2162,328)，给出武器、准备门槛及Boss控制器启用方案，questions为空。报告 `/tmp/terrablind-agent-engine-1793460893321055000/agent-planning-result.json`。前一轮沿用模组9999木材补给，提出先合成工作台，不能当纯开荒起点。实际执行、装备穿戴和老人对话召唤仍未验证；模型准确指出当前API未明确提供后两项接口。
+
 跨段脚本传入稳定的 `workflow`，使用 `step(id, fn)` 保存有独立恢复意义的执行步骤。宿主缓存完成步骤的JSON返回值；同名步骤再次出现只读缓存，不重放动作。失败或取消时未完成步骤为uncertain，不能直接重跑；先读取 `get_state.script_workflows` 或 `script_progress`，核对实际状态，再以当前revision明确retry或complete。核对记录附实际随身库存和永久血量，但不替代任务条件验收，也不提供崩溃事务或任意副作用的恰好一次保证。JS变量不保留，只有步骤结果、最近12次调用和最后段落结果由宿主保存；退出世界清空，最多8个workflow、每个128个步骤。
 
 脚本返回 `{status:'yield', completed, blocked, next}` 可要求模型根据新信息续写。宿主只对本轮新yield的workflow续接，完成步骤增加才算进展；无进展最多额外一次，之后paused。`status:'done'` 与 `status:'blocked'` 不自动续接，不等于宿主已验证最终游戏目标。进度读取和调用日志不增加用于核对的revision；没有运行中step时可在续写段落中核对uncertain步骤。
@@ -109,7 +115,7 @@ dotnet run --project tests/Agent/AgentTests.csproj
 
 当前 live 场地会重新清空附近地面上方空间与旧掉落物，放置铁砧和10颗可实际采集的生命水晶，关闭背包界面。不会直接给 agent 水晶或替它使用；只隔离验证第一阶段100→300血的执行。尚未预置完整的材料与召唤资源链，不能视为整条任务的受控验收。
 
-离线测试共 69 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=69`。直接链接生产的 Agent 协议、脚本解释器、宿主工作流、后台动作句柄、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本入口及API元数据、组合与分支、逐次采集与行为顺序、跨段续接与核对、暂停/取消/恢复、输入归属和过期清理、资源限额、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
+离线测试共 70 组，结束标记为 `AGENT_CHECKS_COMPLETE groups=70`。直接链接生产的 Agent 协议、脚本解释器、宿主工作流、后台动作句柄、调度、网络、PlayerCombat、WoodHarvest、Gather 和 FightCoordinator。覆盖脚本入口及API元数据、组合与分支、逐次采集与行为顺序、跨段续接与核对、暂停/取消/恢复、输入归属和过期清理、Boss控制开关与许可分离、资源限额、工具参数及权限、真实条件验证、有限续接、采集预算、NPC 类型过滤、弹幕避让、射界恢复、名称解析与宝藏接近后取物的调用顺序；使用替身的部分不能视为客户端验收。
 
 `dotnet run --project tests/Agent/AgentTests.csproj -- --routing-benchmark gpt-6-astra 2` 比较正式脚本入口与测试专用混合入口，不改变正式路由，会消耗模型额度。后者额外直接暴露use_item/gather/action_start/action_query/action_control，其余API元数据及系统规则相同，仅替换路由说明。两轮顺序交错、每项新建会话、固定low；模拟库存和危险，不测试游戏物理。三个场景：使用已有一颗水晶；收集10颗；每颗后说“叮”，库存3时注入HP80，须交回后由宿主恢复HP再继续。低血量期间继续采集标为失败，不由模拟器自动替agent避险。完成状态由库存、永久血、逐次顺序和危险期间行为检查，不采用模型自述。使用生产Jint、ScriptProgress、ActionTasks和TaskPlan，未实现的其他游戏工具明确返回错误。
 
