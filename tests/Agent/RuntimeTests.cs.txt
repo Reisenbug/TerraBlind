@@ -105,6 +105,26 @@ static class RuntimeTests
             }
             finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; }
             Console.WriteLine("PASS: Boss controls expose actual state, preserve independent permissions and restore user settings on stop");
+            var savedBag = Game.LocalPlayer.inventory[49];
+            var savedArmor = Game.LocalPlayer.armor;
+            try
+            {
+                Game.LocalPlayer.armor = Enumerable.Range(0, 20).Select(_ => new Terraria.Item()).ToArray();
+                Game.LocalPlayer.inventory[49] = new Terraria.Item { type = 4321, stack = 1 };
+                Game.LocalPlayer.armor[8] = new Terraria.Item { type = 4321, stack = 1 };
+                Game.LocalPlayer.armor[10] = new Terraria.Item { type = 4321, stack = 1 };
+                var equipmentPlan = new AgentTaskPlan();
+                equipmentPlan.Create(JsonNode.Parse("""
+                    {"goal":"wear equipment","steps":[{"id":"wear","description":"actually equipped","conditions":[{"kind":"equipped","type":4321,"count":1}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                Check(!equipmentPlan.Advance("wear", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                    "inventory, locked or vanity slots falsely satisfied equipped condition");
+                Game.LocalPlayer.armor[0] = Game.LocalPlayer.inventory[49]; Game.LocalPlayer.inventory[49] = new Terraria.Item();
+                Check(equipmentPlan.Advance("wear", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                    "functional equipped slot did not satisfy host condition");
+            }
+            finally { Game.LocalPlayer.inventory[49] = savedBag; Game.LocalPlayer.armor = savedArmor; }
+            Console.WriteLine("PASS: equipped condition distinguishes functional slots from inventory, vanity and locked slots");
 
             Game.LocalPlayer.inventory[0].Name = "木材";
             Game.LocalPlayer.inventory[0].stack = 20;
@@ -299,6 +319,16 @@ static class RuntimeTests
                 Check(conflicting["error"].ToString() == "action_busy", "foreground action stole managed input");
                 var bossConflict = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
                 Check(bossConflict["error"].ToString() == "action_busy", "Boss controller stole managed action input");
+                foreach (string interaction in new[] { "equip_item", "npc_chat" })
+                {
+                    var busy = JsonNode.Parse(await Execute(AgentTools.Execute(interaction, new JsonObject(), default)));
+                    Check(busy["error"].ToString() == "action_busy", "interaction stole managed action input");
+                }
+                var gear = JsonNode.Parse(await Execute(AgentTools.Execute("equipment_list", new JsonObject(), default)));
+                var chat = JsonNode.Parse(await Execute(AgentTools.Execute("npc_dialogue_status", new JsonObject(), default)));
+                Check(gear is JsonArray && chat["open"]?.GetValue<bool>() == false && RecedingNav.Active,
+                    "read-only interaction query stopped the owned action or changed its result format");
+                Console.WriteLine("PASS: equipment/dialogue adapters block concurrent input changes while permitting read-only queries; game behavior engine-tested separately");
                 var pausedAction = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
                     { ["handle"] = handle, ["command"] = "pause" }, default)));
                 Check(pausedAction["status"].ToString() == "paused" && !RecedingNav.Active, "pause failed to stop actual navigation adapter");

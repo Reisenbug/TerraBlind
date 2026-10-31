@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Terraria.Map
 {
@@ -34,6 +37,8 @@ namespace Terraria
     }
     public class Player
     {
+        public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
+        public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool controlUp, controlDown, controlHook, ExtraJump;
@@ -221,6 +226,18 @@ namespace TerraBlind
         public static void Stop() => Stops++;
     }
     public static class Dodge { public static bool Enabled; public static string Last = "idle"; }
+    public static class Equipment
+    {
+        public static JsonArray Snapshot() => new();
+        public static JsonObject Swap(JsonObject args) => new() { ["error"] = "equipment_requires_engine" };
+    }
+    public static class NpcDialogue
+    {
+        public static JsonObject Snapshot() => new() { ["open"] = false };
+        public static JsonObject Open(int index, int type) => new() { ["error"] = "dialogue_requires_engine" };
+        public static Task<JsonObject> Choose(int index, int type, int button, string label, CancellationToken token) => Task.FromResult(Open(index, type));
+        public static void Close() { }
+    }
     public static class Manual { public static bool On; }
     public static class StartRun
     {

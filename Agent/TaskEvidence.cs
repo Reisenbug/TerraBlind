@@ -27,6 +27,8 @@ public class AgentTaskEvidence : GlobalNPC
         {
             "permanent_health" => Main.LocalPlayer.statLifeMax,
             "item" => Main.LocalPlayer.inventory.Where(item => item != null && !item.IsAir && item.type == type).Sum(item => item.stack),
+            "equipped" => Enumerable.Range(0, 10).Where(slot => Main.LocalPlayer.IsItemSlotUnlockedAndUsable(slot)
+                && Main.LocalPlayer.armor[slot].type == type).Sum(slot => Main.LocalPlayer.armor[slot].stack),
             "npc_alive" => Main.npc.Count(npc => npc != null && npc.active && npc.life > 0 && npc.type == type),
             "npc_kills" when Main.netMode == NetmodeID.SinglePlayer => Kills.GetValueOrDefault(type),
             "npc_kills" => throw new InvalidOperationException("当前本次击杀证据仅支持单人游戏；联机需要服务器确认，不能用历史Boss进度代替。"),

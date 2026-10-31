@@ -39,9 +39,9 @@ public sealed class AgentTaskPlan
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "item" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
+                if (kind is not ("permanent_health" or "item" or "equipped" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
                     || kind != "permanent_health" && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件仅支持 permanent_health、item、npc_kills、npc_alive，count/type 必须为正数。");
+                    throw new InvalidOperationException("条件仅支持 permanent_health、item、equipped、npc_kills、npc_alive，count/type 必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
                 if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
                 int value = measure(verified);

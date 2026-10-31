@@ -95,6 +95,7 @@ public static class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Snapshot();
         state["boss_control"] = BossStatus();
+        state["equipment_slots"] = Equipment.Snapshot();
         return state.ToJsonString();
     }, token);
 
@@ -200,7 +201,7 @@ public static class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure";
+            or "gather" or "collect_treasure" or "equip_item" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
         if ((action || name is "combat_start" or "combat_reposition" || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
@@ -402,6 +403,34 @@ public static class AgentTools
                     || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
                     await Task.Delay(50, token);
                 result = await NativeAgent.OnMain(() => PvpInventory.Swap(args), token);
+                break;
+            case "equipment_list":
+                return (await NativeAgent.OnMain(Equipment.Snapshot, token)).ToJsonString();
+            case "equip_item":
+                result = await NativeAgent.OnMain(() => Equipment.Swap(args), token);
+                break;
+            case "npc_dialogue_status":
+                return (await NativeAgent.OnMain(NpcDialogue.Snapshot, token)).ToJsonString();
+            case "npc_chat":
+                string chatAction = Text(args, "action");
+                if (chatAction == "close")
+                    result = await NativeAgent.OnMain(() => { NpcDialogue.Close(); return NpcDialogue.Snapshot(); }, token);
+                else if (chatAction == "choose") result = await NpcDialogue.Choose(Int(args, "npc", -1), Int(args, "npc_type", -1),
+                    Int(args, "button"), Text(args, "expected_text"), token);
+                else if (chatAction == "open")
+                {
+                    result = await NativeAgent.OnMain(() => NpcDialogue.Open(Int(args, "npc", -1), Int(args, "npc_type", -1)), token);
+                    var chatClock = Stopwatch.StartNew();
+                    while (result["error"] == null && result["open"]?.GetValue<bool>() == true
+                        && result["buttons_ready"]?.GetValue<bool>() != true && chatClock.Elapsed.TotalSeconds < 3)
+                    {
+                        await Task.Delay(50, token);
+                        result = await NativeAgent.OnMain(NpcDialogue.Snapshot, token);
+                    }
+                    if (result["open"]?.GetValue<bool>() == true && result["buttons_ready"]?.GetValue<bool>() != true)
+                        result["error"] = "dialogue_ui_not_ready";
+                }
+                else throw new ArgumentException("npc_chat.action需要open/choose/close。");
                 break;
             case "combat_observe":
                 result = new JsonObject { ["error"] = "polling_disabled",
