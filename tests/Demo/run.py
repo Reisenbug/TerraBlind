@@ -96,6 +96,10 @@ def main():
         command.append("-vnavoldnavcheck")
     if "--readme-route" in sys.argv:
         command.extend(["-vnavreadmeroute", "-vnavoldnavcheck"])
+    if "--survival-route" in sys.argv:
+        if "--readme-route" not in sys.argv:
+            raise ValueError("--survival-route requires --readme-route")
+        command.append("-vnavsurvivalroute")
     if "--reverse" in sys.argv:
         if "--readme-route" not in sys.argv:
             raise ValueError("--reverse requires --readme-route")
@@ -168,6 +172,8 @@ def main():
             return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
+            if "--survival-route" in sys.argv:
+                assert row["survival_route"] and row["fall_hits"] == 0 and row["drowning_frames"] == 0
             assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or "--reverse" in sys.argv or row["y"] >= row["underworld"])
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]

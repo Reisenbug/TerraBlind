@@ -290,13 +290,16 @@ public sealed class RegionHandoffCheck : ModSystem
 
 public sealed class DamageTrace : ModPlayer
 {
+    public static bool SurvivalRoute => Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalroute");
+    public static int FallHits, DrowningFrames;
     public override bool FreeDodge(Player.HurtInfo info)
-        => Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute");
+        => Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute;
 
     public override void PostUpdate()
     {
-        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute"))
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute)
             Player.AddBuff(BuffID.Gills, 216000);
+        if (SurvivalRoute && Player.breath <= 0 && Collision.DrownCollision(Player.position, Player.width, Player.height, Player.gravDir)) DrowningFrames++;
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck") && Player.FindBuffIndex(BuffID.Shine) < 0)
             Player.AddBuff(BuffID.Shine, 216000);
     }
@@ -305,6 +308,7 @@ public sealed class DamageTrace : ModPlayer
     {
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck")) return;
         var source = info.DamageSource;
+        if (SurvivalRoute && source.SourceOtherIndex is 0 or 5) FallHits++;
         Console.WriteLine(FormattableString.Invariant($"VNAV_HURT tick={Main.GameUpdateCount} damage={info.Damage} hp_before={Player.statLife} x={Player.Center.X / 16} y={Player.Bottom.Y / 16} fall_start={Player.fallStart} other={source.SourceOtherIndex} npc={source.SourceNPCIndex} projectile={source.SourceProjectileType}"));
     }
 }
@@ -1317,7 +1321,17 @@ public sealed class Driver : ModSystem
                     player.armor[3].SetDefaults(ItemID.CloudinaBottle);
                     Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE slot=3 item=53");
                 }
-                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode=true gills=true start=jungle_entrance");
+                if (DamageTrace.SurvivalRoute)
+                {
+                    Config.I.AlwaysGillsAndShine = false; Concessions.Enabled = false;
+                    DamageTrace.FallHits = DamageTrace.DrowningFrames = 0;
+                    Array.Clear(player.buffType); Array.Clear(player.buffTime);
+                    player.inventory[5].SetDefaults(ItemID.Cobweb); player.inventory[5].stack = 100;
+                    player.armor[0].SetDefaults(ItemID.MoltenHelmet);
+                    player.armor[1].SetDefaults(ItemID.MoltenBreastplate);
+                    player.armor[2].SetDefaults(ItemID.MoltenGreaves);
+                }
+                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode={!DamageTrace.SurvivalRoute} gills={!DamageTrace.SurvivalRoute} start=jungle_entrance");
                 bool reverse = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse");
                 int startX = reverse ? 3383 : 3384, startY = reverse ? 1069 : 242;
                 player.Teleport(new Vector2(startX * 16 + 8 - player.width / 2f, (startY + 1) * 16 - player.height));
@@ -1332,7 +1346,13 @@ public sealed class Driver : ModSystem
         if (!started)
         {
             string[] args;
-            if (journey)
+            if (readmeRoute && Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string directSnapshot))
+            {
+                var fixture = JsonNode.Parse(File.ReadAllText(directSnapshot));
+                routeGoalX = fixture["goal_x"].GetValue<int>(); routeGoalY = fixture["goal_y"].GetValue<int>();
+                args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+            }
+            else if (journey)
             {
                 var goal = JourneyApproach(player);
                 routeGoalX = goal.X; routeGoalY = goal.Y;
@@ -1514,6 +1534,8 @@ public sealed class Driver : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
+        if (DamageTrace.SurvivalRoute && (DamageTrace.FallHits > 0 || DamageTrace.DrowningFrames > 0))
+            throw new InvalidOperationException($"survival_route_hurt fall_hits={DamageTrace.FallHits} drowning_frames={DamageTrace.DrowningFrames}");
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
         if (RecedingNav.Active) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
@@ -1537,6 +1559,8 @@ public sealed class Driver : ModSystem
             if (++continuityLeg < (journey ? journeyStops.Length : offsets.Length)) { started = false; return; }
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
+            ["survival_route"] = DamageTrace.SurvivalRoute, ["fall_hits"] = DamageTrace.FallHits,
+            ["drowning_frames"] = DamageTrace.DrowningFrames,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
             ["underworld"] = Main.UnderworldLayer, ["extra_jumps_used"] = routeExtraJumps,
             ["platforms_remaining"] = player.inventory.Where(item => item.type == ItemID.WoodPlatform).Sum(item => item.stack),
