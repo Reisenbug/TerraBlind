@@ -1482,8 +1482,54 @@ public sealed class Engine : ModSystem
             int recovered = source.breath;
             if (submerged >= 12 || recovered <= submerged || source.statLife != 400)
                 throw new InvalidOperationException($"breathing_probe_failed submerged={submerged} recovered={recovered} hp={source.statLife}");
+            Setup(new JsonObject());
+            for (int x = X - 5; x <= X + 6; x++)
+            for (int y = Y - 12; y <= Y; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                bool solid = x == X - 5 || x >= X + 2 || y == Y - 12 || y == Y;
+                tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            }
+            source.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+            for (int x = X - 4; x <= X + 1; x++)
+            for (int y = Y - 11; y < Y; y++) Liquid.AddWater(x, y);
+            var dig = new System.Collections.Generic.Queue<Point>();
+            for (int y = Y - 3; y >= Y - 5; y--)
+            for (int x = X + 2; x <= X + 3; x++) dig.Enqueue(new Point(x, y));
+            for (int y = Y - 2; y < Y; y++)
+            for (int x = X + 2; x <= X + 3; x++) dig.Enqueue(new Point(x, y));
+            int airMinBreath = source.breath, airMinHp = source.statLife, mined = 0, airFrames = 0;
+            bool breathed = false;
+            for (; airFrames < 1500 && !source.dead; airFrames++)
+            {
+                while (dig.Count > 0 && !Main.tile[dig.Peek().X, dig.Peek().Y].HasTile)
+                { dig.Dequeue(); mined++; }
+                var keys = VanillaKeys.None;
+                int useSlot = -1;
+                Point? target = null;
+                if (dig.Count > 0) { useSlot = 0; target = dig.Peek(); }
+                else
+                {
+                    if (source.position.X < (X + 2) * 16 + 5) keys |= VanillaKeys.Right;
+                    if (source.releaseJump && source.velocity.Y == 0) keys |= VanillaKeys.Jump;
+                }
+                VanillaPrediction.Advance(source, keys, useSlot, target);
+                Liquid.UpdateLiquid();
+                airMinBreath = Math.Min(airMinBreath, source.breath);
+                airMinHp = Math.Min(airMinHp, source.statLife);
+                if (dig.Count == 0 && source.breath > airMinBreath + 30)
+                { breathed = true; break; }
+            }
+            var airPocket = new JsonObject { ["breathed"] = breathed, ["frames"] = airFrames,
+                ["mined"] = mined, ["min_breath"] = airMinBreath, ["breath"] = source.breath,
+                ["hp_loss"] = 400 - airMinHp, ["x"] = source.position.X, ["y"] = source.position.Y };
+            if (!breathed || mined != 10 || airMinHp != 400)
+                throw new InvalidOperationException("mined_air_pocket_failed:" + airPocket.ToJsonString());
             return new JsonObject { ["fall_cases"] = cases, ["submerged_breath"] = submerged,
-                ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife };
+                ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife,
+                ["mined_air_pocket"] = airPocket };
         }
         if (command == "water_fall_contract")
         {
