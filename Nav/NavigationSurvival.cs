@@ -7,18 +7,19 @@ namespace TerraBlind;
 public static class NavigationSurvival
 {
     static int heldSlot = -1, previousSlot = -1, stashedSlot = -1;
-    static bool holdingWeb;
+    static bool holdingWeb, holdingPotion;
+    static int heldType;
     static Point webTarget;
     public static int Interventions { get; private set; }
 
     public static void Reset(Player player)
     {
-        if (stashedSlot >= 0 && player.inventory[heldSlot].type is ItemID.Umbrella or ItemID.TragicUmbrella)
+        if (stashedSlot >= 0 && (player.inventory[heldSlot].type == heldType || player.inventory[heldSlot].IsAir))
             (player.inventory[heldSlot], player.inventory[stashedSlot]) = (player.inventory[stashedSlot], player.inventory[heldSlot]);
         if (heldSlot >= 0 && player.selectedItem == heldSlot && previousSlot >= 0)
             player.selectedItem = previousSlot;
         heldSlot = previousSlot = stashedSlot = -1;
-        holdingWeb = false;
+        holdingWeb = holdingPotion = false;
     }
 
     public static bool Apply(Player player)
@@ -49,6 +50,14 @@ public static class NavigationSurvival
                 }
                 return true;
             }
+            if (holdingPotion)
+            {
+                ClearControls(player);
+                player.selectedItem = heldSlot;
+                player.delayUseItem = false; player.mouseInterface = false;
+                player.controlUseItem = !player.HasBuff(BuffID.Featherfall) && player.inventory[heldSlot].type == ItemID.FeatherfallPotion;
+                return true;
+            }
             if (player.inventory[heldSlot].type is ItemID.Umbrella or ItemID.TragicUmbrella)
             {
                 ClearControls(player);
@@ -63,32 +72,32 @@ public static class NavigationSurvival
         for (int slot = 0; slot < 50; slot++)
         {
             if (player.inventory[slot].type is not (ItemID.Umbrella or ItemID.TragicUmbrella)) continue;
-            previousSlot = player.selectedItem;
-            if (slot >= 10)
-            {
-                (player.inventory[9], player.inventory[slot]) = (player.inventory[slot], player.inventory[9]);
-                stashedSlot = slot;
-                slot = 9;
-            }
-            heldSlot = slot;
+            HoldItem(player, slot);
             Interrupt(player, "umbrella");
-            player.selectedItem = slot;
             player.controlDown = player.gravDir > 0;
             player.controlUp = player.gravDir < 0;
             return true;
         }
         if (!player.AnyExtraJumpUsable())
         {
+            for (int slot = 0; slot < 50; slot++)
+            {
+                if (player.inventory[slot].type != ItemID.FeatherfallPotion) continue;
+                HoldItem(player, slot); holdingPotion = true;
+                Interrupt(player, "featherfall_potion");
+                player.delayUseItem = false; player.mouseInterface = false;
+                player.controlUseItem = true;
+                return true;
+            }
             if (player.gravDir != 1) return false;
             var target = new Point((int)((landing.X + player.width / 2f) / 16), (int)((landing.Y + player.height - 1) / 16));
             if (!Reach.CanPlace(player, target.X, target.Y) || Main.tile[target.X, target.Y].HasTile
                 || !LavaSafety.CanMine(target.X, target.Y)) return false;
-            for (int slot = 0; slot < 10; slot++)
+            for (int slot = 0; slot < 50; slot++)
             {
                 if (player.inventory[slot].type != ItemID.Cobweb) continue;
-                previousSlot = player.selectedItem; heldSlot = slot; holdingWeb = true; webTarget = target;
+                HoldItem(player, slot); holdingWeb = true; webTarget = target;
                 Interrupt(player, "place_cobweb");
-                player.selectedItem = slot;
                 player.delayUseItem = false; player.mouseInterface = false;
                 Cursor.AimTile(target.X, target.Y); player.controlUseItem = true;
                 return true;
@@ -134,6 +143,20 @@ public static class NavigationSurvival
         RecedingNav.InterruptForSurvival();
         ClearControls(player);
         DiagLog.Write($"[survival] action={action} pos=({player.position.X:0.##},{player.position.Y:0.##}) vy={player.velocity.Y:0.##} fall_start={player.fallStart}");
+    }
+
+    static void HoldItem(Player player, int slot)
+    {
+        previousSlot = player.selectedItem;
+        heldType = player.inventory[slot].type;
+        if (slot >= 10)
+        {
+            (player.inventory[9], player.inventory[slot]) = (player.inventory[slot], player.inventory[9]);
+            stashedSlot = slot;
+            slot = 9;
+        }
+        heldSlot = slot;
+        player.selectedItem = slot;
     }
 
     static void ClearControls(Player player)
