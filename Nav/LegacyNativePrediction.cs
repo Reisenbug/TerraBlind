@@ -258,7 +258,8 @@ internal static class LegacyNativePrediction
             {
                 var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
                 StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
-                DiagLog.Write("[legacy-native-rejected] outcome=" + outcome);
+                int minHp = samples.Count > 0 ? samples.Min(frame => frame["hp"].GetValue<int>()) : -1;
+                DiagLog.Write($"[legacy-native-rejected] outcome={outcome} frames={samples.Count}/{frames.Count} hp={anchor["hp"]}->{minHp} dead={last?["dead"]} actual=({last?["x"]},{last?["y"]}) expected=({frames[^1].Px},{frames[^1].Py}) from=({from.Item1},{from.Item2}) goal=({plan.GoalWx},{plan.GoalWy}) placed={result["placed"]} supported={result["supported"]}");
                 return true;
             }
             for (int i = 0; i < frames.Count; i++)
