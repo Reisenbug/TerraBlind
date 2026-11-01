@@ -258,6 +258,16 @@ namespace TerraBlind
             RecedingVis.Clear();
         }
 
+        internal static void InterruptForSurvival()
+        {
+            LegacyNativePrediction.Reset();
+            StateSpacePlanner.StopNav();
+            SkillExecutor.Stop(); MineCoordinator.Stop(); BridgeBuilder.Stop(); ItemUseCoordinator.Stop();
+            TrapEscape.Reset(); StuckSentinel.Reset();
+            _haveLast = false; _failureRecoveryPending = false;
+            _noProgressSteps = 0; _failureRecoveryTried = false;
+        }
+
         // per-frame driver (called from SetControls). When the current window finishes (or none running), plan the
         // next window from the real position and dispatch it. The existing TickSteps/ApplyControls execute it.
         // 【异常不许静默】。SetControls 外层会把抛出来的东西吞掉,现象就是人每帧重试同一条边、

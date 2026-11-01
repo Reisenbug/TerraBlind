@@ -706,6 +706,7 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsnapshotcheck")) { SnapshotRoundtrip(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavslopestallcheck")) { SlopeStall(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalcheck")) { SurvivalControl(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -788,6 +789,79 @@ public sealed class Driver : ModSystem
             FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    int survivalCase, survivalMinHp, survivalInterventions, survivalLanded;
+    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag" };
+
+    void SurvivalControl()
+    {
+        var p = Main.LocalPlayer;
+        string kind = survivalKinds[survivalCase];
+        if (!prepared)
+        {
+            RecedingNav.Stop(); NavigationSurvival.Reset(p);
+            Config.I.AlwaysGillsAndShine = false;
+            Concessions.Enabled = false;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var projectile in Main.projectile) projectile.active = false;
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            for (int x = 490; x <= 510; x++)
+            for (int y = 330; y <= 402; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= 400 || y == 330 || x == 490 || x == 510)
+                { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            Array.Clear(p.buffType); Array.Clear(p.buffTime);
+            p.ConsumedLifeCrystals = 15; p.statLifeMax = p.statLifeMax2 = p.statLife = 400;
+            p.position = new Vector2(500 * 16, 400 * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16);
+            if (kind == "horseshoe") p.armor[3].SetDefaults(ItemID.LuckyHorseshoe);
+            if (kind == "wings") p.armor[3].SetDefaults(ItemID.AngelWings);
+            if (kind == "cloud") p.armor[3].SetDefaults(ItemID.CloudinaBottle);
+            if (kind == "umbrella_bag") p.inventory[12].SetDefaults(ItemID.Umbrella);
+            p.inventory[9].SetDefaults(ItemID.Wood); p.inventory[9].stack = 23; p.selectedItem = 9;
+            prepared = true; started = false; warmup = 12;
+            return;
+        }
+        if (warmup-- > 0) return;
+        if (!started)
+        {
+            p.position.Y = 340 * 16; p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16); p.statLife = 400;
+            typeof(RecedingNav).GetField("_fieldReady", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, false);
+            RecedingNav.Active = kind != "bare";
+            survivalInterventions = NavigationSurvival.Interventions;
+            survivalMinHp = 400; survivalLanded = ticks = 0; started = true;
+            return;
+        }
+        ticks++; survivalMinHp = Math.Min(survivalMinHp, p.statLife);
+        if (ticks % 120 == 0)
+        {
+            Console.WriteLine($"SURVIVAL_CONTROL_TRACE kind={kind} tick={ticks} pos={p.position} velocity={p.velocity} gravity={p.gravDir} hp={p.statLife} nav={RecedingNav.Active} engine={VanillaNavigationDemo.Active}");
+            int tx = (int)(p.Center.X / 16), ty = (int)(p.Bottom.Y / 16);
+            for (int y = ty - 1; y <= ty + 1; y++)
+            {
+                var tile = Main.tile[tx, y];
+                Console.WriteLine($"SURVIVAL_SUPPORT x={tx} y={y} active={tile.HasTile} type={tile.TileType} liquid={tile.LiquidAmount} slope={tile.Slope} half={tile.IsHalfBlock} wood={p.inventory[9].stack} jump={p.controlJump} use={p.controlUseItem}");
+            }
+        }
+        if (p.velocity.Y == 0 && p.Bottom.Y >= 6400 - 1) survivalLanded++; else survivalLanded = 0;
+        if (survivalLanded < 3 && ticks < 900 && !p.dead) return;
+        int interventions = NavigationSurvival.Interventions - survivalInterventions;
+        Console.WriteLine($"SURVIVAL_CONTROL_CASE kind={kind} ticks={ticks} hp_loss={400 - survivalMinHp} interventions={interventions} landed={survivalLanded} dead={p.dead} pos={p.position} velocity={p.velocity}");
+        if (p.dead || survivalLanded < 3 || (kind == "bare" ? survivalMinHp >= 400 : survivalMinHp != 400)
+            || (kind is "cloud" or "umbrella_bag") && interventions == 0)
+            throw new InvalidOperationException("survival_control_failed:" + kind);
+        if (kind == "umbrella_bag" && (p.inventory[12].type != ItemID.Umbrella
+            || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
+            throw new InvalidOperationException("survival_inventory_not_restored");
+        RecedingNav.Stop(); NavigationSurvival.Reset(p);
+        prepared = false;
+        if (++survivalCase < survivalKinds.Length) return;
+        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=5");
+        enabled = false; FinishProcess(0);
     }
 
     void PillarProbe()

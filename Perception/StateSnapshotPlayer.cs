@@ -440,6 +440,7 @@ namespace TerraBlind
 		public override void SetControls()
 		{
 			MazeWand.MarkMainThread();
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && NavigationSurvival.Apply(Player)) return;
 			if (VanillaNavigationDemo.Active)
 			{
 				if (VanillaNavigationDemo.Instance.NavigationOwned) { if (StartRun.IsRunning) StartRun.Tick(); RecedingNav.Tick(); }
