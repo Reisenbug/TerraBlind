@@ -1528,9 +1528,56 @@ public sealed class Engine : ModSystem
                 ["hp_loss"] = 400 - airMinHp, ["x"] = source.position.X, ["y"] = source.position.Y };
             if (!breathed || mined != 13 || airMinHp != 400)
                 throw new InvalidOperationException("mined_air_pocket_failed:" + airPocket.ToJsonString());
+            Setup(new JsonObject());
+            for (int x = X - 5; x <= X + 6; x++)
+            for (int y = Y - 12; y <= Y; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                bool solid = x == X - 5 || x == X + 6 || y == Y - 12 || y == Y;
+                tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            }
+            source.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            source.inventory[1].SetDefaults(ItemID.Wood); source.inventory[1].stack = 50;
+            source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+            for (int x = X - 4; x <= X + 5; x++)
+            for (int y = Y - 11; y < Y; y++) Liquid.AddWater(x, y);
+            var seal = new System.Collections.Generic.Queue<Point>();
+            for (int y = Y - 1; y >= Y - 4; y--)
+            { seal.Enqueue(new Point(X - 1, y)); seal.Enqueue(new Point(X + 2, y)); }
+            seal.Enqueue(new Point(X, Y - 4)); seal.Enqueue(new Point(X + 1, Y - 4));
+            dig.Clear();
+            for (int y = Y; y < Y + 4; y++)
+            for (int x = X; x <= X + 1; x++) dig.Enqueue(new Point(x, y));
+            int placed = 0;
+            mined = 0; airMinBreath = source.breath; airMinHp = source.statLife; breathed = false;
+            for (airFrames = 0; airFrames < 1800 && !source.dead; airFrames++)
+            {
+                while (seal.Count > 0 && Main.tile[seal.Peek().X, seal.Peek().Y].HasTile)
+                { seal.Dequeue(); placed++; }
+                while (dig.Count > 0 && !Main.tile[dig.Peek().X, dig.Peek().Y].HasTile)
+                { dig.Dequeue(); mined++; }
+                var keys = VanillaKeys.None;
+                int useSlot = -1; Point? target = null;
+                if (seal.Count > 0) { useSlot = 1; target = seal.Peek(); }
+                else if (dig.Count > 0) { useSlot = 0; target = dig.Peek(); }
+                else if (source.releaseJump && source.velocity.Y == 0) keys = VanillaKeys.Jump;
+                VanillaPrediction.Advance(source, keys, useSlot, target);
+                Liquid.UpdateLiquid();
+                airMinBreath = Math.Min(airMinBreath, source.breath);
+                airMinHp = Math.Min(airMinHp, source.statLife);
+                if (seal.Count == 0 && dig.Count == 0 && source.breath == source.breathMax)
+                { breathed = true; break; }
+            }
+            var sealedPocket = new JsonObject { ["breathed"] = breathed, ["frames"] = airFrames,
+                ["placed"] = placed, ["mined"] = mined, ["min_breath"] = airMinBreath,
+                ["breath"] = source.breath, ["hp_loss"] = 400 - airMinHp,
+                ["x"] = source.position.X, ["y"] = source.position.Y };
+            if (!breathed || placed != 10 || mined != 8 || airMinHp != 400)
+                throw new InvalidOperationException("sealed_air_pocket_failed:" + sealedPocket.ToJsonString());
             return new JsonObject { ["fall_cases"] = cases, ["submerged_breath"] = submerged,
                 ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife,
-                ["mined_air_pocket"] = airPocket };
+                ["mined_air_pocket"] = airPocket, ["sealed_air_pocket"] = sealedPocket };
         }
         if (command == "water_fall_contract")
         {

@@ -792,12 +792,13 @@ public sealed class Driver : ModSystem
     }
 
     int survivalCase, survivalMinHp, survivalInterventions, survivalLanded;
-    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "air_pocket" };
+    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "air_pocket", "air_sealed" };
 
     void SurvivalControl()
     {
         var p = Main.LocalPlayer;
         string kind = survivalKinds[survivalCase];
+        bool air = kind.StartsWith("air_");
         if (!prepared)
         {
             RecedingNav.Stop(); NavigationSurvival.Reset(p);
@@ -822,17 +823,20 @@ public sealed class Driver : ModSystem
             if (kind == "cloud") p.armor[3].SetDefaults(ItemID.CloudinaBottle);
             if (kind == "umbrella_bag") p.inventory[12].SetDefaults(ItemID.Umbrella);
             p.inventory[9].SetDefaults(ItemID.Wood); p.inventory[9].stack = 23; p.selectedItem = 9;
-            if (kind == "air_pocket")
+            if (air)
             {
                 p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
                 for (int x = 495; x <= 506; x++)
                 for (int y = 388; y <= 400; y++)
                 {
                     var tile = Main.tile[x, y]; tile.ClearEverything();
-                    bool solid = x == 495 || x >= 502 || y == 388 || y == 400;
+                    bool solid = x == 495 || (kind == "air_sealed" ? x == 506 : x >= 502) || y == 388 || y == 400;
                     tile.HasTile = solid; tile.TileType = TileID.Dirt;
                     if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; Liquid.AddWater(x, y); }
                 }
+                for (int x = 495; x <= 506; x++)
+                for (int y = 400; y <= 405; y++)
+                { var tile = Main.tile[x, y]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Dirt; }
             }
             prepared = true; started = false; warmup = 12;
             return;
@@ -840,17 +844,17 @@ public sealed class Driver : ModSystem
         if (warmup-- > 0) return;
         if (!started)
         {
-            p.position.Y = kind == "air_pocket" ? 6400 - p.height : 340 * 16; p.velocity = Vector2.Zero;
+            p.position.Y = air ? 6400 - p.height : 340 * 16; p.velocity = Vector2.Zero;
             p.fallStart = (int)(p.position.Y / 16); p.statLife = 400;
             typeof(RecedingNav).GetField("_fieldReady", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, false);
             RecedingNav.Active = kind != "bare";
             survivalInterventions = NavigationSurvival.Interventions;
-            if (kind == "air_pocket") { p.breath = 170; survivalInterventions = NavigationAirPocket.Recoveries; }
+            if (air) { p.breath = 170; survivalInterventions = NavigationAirPocket.Recoveries; }
             survivalMinHp = 400; survivalLanded = ticks = 0; started = true;
             return;
         }
         ticks++; survivalMinHp = Math.Min(survivalMinHp, p.statLife);
-        if (kind == "air_pocket" && ticks % 15 == 0)
+        if (air && ticks % 15 == 0)
         {
             string water = string.Join(",", Enumerable.Range(394, 6).Select(y => $"{y}:{Main.tile[502,y].LiquidAmount}/{Main.tile[503,y].LiquidAmount}"));
             Console.WriteLine($"AIR_TRACE tick={ticks} pos={p.position} vy={p.velocity.Y} breath={p.breath} drown={Collision.DrownCollision(p.position,p.width,p.height,p.gravDir)} water={water}");
@@ -865,10 +869,10 @@ public sealed class Driver : ModSystem
                 Console.WriteLine($"SURVIVAL_SUPPORT x={tx} y={y} active={tile.HasTile} type={tile.TileType} liquid={tile.LiquidAmount} slope={tile.Slope} half={tile.IsHalfBlock} wood={p.inventory[9].stack} jump={p.controlJump} use={p.controlUseItem}");
             }
         }
-        if (kind == "air_pocket") survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions ? 3 : 0;
+        if (air) survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions ? 3 : 0;
         else if (p.velocity.Y == 0 && p.Bottom.Y >= 6400 - 1) survivalLanded++; else survivalLanded = 0;
-        if (survivalLanded < 3 && ticks < (kind == "air_pocket" ? 3600 : 900) && !p.dead) return;
-        int interventions = (kind == "air_pocket" ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
+        if (survivalLanded < 3 && ticks < (air ? 3600 : 900) && !p.dead) return;
+        int interventions = (air ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
         Console.WriteLine($"SURVIVAL_CONTROL_CASE kind={kind} ticks={ticks} hp_loss={400 - survivalMinHp} interventions={interventions} breath={p.breath}/{p.breathMax} landed={survivalLanded} dead={p.dead} pos={p.position} velocity={p.velocity}");
         if (p.dead || survivalLanded < 3 || (kind == "bare" ? survivalMinHp >= 400 : survivalMinHp != 400)
             || (kind is "cloud" or "umbrella_bag") && interventions == 0)
@@ -879,7 +883,7 @@ public sealed class Driver : ModSystem
         RecedingNav.Stop(); NavigationSurvival.Reset(p);
         prepared = false;
         if (++survivalCase < survivalKinds.Length) return;
-        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=6");
+        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=7");
         enabled = false; FinishProcess(0);
     }
 

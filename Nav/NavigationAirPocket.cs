@@ -2,14 +2,16 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.ID;
 
 namespace TerraBlind;
 
 public static class NavigationAirPocket
 {
     static readonly Queue<Point> dig = new();
+    static readonly Queue<Point> seal = new();
     static bool active;
-    static int slot, savedSlot, idle, elapsed, retry;
+    static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
     public static int Recoveries { get; private set; }
 
@@ -18,6 +20,7 @@ public static class NavigationAirPocket
         if (active) player.selectedItem = savedSlot;
         active = false;
         dig.Clear();
+        seal.Clear();
     }
 
     public static bool Apply(Player player)
@@ -30,11 +33,11 @@ public static class NavigationAirPocket
             slot = -1;
             for (int i = 0; i < 10; i++)
                 if (player.inventory[i].pick > 0 && (slot < 0 || player.inventory[i].pick > player.inventory[slot].pick)) slot = i;
-            if (slot < 0 || !FindPocket(player)) { retry = 60; return false; }
+            if (slot < 0 || !FindPocket(player) && !FindSealedPocket(player)) { retry = 60; return false; }
             RecedingNav.InterruptForSurvival();
             savedSlot = player.selectedItem;
             active = true; idle = elapsed = 0;
-            DiagLog.Write($"[survival-air] start breath={player.breath} target_x={destinationX} tiles={dig.Count}");
+            DiagLog.Write($"[survival-air] start breath={player.breath} target_x={destinationX} tiles={dig.Count} seal={seal.Count}");
         }
         player.controlLeft = player.controlRight = player.controlJump = player.controlDown = player.controlUp = player.controlUseItem = false;
         if (player.breath >= player.breathMax)
@@ -52,6 +55,20 @@ public static class NavigationAirPocket
         }
         while (dig.Count > 0 && !Main.tile[dig.Peek().X, dig.Peek().Y].HasTile)
         { dig.Dequeue(); idle = 0; }
+        while (seal.Count > 0 && Main.tile[seal.Peek().X, seal.Peek().Y].HasTile)
+        { seal.Dequeue(); idle = 0; }
+        if (seal.Count > 0)
+        {
+            var target = seal.Peek();
+            if (player.inventory[blockSlot].IsAir || !Reach.CanPlace(player, target.X, target.Y)
+                || !LavaSafety.CanMine(target.X, target.Y))
+            { Reset(player); retry = 60; return true; }
+            player.selectedItem = blockSlot;
+            player.delayUseItem = false; player.mouseInterface = false;
+            Cursor.AimTile(target.X, target.Y);
+            player.controlUseItem = true;
+            return true;
+        }
         if (dig.Count > 0)
         {
             var target = dig.Peek();
@@ -101,5 +118,36 @@ public static class NavigationAirPocket
             return true;
         }
         return false;
+    }
+
+    static bool FindSealedPocket(Player player)
+    {
+        int left = (int)(player.Left.X / 16), floor = (int)(player.Bottom.Y / 16);
+        if (left < 2 || left + 3 >= Main.maxTilesX || floor < 5 || floor + 5 >= Main.maxTilesY
+            || player.Right.X > (left + 2) * 16 || Math.Abs(player.Bottom.Y - floor * 16) > 1) return false;
+        blockSlot = -1;
+        for (int i = 0; i < 10; i++)
+            if (player.inventory[i].stack >= 10
+                && player.inventory[i].type is ItemID.Wood or ItemID.DirtBlock or ItemID.StoneBlock)
+            { blockSlot = i; break; }
+        if (blockSlot < 0) return false;
+        for (int x = left - 1; x <= left + 2; x++)
+        for (int y = floor; y <= floor + 4; y++)
+        {
+            var tile = Main.tile[x, y];
+            if (!tile.HasTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]
+                || tile.IsActuated || tile.IsHalfBlock || tile.Slope != Terraria.ID.SlopeType.Solid
+                || !LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y)) return false;
+        }
+        for (int x = left - 1; x <= left + 2; x++)
+        for (int y = floor - 4; y < floor; y++)
+            if (Main.tile[x, y].HasTile || !LavaSafety.CanMine(x, y)) return false;
+        for (int y = floor - 1; y >= floor - 4; y--)
+        { seal.Enqueue(new Point(left - 1, y)); seal.Enqueue(new Point(left + 2, y)); }
+        seal.Enqueue(new Point(left, floor - 4)); seal.Enqueue(new Point(left + 1, floor - 4));
+        for (int y = floor; y < floor + 4; y++)
+        for (int x = left; x <= left + 1; x++) dig.Enqueue(new Point(x, y));
+        destinationX = player.position.X;
+        return true;
     }
 }
