@@ -23,8 +23,10 @@ public static class NavigationSurvival
         if (!RecedingNav.Active || player.dead)
         {
             Reset(player);
+            NavigationAirPocket.Reset(player);
             return false;
         }
+        if (NavigationAirPocket.Apply(player)) return true;
         if (heldSlot >= 0)
         {
             if (player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player))

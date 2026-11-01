@@ -159,7 +159,7 @@ def main():
             print("SLOPE_STALL_CHECK_COMPLETE", flush=True)
             return
         if "--survival" in sys.argv:
-            assert "SURVIVAL_CONTROL_PASS cases=5" in output
+            assert "SURVIVAL_CONTROL_PASS cases=6" in output
             print("SURVIVAL_CONTROL_CHECK_COMPLETE", flush=True)
             return
         if descent:
