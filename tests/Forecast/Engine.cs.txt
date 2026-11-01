@@ -1417,7 +1417,7 @@ public sealed class Engine : ModSystem
         {
             var cases = new JsonArray();
             foreach (string kind in new[] { "bare", "horseshoe", "wings", "umbrella", "umbrella_down",
-                "featherfall", "cloud_jump", "gravity_flip", "water", "honey", "cobweb", "cobweb_place" })
+                "featherfall", "cloud_jump", "gravity_flip", "gravity_pair", "water", "honey", "cobweb", "cobweb_place" })
             {
                 int equipment = kind switch {
                     "horseshoe" => ItemID.LuckyHorseshoe, "wings" => ItemID.AngelWings,
@@ -1426,7 +1426,7 @@ public sealed class Engine : ModSystem
                 if (kind.StartsWith("umbrella")) { source.inventory[0].SetDefaults(ItemID.Umbrella); source.selectedItem = 0; }
                 if (kind == "cobweb_place") { source.inventory[0].SetDefaults(ItemID.Cobweb); source.inventory[0].stack = 10; }
                 if (kind == "featherfall") source.AddBuff(BuffID.Featherfall, 3600);
-                if (kind == "gravity_flip")
+                if (kind is "gravity_flip" or "gravity_pair")
                 {
                     source.AddBuff(BuffID.Gravitation, 3600);
                     for (int x = X - 3; x <= X + 3; x++)
@@ -1445,6 +1445,7 @@ public sealed class Engine : ModSystem
                 source.velocity = Vector2.Zero;
                 source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
                 bool rescued = false, landed = false;
+                int firstFlip = -1;
                 int minHp = source.statLife, frames = 0;
                 for (; frames < 1200 && !source.dead; frames++)
                 {
@@ -1453,7 +1454,9 @@ public sealed class Engine : ModSystem
                     {
                         if (kind == "cloud_jump") { keys |= VanillaKeys.Jump; rescued = true; }
                         if (kind == "gravity_flip") { keys |= VanillaKeys.Up; rescued = true; }
+                        if (kind == "gravity_pair") { keys |= VanillaKeys.Up; rescued = true; firstFlip = frames; }
                     }
+                    if (kind == "gravity_pair" && firstFlip >= 0 && frames == firstFlip + 2) keys |= VanillaKeys.Up;
                     bool placeWeb = kind == "cobweb_place" && source.velocity.Y > 0 && Y * 16 - source.Bottom.Y < 128;
                     VanillaPrediction.Advance(source, keys, placeWeb ? 0 : -1, placeWeb ? new Point(X, Y - 1) : null);
                     minHp = Math.Min(minHp, source.statLife);

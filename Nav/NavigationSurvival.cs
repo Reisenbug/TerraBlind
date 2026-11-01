@@ -9,6 +9,8 @@ public static class NavigationSurvival
     static int heldSlot = -1, previousSlot = -1, stashedSlot = -1;
     static bool holdingWeb, holdingPotion;
     static int heldType;
+    static int gravityPhase, gravityTicks;
+    static float originalGravity;
     static Point webTarget;
     public static int Interventions { get; private set; }
 
@@ -20,6 +22,7 @@ public static class NavigationSurvival
             player.selectedItem = previousSlot;
         heldSlot = previousSlot = stashedSlot = -1;
         holdingWeb = holdingPotion = false;
+        gravityPhase = gravityTicks = 0;
     }
 
     public static bool Apply(Player player)
@@ -31,6 +34,18 @@ public static class NavigationSurvival
             return false;
         }
         if (NavigationAirPocket.Apply(player)) return true;
+        if (gravityPhase != 0)
+        {
+            ClearControls(player);
+            if (++gravityTicks > 12 || player.mount.Active || player.forcedGravity > 0 || !(player.gravControl || player.gravControl2))
+            { gravityPhase = 0; return false; }
+            if (gravityPhase == 1 && player.gravDir != originalGravity)
+            { gravityPhase = 2; return true; }
+            if (gravityPhase == 2 && player.gravDir == originalGravity)
+            { gravityPhase = 0; return true; }
+            player.controlUp = player.releaseUp;
+            return true;
+        }
         if (heldSlot >= 0)
         {
             if (player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player))
@@ -80,6 +95,13 @@ public static class NavigationSurvival
         }
         if (!player.AnyExtraJumpUsable())
         {
+            if ((player.gravControl || player.gravControl2) && !player.mount.Active && player.forcedGravity == 0)
+            {
+                Interrupt(player, "gravity_pair");
+                originalGravity = player.gravDir; gravityPhase = 1; gravityTicks = 0;
+                player.controlUp = player.releaseUp;
+                return true;
+            }
             for (int slot = 0; slot < 50; slot++)
             {
                 if (player.inventory[slot].type != ItemID.FeatherfallPotion) continue;
