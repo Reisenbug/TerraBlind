@@ -2074,12 +2074,13 @@ public sealed class Engine : ModSystem
             return new JsonObject { ["prepare_ms"] = prepareMs, ["total_ms"] = timer.Elapsed.TotalMilliseconds,
                 ["trials"] = trials };
         }
-        if (command == "replay")
+        if (command == "replay" || command == "native_replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
                 request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
                 detailed: request["detailed"]?.GetValue<bool>() ?? true,
                 stopOnDamage: request["stop_on_damage"]?.GetValue<bool>() == true,
-                captureEnd: request["capture_end"]?.GetValue<bool>() == true);
+                captureEnd: request["capture_end"]?.GetValue<bool>() == true,
+                maxFrames: command == "native_replay" ? 405 : 240);
         if (command == "transit_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots, (int)ItemID.CobaltShield) });

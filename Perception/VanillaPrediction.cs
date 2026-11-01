@@ -247,11 +247,12 @@ public sealed class VanillaPrediction
     }
 
     public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true,
-        System.Collections.Generic.List<MovementSample> samples = null, bool stopOnDamage = false)
+        System.Collections.Generic.List<MovementSample> samples = null, bool stopOnDamage = false, int maxFrames = 240,
+        Func<Player, int, int> controlPolicy = null)
     {
         CheckCancellation();
         VanillaFrame.RequireWorker();
-        if (controls.Length == 0 || controls.Length > 240) throw new ArgumentException("horizon_must_be_1_to_240");
+        if (controls.Length == 0 || controls.Length > maxFrames) throw new ArgumentException($"horizon_must_be_1_to_{maxFrames}");
         var trace = new JsonArray();
         samples?.Clear();
         var timer = Stopwatch.StartNew();
@@ -266,8 +267,9 @@ public sealed class VanillaPrediction
             var player = compiled.Restore();
             int initialHp = player.statLife;
             restore = Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
-            foreach (int control in controls)
+            for (int frameIndex = 0; frameIndex < controls.Length; frameIndex++)
             {
+                int control = controlPolicy == null ? controls[frameIndex] : controls[frameIndex] = controlPolicy(player, frameIndex);
                 tick = Stopwatch.GetTimestamp();
                 Advance(player, (VanillaKeys)control);
                 update += Stopwatch.GetElapsedTime(tick).TotalMilliseconds;
