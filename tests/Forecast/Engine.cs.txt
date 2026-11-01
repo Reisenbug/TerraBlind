@@ -1552,7 +1552,7 @@ public sealed class Engine : ModSystem
             { seal.Enqueue(new Point(X - 1, y)); seal.Enqueue(new Point(X + 2, y)); }
             seal.Enqueue(new Point(X, Y - 4)); seal.Enqueue(new Point(X + 1, Y - 4));
             dig.Clear();
-            for (int y = Y; y < Y + 4; y++)
+            for (int y = Y; y < Y + 2; y++)
             for (int x = X; x <= X + 1; x++) dig.Enqueue(new Point(x, y));
             int placed = 0;
             mined = 0; airMinBreath = source.breath; airMinHp = source.statLife; breathed = false;
@@ -1578,7 +1578,7 @@ public sealed class Engine : ModSystem
                 ["placed"] = placed, ["mined"] = mined, ["min_breath"] = airMinBreath,
                 ["breath"] = source.breath, ["hp_loss"] = 400 - airMinHp,
                 ["x"] = source.position.X, ["y"] = source.position.Y };
-            if (!breathed || placed != 10 || mined != 8 || airMinHp != 400)
+            if (!breathed || placed != 10 || mined != 4 || airMinHp != 400)
                 throw new InvalidOperationException("sealed_air_pocket_failed:" + sealedPocket.ToJsonString());
             return new JsonObject { ["fall_cases"] = cases, ["submerged_breath"] = submerged,
                 ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife,

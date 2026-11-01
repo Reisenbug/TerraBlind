@@ -146,12 +146,23 @@ public static class NavigationAirPocket
                 && player.inventory[i].type is ItemID.Wood or ItemID.DirtBlock or ItemID.StoneBlock)
             { blockSlot = i; break; }
         if (blockSlot < 0) return false;
-        for (int x = left - 1; x <= left + 2; x++)
-        for (int y = floor; y <= floor + 4; y++)
+        int depth = 0;
+        for (int candidate = 2; candidate <= 4 && depth == 0; candidate++)
         {
-            bool openFloor = y == floor && x >= left && x <= left + 1 && !Main.tile[x, y].HasTile;
-            if (!openFloor && !SolidSeal(x, y) || !LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y)) return false;
+            bool valid = true;
+            int water = 6 * 255;
+            for (int x = left - 1; x <= left + 2; x++)
+            for (int y = floor; y <= floor + candidate; y++)
+            {
+                bool shell = x == left - 1 || x == left + 2 || y == floor + candidate;
+                var tile = Main.tile[x, y];
+                if ((shell || tile.HasTile) && !SolidSeal(x, y) || !LavaSafety.CanMine(x, y)
+                    || !shell && tile.HasTile && !WorldGen.CanKillTile(x, y)) valid = false;
+                if (!shell) water += tile.LiquidAmount;
+            }
+            if (valid && water <= ((3 + candidate) * 2 - 3) * 255) depth = candidate;
         }
+        if (depth == 0) return false;
         for (int x = left - 1; x <= left + 2; x++)
         for (int y = floor - 4; y < floor; y++)
         {
@@ -161,10 +172,11 @@ public static class NavigationAirPocket
         for (int y = floor - 1; y >= floor - 4; y--)
         { seal.Enqueue(new Point(left - 1, y)); seal.Enqueue(new Point(left + 2, y)); }
         seal.Enqueue(new Point(left, floor - 4)); seal.Enqueue(new Point(left + 1, floor - 4));
-        for (int y = floor; y < floor + 4; y++)
+        for (int y = floor; y < floor + depth; y++)
         for (int x = left; x <= left + 1; x++) dig.Enqueue(new Point(x, y));
         destinationX = player.position.X;
         sealedPocket = true;
+        DiagLog.Write($"[survival-air] sealed_depth={depth} left={left} floor={floor}");
         return true;
     }
 
