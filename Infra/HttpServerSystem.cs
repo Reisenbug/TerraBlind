@@ -2437,8 +2437,9 @@ namespace TerraBlind
 				{
 					int pcx = (int)(pl.Center.X / 16f), pcy = (int)(pl.Center.Y / 16f);
 					var found = new System.Collections.Generic.List<(int x, int y, string kind)>();
-					for (int r = 0; r <= maxD && found.Count < wantN; r++)
-						for (int dx = -r; dx <= r && found.Count < wantN; dx++)
+					for (int r = 0; r <= maxD; r++)
+					{
+						for (int dx = -r; dx <= r; dx++)
 						{
 							// ring only: interior columns contribute just their top/bottom rows
 							int[] dys = System.Math.Abs(dx) == r
@@ -2450,7 +2451,6 @@ namespace TerraBlind
 								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 								var t = Main.tile[x, y];
 								if (!t.HasTile || t.TileType != wantType) continue;
-								if (InHive(x, y)) continue;   // 蜂巢里的不捡,进去出不来
 								// 箱子是 2x2 一个 TileID,只有左上角那格(frameX%36==0 && frameY%36==0)算锚点。
 								// 去重到它,顺便用 frameX 认出是哪种箱子。
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
@@ -2461,14 +2461,27 @@ namespace TerraBlind
 									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
 								}
 								else found.Add((x, y, null));
-								if (found.Count >= wantN) break;
 							}
 						}
+						found.Sort((a, b) =>
+						{
+							int da = System.Math.Abs(a.x - pcx) + System.Math.Abs(a.y - pcy);
+							int db = System.Math.Abs(b.x - pcx) + System.Math.Abs(b.y - pcy);
+							int compare = da.CompareTo(db);
+							if (compare != 0) return compare;
+							compare = a.y.CompareTo(b.y);
+							return compare != 0 ? compare : a.x.CompareTo(b.x);
+						});
+						if (found.Count > wantN) found.RemoveRange(wantN, found.Count - wantN);
+						if (found.Count >= wantN && (wantN == 0 || System.Math.Abs(found[wantN - 1].x - pcx)
+							+ System.Math.Abs(found[wantN - 1].y - pcy) <= r)) break;
+					}
 					var fsb = new StringBuilder("{\"tiles\":[");
 					for (int i = 0; i < found.Count; i++)
 					{
 						if (i > 0) fsb.Append(',');
 						fsb.Append($"{{\"x\":{found[i].x},\"y\":{found[i].y},\"dist\":{System.Math.Abs(found[i].x - pcx) + System.Math.Abs(found[i].y - pcy)}");
+						fsb.Append(",\"near_hive_wall\":").Append(InHive(found[i].x, found[i].y) ? "true" : "false");
 						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
 						fsb.Append("}");
 					}

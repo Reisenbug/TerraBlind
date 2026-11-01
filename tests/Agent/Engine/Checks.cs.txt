@@ -1,0 +1,945 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
+using MonoMod.Cil;
+using Terraria;
+using Terraria.DataStructures;
+using Terraria.ID;
+using Terraria.IO;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Engine;
+
+public sealed class Engine : Mod { }
+
+public sealed class ChatHookProbe : GlobalNPC
+{
+    public static int PreCalls, PostCalls;
+    public static bool Block;
+    public override bool PreChatButtonClicked(NPC npc, bool firstButton)
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck") || npc.type != NPCID.OldMan) return true;
+        PreCalls++; return !Block;
+    }
+    public override void OnChatButtonClicked(NPC npc, bool firstButton)
+    {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck") && npc.type == NPCID.OldMan) PostCalls++;
+    }
+}
+
+public sealed class HornetTrial : ModSystem
+{
+    public static bool Enabled => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck");
+    bool Obstacle => Terraria.Program.LaunchParameters.ContainsKey("-agenthornetwall");
+    public static int Target = -1;
+    public static bool Killed;
+    readonly JsonArray rounds = new();
+    readonly HashSet<(int, int)> hostileProjectiles = new();
+    int x, floor, tick, spawnedAt, hpBefore, knivesBefore, shots, moves, damageTaken, previousHp;
+    int blockedFrames, blockedAttackFrames;
+    bool started, finished;
+    double distance;
+    Vector2 previousPosition;
+
+    public override void PostUpdateEverything()
+    {
+        if (!Enabled || finished || Main.gameMenu || !Main.LocalPlayer.active) return;
+        try
+        {
+            var p = Main.LocalPlayer;
+            if (!started)
+            {
+                started = true;
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                AgentPermissions.Attack = AgentPermissions.Dodge = true;
+                Combat.Enabled = Dodge.Enabled = false;
+                x = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16;
+                for (int tx = x - 22; tx <= x + 22; tx++)
+                for (int ty = floor - 13; ty <= floor + 2; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (tx == x - 22 || tx == x + 22 || ty == floor - 13 || ty >= floor)
+                    { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                if (Obstacle)
+                    for (int tx = x + 7; tx <= x + 8; tx++)
+                    for (int ty = floor - 5; ty < floor; ty++)
+                    { var tile = Main.tile[tx, ty]; tile.HasTile = true; tile.TileType = TileID.Stone; }
+                foreach (var projectile in Main.projectile) projectile.active = false;
+                foreach (var item in Main.item) item.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.ThrowingKnife); p.inventory[0].stack = 500;
+                p.ConsumedLifeCrystals = 10; p.statLifeMax = p.statLife = 300;
+                p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+                p.immune = false; p.immuneTime = 0;
+                Main.playerInventory = false;
+                previousHp = p.statLife; previousPosition = p.position;
+                Console.WriteLine($"HORNET_TRIAL_START arena=42x12 knives=500 hp=300 immunity=false sequential=3 model_calls=0 obstacle={Obstacle}");
+                Spawn(p); return;
+            }
+            tick++;
+            distance += Vector2.Distance(previousPosition, p.position); previousPosition = p.position;
+            if (p.controlLeft || p.controlRight || p.controlJump) moves++;
+            damageTaken += Math.Max(0, previousHp - p.statLife); previousHp = p.statLife;
+            foreach (var projectile in Main.projectile)
+                if (projectile.active && projectile.hostile) hostileProjectiles.Add((projectile.whoAmI, projectile.identity));
+            shots = Math.Max(shots, knivesBefore - p.inventory.Where(i => i.type == ItemID.ThrowingKnife).Sum(i => i.stack));
+            if (p.dead) { Record(p, "player_dead"); Finish(false, "player_dead"); return; }
+            if (p.Center.X < (x - 22) * 16 || p.Center.X > (x + 22) * 16 || p.Center.Y < (floor - 13) * 16)
+            { Record(p, "left_arena"); Finish(false, "left_arena"); return; }
+            int elapsed = tick - spawnedAt;
+            if (elapsed >= 120 && Main.npc[Target].active && !Collision.CanHitLine(p.Center, 4, 4, Main.npc[Target].Center, 4, 4))
+            { blockedFrames++; if (p.controlUseItem) blockedAttackFrames++; }
+            if (elapsed == 120) FightCoordinator.Start(60, new[] { (int)NPCID.Hornet });
+            if (Killed)
+            {
+                Record(p, "killed"); FightCoordinator.Stop();
+                if (rounds.Count == 3) { Finish(true, "three_hornets_killed"); return; }
+                Spawn(p); return;
+            }
+            if (!Main.npc[Target].active) { Record(p, "target_lost"); Finish(false, "target_lost"); return; }
+            if (elapsed >= 1800) { Record(p, "timeout"); Finish(false, "timeout"); }
+        }
+        catch (Exception error) { Finish(false, error.ToString()); }
+    }
+
+    void Spawn(Player p)
+    {
+        int side = rounds.Count % 2 == 0 ? 1 : -1;
+        Target = NPC.NewNPC(new EntitySource_Misc("HornetTrial"), (x + side * 17) * 16, (floor - 6) * 16, NPCID.Hornet);
+        if (Target >= Main.maxNPCs) throw new InvalidOperationException("hornet_spawn_failed");
+        Killed = false; spawnedAt = tick; hpBefore = p.statLife;
+        knivesBefore = p.inventory.Where(i => i.type == ItemID.ThrowingKnife).Sum(i => i.stack);
+        shots = moves = damageTaken = blockedFrames = blockedAttackFrames = 0; hostileProjectiles.Clear(); distance = 0; previousPosition = p.position; previousHp = p.statLife;
+        Console.WriteLine($"HORNET_SPAWN round={rounds.Count + 1} id={Target} hp={Main.npc[Target].life} side={side}");
+    }
+
+    void Record(Player p, string outcome)
+    {
+        var result = new JsonObject { ["round"] = rounds.Count + 1, ["outcome"] = outcome,
+            ["frames"] = tick - spawnedAt, ["hp_before"] = hpBefore, ["hp_after"] = p.statLife,
+            ["damage_taken"] = damageTaken, ["knives_used"] = shots, ["movement_frames"] = moves,
+            ["hostile_projectiles"] = hostileProjectiles.Count,
+            ["line_blocked_frames"] = blockedFrames, ["blocked_attack_frames"] = blockedAttackFrames,
+            ["distance_pixels"] = distance, ["target_hp"] = Main.npc[Target].life };
+        rounds.Add(result); Console.WriteLine("HORNET_ROUND " + result.ToJsonString());
+    }
+
+    void Finish(bool ok, string outcome)
+    {
+        finished = true; FightCoordinator.Stop();
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject
+        { ["ok"] = ok, ["detail"] = "HORNET_TRIAL_COMPLETE " + outcome, ["rounds"] = rounds,
+            ["model_calls"] = 0, ["immunity"] = false, ["arena_cells"] = "42x12", ["obstacle"] = Obstacle }.ToJsonString());
+    }
+}
+
+public sealed class HornetTrialNpcs : GlobalNPC
+{
+    public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
+    { if (HornetTrial.Enabled) { spawnRate = int.MaxValue; maxSpawns = 0; } }
+    public override void OnKill(NPC npc)
+    { if (HornetTrial.Enabled && npc.whoAmI == HornetTrial.Target && npc.type == NPCID.Hornet) HornetTrial.Killed = true; }
+}
+
+public sealed class Driver : ModSystem
+{
+    bool enabled, opened;
+    bool liveRunning;
+    DateTime liveStart;
+    int phase, ticks;
+    int heartX, heartY;
+    int expectedCrystals;
+    JsonObject gatherRequest;
+    Task<string> pending;
+    readonly JsonArray results = new();
+    delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
+    delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
+    StartHook navigationHook;
+    bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
+    bool WatchLive => Terraria.Program.LaunchParameters.ContainsKey("-agentwatchcheck");
+    bool DecisionLive => Terraria.Program.LaunchParameters.ContainsKey("-agentdecisioncheck");
+    int eventChest = -1;
+    bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
+    bool InteractionCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck");
+    int chatNpc, interactionWait;
+    string chatLabel;
+    bool HealthLive => WatchLive || WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
+    bool hazardApplied;
+    int hazardUntil, hazardStock;
+    bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
+    bool ModelScript => File.Exists(Path.Combine(Main.SavePath, "model-script.json"));
+    bool ContinuationCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentcontinuationcheck");
+    string actionHandle;
+    int stockAtPause;
+    readonly List<int> modelAnnouncements = new();
+    delegate void OriginalSay(string text, bool bot);
+    delegate void SayHook(OriginalSay original, string text, bool bot);
+    SayHook sayHook;
+    bool TeleportCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentteleportcheck");
+    int teleportCheckUntil;
+
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentenginecheck");
+        if (!enabled) return;
+        string root = Path.GetFullPath(Main.SavePath);
+        if (!root.StartsWith("/tmp/") && !root.StartsWith("/private/tmp/")) throw new InvalidOperationException("temporary_root_required");
+        On_Main.Update += Update;
+        IL_Main.DoUpdate += Focus;
+        if (HealthLive || ScriptCheck)
+        {
+            navigationHook = NavigateWithoutPlanning;
+            MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), navigationHook);
+        }
+        if (ModelScript)
+        {
+            sayHook = (original, text, bot) =>
+            {
+                if (text.Trim() == "叮") modelAnnouncements.Add(Main.LocalPlayer.inventory
+                    .Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack));
+                original(text, bot);
+            };
+            MonoModHooks.Add(typeof(AgentChat).GetMethod("Say"), sayHook);
+        }
+    }
+
+    static void NavigateWithoutPlanning(OriginalStart original, int x, int y, RecedingNav.Mode mode)
+    {
+        var player = Main.LocalPlayer;
+        int previousFall = player.fallStart;
+        player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f, y * 16 + 8 - player.height / 2f));
+        player.velocity = Vector2.Zero;
+        player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
+        RecedingNav.Active = false;
+        RecedingNav.LastStop = "done";
+        Console.WriteLine($"AGENT_TEST_NAV x={x} y={y} mode={mode} landed={player.position} fall_before={previousFall} fall_after={player.fallStart} navigation=teleport_stub");
+    }
+
+    static string TileStamp(int x, int y) => string.Join(";", Enumerable.Range(-2, 5).SelectMany(dx =>
+        Enumerable.Range(-2, 5).Select(dy =>
+        {
+            var tile = Main.tile[x + dx, y + dy];
+            return $"{tile.HasTile},{tile.TileType},{tile.TileFrameX},{tile.TileFrameY},{tile.WallType},{tile.LiquidAmount},{tile.LiquidType}";
+        })));
+
+    static void Focus(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("focus_boundary_missing");
+        cursor.EmitDelegate<Action>(() => Main.hasFocus = true);
+    }
+
+    void Update(On_Main.orig_Update original, Main game, GameTime time)
+    {
+        original(game, time);
+        if (opened || Main.menuMode != 0) return;
+        opened = true;
+        if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
+        var file = PlayerFileData.CreateAndSave(new Player { name = "Agent engine check" });
+        if (file.IsCloudSave || !file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new InvalidOperationException("player_not_isolated");
+        Player.LoadPlayer(file.Path, false).SetAsActive(); Main.autoPause = false;
+        WorldGen.playWorld();
+    }
+
+    static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException(message); }
+    void Call(string tool, JsonObject args) => pending = AgentTools.Execute(tool, args, default);
+    static JsonObject Step(string id) => new() { ["id"] = id, ["action"] = "verify" };
+
+    static void KillQueen()
+    {
+        int id = NPC.NewNPC(new EntitySource_Misc("AgentChecks"), (int)Main.LocalPlayer.Center.X + 500,
+            (int)Main.LocalPlayer.Center.Y, NPCID.QueenBee);
+        Check(id < Main.maxNPCs, "npc_spawn_failed");
+        Main.npc[id].StrikeInstantKill();
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || Main.gameMenu || !Main.LocalPlayer.active) return;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-agenthornetcheck")) return;
+        try
+        {
+            if (liveRunning)
+            {
+                if (HealthLive) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+                if (WatchLive && eventChest < 0 && Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack) >= 2)
+                {
+                    int cx = heartX - 8, cy = heartY - 1;
+                    eventChest = WorldGen.PlaceChest(cx, cy, TileID.Containers, false);
+                    Check(eventChest >= 0, "event_chest_not_placed");
+                    Main.chest[eventChest].item[0].SetDefaults(ItemID.GoldCoin);
+                    Main.chest[eventChest].item[0].stack = 1;
+                    Console.WriteLine($"AGENT_WATCH_CHEST x={cx} y={cy} inventory=2+");
+                }
+                if (WorkflowLive)
+                {
+                    int count = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    if (!hazardApplied && count >= 3 && count < 10)
+                    {
+                        hazardApplied = true; hazardUntil = ticks + 60; hazardStock = count;
+                        Console.WriteLine($"AGENT_WORKFLOW_HAZARD stock={count} hp=80 frames=60");
+                    }
+                    if (hazardApplied) Main.LocalPlayer.statLife = ticks < hazardUntil ? 80 : 100;
+                }
+                if (pending != null)
+                {
+                    if (!pending.IsCompleted) return;
+                    var state = JsonNode.Parse(pending.GetAwaiter().GetResult());
+                    pending = null;
+                    if (WatchLive)
+                    {
+                        int inventory = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack);
+                        bool looted = eventChest >= 0 && Main.chest[eventChest].item.All(i => i.IsAir)
+                            && Main.LocalPlayer.inventory.Any(i => i.type == ItemID.GoldCoin && i.stack >= 1);
+                        var actions = state["action_tasks"].AsArray();
+                        bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
+                            && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
+                            && actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10;
+                        bool woke = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "nearby_chest") == true;
+                        bool goalComplete = state["codex_goal"]?["native"]?["status"]?.ToString() == "complete";
+                        bool explicitWake = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "decision_point") == true;
+                        var codex = typeof(NativeAgent).GetField("_codex", BindingFlags.Instance | BindingFlags.NonPublic)
+                            .GetValue(ModContent.GetInstance<NativeAgent>()) as CodexAgent;
+                        results.Add(new JsonObject { ["state"] = state.DeepClone(), ["looted"] = looted,
+                            ["same_handle_changed_target"] = resumed, ["passive_wake"] = woke, ["native_goal_complete"] = goalComplete,
+                            ["explicit_wake"] = explicitWake,
+                            ["model_turns"] = codex?.TurnsStarted, ["token_usage"] = codex?.TokenUsage });
+                        NativeAgent.Stop();
+                        Finish(inventory == 10 && looted && resumed && woke && goalComplete && (!DecisionLive || explicitWake)
+                            && state["task_plan"]?["status"]?.ToString() == "completed",
+                            $"AGENT_WATCH_LIVE_RESULT inventory={inventory} looted={looted} resumed={resumed} woke={woke} explicit={explicitWake} native_goal={goalComplete}");
+                        return;
+                    }
+                    NativeAgent.Stop();
+                    File.WriteAllText(Path.Combine(Main.SavePath, "agent-live-result.json"), new JsonObject
+                    { ["elapsed_seconds"] = (DateTime.UtcNow - liveStart).TotalSeconds,
+                        ["state"] = state, ["controlled_engine_checks_passed"] = !HealthLive,
+                        ["navigation"] = HealthLive ? "teleport_stub" : "real",
+                        ["health_goal_met"] = state["permanent_max_health"]?.GetValue<int>() >= 300,
+                        ["health_goal_verified"] = state["permanent_max_health"]?.GetValue<int>() >= 300
+                            && state["task_plan"]?["status"]?.ToString() == "completed" }.ToJsonString());
+                    if (WorkflowLive)
+                    {
+                        int inventory = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                        var actions = state["action_tasks"].AsArray();
+                        bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
+                            && actions[0]["status"]?.ToString() == "completed"
+                            && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
+                            && actions[0]["previous_attempt"]?["observation"]?["hp"]?.GetValue<int>() < 90;
+                        bool segmented = state["script_workflows"].AsObject().Any(w => w.Value["segment"]?.GetValue<int>() >= 2);
+                        results.Add(new JsonObject { ["hazard_stock"] = hazardStock, ["inventory"] = inventory,
+                            ["resumed_same_handle"] = resumed, ["segmented"] = segmented, ["state"] = state.DeepClone() });
+                        Finish(hazardApplied && inventory == 10 && resumed && segmented,
+                            "AGENT_WORKFLOW_LIVE_RESULT inventory=" + inventory + " resumed=" + resumed + " segmented=" + segmented);
+                        return;
+                    }
+                    Finish(true, "AGENT_LIVE_CAPTURED bounded_probe=true goal_success_requires_state_verification=true");
+                    return;
+                }
+                double seconds = (DateTime.UtcNow - liveStart).TotalSeconds;
+                if (++ticks % 120 == 0) Console.WriteLine($"AGENT_LIVE_PROGRESS seconds={seconds:0.0} status={NativeAgent.Status}");
+                if (seconds >= 180 || seconds >= 10 && NativeAgent.Status is "failed" or "paused" or "idle" or "waiting for answer")
+                    pending = AgentTools.State(default);
+                return;
+            }
+            if (++ticks > (PlanningReadOnly ? 18000 : 7200)) throw new TimeoutException("engine_check_frame_limit");
+            if (!TeleportCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+            if (pending != null && !pending.IsCompleted) return;
+            JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
+            pending = null;
+            Console.WriteLine($"AGENT_ENGINE_PHASE phase={phase} frame={ticks}");
+            if (result != null) results.Add(new JsonObject { ["phase"] = phase, ["result"] = result.DeepClone() });
+            var player = Main.LocalPlayer;
+            switch (phase++)
+            {
+                case 0:
+                    Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (InteractionCheck)
+                    {
+                        Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
+                        foreach (var npc in Main.npc) npc.active = false;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        foreach (var item in player.armor) item.TurnToAir();
+                        Main.mouseItem.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.WoodHelmet);
+                        player.inventory[1].SetDefaults(ItemID.WoodBreastplate);
+                        player.inventory[2].SetDefaults(ItemID.CloudinaBottle);
+                        player.inventory[3].SetDefaults(ItemID.CloudinaBottle);
+                        phase = 45; Call("task_plan", JsonNode.Parse($$"""
+                            {"goal":"actually wear helmet","replace":true,"steps":[{"id":"wear","description":"helmet in functional slot","conditions":[{"kind":"equipped","type":{{ItemID.WoodHelmet}},"count":1}]}]}
+                            """).AsObject());
+                        break;
+                    }
+                    if (PlanningReadOnly)
+                    {
+                        Concessions.Enabled = false;
+                        Combat.Enabled = Dodge.Enabled = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        phase = 28; pending = PlanningTrial.Run();
+                        break;
+                    }
+                    if (TeleportCheck)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        foreach (var npc in Main.npc) npc.active = false;
+                        foreach (var shot in Main.projectile) shot.active = false;
+                        var sources = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":5000}").Body);
+                        Check(sources["tiles"]?.AsArray().Count == 1, "existing_crystal_required_for_teleport_check");
+                        heartX = sources["tiles"][0]["x"].GetValue<int>(); heartY = sources["tiles"][0]["y"].GetValue<int>();
+                        string beforeTeleportTiles = TileStamp(heartX, heartY);
+                        player.statLifeMax = player.statLife = 100;
+                        player.immune = false; player.immuneTime = 0; player.noFallDmg = false;
+                        player.velocity.Y = 20;
+                        NavigateWithoutPlanning(null, heartX, heartY, RecedingNav.Mode.Snap);
+                        Check(RecedingNav.LastStop == "done" && player.velocity == Vector2.Zero
+                            && player.fallStart == (int)(player.position.Y / 16) && player.fallStart2 == player.fallStart,
+                            "teleport_did_not_reset_fall_state");
+                        Check(player.Center == new Vector2(heartX * 16 + 8, heartY * 16 + 8), "teleport_did_not_use_exact_target");
+                        Check(TileStamp(heartX, heartY) == beforeTeleportTiles, "test_teleport_modified_terrain");
+                        teleportCheckUntil = ticks + 90; phase = 24;
+                        break;
+                    }
+                    if (ScriptCheck)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        foreach (var item in player.inventory) item.TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                        foreach (var item in Main.item) item.active = false;
+                        Main.playerInventory = false; PrepareResources(player);
+                        if (ContinuationCheck)
+                        {
+                            phase = 26;
+                            Call("run_script", new JsonObject { ["workflow"] = "engine-continuation", ["seconds"] = 90, ["code"] = """
+                                const action=step('start',()=>tool('action_start',{tool:'gather',args:{targets:[{item_type:29,count:10,tile_names:['Heart']}]}}));
+                                for(let i=0;i<80;i++) {
+                                    const q=tool('action_query',{handle:action.handle,wait_ms:200});
+                                    const count=q.observation.inventory_slots.filter(x=>x.type===29).reduce((n,x)=>n+x.stack,0);
+                                    if(count>=3 && q.status==='running') {
+                                        const paused=step('pause',()=>tool('action_control',{handle:action.handle,command:'pause'}));
+                                        if(paused.status!=='paused') throw new Error('not paused');
+                                        return {status:'yield',handle:action.handle,stock:count};
+                                    }
+                                    if(q.status!=='running') throw new Error('ended before pause: '+JSON.stringify(q));
+                                }
+                                throw new Error('pause deadline');
+                                """ });
+                            break;
+                        }
+                        if (ModelScript)
+                        {
+                            var events = JsonNode.Parse(File.ReadAllText(Path.Combine(Main.SavePath, "model-script.json"))).AsArray();
+                            string code = events.Single(e => e?["tool"]?.ToString() == "run_script")["args"]["code"].ToString();
+                            results.Add(new JsonObject { ["model_code"] = code, ["placed_crystals"] = 10,
+                                ["initial_crystals"] = 0, ["navigation"] = "teleport_stub" });
+                            phase = 25;
+                            Call("run_script", new JsonObject { ["seconds"] = 120, ["code"] = code });
+                            break;
+                        }
+                        phase = 22;
+                        Call("run_script", new JsonObject { ["seconds"] = 90, ["code"] = $$"""
+                            tool('task_plan', {goal:'script real-engine check',replace:true,steps:[
+                              {id:'health',description:'collect and use crystals',conditions:[{kind:'permanent_health',count:300}]}]});
+                            const gathered = tool('gather', {targets:[{item_type:{{ItemID.LifeCrystal}},count:10,tile_names:['Heart']}]});
+                            if (!gathered.ok) return {error:'collection_failed',gathered};
+                            let state = tool('get_state');
+                            while (state.permanent_max_health < 300) {
+                              const slot = state.inventory_slots.find(i => i.type === {{ItemID.LifeCrystal}} && i.stack > 0);
+                              if (!slot) return {error:'missing_crystal',hp:state.permanent_max_health};
+                              const used = tool('use_item',{slot:slot.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:45});
+                              if (used.error) return {error:'use_failed',used};
+                              const next = tool('get_state');
+                              if (next.permanent_max_health <= state.permanent_max_health) throw new Error('no health progress');
+                              state = next;
+                            }
+                            const verified = tool('task_step',{id:'health',action:'verify'});
+                            return {hp:state.permanent_max_health,verified:verified.verified};
+                            """ });
+                        break;
+                    }
+                    if (HealthLive)
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        Config.I.AgentUseCodex = true;
+                        if (WatchLive)
+                        {
+                            PrepareResources(player);
+                            heartX = (int)player.Center.X / 16; heartY = (int)player.Bottom.Y / 16;
+                            foreach (var chest in Main.chest)
+                                if (chest != null && Math.Abs(chest.x - heartX) + Math.Abs(chest.y - heartY) <= 60)
+                                    foreach (var item in chest.item) item.TurnToAir();
+                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            string activeDecision = DecisionLive ? "箱子实际取物成功并单独step保存后，必须先在step之外调用decision_point，说明需要根据新收获重新决策。本段不得恢复采集；下一轮才把原handle目标改成10并恢复，不重复搜刮箱子。" : "";
+                            NativeAgent.Submit("/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
+                        }
+                        else if (WorkflowLive)
+                        {
+                            PrepareResources(player);
+                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            NativeAgent.Submit("用宿主workflow与可中断后台任务收集10颗生命水晶，不使用。已查证物品29、来源方块Heart。采集期间持续观察最新血量；低于90就立刻暂停任务，保存进度并return status=yield交回模型。测试环境稍后会恢复血量；下一段确认血量恢复后，恢复同一个句柄继续收集到10，不能重新启动任务或重复已完成步骤。完成后实际验证库存，返回status=done。请自己编写代码实现，不只给计划。");
+                        }
+                        else NativeAgent.Submit("把永久生命上限提升到300。请建立任务计划，按实际状态执行并验证结果，合理的中间步骤自己决定。");
+                        liveRunning = true; liveStart = DateTime.UtcNow;
+                        Console.WriteLine("AGENT_HEALTH_LIVE_STARTED initial_hp=100 resources=existing_world terrain_setup=false max_seconds=180 navigation=teleport_stub");
+                        break;
+                    }
+                    if (Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck"))
+                    {
+                        AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        PrepareResources(player);
+                        expectedCrystals = 10;
+                        phase = 21;
+                        Console.WriteLine("AGENT_BATCH_STARTED placed_hearts=10 initial_crystals=0 model_calls=0 navigation=teleport_stub");
+                        pending = BatchGather(expectedCrystals);
+                        break;
+                    }
+                    AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                    player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                    for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                    player.inventory[0].SetDefaults(ItemID.LifeCrystal);
+                    player.inventory[1].SetDefaults(ItemID.JungleSpores); player.inventory[1].stack = 12;
+                    player.inventory[2].SetDefaults(ItemID.Stinger); player.inventory[2].stack = 9;
+                    int x = (int)player.Center.X / 16, y = (int)player.Bottom.Y / 16;
+                    for (int tx = x - 24; tx <= x + 24; tx++)
+                    for (int ty = y - 5; ty <= y + 2; ty++)
+                    {
+                        var tile = Main.tile[tx, ty];
+                        tile.ClearEverything();
+                        if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                    }
+                    player.position.Y = y * 16 - player.height; player.velocity = Vector2.Zero;
+                    WorldGen.PlaceObject(x + 2, y - 1, TileID.Anvils);
+                    Check(Main.tile[x + 2, y - 1].TileType == TileID.Anvils, "anvil_fixture_missing");
+                    Main.playerInventory = true;
+                    KillQueen();
+                    Call("task_plan", new JsonObject { ["goal"] = "controlled engine verification", ["replace"] = true,
+                        ["steps"] = JsonNode.Parse($$"""
+                        [{"id":"health","description":"consume crystal","conditions":[{"kind":"permanent_health","count":120}]},
+                         {"id":"weapon","description":"craft weapon","conditions":[{"kind":"item","type":{{ItemID.ThornChakram}},"count":1}]},
+                         {"id":"finish","description":"fresh kill and final requirements","conditions":[{"kind":"permanent_health","count":120},{"kind":"item","type":{{ItemID.ThornChakram}},"count":1},{"kind":"npc_kills","type":{{NPCID.QueenBee}},"count":1}]}]
+                        """) });
+                    break;
+                case 1:
+                    Check(result["error"] == null, "plan_rejected"); Call("task_step", Step("health")); break;
+                case 2:
+                    Check(!result["verified"].GetValue<bool>(), "unearned_health_passed");
+                    Call("use_item", new JsonObject { ["slot"] = 0, ["x"] = (int)player.Center.X / 16,
+                        ["y"] = (int)player.Center.Y / 16, ["duration_ticks"] = 45 }); break;
+                case 3:
+                    Check(player.ConsumedLifeCrystals == 1 && player.statLifeMax == 120, "crystal_not_consumed");
+                    Call("task_step", Step("health")); break;
+                case 4:
+                    Check(result["verified"].GetValue<bool>(), "real_health_not_verified");
+                    Call("recipe", new JsonObject { ["name"] = "ThornChakram" }); break;
+                case 5:
+                    Console.WriteLine($"AGENT_ENGINE_STATION adjacent={player.adjTile[TileID.Anvils]} inventory_open={Main.playerInventory}");
+                    Call("craft", new JsonObject { ["name"] = "ThornChakram", ["amount"] = 1 }); break;
+                case 6:
+                    Check(result["error"] == null, "craft_rejected"); Call("task_step", Step("weapon")); break;
+                case 7:
+                    Check(result["verified"].GetValue<bool>(), "crafted_weapon_not_verified"); Call("task_step", Step("finish")); break;
+                case 8:
+                    Check(!result["verified"].GetValue<bool>(), "historical_kill_counted"); KillQueen(); Call("task_step", Step("finish")); break;
+                case 9:
+                    Check(result["verified"].GetValue<bool>() && result["status"].ToString() == "completed", "fresh_kill_not_verified");
+                    heartX = (int)player.Center.X / 16 - 3; heartY = (int)player.Bottom.Y / 16 - 1;
+                    WorldGen.PlaceObject(heartX, heartY, TileID.Heart);
+                    Check(Main.tile[heartX, heartY].HasTile && Main.tile[heartX, heartY].TileType == TileID.Heart, "heart_fixture_missing");
+                    var hiveTile = Main.tile[heartX, heartY]; hiveTile.WallType = WallID.HiveUnsafe;
+                    var scan = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":20}").Body);
+                    Check(scan["tiles"]?.AsArray().Count == 1 && scan["tiles"][0]["near_hive_wall"]?.GetValue<bool>() == true,
+                        "hive_wall_silently_filtered_resource");
+                    hiveTile.WallType = WallID.None;
+                    Call("nav_to", new JsonObject { ["x"] = heartX, ["y"] = heartY, ["exact"] = true });
+                    break;
+                case 10:
+                    Check(result["done"]?.GetValue<bool>() == true && result["mode_adjustment"] != null, "heart_navigation_not_adapted");
+                    player.inventory[3].SetDefaults(ItemID.CopperPickaxe);
+                    Call("mine", new JsonObject { ["dir"] = "left", ["target_x"] = heartX, ["target_y"] = heartY });
+                    break;
+                case 11:
+                    Check(result["outcome"]?.ToString() == "removed" && !Main.tile[heartX, heartY].HasTile, "heart_not_mined");
+                    int crystalSlot = Array.FindIndex(player.inventory, item => item.type == ItemID.LifeCrystal && item.stack > 0);
+                    Check(crystalSlot >= 0, "crystal_drop_not_collected");
+                    Call("use_item", new JsonObject { ["slot"] = crystalSlot, ["x"] = heartX, ["y"] = heartY, ["duration_ticks"] = 45 });
+                    break;
+                case 12:
+                    Check(player.statLifeMax == 140 && player.ConsumedLifeCrystals == 2, "mined_crystal_not_used");
+                    for (int slot = 0; slot < player.inventory.Length; slot++)
+                        if (player.inventory[slot].type is ItemID.Gel or ItemID.LifeCrystal) player.inventory[slot].TurnToAir();
+                    heartX = (int)player.Center.X / 16 - 3; heartY = (int)player.Bottom.Y / 16 - 1;
+                    WorldGen.PlaceObject(heartX, heartY, TileID.Heart);
+                    Check(Main.tile[heartX, heartY].HasTile, "gather_heart_fixture_missing");
+                    int slime = NPC.NewNPC(new EntitySource_Misc("AgentChecks"), (int)player.Center.X + 64,
+                        (int)player.Bottom.Y - 32, NPCID.BlueSlime);
+                    Check(slime < Main.maxNPCs, "gather_npc_fixture_missing");
+                    AgentPermissions.Attack = true;
+                    gatherRequest = new JsonObject { ["seconds"] = 60, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = 1, ["tile_names"] = new JsonArray("Heart") },
+                        new JsonObject { ["item_type"] = (int)ItemID.Gel, ["count"] = 1, ["npc_types"] = new JsonArray((int)NPCID.BlueSlime) }) };
+                    Call("task_plan", JsonNode.Parse($$"""
+                        {"goal":"verify NPC presence","steps":[{"id":"spawn","description":"live NPC present","conditions":[{"kind":"npc_alive","type":{{NPCID.BlueSlime}},"count":1}]}]}
+                        """).AsObject());
+                    break;
+                case 13:
+                    Check(result["error"] == null, "presence_plan_rejected"); Call("task_step", Step("spawn")); break;
+                case 14:
+                    Check(result["verified"]?.GetValue<bool>() == true, "live_spawn_not_verified"); Call("gather", gatherRequest); break;
+                case 15:
+                    Check(result["ok"]?.GetValue<bool>() == true, "mixed_gather_failed");
+                    Check(Array.Exists(player.inventory, item => item.type == ItemID.LifeCrystal && item.stack >= 1)
+                        && Array.Exists(player.inventory, item => item.type == ItemID.Gel && item.stack >= 1), "mixed_gather_inventory_missing");
+                    int gel = 0;
+                    foreach (var item in player.inventory) if (item.type == ItemID.Gel) gel += item.stack;
+                    int drop = Item.NewItem(new EntitySource_Misc("AgentChecks"), new Rectangle((int)player.Center.X + 128,
+                        (int)player.Bottom.Y - 128, 16, 16), ItemID.Gel, 1);
+                    Check(drop < Main.maxItems, "airborne_drop_fixture_missing");
+                    Main.item[drop].velocity = new Vector2(1, -2);
+                    Call("gather", new JsonObject { ["seconds"] = 30, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.Gel, ["count"] = gel + 1 }) });
+                    break;
+                case 16:
+                    Check(result["ok"]?.GetValue<bool>() == true, "airborne_drop_pickup_failed");
+                    Call("game_catalog", new JsonObject { ["kind"] = "item", ["name"] = "LifeCrystal" });
+                    break;
+                case 17:
+                    Check(result["matches"][0]["places_tile"] == null, "nonplaceable_item_invented_tile");
+                    Call("game_catalog", new JsonObject { ["kind"] = "item", ["name"] = "DirtBlock" });
+                    break;
+                case 18:
+                    Check(result["matches"][0]["places_tile"]["type"].GetValue<int>() == TileID.Dirt
+                        && result["matches"][0]["places_tile"]["names"][0]["internal"].GetValue<string>() == "Dirt",
+                        "loaded_item_tile_definition_missing");
+                    Call("game_catalog", new JsonObject { ["kind"] = "tile", ["name"] = Lang.GetItemNameValue(ItemID.LifeCrystal) });
+                    break;
+                case 19:
+                    Check(result["matches"].AsArray().Any(m => m["type"].GetValue<int>() == TileID.Heart && m["exact"].GetValue<bool>())
+                        && result["matches"].AsArray().Any(m => m["type"].GetValue<int>() == TileID.LifeCrystalBoulder && m["exact"].GetValue<bool>()),
+                        "map_display_name_did_not_retain_ambiguity");
+                    Call("find_tiles", new JsonObject { ["name"] = Lang.GetItemNameValue(ItemID.LifeCrystal), ["n"] = 1, ["max_dist"] = 2000 });
+                    break;
+                case 20:
+                    Check(result["error"]?.GetValue<string>() == "ambiguous_tile_name" && result["name_candidates"]?.AsArray().Count >= 2,
+                        "tile_search_guessed_ambiguous_map_display_name");
+                    PrepareResources(player);
+                    expectedCrystals = 10;
+                    foreach (var item in player.inventory)
+                        if (item.type == ItemID.LifeCrystal) expectedCrystals += item.stack;
+                    Call("gather", new JsonObject { ["seconds"] = 90, ["targets"] = new JsonArray(
+                        new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = expectedCrystals,
+                            ["tile_names"] = new JsonArray("Heart") }) });
+                    break;
+                case 21:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["targets"][0]["actual"].GetValue<int>() >= expectedCrystals,
+                        "batch_crystal_collection_failed");
+                    if (Terraria.Program.LaunchParameters.ContainsKey("-agentlivecheck"))
+                    {
+                        player.ConsumedLifeCrystals = 0; player.statLifeMax = player.statLife = 100;
+                        for (int i = 0; i < player.inventory.Length; i++) player.inventory[i].TurnToAir();
+                        player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+                        player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                        player.inventory[2].SetDefaults(ItemID.CopperAxe);
+                        Main.playerInventory = false;
+                        for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
+                        PrepareResources(player);
+                        Config.I.AgentUseCodex = true;
+                        AgentPermissions.Attack = AgentPermissions.Dodge = true;
+                        NativeAgent.Submit("搞到300血同时搓个荆棘旋刃，然后召唤蜂王打蜂王。请建立新的任务计划，按实际状态执行。合理的中间步骤自己决定，失败时保留证据。");
+                        liveRunning = true; liveStart = DateTime.UtcNow;
+                        Console.WriteLine("AGENT_LIVE_STARTED starter_inventory=true placed_hearts=10 max_seconds=180");
+                        break;
+                    }
+                    Finish(true, Terraria.Program.LaunchParameters.ContainsKey("-agentbatchcheck")
+                        ? "AGENT_BATCH_COMPLETE checks=1 model_calls=0 controlled_fixture=true collected_crystals=10 navigation=teleport_stub"
+                        : "AGENT_ENGINE_COMPLETE checks=17 model_calls=0 controlled_fixture=true"); break;
+                case 22:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["verified"]?.GetValue<bool>() == true
+                        && player.statLifeMax == 300, "script_health_not_verified");
+                    Call("run_script", new JsonObject { ["seconds"] = 1,
+                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:600}}]}); return {unexpected:true};" });
+                    break;
+                case 23:
+                    Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
+                        && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
+                    Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
+                    break;
+                case 29:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[0].type == ItemID.WoodHelmet && player.inventory[0].IsAir,
+                        "helmet_not_equipped");
+                    Call("task_step", new JsonObject { ["id"] = "wear", ["action"] = "verify" }); phase = 47;
+                    break;
+                case 30:
+                    Check(result["error"]?.ToString() == "incompatible_equipment" && player.inventory[1].type == ItemID.WoodBreastplate
+                        && player.armor[0].type == ItemID.WoodHelmet, "wrong_armor_slot_changed_items");
+                    var staleEquip = EquipRequest(1, 1); staleEquip["expected_inventory"]["stack"] = 99;
+                    Call("equip_item", staleEquip);
+                    break;
+                case 31:
+                    Check(result["error"]?.ToString() == "stale_equipment", "stale_equipment_was_accepted");
+                    Call("equip_item", EquipRequest(2, 3));
+                    break;
+                case 32:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[3].type == ItemID.CloudinaBottle,
+                        "accessory_not_equipped");
+                    Call("equip_item", EquipRequest(3, 4));
+                    break;
+                case 33:
+                    Check(result["error"]?.ToString() == "incompatible_equipment" && player.inventory[3].type == ItemID.CloudinaBottle,
+                        "duplicate_accessory_was_accepted");
+                    Check(player.statDefense > 0 && player.GetJumpState(ExtraJump.CloudInABottle).Enabled,
+                        "equipment_did_not_affect_real_player");
+                    Call("equip_item", EquipRequest(3, 9));
+                    break;
+                case 34:
+                    Check(result["error"]?.ToString() == "equipment_slot_locked", "locked_accessory_slot_was_accepted");
+                    Call("equip_item", EquipRequest(4, 3));
+                    break;
+                case 35:
+                    Check(result["ok"]?.GetValue<bool>() == true && player.armor[3].IsAir && player.inventory[4].type == ItemID.CloudinaBottle
+                        && Main.mouseItem.IsAir, "unequip_lost_or_duplicated_items");
+                    Main.dayTime = true; Main.time = 1000;
+                    chatNpc = NPC.NewNPC(new EntitySource_Misc("AgentInteractions"), (int)player.Center.X + 40, (int)player.Bottom.Y, NPCID.OldMan);
+                    Check(chatNpc < Main.maxNPCs, "old_man_fixture_missing");
+                    Main.npc[chatNpc].aiStyle = -1;
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan });
+                    break;
+                case 36:
+                    Check(result["open"]?.GetValue<bool>() == true && result["buttons_ready"]?.GetValue<bool>() == true,
+                        "native_dialogue_did_not_open");
+                    Check(!player.GetJumpState(ExtraJump.CloudInABottle).Enabled, "unequipped_accessory_effect_persisted");
+                    Call("npc_chat", new JsonObject { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan,
+                        ["button"] = 1, ["expected_text"] = "not-current" });
+                    break;
+                case 37:
+                    Check(result["error"]?.ToString() == "dialogue_option_changed" && !NPC.AnyNPCs(NPCID.SkeletronHead),
+                        "daytime_or_stale_button_bypassed_native_rules");
+                    Main.dayTime = false; Main.time = 1000;
+                    interactionWait = ticks + 5; phase = 38;
+                    break;
+                case 38:
+                    if (ticks < interactionWait) { phase = 38; break; }
+                    var dialogue = NpcDialogue.Snapshot();
+                    Check(dialogue["buttons"].AsArray().Count > 0, "night_button_missing");
+                    chatLabel = dialogue["buttons"][0]["text"].ToString();
+                    ChatHookProbe.Block = true;
+                    Call("npc_chat", ChooseButton());
+                    break;
+                case 39:
+                    Check(result["ok"]?.GetValue<bool>() == true && ChatHookProbe.PreCalls == 1 && ChatHookProbe.PostCalls == 0
+                        && !NPC.AnyNPCs(NPCID.SkeletronHead), "mod_chat_veto_was_bypassed");
+                    ChatHookProbe.Block = false;
+                    Call("npc_chat", ChooseButton());
+                    break;
+                case 40:
+                    Check(result["ok"]?.GetValue<bool>() == true && ChatHookProbe.PreCalls == 2 && ChatHookProbe.PostCalls == 1,
+                        "native_chat_hooks_not_dispatched_once");
+                    Check(Main.npc.Count(n => n.active && n.type == NPCID.SkeletronHead) == 1, "native_button_did_not_summon_one_boss");
+                    results.Add(new JsonObject { ["defense"] = (int)player.statDefense, ["button"] = chatLabel,
+                        ["pre_hooks"] = ChatHookProbe.PreCalls, ["post_hooks"] = ChatHookProbe.PostCalls,
+                        ["skeletron_count"] = 1, ["cursor_empty"] = Main.mouseItem.IsAir });
+                    foreach (var npc in Main.npc.Where(n => n.active && (n.boss || n.type == NPCID.SkeletronHand))) npc.aiStyle = -1;
+                    chatNpc = NPC.NewNPC(new EntitySource_Misc("AgentInteractions"), (int)player.Center.X + 2000, (int)player.Bottom.Y, NPCID.Merchant);
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant });
+                    break;
+                case 41:
+                    Check(result["error"]?.ToString() == "tool_exception" && result["detail"]?.ToString() == "npc_out_of_reach",
+                        "remote_dialogue_bypassed_range");
+                    Main.npc[chatNpc].position = player.position - new Vector2(40, 0);
+                    Main.npc[chatNpc].aiStyle = -1;
+                    Call("npc_chat", new JsonObject { ["action"] = "open", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant });
+                    break;
+                case 42:
+                    Check(result["open"]?.GetValue<bool>() == true && result["buttons"].AsArray().Count > 0,
+                        "merchant_dialogue_not_available");
+                    Call("npc_chat", new JsonObject { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.Merchant,
+                        ["button"] = 1, ["expected_text"] = result["buttons"][0]["text"].ToString() });
+                    break;
+                case 43:
+                    Check(result["ok"]?.GetValue<bool>() == true && Main.npcShop > 0, "generic_shop_button_not_dispatched");
+                    Call("npc_chat", new JsonObject { ["action"] = "close" });
+                    break;
+                case 44:
+                    Check(player.talkNPC == -1 && result["open"]?.GetValue<bool>() == false, "dialogue_close_failed");
+                    Finish(true, "AGENT_INTERACTIONS_COMPLETE checks=19 model_calls=0 equipped_verified=true equipment_effects=true native_dialogue=true boss_summoned=1 merchant_shop=true range_guard=true");
+                    break;
+                case 45:
+                    Call("task_step", new JsonObject { ["id"] = "wear", ["action"] = "verify" });
+                    break;
+                case 46:
+                    Check(result["verified"]?.GetValue<bool>() == false, "carried_helmet_falsely_verified_as_worn");
+                    phase = 29; Call("equip_item", EquipRequest(0, 0));
+                    break;
+                case 47:
+                    Check(result["verified"]?.GetValue<bool>() == true, "actually_worn_helmet_not_verified");
+                    phase = 30; Call("equip_item", EquipRequest(1, 0));
+                    break;
+                case 28:
+                    Finish(result["ok"]?.GetValue<bool>() == true,
+                        "AGENT_PLANNING_READONLY queries=" + result["queries"] + " blocked=" + result["blocked_mutators"] + " game_actions=0");
+                    break;
+                case 26:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "yield",
+                        "first_segment_did_not_yield_after_pause");
+                    actionHandle = result["value"]["handle"].ToString();
+                    stockAtPause = player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    Check(stockAtPause >= 3 && stockAtPause < 10 && !RecedingNav.Active && !ItemUseCoordinator.IsActive,
+                        "pause_lost_partial_inventory_or_left_inputs_active");
+                    phase = 27;
+                    Call("run_script", new JsonObject { ["workflow"] = "engine-continuation", ["seconds"] = 90, ["code"] = """
+                        const action=step('start',()=>{throw new Error('completed action start replayed')});
+                        const resumed=step('resume',()=>tool('action_control',{handle:action.handle,command:'resume'}));
+                        if(resumed.handle!==action.handle || resumed.attempt!==2) throw new Error('handle changed');
+                        for(let i=0;i<80;i++) {
+                            const q=tool('action_query',{handle:action.handle,wait_ms:200});
+                            if(q.status==='running') continue;
+                            if(q.status!=='completed') throw new Error(JSON.stringify(q));
+                            const count=q.observation.inventory_slots.filter(x=>x.type===29).reduce((n,x)=>n+x.stack,0);
+                            if(count!==10) throw new Error('inventory mismatch');
+                            step('finish',()=>{tool('say',{text:'continuation-complete'});return {count}});
+                            return {status:'done',handle:action.handle,count,attempt:q.attempt,previous:q.previous_attempt};
+                        }
+                        throw new Error('resume deadline');
+                        """ });
+                    break;
+                case 27:
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "done"
+                        && result["value"]?["handle"]?.ToString() == actionHandle
+                        && result["value"]?["previous"]?["status"]?.ToString() == "paused"
+                        && player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack) == 10,
+                        "continuation_did_not_resume_original_intent");
+                    results.Add(new JsonObject { ["stock_at_pause"] = stockAtPause, ["final_inventory"] = 10,
+                        ["same_handle"] = actionHandle, ["attempt"] = 2 });
+                    Finish(true, "AGENT_CONTINUATION_COMPLETE checks=2 model_calls=0 initial=0 final=10 same_handle=true attempt=2 navigation=teleport_stub");
+                    break;
+                case 25:
+                    int crystals = player.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
+                    results.Add(new JsonObject { ["actual_crystals"] = crystals, ["permanent_health"] = player.statLifeMax,
+                        ["announcements"] = new JsonArray(modelAnnouncements.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()) });
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["completed"]?.GetValue<int>() == 10
+                        && crystals == 10 && player.statLifeMax == 100, "model_script_collection_not_verified");
+                    Check(modelAnnouncements.SequenceEqual(Enumerable.Range(1, 10)), "model_script_per_item_order_wrong");
+                    Finish(true, "AGENT_MODEL_SCRIPT_COMPLETE checks=2 model_calls=0 placed_crystals=10 inventory=10 announcements=10 hp=100 navigation=teleport_stub");
+                    break;
+                case 24:
+                    if (ticks < teleportCheckUntil) { phase = 24; break; }
+                    Check(!player.dead && player.statLife == 100 && !player.noFallDmg,
+                        "teleport_caused_fall_damage");
+                    var nearest = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":1,\"max_dist\":5000}").Body);
+                    var many = JsonNode.Parse(HttpServerSystem.Dispatch("/find_tiles", "{\"name\":\"Heart\",\"n\":100,\"max_dist\":5000}").Body);
+                    var candidates = many["tiles"].AsArray();
+                    Check(nearest["tiles"][0]["dist"].GetValue<int>() == candidates[0]["dist"].GetValue<int>(), "nearest_query_disagrees_with_sorted_candidates");
+                    for (int i = 1; i < candidates.Count; i++)
+                        Check(candidates[i - 1]["dist"].GetValue<int>() <= candidates[i]["dist"].GetValue<int>(), "tile_scan_not_sorted_by_reported_distance");
+                    results.Add(new JsonObject { ["hp_after_90_frames"] = player.statLife, ["target_x"] = heartX, ["target_y"] = heartY,
+                        ["nearest"] = nearest, ["candidate_count"] = candidates.Count });
+                    Finish(true, "AGENT_TELEPORT_COMPLETE checks=4 model_calls=0 hp=100 fall_protection=false terrain_unchanged=true target=exact");
+                    break;
+            }
+        }
+        catch (Exception error) { Finish(false, error.ToString()); }
+    }
+
+    static async Task<string> BatchGather(int wanted)
+    {
+        var targets = new[] { new GatherTarget(ItemID.LifeCrystal, wanted, new[] { "Heart" }, Array.Empty<int>()) };
+        return (await Gather.Run(targets, 90, new ArrivedGather(targets), default)).ToJsonString();
+    }
+
+    static JsonObject EquipRequest(int source, int target)
+    {
+        JsonObject State(Item item) => new() { ["type"] = item.type, ["prefix"] = item.prefix, ["stack"] = item.stack };
+        return new JsonObject { ["inventory_slot"] = source, ["equipment_slot"] = target,
+            ["expected_inventory"] = State(Main.LocalPlayer.inventory[source]), ["expected_equipment"] = State(Main.LocalPlayer.armor[target]) };
+    }
+
+    JsonObject ChooseButton() => new() { ["action"] = "choose", ["npc"] = chatNpc, ["npc_type"] = (int)NPCID.OldMan,
+        ["button"] = 1, ["expected_text"] = chatLabel };
+
+    sealed class ArrivedGather : IGatherWorld
+    {
+        readonly GameGather world;
+        public ArrivedGather(GatherTarget[] targets) => world = new GameGather(targets);
+        public Task<JsonObject> Observe(CancellationToken token) => world.Observe(token);
+        public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            var arrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Main.QueueMainThreadAction(() =>
+            {
+                if (token.IsCancellationRequested) { arrived.TrySetCanceled(token); return; }
+                try
+                {
+                    var player = Main.LocalPlayer;
+                    player.position.X = candidate["x"].GetValue<int>() * 16 - player.width / 2;
+                    player.velocity = Vector2.Zero;
+                    Console.WriteLine($"AGENT_BATCH_ARRIVED x={candidate["x"]} y={candidate["y"]} navigation=teleport_stub");
+                    arrived.TrySetResult(true);
+                }
+                catch (Exception error) { arrived.TrySetException(error); }
+            });
+            await arrived.Task.WaitAsync(token);
+            return await world.Act(candidate, token);
+        }
+        public Task Stop(CancellationToken token) => world.Stop(token);
+    }
+
+    static void PrepareResources(Player player)
+    {
+        int x = (int)player.Center.X / 16, y = (int)player.Bottom.Y / 16;
+        for (int tx = x - 24; tx <= x + 24; tx++)
+        for (int ty = y - 5; ty <= y + 2; ty++)
+        {
+            var tile = Main.tile[tx, ty];
+            tile.ClearEverything();
+            if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+        }
+        WorldGen.PlaceObject(x - 3, y - 1, TileID.Anvils);
+        for (int i = 0; i < 10; i++)
+        {
+            int crystalX = x + 2 + i * 2;
+            WorldGen.PlaceObject(crystalX, y - 1, TileID.Heart);
+            Check(Main.tile[crystalX, y - 1].HasTile && Main.tile[crystalX, y - 1].TileType == TileID.Heart,
+                "resource_fixture_missing");
+        }
+    }
+
+    void Finish(bool ok, string detail)
+    {
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject
+        { ["ok"] = ok, ["detail"] = detail, ["frames"] = ticks, ["results"] = results }.ToJsonString());
+        Console.WriteLine(detail);
+        enabled = false;
+    }
+
+    public override void Unload()
+    {
+        if (!enabled) return;
+        On_Main.Update -= Update; IL_Main.DoUpdate -= Focus;
+    }
+}

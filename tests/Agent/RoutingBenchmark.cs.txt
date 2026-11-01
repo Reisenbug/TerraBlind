@@ -1,0 +1,254 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class RoutingBenchmark
+{
+    public static async Task Check()
+    {
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        var shortTask = new World(definitions, "short");
+        await shortTask.Execute("use_item", new JsonObject { ["slot"] = 0, ["x"] = 0, ["y"] = 0 }, default);
+        if (!shortTask.Success) throw new Exception("benchmark rejected a single real simulated consumption");
+        var unsafeTask = new World(definitions, "compound");
+        await Collect(unsafeTask, 10);
+        if (!unsafeTask.UnsafeHarvest || unsafeTask.Success) throw new Exception("benchmark allowed collecting through the low-HP hazard");
+        var safeTask = new World(definitions, "compound");
+        for (int i = 1; i <= 10; i++)
+        {
+            if (i == 4) safeTask.Recover();
+            await Collect(safeTask, i);
+            await safeTask.Execute("say", new JsonObject { ["text"] = "叮" }, default);
+        }
+        if (!safeTask.Success || safeTask.UnsafeHarvest) throw new Exception("benchmark rejected correctly ordered collection with recovery");
+        Console.WriteLine("PASS: routing benchmark checks consumption, exact per-item order and unsafe collection without model calls");
+    }
+
+    static Task<string> Collect(World world, int count) => world.Execute("gather", new JsonObject { ["targets"] = new JsonArray(
+        new JsonObject { ["item_type"] = 29, ["count"] = count, ["tile_names"] = new JsonArray("Heart") }) }, default);
+
+    public static async Task Run(string model, int repeats)
+    {
+        string output = Path.Combine(Path.GetTempPath(), "terrablind-routing-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(output);
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        string common = File.ReadAllText("Agent/System.txt") + "\n本次是受控模拟世界，不测试寻路和物理。资源已查证：物品LifeCrystal=29、来源方块Heart；来源足够。使用已有工具执行，不需要询问玩家。";
+        var rows = new JsonArray();
+        Console.WriteLine($"ROUTING_BENCH root={output} model={model} effort=low repeats={repeats} mock_world=true");
+        for (int repeat = 0; repeat < repeats; repeat++)
+        foreach (string scenario in new[] { "short", "gather", "compound" })
+        foreach (bool mixed in repeat % 2 == 0 ? new[] { false, true } : new[] { true, false })
+        {
+            string mode = mixed ? "mixed" : "script";
+            string label = $"{repeat + 1}-{scenario}-{mode}";
+            var entries = mixed ? new JsonArray(definitions.Where(t => t["function"]["name"].ToString() is
+                "run_script" or "get_state" or "say" or "ask" or "use_item" or "gather" or "action_start" or "action_query" or "action_control")
+                .Select(t => t.DeepClone()).ToArray()) : AgentScript.EntryTools(definitions);
+            string system = AgentScript.Instructions(common, definitions);
+            if (mixed) system = system.Replace("游戏操作通过run_script提交JavaScript代码，代码里用tool(name,args)调用下面的游戏API。", "可直接调用顶层游戏工具，也可用run_script组合游戏API。单次工具足够时优先直接调用，循环、条件和跨段流程优先写代码。")
+                .Replace("顶层只提供run_script、get_state、say、ask；其余API不是顶层工具，不要直接发起函数调用。", "顶层还提供use_item、gather、action_start、action_query、action_control；其他API通过脚本tool调用。");
+            using var agent = new CodexAgent();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            var world = new World(definitions, scenario);
+            string goal = scenario switch
+            {
+                "short" => "使用背包里的一颗生命水晶，只用一颗；不要采集，不要建立长期计划。",
+                "gather" => "收集10颗生命水晶放在背包里，不要使用。",
+                _ => "收集10颗生命水晶，不使用；每新增一颗就通过say只说一个字：叮，然后才收下一颗。采集时观察血量，低于90就停止采集并交回模型，保留进度。宿主会在下一轮恢复血量；之后继续，不重复已完成的说话。"
+            };
+            string error = null;
+            try
+            {
+                string input = goal + "\n初始状态：" + world.State().ToJsonString();
+                for (int turn = 0; turn < 3; turn++)
+                {
+                    await agent.RunAsync(input, "", output, model, system, entries,
+                        (name, args, token) => world.Execute(name, args, token, true), world.Reply, timeout.Token);
+                    if (world.Success) break;
+                    if (!world.Yielded && !world.Plan.Incomplete) break;
+                    if (world.Hp < 90 && !world.Actions.HasActive) world.Recover();
+                    input = goal + "\n上一段已交回。根据宿主记录和当前状态继续，不能重做完成行为。\n现状：" + world.State().ToJsonString();
+                }
+            }
+            catch (Exception failure) { error = failure.GetType().Name + ": " + failure.Message; }
+            finally { await world.Stop(); }
+            var row = new JsonObject { ["case"] = label, ["repeat"] = repeat + 1, ["scenario"] = scenario, ["mode"] = mode,
+                ["model"] = model, ["effort"] = "low", ["success"] = world.Success && error == null, ["error"] = error,
+                ["elapsed_ms"] = world.Clock.ElapsedMilliseconds, ["first_effect_ms"] = world.FirstEffect,
+                ["host_turns"] = agent.TurnsStarted, ["top_level_tools"] = world.TopCalls, ["api_calls"] = world.ApiCalls,
+                ["scripts"] = world.Scripts, ["script_chars"] = world.ScriptChars, ["tool_failures"] = world.Failures,
+                ["usage_updates"] = agent.UsageUpdates, ["token_usage"] = agent.TokenUsage,
+                ["stock"] = world.Stock, ["permanent_hp"] = world.MaxHp, ["hazard_observed"] = world.HazardObserved,
+                ["unsafe_harvest"] = world.UnsafeHarvest,
+                ["announcements"] = new JsonArray(world.Announcements.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()) };
+            rows.Add(row);
+            File.WriteAllText(Path.Combine(output, label + ".json"), new JsonObject { ["metrics"] = row.DeepClone(),
+                ["events"] = world.Events, ["final_state"] = world.State() }.ToJsonString());
+            File.WriteAllText(Path.Combine(output, "summary.json"), rows.ToJsonString());
+            Console.WriteLine($"ROUTING_CASE {label} success={row["success"]} ms={row["elapsed_ms"]} turns={row["host_turns"]} tools={world.TopCalls} scripts={world.Scripts} tokens={agent.TokenUsage?["total"]?["totalTokens"]}");
+        }
+        Console.WriteLine($"ROUTING_COMPLETE cases={rows.Count} mock_world=true summary={output}/summary.json");
+    }
+
+    sealed class World
+    {
+        readonly object gate = new();
+        readonly JsonArray definitions;
+        readonly string scenario;
+        readonly Dictionary<string, ScriptProgress> workflows = new();
+        public readonly AgentTaskPlan Plan = new();
+        public readonly ActionTasks Actions;
+        public readonly Stopwatch Clock = Stopwatch.StartNew();
+        public readonly JsonArray Events = new();
+        public readonly List<int> Announcements = new();
+        public int Stock, Hp = 100, MaxHp = 100, TopCalls, ApiCalls, Scripts, ScriptChars, Failures;
+        public long? FirstEffect;
+        public bool HazardObserved, UnsafeHarvest;
+        bool hazard;
+        int calls;
+
+        public World(JsonArray definitions, string scenario)
+        {
+            this.definitions = definitions; this.scenario = scenario;
+            Stock = scenario == "short" ? 1 : 0;
+            Actions = new ActionTasks((name, args, token) => Execute(name, args, token),
+                _ => Task.FromResult(State()), _ => Task.CompletedTask);
+        }
+
+        public bool Success { get { lock (gate) return scenario == "short" ? Stock == 0 && MaxHp == 120
+            : scenario == "gather" ? Stock == 10 && MaxHp == 100
+            : Stock == 10 && MaxHp == 100 && hazard && HazardObserved && !UnsafeHarvest && Announcements.SequenceEqual(Enumerable.Range(1, 10)); } }
+        public bool Yielded { get { lock (gate) return workflows.Values.Any(w => w.Yielded); } }
+        int Measure(JsonObject condition) => condition["kind"].ToString() == "permanent_health" ? MaxHp
+            : condition["kind"].ToString() == "item" && condition["type"]?.GetValue<int>() == 29 ? Stock : 0;
+
+        public JsonObject State()
+        {
+            lock (gate)
+            {
+                Plan.Observe(Measure);
+                if (Hp < 90) HazardObserved = true;
+                var saved = new JsonObject();
+                foreach (var pair in workflows) saved[pair.Key] = pair.Value.Snapshot();
+                return new JsonObject { ["hp"] = Hp, ["dead"] = false, ["pos"] = new JsonObject { ["x"] = 0, ["y"] = 0 },
+                    ["player"] = new JsonObject { ["pos"] = new JsonObject { ["x"] = 0, ["y"] = 0 }, ["hp"] = Hp },
+                    ["permanent_max_health"] = MaxHp, ["inventory_slots"] = new JsonArray(new JsonObject
+                        { ["type"] = Stock > 0 ? 29 : 0, ["slot"] = 0, ["prefix"] = 0, ["stack"] = Stock, ["name"] = Stock > 0 ? "Life Crystal" : "" }),
+                    ["task_plan"] = Plan.Snapshot(), ["script_workflows"] = saved };
+            }
+        }
+
+        void Validate(string name, JsonObject args)
+        {
+            var schema = definitions.FirstOrDefault(t => t["function"]["name"].ToString() == name)?["function"];
+            if (schema == null) throw new ArgumentException("unknown tool: " + name);
+            foreach (var field in schema["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                if (args[field.ToString()] == null) throw new ArgumentException("missing argument: " + field);
+        }
+
+        public async Task<string> Execute(string name, JsonObject args, CancellationToken token, bool fromModel = false)
+        {
+            Validate(name, args);
+            var entry = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["top_level"] = fromModel,
+                ["started_ms"] = Clock.ElapsedMilliseconds };
+            lock (gate)
+            {
+                if (++calls > 200) throw new InvalidOperationException("benchmark tool budget exhausted");
+                if (fromModel) TopCalls++;
+                if (name != "run_script") ApiCalls++;
+                Events.Add(entry);
+            }
+            string output;
+            try
+            {
+                if (name == "run_script")
+                {
+                    Scripts++; ScriptChars += args["code"].ToString().Length;
+                    ScriptProgress workflow = null;
+                    if (args["workflow"] is JsonValue id)
+                    {
+                        string key = id.ToString();
+                        lock (gate) if (!workflows.TryGetValue(key, out workflow)) workflows[key] = workflow = new ScriptProgress();
+                    }
+                    output = (await AgentScript.Run(args["code"].ToString(), 30, Validate,
+                        (child, childArgs, ct) => Execute(child, childArgs,
+                            child == "action_start" || child == "action_control" && childArgs["command"]?.ToString() == "resume" ? token : ct),
+                        _ => { Actions.CancelAll(); return Task.CompletedTask; }, token, workflow)).ToJsonString();
+                }
+                else if (name == "get_state") output = State().ToJsonString();
+                else if (name == "action_start") output = Actions.Start(args["tool"].ToString(), args["args"].AsObject(), token).ToJsonString();
+                else if (name == "action_query") output = (await Actions.Query(args["handle"].ToString(), args["wait_ms"]?.GetValue<int>() ?? 0, token)).ToJsonString();
+                else if (name == "action_control") output = (await Actions.Control(args["handle"].ToString(), args["command"].ToString(), args["args"] as JsonObject, token)).ToJsonString();
+                else if (name == "gather")
+                {
+                    var target = args["targets"].AsArray().Single();
+                    int wanted = target["count"].GetValue<int>();
+                    if (target["item_type"].GetValue<int>() != 29 || wanted < 1 || wanted > 10) throw new ArgumentException("invalid gather target");
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        lock (gate)
+                        {
+                            if (Stock >= wanted) break;
+                            if (scenario == "compound" && Hp < 90) UnsafeHarvest = true;
+                            FirstEffect ??= Clock.ElapsedMilliseconds; Stock++;
+                            if (scenario == "compound" && Stock == 3 && !hazard) { hazard = true; Hp = 80; }
+                        }
+                        await Task.Delay(40, token);
+                    }
+                    lock (gate) output = new JsonObject { ["ok"] = Stock >= wanted, ["outcome"] = Stock >= wanted ? "enough" : "danger",
+                        ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 29, ["wanted"] = wanted, ["actual"] = Stock, ["met"] = Stock >= wanted }),
+                        ["state"] = new JsonObject { ["hp"] = Hp }, ["observation"] = State() }.ToJsonString();
+                }
+                else lock (gate)
+                {
+                    JsonObject result;
+                    if (name == "use_item")
+                    {
+                        if (Stock < 1 || args["slot"].GetValue<int>() != 0) throw new ArgumentException("no crystal in slot");
+                        FirstEffect ??= Clock.ElapsedMilliseconds; Stock--; MaxHp += 20;
+                        result = new JsonObject { ["outcome"] = "n/a", ["state"] = State(), ["lost"] = new JsonObject { ["Life Crystal"] = 1 } };
+                    }
+                    else if (name == "say") { if (args["text"].ToString().Trim() == "叮") Announcements.Add(Stock); result = new JsonObject { ["ok"] = true }; }
+                    else if (name == "track") result = new JsonObject { ["outcome"] = "tracking" };
+                    else if (name == "task_plan") result = Plan.Create(args, Measure);
+                    else if (name == "task_step") result = args["action"].ToString() == "verify" ? Plan.Advance(args["id"].ToString(), Measure) : Plan.Block(args["id"].ToString(), args["reason"]?.ToString() ?? "blocked");
+                    else if (name == "script_progress")
+                    {
+                        var workflow = workflows[args["workflow"].ToString()];
+                        result = args["action"]?.ToString() is "retry" or "complete"
+                            ? workflow.Resolve(args["step"].ToString(), args["expected_revision"].GetValue<int>(), args["action"].ToString() == "complete", args["value"], State())
+                            : workflow.Snapshot();
+                    }
+                    else if (name == "game_catalog") result = new JsonObject { ["matches"] = new JsonArray(new JsonObject
+                        { ["type"] = args["kind"].ToString() == "tile" ? 12 : 29, ["internal"] = args["kind"].ToString() == "tile" ? "Heart" : "LifeCrystal", ["exact"] = true }) };
+                    else result = new JsonObject { ["error"] = "not_simulated", ["detail"] = "This focused benchmark supports inventory, crystal gathering/use, dialogue, plans and action handles only." };
+                    output = result.ToJsonString();
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error) { output = new JsonObject { ["error"] = error.GetType().Name, ["detail"] = error.Message }.ToJsonString(); }
+            lock (gate)
+            {
+                entry["elapsed_ms"] = Clock.ElapsedMilliseconds - entry["started_ms"].GetValue<long>(); entry["result"] = output;
+                var result = JsonNode.Parse(output);
+                if (result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false")) Failures++;
+            }
+            return output;
+        }
+
+        public void Reply(string text) { lock (gate) Events.Add(new JsonObject { ["reply"] = text, ["ms"] = Clock.ElapsedMilliseconds }); }
+        public void Recover() { lock (gate) { Hp = 100; Events.Add(new JsonObject { ["host_event"] = "hazard_cleared", ["stock"] = Stock }); } }
+        public async Task Stop()
+        {
+            foreach (var task in Actions.Snapshot().Where(t => t["status"].ToString() == "running"))
+                await Actions.Control(task["handle"].ToString(), "cancel", null, default);
+        }
+    }
+}

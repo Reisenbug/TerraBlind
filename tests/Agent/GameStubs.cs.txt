@@ -2,6 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Terraria.Map
+{
+    public static class MapHelper
+    {
+        public static int[] tileOptionCounts = Array.Empty<int>();
+        public static int TileToLookup(int type, int option) => type * 16 + option;
+    }
+}
 
 namespace Terraria
 {
@@ -14,18 +26,28 @@ namespace Terraria
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
+        public static int maxNPCs = 20, maxItems = 20;
+        public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
+        public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
+        public static Chest[] chest = new Chest[1000];
         public static bool[] tileSolid = { false, true }, tileSolidTop = { false, false };
+        public static bool[] tileAxe = { false, false }, tileHammer = { false, false };
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
+    public class Chest { public int x, y; public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray(); }
     public class Player
     {
+        public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
+        public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool controlUp, controlDown, controlHook, ExtraJump;
         public float wingTime, manaCost = 1;
-        public int statMana = 200, statLifeMax2 = 100, itemTime;
+        public static float jumpSpeed = 5.01f;
+        public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
+        public int statMana = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
         public Item HeldItem => inventory[selectedItem];
         public bool AnyExtraJumpUsable() => ExtraJump;
@@ -42,11 +64,30 @@ namespace Terraria
         public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
     }
+    public class NPC
+    {
+        public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
+        public bool active, friendly, townNPC, boss;
+        public Microsoft.Xna.Framework.Vector2 velocity;
+        public Microsoft.Xna.Framework.Vector2 position;
+        public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
+    }
+    public static class Lang
+    {
+        public static Dictionary<int, string> MapLabels = new();
+        public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
+    }
     public class Item
     {
+        public bool active;
+        public Microsoft.Xna.Framework.Vector2 velocity;
+        public Microsoft.Xna.Framework.Vector2 position;
+        public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
         public string Name = "";
         public int stack, pick, axe, hammer, ammo, damage, useStyle;
         public int type, prefix, useAmmo;
+        public int createTile = -1;
+        public void SetDefaults(int itemType) { type = itemType; createTile = -1; }
         public float shootSpeed;
         public int shoot, mana, width = 30, height = 30;
         public int useTime, useAnimation;
@@ -64,16 +105,19 @@ namespace Terraria
     public class Mount { public bool Active; }
     public class Projectile
     {
-        public bool active, arrow, friendly, hostile;
+        public bool active, arrow, friendly, hostile, tileCollide = true;
         public int owner, damage, identity, whoAmI, type, extraUpdates;
+        public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
     public static class WorldGen { public static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < 1000 && y < 1000; }
     public static class Collision
     {
         public static bool Clear = true;
-        public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => Clear;
-        public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => false;
+        public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
+        public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;
+        public static Func<Microsoft.Xna.Framework.Vector2, int, int, bool> SolidTest;
+        public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => SolidTest?.Invoke(position, width, height) ?? false;
     }
     public static class NetMessage
     {
@@ -85,14 +129,18 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
+    public static class ItemID { }
+    public static class NPCID { }
+    public static class TileID { public const int FixtureSource = 1, FixtureOther = 2; }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
-    public static class AmmoID { public const int Arrow = 40; }
+    public static class AmmoID { public const int None = 0, Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
     public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
 }
 namespace Terraria.ModLoader
 {
+    public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }
     public class Mod
     {
         public TestLogger Logger = new();
@@ -149,7 +197,7 @@ namespace TerraBlind
         public static void Display(string text) => Terraria.Main.NewText(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
-    public static class ItemUseCoordinator { public static bool IsActive; }
+    public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
     public static class PlaceAnywhere { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
@@ -170,16 +218,28 @@ namespace TerraBlind
         public static string All() { Stops++; RecedingNav.Active = false; return "stopped"; }
     }
     public static class StateSnapshotPlayer { public static void StopRemoteTask() { } }
-    public static class FightCoordinator { public static int Stops; public static void Stop() => Stops++; }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
     {
+        public static string Last = "idle";
         public static bool Enabled;
         public static int Stops;
         public static void Stop() => Stops++;
     }
-    public static class Dodge { public static bool Enabled; }
+    public static class Dodge { public static bool Enabled; public static string Last = "idle"; }
+    public static class Equipment
+    {
+        public static JsonArray Snapshot() => new();
+        public static JsonObject Swap(JsonObject args) => new() { ["error"] = "equipment_requires_engine" };
+    }
+    public static class NpcDialogue
+    {
+        public static JsonObject Snapshot() => new() { ["open"] = false };
+        public static JsonObject Open(int index, int type) => new() { ["error"] = "dialogue_requires_engine" };
+        public static Task<JsonObject> Choose(int index, int type, int button, string label, CancellationToken token) => Task.FromResult(Open(index, type));
+        public static void Close() { }
+    }
     public static class Manual { public static bool On; }
     public static class StartRun
     {
@@ -191,6 +251,7 @@ namespace TerraBlind
         public static bool Active;
         public static string LastStop = "";
         public static void Start(int x, int y) => Active = true;
+        public static void Stop() => Active = false;
     }
     public static class StateSerializer { public static string ToJson(object snapshot) => "{}"; }
     public static class ActExecutor
@@ -198,7 +259,12 @@ namespace TerraBlind
         public static int OriginCx(Terraria.Player player) => 12;
         public static int OriginCy(Terraria.Player player) => 34;
     }
-    public static class Reach { public static bool CanInteract(Terraria.Player player, int x, int y) => true; }
+    public static class Reach
+    {
+        public static Func<Terraria.Player, int, int, bool> MineTest;
+        public static bool CanInteract(Terraria.Player player, int x, int y) => true;
+        public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
+    }
     public static class HttpServerSystem
     {
         public static object PendingControl, LatestSnapshot;

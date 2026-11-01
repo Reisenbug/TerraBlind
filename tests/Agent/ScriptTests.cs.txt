@@ -1,0 +1,252 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class ScriptTests
+{
+    static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
+
+    public static async Task Replay(string path)
+    {
+        var events = JsonNode.Parse(File.ReadAllText(path)).AsArray();
+        string code = events.First(e => e?["tool"]?.ToString() == "run_script")["args"]["code"].ToString();
+        foreach (bool overshoot in new[] { false, true })
+        {
+            int stock = 0, attempts = 0;
+            bool interrupted = false;
+            var said = new List<int>();
+            Task<string> Execute(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "get_state") return Task.FromResult(new JsonObject { ["inventory_slots"] = new JsonArray(
+                    new JsonObject { ["type"] = 29, ["stack"] = stock }) }.ToJsonString());
+                if (name == "say") { said.Add(stock); return Task.FromResult("{\"ok\":true}"); }
+                Check(name == "gather" && !interrupted, "generated code continued collecting after an unmet condition");
+                attempts++;
+                if (overshoot) { stock += 2; interrupted = true; }
+                else if (attempts == 4) interrupted = true;
+                else stock++;
+                return Task.FromResult(new JsonObject { ["ok"] = overshoot || !interrupted,
+                    ["outcome"] = !overshoot && interrupted ? "source_unavailable" : "enough",
+                    ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 29, ["actual"] = stock }) }.ToJsonString());
+            }
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && interrupted, "generated code did not return evidence on changed conditions");
+            Check(overshoot ? stock == 2 && attempts == 1 && said.Count == 0
+                : stock == 3 && attempts == 4 && said.SequenceEqual(new[] { 1, 2, 3 }),
+                "generated code falsely announced collection or lost per-item order");
+            Console.WriteLine($"PASS: unchanged model code replay overshoot={overshoot} stock={stock} announcements={said.Count} model_calls=0");
+        }
+        Console.WriteLine("SCRIPT_REPLAY_COMPLETE checks=2 mock_world=true model_calls=0");
+    }
+
+    public static async Task Run()
+    {
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        var entries = AgentScript.EntryTools(definitions);
+        Check(entries.Count == 4 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask")
+            && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
+        string instructions = AgentScript.Instructions("original-system", definitions);
+        Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
+            && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
+        Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
+        var progress = new ScriptProgress();
+        var performed = new List<string>();
+        bool failSecond = true;
+        Task<string> SegmentTool(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "second" && failSecond) { failSecond = false; throw new InvalidOperationException("source_unavailable"); }
+            performed.Add(name);
+            return Task.FromResult("{\"ok\":true}");
+        }
+        const string segmentCode = "step('first',()=>tool('first')); step('announce',()=>tool('say')); return step('second',()=>tool('second'));";
+        Task<JsonObject> RunSegment() => AgentScript.Run(segmentCode, 5, (_, _) => { }, SegmentTool,
+            _ => Task.CompletedTask, default, progress);
+        var interrupted = await RunSegment();
+        Check(!interrupted["ok"].GetValue<bool>() && performed.SequenceEqual(new[] { "first", "say" })
+            && progress.Snapshot()["steps"][2]["status"].ToString() == "uncertain", "workflow lost completed steps or unfinished evidence");
+        var blockedReplay = await RunSegment();
+        Check(!blockedReplay["ok"].GetValue<bool>() && performed.Count == 2,
+            "workflow replayed completed behavior or retried an uncertain step without reconciliation");
+        int revision = progress.Snapshot()["revision"].GetValue<int>();
+        try { progress.Resolve("second", revision - 1, false, null, new JsonObject()); throw new Exception("stale resolution accepted"); }
+        catch (InvalidOperationException) { }
+        progress.Resolve("second", revision, false, null, new JsonObject());
+        var resumed = await RunSegment();
+        Check(resumed["ok"].GetValue<bool>() && performed.SequenceEqual(new[] { "first", "say", "second" }),
+            "workflow did not resume only the remaining action");
+        await RunSegment();
+        Check(performed.Count == 3, "completed segment replay repeated its effects");
+        Console.WriteLine("PASS: host workflow retains effects, rejects stale/uncertain replay and resumes without repeating completed behavior");
+
+        var uncertain = new ScriptProgress();
+        using (var cancellation = new CancellationTokenSource())
+        {
+            async Task<string> CancelStep(string name, JsonObject args, CancellationToken token)
+            { cancellation.Cancel(); await Task.Delay(Timeout.Infinite, token); return "{}"; }
+            try
+            {
+                await AgentScript.Run("return step('pending',()=>tool('wait'));", 5, (_, _) => { }, CancelStep,
+                    _ => Task.CompletedTask, cancellation.Token, uncertain);
+                throw new Exception("workflow swallowed cancellation");
+            }
+            catch (OperationCanceledException) { }
+        }
+        var uncertainState = uncertain.Snapshot();
+        Check(!uncertainState["running"].GetValue<bool>() && uncertainState["steps"][0]["status"].ToString() == "uncertain"
+            && uncertainState["last_segment"]["error"].ToString() == "cancelled", "cancelled workflow lost resumable state");
+        uncertain.Resolve("pending", uncertainState["revision"].GetValue<int>(), true,
+            JsonNode.Parse("{\"observed_complete\":true}"), new JsonObject { ["actual_inventory"] = 1 });
+        var reconciled = await AgentScript.Run("return step('pending',()=>{throw new Error('must not replay')});", 5,
+            (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, uncertain);
+        Check(reconciled["value"]["observed_complete"].GetValue<bool>(), "reconciled action repeated instead of using saved outcome");
+        Console.WriteLine("PASS: cancellation preserves uncertain steps and explicit observed completion avoids replay");
+        var resolution = new ScriptProgress();
+        resolution.Begin(); resolution.Enter("pending"); resolution.End(new JsonObject { ["error"] = "interrupted" });
+        resolution.Begin();
+        int observedRevision = resolution.Snapshot()["revision"].GetValue<int>();
+        resolution.Record("script_progress", new JsonObject(), "observed");
+        Check(resolution.Snapshot()["revision"].GetValue<int>() == observedRevision, "read telemetry invalidated the revision just returned");
+        resolution.Resolve("pending", observedRevision, true, JsonValue.Create("reconciled"), new JsonObject());
+        Check(!resolution.Enter("pending")["execute"].GetValue<bool>(), "reconciliation within a continuation segment failed");
+        resolution.End(new JsonObject());
+        Console.WriteLine("PASS: progress reads do not invalidate revisions and continuation can reconcile an unfinished step");
+        var unicode = new ScriptProgress(); unicode.Begin(); unicode.Enter("text");
+        unicode.Complete("text", JsonValue.Create(new string('中', 2000))); unicode.End(new JsonObject());
+        Check(unicode.Snapshot()["steps"][0]["value"].ToString().Length == 2000, "host inflated unicode before checking step budget");
+        Console.WriteLine("PASS: host checkpoint budget uses the same unescaped JSON character measure as JavaScript");
+        int stock = 0, stopped = 0;
+        var calls = new List<string>();
+        Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            calls.Add(name);
+            return Task.FromResult(name switch
+            {
+                "find" => "{\"boxes\":[1,2,3,4]}",
+                "take" when args["id"].GetValue<int>() == 1 => "{\"error\":\"locked\"}",
+                "take" => "{\"stock\":" + ++stock + "}",
+                "recipe" => new JsonObject { ["can_craft_now"] = stock >= 2 }.ToJsonString(),
+                "craft" => "{\"crafted\":1}",
+                _ => throw new Exception("unexpected tool")
+            });
+        }
+        Task Stop(CancellationToken token) { stopped++; return Task.CompletedTask; }
+        var result = await AgentScript.Run("""
+            const failures = [];
+            for (const id of tool('find').boxes) {
+                const taken = tool('take', {id});
+                if (taken.error) { failures.push({id, error:taken.error}); continue; }
+                if (tool('recipe').can_craft_now) {
+                    const made = tool('craft');
+                    print({made});
+                    return {made, failures};
+                }
+            }
+            return {missing:true, failures};
+            """, 5, (_, _) => { }, Execute, Stop, default);
+        Check(result["ok"].GetValue<bool>() && result["value"]["made"]["crafted"].GetValue<int>() == 1
+            && result["value"]["failures"][0]["id"].GetValue<int>() == 1 && stock == 2 && stopped == 0
+            && calls.Count == 7 && result["logs"].AsArray().Count == 1, "script lost data dependencies, failure branch or early return");
+        Console.WriteLine("PASS: script composes dependent tools, loops, branches around failed sources and returns after verified craft opportunity");
+
+        foreach (int failAt in new[] { 0, 4 })
+        {
+            int collected = 0, attempts = 0, behaviors = 0;
+            var order = new List<string>();
+            Task<string> Collect(string name, JsonObject args, CancellationToken token)
+            {
+                order.Add(name);
+                if (name == "inventory") return Task.FromResult(new JsonObject { ["count"] = collected }.ToJsonString());
+                if (name == "collect")
+                {
+                    attempts++;
+                    if (attempts == failAt) return Task.FromResult("{\"error\":\"source_unavailable\"}");
+                    collected++;
+                    return Task.FromResult("{\"ok\":true}");
+                }
+                Check(name == "behavior" && args["ordinal"].GetValue<int>() == collected && collected == behaviors + 1,
+                    "per-item behavior ran before collection or after a batched collection");
+                behaviors++;
+                return Task.FromResult("{\"ok\":true}");
+            }
+            result = await AgentScript.Run("""
+                const initial = tool('inventory').count;
+                let completed = 0;
+                while (completed < 10) {
+                    const before = tool('inventory').count;
+                    const gathered = tool('collect', {count:before + 1});
+                    const after = tool('inventory').count;
+                    if (gathered.error || after !== before + 1)
+                        return {completed, gained:after-initial, failure:gathered};
+                    const acted = tool('behavior', {ordinal:completed + 1});
+                    if (!acted.ok) return {completed, failure:acted};
+                    completed++;
+                }
+                return {completed, gained:tool('inventory').count-initial};
+                """, 5, (_, _) => { }, Collect, Stop, default);
+            int expected = failAt == 0 ? 10 : failAt - 1;
+            Check(result["ok"].GetValue<bool>() && result["value"]["completed"].GetValue<int>() == expected
+                && result["value"]["gained"].GetValue<int>() == expected && collected == expected && behaviors == expected,
+                "per-item script lost verified collection progress");
+            Check(failAt == 0 ? result["value"]["failure"] == null
+                : result["value"]["failure"]["error"].ToString() == "source_unavailable",
+                "per-item script hid an unavailable source");
+            for (int i = 0; i < order.Count; i++)
+                if (order[i] == "behavior") Check(i >= 2 && order[i - 1] == "inventory" && order[i - 2] == "collect",
+                    "per-item behavior did not follow collection verification");
+        }
+        Console.WriteLine("PASS: per-item scripts preserve ten collection/behavior pairs and stop with exact progress on source failure (fake tools)");
+
+        calls.Clear(); stopped = 0;
+        result = await AgentScript.Run("tool('find'); throw new Error('need another plan');", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>() && stopped == 0 && result["trace"][0]["tool"].ToString() == "find"
+            && result["detail"].ToString().Contains("need another plan"), "failed script lost completed action evidence or cleanup");
+        result = await AgentScript.Run("return typeof System + ':' + typeof require + ':' + typeof process;", 5, (_, _) => { }, Execute, Stop, default);
+        Check(result["value"].ToString() == "undefined:undefined:undefined", "script exposed host runtime or shell globals");
+        result = await AgentScript.Run("return typeof fetch + ':' + typeof XMLHttpRequest + ':' + typeof importNamespace;", 5, (_, _) => { }, Execute, Stop, default);
+        Check(result["value"].ToString() == "undefined:undefined:undefined", "script exposed unrestricted network or CLR loading");
+        result = await AgentScript.Run("return eval('1+1');", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>(), "script allowed string compilation");
+        foreach (string forbidden in new[] { "run_script", "ask" })
+        {
+            int before = calls.Count;
+            result = await AgentScript.Run("tool('" + forbidden + "');", 5, (_, _) => { }, Execute, Stop, default);
+            Check(!result["ok"].GetValue<bool>() && calls.Count == before, "script dispatched forbidden nested tool");
+        }
+        Console.WriteLine("PASS: script preserves failure evidence and cleanup without exposing shell/CLR globals, eval or nested scripts");
+
+        result = await AgentScript.Run("while(true) {}", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>(), "script statement limit did not stop infinite computation");
+        result = await AgentScript.Run("for(let i=0;i<101;i++) tool('find'); return true;", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>() && result["tool_calls"].GetValue<int>() == 100
+            && result["trace"].AsArray().Count == 12, "script tool budget or bounded trace failed");
+        result = await AgentScript.Run("return 'x'.repeat(20000);", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>(), "script oversized output was accepted");
+        result = await AgentScript.Run("const x=[]; while(true) x.push('x'.repeat(1000000));", 5, (_, _) => { }, Execute, Stop, default);
+        Check(!result["ok"].GetValue<bool>(), "script allocation budget was not enforced");
+        Console.WriteLine("PASS: script computation, tool calls, result size and allocations have enforced bounds");
+
+        stopped = 0; int dispatched = 0;
+        async Task<string> Wait(string name, JsonObject args, CancellationToken token)
+        { dispatched++; await Task.Delay(Timeout.Infinite, token); return "{}"; }
+        result = await AgentScript.Run("tool('wait'); tool('never');", 1, (_, _) => { }, Wait, Stop, default);
+        Check(result["error"].ToString() == "script_timeout" && stopped == 1 && dispatched == 1,
+            "script deadline did not cancel pending game tool and stop follow-up execution");
+        using var parent = new CancellationTokenSource();
+        stopped = 0;
+        async Task<string> Cancel(string name, JsonObject args, CancellationToken token)
+        { parent.Cancel(); await Task.Delay(Timeout.Infinite, token); return "{}"; }
+        try
+        {
+            await AgentScript.Run("tool('wait');", 5, (_, _) => { }, Cancel, Stop, parent.Token);
+            throw new Exception("parent cancellation swallowed");
+        }
+        catch (OperationCanceledException) { }
+        Check(stopped == 0, "old script cleanup could stop a replacement task after parent cancellation");
+        Console.WriteLine("PASS: script deadline cancels and cleans up owned actions; parent cancellation propagates without stale cleanup");
+    }
+}

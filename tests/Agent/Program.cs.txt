@@ -41,7 +41,14 @@ static class Tests
 
     static async Task Main(string[] args)
     {
+        if (args.Contains("--planning-probe")) { await CodexTests.PlanningProbe(); return; }
+        if (args.Contains("--goal-smoke")) { await CodexTests.GoalSmoke(); return; }
+        if (args.Contains("--goal-control-smoke")) { await CodexTests.GoalControlSmoke(); return; }
+        if (args.Contains("--routing-benchmark")) { await RoutingBenchmark.Run(args.Length > 1 ? args[1] : "gpt-6-astra", args.Length > 2 ? int.Parse(args[2]) : 2); return; }
         if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
+        if (args.Contains("--script-model")) { await CodexTests.ScriptModel(); return; }
+        if (args.Contains("--script-model-full")) { await CodexTests.ScriptModel(true, args.Length > 1 ? args[1] : ""); return; }
+        if (args.Contains("--script-replay")) { await ScriptTests.Replay(args.Last()); return; }
         if (args.Contains("--pvp-smoke")) { await PvpTests.Smoke(); return; }
         var handler = new FakeHandler();
         using var http = new HttpClient(handler);
@@ -122,14 +129,21 @@ static class Tests
         catch (AgentBudgetExceededException ex) { Check(ex.Message.Contains("40"), "budget failure lacks limit"); }
         Check(handler.Requests.Count - requestCount == 40, "turn budget not enforced");
         Console.WriteLine("PASS: dialogue filtering and bounded task loop");
+        CatalogTests.Run();
+        await ScriptTests.Run();
+        await ActionTests.Run();
+        await RoutingBenchmark.Check();
+        TaskPlanTests.Run();
         await RuntimeTests.Run();
         await WoodHarvestTests.Run();
+        await GatherTests.Run();
         await CodexTests.Run();
         await PvpTests.Run();
         DirectiveTests.Run();
         HistoryTests.Run();
         InventoryTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=32");
+        await WatchTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=81");
     }
 
     sealed class FakeHandler : HttpMessageHandler

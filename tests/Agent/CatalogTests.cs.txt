@@ -1,0 +1,39 @@
+using System;
+using TerraBlind;
+
+static class CatalogTests
+{
+    public static class Sample
+    {
+        public const short AlphaTool = 7;
+        public const int AlphaToolRare = 9, BetaTool = 8, Count = 9999;
+        public static int RuntimeValue = 10;
+        public const string TextValue = "text";
+        public const int Many00 = 0, Many01 = 1, Many02 = 2, Many03 = 3, Many04 = 4, Many05 = 5,
+            Many06 = 6, Many07 = 7, Many08 = 8, Many09 = 9, Many10 = 10, Many11 = 11, Many12 = 12;
+    }
+
+    static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
+
+    public static void Run()
+    {
+        var result = AgentCatalog.Query(typeof(Sample), "ALPHA TOOL");
+        Check(result["total"].GetValue<int>() == 2 && result["matches"][0]["type"].GetValue<int>() == 7
+            && result["matches"][0]["exact"].GetValue<bool>() && !result["matches"][1]["exact"].GetValue<bool>(), "catalog lost exact-match ranking or short IDs");
+        Check(AgentCatalog.Query(typeof(Sample), "beta_tool")["matches"][0]["type"].GetValue<int>() == 8, "catalog did not normalize identifiers");
+        var byId = AgentCatalog.Query(typeof(Sample), "7");
+        Check(byId["matches"].AsArray().Count == 2 && byId["matches"][0]["exact"].GetValue<bool>()
+            && !AgentCatalog.Query(typeof(Sample), "9999")["found"].GetValue<bool>(), "numeric lookup lost aliases or included Count");
+        var labeled = AgentCatalog.Query(typeof(Sample), "Placed Tool", id => id == 8 ? new[] { "Placed Tool" } : Array.Empty<string>());
+        Check(labeled["matches"].AsArray().Count == 2 && labeled["matches"][0]["type"].GetValue<int>() == 8
+            && labeled["matches"][0]["display_names"][0].GetValue<string>() == "Placed Tool", "catalog lost game display names or aliases");
+        foreach (string name in new[] { "Count", "RuntimeValue", "TextValue", "unknown name" })
+            Check(!AgentCatalog.Query(typeof(Sample), name)["found"].GetValue<bool>(), "catalog treated non-ID or unknown data as a match");
+        var broad = AgentCatalog.Query(typeof(Sample), "Many");
+        Check(broad["truncated"].GetValue<bool>() && broad["total"].GetValue<int>() == 13 && broad["matches"].AsArray().Count == 12,
+            "catalog did not bound broad results");
+        try { AgentCatalog.Query(typeof(Sample), " _ "); throw new Exception("catalog accepted empty identifier"); }
+        catch (ArgumentException) { }
+        Console.WriteLine("PASS: catalog resolves typed constants, normalizes names, ranks exact matches and bounds results without inventing unknown IDs");
+    }
+}

@@ -1,0 +1,92 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using Terraria;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Engine;
+
+static class PlanningTrial
+{
+    static readonly HashSet<string> ReadTools = new()
+    { "get_state", "boss_status", "equipment_list", "npc_dialogue_status", "game_catalog", "item_info", "recipe", "find_tiles", "npc_find", "find_biome", "tile_names", "wiki_search", "wiki_page" };
+
+    public static async Task<string> Run()
+    {
+        if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new InvalidOperationException("production_mod_missing");
+        var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        var entries = new JsonArray(schemas.Where(t => ReadTools.Contains(t["function"]["name"].ToString())
+            || t["function"]["name"].ToString() == "run_script").Select(t => t.DeepClone()).ToArray());
+        string system = AgentScript.Instructions(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/System.txt")), schemas)
+            + "\n本轮是只读规划，开放的查询工具可直接调用或在run_script内调用。只允许读取，不得移动、采集、使用、开战、修改许可或登记计划。"
+            + "最多12次查询；没有执行过的查询不能伪称有结果。最终只输出JSON，包含first_action:{tool,args,reason,expected_result,fallback}，equipment_plan、readiness、boss_control、questions、evidence。"
+            + "first_action必须是现在可以尝试的游戏行动，不是继续查询；仅说明，不实际调用。args按真实API填写，坐标须有查询来源。";
+        var events = new JsonArray();
+        var replies = new List<string>();
+        int queries = 0, blocked = 0;
+        void Validate(string name, JsonObject args)
+        {
+            if (!ReadTools.Contains(name)) { blocked++; throw new InvalidOperationException("read_only: " + name); }
+            var schema = schemas.First(t => t["function"]["name"].ToString() == name)["function"];
+            foreach (var key in schema["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                if (args[key.ToString()] == null) throw new ArgumentException("missing query argument: " + key);
+        }
+        async Task<string> Query(string name, JsonObject args, CancellationToken token)
+        {
+            var item = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() };
+            events.Add(item);
+            string result;
+            if (name == "run_script") result = (await AgentScript.Run(args["code"].ToString(), 30, Validate, Query,
+                _ => Task.CompletedTask, token)).ToJsonString();
+            else
+            {
+                Validate(name, args);
+                if (++queries > 12) return "{\"error\":\"planning_query_budget\",\"detail\":\"请根据已有事实提出下一步，不继续查询。\"}";
+                result = await AgentTools.Execute(name, args, token);
+            }
+            item["result"] = result;
+            return result;
+        }
+        var initial = JsonNode.Parse(await AgentTools.State(default));
+        string input = "自行寻找装备，合理搭配，击败骷髅王。\n先只读查询并规划，暂不执行行动。常规路线、装备选择、准备数量和开打门槛由你自主决定，不要为这些事项要求我批准；现有地形限制仍有效。"
+            + "\n请实际查询后，给出第一个具体游戏行动、完整参数与理由，并说明失败后如何换方案。不需要现在给我完整通关脚本。\n当前真实状态：" + initial.ToJsonString();
+        using var agent = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        string failure = null;
+        try
+        {
+            await agent.RunAsync(input, "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-astra", system, entries,
+                Query, text => { replies.Add(text); Console.WriteLine("AGENT_PLANNING_REPLY " + text); }, timeout.Token);
+        }
+        catch (Exception error) { failure = error.ToString(); }
+        JsonObject decision = null;
+        string parseError = null;
+        try
+        {
+            string answer = replies.LastOrDefault() ?? "";
+            int first = answer.IndexOf('{'), last = answer.LastIndexOf('}');
+            decision = JsonNode.Parse(answer[first..(last + 1)]).AsObject();
+            string tool = decision["first_action"]["tool"].ToString();
+            var args = decision["first_action"]["args"].AsObject();
+            if (ReadTools.Contains(tool) || tool is "run_script" or "say" or "ask") throw new InvalidOperationException("first action is not a concrete game action");
+            var schema = schemas.First(t => t["function"]["name"].ToString() == tool)["function"];
+            foreach (var key in schema["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                if (args[key.ToString()] == null) throw new InvalidOperationException("missing action argument: " + key);
+        }
+        catch (Exception error) { parseError = error.Message; }
+        var report = new JsonObject { ["model"] = "gpt-6-astra", ["effort"] = "low", ["queries"] = queries,
+            ["concessions_enabled"] = Concessions.Enabled,
+            ["blocked_mutators"] = blocked, ["executed_mutators"] = 0, ["failure"] = failure, ["parse_error"] = parseError,
+            ["initial_state"] = initial, ["decision"] = decision, ["events"] = events,
+            ["replies"] = new JsonArray(replies.Select(r => (JsonNode)JsonValue.Create(r)).ToArray()), ["token_usage"] = agent.TokenUsage };
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-planning-result.json"), report.ToJsonString());
+        report["ok"] = failure == null && parseError == null && blocked == 0 && queries > 0 && queries <= 12;
+        return report.ToJsonString();
+    }
+}

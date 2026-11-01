@@ -98,6 +98,25 @@ public sealed class CodexAgent : IDisposable
     readonly Func<string, string, CodexConnection> _connect;
     CodexConnection _rpc;
     string _thread, _signature;
+    JsonObject _usage;
+    JsonObject _goal;
+    readonly object _goalGate = new();
+    string _goalRequest;
+    long _goalTokenBaseline;
+    readonly JsonArray _goalHistory = new();
+    public JsonObject GoalState
+    {
+        get
+        {
+            lock (_goalGate) return _goal == null ? null : new JsonObject { ["native"] = _goal.DeepClone(),
+                ["host_tokens_used"] = GoalTokens, ["history"] = _goalHistory.DeepClone(),
+                ["scheduler"] = "game_host", ["completion_authority"] = "verified_game_state" };
+        }
+    }
+    long GoalTokens => Math.Max(0, (_usage?["total"]?["totalTokens"]?.GetValue<long>() ?? 0) - _goalTokenBaseline);
+    public JsonObject TokenUsage => (JsonObject)_usage?.DeepClone();
+    public int UsageUpdates { get; private set; }
+    public int TurnsStarted { get; private set; }
 
     public CodexAgent(Func<string, string, CodexConnection> connect = null) => _connect = connect ?? Launch;
 
@@ -127,6 +146,7 @@ public sealed class CodexAgent : IDisposable
             StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8
         };
         start.ArgumentList.Add("app-server"); start.ArgumentList.Add("--listen"); start.ArgumentList.Add("stdio://");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.goals=true");
         foreach (string feature in new[] { "shell_tool", "unified_exec", "plugins", "apps", "multi_agent", "multi_agent_v2", "memories",
             "memory_tool", "code_mode", "view_image", "skill_search" })
         { start.ArgumentList.Add("-c"); start.ArgumentList.Add($"features.{feature}=false"); }
@@ -158,12 +178,14 @@ public sealed class CodexAgent : IDisposable
         }
     }
 
-    async Task Ensure(string executable, string cwd, string model, string system, JsonArray tools, CancellationToken token)
+    async Task Ensure(string executable, string cwd, string model, string system, JsonArray tools, CancellationToken token, bool managedGoal = false)
     {
-        string signature = executable + "\n" + cwd + "\n" + model + "\n" + system + "\n" + tools.ToJsonString();
+        string signature = executable + "\n" + cwd + "\n" + model + "\n" + system + "\n" + tools.ToJsonString() + "\n" + managedGoal;
         if (_rpc?.Closed == false && _thread != null && _signature == signature) return;
         Dispose();
         _signature = signature;
+        _usage = null; UsageUpdates = TurnsStarted = 0;
+        lock (_goalGate) { _goal = null; _goalRequest = null; _goalHistory.Clear(); }
         _rpc = _connect(executable, cwd);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -179,6 +201,7 @@ public sealed class CodexAgent : IDisposable
             if (account["account"] == null) throw new InvalidOperationException("Codex 尚未登录，请在终端执行 codex login。");
             var config = await _rpc.Request("config/read", new JsonObject { ["includeLayers"] = false }, deadline.Token);
             var overrides = new JsonObject();
+            overrides["features.goals"] = false;
             if (config["config"]?["mcp_servers"] is JsonObject servers)
                 foreach (var server in servers) overrides[$"mcp_servers.{server.Key}.enabled"] = false;
             var dynamicTools = new JsonArray();
@@ -191,7 +214,7 @@ public sealed class CodexAgent : IDisposable
             }
             var args = new JsonObject
             {
-                ["cwd"] = cwd, ["ephemeral"] = true, ["environments"] = new JsonArray(),
+                ["cwd"] = cwd, ["ephemeral"] = !managedGoal, ["environments"] = new JsonArray(),
                 ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["baseInstructions"] = system,
                 ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。不要开发代码、读写文件或使用终端。",
                 ["dynamicTools"] = dynamicTools, ["config"] = overrides
@@ -206,18 +229,38 @@ public sealed class CodexAgent : IDisposable
     }
 
     public async Task RunAsync(string input, string executable, string cwd, string model, string system, JsonArray tools,
-        Func<string, JsonObject, CancellationToken, Task<string>> execute, Action<string> say, CancellationToken token)
+        Func<string, JsonObject, CancellationToken, Task<string>> execute, Action<string> say, CancellationToken token,
+        JsonObject goalOptions = null)
     {
         string turn = null;
         try
         {
-            await Ensure(executable, cwd, model, system, tools, token);
+            await Ensure(executable, cwd, model, system, tools, token, goalOptions != null);
+            if (goalOptions != null)
+            {
+                if (_goalRequest != goalOptions["request"]?.ToString())
+                {
+                    var args = new JsonObject { ["objective"] = goalOptions["objective"]?.DeepClone(), ["status"] = "active", ["origin"] = "user" };
+                    if (goalOptions["tokenBudget"] != null) args["tokenBudget"] = goalOptions["tokenBudget"].DeepClone();
+                    if (_goal == null || _goal["objective"]?.ToString() != goalOptions["objective"]?.ToString()
+                        || _goal["status"]?.ToString() == "complete")
+                        _goalTokenBaseline = _usage?["total"]?["totalTokens"]?.GetValue<long>() ?? 0;
+                    await MutateGoal(args, token);
+                    _goalRequest = goalOptions["request"]?.ToString() ?? throw new ArgumentException("goal需要request标识。");
+                }
+                await ReadGoal(token);
+                if (_goal?["status"]?.ToString() != "active") throw new InvalidOperationException("Codex目标当前不是active：" + _goal?["status"]);
+                input += "\n游戏宿主持有的Codex goal：" + GoalState.ToJsonString()
+                    + "\n继续同一目标；完成只能由宿主按真实task_plan最终条件验收。不要另建或自行标完成目标。";
+            }
             var started = await _rpc.Request("turn/start", new JsonObject
             {
                 ["threadId"] = _thread, ["effort"] = "low",
                 ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = input })
             }, token);
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");
+            TurnsStarted++;
+            int toolCalls = 0;
             var delivered = new System.Collections.Generic.HashSet<string>();
             while (true)
             {
@@ -227,13 +270,27 @@ public sealed class CodexAgent : IDisposable
                 if (message["id"] != null)
                 {
                     if (method == "item/tool/call" && args?["threadId"]?.ToString() == _thread && args?["turnId"]?.ToString() == turn)
+                    {
+                        if (++toolCalls > 32) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
                         await Tool(message, tools, execute, token);
+                    }
                     else await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),
                         ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "该游戏会话不支持此请求。" } }, token);
                     continue;
                 }
                 if (args?["threadId"]?.ToString() != _thread) continue;
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
+                if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
+                {
+                    if (usage["total"]?["totalTokens"]?.ToString() != _usage?["total"]?["totalTokens"]?.ToString()) UsageUpdates++;
+                    _usage = (JsonObject)usage.DeepClone();
+                    if (_goal?["tokenBudget"] is JsonValue limit && GoalTokens >= limit.GetValue<long>())
+                    {
+                        await Interrupt(turn);
+                        await SuspendGoal("budgetLimited", token);
+                        throw new GoalBudgetExceededException();
+                    }
+                }
                 if (method == "error" && args["willRetry"]?.GetValue<bool>() == true)
                     say("Codex 请求暂时失败，后台正在重试。可用 /tb stop 停止。");
                 if (method == "item/completed" && args["item"]?["type"]?.ToString() == "agentMessage")
@@ -253,9 +310,56 @@ public sealed class CodexAgent : IDisposable
         catch (OperationCanceledException)
         {
             await Interrupt(turn);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try { await SuspendGoal("paused", deadline.Token); } catch { }
             throw;
         }
-        catch { Dispose(); throw; }
+        catch (GoalBudgetExceededException) { throw; }
+        catch
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try { await SuspendGoal("blocked", deadline.Token); } catch { }
+            Dispose(); throw;
+        }
+    }
+
+    async Task<JsonObject> ReadGoal(CancellationToken token)
+    {
+        var result = await _rpc.Request("thread/goal/get", new JsonObject { ["threadId"] = _thread }, token);
+        lock (_goalGate) _goal = result["goal"] as JsonObject;
+        return GoalState;
+    }
+
+    async Task<JsonObject> MutateGoal(JsonObject args, CancellationToken token)
+    {
+        args["threadId"] = _thread;
+        var result = await _rpc.Request("thread/goal/set", args, token);
+        lock (_goalGate)
+        {
+            _goal = result["goal"] as JsonObject ?? throw new IOException("Codex未返回goal状态。");
+            _goalHistory.Add(new JsonObject { ["status"] = _goal["status"]?.DeepClone(), ["host_tokens_used"] = GoalTokens,
+                ["utc"] = DateTime.UtcNow.ToString("O") });
+        }
+        return GoalState;
+    }
+
+    public Task<JsonObject> SuspendGoal(string status, CancellationToken token)
+    {
+        if (_goal == null) return Task.FromResult<JsonObject>(null);
+        if (status is not ("paused" or "blocked" or "budgetLimited")) throw new ArgumentException("无效目标停止状态。");
+        if (_goal["status"]?.ToString() is "complete" or "budgetLimited" or "usageLimited") return Task.FromResult(GoalState);
+        return MutateGoal(new JsonObject { ["status"] = status, ["origin"] = "automatic" }, token);
+    }
+
+    public async Task<JsonObject> CompleteGoal(Func<CancellationToken, Task<JsonObject>> verify, CancellationToken token)
+    {
+        if (_goal == null) return null;
+        if (_goal["status"]?.ToString() != "active") return new JsonObject { ["error"] = "goal_not_active", ["goal"] = GoalState };
+        var evidence = await verify(token);
+        if (evidence?["verified"]?.GetValue<bool>() != true)
+            return new JsonObject { ["error"] = "goal_not_verified", ["evidence"] = evidence, ["goal"] = GoalState };
+        await MutateGoal(new JsonObject { ["status"] = "complete", ["origin"] = "automatic" }, token);
+        return new JsonObject { ["verified"] = true, ["evidence"] = evidence, ["goal"] = GoalState };
     }
 
     async Task Tool(JsonObject request, JsonArray tools, Func<string, JsonObject, CancellationToken, Task<string>> execute, CancellationToken token)
@@ -303,4 +407,9 @@ public sealed class CodexAgent : IDisposable
     {
         _rpc?.Dispose(); _rpc = null; _thread = null; _signature = null;
     }
+}
+
+public sealed class GoalBudgetExceededException : Exception
+{
+    public GoalBudgetExceededException() : base("Codex目标已达到token预算，进度保留，未标记完成。") { }
 }

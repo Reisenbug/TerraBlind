@@ -74,16 +74,57 @@ static class RuntimeTests
             finally { Game.LocalPlayer.dead = false; HttpServerSystem.Handler = null; }
             Console.WriteLine("PASS: death during fight sends explicit stop and reports interruption");
 
-            int combatStops = Combat.Stops, fightStops = FightCoordinator.Stops;
+            int combatStops = Combat.Stops;
+            FightCoordinator.Start(20);
             await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_dodge"] = false, ["auto_attack"] = false }, default));
             Check(!AgentPermissions.Dodge && !AgentPermissions.Attack, "combat permission was not applied");
-            Check(Combat.Stops == combatStops + 1 && FightCoordinator.Stops == fightStops + 1, "active attack was not stopped");
+            Check(Combat.Stops == combatStops + 1 && !FightCoordinator.IsActive, "active attack was not stopped");
             int calls = HttpServerSystem.Calls.Count;
             string denied = await Execute(AgentTools.Execute("fight", new JsonObject(), default));
             Check(denied.Contains("error") && HttpServerSystem.Calls.Count == calls, "forbidden fight reached game dispatcher");
             await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_dodge"] = true }, default));
             Check(AgentPermissions.Dodge && !AgentPermissions.Attack, "partial permission update changed unrelated permission");
             Console.WriteLine("PASS: combat denial stops attack, rejects fight and preserves partial updates");
+            bool previousAttackController = Combat.Enabled, previousMovementController = Dodge.Enabled;
+            var previousNpc = Game.npc[0];
+            Game.npc[0] = new Terraria.NPC { active = true, boss = true, type = 123, life = 75 };
+            try
+            {
+                Combat.Enabled = true; Dodge.Enabled = false;
+                var enabled = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
+                Check(Combat.Enabled && Dodge.Enabled && enabled["boss_control"]["attack_permitted"].GetValue<bool>() == false,
+                    "Boss controller enable bypassed separate attack permission");
+                var status = JsonNode.Parse(await Execute(AgentTools.Execute("boss_status", new JsonObject(), default)));
+                Check(status["active_bosses"].AsArray().Any(b => b["type"].GetValue<int>() == 123 && b["hp"].GetValue<int>() == 75)
+                    && Combat.Enabled && Dodge.Enabled, "Boss status omitted current state or mutated controller flags");
+                await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = false }, default));
+                Check(!Combat.Enabled && !Dodge.Enabled, "Boss controller did not disable");
+                NativeAgent.Stop();
+                Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride,
+                    "Agent stop did not restore existing user controller settings");
+            }
+            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; }
+            Console.WriteLine("PASS: Boss controls expose actual state, preserve independent permissions and restore user settings on stop");
+            var savedBag = Game.LocalPlayer.inventory[49];
+            var savedArmor = Game.LocalPlayer.armor;
+            try
+            {
+                Game.LocalPlayer.armor = Enumerable.Range(0, 20).Select(_ => new Terraria.Item()).ToArray();
+                Game.LocalPlayer.inventory[49] = new Terraria.Item { type = 4321, stack = 1 };
+                Game.LocalPlayer.armor[8] = new Terraria.Item { type = 4321, stack = 1 };
+                Game.LocalPlayer.armor[10] = new Terraria.Item { type = 4321, stack = 1 };
+                var equipmentPlan = new AgentTaskPlan();
+                equipmentPlan.Create(JsonNode.Parse("""
+                    {"goal":"wear equipment","steps":[{"id":"wear","description":"actually equipped","conditions":[{"kind":"equipped","type":4321,"count":1}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                Check(!equipmentPlan.Advance("wear", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                    "inventory, locked or vanity slots falsely satisfied equipped condition");
+                Game.LocalPlayer.armor[0] = Game.LocalPlayer.inventory[49]; Game.LocalPlayer.inventory[49] = new Terraria.Item();
+                Check(equipmentPlan.Advance("wear", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                    "functional equipped slot did not satisfy host condition");
+            }
+            finally { Game.LocalPlayer.inventory[49] = savedBag; Game.LocalPlayer.armor = savedArmor; }
+            Console.WriteLine("PASS: equipped condition distinguishes functional slots from inventory, vanity and locked slots");
 
             Game.LocalPlayer.inventory[0].Name = "木材";
             Game.LocalPlayer.inventory[0].stack = 20;
@@ -102,6 +143,205 @@ static class RuntimeTests
             Check(crafted["state"]["pos"]["x"].GetValue<int>() == 12 && crafted["state"]["pos"]["y"].GetValue<int>() == 34, "tool position is not taken from player origin");
             Console.WriteLine("PASS: craft adapter reports measured inventory delta and player origin");
 
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede")
+                {
+                    var request = JsonNode.Parse(payload);
+                    bool solid = Game.tile[100, 100].TileType == 1;
+                    Check(request["exact"].GetValue<bool>() == solid && request["reach"].GetValue<bool>() != solid,
+                        "navigation mode does not match live target solidity");
+                }
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+            };
+            var adapted = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100, ["exact"] = true }, default));
+            Check(adapted["mode_adjustment"] != null && adapted["done"].GetValue<bool>(), "non-solid target did not use interaction reach");
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            var solidResult = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100, ["exact"] = true }, default));
+            Check(solidResult["mode_adjustment"] == null && !solidResult["done"].GetValue<bool>(), "solid mining target changed modes or ignored arrival check");
+            Game.tile[100, 100] = default;
+            Console.WriteLine("PASS: live non-solid targets switch exact mining to interaction reach; solid targets retain mining and arrival checks");
+
+            Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+            var noTool = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 100, ["target_y"] = 100 }, default)));
+            Check(noTool["error"]?.ToString() == "no_collect_tool", "non-solid mining succeeded without a tool");
+            Game.LocalPlayer.inventory[6] = new Terraria.Item { stack = 1, pick = 50 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path is "/item_use" or "/item_use_status", "non-solid collection used tunnel mining");
+                if (path == "/item_use")
+                {
+                    var request = JsonNode.Parse(payload);
+                    Check(request["slot"].GetValue<int>() == 6 && request["strict"].GetValue<bool>(), "collection failed to select real tool and strict coordinates");
+                }
+                return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+            };
+            var collected = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 100, ["target_y"] = 100 }, default)));
+            Check(collected["outcome"].ToString() == "removed" && collected["mode_adjustment"] != null, "non-solid collection invented tunnel completion");
+            Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[100, 100] = default;
+            Console.WriteLine("PASS: non-solid mining selects an actual collect tool, rejects missing tools and preserves measured removal outcome");
+
+            var beforeRangePosition = Game.LocalPlayer.position;
+            bool approachedForMining = false;
+            try
+            {
+                Game.LocalPlayer.inventory[6] = new Terraria.Item { stack = 1, pick = 50 };
+                Game.tile[12, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+                Reach.MineTest = (player, x, y) =>
+                {
+                    Check(player.selectedItem == 6, "mining distance used a different held tool");
+                    return approachedForMining;
+                };
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        Check(!JsonNode.Parse(payload)["reach"].GetValue<bool>(), "non-solid collection stopped at interaction boundary");
+                        approachedForMining = true; Game.LocalPlayer.position = new(192, 544);
+                    }
+                    if (path == "/item_use") Check(approachedForMining, "interaction range incorrectly bypassed mining approach");
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/item_use_status"
+                        ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+                };
+                var reached = await Execute(AgentTools.CollectTarget(12, 34, default));
+                Check(approachedForMining && reached?["outcome"]?.ToString() == "removed", "collection failed to approach with actual tool distance: " + reached);
+            }
+            finally
+            {
+                Reach.MineTest = null; Game.LocalPlayer.position = beforeRangePosition;
+                Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[12, 34] = default;
+            }
+            Console.WriteLine("PASS: collection measures the selected tool's mining range and approaches beyond interaction distance");
+
+            var treasureCalls = new System.Collections.Generic.List<string>();
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                treasureCalls.Add(path);
+                if (path == "/npc_find")
+                {
+                    Check(JsonNode.Parse(payload)["type"].GetValue<int>() == 77, "NPC query changed requested type");
+                    return (200, "{\"npcs\":[{\"idx\":4,\"type\":77}]}");
+                }
+                if (path == "/nav_recede") Check(JsonNode.Parse(payload)["reach"].GetValue<bool>(), "treasure approach did not use interaction reach");
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/collect_treasure_status"
+                    ? "{\"running\":false,\"outcome\":\"done\"}" : "{\"ok\":true}");
+            };
+            var npcs = JsonNode.Parse(await Execute(AgentTools.Execute("npc_find", new JsonObject { ["type"] = 77 }, default)));
+            Check(npcs["npcs"][0]["type"].GetValue<int>() == 77, "NPC query did not return observed entities");
+            var treasure = JsonNode.Parse(await Execute(AgentTools.Execute("collect_treasure", new JsonObject { ["x"] = 100, ["y"] = 100 }, default)));
+            Check(treasure["outcome"].ToString() == "done" && treasureCalls.IndexOf("/nav_recede_done") < treasureCalls.IndexOf("/collect_treasure")
+                && treasureCalls.Contains("/collect_treasure_status"), "treasure tool skipped approach or existing verified looting workflow");
+            Console.WriteLine("PASS: NPC query preserves filters and treasure delegation approaches before invoking existing looting verification");
+
+            Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
+            Terraria.Lang.MapLabels[16] = "Fixture Resource";
+            int tileQueries = 0;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path == "/find_tiles", "tile resolution dispatched unrelated action");
+                tileQueries++;
+                var request = JsonNode.Parse(payload);
+                if (request["name"].ToString() == "FixtureSource")
+                {
+                    Check(request["n"].GetValue<int>() == 3 && request["max_dist"].GetValue<int>() == 45
+                        || request["n"].GetValue<int>() == 12 && request["max_dist"].GetValue<int>() == 2000, "resolution changed query bounds");
+                    return (200, "{\"tiles\":[{\"x\":100,\"y\":101,\"dist\":1}]}");
+                }
+                return (200, "{\"error\":\"unknown_tile_name\"}");
+            };
+            var aliasArgs = new JsonObject { ["name"] = "FixtureResource", ["n"] = 3, ["max_dist"] = 45 };
+            var aliased = await Execute(AgentTools.FindTiles(aliasArgs, default));
+            Check(aliased["resolved_name"].ToString() == "FixtureSource" && tileQueries == 1
+                && aliasArgs["name"].ToString() == "FixtureResource", "unique map name was not resolved or caller arguments mutated");
+            tileQueries = 0;
+            var resourceScene = await Execute(new GameGather(new[] { new GatherTarget(99, 10, new[] { "FixtureResource" }, Array.Empty<int>()) }).Observe(default));
+            Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 1,
+                "batch gathering did not reuse tile name resolution");
+            var spaced = (JsonObject)aliasArgs.DeepClone();
+            spaced["name"] = "Fixture Resource";
+            tileQueries = 0;
+            var spacedResult = await Execute(AgentTools.FindTiles(spaced, default));
+            Check(spacedResult["resolved_name"].ToString() == "FixtureSource" && tileQueries == 1,
+                "display name containing spaces reached legacy parser");
+            Terraria.Lang.MapLabels[32] = "Fixture Resource";
+            tileQueries = 0;
+            var ambiguous = await Execute(AgentTools.FindTiles(aliasArgs, default));
+            Check(ambiguous["error"].ToString() == "ambiguous_tile_name" && tileQueries == 0
+                && ambiguous["name_candidates"].AsArray().Count == 2, "ambiguous map name guessed a source");
+            Terraria.Lang.MapLabels.Clear();
+            Terraria.Map.MapHelper.tileOptionCounts = Array.Empty<int>();
+            Console.WriteLine("PASS: tile queries reuse unique game map names, preserve bounds and refuse ambiguous source names");
+
+            int scriptQueries = 0;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path == "/npc_find", "script bypassed expected production tool adapter");
+                scriptQueries++;
+                Check(JsonNode.Parse(payload)["type"].GetValue<int>() == 77, "script lost dependent argument");
+                return (200, "{\"npcs\":[{\"idx\":4,\"type\":77}]}");
+            };
+            var script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "const r=tool('npc_find',{type:77}); return {target:r.npcs[0].idx};" }, default)));
+            Check(script["ok"].GetValue<bool>() && script["value"]["target"].GetValue<int>() == 4 && scriptQueries == 1,
+                "production script tool failed to compose real dispatcher results");
+            script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "return tool('game_catalog',{kind:'tile'});" }, default)));
+            Check(!script["ok"].GetValue<bool>() && script["detail"].ToString().Contains("name") && scriptQueries == 1,
+                "script bypassed required tool arguments");
+            bool attackBeforeScript = AgentPermissions.Attack;
+            try
+            {
+                AgentPermissions.Attack = false;
+                script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["code"] = "return tool('fight',{max_dist:40,seconds:1});" }, default)));
+                Check(script["value"]?["error"]?.ToString().Contains("禁止") == true && scriptQueries == 1,
+                    "script bypassed existing attack permission");
+            }
+            finally { AgentPermissions.Attack = attackBeforeScript; }
+            Console.WriteLine("PASS: production run_script uses existing dispatcher and registered tool argument validation");
+
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") RecedingNav.Active = true;
+                return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+            };
+            using (var root = new CancellationTokenSource())
+            {
+                var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:100,y:100}});" }, root.Token)));
+                string handle = started["value"]["handle"].ToString();
+                await PumpUntil(() => RecedingNav.Active);
+                var query = JsonNode.Parse(await Execute(AgentTools.Execute("action_query", new JsonObject { ["handle"] = handle }, default)));
+                Check(query["status"].ToString() == "running" && query["observation"]["hp"].GetValue<int>() == Game.LocalPlayer.statLife,
+                    "background action died with the returning script or query lacked current observation");
+                var conflicting = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 0, ["y"] = 0 }, default)));
+                Check(conflicting["error"].ToString() == "action_busy", "foreground action stole managed input");
+                var bossConflict = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
+                Check(bossConflict["error"].ToString() == "action_busy", "Boss controller stole managed action input");
+                foreach (string interaction in new[] { "equip_item", "npc_chat" })
+                {
+                    var busy = JsonNode.Parse(await Execute(AgentTools.Execute(interaction, new JsonObject(), default)));
+                    Check(busy["error"].ToString() == "action_busy", "interaction stole managed action input");
+                }
+                var gear = JsonNode.Parse(await Execute(AgentTools.Execute("equipment_list", new JsonObject(), default)));
+                var chat = JsonNode.Parse(await Execute(AgentTools.Execute("npc_dialogue_status", new JsonObject(), default)));
+                Check(gear is JsonArray && chat["open"]?.GetValue<bool>() == false && RecedingNav.Active,
+                    "read-only interaction query stopped the owned action or changed its result format");
+                Console.WriteLine("PASS: equipment/dialogue adapters block concurrent input changes while permitting read-only queries; game behavior engine-tested separately");
+                var pausedAction = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
+                    { ["handle"] = handle, ["command"] = "pause" }, default)));
+                Check(pausedAction["status"].ToString() == "paused" && !RecedingNav.Active, "pause failed to stop actual navigation adapter");
+                await Execute(AgentTools.Execute("action_control", new JsonObject { ["handle"] = handle, ["command"] = "resume" }, root.Token));
+                await PumpUntil(() => RecedingNav.Active);
+                root.Cancel();
+                await PumpUntil(() => !AgentTools.Actions.HasActive);
+                Check(!RecedingNav.Active && AgentTools.Actions.Snapshot()[0]["status"].ToString() == "cancelled",
+                    "root cancellation failed to release actual navigation inputs");
+            }
+            AgentTools.Actions.Reset();
+            Console.WriteLine("PASS: production scripts preserve background handles across return, block input conflicts and support pause/resume/root cancellation");
+
             using var http = new HttpClient(new NavHandler());
             ((HttpClient)typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(Agent)).Dispose();
             typeof(NativeAgent).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, http);
@@ -111,14 +351,90 @@ static class RuntimeTests
                 if (path == "/nav_recede") RecedingNav.Active = true;
                 return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
             };
+            int navCallsBefore = HttpServerSystem.Calls.Count(p => p == "/nav_recede");
             NativeAgent.Submit("移动");
             await PumpUntil(() => RecedingNav.Active);
             int stops = Halt.Stops;
             NativeAgent.Submit("换个任务");
             Check(!RecedingNav.Active && Halt.Stops == stops + 1, "replacement task did not stop old navigation");
             await PumpUntil(() => AgentChat.Messages.Contains("新任务完成"));
-            Check(HttpServerSystem.Calls.Count(p => p == "/nav_recede") == 1, "old navigation restarted after cancellation");
+            Check(HttpServerSystem.Calls.Count(p => p == "/nav_recede") == navCallsBefore + 1, "old navigation restarted after cancellation");
             Console.WriteLine("PASS: replacement instruction cancels active navigation and completes next task");
+
+            await PumpUntil(() => NativeAgent.Status == "idle");
+            var pauseHandler = new ContinuationLimitHandler();
+            using var pauseHttp = new HttpClient(pauseHandler);
+            var conversationField = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+            var originalConversation = conversationField.GetValue(Agent);
+            conversationField.SetValue(Agent, new AgentConversation(pauseHttp));
+            await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                {"goal":"unfinished goal","steps":[{"id":"health","description":"300 permanent health","conditions":[{"kind":"permanent_health","count":300}]}]}
+                """).AsObject(), default));
+            NativeAgent.Submit("继续未完成目标");
+            await PumpUntil(() => NativeAgent.Status == "paused");
+            var paused = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(paused["task_plan"]["current_step"].ToString() == "health" && AgentTools.Plan.Incomplete,
+                "model final reply discarded unfinished task or marked it completed");
+            Check(pauseHandler.Calls == 2, "no-progress continuation did not stop after one extra turn");
+            conversationField.SetValue(Agent, originalConversation);
+            AgentTools.NewTask();
+            Check(AgentTools.Plan.Incomplete, "continuation cleared task cursor");
+            AgentTools.Plan.Reset();
+            NativeAgent.Stop();
+            Console.WriteLine("PASS: model ending does not complete a registered goal; follow-up retains task cursor");
+
+            using (var continuationHttp = new HttpClient(new ContinuationHandler()))
+            {
+                var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+                var previousConversation = field.GetValue(Agent);
+                field.SetValue(Agent, new AgentConversation(continuationHttp));
+                try
+                {
+                    Game.LocalPlayer.statLifeMax = 300;
+                    await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                        {"goal":"two stages","steps":[
+                          {"id":"first","description":"first milestone","conditions":[{"kind":"permanent_health","count":300}]},
+                          {"id":"last","description":"final requirements","conditions":[{"kind":"permanent_health","count":300}]}]}
+                        """).AsObject(), default));
+                    NativeAgent.Submit("执行两个阶段");
+                    await PumpUntil(() => NativeAgent.Status == "idle");
+                    Check(AgentTools.Plan.Snapshot()["status"].ToString() == "completed", "host did not continue after verified progress");
+                }
+                finally
+                {
+                    field.SetValue(Agent, previousConversation);
+                    Game.LocalPlayer.statLifeMax = 100;
+                    AgentTools.Plan.Reset();
+                }
+            }
+            Console.WriteLine("PASS: verified progress resumes the next model turn and finishes both steps without another player message");
+            foreach (bool emptyYield in new[] { false, true })
+            {
+                var handler = new WorkflowHandler(emptyYield);
+                using var workflowHttp = new HttpClient(handler);
+                var previousConversation = conversationField.GetValue(Agent);
+                conversationField.SetValue(Agent, new AgentConversation(workflowHttp));
+                AgentTools.Workflows.Clear();
+                int beforeFirst = AgentChat.Messages.Count(m => m == "workflow-first");
+                try
+                {
+                    NativeAgent.Submit("分两段执行并保存步骤");
+                    await PumpUntil(() => NativeAgent.Status == (emptyYield ? "paused" : "idle"));
+                    Check(handler.Calls == 4, "workflow continuation did not use exactly two model turns");
+                    if (!emptyYield) Check(AgentChat.Messages.Count(m => m == "workflow-first") == beforeFirst + 1
+                        && AgentTools.Workflows["test-flow"].Completed == 2, "workflow continuation repeated completed effects");
+                }
+                finally
+                {
+                    NativeAgent.Stop(); AgentTools.Workflows.Clear();
+                    conversationField.SetValue(Agent, previousConversation);
+                }
+            }
+            Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
+            Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
+            await TestWakeHandoff();
+            await TestPartialProgress();
+            await TestToolFailureEvidence();
 
             await TestNetwork();
             TestRoleSwitch();
@@ -130,6 +446,159 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestWakeHandoff()
+    {
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        var handler = new WakeHandler();
+        using var http = new HttpClient(handler);
+        field.SetValue(Agent, new AgentConversation(http));
+        AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            NativeAgent.Submit("途中箱子事件后临时改目的地");
+            await PumpUntil(() => RecedingNav.Active);
+            Game.chest[0] = new Terraria.Chest { x = (int)Game.LocalPlayer.Center.X / 16, y = (int)Game.LocalPlayer.Center.Y / 16 };
+            Game.chest[0].item[0] = new Terraria.Item { type = 1, stack = 1 };
+            await PumpUntil(() => handler.Calls == 4 && RecedingNav.Active && AgentTools.Actions.Snapshot()[0]["attempt"].GetValue<int>() == 2);
+            var action = AgentTools.Actions.Snapshot()[0];
+            Check(action["args"]["x"].GetValue<int>() == 200 && action["previous_attempt"]["status"].ToString() == "paused",
+                "event handoff lost old handle evidence or failed to change remaining arguments");
+            Check(AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 1, "same chest caused another wake");
+            NativeAgent.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive);
+            for (int i = 0; i < 10; i++) Agent.PostUpdateEverything();
+            Check(!RecedingNav.Active && !AgentTools.Watches.Armed && handler.Calls == 4,
+                "stop leaked inputs, watchers or additional model requests");
+        }
+        finally
+        {
+            NativeAgent.Stop(); Game.chest[0] = null; HttpServerSystem.Handler = null;
+            AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); field.SetValue(Agent, previous);
+        }
+        Console.WriteLine("PASS: native passive wake pauses input before model, resumes changed args on same handle and stops without more requests");
+    }
+
+    sealed class WakeHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "event handoff spun extra model requests");
+            var message = new JsonObject { ["content"] = "等待事件" };
+            if (call == 2)
+            {
+                var body = JsonNode.Parse(await request.Content.ReadAsStringAsync(token));
+                string input = body["messages"].AsArray().Last(m => m["role"]?.ToString() == "user")["content"].ToString();
+                Check(input.Contains("nearby_chest") && input.Contains("paused") && !RecedingNav.Active,
+                    "model wake lacked actual event or input was not released first");
+            }
+            if (call % 2 == 0)
+            {
+                string code = call == 0
+                    ? "tool('watch',{events:['nearby_chest']}); const a=step('nav',()=>tool('action_start',{tool:'nav_to',args:{x:100,y:100}})); return a;"
+                    : "const a=step('nav',()=>{throw new Error('must retain handle')}); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "wake-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["workflow"] = "wake-flow", ["code"] = code }.ToJsonString() } });
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) };
+        }
+    }
+
+    static async Task TestToolFailureEvidence()
+    {
+        await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+            {"goal":"failure evidence","steps":[{"id":"health","description":"300 health","conditions":[{"kind":"permanent_health","count":300}]}]}
+            """).AsObject(), default));
+        try
+        {
+            HttpServerSystem.Handler = (_, _) => throw new IOException("fixture dispatch failed");
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "fixture" }, default)));
+            Check(result["error"]?.ToString() == "tool_exception" && result["detail"].ToString().Contains("fixture dispatch failed"),
+                "tool exception was not returned with actionable detail");
+            Check(result["task_plan"]["steps"][0]["blocking_evidence"]["tool"].ToString() == "craft", "tool exception evidence not retained in plan");
+            await Execute(AgentTools.Execute("task_step", new JsonObject { ["id"] = "health", ["action"] = "block", ["reason"] = "fixture dispatch failed" }, default));
+            int stops = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/item_use") ItemUseCoordinator.IsActive = true;
+                if (path == "/item_use_status") throw new IOException("fixture status failed");
+                if (path == "/item_use_stop") { stops++; ItemUseCoordinator.IsActive = false; }
+                return (200, "{\"ok\":true}");
+            };
+            var interrupted = JsonNode.Parse(await Execute(AgentTools.Execute("use_item", new JsonObject { ["slot"] = 0, ["x"] = 0, ["y"] = 0 }, default)));
+            Check(stops == 1 && !ItemUseCoordinator.IsActive && interrupted["detail"].ToString().Contains("fixture status failed"),
+                "failed polling left its action active or lost original error");
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/item_use") ItemUseCoordinator.IsActive = true;
+                if (path == "/item_use_status") return (500, "{\"error\":\"fixture status rejected\"}");
+                if (path == "/item_use_stop") { stops++; ItemUseCoordinator.IsActive = false; }
+                return (200, "{\"ok\":true}");
+            };
+            var rejectedStatus = JsonNode.Parse(await Execute(AgentTools.Execute("use_item", new JsonObject { ["slot"] = 0, ["x"] = 0, ["y"] = 0 }, default)));
+            Check(stops == 2 && !ItemUseCoordinator.IsActive && rejectedStatus["error"]?.ToString() == "tool_exception"
+                && rejectedStatus["detail"].ToString().Contains("fixture status rejected"), "status rejection appeared as normal completion or left action running");
+            HttpServerSystem.Handler = (path, _) => throw new IOException(path == "/item_use_stop" ? "fixture cleanup failed" : "fixture status failed");
+            var cleanupFailure = await Execute(AgentTools.Wait("/item_use_status", "active", "/item_use_stop", 1, default).ContinueWith(task => task.Exception, TaskScheduler.Default));
+            Check(cleanupFailure != null && cleanupFailure.ToString().Contains("fixture cleanup failed") && cleanupFailure.ToString().Contains("fixture status failed"),
+                "cleanup failure hid original polling error");
+            HttpServerSystem.Handler = (path, _) => (500, path == "/item_use_stop"
+                ? "{\"error\":\"fixture cleanup rejected\"}" : "{\"error\":\"fixture status rejected\"}");
+            var rejectedCleanup = await Execute(AgentTools.Wait("/item_use_status", "active", "/item_use_stop", 1, default).ContinueWith(task => task.Exception, TaskScheduler.Default));
+            Check(rejectedCleanup != null && rejectedCleanup.ToString().Contains("fixture cleanup rejected") && rejectedCleanup.ToString().Contains("fixture status rejected"),
+                "rejected cleanup was reported as successful");
+            string before = AgentTools.Plan.Snapshot().ToJsonString();
+            using var cancel = new CancellationTokenSource(); cancel.Cancel();
+            try { await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "stale action" }, cancel.Token)); throw new Exception("cancelled tool ran"); }
+            catch (OperationCanceledException) { }
+            Check(AgentTools.Plan.Snapshot().ToJsonString() == before, "cancelled tool contaminated task evidence");
+        }
+        finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
+        Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestPartialProgress()
+    {
+        var handler = new PartialProgressHandler();
+        using var http = new HttpClient(handler);
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        field.SetValue(Agent, new AgentConversation(http));
+        try
+        {
+            Game.LocalPlayer.statLifeMax = 100;
+            await Execute(AgentTools.Execute("task_plan", JsonNode.Parse("""
+                {"goal":"partial progress","steps":[{"id":"health","description":"160 permanent health","conditions":[{"kind":"permanent_health","count":160}]}]}
+                """).AsObject(), default));
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(path is "/item_use" or "/item_use_status", "unexpected partial-progress endpoint");
+                if (path == "/item_use") Game.LocalPlayer.statLifeMax += 20;
+                return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"n/a\"}" : "{\"ok\":true}");
+            };
+            NativeAgent.Submit("逐步提高永久血量到160");
+            await PumpUntil(() => handler.Calls >= 2 && NativeAgent.Status is "paused" or "idle");
+            Check(Game.LocalPlayer.statLifeMax == 160 && AgentTools.Plan.Snapshot()["status"].ToString() == "completed",
+                $"partial progress stopped early: hp={Game.LocalPlayer.statLifeMax} calls={handler.Calls} status={NativeAgent.Status}");
+            Check(handler.Calls == 6, "partial progress caused extra model turns");
+        }
+        finally
+        {
+            NativeAgent.Stop(); field.SetValue(Agent, previous);
+            Game.LocalPlayer.statLifeMax = 100; AgentTools.Plan.Reset(); HttpServerSystem.Handler = null;
+        }
+        Console.WriteLine("PASS: measured progress within one step resumes three turns without another player instruction");
     }
 
     static void Receive(int type, int sender, Action<BinaryWriter> payload)
@@ -347,13 +816,91 @@ static class RuntimeTests
         Console.WriteLine("PASS: production PvP validates players/teams/permissions, syncs toggle, aims, stops and reports actual HP");
     }
 
+    sealed class ContinuationLimitHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Check(++Calls <= 2, "unbounded continuation without progress");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"准备执行\"}}]}") });
+        }
+    }
+
+    sealed class ContinuationHandler : HttpMessageHandler
+    {
+        int calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = calls++;
+            Check(call < 4, "host retried without verified progress");
+            string id = call < 2 ? "first" : "last";
+            var message = new JsonObject { ["content"] = "阶段结束" };
+            if (call % 2 == 0)
+                message["tool_calls"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "step-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script",
+                        ["arguments"] = new JsonObject { ["code"] = "return tool('task_step'," + new JsonObject { ["id"] = id, ["action"] = "verify" }.ToJsonString() + ");" }.ToJsonString() }
+                });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject
+                { ["message"] = message }) }.ToJsonString(), Encoding.UTF8, "application/json") });
+        }
+    }
+
+    sealed class PartialProgressHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 6, "partial-progress loop exceeded expected budget");
+            var message = new JsonObject { ["content"] = "本轮结束" };
+            if (call % 2 == 0)
+            {
+                var calls = new JsonArray(new JsonObject { ["id"] = "use-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = "return tool('use_item',{x:0,y:0,slot:0});" }.ToJsonString() } });
+                if (call == 4) calls.Add(new JsonObject { ["id"] = "verify-final", ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = "return tool('task_step',{id:'health',action:'verify'});" }.ToJsonString() } });
+                message["tool_calls"] = calls;
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
+        }
+    }
+
+    sealed class WorkflowHandler(bool emptyYield) : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "workflow model loop exceeded its continuation bound");
+            var message = new JsonObject { ["content"] = "段落结束" };
+            if (call % 2 == 0)
+            {
+                string code = emptyYield ? "return {status:'yield'};" : call == 0
+                    ? "step('first',()=>tool('say',{text:'workflow-first'})); return {status:'yield',completed:1};"
+                    : "step('first',()=>tool('say',{text:'workflow-first'})); step('second',()=>tool('say',{text:'workflow-second'})); return {status:'done'};";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "workflow-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["workflow"] = "test-flow", ["code"] = code }.ToJsonString() } });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
+        }
+    }
+
     sealed class NavHandler : HttpMessageHandler
     {
         int calls;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             string message = calls++ == 0
-                ? "{\"content\":null,\"tool_calls\":[{\"id\":\"nav\",\"type\":\"function\",\"function\":{\"name\":\"nav_to\",\"arguments\":\"{\\\"x\\\":100,\\\"y\\\":100}\"}}]}"
+                ? new JsonObject { ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "nav", ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["code"] = "return tool('nav_to',{x:100,y:100});" }.ToJsonString() } }) }.ToJsonString()
                 : "{\"content\":\"新任务完成\"}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent("{\"choices\":[{\"message\":" + message + "}]}", Encoding.UTF8, "application/json") });

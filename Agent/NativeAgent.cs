@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -22,7 +23,11 @@ public class NativeAgent : ModSystem
     TaskCompletionSource<string> _answer;
     string _pending;
     string _system;
+    JsonObject _goalOptions;
+    Task _goalStopping = Task.CompletedTask;
+    internal static JsonObject GoalState => _instance?._codex?.GoalState;
     DateTime _lastFeedback;
+    DateTime _lastWatch;
     JsonArray _schemas;
     readonly ConcurrentQueue<string> _combatMessages = new();
     internal static bool CombatMessagesPending => _instance?._combatMessages.IsEmpty == false;
@@ -54,6 +59,37 @@ public class NativeAgent : ModSystem
         if (string.IsNullOrWhiteSpace(text)) { AgentChat.Say("指令不能为空。"); return; }
         if (text.Trim() is "stop" or "停止") { self.Cancel(); AgentChat.Say("停下了。"); return; }
         if (text.Trim() == "status") { AgentChat.Say(Status); return; }
+        bool goalCommand = text.StartsWith("/goal ", StringComparison.Ordinal) || text.StartsWith("goal ", StringComparison.Ordinal);
+        if (goalCommand)
+        {
+            string objective = text[(text.IndexOf(' ') + 1)..].Trim();
+            if (objective == "status") { AgentChat.Say(GoalState?.ToJsonString() ?? "没有Codex目标。"); return; }
+            if (objective is "pause" or "stop") { self.Cancel(); AgentChat.Say("目标已停止执行，进度保留。"); return; }
+            if (!Config.I.AgentUseCodex) { AgentChat.Say("/goal需要启用Codex后端。"); return; }
+            if (objective == "resume")
+            {
+                if (self._goalOptions == null) { AgentChat.Say("没有可以恢复的目标。"); return; }
+                if (GoalState?["native"]?["status"]?.ToString() is "budgetLimited" or "usageLimited" or "complete")
+                { AgentChat.Say("当前目标已完成或达到额度限制；请明确建立新目标和预算。"); return; }
+                self.Cancel();
+                self._goalOptions["request"] = Guid.NewGuid().ToString("N");
+                self._pending = self._goalOptions["objective"].ToString(); Status = "queued"; return;
+            }
+            long? budget = null;
+            if (objective.StartsWith("--tokens ", StringComparison.Ordinal))
+            {
+                var parts = objective.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3 || !long.TryParse(parts[1], out long amount) || amount <= 0)
+                { AgentChat.Say("用法：/tb /goal --tokens 正整数 目标内容"); return; }
+                budget = amount; objective = parts[2];
+            }
+            if (string.IsNullOrWhiteSpace(objective)) { AgentChat.Say("目标不能为空。"); return; }
+            self.Cancel();
+            self._goalOptions = new JsonObject { ["objective"] = objective, ["request"] = Guid.NewGuid().ToString("N") };
+            if (budget.HasValue) self._goalOptions["tokenBudget"] = budget.Value;
+            self._pending = objective; Status = "queued";
+            Progress("收到长期目标，准备执行并验收。", "queued"); return;
+        }
         if (self._answer != null)
         {
             self._answer.TrySetResult(text); self._answer = null;
@@ -66,6 +102,7 @@ public class NativeAgent : ModSystem
             return;
         }
         self.Cancel();
+        self._goalOptions = null;
         self._pending = text;
         Status = "queued";
         Progress("收到指令，准备处理。", "queued");
@@ -84,7 +121,17 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
-        if (stopActions || PvpDuel.Active) AgentTools.Stop();
+        if (_goalStopping.IsCompleted && _codex?.GoalState?["native"]?["status"]?.ToString() == "active")
+        {
+            var codex = _codex;
+            _goalStopping = Task.Run(async () =>
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try { await codex.SuspendGoal("paused", timeout.Token); }
+                catch (Exception error) { DiagLog.Write("[agent] goal pause failed: " + error.Message); }
+            });
+        }
+        if (stopActions || PvpDuel.Active || AgentTools.Actions.HasActive || AgentTools.HasBossControlOverride) AgentTools.Stop();
         while (_combatMessages.TryDequeue(out _)) { }
         _answer?.TrySetCanceled(); _answer = null;
         Status = "idle";
@@ -92,16 +139,39 @@ public class NativeAgent : ModSystem
 
     public static void Stop() => _instance?.Cancel();
 
+    void CloseCodex()
+    {
+        var codex = _codex; _codex = null;
+        if (codex == null) return;
+        if (_goalStopping.IsCompleted) codex.Dispose();
+        else _ = _goalStopping.ContinueWith(_ => codex.Dispose(), TaskScheduler.Default);
+    }
+
     public override void PostUpdateEverything()
     {
         if (Main.dedServ) return;
         if (!Config.I.AgentEnabled || !AgentNetwork.CanAutomate)
         {
             Cancel();
-            _codex?.Dispose(); _codex = null;
+            CloseCodex();
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
+        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false
+            && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
+        {
+            _lastWatch = DateTime.UtcNow;
+            var p = Main.LocalPlayer;
+            var chests = new JsonArray();
+            foreach (var chest in Main.chest)
+                if (chest != null && chest.item.Any(i => !i.IsAir)
+                    && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
+                    chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
+                ["actions"] = AgentTools.Actions.Snapshot() });
+        }
+        if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
             && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
@@ -121,37 +191,77 @@ public class NativeAgent : ModSystem
         string codexModel = Config.I.AgentCodexModel?.Trim();
         if (string.IsNullOrEmpty(codexModel)) codexModel = "gpt-6-luna";
         string cwd = System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent");
+        var goalOptions = _goalOptions?.DeepClone() as JsonObject;
         if (!useCodex && (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(model) ||
             !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
         { Progress("先在模组配置里填写 Agent API Key、Base URL 和模型名。", "failed"); return; }
-        if (!useCodex) { _codex?.Dispose(); _codex = null; }
+        if (!useCodex) CloseCodex();
         var codex = useCodex ? _codex ??= new CodexAgent() : null;
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask();
-        string system = _system + "\n回复语言风格：" + Config.I.AgentPersona;
+        string system = AgentScript.Instructions(_system + "\n回复语言风格：" + Config.I.AgentPersona, _schemas);
+        var entrySchemas = AgentScript.EntryTools(_schemas);
         Progress(useCodex ? "正在连接 Codex 并等待响应。" : "正在请求模型。", "等待模型响应");
         DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)}");
         _running = Task.Run(async () =>
         {
             try
             {
+                await _goalStopping.WaitAsync(token);
                 string state = await AgentTools.State(token);
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
                 string input = goal + "\n现状：" + state;
                 long recoverySession = -1;
+                int noProgressContinuations = 0;
                 while (true)
                 {
+                    int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
+                    var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
+                    int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
-                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, _schemas, AgentTools.Execute, Say, token);
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
                     else
-                        await _conversation.RunAsync(input, url, key, model, system, _schemas, AgentTools.Execute, Say, token);
+                        await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
+                    while (await OnMain(() => AgentTools.Actions.HasActive && AgentTools.Watches.Armed
+                        && !AgentTools.Watches.HasPending, token))
+                        await Task.Delay(100, token);
+                    if (await OnMain(() => AgentTools.Watches.HasPending, token))
+                    {
+                        string handle = AgentTools.Actions.ActiveHandle;
+                        if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
+                        var events = await OnMain(() => AgentTools.Watches.Take(), token);
+                        input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
+                            + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
+                            + "\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
                         while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
                         input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
+                    bool canContinue = await OnMain(() => AgentTools.Plan.Incomplete
+                        && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
+                        && !PvpDuel.Active, token);
+                    if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
+                        canContinue = await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked", token);
+                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token);
+                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
+                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    if (scriptYielded)
+                    {
+                        canContinue = true;
+                        progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
+                    }
+                    if (progressed) noProgressContinuations = 0;
+                    if (canContinue && (progressed || noProgressContinuations++ < 1))
+                    {
+                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。未取得实际进展时宿主仅额外续接一次。\n现状："
+                            + await AgentTools.State(token);
                         continue;
                     }
                     JsonObject report;
@@ -174,15 +284,44 @@ public class NativeAgent : ModSystem
                     if (report["ended"] != null) break;
                     input = "原目标：" + goal + "\n按玩家补充或本会话唯一一次自动受阻求助处理。完成具体操作或说明限制后结束本轮，不轮询、不等待、不重启战斗；Jev会继续控制。\n战况：" + report.ToJsonString();
                 }
-                await OnMain(() => { Status = "idle"; return true; }, token);
+                if (goalOptions != null)
+                {
+                    var final = await codex.CompleteGoal(ct => OnMain(() =>
+                    {
+                        var verified = AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure);
+                        if (AgentTools.Actions.HasActive) verified["verified"] = false;
+                        return verified;
+                    }, ct), token);
+                    if (final?["verified"]?.GetValue<bool>() != true)
+                    {
+                        string handle = AgentTools.Actions.ActiveHandle;
+                        if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
+                        await codex.SuspendGoal(await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked" ? "blocked" : "paused", token), token);
+                    }
+                    await OnMain(() => { DiagLog.Write("[agent] goal result " + final?.ToJsonString()); return true; }, token);
+                }
+                await OnMain(() =>
+                {
+                    if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded)
+                        || goalOptions != null && codex.GoalState?["native"]?["status"]?.ToString() != "complete")
+                        Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
+                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete) AgentTools.Watches.End();
+                    return true;
+                }, token);
             }
             catch (OperationCanceledException) { }
+            catch (GoalBudgetExceededException error)
+            {
+                await OnMain(() => { AgentTools.Stop(); Progress(error.Message, "budgetLimited"); return true; }, default);
+            }
             catch (Exception ex)
             {
                 string error = string.IsNullOrEmpty(key) ? ex.Message : ex.Message.Replace(key, "[redacted]");
                 MainQueue.Enqueue(() =>
                 {
                     if (token.IsCancellationRequested) return;
+                    AgentTools.Plan.Record("host_failure", error);
                     AgentTools.Stop(); Status = "failed";
                     DiagLog.Write("[agent] " + error);
                     AgentChat.Say("这次没执行完：" + error);
@@ -207,6 +346,14 @@ public class NativeAgent : ModSystem
         return result.Task;
     }
 
+    internal static void ValidateTool(string name, JsonObject args)
+    {
+        var schema = _instance?._schemas?.FirstOrDefault(t => t["function"]?["name"]?.ToString() == name);
+        if (schema == null) throw new ArgumentException("未知游戏工具：" + name);
+        foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+            if (args[field.ToString()] == null) throw new ArgumentException("工具缺少必填参数：" + field);
+    }
+
     internal static async Task<string> Ask(string question, CancellationToken token)
     {
         Task<string> answer = await OnMain(() =>
@@ -222,9 +369,14 @@ public class NativeAgent : ModSystem
     public override void OnWorldUnload()
     {
         Cancel();
+        AgentTools.Plan.Reset();
+        AgentTools.Workflows.Clear();
+        AgentTools.Actions.Reset();
+        AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();
-        _codex?.Dispose(); _codex = null;
+        CloseCodex();
+        _goalOptions = null;
         if (_http != null) _conversation = new AgentConversation(_http);
         AgentPermissions.Reset();
     }
@@ -232,7 +384,7 @@ public class NativeAgent : ModSystem
     public override void Unload()
     {
         Cancel();
-        _codex?.Dispose(); _codex = null;
+        CloseCodex();
         _http?.Dispose();
         _instance = null;
         while (MainQueue.TryDequeue(out _)) { }

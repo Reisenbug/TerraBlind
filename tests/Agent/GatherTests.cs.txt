@@ -1,0 +1,166 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+using Terraria;
+
+static class GatherTests
+{
+    static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
+    static readonly GatherTarget[] Targets = { new(10, 1, new[] { "test tile" }, Array.Empty<int>()), new(20, 1, Array.Empty<string>(), new[] { 2 }) };
+
+    public static async Task Run()
+    {
+        var world = new World();
+        var result = await Gather.Run(Targets, 5, world, default);
+        Check(result["ok"].GetValue<bool>() && world.Actions.Count == 2 && world.Actions[0] == "npc" && world.Stops == 1,
+            "mixed gathering did not prioritize nearby target enemy and finish real inventory goals");
+        world = new World { Drop = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
+        Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
+
+        world = new World { Gain = false };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(!result["ok"].GetValue<bool>() && world.Actions.Count == 4 && result["last_result"] != null,
+            "removed targets were counted as acquired items or failed targets retried without bound");
+        world = new World { Empty = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(result["outcome"].ToString() == "source_unavailable" && world.Actions.Count == 0, "missing sources appeared successful");
+        Console.WriteLine("PASS: missing drops and absent sources retain evidence without false collection success or unbounded retries");
+
+        world = new World { Dead = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions.Count == 0 && result["outcome"].ToString() == "interrupted_by_death", "dead player continued gathering");
+        using var cancel = new CancellationTokenSource();
+        world = new World { Cancel = cancel };
+        try { await Gather.Run(Targets, 5, world, cancel.Token); throw new Exception("gather ignored cancellation"); }
+        catch (OperationCanceledException) { }
+        Check(world.Actions.Count == 1, "cancelled gather dispatched another action");
+        Console.WriteLine("PASS: death prevents collection and cancelled gathering never dispatches follow-up actions");
+
+        world = new World { WaitForever = true };
+        result = await Gather.Run(Targets, 1, world, default);
+        Check(result["outcome"].ToString() == "timeout" && world.Stops == 1 && result["last_result"]?["candidate"] != null,
+            "gather budget did not stop action and preserve timed-out target");
+        Console.WriteLine("PASS: gathering deadline cancels a blocked action, stops owned control and preserves target evidence");
+        FightFiltering();
+        Evasion();
+        FiringLane();
+    }
+
+    static void FiringLane()
+    {
+        var p = Main.LocalPlayer;
+        var oldNpcs = Main.npc; var oldShots = Main.projectile; var oldWeapon = p.inventory[0];
+        int oldSlot = p.selectedItem; var oldVelocity = p.velocity; bool oldDodge = AgentPermissions.Dodge;
+        bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var oldSample);
+        try
+        {
+            Main.npc = Array.Empty<NPC>(); Main.projectile = Array.Empty<Projectile>(); p.velocity = default;
+            var target = new NPC { type = 9, active = true, damage = 0, position = new(p.Center.X + 200, p.Center.Y - 10) };
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 77 }; p.selectedItem = 0;
+            Terraria.ID.ContentSamples.ProjectilesByType[77] = new Projectile { tileCollide = true };
+            float clearHeight = p.Center.Y - 45;
+            Collision.LineTest = (from, to) => from.Y < clearHeight;
+            Check(FightCoordinator.Evade(p, target).Jump, "blocked firing lane did not select a jump that exposes target");
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = target; AgentPermissions.Dodge = false;
+            Collision.LineTest = (from, to) => false;
+            FightCoordinator.Start(40, new[] { 9 }); FightCoordinator.Tick(p);
+            Check(!p.controlUseItem, "blocked projectile weapon continued firing into terrain");
+            Terraria.ID.ContentSamples.ProjectilesByType[77].tileCollide = false;
+            FightCoordinator.Tick(p);
+            Check(p.controlUseItem, "wall-passing projectile was incorrectly blocked by line-of-sight guard");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); Main.npc = oldNpcs; Main.projectile = oldShots;
+            p.inventory[0] = oldWeapon; p.selectedItem = oldSlot; p.velocity = oldVelocity;
+            AgentPermissions.Dodge = oldDodge; Collision.LineTest = null; p.controlUseItem = false;
+            if (hadSample) Terraria.ID.ContentSamples.ProjectilesByType[77] = oldSample;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
+        }
+        Console.WriteLine("PASS: NPC combat seeks exposed firing positions, withholds blocked shots and permits wall-passing projectiles");
+    }
+
+    static void Evasion()
+    {
+        var p = Main.LocalPlayer;
+        var oldShots = Main.projectile; var oldNpcs = Main.npc;
+        var oldVelocity = p.velocity; float oldGravity = p.gravity;
+        try
+        {
+            p.velocity = default; p.gravity = 0;
+            Main.npc = Array.Empty<NPC>();
+            var shot = new Projectile { active = true, hostile = true, damage = 10,
+                Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, -120), velocity = new(0, 5) };
+            Main.projectile = new[] { shot };
+            Check(FightCoordinator.Evade(p).Direction != 0, "incoming vertical projectile did not trigger lateral evasion");
+            float wall = p.position.X - 1;
+            Collision.SolidTest = (position, width, height) => position.X < wall;
+            Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected the blocked side");
+            Collision.SolidTest = null;
+            shot.hostile = false;
+            Check(FightCoordinator.Evade(p) == (0, false), "friendly projectile triggered evasion");
+            shot.hostile = true; shot.Center += new Microsoft.Xna.Framework.Vector2(500, 0);
+            Check(FightCoordinator.Evade(p) == (0, false), "non-intersecting projectile caused idle movement");
+        }
+        finally
+        {
+            Main.projectile = oldShots; Main.npc = oldNpcs;
+            p.velocity = oldVelocity; p.gravity = oldGravity; Collision.SolidTest = null;
+        }
+        Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
+    }
+
+    static void FightFiltering()
+    {
+        var p = Main.LocalPlayer;
+        var oldWeapon = p.inventory[0]; var oldA = Main.npc[0]; var oldB = Main.npc[1];
+        try
+        {
+            p.inventory[0] = new Item { stack = 1, damage = 20 };
+            Main.npc[0] = new NPC { type = 1, active = true, position = new(10, 0) };
+            Main.npc[1] = new NPC { type = 2, active = true, position = new(80, 0) };
+            FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
+            Check(Cursor.X == Main.npc[1].Center.X, "targeted fight attacked closer unrelated enemy");
+            FightCoordinator.Stop(); FightCoordinator.Start(40); FightCoordinator.Tick(p);
+            Check(Cursor.X == Main.npc[0].Center.X, "target filter leaked into ordinary fight");
+            Main.npc[1].friendly = true; p.controlUseItem = false;
+            FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
+            Check(!p.controlUseItem, "target filter bypassed friendly NPC protection");
+        }
+        finally { FightCoordinator.Stop(); p.inventory[0] = oldWeapon; Main.npc[0] = oldA; Main.npc[1] = oldB; p.controlUseItem = false; }
+        Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");
+    }
+
+    sealed class World : IGatherWorld
+    {
+        public bool Gain = true, Drop, Empty, Dead, WaitForever;
+        public CancellationTokenSource Cancel;
+        public int Stops;
+        readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
+        public readonly List<string> Actions = new();
+        public Task<JsonObject> Observe(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f };
+            return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
+                ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),
+                ["error"] = Dead ? "interrupted_by_death" : null });
+        }
+        public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            Actions.Add(candidate["kind"].ToString());
+            Cancel?.Cancel(); token.ThrowIfCancellationRequested();
+            if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (Gain) counts[candidate["item_type"].GetValue<int>()]++;
+            return new JsonObject { ["outcome"] = "removed" };
+        }
+        public Task Stop(CancellationToken token) { Stops++; return Task.CompletedTask; }
+    }
+}

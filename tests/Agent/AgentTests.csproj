@@ -5,6 +5,24 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Jint" Version="4.17.0" />
+    <Compile Include="../../Agent/Script.cs" Link="Script.cs" />
+    <Compile Include="../../Agent/ScriptProgress.cs" Link="ScriptProgress.cs" />
+    <Compile Include="../../Agent/ActionTasks.cs" Link="ActionTasks.cs" />
+    <Compile Include="../../Agent/AgentWatch.cs" Link="AgentWatch.cs" />
+    <Compile Include="ActionTests.cs.txt" />
+    <Compile Include="WatchTests.cs.txt" />
+    <Compile Include="RoutingBenchmark.cs.txt" />
+    <Compile Include="ScriptTests.cs.txt" />
+    <Compile Include="../../Agent/Gather.cs" Link="Gather.cs" />
+    <Compile Include="../../Agent/GameGather.cs" Link="GameGather.cs" />
+    <Compile Include="../../Flow/FightCoordinator.cs" Link="FightCoordinator.cs" />
+    <Compile Include="GatherTests.cs.txt" />
+    <Compile Include="../../Agent/Catalog.cs" Link="Catalog.cs" />
+    <Compile Include="CatalogTests.cs.txt" />
+    <Compile Include="../../Agent/TaskPlan.cs" Link="TaskPlan.cs" />
+    <Compile Include="../../Agent/TaskEvidence.cs" Link="TaskEvidence.cs" />
+    <Compile Include="TaskPlanTests.cs.txt" />
     <Compile Include="../../Agent/Conversation.cs" Link="Conversation.cs" />
     <Compile Include="../../Agent/CodexAgent.cs" Link="CodexAgent.cs" />
     <Compile Include="CodexTests.cs.txt" />
