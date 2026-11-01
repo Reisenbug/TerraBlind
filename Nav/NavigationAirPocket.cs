@@ -10,7 +10,7 @@ public static class NavigationAirPocket
 {
     static readonly Queue<Point> dig = new();
     static readonly Queue<Point> seal = new();
-    static bool active;
+    static bool active, sealedPocket;
     static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
     public static int Recoveries { get; private set; }
@@ -19,6 +19,7 @@ public static class NavigationAirPocket
     {
         if (active) player.selectedItem = savedSlot;
         active = false;
+        sealedPocket = false;
         dig.Clear();
         seal.Clear();
     }
@@ -42,6 +43,17 @@ public static class NavigationAirPocket
         player.controlLeft = player.controlRight = player.controlJump = player.controlDown = player.controlUp = player.controlUseItem = false;
         if (player.breath >= player.breathMax)
         {
+            if (sealedPocket)
+            {
+                int missing = 6 - Predicates.Have(ItemID.WoodPlatform);
+                int wood = Predicates.Have(ItemID.Wood);
+                if (missing > 0 && wood > 0)
+                {
+                    Recipe.FindRecipes();
+                    int crafted = CraftCoordinator.Craft(ItemID.WoodPlatform, Math.Min(missing, wood * 2));
+                    DiagLog.Write($"[survival-air] escape_platforms crafted={crafted} result={CraftCoordinator.LastStop}");
+                }
+            }
             Recoveries++;
             DiagLog.Write($"[survival-air] recovered frames={elapsed} hp={player.statLife}");
             Reset(player);
@@ -148,6 +160,7 @@ public static class NavigationAirPocket
         for (int y = floor; y < floor + 4; y++)
         for (int x = left; x <= left + 1; x++) dig.Enqueue(new Point(x, y));
         destinationX = player.position.X;
+        sealedPocket = true;
         return true;
     }
 }

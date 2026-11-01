@@ -116,6 +116,8 @@ def main():
         command.append("-vnavsurvivalcheck")
     if "--survival-resume" in sys.argv:
         command.append("-vnavsurvivalresume")
+    if "--survival-platforms" in sys.argv:
+        command.append("-vnavsurvivalplatforms")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")

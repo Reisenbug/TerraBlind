@@ -827,6 +827,8 @@ public sealed class Driver : ModSystem
             if (air)
             {
                 p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                if (resume && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalplatforms"))
+                { p.inventory[1].SetDefaults(ItemID.WoodPlatform); p.inventory[1].stack = 6; }
                 for (int x = 495; x <= 506; x++)
                 for (int y = 388; y <= 400; y++)
                 {
