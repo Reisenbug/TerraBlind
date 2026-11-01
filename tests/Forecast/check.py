@@ -234,6 +234,7 @@ def main():
     parser.add_argument("--reverse-tiles", action="store_true")
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--landing-probe", type=Path)
+    parser.add_argument("--survival-mechanics-probe", action="store_true")
     parser.add_argument("--expect-landing-rejected", action="store_true")
     parser.add_argument("--cancel-probe", type=Path)
     args = parser.parse_args()
@@ -949,6 +950,10 @@ def main():
                 assert resumed["controls"] == baseline["controls"]
                 assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
             print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
+            return
+        if args.survival_mechanics_probe:
+            result = worker.call("survival_mechanics_probe")
+            print("SURVIVAL_MECHANICS_MEASURED", json.dumps(result), flush=True)
             return
         if args.landing_probe:
             result = worker.call("landing_probe", plan=json.loads(args.landing_probe.read_text()),

@@ -1413,6 +1413,78 @@ public sealed class Engine : ModSystem
             VanillaFrame.RestoreInWorker(snapshot);
             return new JsonObject { ["cases"] = results };
         }
+        if (command == "survival_mechanics_probe")
+        {
+            var cases = new JsonArray();
+            foreach (string kind in new[] { "bare", "horseshoe", "wings", "umbrella", "umbrella_down",
+                "featherfall", "cloud_jump", "gravity_flip", "water", "honey", "cobweb" })
+            {
+                int equipment = kind switch {
+                    "horseshoe" => ItemID.LuckyHorseshoe, "wings" => ItemID.AngelWings,
+                    "cloud_jump" => ItemID.CloudinaBottle, _ => 0 };
+                Setup(new JsonObject { ["equipment"] = equipment == 0 ? new JsonArray() : new JsonArray(equipment) });
+                if (kind.StartsWith("umbrella")) { source.inventory[0].SetDefaults(ItemID.Umbrella); source.selectedItem = 0; }
+                if (kind == "featherfall") source.AddBuff(BuffID.Featherfall, 3600);
+                if (kind == "gravity_flip")
+                {
+                    source.AddBuff(BuffID.Gravitation, 3600);
+                    for (int x = X - 3; x <= X + 3; x++)
+                    { var tile = Main.tile[x, area.Top]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+                if (kind is "water" or "honey" or "cobweb")
+                    for (int x = X - 2; x <= X + 3; x++)
+                    for (int y = Y - 4; y < Y; y++)
+                    {
+                        var tile = Main.tile[x, y];
+                        if (kind == "cobweb") { tile.HasTile = true; tile.TileType = TileID.Cobweb; }
+                        else { tile.LiquidType = kind == "water" ? LiquidID.Water : LiquidID.Honey; tile.LiquidAmount = 255; }
+                    }
+                source.position.Y = (Y - 60) * 16;
+                source.fallStart = (int)(source.position.Y / 16);
+                source.velocity = Vector2.Zero;
+                source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+                bool rescued = false, landed = false;
+                int minHp = source.statLife, frames = 0;
+                for (; frames < 1200 && !source.dead; frames++)
+                {
+                    var keys = kind == "umbrella_down" ? VanillaKeys.Down : VanillaKeys.None;
+                    if (!rescued && source.velocity.Y > 0 && Y * 16 - source.Bottom.Y < 96)
+                    {
+                        if (kind == "cloud_jump") { keys |= VanillaKeys.Jump; rescued = true; }
+                        if (kind == "gravity_flip") { keys |= VanillaKeys.Up; rescued = true; }
+                    }
+                    VanillaPrediction.Advance(source, keys);
+                    minHp = Math.Min(minHp, source.statLife);
+                    if (source.velocity.Y == 0 && (source.Bottom.Y >= Y * 16 - 1
+                        || kind == "gravity_flip" && source.gravDir == -1 && source.position.Y <= (area.Top + 1) * 16 + 1))
+                    {
+                        VanillaPrediction.Advance(source, VanillaKeys.None);
+                        minHp = Math.Min(minHp, source.statLife); landed = true; break;
+                    }
+                }
+                cases.Add(new JsonObject { ["kind"] = kind, ["hp_loss"] = 400 - minHp,
+                    ["dead"] = source.dead, ["landed"] = landed, ["frames"] = frames,
+                    ["rescued"] = rescued, ["fall_start"] = source.fallStart });
+                bool expectedDamage = kind is "bare" or "gravity_flip";
+                if (!landed || source.dead || (expectedDamage ? minHp >= 400 : minHp != 400))
+                    throw new InvalidOperationException($"fall_mechanics_changed kind={kind} hp={minHp} landed={landed} dead={source.dead}");
+            }
+            Setup(new JsonObject());
+            for (int x = X - 2; x <= X + 3; x++)
+            for (int y = Y - 10; y < Y; y++)
+            { var tile = Main.tile[x, y]; tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            source.breath = 12;
+            for (int i = 0; i < 35; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+            int submerged = source.breath;
+            for (int x = X - 2; x <= X + 3; x++)
+            for (int y = Y - 10; y <= Y - 3; y++) Main.tile[x, y].LiquidAmount = 0;
+            for (int i = 0; i < 20; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+            int recovered = source.breath;
+            if (submerged >= 12 || recovered <= submerged || source.statLife != 400)
+                throw new InvalidOperationException($"breathing_probe_failed submerged={submerged} recovered={recovered} hp={source.statLife}");
+            return new JsonObject { ["fall_cases"] = cases, ["submerged_breath"] = submerged,
+                ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife };
+        }
         if (command == "water_fall_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle) });
