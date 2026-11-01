@@ -110,14 +110,17 @@ public static class NavigationAirPocket
             int entrance = direction > 0 ? (int)Math.Ceiling(player.Right.X / 16) : (int)(player.Left.X / 16) - 1;
             int left = direction > 0 ? entrance : entrance - 2;
             int pocketLeft = direction > 0 ? entrance + 1 : left;
-            if (left < 1 || left + 3 >= Main.maxTilesX || floor < 6 || floor >= Main.maxTilesY - 1) continue;
+            if (left < 2 || left + 4 >= Main.maxTilesX || floor < 7 || floor >= Main.maxTilesY - 1) continue;
             bool valid = true;
+            for (int x = left; x < left + 3; x++)
+                if (!SolidSeal(x, floor - 6)) valid = false;
+            int back = direction > 0 ? left + 3 : left - 1;
+            for (int y = floor - 5; y <= floor; y++)
+                if (!SolidSeal(back, y)) valid = false;
             for (int x = left; x < left + 3; x++)
             for (int y = floor - 5; y <= floor; y++)
             {
-                var tile = Main.tile[x, y];
-                if (!tile.HasTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]
-                    || tile.IsActuated || !LavaSafety.CanMine(x, y)
+                if (!SolidSeal(x, y) || !LavaSafety.CanMine(x, y)
                     || y < floor && (!Reach.CanMine(player, x, y) || !WorldGen.CanKillTile(x, y))) valid = false;
             }
             if (!valid) continue;
@@ -146,14 +149,15 @@ public static class NavigationAirPocket
         for (int x = left - 1; x <= left + 2; x++)
         for (int y = floor; y <= floor + 4; y++)
         {
-            var tile = Main.tile[x, y];
-            if (!tile.HasTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]
-                || tile.IsActuated || tile.IsHalfBlock || tile.Slope != Terraria.ID.SlopeType.Solid
-                || !LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y)) return false;
+            bool openFloor = y == floor && x >= left && x <= left + 1 && !Main.tile[x, y].HasTile;
+            if (!openFloor && !SolidSeal(x, y) || !LavaSafety.CanMine(x, y) || !WorldGen.CanKillTile(x, y)) return false;
         }
         for (int x = left - 1; x <= left + 2; x++)
         for (int y = floor - 4; y < floor; y++)
-            if (Main.tile[x, y].HasTile || !LavaSafety.CanMine(x, y)) return false;
+        {
+            bool shell = x == left - 1 || x == left + 2 || y == floor - 4;
+            if (Main.tile[x, y].HasTile && (!shell || !SolidSeal(x, y)) || !LavaSafety.CanMine(x, y)) return false;
+        }
         for (int y = floor - 1; y >= floor - 4; y--)
         { seal.Enqueue(new Point(left - 1, y)); seal.Enqueue(new Point(left + 2, y)); }
         seal.Enqueue(new Point(left, floor - 4)); seal.Enqueue(new Point(left + 1, floor - 4));
@@ -162,5 +166,12 @@ public static class NavigationAirPocket
         destinationX = player.position.X;
         sealedPocket = true;
         return true;
+    }
+
+    static bool SolidSeal(int x, int y)
+    {
+        var tile = Main.tile[x, y];
+        return tile.HasTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]
+            && !tile.IsActuated && !tile.IsHalfBlock && tile.Slope == SlopeType.Solid;
     }
 }
