@@ -164,6 +164,9 @@ internal static class LegacyNativePrediction
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
         int frameCount = SettledPlacementLength(samples, controls, placements?[^1]["frame"].GetValue<int>() ?? placeAt);
+        if (!plan.Steps[0].Pillar && field.TryGetValue((plan.GoalWx, plan.GoalWy), out int previousCost)
+            && (plan.CurH - cost) / (float)frameCount
+                <= (plan.CurH - previousCost) / Math.Max(1f, plan.CostFrames)) return null;
         for (int i = 0; i < frameCount; i++)
         {
             int keys = controls[i].GetValue<int>();
@@ -201,9 +204,8 @@ internal static class LegacyNativePrediction
         return count;
     }
 
-    internal static bool Poll(Player player, out StateSpacePlanner.SSResult ready, out bool rejected)
+    internal static bool Poll(Player player, out StateSpacePlanner.SSResult ready)
     {
-        rejected = false;
         ready = null;
         if (pending == null) return false;
         if (!pending.IsCompleted) return true;
@@ -227,13 +229,7 @@ internal static class LegacyNativePrediction
                         new JsonObject { ["snapshot"] = snapshot.DeepClone(), ["result"] = result.DeepClone(),
                             ["goal_x"] = fieldGoalX, ["goal_y"] = fieldGoalY }.ToJsonString());
                 }
-                ready = replacement;
-                if (replacement == null)
-                {
-                    rejected = true;
-                    var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
-                    StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
-                }
+                ready = replacement ?? plan;
                 if (replacement != null)
                 {
                     int available = anchor["available_jumps"]?.GetValue<int>() ?? 0, used = 0;
@@ -260,7 +256,6 @@ internal static class LegacyNativePrediction
                 && Math.Abs(last["y"].GetValue<float>() - frames[^1].Py) <= 16;
             if (!valid)
             {
-                rejected = true;
                 var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
                 StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
                 int minHp = samples.Count > 0 ? samples.Min(frame => frame["hp"].GetValue<int>()) : -1;
@@ -282,8 +277,8 @@ internal static class LegacyNativePrediction
         }
         catch (Exception error)
         {
-            rejected = true;
-            DiagLog.Write("[legacy-native-error] " + error.Message);
+            DiagLog.Write("[legacy-native-fallback] " + error.Message);
+            ready = plan;
         }
         finally { Reset(); }
         return true;

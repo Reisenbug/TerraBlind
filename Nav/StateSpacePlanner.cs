@@ -235,7 +235,6 @@ namespace TerraBlind
         // 改成显式传递后可重入:执行器跨帧持一个 ctx,后台 lookahead 用自己的。
         public class PlanCtx
         {
-            public bool TerrainOnly;
             public Dictionary<(int, int), int> DistField;
             public Dictionary<(int, int), int> BlockH;
             // 每个节点【走到这儿为止】铺出来的桥面。不记的话从桥头起跳的模拟会认为脚下没地,
@@ -693,8 +692,6 @@ namespace TerraBlind
             using var preview = new PhysicsSimulator.PlatformPreview(laid);
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
-                if (ctx.TerrainOnly && !e.pillar && e.digTiles == null && e.frames != null
-                    && !e.frames.Exists(frame => frame.Place)) continue;
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
                 // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
@@ -747,7 +744,7 @@ namespace TerraBlind
             // dir 0 = 原地竖直跳上头顶的台阶(没对齐时模拟自己失败,无害)。Coarse 时同一落点只发
             // 最便宜的一条:9 档 hold 大半落同一格,各自再展开一遍会把 20000 预算烧光
             var segSeen = ctx.Coarse ? new HashSet<(int, int)>() : null;
-            foreach (int dir in ctx.TerrainOnly ? Array.Empty<int>() : new[] { dirToGoal, -dirToGoal, 0 })
+            foreach (int dir in new[] { dirToGoal, -dirToGoal, 0 })
             {
                 foreach (int hold in holdOptions)
                 {
@@ -780,7 +777,7 @@ namespace TerraBlind
                 // 只报脚下真有平台却不生成 drop 边的那种((1097,390) 那次)。plat=false 是理应不生成
                 // (踩实地/自由落体归 FreeFall),原来全打,40 条真问题被 17000 条噪音淹掉
                 if (anyPlat && anySolid) EventLog.W(Ev.Fail, $"DROP-NULL support plat={anyPlat} solid={anySolid} cols[{dropLc}..{dropRc}] row={fcy + 1}");
-                if (plat && !ctx.TerrainOnly)
+                if (plat)
                 {
                     // 人从平台上下来是按住 Down 加一个方向,一路滑到真正的地板,不是停在下面一格。
                     // 左/右/直三种都发,让 A* 挑那条顺着斜缝滑到底的。
@@ -2615,12 +2612,12 @@ namespace TerraBlind
             return true;   // 一条降 H 的物理边都没有
         }
 
-        public static SSResult StepAlongField(int goalWx, int goalWy, bool terrainOnly = false)
+        public static SSResult StepAlongField(int goalWx, int goalWy)
         {
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return null;
             var field = MazeWand.GetField(goalWx, goalWy);
-            var ctx = new PlanCtx { DistField = field, TerrainOnly = terrainOnly };
+            var ctx = new PlanCtx { DistField = field };
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             // 向日葵漂移取证:Happy! buff 的加速本该已经在实时读的 maxRun/accRun 里。若落点在向日葵附近漂,
             // 说明这些值没跟上 buff 或者 buff 在边执行中途翻转。只在变化时打。
@@ -2845,7 +2842,6 @@ namespace TerraBlind
 
             if (best == null)   // Expand yielded no edge on the field at all
             {
-                if (terrainOnly) return null;
                 EventLog.W(Ev.Fail, $"EXPAND-EMPTY ({curCx},{curCy})H{curH} 一条边都没生成");
                 SegDiag = true;
                 foreach (var _ in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick)) { }
@@ -3546,12 +3542,6 @@ namespace TerraBlind
         // 等几帧比同步 Plan 冻住整个游戏强。
         static bool Replan(string reason)
         {
-            if (RecedingNav.Active && _lastExecResult?.NativeVerified == true)
-            {
-                DiagLog.Write("[native-replan] " + reason);
-                StopExec(); StopSteps();
-                return true;
-            }
             if (_replanPending) return true;   // a replan is already cooking; keep waiting
             if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); _execFailCode = "replan_storm"; return false; }
             _replanCount++;
@@ -3648,9 +3638,6 @@ namespace TerraBlind
         static int _fallFrames;
         const int UnplannedFallFrames = 14;   // ~14 帧自由落体 ≈ 4 格,超过一次跳跃的正常落差
 
-        internal static bool NativeReplayComplete => _lastExecResult?.NativeVerified == true
-            && _execFrames != null && _execIdx >= _execFrames.Count;
-
         internal static bool NativeReplayMatches(Player player)
         {
             if (_lastExecResult?.NativeVerified != true || _execFrames == null
@@ -3727,13 +3714,7 @@ namespace TerraBlind
             // 本体感觉:从上一帧真实状态按上一帧输入预测一帧,和现在的真实结果比。失配 = 身体没按物理听话(穿透/卡住/被推/入水)。
             // 与计划无关,所以计划帧过期了它照样有效。
             float predVy = p.velocity.Y, mismatch = 0f;
-            if (_lastExecResult?.NativeVerified == true && _execIdx > 0)
-            {
-                var expected = _execFrames[_execIdx - 1];
-                predVy = expected.Vy;
-                mismatch = MathF.Abs(p.position.X - expected.Px) + MathF.Abs(p.position.Y - expected.Py);
-            }
-            else if (_lastReal.Valid && _execIdx > 0)
+            if (_lastReal.Valid && _execIdx > 0)
             {
                 var pin = _execFrames[_execIdx - 1];
                 var ph0 = PhysicsSimulator.Params.FromPlayer(p);
