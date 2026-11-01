@@ -150,6 +150,22 @@ public sealed class AgentTaskPlan
         return Snapshot();
     }
 
+    public JsonObject VerifyFinal(Func<JsonObject, int> measure)
+    {
+        var evidence = new JsonArray();
+        bool passed = _steps.Count > 0 && !Incomplete;
+        if (_steps.Count > 0)
+            foreach (var node in _steps[^1]["conditions"].AsArray())
+            {
+                var condition = node.AsObject();
+                int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
+                bool met = actual >= condition["count"].GetValue<int>();
+                passed &= met;
+                evidence.Add(new JsonObject { ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
+            }
+        return new JsonObject { ["verified"] = passed, ["plan"] = Snapshot(), ["final_evidence"] = evidence };
+    }
+
     public JsonObject Snapshot() => new()
     {
         ["goal"] = _goal, ["status"] = _steps.Count == 0 ? "none" : Incomplete ? _steps[_cursor]["status"]?.DeepClone() : JsonValue.Create("completed"),

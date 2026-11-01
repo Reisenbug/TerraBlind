@@ -97,6 +97,7 @@ public static class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Snapshot();
         state["watch"] = Watches.Snapshot();
+        state["codex_goal"] = NativeAgent.GoalState;
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
         return state.ToJsonString();
@@ -213,7 +214,7 @@ public static class AgentTools
         try
         {
             string output = await ExecuteCore(name, args, token);
-            if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step"))
+            if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query"))
                 output = await NativeAgent.OnMain(() =>
                 {
                     Plan.Record(name, output, action);
@@ -293,13 +294,12 @@ public static class AgentTools
                     (child, childArgs, childToken) => Execute(child, childArgs,
                         child == "action_start" || child == "action_control" && Text(childArgs, "command") == "resume" ? token : childToken),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
-                    checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Snapshot() : null, checkToken));
+                    checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
                 break;
             case "watch":
                 return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();
             case "decision_point":
-                return new JsonObject { ["status"] = "yield", ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token),
-                    ["state"] = JsonNode.Parse(await State(token)) }.ToJsonString();
+                return new JsonObject { ["status"] = "yield", ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token) }.ToJsonString();
             case "action_start":
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");

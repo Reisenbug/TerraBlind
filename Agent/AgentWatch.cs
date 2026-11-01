@@ -54,6 +54,7 @@ public sealed class AgentWatch
         while (pending.TryDequeue(out var item)) result.Add(item);
         return result;
     }
+    public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()) };
 
     public JsonObject Request(string reason)
     {
@@ -74,4 +75,5 @@ public sealed class AgentWatch
 
     public void Reset()
     { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = 0; }
+    public void End() { events.Clear(); pending.Clear(); }
 }

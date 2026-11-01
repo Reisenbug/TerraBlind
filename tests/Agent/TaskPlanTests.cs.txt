@@ -75,6 +75,10 @@ static class TaskPlanTests
         Main.LocalPlayer.inventory[5].stack = 1;
         plan.Advance("finish", AgentTaskEvidence.Measure);
         Check(!plan.Incomplete && plan.Snapshot()["status"].ToString() == "completed", "could not resume verified step");
+        Check(plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "final audit rejected actual completed state");
+        Main.LocalPlayer.inventory[5].stack = 0;
+        Check(!plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "final audit trusted stale completed flag after inventory changed");
+        Main.LocalPlayer.inventory[5].stack = 1;
         Main.netMode = NetmodeID.MultiplayerClient;
         try { new AgentTaskPlan().Create(request, AgentTaskEvidence.Measure); throw new Exception("unverified multiplayer kill accepted"); }
         catch (InvalidOperationException) { }

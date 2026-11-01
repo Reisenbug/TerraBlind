@@ -42,6 +42,8 @@ static class Tests
     static async Task Main(string[] args)
     {
         if (args.Contains("--planning-probe")) { await CodexTests.PlanningProbe(); return; }
+        if (args.Contains("--goal-smoke")) { await CodexTests.GoalSmoke(); return; }
+        if (args.Contains("--goal-control-smoke")) { await CodexTests.GoalControlSmoke(); return; }
         if (args.Contains("--routing-benchmark")) { await RoutingBenchmark.Run(args.Length > 1 ? args[1] : "gpt-6-astra", args.Length > 2 ? int.Parse(args[2]) : 2); return; }
         if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
         if (args.Contains("--script-model")) { await CodexTests.ScriptModel(); return; }
@@ -141,7 +143,7 @@ static class Tests
         HistoryTests.Run();
         InventoryTests.Run();
         await WatchTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=77");
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=81");
     }
 
     sealed class FakeHandler : HttpMessageHandler

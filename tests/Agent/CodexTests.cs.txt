@@ -19,6 +19,8 @@ static class CodexTests
 
     public static async Task Run()
     {
+        await GoalProtocol();
+        await NativeGoalProtocol();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
         CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12345"));
@@ -195,6 +197,157 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
+    static async Task NativeGoalProtocol()
+    {
+        var native = new NativeAgent();
+        var server = new Server();
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        try
+        {
+            NativeAgent.Submit("/goal do not trust an unverified final reply");
+            async Task Paused(int calls)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (NativeAgent.Status != "paused" || server.ToolResponses.Count < calls)
+                {
+                    Check(DateTime.UtcNow < deadline, "native goal continuation did not stop at its bound");
+                    native.PostUpdateEverything(); await Task.Delay(5);
+                }
+            }
+            await Paused(2);
+            Check(server.Goal["status"].ToString() == "paused" && server.Threads == 1,
+                "model final reply completed missing game conditions or failed to preserve goal");
+            NativeAgent.Submit("/goal resume");
+            await Paused(4);
+            Check(server.Threads == 1 && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() == 400,
+                "native resume lost thread, target or usage");
+        }
+        finally { native.OnWorldUnload(); native.Unload(); Config.I.AgentUseCodex = false; }
+        Console.WriteLine("PASS: game /goal stops unverified no-progress replies, reports paused and resumes the same thread without resetting usage");
+    }
+
+    static async Task GoalProtocol()
+    {
+        var server = new Server();
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        var options = new JsonObject { ["objective"] = "collect and verify", ["request"] = "initial" };
+        Task Run() => agent.RunAsync("work", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => Task.FromResult("{\"stock\":10}"), _ => { }, default, options);
+        await Run();
+        Check(server.GoalSets == 1 && server.ThreadArgs["ephemeral"].GetValue<bool>() == false
+            && server.ThreadArgs["config"]["features.goals"].GetValue<bool>() == false,
+            "goal session was not persistent or left model-side completion/dispatch uncontrolled");
+        var rejected = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = false }), default);
+        Check(rejected["error"]?.ToString() == "goal_not_verified" && server.Goal["status"].ToString() == "active",
+            "model ending or failed verification completed native goal");
+        await Run();
+        Check(server.GoalSets == 1 && agent.GoalState["host_tokens_used"].GetValue<long>() == 200,
+            "continuation reset objective, goal or usage");
+        await agent.SuspendGoal("paused", default);
+        options["request"] = "explicit-resume";
+        await Run();
+        Check(agent.GoalState["host_tokens_used"].GetValue<long>() == 300, "resume reset token accounting");
+        var passed = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = true }), default);
+        Check(passed["verified"].GetValue<bool>() && server.Goal["status"].ToString() == "complete",
+            "verified goal was not committed through native goal/set");
+        Console.WriteLine("PASS: native goal RPC persists across turns, rejects unverified completion and preserves resume accounting");
+
+        var limited = new Server();
+        using var budget = new CodexAgent((_, _) => limited.Connect());
+        try
+        {
+            await budget.RunAsync("work", "mock", "/tmp", "", "game", Tools,
+                (_, _, _) => Task.FromResult("{}"), _ => { }, default,
+                new JsonObject { ["objective"] = "bounded", ["request"] = "budget", ["tokenBudget"] = 50L });
+            throw new Exception("goal token limit was ignored");
+        }
+        catch (GoalBudgetExceededException) { }
+        Check(limited.Interrupts == 1 && limited.Goal["status"].ToString() == "budgetLimited",
+            "budget did not interrupt or falsely completed goal");
+        Console.WriteLine("PASS: actual token telemetry interrupts a budget-limited goal without completing it");
+        var repeated = new Server { RepeatedToolCalls = 100 };
+        using var bounded = new CodexAgent((_, _) => repeated.Connect());
+        int executions = 0;
+        try
+        {
+            await bounded.RunAsync("retry", "mock", "/tmp", "", "game", Tools,
+                (_, _, _) => { executions++; return Task.FromResult("{\"error\":\"no_progress\"}"); }, _ => { }, default,
+                new JsonObject { ["objective"] = "bounded failures", ["request"] = "retry" });
+            throw new Exception("model tool loop was unbounded");
+        }
+        catch (InvalidOperationException error) { Check(error.Message.Contains("32"), "wrong loop termination evidence"); }
+        Check(executions == 32 && repeated.Goal["status"].ToString() == "blocked" && repeated.Stopped,
+            "repeated failure did not bound effects and preserve blocked native goal");
+        Console.WriteLine("PASS: repeated model tool failures stop at the call limit and persist a blocked native goal");
+    }
+
+    public static async Task GoalSmoke()
+    {
+        using var agent = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        string cwd = Path.Combine(Path.GetTempPath(), "terrablind-goal-protocol-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(cwd);
+        var events = new JsonArray();
+        await agent.RunAsync("Read fixture state once, then finish this turn.", "", cwd, "gpt-6-astra",
+            "Only use get_state once and report its value. The game host controls the goal lifecycle.", Tools,
+            (name, args, _) => { events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() }); return Task.FromResult("{\"fixture_stock\":10}"); },
+            text => events.Add(new JsonObject { ["text"] = text }), timeout.Token,
+            new JsonObject { ["objective"] = "Read fixture state; completion requires host verification.", ["request"] = "smoke" });
+        Check(events.Any(e => e["tool"]?.ToString() == "get_state"), "real model did not invoke fixture tool");
+        var before = agent.GoalState;
+        var denied = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = false }), timeout.Token);
+        Check(denied["error"]?.ToString() == "goal_not_verified" && agent.GoalState["native"]["status"].ToString() == "active", "native goal completed without host evidence");
+        var completed = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = true, ["fixture_stock"] = 10 }), timeout.Token);
+        Check(agent.GoalState["native"]["status"].ToString() == "complete", "native goal did not complete");
+        File.WriteAllText(Path.Combine(cwd, "result.json"), new JsonObject { ["before"] = before,
+            ["rejected"] = denied, ["completed"] = completed, ["events"] = events, ["usage"] = agent.TokenUsage }.ToJsonString());
+        Console.WriteLine("GOAL_PROTOCOL_SMOKE_COMPLETE actual_codex=true mock_world=true report=" + Path.Combine(cwd, "result.json"));
+    }
+
+    public static async Task GoalControlSmoke()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-goal-controls-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var results = new JsonObject();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        using (var stopped = new CodexAgent())
+        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token))
+        {
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int effects = 0;
+            var running = stopped.RunAsync("Read get_state once now.", "", Path.Combine(root, "stop"), "gpt-6-astra",
+                "Only call the supplied get_state tool once. Do not guess the state.", Tools,
+                async (_, _, token) => { effects++; entered.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); return "unreachable"; },
+                _ => { }, cancel.Token, new JsonObject { ["objective"] = "read fixture", ["request"] = "stop" });
+            await entered.Task.WaitAsync(deadline.Token);
+            cancel.Cancel();
+            try { await running; throw new Exception("real Codex stop failed"); } catch (OperationCanceledException) { }
+            await Task.Delay(500, deadline.Token);
+            Check(effects == 1 && stopped.TurnsStarted == 1 && stopped.GoalState["native"]["status"].ToString() == "paused",
+                "real stop leaked effects, requests or active native goal");
+            results["stop"] = new JsonObject { ["goal"] = stopped.GoalState, ["effects"] = effects, ["turns"] = stopped.TurnsStarted };
+        }
+        using (var limited = new CodexAgent())
+        {
+            try
+            {
+                await limited.RunAsync("Read get_state once.", "", Path.Combine(root, "budget"), "gpt-6-astra", "Use get_state once.", Tools,
+                    (_, _, _) => Task.FromResult("{\"fixture\":true}"), _ => { }, deadline.Token,
+                    new JsonObject { ["objective"] = "bounded read", ["request"] = "budget", ["tokenBudget"] = 1L });
+                throw new Exception("real token telemetry failed to stop budget goal");
+            }
+            catch (GoalBudgetExceededException) { }
+            Check(limited.GoalState["native"]["status"].ToString() == "budgetLimited" && limited.TurnsStarted == 1,
+                "real budget ended as complete or continued another turn");
+            results["budget"] = new JsonObject { ["goal"] = limited.GoalState, ["usage"] = limited.TokenUsage, ["turns"] = limited.TurnsStarted };
+        }
+        File.WriteAllText(Path.Combine(root, "result.json"), results.ToJsonString());
+        Console.WriteLine("GOAL_CONTROL_SMOKE_COMPLETE actual_codex=true mock_world=true checks=2 report=" + Path.Combine(root, "result.json"));
+    }
+
     public static async Task PlanningProbe()
     {
         var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
@@ -351,6 +504,9 @@ static class CodexTests
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
+        public JsonObject Goal;
+        public int GoalSets;
+        public int RepeatedToolCalls = 1;
         public readonly List<JsonObject> ToolResponses = new();
         public readonly List<string> Inputs = new();
         public void Drop() => _input.End();
@@ -369,6 +525,14 @@ static class CodexTests
             else if (method == "config/read") Reply(message["id"], JsonNode.Parse("{\"config\":{\"mcp_servers\":{\"unrelated\":{}}}}").AsObject());
             else if (method == "thread/start")
             { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
+            else if (method == "thread/goal/set")
+            {
+                GoalSets++; Goal ??= new JsonObject();
+                foreach (var pair in message["params"].AsObject())
+                    if (pair.Key is "objective" or "status" or "tokenBudget") Goal[pair.Key] = pair.Value?.DeepClone();
+                Reply(message["id"], new JsonObject { ["goal"] = Goal.DeepClone() });
+            }
+            else if (method == "thread/goal/get") Reply(message["id"], new JsonObject { ["goal"] = Goal?.DeepClone() });
             else if (method == "turn/start")
             {
                 Inputs.Add(message["params"]["input"][0]["text"].ToString());
@@ -387,6 +551,13 @@ static class CodexTests
                     { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["tokenUsage"] = new JsonObject
                         { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 } } } };
                 Send(usage); Send(usage);
+                if (ToolResponses.Count < RepeatedToolCalls)
+                {
+                    Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "repeat" + ToolResponses.Count,
+                        ["params"] = new JsonObject { ["threadId"] = "thread", ["turnId"] = "turn" + _turn,
+                            ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
+                    return;
+                }
                 var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
                 { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };

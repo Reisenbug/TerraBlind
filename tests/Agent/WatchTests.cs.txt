@@ -30,6 +30,9 @@ static class WatchTests
             "wake budget failed to bound repeated changed events");
         try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
         catch (InvalidOperationException) { }
+        watch.End();
+        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 6,
+            "completion left observations active or erased acceptance evidence");
         watch.Reset(); Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 0,
             "task scope leaked events or state");
         Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");

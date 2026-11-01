@@ -92,7 +92,9 @@ public static class AgentScript
                     inTool = false;
                     if (name == "decision_point")
                     {
-                        wake = JsonNode.Parse(result) as JsonObject;
+                        var requested = JsonNode.Parse(result) as JsonObject;
+                        if (requested?["error"] != null) throw hostFailure = new InvalidOperationException(requested.ToJsonString());
+                        wake = requested;
                         throw hostFailure = new InvalidOperationException("decision_requested");
                     }
                     budget.Token.ThrowIfCancellationRequested();
