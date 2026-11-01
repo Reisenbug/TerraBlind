@@ -258,6 +258,16 @@ namespace TerraBlind
             RecedingVis.Clear();
         }
 
+        internal static void InterruptForSurvival()
+        {
+            LegacyNativePrediction.Reset();
+            StateSpacePlanner.StopNav();
+            SkillExecutor.Stop(); MineCoordinator.Stop(); BridgeBuilder.Stop(); ItemUseCoordinator.Stop();
+            TrapEscape.Reset(); StuckSentinel.Reset();
+            _haveLast = false; _failureRecoveryPending = false;
+            _noProgressSteps = 0; _failureRecoveryTried = false;
+        }
+
         // per-frame driver (called from SetControls). When the current window finishes (or none running), plan the
         // next window from the real position and dispatch it. The existing TickSteps/ApplyControls execute it.
         // 【异常不许静默】。SetControls 外层会把抛出来的东西吞掉,现象就是人每帧重试同一条边、
@@ -441,6 +451,7 @@ namespace TerraBlind
             // 上一条边真落到哪了 → 变成连续的失配权重,软性压低老是落空的边。随后整表衰减:不做黑名单、不禁回头
             if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
+                StateSpacePlanner.DecayMiss();
                 _haveLast = false;
                 var f = _lastFrom.Value; var t = _lastTarget.Value;
                 int dxc = cell.Item1 - t.Item1, dyc = cell.Item2 - t.Item2;
@@ -479,8 +490,6 @@ namespace TerraBlind
                     Stop(); return;
                 }
             }
-            StateSpacePlanner.DecayMiss();
-
             // STAND 末段交给 A*:H 场是格子 Dijkstra,不知道悬空格竖直跳不上去,梯度会把人吸到正下方打转
             // Reach 不走这条:"先变差再变好"主体的 PUSH 已经在做,不需要第二套会搜索的选边逻辑
             if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch

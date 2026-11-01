@@ -233,7 +233,12 @@ def main():
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
     parser.add_argument("--reverse-tiles", action="store_true")
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--movement-timing", type=Path)
+    parser.add_argument("--native-movement-probe", type=Path)
+    parser.add_argument("--movement-goal", type=int, nargs=2)
+    parser.add_argument("--movement-fall-probe", type=Path)
     parser.add_argument("--landing-probe", type=Path)
+    parser.add_argument("--survival-mechanics-probe", action="store_true")
     parser.add_argument("--expect-landing-rejected", action="store_true")
     parser.add_argument("--cancel-probe", type=Path)
     args = parser.parse_args()
@@ -950,6 +955,93 @@ def main():
                 assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
             print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
             return
+        if args.movement_fall_probe:
+            request = json.loads(args.movement_fall_probe.read_text())["request"]
+            raw = struct.unpack("<" + "i" * (len(base64.b64decode(request["guidance"])) // 4), base64.b64decode(request["guidance"]))
+            field = {(raw[i], raw[i+1]): raw[i+2] for i in range(0, len(raw), 3)}
+            results = []
+            jump_at = 0
+            for rescue in (False, True):
+                keys = [17 if not rescue or i < jump_at else 5 if i < jump_at + 12 else 1 for i in range(360)]
+                result = worker.call("native_replay", snapshot=request["snapshot"], controls=keys, detailed=False, stop_on_damage=True)
+                results.append(result)
+                frames = result["frames"]
+                if not rescue:
+                    jump_at = max(0, len(frames) - 8)
+                for i, f in enumerate(frames):
+                    if f["grounded"] or abs(i - jump_at) <= 2 or i >= len(frames)-3:
+                        cell = (int((f["x"]+10)//16), int((f["y"]+41)//16))
+                        print("FALL_FRAME", rescue, i, {k:f[k] for k in ("x","y","vx","vy","hp","grounded","available_jumps")},
+                            "cell", cell, "cost", field.get(cell), flush=True)
+            (args.root / "fall-probe.json").write_text(json.dumps(results))
+            return
+        if args.native_movement_probe:
+            source = json.loads(args.native_movement_probe.read_text())
+            state = source["snapshot"]
+            goal = args.movement_goal or (source["goal_x"], source["goal_y"])
+            reports = []
+            reached = False
+            for step in range(8):
+                result = worker.call("native_movement", snapshot=state,
+                    x=goal[0] * 16, y=goal[1] * 16 - 42)
+                reports.append(result)
+                if result["status"] != "planned":
+                    print("NATIVE_MOVEMENT_STOP", step, result["status"], flush=True)
+                    break
+                forecast = result["forecast"]
+                repeated = worker.call("native_movement", snapshot=state,
+                    x=goal[0] * 16, y=goal[1] * 16 - 42)
+                assert repeated["controls"] == result["controls"]
+                assert repeated["forecast"]["frames"] == forecast["frames"]
+                result["warm_plan_ms"] = repeated["elapsed_ms"]
+                replay = worker.call("native_replay", snapshot=state, controls=result["controls"], detailed=False)
+                assert replay["outcome"] == "complete"
+                assert replay["frames"] == forecast["frames"]
+                frames = forecast["frames"]
+                assert all(not f["dead"] and f["hp"] >= frames[0]["hp"] for f in frames)
+                state = forecast["end_snapshot"]
+                print("NATIVE_MOVEMENT_STEP", step, "frames", len(frames), "ms", result["elapsed_ms"],
+                    "warm_ms", result["warm_plan_ms"], "end", (frames[-1]["x"], frames[-1]["y"]), flush=True)
+                if abs(frames[-1]["x"] - goal[0] * 16) <= 16 and abs(frames[-1]["y"] - (goal[1] * 16 - 42)) <= 16:
+                    reached = True
+                    print("NATIVE_MOVEMENT_REACHED", goal, flush=True)
+                    break
+            (args.root / "native-movement.json").write_text(json.dumps(dict(
+                source=str(args.native_movement_probe), goal=goal, reached=reached, steps=reports)))
+            assert any(r["status"] == "planned" for r in reports), "no native movement produced"
+            if args.movement_goal:
+                assert reached, "native movement did not reach the local test goal"
+            return
+        if args.movement_timing:
+            import statistics
+            state = json.loads(args.movement_timing.read_text())["snapshot"]
+            reports = []
+            for keys in (1, 5):
+                for frames in (30, 60, 90):
+                    started = time.perf_counter()
+                    result = worker.call("movement_timing", snapshot=state, frames=frames, keys=keys)
+                    wall_ms = (time.perf_counter() - started) * 1000
+                    trials = result["trials"]
+                    for trial in trials:
+                        assert trial["outcome"] == "complete", trial["outcome"]
+                        assert len(trial["frames"]) == frames
+                        assert trial["frames"] == trials[0]["frames"], "replay changed across identical trials"
+                    summary = dict(keys=keys, frames=frames, prepare_ms=result["prepare_ms"],
+                        first_ms=trials[0]["elapsed_ms"],
+                        warm_median_ms=statistics.median(t["elapsed_ms"] for t in trials[1:]),
+                        warm_max_ms=max(t["elapsed_ms"] for t in trials[1:]),
+                        timing={k: statistics.median(t["timing"][k] for t in trials[1:])
+                                for k in trials[0]["timing"]},
+                        roundtrip_overhead_ms=wall_ms-result["total_ms"])
+                    reports.append(dict(summary=summary, result=result))
+                    print("MOVEMENT_TIMING", json.dumps(summary), flush=True)
+            (args.root / "movement-timing.json").write_text(json.dumps(reports))
+            print("MOVEMENT_TIMING_PASS cases=6 repeats=11", flush=True)
+            return
+        if args.survival_mechanics_probe:
+            result = worker.call("survival_mechanics_probe")
+            print("SURVIVAL_MECHANICS_MEASURED", json.dumps(result), flush=True)
+            return
         if args.landing_probe:
             result = worker.call("landing_probe", plan=json.loads(args.landing_probe.read_text()),
                                  expect_rejected=args.expect_landing_rejected)
@@ -960,8 +1052,18 @@ def main():
             results = []
             for run in range(10):
                 result = worker.call(**request)
+                if request["command"] == "native_movement" and result["status"] == "planned":
+                    replay = worker.call("native_replay", snapshot=request["snapshot"], controls=result["controls"], detailed=False)
+                    assert replay["outcome"] == "complete"
+                    assert replay["frames"] == result["forecast"]["frames"]
+                    coast = worker.call("native_replay", snapshot=request["snapshot"],
+                                        controls=result["controls"] + [0] * 45, detailed=False)
+                    assert coast["outcome"] == "complete"
+                    assert coast["frames"][-1]["vx"] == 0 and coast["frames"][-1]["vy"] == 0
+                    result["replay_verified"] = True
                 results.append(result)
-                print("PLANNER_BENCHMARK", "run=", run, "compute_ms=", result.get("request_compute_ms"),
+                print("PLANNER_BENCHMARK", "run=", run, "status=", result.get("status"),
+                      "compute_ms=", result.get("request_compute_ms", result.get("elapsed_ms")),
                       "selected=", result.get("selected"), "progress=", result.get("route_progress"), flush=True)
             (args.root / "planner-benchmark.json").write_text(json.dumps(results))
             return

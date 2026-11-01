@@ -290,13 +290,16 @@ public sealed class RegionHandoffCheck : ModSystem
 
 public sealed class DamageTrace : ModPlayer
 {
+    public static bool SurvivalRoute => Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalroute");
+    public static int FallHits, DrowningFrames;
     public override bool FreeDodge(Player.HurtInfo info)
-        => Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute");
+        => Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute;
 
     public override void PostUpdate()
     {
-        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute"))
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute)
             Player.AddBuff(BuffID.Gills, 216000);
+        if (SurvivalRoute && Player.breath <= 0 && Collision.DrownCollision(Player.position, Player.width, Player.height, Player.gravDir)) DrowningFrames++;
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck") && Player.FindBuffIndex(BuffID.Shine) < 0)
             Player.AddBuff(BuffID.Shine, 216000);
     }
@@ -305,6 +308,7 @@ public sealed class DamageTrace : ModPlayer
     {
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck")) return;
         var source = info.DamageSource;
+        if (SurvivalRoute && source.SourceOtherIndex is 0 or 5) FallHits++;
         Console.WriteLine(FormattableString.Invariant($"VNAV_HURT tick={Main.GameUpdateCount} damage={info.Damage} hp_before={Player.statLife} x={Player.Center.X / 16} y={Player.Bottom.Y / 16} fall_start={Player.fallStart} other={source.SourceOtherIndex} npc={source.SourceNPCIndex} projectile={source.SourceProjectileType}"));
     }
 }
@@ -706,6 +710,7 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsnapshotcheck")) { SnapshotRoundtrip(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavslopestallcheck")) { SlopeStall(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalcheck")) { SurvivalControl(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
@@ -788,6 +793,118 @@ public sealed class Driver : ModSystem
             FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    int survivalCase, survivalMinHp, survivalInterventions, survivalLanded;
+    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "cobweb", "cobweb_bag", "featherfall_bag", "gravity_pair", "air_pocket", "air_sealed" };
+
+    void SurvivalControl()
+    {
+        var p = Main.LocalPlayer;
+        string kind = survivalKinds[survivalCase];
+        bool air = kind.StartsWith("air_");
+        bool resume = kind == "air_sealed" && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalresume");
+        if (!prepared)
+        {
+            RecedingNav.Stop(); NavigationSurvival.Reset(p);
+            Config.I.AlwaysGillsAndShine = false;
+            Concessions.Enabled = false;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var projectile in Main.projectile) projectile.active = false;
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            for (int x = 490; x <= 510; x++)
+            for (int y = 330; y <= 402; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= 400 || y == 330 || x == 490 || x == 510)
+                { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            Array.Clear(p.buffType); Array.Clear(p.buffTime);
+            p.ConsumedLifeCrystals = 15; p.statLifeMax = p.statLifeMax2 = p.statLife = 400;
+            p.position = new Vector2(500 * 16, 400 * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16);
+            if (kind == "horseshoe") p.armor[3].SetDefaults(ItemID.LuckyHorseshoe);
+            if (kind == "wings") p.armor[3].SetDefaults(ItemID.AngelWings);
+            if (kind == "cloud") p.armor[3].SetDefaults(ItemID.CloudinaBottle);
+            if (kind == "umbrella_bag") p.inventory[12].SetDefaults(ItemID.Umbrella);
+            if (kind == "cobweb") { p.inventory[0].SetDefaults(ItemID.Cobweb); p.inventory[0].stack = 10; }
+            if (kind == "cobweb_bag") { p.inventory[12].SetDefaults(ItemID.Cobweb); p.inventory[12].stack = 10; }
+            if (kind == "featherfall_bag") { p.inventory[12].SetDefaults(ItemID.FeatherfallPotion); p.inventory[12].stack = 2; }
+            if (kind == "gravity_pair") p.AddBuff(BuffID.Gravitation, 3600);
+            p.inventory[9].SetDefaults(ItemID.Wood); p.inventory[9].stack = 23; p.selectedItem = 9;
+            if (air)
+            {
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                if (resume && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalplatforms"))
+                { p.inventory[1].SetDefaults(ItemID.WoodPlatform); p.inventory[1].stack = 6; }
+                for (int x = 495; x <= 506; x++)
+                for (int y = 388; y <= 400; y++)
+                {
+                    var tile = Main.tile[x, y]; tile.ClearEverything();
+                    bool solid = x == 495 || (kind == "air_sealed" ? x == 506 : x >= 502) || y == 388 || y == 400;
+                    tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                    if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; Liquid.AddWater(x, y); }
+                }
+                for (int x = 495; x <= 506; x++)
+                for (int y = 400; y <= 405; y++)
+                { var tile = Main.tile[x, y]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            prepared = true; started = false; warmup = 12;
+            return;
+        }
+        if (warmup-- > 0) return;
+        if (!started)
+        {
+            p.position.Y = air ? 6400 - p.height : 340 * 16; p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16); p.statLife = 400;
+            typeof(RecedingNav).GetField("_fieldReady", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, false);
+            RecedingNav.Active = kind != "bare";
+            survivalInterventions = NavigationSurvival.Interventions;
+            if (air) { p.breath = 170; survivalInterventions = NavigationAirPocket.Recoveries; }
+            if (resume) RecedingNav.Start(508, 399, RecedingNav.Mode.Stand);
+            survivalMinHp = 400; survivalLanded = ticks = 0; started = true;
+            return;
+        }
+        ticks++; survivalMinHp = Math.Min(survivalMinHp, p.statLife);
+        if (air && ticks % 15 == 0)
+        {
+            string water = string.Join(",", Enumerable.Range(394, 6).Select(y => $"{y}:{Main.tile[502,y].LiquidAmount}/{Main.tile[503,y].LiquidAmount}"));
+            Console.WriteLine($"AIR_TRACE tick={ticks} pos={p.position} vy={p.velocity.Y} breath={p.breath} drown={Collision.DrownCollision(p.position,p.width,p.height,p.gravDir)} water={water}");
+        }
+        if (ticks % 120 == 0)
+        {
+            Console.WriteLine($"SURVIVAL_CONTROL_TRACE kind={kind} tick={ticks} pos={p.position} velocity={p.velocity} gravity={p.gravDir} hp={p.statLife} nav={RecedingNav.Active} engine={VanillaNavigationDemo.Active}");
+            int tx = (int)(p.Center.X / 16), ty = (int)(p.Bottom.Y / 16);
+            for (int y = ty - 1; y <= ty + 1; y++)
+            {
+                var tile = Main.tile[tx, y];
+                Console.WriteLine($"SURVIVAL_SUPPORT x={tx} y={y} active={tile.HasTile} type={tile.TileType} liquid={tile.LiquidAmount} slope={tile.Slope} half={tile.IsHalfBlock} wood={p.inventory[9].stack} jump={p.controlJump} use={p.controlUseItem}");
+            }
+        }
+        if (air) survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions
+            && (!resume || !RecedingNav.Active && RecedingNav.LastStop == "done"
+                && Math.Abs(p.Center.X / 16 - 508.5f) < 2) ? 3 : 0;
+        else if (p.velocity.Y == 0 && p.Bottom.Y >= 6400 - 1) survivalLanded++; else survivalLanded = 0;
+        if (survivalLanded < 3 && ticks < (air ? 3600 : 900) && !p.dead) return;
+        int interventions = (air ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
+        Console.WriteLine($"SURVIVAL_CONTROL_CASE kind={kind} ticks={ticks} hp_loss={400 - survivalMinHp} interventions={interventions} breath={p.breath}/{p.breathMax} landed={survivalLanded} dead={p.dead} pos={p.position} velocity={p.velocity}");
+        if (p.dead || survivalLanded < 3 || (kind == "bare" ? survivalMinHp >= 400 : survivalMinHp != 400)
+            || (kind is "cloud" or "umbrella_bag" or "cobweb" or "cobweb_bag" or "featherfall_bag" or "gravity_pair") && interventions == 0)
+            throw new InvalidOperationException("survival_control_failed:" + kind);
+        if (kind == "umbrella_bag" && (p.inventory[12].type != ItemID.Umbrella
+            || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
+            throw new InvalidOperationException("survival_inventory_not_restored");
+        if (kind == "featherfall_bag" && (!p.HasBuff(BuffID.Featherfall) || p.inventory[12].type != ItemID.FeatherfallPotion
+            || p.inventory[12].stack != 1 || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
+            throw new InvalidOperationException("survival_potion_not_used_or_restored");
+        if (kind == "gravity_pair" && p.gravDir != 1) throw new InvalidOperationException("gravity_not_restored");
+        if (kind == "cobweb_bag" && (p.inventory[12].type != ItemID.Cobweb || p.inventory[9].type != ItemID.Wood
+            || p.inventory[9].stack != 23 || p.selectedItem != 9)) throw new InvalidOperationException("web_inventory_not_restored");
+        RecedingNav.Stop(); NavigationSurvival.Reset(p);
+        prepared = false;
+        if (++survivalCase < survivalKinds.Length) return;
+        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=11");
+        enabled = false; FinishProcess(0);
     }
 
     void PillarProbe()
@@ -1204,7 +1321,17 @@ public sealed class Driver : ModSystem
                     player.armor[3].SetDefaults(ItemID.CloudinaBottle);
                     Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE slot=3 item=53");
                 }
-                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode=true gills=true start=jungle_entrance");
+                if (DamageTrace.SurvivalRoute)
+                {
+                    Config.I.AlwaysGillsAndShine = false; Concessions.Enabled = false;
+                    DamageTrace.FallHits = DamageTrace.DrowningFrames = 0;
+                    Array.Clear(player.buffType); Array.Clear(player.buffTime);
+                    player.inventory[5].SetDefaults(ItemID.Cobweb); player.inventory[5].stack = 100;
+                    player.armor[0].SetDefaults(ItemID.MoltenHelmet);
+                    player.armor[1].SetDefaults(ItemID.MoltenBreastplate);
+                    player.armor[2].SetDefaults(ItemID.MoltenGreaves);
+                }
+                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode={!DamageTrace.SurvivalRoute} gills={!DamageTrace.SurvivalRoute} start=jungle_entrance");
                 bool reverse = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse");
                 int startX = reverse ? 3383 : 3384, startY = reverse ? 1069 : 242;
                 player.Teleport(new Vector2(startX * 16 + 8 - player.width / 2f, (startY + 1) * 16 - player.height));
@@ -1219,7 +1346,13 @@ public sealed class Driver : ModSystem
         if (!started)
         {
             string[] args;
-            if (journey)
+            if (readmeRoute && Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string directSnapshot))
+            {
+                var fixture = JsonNode.Parse(File.ReadAllText(directSnapshot));
+                routeGoalX = fixture["goal_x"].GetValue<int>(); routeGoalY = fixture["goal_y"].GetValue<int>();
+                args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+            }
+            else if (journey)
             {
                 var goal = JourneyApproach(player);
                 routeGoalX = goal.X; routeGoalY = goal.Y;
@@ -1401,6 +1534,8 @@ public sealed class Driver : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
+        if (DamageTrace.SurvivalRoute && (DamageTrace.FallHits > 0 || DamageTrace.DrowningFrames > 0))
+            throw new InvalidOperationException($"survival_route_hurt fall_hits={DamageTrace.FallHits} drowning_frames={DamageTrace.DrowningFrames}");
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
         if (RecedingNav.Active) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
@@ -1424,6 +1559,8 @@ public sealed class Driver : ModSystem
             if (++continuityLeg < (journey ? journeyStops.Length : offsets.Length)) { started = false; return; }
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
+            ["survival_route"] = DamageTrace.SurvivalRoute, ["fall_hits"] = DamageTrace.FallHits,
+            ["drowning_frames"] = DamageTrace.DrowningFrames,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
             ["underworld"] = Main.UnderworldLayer, ["extra_jumps_used"] = routeExtraJumps,
             ["platforms_remaining"] = player.inventory.Where(item => item.type == ItemID.WoodPlatform).Sum(item => item.stack),

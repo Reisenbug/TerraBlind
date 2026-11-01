@@ -1413,6 +1413,177 @@ public sealed class Engine : ModSystem
             VanillaFrame.RestoreInWorker(snapshot);
             return new JsonObject { ["cases"] = results };
         }
+        if (command == "survival_mechanics_probe")
+        {
+            var cases = new JsonArray();
+            foreach (string kind in new[] { "bare", "horseshoe", "wings", "umbrella", "umbrella_down",
+                "featherfall", "cloud_jump", "gravity_flip", "gravity_pair", "water", "honey", "cobweb", "cobweb_place" })
+            {
+                int equipment = kind switch {
+                    "horseshoe" => ItemID.LuckyHorseshoe, "wings" => ItemID.AngelWings,
+                    "cloud_jump" => ItemID.CloudinaBottle, _ => 0 };
+                Setup(new JsonObject { ["equipment"] = equipment == 0 ? new JsonArray() : new JsonArray(equipment) });
+                if (kind.StartsWith("umbrella")) { source.inventory[0].SetDefaults(ItemID.Umbrella); source.selectedItem = 0; }
+                if (kind == "cobweb_place") { source.inventory[0].SetDefaults(ItemID.Cobweb); source.inventory[0].stack = 10; }
+                if (kind == "featherfall") source.AddBuff(BuffID.Featherfall, 3600);
+                if (kind is "gravity_flip" or "gravity_pair")
+                {
+                    source.AddBuff(BuffID.Gravitation, 3600);
+                    for (int x = X - 3; x <= X + 3; x++)
+                    { var tile = Main.tile[x, area.Top]; tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+                if (kind is "water" or "honey" or "cobweb")
+                    for (int x = X - 2; x <= X + 3; x++)
+                    for (int y = Y - 4; y < Y; y++)
+                    {
+                        var tile = Main.tile[x, y];
+                        if (kind == "cobweb") { tile.HasTile = true; tile.TileType = TileID.Cobweb; }
+                        else { tile.LiquidType = kind == "water" ? LiquidID.Water : LiquidID.Honey; tile.LiquidAmount = 255; }
+                    }
+                source.position.Y = (Y - 60) * 16;
+                source.fallStart = (int)(source.position.Y / 16);
+                source.velocity = Vector2.Zero;
+                source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+                bool rescued = false, landed = false;
+                int firstFlip = -1;
+                int minHp = source.statLife, frames = 0;
+                for (; frames < 1200 && !source.dead; frames++)
+                {
+                    var keys = kind == "umbrella_down" ? VanillaKeys.Down : VanillaKeys.None;
+                    if (!rescued && source.velocity.Y > 0 && Y * 16 - source.Bottom.Y < 96)
+                    {
+                        if (kind == "cloud_jump") { keys |= VanillaKeys.Jump; rescued = true; }
+                        if (kind == "gravity_flip") { keys |= VanillaKeys.Up; rescued = true; }
+                        if (kind == "gravity_pair") { keys |= VanillaKeys.Up; rescued = true; firstFlip = frames; }
+                    }
+                    if (kind == "gravity_pair" && firstFlip >= 0 && frames == firstFlip + 2) keys |= VanillaKeys.Up;
+                    bool placeWeb = kind == "cobweb_place" && source.velocity.Y > 0 && Y * 16 - source.Bottom.Y < 128;
+                    VanillaPrediction.Advance(source, keys, placeWeb ? 0 : -1, placeWeb ? new Point(X, Y - 1) : null);
+                    minHp = Math.Min(minHp, source.statLife);
+                    if (source.velocity.Y == 0 && (source.Bottom.Y >= Y * 16 - 1
+                        || kind == "gravity_flip" && source.gravDir == -1 && source.position.Y <= (area.Top + 1) * 16 + 1))
+                    {
+                        VanillaPrediction.Advance(source, VanillaKeys.None);
+                        minHp = Math.Min(minHp, source.statLife); landed = true; break;
+                    }
+                }
+                cases.Add(new JsonObject { ["kind"] = kind, ["hp_loss"] = 400 - minHp,
+                    ["dead"] = source.dead, ["landed"] = landed, ["frames"] = frames,
+                    ["rescued"] = rescued, ["fall_start"] = source.fallStart });
+                bool expectedDamage = kind is "bare" or "gravity_flip";
+                if (!landed || source.dead || (expectedDamage ? minHp >= 400 : minHp != 400))
+                    throw new InvalidOperationException($"fall_mechanics_changed kind={kind} hp={minHp} landed={landed} dead={source.dead}");
+            }
+            Setup(new JsonObject());
+            for (int x = X - 2; x <= X + 3; x++)
+            for (int y = Y - 10; y < Y; y++)
+            { var tile = Main.tile[x, y]; tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            source.breath = 12;
+            for (int i = 0; i < 35; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+            int submerged = source.breath;
+            for (int x = X - 2; x <= X + 3; x++)
+            for (int y = Y - 10; y <= Y - 3; y++) Main.tile[x, y].LiquidAmount = 0;
+            for (int i = 0; i < 20; i++) VanillaPrediction.Advance(source, VanillaKeys.None);
+            int recovered = source.breath;
+            if (submerged >= 12 || recovered <= submerged || source.statLife != 400)
+                throw new InvalidOperationException($"breathing_probe_failed submerged={submerged} recovered={recovered} hp={source.statLife}");
+            Setup(new JsonObject());
+            for (int x = X - 5; x <= X + 6; x++)
+            for (int y = Y - 12; y <= Y; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                bool solid = x == X - 5 || x >= X + 2 || y == Y - 12 || y == Y;
+                tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            }
+            source.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+            for (int x = X - 4; x <= X + 1; x++)
+            for (int y = Y - 11; y < Y; y++) Liquid.AddWater(x, y);
+            var dig = new System.Collections.Generic.Queue<Point>();
+            for (int y = Y - 3; y < Y; y++) dig.Enqueue(new Point(X + 2, y));
+            for (int y = Y - 3; y >= Y - 5; y--)
+            for (int x = X + 3; x <= X + 4; x++) dig.Enqueue(new Point(x, y));
+            for (int y = Y - 2; y < Y; y++)
+            for (int x = X + 3; x <= X + 4; x++) dig.Enqueue(new Point(x, y));
+            int airMinBreath = source.breath, airMinHp = source.statLife, mined = 0, airFrames = 0;
+            bool breathed = false;
+            for (; airFrames < 1500 && !source.dead; airFrames++)
+            {
+                while (dig.Count > 0 && !Main.tile[dig.Peek().X, dig.Peek().Y].HasTile)
+                { dig.Dequeue(); mined++; }
+                var keys = VanillaKeys.None;
+                int useSlot = -1;
+                Point? target = null;
+                if (dig.Count > 0) { useSlot = 0; target = dig.Peek(); }
+                else
+                {
+                    if (source.position.X < (X + 3) * 16 + 5) keys |= VanillaKeys.Right;
+                    if (source.releaseJump && source.velocity.Y == 0) keys |= VanillaKeys.Jump;
+                }
+                VanillaPrediction.Advance(source, keys, useSlot, target);
+                Liquid.UpdateLiquid();
+                airMinBreath = Math.Min(airMinBreath, source.breath);
+                airMinHp = Math.Min(airMinHp, source.statLife);
+                if (dig.Count == 0 && source.breath == source.breathMax)
+                { breathed = true; break; }
+            }
+            var airPocket = new JsonObject { ["breathed"] = breathed, ["frames"] = airFrames,
+                ["mined"] = mined, ["min_breath"] = airMinBreath, ["breath"] = source.breath,
+                ["hp_loss"] = 400 - airMinHp, ["x"] = source.position.X, ["y"] = source.position.Y };
+            if (!breathed || mined != 13 || airMinHp != 400)
+                throw new InvalidOperationException("mined_air_pocket_failed:" + airPocket.ToJsonString());
+            Setup(new JsonObject());
+            for (int x = X - 5; x <= X + 6; x++)
+            for (int y = Y - 12; y <= Y; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                bool solid = x == X - 5 || x == X + 6 || y == Y - 12 || y == Y;
+                tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; }
+            }
+            source.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            source.inventory[1].SetDefaults(ItemID.Wood); source.inventory[1].stack = 50;
+            source = VanillaFrame.RestoreInWorker(VanillaFrame.Capture(source, area, true));
+            for (int x = X - 4; x <= X + 5; x++)
+            for (int y = Y - 11; y < Y; y++) Liquid.AddWater(x, y);
+            var seal = new System.Collections.Generic.Queue<Point>();
+            for (int y = Y - 1; y >= Y - 4; y--)
+            { seal.Enqueue(new Point(X - 1, y)); seal.Enqueue(new Point(X + 2, y)); }
+            seal.Enqueue(new Point(X, Y - 4)); seal.Enqueue(new Point(X + 1, Y - 4));
+            dig.Clear();
+            for (int y = Y; y < Y + 2; y++)
+            for (int x = X; x <= X + 1; x++) dig.Enqueue(new Point(x, y));
+            int placed = 0;
+            mined = 0; airMinBreath = source.breath; airMinHp = source.statLife; breathed = false;
+            for (airFrames = 0; airFrames < 1800 && !source.dead; airFrames++)
+            {
+                while (seal.Count > 0 && Main.tile[seal.Peek().X, seal.Peek().Y].HasTile)
+                { seal.Dequeue(); placed++; }
+                while (dig.Count > 0 && !Main.tile[dig.Peek().X, dig.Peek().Y].HasTile)
+                { dig.Dequeue(); mined++; }
+                var keys = VanillaKeys.None;
+                int useSlot = -1; Point? target = null;
+                if (seal.Count > 0) { useSlot = 1; target = seal.Peek(); }
+                else if (dig.Count > 0) { useSlot = 0; target = dig.Peek(); }
+                else if (source.releaseJump && source.velocity.Y == 0) keys = VanillaKeys.Jump;
+                VanillaPrediction.Advance(source, keys, useSlot, target);
+                Liquid.UpdateLiquid();
+                airMinBreath = Math.Min(airMinBreath, source.breath);
+                airMinHp = Math.Min(airMinHp, source.statLife);
+                if (seal.Count == 0 && dig.Count == 0 && source.breath == source.breathMax)
+                { breathed = true; break; }
+            }
+            var sealedPocket = new JsonObject { ["breathed"] = breathed, ["frames"] = airFrames,
+                ["placed"] = placed, ["mined"] = mined, ["min_breath"] = airMinBreath,
+                ["breath"] = source.breath, ["hp_loss"] = 400 - airMinHp,
+                ["x"] = source.position.X, ["y"] = source.position.Y };
+            if (!breathed || placed != 10 || mined != 4 || airMinHp != 400)
+                throw new InvalidOperationException("sealed_air_pocket_failed:" + sealedPocket.ToJsonString());
+            return new JsonObject { ["fall_cases"] = cases, ["submerged_breath"] = submerged,
+                ["recovered_breath"] = recovered, ["breathing_hp"] = source.statLife,
+                ["mined_air_pocket"] = airPocket, ["sealed_air_pocket"] = sealedPocket };
+        }
         if (command == "water_fall_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle) });
@@ -1887,12 +2058,29 @@ public sealed class Engine : ModSystem
             passed++;
             return new JsonObject { ["passed"] = true, ["cases"] = passed, ["max_error"] = error };
         }
-        if (command == "replay")
+        if (command == "native_movement")
+            return new VanillaLocalPlanner().PlanMovement(request["snapshot"].AsObject(),
+                new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()), request["guidance"]);
+        if (command == "movement_timing")
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            var predictor = new VanillaPrediction(request["snapshot"].AsObject());
+            double prepareMs = timer.Elapsed.TotalMilliseconds;
+            int count = request["frames"].GetValue<int>();
+            var timingControls = Enumerable.Repeat(request["keys"].GetValue<int>(), count).ToArray();
+            var trials = new JsonArray();
+            for (int i = 0; i < 11; i++)
+                trials.Add(predictor.Predict(timingControls, false));
+            return new JsonObject { ["prepare_ms"] = prepareMs, ["total_ms"] = timer.Elapsed.TotalMilliseconds,
+                ["trials"] = trials };
+        }
+        if (command == "replay" || command == "native_replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
                 request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
                 detailed: request["detailed"]?.GetValue<bool>() ?? true,
                 stopOnDamage: request["stop_on_damage"]?.GetValue<bool>() == true,
-                captureEnd: request["capture_end"]?.GetValue<bool>() == true);
+                captureEnd: request["capture_end"]?.GetValue<bool>() == true,
+                maxFrames: command == "native_replay" ? 405 : 240);
         if (command == "transit_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots, (int)ItemID.CobaltShield) });

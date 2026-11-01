@@ -13,7 +13,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
-    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check", "--slope-stall"))
+    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check", "--slope-stall", "--survival"))
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
@@ -96,6 +96,10 @@ def main():
         command.append("-vnavoldnavcheck")
     if "--readme-route" in sys.argv:
         command.extend(["-vnavreadmeroute", "-vnavoldnavcheck"])
+    if "--survival-route" in sys.argv:
+        if "--readme-route" not in sys.argv:
+            raise ValueError("--survival-route requires --readme-route")
+        command.append("-vnavsurvivalroute")
     if "--reverse" in sys.argv:
         if "--readme-route" not in sys.argv:
             raise ValueError("--reverse requires --readme-route")
@@ -112,6 +116,12 @@ def main():
         command.append("-vnavsnapshotcheck")
     if "--slope-stall" in sys.argv:
         command.append("-vnavslopestallcheck")
+    if "--survival" in sys.argv:
+        command.append("-vnavsurvivalcheck")
+    if "--survival-resume" in sys.argv:
+        command.append("-vnavsurvivalresume")
+    if "--survival-platforms" in sys.argv:
+        command.append("-vnavsurvivalplatforms")
     if unlimited:
         command.append("-vnavnotimelimit")
     log = (root / "demo-client.log").open("w")
@@ -156,8 +166,14 @@ def main():
             assert "SLOPE_STALL_MEASURED" in output
             print("SLOPE_STALL_CHECK_COMPLETE", flush=True)
             return
+        if "--survival" in sys.argv:
+            assert "SURVIVAL_CONTROL_PASS cases=11" in output
+            print("SURVIVAL_CONTROL_CHECK_COMPLETE", flush=True)
+            return
         if descent:
             row = json.loads((root / "descent-result.json").read_text())
+            if "--survival-route" in sys.argv:
+                assert row["survival_route"] and row["fall_hits"] == 0 and row["drowning_frames"] == 0
             assert row["done"] and row["hp"] > 0 and (continuity or recorded_goal or "--reverse" in sys.argv or row["y"] >= row["underworld"])
             if circuit:
                 assert [leg["offset"] for leg in row["legs"]] == [180, 360, -180]

@@ -12,6 +12,130 @@ public sealed class VanillaLocalPlanner
 {
     public const int Horizon = 180;
     public const int ExecuteFrames = 8;
+    public JsonObject PlanMovement(JsonObject snapshot, Vector2 goal, JsonNode guidance = null)
+    {
+        VanillaFrame.RequireWorker();
+        var timer = Stopwatch.StartNew();
+        var player = VanillaFrame.RestoreInWorker(snapshot);
+        var origin = player.position;
+        int width = player.width, height = player.height, hp = player.statLife;
+        bool extraJump = player.AnyExtraJumpUsable();
+        var field = ReadGuidance(guidance);
+        double Cost(Vector2 position)
+        {
+            if (field == null) return Vector2.Distance(position, goal);
+            return field.TryGetValue(FootCell(position, width, height), out int value) ? value : double.PositiveInfinity;
+        }
+        double initialCost = Cost(origin), bestScore = double.PositiveInfinity;
+        var prediction = new VanillaPrediction(snapshot);
+        var samples = new List<VanillaPrediction.MovementSample>();
+        var stopping = new List<VanillaPrediction.MovementSample>();
+        var diagnostics = new JsonArray();
+        int[] chosen = null;
+        bool incomplete = false;
+        double restoreMs = 0, updateMs = 0;
+        var candidates = new List<(int direction, int pattern, int[] keys)>();
+        var rescueTargets = new Dictionary<int, (int jumpAt, float x)>();
+        foreach (int direction in new[] { 1, 2 })
+        foreach (int pattern in new[] { 0, 1, 2, 3, 4, 5 })
+            candidates.Add((direction, pattern, Enumerable.Range(0, 90).Select(i => direction | (pattern switch {
+                1 => i < 18 ? 4 : 0,
+                2 => i >= 12 && i < 30 ? 4 : 0,
+                3 => i != 20 ? 4 : 0,
+                4 => i != 40 ? 4 : 0,
+                5 => 16,
+                _ => 0
+            })).ToArray()));
+        foreach (int direction in new[] { 1, 2 })
+            candidates.Add((direction, 8, Enumerable.Range(0, 90)
+                .Select(i => direction | (i < 12 ? 16 : 0)).ToArray()));
+        int primaryCount = candidates.Count;
+        try
+        {
+            for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
+            {
+                var (direction, pattern, keys) = candidates[candidateIndex];
+                Func<Player, int, int> policy = null;
+                if (rescueTargets.TryGetValue(candidateIndex, out var rescue))
+                    policy = (moving, i) => i < rescue.jumpAt ? keys[i]
+                        : (moving.position.X < rescue.x - 4 ? 2 : moving.position.X > rescue.x + 4 ? 1 : 0)
+                            | (i < rescue.jumpAt + 12 ? 4 : 0);
+                var result = prediction.Predict(keys, false, restoreAfter: false, samples: samples, stopOnDamage: true,
+                    maxFrames: 405, controlPolicy: policy);
+                string outcome = result["outcome"].GetValue<string>();
+                if (pattern is 6 or 9 && extraJump && (outcome is "damaged" or "dead") && samples.Count > 8)
+                {
+                    int jumpAt = samples.Count - 8;
+                    candidates.Add((direction, 7, Enumerable.Range(0, keys.Length)
+                        .Select(i => direction | (i < jumpAt ? 16 : i < jumpAt + 12 ? 4 : 0)).ToArray()));
+                    candidates.Add((direction, 10, Enumerable.Range(0, keys.Length)
+                        .Select(i => (i < jumpAt ? direction | 16 : i < jumpAt + 12 ? 4 : 0)).ToArray()));
+                    rescueTargets[candidates.Count - 1] = (jumpAt, samples[^1].Position.X);
+                }
+                if (pattern == 6 && outcome == "complete" && !samples[^1].Grounded
+                    && Cost(samples[^1].Position) < initialCost)
+                    candidates.Add((direction, 9, Enumerable.Repeat(direction | 16, 360).ToArray()));
+                if (pattern is 7 or 9 or 10 && (outcome is "complete" or "outside_observed_world")
+                    && !samples[^1].Grounded && Cost(samples[^1].Position) < initialCost)
+                    incomplete = true;
+                restoreMs += result["timing"]["restore_ms"].GetValue<double>();
+                updateMs += result["timing"]["update_ms"].GetValue<double>();
+                int selectedLength = 0;
+                double candidateScore = double.PositiveInfinity;
+                for (int i = 0; i < samples.Count; i++)
+                {
+                    var sample = samples[i];
+                    if (sample.Dead || sample.Hp < hp) break;
+                    if (!sample.Grounded || sample.Velocity.Y != 0 || Vector2.DistanceSquared(origin, sample.Position) < 256) continue;
+                    double cost = Cost(sample.Position);
+                    if (cost >= initialCost) continue;
+                    double score = cost + (i + 1) * .1;
+                    if (score >= candidateScore) continue;
+                    candidateScore = score;
+                    selectedLength = i + 1;
+                }
+                bool stoppedSafely = false;
+                if (selectedLength > 0 && candidateScore < bestScore)
+                {
+                    var stoppedKeys = keys.Take(selectedLength).Concat(new int[45]).ToArray();
+                    var stopped = prediction.Predict(stoppedKeys, false, restoreAfter: false,
+                        samples: stopping, stopOnDamage: true, maxFrames: 405);
+                    restoreMs += stopped["timing"]["restore_ms"].GetValue<double>();
+                    updateMs += stopped["timing"]["update_ms"].GetValue<double>();
+                    var end = stopping[^1];
+                    stoppedSafely = stopped["outcome"].GetValue<string>() == "complete"
+                        && end.Grounded && end.Velocity == Vector2.Zero && end.Hp >= hp && !end.Dead;
+                    if (stoppedSafely)
+                    {
+                        bestScore = candidateScore;
+                        chosen = keys.Take(selectedLength).ToArray();
+                    }
+                }
+                diagnostics.Add(new JsonObject { ["direction"] = direction, ["pattern"] = pattern,
+                    ["frames"] = samples.Count, ["selected_prefix"] = selectedLength,
+                    ["stopped_safely"] = stoppedSafely,
+                    ["grounded_frames"] = samples.Count(frame => frame.Grounded),
+                    ["initial_cost"] = double.IsFinite(initialCost) ? JsonValue.Create(initialCost) : null,
+                    ["minimum_cost"] = samples.Select(frame => Cost(frame.Position)).Where(double.IsFinite)
+                        .Select(value => (double?)value).Min(),
+                    ["end_x"] = samples[^1].Position.X, ["end_y"] = samples[^1].Position.Y,
+                    ["end_vy"] = samples[^1].Velocity.Y, ["end_wet"] = samples[^1].Wet,
+                    ["outcome"] = result["outcome"].DeepClone() });
+                if (candidateIndex == primaryCount - 1 && chosen == null)
+                    foreach (int dropDirection in new[] { 1, 2 })
+                        candidates.Add((dropDirection, 6, Enumerable.Repeat(dropDirection | 16, 180).ToArray()));
+            }
+            JsonObject forecast = chosen == null ? null : prediction.Predict(chosen, false, captureEnd: true, stopOnDamage: true, maxFrames: 405);
+            if (forecast != null && forecast["outcome"].GetValue<string>() != "complete")
+            { chosen = null; forecast = null; }
+            return new JsonObject { ["status"] = chosen == null ? incomplete ? "incomplete_horizon" : "no_safe_progress" : "planned",
+                ["controls"] = new JsonArray((chosen ?? Array.Empty<int>()).Select(key => JsonValue.Create(key)).ToArray()),
+                ["forecast"] = forecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+                ["restore_ms"] = restoreMs, ["update_ms"] = updateMs };
+        }
+        finally { VanillaFrame.RestoreInWorker(snapshot); }
+    }
+
     static bool RepeatsCeilingContact(List<VanillaPrediction.MovementSample> frames)
     {
         var contacts = new List<Vector2>();
