@@ -2058,6 +2058,19 @@ public sealed class Engine : ModSystem
             passed++;
             return new JsonObject { ["passed"] = true, ["cases"] = passed, ["max_error"] = error };
         }
+        if (command == "movement_timing")
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            var predictor = new VanillaPrediction(request["snapshot"].AsObject());
+            double prepareMs = timer.Elapsed.TotalMilliseconds;
+            int count = request["frames"].GetValue<int>();
+            var timingControls = Enumerable.Repeat(request["keys"].GetValue<int>(), count).ToArray();
+            var trials = new JsonArray();
+            for (int i = 0; i < 11; i++)
+                trials.Add(predictor.Predict(timingControls, false));
+            return new JsonObject { ["prepare_ms"] = prepareMs, ["total_ms"] = timer.Elapsed.TotalMilliseconds,
+                ["trials"] = trials };
+        }
         if (command == "replay")
             return new VanillaPrediction(request["snapshot"].AsObject()).Predict(
                 request["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),

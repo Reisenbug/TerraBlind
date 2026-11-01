@@ -233,6 +233,7 @@ def main():
     parser.add_argument("--route-direction", type=int, choices=(-1, 0, 1))
     parser.add_argument("--reverse-tiles", action="store_true")
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--movement-timing", type=Path)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--survival-mechanics-probe", action="store_true")
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -950,6 +951,32 @@ def main():
                 assert resumed["controls"] == baseline["controls"]
                 assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
             print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
+            return
+        if args.movement_timing:
+            import statistics
+            state = json.loads(args.movement_timing.read_text())["snapshot"]
+            reports = []
+            for keys in (1, 5):
+                for frames in (30, 60, 90):
+                    started = time.perf_counter()
+                    result = worker.call("movement_timing", snapshot=state, frames=frames, keys=keys)
+                    wall_ms = (time.perf_counter() - started) * 1000
+                    trials = result["trials"]
+                    for trial in trials:
+                        assert trial["outcome"] == "complete", trial["outcome"]
+                        assert len(trial["frames"]) == frames
+                        assert trial["frames"] == trials[0]["frames"], "replay changed across identical trials"
+                    summary = dict(keys=keys, frames=frames, prepare_ms=result["prepare_ms"],
+                        first_ms=trials[0]["elapsed_ms"],
+                        warm_median_ms=statistics.median(t["elapsed_ms"] for t in trials[1:]),
+                        warm_max_ms=max(t["elapsed_ms"] for t in trials[1:]),
+                        timing={k: statistics.median(t["timing"][k] for t in trials[1:])
+                                for k in trials[0]["timing"]},
+                        roundtrip_overhead_ms=wall_ms-result["total_ms"])
+                    reports.append(dict(summary=summary, result=result))
+                    print("MOVEMENT_TIMING", json.dumps(summary), flush=True)
+            (args.root / "movement-timing.json").write_text(json.dumps(reports))
+            print("MOVEMENT_TIMING_PASS cases=6 repeats=11", flush=True)
             return
         if args.survival_mechanics_probe:
             result = worker.call("survival_mechanics_probe")
