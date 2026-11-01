@@ -16,6 +16,8 @@ def main():
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
     mode.add_argument("--workflow-live", action="store_true", help="Real model writes monitored gathering, pauses on low HP, then resumes; consumes quota")
+    mode.add_argument("--watch-live", action="store_true", help="Real model handles a passive chest event, loots, changes gathering target and resumes; consumes quota")
+    mode.add_argument("--decision-live", action="store_true", help="Also require a model-authored explicit decision point between looting and resumed collection")
     mode.add_argument("--planning-readonly", action="store_true", help="Real model queries actual game state then proposes an action without executing it")
     mode.add_argument("--interactions", action="store_true", help="Real equipment swaps and generic NPC dialogue buttons, no model calls")
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
@@ -61,6 +63,10 @@ def main():
         command.append("-agenthealthcheck")
     if args.workflow_live:
         command.append("-agentworkflowcheck")
+    if args.watch_live or args.decision_live:
+        command.append("-agentwatchcheck")
+    if args.decision_live:
+        command.append("-agentdecisioncheck")
     if args.planning_readonly:
         command.append("-agentplanningcheck")
     if args.interactions:
@@ -81,7 +87,7 @@ def main():
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         print("AGENT_ENGINE_PID", process.pid, flush=True)
         try:
-            deadline = time.monotonic() + (300 if args.live or args.health_live or args.workflow_live or args.planning_readonly else 180)
+            deadline = time.monotonic() + (300 if args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.planning_readonly else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break

@@ -165,11 +165,14 @@ public sealed class Driver : ModSystem
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook navigationHook;
     bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
+    bool WatchLive => Terraria.Program.LaunchParameters.ContainsKey("-agentwatchcheck");
+    bool DecisionLive => Terraria.Program.LaunchParameters.ContainsKey("-agentdecisioncheck");
+    int eventChest = -1;
     bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
     bool InteractionCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck");
     int chatNpc, interactionWait;
     string chatLabel;
-    bool HealthLive => WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
+    bool HealthLive => WatchLive || WorkflowLive || Terraria.Program.LaunchParameters.ContainsKey("-agenthealthcheck");
     bool hazardApplied;
     int hazardUntil, hazardStock;
     bool ScriptCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentscriptcheck");
@@ -271,6 +274,15 @@ public sealed class Driver : ModSystem
             if (liveRunning)
             {
                 if (HealthLive) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+                if (WatchLive && eventChest < 0 && Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack) >= 2)
+                {
+                    int cx = heartX - 8, cy = heartY - 1;
+                    eventChest = WorldGen.PlaceChest(cx, cy, TileID.Containers, false);
+                    Check(eventChest >= 0, "event_chest_not_placed");
+                    Main.chest[eventChest].item[0].SetDefaults(ItemID.GoldCoin);
+                    Main.chest[eventChest].item[0].stack = 1;
+                    Console.WriteLine($"AGENT_WATCH_CHEST x={cx} y={cy} inventory=2+");
+                }
                 if (WorkflowLive)
                 {
                     int count = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LifeCrystal).Sum(item => item.stack);
@@ -286,6 +298,30 @@ public sealed class Driver : ModSystem
                     if (!pending.IsCompleted) return;
                     var state = JsonNode.Parse(pending.GetAwaiter().GetResult());
                     pending = null;
+                    if (WatchLive)
+                    {
+                        int inventory = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack);
+                        bool looted = eventChest >= 0 && Main.chest[eventChest].item.All(i => i.IsAir)
+                            && Main.LocalPlayer.inventory.Any(i => i.type == ItemID.GoldCoin && i.stack >= 1);
+                        var actions = state["action_tasks"].AsArray();
+                        bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
+                            && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
+                            && actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10;
+                        bool woke = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "nearby_chest") == true;
+                        bool goalComplete = state["codex_goal"]?["native"]?["status"]?.ToString() == "complete";
+                        bool explicitWake = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "decision_point") == true;
+                        var codex = typeof(NativeAgent).GetField("_codex", BindingFlags.Instance | BindingFlags.NonPublic)
+                            .GetValue(ModContent.GetInstance<NativeAgent>()) as CodexAgent;
+                        results.Add(new JsonObject { ["state"] = state.DeepClone(), ["looted"] = looted,
+                            ["same_handle_changed_target"] = resumed, ["passive_wake"] = woke, ["native_goal_complete"] = goalComplete,
+                            ["explicit_wake"] = explicitWake,
+                            ["model_turns"] = codex?.TurnsStarted, ["token_usage"] = codex?.TokenUsage });
+                        NativeAgent.Stop();
+                        Finish(inventory == 10 && looted && resumed && woke && goalComplete && (!DecisionLive || explicitWake)
+                            && state["task_plan"]?["status"]?.ToString() == "completed",
+                            $"AGENT_WATCH_LIVE_RESULT inventory={inventory} looted={looted} resumed={resumed} woke={woke} explicit={explicitWake} native_goal={goalComplete}");
+                        return;
+                    }
                     NativeAgent.Stop();
                     File.WriteAllText(Path.Combine(Main.SavePath, "agent-live-result.json"), new JsonObject
                     { ["elapsed_seconds"] = (DateTime.UtcNow - liveStart).TotalSeconds,
@@ -448,7 +484,18 @@ public sealed class Driver : ModSystem
                         Main.playerInventory = false;
                         for (int i = 0; i < Main.maxItems; i++) Main.item[i].active = false;
                         Config.I.AgentUseCodex = true;
-                        if (WorkflowLive)
+                        if (WatchLive)
+                        {
+                            PrepareResources(player);
+                            heartX = (int)player.Center.X / 16; heartY = (int)player.Bottom.Y / 16;
+                            foreach (var chest in Main.chest)
+                                if (chest != null && Math.Abs(chest.x - heartX) + Math.Abs(chest.y - heartY) <= 60)
+                                    foreach (var item in chest.item) item.TurnToAir();
+                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            string activeDecision = DecisionLive ? "箱子实际取物成功并单独step保存后，必须先在step之外调用decision_point，说明需要根据新收获重新决策。本段不得恢复采集；下一轮才把原handle目标改成10并恢复，不重复搜刮箱子。" : "";
+                            NativeAgent.Submit("/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
+                        }
+                        else if (WorkflowLive)
                         {
                             PrepareResources(player);
                             Config.I.AgentCodexModel = "gpt-6-astra";

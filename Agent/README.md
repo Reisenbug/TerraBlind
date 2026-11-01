@@ -183,6 +183,31 @@ dotnet run --project tests/Agent/AgentTests.csproj -- --codex-smoke
 
 `decision_point` 主动交回且不执行后续语句；未完成step保留uncertain，不能直接重放。模型可核对后提交剩余代码，或用action_control resume args修改同一句柄的剩余参数。参数属于动作，不改默认设置或玩家权限。停止和新指令清理观察状态。77组离线检查包含生产宿主事件交接、暂停后重设目标并同handle恢复、停止后无新调用，以及脚本无法捕获事件异常后继续执行工具。尚待真实模型与客户端的事件流程验收。
 
+### Codex goal 与事件流程验收
+
+游戏中用 `/tb /goal 目标内容` 创建长期目标；`/tb /goal --tokens 预算 目标内容` 显式设置正整数token预算。`/tb /goal status` 查询，`/tb /goal pause` 或普通stop停止，`/tb /goal resume` 继续保留的目标。预算耗尽或已完成的目标不能普通resume。普通指令不会隐式创建Codex goal。离开世界仍清空游戏计划与句柄，不承诺重启游戏后续接。
+
+实际调用Codex app-server的thread/goal/set与thread/goal/get，goal会话使用持久线程。服务器启用goals；游戏线程单独关闭原生自动续轮和模型内置goal工具，由游戏宿主调度同一目标的事件续接，防止原生自动轮次绕过输入交接或模型提前标完成。完成前重新读取最终条件，所有步骤已验收且没有后台动作占用输入才写native complete。模型回复结束、仅有启动成功、计划中的旧completed标记都不能替代最终现场。无进展只额外续接一次；每轮最多32次顶层游戏工具调用，脚本另有100次工具与时间限制。
+
+原生goal的tokensUsed/timeUsedSeconds在该宿主调度方式下不会自动累计，保留原始值，不伪造。实际额度判断使用thread/tokenUsage/updated的累计totalTokens差额，另列host_tokens_used；暂停恢复不重置计数。包括缓存输入，不能等同费用。预算在收到遥测时中断，可能超过阈值一个模型响应，不能当服务端生成硬上限。达到限制写budgetLimited并停止角色动作，不标完成。异常保留blocked状态；用户停止保留paused状态。停止确认完成后再关闭所属后台连接。
+
+2026-11-01 当前81组离线检查通过。新增原生goal协议替身检查、宿主/goal命令续接、额度中断、32次连续失败截止、最终条件重新测量、事件结束保留证据且清除观察、同句柄恢复及停止。真正的协议验收分别运行：
+
+```sh
+dotnet run --project tests/Agent/AgentTests.csproj -- --goal-smoke
+dotnet run --project tests/Agent/AgentTests.csproj -- --goal-control-smoke
+python3 tests/Agent/Engine/run.py --watch-live
+python3 tests/Agent/Engine/run.py --decision-live
+```
+
+这些可选入口会消耗模型额度，均使用gpt-6-astra/low，生产默认Luna未改。goal-smoke通过真实Codex持久目标的active→拒绝无证据完成→complete，世界为替身；报告 `/var/folders/2p/90f7gl9d32g9227t1r_cd9nh0000gn/T/terrablind-goal-protocol-593fd719826e4732a74f70af2ce723f9/result.json`。goal-control-smoke两项通过：真实模型的阻塞工具被取消后目标paused，无第二轮；1token阈值收到14455token遥测后中断，原生状态budgetLimited；报告 `/var/folders/2p/90f7gl9d32g9227t1r_cd9nh0000gn/T/terrablind-goal-controls-495102272c834dc9a2fa6711123ca6d0/result.json`。两者不是游戏行为验收。
+
+真实客户端联合验收报告 `/tmp/terrablind-agent-engine-1793513272195296000/agent-engine-result.json`：有限10颗预置Heart、铜镐，初始目标库存5；实际取得2颗后生成一个装有金币的箱子；被动nearby_chest事件暂停旧采集，模型实际搜刮并保存独立step，然后主动decision_point交回；下一段把原句柄目标改为10，恢复采集；action_finished再唤醒，实际库存10且原箱子已空、金币入包，计划与原生goal均完成。相同句柄仅2个attempt，旧attempt为paused；三个事件各一次，结束后events为空。通过标记 `AGENT_WATCH_LIVE_RESULT inventory=10 looted=True resumed=True woke=True explicit=True native_goal=True`。引擎测试包SHA256 `f30e7c7826fcafe3050c3a44c02679cfbfea45ccf46f8c296c246e001b2dfc10`。
+
+该次4个宿主模型轮次、4段模型工具代码；原生rollout有8个token_usage_record/response_id。累计inputTokens=998198，其中cachedInputTokens=793856，outputTokens=956，不能说只有4次模型推理或直接换算费用。完整代码、工具输出、事件与用量保留在 `/Users/lhy/.codex/sessions/2026/11/01/rollout-2026-11-01T14-08-14-01a195b9-0a0a-7a33-ae08-2db4798e90dc.jsonl` 及测试目录TerraBlindLogs。移除了把action_query嵌套记录回计划，以及决策点把整个旧状态嵌入workflow造成的证据膨胀，但完整游戏上下文仍较大，不声称额度成本已充分优化。
+
+导航仍由测试传送替代，场地与箱子由测试生成；真实挖掘、掉落、拾取、开箱与任务验收由正式代码完成。这不证明自然地图探索、任意任务、Luna可靠性或300血/荆棘旋刃/蜂王整链成功。功能报告通过后，测试客户端终止阶段仍记录macOS原生退出异常，不能称干净退出。
+
 `equipment_list` 和状态中的 `equipment_slots` 返回原版功能装备槽0..9：头、衣、裤、饰品，以及各槽是否解锁。`equip_item` 在背包0..49和指定装备槽之间交换物品，必须提供查询得到的 `expected_inventory`、`expected_equipment`（type/prefix/stack）。用空背包槽交换可以卸下装备。调用原生 ItemSlot 校验与点击逻辑，遵守部位、重复饰品、翅膀冲突、锁定槽及模组装备钩子；光标有物品或正在使用物品时拒绝。装备效果在下一次玩家更新生效。暂不覆盖时装、染料、坐骑、钩爪和模组新增槽。
 
 任务完成条件新增 `equipped`，按真实已解锁功能槽中的物品类型计数；背包、时装及锁定槽不计入。它证明已穿戴，不替代防御、机动性等效果与战斗准备程度的检查。
