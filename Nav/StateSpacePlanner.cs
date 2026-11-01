@@ -3648,6 +3648,9 @@ namespace TerraBlind
         static int _fallFrames;
         const int UnplannedFallFrames = 14;   // ~14 帧自由落体 ≈ 4 格,超过一次跳跃的正常落差
 
+        internal static bool NativeReplayComplete => _lastExecResult?.NativeVerified == true
+            && _execFrames != null && _execIdx >= _execFrames.Count;
+
         internal static bool NativeReplayMatches(Player player)
         {
             if (_lastExecResult?.NativeVerified != true || _execFrames == null

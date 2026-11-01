@@ -382,7 +382,21 @@ namespace TerraBlind
             if (NativeMovementPlanner.Poll(p, out var movement, out string movementStatus))
             {
                 StuckSentinel.Reset();
-                if (movement != null) DispatchLegacy(movement, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
+                if (movement != null)
+                {
+                    if (_haveLast && StateSpacePlanner.NativeReplayComplete && _lastFrom.HasValue && _lastTarget.HasValue)
+                    {
+                        var actual = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
+                        var from = _lastFrom.Value; var target = _lastTarget.Value;
+                        bool hit = StateSpacePlanner.Arrived(target.Item1, target.Item2, actual.Item1, actual.Item2, _lastPillar);
+                        StateSpacePlanner.DecayMiss();
+                        StateSpacePlanner.ReportEdge(from.Item1, from.Item2, target.Item1, target.Item2, actual.Item1, actual.Item2, _lastPillar);
+                        _haveLast = false;
+                        if (RecordAttempt(p, hit)) { LastStop = "repeated_action_failure"; Stop(); return; }
+                    }
+                    DispatchLegacy(movement, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
+                    NativeMovementPlanner.Prefetch();
+                }
                 else if (movementStatus == "no_safe_progress") DispatchTerrain(p);
                 else if (movementStatus == "incomplete_horizon") { LastStop = "native_movement_incomplete_horizon"; Stop(); }
                 else if (movementStatus == "failed") { LastStop = "native_movement_failed"; Stop(); }

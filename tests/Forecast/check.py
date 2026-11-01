@@ -1056,7 +1056,10 @@ def main():
                     replay = worker.call("native_replay", snapshot=request["snapshot"], controls=result["controls"], detailed=False)
                     assert replay["outcome"] == "complete"
                     assert replay["frames"] == result["forecast"]["frames"]
-                    assert replay["frames"][-1]["vx"] == 0 and replay["frames"][-1]["vy"] == 0
+                    coast = worker.call("native_replay", snapshot=request["snapshot"],
+                                        controls=result["controls"] + [0] * 45, detailed=False)
+                    assert coast["outcome"] == "complete"
+                    assert coast["frames"][-1]["vx"] == 0 and coast["frames"][-1]["vy"] == 0
                     result["replay_verified"] = True
                 results.append(result)
                 print("PLANNER_BENCHMARK", "run=", run, "status=", result.get("status"),

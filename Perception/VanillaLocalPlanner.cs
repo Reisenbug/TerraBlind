@@ -107,13 +107,8 @@ public sealed class VanillaLocalPlanner
                         && end.Grounded && end.Velocity == Vector2.Zero && end.Hp >= hp && !end.Dead;
                     if (stoppedSafely)
                     {
-                        int length = stoppedKeys.Length;
-                        while (length > selectedLength + 2 && stopping[length - 1].Velocity == Vector2.Zero
-                            && stopping[length - 2].Velocity == Vector2.Zero
-                            && stopping[length - 1].Position == stopping[length - 2].Position) length--;
-                        double cost = Cost(end.Position), score = cost + length * .1;
-                        if (cost < initialCost && score < bestScore)
-                        { bestScore = score; chosen = stoppedKeys.Take(length).ToArray(); }
+                        bestScore = candidateScore;
+                        chosen = keys.Take(selectedLength).ToArray();
                     }
                 }
                 diagnostics.Add(new JsonObject { ["direction"] = direction, ["pattern"] = pattern,
