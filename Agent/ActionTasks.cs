@@ -15,6 +15,7 @@ public sealed class ActionTasks
         public JsonObject Args, Observation, PreviousAttempt, StoppedObservation;
         public JsonNode Result;
         public int Attempt;
+        public bool Inline;
         public CancellationTokenSource Cancel;
         public Task Running;
     }
@@ -35,15 +36,15 @@ public sealed class ActionTasks
     public bool HasActive { get { lock (gate) return active != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id; } }
 
-    public JsonObject Start(string tool, JsonObject args, CancellationToken root)
+    public JsonObject Start(string tool, JsonObject args, CancellationToken root, bool inline = false)
     {
-        if (tool is not ("gather" or "nav_to" or "fight")) throw new ArgumentException("句柄只支持gather/nav_to/fight。");
+        if (tool is not ("gather" or "nav_to" or "fight" or "mine_vein" or "chop_wood")) throw new ArgumentException("不支持的后台动作。");
         root.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (active != null) throw new InvalidOperationException("已有动作持有角色输入，请先暂停或取消。");
             if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
-            var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone() };
+            var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline };
             entries.Add(entry.Id, entry);
             Launch(entry, root);
             return Snapshot(entry);
@@ -80,7 +81,7 @@ public sealed class ActionTasks
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
             status = result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false"
                 || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death"
-                || value["status"]?.ToString() == "failed") ? "failed" : "completed";
+                || value["status"]?.ToString() is "failed" or "stopped_short") ? "failed" : "completed";
         }
         catch (OperationCanceledException) { status = "cancelled"; }
         catch (Exception error) { result = new JsonObject { ["error"] = "action_failed", ["detail"] = error.Message }; }
@@ -143,6 +144,7 @@ public sealed class ActionTasks
                 if (active != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
                 if (updatedArgs != null) entry.Args = (JsonObject)updatedArgs.DeepClone();
+                entry.Inline = false;
                 Launch(entry, root);
                 return Snapshot(entry);
             }
@@ -179,6 +181,7 @@ public sealed class ActionTasks
     {
         ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
         ["status"] = entry.Status, ["attempt"] = entry.Attempt,
+        ["inline"] = entry.Inline,
         ["result"] = entry.Result?.DeepClone(), ["observation"] = entry.Observation?.DeepClone(),
         ["previous_attempt"] = entry.PreviousAttempt?.DeepClone(),
         ["requested"] = entry.Requested

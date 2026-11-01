@@ -25,7 +25,6 @@ public static class Gather
             || targets.Any(t => t.ItemType <= 0 || t.Count is < 1 or > 9999 || t.Npcs.Any(id => id <= 0)))
             throw new ArgumentException("需要1..8种不重复的物品，正数物品/NPC编号，目标数量1..9999。");
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
-        budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 180)));
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
         JsonObject scene = null, last = null;
@@ -52,7 +51,6 @@ public static class Gather
                 last["result"] = await world.Act(candidate, budget.Token);
             }
         }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested) { outcome = "timeout"; }
         finally
         {
             if (!token.IsCancellationRequested) await world.Stop(token);

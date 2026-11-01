@@ -15,6 +15,7 @@ public static class AgentTools
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     internal static readonly AgentWatch Watches = new();
+    internal static readonly AgentRecovery Recovery = new();
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
@@ -22,7 +23,7 @@ public static class AgentTools
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Watches.Reset(); }
+    public static void NewTask() { Tracking.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -97,6 +98,7 @@ public static class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Snapshot();
         state["watch"] = Watches.Snapshot();
+        state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
@@ -165,7 +167,7 @@ public static class AgentTools
         try
         {
             var timer = Stopwatch.StartNew();
-            while (timer.Elapsed.TotalSeconds < seconds)
+            while (seconds <= 0 || timer.Elapsed.TotalSeconds < seconds)
             {
                 await Task.Delay(150, token);
                 if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
@@ -195,6 +197,9 @@ public static class AgentTools
 
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
+        if (Recovery.Revision > 0 && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
+            return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
+                ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();
         if (name is not ("say" or "ask" or "get_state" or "combat_observe" or "combat_stop")
             && await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
         {
@@ -214,10 +219,11 @@ public static class AgentTools
         try
         {
             string output = await ExecuteCore(name, args, token);
-            if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query"))
+            if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query" or "run_script" or "watch"))
                 output = await NativeAgent.OnMain(() =>
                 {
                     Plan.Record(name, output, action);
+                    Recovery.Record(name, args, output);
                     try
                     {
                         if (JsonNode.Parse(output) is JsonObject result && result.ContainsKey("task_plan"))
@@ -246,6 +252,7 @@ public static class AgentTools
             {
                 var result = new JsonObject { ["error"] = "tool_exception", ["tool"] = name, ["detail"] = ex.Message };
                 Plan.Record(name, result.ToJsonString(), action);
+                Recovery.Record(name, args, result.ToJsonString());
                 result["task_plan"] = Plan.Snapshot();
                 DiagLog.Write($"[agent] tool_exception {name}: {ex.Message}");
                 NativeAgent.Progress("执行失败：" + name, "等待模型决策", false);
@@ -256,6 +263,39 @@ public static class AgentTools
         {
             if (lease != 0 && !token.IsCancellationRequested)
                 await NativeAgent.OnMain(() => { PvpDuel.EndAction(lease); return true; }, token);
+        }
+    }
+
+    static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token)
+    {
+        if (name is not ("nav_to" or "gather" or "fight" or "mine_vein" or "chop_wood"))
+            return await Execute(name, args, name == "action_start" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
+        if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
+        await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
+        string handle = Actions.Start(name, args, root, inline: true)["handle"].ToString();
+        while (true)
+        {
+            var current = await Actions.Query(handle, 250, token);
+            bool pending = await NativeAgent.OnMain(() => Watches.HasPending, token);
+            if (current["status"]?.ToString() == "running" && pending)
+            {
+                current = await Actions.Control(handle, "pause", null, root);
+                return new JsonObject { ["host_yield"] = true, ["handle"] = handle, ["action"] = current }.ToJsonString();
+            }
+            if (current["status"]?.ToString() == "running") continue;
+            var result = current["result"] as JsonObject ?? new JsonObject { ["outcome"] = current["status"]?.DeepClone() };
+            result["managed_handle"] = handle;
+            if (current["status"]?.ToString() == "failed")
+            {
+                await NativeAgent.OnMain(() =>
+                {
+                    Watches.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead,
+                        ["actions"] = new JsonArray(current.DeepClone()) });
+                    return true;
+                }, token);
+                result["host_yield"] = true;
+            }
+            return result.ToJsonString();
         }
     }
 
@@ -291,8 +331,7 @@ public static class AgentTools
                     return saved;
                 }, token);
                 result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool,
-                    (child, childArgs, childToken) => Execute(child, childArgs,
-                        child == "action_start" || child == "action_control" && Text(childArgs, "command") == "resume" ? token : childToken),
+                    (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
                     checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
                 break;
@@ -304,6 +343,7 @@ public static class AgentTools
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
                 NativeAgent.ValidateTool(actionTool, actionArgs);
+                await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
                 result = Actions.Start(actionTool, actionArgs, token);
                 return result.ToJsonString();
             case "action_query":
@@ -320,8 +360,12 @@ public static class AgentTools
                 return result.ToJsonString();
             case "script_progress":
                 var savedProgress = await NativeAgent.OnMain(() => Workflows.TryGetValue(Text(args, "workflow"), out var saved)
-                    ? saved : throw new ArgumentException("未知workflow。"), token);
+                    ? saved : null, token);
                 string resolution = Text(args, "action");
+                if (savedProgress == null && resolution is "" or "get")
+                    return new JsonObject { ["found"] = false, ["workflow"] = Text(args, "workflow"), ["steps"] = new JsonArray(),
+                        ["detail"] = "没有已保存的workflow；首次执行请在run_script指定workflow，勿假定存在进度。" }.ToJsonString();
+                if (savedProgress == null) throw new ArgumentException("未知workflow，不能核对不存在的步骤。");
                 if (resolution is "retry" or "complete")
                 {
                     var observed = JsonNode.Parse(await State(token)).AsObject();
@@ -694,7 +738,7 @@ public static class AgentTools
         return result;
     }
 
-    internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 180)
+    internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
     {
         var request = await NativeAgent.OnMain(() =>
         {

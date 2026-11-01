@@ -232,10 +232,10 @@ static class ScriptTests
 
         stopped = 0; int dispatched = 0;
         async Task<string> Wait(string name, JsonObject args, CancellationToken token)
-        { dispatched++; await Task.Delay(Timeout.Infinite, token); return "{}"; }
-        result = await AgentScript.Run("tool('wait'); tool('never');", 1, (_, _) => { }, Wait, Stop, default);
-        Check(result["error"].ToString() == "script_timeout" && stopped == 1 && dispatched == 1,
-            "script deadline did not cancel pending game tool and stop follow-up execution");
+        { dispatched++; await Task.Delay(1200, token); return "{}"; }
+        result = await AgentScript.Run("return tool('wait');", 1, (_, _) => { }, Wait, Stop, default);
+        Check(result["ok"].GetValue<bool>() && stopped == 0 && dispatched == 1 && result["elapsed_ms"].GetValue<long>() >= 1200,
+            "long game tool was cancelled by obsolete script wall deadline");
         using var parent = new CancellationTokenSource();
         stopped = 0;
         async Task<string> Cancel(string name, JsonObject args, CancellationToken token)
@@ -247,6 +247,6 @@ static class ScriptTests
         }
         catch (OperationCanceledException) { }
         Check(stopped == 0, "old script cleanup could stop a replacement task after parent cancellation");
-        Console.WriteLine("PASS: script deadline cancels and cleans up owned actions; parent cancellation propagates without stale cleanup");
+        Console.WriteLine("PASS: long game tools outlive legacy script deadlines; parent cancellation still stops execution without stale cleanup");
     }
 }

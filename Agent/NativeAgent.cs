@@ -168,8 +168,11 @@ public class NativeAgent : ModSystem
                     && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
                 ["actions"] = AgentTools.Actions.Snapshot() });
+            if (AgentTools.Watches.Samples % 20 == 0)
+                DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
         }
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
@@ -231,6 +234,7 @@ public class NativeAgent : ModSystem
                     {
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
+                        if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
                         var events = await OnMain(() => AgentTools.Watches.Take(), token);
                         input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
@@ -258,6 +262,14 @@ public class NativeAgent : ModSystem
                         progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
                     }
                     if (progressed) noProgressContinuations = 0;
+                    if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) canContinue = false;
+                    if (canContinue && await OnMain(() => AgentTools.Recovery.Offer(), token))
+                    {
+                        input = "原目标：" + goal + "\n最近工具失败，先修正实际错误，再继续原任务。参数歧义请选返回的精确internal重试，缺来源请换区域；不能把错误打印出来就结束。"
+                            + "长导航不因耗时失败，不重复启动已有句柄。修复最多3轮，同一失败参数最多3次。\n失败证据与完整候选："
+                            + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString() + "\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
                     if (canContinue && (progressed || noProgressContinuations++ < 1))
                     {
                         input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。未取得实际进展时宿主仅额外续接一次。\n现状："
@@ -296,7 +308,7 @@ public class NativeAgent : ModSystem
                     {
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
-                        await codex.SuspendGoal(await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked" ? "blocked" : "paused", token), token);
+                        await codex.SuspendGoal(await OnMain(() => AgentTools.Recovery.Exhausted || AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked" ? "blocked" : "paused", token), token);
                     }
                     await OnMain(() => { DiagLog.Write("[agent] goal result " + final?.ToJsonString()); return true; }, token);
                 }

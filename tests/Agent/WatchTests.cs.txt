@@ -9,6 +9,15 @@ static class WatchTests
 
     public static async Task Run()
     {
+        var recovery = new AgentRecovery();
+        var bad = JsonNode.Parse("{\"name\":\"wrong\"}").AsObject();
+        for (int i = 0; i < 3; i++) recovery.Record("find_tiles", bad, "{\"error\":\"ambiguous_tile_name\",\"name_candidates\":[{\"internal\":\"Heart\"}]}");
+        Check(recovery.Exhausted && recovery.Denied("find_tiles", bad) && !recovery.Offer(), "identical failed arguments received unlimited recovery rounds");
+        recovery.Reset(); recovery.Record("find_tiles", bad, "{\"error\":\"ambiguous_tile_name\"}");
+        Check(recovery.Offer() && !recovery.Offer(), "unchanged failure caused repeat model wake");
+        recovery.Record("find_tiles", new JsonObject { ["name"] = "Heart" }, "{\"tiles\":[{\"x\":1,\"y\":2}]}");
+        Check(recovery.Snapshot()["latest"] == null && !recovery.Exhausted, "corrected query retained stale failure");
+        Console.WriteLine("PASS: recovery deduplicates wake requests, bounds identical failures and clears corrected query evidence");
         var watch = new AgentWatch();
         var config = JsonNode.Parse("{\"events\":[\"nearby_chest\",\"action_finished\",\"low_health\"]}").AsObject();
         watch.Configure(config);
@@ -26,7 +35,7 @@ static class WatchTests
             state["chests"] = new JsonArray(new JsonObject { ["x"] = i + 100, ["y"] = 1 });
             watch.Observe(state);
         }
-        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && watch.Take().Count == 4 && !watch.Armed,
+        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && watch.Take().Count == 4 && watch.Armed,
             "wake budget failed to bound repeated changed events");
         try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
         catch (InvalidOperationException) { }

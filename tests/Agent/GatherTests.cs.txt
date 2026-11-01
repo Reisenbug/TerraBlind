@@ -42,10 +42,14 @@ static class GatherTests
         Console.WriteLine("PASS: death prevents collection and cancelled gathering never dispatches follow-up actions");
 
         world = new World { WaitForever = true };
-        result = await Gather.Run(Targets, 1, world, default);
-        Check(result["outcome"].ToString() == "timeout" && world.Stops == 1 && result["last_result"]?["candidate"] != null,
-            "gather budget did not stop action and preserve timed-out target");
-        Console.WriteLine("PASS: gathering deadline cancels a blocked action, stops owned control and preserves target evidence");
+        using var stopWaiting = new CancellationTokenSource();
+        var waiting = Gather.Run(Targets, 1, world, stopWaiting.Token);
+        await Task.Delay(1200);
+        Check(!waiting.IsCompleted, "gather retained an implicit wall-clock deadline");
+        stopWaiting.Cancel();
+        try { await waiting; throw new Exception("gather ignored explicit stop"); } catch (OperationCanceledException) { }
+        Check(world.Actions.Count == 1 && world.Stops == 0, "cancelled gather ran follow-up actions or performed unowned late cleanup");
+        Console.WriteLine("PASS: long gathering has no implicit deadline; explicit cancellation propagates without follow-up actions or stale cleanup");
         FightFiltering();
         Evasion();
         FiringLane();

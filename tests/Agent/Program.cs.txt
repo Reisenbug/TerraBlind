@@ -143,7 +143,8 @@ static class Tests
         HistoryTests.Run();
         InventoryTests.Run();
         await WatchTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=81");
+        SurfaceBiomeTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=85");
     }
 
     sealed class FakeHandler : HttpMessageHandler

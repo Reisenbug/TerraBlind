@@ -33,7 +33,6 @@ public static class AgentScript
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
         progress?.Begin();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
-        budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 180)));
         var clock = Stopwatch.StartNew();
         var trace = new Queue<JsonNode>();
         var logs = new JsonArray();
@@ -41,6 +40,7 @@ public static class AgentScript
         bool inTool = false;
         Exception hostFailure = null;
         JsonObject wake = null;
+        JsonObject lastFailure = null;
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
         JsonObject Report(string error, string detail, JsonNode value = null)
         {
@@ -48,7 +48,8 @@ public static class AgentScript
             {
                 ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
-                ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs
+                ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs,
+                ["failure"] = lastFailure?.DeepClone()
             };
             progress?.End(result);
             if (progress != null) result["workflow"] = progress.Snapshot();
@@ -61,7 +62,6 @@ public static class AgentScript
                 using var engine = new Engine(options =>
                 {
                     options.Strict().LimitMemory(32_000_000).MaxStatements(50000)
-                        .TimeoutInterval(TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 180)))
                         .CancellationToken(budget.Token);
                     options.Host.StringCompilationAllowed = false;
                     options.Constraints.MaxRecursionDepth = 64;
@@ -90,11 +90,25 @@ public static class AgentScript
                     string result = execute(name, args, budget.Token).GetAwaiter().GetResult();
                     progress?.Record(name, args, result);
                     inTool = false;
-                    if (name == "decision_point")
+                    JsonObject toolResult = null;
+                    try { toolResult = JsonNode.Parse(result) as JsonObject; }
+                    catch (System.Text.Json.JsonException) { }
+                    if (toolResult != null)
                     {
-                        var requested = JsonNode.Parse(result) as JsonObject;
-                        if (requested?["error"] != null) throw hostFailure = new InvalidOperationException(requested.ToJsonString());
-                        wake = requested;
+                        if (toolResult["error"] != null || toolResult["ok"]?.ToString() == "false")
+                        {
+                            var facts = new JsonObject();
+                            foreach (string field in new[] { "error", "detail", "outcome", "name_candidates", "requested_name", "targets" })
+                                if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
+                            lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
+                        }
+                        else if (lastFailure?["tool"]?.ToString() == name) lastFailure = null;
+                    }
+                    if (name == "decision_point" || toolResult?["host_yield"]?.GetValue<bool>() == true)
+                    {
+                        if (name == "decision_point" && toolResult?["error"] != null)
+                            throw hostFailure = new InvalidOperationException(toolResult.ToJsonString());
+                        wake = toolResult;
                         throw hostFailure = new InvalidOperationException("decision_requested");
                     }
                     budget.Token.ThrowIfCancellationRequested();
@@ -147,7 +161,9 @@ public static class AgentScript
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;
                 budget.Token.ThrowIfCancellationRequested();
-                return Report(null, "脚本执行结束；任务是否完成仍由task_step verify检查。", JsonNode.Parse(output)?["value"]?.DeepClone());
+                var value = JsonNode.Parse(output)?["value"]?.DeepClone();
+                return Report(lastFailure != null && value == null ? "tool_failed" : null,
+                    lastFailure != null && value == null ? "工具失败未处理；返回完整失败证据以修复。" : "脚本执行结束；任务是否完成仍由task_step verify检查。", value);
             }, token);
         }
         catch (Exception) when (token.IsCancellationRequested)

@@ -433,6 +433,8 @@ static class RuntimeTests
             Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestWakeHandoff();
+            await TestWakeHandoff(true);
+            await TestQueryRecovery();
             await TestPartialProgress();
             await TestToolFailureEvidence();
 
@@ -448,11 +450,11 @@ static class RuntimeTests
         finally { Agent.Unload(); }
     }
 
-    static async Task TestWakeHandoff()
+    static async Task TestWakeHandoff(bool automatic = false)
     {
         var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
         var previous = field.GetValue(Agent);
-        var handler = new WakeHandler();
+        var handler = new WakeHandler(automatic);
         using var http = new HttpClient(handler);
         field.SetValue(Agent, new AgentConversation(http));
         AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset();
@@ -472,6 +474,8 @@ static class RuntimeTests
             Check(action["args"]["x"].GetValue<int>() == 200 && action["previous_attempt"]["status"].ToString() == "paused",
                 "event handoff lost old handle evidence or failed to change remaining arguments");
             Check(AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 1, "same chest caused another wake");
+            Check(AgentTools.Watches.Samples > 0 && !AgentChat.Messages.Contains("must-not-run-after-event"),
+                "automatic observation never sampled or script continued after interruption");
             NativeAgent.Stop();
             await PumpUntil(() => !AgentTools.Actions.HasActive);
             for (int i = 0; i < 10; i++) Agent.PostUpdateEverything();
@@ -483,10 +487,10 @@ static class RuntimeTests
             NativeAgent.Stop(); Game.chest[0] = null; HttpServerSystem.Handler = null;
             AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); field.SetValue(Agent, previous);
         }
-        Console.WriteLine("PASS: native passive wake pauses input before model, resumes changed args on same handle and stops without more requests");
+        Console.WriteLine("PASS: native passive wake automatic=" + automatic + " pauses input before model, retains handle and stops without more requests");
     }
 
-    sealed class WakeHandler : HttpMessageHandler
+    sealed class WakeHandler(bool automatic) : HttpMessageHandler
     {
         public int Calls;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -504,11 +508,75 @@ static class RuntimeTests
             if (call % 2 == 0)
             {
                 string code = call == 0
-                    ? "tool('watch',{events:['nearby_chest']}); const a=step('nav',()=>tool('action_start',{tool:'nav_to',args:{x:100,y:100}})); return a;"
-                    : "const a=step('nav',()=>{throw new Error('must retain handle')}); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});";
+                    ? automatic
+                        ? "step('nav',()=>tool('nav_to',{x:100,y:100})); tool('say',{text:'must-not-run-after-event'});"
+                        : "tool('watch',{events:['nearby_chest']}); const a=step('nav',()=>tool('action_start',{tool:'nav_to',args:{x:100,y:100}})); return a;"
+                    : automatic
+                        ? "const s=tool('get_state'); const a=s.action_tasks.find(x=>x.status==='paused'); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});"
+                        : "const a=step('nav',()=>{throw new Error('must retain handle')}); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});";
                 message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "wake-" + call, ["type"] = "function",
                     ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
                         { ["workflow"] = "wake-flow", ["code"] = code }.ToJsonString() } });
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) };
+        }
+    }
+
+    static async Task TestQueryRecovery()
+    {
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        var labels = new System.Collections.Generic.Dictionary<int, string>(Terraria.Lang.MapLabels);
+        var options = Terraria.Map.MapHelper.tileOptionCounts;
+        var handler = new QueryRecoveryHandler();
+        using var http = new HttpClient(handler);
+        field.SetValue(Agent, new AgentConversation(http));
+        AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
+        int searches = 0;
+        Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
+        Terraria.Lang.MapLabels[16] = Terraria.Lang.MapLabels[32] = "repair target";
+        HttpServerSystem.Handler = (path, args) =>
+        {
+            Check(path == "/find_tiles" && JsonNode.Parse(args)["name"].ToString() == "FixtureSource", "recovery did not use exact candidate");
+            searches++; return (200, "{\"tiles\":[{\"x\":10,\"y\":20}]}");
+        };
+        try
+        {
+            NativeAgent.Submit("修正名称歧义后验证现有100血");
+            await PumpUntil(() => NativeAgent.Status == "idle" && handler.Calls == 4);
+            Check(searches == 1 && AgentTools.Plan.Snapshot()["status"].ToString() == "completed"
+                && AgentTools.Recovery.Snapshot()["latest"] == null, "query failure did not recover and verify same plan");
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Plan.Reset(); HttpServerSystem.Handler = null;
+            Terraria.Lang.MapLabels = labels; Terraria.Map.MapHelper.tileOptionCounts = options; field.SetValue(Agent, previous);
+        }
+        Console.WriteLine("PASS: implicit query failure preserves full candidates and host requests repair before no-progress shutdown");
+    }
+
+    sealed class QueryRecoveryHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "query repair exceeded its expected two turns");
+            if (call == 2)
+            {
+                string body = await request.Content.ReadAsStringAsync(token);
+                Check(body.Contains("FixtureSource") && body.Contains("FixtureOther") && body.Contains("ambiguous_tile_name"),
+                    "repair turn lost candidate evidence");
+            }
+            var message = new JsonObject { ["content"] = "本轮结束" };
+            if (call % 2 == 0)
+            {
+                string code = call == 0
+                    ? "tool('task_plan',{goal:'repair',steps:[{id:'health',description:'verify existing health',conditions:[{kind:'permanent_health',count:100}]}]}); print(tool('find_tiles',{name:'repair target'}));"
+                    : "tool('find_tiles',{name:'FixtureSource'}); return tool('task_step',{id:'health',action:'verify'});";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "repair-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = code }.ToJsonString() } });
             }
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
                 new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) };
