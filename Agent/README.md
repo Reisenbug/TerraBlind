@@ -185,6 +185,12 @@ dotnet run --project tests/Agent/AgentTests.csproj -- --codex-smoke
 
 ### Codex goal 与事件流程验收
 
+计划条件误填编号可用task_plan_patch原子纠正：expected_revision抄当前task_plan.revision，changes每项给step/condition/expected_type/type，reason写查证依据。仅改未完成的item/equipped/npc_alive类型，不改数量、kind、已完成步骤、游标或npc_kills基线；所有变更验证通过才应用，留condition_corrections历史。修正不增加progress_revision，不自动完成或核销实际阻塞，后续仍需执行和task_step verify。建计划、成功推进及修正更新结构revision，普通观察不更新。
+
+新增回归后86组独立检查通过，覆盖两处错号原子修正、旧版本/已完成步骤/击杀条件拒绝、失败不部分写入、保持原目标与已得进度。`dotnet run --project tests/Agent/AgentTests.csproj -- --plan-repair-model` 使用真实Luna、模拟库存，复用生产TaskPlan/Script/工具元数据及Codex goal协议；模型查证191，修正既有190条件两处并继续验收，未重建计划，2个宿主轮次后原生goal完成。报告 `/var/folders/2p/90f7gl9d32g9227t1r_cd9nh0000gn/T/terrablind-plan-repair-5ac2792a048f4f70889a858858b0e652/result.json`。这不证明自然游戏整链已通过。
+
+启动Agent时日志增加api_revision=2与程序集ModuleVersionId，状态agent.api_revision同样可读，用于区分源代码已合并与实际已加载。2026-11-01晚间读取正常Mods/TerraBlind.tmod，发现其中仍无AgentRecovery和SurfaceBiomeSearch类，System.txt也没有自动观察规则；因此旧包的“只查询后暂停”不能用当前源码解释为已执行新修复。
+
 2026-11-01 晚间实机反馈修正：脚本与导航不再有120/180秒墙钟截止，Gather也取消隐式时限；保留JS语句/内存/调用次数上限、真实失败、死亡与玩家停止。旧seconds参数仅兼容，不限制长动作耗时。脚本直接调用nav_to/gather/fight/mine_vein/chop_wood也由宿主自动托管，正常保持串行等待，事件发生则暂停并提前交回；后续代码不执行，原句柄及未完成step保留。不再依赖模型登记watch。每250毫秒采样，状态含samples/last_observation，每20次写agent_observe日志，不按周期请求模型。6次机会事件预算不会关闭现场采样或吞掉完成/失败/死亡。
 
 查询错误单独保存recovery，含原参数和完整name_candidates；仅print失败而隐式返回null的脚本标tool_failed，不再算成功。宿主最多补3轮有证据的修复，同参数失败3次后拒绝再次执行。正确查询消除对应旧失败。首次script_progress get不存在workflow返回found=false，不能对不存在的步骤retry/complete。run_script包装和只读action_query不再覆盖原动作证据。
