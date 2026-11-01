@@ -7,6 +7,8 @@ namespace TerraBlind;
 public static class NavigationSurvival
 {
     static int heldSlot = -1, previousSlot = -1, stashedSlot = -1;
+    static bool holdingWeb;
+    static Point webTarget;
     public static int Interventions { get; private set; }
 
     public static void Reset(Player player)
@@ -16,6 +18,7 @@ public static class NavigationSurvival
         if (heldSlot >= 0 && player.selectedItem == heldSlot && previousSlot >= 0)
             player.selectedItem = previousSlot;
         heldSlot = previousSlot = stashedSlot = -1;
+        holdingWeb = false;
     }
 
     public static bool Apply(Player player)
@@ -34,6 +37,18 @@ public static class NavigationSurvival
                 Reset(player);
                 return false;
             }
+            if (holdingWeb)
+            {
+                ClearControls(player);
+                if (!Main.tile[webTarget.X, webTarget.Y].HasTile && player.inventory[heldSlot].type == ItemID.Cobweb)
+                {
+                    player.selectedItem = heldSlot;
+                    player.delayUseItem = false; player.mouseInterface = false;
+                    Cursor.AimTile(webTarget.X, webTarget.Y);
+                    player.controlUseItem = true;
+                }
+                return true;
+            }
             if (player.inventory[heldSlot].type is ItemID.Umbrella or ItemID.TragicUmbrella)
             {
                 ClearControls(player);
@@ -44,7 +59,7 @@ public static class NavigationSurvival
             }
             Reset(player);
         }
-        if (!DangerousLandingSoon(player)) return false;
+        if (!DangerousLandingSoon(player, out var landing)) return false;
         for (int slot = 0; slot < 50; slot++)
         {
             if (player.inventory[slot].type is not (ItemID.Umbrella or ItemID.TragicUmbrella)) continue;
@@ -62,7 +77,24 @@ public static class NavigationSurvival
             player.controlUp = player.gravDir < 0;
             return true;
         }
-        if (!player.AnyExtraJumpUsable()) return false;
+        if (!player.AnyExtraJumpUsable())
+        {
+            if (player.gravDir != 1) return false;
+            var target = new Point((int)((landing.X + player.width / 2f) / 16), (int)((landing.Y + player.height - 1) / 16));
+            if (!Reach.CanPlace(player, target.X, target.Y) || Main.tile[target.X, target.Y].HasTile
+                || !LavaSafety.CanMine(target.X, target.Y)) return false;
+            for (int slot = 0; slot < 10; slot++)
+            {
+                if (player.inventory[slot].type != ItemID.Cobweb) continue;
+                previousSlot = player.selectedItem; heldSlot = slot; holdingWeb = true; webTarget = target;
+                Interrupt(player, "place_cobweb");
+                player.selectedItem = slot;
+                player.delayUseItem = false; player.mouseInterface = false;
+                Cursor.AimTile(target.X, target.Y); player.controlUseItem = true;
+                return true;
+            }
+            return false;
+        }
         bool press = player.releaseJump;
         Interrupt(player, press ? "extra_jump" : "release_jump");
         player.controlJump = press;
@@ -70,7 +102,11 @@ public static class NavigationSurvival
     }
 
     public static bool DangerousLandingSoon(Player player)
+        => DangerousLandingSoon(player, out _);
+
+    static bool DangerousLandingSoon(Player player, out Vector2 landing)
     {
+        landing = player.position;
         if (player.stoned || player.noFallDmg || player.equippedWings != null || player.slowFall
             || player.wet || player.velocity.Y * player.gravDir <= 0) return false;
         var position = player.position;
@@ -84,7 +120,10 @@ public static class NavigationSurvival
                 false, false, (int)player.gravDir);
             position += allowed;
             if (allowed.Y * player.gravDir < velocity.Y * player.gravDir)
+            {
+                landing = position;
                 return ((int)(position.Y / 16f) - player.fallStart) * player.gravDir > 25 + player.extraFall;
+            }
         }
         return false;
     }

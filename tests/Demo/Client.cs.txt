@@ -792,7 +792,7 @@ public sealed class Driver : ModSystem
     }
 
     int survivalCase, survivalMinHp, survivalInterventions, survivalLanded;
-    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "air_pocket", "air_sealed" };
+    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "cobweb", "air_pocket", "air_sealed" };
 
     void SurvivalControl()
     {
@@ -823,6 +823,7 @@ public sealed class Driver : ModSystem
             if (kind == "wings") p.armor[3].SetDefaults(ItemID.AngelWings);
             if (kind == "cloud") p.armor[3].SetDefaults(ItemID.CloudinaBottle);
             if (kind == "umbrella_bag") p.inventory[12].SetDefaults(ItemID.Umbrella);
+            if (kind == "cobweb") { p.inventory[0].SetDefaults(ItemID.Cobweb); p.inventory[0].stack = 10; }
             p.inventory[9].SetDefaults(ItemID.Wood); p.inventory[9].stack = 23; p.selectedItem = 9;
             if (air)
             {
@@ -881,7 +882,7 @@ public sealed class Driver : ModSystem
         int interventions = (air ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
         Console.WriteLine($"SURVIVAL_CONTROL_CASE kind={kind} ticks={ticks} hp_loss={400 - survivalMinHp} interventions={interventions} breath={p.breath}/{p.breathMax} landed={survivalLanded} dead={p.dead} pos={p.position} velocity={p.velocity}");
         if (p.dead || survivalLanded < 3 || (kind == "bare" ? survivalMinHp >= 400 : survivalMinHp != 400)
-            || (kind is "cloud" or "umbrella_bag") && interventions == 0)
+            || (kind is "cloud" or "umbrella_bag" or "cobweb") && interventions == 0)
             throw new InvalidOperationException("survival_control_failed:" + kind);
         if (kind == "umbrella_bag" && (p.inventory[12].type != ItemID.Umbrella
             || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
@@ -889,7 +890,7 @@ public sealed class Driver : ModSystem
         RecedingNav.Stop(); NavigationSurvival.Reset(p);
         prepared = false;
         if (++survivalCase < survivalKinds.Length) return;
-        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=7");
+        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=8");
         enabled = false; FinishProcess(0);
     }
 

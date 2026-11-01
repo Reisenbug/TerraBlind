@@ -1417,13 +1417,14 @@ public sealed class Engine : ModSystem
         {
             var cases = new JsonArray();
             foreach (string kind in new[] { "bare", "horseshoe", "wings", "umbrella", "umbrella_down",
-                "featherfall", "cloud_jump", "gravity_flip", "water", "honey", "cobweb" })
+                "featherfall", "cloud_jump", "gravity_flip", "water", "honey", "cobweb", "cobweb_place" })
             {
                 int equipment = kind switch {
                     "horseshoe" => ItemID.LuckyHorseshoe, "wings" => ItemID.AngelWings,
                     "cloud_jump" => ItemID.CloudinaBottle, _ => 0 };
                 Setup(new JsonObject { ["equipment"] = equipment == 0 ? new JsonArray() : new JsonArray(equipment) });
                 if (kind.StartsWith("umbrella")) { source.inventory[0].SetDefaults(ItemID.Umbrella); source.selectedItem = 0; }
+                if (kind == "cobweb_place") { source.inventory[0].SetDefaults(ItemID.Cobweb); source.inventory[0].stack = 10; }
                 if (kind == "featherfall") source.AddBuff(BuffID.Featherfall, 3600);
                 if (kind == "gravity_flip")
                 {
@@ -1453,7 +1454,8 @@ public sealed class Engine : ModSystem
                         if (kind == "cloud_jump") { keys |= VanillaKeys.Jump; rescued = true; }
                         if (kind == "gravity_flip") { keys |= VanillaKeys.Up; rescued = true; }
                     }
-                    VanillaPrediction.Advance(source, keys);
+                    bool placeWeb = kind == "cobweb_place" && source.velocity.Y > 0 && Y * 16 - source.Bottom.Y < 128;
+                    VanillaPrediction.Advance(source, keys, placeWeb ? 0 : -1, placeWeb ? new Point(X, Y - 1) : null);
                     minHp = Math.Min(minHp, source.statLife);
                     if (source.velocity.Y == 0 && (source.Bottom.Y >= Y * 16 - 1
                         || kind == "gravity_flip" && source.gravDir == -1 && source.position.Y <= (area.Top + 1) * 16 + 1))
