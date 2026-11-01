@@ -33,6 +33,7 @@ public sealed class ActionTasks
 
     public bool Conflicts { get { lock (gate) return active != null && caller.Value != active.Id; } }
     public bool HasActive { get { lock (gate) return active != null; } }
+    public string ActiveHandle { get { lock (gate) return active?.Id; } }
 
     public JsonObject Start(string tool, JsonObject args, CancellationToken root)
     {

@@ -26,7 +26,8 @@ public static class AgentScript
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
-        Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null)
+        Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null,
+        Func<CancellationToken, Task<JsonObject>> observeEvent = null)
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
@@ -39,6 +40,7 @@ public static class AgentScript
         int calls = 0;
         bool inTool = false;
         Exception hostFailure = null;
+        JsonObject wake = null;
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
         JsonObject Report(string error, string detail, JsonNode value = null)
         {
@@ -69,6 +71,11 @@ public static class AgentScript
                 engine.SetValue("__gameTool", new Func<string, string, string>((name, json) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
+                    if (observeEvent != null)
+                    {
+                        wake ??= observeEvent(budget.Token).GetAwaiter().GetResult();
+                        if (wake != null) throw hostFailure = new InvalidOperationException("host_event_pending");
+                    }
                     if (name is "run_script" or "ask") throw new InvalidOperationException("脚本内禁止嵌套run_script或ask；需要决策时return交回模型。");
                     if (json == null || json.Length > 32000) throw new ArgumentException("工具参数超过32000字符。");
                     var args = JsonNode.Parse(json) as JsonObject ?? throw new ArgumentException("工具参数必须是JSON对象。");
@@ -83,6 +90,11 @@ public static class AgentScript
                     string result = execute(name, args, budget.Token).GetAwaiter().GetResult();
                     progress?.Record(name, args, result);
                     inTool = false;
+                    if (name == "decision_point")
+                    {
+                        wake = JsonNode.Parse(result) as JsonObject;
+                        throw hostFailure = new InvalidOperationException("decision_requested");
+                    }
                     budget.Token.ThrowIfCancellationRequested();
                     entry["elapsed_ms"] = clock.ElapsedMilliseconds - started;
                     entry["result"] = Clip(result, 800);
@@ -143,6 +155,9 @@ public static class AgentScript
         }
         catch (Exception error)
         {
+            if (wake != null)
+                return Report(null, "宿主事件或主动决策点交回模型；未完成step需核对。", new JsonObject
+                { ["status"] = "yield", ["wake"] = wake.DeepClone() });
             string cleanup = null;
             if (inTool)
             {

@@ -14,6 +14,7 @@ public static class AgentTools
 {
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
+    internal static readonly AgentWatch Watches = new();
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
@@ -21,10 +22,11 @@ public static class AgentTools
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() => Tracking.Clear();
+    public static void NewTask() { Tracking.Clear(); Watches.Reset(); }
     public static void Stop()
     {
         Actions.CancelAll();
+        Watches.Reset();
         if (bossBefore is { } previous)
         {
             Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; bossBefore = null;
@@ -94,6 +96,7 @@ public static class AgentTools
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Snapshot();
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Snapshot();
+        state["watch"] = Watches.Snapshot();
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
         return state.ToJsonString();
@@ -289,8 +292,14 @@ public static class AgentTools
                 result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool,
                     (child, childArgs, childToken) => Execute(child, childArgs,
                         child == "action_start" || child == "action_control" && Text(childArgs, "command") == "resume" ? token : childToken),
-                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow);
+                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
+                    checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Snapshot() : null, checkToken));
                 break;
+            case "watch":
+                return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();
+            case "decision_point":
+                return new JsonObject { ["status"] = "yield", ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token),
+                    ["state"] = JsonNode.Parse(await State(token)) }.ToJsonString();
             case "action_start":
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");

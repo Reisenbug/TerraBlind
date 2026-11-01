@@ -432,6 +432,7 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
+            await TestWakeHandoff();
             await TestPartialProgress();
             await TestToolFailureEvidence();
 
@@ -445,6 +446,73 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestWakeHandoff()
+    {
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        var handler = new WakeHandler();
+        using var http = new HttpClient(handler);
+        field.SetValue(Agent, new AgentConversation(http));
+        AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            NativeAgent.Submit("途中箱子事件后临时改目的地");
+            await PumpUntil(() => RecedingNav.Active);
+            Game.chest[0] = new Terraria.Chest { x = (int)Game.LocalPlayer.Center.X / 16, y = (int)Game.LocalPlayer.Center.Y / 16 };
+            Game.chest[0].item[0] = new Terraria.Item { type = 1, stack = 1 };
+            await PumpUntil(() => handler.Calls == 4 && RecedingNav.Active && AgentTools.Actions.Snapshot()[0]["attempt"].GetValue<int>() == 2);
+            var action = AgentTools.Actions.Snapshot()[0];
+            Check(action["args"]["x"].GetValue<int>() == 200 && action["previous_attempt"]["status"].ToString() == "paused",
+                "event handoff lost old handle evidence or failed to change remaining arguments");
+            Check(AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 1, "same chest caused another wake");
+            NativeAgent.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive);
+            for (int i = 0; i < 10; i++) Agent.PostUpdateEverything();
+            Check(!RecedingNav.Active && !AgentTools.Watches.Armed && handler.Calls == 4,
+                "stop leaked inputs, watchers or additional model requests");
+        }
+        finally
+        {
+            NativeAgent.Stop(); Game.chest[0] = null; HttpServerSystem.Handler = null;
+            AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); field.SetValue(Agent, previous);
+        }
+        Console.WriteLine("PASS: native passive wake pauses input before model, resumes changed args on same handle and stops without more requests");
+    }
+
+    sealed class WakeHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "event handoff spun extra model requests");
+            var message = new JsonObject { ["content"] = "等待事件" };
+            if (call == 2)
+            {
+                var body = JsonNode.Parse(await request.Content.ReadAsStringAsync(token));
+                string input = body["messages"].AsArray().Last(m => m["role"]?.ToString() == "user")["content"].ToString();
+                Check(input.Contains("nearby_chest") && input.Contains("paused") && !RecedingNav.Active,
+                    "model wake lacked actual event or input was not released first");
+            }
+            if (call % 2 == 0)
+            {
+                string code = call == 0
+                    ? "tool('watch',{events:['nearby_chest']}); const a=step('nav',()=>tool('action_start',{tool:'nav_to',args:{x:100,y:100}})); return a;"
+                    : "const a=step('nav',()=>{throw new Error('must retain handle')}); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "wake-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["workflow"] = "wake-flow", ["code"] = code }.ToJsonString() } });
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) };
+        }
     }
 
     static async Task TestToolFailureEvidence()

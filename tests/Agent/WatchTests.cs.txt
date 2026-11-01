@@ -1,0 +1,55 @@
+using System;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class WatchTests
+{
+    static void Check(bool value, string reason) { if (!value) throw new Exception(reason); }
+
+    public static async Task Run()
+    {
+        var watch = new AgentWatch();
+        var config = JsonNode.Parse("{\"events\":[\"nearby_chest\",\"action_finished\",\"low_health\"]}").AsObject();
+        watch.Configure(config);
+        var state = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":10,\"y\":20}],\"actions\":[]}").AsObject();
+        watch.Observe(state);
+        Check(watch.Take().Count == 1, "chest did not emit one event");
+        watch.Configure(config); watch.Observe(state);
+        Check(!watch.HasPending, "reconfiguration reset same-chest deduplication");
+        state["hp"] = 50; watch.Observe(state); watch.Observe(state);
+        Check(watch.Take().Count == 1, "unchanged health repeatedly woke model");
+        Console.WriteLine("PASS: event evidence deduplicates chests and health across reconfiguration");
+
+        for (int i = 0; i < 10; i++)
+        {
+            state["chests"] = new JsonArray(new JsonObject { ["x"] = i + 100, ["y"] = 1 });
+            watch.Observe(state);
+        }
+        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && watch.Take().Count == 4 && !watch.Armed,
+            "wake budget failed to bound repeated changed events");
+        try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
+        catch (InvalidOperationException) { }
+        watch.Reset(); Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 0,
+            "task scope leaked events or state");
+        Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
+
+        int effects = 0;
+        var progress = new ScriptProgress();
+        var direct = await AgentScript.Run("step('before',()=>tool('effect')); tool('decision_point',{reason:'choose next'}); tool('effect');", 5,
+            (_, _) => { }, (name, _, _) => { if (name == "effect") effects++; return Task.FromResult("{\"status\":\"yield\"}"); },
+            _ => Task.CompletedTask, default, progress);
+        Check(direct["ok"].GetValue<bool>() && direct["value"]["status"].ToString() == "yield" && effects == 1
+            && progress.Completed == 1, "decision point ran later effects or lost completed steps");
+        Console.WriteLine("PASS: explicit decision point stops remaining code and retains completed effects");
+
+        bool pending = false;
+        var passive = await AgentScript.Run("step('one',()=>tool('effect')); try { tool('effect'); } catch(e) {} tool('effect');", 5,
+            (_, _) => { }, (_, _, _) => { effects++; pending = true; return Task.FromResult("{\"ok\":true}"); },
+            _ => Task.CompletedTask, default, new ScriptProgress(),
+            _ => Task.FromResult(pending ? new JsonObject { ["kind"] = "nearby_chest" } : null));
+        Check(passive["ok"].GetValue<bool>() && passive["value"]["status"].ToString() == "yield" && effects == 2,
+            "passive event failed to stop effects or script bypassed wake by catching exception");
+        Console.WriteLine("PASS: passive host event yields at a tool boundary and cannot be caught to continue effects");
+    }
+}

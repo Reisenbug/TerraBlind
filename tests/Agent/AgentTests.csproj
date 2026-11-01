@@ -9,7 +9,9 @@
     <Compile Include="../../Agent/Script.cs" Link="Script.cs" />
     <Compile Include="../../Agent/ScriptProgress.cs" Link="ScriptProgress.cs" />
     <Compile Include="../../Agent/ActionTasks.cs" Link="ActionTasks.cs" />
+    <Compile Include="../../Agent/AgentWatch.cs" Link="AgentWatch.cs" />
     <Compile Include="ActionTests.cs.txt" />
+    <Compile Include="WatchTests.cs.txt" />
     <Compile Include="RoutingBenchmark.cs.txt" />
     <Compile Include="ScriptTests.cs.txt" />
     <Compile Include="../../Agent/Gather.cs" Link="Gather.cs" />

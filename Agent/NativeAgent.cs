@@ -24,6 +24,7 @@ public class NativeAgent : ModSystem
     string _pending;
     string _system;
     DateTime _lastFeedback;
+    DateTime _lastWatch;
     JsonArray _schemas;
     readonly ConcurrentQueue<string> _combatMessages = new();
     internal static bool CombatMessagesPending => _instance?._combatMessages.IsEmpty == false;
@@ -103,6 +104,20 @@ public class NativeAgent : ModSystem
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
+        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false
+            && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
+        {
+            _lastWatch = DateTime.UtcNow;
+            var p = Main.LocalPlayer;
+            var chests = new JsonArray();
+            foreach (var chest in Main.chest)
+                if (chest != null && chest.item.Any(i => !i.IsAir)
+                    && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
+                    chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
+                ["actions"] = AgentTools.Actions.Snapshot() });
+        }
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
@@ -154,6 +169,19 @@ public class NativeAgent : ModSystem
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
+                    while (await OnMain(() => AgentTools.Actions.HasActive && AgentTools.Watches.Armed
+                        && !AgentTools.Watches.HasPending, token))
+                        await Task.Delay(100, token);
+                    if (await OnMain(() => AgentTools.Watches.HasPending, token))
+                    {
+                        string handle = AgentTools.Actions.ActiveHandle;
+                        if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
+                        var events = await OnMain(() => AgentTools.Watches.Take(), token);
+                        input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
+                            + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
+                            + "\n现状：" + await AgentTools.State(token);
+                        continue;
+                    }
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
@@ -204,6 +232,7 @@ public class NativeAgent : ModSystem
                     if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded))
                         Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
                     else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
+                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete) AgentTools.Watches.Reset();
                     return true;
                 }, token);
             }
