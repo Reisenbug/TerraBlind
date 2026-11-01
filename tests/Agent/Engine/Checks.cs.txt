@@ -167,6 +167,8 @@ public sealed class Driver : ModSystem
     bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
     bool WatchLive => Terraria.Program.LaunchParameters.ContainsKey("-agentwatchcheck");
     bool DecisionLive => Terraria.Program.LaunchParameters.ContainsKey("-agentdecisioncheck");
+    bool BiomeCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentbiomecheck");
+    bool AutomaticLive => Terraria.Program.LaunchParameters.ContainsKey("-agentautomaticcheck");
     int eventChest = -1;
     bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
     bool InteractionCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck");
@@ -306,7 +308,8 @@ public sealed class Driver : ModSystem
                         var actions = state["action_tasks"].AsArray();
                         bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
                             && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
-                            && actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10;
+                            && (actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10
+                                || AutomaticLive && actions[0]["args"]?["count"]?.GetValue<int>() == 10);
                         bool woke = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "nearby_chest") == true;
                         bool goalComplete = state["codex_goal"]?["native"]?["status"]?.ToString() == "complete";
                         bool explicitWake = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "decision_point") == true;
@@ -366,6 +369,11 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (BiomeCheck)
+                    {
+                        Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
+                        Call("find_biome", new JsonObject { ["name"] = "jungle" }); phase = 48; break;
+                    }
                     if (InteractionCheck)
                     {
                         Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
@@ -487,13 +495,16 @@ public sealed class Driver : ModSystem
                         if (WatchLive)
                         {
                             PrepareResources(player);
+                            Concessions.Enabled = false;
                             heartX = (int)player.Center.X / 16; heartY = (int)player.Bottom.Y / 16;
                             foreach (var chest in Main.chest)
                                 if (chest != null && Math.Abs(chest.x - heartX) + Math.Abs(chest.y - heartY) <= 60)
                                     foreach (var item in chest.item) item.TurnToAir();
-                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            Config.I.AgentCodexModel = AutomaticLive ? "gpt-6-luna" : "gpt-6-astra";
                             string activeDecision = DecisionLive ? "箱子实际取物成功并单独step保存后，必须先在step之外调用decision_point，说明需要根据新收获重新决策。本段不得恢复采集；下一轮才把原handle目标改成10并恢复，不重复搜刮箱子。" : "";
-                            NativeAgent.Submit("/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
+                            NativeAgent.Submit(AutomaticLive
+                                ? "/goal 收集10颗生命水晶，先别使用；途中搜刮附近箱子。已查证水晶物品29，来源方块Heart。"
+                                : "/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
                         }
                         else if (WorkflowLive)
                         {
@@ -683,13 +694,30 @@ public sealed class Driver : ModSystem
                     Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["verified"]?.GetValue<bool>() == true
                         && player.statLifeMax == 300, "script_health_not_verified");
                     Call("run_script", new JsonObject { ["seconds"] = 1,
-                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:600}}]}); return {unexpected:true};" });
+                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:90}}]}); return {completed:true};" });
                     break;
                 case 23:
-                    Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
-                        && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["completed"]?.GetValue<bool>() == true
+                        && !ActExecutor.IsActive && result["elapsed_ms"]?.GetValue<long>() > 1000, "long_action_was_cancelled_by_script_deadline");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
                     break;
+                case 48:
+                    Check(result["found"]?.GetValue<bool>() == true && result["local_biome_tiles"].GetValue<int>() >= SceneMetrics.JungleTileThreshold,
+                        "no_verified_jungle_surface");
+                    heartX = result["x"].GetValue<int>(); heartY = result["y"].GetValue<int>();
+                    for (int sy = 0; sy <= heartY; sy++)
+                    {
+                        var sky = Main.tile[heartX, sy];
+                        Check(!sky.HasUnactuatedTile || !Main.tileSolid[sky.TileType] || Main.tileSolidTop[sky.TileType], "entrance_is_a_covered_pocket");
+                    }
+                    player.Teleport(new Vector2(heartX * 16 + 8 - player.width / 2f, (heartY + 1) * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+                    interactionWait = ticks + 90; break;
+                case 49:
+                    if (ticks < interactionWait) { phase = 49; break; }
+                    Check(player.ZoneJungle, "native_player_did_not_recognize_selected_jungle");
+                    results.Add(new JsonObject { ["native_zone_jungle"] = player.ZoneJungle, ["x"] = heartX, ["y"] = heartY });
+                    Finish(true, "AGENT_BIOME_COMPLETE sky_exposed=true native_zone_jungle=true model_calls=0"); break;
                 case 29:
                     Check(result["ok"]?.GetValue<bool>() == true && player.armor[0].type == ItemID.WoodHelmet && player.inventory[0].IsAir,
                         "helmet_not_equipped");

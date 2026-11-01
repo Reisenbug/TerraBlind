@@ -185,6 +185,16 @@ dotnet run --project tests/Agent/AgentTests.csproj -- --codex-smoke
 
 ### Codex goal 与事件流程验收
 
+2026-11-01 晚间实机反馈修正：脚本与导航不再有120/180秒墙钟截止，Gather也取消隐式时限；保留JS语句/内存/调用次数上限、真实失败、死亡与玩家停止。旧seconds参数仅兼容，不限制长动作耗时。脚本直接调用nav_to/gather/fight/mine_vein/chop_wood也由宿主自动托管，正常保持串行等待，事件发生则暂停并提前交回；后续代码不执行，原句柄及未完成step保留。不再依赖模型登记watch。每250毫秒采样，状态含samples/last_observation，每20次写agent_observe日志，不按周期请求模型。6次机会事件预算不会关闭现场采样或吞掉完成/失败/死亡。
+
+查询错误单独保存recovery，含原参数和完整name_candidates；仅print失败而隐式返回null的脚本标tool_failed，不再算成功。宿主最多补3轮有证据的修复，同参数失败3次后拒绝再次执行。正确查询消除对应旧失败。首次script_progress get不存在workflow返回found=false，不能对不存在的步骤retry/complete。run_script包装和只读action_query不再覆盖原动作证据。
+
+丛林入口用完整天空列的第一块实心地面，检查3格宽/高人物空间和岩浆，按当前TileID.Sets.JungleBiome、原版buffScanAreaWidth/Height与SceneMetrics.JungleTileThreshold计算局部生态数量；不足则拒绝，不找地下小洞的最近单块草。独立引擎报告 `/tmp/terrablind-agent-engine-1793540635022563000/agent-engine-result.json`：选点(2905,275)，局部141/阈值140，扫描1680000格、124ms，传送测试后原生player.ZoneJungle=true，天空列检查通过。原世界只读扫描，只有测试人物被传送；不宣称真实导航已到达。
+
+新普通指令Luna联调：`python3 tests/Agent/Engine/run.py --automatic-live`，未要求watch或后台句柄，只要求收10颗水晶并顺路搜箱子。报告 `/tmp/terrablind-agent-engine-1793541026863389000/agent-engine-result.json`：自动观察83次，箱子事件暂停、实际搜刮、同一句柄attempt=2恢复，最终库存10且原生goal完成，4个宿主模型轮次。导航仍由传送替代、10颗资源及中途箱子由测试有限预置；不是自然地图一条龙验收。新增回归后85组独立检查通过，包含未注册watch的同步导航中断、失败候选修复、超过旧seconds仍执行及玩家取消。
+
+无模型的真实引擎脚本检查也通过：`python3 tests/Agent/Engine/run.py --script`，报告 `/tmp/terrablind-agent-engine-1793541390809299000/agent-engine-result.json`。seconds=1的脚本实际执行90帧动作后正常完成，并验证300永久血，标记 `AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub`。它验证游戏等待不会被旧脚本墙钟打断，不代表已经实测任意时长导航。
+
 游戏中用 `/tb /goal 目标内容` 创建长期目标；`/tb /goal --tokens 预算 目标内容` 显式设置正整数token预算。`/tb /goal status` 查询，`/tb /goal pause` 或普通stop停止，`/tb /goal resume` 继续保留的目标。预算耗尽或已完成的目标不能普通resume。普通指令不会隐式创建Codex goal。离开世界仍清空游戏计划与句柄，不承诺重启游戏后续接。
 
 实际调用Codex app-server的thread/goal/set与thread/goal/get，goal会话使用持久线程。服务器启用goals；游戏线程单独关闭原生自动续轮和模型内置goal工具，由游戏宿主调度同一目标的事件续接，防止原生自动轮次绕过输入交接或模型提前标完成。完成前重新读取最终条件，所有步骤已验收且没有后台动作占用输入才写native complete。模型回复结束、仅有启动成功、计划中的旧completed标记都不能替代最终现场。无进展只额外续接一次；每轮最多32次顶层游戏工具调用，脚本另有100次工具与时间限制。
