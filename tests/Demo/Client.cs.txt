@@ -799,6 +799,7 @@ public sealed class Driver : ModSystem
         var p = Main.LocalPlayer;
         string kind = survivalKinds[survivalCase];
         bool air = kind.StartsWith("air_");
+        bool resume = kind == "air_sealed" && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalresume");
         if (!prepared)
         {
             RecedingNav.Stop(); NavigationSurvival.Reset(p);
@@ -850,6 +851,7 @@ public sealed class Driver : ModSystem
             RecedingNav.Active = kind != "bare";
             survivalInterventions = NavigationSurvival.Interventions;
             if (air) { p.breath = 170; survivalInterventions = NavigationAirPocket.Recoveries; }
+            if (resume) RecedingNav.Start(508, 399, RecedingNav.Mode.Stand);
             survivalMinHp = 400; survivalLanded = ticks = 0; started = true;
             return;
         }
@@ -869,7 +871,9 @@ public sealed class Driver : ModSystem
                 Console.WriteLine($"SURVIVAL_SUPPORT x={tx} y={y} active={tile.HasTile} type={tile.TileType} liquid={tile.LiquidAmount} slope={tile.Slope} half={tile.IsHalfBlock} wood={p.inventory[9].stack} jump={p.controlJump} use={p.controlUseItem}");
             }
         }
-        if (air) survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions ? 3 : 0;
+        if (air) survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions
+            && (!resume || !RecedingNav.Active && RecedingNav.LastStop == "done"
+                && Math.Abs(p.Center.X / 16 - 508.5f) < 2) ? 3 : 0;
         else if (p.velocity.Y == 0 && p.Bottom.Y >= 6400 - 1) survivalLanded++; else survivalLanded = 0;
         if (survivalLanded < 3 && ticks < (air ? 3600 : 900) && !p.dead) return;
         int interventions = (air ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
