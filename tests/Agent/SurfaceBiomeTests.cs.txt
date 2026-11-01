@@ -1,0 +1,23 @@
+using System;
+using TerraBlind;
+
+static class SurfaceBiomeTests
+{
+    static void Check(bool ok, string reason) { if (!ok) throw new Exception(reason); }
+    public static void Run()
+    {
+        var cells = new BiomeCell[70, 65];
+        for (int x = 0; x < 70; x++) cells[x, 20] = new BiomeCell(true, 0);
+        cells[8, 35] = new BiomeCell(true, 1);
+        for (int x = 40; x < 60; x++)
+        for (int y = 20; y < 25; y++) cells[x, y] = new BiomeCell(true, 1);
+        var result = SurfaceBiomeSearch.Find(70, 65, 45, 8, 20, 20, 30, (x, y) => cells[x, y]);
+        Check(result.HasValue && result.Value.X > 25 && result.Value.Y == 19 && result.Value.LocalCount >= 30,
+            "isolated underground grass or a covered pocket was chosen as a surface biome");
+        for (int x = 40; x < 60; x++)
+        for (int y = 20; y < 25; y++) cells[x, y] = new BiomeCell(true, 0);
+        Check(SurfaceBiomeSearch.Find(70, 65, 45, 8, 20, 20, 30, (x, y) => cells[x, y]) == null,
+            "single signature tile was accepted without a biome-size neighborhood");
+        Console.WriteLine("PASS: surface biome selection rejects covered pockets and isolated signature tiles, requiring measured local density");
+    }
+}

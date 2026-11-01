@@ -2268,6 +2268,7 @@ namespace TerraBlind
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] sigTypes = BiomeSig(biome);
 				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
+                else if (biome == "jungle") body = BiomeSearch.Jungle().ToJsonString();
 				else
 				{
 					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
