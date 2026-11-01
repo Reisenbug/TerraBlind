@@ -234,6 +234,8 @@ def main():
     parser.add_argument("--reverse-tiles", action="store_true")
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--movement-timing", type=Path)
+    parser.add_argument("--native-movement-probe", type=Path)
+    parser.add_argument("--movement-goal", type=int, nargs=2)
     parser.add_argument("--landing-probe", type=Path)
     parser.add_argument("--survival-mechanics-probe", action="store_true")
     parser.add_argument("--expect-landing-rejected", action="store_true")
@@ -951,6 +953,43 @@ def main():
                 assert resumed["controls"] == baseline["controls"]
                 assert resumed["forecast"]["frames"] == baseline["forecast"]["frames"]
             print("CANCELLATION_CONTRACT_PASS", dict(latency_ms=latencies, restored=True), flush=True)
+            return
+        if args.native_movement_probe:
+            source = json.loads(args.native_movement_probe.read_text())
+            state = source["snapshot"]
+            goal = args.movement_goal or (source["goal_x"], source["goal_y"])
+            reports = []
+            reached = False
+            for step in range(8):
+                result = worker.call("native_movement", snapshot=state,
+                    x=goal[0] * 16, y=goal[1] * 16 - 42)
+                reports.append(result)
+                if result["status"] != "planned":
+                    print("NATIVE_MOVEMENT_STOP", step, result["status"], flush=True)
+                    break
+                forecast = result["forecast"]
+                repeated = worker.call("native_movement", snapshot=state,
+                    x=goal[0] * 16, y=goal[1] * 16 - 42)
+                assert repeated["controls"] == result["controls"]
+                assert repeated["forecast"]["frames"] == forecast["frames"]
+                result["warm_plan_ms"] = repeated["elapsed_ms"]
+                replay = worker.call("replay", snapshot=state, controls=result["controls"], detailed=False)
+                assert replay["outcome"] == "complete"
+                assert replay["frames"] == forecast["frames"]
+                frames = forecast["frames"]
+                assert all(not f["dead"] and f["hp"] >= frames[0]["hp"] for f in frames)
+                state = forecast["end_snapshot"]
+                print("NATIVE_MOVEMENT_STEP", step, "frames", len(frames), "ms", result["elapsed_ms"],
+                    "warm_ms", result["warm_plan_ms"], "end", (frames[-1]["x"], frames[-1]["y"]), flush=True)
+                if abs(frames[-1]["x"] - goal[0] * 16) <= 16 and abs(frames[-1]["y"] - (goal[1] * 16 - 42)) <= 16:
+                    reached = True
+                    print("NATIVE_MOVEMENT_REACHED", goal, flush=True)
+                    break
+            (args.root / "native-movement.json").write_text(json.dumps(dict(
+                source=str(args.native_movement_probe), goal=goal, reached=reached, steps=reports)))
+            assert any(r["status"] == "planned" for r in reports), "no native movement produced"
+            if args.movement_goal:
+                assert reached, "native movement did not reach the local test goal"
             return
         if args.movement_timing:
             import statistics

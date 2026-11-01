@@ -2058,6 +2058,9 @@ public sealed class Engine : ModSystem
             passed++;
             return new JsonObject { ["passed"] = true, ["cases"] = passed, ["max_error"] = error };
         }
+        if (command == "native_movement")
+            return new VanillaLocalPlanner().PlanMovement(request["snapshot"].AsObject(),
+                new Vector2(request["x"].GetValue<float>(), request["y"].GetValue<float>()), request["guidance"]);
         if (command == "movement_timing")
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();

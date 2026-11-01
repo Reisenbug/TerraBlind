@@ -12,6 +12,77 @@ public sealed class VanillaLocalPlanner
 {
     public const int Horizon = 180;
     public const int ExecuteFrames = 8;
+    public JsonObject PlanMovement(JsonObject snapshot, Vector2 goal, JsonNode guidance = null)
+    {
+        VanillaFrame.RequireWorker();
+        var timer = Stopwatch.StartNew();
+        var player = VanillaFrame.RestoreInWorker(snapshot);
+        var origin = player.position;
+        int width = player.width, height = player.height, hp = player.statLife;
+        var field = ReadGuidance(guidance);
+        double Cost(Vector2 position)
+        {
+            if (field == null) return Vector2.Distance(position, goal);
+            return field.TryGetValue(FootCell(position, width, height), out int value) ? value : double.PositiveInfinity;
+        }
+        double initialCost = Cost(origin), bestScore = double.PositiveInfinity;
+        var prediction = new VanillaPrediction(snapshot);
+        var samples = new List<VanillaPrediction.MovementSample>();
+        var diagnostics = new JsonArray();
+        int[] chosen = null;
+        double restoreMs = 0, updateMs = 0;
+        try
+        {
+            foreach (int direction in new[] { 1, 2 })
+            foreach (int pattern in new[] { 0, 1, 2, 3, 4, 5 })
+            {
+                var keys = Enumerable.Range(0, 90).Select(i => direction | (pattern switch {
+                    1 => i < 18 ? 4 : 0,
+                    2 => i >= 12 && i < 30 ? 4 : 0,
+                    3 => i != 20 ? 4 : 0,
+                    4 => i != 40 ? 4 : 0,
+                    5 => 16,
+                    _ => 0
+                })).ToArray();
+                var result = prediction.Predict(keys, false, restoreAfter: false, samples: samples, stopOnDamage: true);
+                restoreMs += result["timing"]["restore_ms"].GetValue<double>();
+                updateMs += result["timing"]["update_ms"].GetValue<double>();
+                int selectedLength = 0;
+                for (int i = 0; i < samples.Count; i++)
+                {
+                    var sample = samples[i];
+                    if (sample.Dead || sample.Hp < hp) break;
+                    if (!sample.Grounded || sample.Velocity.Y != 0 || Vector2.DistanceSquared(origin, sample.Position) < 256) continue;
+                    double cost = Cost(sample.Position);
+                    if (cost >= initialCost) continue;
+                    double score = cost + (i + 1) * .1;
+                    if (score >= bestScore) continue;
+                    bestScore = score;
+                    selectedLength = i + 1;
+                    chosen = keys.Take(selectedLength).ToArray();
+                }
+                diagnostics.Add(new JsonObject { ["direction"] = direction, ["pattern"] = pattern,
+                    ["frames"] = samples.Count, ["selected_prefix"] = selectedLength,
+                    ["grounded_frames"] = samples.Count(frame => frame.Grounded),
+                    ["initial_cost"] = double.IsFinite(initialCost) ? JsonValue.Create(initialCost) : null,
+                    ["minimum_cost"] = samples.Select(frame => Cost(frame.Position)).Where(double.IsFinite)
+                        .Select(value => (double?)value).Min(),
+                    ["end_x"] = samples[^1].Position.X, ["end_y"] = samples[^1].Position.Y,
+                    ["end_vy"] = samples[^1].Velocity.Y, ["end_wet"] = samples[^1].Wet,
+                    ["outcome"] = result["outcome"].DeepClone() });
+            }
+            if (chosen != null) chosen = chosen.Concat(new[] { 0 }).ToArray();
+            JsonObject forecast = chosen == null ? null : prediction.Predict(chosen, false, captureEnd: true, stopOnDamage: true);
+            if (forecast != null && forecast["outcome"].GetValue<string>() != "complete")
+            { chosen = null; forecast = null; }
+            return new JsonObject { ["status"] = chosen == null ? "no_safe_progress" : "planned",
+                ["controls"] = new JsonArray((chosen ?? Array.Empty<int>()).Select(key => JsonValue.Create(key)).ToArray()),
+                ["forecast"] = forecast, ["candidates"] = diagnostics, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+                ["restore_ms"] = restoreMs, ["update_ms"] = updateMs };
+        }
+        finally { VanillaFrame.RestoreInWorker(snapshot); }
+    }
+
     static bool RepeatsCeilingContact(List<VanillaPrediction.MovementSample> frames)
     {
         var contacts = new List<Vector2>();
