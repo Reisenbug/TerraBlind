@@ -12,6 +12,7 @@ namespace TerraBlind;
 
 public static class AgentTools
 {
+    internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     internal static readonly AgentWatch Watches = new();
@@ -73,6 +74,7 @@ public static class AgentTools
             ["auto_attack"] = AgentPermissions.Attack, ["player_id"] = Main.LocalPlayer.whoAmI,
             ["pvp"] = Main.LocalPlayer.hostile, ["team"] = Main.LocalPlayer.team,
             ["instruction_player_id"] = AgentNetwork.OwnerPlayer,
+            ["api_revision"] = ApiRevision,
             ["pvp_target"] = PvpDuel.Active ? PvpDuel.Target : PlayerCombat.Target
         };
         var players = new JsonArray();
@@ -375,6 +377,9 @@ public static class AgentTools
                 }
                 else if (resolution is "" or "get") result = savedProgress.Snapshot();
                 else throw new ArgumentException("action需要get/retry/complete。");
+                break;
+            case "task_plan_patch":
+                result = await NativeAgent.OnMain(() => Plan.Patch(args, AgentTaskEvidence.Measure), token);
                 break;
             case "gather":
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))

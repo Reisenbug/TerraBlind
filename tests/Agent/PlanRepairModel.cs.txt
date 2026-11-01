@@ -1,0 +1,87 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using TerraBlind;
+
+static class PlanRepairModel
+{
+    public static async Task Run()
+    {
+        var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        var plan = new AgentTaskPlan();
+        int kills = 7;
+        int Measure(JsonObject c) => c["kind"].ToString() switch
+        { "permanent_health" => 120, "npc_kills" => kills, _ => c["type"].GetValue<int>() == 191 ? 1 : 0 };
+        plan.Create(JsonNode.Parse("""
+            {"goal":"修正既有计划并验收已具备的物品和击杀证据","steps":[
+              {"id":"health","description":"已经获得120永久血","conditions":[{"kind":"permanent_health","count":120}]},
+              {"id":"weapon","description":"持有荆棘旋刃","conditions":[{"kind":"item","type":190,"count":1}]},
+              {"id":"finish","description":"最终持有荆棘旋刃及本次击杀","conditions":[{"kind":"item","type":190,"count":1},{"kind":"npc_kills","type":222,"count":1}]}]}
+            """).AsObject(), Measure);
+        plan.Advance("health", Measure); kills++;
+        var initial = plan.Snapshot();
+        var events = new JsonArray();
+        var workflows = new Dictionary<string, ScriptProgress>();
+        JsonObject State() => new() { ["task_plan"] = plan.Snapshot(), ["permanent_max_health"] = 120,
+            ["inventory_slots"] = new JsonArray(new JsonObject { ["type"] = 191, ["name"] = "Thorn Chakram", ["stack"] = 1, ["slot"] = 0 }),
+            ["fixture_fresh_kills"] = 1, ["mock_world"] = true };
+        void Validate(string name, JsonObject args)
+        {
+            var schema = schemas.FirstOrDefault(x => x["function"]["name"].ToString() == name)
+                ?? throw new ArgumentException("unknown tool " + name);
+            foreach (var field in schema["function"]["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                if (args[field.ToString()] == null) throw new ArgumentException("missing " + field);
+        }
+        async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            var entry = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() }; events.Add(entry);
+            JsonNode result;
+            try
+            {
+                Validate(name, args);
+                switch (name)
+                {
+                    case "get_state": result = State(); break;
+                    case "game_catalog": result = AgentCatalog.Query(typeof(FixtureItems), args["name"].ToString()); break;
+                    case "task_plan_patch": result = plan.Patch(args, Measure); break;
+                    case "task_step": result = plan.Advance(args["id"].ToString(), Measure); break;
+                    case "run_script":
+                        ScriptProgress progress = null;
+                        if (args["workflow"] is { } id)
+                        {
+                            if (!workflows.TryGetValue(id.ToString(), out progress)) workflows[id.ToString()] = progress = new ScriptProgress();
+                        }
+                        result = await AgentScript.Run(args["code"].ToString(), 120, Validate, Execute, _ => Task.CompletedTask, token, progress);
+                        break;
+                    case "say": result = new JsonObject { ["ok"] = true }; break;
+                    default: result = new JsonObject { ["error"] = "not_simulated", ["tool"] = name }; break;
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { result = new JsonObject { ["error"] = error.Message }; }
+            entry["result"] = result.DeepClone(); return result.ToJsonString();
+        }
+        using var codex = new CodexAgent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-plan-repair-" + Guid.NewGuid().ToString("N"));
+        var options = new JsonObject { ["request"] = "repair", ["objective"] = "修正既有计划中的错误物品编号，保留全部既有进度，并验证现有库存和本次击杀证据。" };
+        for (int round = 0; round < 2 && !plan.VerifyFinal(Measure)["verified"].GetValue<bool>(); round++)
+            await codex.RunAsync(options["objective"] + "\n这是模拟状态测试，不需移动或战斗。物品编号疑似错了，请查证后自行修正并继续验收；不得重建计划。现状：" + State().ToJsonString(),
+                "", root, "gpt-6-luna", AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), schemas), AgentScript.EntryTools(schemas),
+                Execute, text => events.Add(new JsonObject { ["text"] = text }), deadline.Token, options);
+        var final = await codex.CompleteGoal(_ => Task.FromResult(plan.VerifyFinal(Measure)), deadline.Token);
+        var after = plan.Snapshot();
+        bool passed = final?["verified"]?.GetValue<bool>() == true && after["steps"][0].ToJsonString() == initial["steps"][0].ToJsonString()
+            && after["steps"][2]["conditions"][1]["baseline"].GetValue<int>() == 7
+            && events.Any(e => e["tool"]?.ToString() == "task_plan_patch") && !events.Any(e => e["tool"]?.ToString() == "task_plan");
+        File.WriteAllText(Path.Combine(root, "result.json"), new JsonObject { ["passed"] = passed, ["initial"] = initial, ["final"] = after,
+            ["codex_goal"] = codex.GoalState, ["model_turns"] = codex.TurnsStarted, ["events"] = events }.ToJsonString());
+        if (!passed) throw new Exception("plan repair model check failed; inspect " + root);
+        Console.WriteLine("PLAN_REPAIR_MODEL_COMPLETE model=gpt-6-luna mock_world=true earned_steps_preserved=true baseline_preserved=true report=" + Path.Combine(root, "result.json"));
+    }
+    static class FixtureItems { public const int BladeofGrass = 190, ThornChakram = 191; }
+}

@@ -116,5 +116,59 @@ static class TaskPlanTests
         Main.LocalPlayer.statLifeMax = Main.LocalPlayer.statLifeMax2 = 100;
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
+        PatchChecks();
+    }
+
+    static void PatchChecks()
+    {
+        var plan = new AgentTaskPlan();
+        int kills = 7;
+        int Measure(JsonObject c) => c["kind"].ToString() switch
+        { "permanent_health" => 120, "npc_kills" => kills, _ => c["type"].GetValue<int>() == 191 ? 1 : 0 };
+        plan.Create(Parse("""
+            {"goal":"preserve original objective","steps":[
+              {"id":"health","description":"already earned health","conditions":[{"kind":"permanent_health","count":120}]},
+              {"id":"weapon","description":"wrong item identity","conditions":[{"kind":"item","type":190,"count":1}]},
+              {"id":"final","description":"weapon and fresh kill","conditions":[{"kind":"item","type":190,"count":1},{"kind":"npc_kills","type":222,"count":1}]}]}
+            """), Measure);
+        plan.Advance("health", Measure); kills++;
+        string health = plan.Snapshot()["steps"][0].ToJsonString();
+        int progress = plan.Progress, revision = plan.Snapshot()["revision"].GetValue<int>();
+        var request = Parse($$"""
+            {"expected_revision":{{revision}},"reason":"catalog confirmed identity","changes":[
+              {"step":"weapon","condition":0,"expected_type":190,"type":191},
+              {"step":"final","condition":0,"expected_type":190,"type":191}]}
+            """);
+        var invalid = (JsonObject)request.DeepClone();
+        invalid["changes"][1]["expected_type"] = 999;
+        string before = plan.Snapshot().ToJsonString();
+        try { plan.Patch(invalid, Measure); throw new Exception("partial invalid patch accepted"); }
+        catch (InvalidOperationException) { }
+        Check(plan.Snapshot().ToJsonString() == before, "failed patch partially changed conditions or revision");
+        var patched = plan.Patch(request, Measure);
+        Check(plan.Cursor == 1 && plan.Progress == progress && patched["verified"].GetValue<bool>() == false
+            && patched["goal"].ToString() == "preserve original objective" && patched["steps"][0].ToJsonString() == health,
+            "identity repair reset earned steps, goal or counted fake game progress");
+        Check(patched["steps"][2]["conditions"][1]["baseline"].GetValue<int>() == 7
+            && patched["steps"][1]["conditions"][0]["count"].GetValue<int>() == 1, "patch altered kill baseline or quantity");
+        try { plan.Patch(request, Measure); throw new Exception("stale revision accepted"); }
+        catch (InvalidOperationException) { }
+        foreach (var change in new[]
+        {
+            Parse("{\"step\":\"health\",\"condition\":0,\"expected_type\":190,\"type\":191}"),
+            Parse("{\"step\":\"final\",\"condition\":1,\"expected_type\":222,\"type\":223}")
+        })
+        {
+            var denied = new JsonObject { ["expected_revision"] = plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "invalid correction", ["changes"] = new JsonArray(change) };
+            string unchanged = plan.Snapshot().ToJsonString();
+            try { plan.Patch(denied, Measure); throw new Exception("completed step or kill rewrite accepted"); }
+            catch (InvalidOperationException) { }
+            Check(plan.Snapshot().ToJsonString() == unchanged, "rejected edit changed original progress");
+        }
+        Check(!plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "patch itself completed the task");
+        plan.Advance("weapon", Measure); plan.Advance("final", Measure);
+        Check(plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "corrected identity did not verify earned inventory and preserved fresh kill");
+        Console.WriteLine("PASS: atomic plan identity correction preserves earned steps and kill baseline, rejects stale/completed edits and never invents progress");
     }
 }

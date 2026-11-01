@@ -11,11 +11,12 @@ public sealed class AgentTaskPlan
     string _goal;
     int _cursor;
     int _progress;
+    int _revision;
     public int Cursor => _cursor;
     public int Progress => _progress;
     public bool Incomplete => _steps.Count > _cursor;
 
-    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; }
+    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _revision++; }
 
     public JsonObject Create(JsonObject args, Func<JsonObject, int> measure)
     {
@@ -53,7 +54,47 @@ public sealed class AgentTaskPlan
         }
         _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
         _steps[0]["status"] = "active";
+        _revision++;
         return Snapshot();
+    }
+
+    public JsonObject Patch(JsonObject args, Func<JsonObject, int> measure)
+    {
+        if (!Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
+            throw new InvalidOperationException("计划已改变或已完成，请重新读取task_plan.revision。");
+        string reason = args["reason"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(reason) || args["changes"] is not JsonArray changes || changes.Count is < 1 or > 32)
+            throw new ArgumentException("修正需要reason与1..32项changes。");
+        var edits = new List<(JsonObject Step, int Index, JsonObject Before, JsonObject After, int Actual)>();
+        var seen = new HashSet<string>();
+        foreach (var node in changes)
+        {
+            string id = node["step"]?.GetValue<string>();
+            int index = node["condition"]?.GetValue<int>() ?? -1;
+            var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+            if (step == null || step["status"]?.ToString() == "completed" || !seen.Add(id + ":" + index)
+                || index < 0 || index >= step["conditions"].AsArray().Count)
+                throw new InvalidOperationException("只能修正未完成步骤的有效且不重复条件。");
+            var before = step["conditions"][index].AsObject();
+            int type = node["type"]?.GetValue<int>() ?? 0;
+            if (before["kind"]?.ToString() is not ("item" or "equipped" or "npc_alive") || type <= 0
+                || before["type"]?.GetValue<int>() != node["expected_type"]?.GetValue<int>() || before["type"].GetValue<int>() == type)
+                throw new InvalidOperationException("仅允许纠正item/equipped/npc_alive的type；不得修改数量、完成步骤或击杀基线。");
+            var after = (JsonObject)before.DeepClone(); after["type"] = type;
+            edits.Add((step, index, (JsonObject)before.DeepClone(), after, measure(after)));
+        }
+        foreach (var edit in edits)
+        {
+            edit.Step["conditions"][edit.Index] = edit.After;
+            edit.Step["best_actual"][edit.Index] = Math.Min(edit.Actual, edit.After["count"].GetValue<int>());
+            edit.Step.Remove("evidence");
+            var history = edit.Step["condition_corrections"] as JsonArray;
+            if (history == null) edit.Step["condition_corrections"] = history = new JsonArray();
+            history.Add(new JsonObject { ["before"] = edit.Before, ["after"] = edit.After.DeepClone(), ["reason"] = reason });
+        }
+        _revision++;
+        var result = Snapshot(); result["corrected"] = true; result["verified"] = false;
+        return result;
     }
 
     public void Observe(Func<JsonObject, int> measure)
@@ -95,6 +136,7 @@ public sealed class AgentTaskPlan
             step["status"] = "completed";
             _progress++;
             if (++_cursor < _steps.Count) _steps[_cursor]["status"] = "active";
+            _revision++;
         }
         var result = Snapshot();
         result["verified"] = passed;
@@ -169,7 +211,8 @@ public sealed class AgentTaskPlan
     public JsonObject Snapshot() => new()
     {
         ["goal"] = _goal, ["status"] = _steps.Count == 0 ? "none" : Incomplete ? _steps[_cursor]["status"]?.DeepClone() : JsonValue.Create("completed"),
-        ["cursor"] = _cursor, ["progress_revision"] = _progress, ["current_step"] = Incomplete ? _steps[_cursor]["id"]?.DeepClone() : null,
+        ["cursor"] = _cursor, ["progress_revision"] = _progress, ["revision"] = _revision,
+        ["current_step"] = Incomplete ? _steps[_cursor]["id"]?.DeepClone() : null,
         ["steps"] = new JsonArray(_steps.Select(step => step.DeepClone()).ToArray())
     };
 }
