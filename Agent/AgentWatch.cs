@@ -14,6 +14,7 @@ public sealed class AgentWatch
     int samples;
     bool configured;
     JsonObject lastObservation;
+    JsonObject itemCounts;
     public int Radius { get; private set; } = 25;
     public int HealthBelow { get; private set; } = 80;
     public bool HasPending => pending.Count > 0;
@@ -24,7 +25,7 @@ public sealed class AgentWatch
     { foreach (var action in actions) seen.Add("action_finished:" + action["handle"] + ":" + action["attempt"]); }
     public void EnsureDefaults()
     {
-        events.UnionWith(new[] { "action_finished", "low_health", "suffocating", "player_died", "inventory_full" });
+        events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "inventory_full" });
         if (!configured) events.Add("nearby_chest");
     }
 
@@ -32,7 +33,7 @@ public sealed class AgentWatch
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
-        if (requested.Any(x => x is not ("nearby_chest" or "action_finished" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
+        if (requested.Any(x => x is not ("nearby_chest" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
             throw new ArgumentException("不支持的观察事件。");
         int radius = args["radius"]?.GetValue<int>() ?? 25, health = args["health_below"]?.GetValue<int>() ?? 80;
         if (radius is < 1 or > 60 || health is < 1 or > 500) throw new ArgumentException("radius须1..60，health_below须1..500。");
@@ -50,13 +51,26 @@ public sealed class AgentWatch
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         void Emit(string kind, string key, JsonNode evidence)
         {
-            if (!events.Contains(kind) || issued >= 6 && kind is not ("action_finished" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
+            if (!events.Contains(kind) || issued >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
             var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key,
                 ["evidence"] = evidence?.DeepClone() };
             pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
         }
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
         string dangerKey = running == null ? "task" : running["handle"] + ":" + running["attempt"];
+        if (state["item_counts"] is JsonObject current)
+        {
+            if (itemCounts != null && running?["tool"]?.ToString() == "gather")
+                foreach (var target in running["args"]?["targets"]?.AsArray() ?? new JsonArray())
+                {
+                    string type = target["item_type"].ToString();
+                    int before = itemCounts[type]?.GetValue<int>() ?? 0, after = current[type]?.GetValue<int>() ?? 0;
+                    if (after > before) Emit("target_acquired", type + ":" + samples, new JsonObject
+                    { ["handle"] = running["handle"]?.DeepClone(), ["item_type"] = target["item_type"].DeepClone(),
+                        ["before"] = before, ["after"] = after, ["gained"] = after - before });
+                }
+            itemCounts = (JsonObject)current.DeepClone();
+        }
         if (state["dead"]?.GetValue<bool>() == true) Emit("player_died", dangerKey, state);
         else
         {
@@ -107,6 +121,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = samples = 0; configured = false; lastObservation = null; }
+    { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = samples = 0; configured = false; lastObservation = itemCounts = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

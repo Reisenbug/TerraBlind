@@ -68,6 +68,26 @@ static class WatchTests
         watch.Reset();
         Console.WriteLine("PASS: low health and suffocation bypass opportunity budget and deduplicate per action attempt");
 
+        watch.EnsureDefaults();
+        var collecting = JsonNode.Parse("{\"hp\":100,\"item_counts\":{\"29\":2},\"actions\":[{\"handle\":\"collect\",\"attempt\":1,\"status\":\"running\",\"tool\":\"gather\",\"args\":{\"targets\":[{\"item_type\":29,\"count\":10}]}}]}").AsObject();
+        watch.Observe(collecting);
+        Check(!watch.HasPending, "existing inventory appeared as a new acquisition");
+        collecting["item_counts"]["29"] = 3;
+        watch.Observe(collecting);
+        var acquired = watch.Take();
+        Check(acquired.Count == 1 && acquired[0]["kind"].ToString() == "target_acquired"
+            && acquired[0]["evidence"]["gained"].GetValue<int>() == 1
+            && acquired[0]["evidence"]["handle"].ToString() == "collect", "target acquisition lost actual gain or action handle");
+        watch.Observe(collecting);
+        Check(!watch.HasPending, "unchanged inventory repeatedly woke the model");
+        collecting["item_counts"]["29"] = 2; watch.Observe(collecting);
+        collecting["item_counts"]["29"] = 3; watch.Observe(collecting);
+        Check(watch.Take().Count == 1, "consumption permanently suppressed a later genuine acquisition");
+        collecting["item_counts"]["99"] = 50; watch.Observe(collecting);
+        Check(!watch.HasPending, "unrequested mining debris interrupted target gathering");
+        watch.Reset();
+        Console.WriteLine("PASS: target inventory gains wake once, survive consumption and ignore existing inventory or unrelated debris");
+
         var navigation = new NavigationProgress();
         var terrain = new System.Collections.Generic.Dictionary<int, long> { [1] = 1 };
         Check(navigation.Observe(0, 0, 0, 1000, terrain) == null
