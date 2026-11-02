@@ -31,6 +31,20 @@ static class GatherTests
         Check(result["outcome"].ToString() == "source_unavailable" && world.Actions.Count == 0, "missing sources appeared successful");
         Console.WriteLine("PASS: missing drops and absent sources retain evidence without false collection success or unbounded retries");
 
+        world = new World { Unsafe = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "unsafe"
+            && world.Actions.Count == 1 && world.Stops == 1
+            && result["last_result"]["result"]["navigation"]["trap_tiles"][0]["x"].GetValue<int>() == 12,
+            "dangerous navigation was retried on other sources or lost trap evidence");
+        Console.WriteLine("PASS: unsafe nested navigation ends gathering immediately and preserves exact hazard evidence");
+        world = new World { Ambiguous = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions.Count == 0 && result["outcome"].ToString() == "ambiguous_tile_name"
+            && result["source_error"]["name_candidates"][0]["internal"].ToString() == "ActualTile",
+            "source lookup error lost correction candidates after final inventory observation");
+        Console.WriteLine("PASS: gathering preserves source lookup correction evidence across cleanup");
+
         world = new World { Dead = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions.Count == 0 && result["outcome"].ToString() == "interrupted_by_death", "dead player continued gathering");
@@ -144,7 +158,7 @@ static class GatherTests
 
     sealed class World : IGatherWorld
     {
-        public bool Gain = true, Drop, Empty, Dead, WaitForever;
+        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -155,13 +169,18 @@ static class GatherTests
             JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f };
             return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
                 ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),
-                ["error"] = Dead ? "interrupted_by_death" : null });
+                ["error"] = Dead ? "interrupted_by_death" : Ambiguous && Stops == 0 ? "ambiguous_tile_name" : null,
+                ["source_error"] = Ambiguous && Stops == 0 ? new JsonObject { ["error"] = "ambiguous_tile_name",
+                    ["name_candidates"] = new JsonArray(new JsonObject { ["internal"] = "ActualTile" }) } : null });
         }
         public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
         {
             Actions.Add(candidate["kind"].ToString());
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+                ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",
+                    ["trap_tiles"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) } };
             if (Gain) counts[candidate["item_type"].GetValue<int>()]++;
             return new JsonObject { ["outcome"] = "removed" };
         }

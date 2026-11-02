@@ -28,6 +28,7 @@ public static class Gather
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
         JsonObject scene = null, last = null;
+        JsonNode sourceError = null;
         string outcome = "attempt_limit";
         int actions = 0;
         int Count(GatherTarget target) => scene?["counts"]?[target.ItemType.ToString()]?.GetValue<int>() ?? 0;
@@ -37,7 +38,8 @@ public static class Gather
             {
                 scene = await world.Observe(budget.Token);
                 if (targets.All(t => Count(t) >= t.Count)) { outcome = "enough"; break; }
-                if (scene["error"] != null) { outcome = scene["error"].ToString(); break; }
+                if (scene["error"] != null)
+                { outcome = scene["error"].ToString(); sourceError = scene["source_error"]?.DeepClone(); break; }
                 var candidate = scene["candidates"].AsArray().OfType<JsonObject>()
                     .Where(c => targets.Any(t => t.ItemType == c["item_type"].GetValue<int>() && Count(t) < t.Count))
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
@@ -49,6 +51,9 @@ public static class Gather
                 actions++;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
+                if (last["result"]?["outcome"]?.ToString() == "unsafe"
+                    || last["result"]?["navigation"]?["outcome"]?.ToString() == "unsafe")
+                { outcome = "unsafe"; break; }
             }
         }
         finally
@@ -59,6 +64,7 @@ public static class Gather
         bool enough = targets.All(t => Count(t) >= t.Count);
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
+            ["source_error"] = sourceError,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
                 { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t), ["met"] = Count(t) >= t.Count }).ToArray()) };
     }
