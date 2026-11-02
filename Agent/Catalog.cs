@@ -23,6 +23,8 @@ public static class AgentCatalog
             .OrderByDescending(entry => Key(entry.Name) == key || entry.Labels.Any(label => Key(label) == key))
             .ThenBy(entry => entry.Name, StringComparer.Ordinal)
             .ToArray();
+        var exact = matches.Where(entry => numeric || Key(entry.Name) == key || entry.Labels.Any(label => Key(label) == key)).ToArray();
+        if (exact.Length > 0) matches = exact;
         return new JsonObject
         {
             ["found"] = matches.Length > 0, ["total"] = matches.Length, ["truncated"] = matches.Length > 12,

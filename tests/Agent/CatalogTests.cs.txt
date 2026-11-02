@@ -18,8 +18,10 @@ static class CatalogTests
     public static void Run()
     {
         var result = AgentCatalog.Query(typeof(Sample), "ALPHA TOOL");
-        Check(result["total"].GetValue<int>() == 2 && result["matches"][0]["type"].GetValue<int>() == 7
-            && result["matches"][0]["exact"].GetValue<bool>() && !result["matches"][1]["exact"].GetValue<bool>(), "catalog lost exact-match ranking or short IDs");
+        Check(result["total"].GetValue<int>() == 1 && result["matches"][0]["type"].GetValue<int>() == 7
+            && result["matches"][0]["exact"].GetValue<bool>(), "exact lookup included a different item's partial match");
+        Check(AgentCatalog.Query(typeof(Sample), "Alpha")["total"].GetValue<int>() == 2,
+            "fragment search lost related candidates");
         Check(AgentCatalog.Query(typeof(Sample), "beta_tool")["matches"][0]["type"].GetValue<int>() == 8, "catalog did not normalize identifiers");
         var byId = AgentCatalog.Query(typeof(Sample), "7");
         Check(byId["matches"].AsArray().Count == 2 && byId["matches"][0]["exact"].GetValue<bool>()
