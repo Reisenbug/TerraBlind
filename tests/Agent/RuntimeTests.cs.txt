@@ -39,6 +39,7 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        ControlTests.Run();
         Agent.Load();
         try
         {

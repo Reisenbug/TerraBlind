@@ -1,0 +1,55 @@
+using System;
+using TerraBlind;
+
+static class ControlTests
+{
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); }
+
+    public static void Run()
+    {
+        var policy = new AgentControlPolicy();
+        var movement = ControlChannels.Movement;
+        var use = ControlChannels.ItemUse;
+        string claim = policy.Claim(movement, ControlLifetime.Task, null, "stop unsafe excavation");
+        Check(policy.Check(ControlBehavior.Navigation, movement) != null, "navigation survived acquisition");
+        Check(policy.Check(ControlBehavior.Direct, movement, claim)?["error"].ToString() == "control_handoff_pending",
+            "agent gained control before old input owner finished cleanup");
+        policy.ConfirmReleased(claim);
+        Check(policy.Check(ControlBehavior.Direct, movement, claim) == null, "confirmed agent could not move");
+        foreach (var behavior in new[] { ControlBehavior.Navigation, ControlBehavior.Dodge, ControlBehavior.Survival, ControlBehavior.Workflow })
+            Check(policy.Check(behavior, movement) != null, "automatic movement bypassed claim: " + behavior);
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "movement-only claim blocked independent weapon use");
+        Check(policy.Check(ControlBehavior.Direct, use, claim)?["error"].ToString() == "control_claim_missing_channel",
+            "movement claim also granted item control");
+        string item = policy.Claim(use, ControlLifetime.Action, "harvest", "keep pickaxe and cursor together");
+        policy.ConfirmReleased(item);
+        foreach (var behavior in new[] { ControlBehavior.Attack, ControlBehavior.Mining, ControlBehavior.Placement })
+            Check(policy.Check(behavior, use) != null, "item channel failed to exclude " + behavior);
+        bool conflict = false;
+        long revision = policy.Revision;
+        try { policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "conflict"); }
+        catch (InvalidOperationException) { conflict = true; }
+        Check(conflict && policy.Revision == revision, "conflicting claim partially changed ownership");
+        Console.WriteLine("PASS: control claims await cleanup and exclude conflicting movement and shared item writers");
+
+        string veto = policy.Deny(new[] { ControlBehavior.Navigation }, ControlLifetime.Persistent, null, "buried by this route");
+        policy.Release(claim);
+        Check(policy.Check(ControlBehavior.Navigation, movement)?["error"].ToString() == "behavior_forbidden",
+            "handoff release silently restored forbidden navigation");
+        Check(policy.Check(ControlBehavior.Direct, movement, claim)?["error"].ToString() == "control_claim_expired",
+            "late callback reused released claim");
+        policy.EndAction("another_action");
+        Check(policy.Check(ControlBehavior.Attack, use) != null, "unrelated completion released action scope");
+        policy.EndAction("harvest");
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "completed action retained item claim");
+        policy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Task, null, "avoid fighting during this task");
+        policy.BeginTask();
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "task restriction leaked into next task");
+        Check(policy.Check(ControlBehavior.Navigation, movement) != null, "persistent restriction disappeared on new task");
+        policy.Release(veto);
+        Check(policy.Check(ControlBehavior.Navigation, movement) == null, "explicit release did not restore navigation");
+        Check(policy.Snapshot()["rules"].AsArray().Count == 0, "released rules remained in observation");
+        Console.WriteLine("PASS: control overrides have independent scopes and stale claims cannot regain control");
+    }
+}
