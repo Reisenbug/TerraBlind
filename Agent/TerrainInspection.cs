@@ -20,10 +20,12 @@ public static class TerrainInspection
             if (!tile.HasUnactuatedTile) continue;
             bool trigger = tile.TileType == TileID.PressurePlates;
             bool explosive = tile.TileType == TileID.Explosives;
-            bool overheadBoulder = tile.TileType == TileID.Boulder && y < py && Math.Abs(x - px) <= 2;
-            if (trigger || explosive || overheadBoulder)
+            bool rollingCactus = tile.TileType == TileID.RollingCactus;
+            bool overheadBoulder = tile.TileType is TileID.Boulder or TileID.BouncyBoulder or TileID.LifeCrystalBoulder
+                && y < py && Math.Abs(x - px) <= 2;
+            if (trigger || explosive || overheadBoulder || rollingCactus)
                 hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
-                    ["kind"] = trigger ? "pressure_plate" : explosive ? "explosive" : "overhead_boulder" });
+                    ["kind"] = trigger ? "pressure_plate" : explosive ? "explosive" : rollingCactus ? "rolling_cactus" : "overhead_boulder" });
         }
         return hazards.Count == 0 ? null : new JsonObject { ["error"] = "navigation_near_trap", ["outcome"] = "unsafe",
             ["trap_tiles"] = hazards, ["detail"] = "已停止接近机关。先用inspect_terrain检查并拆除可达触发器；不要挖落头顶巨石或原样重试路线。" };
@@ -49,7 +51,8 @@ public static class TerrainInspection
                 bool active = tile.HasUnactuatedTile;
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
-                if (tile.HasTile && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives)
+                if (tile.HasTile && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives
+                    or TileID.RollingCactus or TileID.BouncyBoulder or TileID.LifeCrystalBoulder)
                     hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                         ["active"] = active, ["frame_x"] = tile.TileFrameX, ["frame_y"] = tile.TileFrameY,
                         ["red_wire"] = tile.RedWire, ["blue_wire"] = tile.BlueWire,
