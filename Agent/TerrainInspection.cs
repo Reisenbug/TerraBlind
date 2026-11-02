@@ -8,6 +8,27 @@ namespace TerraBlind;
 
 public static class TerrainInspection
 {
+    internal static JsonObject NavigationHazard()
+    {
+        var player = Main.LocalPlayer;
+        int px = (int)player.Center.X / 16, py = (int)player.Bottom.Y / 16;
+        var hazards = new JsonArray();
+        for (int x = Math.Max(1, px - 4); x <= Math.Min(Main.maxTilesX - 2, px + 4); x++)
+        for (int y = Math.Max(1, py - 6); y <= Math.Min(Main.maxTilesY - 2, py + 2); y++)
+        {
+            var tile = Main.tile[x, y];
+            if (!tile.HasUnactuatedTile) continue;
+            bool trigger = tile.TileType == TileID.PressurePlates;
+            bool explosive = tile.TileType == TileID.Explosives;
+            bool overheadBoulder = tile.TileType == TileID.Boulder && y < py && Math.Abs(x - px) <= 2;
+            if (trigger || explosive || overheadBoulder)
+                hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
+                    ["kind"] = trigger ? "pressure_plate" : explosive ? "explosive" : "overhead_boulder" });
+        }
+        return hazards.Count == 0 ? null : new JsonObject { ["error"] = "navigation_near_trap", ["outcome"] = "unsafe",
+            ["trap_tiles"] = hazards, ["detail"] = "已停止接近机关。先用inspect_terrain检查并拆除可达触发器；不要挖落头顶巨石或原样重试路线。" };
+    }
+
     public static JsonObject Read(int radius)
     {
         if (radius is < 2 or > 12) throw new ArgumentException("radius须2..12格。");

@@ -126,6 +126,25 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: terrain inspection reports exact body overlap, falling blocks and lava without editing tiles");
 
+            var oldPlate = Game.tile[4, 6];
+            try
+            {
+                Game.LocalPlayer.position = new(32, 64);
+                Game.tile[4, 6] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.PressurePlates, RedWire = true };
+                var traps = TerrainInspection.Read(6)["trap_tiles"].AsArray();
+                Check(traps.Any(t => t["x"].GetValue<int>() == 4 && t["y"].GetValue<int>() == 6 && t["red_wire"].GetValue<bool>()),
+                    "trap inspection lost trigger coordinates or wiring");
+                int starts = 0;
+                HttpServerSystem.Handler = (_, _) => { starts++; return (200, "{}"); };
+                var blocked = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 10, ["y"] = 6 }, default));
+                Check(blocked["error"].ToString() == "navigation_near_trap" && starts == 0,
+                    "nearby trap allowed navigation to acquire movement controls");
+                Game.tile[4, 6] = default;
+                Check(TerrainInspection.NavigationHazard() == null, "removed trigger permanently blocked navigation");
+            }
+            finally { Game.LocalPlayer.position = savedPosition; Game.tile[4, 6] = oldPlate; }
+            Console.WriteLine("PASS: nearby trap stops before navigation and removing the trigger clears the guard");
+
             var savedPotion = Game.LocalPlayer.inventory[20];
             int savedDelay = Game.LocalPlayer.potionDelay;
             try

@@ -828,6 +828,8 @@ public static class AgentTools
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
     {
+        var hazard = await NativeAgent.OnMain(TerrainInspection.NavigationHazard, token);
+        if (hazard != null) return hazard;
         var request = await NativeAgent.OnMain(() =>
         {
             int x = Int(args, "x"), y = Int(args, "y");
@@ -847,6 +849,8 @@ public static class AgentTools
             elapsed => NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;
+                var trap = TerrainInspection.NavigationHazard();
+                if (trap != null) return trap;
                 if (player.suffocating)
                     return new JsonObject { ["error"] = "navigation_suffocating", ["outcome"] = "unsafe",
                         ["hp"] = player.statLife, ["pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y },
