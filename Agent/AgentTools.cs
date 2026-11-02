@@ -70,6 +70,11 @@ public static class AgentTools
     {
         Plan.Observe(AgentTaskEvidence.Measure);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
+        if (state["player"] is JsonObject observedPlayer)
+        {
+            observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
+            observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
+        }
         state["agent"] = new JsonObject
         {
             ["status"] = NativeAgent.Status, ["auto_dodge"] = AgentPermissions.Dodge,
@@ -610,12 +615,38 @@ public static class AgentTools
                 if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token);
                 break;
             case "use_item":
+                var usedItem = await NativeAgent.OnMain(() =>
+                {
+                    var player = Main.LocalPlayer;
+                    int slot = Int(args, "slot", -1);
+                    if (slot < 0 || slot >= player.inventory.Length) return null;
+                    var item = player.inventory[slot];
+                    return new JsonObject { ["type"] = item.type, ["consumable"] = item.consumable, ["heal_life"] = item.healLife,
+                        ["count"] = player.inventory.Where(i => i.type == item.type).Sum(i => i.stack) };
+                }, token);
                 result = await Call("/item_use", new JsonObject
                 {
                     ["target_wx"] = Int(args, "x"), ["target_wy"] = Int(args, "y"), ["slot"] = Int(args, "slot", -1),
                     ["duration_ticks"] = Int(args, "duration_ticks", 30), ["strict"] = Bool(args, "strict")
                 }, token);
                 if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token);
+                if (Text(result, "outcome") == "n/a" && usedItem?["consumable"]?.GetValue<bool>() == true)
+                    result = await NativeAgent.OnMain(() =>
+                    {
+                        var player = Main.LocalPlayer;
+                        int remaining = player.inventory.Where(i => i.type == usedItem["type"].GetValue<int>()).Sum(i => i.stack);
+                        int consumed = usedItem["count"].GetValue<int>() - remaining;
+                        result["consumed"] = Math.Max(0, consumed); result["verified"] = consumed > 0;
+                        if (consumed > 0) result["outcome"] = "consumed";
+                        else
+                        {
+                            result["error"] = "item_use_not_observed"; result["outcome"] = "no_progress";
+                            result["reason"] = usedItem["heal_life"].GetValue<int>() > 0 && player.potionDelay > 0
+                                ? "potion_sickness" : "consumable_count_unchanged";
+                        }
+                        result["potion_delay_ticks"] = player.potionDelay;
+                        return result;
+                    }, token);
                 break;
             case "place_at":
                 result = await Place(args, token);

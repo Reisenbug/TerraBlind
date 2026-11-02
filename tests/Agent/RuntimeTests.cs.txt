@@ -124,6 +124,35 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: terrain inspection reports exact body overlap, falling blocks and lava without editing tiles");
 
+            var savedPotion = Game.LocalPlayer.inventory[20];
+            int savedDelay = Game.LocalPlayer.potionDelay;
+            try
+            {
+                foreach (bool consumed in new[] { false, true })
+                {
+                    Game.LocalPlayer.inventory[20] = new Terraria.Item { type = 28, stack = 2, consumable = true, healLife = 50 };
+                    Game.LocalPlayer.potionDelay = consumed ? 0 : 900;
+                    HttpServerSystem.Handler = (path, _) =>
+                    {
+                        if (path == "/item_use" && consumed) Game.LocalPlayer.inventory[20].stack--;
+                        return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"n/a\"}" : "{\"ok\":true}");
+                    };
+                    var use = JsonNode.Parse(await Execute(AgentTools.Execute("use_item",
+                        new JsonObject { ["x"] = 0, ["y"] = 0, ["slot"] = 20 }, default)));
+                    Check(use["verified"].GetValue<bool>() == consumed && use["consumed"].GetValue<int>() == (consumed ? 1 : 0),
+                        "consumable usage was inferred from elapsed time instead of inventory evidence");
+                    Check(consumed ? use["outcome"].ToString() == "consumed"
+                        : use["error"].ToString() == "item_use_not_observed" && use["reason"].ToString() == "potion_sickness",
+                        "failed healing was reported as successful generic item use");
+                }
+            }
+            finally
+            {
+                Game.LocalPlayer.inventory[20] = savedPotion; Game.LocalPlayer.potionDelay = savedDelay;
+                HttpServerSystem.Handler = null;
+            }
+            Console.WriteLine("PASS: consumable use verifies inventory loss and reports potion sickness instead of false healing");
+
             HttpServerSystem.Handler = (path, payload) =>
             {
                 Check(path == "/fight" && JsonNode.Parse(payload)["active"]?.GetValue<bool>() == false,

@@ -314,7 +314,7 @@
     "type": "function",
     "function": {
       "name": "use_item",
-      "description": "对着一个格坐标使用背包里某个槽位的道具,**一步完成**:自动切槽位+瞄准+使用,并等到动作结束才返回。镐挖、斧砍树、剑砍、扔炸弹、用魔杖、喝药都走这个。**放东西不走这个,用 place_at**(它会自己挪脚和补锚点,这里不会)。slot 直接抄 get_state 里那个物品的 slot 字段。x,y 给大概位置即可:砍树/挖矿会自动吸附到最近的树干根部/可挖格,不用你算准。返回 outcome:removed=目标已消失(树倒了/矿挖掉了,成功);no_progress=一下都没啃动,看 reason:reason=tool_weak 是镐/斧不够硬(换更好的);reason=blocked 是上方压着树或箱子(原版不许抽走支撑,先清掉上方那格,换镐没用);**reason=out_of_reach 说明这一格得挖过去而不是站着挥,改用 mine**。挖【挖到为止】,不用你估时间。n/a=喝药/扔炸弹/召唤这种既不采集也不放置的。采集类务必先 find_tiles 拿真实坐标,别自己编。这个工具只挥够得着的一格(砍树、挖脚边的矿);要挖深处或挖穿地形用 mine。",
+      "description": "对着世界格坐标使用背包槽位中的道具，自动切槽、瞄准并等待动作结束。slot抄get_state.inventory_slots；x/y使用真实坐标。挖矿、砍树用removed表示目标消失；out_of_reach改用mine接近，tool_weak换工具。放置改用place_at。消耗品返回consumed数量及verified；item_use_not_observed表示数量未减少，不能声称喝药或召唤成功，reason=potion_sickness表示治疗受冷却限制。使用后的实际血量、位置及got/lost仍需核对；消费物品不代表整个任务完成。非消耗品的n/a只表示动作窗口结束，效果未验证。采集先find_tiles拿坐标，要挖深处或穿地形用mine。",
       "parameters": {
         "type": "object",
         "properties": {

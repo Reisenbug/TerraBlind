@@ -53,7 +53,7 @@ namespace Terraria
         public bool AnyExtraJumpUsable() => ExtraJump;
         public bool PickAmmo(Item item, out int shot, out float speed, out int damage, out float knockback, out int ammo, bool dontConsume)
         { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
-        public int itemAnimation;
+        public int itemAnimation, potionDelay;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
         public System.Numerics.Vector2 position;
         public string name = "test";
@@ -79,7 +79,8 @@ namespace Terraria
     }
     public class Item
     {
-        public bool active;
+        public bool active, consumable;
+        public int healLife;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
