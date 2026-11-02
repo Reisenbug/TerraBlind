@@ -174,6 +174,7 @@ namespace TerraBlind
 				if (hb < 0) hb = 0;   // no empty hotbar slot → displace slot 0 (its item goes to the backpack slot)
 				PvpInventory.SwapSlots(slot, hb);
 				slot = hb;
+				req.Slot = hb;
 			}
 
 			// LLM 给的是"树大概在这儿",常落在树叶或空气上。像原版 SmartCursor 那样吸附到最近可作用的格
