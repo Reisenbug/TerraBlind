@@ -410,7 +410,7 @@ public class NativeAgent : ModSystem
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
-        AgentTools.LastDamage = AgentTools.LastDeath = null;
+        AgentTools.LastDamage = AgentTools.LastDeath = AgentTools.LastContactEscape = null;
         AgentTools.ContactEscapeActive = false;
         CombatLoadout.PreferredType = 0;
         AgentTaskEvidence.Reset();

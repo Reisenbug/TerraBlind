@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
@@ -60,7 +61,13 @@ public class AgentContactEscape : ModSystem
         if (!Config.I.AgentEnabled || !AgentNetwork.CanAutomate || !AgentTools.Watches.Armed
             || !AgentPermissions.Dodge || PvpDuel.Active || player.dead || player.gravDir != 1)
         {
-            if (AgentTools.ContactEscapeActive) { ActExecutor.Stop(); DiagLog.Write("[agent_escape] cancelled"); }
+            if (AgentTools.ContactEscapeActive)
+            {
+                ActExecutor.Stop();
+                AgentTools.LastContactEscape["status"] = "cancelled";
+                AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
+                DiagLog.Write("[agent_escape] cancelled");
+            }
             AgentTools.ContactEscapeActive = false; attempted = false; return;
         }
         bool touching = Harmful(player.position, player, includeLava: false);
@@ -75,6 +82,9 @@ public class AgentContactEscape : ModSystem
             AgentTools.StopInputs();
             AgentTools.ContactEscapeActive = true;
             frames = 0; startX = player.position.X;
+            AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "moving",
+                ["reason"] = "contact_damage", ["direction"] = direction < 0 ? "left" : "right",
+                ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife };
             Move();
             DiagLog.Write($"[agent_escape] start direction={direction} x={startX} hp={player.statLife}");
             return;
@@ -85,11 +95,18 @@ public class AgentContactEscape : ModSystem
         {
             ActExecutor.Stop();
             AgentTools.ContactEscapeActive = false;
+            AgentTools.LastContactEscape["status"] = "controls_released";
+            AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
+            AgentTools.LastContactEscape["frames"] = frames;
+            AgentTools.LastContactEscape["contact_clear"] = !touching;
+            AgentTools.LastContactEscape["grounded"] = grounded;
+            AgentTools.LastContactEscape["end_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y };
+            AgentTools.LastContactEscape["hp_end"] = player.statLife;
             DiagLog.Write($"[agent_escape] end frames={frames} clear={!touching} grounded={grounded} x={player.position.X} hp={player.statLife}");
         }
         else if (!ActExecutor.IsActive) Move();
     }
 
     public override void OnWorldUnload()
-    { AgentTools.ContactEscapeActive = false; attempted = false; }
+    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attempted = false; }
 }

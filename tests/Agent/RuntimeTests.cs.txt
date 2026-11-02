@@ -120,6 +120,28 @@ static class RuntimeTests
             finally { AgentTools.ContactEscapeActive = false; }
             Console.WriteLine("PASS: emergency escape holds new actions and returns fresh state without replaying stale coordinates");
 
+            var previousEscape = AgentTools.LastContactEscape;
+            try
+            {
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        AgentTools.LastContactEscape = new JsonObject { ["reason"] = "contact_damage", ["status"] = "controls_released",
+                            ["start_pos"] = new JsonObject { ["x"] = 10, ["y"] = 20 },
+                            ["end_pos"] = new JsonObject { ["x"] = 58, ["y"] = 20 } };
+                        return (200, "{\"ok\":true}");
+                    }
+                    return (200, "{\"done\":false,\"status\":\"failed\",\"reason\":\"stopped\"}");
+                };
+                var escapedRoute = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 99, ["y"] = 99 }, default));
+                Check(escapedRoute["error"].ToString() == "navigation_contact_escape" && escapedRoute["outcome"].ToString() == "unsafe"
+                    && escapedRoute["contact_escape"]["end_pos"]["x"].GetValue<int>() == 58,
+                    "contact escape appeared as an unexplained navigation stop or lost measured displacement");
+            }
+            finally { AgentTools.LastContactEscape = previousEscape; }
+            Console.WriteLine("PASS: navigation reports measured contact escape as an unsafe handoff instead of generic stopped");
+
             var savedPosition = Game.LocalPlayer.position;
             var oldSand = Game.tile[2, 2]; var oldLava = Game.tile[3, 3];
             try

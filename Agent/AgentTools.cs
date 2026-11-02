@@ -17,7 +17,7 @@ public static class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     internal static readonly AgentWatch Watches = new();
     internal static readonly AgentRecovery Recovery = new();
-    internal static JsonObject LastDamage, LastDeath;
+    internal static JsonObject LastDamage, LastDeath, LastContactEscape;
     internal static bool ContactEscapeActive;
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
@@ -109,6 +109,7 @@ public static class AgentTools
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
         state["last_damage"] = LastDamage?.DeepClone();
         state["last_death"] = LastDeath?.DeepClone();
+        state["contact_escape"] = LastContactEscape?.DeepClone();
         var workflows = new JsonObject();
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();
         state["script_workflows"] = workflows;
@@ -840,7 +841,9 @@ public static class AgentTools
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
     {
-        var hazard = await NativeAgent.OnMain(TerrainInspection.NavigationHazard, token);
+        JsonObject escapeBefore = null;
+        var hazard = await NativeAgent.OnMain(() =>
+        { escapeBefore = LastContactEscape; return TerrainInspection.NavigationHazard(); }, token);
         if (hazard != null) return hazard;
         var request = await NativeAgent.OnMain(() =>
         {
@@ -884,6 +887,11 @@ public static class AgentTools
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
+            if (!Bool(result, "done") && LastContactEscape != null && !ReferenceEquals(escapeBefore, LastContactEscape))
+            {
+                result["outcome"] = "unsafe"; result["error"] = "navigation_contact_escape";
+                result["contact_escape"] = LastContactEscape.DeepClone();
+            }
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));
             bool arrived = Bool(request, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
             if (Bool(request, "reach") && !Bool(args, "reach"))
