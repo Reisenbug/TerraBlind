@@ -331,6 +331,8 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "inspect_terrain":
+                return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
             case "run_script":
                 var workflow = await NativeAgent.OnMain(() =>
                 {

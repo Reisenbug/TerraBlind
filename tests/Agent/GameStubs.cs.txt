@@ -131,7 +131,15 @@ namespace Terraria.ID
 {
     public static class ItemID { }
     public static class NPCID { }
-    public static class TileID { public const int FixtureSource = 1, FixtureOther = 2; }
+    public static class LiquidID { public const int Lava = 1; }
+    public static class TileID
+    {
+        public const int FixtureSource = 1, FixtureOther = 2;
+        public static class Sets
+        {
+            public static bool[] Falling = new bool[1000], Suffocate = new bool[1000];
+        }
+    }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int None = 0, Arrow = 40; }

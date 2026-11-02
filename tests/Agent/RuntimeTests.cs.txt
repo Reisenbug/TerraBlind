@@ -100,6 +100,28 @@ static class RuntimeTests
                 "unsafe navigation waited indefinitely or failed to release controls");
             Console.WriteLine("PASS: navigation safety interruption stops even waits without a wall-clock deadline");
 
+            var savedPosition = Game.LocalPlayer.position;
+            var oldSand = Game.tile[2, 2]; var oldLava = Game.tile[3, 3];
+            try
+            {
+                Game.LocalPlayer.position = new(20, 32);
+                Game.tile[2, 2] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+                Terraria.ID.TileID.Sets.Falling[1] = Terraria.ID.TileID.Sets.Suffocate[1] = true;
+                Game.tile[3, 3] = new Terraria.Tile { LiquidAmount = 255, LiquidType = 1 };
+                var terrain = JsonNode.Parse(await Execute(AgentTools.Execute("inspect_terrain", new JsonObject { ["radius"] = 2 }, default)));
+                Check(terrain["origin"]["x"].GetValue<int>() == 1 && terrain["origin"]["y"].GetValue<int>() == 1
+                    && terrain["rows"][1].ToString()[1] == 'F' && terrain["rows"][2].ToString()[2] == 'L',
+                    "terrain grid lost world coordinates or falling/liquid semantics");
+                var buried = terrain["near_body_tiles"].AsArray().Single(t => t["x"].GetValue<int>() == 2 && t["y"].GetValue<int>() == 2);
+                Check(buried["in_body"].GetValue<bool>() && buried["suffocates"].GetValue<bool>(), "buried tile was shown as free space");
+            }
+            finally
+            {
+                Game.LocalPlayer.position = savedPosition; Game.tile[2, 2] = oldSand; Game.tile[3, 3] = oldLava;
+                Terraria.ID.TileID.Sets.Falling[1] = Terraria.ID.TileID.Sets.Suffocate[1] = false;
+            }
+            Console.WriteLine("PASS: terrain inspection reports exact body overlap, falling blocks and lava without editing tiles");
+
             HttpServerSystem.Handler = (path, payload) =>
             {
                 Check(path == "/fight" && JsonNode.Parse(payload)["active"]?.GetValue<bool>() == false,
