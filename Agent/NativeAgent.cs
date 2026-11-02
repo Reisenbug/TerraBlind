@@ -218,10 +218,12 @@ public class NativeAgent : ModSystem
                 string input = goal + "\n现状：" + state;
                 long recoverySession = -1;
                 int noProgressContinuations = 0;
+                int preparationContinuations = 0;
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
                     int arrivalsBefore = AgentTools.Actions.NavigationArrivals;
+                    int discoveriesBefore = await OnMain(() => AgentTools.DiscoveryRevision, token);
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
                     int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
@@ -266,7 +268,7 @@ public class NativeAgent : ModSystem
                         canContinue = true;
                         progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
                     }
-                    if (progressed) noProgressContinuations = 0;
+                    if (progressed) { noProgressContinuations = 0; preparationContinuations = 0; }
                     if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) canContinue = false;
                     if (canContinue && await OnMain(() => AgentTools.Recovery.Offer(), token))
                     {
@@ -275,9 +277,10 @@ public class NativeAgent : ModSystem
                             + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString() + "\n现状：" + await AgentTools.State(token);
                         continue;
                     }
-                    if (canContinue && (progressed || noProgressContinuations++ < 1))
+                    bool discovered = await OnMain(() => AgentTools.DiscoveryRevision > discoveriesBefore, token);
+                    if (canContinue && (progressed || discovered && preparationContinuations++ < 4 || noProgressContinuations++ < 1))
                     {
-                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。未取得实际进展时宿主仅额外续接一次。\n现状："
+                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作。\n现状："
                             + await AgentTools.State(token);
                         continue;
                     }

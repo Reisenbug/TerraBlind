@@ -22,9 +22,11 @@ public static class AgentTools
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default));
     static readonly Dictionary<string, int> Tracking = new();
+    static readonly HashSet<string> Discoveries = new();
+    internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); Actions.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); Actions.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -241,7 +243,11 @@ public static class AgentTools
                     Recovery.Record(name, args, output);
                     try
                     {
-                        if (JsonNode.Parse(output) is JsonObject result && result.ContainsKey("task_plan"))
+                        var facts = JsonNode.Parse(output);
+                        if (name is "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome"
+                            or "find_tiles" or "tile_names" or "find_descent" or "descent_route" or "equipment_list" or "inspect_terrain")
+                            if (!Rejected(facts as JsonObject)) Discoveries.Add(name + ":" + args.ToJsonString());
+                        if (facts is JsonObject result && result.ContainsKey("task_plan"))
                         {
                             result["task_plan"] = Plan.Snapshot();
                             return result.ToJsonString();
