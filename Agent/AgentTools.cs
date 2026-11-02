@@ -18,6 +18,7 @@ public static class AgentTools
     internal static readonly AgentWatch Watches = new();
     internal static readonly AgentRecovery Recovery = new();
     internal static JsonObject LastDamage, LastDeath;
+    internal static bool ContactEscapeActive;
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
@@ -39,7 +40,7 @@ public static class AgentTools
         StopInputs();
     }
 
-    static void StopInputs()
+    internal static void StopInputs()
     {
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
@@ -85,6 +86,7 @@ public static class AgentTools
             ["api_revision"] = ApiRevision,
             ["combat_weapon_type"] = CombatLoadout.PreferredType,
             ["navigation_arrivals"] = Actions.NavigationArrivals,
+            ["contact_escape_active"] = ContactEscapeActive,
             ["pvp_target"] = PvpDuel.Active ? PvpDuel.Target : PlayerCombat.Target
         };
         var players = new JsonArray();
@@ -237,6 +239,13 @@ public static class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "equip_item" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
+        if (action && ContactEscapeActive)
+        {
+            while (ContactEscapeActive) await Task.Delay(33, token);
+            return new JsonObject { ["error"] = "survival_escape_reobserve", ["outcome"] = "unsafe",
+                ["detail"] = "短程脱离接触伤害已结束，原动作尚未执行；依据最新位置和危险状态重新决策。",
+                ["state"] = JsonNode.Parse(await State(token)) }.ToJsonString();
+        }
         if ((action || name is "combat_start" or "combat_reposition" || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();

@@ -411,6 +411,7 @@ public class NativeAgent : ModSystem
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
         AgentTools.LastDamage = AgentTools.LastDeath = null;
+        AgentTools.ContactEscapeActive = false;
         CombatLoadout.PreferredType = 0;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();

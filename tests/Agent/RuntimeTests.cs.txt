@@ -104,6 +104,22 @@ static class RuntimeTests
                 "unsafe navigation waited indefinitely or failed to release controls");
             Console.WriteLine("PASS: navigation safety interruption stops even waits without a wall-clock deadline");
 
+            int staleActions = 0;
+            HttpServerSystem.Handler = (_, _) => { staleActions++; return (200, "{}"); };
+            AgentTools.ContactEscapeActive = true;
+            try
+            {
+                var stale = AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 99, ["target_y"] = 99 }, default);
+                for (int i = 0; i < 10; i++) { Agent.PostUpdateEverything(); await Task.Delay(5); }
+                Check(!stale.IsCompleted && staleActions == 0, "new action overrode an active survival escape");
+                AgentTools.ContactEscapeActive = false;
+                var reobserve = JsonNode.Parse(await Execute(stale));
+                Check(reobserve["error"].ToString() == "survival_escape_reobserve" && staleActions == 0,
+                    "stale coordinates executed after emergency movement changed the player position");
+            }
+            finally { AgentTools.ContactEscapeActive = false; }
+            Console.WriteLine("PASS: emergency escape holds new actions and returns fresh state without replaying stale coordinates");
+
             var savedPosition = Game.LocalPlayer.position;
             var oldSand = Game.tile[2, 2]; var oldLava = Game.tile[3, 3];
             try
