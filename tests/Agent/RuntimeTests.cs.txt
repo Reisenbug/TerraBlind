@@ -149,6 +149,18 @@ static class RuntimeTests
             finally { Game.LocalPlayer.position = savedPosition; Game.tile[4, 6] = oldPlate; }
             Console.WriteLine("PASS: nearby trap stops before navigation and removing the trigger clears the guard");
 
+            AgentTools.LastDeath = new JsonObject { ["kind"] = "death", ["projectile_type"] = 727,
+                ["pos_tiles"] = new JsonObject { ["x"] = 12, ["y"] = 34 } };
+            AgentTools.NewTask();
+            var deathState = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(deathState["last_death"]["projectile_type"].GetValue<int>() == 727
+                && deathState["last_death"]["pos_tiles"]["x"].GetValue<int>() == 12,
+                "fresh task lost measured death source or coordinates");
+            deathState["last_death"]["projectile_type"] = 0;
+            Check(AgentTools.LastDeath["projectile_type"].GetValue<int>() == 727, "state exposed mutable death evidence");
+            AgentTools.LastDeath = null;
+            Console.WriteLine("PASS: death source and coordinates survive task continuation as isolated state evidence");
+
             var savedPotion = Game.LocalPlayer.inventory[20];
             int savedDelay = Game.LocalPlayer.potionDelay;
             try

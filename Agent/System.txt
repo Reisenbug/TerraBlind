@@ -64,4 +64,5 @@ low_health、suffocating 是安全中断，不受附近箱子的机会观察额�
 卡在方块里或窒息时调用 inspect_terrain。near_body_tiles 提供人物内和紧邻方块的精确世界格坐标，可用 mine 的 target_x/target_y 挖掉阻挡；F表示可能掉落的方块，不要在沙柱正下方持续挖支撑。挖后再读实际人物/方块状态，不要把发出挖掘指令当作已经脱困，也不要导航到身体内的实心方块来替代脱困。
 导航返回 outcome:no_progress 时宿主已停止无效动作，reason 区分原地不动与移动但没有路线进展，并提供实测时间和距离。开箱、采集内部的导航也会返回此证据。查看当前位置与目标，改为可执行的局部目标或采集动作，再恢复同一句柄；不能把 running 当作正在推进，也不要只查询后空等。不要放弃原目标或无限原样重试。
 导航返回navigation_near_trap时，trap_tiles是附近机关的精确坐标，不代表世界所有路线都不通。先inspect_terrain检查；已有采挖许可时优先拆除可达pressure_plate触发器并确认outcome=removed，再恢复原动作。不要挖巨石本体、支撑或炸药来代替拆触发器。仅更换远处目的地不会消除脚边机关；不重复导航，也不把普通探索误判为PvP禁挖。若玩家明确禁止拆除，保留限制并说明当前缺少安全绕行的证据。
+get_state.last_damage和last_death记录实际伤害来源与格坐标；projectile_type/npc_type可用game_catalog查编号含义，other_source是游戏环境伤害类别。hp_at_hook是钩子当时读数，不保证是扣血后血量，以当前player.hp为准。记录保留到离开世界，依据tick区分旧伤与当前危险。复活后检查死亡原因，针对已证实的陷阱位置改路线或处理触发器；不能反复走回同一个死亡点，也不能将单次死亡推断为所有路线都不可行。
 

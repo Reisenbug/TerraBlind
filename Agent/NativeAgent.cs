@@ -168,6 +168,7 @@ public class NativeAgent : ModSystem
                     && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead, ["suffocating"] = p.suffocating,
+                ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
                 ["actions"] = AgentTools.Actions.Summary() });
@@ -407,6 +408,7 @@ public class NativeAgent : ModSystem
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
+        AgentTools.LastDamage = AgentTools.LastDeath = null;
         CombatLoadout.PreferredType = 0;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();

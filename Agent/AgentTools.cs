@@ -17,6 +17,7 @@ public static class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     internal static readonly AgentWatch Watches = new();
     internal static readonly AgentRecovery Recovery = new();
+    internal static JsonObject LastDamage, LastDeath;
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
@@ -104,6 +105,8 @@ public static class AgentTools
         state["inventory_slots"] = PvpInventory.Snapshot();
         state["task_plan"] = Plan.Summary();
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
+        state["last_damage"] = LastDamage?.DeepClone();
+        state["last_death"] = LastDeath?.DeepClone();
         var workflows = new JsonObject();
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();
         state["script_workflows"] = workflows;
