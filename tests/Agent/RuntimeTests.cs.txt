@@ -88,6 +88,18 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: model weapon choice survives mining and inventory reordering, rejecting tools and silent fallback");
 
+            int unsafeStops = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede_stop") unsafeStops++;
+                return (200, "{\"done\":false}");
+            };
+            var unsafeNavigation = await Execute(AgentTools.Wait("/nav_recede_done", "nav", "/nav_recede_stop", 0, default,
+                _ => Task.FromResult(new JsonObject { ["error"] = "navigation_suffocating", ["outcome"] = "unsafe" })));
+            Check(unsafeStops == 1 && unsafeNavigation["error"].ToString() == "navigation_suffocating",
+                "unsafe navigation waited indefinitely or failed to release controls");
+            Console.WriteLine("PASS: navigation safety interruption stops even waits without a wall-clock deadline");
+
             HttpServerSystem.Handler = (path, payload) =>
             {
                 Check(path == "/fight" && JsonNode.Parse(payload)["active"]?.GetValue<bool>() == false,

@@ -189,7 +189,7 @@ public static class AgentTools
                     if (stalled != null)
                     {
                         await StopAction();
-                        await NativeAgent.OnMain(() => { DiagLog.Write("[agent_navigation_stalled] " + stalled.ToJsonString()); return true; }, token);
+                        await NativeAgent.OnMain(() => { DiagLog.Write("[agent_navigation_interrupted] " + stalled.ToJsonString()); return true; }, token);
                         return stalled;
                     }
                 }
@@ -785,6 +785,10 @@ public static class AgentTools
             elapsed => NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;
+                if (player.suffocating)
+                    return new JsonObject { ["error"] = "navigation_suffocating", ["outcome"] = "unsafe",
+                        ["hp"] = player.statLife, ["pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y },
+                        ["detail"] = "原生人物已窒息；停止路线，先脱困再恢复。" };
                 int px = (int)player.Center.X / 16, py = (int)player.Center.Y / 16;
                 var terrain = new Dictionary<int, long>();
                 for (int x = px - 4; x <= px + 4; x++)
