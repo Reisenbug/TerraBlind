@@ -20,7 +20,13 @@ public static class CombatLoadout
                 if (item.type == PreferredType) return slot;
                 continue;
             }
-            if (best < 0 || player.GetWeaponDamage(item) > player.GetWeaponDamage(player.inventory[best])) best = slot;
+            if (best < 0) best = slot;
+            else
+            {
+                var previous = player.inventory[best];
+                if (previous.consumable && !item.consumable || previous.consumable == item.consumable
+                    && player.GetWeaponDamage(item) > player.GetWeaponDamage(previous)) best = slot;
+            }
         }
         return best;
     }
