@@ -310,6 +310,43 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: collection measures the selected tool's mining range and approaches beyond interaction distance");
 
+            var requestedPick = Game.LocalPlayer.inventory[1];
+            try
+            {
+                Game.LocalPlayer.inventory[1] = new Terraria.Item { type = 3509, stack = 1, pick = 35 };
+                Game.tile[12, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
+                bool exactUse = false;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/item_use")
+                    {
+                        var request = JsonNode.Parse(payload);
+                        exactUse = request["strict"].GetValue<bool>() && request["slot"].GetValue<int>() == 1
+                            && request["target_wx"].GetValue<int>() == 12 && request["target_wy"].GetValue<int>() == 34;
+                    }
+                    return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+                };
+                var use = JsonNode.Parse(await Execute(AgentTools.Execute("use_item",
+                    new JsonObject { ["x"] = 12, ["y"] = 34, ["slot"] = 1 }, default)));
+                Check(exactUse && use["outcome"].ToString() == "removed", "non-solid target snapped away or ignored requested pickaxe");
+                Reach.MineTest = (_, _, _) => false;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    Check(path != "/item_use", "collection swung despite failed actual mining range");
+                    if (path == "/nav_recede") Game.LocalPlayer.position = new(192, 544);
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"ok\":true}");
+                };
+                var missed = JsonNode.Parse(await Execute(AgentTools.Execute("use_item",
+                    new JsonObject { ["x"] = 12, ["y"] = 34, ["slot"] = 1 }, default)));
+                Check(missed["error"].ToString() == "collect_target_out_of_mining_range", "arrival alone was treated as mining reach");
+            }
+            finally
+            {
+                Game.LocalPlayer.inventory[1] = requestedPick; Game.LocalPlayer.position = beforeRangePosition;
+                Game.tile[12, 34] = default; Reach.MineTest = null;
+            }
+            Console.WriteLine("PASS: use_item preserves exact non-solid targets and selected tools, rechecking mining reach after navigation");
+
             var treasureCalls = new System.Collections.Generic.List<string>();
             HttpServerSystem.Handler = (path, payload) =>
             {

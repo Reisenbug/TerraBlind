@@ -622,8 +622,14 @@ public static class AgentTools
                     if (slot < 0 || slot >= player.inventory.Length) return null;
                     var item = player.inventory[slot];
                     return new JsonObject { ["type"] = item.type, ["consumable"] = item.consumable, ["heal_life"] = item.healLife,
+                        ["collect_tool"] = item.pick > 0 || item.axe > 0 || item.hammer > 0,
                         ["count"] = player.inventory.Where(i => i.type == item.type).Sum(i => i.stack) };
                 }, token);
+                if (usedItem?["collect_tool"]?.GetValue<bool>() == true)
+                {
+                    var collection = await CollectTarget(Int(args, "x"), Int(args, "y"), token, requestedSlot: Int(args, "slot", -1));
+                    if (collection != null) { result = collection; break; }
+                }
                 result = await Call("/item_use", new JsonObject
                 {
                     ["target_wx"] = Int(args, "x"), ["target_wy"] = Int(args, "y"), ["slot"] = Int(args, "slot", -1),
@@ -775,7 +781,7 @@ public static class AgentTools
         return output;
     }
 
-    internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true)
+    internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true, int requestedSlot = -1)
     {
         var target = await NativeAgent.OnMain(() =>
         {
@@ -783,7 +789,7 @@ public static class AgentTools
             var tile = Main.tile[x, y];
             if (!tile.HasUnactuatedTile || nonSolidOnly && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) return null;
             int Power(Item item) => Main.tileAxe[tile.TileType] ? item.axe : Main.tileHammer[tile.TileType] ? item.hammer : item.pick;
-            int slot = Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
+            int slot = requestedSlot >= 0 ? requestedSlot : Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
                 .FirstOrDefault(i => !Main.LocalPlayer.inventory[i].IsAir && Power(Main.LocalPlayer.inventory[i]) > 0, -1);
             bool canMine = false;
             if (slot >= 0)
@@ -802,6 +808,15 @@ public static class AgentTools
             var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = Bool(target, "solid") }, token, 30);
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
+            bool reachable = await NativeAgent.OnMain(() =>
+            {
+                var player = Main.LocalPlayer;
+                int previous = player.selectedItem;
+                try { player.selectedItem = Int(target, "slot", -1); return Reach.CanMine(player, x, y); }
+                finally { player.selectedItem = previous; }
+            }, token);
+            if (!reachable) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
+                ["x"] = x, ["y"] = y, ["navigation"] = approach };
         }
         var result = await Call("/item_use", new JsonObject { ["target_wx"] = x, ["target_wy"] = y,
             ["slot"] = target["slot"].DeepClone(), ["strict"] = true }, token);
