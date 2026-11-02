@@ -14,6 +14,10 @@ public sealed class AgentWatch
     int samples;
     bool configured;
     JsonObject lastObservation;
+    string navigationAttempt;
+    string terrain;
+    double anchorX, anchorY;
+    DateTime lastMovement;
     public int Radius { get; private set; } = 25;
     public int HealthBelow { get; private set; } = 80;
     public bool HasPending => pending.Count > 0;
@@ -24,7 +28,7 @@ public sealed class AgentWatch
     { foreach (var action in actions) seen.Add("action_finished:" + action["handle"] + ":" + action["attempt"]); }
     public void EnsureDefaults()
     {
-        events.UnionWith(new[] { "action_finished", "low_health", "player_died", "inventory_full" });
+        events.UnionWith(new[] { "action_finished", "action_stalled", "low_health", "player_died", "inventory_full" });
         if (!configured) events.Add("nearby_chest");
     }
 
@@ -41,7 +45,7 @@ public sealed class AgentWatch
         return Snapshot();
     }
 
-    public void Observe(JsonObject state)
+    public void Observe(JsonObject state, DateTime? observedAt = null)
     {
         if (!Armed) return;
         samples++;
@@ -49,7 +53,7 @@ public sealed class AgentWatch
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         void Emit(string kind, string key, JsonNode evidence)
         {
-            if (!events.Contains(kind) || issued >= 6 && kind is not ("action_finished" or "player_died") || !seen.Add(kind + ":" + key)) return;
+            if (!events.Contains(kind) || issued >= 6 && kind is not ("action_finished" or "action_stalled" or "player_died") || !seen.Add(kind + ":" + key)) return;
             var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key,
                 ["evidence"] = evidence?.DeepClone() };
             pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
@@ -62,6 +66,22 @@ public sealed class AgentWatch
         foreach (var action in state["actions"]?.AsArray() ?? new JsonArray())
             if (action["status"]?.ToString() == "failed" || action["status"]?.ToString() == "completed" && action["inline"]?.GetValue<bool>() != true)
                 Emit("action_finished", action["handle"] + ":" + action["attempt"], action);
+        var navigation = state["actions"]?.AsArray().FirstOrDefault(action =>
+            action["tool"]?.ToString() == "nav_to" && action["status"]?.ToString() == "running");
+        if (navigation == null) { navigationAttempt = null; return; }
+        var now = observedAt ?? DateTime.UtcNow;
+        string attempt = navigation["handle"] + ":" + navigation["attempt"];
+        double x = double.Parse(state["pos"]?["x"]?.ToString() ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+        double y = double.Parse(state["pos"]?["y"]?.ToString() ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+        string currentTerrain = state["terrain"]?.ToString();
+        if (attempt != navigationAttempt || Math.Abs(x - anchorX) >= 16 || Math.Abs(y - anchorY) >= 16 || currentTerrain != terrain)
+        {
+            navigationAttempt = attempt; anchorX = x; anchorY = y; terrain = currentTerrain; lastMovement = now;
+        }
+        if ((now - lastMovement).TotalSeconds >= 45)
+            Emit("action_stalled", attempt, new JsonObject { ["action"] = navigation.DeepClone(),
+                ["stationary_seconds"] = (now - lastMovement).TotalSeconds, ["pos"] = state["pos"]?.DeepClone(),
+                ["reason"] = "navigation_running_without_position_or_nearby_tile_changes" });
     }
 
     public JsonArray Take()
@@ -91,6 +111,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = samples = 0; configured = false; lastObservation = null; }
+    { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = samples = 0; configured = false; lastObservation = null; navigationAttempt = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

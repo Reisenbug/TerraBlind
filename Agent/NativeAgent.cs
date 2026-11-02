@@ -167,7 +167,16 @@ public class NativeAgent : ModSystem
                 if (chest != null && chest.item.Any(i => !i.IsAir)
                     && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
-            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead,
+            var terrain = new System.Text.StringBuilder();
+            int px = (int)p.Center.X / 16, py = (int)p.Center.Y / 16;
+            for (int x = px - 4; x <= px + 4; x++)
+            for (int y = py - 4; y <= py + 4; y++)
+                if (WorldGen.InWorld(x, y))
+                {
+                    var tile = Main.tile[x, y];
+                    terrain.Append(tile.HasTile).Append(':').Append(tile.TileType).Append(':').Append(tile.Slope).Append(':').Append(tile.IsHalfBlock).Append(';');
+                }
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead, ["terrain"] = terrain.ToString(),
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
                 ["actions"] = AgentTools.Actions.Snapshot() });

@@ -46,6 +46,33 @@ static class WatchTests
             "task scope leaked events or state");
         Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
 
+        watch.EnsureDefaults();
+        var clock = DateTime.UtcNow;
+        var navigation = JsonNode.Parse("{\"hp\":100,\"pos\":{\"x\":0,\"y\":0},\"terrain\":\"solid\",\"actions\":[{\"tool\":\"nav_to\",\"handle\":\"nav\",\"attempt\":1,\"status\":\"running\"}]}").AsObject();
+        watch.Observe(navigation, clock);
+        watch.Observe(navigation, clock.AddSeconds(44));
+        Check(!watch.HasPending, "initial planning was interrupted before stall threshold");
+        navigation["terrain"] = "mined";
+        watch.Observe(navigation, clock.AddSeconds(44));
+        watch.Observe(navigation, clock.AddSeconds(88));
+        Check(!watch.HasPending, "real excavation failed to reset navigation stall detection");
+        navigation["pos"]["x"] = 32f;
+        watch.Observe(navigation, clock.AddSeconds(88));
+        watch.Observe(navigation, clock.AddSeconds(132));
+        Check(!watch.HasPending, "movement failed to reset navigation stall detection");
+        watch.Observe(navigation, clock.AddSeconds(134));
+        var stalled = watch.Take();
+        Check(stalled.Count == 1 && stalled[0]["kind"].ToString() == "action_stalled"
+            && stalled[0]["evidence"]["stationary_seconds"].GetValue<double>() == 46, "stationary navigation never woke the model");
+        watch.Observe(navigation, clock.AddSeconds(200));
+        Check(!watch.HasPending, "same stalled attempt caused repeated wakes");
+        navigation["actions"][0]["attempt"] = 2;
+        watch.Observe(navigation, clock.AddSeconds(200));
+        watch.Observe(navigation, clock.AddSeconds(246));
+        Check(watch.Take().Count == 1, "resumed stalled attempt was permanently ignored");
+        watch.Reset();
+        Console.WriteLine("PASS: navigation stalls wake once per attempt; movement and excavation reset the measured interval");
+
         int effects = 0;
         var progress = new ScriptProgress();
         var direct = await AgentScript.Run("step('before',()=>tool('effect')); tool('decision_point',{reason:'choose next'}); tool('effect');", 5,
