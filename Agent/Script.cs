@@ -136,7 +136,17 @@ public static class AgentScript
                         delete globalThis.__stepComplete;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
-                        const tool = (name, args = {}) => parse(call(name, stringify(args)));
+                        const tool = (name, args = {}) => {
+                            const result = parse(call(name, stringify(args)));
+                            if (name !== 'get_state' || result === null || typeof result !== 'object') return result;
+                            return new Proxy(result, {
+                                get(target, key, receiver) {
+                                    if (typeof key === 'string' && key !== 'then' && key !== 'toJSON' && !Reflect.has(target, key))
+                                        throw new Error('get_state.' + key + ' 不存在；请使用实际结构，根字段：' + Object.keys(target).join(','));
+                                    return Reflect.get(target, key, receiver);
+                                }
+                            });
+                        };
                         const print = value => log(stringify(value));
                         const step = (id, action) => {
                             const saved = parse(enter(id));

@@ -46,6 +46,21 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        int invalidStateEffects = 0;
+        Task<string> StateTool(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "get_state") return Task.FromResult("{\"player\":{\"hp\":60},\"inventory_slots\":[]}");
+            invalidStateEffects++; return Task.FromResult("{}");
+        }
+        var wrongState = await AgentScript.Run("const s=tool('get_state'); if(s.hp<80) tool('heal'); tool('effect');", 5,
+            (_, _) => { }, StateTool, _ => Task.CompletedTask, default);
+        Check(wrongState["error"].ToString() == "script_failed" && wrongState["detail"].ToString().Contains("get_state.hp")
+            && invalidStateEffects == 0, "missing state field silently skipped its safety branch");
+        var correctState = await AgentScript.Run("const s=tool('get_state'); print(s); return s;", 5,
+            (_, _) => { }, StateTool, _ => Task.CompletedTask, default);
+        Check(correctState["ok"].GetValue<bool>() && correctState["value"]["player"]["hp"].GetValue<int>() == 60,
+            "state field guard broke JSON serialization or valid fields");
+        Console.WriteLine("PASS: missing state fields fail before effects; actual state remains readable and serializable");
         var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
         var entries = AgentScript.EntryTools(definitions);
         Check(entries.Count == 4 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask")
