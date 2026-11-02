@@ -158,7 +158,8 @@ public static class AgentTools
         return result.ToJsonString();
     }, token);
 
-    internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token)
+    internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token,
+        Func<double, Task<JsonObject>> navigationProgress = null)
     {
         var stopArgs = stop == "/fight" ? new JsonObject { ["active"] = false } : null;
         async Task StopAction()
@@ -181,6 +182,16 @@ public static class AgentTools
                 if (Rejected(status)) throw new InvalidOperationException($"{path} 状态查询被拒绝：{status}");
                 if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
                     return status;
+                if (navigationProgress != null)
+                {
+                    var stalled = await navigationProgress(timer.Elapsed.TotalSeconds);
+                    if (stalled != null)
+                    {
+                        await StopAction();
+                        await NativeAgent.OnMain(() => { DiagLog.Write("[agent_navigation_stalled] " + stalled.ToJsonString()); return true; }, token);
+                        return stalled;
+                    }
+                }
             }
             await StopAction();
             var final = await Call(path, null, token);
@@ -759,7 +770,25 @@ public static class AgentTools
         }, token);
         var start = await Call("/nav_recede", request, token);
         if (Rejected(start)) return start;
-        var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token);
+        var progress = new NavigationProgress();
+        var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token,
+            elapsed => NativeAgent.OnMain(() =>
+            {
+                var player = Main.LocalPlayer;
+                int px = (int)player.Center.X / 16, py = (int)player.Center.Y / 16;
+                var terrain = new Dictionary<int, long>();
+                for (int x = px - 4; x <= px + 4; x++)
+                for (int y = py - 4; y <= py + 4; y++)
+                    if (WorldGen.InWorld(x, y))
+                    {
+                        var tile = Main.tile[x, y];
+                        terrain[x * Main.maxTilesY + y] = tile.HasTile
+                            ? 1L + ((long)tile.TileType << 8) + ((long)tile.Slope << 4) + (tile.IsHalfBlock ? 2 : 0) : 0;
+                    }
+                double distance = Math.Abs(player.Center.X - Int(args, "x") * 16)
+                    + Math.Abs(player.Center.Y - Int(args, "y") * 16);
+                return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain);
+            }, token));
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;

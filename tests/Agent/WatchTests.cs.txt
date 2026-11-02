@@ -46,32 +46,29 @@ static class WatchTests
             "task scope leaked events or state");
         Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
 
-        watch.EnsureDefaults();
-        var clock = DateTime.UtcNow;
-        var navigation = JsonNode.Parse("{\"hp\":100,\"pos\":{\"x\":0,\"y\":0},\"terrain\":\"solid\",\"actions\":[{\"tool\":\"nav_to\",\"handle\":\"nav\",\"attempt\":1,\"status\":\"running\"}]}").AsObject();
-        watch.Observe(navigation, clock);
-        watch.Observe(navigation, clock.AddSeconds(44));
-        Check(!watch.HasPending, "initial planning was interrupted before stall threshold");
-        navigation["terrain"] = "mined";
-        watch.Observe(navigation, clock.AddSeconds(44));
-        watch.Observe(navigation, clock.AddSeconds(88));
-        Check(!watch.HasPending, "real excavation failed to reset navigation stall detection");
-        navigation["pos"]["x"] = 32f;
-        watch.Observe(navigation, clock.AddSeconds(88));
-        watch.Observe(navigation, clock.AddSeconds(132));
-        Check(!watch.HasPending, "movement failed to reset navigation stall detection");
-        watch.Observe(navigation, clock.AddSeconds(134));
-        var stalled = watch.Take();
-        Check(stalled.Count == 1 && stalled[0]["kind"].ToString() == "action_stalled"
-            && stalled[0]["evidence"]["stationary_seconds"].GetValue<double>() == 46, "stationary navigation never woke the model");
-        watch.Observe(navigation, clock.AddSeconds(200));
-        Check(!watch.HasPending, "same stalled attempt caused repeated wakes");
-        navigation["actions"][0]["attempt"] = 2;
-        watch.Observe(navigation, clock.AddSeconds(200));
-        watch.Observe(navigation, clock.AddSeconds(246));
-        Check(watch.Take().Count == 1, "resumed stalled attempt was permanently ignored");
-        watch.Reset();
-        Console.WriteLine("PASS: navigation stalls wake once per attempt; movement and excavation reset the measured interval");
+        var navigation = new NavigationProgress();
+        var terrain = new System.Collections.Generic.Dictionary<int, long> { [1] = 1 };
+        Check(navigation.Observe(0, 0, 0, 1000, terrain) == null
+            && navigation.Observe(29, 0, 0, 1000, terrain) == null, "planning grace interrupted");
+        Check(navigation.Observe(30, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary", "stationary planning waited forever");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        navigation.Observe(25, 100, 0, 900, terrain);
+        terrain[1] = 0;
+        Check(navigation.Observe(32, 100, 0, 900, terrain) == null, "excavation was declared stalled");
+        Check(navigation.Observe(39, 100, 0, 900, terrain) == null
+            && navigation.Observe(40, 100, 0, 900, terrain)?["reason"]?.ToString() == "stationary", "execution stall deadline failed");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i < 30; i++)
+        {
+            terrain[100 + i] = 1;
+            Check(navigation.Observe(i, i % 2 * 100, 0, 1000 + i % 2 * 100, terrain) == null,
+                "detour interrupted before no-progress deadline");
+        }
+        Check(navigation.Observe(30, 0, 0, 1000, terrain)?["reason"]?.ToString() == "moving_without_route_progress",
+            "oscillation or newly visible tiles masked no progress");
+        Console.WriteLine("PASS: navigation separates planning, execution stalls, excavation and oscillation");
 
         int effects = 0;
         var progress = new ScriptProgress();
