@@ -271,7 +271,14 @@ public sealed class CodexAgent : IDisposable
                 {
                     if (method == "item/tool/call" && args?["threadId"]?.ToString() == _thread && args?["turnId"]?.ToString() == turn)
                     {
-                        if (++toolCalls > 32) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
+                        if (++toolCalls > 32)
+                        {
+                            if (goalOptions == null) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
+                            await Tool(message, tools, (_, _, _) => Task.FromResult("{\"error\":\"host_turn_limit\",\"not_executed\":true,\"detail\":\"本轮工具预算已用完；目标保持active，由宿主继续下一轮，不重建计划。\"}"), token);
+                            await Interrupt(turn);
+                            if (_rpc == null) throw new IOException("Codex轮次交接连接已关闭。");
+                            return;
+                        }
                         await Tool(message, tools, execute, token);
                     }
                     else await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),

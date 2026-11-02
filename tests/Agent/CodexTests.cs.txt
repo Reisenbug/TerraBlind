@@ -270,20 +270,21 @@ static class CodexTests
         Check(limited.Interrupts == 1 && limited.Goal["status"].ToString() == "budgetLimited",
             "budget did not interrupt or falsely completed goal");
         Console.WriteLine("PASS: actual token telemetry interrupts a budget-limited goal without completing it");
-        var repeated = new Server { RepeatedToolCalls = 100 };
+        var repeated = new Server { RepeatedToolCalls = 33 };
         using var bounded = new CodexAgent((_, _) => repeated.Connect());
         int executions = 0;
-        try
-        {
-            await bounded.RunAsync("retry", "mock", "/tmp", "", "game", Tools,
-                (_, _, _) => { executions++; return Task.FromResult("{\"error\":\"no_progress\"}"); }, _ => { }, default,
-                new JsonObject { ["objective"] = "bounded failures", ["request"] = "retry" });
-            throw new Exception("model tool loop was unbounded");
-        }
-        catch (InvalidOperationException error) { Check(error.Message.Contains("32"), "wrong loop termination evidence"); }
-        Check(executions == 32 && repeated.Goal["status"].ToString() == "blocked" && repeated.Stopped,
-            "repeated failure did not bound effects and preserve blocked native goal");
-        Console.WriteLine("PASS: repeated model tool failures stop at the call limit and persist a blocked native goal");
+        var loopOptions = new JsonObject { ["objective"] = "bounded failures", ["request"] = "retry" };
+        await bounded.RunAsync("retry", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => { executions++; return Task.FromResult("{\"error\":\"no_progress\"}"); }, _ => { }, default, loopOptions);
+        Check(executions == 32 && repeated.Goal["status"].ToString() == "active" && !repeated.Stopped && repeated.Interrupts == 1
+            && repeated.ToolResponses.Last()["contentItems"][0]["text"].ToString().Contains("host_turn_limit"),
+            "turn limit executed the rejected call, stopped the goal or disposed its connection");
+        repeated.RepeatedToolCalls = repeated.ToolResponses.Count + 1;
+        await bounded.RunAsync("continue", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => { executions++; return Task.FromResult("{}"); }, _ => { }, default, loopOptions);
+        Check(executions == 33 && repeated.Threads == 1 && repeated.Goal["status"].ToString() == "active",
+            "next turn failed to continue on the same goal and thread");
+        Console.WriteLine("PASS: managed goal keeps the per-turn effect bound and continues on the same thread after budget handoff");
     }
 
     public static async Task GoalSmoke()
