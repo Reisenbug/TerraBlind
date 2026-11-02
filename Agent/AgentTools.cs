@@ -75,6 +75,7 @@ public static class AgentTools
             ["pvp"] = Main.LocalPlayer.hostile, ["team"] = Main.LocalPlayer.team,
             ["instruction_player_id"] = AgentNetwork.OwnerPlayer,
             ["api_revision"] = ApiRevision,
+            ["combat_weapon_type"] = CombatLoadout.PreferredType,
             ["pvp_target"] = PvpDuel.Active ? PvpDuel.Target : PlayerCombat.Target
         };
         var players = new JsonArray();
@@ -518,6 +519,14 @@ public static class AgentTools
             case "set_combat":
                 result = await NativeAgent.OnMain(() =>
                 {
+                    if (args["weapon_type"] != null)
+                    {
+                        int weaponType = Int(args, "weapon_type");
+                        if (weaponType < 0 || weaponType > 0 && !Main.LocalPlayer.inventory.Take(10).Any(item =>
+                            item.type == weaponType && CombatLoadout.Usable(item)))
+                            return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_hotbar" };
+                        CombatLoadout.PreferredType = weaponType;
+                    }
                     if (args["boss_control"] != null)
                     {
                         bossBefore ??= (Combat.Enabled, Dodge.Enabled);
@@ -528,6 +537,7 @@ public static class AgentTools
                     if (args["auto_attack"] != null) AgentPermissions.Attack = Bool(args, "auto_attack");
                     if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); PlayerCombat.Stop(); }
                     return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack,
+                        ["weapon_type"] = CombatLoadout.PreferredType,
                         ["boss_control"] = BossStatus() };
                 }, token);
                 break;

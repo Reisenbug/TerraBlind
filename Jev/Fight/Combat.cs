@@ -165,24 +165,6 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 打小怪用 0 号位,打 boss 本体用 1 号位。【目标类型天然就是阶段】--
-		// 克脑一阶段本体打不动,Worst() 那时只会返回爬行者,不用存阶段变量
-		static int WeaponSlot(Player p, bool atBoss)
-		{
-			int want = atBoss ? 1 : 0;
-			if (Usable(p, want)) return want;
-			for (int i = 0; i < 10; i++)
-				if (Usable(p, i)) return i;
-			return -1;
-		}
-
-		static bool Usable(Player p, int i)
-		{
-			var it = p.inventory[i];
-			if (it == null || it.IsAir || it.damage <= 0 || it.useStyle == 0) return false;
-			return it.pick == 0 && it.axe == 0 && it.hammer == 0;
-		}
-
 		static bool BossOnField()
 		{
 			for (int i = 0; i < Main.maxNPCs; i++)
@@ -230,10 +212,10 @@ namespace TerraBlind
 			}
 			_target = n;
 
-			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); return; }
+			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); Release(); return; }
 			_noFire = "";
 
-			int slot = WeaponSlot(p, Main.npc[n].boss || DestroyerSegment(Main.npc[n].type));
+			int slot = CombatLoadout.Select(p);
 			if (slot < 0)
 			{ Last = "no weapon"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
@@ -263,9 +245,10 @@ namespace TerraBlind
 			{
 				_swinging = true;
 				_loggedTarget = n;
-				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
+				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax} weapon={p.inventory[slot].type} slot={slot} nav={RecedingNav.Active}");
 			}
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
+			if (!bossFight) AxisLock.Release(Owner);
 		}
 
 		static float ShotSpeed(Player p, Item weapon)

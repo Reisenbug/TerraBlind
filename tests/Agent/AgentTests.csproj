@@ -11,6 +11,7 @@
     <Compile Include="../../Agent/ActionTasks.cs" Link="ActionTasks.cs" />
     <Compile Include="../../Agent/AgentWatch.cs" Link="AgentWatch.cs" />
     <Compile Include="../../Agent/NavigationProgress.cs" Link="NavigationProgress.cs" />
+    <Compile Include="../../Agent/CombatLoadout.cs" Link="CombatLoadout.cs" />
     <Compile Include="../../Agent/AgentRecovery.cs" Link="AgentRecovery.cs" />
     <Compile Include="../../Agent/SurfaceBiomeSearch.cs" Link="SurfaceBiomeSearch.cs" />
     <Compile Include="SurfaceBiomeTests.cs.txt" />

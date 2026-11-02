@@ -654,6 +654,11 @@
           },
           "auto_attack": {
             "type": "boolean"
+          },
+          "weapon_type": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "指定随身快捷栏中的武器物品type，防身和fight持续使用该武器，不按槽位自动切回。0清除指定。须先看背包和item_info，按射程、地形、耗材选择。"
           }
         }
       }

@@ -171,14 +171,6 @@ namespace TerraBlind
         }
 
         private static int FindWeaponSlot(Player p)
-        {
-            for (int i = 0; i < 10; i++)
-            {
-                var item = p.inventory[i];
-                if (item != null && !item.IsAir && item.ammo == AmmoID.None && item.damage > 0)
-                    return i;
-            }
-            return -1;
-        }
+            => CombatLoadout.Select(p);
     }
 }

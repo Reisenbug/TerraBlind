@@ -59,6 +59,35 @@ static class RuntimeTests
             NativeAgent.Stop();
             Console.WriteLine("PASS: invalid configuration terminates queued task as failed");
 
+            var savedInventory = Game.LocalPlayer.inventory;
+            int savedSelection = Game.LocalPlayer.selectedItem;
+            try
+            {
+                Game.LocalPlayer.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
+                Game.LocalPlayer.inventory[0] = new Terraria.Item { type = 3507, stack = 1, damage = 6 };
+                Game.LocalPlayer.inventory[5] = new Terraria.Item { type = 65, stack = 1, damage = 25 };
+                Game.LocalPlayer.inventory[8] = new Terraria.Item { type = 3509, stack = 1, damage = 4, pick = 35 };
+                var choice = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat",
+                    new JsonObject { ["weapon_type"] = 65 }, default)));
+                Game.LocalPlayer.selectedItem = 8;
+                Check(choice["weapon_type"].GetValue<int>() == 65 && CombatLoadout.Select(Game.LocalPlayer) == 5,
+                    "mining or a leading shortsword overrode model weapon choice");
+                Game.LocalPlayer.inventory[7] = Game.LocalPlayer.inventory[5];
+                Game.LocalPlayer.inventory[5] = new Terraria.Item();
+                Check(CombatLoadout.Select(Game.LocalPlayer) == 7, "preferred weapon was tied to a stale slot");
+                var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat",
+                    new JsonObject { ["weapon_type"] = 3509 }, default)));
+                Check(rejected["error"] != null && CombatLoadout.PreferredType == 65, "tool replaced preferred weapon");
+                Game.LocalPlayer.inventory[7] = new Terraria.Item();
+                Check(CombatLoadout.Select(Game.LocalPlayer) == -1, "missing preferred weapon silently switched to shortsword");
+            }
+            finally
+            {
+                Game.LocalPlayer.inventory = savedInventory; Game.LocalPlayer.selectedItem = savedSelection;
+                CombatLoadout.PreferredType = 0;
+            }
+            Console.WriteLine("PASS: model weapon choice survives mining and inventory reordering, rejecting tools and silent fallback");
+
             HttpServerSystem.Handler = (path, payload) =>
             {
                 Check(path == "/fight" && JsonNode.Parse(payload)["active"]?.GetValue<bool>() == false,

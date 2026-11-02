@@ -384,6 +384,7 @@ public class NativeAgent : ModSystem
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
+        CombatLoadout.PreferredType = 0;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();
