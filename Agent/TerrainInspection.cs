@@ -51,17 +51,18 @@ public static class TerrainInspection
                 bool active = tile.HasUnactuatedTile;
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
+                int touchDamage = active ? TileID.Sets.TouchDamageImmediate[tile.TileType] : 0;
                 if (tile.HasTile && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives
                     or TileID.RollingCactus or TileID.BouncyBoulder or TileID.LifeCrystalBoulder)
                     hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                         ["active"] = active, ["frame_x"] = tile.TileFrameX, ["frame_y"] = tile.TileFrameY,
                         ["red_wire"] = tile.RedWire, ["blue_wire"] = tile.BlueWire,
                         ["green_wire"] = tile.GreenWire, ["yellow_wire"] = tile.YellowWire });
-                row.Append(falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
+                row.Append(touchDamage > 0 ? 'H' : falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
                     : tile.LiquidAmount > 0 ? tile.LiquidType == LiquidID.Lava ? 'L' : '~' : active ? '*' : '.');
                 if (tile.HasTile && x >= bodyLeft - 1 && x <= bodyRight + 1 && y >= bodyTop - 1 && y <= bodyBottom + 1)
                     nearby.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
-                        ["solid"] = solid, ["falling"] = falling, ["suffocates"] = TileID.Sets.Suffocate[tile.TileType],
+                        ["solid"] = solid, ["falling"] = falling, ["suffocates"] = TileID.Sets.Suffocate[tile.TileType], ["touch_damage"] = touchDamage,
                         ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
                         ["in_body"] = x >= bodyLeft && x <= bodyRight && y >= bodyTop && y <= bodyBottom });
             }
@@ -71,6 +72,6 @@ public static class TerrainInspection
             ["suffocating"] = player.suffocating, ["origin"] = new JsonObject { ["x"] = left, ["y"] = top },
             ["player_bounds"] = new JsonObject { ["left"] = bodyLeft, ["top"] = bodyTop, ["right"] = bodyRight, ["bottom"] = bodyBottom },
             ["rows"] = rows, ["near_body_tiles"] = nearby, ["trap_tiles"] = hazards,
-            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。人物范围见player_bounds；不是未来碰撞预测。" };
+            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；H原生接触伤害方块，F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。人物范围见player_bounds；不是未来碰撞预测。" };
     }
 }

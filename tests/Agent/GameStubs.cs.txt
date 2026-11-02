@@ -143,6 +143,7 @@ namespace Terraria.ID
         public static class Sets
         {
             public static bool[] Falling = new bool[1000], Suffocate = new bool[1000];
+            public static int[] TouchDamageImmediate = new int[1000];
         }
     }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }

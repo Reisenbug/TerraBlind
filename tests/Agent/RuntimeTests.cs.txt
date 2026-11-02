@@ -142,11 +142,18 @@ static class RuntimeTests
                 Game.tile[4, 6] = default;
                 Check(TerrainInspection.NavigationHazard() == null, "removed trigger permanently blocked navigation");
                 Game.tile[4, 6] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.RollingCactus };
+                Terraria.ID.TileID.Sets.TouchDamageImmediate[Terraria.ID.TileID.RollingCactus] = 25;
+                var harmfulTerrain = TerrainInspection.Read(6);
                 Check(TerrainInspection.NavigationHazard()?["trap_tiles"]?[0]?["kind"]?.ToString() == "rolling_cactus"
-                    && TerrainInspection.Read(6)["trap_tiles"].AsArray().Any(t => t["type"].GetValue<int>() == Terraria.ID.TileID.RollingCactus),
+                    && harmfulTerrain["rows"].AsArray().Any(row => row.ToString().Contains('H'))
+                    && harmfulTerrain["near_body_tiles"].AsArray().Any(t => t["touch_damage"].GetValue<int>() == 25),
                     "rolling cactus was absent from navigation safety or terrain inspection");
             }
-            finally { Game.LocalPlayer.position = savedPosition; Game.tile[4, 6] = oldPlate; }
+            finally
+            {
+                Game.LocalPlayer.position = savedPosition; Game.tile[4, 6] = oldPlate;
+                Terraria.ID.TileID.Sets.TouchDamageImmediate[Terraria.ID.TileID.RollingCactus] = 0;
+            }
             Console.WriteLine("PASS: nearby trap stops before navigation and removing the trigger clears the guard");
 
             AgentTools.LastDeath = new JsonObject { ["kind"] = "death", ["projectile_type"] = 727,
