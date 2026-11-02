@@ -316,7 +316,8 @@ public class NativeAgent : ModSystem
                     {
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
-                        await codex.SuspendGoal(await OnMain(() => AgentTools.Recovery.Exhausted || AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked" ? "blocked" : "paused", token), token);
+                        if (await OnMain(() => AgentTools.Recovery.Exhausted || AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked", token))
+                            await codex.SuspendGoal("blocked", token);
                     }
                     await OnMain(() => { DiagLog.Write("[agent] goal result " + final?.ToJsonString()); return true; }, token);
                 }
@@ -324,7 +325,11 @@ public class NativeAgent : ModSystem
                 {
                     if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded)
                         || goalOptions != null && codex.GoalState?["native"]?["status"]?.ToString() != "complete")
-                        Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    {
+                        if (goalOptions != null)
+                            Progress("本轮执行未完成，已停止空转；目标与进度保留，等待修复或 /tb /goal resume。", "needs_repair");
+                        else Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    }
                     else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
                     if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete) AgentTools.Watches.End();
                     return true;
