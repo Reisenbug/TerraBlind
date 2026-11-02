@@ -24,7 +24,7 @@ public static class AgentTools
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); }
+    public static void NewTask() { Tracking.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); Actions.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -76,6 +76,7 @@ public static class AgentTools
             ["instruction_player_id"] = AgentNetwork.OwnerPlayer,
             ["api_revision"] = ApiRevision,
             ["combat_weapon_type"] = CombatLoadout.PreferredType,
+            ["navigation_arrivals"] = Actions.NavigationArrivals,
             ["pvp_target"] = PvpDuel.Active ? PvpDuel.Target : PlayerCombat.Target
         };
         var players = new JsonArray();

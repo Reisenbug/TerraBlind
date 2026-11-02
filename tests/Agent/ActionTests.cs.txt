@@ -89,5 +89,27 @@ static class ActionTests
         try { await cancelling; } catch (ArgumentException) { }
         Check(staleStops == 0 && stale.Snapshot().Count == 0, "old world cleanup stopped a new owner or restored stale handles");
         Console.WriteLine("PASS: world reset invalidates old handles and prevents stale cleanup from changing new input");
+
+        int position = 0;
+        var navigation = new ActionTasks((_, args, _) =>
+        {
+            position = args["x"].GetValue<int>() * 16;
+            return Task.FromResult("{\"done\":true}");
+        }, _ => Task.FromResult(new JsonObject { ["pos"] = new JsonObject { ["x"] = position, ["y"] = 0 } }),
+            _ => Task.CompletedTask);
+        async Task Arrive(int x)
+        {
+            string handle = navigation.Start("nav_to", new JsonObject { ["x"] = x, ["y"] = 0 }, default)["handle"].ToString();
+            while ((await navigation.Query(handle, 100, default))["status"].ToString() == "running") { }
+        }
+        await Arrive(0);
+        Check(navigation.NavigationArrivals == 0, "no-op arrival counted as game progress");
+        await Arrive(20);
+        Check(navigation.NavigationArrivals == 1, "verified travel did not count as execution progress");
+        await Arrive(0); await Arrive(20);
+        Check(navigation.NavigationArrivals == 2, "repeated destination farmed continuation progress");
+        navigation.BeginTask();
+        Check(navigation.NavigationArrivals == 0, "navigation progress leaked across instructions");
+        Console.WriteLine("PASS: real navigation arrivals advance continuation; no-op and repeated destinations do not");
     }
 }

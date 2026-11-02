@@ -15,12 +15,17 @@ public sealed class ActionTasks
         public JsonObject Args, Observation, PreviousAttempt, StoppedObservation;
         public JsonNode Result;
         public int Attempt;
+        public int TaskSerial;
         public bool Inline;
         public CancellationTokenSource Cancel;
         public Task Running;
     }
 
     readonly object gate = new();
+    readonly HashSet<string> arrivals = new();
+    int navigationArrivals, taskSerial;
+    public int NavigationArrivals { get { lock (gate) return navigationArrivals; } }
+    public void BeginTask() { lock (gate) { taskSerial++; arrivals.Clear(); navigationArrivals = 0; } }
     readonly Dictionary<string, Entry> entries = new();
     readonly AsyncLocal<string> caller = new();
     readonly Func<string, JsonObject, CancellationToken, Task<string>> execute;
@@ -59,6 +64,7 @@ public sealed class ActionTasks
         entry.Result = null;
         entry.StoppedObservation = null;
         entry.Status = "running"; entry.Requested = null; entry.Attempt++;
+        entry.TaskSerial = taskSerial;
         entry.Cancel = CancellationTokenSource.CreateLinkedTokenSource(root);
         active = entry;
         entry.Running = Task.Run(() => Run(entry, entry.Attempt));
@@ -72,10 +78,12 @@ public sealed class ActionTasks
         caller.Value = entry.Id;
         JsonNode result = null;
         JsonObject observed = null;
+        JsonObject starting = null;
         string status = "failed";
         try
         {
             observed = await observe(entry.Cancel.Token);
+            starting = (JsonObject)observed.DeepClone();
             string output = await execute(entry.Tool, (JsonObject)entry.Args.DeepClone(), entry.Cancel.Token);
             try { result = JsonNode.Parse(output); }
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
@@ -107,12 +115,23 @@ public sealed class ActionTasks
                 {
                     entry.Status = status == "failed" ? status : entry.Requested ?? status;
                     entry.Result = result; entry.Observation = observed;
+                    if (entry.TaskSerial == taskSerial && entry.Status == "completed" && entry.Tool == "nav_to"
+                        && result?["done"]?.ToString() == "true" && Moved(starting, observed)
+                        && arrivals.Add(entry.Args["x"] + "," + entry.Args["y"])) navigationArrivals++;
                     active = null;
                 }
                 entry.Cancel.Dispose();
             }
             caller.Value = null;
         }
+    }
+
+    static bool Moved(JsonObject before, JsonObject after)
+    {
+        if (before?["pos"] == null || after?["pos"] == null) return false;
+        double Coordinate(JsonObject state, string axis) => double.Parse(state["pos"][axis].ToString(), System.Globalization.CultureInfo.InvariantCulture);
+        return Math.Abs(Coordinate(before, "x") - Coordinate(after, "x")) >= 16
+            || Math.Abs(Coordinate(before, "y") - Coordinate(after, "y")) >= 16;
     }
 
     Entry Find(string id) => entries.TryGetValue(id, out var entry) ? entry : throw new ArgumentException("未知动作句柄。");
@@ -172,6 +191,7 @@ public sealed class ActionTasks
     {
         lock (gate)
         {
+            taskSerial++; arrivals.Clear(); navigationArrivals = 0;
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
             active = null; entries.Clear();
         }

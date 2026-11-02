@@ -221,6 +221,7 @@ public class NativeAgent : ModSystem
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
+                    int arrivalsBefore = AgentTools.Actions.NavigationArrivals;
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
                     int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
@@ -232,6 +233,7 @@ public class NativeAgent : ModSystem
                         await Task.Delay(100, token);
                     if (await OnMain(() => AgentTools.Watches.HasPending, token))
                     {
+                        if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
                         if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
@@ -253,7 +255,10 @@ public class NativeAgent : ModSystem
                         && !PvpDuel.Active, token);
                     if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
                         canContinue = await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked", token);
-                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token);
+                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token)
+                        || AgentTools.Actions.NavigationArrivals > arrivalsBefore;
+                    if (AgentTools.Actions.NavigationArrivals > arrivalsBefore)
+                        await OnMain(() => { DiagLog.Write("[agent_progress] navigation_arrivals=" + AgentTools.Actions.NavigationArrivals); return true; }, token);
                     bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     if (scriptYielded)
