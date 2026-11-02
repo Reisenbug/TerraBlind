@@ -20,8 +20,7 @@ public static class CombatLoadout
                 if (item.type == PreferredType) return slot;
                 continue;
             }
-            if (slot == player.selectedItem) return slot;
-            if (best < 0 || item.damage > player.inventory[best].damage) best = slot;
+            if (best < 0 || player.GetWeaponDamage(item) > player.GetWeaponDamage(player.inventory[best])) best = slot;
         }
         return best;
     }

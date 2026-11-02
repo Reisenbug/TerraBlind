@@ -67,6 +67,8 @@ static class RuntimeTests
                 Game.LocalPlayer.inventory[0] = new Terraria.Item { type = 3507, stack = 1, damage = 6 };
                 Game.LocalPlayer.inventory[5] = new Terraria.Item { type = 65, stack = 1, damage = 25 };
                 Game.LocalPlayer.inventory[8] = new Terraria.Item { type = 3509, stack = 1, damage = 4, pick = 35 };
+                Game.LocalPlayer.selectedItem = 0; CombatLoadout.PreferredType = 0;
+                Check(CombatLoadout.Select(Game.LocalPlayer) == 5, "unspecified loadout retained the initial shortsword despite a stronger weapon");
                 var choice = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat",
                     new JsonObject { ["weapon_type"] = 65 }, default)));
                 Game.LocalPlayer.selectedItem = 8;
