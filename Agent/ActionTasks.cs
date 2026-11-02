@@ -209,4 +209,23 @@ public sealed class ActionTasks
 
     public JsonArray Snapshot()
     { lock (gate) return new JsonArray(entries.Values.Select(e => (JsonNode)Snapshot(e)).ToArray()); }
+
+    public JsonArray Summary()
+    {
+        lock (gate)
+        {
+            var result = new JsonArray();
+            foreach (var entry in entries.Values)
+            {
+                var facts = new JsonObject();
+                if (entry.Result is JsonObject full)
+                    foreach (string key in new[] { "done", "outcome", "error", "reason", "status", "got", "lost", "state" })
+                        if (full[key] != null) facts[key] = full[key].DeepClone();
+                result.Add(new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
+                    ["status"] = entry.Status, ["attempt"] = entry.Attempt, ["inline"] = entry.Inline,
+                    ["result"] = facts, ["detail_tool"] = "action_query" });
+            }
+            return result;
+        }
+    }
 }

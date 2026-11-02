@@ -531,6 +531,7 @@ static class RuntimeTests
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
+            await TestBoundedState();
             await TestQueryRecovery();
             await TestPartialProgress();
             await TestPreparation();
@@ -616,6 +617,35 @@ static class RuntimeTests
             NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
         }
         Console.WriteLine("PASS: script event delivery pauses inputs and consumes events before another model tool call");
+    }
+
+    static async Task TestBoundedState()
+    {
+        AgentTools.Workflows.Clear();
+        try
+        {
+            int fullSize = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                var progress = new ScriptProgress(); progress.Begin();
+                for (int step = 0; step < 12; step++)
+                {
+                    string id = "large-" + step; progress.Enter(id); progress.Complete(id, JsonValue.Create(new string('x', 3000)));
+                }
+                progress.End(new JsonObject { ["value"] = new JsonObject { ["status"] = "yield" } });
+                AgentTools.Workflows["large-" + i] = progress;
+                fullSize += progress.Snapshot().ToJsonString().Length;
+            }
+            string state = await Execute(AgentTools.State(default));
+            var parsed = JsonNode.Parse(state);
+            Check(fullSize > 256000 && state.Length < 48000 && parsed["script_workflows"]["large-0"]["steps"][0]["value_omitted"].GetValue<bool>(),
+                "history summaries still embedded all saved values into ordinary state");
+            var detail = JsonNode.Parse(await Execute(AgentTools.Execute("script_progress",
+                new JsonObject { ["workflow"] = "large-0", ["action"] = "get" }, default)));
+            Check(detail["steps"][0]["value"].ToString().Length == 3000, "summary discarded resumable detailed values");
+        }
+        finally { AgentTools.Workflows.Clear(); }
+        Console.WriteLine("PASS: large resumable history stays out of default state while explicit workflow detail remains intact");
     }
 
     sealed class WakeHandler(bool automatic) : HttpMessageHandler

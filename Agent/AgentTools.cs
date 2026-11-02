@@ -26,7 +26,7 @@ public static class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Snapshot()); Recovery.Reset(); Actions.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -102,13 +102,13 @@ public static class AgentTools
         state["other_players"] = players;
         state["combat"] = PvpDuel.Report();
         state["inventory_slots"] = PvpInventory.Snapshot();
-        state["task_plan"] = Plan.Snapshot();
+        state["task_plan"] = Plan.Summary();
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
         var workflows = new JsonObject();
-        foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Snapshot();
+        foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();
         state["script_workflows"] = workflows;
-        state["action_tasks"] = Actions.Snapshot();
-        state["watch"] = Watches.Snapshot();
+        state["action_tasks"] = Actions.Summary();
+        state["watch"] = Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
         state["boss_control"] = BossStatus();
@@ -162,7 +162,7 @@ public static class AgentTools
             ["hp"] = player.statLife, ["on_ground"] = player.velocity.Y == 0f
         };
         result["got"] = got; result["lost"] = lost;
-        result["task_plan"] = Plan.Snapshot();
+        result["task_plan"] = Plan.Summary();
         if (progress.Count > 0) result["进度"] = progress;
         return result.ToJsonString();
     }, token);
@@ -236,7 +236,7 @@ public static class AgentTools
         bool action = external || name is "fight" or "fight_player";
         if ((action || name is "combat_start" or "combat_reposition" || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
-                ["action_tasks"] = Actions.Snapshot() }.ToJsonString();
+                ["action_tasks"] = Actions.Summary() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         try
         {
@@ -254,7 +254,7 @@ public static class AgentTools
                             if (!Rejected(facts as JsonObject)) Discoveries.Add(name + ":" + args.ToJsonString());
                         if (facts is JsonObject result && result.ContainsKey("task_plan"))
                         {
-                            result["task_plan"] = Plan.Snapshot();
+                            result["task_plan"] = Plan.Summary();
                             return result.ToJsonString();
                         }
                     }
@@ -279,7 +279,7 @@ public static class AgentTools
                 var result = new JsonObject { ["error"] = "tool_exception", ["tool"] = name, ["detail"] = ex.Message };
                 Plan.Record(name, result.ToJsonString(), action);
                 Recovery.Record(name, args, result.ToJsonString());
-                result["task_plan"] = Plan.Snapshot();
+                result["task_plan"] = Plan.Summary();
                 DiagLog.Write($"[agent] tool_exception {name}: {ex.Message}");
                 NativeAgent.Progress("执行失败：" + name, "等待模型决策", false);
                 return result.ToJsonString();

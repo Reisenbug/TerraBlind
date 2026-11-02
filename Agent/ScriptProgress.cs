@@ -104,6 +104,24 @@ public sealed class ScriptProgress
         }
     }
 
+    public JsonObject Summary()
+    {
+        lock (gate)
+        {
+            var saved = new JsonArray();
+            foreach (var step in steps.Values)
+            {
+                var brief = (JsonObject)step.DeepClone();
+                if ((brief["value"]?.ToJsonString(JsonOptions).Length ?? 0) > 512)
+                { brief.Remove("value"); brief["value_omitted"] = true; }
+                saved.Add(brief);
+            }
+            return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
+                ["steps"] = saved, ["last_error"] = last?["error"]?.DeepClone(),
+                ["detail_tool"] = "script_progress" };
+        }
+    }
+
     public JsonObject Snapshot()
     {
         lock (gate) return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,

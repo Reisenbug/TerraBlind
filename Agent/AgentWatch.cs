@@ -88,6 +88,15 @@ public sealed class AgentWatch
         return (JsonObject)value.DeepClone();
     }
 
+    public JsonObject Summary() => new()
+    {
+        ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = issued, ["wake_limit"] = 6,
+        ["pending"] = Pending()["events"].DeepClone(), ["samples"] = samples, ["last_observation"] = LastObservation,
+        ["history"] = new JsonArray(history.Select(value => (JsonNode)new JsonObject
+            { ["id"] = value["id"]?.DeepClone(), ["kind"] = value["kind"]?.DeepClone(), ["key"] = value["key"]?.DeepClone() }).ToArray())
+    };
+
     public JsonObject Snapshot() => new()
     {
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),

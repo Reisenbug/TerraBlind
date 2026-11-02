@@ -208,6 +208,22 @@ public sealed class AgentTaskPlan
         return new JsonObject { ["verified"] = passed, ["plan"] = Snapshot(), ["final_evidence"] = evidence };
     }
 
+    public JsonObject Summary()
+    {
+        var result = Snapshot();
+        foreach (var step in result["steps"].AsArray().OfType<JsonObject>())
+        {
+            step.Remove("last_action"); step.Remove("previous_failure");
+            if (step["blocking_evidence"] is JsonObject evidence)
+            {
+                string text = evidence["result"]?.ToString() ?? "";
+                step["blocking_evidence"] = new JsonObject { ["tool"] = evidence["tool"]?.DeepClone(),
+                    ["utc"] = evidence["utc"]?.DeepClone(), ["result_excerpt"] = text[..Math.Min(512, text.Length)] };
+            }
+        }
+        return result;
+    }
+
     public JsonObject Snapshot() => new()
     {
         ["goal"] = _goal, ["status"] = _steps.Count == 0 ? "none" : Incomplete ? _steps[_cursor]["status"]?.DeepClone() : JsonValue.Create("completed"),
