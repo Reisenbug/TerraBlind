@@ -348,6 +348,13 @@ public static class AgentTools
                     (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
                     checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                if (result["value"]?["wake"] is JsonObject deliveredWake)
+                {
+                    string activeHandle = Actions.ActiveHandle;
+                    if (activeHandle != null) await Actions.Control(activeHandle, "pause", null, token);
+                    var deliveredEvents = await NativeAgent.OnMain(Watches.Take, token);
+                    if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
+                }
                 break;
             case "watch":
                 return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();

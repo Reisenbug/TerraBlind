@@ -475,6 +475,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestWakeHandoff();
             await TestWakeHandoff(true);
+            await TestEventDelivery();
             await TestQueryRecovery();
             await TestPartialProgress();
             await TestToolFailureEvidence();
@@ -529,6 +530,36 @@ static class RuntimeTests
             AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); field.SetValue(Agent, previous);
         }
         Console.WriteLine("PASS: native passive wake automatic=" + automatic + " pauses input before model, retains handle and stops without more requests");
+    }
+
+    static async Task TestEventDelivery()
+    {
+        AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
+            await PumpUntil(() => RecedingNav.Active);
+            AgentTools.Watches.EnsureDefaults();
+            AgentTools.Watches.Observe(JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":1,\"y\":2}]}").AsObject());
+            var wake = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["workflow"] = "delivery", ["code"] = "tool('say',{text:'must-not-run-before-event-delivery'});" }, default)));
+            Check(wake["value"]["wake"]["events"].AsArray().Count == 1 && !RecedingNav.Active
+                && !AgentTools.Watches.HasPending, "event delivery left input running or the same event queued");
+            var next = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["workflow"] = "delivery", ["code"] = "tool('say',{text:'after-event-delivery'});" }, default)));
+            Check(next["tool_calls"].GetValue<int>() == 1 && AgentChat.Messages.Contains("after-event-delivery")
+                && !AgentChat.Messages.Contains("must-not-run-before-event-delivery"), "same-turn follow-up was blocked by a delivered event");
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
+        }
+        Console.WriteLine("PASS: script event delivery pauses inputs and consumes events before another model tool call");
     }
 
     sealed class WakeHandler(bool automatic) : HttpMessageHandler
