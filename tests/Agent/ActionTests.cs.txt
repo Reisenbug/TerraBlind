@@ -111,5 +111,64 @@ static class ActionTests
         navigation.BeginTask();
         Check(navigation.NavigationArrivals == 0, "navigation progress leaked across instructions");
         Console.WriteLine("PASS: real navigation arrivals advance continuation; no-op and repeated destinations do not");
+
+        var oldStarted = Signal(); var oldCleaning = Signal(); var cleanupDone = Signal();
+        var granting = Signal(); var grantDone = Signal();
+        var transfer = new ActionTasks(async (_, _, token) =>
+        {
+            oldStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); return "{}";
+        }, Observe, async owns =>
+        {
+            oldCleaning.TrySetResult(true); await cleanupDone.Task;
+            Check(owns(), "old action lost authority while still cleaning up");
+        });
+        string previousHandle = transfer.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+        await oldStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        bool granted = false;
+        var handoff = transfer.Handoff(async valid =>
+        {
+            granting.TrySetResult(true); await grantDone.Task;
+            Check(valid(), "handoff lost its reservation"); granted = true;
+        }, default);
+        await oldCleaning.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!granted && !handoff.IsCompleted, "handoff completed before old cleanup");
+        cleanupDone.TrySetResult(true);
+        await granting.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!transfer.HasActive && transfer.Conflicts, "handoff gap allowed a new input writer");
+        try { transfer.Start("fight", new JsonObject(), default); throw new Exception("start raced handoff"); }
+        catch (InvalidOperationException) { }
+        try { await transfer.Control(previousHandle, "resume", null, default); throw new Exception("resume raced handoff"); }
+        catch (InvalidOperationException) { }
+        grantDone.TrySetResult(true);
+        var handed = await handoff.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(granted && handed["paused_action"].ToString() == previousHandle && !transfer.Conflicts,
+            "handoff lost paused action or retained transition reservation");
+        Check((await transfer.Query(previousHandle, 0, default))["status"].ToString() == "paused",
+            "takeover cancelled rather than preserved previous task");
+        Console.WriteLine("PASS: takeover reserves input across cleanup and confirmation without losing the paused task");
+
+        var acquireStarted = Signal(); var allowAcquire = Signal();
+        bool staleGrant = false;
+        var resetTransfer = transfer.Handoff(async valid =>
+        {
+            acquireStarted.TrySetResult(true); await allowAcquire.Task;
+            if (valid()) staleGrant = true;
+        }, default);
+        await acquireStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        transfer.Reset(); allowAcquire.TrySetResult(true);
+        try { await resetTransfer; throw new Exception("reset handoff reported success"); }
+        catch (OperationCanceledException) { }
+        Check(!staleGrant && !transfer.Conflicts, "world reset let stale handoff reclaim controls");
+        Console.WriteLine("PASS: world reset invalidates pending control acquisition");
+
+        var failedCleanup = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => throw new InvalidOperationException("fixture cleanup failure"));
+        failedCleanup.Start("nav_to", new JsonObject(), default);
+        bool falselyAcquired = false;
+        var failedTransfer = await failedCleanup.Handoff(_ => { falselyAcquired = true; return Task.CompletedTask; }, default);
+        Check(!falselyAcquired && failedTransfer["error"].ToString() == "control_handoff_cleanup_failed",
+            "cleanup failure falsely granted control");
+        Console.WriteLine("PASS: failed input cleanup rejects takeover with original action evidence");
     }
 }

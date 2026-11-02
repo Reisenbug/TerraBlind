@@ -32,12 +32,14 @@ public sealed class ActionTasks
     readonly Func<CancellationToken, Task<JsonObject>> observe;
     readonly Func<Func<bool>, Task> stop;
     Entry active;
+    bool handingOff;
+    int handoffGeneration;
 
     public ActionTasks(Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task<JsonObject>> observe, Func<Func<bool>, Task> stop)
     { this.execute = execute; this.observe = observe; this.stop = stop; }
 
-    public bool Conflicts { get { lock (gate) return active != null && caller.Value != active.Id; } }
+    public bool Conflicts { get { lock (gate) return handingOff || active != null && caller.Value != active.Id; } }
     public bool HasActive { get { lock (gate) return active != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id; } }
 
@@ -47,7 +49,7 @@ public sealed class ActionTasks
         root.ThrowIfCancellationRequested();
         lock (gate)
         {
-            if (active != null) throw new InvalidOperationException("已有动作持有角色输入，请先暂停或取消。");
+            if (handingOff || active != null) throw new InvalidOperationException("已有动作或控制交接持有角色输入，请先等待释放。");
             if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline };
             entries.Add(entry.Id, entry);
@@ -160,7 +162,7 @@ public sealed class ActionTasks
             if (command == "resume")
             {
                 root.ThrowIfCancellationRequested();
-                if (active != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
+                if (handingOff || active != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
                 if (updatedArgs != null) entry.Args = (JsonObject)updatedArgs.DeepClone();
                 entry.Inline = false;
@@ -187,10 +189,44 @@ public sealed class ActionTasks
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
     }
 
+    public async Task<JsonObject> Handoff(Func<Func<bool>, Task> acquire, CancellationToken token)
+    {
+        Entry previous;
+        int generation;
+        lock (gate)
+        {
+            token.ThrowIfCancellationRequested();
+            if (handingOff) throw new InvalidOperationException("已有控制交接正在进行。");
+            handingOff = true; generation = ++handoffGeneration;
+            previous = active;
+            if (previous != null) { previous.Requested = "paused"; previous.Cancel.Cancel(); }
+        }
+        bool Valid() { lock (gate) return handingOff && generation == handoffGeneration && !token.IsCancellationRequested; }
+        try
+        {
+            if (previous != null)
+            {
+                await previous.Running.WaitAsync(token);
+                lock (gate)
+                    if (previous.Result is JsonObject result && result["error"]?.ToString() == "action_cleanup_failed")
+                        return new JsonObject { ["error"] = "control_handoff_cleanup_failed", ["action"] = Snapshot(previous) };
+            }
+            if (!Valid()) throw new OperationCanceledException("控制交接已失效。");
+            await acquire(Valid);
+            if (!Valid()) throw new OperationCanceledException("控制交接已失效。");
+            return new JsonObject { ["status"] = "ready", ["paused_action"] = previous?.Id };
+        }
+        finally
+        {
+            lock (gate) if (generation == handoffGeneration) handingOff = false;
+        }
+    }
+
     public void Reset()
     {
         lock (gate)
         {
+            handoffGeneration++; handingOff = false;
             taskSerial++; arrivals.Clear(); navigationArrivals = 0;
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
             active = null; entries.Clear();
