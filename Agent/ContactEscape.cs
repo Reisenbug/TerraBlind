@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Terraria;
@@ -10,7 +11,7 @@ namespace TerraBlind;
 
 public class AgentContactEscape : ModSystem
 {
-    bool attempted;
+    long attemptedDamageTick = -1;
     int direction, frames;
     float startX;
 
@@ -68,14 +69,15 @@ public class AgentContactEscape : ModSystem
                 AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
                 DiagLog.Write("[agent_escape] cancelled");
             }
-            AgentTools.ContactEscapeActive = false; attempted = false; return;
+            AgentTools.ContactEscapeActive = false; attemptedDamageTick = -1; return;
         }
         bool touching = Harmful(player.position, player, includeLava: false);
         if (!AgentTools.ContactEscapeActive)
         {
-            if (!touching) { attempted = false; return; }
-            if (attempted) return;
-            attempted = true;
+            if (!touching) return;
+            var damage = AgentTools.RecentContactDamage((long)Main.GameUpdateCount);
+            if (damage == null || damage["tick"].GetValue<long>() == attemptedDamageTick) return;
+            attemptedDamageTick = damage["tick"].GetValue<long>();
             direction = SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
             if (direction == 0)
             { DiagLog.Write("[agent_escape] no_checked_side"); return; }
@@ -84,7 +86,9 @@ public class AgentContactEscape : ModSystem
             frames = 0; startX = player.position.X;
             AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "moving",
                 ["reason"] = "contact_damage", ["direction"] = direction < 0 ? "left" : "right",
-                ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife };
+                ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife,
+                ["damage_event"] = damage.DeepClone(), ["hazard_tiles"] = new JsonArray(TerrainInspection.Read(2)["near_body_tiles"].AsArray()
+                    .Where(tile => tile["touch_damage"].GetValue<int>() > 0).Select(tile => tile.DeepClone()).ToArray()) };
             Move();
             DiagLog.Write($"[agent_escape] start direction={direction} x={startX} hp={player.statLife}");
             return;
@@ -108,5 +112,5 @@ public class AgentContactEscape : ModSystem
     }
 
     public override void OnWorldUnload()
-    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attempted = false; }
+    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attemptedDamageTick = -1; }
 }

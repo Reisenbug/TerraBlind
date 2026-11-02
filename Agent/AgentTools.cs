@@ -19,6 +19,14 @@ public static class AgentTools
     internal static readonly AgentRecovery Recovery = new();
     internal static JsonObject LastDamage, LastDeath, LastContactEscape;
     internal static bool ContactEscapeActive;
+    internal static JsonObject RecentContactDamage(long tick)
+    {
+        var damage = LastDamage;
+        if (damage?["kind"]?.ToString() != "hurt" || damage["other_source"]?.GetValue<int>() != 3
+            || (damage["damage"]?.GetValue<double>() ?? 0) <= 0) return null;
+        long age = tick - damage["tick"].GetValue<long>();
+        return age is >= 0 and <= 2 ? damage : null;
+    }
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,

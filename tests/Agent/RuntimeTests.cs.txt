@@ -120,6 +120,23 @@ static class RuntimeTests
             finally { AgentTools.ContactEscapeActive = false; }
             Console.WriteLine("PASS: emergency escape holds new actions and returns fresh state without replaying stale coordinates");
 
+            var previousDamage = AgentTools.LastDamage;
+            try
+            {
+                AgentTools.LastDamage = null;
+                Check(AgentTools.RecentContactDamage(100) == null, "nearby hazard fabricated a damage event");
+                AgentTools.LastDamage = new JsonObject { ["kind"] = "hurt", ["other_source"] = 3, ["tick"] = 100L, ["damage"] = 25d };
+                Check(AgentTools.RecentContactDamage(100) != null && AgentTools.RecentContactDamage(102) != null
+                    && AgentTools.RecentContactDamage(103) == null && AgentTools.RecentContactDamage(99) == null,
+                    "stale or future damage triggered the contact escape");
+                AgentTools.LastDamage["other_source"] = -1;
+                Check(AgentTools.RecentContactDamage(100) == null, "NPC damage triggered terrain escape");
+                AgentTools.LastDamage["other_source"] = 3; AgentTools.LastDamage["damage"] = 0d;
+                Check(AgentTools.RecentContactDamage(100) == null, "zero damage triggered an emergency movement");
+            }
+            finally { AgentTools.LastDamage = previousDamage; }
+            Console.WriteLine("PASS: contact escape requires fresh positive native terrain damage rather than proximity alone");
+
             var previousEscape = AgentTools.LastContactEscape;
             try
             {
