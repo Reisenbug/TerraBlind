@@ -425,7 +425,7 @@ public static class AgentTools
                 result = await Call("/npc_find", args, token);
                 break;
             case "collect_treasure":
-                result = await Navigate(new JsonObject { ["x"] = Int(args, "x"), ["y"] = Int(args, "y"), ["reach"] = true }, token, 60);
+                result = await Navigate(new JsonObject { ["x"] = Int(args, "x"), ["y"] = Int(args, "y"), ["reach"] = true }, token);
                 if (result["done"]?.GetValue<bool>() != true) break;
                 result = await Call("/collect_treasure", args, token);
                 if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
@@ -805,7 +805,7 @@ public static class AgentTools
         if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
         if (!Bool(target, "in_reach"))
         {
-            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = Bool(target, "solid") }, token, 30);
+            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = Bool(target, "solid") }, token);
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             bool reachable = await NativeAgent.OnMain(() =>
