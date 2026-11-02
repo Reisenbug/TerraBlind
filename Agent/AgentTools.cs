@@ -17,6 +17,7 @@ public static class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     internal static readonly AgentWatch Watches = new();
     internal static readonly AgentRecovery Recovery = new();
+    internal static readonly AgentControlPolicy Control = new();
     internal static JsonObject LastDamage, LastDeath, LastContactEscape;
     internal static bool ContactEscapeActive;
     internal static JsonObject RecentContactDamage(long tick)
@@ -30,13 +31,14 @@ public static class AgentTools
     static (bool Attack, bool Dodge)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
-        owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default));
+        owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default),
+        (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default));
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HashSet<string> Discoveries = new();
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -122,6 +124,7 @@ public static class AgentTools
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Summary();
+        state["control_overrides"] = Control.Snapshot();
         state["watch"] = Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;

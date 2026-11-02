@@ -31,13 +31,15 @@ public sealed class ActionTasks
     readonly Func<string, JsonObject, CancellationToken, Task<string>> execute;
     readonly Func<CancellationToken, Task<JsonObject>> observe;
     readonly Func<Func<bool>, Task> stop;
+    readonly Func<string, Func<bool>, Task> finished;
     Entry active;
     bool handingOff;
     int handoffGeneration;
 
     public ActionTasks(Func<string, JsonObject, CancellationToken, Task<string>> execute,
-        Func<CancellationToken, Task<JsonObject>> observe, Func<Func<bool>, Task> stop)
-    { this.execute = execute; this.observe = observe; this.stop = stop; }
+        Func<CancellationToken, Task<JsonObject>> observe, Func<Func<bool>, Task> stop,
+        Func<string, Func<bool>, Task> finished = null)
+    { this.execute = execute; this.observe = observe; this.stop = stop; this.finished = finished; }
 
     public bool Conflicts { get { lock (gate) return handingOff || active != null && caller.Value != active.Id; } }
     public bool HasActive { get { lock (gate) return active != null; } }
@@ -103,6 +105,10 @@ public sealed class ActionTasks
                 {
                     await stop(() => Owns(entry, attempt));
                     if (!entry.Cancel.IsCancellationRequested) observed = await observe(entry.Cancel.Token);
+                    string ending;
+                    lock (gate) ending = status == "failed" ? status : entry.Requested ?? status;
+                    if (ending != "paused" && finished != null)
+                        await finished(entry.Id, () => Owns(entry, attempt));
                 }
                 catch (Exception error)
                 {

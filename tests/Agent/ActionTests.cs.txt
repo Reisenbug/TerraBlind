@@ -170,5 +170,31 @@ static class ActionTests
         Check(!falselyAcquired && failedTransfer["error"].ToString() == "control_handoff_cleanup_failed",
             "cleanup failure falsely granted control");
         Console.WriteLine("PASS: failed input cleanup rejects takeover with original action evidence");
+
+        var scopedPolicy = new AgentControlPolicy();
+        var cleanupStarted = Signal(); var cleanupAllowed = Signal();
+        int completionCount = 0;
+        var scoped = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            async owns => { cleanupStarted.TrySetResult(true); await cleanupAllowed.Task; },
+            (handle, owns) =>
+            {
+                if (owns()) { scopedPolicy.EndAction(handle); completionCount++; }
+                return Task.CompletedTask;
+            });
+        string scopeHandle = scoped.Start("gather", new JsonObject(), default)["handle"].ToString();
+        scopedPolicy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Action, scopeHandle, "collect quietly");
+        var scopePause = scoped.Control(scopeHandle, "pause", null, default);
+        await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) != null,
+            "action override expired before input cleanup");
+        cleanupAllowed.TrySetResult(true); await scopePause;
+        Check(completionCount == 0 && scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) != null,
+            "pause discarded the action override needed on resume");
+        await scoped.Control(scopeHandle, "resume", null, default);
+        await scoped.Control(scopeHandle, "cancel", null, default);
+        Check(completionCount == 1 && scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) == null,
+            "cancelled action retained its override after verified cleanup");
+        Console.WriteLine("PASS: action overrides survive pause and expire only after terminal input cleanup");
     }
 }
