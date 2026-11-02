@@ -46,6 +46,28 @@ static class WatchTests
             "task scope leaked events or state");
         Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
 
+        watch.EnsureDefaults();
+        state["hp"] = 100;
+        for (int i = 0; i < 6; i++)
+        {
+            state["chests"] = new JsonArray(new JsonObject { ["x"] = i, ["y"] = 1 });
+            watch.Observe(state);
+        }
+        watch.Take();
+        state["chests"] = new JsonArray(); state["hp"] = 34; state["suffocating"] = true;
+        state["actions"] = new JsonArray(new JsonObject { ["handle"] = "buried", ["attempt"] = 1, ["status"] = "running" });
+        watch.Observe(state);
+        var danger = watch.Take();
+        Check(danger.Count == 2 && danger[0]["kind"].ToString() == "low_health" && danger[1]["kind"].ToString() == "suffocating",
+            "chest budget suppressed actual low health or suffocation");
+        watch.Observe(state);
+        Check(!watch.HasPending, "unchanged danger flooded the model");
+        state["actions"][0]["attempt"] = 2;
+        watch.Observe(state);
+        Check(watch.Take().Count == 2, "resuming into danger permanently suppressed safety events");
+        watch.Reset();
+        Console.WriteLine("PASS: low health and suffocation bypass opportunity budget and deduplicate per action attempt");
+
         var navigation = new NavigationProgress();
         var terrain = new System.Collections.Generic.Dictionary<int, long> { [1] = 1 };
         Check(navigation.Observe(0, 0, 0, 1000, terrain) == null

@@ -41,7 +41,7 @@ namespace Terraria
     {
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
-        public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
+        public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool controlUp, controlDown, controlHook, ExtraJump;
         public float wingTime, manaCost = 1;
