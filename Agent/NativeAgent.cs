@@ -230,7 +230,7 @@ public class NativeAgent : ModSystem
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
-                    while (await OnMain(() => AgentTools.Actions.HasActive && AgentTools.Watches.Armed
+                    while (await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasPending, token))
                         await Task.Delay(100, token);
                     if (await OnMain(() => AgentTools.Watches.HasPending, token))
@@ -238,7 +238,7 @@ public class NativeAgent : ModSystem
                         if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
-                        if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
+                        if (goalOptions == null && await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
                         var events = await OnMain(() => AgentTools.Watches.Take(), token);
                         input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
@@ -282,6 +282,16 @@ public class NativeAgent : ModSystem
                     {
                         input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作。\n现状："
                             + await AgentTools.State(token);
+                        continue;
+                    }
+                    if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
+                    {
+                        await OnMain(() => { Progress("目标未完成，继续调整方案。", "目标续接中", false); return true; }, token);
+                        await Task.Delay(5000, token);
+                        input = "原目标：" + goal + "\n目标尚未通过宿主验收，继续执行。不要结束等待玩家resume。"
+                            + "已有后台动作则等待它或处理真实事件；已失败动作依据最新证据换方案，不重放相同失败参数。"
+                            + "当前步骤blocked不等于永久放弃：调查实际阻塞，修复后继续原计划，不清空既有进度。"
+                            + "普通探索按已有权限处理可达障碍；只有必须由玩家决定的问题才ask。\n现状：" + await AgentTools.State(token);
                         continue;
                     }
                     JsonObject report;

@@ -208,25 +208,27 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("/goal do not trust an unverified final reply");
-            async Task NeedsRepair(int calls)
+            async Task WaitCalls(int calls)
             {
-                var deadline = DateTime.UtcNow.AddSeconds(5);
-                while (NativeAgent.Status != "needs_repair" || server.ToolResponses.Count < calls)
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                while (server.ToolResponses.Count < calls)
                 {
-                    Check(DateTime.UtcNow < deadline, "native goal continuation did not stop at its bound");
+                    Check(DateTime.UtcNow < deadline, "unverified native goal stopped continuing");
                     native.PostUpdateEverything(); await Task.Delay(5);
                 }
             }
-            await NeedsRepair(2);
+            await WaitCalls(3);
             Check(server.Goal["status"].ToString() == "active" && server.Threads == 1,
                 "model final reply completed missing game conditions or failed to preserve goal");
-            NativeAgent.Submit("/goal resume");
-            await NeedsRepair(4);
-            Check(server.Threads == 1 && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() == 400,
-                "native resume lost thread, target or usage");
+            Check(NativeAgent.Status != "needs_repair" && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() >= 300,
+                "goal stopped at the old no-progress bound or reset usage");
+            NativeAgent.Submit("stop");
+            int calls = server.ToolResponses.Count;
+            for (int i = 0; i < 30; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.ToolResponses.Count == calls, "explicit stop failed to cancel goal continuation");
         }
         finally { native.OnWorldUnload(); native.Unload(); Config.I.AgentUseCodex = false; }
-        Console.WriteLine("PASS: game /goal bounds failed rounds while leaving its objective active and resumable on the same thread");
+        Console.WriteLine("PASS: unverified game goal continues beyond no-progress turns on the same thread until explicit stop");
     }
 
     static async Task GoalProtocol()
