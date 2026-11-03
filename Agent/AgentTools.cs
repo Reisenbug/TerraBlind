@@ -960,10 +960,12 @@ public static partial class AgentTools
         var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
         int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
         var area = GatherArea.Parse(args["source_area"] as JsonObject);
+        const string unknownSourceDetail = "find_tiles查询方块类型，不是物品获取来源。若输入的是材料名，先game_catalog(kind:item)查物品编号，再用npc_drop_sources查NPC掉落或wiki_search/wiki_page查方块来源与变体；不要猜方块、NPC或frame编号。";
         if (area == null && (args["frame_x"] != null || args["frame_y"] != null))
             throw new ArgumentException("按frame筛选find_tiles需要source_area，不能忽略变体条件。");
         if (area != null && types == 0)
-            return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone() };
+            return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone(),
+                ["detail"] = unknownSourceDetail };
         if (catalog["truncated"].GetValue<bool>() || types > 1)
             return new JsonObject { ["error"] = "ambiguous_tile_name", ["requested_name"] = Text(args, "name"),
                 ["name_candidates"] = catalog["matches"].DeepClone() };
@@ -971,7 +973,10 @@ public static partial class AgentTools
         {
             var unresolved = await Call("/find_tiles", args, token);
             if (Text(unresolved, "error") is "unknown_tile_name" or "bad_params")
+            {
                 unresolved["name_candidates"] = catalog["matches"].DeepClone();
+                unresolved["detail"] = unknownSourceDetail;
+            }
             return unresolved;
         }
         var resolved = (JsonObject)args.DeepClone();
