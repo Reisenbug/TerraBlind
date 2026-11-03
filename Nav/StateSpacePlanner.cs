@@ -288,6 +288,28 @@ namespace TerraBlind
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
+            var walkGoal = new Microsoft.Xna.Framework.Vector2(goalCx - p.width / 2f, goalFeetY - p.height);
+            if (!startOverride.HasValue && p.width == PhysicsSimulator.PlayerW && p.height == PhysicsSimulator.PlayerH
+                && MathF.Abs(walkGoal.X - startPx) <= WalkStridePx
+                && VanillaContactRegion.TryWalk(p, walkGoal, out _)
+                && VanillaContactRegion.ConnectedSupport(p.position, walkGoal, p.width, p.height))
+            {
+                var from = new SSNode { Px = startPx, Py = startPy, Vx = startVx, Grounded = true };
+                var walk = SimulateSegment(from, Math.Sign(walkGoal.X - startPx), 0, ph, walkStopPx: walkGoal.X);
+                if (walk.HasValue && StandCell(walk.Value.node.Px, walk.Value.node.Py) == (goalWx, goalWy)
+                    && walk.Value.frames.TrueForAll(frame => MathF.Abs(frame.Py - startPy) < .01f))
+                {
+                    res.Found = true;
+                    res.Steps = EdgeToSteps(from, walk.Value.node, walk.Value.frames, false, null);
+                    res.ExecFrames = walk.Value.frames;
+                    res.CostFrames = walk.Value.frames.Count;
+                    res.Path.Add((startPx, startPy));
+                    res.Path.Add((walk.Value.node.Px, walk.Value.node.Py));
+                    res.Millis = sw.Elapsed.TotalMilliseconds;
+                    DiagLog.Write($"[ss-direct-walk] goal=({goalWx},{goalWy}) frames={res.ExecFrames.Count} compute_ms={res.Millis:0.###}");
+                    return res;
+                }
+            }
             // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
             // 单点绝不能走大场。那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
@@ -1796,7 +1818,7 @@ namespace TerraBlind
         // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
         static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null)
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null, float? walkStopPx = null)
         {
             var s = new PhysicsSimulator.State
             {
@@ -1846,6 +1868,7 @@ namespace TerraBlind
                     // 在这儿结束会产出被拒的假站位,把"走下崖"这条边杀掉。继续模拟,让人真的落到下面的地板。
                     var (wcx, wcy) = StandCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
+                    if (footSupported && walkStopPx.HasValue && dir * (s.Px - walkStopPx.Value) >= 0) break;
                     // 走满一个完整步幅再结束,不是 24px。24px 时边死在加速斜坡里(0.08/帧,要 37 帧才到 maxRun),
                     // 于是每条走路边平均 ~1px/帧,看起来比跳慢得多,A* 在平地上就一路跳。步幅取一次跳的射程,两者才可比。
                     if (footSupported && MathF.Abs(s.Px - startPx) >= WalkStridePx) break;
