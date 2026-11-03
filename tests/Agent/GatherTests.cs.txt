@@ -52,6 +52,12 @@ static class GatherTests
             && result["last_result"]["result"]["navigation"]["trap_tiles"][0]["x"].GetValue<int>() == 12,
             "dangerous navigation was retried on other sources or lost trap evidence");
         Console.WriteLine("PASS: unsafe nested navigation ends gathering immediately and preserves exact hazard evidence");
+        world = new World { Obstructed = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "combat_obstructed"
+            && world.Actions.Count == 1 && world.Stops == 1
+            && result["last_result"]["result"]["target_x"].GetValue<int>() == 30,
+            "obstructed combat was silently repeated or lost its repositioning evidence");
         world = new World { Ambiguous = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions.Count == 0 && result["outcome"].ToString() == "ambiguous_tile_name"
@@ -176,7 +182,7 @@ static class GatherTests
 
     sealed class World : IGatherWorld
     {
-        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous;
+        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -197,6 +203,7 @@ static class GatherTests
             Actions.Add(candidate["kind"].ToString());
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
             if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",
                     ["trap_tiles"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) } };

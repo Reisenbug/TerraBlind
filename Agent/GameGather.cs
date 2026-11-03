@@ -43,6 +43,8 @@ public sealed class GameGather : IGatherWorld
                         candidate["npc_generation"] = identity.Generation;
                         candidate["id"] = $"{target.ItemType}:npc:{i}:{identity.Generation}";
                         candidate["npc_type"] = npc.type;
+                        candidate["hp"] = npc.life;
+                        candidate["clear_line"] = Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4);
                         candidates.Add(candidate);
                     }
                 }
@@ -152,15 +154,39 @@ public sealed class GameGather : IGatherWorld
             return true;
         }, token);
         if (!startFight) return new JsonObject { ["error"] = "target_changed" };
+        int blockedSamples = 0, previousHp = hpBefore;
+        JsonObject combat = null;
         try
         {
             for (int i = 0; i < 32; i++)
             {
                 await Task.Delay(250, token);
-                if (!await NativeAgent.OnMain(() => Valid() && !Main.LocalPlayer.dead, token)) break;
+                combat = await NativeAgent.OnMain(() =>
+                {
+                    var player = Main.LocalPlayer;
+                    bool present = Valid();
+                    return new JsonObject { ["target_present"] = present, ["hp_before"] = hpBefore,
+                        ["hp_after"] = present ? Main.npc[who].life : 0, ["self_dead"] = player.dead,
+                        ["clear_line"] = present && Collision.CanHitLine(player.Center, 4, 4, Main.npc[who].Center, 4, 4),
+                        ["requires_clear_line"] = FightCoordinator.NeedsClearLine(player.HeldItem),
+                        ["weapon_type"] = player.HeldItem.type,
+                        ["target_x"] = present ? Main.npc[who].Center.X / 16f : null,
+                        ["target_y"] = present ? Main.npc[who].Center.Y / 16f : null };
+                }, token);
+                if (!combat["target_present"].GetValue<bool>() || combat["self_dead"].GetValue<bool>()) break;
+                int hp = combat["hp_after"].GetValue<int>();
+                blockedSamples = !combat["clear_line"].GetValue<bool>() && combat["requires_clear_line"].GetValue<bool>()
+                    && hp >= previousHp ? blockedSamples + 1 : 0;
+                previousHp = hp;
+                if (blockedSamples >= 8)
+                {
+                    combat["outcome"] = "combat_obstructed";
+                    combat["blocked_samples"] = blockedSamples;
+                    combat["sample_interval_ms"] = 250;
+                    return combat;
+                }
             }
-            return await NativeAgent.OnMain(() => new JsonObject { ["target_present"] = Valid(),
-                ["hp_before"] = hpBefore, ["hp_after"] = Valid() ? Main.npc[who].life : 0, ["self_dead"] = Main.LocalPlayer.dead }, token);
+            return combat;
         }
         finally { if (!token.IsCancellationRequested) await NativeAgent.OnMain(() => { FightCoordinator.Stop(); return true; }, token); }
     }

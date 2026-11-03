@@ -82,6 +82,8 @@ public static class Gather
                 actions++;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
+                if (last["result"]?["outcome"]?.ToString() == "combat_obstructed")
+                { outcome = "combat_obstructed"; break; }
                 if (last["result"]?["outcome"]?.ToString() == "unsafe"
                     || last["result"]?["navigation"]?["outcome"]?.ToString() == "unsafe")
                 { outcome = "unsafe"; break; }

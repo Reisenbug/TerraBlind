@@ -822,6 +822,8 @@ public sealed class BehaviorTrial : ModSystem
                         for(let round=0;round<16&&count()<required;round++) {
                           let action=tool('gather',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
                           review(action.events);
+                          if(action.outcome==='combat_obstructed')
+                            tool('decision_point',{reason:'Material combat needs repositioning before resuming: '+JSON.stringify(action.last_result)});
                           for(let i=0;i<15&&action.handle;i++) {
                             const events=tool('script_events',{wait_ms:0});
                             review(events.events);

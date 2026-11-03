@@ -52,6 +52,18 @@ static class RuntimeTests
             Check(first["id"].ToString() != replacement["id"].ToString(), "new NPC inherited the reused slot's retry identity");
             var stale = await Execute(gather.Act(first, default));
             Check(stale["error"]?.ToString() == "target_changed", "stale NPC observation attacked a replacement entity");
+            bool clear = Terraria.Collision.Clear;
+            try
+            {
+                Terraria.Collision.Clear = false;
+                var blocked = await Execute(gather.Act(replacement.AsObject(), default));
+                Check(blocked["outcome"]?.ToString() == "combat_obstructed"
+                    && blocked["blocked_samples"].GetValue<int>() == 8 && blocked["clear_line"].GetValue<bool>() == false
+                    && blocked["hp_before"].GetValue<int>() == blocked["hp_after"].GetValue<int>()
+                    && blocked["target_x"] != null && !FightCoordinator.IsActive,
+                    "obstructed material combat failed to return measured evidence and release attack");
+            }
+            finally { Terraria.Collision.Clear = clear; }
         }
         finally { Game.npc[0] = previousGatherNpc; }
         Console.WriteLine("PASS: gathering distinguishes replacement NPCs and rejects stale entity targets");

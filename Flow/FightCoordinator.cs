@@ -24,7 +24,7 @@ namespace TerraBlind
             _moving = false; _jumpHold = 0;
         }
 
-        private static bool NeedsClearLine(Item item) => item.shoot <= 0
+        internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
 
         internal static (int Direction, bool Jump) Evade(Player p, NPC target = null)
