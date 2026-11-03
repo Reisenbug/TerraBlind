@@ -42,6 +42,10 @@ static class CodexTests
         Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
             && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
             "game thread did not override instructions/environments/MCP");
+        string gameInstructions = server.ThreadArgs["developerInstructions"].ToString();
+        Check(gameInstructions.Contains("script_program") && gameInstructions.Contains("run_script")
+            && !gameInstructions.Contains("不要开发代码") && gameInstructions.Contains("不要修改模组源码"),
+            "game thread forbids its own behavior scripts or permits editing mod source");
         Check(server.ThreadArgs["dynamicTools"][0]["type"].ToString() == "function" && server.ToolResponses.All(r => r["success"].GetValue<bool>()),
             "dynamic tool registration/result contract changed");
         Console.WriteLine("PASS: Codex protocol registers game tools, isolates thread settings, reuses context and deduplicates replies");

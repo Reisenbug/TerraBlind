@@ -216,7 +216,7 @@ public sealed class CodexAgent : IDisposable
             {
                 ["cwd"] = cwd, ["ephemeral"] = !managedGoal, ["environments"] = new JsonArray(),
                 ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["baseInstructions"] = system,
-                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。不要开发代码、读写文件或使用终端。",
+                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。允许通过 script_program 编写和修改游戏行为 JavaScript，通过 run_script 执行；遵守宿主提供的脚本接口和当前任务授权。不要修改模组源码、直接读写文件或使用终端。",
                 ["dynamicTools"] = dynamicTools, ["config"] = overrides
             };
             if (!string.IsNullOrWhiteSpace(model)) args["model"] = model;
