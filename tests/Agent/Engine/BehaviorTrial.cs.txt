@@ -930,7 +930,18 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1")
                 {
+                    JsonObject defense = null;
+                    if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_GUARD") == "1")
+                    {
+                        defense = await Call("run_script", new JsonObject { ["event_delivery"] = "script", ["code"] = """
+                            const guard=tool('action_start',{tool:'fight',args:{max_dist:25,seconds:45,movement:'auto'}});
+                            if(guard.error||!guard.handle) throw new Error(JSON.stringify(guard));
+                            tool('decision_point',{reason:'Continue bounded defense while reviewing material recovery',continue_action:guard.handle});
+                            """ });
+                        File.WriteAllText(Path.Combine(Main.SavePath, "material-review-defense.json"), defense.ToJsonString());
+                    }
                     var reviewed = await Review(new JsonObject { ["workflow"] = "stinger-continuation",
+                        ["continued_defense"] = defense?["value"]?["wake"]?["continue_action"]?.DeepClone(),
                         ["reason"] = combat["value"]?["wake"]?["event"]?["reason"]?.DeepClone(),
                         ["status"] = combat["value"]?["status"]?.DeepClone(),
                         ["state"] = combat["state"]?.DeepClone() }, materials: true);
