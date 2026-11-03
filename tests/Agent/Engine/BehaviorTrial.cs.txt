@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
@@ -253,6 +255,43 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_SOURCE_DATABASE_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                var timer = Stopwatch.StartNew();
+                var sources = new JsonArray();
+                for (int type = 1; type < NPCID.Count; type++)
+                {
+                    var drops = new List<Terraria.GameContent.ItemDropRules.DropRateInfo>();
+                    foreach (var rule in Main.ItemDropsDB.GetRulesForNPCID(type, true))
+                        rule.ReportDroprates(drops, new Terraria.GameContent.ItemDropRules.DropRateInfoChainFeed(1f));
+                    foreach (var drop in drops.Where(d => d.itemId == ItemID.Stinger))
+                        sources.Add(new JsonObject { ["npc_type"] = type, ["rate"] = drop.dropRate,
+                            ["min"] = drop.stackMin, ["max"] = drop.stackMax,
+                            ["conditions"] = new JsonArray((drop.conditions ?? new()).Select(c => (JsonNode)JsonValue.Create(c.GetType().FullName)).ToArray()) });
+                }
+                double elapsed = timer.Elapsed.TotalMilliseconds;
+                if (!sources.Any(s => s["npc_type"].GetValue<int>() == NPCID.Hornet)
+                    || sources.Any(s => s["npc_type"].GetValue<int>() == NPCID.ManEater))
+                    throw new Exception("native drop reporting did not distinguish hornets from man eaters");
+                var plants = new JsonArray();
+                for (int x = 3340; x <= 3356; x++)
+                    for (int y = 507; y <= 523; y++)
+                    {
+                        var tile = Main.tile[x, y];
+                        if (!tile.HasTile || tile.TileType != TileID.JunglePlants) continue;
+                        var map = Terraria.Map.MapHelper.CreateMapTile(x, y, 255);
+                        plants.Add(new JsonObject { ["x"] = x, ["y"] = y, ["frame_x"] = tile.TileFrameX,
+                            ["map_name"] = Lang.GetMapObjectName(map.Type) });
+                    }
+                File.WriteAllText(Path.Combine(Main.SavePath, "source-database-probe.json"), new JsonObject
+                { ["npc_sources"] = sources, ["npc_scan_ms"] = elapsed, ["plants"] = plants }.ToJsonString());
+                Console.WriteLine($"SOURCE_DATABASE_PROBE_PASS sources={sources.Count} npc_scan_ms={elapsed:F2} plants={plants.Count}");
+                return true;
+            });
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")
         {
             await OnMain(() =>
