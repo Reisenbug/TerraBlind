@@ -266,7 +266,7 @@ static class ScriptTests
         Check(entries.Count == 5 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
         string instructions = AgentScript.Instructions("original-system", definitions);
-        Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
+        Check(instructions.Contains("original-system") && instructions.Contains("\ngather: ")
             && !instructions.Contains("\"parameters\":"), "script API index omitted names or still embeds all schemas");
         var description = definitions.First(t => t["function"]["name"].ToString() == "gather")["function"]["description"].ToString();
         Check(instructions.Contains(description.Split('。')[0]), "model API index expanded Chinese into escape text");

@@ -37,9 +37,8 @@ public static class AgentScript
         + system
         + RuntimeInstructions
         + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
-        + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
-            .Select(t => (JsonNode)new JsonObject { ["name"] = t["function"]["name"].DeepClone(),
-                ["summary"] = t["function"]["description"]?.ToString().Split('。')[0] }).ToArray()).ToJsonString(AgentTools.ModelJson);
+        + string.Join("\n", tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
+            .Select(t => t["function"]["name"] + ": " + t["function"]["description"]?.ToString().Split('。')[0]));
 
     public static JsonObject DescribeApi(JsonArray tools, JsonObject args)
     {
