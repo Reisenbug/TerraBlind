@@ -1255,8 +1255,7 @@ public sealed class BehaviorTrial : ModSystem
                                 tool('script_events',{wait_ms:0});
                                 const policy={events:state.watch.events,passive_events:state.watch.passive_events,
                                   tile_types:state.watch.tile_types,radius:state.watch.radius,health_below:state.watch.health_below};
-                                recovery.retreat_health_floor=Math.min(state.player.hp,policy.health_below);
-                                tool('watch',{...policy,health_below:recovery.retreat_health_floor});
+                                tool('watch',{...policy,passive_events:[...new Set([...policy.passive_events,'low_health'])]});
                                 let moved;
                                 try { moved=tool('nav_to',retreat.anchor); }
                                 finally { tool('watch',policy); }

@@ -14,7 +14,17 @@ public sealed class AgentWatch
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
-    public bool LocalDelivery { get; set; }
+    bool localDelivery;
+    public bool LocalDelivery
+    {
+        get => localDelivery;
+        set
+        {
+            if (localDelivery && !value && passive.Contains("low_health"))
+                seen.RemoveWhere(key => key.StartsWith("low_health:", StringComparison.Ordinal));
+            localDelivery = value;
+        }
+    }
     int samples;
     bool configured;
     JsonObject lastObservation;
@@ -22,7 +32,8 @@ public sealed class AgentWatch
     public int Radius { get; private set; } = 25;
     public int HealthBelow { get; private set; } = 80;
     public bool HasPending => pending.Count > 0;
-    public bool HasInterrupting => pending.Any(e => !passive.Contains(e["kind"]?.ToString()));
+    public bool HasInterrupting => pending.Any(e => !passive.Contains(e["kind"]?.ToString())
+        || e["kind"]?.ToString() == "low_health" && !LocalDelivery);
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
     public bool WatchesTile(int type) => tileTypes.Contains(type);
@@ -49,8 +60,8 @@ public sealed class AgentWatch
             || requested.Contains("nearby_tile") && types.Length == 0)
             throw new ArgumentException("nearby_tile需要1..64个tile_types方块编号，请通过game_catalog查询。");
         var passiveEvents = args["passive_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
-        if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop")))
-            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop。");
+        if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "low_health")))
+            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/low_health；low_health仅在本地JS执行期间不强制中断。");
         passive.Clear(); passive.UnionWith(passiveEvents);
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; HealthBelow = health;

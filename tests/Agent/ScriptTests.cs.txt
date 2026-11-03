@@ -60,6 +60,22 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var retreatWatch = new AgentWatch { LocalDelivery = true };
+        retreatWatch.Configure(JsonNode.Parse("{\"events\":[\"low_health\",\"suffocating\",\"player_died\"],\"passive_events\":[\"low_health\"]}").AsObject());
+        retreatWatch.Observe(JsonNode.Parse("{\"hp\":74,\"dead\":false,\"suffocating\":false}").AsObject());
+        Check(retreatWatch.HasPending && !retreatWatch.HasInterrupting, "explicit JS health policy stopped retreat or lost danger evidence");
+        retreatWatch.LocalDelivery = false;
+        Check(retreatWatch.HasInterrupting, "local health override leaked into model thinking time");
+        retreatWatch.Take();
+        retreatWatch.Observe(JsonNode.Parse("{\"hp\":73,\"dead\":false,\"suffocating\":false}").AsObject());
+        Check(retreatWatch.HasInterrupting, "consumed local health event prevented host recheck after handoff");
+        retreatWatch.LocalDelivery = true;
+        retreatWatch.Observe(JsonNode.Parse("{\"hp\":73,\"dead\":false,\"suffocating\":true}").AsObject());
+        Check(retreatWatch.HasInterrupting, "health policy suppressed suffocation");
+        retreatWatch.Take();
+        retreatWatch.Observe(JsonNode.Parse("{\"hp\":0,\"dead\":true,\"suffocating\":false}").AsObject());
+        Check(retreatWatch.HasInterrupting, "health policy suppressed death");
+        Console.WriteLine("PASS: explicit local health policy retains notifications, restores host interruption and preserves independent dangers");
         var interruptedProgress = new ScriptProgress();
         var interruptedStep = await AgentScript.Run("return step('approach', () => tool('nav_to', {}));", 30,
             (_, _) => { }, (_, _, _) => Task.FromResult("{\"outcome\":\"interrupted\",\"handle\":\"keep-this-handle\",\"events\":[]}"),
