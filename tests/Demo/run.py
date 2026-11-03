@@ -46,6 +46,8 @@ def main():
     user_config = user_root / "config.json"
     settings = json.loads(user_config.read_text()) if user_config.exists() else {}
     settings["CloudSavingDefault"] = False
+    if focused:
+        settings["ShowNewUpdatedModsInfo"] = False
     (root / "config.json").write_text(json.dumps(settings))
     if (user_root / "input profiles.json").exists():
         shutil.copy2(user_root / "input profiles.json", root / "input profiles.json")
