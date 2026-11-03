@@ -44,6 +44,7 @@ public sealed class BehaviorTrial : ModSystem
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
+        var reviewCalls = new JsonArray();
         using var agent = new CodexAgent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(materials ? 45 : 90));
         string request = materials
@@ -61,6 +62,8 @@ public sealed class BehaviorTrial : ModSystem
             + "Do not delete the continuation or save another immediate decision_point. Preserve the return contract: item_type,gained,original_handle,judgment,returned. "
             + "Handle interrupted actions and danger explicitly. Do not claim a kill or collection without evidence. Avoid walking off the current ledge. "
             + "At most 8 tool calls. Read current source via script_program get.\nReview request:\n";
+        try
+        {
         await agent.RunAsync(request + wake.ToJsonString(),
             "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
             "You review and edit saved Terraria JS behavior programs. tool(name,args) inside source uses the game APIs below. "
@@ -70,8 +73,18 @@ public sealed class BehaviorTrial : ModSystem
             async (name, args, token) =>
             {
                 if (!allowed.Contains(name) || ++calls > 8) throw new InvalidOperationException("review tool budget or scope exceeded");
+                if (materials && name == "script_program" && (args["name"]?.ToString() != "material_recovery"
+                    || args["operation"]?.ToString() is not ("get" or "save" or "patch")))
+                    throw new InvalidOperationException("review may only read or edit material_recovery");
+                string Record(string value)
+                {
+                    reviewCalls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(),
+                        ["result"] = value[..Math.Min(4000, value.Length)], ["truncated"] = value.Length > 4000,
+                        ["result_chars"] = value.Length });
+                    return value;
+                }
                 string output = await AgentTools.Execute(name, args, token);
-                if (name != "get_state") return output;
+                if (name != "get_state") return Record(output);
                 var state = JsonNode.Parse(output);
                 var compact = new JsonObject();
                 foreach (string field in new[] { "player", "buffs", "enemies", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
@@ -90,10 +103,15 @@ public sealed class BehaviorTrial : ModSystem
                         { ["id"] = step["id"]?.DeepClone(), ["status"] = step["status"]?.DeepClone() }).ToArray()) };
                 compact["script_workflows"] = workflows;
                 Console.WriteLine($"MODEL_REVIEW_STATE raw_chars={output.Length} compact_chars={compact.ToJsonString().Length}");
-                return compact.ToJsonString();
+                return Record(compact.ToJsonString());
             }, text => replies.Add(text), timeout.Token);
+        }
+        finally
+        {
         File.WriteAllText(Path.Combine(Main.SavePath, "behavior-review.json"), new JsonObject
-        { ["model"] = "gpt-6-luna", ["calls"] = calls, ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
+        { ["model"] = "gpt-6-luna", ["calls"] = calls, ["tool_calls"] = reviewCalls,
+            ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
+        }
         return await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = materials ? "material_recovery" : "combat_loot_return" });
     }
     public override void Load()
