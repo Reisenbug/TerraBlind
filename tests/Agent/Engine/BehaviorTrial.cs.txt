@@ -573,6 +573,18 @@ public sealed class BehaviorTrial : ModSystem
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
             File.WriteAllText(Path.Combine(Main.SavePath, "material-recipe.json"), recipe.ToJsonString());
             string materials = """
+                const recipe=tool('recipe',{name:'ThornChakram'}).recipes.find(r=>r.internal==='ThornChakram');
+                if(!recipe) throw new Error('crafting recipe unavailable');
+                function itemType(name){
+                  const found=tool('game_catalog',{kind:'item',name}).matches.filter(m=>m.internal===name);
+                  if(found.length!==1) throw new Error('ambiguous recipe ingredient: '+name);
+                  return found[0].type;
+                }
+                tool('task_plan',{goal:'Collect recipe materials and craft Thorn Chakram after opportunistic loot',steps:[
+                  {id:'materials',description:'Acquire all materials required by the loaded recipe',
+                    conditions:recipe.ingredients.map(i=>({kind:'item',type:itemType(i.internal),count:i.need}))},
+                  {id:'crafted',description:'Verify the crafted weapon in inventory',
+                    conditions:[{kind:'item',type:itemType(recipe.internal),count:1}]}]});
                 tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                 const state=tool('get_state');
                 const x=Math.floor(state.player.pos.x/16), y=Math.floor(state.player.pos.y/16);
@@ -677,6 +689,12 @@ public sealed class BehaviorTrial : ModSystem
                     throw new Exception("no verified native stinger acquisition; inspect stinger-result.json");
                 Console.WriteLine($"OPPORTUNITY_STINGER_PROGRESS verified_stinger_gain=true spawned_hornets={hornetsSpawned}");
             }
+            var verification = await Call("task_step", new JsonObject { ["id"] = "materials", ["action"] = "verify" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "material-plan-verification.json"), verification.ToJsonString());
+            if (verification["verified"]?.GetValue<bool>() != false || verification["current_step"]?.ToString() != "materials"
+                || verification["steps"]?[1]?["id"]?.ToString() != "crafted")
+                throw new Exception("partial materials advanced or lost the preserved crafting plan");
+            Console.WriteLine("OPPORTUNITY_RECIPE_PENDING verified_incomplete=true crafting_goal_preserved=true");
         }
     }
 }
