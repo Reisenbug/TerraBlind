@@ -397,6 +397,13 @@ public sealed class BehaviorTrial : ModSystem
         });
         string code = """
             const goal={x:GOAL_X,y:GOAL_Y};
+            const initial=tool('get_state');
+            const initialCount=t=>initial.inventory_slots.filter(i=>i.type===t).reduce((n,i)=>n+i.stack,0);
+            tool('task_plan',{goal:'Collect selected opportunities while preserving the original destination',steps:[
+              {id:'selected-loot',description:'Verify actual chest and crystal inventory gains',conditions:[
+                {kind:'item',type:22,count:initialCount(22)+7},{kind:'item',type:29,count:initialCount(29)+1}]}]});
+            const premature=tool('task_step',{id:'selected-loot',action:'verify'});
+            if(premature.verified!==false||premature.cursor!==0) throw new Error('uncollected opportunities passed host verification');
             tool('watch',{events:['nearby_chest','nearby_tile'],tile_types:[12],radius:35});
             const original=step('original',()=>tool('action_start',{tool:'nav_to',args:goal}));
             let events=[];
@@ -438,7 +445,10 @@ public sealed class BehaviorTrial : ModSystem
               if(restored.status!=='running') break;
             }
             if(restored.status!=='completed'||restored.result.done!==true) throw new Error('original destination not reached: '+JSON.stringify(restored));
-            return {choices,original_handle:original.handle,bars_gained:count(22)-barsBefore,crystals_gained:count(29)-crystalsBefore,restored};
+            const verified=tool('task_step',{id:'selected-loot',action:'verify'});
+            if(verified.verified!==true||verified.status!=='completed') throw new Error('task plan lost or actual collection not verified');
+            return {choices,original_handle:original.handle,bars_gained:count(22)-barsBefore,crystals_gained:count(29)-crystalsBefore,restored,
+              verification:{verified:verified.verified,status:verified.status,evidence:verified.steps[0].evidence}};
             """.Replace("GOAL_X", (originX + 28).ToString()).Replace("GOAL_Y", (floor - 1).ToString());
         var result = await Call("run_script", new JsonObject { ["code"] = code, ["workflow"] = "opportunity-trial", ["event_delivery"] = "script" });
         File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-result.json"), result.ToJsonString());
