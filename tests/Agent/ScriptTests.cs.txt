@@ -189,6 +189,14 @@ static class ScriptTests
             && activityReport["tool_counts"]["action_control.pause"].GetValue<int>() == 1
             && activityReport["tool_counts"]["action_control.resume"] == null,
             "script activity summary lost earlier calls or confused pause with resume");
+        var maskedFailure = await AgentScript.Run("const a=tool('action_start'); tool('action_query',{handle:a.handle});", 5,
+            (name, args) => { if (name == "action_query" && args["handle"] == null) throw new ArgumentException("missing handle"); },
+            (_, _, _) => Task.FromResult("{\"error\":\"action_busy\",\"active_handle\":\"defense-owner\"}"),
+            _ => Task.CompletedTask, default);
+        Check(!maskedFailure["ok"].GetValue<bool>() && maskedFailure["failure"]["tool"].ToString() == "action_start"
+            && maskedFailure["failure"]["evidence"]["error"].ToString() == "action_busy"
+            && maskedFailure["failure"]["evidence"]["active_handle"].ToString() == "defense-owner",
+            "later argument error hid the original input conflict and owning handle");
         var progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;

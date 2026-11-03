@@ -967,6 +967,7 @@ public sealed class BehaviorTrial : ModSystem
                                 ["program_revision"] = reviewed["revision"].DeepClone(),
                                 ["execution"] = new JsonObject { ["ok"] = execution["ok"]?.DeepClone(), ["error"] = execution["error"]?.DeepClone(),
                                     ["detail"] = execution["detail"]?.DeepClone(), ["tool_counts"] = execution["tool_counts"]?.DeepClone(),
+                                    ["failure"] = execution["failure"]?.DeepClone(),
                                     ["yield_reason"] = execution["value"]?["wake"]?["event"]?["reason"]?.DeepClone() },
                                 ["inventory_before"] = new JsonArray(before["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),
                                 ["inventory_after"] = new JsonArray(after["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),

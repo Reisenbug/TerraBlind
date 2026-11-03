@@ -273,8 +273,11 @@ public static partial class AgentTools
                 ["detail"] = "短程脱离接触伤害已结束，原动作尚未执行；依据最新位置和危险状态重新决策。",
                 ["state"] = JsonNode.Parse(await State(token)) }.ToJsonString();
         }
-        if ((action || name is "combat_start" or "combat_reposition" || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
+        if ((action || name is "action_start" or "combat_start" or "combat_reposition"
+            || name == "action_control" && Text(args, "command") == "resume"
+            || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
+                ["active_handle"] = Actions.ActiveHandle,
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         long controlTicket = 0;

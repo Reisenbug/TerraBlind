@@ -795,6 +795,11 @@ static class RuntimeTests
                 string handle = started["value"]["handle"].ToString();
                 await PumpUntil(() => RecedingNav.Active);
                 var query = JsonNode.Parse(await Execute(AgentTools.Execute("action_query", new JsonObject { ["handle"] = handle }, default)));
+                var startConflict = JsonNode.Parse(await Execute(AgentTools.Execute("action_start", new JsonObject
+                    { ["tool"] = "nav_to", ["args"] = new JsonObject { ["x"] = 200, ["y"] = 100 } }, default)));
+                Check(startConflict["error"]?.ToString() == "action_busy" && startConflict["active_handle"]?.ToString() == handle
+                    && startConflict["handle"] == null && AgentTools.Actions.ActiveHandle == handle,
+                    "background start conflict hid the input owner or returned a nonexistent new handle");
                 Check(query["status"].ToString() == "running" && query["observation"]["hp"].GetValue<int>() == Game.LocalPlayer.statLife,
                     "background action died with the returning script or query lacked current observation");
                 var conflicting = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 0, ["y"] = 0 }, default)));
