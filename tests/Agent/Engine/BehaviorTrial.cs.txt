@@ -93,7 +93,7 @@ public sealed class BehaviorTrial : ModSystem
                 if (name != "get_state") return Record(output);
                 var state = JsonNode.Parse(output);
                 var compact = new JsonObject();
-                foreach (string field in new[] { "player", "buffs", "enemies", "healing_items", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
+                foreach (string field in new[] { "player", "buffs", "enemies", "healing_items", "health_dynamics", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
                     if (state[field] != null) compact[field] = state[field].DeepClone();
                 var watch = new JsonObject();
                 foreach (string field in new[] { "events", "passive_events", "tile_types", "radius", "health_below" })
@@ -1267,13 +1267,16 @@ public sealed class BehaviorTrial : ModSystem
                                 state=tool('get_state');
                                 recovery.rest=[];
                                 let previousHp=state.player.hp;
+                                const damageTick=state.last_damage?.tick;
                                 for(let sample=0;sample<20&&state.player.hp<80;sample++) {
                                   const position={x:state.player.pos.x/16,y:state.player.pos.y/16};
-                                  if(state.player.suffocating||state.player.hp<previousHp||distanceToEnemy(position)<20) break;
+                                  if(state.player.suffocating||state.player.hp<=40||state.last_damage?.tick!==damageTick
+                                    ||(state.player.hp<previousHp&&state.health_dynamics?.regen_direction!=='damage')||distanceToEnemy(position)<20) break;
                                   previousHp=state.player.hp;
                                   tool('script_events',{wait_ms:1000});
                                   state=tool('get_state');
-                                  recovery.rest.push({hp:state.player.hp,pos:state.player.pos});
+                                  recovery.rest.push({hp:state.player.hp,pos:state.player.pos,health_dynamics:state.health_dynamics,
+                                    last_damage:state.last_damage,buffs:state.buffs});
                                 }
                               }
                             }
