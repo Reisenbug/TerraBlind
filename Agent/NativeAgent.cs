@@ -25,6 +25,8 @@ public class NativeAgent : ModSystem
     string _system;
     JsonObject _goalOptions;
     Task _goalStopping = Task.CompletedTask;
+    Task _dangerDelivery = Task.CompletedTask;
+    int _lastDangerNotice;
     internal static JsonObject GoalState => _instance?._codex?.GoalState;
     DateTime _lastFeedback;
     DateTime _lastWatch;
@@ -204,6 +206,22 @@ public class NativeAgent : ModSystem
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
+            if (_codex != null && Processing && !AgentTools.Watches.LocalDelivery && _dangerDelivery.IsCompleted)
+            {
+                var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
+                    e["id"].GetValue<int>() > _lastDangerNotice
+                    && e["kind"].ToString() is "low_health" or "suffocating" or "player_died");
+                if (danger != null)
+                {
+                    _lastDangerNotice = danger["id"].GetValue<int>();
+                    var observation = new JsonObject { ["event_id"] = _lastDangerNotice, ["kind"] = danger["kind"].DeepClone(),
+                        ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2, ["dead"] = p.dead,
+                        ["potion_delay_ticks"] = p.potionDelay, ["active_handle"] = AgentTools.Actions.ActiveHandle,
+                        ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
+                    _dangerDelivery = _codex.Steer("宿主实时危险观察，原目标和进度保留。请按最新现场调整尚未执行的动作；此通知不代表已经脱险："
+                        + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
+                }
+            }
         }
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
@@ -235,6 +253,7 @@ public class NativeAgent : ModSystem
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask();
+        _lastDangerNotice = 0;
         string system = AgentScript.Instructions(_system + "\n回复语言风格：" + Config.I.AgentPersona, _schemas);
         var entrySchemas = AgentScript.EntryTools(_schemas);
         Progress(useCodex ? "正在连接 Codex 并等待响应。" : "正在请求模型。", "等待模型响应");

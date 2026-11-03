@@ -98,6 +98,7 @@ public sealed class CodexAgent : IDisposable
     readonly Func<string, string, CodexConnection> _connect;
     CodexConnection _rpc;
     string _thread, _signature;
+    volatile string _activeTurn;
     JsonObject _usage;
     JsonObject _goal;
     readonly object _goalGate = new();
@@ -117,6 +118,24 @@ public sealed class CodexAgent : IDisposable
     public JsonObject TokenUsage => (JsonObject)_usage?.DeepClone();
     public int UsageUpdates { get; private set; }
     public int TurnsStarted { get; private set; }
+
+    internal async Task<bool> Steer(string observation, CancellationToken token)
+    {
+        var rpc = _rpc;
+        string turn = _activeTurn, thread = _thread;
+        if (turn == null || rpc == null || rpc.Closed || token.IsCancellationRequested) return false;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            await rpc.Request("turn/steer", new JsonObject { ["threadId"] = thread, ["expectedTurnId"] = turn,
+                ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = observation }) }, deadline.Token);
+            DiagLog.Write("[agent_danger] steering accepted turn=" + turn);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
+        { DiagLog.Write("[agent_danger] steering not accepted: " + error.Message); return false; }
+    }
 
     public CodexAgent(Func<string, string, CodexConnection> connect = null) => _connect = connect ?? Launch;
 
@@ -260,6 +279,7 @@ public sealed class CodexAgent : IDisposable
                 ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = input })
             }, token);
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");
+            _activeTurn = turn;
             TurnsStarted++;
             int toolCalls = 0;
             var delivered = new System.Collections.Generic.HashSet<string>();
@@ -329,6 +349,7 @@ public sealed class CodexAgent : IDisposable
             try { await SuspendGoal("blocked", deadline.Token); } catch { }
             Dispose(); throw;
         }
+        finally { if (_activeTurn == turn) _activeTurn = null; }
     }
 
     async Task<JsonObject> ReadGoal(CancellationToken token)

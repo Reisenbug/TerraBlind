@@ -79,9 +79,17 @@ static class CodexTests
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var running = agent.RunAsync("长任务", "mock", "/tmp", "", "game instructions", Tools,
             async (_, _, token) => { entered.SetResult(true); await Task.Delay(Timeout.Infinite, token); return "unreachable"; }, spoken.Add, cancel.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2)); cancel.Cancel();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        int turnsBeforeDanger = agent.TurnsStarted;
+        Check(await agent.Steer("hp=20，原采集目标保留", default)
+            && server.Steers.Count == 1 && server.Steers[0]["expectedTurnId"].ToString().StartsWith("turn")
+            && server.Steers[0]["threadId"].ToString() == "thread" && agent.TurnsStarted == turnsBeforeDanger,
+            "live danger did not steer the current turn or replaced the task");
+        cancel.Cancel();
         try { await running; throw new Exception("Codex cancellation ignored"); } catch (OperationCanceledException) { }
         Check(server.Interrupts == 1 && !server.Stopped, "Codex did not interrupt while preserving reusable session");
+        Check(!await agent.Steer("stale danger", default) && server.Steers.Count == 1,
+            "ended turn accepted stale danger steering");
         await agent.RunAsync("新任务", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         Check(server.Threads == 1 && calls == 3, "new Codex task failed after interruption");
         Console.WriteLine("PASS: Codex interrupts blocked tool calls and accepts a replacement task in the same thread");
@@ -522,6 +530,7 @@ static class CodexTests
         public int RepeatedToolCalls = 1;
         public readonly List<JsonObject> ToolResponses = new();
         public readonly List<string> Inputs = new();
+        public readonly List<JsonObject> Steers = new();
         public void Drop() => _input.End();
         public CodexConnection Connect() => new(_input, new Writer(Receive), () => { Stopped = true; _input.End(); });
         void Send(JsonObject message) => _input.Add(message.ToJsonString());
@@ -556,6 +565,8 @@ static class CodexTests
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
             }
             else if (method == "turn/interrupt") { Interrupts++; Reply(message["id"], new JsonObject()); Completed("interrupted"); }
+            else if (method == "turn/steer")
+            { Steers.Add(message["params"].AsObject()); Reply(message["id"], new JsonObject { ["turnId"] = "turn" + _turn }); }
             else if (method == null)
             {
                 ToolResponses.Add(message["result"].AsObject());
