@@ -238,6 +238,37 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: terrain inspection reports exact body overlap, falling blocks and lava without editing tiles");
 
+            var savedTiles = Game.tile;
+            bool savedSolid = Game.tileSolid[1];
+            try
+            {
+                Game.tile = new Terraria.Tile[1000, 1000];
+                Game.LocalPlayer.position = new(160, 160);
+                Game.tileSolid[1] = true;
+                Game.tile[15, 11] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+                Game.tile[19, 11] = new Terraria.Tile { LiquidAmount = 255, LiquidType = 1 };
+                Game.tile[21, 12] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.PressurePlates };
+                var assessed = JsonNode.Parse(await Execute(AgentTools.Execute("opportunity_assess", new JsonObject
+                    { ["x"] = 20, ["y"] = 11, ["destination"] = new JsonObject { ["x"] = 40, ["y"] = 11 } }, default)));
+                Check(assessed["direct_corridor_solid_cells"].AsArray().Any(t => t["x"].GetValue<int>() == 15)
+                    && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "lava")
+                    && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "trap_tile"),
+                    "opportunity hid direct obstruction, target lava or nearby trap");
+                Check(assessed["reachable"] == null && assessed["travel_time_ms"] == null
+                    && assessed["required_mining_cells"] == null && assessed["route_relation"]["extra_direct_distance"].GetValue<double>() < 0.01,
+                    "geometric assessment invented a navigable route, mining requirement or arrival time");
+                var behind = TerrainInspection.Opportunity(5, 11, new JsonObject { ["x"] = 40, ["y"] = 11 });
+                Check(behind["route_relation"]["behind_player"].GetValue<bool>()
+                    && behind["route_relation"]["extra_direct_distance"].GetValue<double>() > 10,
+                    "opportunity behind player looked like free forward progress");
+                Check(Game.tile[15, 11].HasTile && Game.tile[19, 11].LiquidAmount == 255,
+                    "assessment changed the world while estimating access");
+                try { TerrainInspection.Opportunity(200, 200, null); throw new Exception("unbounded assessment accepted"); }
+                catch (ArgumentException) { }
+                Console.WriteLine("PASS: opportunity assessment reports obstacles/hazards and measured geometry; elapsed_ms=" + assessed["elapsed_ms"]);
+            }
+            finally { Game.tile = savedTiles; Game.LocalPlayer.position = savedPosition; Game.tileSolid[1] = savedSolid; }
+
             var oldPlate = Game.tile[4, 6];
             try
             {

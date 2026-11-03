@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Terraria;
@@ -8,6 +10,81 @@ namespace TerraBlind;
 
 public static class TerrainInspection
 {
+    public static JsonObject Opportunity(int x, int y, JsonObject destination)
+    {
+        var clock = Stopwatch.StartNew();
+        if (x < 1 || y < 1 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1)
+            throw new ArgumentException("目标须在世界边界内，坐标单位为格。");
+        var player = Main.LocalPlayer;
+        double sx = player.Center.X / 16, sy = player.Center.Y / 16;
+        double tx = x + 0.5, ty = y + 0.5;
+        double Distance(double ax, double ay, double bx, double by) => Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
+        double approach = Distance(sx, sy, tx, ty);
+        if (approach > 60) throw new ArgumentException("机会检查仅支持人物附近60格；远处目标先接近再观察。");
+        var solids = new JsonArray(); var hazards = new JsonArray();
+        var sampled = new HashSet<(int, int)>();
+        var approachCells = new HashSet<(int, int)>();
+        double halfWidth = player.width / 32.0, halfHeight = player.height / 32.0;
+        int steps = Math.Max(1, (int)Math.Ceiling(approach * 2));
+        for (int step = 0; step <= steps; step++)
+        {
+            double cx = sx + (tx - sx) * step / steps, cy = sy + (ty - sy) * step / steps;
+            for (int ix = (int)Math.Floor(cx - halfWidth); ix <= (int)Math.Floor(cx + halfWidth - 0.001); ix++)
+                for (int iy = (int)Math.Floor(cy - halfHeight); iy <= (int)Math.Floor(cy + halfHeight - 0.001); iy++)
+                    if (ix >= 1 && iy >= 1 && ix < Main.maxTilesX - 1 && iy < Main.maxTilesY - 1)
+                        approachCells.Add((ix, iy));
+        }
+        sampled.UnionWith(approachCells);
+        for (int ix = Math.Max(1, x - 4); ix <= Math.Min(Main.maxTilesX - 2, x + 4); ix++)
+            for (int iy = Math.Max(1, y - 4); iy <= Math.Min(Main.maxTilesY - 2, y + 4); iy++) sampled.Add((ix, iy));
+        foreach (var (ix, iy) in sampled)
+        {
+            var tile = Main.tile[ix, iy];
+            bool active = tile.HasUnactuatedTile;
+            JsonObject Fact(string kind) => new() { ["x"] = ix, ["y"] = iy, ["kind"] = kind,
+                ["tile_type"] = active ? (int)tile.TileType : null, ["on_direct_corridor"] = approachCells.Contains((ix, iy)) };
+            if (active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType] && approachCells.Contains((ix, iy)))
+                solids.Add(Fact("solid"));
+            if (active && TileID.Sets.Falling[tile.TileType]) hazards.Add(Fact("falling_block"));
+            if (active && TileID.Sets.TouchDamageImmediate[tile.TileType] > 0) hazards.Add(Fact("contact_damage"));
+            if (tile.LiquidAmount > 0)
+            {
+                var liquid = Fact(tile.LiquidType == LiquidID.Lava ? "lava" : "liquid");
+                liquid["liquid_type"] = tile.LiquidType; liquid["amount"] = (int)tile.LiquidAmount;
+                hazards.Add(liquid);
+            }
+            if (active && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives
+                or TileID.RollingCactus or TileID.BouncyBoulder or TileID.LifeCrystalBoulder)
+                hazards.Add(Fact("trap_tile"));
+        }
+        JsonObject relation = null;
+        if (destination != null)
+        {
+            int gx = destination["x"]?.GetValue<int>() ?? throw new ArgumentException("destination需要x/y。");
+            int gy = destination["y"]?.GetValue<int>() ?? throw new ArgumentException("destination需要x/y。");
+            if (gx < 0 || gy < 0 || gx >= Main.maxTilesX || gy >= Main.maxTilesY)
+                throw new ArgumentException("destination须在世界内。");
+            double dx = gx + 0.5 - sx, dy = gy + 0.5 - sy, lengthSquared = dx * dx + dy * dy;
+            double projection = lengthSquared == 0 ? 0 : ((tx - sx) * dx + (ty - sy) * dy) / lengthSquared;
+            double nearest = Math.Clamp(projection, 0, 1);
+            double remaining = Distance(tx, ty, gx + 0.5, gy + 0.5);
+            relation = new JsonObject { ["destination"] = destination.DeepClone(),
+                ["original_direct_distance"] = Math.Sqrt(lengthSquared), ["target_to_destination_direct_distance"] = remaining,
+                ["extra_direct_distance"] = Math.Max(0, approach + remaining - Math.Sqrt(lengthSquared)),
+                ["distance_to_goal_segment"] = Distance(tx, ty, sx + nearest * dx, sy + nearest * dy),
+                ["projection_fraction"] = projection, ["behind_player"] = projection < 0,
+                ["basis"] = "straight_line_geometry_not_navigation_route" };
+        }
+        var target = Main.tile[x, y];
+        return new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["target"] = new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = target.HasTile,
+                ["tile_type"] = target.HasTile ? (int)target.TileType : null },
+            ["approach_direct_distance"] = approach, ["direct_corridor_solid_cells"] = solids,
+            ["hazards"] = hazards, ["sampled_cells"] = sampled.Count, ["route_relation"] = relation,
+            ["reachable"] = null, ["travel_time_ms"] = null, ["required_mining_cells"] = null,
+            ["limitations"] = "只检查当前方块、直线人物扫掠范围及目标周边4格。挡路格数不是必挖数量；未模拟跳跃、落差、绕路、敌人、射出的机关或返程，不证明安全可达。由Agent/JS决定接近、跳过或进一步调查。" };
+    }
+
     internal static JsonObject NavigationHazard()
     {
         var player = Main.LocalPlayer;

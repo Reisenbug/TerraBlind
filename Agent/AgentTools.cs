@@ -412,6 +412,9 @@ public static partial class AgentTools
                 return (await ManageControl(args, token)).ToJsonString();
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
+            case "opportunity_assess":
+                return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
+                    args["destination"] as JsonObject), token)).ToJsonString();
             case "run_script":
                 string eventDelivery = Text(args, "event_delivery");
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
