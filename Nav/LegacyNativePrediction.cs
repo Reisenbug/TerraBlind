@@ -212,7 +212,17 @@ internal static class LegacyNativePrediction
         try
         {
             bool stateMatches = VanillaAsyncMovement.StateMatches(player, anchor, true, out var reason, out var mismatch);
-            bool terrainMatches = VanillaFrame.ContextMatches(snapshot, player, out var terrainDifference);
+            JsonArray trajectory = null;
+            if (!searchingPlacement && plan.Steps.Count == 1 && plan.Steps[0].Frames is { Count: > 0 } controls
+                && !controls.Exists(frame => frame.Place))
+            {
+                trajectory = new JsonArray(new JsonObject { ["x"] = plan.StartPx, ["y"] = plan.StartPy });
+                foreach (var frame in controls)
+                    trajectory.Add(new JsonObject { ["x"] = frame.Px, ["y"] = frame.Py });
+                if (pending.IsCompletedSuccessfully && pending.Result["frames"] is JsonArray nativeFrames)
+                    foreach (var frame in nativeFrames) trajectory.Add(frame.DeepClone());
+            }
+            bool terrainMatches = VanillaFrame.ContextMatches(snapshot, player, out var terrainDifference, trajectory);
             if (!stateMatches || !terrainMatches)
             {
                 DiagLog.Write($"[legacy-native-discard] state={reason} detail={mismatch} terrain={(terrainMatches ? "unchanged" : terrainDifference)} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");

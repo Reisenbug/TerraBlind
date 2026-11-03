@@ -1293,7 +1293,8 @@ public sealed class Driver : ModSystem
         if (shortTick < 30) return;
         if (shortTick == 30)
         {
-            if (shortCase == 0) CheckCanceledPrediction(player);
+            if (shortCase == 0)
+                for (int change = 0; change < 5; change++) CheckCanceledPrediction(player, change);
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool flat = shortCase == 0 || shortCase >= 7;
@@ -1335,31 +1336,43 @@ public sealed class Driver : ModSystem
         RecedingNav.Stop(); shortCase++; shortTick = 0;
     }
 
-    static void CheckCanceledPrediction(Player player)
+    static void CheckCanceledPrediction(Player player, int change)
     {
         var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction", true);
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
         var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
         var cancellation = new System.Threading.CancellationTokenSource();
-        var candidate = new StateSpacePlanner.SSResult();
+        var candidate = new StateSpacePlanner.SSResult { StartPx = player.position.X, StartPy = player.position.Y };
+        candidate.Steps.Add(new StateSpacePlanner.ExecStep {
+            Frames = new() { new PhysicsSimulator.ControlInput { Px = player.position.X, Py = player.position.Y, Place = change == 4 } } });
         int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+        int changedX = change == 2 ? x : x - 9, changedY = change == 2 ? y : y + 9;
+        var tile = Main.tile[changedX, changedY];
+        bool hadTile = tile.HasTile;
+        ushort tileType = tile.TileType;
         type.GetField("pending", flags).SetValue(null, pending.Task);
         type.GetField("cancellation", flags).SetValue(null, cancellation);
         type.GetField("plan", flags).SetValue(null, candidate);
-        type.GetField("snapshot", flags).SetValue(null, VanillaFrame.Capture(player, new Rectangle(x - 4, y - 4, 9, 9), true));
+        type.GetField("snapshot", flags).SetValue(null, VanillaFrame.Capture(player, new Rectangle(x - 10, y - 10, 21, 21), true));
         type.GetField("anchor", flags).SetValue(null, VanillaPrediction.Observe(player, false));
         type.GetField("requestedAt", flags).SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
         cancellation.Cancel();
+        if (change == 3)
+            pending.SetResult(new JsonObject { ["frames"] = new JsonArray(new JsonObject {
+                ["x"] = changedX * 16f, ["y"] = changedY * 16f }) });
         try
         {
+            if (change != 0) { tile.HasTile = true; tile.TileType = tileType == TileID.Stone ? TileID.Dirt : TileID.Stone; }
             object[] arguments = { player, null };
             bool handled = (bool)type.GetMethod("Poll", flags).Invoke(null, arguments);
-            if (!handled || !ReferenceEquals(arguments[1], candidate) || pending.Task.IsCompleted)
-                throw new InvalidOperationException("canceled_prediction_waited_for_transport");
-            Console.WriteLine("CANCELED_PREDICTION_RELEASE_PASS");
+            bool expected = change >= 2 ? arguments[1] == null : ReferenceEquals(arguments[1], candidate);
+            if (!handled || !expected || pending.Task.IsCompleted != (change == 3))
+                throw new InvalidOperationException($"canceled_prediction_context_check_failed:{change} position={player.position} changed=({changedX},{changedY}) before={hadTile}/{tileType} after={Main.tile[changedX, changedY].HasTile}/{Main.tile[changedX, changedY].TileType} handled={handled} returned_plan={ReferenceEquals(arguments[1], candidate)}");
+            Console.WriteLine("CANCELED_PREDICTION_CONTEXT_PASS change=" + change);
         }
         finally
         {
+            tile.HasTile = hadTile; tile.TileType = tileType;
             type.GetMethod("Reset", flags).Invoke(null, null);
             pending.TrySetCanceled();
         }
