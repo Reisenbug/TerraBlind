@@ -942,7 +942,9 @@ public sealed class BehaviorTrial : ModSystem
                           review(action.events);
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
                           if((action.result?.outcome??action.outcome)==='combat_obstructed')
-                            tool('decision_point',{reason:'Material combat requires recovery of the same handle '+(action.handle??action.managed_handle)+': '+JSON.stringify(action.result?.last_result??action.last_result)});
+                            tool('decision_point',{reason:'Material combat requires a changed approach before resuming the same handle',
+                              evidence:{handle:started.handle,status:action.status,outcome:action.result?.outcome,
+                                last_result:action.result?.last_result??action.last_result}});
                           if((action.result?.outcome??action.outcome)==='source_unavailable')
                             tool('decision_point',{reason:'Material source exhausted; preserve handle '+(action.handle??action.managed_handle)+' and inspect fresh sources before continuing'});
                           if(action.error==='repeated_failure_blocked')
@@ -1021,6 +1023,7 @@ public sealed class BehaviorTrial : ModSystem
                     var reviewed = await Review(new JsonObject { ["workflow"] = "stinger-continuation",
                         ["continued_defense"] = defense?["value"]?["wake"]?["continue_action"]?.DeepClone(),
                         ["reason"] = combat["value"]?["wake"]?["event"]?["reason"]?.DeepClone(),
+                        ["decision"] = combat["value"]?["wake"]?["event"]?.DeepClone(),
                         ["status"] = combat["value"]?["status"]?.DeepClone(),
                         ["state"] = combat["state"]?.DeepClone() }, materials: true, session: modelSession);
                     File.WriteAllText(Path.Combine(Main.SavePath, "material-reviewed-program.json"), reviewed.ToJsonString());
