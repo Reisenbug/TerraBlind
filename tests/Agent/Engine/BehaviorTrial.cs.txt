@@ -1000,7 +1000,7 @@ public sealed class BehaviorTrial : ModSystem
                                 recovery.defense={handle:guard.handle,status:released.status,hp:released.observation?.hp,pos:released.observation?.pos};
                               }
                               state=tool('get_state');
-                              if(state.player.dead||state.player.suffocating)
+                              if(state.player.hp<=0||state.player.suffocating)
                                 tool('decision_point',{reason:'Recovery observation ended in danger; retain original gather and defense evidence'});
                               if(retreat) {
                                 tool('script_events',{wait_ms:0});
