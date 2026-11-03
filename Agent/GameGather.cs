@@ -48,13 +48,14 @@ public sealed class GameGather : IGatherWorld
         foreach (string tile in target.Tiles)
         {
             var found = await AgentTools.FindTiles(new JsonObject { ["name"] = tile, ["n"] = 12, ["max_dist"] = 2000,
-                ["source_area"] = _area?.Snapshot() }, token);
+                ["source_area"] = _area?.Snapshot(), ["frame_x"] = target.TileFrameX, ["frame_y"] = target.TileFrameY }, token);
             if (found["error"] != null)
             { scene["error"] = found["error"].DeepClone(); scene["source_error"] = found.DeepClone(); return scene; }
             foreach (var cell in found["tiles"]?.AsArray() ?? new JsonArray())
                 scene["candidates"].AsArray().Add(new JsonObject { ["item_type"] = target.ItemType, ["kind"] = "tile",
                     ["id"] = $"{target.ItemType}:tile:{cell["x"]}:{cell["y"]}", ["x"] = cell["x"].DeepClone(),
-                    ["y"] = cell["y"].DeepClone(), ["distance"] = cell["dist"]?.DeepClone() ?? JsonValue.Create(0) });
+                    ["y"] = cell["y"].DeepClone(), ["distance"] = cell["dist"]?.DeepClone() ?? JsonValue.Create(0),
+                    ["tile_type"] = cell["tile_type"]?.DeepClone(), ["frame_x"] = cell["frame_x"]?.DeepClone(), ["frame_y"] = cell["frame_y"]?.DeepClone() });
         }
         return scene;
     }
@@ -78,7 +79,18 @@ public sealed class GameGather : IGatherWorld
     {
         string kind = candidate["kind"].ToString();
         int x = candidate["x"].GetValue<int>(), y = candidate["y"].GetValue<int>();
-        if (kind == "tile") return await AgentTools.CollectTarget(x, y, token, false) ?? new JsonObject { ["error"] = "target_changed" };
+        if (kind == "tile")
+        {
+            bool unchanged = await NativeAgent.OnMain(() =>
+            {
+                var tile = Main.tile[x, y];
+                return tile.HasTile && (candidate["tile_type"] == null || tile.TileType == candidate["tile_type"].GetValue<int>())
+                    && (candidate["frame_x"] == null || tile.TileFrameX == candidate["frame_x"].GetValue<int>())
+                    && (candidate["frame_y"] == null || tile.TileFrameY == candidate["frame_y"].GetValue<int>());
+            }, token);
+            if (!unchanged) return new JsonObject { ["error"] = "target_changed" };
+            return await AgentTools.CollectTarget(x, y, token, false) ?? new JsonObject { ["error"] = "target_changed" };
+        }
         int who = candidate["who"].GetValue<int>();
         if (kind == "drop")
         {

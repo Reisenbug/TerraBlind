@@ -526,7 +526,8 @@ public static partial class AgentTools
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))
                     .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
                         t["tile_names"]?.AsArray().Select(n => n.GetValue<string>()).ToArray() ?? Array.Empty<string>(),
-                        t["npc_types"]?.AsArray().Select(n => n.GetValue<int>()).ToArray() ?? Array.Empty<int>())).ToArray();
+                        t["npc_types"]?.AsArray().Select(n => n.GetValue<int>()).ToArray() ?? Array.Empty<int>(),
+                        t["tile_frame_x"]?.GetValue<int>(), t["tile_frame_y"]?.GetValue<int>())).ToArray();
                 var sourceArea = GatherArea.Parse(args["source_area"] as JsonObject);
                 if (sourceArea != null && ((long)sourceArea.X + sourceArea.Width > Main.maxTilesX
                     || (long)sourceArea.Y + sourceArea.Height > Main.maxTilesY)) throw new ArgumentException("source_area超出世界边界。");
@@ -891,10 +892,13 @@ public static partial class AgentTools
                 var matches = new List<JsonObject>();
                 for (int x = area.X; x < area.X + area.Width; x++)
                     for (int y = area.Y; y < area.Y + area.Height; y++)
-                        if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type)
+                        if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type
+                            && (args["frame_x"] == null || Main.tile[x, y].TileFrameX == Int(args, "frame_x"))
+                            && (args["frame_y"] == null || Main.tile[x, y].TileFrameY == Int(args, "frame_y")))
                         {
                             double dx = x - Main.LocalPlayer.Center.X / 16, dy = y - Main.LocalPlayer.Center.Y / 16;
-                            matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy) });
+                            matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy),
+                                ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY });
                         }
                 return new JsonObject { ["tiles"] = new JsonArray(matches.OrderBy(m => m["dist"].GetValue<float>())
                     .Take(Math.Clamp(Int(args, "n", 12), 1, 100)).Select(m => (JsonNode)m).ToArray()),

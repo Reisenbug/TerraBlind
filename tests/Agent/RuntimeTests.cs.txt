@@ -291,6 +291,16 @@ static class RuntimeTests
                 Check(sourceScene["candidates"].AsArray().Count == 1
                     && sourceScene["candidates"][0]["distance"].GetValue<float>() > 0,
                     "bounded tile lookup did not supply a usable gather candidate");
+                Game.tile[30, 30].TileFrameX = 18;
+                Game.tile[31, 30] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther, TileFrameX = 144 };
+                var variantGather = new GameGather(new[] { new GatherTarget(987, 1, new[] { "FixtureOther" }, Array.Empty<int>(), 144) },
+                    new GatherArea(30, 30, 2, 2));
+                var variants = await Execute(variantGather.Observe(default));
+                Check(variants["candidates"].AsArray().Count == 1 && variants["candidates"][0]["x"].GetValue<int>() == 31,
+                    "gather substituted a different variant of the same tile type");
+                Game.tile[31, 30].TileFrameX = 18;
+                var changedVariant = await Execute(variantGather.Act(variants["candidates"][0].AsObject(), default));
+                Check(changedVariant["error"].ToString() == "target_changed", "gather executed stale variant selection");
             }
             finally { Game.tile = savedTiles; Game.LocalPlayer.position = savedPosition; Game.tileSolid[1] = savedSolid; }
 

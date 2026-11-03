@@ -54,6 +54,7 @@ public class NativeAgent : ModSystem
                 var tile = Main.tile[x, y];
                 if (!tile.HasTile || !watch.WatchesTile(tile.TileType)) continue;
                 result.Add(new JsonObject { ["tile_type"] = (int)tile.TileType, ["x"] = x, ["y"] = y,
+                    ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY,
                     ["distance_tiles_manhattan"] = distance, ["liquid_amount"] = (int)tile.LiquidAmount,
                     ["liquid_type"] = tile.LiquidType, ["route_assessed"] = false,
                     ["unit"] = "tile_cell", ["collection_verified"] = false });

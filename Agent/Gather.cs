@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace TerraBlind;
 
-public sealed record GatherTarget(int ItemType, int Count, string[] Tiles, int[] Npcs);
+public sealed record GatherTarget(int ItemType, int Count, string[] Tiles, int[] Npcs, int? TileFrameX = null, int? TileFrameY = null);
 
 public sealed record GatherArea(int X, int Y, int Width, int Height)
 {
@@ -39,8 +39,11 @@ public static class Gather
     public static async Task<JsonObject> Run(GatherTarget[] targets, int seconds, IGatherWorld world, CancellationToken token, GatherArea area = null)
     {
         if (targets.Length is < 1 or > 8 || targets.Select(t => t.ItemType).Distinct().Count() != targets.Length
-            || targets.Any(t => t.ItemType <= 0 || t.Count is < 1 or > 9999 || t.Npcs.Any(id => id <= 0)))
+            || targets.Any(t => t.ItemType <= 0 || t.Count is < 1 or > 9999 || t.Npcs.Any(id => id <= 0)
+                || t.TileFrameX is < 0 or > short.MaxValue || t.TileFrameY is < 0 or > short.MaxValue))
             throw new ArgumentException("需要1..8种不重复的物品，正数物品/NPC编号，目标数量1..9999。");
+        if (area == null && targets.Any(t => t.TileFrameX != null || t.TileFrameY != null))
+            throw new ArgumentException("按方块frame筛选来源需要source_area，先观察实际变体及坐标。");
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
