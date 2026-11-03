@@ -11,6 +11,15 @@ namespace TerraBlind;
 
 public static class AgentScript
 {
+    public static void DescribePrograms(JsonArray tools)
+    {
+        var parameters = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"]["parameters"];
+        parameters["properties"]["program"] = new JsonObject { ["type"] = "string", ["description"] = "已保存程序名称；与code二选一。" };
+        parameters["properties"]["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
+            ["description"] = "使用program时必填，必须匹配刚读取的源码版本。" };
+        parameters["required"] = new JsonArray();
+    }
+
     public static JsonArray EntryTools(JsonArray tools) => new(tools.Where(t =>
         t["function"]?["name"]?.ToString() is "run_script" or "get_state" or "say" or "ask")
         .Select(t => t.DeepClone()).ToArray());

@@ -49,6 +49,7 @@ public class NativeAgent : ModSystem
         _system = Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/System.txt"));
         _schemas = JsonNode.Parse(Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/Tools.json"))).AsArray();
         AgentControlSession.DescribeClaims(_schemas);
+        AgentScript.DescribePrograms(_schemas);
     }
 
     public static void Submit(string text)

@@ -386,11 +386,31 @@ public static partial class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "script_program":
+                var library = new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));
+                return (Text(args, "operation") switch
+                {
+                    "list" => (JsonNode)library.List(),
+                    "get" => library.Get(Text(args, "name")),
+                    "save" => library.Save(Text(args, "name"), Text(args, "code"), Int(args, "expected_revision", -1)),
+                    _ => throw new ArgumentException("operation需要list/get/save。")
+                }).ToJsonString();
             case "control":
                 return (await ManageControl(args, token)).ToJsonString();
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
             case "run_script":
+                string source = Text(args, "code");
+                JsonObject program = null;
+                if (Text(args, "program") != "")
+                {
+                    if (source != "") throw new ArgumentException("code与program不能同时提供。");
+                    program = new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Get(Text(args, "program"));
+                    if (program["found"]?.GetValue<bool>() != true) throw new ArgumentException("未知program。");
+                    if (program["revision"].GetValue<int>() != Int(args, "expected_revision", -1))
+                        return new JsonObject { ["error"] = "program_revision_conflict", ["revision"] = program["revision"].DeepClone() }.ToJsonString();
+                    source = program["code"].GetValue<string>();
+                }
                 var workflow = await NativeAgent.OnMain(() =>
                 {
                     string id = Text(args, "workflow");
@@ -403,10 +423,12 @@ public static partial class AgentTools
                     }
                     return saved;
                 }, token);
-                result = await AgentScript.Run(Text(args, "code"), Int(args, "seconds", 120), NativeAgent.ValidateTool,
+                result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
                     (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
                     checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                if (program != null)
+                    result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
                 if (result["value"]?["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;

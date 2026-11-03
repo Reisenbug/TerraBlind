@@ -46,6 +46,36 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var library = new ScriptLibrary(programDirectory);
+            string firstCode = "step('first', () => tool('effect', {})); return {status:'yield'};";
+            Check(library.Save("collect", firstCode, 0)["revision"].GetValue<int>() == 1, "program not saved");
+            var savedProgress = new ScriptProgress();
+            int effects = 0;
+            Task<string> Effect(string name, JsonObject args, CancellationToken token)
+            { effects++; return Task.FromResult("{\"ok\":true}"); }
+            var first = await AgentScript.Run(library.Get("collect")["code"].ToString(), 30,
+                (_, _) => { }, Effect, _ => Task.CompletedTask, default, savedProgress);
+            Check(first["ok"].GetValue<bool>() && effects == 1, "saved program did not execute");
+            string secondCode = "step('first', () => tool('effect', {})); step('second', () => tool('effect', {})); return 'done';";
+            Check(library.Save("collect", secondCode, 0)["error"]?.ToString() == "program_revision_conflict",
+                "stale editor overwrote saved source");
+            library.Save("collect", secondCode, 1);
+            var reopened = new ScriptLibrary(programDirectory);
+            var second = await AgentScript.Run(reopened.Get("collect")["code"].ToString(), 30,
+                (_, _) => { }, Effect, _ => Task.CompletedTask, default, savedProgress);
+            Check(second["ok"].GetValue<bool>() && effects == 2 && savedProgress.Completed == 2,
+                "edited program replayed a completed effect or lost progress");
+            Check(reopened.List()[0]["code"] == null, "listing unnecessarily exposes full program source");
+            bool escaped = false;
+            try { library.Save("../outside", "return 1;", 0); }
+            catch (ArgumentException) { escaped = true; }
+            Check(escaped, "program name escaped library directory");
+            Console.WriteLine("PASS: saved JS revisions survive reopening and edits resume without replaying completed effects");
+        }
+        finally { if (Directory.Exists(programDirectory)) Directory.Delete(programDirectory, true); }
         int invalidStateEffects = 0;
         Task<string> StateTool(string name, JsonObject args, CancellationToken token)
         {

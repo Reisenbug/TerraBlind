@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Jint" Version="4.17.0" />
     <Compile Include="../../Agent/Script.cs" Link="Script.cs" />
+    <Compile Include="../../Agent/ScriptLibrary.cs" Link="ScriptLibrary.cs" />
     <Compile Include="../../Agent/ScriptProgress.cs" Link="ScriptProgress.cs" />
     <Compile Include="../../Agent/ActionTasks.cs" Link="ActionTasks.cs" />
     <Compile Include="../../Agent/ControlPolicy.cs" Link="ControlPolicy.cs" />
