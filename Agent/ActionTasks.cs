@@ -45,9 +45,12 @@ public sealed class ActionTasks
     public bool HasActive { get { lock (gate) return active != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id; } }
 
+    internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
+        or "mine_vein" or "chop_wood" or "collect_treasure";
+
     public JsonObject Start(string tool, JsonObject args, CancellationToken root, bool inline = false)
     {
-        if (tool is not ("gather" or "nav_to" or "fight" or "mine_vein" or "chop_wood")) throw new ArgumentException("不支持的后台动作。");
+        if (!Supports(tool)) throw new ArgumentException("不支持的后台动作。");
         root.ThrowIfCancellationRequested();
         lock (gate)
         {
@@ -92,7 +95,7 @@ public sealed class ActionTasks
             try { result = JsonNode.Parse(output); }
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
             status = result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false"
-                || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death"
+                || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial"
                 || value["status"]?.ToString() is "failed" or "stopped_short") ? "failed" : "completed";
         }
         catch (OperationCanceledException) { status = "cancelled"; }

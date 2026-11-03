@@ -12,6 +12,7 @@ static class ActionTests
 
     public static async Task Run()
     {
+        await InterruptedChest();
         int stock = 0, attempts = 0, stops = 0, hp = 80;
         var collecting = Signal(); var cleaning = Signal(); var release = Signal();
         Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject { ["stock"] = Volatile.Read(ref stock), ["hp"] = hp });
@@ -233,5 +234,56 @@ static class ActionTests
         }
         Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
         Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
+    }
+
+    static async Task InterruptedChest()
+    {
+        var navigationStarted = Signal();
+        var chestStarted = Signal();
+        int navigationAttempts = 0, chestAttempts = 0, stock = 0;
+        var tasks = new ActionTasks(async (tool, args, token) =>
+        {
+            if (tool == "nav_to")
+            {
+                Check(args["x"].GetValue<int>() == 100, "inserted chest changed original destination");
+                if (++navigationAttempts == 1)
+                { navigationStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); }
+                return "{\"done\":true}";
+            }
+            Check(args["x"].GetValue<int>() == 20, "resumed chest lost its original location");
+            if (++chestAttempts == 1)
+            { chestStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); }
+            stock = 7;
+            return "{\"outcome\":\"done\"}";
+        }, _ => Task.FromResult(new JsonObject { ["stock"] = stock }), _ => Task.CompletedTask);
+        string navigation = tasks.Start("nav_to", new JsonObject { ["x"] = 100 }, default)["handle"].ToString();
+        await navigationStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await tasks.Control(navigation, "pause", null, default);
+        string chest = tasks.Start("collect_treasure", new JsonObject { ["x"] = 20 }, default)["handle"].ToString();
+        await chestStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await tasks.Control(chest, "pause", null, default);
+        Check((await tasks.Query(navigation, 0, default))["status"].ToString() == "paused",
+            "interrupting inserted chest lost paused original navigation");
+        await tasks.Control(chest, "resume", null, default);
+        JsonObject result;
+        do { result = await tasks.Query(chest, 100, default); } while (result["status"].ToString() == "running");
+        Check(result["status"].ToString() == "completed" && result["attempt"].GetValue<int>() == 2
+            && result["observation"]["stock"].GetValue<int>() == 7, "resumed chest lost result evidence");
+        await tasks.Control(navigation, "resume", null, default);
+        do { result = await tasks.Query(navigation, 100, default); } while (result["status"].ToString() == "running");
+        Check(result["status"].ToString() == "completed" && navigationAttempts == 2,
+            "original navigation failed to resume after interrupted chest");
+        Console.WriteLine("PASS: interrupted inserted chest retains its handle and original navigation resumes");
+        foreach (string outcome in new[] { "failed", "stopped", "partial" })
+        {
+            var incomplete = new ActionTasks((_, _, _) => Task.FromResult(new JsonObject
+                { ["outcome"] = outcome, ["reason"] = "chest not fully collected" }.ToJsonString()),
+                _ => Task.FromResult(new JsonObject { ["stock"] = 2 }), _ => Task.CompletedTask);
+            string handle = incomplete.Start("collect_treasure", new JsonObject { ["x"] = 20 }, default)["handle"].ToString();
+            do { result = await incomplete.Query(handle, 100, default); } while (result["status"].ToString() == "running");
+            Check(result["status"].ToString() == "failed" && result["result"]["outcome"].ToString() == outcome
+                && result["observation"]["stock"].GetValue<int>() == 2, "incomplete chest was reported as completed or lost partial gains");
+        }
+        Console.WriteLine("PASS: failed, stopped and partial chest collection preserve evidence without false completion");
     }
 }

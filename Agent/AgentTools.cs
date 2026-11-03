@@ -337,7 +337,7 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
-        if (name is not ("nav_to" or "gather" or "fight" or "mine_vein" or "chop_wood"))
+        if (!ActionTasks.Supports(name))
             return await Execute(name, args, name == "action_start" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
         if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
         await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
