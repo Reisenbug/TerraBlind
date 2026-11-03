@@ -48,6 +48,7 @@ public static class Gather
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
         JsonObject scene = null, last = null;
+        var blockedSources = new JsonArray();
         JsonNode sourceError = null;
         string outcome = "attempt_limit";
         int actions = 0;
@@ -60,13 +61,22 @@ public static class Gather
                 if (targets.All(t => Count(t) >= t.Count)) { outcome = "enough"; break; }
                 if (scene["error"] != null)
                 { outcome = scene["error"].ToString(); sourceError = scene["source_error"]?.DeepClone(); break; }
-                var candidate = scene["candidates"].AsArray().OfType<JsonObject>()
+                var available = scene["candidates"].AsArray().OfType<JsonObject>()
                     .Where(c => area == null || area.Contains(c))
                     .Where(c => targets.Any(t => t.ItemType == c["item_type"].GetValue<int>() && Count(t) < t.Count))
+                    .ToArray();
+                var candidate = available
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
                     .FirstOrDefault();
-                if (candidate == null) { outcome = "source_unavailable"; break; }
+                if (candidate == null)
+                {
+                    outcome = available.Length == 0 ? "source_unavailable" : "attempt_limit";
+                    foreach (var source in available)
+                        blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
+                            ["attempts"] = attempts.GetValueOrDefault(source["id"].ToString()) });
+                    break;
+                }
                 string id = candidate["id"].ToString();
                 attempts[id] = attempts.GetValueOrDefault(id) + 1;
                 actions++;
@@ -87,6 +97,7 @@ public static class Gather
             ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,
+            ["blocked_sources"] = blockedSources,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
                 { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t), ["met"] = Count(t) >= t.Count }).ToArray()) };
     }
