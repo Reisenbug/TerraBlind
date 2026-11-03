@@ -243,6 +243,25 @@ static class ScriptTests
             "state field guard broke JSON serialization or valid fields");
         Console.WriteLine("PASS: missing state fields fail before effects; actual state remains readable and serializable");
         var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        var defaults = new AgentWatch();
+        defaults.EnsureDefaults();
+        defaults.Observe(new JsonObject { ["hp"] = 100,
+            ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 }) });
+        Check(defaults.HasPending && !defaults.HasInterrupting,
+            "default chest discovery interrupted policy preparation or lost the opportunity");
+        defaults.Observe(new JsonObject { ["hp"] = 100, ["actions"] = new JsonArray(new JsonObject
+            { ["handle"] = "travel", ["status"] = "running", ["attempt"] = 1 }) });
+        Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "nearby_chest",
+            "deferred opportunity was lost when travel began");
+        defaults.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        defaults.EnsureDefaults();
+        defaults.Observe(new JsonObject { ["hp"] = 100,
+            ["chests"] = new JsonArray(new JsonObject { ["x"] = 11, ["y"] = 20 }) });
+        Check(defaults.HasInterrupting, "defaults overrode explicit opportunity interruption policy");
+        defaults.Take();
+        defaults.Observe(new JsonObject { ["hp"] = 20 });
+        Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "low_health",
+            "passive default opportunities suppressed danger interruption");
         var entries = AgentScript.EntryTools(definitions);
         Check(entries.Count == 5 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");

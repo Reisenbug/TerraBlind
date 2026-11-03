@@ -44,7 +44,11 @@ public sealed class AgentWatch
     public void EnsureDefaults()
     {
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "inventory_full" });
-        if (!configured) events.Add("nearby_chest");
+        if (!configured)
+        {
+            events.Add("nearby_chest");
+            passive.Add("nearby_chest");
+        }
     }
 
     public JsonObject Configure(JsonObject args)
@@ -77,6 +81,11 @@ public sealed class AgentWatch
             ["suffocating"] = state["suffocating"]?.DeepClone(),
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
+        if (!configured)
+        {
+            if (running == null) passive.Add("nearby_chest");
+            else passive.Remove("nearby_chest");
+        }
         string dangerKey = running == null ? "task" : running["handle"] + ":" + running["attempt"];
         if (state["item_counts"] is JsonObject current)
         {

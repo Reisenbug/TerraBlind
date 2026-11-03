@@ -1168,7 +1168,9 @@ static class RuntimeTests
             AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
             await PumpUntil(() => RecedingNav.Active);
             AgentTools.Watches.EnsureDefaults();
-            AgentTools.Watches.Observe(JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":1,\"y\":2}]}").AsObject());
+            var firstObservation = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":1,\"y\":2}]}").AsObject();
+            firstObservation["actions"] = AgentTools.Actions.Snapshot();
+            AgentTools.Watches.Observe(firstObservation);
             var wake = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
                 { ["workflow"] = "delivery", ["code"] = "tool('say',{text:'must-not-run-before-event-delivery'});" }, default)));
             Check(wake["value"]["wake"]["events"].AsArray().Count == 1 && !RecedingNav.Active
@@ -1180,7 +1182,9 @@ static class RuntimeTests
             string pausedHandle = AgentTools.Actions.Summary()[0]["handle"].ToString();
             await Execute(AgentTools.Actions.Control(pausedHandle, "resume", null, default));
             await PumpUntil(() => RecedingNav.Active);
-            AgentTools.Watches.Observe(JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":3,\"y\":4}]}").AsObject());
+            var resumedObservation = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":3,\"y\":4}]}").AsObject();
+            resumedObservation["actions"] = AgentTools.Actions.Snapshot();
+            AgentTools.Watches.Observe(resumedObservation);
             var local = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
             {
                 ["workflow"] = "local-delivery", ["event_delivery"] = "script",
