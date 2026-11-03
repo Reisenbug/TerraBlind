@@ -699,6 +699,9 @@ namespace TerraBlind
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, ex, ey)
+                    || e.digTiles?.Exists(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.Item1, tile.Item2)) == true)
+                    continue;
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
                 // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
                 // 长 bridge 的标记是"没帧、不挖、不是柱"(EdgeToSteps 同一组合),别借 pillar 表示

@@ -23,6 +23,7 @@ public sealed class AgentControlPolicy
     }
 
     readonly Dictionary<string, Rule> rules = new();
+    volatile Rule[] spatialRules = Array.Empty<Rule>();
     public long Revision { get; private set; }
     public bool HasClaims => rules.Values.Any(rule => rule.Channels != ControlChannels.None);
     public bool Contains(string id) => rules.ContainsKey(id);
@@ -64,6 +65,7 @@ public sealed class AgentControlPolicy
     {
         rule.Id = Guid.NewGuid().ToString("N");
         rules.Add(rule.Id, rule); Revision++;
+        spatialRules = rules.Values.Where(value => value.Region != null).ToArray();
         return rule.Id;
     }
 
@@ -93,7 +95,7 @@ public sealed class AgentControlPolicy
 
     public JsonObject CheckAt(ControlBehavior behavior, int x, int y)
     {
-        foreach (var rule in rules.Values)
+        foreach (var rule in spatialRules)
             if (rule.Region is { } area && rule.Behaviors?.Contains(behavior) == true
                 && x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height)
             {
@@ -102,6 +104,15 @@ public sealed class AgentControlPolicy
                 return denied;
             }
         return null;
+    }
+
+    public bool ForbiddenAt(ControlBehavior behavior, int x, int y)
+    {
+        foreach (var rule in spatialRules)
+            if (rule.Region is { } area && rule.Behaviors.Contains(behavior)
+                && x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height)
+                return true;
+        return false;
     }
 
     JsonObject Denied(Rule rule, string error, ControlBehavior behavior) => new()
@@ -114,6 +125,7 @@ public sealed class AgentControlPolicy
     {
         if (!rules.Remove(id)) throw new ArgumentException("未知或已经释放的覆盖句柄。");
         Revision++;
+        spatialRules = rules.Values.Where(value => value.Region != null).ToArray();
     }
 
     public void EndAction(string action) => Remove(rule => rule.Lifetime == ControlLifetime.Action && rule.Action == action);
@@ -124,7 +136,11 @@ public sealed class AgentControlPolicy
     {
         var ids = rules.Values.Where(predicate).Select(rule => rule.Id).ToArray();
         foreach (string id in ids) rules.Remove(id);
-        if (ids.Length > 0) Revision++;
+        if (ids.Length > 0)
+        {
+            Revision++;
+            spatialRules = rules.Values.Where(value => value.Region != null).ToArray();
+        }
     }
 
     public JsonObject Snapshot() => new()

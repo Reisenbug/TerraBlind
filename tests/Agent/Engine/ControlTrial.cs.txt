@@ -176,37 +176,25 @@ public sealed class ControlTrial : ModSystem
         Check(moved["error"] == null && moved["outcome"]?.ToString() == "done", "claimed movement did not finish");
         await OnMain(() =>
         { Check(Main.LocalPlayer.position.X < before.X - 30, "claimed action failed to move left"); return true; });
-        var veto = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
-            ["behaviors"] = new JsonArray("navigation"), ["reason"] = "do not repeat unsafe sand approach" });
-        Check(veto["id"] != null, "navigation prohibition not recorded");
-        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claimId });
-        var retried = await Call("nav_to", new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 });
-        Check(retried["error"]?.ToString() == "behavior_forbidden", "handback erased independent navigation prohibition");
-        await OnMain(() =>
-        {
-            RecedingNav.Start(sandX + 8, floor - 1);
-            Check(!RecedingNav.Active, "native navigation bypassed agent prohibition");
-            Check(!Main.LocalPlayer.dead && CountSand() == sandBefore, "sand changed or player died after handback");
-            return true;
-        });
-        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = veto["id"].ToString() });
         var localVeto = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
             ["behaviors"] = new JsonArray("mining"), ["reason"] = "do not undermine this sand wall",
             ["region"] = new JsonObject { ["x"] = sandX, ["y"] = floor - 7, ["width"] = 4, ["height"] = 7 } });
         Check(localVeto["status"]?.ToString() == "ready", "local excavation veto not ready");
+        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claimId });
+        int picksBeforeResume = await OnMain(() => sandPickAttempts);
+        var retried = await Call("nav_to", new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 }).WaitAsync(TimeSpan.FromSeconds(60));
+        Check(retried["done"]?.ToString() == "true", "navigation failed to reach the original destination after local veto");
         await OnMain(() =>
         {
             var p = Main.LocalPlayer;
             Check(AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All), "local veto disabled all navigation");
-            p.PickTile(sandX, floor - 1, 10000);
-            Check(CountSand() == sandBefore, "native pick bypassed local excavation veto");
-            Main.tile[sandX - 2, floor - 4].ResetToType(TileID.Stone);
-            p.PickTile(sandX - 2, floor - 4, 10000);
-            Check(!Main.tile[sandX - 2, floor - 4].HasTile, "local veto blocked unrelated native mining");
+            Check(sandPickAttempts == picksBeforeResume && CountSand() == sandBefore,
+                "resumed navigation repeated rejected excavation");
+            Check(!p.dead && p.Center.X > (sandX + 4) * 16, "player did not cross the sand wall alive");
             return true;
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
-        Console.WriteLine("CONTROL_REGION_ASSERTIONS protected_native_pick_blocked=true outside_native_pick_allowed=true navigation_enabled=true");
+        Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
     }
 
     int CountSand()

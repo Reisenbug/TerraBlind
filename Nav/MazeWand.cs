@@ -180,9 +180,19 @@ namespace TerraBlind
         // 每二十帧就在主线程重建一次 500ms 的场,永远停不下来。
         static (int gx, int gy) _prevGoal = (int.MinValue, int.MinValue);
         static Dictionary<(int, int), int> _prevField;
+        static long _controlRevision = -1;
+
+        static void RefreshControlRevision()
+        {
+            long revision = AgentTools.Control.Revision;
+            if (_controlRevision == revision) return;
+            InvalidateField();
+            _controlRevision = revision;
+        }
 
         public static Dictionary<(int, int), int> GetField(int gx, int gy)
         {
+            RefreshControlRevision();
             var p = Main.LocalPlayer;
             int sx = p != null ? (int)(p.Center.X / 16f) : gx;
             int sy = p != null ? (int)((p.position.Y + p.height) / 16f) - 1 : gy;
@@ -203,6 +213,7 @@ namespace TerraBlind
         // 只读地问缓存,【绝不】就地建场。后台预扫要用。建场是秒级的,不能顺手触发
         public static Dictionary<(int, int), int> PeekFieldOrNull(int gx, int gy)
         {
+            RefreshControlRevision();
             if (_cachedField != null && _cachedGoal == (gx, gy)) return _cachedField;
             if (_prevField != null && _prevGoal == (gx, gy)) return _prevField;
             return null;
@@ -408,6 +419,12 @@ namespace TerraBlind
 
         static int StepCost(int cx, int cy, int nx, int ny)
         {
+            for (int row = 0; row < 3; row++)
+            {
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, cx, cy - row)) return Impassable;
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, cx, cy - row)
+                    && SolidAnyShape(cx, cy - row)) return Impassable;
+            }
             // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
