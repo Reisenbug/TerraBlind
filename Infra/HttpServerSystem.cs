@@ -2246,6 +2246,12 @@ namespace TerraBlind
 					isb.Append(",\"type\":").Append(it.type);
 					isb.Append(",\"stack\":").Append(it.stack);
 					isb.Append(",\"damage\":").Append(it.damage);
+					isb.Append(",\"useAmmo\":").Append(it.useAmmo);
+					isb.Append(",\"hasAmmo\":").Append(it.useAmmo <= 0 || Main.LocalPlayer.HasAmmo(it) ? "true" : "false");
+					isb.Append(",\"shoot\":").Append(it.shoot);
+					isb.Append(",\"shootSpeed\":").Append(it.shootSpeed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+					isb.Append(",\"useTime\":").Append(it.useTime);
+					isb.Append(",\"useAnimation\":").Append(it.useAnimation);
 					isb.Append(",\"pick\":").Append(it.pick);
 					isb.Append(",\"axe\":").Append(it.axe);
 					isb.Append(",\"hammer\":").Append(it.hammer);

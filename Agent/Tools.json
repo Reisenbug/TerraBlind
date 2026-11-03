@@ -84,7 +84,7 @@
     "type": "function",
     "function": {
       "name": "item_info",
-      "description": "查背包里某个物品的详细信息(描述tooltip + 类型标志:武器伤害/镐力/放置物createTile/是否消耗品/回血等)。**同名或看不懂的物品别猜别反复问玩家,用这个查一眼就懂**(比如 BOMB 召唤妖精 vs 炸弹摧毁图格,靠 tooltip 分清)。给 slot(槽位号)或 name(物品名)。",
+      "description": "查背包里某个物品的详细信息(描述tooltip + 类型标志:武器伤害/镐力/放置物createTile/是否消耗品/回血等)。useAmmo为弹药类别，0表示无需弹药；hasAmmo是当前玩家的游戏弹药检查，无需弹药时为true，不证明有魔力、射界或可以立即攻击。shoot/shootSpeed为物品基础射弹类型/速度，useTime/useAnimation为基础帧间隔，不包含弹药、饰品、模组射击钩子的最终弹道。给slot(槽位号)或name(物品名)；同名或陌生物品先查询，不猜效果。",
       "parameters": {
         "type": "object",
         "properties": {

@@ -602,6 +602,24 @@ public sealed class BehaviorTrial : ModSystem
         if (result["ok"]?.GetValue<bool>() != true || result["value"]?["crystals_gained"]?.GetValue<int>() != 1)
             throw new Exception("natural opportunity continuation incomplete: " + result["detail"] + " " + result["value"]);
         Console.WriteLine("OPPORTUNITY_NATURAL_COMPLETE native_engine=true model_calls=0 fixture_tile_edits=0 teleports_after_start=0");
+        var loadout = await Call("run_script", new JsonObject { ["code"] = """
+            const state=tool('get_state');
+            const weapons=[];
+            for(const item of state.inventory_slots.filter(i=>i.type>0)) {
+              const info=tool('item_info',{slot:item.slot});
+              if(info.damage>0&&info.pick===0&&info.axe===0&&info.hammer===0)
+                weapons.push({slot:item.slot,type:item.type,useAmmo:info.useAmmo,hasAmmo:info.hasAmmo,
+                  shoot:info.shoot,shootSpeed:info.shootSpeed,useTime:info.useTime,useAnimation:info.useAnimation});
+            }
+            const knives=weapons.find(w=>w.type===279);
+            const gun=weapons.find(w=>w.type===964);
+            if(!knives||knives.useAmmo!==0||knives.hasAmmo!==true||knives.shoot<=0||knives.shootSpeed<=0||knives.useTime<=0)
+              throw new Error('throwing weapon facts missing');
+            if(gun&&(gun.useAmmo<=0||gun.hasAmmo!==false)) throw new Error('empty looted gun reported usable ammo');
+            return {weapons,empty_gun_checked:!!gun};
+            """ });
+        File.WriteAllText(Path.Combine(Main.SavePath, "weapon-facts.json"), loadout.ToJsonString());
+        if (loadout["ok"]?.GetValue<bool>() != true) throw new Exception("weapon facts failed: " + loadout.ToJsonString());
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MATERIALS") == "1")
         {
             await OnMain(() => { materialNavigationStub = Environment.GetEnvironmentVariable("TB_MATERIAL_NAV_STUB") == "1"; return true; });
