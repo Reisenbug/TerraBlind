@@ -19,6 +19,7 @@ public sealed class ScriptProgress
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
     public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield"; } }
+    public bool ReviewRequested { get { lock (gate) return !running && last?["value"]?["wake"] is JsonObject; } }
 
     public void Begin()
     {

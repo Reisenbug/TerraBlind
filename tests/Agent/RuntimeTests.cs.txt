@@ -1146,7 +1146,7 @@ static class RuntimeTests
         Console.WriteLine("PASS: event delivery pauses inputs, local JS continues without a model turn, and explicit review still yields");
     }
 
-    sealed class ContinuedReviewHandler : HttpMessageHandler
+    sealed class ContinuedReviewHandler(bool immediate = true) : HttpMessageHandler
     {
         public int Calls;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -1156,10 +1156,11 @@ static class RuntimeTests
             var message = new JsonObject { ["content"] = "审阅" };
             if (call % 2 == 0)
             {
-                if (call == 2) Check(AgentTools.Actions.HasActive, "host waited for or stopped the delegated action before reviewing");
+                if (call == 2) Check(AgentTools.Actions.HasActive == immediate, "review did not honor explicit review versus real event handoff");
                 string code = call == 0
-                    ? "const a=tool('action_start',{tool:'nav_to',args:{x:100,y:100}}); tool('decision_point',{reason:'review while moving',continue_action:a.handle});"
-                    : "const s=tool('get_state'); const a=s.action_tasks.find(x=>x.status==='running'); return tool('action_control',{handle:a.handle,command:'cancel'});";
+                    ? "const a=tool('action_start',{tool:'nav_to',args:{x:100,y:100}}); " + (immediate
+                        ? "tool('decision_point',{reason:'review while moving',continue_action:a.handle});" : "return {status:'yield',handle:a.handle};")
+                    : "const s=tool('get_state'); const a=s.action_tasks.find(x=>x.status==='running'||x.status==='paused'); return tool('action_control',{handle:a.handle,command:'cancel'});";
                 message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "continue-review-" + call, ["type"] = "function",
                     ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
                         { ["workflow"] = "continued-review", ["event_delivery"] = "script", ["code"] = code }.ToJsonString() } });
@@ -1194,6 +1195,42 @@ static class RuntimeTests
             field.SetValue(Agent, previous);
         }
         Console.WriteLine("PASS: explicit continued action remains active across model review and obeys subsequent cancellation");
+        await TestDeferredReview();
+    }
+
+    static async Task TestDeferredReview()
+    {
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        var handler = new ContinuedReviewHandler(false);
+        using var http = new HttpClient(handler);
+        field.SetValue(Agent, new AgentConversation(http));
+        AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            NativeAgent.Submit("开始移动后等待真实事件");
+            await PumpUntil(() => handler.Calls >= 2);
+            var until = DateTime.UtcNow.AddMilliseconds(350);
+            await PumpUntil(() => DateTime.UtcNow >= until);
+            string handle = AgentTools.Actions.ActiveHandle;
+            Check(handler.Calls == 2 && handle != null && RecedingNav.Active,
+                "ordinary script yield called the model again before background work or events changed");
+            AgentTools.Watches.Request("new event requiring a changed plan");
+            await PumpUntil(() => handler.Calls == 4 && NativeAgent.Status == "idle");
+            var action = await Execute(AgentTools.Actions.Query(handle, 0, default));
+            Check(action["status"].ToString() == "cancelled" && action["attempt"].GetValue<int>() == 1,
+                "event handling replaced the original background handle");
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
+            field.SetValue(Agent, previous);
+        }
     }
 
     static async Task TestPassiveOpportunity()
