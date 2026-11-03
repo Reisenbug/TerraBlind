@@ -597,6 +597,9 @@ public static partial class AgentTools
                 result = await Call("/collect_treasure", args, token);
                 if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
                 break;
+            case "npc_drop_sources":
+                result = await NativeAgent.OnMain(() => AgentCatalog.NpcDropSources(Int(args, "item_type"), Int(args, "limit", 40)), token);
+                break;
             case "game_catalog":
                 string kind = Text(args, "kind");
                 Type constants = kind switch

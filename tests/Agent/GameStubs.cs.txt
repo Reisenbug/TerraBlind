@@ -15,6 +15,26 @@ namespace Terraria.Map
     }
 }
 
+namespace Terraria.GameContent.ItemDropRules
+{
+    public interface IItemDropRuleCondition { string GetConditionDescription(); }
+    public struct DropRateInfo
+    {
+        public int itemId, stackMin, stackMax;
+        public float dropRate;
+        public List<IItemDropRuleCondition> conditions;
+    }
+    public struct DropRateInfoChainFeed { public DropRateInfoChainFeed(float rate) { } }
+    public interface IItemDropRule { void ReportDroprates(List<DropRateInfo> drops, DropRateInfoChainFeed feed); }
+    public class ItemDropDatabase
+    {
+        public readonly Dictionary<int, List<IItemDropRule>> Rules = new();
+        public readonly List<IItemDropRule> Global = new();
+        public List<IItemDropRule> GetRulesForNPCID(int type, bool includeGlobalDrops)
+            => Rules.GetValueOrDefault(type, new()).Concat(includeGlobalDrops ? Global : new()).ToList();
+    }
+}
+
 namespace Terraria
 {
     public static class Main
@@ -23,6 +43,7 @@ namespace Terraria
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
+        public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
@@ -77,6 +98,7 @@ namespace Terraria
     }
     public static class Lang
     {
+        public static string GetNPCNameValue(int type) => "NPC " + type;
         public static Dictionary<int, string> MapLabels = new();
         public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
     }
@@ -157,6 +179,8 @@ namespace Terraria.ID
 }
 namespace Terraria.ModLoader
 {
+    public static class ItemLoader { public static int ItemCount = 6000; }
+    public static class NPCLoader { public static int NPCCount = 700; }
     public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }
     public class Mod
     {

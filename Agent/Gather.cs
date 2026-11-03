@@ -42,7 +42,7 @@ public static class Gather
         ["npc_types"] = new JsonArray(t.Npcs.Select(v => (JsonNode)JsonValue.Create(v)).ToArray()),
         ["drops_only"] = t.Tiles.Length == 0 && t.Npcs.Length == 0,
         ["detail"] = t.Tiles.Length == 0 && t.Npcs.Length == 0
-            ? "仅搜索已有掉落物；未配置方块或敌怪来源，不会从物品编号推断来源。要主动获取，先查证并提供tile_names或npc_types。" : null
+            ? "仅搜索已有掉落物；未配置方块或敌怪来源，不会从物品编号推断来源。要主动获取，先查证并提供tile_names或npc_types；npc_drop_sources可查询登记的敌怪掉落规则，方块来源需另查。" : null
     }).ToArray());
 
     public static void Validate(GatherTarget[] targets, GatherArea area)

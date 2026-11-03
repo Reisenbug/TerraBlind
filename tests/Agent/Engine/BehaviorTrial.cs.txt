@@ -290,6 +290,13 @@ public sealed class BehaviorTrial : ModSystem
                 Console.WriteLine($"SOURCE_DATABASE_PROBE_PASS sources={sources.Count} npc_scan_ms={elapsed:F2} plants={plants.Count}");
                 return true;
             });
+            var queried = await Call("npc_drop_sources", new JsonObject { ["item_type"] = (int)ItemID.Stinger });
+            if (queried["error"] != null || !queried["sources"].AsArray().Any(s => s["npc_type"].GetValue<int>() == NPCID.Hornet)
+                || queried["sources"].AsArray().Any(s => s["npc_type"].GetValue<int>() == NPCID.ManEater)
+                || queried["got"].AsObject().Count != 0 || queried["lost"].AsObject().Count != 0)
+                throw new Exception("production drop source tool reported incorrect sources or mutated inventory");
+            File.WriteAllText(Path.Combine(Main.SavePath, "npc-drop-sources-tool.json"), queried.ToJsonString());
+            Console.WriteLine("NPC_DROP_SOURCES_TOOL_PASS real_rules=true inventory_unchanged=true");
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")

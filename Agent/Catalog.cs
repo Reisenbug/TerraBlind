@@ -7,6 +7,34 @@ namespace TerraBlind;
 
 public static class AgentCatalog
 {
+    public static JsonObject NpcDropSources(int itemType, int limit = 40)
+    {
+        if (itemType <= 0 || itemType >= Terraria.ModLoader.ItemLoader.ItemCount || limit is < 1 or > 100)
+            throw new ArgumentException("item_type需要已加载的物品编号，limit须1..100。");
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var sources = new JsonArray();
+        int total = 0;
+        for (int type = 1; type < Terraria.ModLoader.NPCLoader.NPCCount; type++)
+        {
+            var drops = new System.Collections.Generic.List<Terraria.GameContent.ItemDropRules.DropRateInfo>();
+            foreach (var rule in Terraria.Main.ItemDropsDB.GetRulesForNPCID(type, true))
+                rule.ReportDroprates(drops, new Terraria.GameContent.ItemDropRules.DropRateInfoChainFeed(1f));
+            foreach (var drop in drops.Where(d => d.itemId == itemType))
+            {
+                total++;
+                if (sources.Count >= limit) continue;
+                sources.Add(new JsonObject { ["npc_type"] = type, ["name"] = Terraria.Lang.GetNPCNameValue(type),
+                    ["reported_drop_rate"] = drop.dropRate, ["stack_min"] = drop.stackMin, ["stack_max"] = drop.stackMax,
+                    ["conditions"] = new JsonArray((drop.conditions ?? new()).Select(c => (JsonNode)new JsonObject
+                    { ["type"] = c.GetType().FullName, ["description"] = c.GetConditionDescription() }).ToArray()) });
+            }
+        }
+        return new JsonObject { ["item_type"] = itemType, ["sources"] = sources, ["total_rules"] = total,
+            ["truncated"] = total > limit, ["elapsed_ms"] = timer.Elapsed.TotalMilliseconds,
+            ["source"] = "loaded_npc_drop_rules_including_global_rules",
+            ["limitations"] = "枚举已加载的正数NPC类型；条件未经现场求值，报告概率不保证当前可掉落或已生成。不是击杀、拾取或库存证据。未包含负数netID变体、方块掉落、开袋及未登记到掉落规则的特殊逻辑；空结果不证明物品没有来源。" };
+    }
+
     static string Key(string name) => name.Replace(" ", "").Replace("_", "").ToLowerInvariant();
 
     public static JsonObject Query(Type constants, string query, Func<int, string[]> displayNames = null)

@@ -3,6 +3,17 @@ using TerraBlind;
 
 static class CatalogTests
 {
+    sealed class Condition : Terraria.GameContent.ItemDropRules.IItemDropRuleCondition
+    { public string GetConditionDescription() => "test condition, not evaluated"; }
+    sealed class Drop : Terraria.GameContent.ItemDropRules.IItemDropRule
+    {
+        readonly int item;
+        public Drop(int item) { this.item = item; }
+        public void ReportDroprates(System.Collections.Generic.List<Terraria.GameContent.ItemDropRules.DropRateInfo> drops,
+            Terraria.GameContent.ItemDropRules.DropRateInfoChainFeed feed)
+            => drops.Add(new() { itemId = item, stackMin = 1, stackMax = 2, dropRate = .25f,
+                conditions = new() { new Condition() } });
+    }
     public static class Sample
     {
         public const short AlphaTool = 7;
@@ -36,6 +47,28 @@ static class CatalogTests
             "catalog did not bound broad results");
         try { AgentCatalog.Query(typeof(Sample), " _ "); throw new Exception("catalog accepted empty identifier"); }
         catch (ArgumentException) { }
+        var savedDrops = Terraria.Main.ItemDropsDB;
+        int savedCount = Terraria.ModLoader.NPCLoader.NPCCount;
+        try
+        {
+            Terraria.Main.ItemDropsDB = new();
+            Terraria.ModLoader.NPCLoader.NPCCount = 4;
+            Terraria.Main.ItemDropsDB.Rules[2] = new() { new Drop(77), new Drop(88) };
+            Terraria.Main.ItemDropsDB.Global.Add(new Drop(99));
+            var drops = AgentCatalog.NpcDropSources(77);
+            Check(drops["total_rules"].GetValue<int>() == 1 && drops["sources"][0]["npc_type"].GetValue<int>() == 2
+                && drops["sources"][0]["reported_drop_rate"].GetValue<float>() == .25f
+                && drops["sources"][0]["conditions"][0]["description"].ToString().Contains("not evaluated"),
+                "drop lookup lost item filtering, conditional rates or actual source identity");
+            drops = AgentCatalog.NpcDropSources(99, 1);
+            Check(drops["total_rules"].GetValue<int>() == 3 && drops["sources"].AsArray().Count == 1
+                && drops["truncated"].GetValue<bool>(), "global drop rules were omitted or truncated silently");
+            Check(AgentCatalog.NpcDropSources(100)["sources"].AsArray().Count == 0,
+                "drop lookup invented an unregistered source");
+            try { AgentCatalog.NpcDropSources(0); throw new Exception("drop lookup accepted invalid item"); }
+            catch (ArgumentException) { }
+        }
+        finally { Terraria.Main.ItemDropsDB = savedDrops; Terraria.ModLoader.NPCLoader.NPCCount = savedCount; }
         Console.WriteLine("PASS: catalog resolves typed constants, normalizes names, ranks exact matches and bounds results without inventing unknown IDs");
     }
 }
