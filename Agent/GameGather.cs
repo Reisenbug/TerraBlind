@@ -104,10 +104,17 @@ public sealed class GameGather : IGatherWorld
         if (kind == "drop")
         {
             int stable = 0;
+            Microsoft.Xna.Framework.Vector2? previousPosition = null;
             for (int i = 0; i < 20; i++)
             {
-                bool moving = await NativeAgent.OnMain(() => Main.item[who].active && Main.item[who].velocity.LengthSquared() > .01f, token);
-                stable = moving ? 0 : stable + 1;
+                var sample = await NativeAgent.OnMain(() =>
+                {
+                    var item = Main.item[who];
+                    return (Valid: item.active && item.type == candidate["item_type"].GetValue<int>(), Position: item.Center);
+                }, token);
+                if (!sample.Valid) return new JsonObject { ["outcome"] = "target_changed" };
+                stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
+                previousPosition = sample.Position;
                 if (stable >= 2) break;
                 await Task.Delay(150, token);
             }
@@ -115,7 +122,8 @@ public sealed class GameGather : IGatherWorld
             {
                 var item = Main.item[who];
                 DiagLog.Write($"[gather] drop who={who} pos={item.Center} velocity={item.velocity} player={Main.LocalPlayer.Center}");
-                if (item.velocity.LengthSquared() > .01f) return new JsonObject { ["moving"] = true };
+                if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
+                    return new JsonObject { ["moving"] = true };
                 return item.active && item.type == candidate["item_type"].GetValue<int>()
                     ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = true,
                         ["near"] = Microsoft.Xna.Framework.Vector2.Distance(item.Center, Main.LocalPlayer.Center) <= 48 } : null;
