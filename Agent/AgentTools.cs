@@ -465,7 +465,12 @@ public static partial class AgentTools
                 }
                 break;
             case "watch":
-                return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();
+                return (await NativeAgent.OnMain(() =>
+                {
+                    Watches.Configure(args);
+                    if (Actions.HasActive) Watches.EnsureDefaults();
+                    return Watches.Snapshot();
+                }, token)).ToJsonString();
             case "opportunity_reconsider":
                 return (await NativeAgent.OnMain(() => Watches.Reconsider(Text(args, "kind"), Text(args, "key"), Text(args, "reason")), token)).ToJsonString();
             case "script_events":
@@ -499,6 +504,8 @@ public static partial class AgentTools
                         ?? throw new ArgumentException("未知动作句柄。");
                     NativeAgent.ValidateTool(resumeTool, resumeArgs);
                 }
+                if (Text(args, "command") == "resume")
+                    await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
                 result = await Actions.Control(Text(args, "handle"), Text(args, "command"), args["args"] as JsonObject, token);
                 return result.ToJsonString();
             case "script_progress":

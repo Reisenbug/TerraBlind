@@ -713,8 +713,16 @@ static class RuntimeTests
                 var pausedAction = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
                     { ["handle"] = handle, ["command"] = "pause" }, default)));
                 Check(pausedAction["status"].ToString() == "paused" && !RecedingNav.Active, "pause failed to stop actual navigation adapter");
+                await Execute(AgentTools.Execute("watch", new JsonObject { ["events"] = new JsonArray("nearby_chest"),
+                    ["passive_events"] = new JsonArray("nearby_chest"), ["health_below"] = 60 }, default));
                 await Execute(AgentTools.Execute("action_control", new JsonObject { ["handle"] = handle, ["command"] = "resume" }, root.Token));
                 await PumpUntil(() => RecedingNav.Active);
+                Check(AgentTools.Watches.Subscribed("low_health") && AgentTools.Watches.Subscribed("player_died")
+                    && AgentTools.Watches.Subscribed("target_acquired") && AgentTools.Watches.HealthBelow == 60,
+                    "resume lost safety observations after watch reconfiguration");
+                await Execute(AgentTools.Execute("watch", new JsonObject { ["events"] = new JsonArray(), ["health_below"] = 60 }, default));
+                Check(AgentTools.Watches.Subscribed("low_health") && AgentTools.Watches.Subscribed("suffocating"),
+                    "live watch reconfiguration disabled action safety observations");
                 root.Cancel();
                 await PumpUntil(() => !AgentTools.Actions.HasActive);
                 Check(!RecedingNav.Active && AgentTools.Actions.Snapshot()[0]["status"].ToString() == "cancelled",
