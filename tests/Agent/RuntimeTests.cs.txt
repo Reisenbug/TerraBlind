@@ -1078,10 +1078,14 @@ static class RuntimeTests
             var review = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
             {
                 ["workflow"] = "local-delivery", ["event_delivery"] = "script",
-                ["code"] = "tool('decision_point',{reason:'route needs a new plan'}); tool('say',{text:'must-not-run-after-review'});"
+                ["code"] = "tool('decision_point',{reason:'route needs a new plan',evidence:{captured_tick:123,blocked:true,candidates:[{x:10,y:20,shot_line:false}]}}); tool('say',{text:'must-not-run-after-review'});"
             }, default)));
             Check(review["value"]["status"].ToString() == "yield" && !AgentChat.Messages.Contains("must-not-run-after-review"),
                 "local event mode swallowed an explicit request for Agent review");
+            Check(review["value"]["wake"]["event"]["reported_evidence"]["captured_tick"].GetValue<int>() == 123
+                && !review["value"]["wake"]["event"]["reported_evidence"]["candidates"][0]["shot_line"].GetValue<bool>()
+                && review["value"]["wake"]["events"].AsArray().Any(e => e["reported_evidence"]?["blocked"]?.GetValue<bool>() == true),
+                "decision handoff lost structured observations or replaced them with a success claim");
             await Execute(AgentTools.Actions.Control(pausedHandle, "resume", null, default));
             await PumpUntil(() => RecedingNav.Active);
             var invalidReview = JsonNode.Parse(await Execute(AgentTools.Execute("decision_point", new JsonObject

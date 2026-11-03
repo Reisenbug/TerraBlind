@@ -148,12 +148,15 @@ public sealed class AgentWatch
             ["detail"] = "下次实际观察仍发现该机会时重新通知；不复用旧现场，不重置模型唤醒额度。" };
     }
 
-    public JsonObject Request(string reason)
+    public JsonObject Request(string reason, JsonObject evidence = null)
     {
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("决策点需要原因。");
+        if (evidence?.ToJsonString(AgentTools.ModelJson).Length > 8000)
+            throw new ArgumentException("决策证据最多8000字符，请保留关键实测字段和句柄。");
         if (wakeCount >= 6) throw new InvalidOperationException("本指令唤醒预算已用完，请报告阻塞或完成。");
         wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = "decision_point", ["reason"] = reason };
+        if (evidence != null) value["reported_evidence"] = evidence.DeepClone();
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
         return (JsonObject)value.DeepClone();
     }

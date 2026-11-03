@@ -515,7 +515,7 @@ public static partial class AgentTools
                 if (continueAction.Length > 0 && Actions.ActiveHandle != continueAction)
                     return new JsonObject { ["error"] = "continue_action_not_active", ["handle"] = continueAction }.ToJsonString();
                 return new JsonObject { ["status"] = "yield", ["continue_action"] = continueAction.Length > 0 ? continueAction : null,
-                    ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token) }.ToJsonString();
+                    ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason"), args["evidence"] as JsonObject), token) }.ToJsonString();
             case "action_start":
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
