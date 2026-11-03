@@ -13,6 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", type=Path, default=Path("/tmp/terrablind-descent-world/Worlds/World.wld"), help="World copied into the disposable save")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--behavior", action="store_true", help="Saved JS combat, live Jev judgment, loot and original-goal continuation")
     mode.add_argument("--control", action="store_true", help="Native control takeover and terrain veto trial, no model calls")
     mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
@@ -47,6 +48,14 @@ def main():
     staging = Path.home() / "Library/Application Support/TerraBlindDev/agent-277ba5a4e4c2/staging/Mods/TerraBlind.tmod"
     shutil.copy2(staging, root / "Mods/TerraBlind.tmod")
     user = Path.home() / "Library/Application Support/Terraria/tModLoader"
+    if args.behavior:
+        key = json.loads((user / "ModConfigs/TerraBlind_Config.json").read_text()).get("TypeSafeKey", "")
+        if not key.strip():
+            raise RuntimeError("The isolated behavior trial requires a configured TypeSafe key")
+        (root / "ModConfigs").mkdir()
+        config = root / "ModConfigs/TerraBlind_Config.json"
+        config.write_text(json.dumps({"TypeSafeKey": key}))
+        config.chmod(0o600)
     for name in ("config.json", "input profiles.json"):
         shutil.copy2(user / name, root / name)
     (root / "Mods/enabled.json").write_text('["TerraBlind","Engine"]')
@@ -62,6 +71,9 @@ def main():
     if args.control:
         command.remove("-agentenginecheck")
         command.append("-agentcontrolcheck")
+    if args.behavior:
+        command.remove("-agentenginecheck")
+        command.append("-agentbehaviorcheck")
     if args.live:
         command.append("-agentlivecheck")
     if args.batch:

@@ -1,0 +1,151 @@
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
+using MonoMod.Cil;
+using Terraria;
+using Terraria.DataStructures;
+using Terraria.ID;
+using Terraria.IO;
+using Terraria.ModLoader;
+using TerraBlind;
+
+namespace Engine;
+
+public sealed class BehaviorTrial : ModSystem
+{
+    readonly ConcurrentQueue<Action> queue = new();
+    bool enabled, opened, finished;
+    int frames, movingAttackFrames, originX, floor, target = -1;
+    Task trial;
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
+        if (enabled) { On_Main.Update += Open; IL_Main.DoUpdate += Focus; }
+    }
+    public override void Unload() { if (enabled) { On_Main.Update -= Open; IL_Main.DoUpdate -= Focus; } }
+    static void Focus(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus"))) throw new Exception("focus hook missing");
+        cursor.EmitDelegate<Action>(() => Main.hasFocus = true);
+    }
+    void Open(On_Main.orig_Update original, Main game, GameTime time)
+    {
+        original(game, time);
+        if (opened || Main.menuMode != 0) return;
+        opened = true;
+        if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
+        var player = PlayerFileData.CreateAndSave(new Player { name = "JS behavior trial" });
+        if (player.IsCloudSave || !player.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new Exception("nonisolated player");
+        Player.LoadPlayer(player.Path, false).SetAsActive(); WorldGen.playWorld();
+    }
+    Task<T> OnMain<T>(Func<T> body)
+    {
+        var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Enqueue(() => { try { done.SetResult(body()); } catch (Exception error) { done.SetException(error); } });
+        return done.Task;
+    }
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || finished) return;
+        Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0; Main.autoPause = false;
+        while (queue.TryDequeue(out var work)) work();
+        if (Main.gameMenu || !Main.LocalPlayer.active) return;
+        frames++;
+        for (int i = 0; i < Main.maxNPCs; i++) if (i != target) Main.npc[i].active = false;
+        var p = Main.LocalPlayer;
+        if (p.controlUseItem && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > 0.2f) movingAttackFrames++;
+        if (frames == 60) trial = Task.Run(Run);
+        if (frames % 120 == 0) Console.WriteLine($"BEHAVIOR_SAMPLE frame={frames} pos={p.position} hp={p.statLife} moving_attack={movingAttackFrames}");
+        if (trial?.IsCompleted == true || frames > 7200)
+        {
+            finished = true;
+            bool ok = trial?.IsCompletedSuccessfully == true;
+            string detail = ok ? $"BEHAVIOR_COMPLETE moving_attack_frames={movingAttackFrames}" : trial?.Exception?.GetBaseException().ToString() ?? "behavior frame deadline";
+            Console.WriteLine(detail);
+            File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject { ["ok"] = ok, ["detail"] = detail }.ToJsonString());
+        }
+    }
+    static async Task<JsonObject> Call(string tool, JsonObject args)
+    {
+        var result = JsonNode.Parse(await AgentTools.Execute(tool, args, default)).AsObject();
+        Console.WriteLine("BEHAVIOR_TOOL " + tool + " " + result.ToJsonString());
+        return result;
+    }
+    async Task Run()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset();
+            var p = Main.LocalPlayer; originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16 + 3;
+            for (int x = originX - 30; x <= originX + 35; x++)
+            {
+                for (int y = floor - 15; y < floor; y++) Main.tile[x, y].ClearEverything();
+                Main.tile[x, floor].ResetToType(TileID.Stone);
+            }
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.ThrowingKnife); p.inventory[0].stack = 500;
+            p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+            p.position = new Vector2(originX * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            target = NPC.NewNPC(new EntitySource_Misc("BehaviorTrial"), (int)p.Center.X + 75, (int)p.Bottom.Y, NPCID.BlueSlime);
+            Main.npc[target].life = Main.npc[target].lifeMax = 120;
+            return true;
+        });
+        string code = """
+            tool('watch',{events:['nearby_npc_killed','nearby_drop'],radius:40});
+            const original = step('original',()=>tool('action_start',{tool:'nav_to',args:{x:GOAL_X,y:GOAL_Y}}));
+            tool('action_control',{handle:original.handle,command:'pause'});
+            step('moving-attack',()=>tool('fight',{npc_types:[1],max_dist:40,seconds:1,movement:'left'}));
+            const fight = step('combat',()=>tool('action_start',{tool:'fight',args:{npc_types:[1],max_dist:40,seconds:60}}));
+            let death=false;
+            for(let i=0;i<30&&!death;i++) {
+              const notice=tool('script_events',{wait_ms:1000});
+              death=notice.events.some(e=>e.kind==='nearby_npc_killed');
+              if(notice.paused_action&&!death) tool('action_control',{handle:notice.paused_action,command:'resume'});
+            }
+            if(!death) throw new Error('no native death event');
+            tool('action_control',{handle:fight.handle,command:'cancel'});
+            let drops=[];
+            for(let i=0;i<5&&!drops.length;i++) {
+              drops=tool('nearby_drops',{radius:40}).drops.filter(d=>d.item_type===23);
+              if(!drops.length) tool('script_events',{wait_ms:250});
+            }
+            if(!drops.length) throw new Error('no visible gel drop to judge');
+            const decision=tool('jev_judge',{state:{goal:'Collect one additional gel then return to the original destination',drops,
+              terrain:'Controlled test arena: flat solid floor, no liquids, no traps; only the just-killed slime was spawned.'},
+              questions:{pickup:{type:'noul',instructions:'Is collecting one of these gel drops useful for the stated goal?'}}});
+            if(decision.error) throw new Error(JSON.stringify(decision));
+            if(decision.answers.pickup.noul<0.7) {tool('decision_point',{reason:'drop judgment needs review'});}
+            const before=tool('get_state').inventory_slots.filter(i=>i.type===23).reduce((n,i)=>n+i.stack,0);
+            const collected=tool('gather',{targets:[{item_type:23,count:before+1}]});
+            const after=tool('get_state').inventory_slots.filter(i=>i.type===23).reduce((n,i)=>n+i.stack,0);
+            if(after<=before) throw new Error('drop not verified in inventory: '+JSON.stringify(collected));
+            tool('action_control',{handle:original.handle,command:'resume'});
+            let status;
+            for(let i=0;i<25;i++) {
+              status=tool('action_query',{handle:original.handle,wait_ms:1000});
+              if(status.status!=='running') break;
+            }
+            if(status.status!=='completed') throw new Error('original goal not resumed: '+JSON.stringify(status));
+            return {gel_gained:after-before,original_handle:original.handle,judgment:decision,returned:true};
+            """.Replace("GOAL_X", (originX + 18).ToString()).Replace("GOAL_Y", (floor - 1).ToString());
+        var saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = 0, ["code"] = code });
+        var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
+            ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
+        if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
+        await OnMain(() =>
+        {
+            if (Main.LocalPlayer.dead || movingAttackFrames == 0 || !Main.LocalPlayer.inventory.Any(i => i.type == ItemID.Gel && i.stack > 0))
+                throw new Exception("native movement/combat/loot evidence missing");
+            return true;
+        });
+    }
+}

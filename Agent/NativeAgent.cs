@@ -159,7 +159,7 @@ public class NativeAgent : ModSystem
             return;
         }
         while (MainQueue.TryDequeue(out var action)) action();
-        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false
+        if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
             _lastWatch = DateTime.UtcNow;
