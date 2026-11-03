@@ -959,8 +959,19 @@ public sealed class BehaviorTrial : ModSystem
                             ["expected_revision"] = reviewed["revision"].DeepClone(), ["workflow"] = "stinger-continuation",
                             ["event_delivery"] = "script", ["seconds"] = 20 });
                         var after = await Call("get_state", new JsonObject());
+                        var background = new JsonArray();
+                        string running = after["action_tasks"].AsArray()
+                            .FirstOrDefault(a => a["status"]?.ToString() == "running")?["handle"]?.ToString();
+                        if (running != null)
+                            for (int sample = 0; sample < 5; sample++)
+                            {
+                                var observation = await Call("action_query", new JsonObject { ["handle"] = running, ["wait_ms"] = 1000 });
+                                background.Add(observation);
+                                if (observation["status"]?.ToString() != "running") break;
+                            }
+                        after = await Call("get_state", new JsonObject());
                         File.WriteAllText(Path.Combine(Main.SavePath, segment == 0 ? "material-model-execution.json" : "material-model-repair-execution.json"), new JsonObject
-                        { ["before"] = before, ["execution"] = execution, ["after"] = after }.ToJsonString());
+                        { ["before"] = before, ["execution"] = execution, ["background_observations"] = background, ["after"] = after }.ToJsonString());
                         if (segment + 1 < segments)
                         {
                             var feedback = new JsonObject { ["workflow"] = "stinger-continuation",
@@ -971,6 +982,7 @@ public sealed class BehaviorTrial : ModSystem
                                     ["yield_reason"] = execution["value"]?["wake"]?["event"]?["reason"]?.DeepClone() },
                                 ["inventory_before"] = new JsonArray(before["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),
                                 ["inventory_after"] = new JsonArray(after["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),
+                                ["background_action"] = background.LastOrDefault()?.DeepClone(),
                                 ["task_plan"] = after["task_plan"].DeepClone(),
                                 ["review_request"] = "Execution ended but the host has not verified the goal. Read the saved revision, account for actual effects, and repair missing or failed continuation without replaying completed work." };
                             reviewed = await Review(feedback, materials: true, session: modelSession, reportName: "behavior-review-repair");
