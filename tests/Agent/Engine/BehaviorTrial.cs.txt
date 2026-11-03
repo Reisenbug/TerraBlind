@@ -349,11 +349,37 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("legacy run ignored the agent claim");
             if (TreasureGrab.Start(originX + 5, floor - 2, out string grabReason) || grabReason != "control_owned_by_agent")
                 throw new Exception("legacy treasure start ignored the agent claim");
+            if (WofPrep.Start(originX, floor - 2, 1, out string prepReason) || prepReason != "control_owned_by_agent")
+                throw new Exception("legacy boss preparation ignored the agent claim");
             if (StartRun.IsRunning || TreasureGrab.IsRunning || RecedingNav.Active)
                 throw new Exception("denied workflow mutated execution state");
             return true;
         });
         await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claim["id"].DeepClone() });
+        await OnMain(() =>
+        {
+            bool day = Main.dayTime;
+            long ticket = 0;
+            var session = (AgentControlSession)typeof(AgentTools).GetField("ControlSession",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+            try
+            {
+                if (!WofPrep.Start(originX, floor - 2, 1, out string reason)) throw new Exception(reason);
+                var phase = WofPrep.Phase;
+                Main.dayTime = false;
+                if (session.Begin("gather", null, out ticket) != null)
+                    throw new Exception("could not establish gather ownership");
+                WofPrep.Tick();
+                if (WofPrep.Phase != phase || WofPrep.Outcome != "running")
+                    throw new Exception("blocked legacy preparation advanced or discarded its phase");
+                session.End(ticket);
+                WofPrep.Tick();
+                if (WofPrep.Phase == phase && WofPrep.Outcome == "running")
+                    throw new Exception("legacy preparation did not resume after ownership release");
+            }
+            finally { session.End(ticket); WofPrep.Stop(); Main.dayTime = day; }
+            return true;
+        });
         string code = """
             const goal={x:GOAL_X,y:GOAL_Y};
             tool('watch',{events:['nearby_chest','nearby_tile'],tile_types:[12],radius:35});
