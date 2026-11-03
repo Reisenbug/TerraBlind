@@ -143,6 +143,15 @@ static class ScriptTests
             var patched = await AgentScript.Run(reopened.Get("collect")["code"].ToString(), 30,
                 (_, _) => { }, Effect, _ => Task.CompletedTask, default, savedProgress);
             Check(patched["value"]?.ToString() == "patched" && effects == 2, "patched continuation replayed completed effects");
+            Check(library.Save("collect", "const state = await tool('get_state');", 3)["error"]?.ToString() == "program_invalid_syntax",
+                "saved top-level await that the synchronous runner cannot execute");
+            Check(library.Patch("collect", "return 'patched';", "return {;", 3)["error"]?.ToString() == "program_invalid_syntax",
+                "patch accepted syntactically invalid continuation");
+            Check(library.Get("collect")["revision"].GetValue<int>() == 3
+                && library.Get("collect")["code"].ToString().Contains("return 'patched';"),
+                "syntax rejection overwrote the runnable program or consumed a revision");
+            Check(library.Save("parse_only", "throw new Error('saving must not execute me');", 0)["revision"].GetValue<int>() == 1,
+                "save executed code instead of parsing it");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }
             catch (ArgumentException) { escaped = true; }

@@ -50,6 +50,14 @@ public sealed class ScriptLibrary
             if (revision != expectedRevision)
                 return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name,
                     ["expected_revision"] = expectedRevision, ["revision"] = revision };
+            try { Jint.Engine.PrepareScript("(function() {\n" + code + "\n});"); }
+            catch (Jint.ScriptPreparationException failure) when (failure.InnerException is Acornima.ParseErrorException)
+            {
+                var error = (Acornima.ParseErrorException)failure.InnerException;
+                return new JsonObject { ["error"] = "program_invalid_syntax", ["name"] = name, ["revision"] = revision,
+                    ["line"] = Math.Max(1, error.LineNumber - 1), ["column"] = error.Column,
+                    ["detail"] = error.Message, ["hint"] = "使用同步JavaScript函数体和tool()；不支持顶层await。原版本未修改。" };
+            }
             var saved = new JsonObject { ["name"] = name, ["found"] = true, ["revision"] = revision + 1, ["code"] = code };
             Directory.CreateDirectory(directory);
             string path = FilePath(name), temporary = path + ".tmp";
