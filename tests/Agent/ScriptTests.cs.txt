@@ -69,8 +69,12 @@ static class ScriptTests
         var retained = decisionWatch.Take()[0]["reported_evidence"];
         Check(retained["handle"].ToString() == "original" && retained["tick"].GetValue<int>() == 12,
             "decision evidence aliases caller state or returned event");
+        var largeEvidence = new JsonObject { ["result"] = new string('x', 12000) };
+        Check(JsonNode.DeepEquals(decisionWatch.Request("preserve action details", largeEvidence)["reported_evidence"], largeEvidence),
+            "valid tool-sized evidence failed a smaller decision-only limit");
+        decisionWatch.Take();
         var beforeRejected = decisionWatch.Snapshot().ToJsonString();
-        try { decisionWatch.Request("oversized", new JsonObject { ["data"] = new string('x', 8001) }); throw new Exception("oversized evidence accepted"); }
+        try { decisionWatch.Request("oversized", new JsonObject { ["data"] = new string('x', 32001) }); throw new Exception("oversized evidence accepted"); }
         catch (ArgumentException) { }
         Check(decisionWatch.Snapshot().ToJsonString() == beforeRejected, "rejected evidence consumed wake budget or mutated events");
         retreatWatch.Configure(JsonNode.Parse("{\"events\":[\"low_health\",\"suffocating\",\"player_died\"],\"passive_events\":[\"low_health\"]}").AsObject());

@@ -151,8 +151,8 @@ public sealed class AgentWatch
     public JsonObject Request(string reason, JsonObject evidence = null)
     {
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("决策点需要原因。");
-        if (evidence?.ToJsonString(AgentTools.ModelJson).Length > 8000)
-            throw new ArgumentException("决策证据最多8000字符，请保留关键实测字段和句柄。");
+        if (evidence?.ToJsonString(AgentTools.ModelJson).Length > 32000)
+            throw new ArgumentException("决策证据超过工具参数的32000字符上限，请保留关键实测字段和句柄。");
         if (wakeCount >= 6) throw new InvalidOperationException("本指令唤醒预算已用完，请报告阻塞或完成。");
         wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = "decision_point", ["reason"] = reason };
