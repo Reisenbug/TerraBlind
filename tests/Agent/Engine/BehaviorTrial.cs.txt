@@ -589,35 +589,52 @@ public sealed class BehaviorTrial : ModSystem
                 const state=tool('get_state');
                 const x=Math.floor(state.player.pos.x/16), y=Math.floor(state.player.pos.y/16);
                 const before=state.inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                const required=recipe.ingredients.find(i=>i.internal==='JungleSpores').need;
                 tool('script_events',{wait_ms:0});
                 const sourceTile=tool('game_catalog',{kind:'tile',name:'61'}).matches.find(m=>m.type===61).internal;
                 const sources=[];
                 for(const dx of [-120,0,120]) for(const dy of [-120,0,120]) {
-                  const query=tool('find_tiles',{name:sourceTile,n:1,frame_x:144,source_area:{x:x+dx-60,y:y+dy-60,width:120,height:120}});
+                  const query=tool('find_tiles',{name:sourceTile,n:10,frame_x:144,source_area:{x:x+dx-60,y:y+dy-60,width:120,height:120}});
                   if(query.error) throw new Error(JSON.stringify(query));
                   sources.push(...query.tiles);
                 }
-                sources.sort((a,b)=>a.dist-b.dist);
-                if(!sources.length) throw new Error('no verified spore source in searched regions; original progress preserved');
-                const source=step('next-material-source',()=>sources[0]);
-                let result=tool('gather',{targets:[{item_type:331,count:before+1,tile_names:[sourceTile],tile_frame_x:144}],source_area:{x:source.x-1,y:source.y-1,width:3,height:3}});
-                for(let i=0;i<30&&result.handle;i++) {
-                  const events=tool('script_events',{wait_ms:0});
-                  if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger while collecting the next recipe material'});
-                  const current=tool('action_query',{handle:result.handle,wait_ms:1000});
-                  if(current.status==='completed'){result=current;break;}
-                  if(current.status==='paused') tool('action_control',{handle:result.handle,command:'resume'});
-                  else if(current.status!=='running') throw new Error(JSON.stringify(current));
+                let after=before;
+                const collected=[];
+                for(let round=0;round<6&&after<required;round++) {
+                  const live=tool('get_state');
+                  const px=live.player.pos.x/16,py=live.player.pos.y/16;
+                  sources.sort((a,b)=>Math.hypot(a.x-px,a.y-py)-Math.hypot(b.x-px,b.y-py));
+                  if(!sources.length) tool('decision_point',{reason:'Searched material sources exhausted before recipe quantity; retain crafting goal'});
+                  const source=sources.shift();
+                  const sourceBefore=after;
+                  const pending=tool('script_events',{wait_ms:0});
+                  if(pending.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                    tool('decision_point',{reason:'Danger before starting the next material source'});
+                  let result=tool('gather',{targets:[{item_type:331,count:sourceBefore+1,tile_names:[sourceTile],tile_frame_x:144}],source_area:{x:source.x-1,y:source.y-1,width:3,height:3}});
+                  if((result.events??[]).some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                    tool('decision_point',{reason:'Danger at the selected material source'});
+                  for(let i=0;i<30&&result.handle;i++) {
+                    const events=tool('script_events',{wait_ms:0});
+                    if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger while collecting the next recipe material'});
+                    const current=tool('action_query',{handle:result.handle,wait_ms:1000});
+                    if(current.status==='completed'||current.status==='failed'){result=current;break;}
+                    if(current.status==='paused') tool('action_control',{handle:result.handle,command:'resume'});
+                    else if(current.status!=='running') throw new Error(JSON.stringify(current));
+                  }
+                  if(result.handle&&result.status!=='completed'&&result.status!=='failed')
+                    tool('decision_point',{reason:'Material action still pending; inspect and continue its preserved handle rather than declaring the source failed'});
+                  after=tool('get_state').inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                  collected.push(step('material:'+source.x+','+source.y,()=>({source,before:sourceBefore,after,gained:after-sourceBefore})));
+                  if(after<=sourceBefore) tool('decision_point',{reason:'Selected source produced no verified gain; inspect obstruction before retrying'});
                 }
-                const after=tool('get_state').inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
-                return {before,after,gained:after-before,source,result};
+                return {before,after,gained:after-before,required,fulfilled:after>=required,collected};
                 """;
             var progress = await Call("run_script", new JsonObject { ["code"] = materials,
                 ["workflow"] = "material-continuation", ["event_delivery"] = "script" });
             File.WriteAllText(Path.Combine(Main.SavePath, "material-result.json"), progress.ToJsonString());
-            if (progress["value"]?["gained"]?.GetValue<int>() < 1 || progress["value"]?["gained"] == null)
-                throw new Exception("material continuation has no verified spore gain; inspect material-result.json");
-            Console.WriteLine("OPPORTUNITY_MATERIAL_PROGRESS verified_spore_gain=true");
+            if (progress["value"]?["fulfilled"]?.GetValue<bool>() != true)
+                throw new Exception("recipe spore quantity not fulfilled; inspect material-result.json");
+            Console.WriteLine("OPPORTUNITY_MATERIAL_PROGRESS verified_recipe_spores=true");
             if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_STINGERS") == "1")
             {
                 await OnMain(() =>
