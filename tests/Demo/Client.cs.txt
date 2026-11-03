@@ -1325,7 +1325,7 @@ public sealed class Driver : ModSystem
             shortLongestIdle = Math.Max(shortLongestIdle, ++shortIdleRun);
         }
         else shortIdleRun = 0;
-        bool arrivalCheck = shortCase >= 7;
+        bool arrivalCheck = shortCase != 0;
         if ((arrivalCheck || !moved) && shortTick < 1230 && RecedingNav.Active && !player.dead) return;
         shortResults.Add(new JsonObject { ["case"] = shortCase, ["offset"] = offsets[shortCase],
             ["moved"] = shortMoved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
