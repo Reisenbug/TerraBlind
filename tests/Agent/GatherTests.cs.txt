@@ -167,14 +167,33 @@ static class GatherTests
         var p = Main.LocalPlayer;
         var oldShots = Main.projectile; var oldNpcs = Main.npc;
         var oldVelocity = p.velocity; float oldGravity = p.gravity;
+        bool oldManual = Manual.On;
         try
         {
-            p.velocity = default; p.gravity = 0;
+            p.velocity = default; p.gravity = 0; Manual.On = false;
             Main.npc = Array.Empty<NPC>();
             var shot = new Projectile { active = true, hostile = true, damage = 10,
                 Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, -120), velocity = new(0, 5) };
             Main.projectile = new[] { shot };
             Check(FightCoordinator.Evade(p).Direction != 0, "incoming vertical projectile did not trigger lateral evasion");
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            FightCoordinator.Tick(p, true);
+            Check(FightCoordinator.IsIdleDefending && (p.controlLeft || p.controlRight) && !p.controlUseItem,
+                $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");
+            string noDodge = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "hold still");
+            try
+            {
+                FightCoordinator.Tick(p, true);
+                Check(!p.controlLeft && !p.controlRight && !p.controlJump,
+                    "projectile-only defense ignored agent movement veto");
+            }
+            finally { AgentTools.Control.Release(noDodge); }
+            FightCoordinator.Start(20);
+            FightCoordinator.Tick(p, true);
+            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
+                "explicit fight ignored projectiles when no NPC was in acquisition range");
+            FightCoordinator.Stop();
             float wall = p.position.X - 1;
             Collision.SolidTest = (position, width, height) => position.X < wall;
             Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected the blocked side");
@@ -186,8 +205,9 @@ static class GatherTests
         }
         finally
         {
+            FightCoordinator.Stop();
             Main.projectile = oldShots; Main.npc = oldNpcs;
-            p.velocity = oldVelocity; p.gravity = oldGravity; Collision.SolidTest = null;
+            p.velocity = oldVelocity; p.gravity = oldGravity; Manual.On = oldManual; Collision.SolidTest = null;
         }
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
     }

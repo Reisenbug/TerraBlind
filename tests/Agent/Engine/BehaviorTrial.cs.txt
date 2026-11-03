@@ -255,6 +255,44 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PROJECTILE_ONLY_DEFENSE") == "1")
+        {
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                int cx = (int)(p.Center.X / 16), cy = (int)(p.Center.Y / 16);
+                for (int x = cx - 12; x <= cx + 12; x++)
+                    for (int y = cy - 12; y <= cy + 12; y++) Main.tile[x, y].ClearEverything();
+                foreach (var npc in Main.npc) npc.active = false;
+                float oldGravity = p.gravity;
+                p.velocity = Vector2.Zero; p.gravity = 0;
+                int shot = Projectile.NewProjectile(p.GetSource_Misc("projectile-only-defense-test"),
+                    p.Center + new Vector2(0, -120), new Vector2(0, 5), ProjectileID.Stinger, 10, 0);
+                Main.projectile[shot].hostile = true; Main.projectile[shot].friendly = false;
+                var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                string veto = null;
+                try
+                {
+                    FightCoordinator.Start(20);
+                    FightCoordinator.Tick(p);
+                    bool moved = p.controlLeft || p.controlRight;
+                    if (!moved || p.controlUseItem) throw new Exception("native incoming projectile was ignored without an NPC target");
+                    veto = policy.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "test movement veto");
+                    FightCoordinator.Tick(p);
+                    if (p.controlLeft || p.controlRight || p.controlJump)
+                        throw new Exception("native projectile defense overrode movement veto");
+                    Console.WriteLine("PROJECTILE_ONLY_DEFENSE_PASS native_inputs=true no_npc=true veto_respected=true");
+                }
+                finally
+                {
+                    if (veto != null) policy.Release(veto);
+                    FightCoordinator.Stop(); Main.projectile[shot].active = false; p.gravity = oldGravity;
+                }
+                return true;
+            });
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_SOURCE_DATABASE_PROBE") == "1")
         {
             await OnMain(() =>

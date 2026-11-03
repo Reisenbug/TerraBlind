@@ -140,11 +140,6 @@ namespace TerraBlind
                 return;
             }
             NPC target = FindNearest(p, idle);
-            if (target == null) { StopIdleDefense(); ReleaseMovement(p); if (!idle) _framesLeft--; return; }
-            if (idle && !_idleDefense) DiagLog.Write($"[agent_defense] started target={target.whoAmI} hp={p.statLife}");
-            _idleDefense = idle;
-            if (!idle) _framesLeft = TimeoutFrames;
-
             if (AgentPermissions.CanDodge(delegated: true))
             {
                 var evade = idle || _movement == "auto" ? Evade(p, target)
@@ -158,6 +153,17 @@ namespace TerraBlind
                 if (_jumpHold > 0) _jumpHold--;
             }
             else ReleaseMovement(p);
+
+            if (target == null)
+            {
+                p.controlUseItem = false;
+                _idleDefense = idle && _moving;
+                if (!idle) _framesLeft--;
+                return;
+            }
+            if (idle && !_idleDefense) DiagLog.Write($"[agent_defense] started target={target.whoAmI} hp={p.statLife}");
+            _idleDefense = idle;
+            if (!idle) _framesLeft = TimeoutFrames;
 
             int weaponSlot = FindWeaponSlot(p);
             if (weaponSlot < 0) return;
