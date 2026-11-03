@@ -275,6 +275,8 @@ namespace TerraBlind
             int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
 
             var dist = new Dictionary<(int, int), int>();
+            var standCosts = new Dictionary<(int, int), int>();
+            int standCacheHits = 0;
             var closed = new HashSet<(int, int)>();
             var pq = new PriorityQueue<(int x, int y), (int cost, int x, int y)>();
             int Estimate(int x, int y) => stopAtStart ? System.Math.Abs(x - sx) * MoveSide + System.Math.Abs(y - sy) * MoveDown : 0;
@@ -302,7 +304,12 @@ namespace TerraBlind
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // H = 站在 (nx,ny) 还要多少,先问站不站得住。悬空格照发 H 会在空中连成
                     // 一条 H 递减的假路把人吸进死角(腐化区 1341..1343 那次)
-                    int stand = StandPenalty(nx, ny);
+                    if (!standCosts.TryGetValue((nx, ny), out int stand))
+                    {
+                        stand = StandPenalty(nx, ny);
+                        standCosts[(nx, ny)] = stand;
+                    }
+                    else standCacheHits++;
                     if (stand == Impassable) continue;
                     int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
@@ -334,7 +341,7 @@ namespace TerraBlind
             catch { }
             bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
             EventLog.W(Ev.Field, $"goal=({gx},{gy}) {sw.Elapsed.TotalMilliseconds:0}ms cells={dist.Count} {(mainThread ? "MAIN" : "bg")}");
-            DiagLog.Write($"[field-timing] goal=({gx},{gy}) elapsed_ms={sw.Elapsed.TotalMilliseconds:0.###} cells={dist.Count} main={mainThread}");
+            DiagLog.Write($"[field-timing] goal=({gx},{gy}) elapsed_ms={sw.Elapsed.TotalMilliseconds:0.###} cells={dist.Count} stand_checks={standCosts.Count} stand_cache_hits={standCacheHits} main={mainThread}");
             return dist;
         }
 
