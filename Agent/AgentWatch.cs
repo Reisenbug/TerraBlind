@@ -168,7 +168,9 @@ public sealed class AgentWatch
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = Pending()["events"].DeepClone(), ["samples"] = samples, ["last_observation"] = LastObservation,
-        ["history"] = new JsonArray(history.Select(value => (JsonNode)new JsonObject
+        ["history_count"] = history.Count, ["history_truncated"] = history.Count > 12,
+        ["history_detail_request"] = new JsonObject { ["tool"] = "get_state", ["args"] = new JsonObject { ["include_watch_history"] = true } },
+        ["history"] = new JsonArray(history.TakeLast(12).Select(value => (JsonNode)new JsonObject
             { ["id"] = value["id"]?.DeepClone(), ["kind"] = value["kind"]?.DeepClone(), ["key"] = value["key"]?.DeepClone() }).ToArray())
     };
 

@@ -1228,8 +1228,21 @@ static class RuntimeTests
     static async Task TestBoundedState()
     {
         AgentTools.Workflows.Clear();
+        AgentTools.Watches.Reset();
         try
         {
+            AgentTools.Watches.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\"],\"passive_events\":[\"nearby_chest\"]}").AsObject());
+            for (int i = 0; i < 240; i++)
+                AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = i, ["y"] = 2 }) });
+            AgentTools.Watches.Take();
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = 240, ["y"] = 2 }) });
+            var brief = JsonNode.Parse(await Execute(AgentTools.State(default)))["watch"];
+            var full = JsonNode.Parse(await Execute(AgentTools.Execute("get_state", new JsonObject { ["include_watch_history"] = true }, default)))["watch"];
+            Check(brief["history"].AsArray().Count == 12 && brief["history_count"].GetValue<int>() == 241
+                && brief["history_truncated"].GetValue<bool>() && full["history"].AsArray().Count == 241
+                && full["history"][0]["evidence"]["x"].GetValue<int>() == 0
+                && JsonNode.DeepEquals(brief["pending"], full["pending"]) && AgentTools.Watches.HasPending,
+                "bounded watch history lost original evidence, hid pending opportunities or consumed observations");
             int fullSize = 0;
             for (int i = 0; i < 8; i++)
             {
@@ -1250,7 +1263,7 @@ static class RuntimeTests
                 new JsonObject { ["workflow"] = "large-0", ["action"] = "get" }, default)));
             Check(detail["steps"][0]["value"].ToString().Length == 3000, "summary discarded resumable detailed values");
         }
-        finally { AgentTools.Workflows.Clear(); }
+        finally { AgentTools.Workflows.Clear(); AgentTools.Watches.Reset(); }
         Console.WriteLine("PASS: large resumable history stays out of default state while explicit workflow detail remains intact");
     }
 

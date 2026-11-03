@@ -89,7 +89,7 @@ public static partial class AgentTools
         return result;
     }, token);
 
-    public static Task<string> State(CancellationToken token, bool includeTiles = false) => NativeAgent.OnMain(() =>
+    public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false) => NativeAgent.OnMain(() =>
     {
         Plan.Observe(AgentTaskEvidence.Measure);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
@@ -157,7 +157,7 @@ public static partial class AgentTools
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;
-        state["watch"] = Watches.Summary();
+        state["watch"] = includeWatchHistory ? Watches.Snapshot() : Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
         state["boss_control"] = BossStatus();
@@ -411,7 +411,7 @@ public static partial class AgentTools
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
-        if (name == "get_state") return await State(token, Bool(args, "include_tiles"));
+        if (name == "get_state") return await State(token, Bool(args, "include_tiles"), Bool(args, "include_watch_history"));
         if (name == "say")
         {
             await NativeAgent.OnMain(() => { AgentChat.Say(AgentConversation.VisibleText(Text(args, "text"))); return true; }, token);
