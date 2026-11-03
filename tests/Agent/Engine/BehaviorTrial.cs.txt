@@ -904,12 +904,23 @@ public sealed class BehaviorTrial : ModSystem
                               const anchors=state.action_tasks.filter(a=>a.status==='completed')
                                 .map(a=>a.result?.state?.pos??(a.tool==='nav_to'?{x:a.args.x,y:a.args.y}:null))
                                 .filter(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y));
+                              const nearest=state.enemies.slice().sort((a,b)=>Math.hypot(a.pos.x-state.player.pos.x,a.pos.y-state.player.pos.y)
+                                -Math.hypot(b.pos.x-state.player.pos.x,b.pos.y-state.player.pos.y))[0];
+                              if(nearest) {
+                                const nearby=tool('npc_combat_observe',{npc:nearest.who,npc_type:nearest.type});
+                                if(!nearby.error) for(const p of nearby.terrain.stance_probes)
+                                  if(p.body_fits) anchors.push({x:p.support_x,y:p.support_y-1});
+                              }
                               const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
                               anchors.sort((a,b)=>distanceToEnemy(b)-distanceToEnemy(a));
                               let retreat=null;
                               recovery.retreat_candidates=[];
                               for(const anchor of anchors) {
                                 const enemyDistance=distanceToEnemy(anchor);
+                                if(Math.hypot(anchor.x+.5-state.player.pos.x/16-state.player.width/32,
+                                  anchor.y+.5-state.player.pos.y/16-state.player.height/32)>60) {
+                                  recovery.retreat_candidates.push({anchor,rejected:'outside_observation_range'});continue;
+                                }
                                 if(enemyDistance<20){recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'enemy_nearby'});continue;}
                                 const facts=tool('opportunity_assess',anchor);
                                 if(facts.error||!Array.isArray(facts.hazards)) {
