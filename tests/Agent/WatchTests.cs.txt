@@ -97,6 +97,12 @@ static class WatchTests
             "chest budget suppressed actual low health or suffocation");
         watch.Observe(state);
         Check(!watch.HasPending, "unchanged danger flooded the model");
+        state["hp"] = 100; state["suffocating"] = false;
+        watch.Observe(state);
+        Check(!watch.HasPending, "recovery incorrectly emitted danger");
+        state["hp"] = 34; state["suffocating"] = true;
+        watch.Observe(state);
+        Check(watch.Take().Count == 2, "new danger after recovery was hidden within the same action");
         state["actions"][0]["attempt"] = 2;
         watch.Observe(state);
         Check(watch.Take().Count == 2, "resuming into danger permanently suppressed safety events");

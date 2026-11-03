@@ -84,7 +84,11 @@ public sealed class AgentWatch
         else
         {
             if (state["hp"]?.GetValue<int>() < HealthBelow) Emit("low_health", dangerKey, state);
+            else if (state["hp"]?.GetValue<int>() >= HealthBelow)
+                seen.RemoveWhere(key => key.StartsWith("low_health:", StringComparison.Ordinal));
             if (state["suffocating"]?.GetValue<bool>() == true) Emit("suffocating", dangerKey, state);
+            else if (state["suffocating"]?.GetValue<bool>() == false)
+                seen.RemoveWhere(key => key.StartsWith("suffocating:", StringComparison.Ordinal));
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         foreach (var chest in state["chests"]?.AsArray() ?? new JsonArray())
