@@ -1244,6 +1244,8 @@ public sealed class Driver : ModSystem
     }
 
     int shortCase, shortTick;
+    int shortIdleFrames, shortIdleRun, shortLongestIdle;
+    bool shortMoved;
     long shortStarted;
     Vector2 shortOrigin;
     readonly JsonArray shortResults = new();
@@ -1262,6 +1264,8 @@ public sealed class Driver : ModSystem
         }
         if (shortTick++ == 0)
         {
+            shortIdleFrames = shortIdleRun = shortLongestIdle = 0;
+            shortMoved = false;
             RecedingNav.Stop();
             if (shortCase <= 1) MazeWand.InvalidateField();
             foreach (var item in player.armor) item.TurnToAir();
@@ -1299,10 +1303,20 @@ public sealed class Driver : ModSystem
         }
         bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
         bool moved = input && Vector2.DistanceSquared(player.position, shortOrigin) >= 64;
-        if (!moved && shortTick < 1230 && RecedingNav.Active) return;
+        shortMoved |= moved;
+        if (RecedingNav.Active && !input)
+        {
+            shortIdleFrames++;
+            shortLongestIdle = Math.Max(shortLongestIdle, ++shortIdleRun);
+        }
+        else shortIdleRun = 0;
+        bool arrivalCheck = shortCase >= 7;
+        if ((arrivalCheck || !moved) && shortTick < 1230 && RecedingNav.Active && !player.dead) return;
         shortResults.Add(new JsonObject { ["case"] = shortCase, ["offset"] = offsets[shortCase],
-            ["moved"] = moved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
-            ["frames"] = shortTick - 30, ["stop"] = RecedingNav.LastStop });
+            ["moved"] = shortMoved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
+            ["frames"] = shortTick - 30, ["stop"] = RecedingNav.LastStop,
+            ["arrival_check"] = arrivalCheck, ["arrived"] = RecedingNav.LastStop == "done",
+            ["dead"] = player.dead, ["idle_frames"] = shortIdleFrames, ["longest_idle_frames"] = shortLongestIdle });
         RecedingNav.Stop(); shortCase++; shortTick = 0;
     }
 
