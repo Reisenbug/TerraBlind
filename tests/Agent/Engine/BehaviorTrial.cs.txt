@@ -162,9 +162,6 @@ public sealed class BehaviorTrial : ModSystem
             p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
             p.position = new Vector2(originX * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
             p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
-            target = NPC.NewNPC(new EntitySource_Misc("BehaviorTrial"), (int)p.Center.X + (Natural ? 128 : 75),
-                (int)p.Bottom.Y - (Natural ? 80 : 0), Natural ? NPCID.Hornet : NPCID.BlueSlime);
-            if (!Natural) Main.npc[target].life = Main.npc[target].lifeMax = 120;
             return true;
         });
         string code = """
@@ -252,8 +249,23 @@ public sealed class BehaviorTrial : ModSystem
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
         if (review["value"]?["status"]?.ToString() != "yield" || review["value"]?["wake"] == null)
             throw new Exception("review did not yield: " + review.ToJsonString());
-        if (Environment.GetEnvironmentVariable("TB_BEHAVIOR_REVIEW") == "1") saved = await Review(review);
+        string replay = Environment.GetEnvironmentVariable("TB_BEHAVIOR_REPLAY");
+        if (!string.IsNullOrEmpty(replay))
+        {
+            var edited = JsonNode.Parse(File.ReadAllText(replay));
+            Console.WriteLine("BEHAVIOR_REPLAY source_sha256=" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(edited["code"].ToString()))));
+            saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = edited["code"].DeepClone() });
+        }
+        else if (Environment.GetEnvironmentVariable("TB_BEHAVIOR_REVIEW") == "1") saved = await Review(review);
         else saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = code });
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            target = NPC.NewNPC(new EntitySource_Misc("BehaviorTrial"), (int)p.Center.X + (Natural ? 128 : 75),
+                (int)p.Bottom.Y - (Natural ? 80 : 0), Natural ? NPCID.Hornet : NPCID.BlueSlime);
+            if (!Natural) Main.npc[target].life = Main.npc[target].lifeMax = 120;
+            return true;
+        });
         var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
         if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
