@@ -283,7 +283,8 @@ public sealed class BehaviorTrial : ModSystem
                         if (!tile.HasTile || tile.TileType != TileID.JunglePlants) continue;
                         var map = Terraria.Map.MapHelper.CreateMapTile(x, y, 255);
                         plants.Add(new JsonObject { ["x"] = x, ["y"] = y, ["frame_x"] = tile.TileFrameX,
-                            ["map_name"] = Lang.GetMapObjectName(map.Type) });
+                            ["map_name"] = Lang.GetMapObjectName(map.Type),
+                            ["spelunkable"] = Main.IsTileSpelunkable(x, y) });
                     }
                 File.WriteAllText(Path.Combine(Main.SavePath, "source-database-probe.json"), new JsonObject
                 { ["npc_sources"] = sources, ["npc_scan_ms"] = elapsed, ["plants"] = plants }.ToJsonString());
