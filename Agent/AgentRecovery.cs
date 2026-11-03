@@ -7,6 +7,7 @@ namespace TerraBlind;
 public sealed class AgentRecovery
 {
     readonly Dictionary<string, int> attempts = new();
+    readonly Dictionary<string, int> gatherBest = new();
     JsonObject latest;
     int revision, offered, rounds;
     public int Revision => revision;
@@ -28,6 +29,19 @@ public sealed class AgentRecovery
             return;
         }
         string key = tool + ":" + args.ToJsonString();
+        if (tool == "gather" && result["targets"] is JsonArray targets)
+        {
+            bool progressed = false;
+            foreach (var target in targets)
+            {
+                string itemKey = key + ":" + target["item_type"];
+                int actual = Math.Min(target["actual"].GetValue<int>(), target["wanted"].GetValue<int>());
+                bool known = gatherBest.TryGetValue(itemKey, out int bestActual);
+                progressed |= known && actual > bestActual;
+                gatherBest[itemKey] = known ? Math.Max(bestActual, actual) : actual;
+            }
+            if (progressed) { attempts[key] = 0; rounds = 0; }
+        }
         int count = attempts.GetValueOrDefault(key) + 1;
         attempts[key] = count;
         var evidence = new JsonObject();
@@ -45,5 +59,5 @@ public sealed class AgentRecovery
 
     public JsonObject Snapshot() => new() { ["latest"] = latest?.DeepClone(), ["revision"] = revision,
         ["repair_rounds"] = rounds, ["exhausted"] = Exhausted };
-    public void Reset() { attempts.Clear(); latest = null; revision = offered = rounds = 0; }
+    public void Reset() { attempts.Clear(); gatherBest.Clear(); latest = null; revision = offered = rounds = 0; }
 }

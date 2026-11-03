@@ -12,6 +12,27 @@ static class ActionTests
 
     public static async Task Run()
     {
+        var recovery = new AgentRecovery();
+        var gatherArgs = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":9}]}").AsObject();
+        void RecordStock(int count) => recovery.Record("gather", gatherArgs, new JsonObject
+        {
+            ["ok"] = false, ["outcome"] = "source_unavailable",
+            ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 209, ["wanted"] = 9, ["actual"] = count, ["met"] = false })
+        }.ToJsonString());
+        for (int count = 1; count <= 4; count++)
+        {
+            RecordStock(count);
+            Check(!recovery.Denied("gather", gatherArgs) && recovery.Offer(),
+                "verified material progress exhausted recovery as unchanged failures");
+        }
+        Check(recovery.Snapshot()["latest"]["evidence"]["outcome"].ToString() == "source_unavailable",
+            "partial material progress erased the remaining failure");
+        RecordStock(3); RecordStock(4);
+        Check(recovery.Denied("gather", gatherArgs), "dropping and reacquiring stock reset the no-progress guard");
+        recovery.Reset(); RecordStock(1); RecordStock(1); RecordStock(1);
+        Check(recovery.Denied("gather", gatherArgs), "unchanged stock bypassed the no-progress guard");
+        recovery.Reset(); RecordStock(9); RecordStock(10); RecordStock(11);
+        Check(recovery.Denied("gather", gatherArgs), "surplus of an already fulfilled target counted as remaining-goal progress");
         await InterruptedChest();
         int stock = 0, attempts = 0, stops = 0, hp = 80;
         var collecting = Signal(); var cleaning = Signal(); var release = Signal();
