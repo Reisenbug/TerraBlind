@@ -646,6 +646,22 @@ public static partial class AgentTools
                 result = new JsonObject { ["error"] = "polling_disabled",
                     ["detail"] = "End this turn. Jev continues combat; code waits for player instructions or a bounded recovery request." };
                 break;
+            case "npc_combat_observe":
+                result = await NativeAgent.OnMain(() =>
+                {
+                    int who = Int(args, "npc", -1), expected = Int(args, "npc_type", -1);
+                    if (who < 0 || who >= Main.maxNPCs || !Main.npc[who].active || Main.npc[who].type != expected
+                        || Main.npc[who].friendly || Main.npc[who].townNPC)
+                        return new JsonObject { ["error"] = "target_changed" };
+                    var npc = Main.npc[who]; var player = Main.LocalPlayer;
+                    if (Microsoft.Xna.Framework.Vector2.Distance(player.Center, npc.Center) > 1280)
+                        return new JsonObject { ["error"] = "target_out_of_observation_range" };
+                    return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
+                        ["target_pos"] = new JsonObject { ["x"] = npc.Center.X, ["y"] = npc.Center.Y },
+                        ["terrain"] = PvpTerrain.Observe(player, npc.Center),
+                        ["limitations"] = "只读瞬时快照；NPC槽位可能复用。站位仅检查支撑和身体空间，未验证路径、落差、液体、陷阱或弹幕。选择后需检查危险，移动后刷新射界。" };
+                }, token);
+                break;
             case "combat_update":
                 result = await NativeAgent.OnMain(() => PvpDuel.UpdateDirective(args), token);
                 break;

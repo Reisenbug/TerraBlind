@@ -94,6 +94,9 @@ public static class PvpTerrain
     }
 
     public static JsonObject Observe(Player self, Player target, bool detailed = false)
+        => Observe(self, target.Center, detailed);
+
+    internal static JsonObject Observe(Player self, Vector2 targetCenter, bool detailed = false)
     {
         var probes = new JsonArray();
         foreach (int dx in new[] { -12, -6, 0, 6, 12 })
@@ -108,16 +111,16 @@ public static class PvpTerrain
                 Vector2 topLeft = center - new Vector2(self.width / 2f, self.height / 2f);
                 if (!Collision.SolidCollision(topLeft, self.width, self.height))
                     probes.Add(new JsonObject { ["x"] = center.X, ["y"] = center.Y, ["support_x"] = x, ["support_y"] = y,
-                        ["body_fits"] = true, ["shot_line"] = Trace(center, target.Center),
+                        ["body_fits"] = true, ["shot_line"] = Trace(center, targetCenter),
                         ["reachability"] = "unknown_not_a_computed_path" });
                 break;
             }
         }
         var result = new JsonObject { ["captured_tick"] = Main.GameUpdateCount,
-            ["direct_line"] = Trace(self.Center, target.Center), ["stance_probes"] = probes,
+            ["direct_line"] = Trace(self.Center, targetCenter), ["stance_probes"] = probes,
             ["warning"] = "A clear line is not a valid curved projectile trajectory or proof of reachability." };
         if (detailed)
-            result["tile_windows"] = new JsonArray(Window(self.Center, 32, 20), Window(target.Center, 16, 12));
+            result["tile_windows"] = new JsonArray(Window(self.Center, 32, 20), Window(targetCenter, 16, 12));
         return result;
     }
 

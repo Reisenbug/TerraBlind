@@ -62,6 +62,14 @@ static class RuntimeTests
                     && blocked["hp_before"].GetValue<int>() == blocked["hp_after"].GetValue<int>()
                     && blocked["target_x"] != null && !FightCoordinator.IsActive,
                     "obstructed material combat failed to return measured evidence and release attack");
+                var observed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
+                    new JsonObject { ["npc"] = 0, ["npc_type"] = 42 }, default)));
+                Check(observed["npc_type"].GetValue<int>() == 42 && observed["hp"].GetValue<int>() == Game.npc[0].life
+                    && !observed["terrain"]["direct_line"]["clear"].GetValue<bool>() && !FightCoordinator.IsActive,
+                    "NPC observation changed combat or omitted current blocked line");
+                var changed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
+                    new JsonObject { ["npc"] = 0, ["npc_type"] = 43 }, default)));
+                Check(changed["error"]?.ToString() == "target_changed", "NPC observation silently substituted a different target type");
             }
             finally { Terraria.Collision.Clear = clear; }
         }
