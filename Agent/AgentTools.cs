@@ -142,6 +142,7 @@ public static partial class AgentTools
         state["action_tasks"] = Actions.Summary();
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
+        state["idle_defense_active"] = FightCoordinator.IsIdleDefending;
         state["watch"] = Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
@@ -287,8 +288,12 @@ public static partial class AgentTools
         {
             if (action)
             {
-                var denied = await NativeAgent.OnMain(() => ControlSession.Begin(name,
-                    args["control_claim"]?.ToString(), out controlTicket, AgentControlSession.RequiredChannels(name, args)), token);
+                var denied = await NativeAgent.OnMain(() =>
+                {
+                    FightCoordinator.StopIdleDefense();
+                    return ControlSession.Begin(name, args["control_claim"]?.ToString(), out controlTicket,
+                        AgentControlSession.RequiredChannels(name, args));
+                }, token);
                 if (denied != null) return denied.ToJsonString();
             }
             string output = await ExecuteCore(name, args, token);

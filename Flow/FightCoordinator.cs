@@ -17,6 +17,7 @@ namespace TerraBlind
         private static bool _moving;
         private static int _jumpHold;
         private static string _movement = "auto";
+        private static bool _idleDefense;
 
         private static void ReleaseMovement(Player p)
         {
@@ -90,10 +91,12 @@ namespace TerraBlind
         }
 
         public static bool IsActive => _active && _framesLeft > 0;
+        public static bool IsIdleDefending => _idleDefense;
 
         public static void Start(float maxDistTiles, int[] types = null, string movement = "auto")
         {
             if (movement is not ("auto" or "left" or "right")) throw new ArgumentException("movement需要auto/left/right。");
+            StopIdleDefense();
             _movement = movement;
             _maxDistTiles = maxDistTiles;
             _framesLeft = TimeoutFrames;
@@ -103,6 +106,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            StopIdleDefense();
             ReleaseMovement(Main.LocalPlayer);
             _active = false;
             _framesLeft = 0;
@@ -110,22 +114,40 @@ namespace TerraBlind
             _movement = "auto";
         }
 
-        public static void Tick(Player p)
+        internal static void StopIdleDefense()
+        {
+            if (!_idleDefense) return;
+            ReleaseMovement(Main.LocalPlayer);
+            Main.LocalPlayer.controlUseItem = false;
+            _idleDefense = false;
+            DiagLog.Write("[agent_defense] released");
+        }
+
+        public static void Tick(Player p) => Tick(p, NativeAgent.Processing);
+
+        internal static void Tick(Player p, bool processing)
         {
             if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
-            if (!_active || _framesLeft <= 0)
+            bool idle = !IsActive;
+            if (idle && (!processing || !Config.I.AgentEnabled || !AgentNetwork.CanAutomate || Manual.On
+                || p.dead || AgentTools.ControlSession.Active || AgentTools.Actions.HasActive
+                || AgentTools.ContactEscapeActive || PvpDuel.Active || PlayerCombat.Active
+                || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All)))
             {
+                StopIdleDefense();
                 ReleaseMovement(p);
                 _active = false;
                 return;
             }
-            NPC target = FindNearest(p);
-            if (target == null) { ReleaseMovement(p); _framesLeft--; return; }
-            _framesLeft = TimeoutFrames;
+            NPC target = FindNearest(p, idle);
+            if (target == null) { StopIdleDefense(); ReleaseMovement(p); if (!idle) _framesLeft--; return; }
+            if (idle && !_idleDefense) DiagLog.Write($"[agent_defense] started target={target.whoAmI} hp={p.statLife}");
+            _idleDefense = idle;
+            if (!idle) _framesLeft = TimeoutFrames;
 
             if (AgentPermissions.CanDodge(delegated: true))
             {
-                var evade = _movement == "auto" ? Evade(p, target)
+                var evade = idle || _movement == "auto" ? Evade(p, target)
                     : (Direction: _movement == "left" ? -1 : 1, Jump: false);
                 if (evade.Jump) _jumpHold = 12;
                 if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
@@ -145,21 +167,22 @@ namespace TerraBlind
             Cursor.AimPx(ncx, ncy);
 
             p.selectedItem = weaponSlot;
+            if (idle) p.delayUseItem = p.mouseInterface = false;
             p.controlUseItem = !NeedsClearLine(p.HeldItem) || Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
         }
 
-        private static NPC FindNearest(Player p)
+        private static NPC FindNearest(Player p, bool idle = false)
         {
             float pcx = p.position.X + p.width / 2f;
             float pcy = p.position.Y + p.height / 2f;
-            float maxDist = _maxDistTiles * 16f;
+            float maxDist = (idle ? 20f : _maxDistTiles) * 16f;
             NPC best = null;
             float bestDist = float.MaxValue;
             for (int i = 0; i < Main.maxNPCs; i++)
             {
                 NPC npc = Main.npc[i];
                 if (npc == null || !npc.active) continue;
-                if (_types != null && !_types.Contains(npc.type)) continue;
+                if (idle ? npc.damage <= 0 : _types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
                 float ncx = npc.position.X + npc.width / 2f;

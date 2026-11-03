@@ -39,6 +39,8 @@ public class NativeAgent : ModSystem
         return messages;
     }
     public static string Status { get; private set; } = "idle";
+    internal static bool Processing => _instance?._running?.IsCompleted == false
+        && _instance._cancel?.IsCancellationRequested == false && _instance._answer == null;
 
     internal static JsonArray ObserveTiles(Player player)
     {

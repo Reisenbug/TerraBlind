@@ -85,6 +85,7 @@ static class GatherTests
         Check(world.Actions.Count == 1 && world.Stops == 0, "cancelled gather ran follow-up actions or performed unowned late cleanup");
         Console.WriteLine("PASS: long gathering has no implicit deadline; explicit cancellation propagates without follow-up actions or stale cleanup");
         FightFiltering();
+        IdleDefense();
         Evasion();
         FiringLane();
     }
@@ -153,6 +154,53 @@ static class GatherTests
             p.velocity = oldVelocity; p.gravity = oldGravity; Collision.SolidTest = null;
         }
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
+    }
+
+    static void IdleDefense()
+    {
+        var p = Main.LocalPlayer;
+        var oldWeapon = p.inventory[0]; var oldNpcs = Main.npc;
+        bool oldDead = p.dead, oldManual = Manual.On;
+        try
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset(); p.dead = false; Manual.On = false;
+            p.inventory[0] = new Item { stack = 1, damage = 20 };
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = new NPC { type = 42, active = true, damage = 20, position = new(p.position.X + 80, p.position.Y) };
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, false);
+            Check(!p.controlUseItem, "idle agent attacked without an active task");
+            p.delayUseItem = p.mouseInterface = true;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem && !FightCoordinator.IsActive, "thinking defense failed or became a managed fight");
+            Check(!p.delayUseItem && !p.mouseInterface, "UI suppression blocked thinking defense");
+            AgentPermissions.Attack = false;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem, "attack denial retained thinking defense");
+            AgentPermissions.Attack = true;
+            FightCoordinator.Tick(p, true);
+            FightCoordinator.StopIdleDefense();
+            Check(!p.controlUseItem, "handoff retained defense item input");
+            var denied = AgentTools.ControlSession.Begin("nav_to", null, out long ticket);
+            Check(denied == null, "idle defense reserved the action slot");
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem, "thinking defense overrode navigation owner");
+            AgentTools.ControlSession.End(ticket);
+            string claim = AgentTools.Control.Claim(ControlChannels.All, ControlLifetime.Task, null, "test ownership");
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem, "thinking defense overrode agent claim");
+            AgentTools.Control.Release(claim);
+            FightCoordinator.Tick(p, true);
+            FightCoordinator.Tick(p, false);
+            Check(!p.controlUseItem && !p.controlLeft && !p.controlRight, "task completion retained defense inputs");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset();
+            Main.npc = oldNpcs; p.inventory[0] = oldWeapon; p.dead = oldDead; Manual.On = oldManual;
+        }
+        Console.WriteLine("PASS: thinking defense yields to task end, action ownership, attack denial and control claims without reserving a task");
     }
 
     static void FightFiltering()

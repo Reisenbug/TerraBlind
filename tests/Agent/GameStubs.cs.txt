@@ -43,6 +43,7 @@ namespace Terraria
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
+        public bool delayUseItem, mouseInterface;
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;
@@ -66,6 +67,7 @@ namespace Terraria
     }
     public class NPC
     {
+        public int whoAmI;
         public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
         public bool active, friendly, townNPC, boss;
         public Microsoft.Xna.Framework.Vector2 velocity;
