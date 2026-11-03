@@ -312,6 +312,14 @@ static class ScriptTests
             && !maskedFailure["failure"]["validation_failure"]["evidence"]["executed"].GetValue<bool>(),
             "root failure preservation lost the subsequent invalid call evidence");
         var progress = new ScriptProgress();
+        var missingSources = await AgentScript.Run("tool('gather');", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("{\"ok\":false,\"outcome\":\"source_unavailable\",\"source_rules\":[{\"item_type\":331,\"drops_only\":true}]}"),
+            _ => Task.CompletedTask, default, progress);
+        Check(missingSources["error"]?.ToString() == "tool_failed"
+            && missingSources["failure"]["evidence"]["source_rules"][0]["drops_only"].GetValue<bool>()
+            && progress.Summary()["last_execution"]["failure"]["evidence"]["source_rules"] != null,
+            "script handoff lost the distinction between unconfigured sources and absent resources");
+        progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;
         Task<string> SegmentTool(string name, JsonObject args, CancellationToken token)

@@ -50,6 +50,7 @@ public sealed class GameGather : IGatherWorld
                 }
             }
             return new JsonObject { ["counts"] = counts, ["candidates"] = candidates,
+                ["source_rules"] = Gather.DescribeSources(_targets),
                 ["error"] = p.dead ? "interrupted_by_death" : null };
         }, token);
         if (scene["error"] != null) return scene;

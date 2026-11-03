@@ -43,6 +43,18 @@ static class GatherTests
         world = new World { Empty = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(result["outcome"].ToString() == "source_unavailable" && world.Actions.Count == 0, "missing sources appeared successful");
+        Check(!result["source_rules"][0]["drops_only"].GetValue<bool>()
+            && result["source_rules"][0]["tile_names"][0].ToString() == "test tile"
+            && result["source_rules"][1]["npc_types"][0].GetValue<int>() == 2,
+            "source absence lost the actual configured search rules");
+        var dropsOnly = new[] { new GatherTarget(10, 1, Array.Empty<string>(), Array.Empty<int>()) };
+        result = await Gather.Run(dropsOnly, 5, world, default);
+        Check(result["source_rules"][0]["drops_only"].GetValue<bool>()
+            && result["source_rules"][0]["detail"].ToString().Contains("tile_names") && world.Actions.Count == 0,
+            "drop-only search implied that tile or NPC sources had been searched");
+        result = await Gather.Run(dropsOnly, 5, new World { Drop = true }, default);
+        Check(result["ok"].GetValue<bool>() && result["source_rules"][0]["drops_only"].GetValue<bool>(),
+            "source diagnostics rejected legitimate collection of existing drops");
         Console.WriteLine("PASS: missing drops and absent sources retain evidence without false collection success or unbounded retries");
 
         world = new World { Unsafe = true };

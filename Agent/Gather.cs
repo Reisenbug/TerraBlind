@@ -36,6 +36,15 @@ public interface IGatherWorld
 
 public static class Gather
 {
+    public static JsonArray DescribeSources(GatherTarget[] targets) => new(targets.Select(t => (JsonNode)new JsonObject
+    {
+        ["item_type"] = t.ItemType, ["tile_names"] = new JsonArray(t.Tiles.Select(v => (JsonNode)JsonValue.Create(v)).ToArray()),
+        ["npc_types"] = new JsonArray(t.Npcs.Select(v => (JsonNode)JsonValue.Create(v)).ToArray()),
+        ["drops_only"] = t.Tiles.Length == 0 && t.Npcs.Length == 0,
+        ["detail"] = t.Tiles.Length == 0 && t.Npcs.Length == 0
+            ? "仅搜索已有掉落物；未配置方块或敌怪来源，不会从物品编号推断来源。要主动获取，先查证并提供tile_names或npc_types。" : null
+    }).ToArray());
+
     public static void Validate(GatherTarget[] targets, GatherArea area)
     {
         if (targets.Length is < 1 or > 8 || targets.Select(t => t.ItemType).Distinct().Count() != targets.Length
@@ -101,6 +110,7 @@ public static class Gather
         scene = await world.Observe(token);
         bool enough = targets.All(t => Count(t) >= t.Count);
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
+            ["source_rules"] = DescribeSources(targets),
             ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,

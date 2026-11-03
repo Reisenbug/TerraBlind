@@ -175,7 +175,7 @@ public static class AgentScript
                         if (toolResult["error"] != null || toolResult["ok"]?.ToString() == "false")
                         {
                             var facts = new JsonObject();
-                            foreach (string field in new[] { "error", "detail", "outcome", "active_handle", "name_candidates", "requested_name", "targets" })
+                            foreach (string field in new[] { "error", "detail", "outcome", "active_handle", "name_candidates", "requested_name", "targets", "source_rules" })
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
                         }
