@@ -605,6 +605,8 @@ public sealed class BehaviorTrial : ModSystem
         });
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
+            int modelTokenBudget = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TOKEN_BUDGET") is string configuredBudget
+                ? int.Parse(configuredBudget) : 200000;
             var before = await Call("get_state", new JsonObject());
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
             await OnMain(() =>
@@ -614,7 +616,7 @@ public sealed class BehaviorTrial : ModSystem
                 stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                 collectingStingers = true;
-                NativeAgent.Submit($"/goal --tokens 200000 前往丛林目标格({goalX},{goalY})。途中观察附近箱子、生命水晶、材料和工作站：拿容易取得且值得的，跳过不值得的并记录实际依据，不能见宝必拿。至少新增收集1颗生命水晶，先别使用；开箱核实实际所得，插入行动后继续原任务。之后收集制作荆棘旋刃所需材料，制作一把荆棘旋刃。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。");
+                NativeAgent.Submit($"/goal --tokens {modelTokenBudget} 前往丛林目标格({goalX},{goalY})。途中观察附近箱子、生命水晶、材料和工作站：拿容易取得且值得的，跳过不值得的并记录实际依据，不能见宝必拿。至少新增收集1颗生命水晶，先别使用；开箱核实实际所得，插入行动后继续原任务。之后收集制作荆棘旋刃所需材料，制作一把荆棘旋刃。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。");
                 return true;
             });
             var samples = new JsonArray();
@@ -640,7 +642,8 @@ public sealed class BehaviorTrial : ModSystem
                 after = await Call("get_state", new JsonObject());
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-agent-live.json"), new JsonObject
                 { ["before"] = before, ["samples"] = samples, ["after"] = after,
-                    ["navigation_stub"] = materialNavigationStub, ["spawned_hornets"] = hornetsSpawned }.ToJsonString());
+                    ["navigation_stub"] = materialNavigationStub, ["spawned_hornets"] = hornetsSpawned,
+                    ["model_token_budget"] = modelTokenBudget }.ToJsonString());
                 await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
             }
             throw new Exception("bounded production agent trial ended; inspect actual gains, choices and preserved handles before acceptance");
