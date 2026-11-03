@@ -633,7 +633,7 @@ public sealed class BehaviorTrial : ModSystem
                           if((events??[]).some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
                             tool('decision_point',{reason:'Health or terrain danger during material combat; preserve collected resources and review before resuming'});
                         }
-                        const before=count();
+                        const before=step('stinger-baseline',()=>count());
                         tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
@@ -664,7 +664,7 @@ public sealed class BehaviorTrial : ModSystem
                               &&a.args.targets.some(t=>t.item_type===209));
                             if(!action||state.player.hp<=60||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
-                            const before=state.inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);
+                            const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review',()=>({handle:action.handle,hp:state.player.hp,
                               reason:'Accept limited damage while above 60 health; retain the same material target and throwing weapon'}));
                             tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:60});
