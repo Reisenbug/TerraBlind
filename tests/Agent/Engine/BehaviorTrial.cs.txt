@@ -31,6 +31,8 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
+    int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1" ? 9600 : 7200;
+    const int ReviewExecutionFrames = (45 + 20 + 20 + 5) * 60;
     async Task<JsonObject> Review(JsonObject wake, bool materials = false, CodexAgent session = null, string reportName = "behavior-review")
     {
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
@@ -184,7 +186,7 @@ public sealed class BehaviorTrial : ModSystem
                 + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
                 + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
         }
-        if (trial?.IsCompleted == true || frames > 7200)
+        if (trial?.IsCompleted == true || frames > FrameLimit)
         {
             finished = true;
             bool ok = trial?.IsCompletedSuccessfully == true;
@@ -955,6 +957,8 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1")
                 {
+                    if (FrameLimit - frames < ReviewExecutionFrames)
+                        throw new Exception("insufficient scene budget for model review and execution; model not called");
                     using var modelSession = new CodexAgent();
                     JsonObject defense = null;
                     if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_GUARD") == "1")
@@ -1013,6 +1017,11 @@ public sealed class BehaviorTrial : ModSystem
                         }
                         if (segment + 1 < segments)
                         {
+                            if (FrameLimit - frames < ReviewExecutionFrames)
+                            {
+                                Console.WriteLine("MATERIAL_REPAIR_SKIPPED insufficient_review_and_execution_budget=true prior_execution_saved=true");
+                                break;
+                            }
                             var feedback = new JsonObject { ["workflow"] = "stinger-continuation",
                                 ["program_revision"] = reviewed["revision"].DeepClone(),
                                 ["execution"] = new JsonObject { ["ok"] = execution["ok"]?.DeepClone(), ["error"] = execution["error"]?.DeepClone(),
