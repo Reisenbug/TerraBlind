@@ -46,7 +46,7 @@ public static class AgentScript
     public static JsonObject DescribeApi(JsonArray tools, JsonObject args)
     {
         var names = args["names"]?.AsArray().Select(n => n.GetValue<string>()).Distinct().ToArray();
-        if (names == null || names.Length is < 1 or > 8) throw new ArgumentException("names需要1..8个工具名。");
+        if (names == null || names.Length == 0) throw new ArgumentException("names需要至少一个工具名。");
         var functions = tools.Select(t => t["function"]).ToArray();
         var missing = names.Where(n => !functions.Any(f => f["name"].ToString() == n)).ToArray();
         if (missing.Length > 0) return new JsonObject { ["error"] = "unknown_game_api",

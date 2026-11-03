@@ -55,6 +55,19 @@ static class RuntimeTests
             Check(Game.LocalPlayer.statLife == healingHpBefore, "reading healing candidates applied healing");
         }
         finally { Game.LocalPlayer.inventory[20] = previousHealingItem; }
+        var previousSnapshot = HttpServerSystem.LatestSnapshot;
+        try
+        {
+            var snapshot = JsonNode.Parse("{\"tiles\":{\"origin\":{\"x\":10,\"y\":20},\"w\":2,\"h\":1,\"rows\":[[[59,3,2]]]},\"objects\":[{\"type\":\"chest\",\"x\":11,\"y\":20}]}").AsObject();
+            HttpServerSystem.LatestSnapshot = snapshot;
+            var compact = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(compact["tiles"]["rows"] == null && compact["tiles"]["deferred"].GetValue<bool>()
+                && compact["terrain"]["rows"] != null && compact["objects"].AsArray().Count == 1,
+                "compact state lost near terrain or opportunities, or presented unreported map as empty");
+            var full = JsonNode.Parse(await Execute(AgentTools.Execute("get_state", new JsonObject { ["include_tiles"] = true }, default)));
+            Check(JsonNode.DeepEquals(full["tiles"], snapshot["tiles"]), "explicit map request changed original tile encoding");
+        }
+        finally { HttpServerSystem.LatestSnapshot = previousSnapshot; }
         var previousGatherNpc = Game.npc[0];
         try
         {

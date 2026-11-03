@@ -269,7 +269,7 @@ namespace TerraBlind
         public static void Start(int x, int y) => Active = true;
         public static void Stop() => Active = false;
     }
-    public static class StateSerializer { public static string ToJson(object snapshot) => "{}"; }
+    public static class StateSerializer { public static string ToJson(object snapshot) => snapshot is JsonObject json ? json.ToJsonString() : "{}"; }
     public static class ActExecutor
     {
         public static int OriginCx(Terraria.Player player) => 12;

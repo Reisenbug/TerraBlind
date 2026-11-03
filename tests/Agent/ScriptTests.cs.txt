@@ -201,6 +201,9 @@ static class ScriptTests
         var unknownApi = AgentScript.DescribeApi(definitions, JsonNode.Parse("{\"names\":[\"action_tasks\"]}").AsObject());
         Check(unknownApi["error"].ToString() == "unknown_game_api" && unknownApi["available"].AsArray().Any(n => n.ToString() == "action_query"),
             "unknown API lookup invented an implementation or omitted actual names");
+        var batchApi = AgentScript.DescribeApi(definitions, new JsonObject { ["names"] = new JsonArray(definitions.Take(14)
+            .Select(t => t["function"]["name"].DeepClone()).ToArray()) });
+        Check(batchApi["tools"].AsArray().Count == 14, "valid multi-step API discovery forced extra model turns");
         Console.WriteLine("PASS: compact API index retrieves exact full schemas on demand without mutating registration");
         Console.WriteLine($"API_CONTEXT instructions_chars={instructions.Length} full_schema_chars={definitions.ToJsonString(AgentTools.ModelJson).Length}");
         var activityProgress = new ScriptProgress();

@@ -12,7 +12,7 @@ namespace TerraBlind;
 
 public static partial class AgentTools
 {
-    internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new()
+    internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new(System.Text.Json.JsonSerializerOptions.Default)
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
@@ -89,10 +89,17 @@ public static partial class AgentTools
         return result;
     }, token);
 
-    public static Task<string> State(CancellationToken token) => NativeAgent.OnMain(() =>
+    public static Task<string> State(CancellationToken token, bool includeTiles = false) => NativeAgent.OnMain(() =>
     {
         Plan.Observe(AgentTaskEvidence.Measure);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
+        if (!includeTiles && state["tiles"] is JsonObject tiles)
+        {
+            tiles.Remove("rows");
+            tiles["deferred"] = true;
+            tiles["detail_request"] = new JsonObject { ["tool"] = "get_state", ["args"] = new JsonObject { ["include_tiles"] = true } };
+        }
+        state["terrain"] = TerrainInspection.Read(6);
         if (state["player"] is JsonObject observedPlayer)
         {
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
@@ -397,7 +404,7 @@ public static partial class AgentTools
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
-        if (name == "get_state") return await State(token);
+        if (name == "get_state") return await State(token, Bool(args, "include_tiles"));
         if (name == "say")
         {
             await NativeAgent.OnMain(() => { AgentChat.Say(AgentConversation.VisibleText(Text(args, "text"))); return true; }, token);
