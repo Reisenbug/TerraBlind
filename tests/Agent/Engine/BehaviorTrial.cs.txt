@@ -877,7 +877,21 @@ public sealed class BehaviorTrial : ModSystem
                         const events=tool('script_events',{wait_ms:0}).events;
                         if(events.some(e=>['low_health','player_died','suffocating'].includes(e.kind)))
                           tool('decision_point',{reason:'Unsafe to continue source sampling',evidence:{handle,events}});
-                        const assessment=tool('opportunity_assess',{x:c.x,y:c.y});
+                        let assessment=tool('opportunity_assess',{x:c.x,y:c.y});
+                        let approachHandle=null;
+                        if(assessment.error==='target_out_of_observation_range'&&positive.has(key)) {
+                          const approach=tool('action_start',{tool:'nav_to',args:{x:c.x,y:c.y}});
+                          approachHandle=approach.handle;
+                          if(!approachHandle) throw new Error(JSON.stringify(approach));
+                          let arrival;
+                          do {
+                            arrival=tool('action_query',{handle:approachHandle,wait_ms:1000});
+                            if(arrival.status==='paused') tool('decision_point',{reason:'Approach interrupted before source inspection',evidence:{handle,approachHandle,candidate:c,arrival}});
+                          } while(arrival.status==='running');
+                          if(arrival.status!=='completed') tool('decision_point',{reason:'Approach failed; retain source and original gather',evidence:{handle,approachHandle,candidate:c,arrival}});
+                          assessment=tool('opportunity_assess',{x:c.x,y:c.y});
+                        }
+                        if(!assessment.ok) tool('decision_point',{reason:'Source access remains unknown',evidence:{handle,approachHandle,candidate:c,assessment}});
                         const relevant=(assessment.hazards??[]).filter(h=>h.on_direct_corridor||Math.abs(h.x-c.x)<=1&&Math.abs(h.y-c.y)<=2);
                         if(!assessment.ok||relevant.length)
                           return {key,x:c.x,y:c.y,decision:'skip',reason:assessment.error??'hazard intersects approach or target neighborhood',hazards:relevant};
@@ -896,7 +910,7 @@ public sealed class BehaviorTrial : ModSystem
                         const after=count();
                         return {key,x:c.x,y:c.y,decision:'sample',before,after,gained:after-before,
                           removed:q.result?.last_result?.result?.outcome==='removed',
-                          handle:q.handle,outcome:q.result?.outcome,approach:assessment.approach_direct_distance};
+                          handle:q.handle,outcome:q.result?.outcome,approach:assessment.approach_direct_distance,approach_handle:approachHandle};
                       });
                       decisions.push(evidence);
                       if(evidence.after!==undefined) currentCount=evidence.after;
