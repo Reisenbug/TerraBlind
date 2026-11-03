@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using MonoMod.Cil;
@@ -22,6 +24,34 @@ public sealed class BehaviorTrial : ModSystem
     int frames, movingAttackFrames, originX, floor, target = -1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
+    async Task<JsonObject> Review(JsonObject wake, string proposedCode)
+    {
+        if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
+        var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        var allowed = new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
+        var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
+        int calls = 0;
+        var replies = new JsonArray();
+        using var agent = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        await agent.RunAsync("Review and save a corrected revision of combat_loot_return. Preserve workflow behavior-trial and all completed step identifiers/handles. "
+            + "Goal: move while attacking the nearby hostile, judge actual drops with Jev, collect a useful drop, then resume the original navigation handle. "
+            + "Do not execute game actions now. Read the saved program and current terrain/state, then use script_program save with the current expected_revision. "
+            + "Handle interrupted actions and danger explicitly. Do not claim a kill or collection without evidence. Avoid walking off the current ledge. "
+            + "At most 8 tool calls. Existing candidate continuation (editable):\n" + proposedCode + "\nReview request:\n" + wake.ToJsonString(),
+            "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
+            "You review and edit saved Terraria JS behavior programs. tool(name,args) inside source uses the game APIs below. "
+            + "You may only query or save source during this review. No shell/files/network. Existing workflow step results are reused on resume.\n"
+            + schemas.ToJsonString(), entries,
+            async (name, args, token) =>
+            {
+                if (!allowed.Contains(name) || ++calls > 8) throw new InvalidOperationException("review tool budget or scope exceeded");
+                return await AgentTools.Execute(name, args, token);
+            }, text => replies.Add(text), timeout.Token);
+        File.WriteAllText(Path.Combine(Main.SavePath, "behavior-review.json"), new JsonObject
+        { ["model"] = "gpt-6-luna", ["calls"] = calls, ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
+        return await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = "combat_loot_return" });
+    }
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
@@ -126,20 +156,43 @@ public sealed class BehaviorTrial : ModSystem
             tool('watch',{events:['nearby_npc_killed','nearby_drop'],radius:40});
             const original = step('original',()=>tool('action_start',{tool:'nav_to',args:{x:GOAL_X,y:GOAL_Y}}));
             step('pause-original',()=>tool('action_control',{handle:original.handle,command:'pause'}));
-            const moving=step('moving-attack',()=>{
-              const result=tool('fight',{npc_types:[NPC_TYPE],max_dist:40,seconds:1,movement:'left'});
-              if(result.error) throw new Error(JSON.stringify(result));
-              return {events:result.events??[],handle:result.handle};
-            });
-            if(moving.handle) tool('action_control',{handle:moving.handle,command:'cancel'});
-            let death=moving.events.some(e=>e.kind==='nearby_npc_killed');
-            const fight = death?null:step('combat',()=>tool('action_start',{tool:'fight',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60}}));
+            function chooseMovement() {
+              const terrain=tool('inspect_terrain',{radius:12});
+              const enemies=tool('npc_find',{type:NPC_TYPE});
+              const answer=tool('jev_judge',{state:{terrain,enemies},questions:{movement:{type:'choice',
+                instructions:'Choose movement for the next one second of throwing-knife combat. NPC cell and terrain origin use tile coordinates. Read player_bounds and rows. Do not walk off a ledge into a lower pocket, liquids, or a wall. Prefer auto when the current area permits attack or when terrain is uncertain. A horizontal move is useful only if it improves the firing position without falling into a worse pocket.',
+                criteria:{auto:'Let the existing controller dodge threats and restore a blocked firing line.',left:'Move left while aiming and attacking for one second.',right:'Move right while aiming and attacking for one second.'}}}});
+              if(answer.error) tool('decision_point',{reason:'Movement judgment failed: '+JSON.stringify(answer)});
+              return answer.answers.movement.choice;
+            }
+            const fight = step('combat',()=>tool('action_start',{tool:'fight',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60}}));
+            const initialMovement=chooseMovement();
+            tool('action_control',{handle:fight.handle,command:'pause'});
+            tool('action_control',{handle:fight.handle,command:'resume',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60,movement:initialMovement}});
+            let death=false, previousLife=null, judgments=1, resetMovement=true;
             for(let i=0;i<30&&!death;i++) {
               const notice=tool('script_events',{wait_ms:1000});
               death=notice.events.some(e=>e.kind==='nearby_npc_killed');
-              if(notice.paused_action&&!death) tool('action_control',{handle:notice.paused_action,command:'resume'});
+              if(death) break;
+              if(resetMovement) {
+                tool('action_control',{handle:fight.handle,command:'pause'});
+                tool('action_control',{handle:fight.handle,command:'resume',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60,movement:'auto'}});
+                resetMovement=false;
+              } else if(notice.paused_action) tool('action_control',{handle:notice.paused_action,command:'resume'});
+              if(i%6===5) {
+                const enemies=tool('npc_find',{type:NPC_TYPE}).npcs;
+                const life=enemies.reduce((sum,n)=>sum+n.life,0);
+                if(previousLife!==null&&life>=previousLife&&enemies.length) {
+                  if(judgments>=3) tool('decision_point',{reason:'No combat progress after local adjustments; inspect terrain and preserved combat handle instead of waiting indefinitely.'});
+                  const movement=chooseMovement(); judgments++;
+                  tool('action_control',{handle:fight.handle,command:'pause'});
+                  tool('action_control',{handle:fight.handle,command:'resume',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60,movement}});
+                  resetMovement=true;
+                }
+                previousLife=life;
+              }
             }
-            if(!death) throw new Error('no native death event');
+            if(!death) tool('decision_point',{reason:'No verified kill after bounded local combat; inspect the current target and terrain, then modify this program without restarting the original goal.'});
             if(fight) tool('action_control',{handle:fight.handle,command:'cancel'});
             let drops=[];
             for(let i=0;i<5&&!drops.length;i++) {
@@ -177,7 +230,7 @@ public sealed class BehaviorTrial : ModSystem
             return {item_type:itemType,gained:after-before,original_handle:original.handle,judgment:decision,returned:true};
             """.Replace("GOAL_X", (originX + (Natural ? 3 : 18)).ToString()).Replace("GOAL_Y", (floor - 1).ToString())
                 .Replace("NPC_TYPE", (Natural ? NPCID.Hornet : NPCID.BlueSlime).ToString());
-        string reviewCode = code[..code.IndexOf("const moving=", StringComparison.Ordinal)]
+        string reviewCode = code[..code.IndexOf("function chooseMovement", StringComparison.Ordinal)]
             + "tool('decision_point',{reason:'Review local terrain before selecting combat movement; retain original action handle.'});";
         var saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = 0, ["code"] = reviewCode });
         var review = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
@@ -187,6 +240,14 @@ public sealed class BehaviorTrial : ModSystem
         saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = code });
         var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
+        if (result["value"]?["status"]?.ToString() == "yield" && Environment.GetEnvironmentVariable("TB_BEHAVIOR_REVIEW") == "1")
+        {
+            int oldRevision = saved["revision"].GetValue<int>();
+            saved = await Review(result, code);
+            if (saved["revision"].GetValue<int>() <= oldRevision) throw new Exception("model review did not save a changed program revision");
+            result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
+                ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
+        }
         if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
         var finalState = await Call("get_state", new JsonObject());
         await OnMain(() =>
@@ -195,7 +256,7 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("native movement/combat/loot evidence missing");
             var originalActions = finalState["action_tasks"].AsArray().Where(a => a["tool"]?.ToString() == "nav_to").ToArray();
             if (originalActions.Length != 1 || originalActions[0]["handle"]?.ToString() != result["value"]?["original_handle"]?.ToString()
-                || result["program"]?["revision"]?.GetValue<int>() != 2)
+                || result["program"]?["revision"]?.GetValue<int>() < 2)
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
