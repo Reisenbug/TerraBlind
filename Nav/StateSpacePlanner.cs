@@ -293,7 +293,12 @@ namespace TerraBlind
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
                 ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
             else
-                ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            {
+                var cached = MazeWand.PeekFieldOrNull(goalWx, goalWy);
+                bool reusable = cached != null && cached.ContainsKey((spx, spy)) && !MazeWand.FieldPickStale();
+                ctx.DistField = reusable ? cached : MazeWand.BuildField(goalWx, goalWy, spx, spy);
+                DiagLog.Write($"[ss-field-reuse] reused={reusable} goal=({goalWx},{goalWy}) start=({spx},{spy})");
+            }
             ctx.BlockH = null;
             ctx.Laid = new Dictionary<SSNode, List<(int, int)>>();
 

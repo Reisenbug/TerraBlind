@@ -1252,7 +1252,7 @@ public sealed class Driver : ModSystem
     void ShortRequests()
     {
         var player = Main.LocalPlayer;
-        int[] offsets = { 6, 10, 30, 60, 60, -30, -30 };
+        int[] offsets = { 6, 10, 30, 60, 60, -30, -30, 6, 6 };
         if (shortCase >= offsets.Length)
         {
             System.IO.File.WriteAllText(System.IO.Path.Combine(Main.SavePath, "short-requests.json"), shortResults.ToJsonString());
@@ -1283,6 +1283,7 @@ public sealed class Driver : ModSystem
                 if (!found) throw new InvalidOperationException("natural_flat_start_missing");
                 player.Teleport(shortFlat);
             }
+            if (shortCase >= 7) player.Teleport(shortFlat);
             player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
         }
         if (shortTick < 30) return;
@@ -1290,8 +1291,10 @@ public sealed class Driver : ModSystem
         {
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            RecedingNav.Start(shortCase == 0 ? (int)(shortFlat.X / 16) + offsets[shortCase] : 3384 + offsets[shortCase],
-                shortCase == 0 ? (int)((shortFlat.Y + player.height) / 16) - 1 : 242);
+            bool flat = shortCase == 0 || shortCase >= 7;
+            RecedingNav.Start(flat ? (int)(shortFlat.X / 16) + offsets[shortCase] : 3384 + offsets[shortCase],
+                flat ? (int)((shortFlat.Y + player.height) / 16) - 1 : 242,
+                shortCase >= 7 ? RecedingNav.Mode.Stand : RecedingNav.Mode.Snap);
             return;
         }
         bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
