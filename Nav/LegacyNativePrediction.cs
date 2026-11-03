@@ -208,15 +208,17 @@ internal static class LegacyNativePrediction
     {
         ready = null;
         if (pending == null) return false;
-        if (!pending.IsCompleted) return true;
+        if (!pending.IsCompleted && !cancellation.IsCancellationRequested) return true;
         try
         {
-            if (!VanillaAsyncMovement.StateMatches(player, anchor, true, out _, out _)
-                || !VanillaFrame.ContextMatches(snapshot, player))
+            bool stateMatches = VanillaAsyncMovement.StateMatches(player, anchor, true, out var reason, out var mismatch);
+            bool terrainMatches = VanillaFrame.ContextMatches(snapshot, player, out var terrainDifference);
+            if (!stateMatches || !terrainMatches)
             {
-                DiagLog.Write("[legacy-native-discard] start_or_terrain_changed");
+                DiagLog.Write($"[legacy-native-discard] state={reason} detail={mismatch} terrain={(terrainMatches ? "unchanged" : terrainDifference)} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
                 return true;
             }
+            cancellation.Token.ThrowIfCancellationRequested();
             var result = pending.GetAwaiter().GetResult();
             if (searchingPlacement)
             {

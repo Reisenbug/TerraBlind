@@ -1293,6 +1293,7 @@ public sealed class Driver : ModSystem
         if (shortTick < 30) return;
         if (shortTick == 30)
         {
+            if (shortCase == 0) CheckCanceledPrediction(player);
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool flat = shortCase == 0 || shortCase >= 7;
@@ -1332,6 +1333,36 @@ public sealed class Driver : ModSystem
             ["owner_hold_verified"] = shortCase == 9,
             ["dead"] = player.dead, ["idle_frames"] = shortIdleFrames, ["longest_idle_frames"] = shortLongestIdle });
         RecedingNav.Stop(); shortCase++; shortTick = 0;
+    }
+
+    static void CheckCanceledPrediction(Player player)
+    {
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction", true);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+        var cancellation = new System.Threading.CancellationTokenSource();
+        var candidate = new StateSpacePlanner.SSResult();
+        int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+        type.GetField("pending", flags).SetValue(null, pending.Task);
+        type.GetField("cancellation", flags).SetValue(null, cancellation);
+        type.GetField("plan", flags).SetValue(null, candidate);
+        type.GetField("snapshot", flags).SetValue(null, VanillaFrame.Capture(player, new Rectangle(x - 4, y - 4, 9, 9), true));
+        type.GetField("anchor", flags).SetValue(null, VanillaPrediction.Observe(player, false));
+        type.GetField("requestedAt", flags).SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+        cancellation.Cancel();
+        try
+        {
+            object[] arguments = { player, null };
+            bool handled = (bool)type.GetMethod("Poll", flags).Invoke(null, arguments);
+            if (!handled || !ReferenceEquals(arguments[1], candidate) || pending.Task.IsCompleted)
+                throw new InvalidOperationException("canceled_prediction_waited_for_transport");
+            Console.WriteLine("CANCELED_PREDICTION_RELEASE_PASS");
+        }
+        finally
+        {
+            type.GetMethod("Reset", flags).Invoke(null, null);
+            pending.TrySetCanceled();
+        }
     }
 
     void PreviewIsolation()
