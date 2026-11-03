@@ -132,6 +132,8 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TRIAL") == "1")
+        { await Opportunities(); return; }
         await OnMain(() =>
         {
             NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
@@ -280,5 +282,91 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+    async Task Opportunities()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset();
+            var p = Main.LocalPlayer; originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16 + 3;
+            for (int x = originX - 35; x <= originX + 45; x++)
+            {
+                for (int y = floor - 20; y < floor; y++) Main.tile[x, y].ClearEverything();
+                Main.tile[x, floor].ResetToType(TileID.Stone);
+            }
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.ThrowingKnife); p.inventory[1].stack = 500;
+            p.inventory[2].SetDefaults(ItemID.Wood); p.inventory[2].stack = 100;
+            p.ConsumedLifeCrystals = 0; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            p.position = new Vector2(originX * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            int chest = WorldGen.PlaceChest(originX + 5, floor - 1);
+            if (chest < 0) throw new Exception("opportunity chest placement failed");
+            Main.chest[chest].item[0].SetDefaults(ItemID.IronBar); Main.chest[chest].item[0].stack = 7;
+            WorldGen.PlaceObject(originX + 12, floor - 1, TileID.Heart);
+            WorldGen.PlaceObject(originX - 12, floor - 1, TileID.Heart);
+            WorldGen.PlaceTile(originX - 10, floor - 1, TileID.PressurePlates, forced: true);
+            if (!Main.tile[originX + 12, floor - 1].HasTile || !Main.tile[originX - 10, floor - 1].HasTile)
+                throw new Exception($"opportunity fixture failed heart={Main.tile[originX + 12, floor - 1].HasTile}/{Main.tile[originX + 12, floor - 1].TileType} trap={Main.tile[originX - 10, floor - 1].HasTile}/{Main.tile[originX - 10, floor - 1].TileType}");
+            return true;
+        });
+        string code = """
+            const goal={x:GOAL_X,y:GOAL_Y};
+            tool('watch',{events:['nearby_chest','nearby_tile'],tile_types:[12],radius:35});
+            const original=step('original',()=>tool('action_start',{tool:'nav_to',args:goal}));
+            let events=[];
+            for(let i=0;i<4&&!events.length;i++) events=tool('script_events',{wait_ms:500}).events;
+            tool('action_control',{handle:original.handle,command:'pause'});
+            if(!events.some(e=>e.kind==='nearby_chest')||!events.some(e=>e.kind==='nearby_tile'))
+              throw new Error('opportunities were not discovered during navigation');
+            const choices=[];
+            const chest=events.find(e=>e.kind==='nearby_chest');
+            const hearts=events.filter(e=>e.kind==='nearby_tile').sort((a,b)=>a.evidence.x-b.evidence.x);
+            const unsafe=hearts[0], safe=hearts[hearts.length-1];
+            for(const e of [unsafe,chest,safe]) {
+              const f=tool('opportunity_assess',{x:e.evidence.x,y:e.evidence.y,destination:goal});
+              const hazard=f.hazards.some(h=>['trap_tile','lava','falling_block'].includes(h.kind));
+              const choice={key:e.key,decision:hazard?'skip':'inspect_and_collect',reason:hazard?'measured hazard near target':'needed inventory; low geometric detour; verify interaction',facts:f};
+              choices.push(step('choice:'+e.key,()=>choice));
+            }
+            if(choices[0].decision!=='skip'||choices[1].decision==='skip'||choices[2].decision==='skip')
+              throw new Error('opportunity choice did not distinguish measured hazards');
+            function count(type){return tool('get_state').inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);}
+            const barsBefore=count(22), crystalsBefore=count(29);
+            const looted=tool('collect_treasure',{x:chest.evidence.x,y:chest.evidence.y});
+            if(count(22)-barsBefore!==7) throw new Error('chest contents not acquired: '+JSON.stringify(looted));
+            let gathered=tool('gather',{targets:[{item_type:29,count:crystalsBefore+1,tile_names:['Heart']}],
+              source_area:{x:safe.evidence.x-1,y:safe.evidence.y-1,width:3,height:3}});
+            for(let i=0;i<15&&gathered.handle;i++) {
+              tool('script_events',{wait_ms:0});
+              const state=tool('action_query',{handle:gathered.handle,wait_ms:1000});
+              if(state.status==='completed'){gathered=state;break;}
+              if(state.status==='paused') tool('action_control',{handle:gathered.handle,command:'resume'});
+              else if(state.status!=='running') throw new Error(JSON.stringify(state));
+            }
+            if(count(29)-crystalsBefore!==1) throw new Error('crystal inventory delta missing');
+            tool('script_events',{wait_ms:0});
+            tool('action_control',{handle:original.handle,command:'resume'});
+            let restored;
+            for(let i=0;i<25;i++) {
+              restored=tool('action_query',{handle:original.handle,wait_ms:1000});
+              if(restored.status!=='running') break;
+            }
+            if(restored.status!=='completed'||restored.result.done!==true) throw new Error('original destination not reached: '+JSON.stringify(restored));
+            return {choices,original_handle:original.handle,bars_gained:count(22)-barsBefore,crystals_gained:count(29)-crystalsBefore,restored};
+            """.Replace("GOAL_X", (originX + 28).ToString()).Replace("GOAL_Y", (floor - 1).ToString());
+        var result = await Call("run_script", new JsonObject { ["code"] = code, ["workflow"] = "opportunity-trial", ["event_delivery"] = "script" });
+        File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-result.json"), result.ToJsonString());
+        if (result["ok"]?.GetValue<bool>() != true || result["value"]?["crystals_gained"]?.GetValue<int>() != 1)
+            throw new Exception("opportunity continuation failed: " + result.ToJsonString());
+        await OnMain(() =>
+        {
+            if (Main.LocalPlayer.dead || !Main.tile[originX - 12, floor - 1].HasTile)
+                throw new Exception("skipped crystal was collected or player died");
+            return true;
+        });
+        Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
     }
 }
