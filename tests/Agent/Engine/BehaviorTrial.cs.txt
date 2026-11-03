@@ -131,11 +131,15 @@ public sealed class BehaviorTrial : ModSystem
             {
                 if (!materialNavigationStub) { original(x, y, mode); return; }
                 var player = Main.LocalPlayer;
-                player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f, y * 16 + 8 - player.height / 2f));
+                bool feetTarget = mode is RecedingNav.Mode.Snap or RecedingNav.Mode.Stand;
+                player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f,
+                    feetTarget ? (y + 1) * 16 - player.height : y * 16 + 8 - player.height / 2f));
                 player.velocity = Vector2.Zero;
                 player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
+                if (feetTarget && (ActExecutor.OriginCy(player) != y || player.Bottom.Y != (y + 1) * 16))
+                    throw new Exception("material navigation substitute violated feet-cell arrival contract");
                 RecedingNav.Active = false; RecedingNav.LastStop = "done";
-                Console.WriteLine($"MATERIAL_TEST_NAV x={x} y={y} navigation=teleport_stub");
+                Console.WriteLine($"MATERIAL_TEST_NAV x={x} y={y} mode={mode} center={player.Center} feet={player.Bottom.Y} navigation=teleport_stub");
             };
             MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), materialNavigationHook);
         }
