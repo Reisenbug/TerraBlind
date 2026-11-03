@@ -1740,6 +1740,38 @@ public sealed class BehaviorTrial : ModSystem
                 || verification["steps"]?[1]?["id"]?.ToString() != "crafted")
                 throw new Exception("partial materials advanced or lost the preserved crafting plan");
             Console.WriteLine($"OPPORTUNITY_RECIPE_PENDING materials_complete={allMaterials} crafting_goal_preserved=true");
+            if (allMaterials)
+            {
+                var crafted = await Call("run_script", new JsonObject { ["workflow"] = "material-crafting", ["event_delivery"] = "script",
+                    ["code"] = """
+                        function recipe(){return tool('recipe',{name:'ThornChakram'}).recipes.find(r=>r.internal==='ThornChakram');}
+                        let current=recipe();
+                        if(!current.can_craft_now) {
+                          const candidates=[];
+                          for(const station of current.stations)
+                            candidates.push(...tool('find_tiles',{name:station.tile,max_dist:2000,n:5}).tiles);
+                          if(!candidates.length) tool('decision_point',{reason:'Materials verified but crafting station unavailable; preserve crafting step',evidence:{stations:current.stations}});
+                          const station=candidates[0];
+                          const arrival=tool('nav_to',{x:station.x,y:station.y,reach:true});
+                          if(arrival.done!==true) tool('decision_point',{reason:'Station approach unfinished',evidence:{station,arrival}});
+                          current=recipe();
+                        }
+                        if(!current.can_craft_now) tool('decision_point',{reason:'Station arrival did not make recipe craftable',evidence:{recipe:current}});
+                        const made=tool('craft',{name:current.internal});
+                        if(made.error||made.ok===false) throw new Error(JSON.stringify(made));
+                        const verified=tool('task_step',{id:'crafted',action:'verify'});
+                        const inventory=tool('get_state').inventory_slots;
+                        return {verified:verified.verified,plan_status:verified.status,
+                          crystals:inventory.filter(i=>i.type===29).reduce((n,i)=>n+i.stack,0),
+                          weapon:inventory.filter(i=>i.type===191).reduce((n,i)=>n+i.stack,0)};
+                        """ });
+                File.WriteAllText(Path.Combine(Main.SavePath, "crafted-result.json"), crafted.ToJsonString());
+                if (crafted["value"]?["verified"]?.GetValue<bool>() != true
+                    || crafted["value"]?["crystals"]?.GetValue<int>() is not >= 1
+                    || crafted["value"]?["weapon"]?.GetValue<int>() is not >= 1)
+                    throw new Exception("final crafting or preserved crystal unverified; inspect crafted-result.json");
+                Console.WriteLine("OPPORTUNITY_CRAFTED_VERIFIED native_inventory=true model_calls=0");
+            }
         }
     }
 }
