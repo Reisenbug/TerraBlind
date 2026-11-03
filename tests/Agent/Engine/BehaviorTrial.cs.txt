@@ -353,6 +353,21 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("legacy boss preparation ignored the agent claim");
             if (StartRun.IsRunning || TreasureGrab.IsRunning || RecedingNav.Active)
                 throw new Exception("denied workflow mutated execution state");
+            var npc = Main.npc[Main.maxNPCs - 1];
+            bool fighting = WofFight.On;
+            try
+            {
+                var boss = new NPC(); boss.SetDefaults(NPCID.WallofFlesh);
+                boss.active = true; boss.Center = Main.LocalPlayer.Center + new Vector2(160, 0);
+                Main.npc[Main.maxNPCs - 1] = boss;
+                WofFight.On = true;
+                Main.LocalPlayer.controlLeft = Main.LocalPlayer.controlRight = Main.LocalPlayer.controlUseItem = false;
+                WofFight.Tick();
+                if (Main.LocalPlayer.controlLeft || Main.LocalPlayer.controlRight || Main.LocalPlayer.controlUseItem)
+                    throw new Exception("legacy boss fight wrote inputs despite agent ownership");
+                if (!WofFight.On) throw new Exception("blocked legacy boss fight discarded its intent");
+            }
+            finally { Main.npc[Main.maxNPCs - 1] = npc; WofFight.On = fighting; }
             return true;
         });
         await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claim["id"].DeepClone() });
