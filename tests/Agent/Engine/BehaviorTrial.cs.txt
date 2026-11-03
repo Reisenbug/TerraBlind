@@ -580,15 +580,15 @@ public sealed class BehaviorTrial : ModSystem
                   if(found.length!==1) throw new Error('ambiguous recipe ingredient: '+name);
                   return found[0].type;
                 }
-                tool('task_plan',{goal:'Collect recipe materials and craft Thorn Chakram after opportunistic loot',steps:[
+                step('recipe-plan',()=>tool('task_plan',{goal:'Collect recipe materials and craft Thorn Chakram after opportunistic loot',steps:[
                   {id:'materials',description:'Acquire all materials required by the loaded recipe',
                     conditions:recipe.ingredients.map(i=>({kind:'item',type:itemType(i.internal),count:i.need}))},
                   {id:'crafted',description:'Verify the crafted weapon in inventory',
-                    conditions:[{kind:'item',type:itemType(recipe.internal),count:1}]}]});
+                    conditions:[{kind:'item',type:itemType(recipe.internal),count:1}]}]}));
                 tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                 const state=tool('get_state');
                 const x=Math.floor(state.player.pos.x/16), y=Math.floor(state.player.pos.y/16);
-                const before=state.inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                const before=step('spore-baseline',()=>state.inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0));
                 const required=recipe.ingredients.find(i=>i.internal==='JungleSpores').need;
                 tool('script_events',{wait_ms:0});
                 const sourceTile=tool('game_catalog',{kind:'tile',name:'61'}).matches.find(m=>m.type===61).internal;
@@ -598,25 +598,32 @@ public sealed class BehaviorTrial : ModSystem
                   if(query.error) throw new Error(JSON.stringify(query));
                   sources.push(...query.tiles);
                 }
-                let after=before;
+                let after=state.inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
                 const collected=[];
+                const visited=new Set();
                 for(let round=0;round<6&&after<required;round++) {
                   const live=tool('get_state');
                   const px=live.player.pos.x/16,py=live.player.pos.y/16;
                   sources.sort((a,b)=>Math.hypot(a.x-px,a.y-py)-Math.hypot(b.x-px,b.y-py));
-                  if(!sources.length) tool('decision_point',{reason:'Searched material sources exhausted before recipe quantity; retain crafting goal'});
-                  const source=sources.shift();
-                  const sourceBefore=after;
+                  const selection=step('source:'+round,()=>{
+                    const source=sources.find(s=>!visited.has(s.x+','+s.y));
+                    if(!source) tool('decision_point',{reason:'Searched material sources exhausted before recipe quantity; retain crafting goal'});
+                    return {source,before:after};
+                  });
+                  const source=selection.source, sourceBefore=selection.before;
+                  visited.add(source.x+','+source.y);
                   const pending=tool('script_events',{wait_ms:0});
                   if(pending.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
                     tool('decision_point',{reason:'Danger before starting the next material source'});
-                  let result=tool('gather',{targets:[{item_type:331,count:sourceBefore+1,tile_names:[sourceTile],tile_frame_x:144}],source_area:{x:source.x-1,y:source.y-1,width:3,height:3}});
+                  const started=step('source-action:'+round,()=>tool('action_start',{tool:'gather',args:{targets:[{item_type:331,count:sourceBefore+1,tile_names:[sourceTile],tile_frame_x:144}],source_area:{x:source.x-1,y:source.y-1,width:3,height:3}}}));
+                  let result=tool('action_query',{handle:started.handle});
                   if((result.events??[]).some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
                     tool('decision_point',{reason:'Danger at the selected material source'});
-                  for(let i=0;i<30&&result.handle;i++) {
+                  for(let i=0;i<30&&result.status!=='completed'&&result.status!=='failed';i++) {
                     const events=tool('script_events',{wait_ms:0});
                     if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger while collecting the next recipe material'});
                     const current=tool('action_query',{handle:result.handle,wait_ms:1000});
+                    result=current;
                     if(current.status==='completed'||current.status==='failed'){result=current;break;}
                     if(current.status==='paused') tool('action_control',{handle:result.handle,command:'resume'});
                     else if(current.status!=='running') throw new Error(JSON.stringify(current));
@@ -629,8 +636,15 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 return {before,after,gained:after-before,required,fulfilled:after>=required,collected};
                 """;
-            var progress = await Call("run_script", new JsonObject { ["code"] = materials,
-                ["workflow"] = "material-continuation", ["event_delivery"] = "script" });
+            JsonObject progress = null;
+            for (int segment = 0; segment < 3; segment++)
+            {
+                progress = await Call("run_script", new JsonObject { ["code"] = materials,
+                    ["workflow"] = "material-continuation", ["event_delivery"] = "script" });
+                File.WriteAllText(Path.Combine(Main.SavePath, $"material-segment-{segment}.json"), progress.ToJsonString());
+                if (progress["value"]?["wake"]?["event"]?["reason"]?.ToString()
+                    != "Material action still pending; inspect and continue its preserved handle rather than declaring the source failed") break;
+            }
             File.WriteAllText(Path.Combine(Main.SavePath, "material-result.json"), progress.ToJsonString());
             if (progress["value"]?["fulfilled"]?.GetValue<bool>() != true)
                 throw new Exception("recipe spore quantity not fulfilled; inspect material-result.json");
