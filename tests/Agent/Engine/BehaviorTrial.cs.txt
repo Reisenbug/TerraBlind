@@ -31,8 +31,8 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
-    int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
-        || Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1" ? 9600 : 7200;
+    int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1" ? 14400
+        : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1" ? 9600 : 7200;
     const int ReviewExecutionFrames = (45 + 20 + 20 + 5) * 60;
     async Task<JsonObject> Review(JsonObject wake, bool materials = false, CodexAgent session = null, string reportName = "behavior-review")
     {

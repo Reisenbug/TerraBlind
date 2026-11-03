@@ -110,7 +110,8 @@ def main():
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         print("AGENT_ENGINE_PID", process.pid, flush=True)
         try:
-            deadline = time.monotonic() + (300 if args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.automatic_live or args.planning_readonly else 180)
+            material_review = args.behavior and os.environ.get("TB_MATERIAL_MODEL_REVIEW") == "1"
+            deadline = time.monotonic() + (300 if material_review or args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.automatic_live or args.planning_readonly else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break
