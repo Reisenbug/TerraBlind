@@ -191,7 +191,30 @@ static class GatherTests
             FightCoordinator.Tick(p, true);
             Check(!p.controlUseItem, "thinking defense overrode agent claim");
             AgentTools.Control.Release(claim);
+            string rest = AgentTools.Control.Deny(new[] { ControlBehavior.Survival }, ControlLifetime.Task, null, "rest instead of automatic defense");
+            try
+            {
+                for (int frame = 0; frame < 120; frame++)
+                {
+                    FightCoordinator.Tick(p, true);
+                    Check(!FightCoordinator.IsIdleDefending && !p.controlUseItem && !p.controlLeft && !p.controlRight && !p.controlJump,
+                        "automatic defense reclaimed inputs during an agent rest veto");
+                }
+            }
+            finally { AgentTools.Control.Release(rest); }
             FightCoordinator.Tick(p, true);
+            Check(FightCoordinator.IsIdleDefending && p.controlUseItem, "released rest veto did not permit default defense");
+            string holdPosition = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "defend without leaving the recovery position");
+            try
+            {
+                for (int frame = 0; frame < 120; frame++)
+                {
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem && !p.controlLeft && !p.controlRight && !p.controlJump,
+                        "holding position either disabled firing or allowed autonomous movement");
+                }
+            }
+            finally { AgentTools.Control.Release(holdPosition); }
             FightCoordinator.Tick(p, false);
             Check(!p.controlUseItem && !p.controlLeft && !p.controlRight, "task completion retained defense inputs");
         }
