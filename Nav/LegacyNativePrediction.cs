@@ -273,11 +273,11 @@ internal static class LegacyNativePrediction
             plan.NativeVerified = true;
             plan.Steps[0].LandPx = frames[^1].Px; plan.Steps[0].LandPy = frames[^1].Py;
             ready = plan;
-            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
+            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} queue_ms={result["queue_ms"]} write_ms={result["write_ms"]} response_wait_ms={result["response_wait_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
         }
         catch (Exception error)
         {
-            DiagLog.Write("[legacy-native-fallback] " + error.Message);
+            DiagLog.Write($"[legacy-native-fallback] total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###} worker_ready={VanillaNavigationDemo.Instance.WorkerReady} error={error.Message}");
             ready = plan;
         }
         finally { Reset(); }
