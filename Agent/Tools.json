@@ -193,10 +193,13 @@
     "type": "function",
     "function": {
       "name": "find_tiles",
-      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。扫不到就是真没有(钨和银、铜和锡是二选一生成的,没扫到钨就去扫银),不用查 wiki 猜它在哪一层,也不用自己去找洞口。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
+      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。空结果只证明本次指定范围和筛选条件下未找到，不证明整个世界不存在；可扩大范围或分区查询。source_area模式同时支持frame_x/frame_y精确变体，并返回实际tile_type和frame。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
       "parameters": {
         "type": "object",
         "properties": {
+          "source_area": {"type":"object","description":"可选：只查询该格区域，不截取全局最近结果后再过滤。支持局部材料来源检查。","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1,"maximum":120},"height":{"type":"integer","minimum":1,"maximum":120}},"required":["x","y","width","height"]},
+          "frame_x": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；需source_area，不代表物品编号。"},
+          "frame_y": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；需source_area。"},
           "name": {
             "type": "string",
             "description": "TileID 精确名,如 'Iron'"

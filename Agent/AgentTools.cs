@@ -869,6 +869,8 @@ public static partial class AgentTools
         var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
         int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
         var area = GatherArea.Parse(args["source_area"] as JsonObject);
+        if (area == null && (args["frame_x"] != null || args["frame_y"] != null))
+            throw new ArgumentException("按frame筛选find_tiles需要source_area，不能忽略变体条件。");
         if (area != null && types == 0)
             return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone() };
         if (catalog["truncated"].GetValue<bool>() || types > 1)
