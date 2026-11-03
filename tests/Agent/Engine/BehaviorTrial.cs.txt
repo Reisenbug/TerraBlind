@@ -820,6 +820,9 @@ public sealed class BehaviorTrial : ModSystem
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
                         for(let round=0;round<16&&count()<required;round++) {
+                          const sources=tool('gather_observe',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
+                          if(sources.error||!sources.candidates?.length)
+                            tool('decision_point',{reason:'No current material source; choose another area or activity instead of repeating gather: '+JSON.stringify(sources)});
                           let action=tool('gather',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
                           review(action.events);
                           if(action.outcome==='combat_obstructed')
@@ -832,6 +835,8 @@ public sealed class BehaviorTrial : ModSystem
                             if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
                           }
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
+                          if((action.result?.outcome??action.outcome)==='source_unavailable')
+                            tool('decision_point',{reason:'Material source exhausted; preserve handle '+(action.handle??action.managed_handle)+' and inspect fresh sources before continuing'});
                           if(action.error==='repeated_failure_blocked')
                             tool('decision_point',{reason:'Repeated material acquisition failure requires a different source or plan'});
                           if(count()<required) tool('script_events',{wait_ms:1000});

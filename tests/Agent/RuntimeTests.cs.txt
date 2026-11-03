@@ -52,6 +52,18 @@ static class RuntimeTests
             Check(first["id"].ToString() != replacement["id"].ToString(), "new NPC inherited the reused slot's retry identity");
             var stale = await Execute(gather.Act(first, default));
             Check(stale["error"]?.ToString() == "target_changed", "stale NPC observation attacked a replacement entity");
+            var observationArgs = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":9,\"npc_types\":[42]}]}").AsObject();
+            FightCoordinator.Start(40, new[] { 42 });
+            var sources = JsonNode.Parse(await Execute(AgentTools.Execute("gather_observe", observationArgs, default)));
+            Check(sources["candidates"].AsArray().Any(c => c["kind"].ToString() == "npc")
+                && sources["counts"]["209"] != null && FightCoordinator.IsActive,
+                "source observation omitted live evidence or stopped active combat");
+            observationArgs["source_area"] = new JsonObject { ["x"] = Game.maxTilesX - 1,
+                ["y"] = Game.maxTilesY - 1, ["width"] = 1, ["height"] = 1 };
+            sources = JsonNode.Parse(await Execute(AgentTools.Execute("gather_observe", observationArgs, default)));
+            Check(sources["candidates"].AsArray().Count == 0 && FightCoordinator.IsActive,
+                "source observation escaped the requested area or took input ownership");
+            FightCoordinator.Stop();
             bool clear = Terraria.Collision.Clear;
             try
             {

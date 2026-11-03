@@ -529,6 +529,7 @@ public static partial class AgentTools
             case "task_plan_patch":
                 result = await NativeAgent.OnMain(() => Plan.Patch(args, AgentTaskEvidence.Measure), token);
                 break;
+            case "gather_observe":
             case "gather":
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))
                     .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
@@ -538,7 +539,17 @@ public static partial class AgentTools
                 var sourceArea = GatherArea.Parse(args["source_area"] as JsonObject);
                 if (sourceArea != null && ((long)sourceArea.X + sourceArea.Width > Main.maxTilesX
                     || (long)sourceArea.Y + sourceArea.Height > Main.maxTilesY)) throw new ArgumentException("source_area超出世界边界。");
-                result = await Gather.Run(targets, Int(args, "seconds", 120), new GameGather(targets, sourceArea), token, sourceArea);
+                Gather.Validate(targets, sourceArea);
+                var gatherWorld = new GameGather(targets, sourceArea);
+                if (name == "gather_observe")
+                {
+                    result = await gatherWorld.Observe(token);
+                    if (sourceArea != null)
+                        result["candidates"] = new JsonArray(result["candidates"].AsArray().OfType<JsonObject>()
+                            .Where(sourceArea.Contains).Select(c => c.DeepClone()).ToArray());
+                    result["source_area"] = sourceArea?.Snapshot();
+                }
+                else result = await Gather.Run(targets, Int(args, "seconds", 120), gatherWorld, token, sourceArea);
                 break;
             case "npc_find":
                 result = await Call("/npc_find", args, token);
