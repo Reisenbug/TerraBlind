@@ -89,7 +89,7 @@ public sealed class BehaviorTrial : ModSystem
                 if (name != "get_state") return Record(output);
                 var state = JsonNode.Parse(output);
                 var compact = new JsonObject();
-                foreach (string field in new[] { "player", "buffs", "enemies", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
+                foreach (string field in new[] { "player", "buffs", "enemies", "healing_items", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
                     if (state[field] != null) compact[field] = state[field].DeepClone();
                 var watch = new JsonObject();
                 foreach (string field in new[] { "events", "passive_events", "tile_types", "radius", "health_below" })
@@ -1007,11 +1007,8 @@ public sealed class BehaviorTrial : ModSystem
                             }
                             const recovery={hp_before:state.player.hp,potion_delay_ticks:state.player.potion_delay_ticks,candidates:[]};
                             if(state.player.hp<80&&state.player.potion_delay_ticks===0) {
-                              for(const item of state.inventory_slots.filter(i=>i.type>0)) {
-                                const info=tool('item_info',{slot:item.slot});
-                                if(info.found&&info.healLife>0&&info.consumable)
-                                  recovery.candidates.push({slot:item.slot,type:item.type,heal:info.healLife});
-                              }
+                              recovery.candidates=state.healing_items.filter(i=>i.consumable)
+                                .map(i=>({slot:i.slot,type:i.type,heal:i.base_heal_life}));
                               recovery.candidates.sort((a,b)=>b.heal-a.heal);
                               if(recovery.candidates.length) {
                                 const medicine=recovery.candidates[0];

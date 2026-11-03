@@ -39,6 +39,22 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        var previousHealingItem = Game.LocalPlayer.inventory[20];
+        int healingHpBefore = Game.LocalPlayer.statLife;
+        try
+        {
+            Game.LocalPlayer.inventory[20] = new Terraria.Item { type = 28, stack = 2, healLife = 50, consumable = true };
+            var healingState = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            var medicine = healingState["healing_items"]?.AsArray().SingleOrDefault(i => i["slot"].GetValue<int>() == 20);
+            Check(medicine?["base_heal_life"]?.GetValue<int>() == 50 && medicine["stack"].GetValue<int>() == 2
+                && medicine["consumable"].GetValue<bool>(), "state omitted direct healing candidates or their actual inventory slots");
+            Game.LocalPlayer.inventory[20].stack = 0;
+            healingState = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(!healingState["healing_items"].AsArray().Any(i => i["slot"].GetValue<int>() == 20),
+                "empty stack remained a healing candidate");
+            Check(Game.LocalPlayer.statLife == healingHpBefore, "reading healing candidates applied healing");
+        }
+        finally { Game.LocalPlayer.inventory[20] = previousHealingItem; }
         var previousGatherNpc = Game.npc[0];
         try
         {

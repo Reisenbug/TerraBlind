@@ -124,6 +124,11 @@ public static partial class AgentTools
         state["other_players"] = players;
         state["combat"] = PvpDuel.Report();
         state["inventory_slots"] = PvpInventory.Snapshot();
+        state["healing_items"] = new JsonArray(Main.LocalPlayer.inventory.Take(50)
+            .Select((item, slot) => (item, slot)).Where(entry => !entry.item.IsAir && entry.item.healLife > 0)
+            .Select(entry => (JsonNode)new JsonObject { ["slot"] = entry.slot, ["type"] = entry.item.type,
+                ["stack"] = entry.item.stack, ["base_heal_life"] = entry.item.healLife,
+                ["consumable"] = entry.item.consumable }).ToArray());
         state["task_plan"] = Plan.Summary();
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
         state["last_damage"] = LastDamage?.DeepClone();
