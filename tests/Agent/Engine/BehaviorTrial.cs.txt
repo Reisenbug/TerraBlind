@@ -934,21 +934,12 @@ public sealed class BehaviorTrial : ModSystem
                         tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
+                        const started=step('stinger-action',()=>tool('action_start',{tool:'gather',args:{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]}}));
+                        if(!started.handle) throw new Error(JSON.stringify(started));
                         for(let round=0;round<16&&count()<required;round++) {
-                          const sources=tool('gather_observe',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
-                          if(sources.error||!sources.candidates?.length)
-                            tool('decision_point',{reason:'No current material source; choose another area or activity instead of repeating gather: '+JSON.stringify(sources)});
-                          let action=tool('gather',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
+                          review(tool('script_events',{wait_ms:0}).events);
+                          const action=tool('action_query',{handle:started.handle,wait_ms:1000});
                           review(action.events);
-                          if(action.outcome==='combat_obstructed')
-                            tool('decision_point',{reason:'Material combat needs repositioning before resuming: '+JSON.stringify(action.last_result)});
-                          for(let i=0;i<15&&action.handle;i++) {
-                            const events=tool('script_events',{wait_ms:0});
-                            review(events.events);
-                            const current=tool('action_query',{handle:action.handle,wait_ms:1000});
-                            if(current.status==='completed'||current.status==='failed'){action=current;break;}
-                            if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
-                          }
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
                           if((action.result?.outcome??action.outcome)==='combat_obstructed')
                             tool('decision_point',{reason:'Material combat requires recovery of the same handle '+(action.handle??action.managed_handle)+': '+JSON.stringify(action.result?.last_result??action.last_result)});
@@ -958,8 +949,10 @@ public sealed class BehaviorTrial : ModSystem
                             tool('decision_point',{reason:'Repeated material acquisition failure requires a different source or plan'});
                           if(action.status==='failed')
                             tool('decision_point',{reason:'Material action failed; preserve handle '+action.handle+' and inspect failure rather than starting another gather'});
-                          if(count()<required) tool('script_events',{wait_ms:1000});
+                          if(action.status==='paused') tool('action_control',{handle:started.handle,command:'resume'});
+                          if(action.status==='completed') break;
                         }
+                        if(count()<required) tool('decision_point',{reason:'Material collection still incomplete; inspect and continue preserved handle '+started.handle});
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
@@ -1210,6 +1203,7 @@ public sealed class BehaviorTrial : ModSystem
                               const guard=tool('action_start',{tool:'fight',args:{max_dist:25,seconds:15,movement:'auto'}});
                               if(guard.error||!guard.handle) tool('decision_point',{reason:'Temporary defense could not acquire input; inspect current owner'});
                               let retreat=null;
+                              const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
                               try {
                               const anchors=state.action_tasks.filter(a=>a.status==='completed')
                                 .map(a=>a.result?.state?.pos??(a.tool==='nav_to'?{x:a.args.x,y:a.args.y}:null))
@@ -1221,7 +1215,6 @@ public sealed class BehaviorTrial : ModSystem
                                 if(!nearby.error) for(const p of nearby.terrain.stance_probes)
                                   if(p.body_fits) anchors.push({x:p.support_x,y:p.support_y-1});
                               }
-                              const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
                               anchors.sort((a,b)=>distanceToEnemy(b)-distanceToEnemy(a));
                               recovery.retreat_candidates=[];
                               for(const anchor of anchors) {
