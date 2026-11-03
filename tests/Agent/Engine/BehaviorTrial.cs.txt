@@ -809,6 +809,18 @@ public sealed class BehaviorTrial : ModSystem
             || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
         {
             await OnMain(() => { materialNavigationStub = true; return true; });
+            var sourceDepthState = await Call("get_state", new JsonObject());
+            await OnMain(() =>
+            {
+                var depth = sourceDepthState["depth"];
+                if (depth?["world_surface_y_tiles"]?.GetValue<double>() != Main.worldSurface
+                    || depth?["rock_layer_y_tiles"]?.GetValue<double>() != Main.rockLayer
+                    || depth?["underground"]?.GetValue<bool>() != Main.LocalPlayer.ZoneDirtLayerHeight
+                    || depth?["cavern"]?.GetValue<bool>() != Main.LocalPlayer.ZoneRockLayerHeight)
+                    throw new Exception("source depth observation does not match native world layers");
+                return true;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "source-depth-state.json"), sourceDepthState["depth"].ToJsonString());
             var sourceArgs = new JsonObject { ["targets"] = new JsonArray(new JsonObject
                 { ["item_type"] = (int)ItemID.JungleSpores, ["count"] = 6,
                     ["tile_names"] = new JsonArray("JungleGrass") }) };

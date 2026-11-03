@@ -39,6 +39,30 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        var depthPlayer = Game.LocalPlayer;
+        var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
+            depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);
+        try
+        {
+            Game.worldSurface = 350.5; Game.rockLayer = 600.25;
+            for (int layer = 0; layer < 5; layer++)
+            {
+                depthPlayer.ZoneSkyHeight = layer == 0; depthPlayer.ZoneOverworldHeight = layer == 1;
+                depthPlayer.ZoneDirtLayerHeight = layer == 2; depthPlayer.ZoneRockLayerHeight = layer == 3;
+                depthPlayer.ZoneUnderworldHeight = layer == 4;
+                var depth = JsonNode.Parse(await Execute(AgentTools.State(default)))["depth"];
+                var flags = new[] { "sky", "surface", "underground", "cavern", "underworld" };
+                Check(flags.Where(f => depth[f].GetValue<bool>()).SequenceEqual(new[] { flags[layer] })
+                    && depth["world_surface_y_tiles"].GetValue<double>() == 350.5
+                    && depth["rock_layer_y_tiles"].GetValue<double>() == 600.25,
+                    "depth observation guessed a layer instead of preserving native flags and world thresholds");
+            }
+        }
+        finally
+        {
+            (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
+                depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight) = oldDepth;
+        }
         var savedHeal = AgentTools.LastAutomaticHeal;
         try
         {

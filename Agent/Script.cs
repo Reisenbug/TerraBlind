@@ -76,6 +76,7 @@ public static class AgentScript
         + "get_state.healing_items直接列出背包前50格中healLife>0的非空物品及slot、stack、base_heal_life、consumable，找直接治疗物品不必逐格item_info。基础治疗值不是当前可用或实际回血承诺；还需看potion_delay_ticks并验证use_item结果，不包含仅提供再生buff的物品。"
         + "last_automatic_heal记录默认生存反射最近一次实际回血或治疗冷却变化的tick和前后值；默认代码可能已用掉药水，不能照旧槽位重复用药。它是历史证据，继续查看当前healing_items、hp和potion_delay_ticks；可通过control禁止survival，但需自行承担恢复控制。"
         + "get_state.health_dynamics是同一tick的原生血量、死亡状态、life_regen_raw和life_regen_count_raw；regen_direction只说明当前引擎持续回血/掉血方向，不证明安全或预测未来血量。结合buffs剩余时间和last_damage.tick区分持续掉血与新受击，撤离后仍掉血不必然需要再次换位；判断能否等待由你的策略决定，继续观察新威胁并保留原任务。raw字段是引擎原始单位，不是每秒伤害。"
+        + "get_state.depth提供游戏原生高度层标志sky/surface/underground/cavern/underworld和世界分层格坐标。结合player.biome判断所处环境，不能仅凭方块类型或猜测坐标断言不在地下；深度符合也不证明每个植物变体都能掉落所需材料。"
         + "gather返回source_unavailable时，用相同targets/source_area调用只读gather_observe确认当前库存和来源，不要反复启动gather探测。出现值得获取的新来源后可恢复原handle；否则决定换区域、执行其他步骤或交回观察。候选不是可达或安全证明，仍需opportunity_assess。"
         + "gather返回source_needs_review时，source_error.observations记录连续移除方块却没有目标库存增长的证据。先核查材料来源、变体和拾取条件，修正原handle的targets/source_area后再恢复；不要把挖掉方块当作收集成功，也不要原样重跑整批采集。"
         + "gather返回combat_obstructed表示连续射界受阻且目标未掉血；读取last_result.result里的目标格坐标、武器和血量证据，先观察地形、换位或改武器，不要原样重试。clear_line只是当前直线碰撞检查，不预测弹道或证明可达。"

@@ -43,6 +43,7 @@ namespace Terraria
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
+        public static double worldSurface, rockLayer;
         public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
@@ -65,6 +66,7 @@ namespace Terraria
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool delayUseItem, mouseInterface;
+        public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;

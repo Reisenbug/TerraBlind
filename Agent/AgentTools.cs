@@ -112,6 +112,14 @@ public static partial class AgentTools
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
             observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
         }
+        state["depth"] = new JsonObject
+        {
+            ["tick"] = Main.GameUpdateCount, ["player_center_y_tiles"] = healthPlayer.Center.Y / 16,
+            ["world_surface_y_tiles"] = Main.worldSurface, ["rock_layer_y_tiles"] = Main.rockLayer,
+            ["sky"] = healthPlayer.ZoneSkyHeight, ["surface"] = healthPlayer.ZoneOverworldHeight,
+            ["underground"] = healthPlayer.ZoneDirtLayerHeight, ["cavern"] = healthPlayer.ZoneRockLayerHeight,
+            ["underworld"] = healthPlayer.ZoneUnderworldHeight
+        };
         state["agent"] = new JsonObject
         {
             ["status"] = NativeAgent.Status, ["auto_dodge"] = AgentPermissions.Dodge,
