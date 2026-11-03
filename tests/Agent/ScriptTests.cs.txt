@@ -152,6 +152,15 @@ static class ScriptTests
                 "syntax rejection overwrote the runnable program or consumed a revision");
             Check(library.Save("parse_only", "throw new Error('saving must not execute me');", 0)["revision"].GetValue<int>() == 1,
                 "save executed code instead of parsing it");
+            Check(library.Save("collect", "function main(){tool('gather',{});}", 3)["error"]?.ToString() == "program_missing_invocation"
+                && library.Get("collect")["revision"].GetValue<int>() == 3,
+                "uncalled entry function replaced the runnable continuation");
+            var explicitEntry = library.Save("explicit_entry", "function main(){return tool('get_state');} return main();", 0);
+            int entryCalls = 0;
+            var entryResult = await AgentScript.Run(explicitEntry["code"].ToString(), 5, (_, _) => { },
+                (_, _, _) => { entryCalls++; return Task.FromResult("{\"hp\":60}"); }, _ => Task.CompletedTask, default);
+            Check(entryCalls == 1 && entryResult["value"]["hp"].GetValue<int>() == 60,
+                "explicit function invocation was rejected or executed during save");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }
             catch (ArgumentException) { escaped = true; }

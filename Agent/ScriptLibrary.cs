@@ -50,7 +50,18 @@ public sealed class ScriptLibrary
             if (revision != expectedRevision)
                 return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name,
                     ["expected_revision"] = expectedRevision, ["revision"] = revision };
-            try { Jint.Engine.PrepareScript("(function() {\n" + code + "\n});"); }
+            try
+            {
+                string wrapped = "(function() {\n" + code + "\n});";
+                Jint.Engine.PrepareScript(wrapped);
+                var script = new Acornima.Parser().ParseScript(wrapped);
+                var function = (Acornima.Ast.FunctionExpression)((Acornima.Ast.ExpressionStatement)script.Body[0]).Expression;
+                if (function.Body.Body.Any(node => node is Acornima.Ast.FunctionDeclaration)
+                    && function.Body.Body.All(node => node is Acornima.Ast.FunctionDeclaration or Acornima.Ast.EmptyStatement))
+                    return new JsonObject { ["error"] = "program_missing_invocation", ["name"] = name, ["revision"] = revision,
+                        ["detail"] = "源码仅声明函数，没有执行它们。宿主执行的是函数体，不会自动调用main。",
+                        ["hint"] = "在末尾显式调用入口，例如return main();，或直接编写执行语句。原版本未修改。" };
+            }
             catch (Jint.ScriptPreparationException failure) when (failure.InnerException is Acornima.ParseErrorException)
             {
                 var error = (Acornima.ParseErrorException)failure.InnerException;
