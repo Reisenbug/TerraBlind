@@ -904,15 +904,24 @@ public sealed class BehaviorTrial : ModSystem
                             if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
                           }
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
+                          if((action.result?.outcome??action.outcome)==='combat_obstructed')
+                            tool('decision_point',{reason:'Material combat requires recovery of the same handle '+(action.handle??action.managed_handle)+': '+JSON.stringify(action.result?.last_result??action.last_result)});
                           if((action.result?.outcome??action.outcome)==='source_unavailable')
                             tool('decision_point',{reason:'Material source exhausted; preserve handle '+(action.handle??action.managed_handle)+' and inspect fresh sources before continuing'});
                           if(action.error==='repeated_failure_blocked')
                             tool('decision_point',{reason:'Repeated material acquisition failure requires a different source or plan'});
+                          if(action.status==='failed')
+                            tool('decision_point',{reason:'Material action failed; preserve handle '+action.handle+' and inspect failure rather than starting another gather'});
                           if(count()<required) tool('script_events',{wait_ms:1000});
                         }
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
+                var materialActions = (await Call("get_state", new JsonObject()))["action_tasks"].AsArray()
+                    .Where(a => a["tool"]?.ToString() == "gather"
+                        && a["args"]?["targets"]?.AsArray().Any(t => t["item_type"]?.GetValue<int>() == 209) == true).ToArray();
+                if (materialActions.Length > 1)
+                    throw new Exception("material trial duplicated the original gather instead of preserving its handle");
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_CONTINUED_DEFENSE") == "1")
                 {
                     var state = await Call("get_state", new JsonObject());
