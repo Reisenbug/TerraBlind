@@ -34,6 +34,11 @@ internal static class LegacyNativePrediction
         if (Main.netMode != 0 || player.velocity != Vector2.Zero
             || !allowItemCooldown && (player.itemAnimation > 0 || player.itemTime > 0)
             || !player.releaseJump || candidate.Steps.Count != 1) return false;
+        if (!VanillaNavigationDemo.Instance.WorkerReady)
+        {
+            DiagLog.Write("[legacy-native-skip] worker_starting; execute_existing_candidate");
+            return false;
+        }
         var step = candidate.Steps[0];
         if (player.AnyExtraJumpUsable() && candidate.GoalWy < ActExecutor.OriginCy(player)
             && step.Frames?.Exists(frame => frame.Jump) == true)
