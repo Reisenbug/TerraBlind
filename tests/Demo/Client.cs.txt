@@ -1254,7 +1254,7 @@ public sealed class Driver : ModSystem
     void ShortRequests()
     {
         var player = Main.LocalPlayer;
-        int[] offsets = { 6, 10, 30, 60, 60, -30, -30, 6, 6 };
+        int[] offsets = { 6, 10, 30, 60, 60, -30, -30, 6, 6, 6 };
         if (shortCase >= offsets.Length)
         {
             System.IO.File.WriteAllText(System.IO.Path.Combine(Main.SavePath, "short-requests.json"), shortResults.ToJsonString());
@@ -1296,12 +1296,25 @@ public sealed class Driver : ModSystem
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool flat = shortCase == 0 || shortCase >= 7;
+            if (shortCase == 9 && !AxisLock.Take("short-request-owner", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use))
+                throw new InvalidOperationException("short_request_owner_lock_failed");
             RecedingNav.Start(flat ? (int)(shortFlat.X / 16) + offsets[shortCase] : 3384 + offsets[shortCase],
                 flat ? (int)((shortFlat.Y + player.height) / 16) - 1 : 242,
                 shortCase >= 7 ? RecedingNav.Mode.Stand : RecedingNav.Mode.Snap);
             return;
         }
         bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
+        if (shortCase == 9 && shortTick <= 60)
+        {
+            if (input || Vector2.DistanceSquared(player.position, shortOrigin) > .01f)
+                throw new InvalidOperationException("short_request_ignored_owner");
+            if (shortTick == 60)
+            {
+                AxisLock.Release("short-request-owner");
+                shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
+            return;
+        }
         bool moved = input && Vector2.DistanceSquared(player.position, shortOrigin) >= 64;
         shortMoved |= moved;
         if (RecedingNav.Active && !input)
@@ -1314,8 +1327,9 @@ public sealed class Driver : ModSystem
         if ((arrivalCheck || !moved) && shortTick < 1230 && RecedingNav.Active && !player.dead) return;
         shortResults.Add(new JsonObject { ["case"] = shortCase, ["offset"] = offsets[shortCase],
             ["moved"] = shortMoved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
-            ["frames"] = shortTick - 30, ["stop"] = RecedingNav.LastStop,
+            ["frames"] = shortTick - (shortCase == 9 ? 60 : 30), ["stop"] = RecedingNav.LastStop,
             ["arrival_check"] = arrivalCheck, ["arrived"] = RecedingNav.LastStop == "done",
+            ["owner_hold_verified"] = shortCase == 9,
             ["dead"] = player.dead, ["idle_frames"] = shortIdleFrames, ["longest_idle_frames"] = shortLongestIdle });
         RecedingNav.Stop(); shortCase++; shortTick = 0;
     }

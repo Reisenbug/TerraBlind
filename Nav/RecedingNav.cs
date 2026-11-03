@@ -325,7 +325,7 @@ namespace TerraBlind
             if (!_fieldReady)
             {
                 var destination = new Vector2(_goalWx * 16 + 8 - p.width / 2f, (_goalWy + 1) * 16 - p.height);
-                if (_mode == Mode.Snap
+                if ((_mode == Mode.Snap || _mode == Mode.Stand)
                     && VanillaContactRegion.TryWalk(p, destination, out var input))
                 {
                     VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(input));
