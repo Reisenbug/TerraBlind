@@ -729,12 +729,30 @@ public sealed class BehaviorTrial : ModSystem
                             if(terrain.rows[y].slice(x,x+2)!=='..'||terrain.rows[y+1].slice(x,x+2)!=='##') continue;
                             const wx=terrain.origin.x+x,wy=terrain.origin.y+y,b=terrain.player_bounds;
                             if(wx<=b.right&&wx+1>=b.left&&wy>=b.top&&wy<=b.bottom) continue;
-                            candidates.push({x:wx,y:wy,d:Math.abs(wx-b.left)+Math.abs(wy-b.bottom)});
+                            const shaped=terrain.shaped_tiles.filter(t=>t.y===wy+1&&t.x>=wx&&t.x<=wx+1);
+                            candidates.push({x:wx,y:wy,d:Math.abs(wx-b.left)+Math.abs(wy-b.bottom),shaped});
                           }
-                          candidates.sort((a,b)=>a.d-b.d);
+                          candidates.sort((a,b)=>a.shaped.length-b.shaped.length||a.d-b.d);
                           for(const location of candidates.slice(0,3)) {
                             const facts=tool('opportunity_assess',{x:location.x,y:location.y});
                             if(facts.hazards.length) continue;
+                            for(const support of location.shaped) {
+                              tool('script_events',{wait_ms:0});
+                              const approach=tool('nav_to',{x:support.x,y:support.y,reach:true});
+                              if(approach.done!==true) tool('decision_point',{reason:'Support repair approach not completed; inspect preserved navigation before mining'});
+                              let pick=null;
+                              for(const item of tool('get_state').inventory_slots.filter(i=>i.type>0)) {
+                                const info=tool('item_info',{slot:item.slot});
+                                if(info.pick>0&&(!pick||info.pick>pick.power)) pick={slot:item.slot,power:info.pick};
+                              }
+                              if(!pick) tool('decision_point',{reason:'No pickaxe for measured support repair'});
+                              const mined=tool('use_item',{slot:pick.slot,x:support.x,y:support.y,strict:true,duration_ticks:0});
+                              if(mined.outcome!=='removed') tool('decision_point',{reason:'Single support tile removal not verified: '+JSON.stringify(mined)});
+                              const material=inventory(resolve('Wood'));
+                              if(!material) tool('decision_point',{reason:'No full support material; preserve workstation preparation evidence'});
+                              const foundation=tool('place_at',{item:String(material.type),x:support.x,y:support.y});
+                              if(foundation.outcome!=='done') tool('decision_point',{reason:'Replacement support not verified: '+JSON.stringify(foundation)});
+                            }
                             placed=tool('place_at',{item:String(bench.type),x:location.x,y:location.y});
                             if(placed.outcome==='done') break;
                           }
