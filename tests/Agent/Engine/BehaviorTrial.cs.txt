@@ -476,5 +476,44 @@ public sealed class BehaviorTrial : ModSystem
         if (result["ok"]?.GetValue<bool>() != true || result["value"]?["crystals_gained"]?.GetValue<int>() != 1)
             throw new Exception("natural opportunity continuation incomplete: " + result["detail"] + " " + result["value"]);
         Console.WriteLine("OPPORTUNITY_NATURAL_COMPLETE native_engine=true model_calls=0 fixture_tile_edits=0 teleports_after_start=0");
+        if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MATERIALS") == "1")
+        {
+            var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "material-recipe.json"), recipe.ToJsonString());
+            string materials = """
+                tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
+                const state=tool('get_state');
+                const x=Math.floor(state.player.pos.x/16), y=Math.floor(state.player.pos.y/16);
+                const before=state.inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                tool('script_events',{wait_ms:0});
+                const sourceTile=tool('game_catalog',{kind:'tile',name:'61'}).matches.find(m=>m.type===61).internal;
+                const sources=[];
+                for(const dx of [-120,0,120]) for(const dy of [-120,0,120]) {
+                  const query=tool('find_tiles',{name:sourceTile,n:1,frame_x:144,source_area:{x:x+dx-60,y:y+dy-60,width:120,height:120}});
+                  if(query.error) throw new Error(JSON.stringify(query));
+                  sources.push(...query.tiles);
+                }
+                sources.sort((a,b)=>a.dist-b.dist);
+                if(!sources.length) throw new Error('no verified spore source in searched regions; original progress preserved');
+                const source=step('next-material-source',()=>sources[0]);
+                let result=tool('gather',{targets:[{item_type:331,count:before+1,tile_names:[sourceTile],tile_frame_x:144}],source_area:{x:source.x-1,y:source.y-1,width:3,height:3}});
+                for(let i=0;i<30&&result.handle;i++) {
+                  const events=tool('script_events',{wait_ms:0});
+                  if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger while collecting the next recipe material'});
+                  const current=tool('action_query',{handle:result.handle,wait_ms:1000});
+                  if(current.status==='completed'){result=current;break;}
+                  if(current.status==='paused') tool('action_control',{handle:result.handle,command:'resume'});
+                  else if(current.status!=='running') throw new Error(JSON.stringify(current));
+                }
+                const after=tool('get_state').inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                return {before,after,gained:after-before,source,result};
+                """;
+            var progress = await Call("run_script", new JsonObject { ["code"] = materials,
+                ["workflow"] = "material-continuation", ["event_delivery"] = "script" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "material-result.json"), progress.ToJsonString());
+            if (progress["value"]?["gained"]?.GetValue<int>() < 1 || progress["value"]?["gained"] == null)
+                throw new Exception("material continuation has no verified spore gain; inspect material-result.json");
+            Console.WriteLine("OPPORTUNITY_MATERIAL_PROGRESS verified_spore_gain=true");
+        }
     }
 }
