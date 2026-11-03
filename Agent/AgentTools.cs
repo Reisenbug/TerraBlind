@@ -525,7 +525,10 @@ public static partial class AgentTools
                     .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
                         t["tile_names"]?.AsArray().Select(n => n.GetValue<string>()).ToArray() ?? Array.Empty<string>(),
                         t["npc_types"]?.AsArray().Select(n => n.GetValue<int>()).ToArray() ?? Array.Empty<int>())).ToArray();
-                result = await Gather.Run(targets, Int(args, "seconds", 120), new GameGather(targets), token);
+                var sourceArea = GatherArea.Parse(args["source_area"] as JsonObject);
+                if (sourceArea != null && ((long)sourceArea.X + sourceArea.Width > Main.maxTilesX
+                    || (long)sourceArea.Y + sourceArea.Height > Main.maxTilesY)) throw new ArgumentException("source_area超出世界边界。");
+                result = await Gather.Run(targets, Int(args, "seconds", 120), new GameGather(targets, sourceArea), token, sourceArea);
                 break;
             case "npc_find":
                 result = await Call("/npc_find", args, token);
@@ -862,6 +865,9 @@ public static partial class AgentTools
         var catalog = await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token);
         var exact = catalog["matches"].AsArray().Where(m => m["exact"].GetValue<bool>()).ToArray();
         int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
+        var area = GatherArea.Parse(args["source_area"] as JsonObject);
+        if (area != null && types == 0)
+            return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone() };
         if (catalog["truncated"].GetValue<bool>() || types > 1)
             return new JsonObject { ["error"] = "ambiguous_tile_name", ["requested_name"] = Text(args, "name"),
                 ["name_candidates"] = catalog["matches"].DeepClone() };
@@ -874,6 +880,24 @@ public static partial class AgentTools
         }
         var resolved = (JsonObject)args.DeepClone();
         resolved["name"] = exact[0]["internal"].GetValue<string>();
+        if (area != null)
+            return await NativeAgent.OnMain(() =>
+            {
+                if ((long)area.X + area.Width > Main.maxTilesX || (long)area.Y + area.Height > Main.maxTilesY)
+                    throw new ArgumentException("source_area超出世界边界。");
+                int type = exact[0]["type"].GetValue<int>();
+                var matches = new List<JsonObject>();
+                for (int x = area.X; x < area.X + area.Width; x++)
+                    for (int y = area.Y; y < area.Y + area.Height; y++)
+                        if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == type)
+                        {
+                            double dx = x - Main.LocalPlayer.Center.X / 16, dy = y - Main.LocalPlayer.Center.Y / 16;
+                            matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy) });
+                        }
+                return new JsonObject { ["tiles"] = new JsonArray(matches.OrderBy(m => m["dist"].GetValue<float>())
+                    .Take(Math.Clamp(Int(args, "n", 12), 1, 100)).Select(m => (JsonNode)m).ToArray()),
+                    ["source_area"] = area.Snapshot(), ["resolved_name"] = resolved["name"].DeepClone() };
+            }, token);
         var result = await Call("/find_tiles", resolved, token);
         result["requested_name"] = Text(args, "name");
         result["resolved_name"] = resolved["name"].DeepClone();

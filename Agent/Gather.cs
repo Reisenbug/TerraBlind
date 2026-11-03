@@ -10,6 +10,23 @@ namespace TerraBlind;
 
 public sealed record GatherTarget(int ItemType, int Count, string[] Tiles, int[] Npcs);
 
+public sealed record GatherArea(int X, int Y, int Width, int Height)
+{
+    public static GatherArea Parse(JsonObject value)
+    {
+        if (value == null) return null;
+        var area = new GatherArea(value["x"].GetValue<int>(), value["y"].GetValue<int>(),
+            value["width"].GetValue<int>(), value["height"].GetValue<int>());
+        if (area.X < 0 || area.Y < 0 || area.Width is < 1 or > 120 || area.Height is < 1 or > 120)
+            throw new ArgumentException("source_area需要非负坐标及1..120格的width/height。");
+        return area;
+    }
+    public bool Contains(JsonObject candidate) => candidate["x"] != null && candidate["y"] != null
+        && candidate["x"].GetValue<int>() >= X && candidate["x"].GetValue<int>() < (long)X + Width
+        && candidate["y"].GetValue<int>() >= Y && candidate["y"].GetValue<int>() < (long)Y + Height;
+    public JsonObject Snapshot() => new() { ["x"] = X, ["y"] = Y, ["width"] = Width, ["height"] = Height };
+}
+
 public interface IGatherWorld
 {
     Task<JsonObject> Observe(CancellationToken token);
@@ -19,7 +36,7 @@ public interface IGatherWorld
 
 public static class Gather
 {
-    public static async Task<JsonObject> Run(GatherTarget[] targets, int seconds, IGatherWorld world, CancellationToken token)
+    public static async Task<JsonObject> Run(GatherTarget[] targets, int seconds, IGatherWorld world, CancellationToken token, GatherArea area = null)
     {
         if (targets.Length is < 1 or > 8 || targets.Select(t => t.ItemType).Distinct().Count() != targets.Length
             || targets.Any(t => t.ItemType <= 0 || t.Count is < 1 or > 9999 || t.Npcs.Any(id => id <= 0)))
@@ -41,6 +58,7 @@ public static class Gather
                 if (scene["error"] != null)
                 { outcome = scene["error"].ToString(); sourceError = scene["source_error"]?.DeepClone(); break; }
                 var candidate = scene["candidates"].AsArray().OfType<JsonObject>()
+                    .Where(c => area == null || area.Contains(c))
                     .Where(c => targets.Any(t => t.ItemType == c["item_type"].GetValue<int>() && Count(t) < t.Count))
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
@@ -63,6 +81,7 @@ public static class Gather
         scene = await world.Observe(token);
         bool enough = targets.All(t => Count(t) >= t.Count);
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
+            ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject

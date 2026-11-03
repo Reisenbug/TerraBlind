@@ -266,6 +266,18 @@ static class RuntimeTests
                 try { TerrainInspection.Opportunity(200, 200, null); throw new Exception("unbounded assessment accepted"); }
                 catch (ArgumentException) { }
                 Console.WriteLine("PASS: opportunity assessment reports obstacles/hazards and measured geometry; elapsed_ms=" + assessed["elapsed_ms"]);
+                Game.tile[30, 30] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther };
+                Game.tile[5, 5] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther };
+                var areaTiles = await Execute(AgentTools.FindTiles(new JsonObject { ["name"] = "FixtureOther",
+                    ["source_area"] = new JsonObject { ["x"] = 30, ["y"] = 30, ["width"] = 2, ["height"] = 2 } }, default));
+                Check(areaTiles["tiles"].AsArray().Count == 1 && areaTiles["tiles"][0]["x"].GetValue<int>() == 30,
+                    "source query substituted a nearer outside tile for the selected region");
+                var scopedGather = new GameGather(new[] { new GatherTarget(987, 1, new[] { "FixtureOther" }, Array.Empty<int>()) },
+                    new GatherArea(30, 30, 2, 2));
+                var sourceScene = await Execute(scopedGather.Observe(default));
+                Check(sourceScene["candidates"].AsArray().Count == 1
+                    && sourceScene["candidates"][0]["distance"].GetValue<float>() > 0,
+                    "bounded tile lookup did not supply a usable gather candidate");
             }
             finally { Game.tile = savedTiles; Game.LocalPlayer.position = savedPosition; Game.tileSolid[1] = savedSolid; }
 

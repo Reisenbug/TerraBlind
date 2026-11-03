@@ -22,6 +22,17 @@ static class GatherTests
         Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
         Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
 
+        world = new World();
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(10, 0, 1, 1));
+        Check(world.Actions.Count == 1 && world.Actions[0] == "tile" && !result["ok"].GetValue<bool>()
+            && result["outcome"].ToString() == "source_unavailable" && result["targets"][0]["actual"].GetValue<int>() == 1,
+            "gather ignored source area to chase an outside NPC or counted incomplete target as success");
+        world = new World { Drop = true };
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(30, 0, 1, 1));
+        Check(world.Actions.Count == 0 && result["outcome"].ToString() == "source_unavailable",
+            "empty selected source silently fell back to a nearby rejected drop");
+        Console.WriteLine("PASS: selected source area overrides default candidate priorities without fallback or false success");
+
         world = new World { Gain = false };
         result = await Gather.Run(Targets, 5, world, default);
         Check(!result["ok"].GetValue<bool>() && world.Actions.Count == 4 && result["last_result"] != null,
@@ -170,7 +181,8 @@ static class GatherTests
         public Task<JsonObject> Observe(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f };
+            JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f,
+                ["x"] = type, ["y"] = 0 };
             return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
                 ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),
                 ["error"] = Dead ? "interrupted_by_death" : Ambiguous && Stops == 0 ? "ambiguous_tile_name" : null,
