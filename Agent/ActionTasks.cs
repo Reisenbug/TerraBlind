@@ -169,6 +169,7 @@ public sealed class ActionTasks
             {
                 root.ThrowIfCancellationRequested();
                 if (handingOff || active != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
+                if (entry.Status == "cancelling") throw new InvalidOperationException("取消清理尚未完成，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
                 if (updatedArgs != null) entry.Args = (JsonObject)updatedArgs.DeepClone();
                 entry.Inline = false;
@@ -176,9 +177,18 @@ public sealed class ActionTasks
                 return Snapshot(entry);
             }
             if (command is not ("pause" or "cancel")) throw new ArgumentException("command需要pause/cancel/resume。");
-            if (entry.Status != "running") return Snapshot(entry);
-            entry.Requested = command == "pause" ? "paused" : "cancelled";
-            entry.Cancel.Cancel(); running = entry.Running;
+            if (entry.Status == "paused" && command == "cancel")
+            {
+                entry.Status = "cancelling"; entry.Requested = "cancelled";
+                entry.Running = CancelPaused(entry);
+            }
+            else if (entry.Status == "running")
+            {
+                entry.Requested = command == "pause" ? "paused" : "cancelled";
+                entry.Cancel.Cancel();
+            }
+            else if (entry.Status != "cancelling") return Snapshot(entry);
+            running = entry.Running;
         }
         await running.WaitAsync(root);
         var observed = await observe(root);
@@ -186,6 +196,26 @@ public sealed class ActionTasks
         {
             var entry = Find(id); entry.Observation = observed; entry.StoppedObservation = (JsonObject)observed.DeepClone();
             return Snapshot(entry);
+        }
+    }
+
+    async Task CancelPaused(Entry entry)
+    {
+        bool Valid()
+        { lock (gate) return entries.TryGetValue(entry.Id, out var current) && current == entry && entry.Status == "cancelling"; }
+        try
+        {
+            if (finished != null) await finished(entry.Id, Valid);
+            lock (gate) if (Valid()) entry.Status = "cancelled";
+        }
+        catch (Exception error)
+        {
+            lock (gate) if (Valid())
+            {
+                entry.Status = "failed";
+                entry.Result = new JsonObject { ["error"] = "action_cleanup_failed", ["detail"] = error.Message,
+                    ["action_result"] = entry.Result?.DeepClone() };
+            }
         }
     }
 

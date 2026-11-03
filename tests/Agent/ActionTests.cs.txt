@@ -196,5 +196,27 @@ static class ActionTests
         Check(completionCount == 1 && scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) == null,
             "cancelled action retained its override after verified cleanup");
         Console.WriteLine("PASS: action overrides survive pause and expire only after terminal input cleanup");
+
+        int pausedStops = 0, pausedEnds = 0;
+        var cancelEntered = Signal(); var cancelAllowed = Signal();
+        var detached = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => { pausedStops++; return Task.CompletedTask; },
+            async (_, valid) => { cancelEntered.TrySetResult(true); await cancelAllowed.Task; if (valid()) pausedEnds++; });
+        string detachedId = detached.Start("nav_to", new JsonObject { ["x"] = 100 }, default)["handle"].ToString();
+        await detached.Control(detachedId, "pause", null, default);
+        var detachedCancel = detached.Control(detachedId, "cancel", null, default);
+        await cancelEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!detachedCancel.IsCompleted && pausedStops == 1, "paused cancel returned before cleanup or stopped inputs twice");
+        try { await detached.Control(detachedId, "resume", null, default); throw new Exception("resume raced paused cancellation"); }
+        catch (InvalidOperationException) { }
+        string sideHandle = detached.Start("fight", new JsonObject(), default)["handle"].ToString();
+        cancelAllowed.TrySetResult(true);
+        var detachedResult = await detachedCancel.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(detachedResult["status"].ToString() == "cancelled" && pausedEnds == 1
+            && pausedStops == 1 && detached.ActiveHandle == sideHandle,
+            "cancelling a paused original task left it paused or stopped the inserted action");
+        await detached.Control(sideHandle, "cancel", null, default);
+        Console.WriteLine("PASS: vetoing a paused intent finalizes its scope without stopping the inserted action or allowing resume races");
     }
 }
