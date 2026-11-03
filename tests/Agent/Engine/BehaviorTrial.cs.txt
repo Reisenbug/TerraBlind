@@ -263,6 +263,54 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_INVENTORY_MANAGEMENT") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false;
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                foreach (var item in p.armor) item.TurnToAir();
+                Main.mouseItem.TurnToAir(); p.itemTime = p.itemAnimation = 0;
+                p.inventory[0].SetDefaults(ItemID.WoodHelmet);
+                p.inventory[1].SetDefaults(ItemID.CloudinaBottle);
+                p.inventory[2].SetDefaults(ItemID.StoneBlock); p.inventory[2].stack = 17; p.inventory[2].favorited = true;
+                return true;
+            });
+            var overview = await Call("inventory_review", new JsonObject());
+            JsonNode Inventory(int slot) => overview["inventory"].AsArray().First(i => i["slot"].GetValue<int>() == slot).DeepClone();
+            foreach (var (inventory, equipment) in new[] { (0, 0), (1, 3) })
+            {
+                var equipped = await Call("equip_item", new JsonObject { ["inventory_slot"] = inventory, ["equipment_slot"] = equipment,
+                    ["expected_inventory"] = Inventory(inventory), ["expected_equipment"] = overview["equipment"][equipment].DeepClone() });
+                if (equipped["ok"]?.GetValue<bool>() != true) throw new Exception("native equipment rejected: " + equipped);
+            }
+            var dropArgs = new JsonObject { ["slot"] = 2, ["expected"] = Inventory(2) };
+            var favorite = await Call("inventory_drop", dropArgs);
+            if (favorite["error"]?.ToString() != "favorited_item") throw new Exception("native favorite was discarded");
+            await OnMain(() => { Main.LocalPlayer.inventory[2].favorited = false; return true; });
+            dropArgs["expected"]["stack"] = 18;
+            var stale = await Call("inventory_drop", dropArgs);
+            if (stale["error"]?.ToString() != "stale_inventory") throw new Exception("native stale inventory was discarded");
+            dropArgs["expected"]["stack"] = 17;
+            var dropped = await Call("inventory_drop", dropArgs);
+            var verified = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                int who = dropped["world_item"]?.GetValue<int>() ?? -1;
+                return dropped["ok"]?.GetValue<bool>() == true && p.inventory[2].IsAir && who >= 0 && who < Main.maxItems
+                    && Main.item[who].active && Main.item[who].type == ItemID.StoneBlock && Main.item[who].stack == 17
+                    && p.armor[0].type == ItemID.WoodHelmet && p.statDefense > 0
+                    && p.armor[3].type == ItemID.CloudinaBottle && p.GetJumpState(ExtraJump.CloudInABottle).Enabled
+                    && Main.mouseItem.IsAir;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "inventory-management.json"), new JsonObject
+                { ["review"] = overview, ["favorite"] = favorite, ["stale"] = stale, ["drop"] = dropped, ["verified"] = verified }.ToJsonString());
+            if (!verified) throw new Exception("native inventory/equipment effects unverified");
+            Console.WriteLine("INVENTORY_MANAGEMENT_PASS native_equipment=true native_drop=true protected=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PROJECTILE_ONLY_DEFENSE") == "1")
         {
             await OnMain(() =>
