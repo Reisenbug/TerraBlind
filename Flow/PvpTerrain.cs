@@ -96,6 +96,21 @@ public static class PvpTerrain
     public static JsonObject Observe(Player self, Player target, bool detailed = false)
         => Observe(self, target.Center, detailed);
 
+    internal static JsonObject ProbeStance(Player self, Vector2 target, int x, int y)
+    {
+        Vector2 center = new(x * 16 + 8, y * 16 - self.height / 2f);
+        if (!InWorld(x, y) || Vector2.Distance(self.Center, center) > 960)
+            return new JsonObject { ["support_x"] = x, ["support_y"] = y, ["error"] = "stance_out_of_observation_range" };
+        var topLeft = center - new Vector2(self.width / 2f, self.height / 2f);
+        bool fits = topLeft.X >= 0 && topLeft.Y >= 0 && topLeft.X + self.width <= Main.maxTilesX * 16
+            && topLeft.Y + self.height <= Main.maxTilesY * 16 && !Collision.SolidCollision(topLeft, self.width, self.height);
+        var tile = Main.tile[x, y];
+        return new JsonObject { ["x"] = center.X, ["y"] = center.Y, ["support_x"] = x, ["support_y"] = y,
+            ["supported"] = Support(x, y), ["body_fits"] = fits,
+            ["support_slope"] = (int)tile.Slope, ["support_half_block"] = tile.IsHalfBlock,
+            ["shot_line"] = fits ? Trace(center, target) : null, ["reachability"] = "unknown_not_a_computed_path" };
+    }
+
     internal static JsonObject Observe(Player self, Vector2 targetCenter, bool detailed = false)
     {
         var probes = new JsonArray();

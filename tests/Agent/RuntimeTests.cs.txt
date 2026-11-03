@@ -82,6 +82,33 @@ static class RuntimeTests
                 var changed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
                     new JsonObject { ["npc"] = 0, ["npc_type"] = 43 }, default)));
                 Check(changed["error"]?.ToString() == "target_changed", "NPC observation silently substituted a different target type");
+                int probeX = (int)(Game.LocalPlayer.Center.X / 16) + 23, probeY = (int)(Game.LocalPlayer.Center.Y / 16) + 5;
+                var savedSupport = Game.tile[probeX, probeY];
+                var savedEmpty = Game.tile[probeX + 1, probeY];
+                var savedSolidTest = Terraria.Collision.SolidTest;
+                try
+                {
+                    Game.tile[probeX, probeY] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, IsHalfBlock = true };
+                    Game.tile[probeX + 1, probeY] = default;
+                    var probeArgs = new JsonObject { ["npc"] = 0, ["npc_type"] = 42,
+                        ["stance_cells"] = new JsonArray(new JsonObject { ["x"] = probeX, ["y"] = probeY },
+                            new JsonObject { ["x"] = probeX + 1, ["y"] = probeY }, new JsonObject { ["x"] = -1, ["y"] = probeY }) };
+                    var probes = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe", probeArgs, default)))["requested_stances"];
+                    Check(probes[0]["supported"].GetValue<bool>() && probes[0]["body_fits"].GetValue<bool>()
+                        && probes[0]["support_half_block"].GetValue<bool>() && probes[0]["support_x"].GetValue<int>() == probeX
+                        && !probes[0]["shot_line"]["clear"].GetValue<bool>() && !probes[1]["supported"].GetValue<bool>()
+                        && probes[2]["error"].ToString() == "stance_out_of_observation_range" && !FightCoordinator.IsActive,
+                        "custom stance observation substituted points, hid support shape or claimed blocked shots clear");
+                    Terraria.Collision.SolidTest = (_, _, _) => true;
+                    probes = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe", probeArgs, default)))["requested_stances"];
+                    Check(!probes[0]["body_fits"].GetValue<bool>() && probes[0]["shot_line"] == null,
+                        "body-blocked custom stance was offered as a firing position");
+                }
+                finally
+                {
+                    Game.tile[probeX, probeY] = savedSupport; Game.tile[probeX + 1, probeY] = savedEmpty;
+                    Terraria.Collision.SolidTest = savedSolidTest;
+                }
             }
             finally { Terraria.Collision.Clear = clear; }
         }

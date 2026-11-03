@@ -667,7 +667,16 @@ public static partial class AgentTools
                     var npc = Main.npc[who]; var player = Main.LocalPlayer;
                     if (Microsoft.Xna.Framework.Vector2.Distance(player.Center, npc.Center) > 1280)
                         return new JsonObject { ["error"] = "target_out_of_observation_range" };
+                    var requestedStances = new JsonArray();
+                    if (args["stance_cells"] is JsonArray cells)
+                    {
+                        if (cells.Count is < 1 or > 12) throw new ArgumentException("stance_cells需要1..12个支撑格坐标。");
+                        foreach (var cell in cells)
+                            requestedStances.Add(PvpTerrain.ProbeStance(player, npc.Center,
+                                cell["x"].GetValue<int>(), cell["y"].GetValue<int>()));
+                    }
                     return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
+                        ["requested_stances"] = requestedStances,
                         ["target_pos"] = new JsonObject { ["x"] = npc.Center.X, ["y"] = npc.Center.Y },
                         ["terrain"] = PvpTerrain.Observe(player, npc.Center),
                         ["limitations"] = "只读瞬时快照；NPC槽位可能复用。站位仅检查支撑和身体空间，未验证路径、落差、液体、陷阱或弹幕。选择后需检查危险，移动后刷新射界。" };
