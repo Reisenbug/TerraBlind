@@ -481,6 +481,14 @@ static class RuntimeTests
                 ["pos_tiles"] = new JsonObject { ["x"] = 12, ["y"] = 34 } };
             AgentTools.NewTask();
             var deathState = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(AgentTools.Watches.Armed && AgentTools.Watches.Subscribed("low_health")
+                && AgentTools.Watches.Subscribed("nearby_chest"), "task preparation started without default observations");
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = 40, ["actions"] = new JsonArray(),
+                ["chests"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) });
+            var preparingEvents = AgentTools.Watches.Take();
+            Check(preparingEvents.Any(e => e["kind"].ToString() == "low_health")
+                && preparingEvents.Any(e => e["kind"].ToString() == "nearby_chest"),
+                "preparation without an action handle lost danger or opportunity evidence");
             Check(deathState["last_death"]["projectile_type"].GetValue<int>() == 727
                 && deathState["last_death"]["pos_tiles"]["x"].GetValue<int>() == 12,
                 "fresh task lost measured death source or coordinates");
