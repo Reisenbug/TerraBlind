@@ -29,6 +29,9 @@ public sealed class BehaviorTrial : ModSystem
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
         var allowed = new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
+        var programTools = allowed.Concat(new[] { "watch", "fight", "action_start", "action_control", "action_query", "script_events",
+            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress" }).ToArray();
+        var definitions = new JsonArray(schemas.Where(t => programTools.Contains(t["function"]["name"].ToString())).Select(t => t["function"].DeepClone()).ToArray());
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
@@ -37,16 +40,28 @@ public sealed class BehaviorTrial : ModSystem
         await agent.RunAsync("Review and save a corrected revision of combat_loot_return. Preserve workflow behavior-trial and all completed step identifiers/handles. "
             + "Goal: move while attacking the nearby hostile, judge actual drops with Jev, collect a useful drop, then resume the original navigation handle. "
             + "Do not execute game actions now. Read the saved program and current terrain/state, then use script_program save with the current expected_revision. "
+            + "The saved revision currently ends at a review request. Replace that request with the executable candidate continuation below, correcting it as needed. "
+            + "Saving another immediate decision_point without the combat/collection/return logic is NOT a solution. Preserve the candidate return contract: item_type,gained,original_handle,judgment,returned. "
             + "Handle interrupted actions and danger explicitly. Do not claim a kill or collection without evidence. Avoid walking off the current ledge. "
             + "At most 8 tool calls. Existing candidate continuation (editable):\n" + proposedCode + "\nReview request:\n" + wake.ToJsonString(),
             "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
             "You review and edit saved Terraria JS behavior programs. tool(name,args) inside source uses the game APIs below. "
             + "You may only query or save source during this review. No shell/files/network. Existing workflow step results are reused on resume.\n"
-            + schemas.ToJsonString(), entries,
+            + "During review get_state is a compact current-state view, not the full runtime snapshot.\n" + definitions.ToJsonString(), entries,
             async (name, args, token) =>
             {
                 if (!allowed.Contains(name) || ++calls > 8) throw new InvalidOperationException("review tool budget or scope exceeded");
-                return await AgentTools.Execute(name, args, token);
+                string output = await AgentTools.Execute(name, args, token);
+                if (name != "get_state") return output;
+                var state = JsonNode.Parse(output);
+                var compact = new JsonObject();
+                foreach (string field in new[] { "player", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
+                    if (state[field] != null) compact[field] = state[field].DeepClone();
+                compact["inventory_slots"] = new JsonArray(state["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray());
+                compact["action_tasks"] = new JsonArray(state["action_tasks"].AsArray().Select(a => (JsonNode)new JsonObject
+                { ["handle"] = a["handle"]?.DeepClone(), ["tool"] = a["tool"]?.DeepClone(), ["args"] = a["args"]?.DeepClone(), ["status"] = a["status"]?.DeepClone() }).ToArray());
+                compact["script_workflows"] = state["script_workflows"]?.DeepClone();
+                return compact.ToJsonString();
             }, text => replies.Add(text), timeout.Token);
         File.WriteAllText(Path.Combine(Main.SavePath, "behavior-review.json"), new JsonObject
         { ["model"] = "gpt-6-luna", ["calls"] = calls, ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
@@ -237,17 +252,10 @@ public sealed class BehaviorTrial : ModSystem
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
         if (review["value"]?["status"]?.ToString() != "yield" || review["value"]?["wake"] == null)
             throw new Exception("review did not yield: " + review.ToJsonString());
-        saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = code });
+        if (Environment.GetEnvironmentVariable("TB_BEHAVIOR_REVIEW") == "1") saved = await Review(review, code);
+        else saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = code });
         var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
-        if (result["value"]?["status"]?.ToString() == "yield" && Environment.GetEnvironmentVariable("TB_BEHAVIOR_REVIEW") == "1")
-        {
-            int oldRevision = saved["revision"].GetValue<int>();
-            saved = await Review(result, code);
-            if (saved["revision"].GetValue<int>() <= oldRevision) throw new Exception("model review did not save a changed program revision");
-            result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
-                ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
-        }
         if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
         var finalState = await Call("get_state", new JsonObject());
         await OnMain(() =>
