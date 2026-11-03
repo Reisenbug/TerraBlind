@@ -31,26 +31,37 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
-    async Task<JsonObject> Review(JsonObject wake)
+    async Task<JsonObject> Review(JsonObject wake, bool materials = false)
     {
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
-        var allowed = new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
+        var allowed = materials
+            ? new[] { "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
+            : new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
         var programTools = allowed.Concat(new[] { "watch", "fight", "action_start", "action_control", "action_query", "script_events",
-            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress" }).ToArray();
+            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress", "nav_to", "use_item", "craft" }).ToArray();
         var definitions = new JsonArray(schemas.Where(t => programTools.Contains(t["function"]["name"].ToString())).Select(t => t["function"].DeepClone()).ToArray());
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
         using var agent = new CodexAgent();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        await agent.RunAsync("Review and save a corrected revision of combat_loot_return. Preserve workflow behavior-trial and all completed step identifiers/handles. "
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(materials ? 45 : 90));
+        string request = materials
+            ? "Inspect the failed material collection and save a JavaScript continuation named material_recovery. Do not execute it during this review. "
+                + "Goal: preserve completed opportunistic chest/crystal collection and continue obtaining the recipe materials for Thorn Chakram. "
+                + "Use current evidence to choose the next concrete recovery action; retain existing gather/navigation handles and progress. "
+                + "Do not invent sources, equipment, healing or a safe route. Do not hardcode coordinates absent from observations. "
+                + "The saved code must reobserve at execution, handle interruption, verify actual gains, and resume the same original gather when appropriate. "
+                + "You may instead record a concrete unmet prerequisite if no justified action exists, but do not claim task success. "
+                + "At most 8 tool calls; save source before your final reply.\nReview request:\n"
+            : "Review and save a corrected revision of combat_loot_return. Preserve workflow behavior-trial and all completed step identifiers/handles. "
             + "Goal: move while attacking the nearby hostile, judge actual drops with Jev, collect a useful drop, then resume the original navigation handle. "
             + "Do not execute game actions now. Read the saved program and current terrain/state, then use script_program save with the current expected_revision. "
             + "The saved revision contains the full continuation but pauses at a pre-combat review gate. Use script_program patch to change only that gate and any concrete issue supported by observations. "
             + "Do not delete the continuation or save another immediate decision_point. Preserve the return contract: item_type,gained,original_handle,judgment,returned. "
             + "Handle interrupted actions and danger explicitly. Do not claim a kill or collection without evidence. Avoid walking off the current ledge. "
-            + "At most 8 tool calls. Read current source via script_program get.\nReview request:\n" + wake.ToJsonString(),
+            + "At most 8 tool calls. Read current source via script_program get.\nReview request:\n";
+        await agent.RunAsync(request + wake.ToJsonString(),
             "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
             "You review and edit saved Terraria JS behavior programs. tool(name,args) inside source uses the game APIs below. "
             + "You may only query or save source during this review. No shell/files/network. Existing workflow step results are reused on resume.\n"
@@ -62,7 +73,7 @@ public sealed class BehaviorTrial : ModSystem
                 if (name != "get_state") return output;
                 var state = JsonNode.Parse(output);
                 var compact = new JsonObject();
-                foreach (string field in new[] { "player", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
+                foreach (string field in new[] { "player", "buffs", "enemies", "watch", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
                     if (state[field] != null) compact[field] = state[field].DeepClone();
                 compact["inventory_slots"] = new JsonArray(state["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray());
                 compact["action_tasks"] = new JsonArray(state["action_tasks"].AsArray().Select(a => (JsonNode)new JsonObject
@@ -72,7 +83,7 @@ public sealed class BehaviorTrial : ModSystem
             }, text => replies.Add(text), timeout.Token);
         File.WriteAllText(Path.Combine(Main.SavePath, "behavior-review.json"), new JsonObject
         { ["model"] = "gpt-6-luna", ["calls"] = calls, ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
-        return await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = "combat_loot_return" });
+        return await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = materials ? "material_recovery" : "combat_loot_return" });
     }
     public override void Load()
     {
@@ -844,6 +855,13 @@ public sealed class BehaviorTrial : ModSystem
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
+                if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1")
+                {
+                    var reviewed = await Review(new JsonObject { ["workflow"] = "stinger-continuation",
+                        ["result"] = combat["value"]?.DeepClone(), ["state"] = combat["state"]?.DeepClone() }, materials: true);
+                    File.WriteAllText(Path.Combine(Main.SavePath, "material-reviewed-program.json"), reviewed.ToJsonString());
+                    throw new Exception("material model review ended without executing the saved continuation; full acceptance remains unverified");
+                }
                 string previousReviewReason = null;
                 string previousReviewActions = null;
                 for (int review = 0; review < 3 && (combat["value"]?["status"]?.ToString() == "yield"
