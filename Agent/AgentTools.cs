@@ -740,6 +740,12 @@ public static partial class AgentTools
                         if (weaponType < 0 || weaponType > 0 && !Main.LocalPlayer.inventory.Take(10).Any(item =>
                             item.type == weaponType && CombatLoadout.Usable(item)))
                             return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_hotbar" };
+                        var weapon = weaponType > 0 ? Main.LocalPlayer.inventory.Take(10).First(item =>
+                            item.type == weaponType && CombatLoadout.Usable(item)) : null;
+                        if (weapon != null && weapon.useAmmo > 0 && !Main.LocalPlayer.HasAmmo(weapon))
+                            return new JsonObject { ["error"] = "weapon_missing_ammo", ["requested_weapon_type"] = weaponType,
+                                ["use_ammo"] = weapon.useAmmo, ["weapon_type"] = CombatLoadout.PreferredType,
+                                ["detail"] = "未修改战斗设置；补充匹配弹药或选择当前可用武器。" };
                         CombatLoadout.PreferredType = weaponType;
                     }
                     if (args["boss_control"] != null)

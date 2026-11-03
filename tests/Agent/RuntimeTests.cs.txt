@@ -327,10 +327,19 @@ static class RuntimeTests
                 Game.LocalPlayer.inventory[3] = new Terraria.Item { type = 964, stack = 1, damage = 14, useAmmo = 97 };
                 Game.LocalPlayer.HasAmmunition = false;
                 Check(CombatLoadout.Select(Game.LocalPlayer) == 1, "empty gun displaced usable throwing knives after looting");
+                var emptyGun = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat",
+                    new JsonObject { ["weapon_type"] = 964, ["auto_attack"] = false }, default)));
+                Check(emptyGun["error"]?.ToString() == "weapon_missing_ammo" && emptyGun["use_ammo"]?.GetValue<int>() == 97
+                    && CombatLoadout.PreferredType == 0 && AgentPermissions.Attack,
+                    "empty gun selection claimed success or changed combat settings");
                 CombatLoadout.PreferredType = 964;
                 Check(CombatLoadout.Select(Game.LocalPlayer) == -1, "explicit empty gun appeared usable or silently switched weapons");
                 Game.LocalPlayer.HasAmmunition = true;
                 Check(CombatLoadout.Select(Game.LocalPlayer) == 3, "restocked preferred gun stayed unavailable");
+                var loadedGun = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat",
+                    new JsonObject { ["weapon_type"] = 964 }, default)));
+                Check(loadedGun["error"] == null && loadedGun["weapon_type"]?.GetValue<int>() == 964,
+                    "restocked gun could not be selected through the tool");
             }
             finally
             {
