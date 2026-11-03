@@ -26,6 +26,8 @@ public sealed class BehaviorTrial : ModSystem
     int frames, movingAttackFrames, originX, floor, target = -1;
     bool collectingStingers;
     bool materialNavigationStub;
+    readonly List<string> sourceInputSamples = new();
+    bool samplingSources;
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
@@ -204,6 +206,12 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (samplingSources)
+        {
+            int x = ItemUseCoordinator.SnappedWx, y = ItemUseCoordinator.SnappedWy;
+            bool hasTile = x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY && Main.tile[x, y].HasTile;
+            sourceInputSamples.Add($"{Main.GameUpdateCount},{ItemUseCoordinator.IsActive},{ItemUseCoordinator.Outcome},{x},{y},{hasTile},{p.controlUseItem},{p.itemAnimation},{p.itemTime},{p.HeldItem.type}");
+        }
         if (!NaturalEncounters && collectingStingers && frames % 60 == 0 && hornetsSpawned < 40
             && (target < 0 || !Main.npc[target].active) && p.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack) < stingersRequired)
             SpawnMaterialHornet();
@@ -806,7 +814,8 @@ public sealed class BehaviorTrial : ModSystem
             return true;
         });
         if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1"
-            || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
+            || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1"
+            || Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
         {
             await OnMain(() => { materialNavigationStub = true; return true; });
             var sourceDepthState = await Call("get_state", new JsonObject());
@@ -838,6 +847,91 @@ public sealed class BehaviorTrial : ModSystem
                 || sourceReview["source_error"]["observations"]?.AsArray().Count != 3)
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
             Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true");
+            if (Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
+            {
+                samplingSources = true;
+                var variantTrial = await Call("run_script", new JsonObject { ["workflow"] = "source-variant-sampling",
+                    ["event_delivery"] = "script", ["code"] = """
+                    const handle=HANDLE, item=ITEM, wanted=6, tileName=TILE;
+                    const count=()=>tool('get_state').inventory_slots.filter(i=>i.type===item).reduce((n,i)=>n+i.stack,0);
+                    const start=step('origin',()=>{const s=tool('get_state');return {x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),count:count()};});
+                    const area={x:start.x-60,y:start.y-60,width:120,height:120};
+                    tool('watch',{events:['nearby_chest'],passive_events:['nearby_chest'],radius:40});
+                    const candidates=tool('find_tiles',{name:tileName,n:100,source_area:area}).tiles;
+                    const tried=new Set(), positive=new Set(), decisions=[];
+                    const regions=[{...area,x:area.x+120},{...area,y:area.y+120},{...area,x:area.x-120},{...area,y:area.y-120}];
+                    let learned=null;
+                    let currentCount=count();
+                    while(candidates.length||learned&&regions.length){
+                      if(currentCount>=wanted) break;
+                      if(!candidates.length) {
+                        const nextArea=regions.shift();
+                        candidates.push(...tool('find_tiles',{name:tileName,n:100,source_area:nextArea,frame_x:learned.frame_x,frame_y:learned.frame_y}).tiles);
+                        continue;
+                      }
+                      const preferred=candidates.findIndex(c=>positive.has(c.tile_type+':'+c.frame_x+':'+c.frame_y));
+                      const c=candidates.splice(preferred<0?0:preferred,1)[0];
+                      const key=c.tile_type+':'+c.frame_x+':'+c.frame_y;
+                      if(tried.has(key)&&!positive.has(key)) continue;
+                      const evidence=step('sample-'+c.x+'-'+c.y,()=>{
+                        const events=tool('script_events',{wait_ms:0}).events;
+                        if(events.some(e=>['low_health','player_died','suffocating'].includes(e.kind)))
+                          tool('decision_point',{reason:'Unsafe to continue source sampling',evidence:{handle,events}});
+                        const assessment=tool('opportunity_assess',{x:c.x,y:c.y});
+                        const relevant=(assessment.hazards??[]).filter(h=>h.on_direct_corridor||Math.abs(h.x-c.x)<=1&&Math.abs(h.y-c.y)<=2);
+                        if(!assessment.ok||relevant.length)
+                          return {key,x:c.x,y:c.y,decision:'skip',reason:assessment.error??'hazard intersects approach or target neighborhood',hazards:relevant};
+                        const before=count();
+                        const resumed=tool('action_control',{handle,command:'resume',args:{
+                          targets:[{item_type:item,count:wanted,tile_names:[tileName],tile_frame_x:c.frame_x,tile_frame_y:c.frame_y}],
+                          source_area:{x:c.x-2,y:c.y-2,width:5,height:5}}});
+                        if(resumed.error) throw new Error(JSON.stringify(resumed));
+                        let q;
+                        do {
+                          q=tool('action_query',{handle,wait_ms:1000});
+                          if(q.status==='paused') tool('decision_point',{reason:'Sample interrupted; inspect before resuming',evidence:{handle,status:q.status}});
+                        } while(q.status==='running');
+                        if(['unsafe','interrupted_by_death','combat_obstructed'].includes(q.result?.outcome))
+                          tool('decision_point',{reason:'Source sampling requires recovery before another candidate',evidence:{handle,result:q.result}});
+                        const after=count();
+                        return {key,x:c.x,y:c.y,decision:'sample',before,after,gained:after-before,
+                          removed:q.result?.last_result?.result?.outcome==='removed',
+                          handle:q.handle,outcome:q.result?.outcome,approach:assessment.approach_direct_distance};
+                      });
+                      decisions.push(evidence);
+                      if(evidence.after!==undefined) currentCount=evidence.after;
+                      if(evidence.removed) tried.add(key);
+                      if(evidence.gained>0&&!positive.has(key)) {
+                        positive.add(key);
+                        learned=c;
+                        const matching=tool('find_tiles',{name:tileName,n:100,source_area:area,frame_x:c.frame_x,frame_y:c.frame_y}).tiles;
+                        candidates.splice(0,candidates.length,...matching.filter(t=>!decisions.some(d=>d.x===t.x&&d.y===t.y)));
+                      }
+                      if(decisions.length>=12) break;
+                    }
+                    return {handle,before:start.count,after:count(),wanted,positive_variants:[...positive],decisions};
+                    """.Replace("HANDLE", JsonValue.Create(sourceHandle).ToJsonString())
+                        .Replace("ITEM", ((int)ItemID.JungleSpores).ToString())
+                        .Replace("TILE", JsonValue.Create("JunglePlants").ToJsonString()) });
+                File.WriteAllText(Path.Combine(Main.SavePath, "source-variant-script.json"), variantTrial.ToJsonString());
+                await OnMain(() =>
+                {
+                    samplingSources = false;
+                    File.WriteAllLines(Path.Combine(Main.SavePath, "source-inputs.csv"),
+                        new[] { "tick,active,outcome,x,y,has_tile,use,animation,item_time,item_type" }.Concat(sourceInputSamples));
+                    return true;
+                });
+                var afterVariants = await Call("get_state", new JsonObject());
+                File.WriteAllText(Path.Combine(Main.SavePath, "source-variant-state.json"), afterVariants.ToJsonString());
+                if (variantTrial["value"]?["after"]?.GetValue<int>() < 6
+                    || variantTrial["value"]?["positive_variants"]?.AsArray().Count is not > 0
+                    || afterVariants["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.JungleSpores)
+                        .Sum(i => i["stack"].GetValue<int>()) < 6
+                    || afterVariants["action_tasks"].AsArray().Count(a => a["tool"]?.ToString() == "gather") != 1)
+                    throw new Exception("variant sampling incomplete; inspect actual inventory, decisions and original handle");
+                Console.WriteLine("SOURCE_VARIANT_SCRIPT_PASS native_items=true original_handle=true predefined_variant=false navigation_stub=true");
+                return;
+            }
             if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
             {
                 var beforeSourceRecovery = await Call("get_state", new JsonObject());
