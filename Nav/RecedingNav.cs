@@ -294,7 +294,6 @@ namespace TerraBlind
         static void TickInner()
         {
             if (!Active) return;
-            if (!_fieldReady && (!VanillaNavBridge.RegionsEnabled || _mode != Mode.Snap)) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
 
@@ -314,7 +313,7 @@ namespace TerraBlind
             if (!_fieldReady)
             {
                 var destination = new Vector2(_goalWx * 16 + 8 - p.width / 2f, (_goalWy + 1) * 16 - p.height);
-                if (VanillaNavBridge.RegionsEnabled && _mode == Mode.Snap
+                if (_mode == Mode.Snap
                     && VanillaContactRegion.TryWalk(p, destination, out var input))
                 {
                     VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(input));

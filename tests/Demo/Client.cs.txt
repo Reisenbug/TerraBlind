@@ -1247,11 +1247,12 @@ public sealed class Driver : ModSystem
     long shortStarted;
     Vector2 shortOrigin;
     readonly JsonArray shortResults = new();
+    Vector2 shortFlat;
 
     void ShortRequests()
     {
         var player = Main.LocalPlayer;
-        int[] offsets = { 10, 30, 60, 60, -30, -30 };
+        int[] offsets = { 6, 10, 30, 60, 60, -30, -30 };
         if (shortCase >= offsets.Length)
         {
             System.IO.File.WriteAllText(System.IO.Path.Combine(Main.SavePath, "short-requests.json"), shortResults.ToJsonString());
@@ -1262,12 +1263,26 @@ public sealed class Driver : ModSystem
         if (shortTick++ == 0)
         {
             RecedingNav.Stop();
-            if (shortCase == 0) MazeWand.InvalidateField();
+            if (shortCase <= 1) MazeWand.InvalidateField();
             foreach (var item in player.armor) item.TurnToAir();
             player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
             player.inventory[1].SetDefaults(ItemID.WoodPlatform); player.inventory[1].stack = 9999;
             player.statLife = player.statLifeMax = player.statLifeMax2 = 400;
             player.Teleport(new Vector2(3384 * 16, 243 * 16 - player.height));
+            if (shortCase == 0)
+            {
+                bool found = false;
+                for (int y = 200; y < 350 && !found; y++)
+                for (int x = 3000; x < 3500 && !found; x++)
+                {
+                    var from = new Vector2(x * 16, y * 16 - player.height);
+                    var to = from + new Vector2(8 * 16, 0);
+                    if (!VanillaContactRegion.ConnectedSupport(from, to, player.width, player.height)) continue;
+                    shortFlat = from; found = true;
+                }
+                if (!found) throw new InvalidOperationException("natural_flat_start_missing");
+                player.Teleport(shortFlat);
+            }
             player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
         }
         if (shortTick < 30) return;
@@ -1275,7 +1290,8 @@ public sealed class Driver : ModSystem
         {
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            RecedingNav.Start(3384 + offsets[shortCase], 242);
+            RecedingNav.Start(shortCase == 0 ? (int)(shortFlat.X / 16) + offsets[shortCase] : 3384 + offsets[shortCase],
+                shortCase == 0 ? (int)((shortFlat.Y + player.height) / 16) - 1 : 242);
             return;
         }
         bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
