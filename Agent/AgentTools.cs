@@ -100,6 +100,13 @@ public static partial class AgentTools
             tiles["detail_request"] = new JsonObject { ["tool"] = "get_state", ["args"] = new JsonObject { ["include_tiles"] = true } };
         }
         state["terrain"] = TerrainInspection.Read(6);
+        var healthPlayer = Main.LocalPlayer;
+        state["health_dynamics"] = new JsonObject
+        {
+            ["tick"] = Main.GameUpdateCount, ["hp"] = healthPlayer.statLife, ["dead"] = healthPlayer.dead,
+            ["life_regen_raw"] = healthPlayer.lifeRegen, ["life_regen_count_raw"] = healthPlayer.lifeRegenCount,
+            ["regen_direction"] = healthPlayer.lifeRegen < 0 ? "damage" : healthPlayer.lifeRegen > 0 ? "healing" : "neutral"
+        };
         if (state["player"] is JsonObject observedPlayer)
         {
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;

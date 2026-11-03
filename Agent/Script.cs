@@ -74,6 +74,7 @@ public static class AgentScript
         + "恢复失败任务前先刷新get_state并处理低血量、持续受伤或窒息，再处理射界等任务障碍。治疗须核对实际库存和使用后的血量；无药可依据现场选择撤离休整或其他方案，不能只反复yield。撤离和换位也可能被事件中断，保留新旧句柄及返回events，勿把中断误判为寻路不可达。"
         + "恢复条件必须配有执行分支：由你依据现场选择回血目标和等待预算；判断当前位置可休息后，在预算内用script_events({wait_ms:1000})等待并消费事件，再get_state核对血量、死亡/窒息和新伤害。继续受伤或现场改变就中止休息并调整方案；条件满足后在同一段代码继续处理原任务障碍或resume原handle，而不是再decision_point要求模型做已经明确的观察。预算耗尽仍未恢复时，带上血量变化、已等时长和原handle交回。没有确认可休息的位置不能直接套等待循环；缺少可查询的证据应先调用观察工具，不能只把‘需要观察/回血’存成一个立即yield的程序。"
         + "get_state.healing_items直接列出背包前50格中healLife>0的非空物品及slot、stack、base_heal_life、consumable，找直接治疗物品不必逐格item_info。基础治疗值不是当前可用或实际回血承诺；还需看potion_delay_ticks并验证use_item结果，不包含仅提供再生buff的物品。"
+        + "get_state.health_dynamics是同一tick的原生血量、死亡状态、life_regen_raw和life_regen_count_raw；regen_direction只说明当前引擎持续回血/掉血方向，不证明安全或预测未来血量。结合buffs剩余时间和last_damage.tick区分持续掉血与新受击，撤离后仍掉血不必然需要再次换位；判断能否等待由你的策略决定，继续观察新威胁并保留原任务。raw字段是引擎原始单位，不是每秒伤害。"
         + "gather返回source_unavailable时，用相同targets/source_area调用只读gather_observe确认当前库存和来源，不要反复启动gather探测。出现值得获取的新来源后可恢复原handle；否则决定换区域、执行其他步骤或交回观察。候选不是可达或安全证明，仍需opportunity_assess。"
         + "gather返回combat_obstructed表示连续射界受阻且目标未掉血；读取last_result.result里的目标格坐标、武器和血量证据，先观察地形、换位或改武器，不要原样重试。clear_line只是当前直线碰撞检查，不预测弹道或证明可达。"
         + "普通敌怪受阻可用npc_combat_observe，npc/npc_type取原candidate的who/npc_type。站位候选不是路径或安全承诺；先检查危险，再尝试导航，抵达后刷新NPC射界和身份，最后显式resume失败的原采集句柄。"

@@ -39,6 +39,21 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        int savedRegen = Game.LocalPlayer.lifeRegen, savedRegenCount = Game.LocalPlayer.lifeRegenCount;
+        try
+        {
+            foreach (int regen in new[] { -4, 0, 6 })
+            {
+                Game.LocalPlayer.lifeRegen = regen; Game.LocalPlayer.lifeRegenCount = -17;
+                int hp = Game.LocalPlayer.statLife;
+                var dynamics = JsonNode.Parse(await Execute(AgentTools.State(default)))["health_dynamics"];
+                Check(dynamics["life_regen_raw"].GetValue<int>() == regen && dynamics["life_regen_count_raw"].GetValue<int>() == -17
+                    && dynamics["hp"].GetValue<int>() == hp && Game.LocalPlayer.statLife == hp
+                    && dynamics["regen_direction"].ToString() == (regen < 0 ? "damage" : regen > 0 ? "healing" : "neutral"),
+                    "health observation invented healing, hid native damage, or used stale snapshot values");
+            }
+        }
+        finally { Game.LocalPlayer.lifeRegen = savedRegen; Game.LocalPlayer.lifeRegenCount = savedRegenCount; }
         var savedDrop = Game.item[0];
         try
         {
