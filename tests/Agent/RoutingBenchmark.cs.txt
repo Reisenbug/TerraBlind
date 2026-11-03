@@ -48,11 +48,11 @@ static class RoutingBenchmark
             string mode = mixed ? "mixed" : "script";
             string label = $"{repeat + 1}-{scenario}-{mode}";
             var entries = mixed ? new JsonArray(definitions.Where(t => t["function"]["name"].ToString() is
-                "run_script" or "get_state" or "say" or "ask" or "use_item" or "gather" or "action_start" or "action_query" or "action_control")
+                "run_script" or "get_state" or "say" or "ask" or "game_api" or "use_item" or "gather" or "action_start" or "action_query" or "action_control")
                 .Select(t => t.DeepClone()).ToArray()) : AgentScript.EntryTools(definitions);
             string system = AgentScript.Instructions(common, definitions);
             if (mixed) system = system.Replace("游戏操作通过run_script提交JavaScript代码，代码里用tool(name,args)调用下面的游戏API。", "可直接调用顶层游戏工具，也可用run_script组合游戏API。单次工具足够时优先直接调用，循环、条件和跨段流程优先写代码。")
-                .Replace("顶层只提供run_script、get_state、say、ask；其余API不是顶层工具，不要直接发起函数调用。", "顶层还提供use_item、gather、action_start、action_query、action_control；其他API通过脚本tool调用。");
+                .Replace("顶层只提供run_script、get_state、say、ask、game_api；其余API不是顶层工具，不要直接发起函数调用。", "顶层还提供use_item、gather、action_start、action_query、action_control；其他API通过脚本tool调用。");
             using var agent = new CodexAgent();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
             var world = new World(definitions, scenario);
@@ -182,6 +182,7 @@ static class RoutingBenchmark
                         _ => { Actions.CancelAll(); return Task.CompletedTask; }, token, workflow)).ToJsonString();
                 }
                 else if (name == "get_state") output = State().ToJsonString();
+                else if (name == "game_api") output = AgentScript.DescribeApi(definitions, args).ToJsonString();
                 else if (name == "action_start") output = Actions.Start(args["tool"].ToString(), args["args"].AsObject(), token).ToJsonString();
                 else if (name == "action_query") output = (await Actions.Query(args["handle"].ToString(), args["wait_ms"]?.GetValue<int>() ?? 0, token)).ToJsonString();
                 else if (name == "action_control") output = (await Actions.Control(args["handle"].ToString(), args["command"].ToString(), args["args"] as JsonObject, token)).ToJsonString();

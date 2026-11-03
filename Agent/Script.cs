@@ -29,18 +29,32 @@ public static class AgentScript
     }
 
     public static JsonArray EntryTools(JsonArray tools) => new(tools.Where(t =>
-        t["function"]?["name"]?.ToString() is "run_script" or "get_state" or "say" or "ask")
+        t["function"]?["name"]?.ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
         .Select(t => t.DeepClone()).ToArray());
 
     public static string Instructions(string system, JsonArray tools) =>
         "游戏操作通过run_script提交JavaScript代码，代码里用tool(name,args)调用下面的游戏API。"
-        + "顶层只提供run_script、get_state、say、ask；其余API不是顶层工具，不要直接发起函数调用。"
+        + "顶层只提供run_script、get_state、say、ask、game_api；其余API不是顶层工具，不要直接发起函数调用。"
         + "逐次行为、条件和循环应写在代码里，读取真实返回后推进；不能只登记计划或口头承诺。\n"
         + system
         + RuntimeInstructions
-        + "\n以下是脚本内tool可调用的完整游戏API定义（name、description、parameters），不是执行结果：\n"
+        + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
         + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
-            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString(AgentTools.ModelJson);
+            .Select(t => (JsonNode)new JsonObject { ["name"] = t["function"]["name"].DeepClone(),
+                ["summary"] = t["function"]["description"]?.ToString().Split('。')[0] }).ToArray()).ToJsonString(AgentTools.ModelJson);
+
+    public static JsonObject DescribeApi(JsonArray tools, JsonObject args)
+    {
+        var names = args["names"]?.AsArray().Select(n => n.GetValue<string>()).Distinct().ToArray();
+        if (names == null || names.Length is < 1 or > 8) throw new ArgumentException("names需要1..8个工具名。");
+        var functions = tools.Select(t => t["function"]).ToArray();
+        var missing = names.Where(n => !functions.Any(f => f["name"].ToString() == n)).ToArray();
+        if (missing.Length > 0) return new JsonObject { ["error"] = "unknown_game_api",
+            ["unknown"] = new JsonArray(missing.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()),
+            ["available"] = new JsonArray(functions.Select(f => f["name"].DeepClone()).ToArray()) };
+        return new JsonObject { ["tools"] = new JsonArray(names.Select(n => functions.First(f => f["name"].ToString() == n).DeepClone()).ToArray()),
+            ["detail"] = "仅接口定义，不是执行结果。通过run_script里的tool(name,args)执行游戏操作。" };
+    }
 
     public const string RuntimeInstructions =
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"

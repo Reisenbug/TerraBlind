@@ -433,6 +433,7 @@ static class CodexTests
                         _ => Task.CompletedTask, token)).ToJsonString(); }
                     finally { depth--; }
                 }
+                else if (name == "game_api") result = AgentScript.DescribeApi(tools, args).ToJsonString();
                 else if (name == "get_state") result = new JsonObject
                 {
                     ["inventory_slots"] = new JsonArray(new JsonObject { ["slot"] = 0, ["type"] = 29, ["prefix"] = 0,

@@ -804,6 +804,10 @@ static class RuntimeTests
             }
             finally { AgentPermissions.Attack = attackBeforeScript; }
             Console.WriteLine("PASS: production run_script uses existing dispatcher and registered tool argument validation");
+            var api = JsonNode.Parse(await Execute(AgentTools.Execute("game_api",
+                JsonNode.Parse("{\"names\":[\"nav_to\",\"action_control\"]}").AsObject(), default)));
+            Check(api["tools"].AsArray().Count == 2 && api["tools"][0]["parameters"]["properties"]["control_claim"] != null,
+                "live API discovery omitted registered control claim metadata");
 
             HttpServerSystem.Handler = (path, payload) =>
             {

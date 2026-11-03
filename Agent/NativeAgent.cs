@@ -439,6 +439,8 @@ public class NativeAgent : ModSystem
             if (args[field.ToString()] == null) throw new ArgumentException("工具缺少必填参数：" + field);
     }
 
+    internal static JsonObject DescribeApi(JsonObject args) => AgentScript.DescribeApi(_instance._schemas, args);
+
     internal static async Task<string> Ask(string question, CancellationToken token)
     {
         Task<string> answer = await OnMain(() =>

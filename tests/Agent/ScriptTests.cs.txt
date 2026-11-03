@@ -185,14 +185,24 @@ static class ScriptTests
         Console.WriteLine("PASS: missing state fields fail before effects; actual state remains readable and serializable");
         var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
         var entries = AgentScript.EntryTools(definitions);
-        Check(entries.Count == 4 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask")
+        Check(entries.Count == 5 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
         string instructions = AgentScript.Instructions("original-system", definitions);
         Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
-            && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
+            && !instructions.Contains("\"parameters\":"), "script API index omitted names or still embeds all schemas");
         var description = definitions.First(t => t["function"]["name"].ToString() == "gather")["function"]["description"].ToString();
-        Check(instructions.Contains(description), "model API descriptions were expanded into Unicode escape text");
-        Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
+        Check(instructions.Contains(description.Split('。')[0]), "model API index expanded Chinese into escape text");
+        var requestedApi = AgentScript.DescribeApi(definitions, JsonNode.Parse("{\"names\":[\"gather\",\"action_control\"]}").AsObject());
+        Check(requestedApi["tools"].AsArray().Count == 2 && JsonNode.DeepEquals(requestedApi["tools"][0],
+            definitions.First(t => t["function"]["name"].ToString() == "gather")["function"]), "API lookup lost full constraints or parameters");
+        requestedApi["tools"][0]["description"] = "changed";
+        Check(definitions.First(t => t["function"]["name"].ToString() == "gather")["function"]["description"].ToString() == description,
+            "API lookup exposed mutable registration metadata");
+        var unknownApi = AgentScript.DescribeApi(definitions, JsonNode.Parse("{\"names\":[\"action_tasks\"]}").AsObject());
+        Check(unknownApi["error"].ToString() == "unknown_game_api" && unknownApi["available"].AsArray().Any(n => n.ToString() == "action_query"),
+            "unknown API lookup invented an implementation or omitted actual names");
+        Console.WriteLine("PASS: compact API index retrieves exact full schemas on demand without mutating registration");
+        Console.WriteLine($"API_CONTEXT instructions_chars={instructions.Length} full_schema_chars={definitions.ToJsonString(AgentTools.ModelJson).Length}");
         var activityProgress = new ScriptProgress();
         var activityReport = await AgentScript.Run("tool('effect'); for(let i=0;i<14;i++) tool('get_state'); tool('action_control',{command:'pause'});", 5,
             (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default, activityProgress);

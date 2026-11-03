@@ -305,7 +305,7 @@ public static partial class AgentTools
                     try
                     {
                         var facts = JsonNode.Parse(output);
-                        if (name is "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome"
+                        if (name is "game_api" or "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome"
                             or "find_tiles" or "tile_names" or "find_descent" or "descent_route" or "equipment_list" or "inspect_terrain")
                             if (!Rejected(facts as JsonObject)) Discoveries.Add(name + ":" + args.ToJsonString());
                         if (facts is JsonObject result && result.ContainsKey("task_plan"))
@@ -408,6 +408,8 @@ public static partial class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "game_api":
+                return NativeAgent.DescribeApi(args).ToJsonString(ModelJson);
             case "nearby_drops":
                 return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
             case "jev_judge":
