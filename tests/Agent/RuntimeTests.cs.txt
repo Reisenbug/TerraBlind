@@ -889,6 +889,8 @@ static class RuntimeTests
             var watchEvents = watchApi["tools"][0]["parameters"]["properties"]["events"]["items"]["enum"].AsArray();
             Check(new[] { "nearby_drop", "nearby_npc_killed" }.All(kind => watchEvents.Any(value => value.ToString() == kind)),
                 "watch API concealed supported material acquisition events");
+            Check(watchEvents.Select(value => value.ToString()).Distinct().Count() == watchEvents.Count,
+                "watch API duplicated events while augmenting program metadata");
             script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
                 { ["code"] = "return tool('watch',{events:['nearby_drop','nearby_npc_killed'],passive_events:['nearby_drop']});" }, default)));
             Check(script["ok"]?.GetValue<bool>() == true && script["value"]?["error"] == null,
