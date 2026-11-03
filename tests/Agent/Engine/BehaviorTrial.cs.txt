@@ -591,6 +591,35 @@ public sealed class BehaviorTrial : ModSystem
                         }
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
+                File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
+                if (combat["value"]?["status"]?.ToString() == "yield")
+                {
+                    combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
+                        ["code"] = """
+                            const state=tool('get_state');
+                            const action=state.action_tasks.find(a=>a.tool==='gather'&&a.status==='paused'
+                              &&a.args.targets.some(t=>t.item_type===209));
+                            if(!action||state.player.hp<=60||state.player.suffocating)
+                              tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
+                            const before=state.inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);
+                            step('combat-review',()=>({handle:action.handle,hp:state.player.hp,
+                              reason:'Accept limited damage while above 60 health; retain the same material target and throwing weapon'}));
+                            tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:60});
+                            tool('script_events',{wait_ms:0});
+                            tool('action_control',{handle:action.handle,command:'resume'});
+                            for(let i=0;i<20;i++) {
+                              const observed=tool('script_events',{wait_ms:1000});
+                              if(observed.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                                tool('decision_point',{reason:'Revised combat health limit reached; do not resume blindly'});
+                              const current=tool('action_query',{handle:action.handle});
+                              if(current.status==='completed'||current.status==='failed') break;
+                              if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
+                            }
+                            const after=tool('get_state').inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);
+                            return {before,after,gained:after-before,resumed_handle:action.handle,
+                              action:tool('action_query',{handle:action.handle})};
+                            """ });
+                }
                 await OnMain(() => { collectingStingers = false; return true; });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-result.json"), combat.ToJsonString());
                 if (combat["value"]?["gained"]?.GetValue<int>() < 1 || combat["value"]?["gained"] == null)
