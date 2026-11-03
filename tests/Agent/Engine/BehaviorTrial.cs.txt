@@ -28,6 +28,7 @@ public sealed class BehaviorTrial : ModSystem
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
     int hornetsSpawned;
+    int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
     async Task<JsonObject> Review(JsonObject wake)
@@ -127,8 +128,8 @@ public sealed class BehaviorTrial : ModSystem
         for (int i = 0; i < Main.maxNPCs; i++)
             if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
-        if (collectingStingers && frames % 60 == 0 && hornetsSpawned < 6
-            && (target < 0 || !Main.npc[target].active) && !p.inventory.Any(i => i.type == ItemID.Stinger && i.stack > 0))
+        if (collectingStingers && frames % 60 == 0 && hornetsSpawned < 40
+            && (target < 0 || !Main.npc[target].active) && p.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack) < stingersRequired)
             SpawnMaterialHornet();
         if (p.controlUseItem && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > 0.2f) movingAttackFrames++;
         if (frames == 60) trial = Task.Run(Run);
@@ -672,6 +673,8 @@ public sealed class BehaviorTrial : ModSystem
             {
                 await OnMain(() =>
                 {
+                    stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
+                        ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                     collectingStingers = true;
                     if (!SpawnMaterialHornet()) throw new Exception("no clear native encounter position; terrain was not modified");
                     return true;
@@ -684,11 +687,12 @@ public sealed class BehaviorTrial : ModSystem
                             tool('decision_point',{reason:'Health or terrain danger during material combat; preserve collected resources and review before resuming'});
                         }
                         const before=step('stinger-baseline',()=>count());
+                        const required=tool('recipe',{name:'ThornChakram'}).recipes.find(r=>r.internal==='ThornChakram').ingredients.find(i=>i.internal==='Stinger').need;
                         tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
-                        for(let round=0;round<6&&count()===before;round++) {
-                          let action=tool('gather',{targets:[{item_type:209,count:before+1,npc_types:[NPC_TYPE]}]});
+                        for(let round=0;round<16&&count()<required;round++) {
+                          let action=tool('gather',{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]});
                           review(action.events);
                           for(let i=0;i<15&&action.handle;i++) {
                             const events=tool('script_events',{wait_ms:0});
@@ -700,7 +704,7 @@ public sealed class BehaviorTrial : ModSystem
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
                           if(action.error==='repeated_failure_blocked')
                             tool('decision_point',{reason:'Repeated material acquisition failure requires a different source or plan'});
-                          if(count()===before) tool('script_events',{wait_ms:1000});
+                          if(count()<required) tool('script_events',{wait_ms:1000});
                         }
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
@@ -735,16 +739,17 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 await OnMain(() => { collectingStingers = false; return true; });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-result.json"), combat.ToJsonString());
-                if (combat["value"]?["gained"]?.GetValue<int>() < 1 || combat["value"]?["gained"] == null)
-                    throw new Exception("no verified native stinger acquisition; inspect stinger-result.json");
-                Console.WriteLine($"OPPORTUNITY_STINGER_PROGRESS verified_stinger_gain=true spawned_hornets={hornetsSpawned}");
+                if ((combat["value"]?["after"]?.GetValue<int>() ?? 0) < stingersRequired)
+                    throw new Exception("recipe stinger quantity not fulfilled; inspect stinger-result.json");
+                Console.WriteLine($"OPPORTUNITY_STINGER_PROGRESS verified_recipe_stingers=true spawned_hornets={hornetsSpawned}");
             }
             var verification = await Call("task_step", new JsonObject { ["id"] = "materials", ["action"] = "verify" });
             File.WriteAllText(Path.Combine(Main.SavePath, "material-plan-verification.json"), verification.ToJsonString());
-            if (verification["verified"]?.GetValue<bool>() != false || verification["current_step"]?.ToString() != "materials"
+            bool allMaterials = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_STINGERS") == "1";
+            if (verification["verified"]?.GetValue<bool>() != allMaterials || verification["current_step"]?.ToString() != (allMaterials ? "crafted" : "materials")
                 || verification["steps"]?[1]?["id"]?.ToString() != "crafted")
                 throw new Exception("partial materials advanced or lost the preserved crafting plan");
-            Console.WriteLine("OPPORTUNITY_RECIPE_PENDING verified_incomplete=true crafting_goal_preserved=true");
+            Console.WriteLine($"OPPORTUNITY_RECIPE_PENDING materials_complete={allMaterials} crafting_goal_preserved=true");
         }
     }
 }
