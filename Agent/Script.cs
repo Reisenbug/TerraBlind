@@ -116,7 +116,7 @@ public static class AgentScript
                 ["failure"] = lastFailure?.DeepClone()
             };
             progress?.End(result);
-            if (progress != null) result["workflow"] = progress.Snapshot();
+            if (progress != null) result["workflow"] = progress.Summary();
             return result;
         }
         try

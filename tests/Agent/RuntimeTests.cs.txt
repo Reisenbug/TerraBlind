@@ -1296,6 +1296,13 @@ static class RuntimeTests
             var parsed = JsonNode.Parse(state);
             Check(fullSize > 256000 && state.Length < 48000 && parsed["script_workflows"]["large-0"]["steps"][0]["value_omitted"].GetValue<bool>(),
                 "history summaries still embedded all saved values into ordinary state");
+            string execution = await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["workflow"] = "large-0", ["code"] = "return {checked:true};" }, default));
+            var executed = JsonNode.Parse(execution);
+            Check(execution.Length < 16000 && executed["value"]["checked"].GetValue<bool>()
+                && executed["workflow"]["steps"][0]["value_omitted"].GetValue<bool>()
+                && executed["workflow"]["detail_tool"].ToString() == "script_progress",
+                "script response replayed full prior history or omitted its actual new result");
             var detail = JsonNode.Parse(await Execute(AgentTools.Execute("script_progress",
                 new JsonObject { ["workflow"] = "large-0", ["action"] = "get" }, default)));
             Check(detail["steps"][0]["value"].ToString().Length == 3000, "summary discarded resumable detailed values");
