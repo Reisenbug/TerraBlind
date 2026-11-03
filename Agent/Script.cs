@@ -37,7 +37,14 @@ public static class AgentScript
         + "顶层只提供run_script、get_state、say、ask；其余API不是顶层工具，不要直接发起函数调用。"
         + "逐次行为、条件和循环应写在代码里，读取真实返回后推进；不能只登记计划或口头承诺。\n"
         + system
-        + "\n需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
+        + RuntimeInstructions
+        + "\n以下是脚本内tool可调用的完整游戏API定义（name、description、parameters），不是执行结果：\n"
+        + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
+            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString();
+
+    public const string RuntimeInstructions =
+        "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"
+        + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
         + "有沿途收集要求时，先查game_catalog确定材料/工作站的tile编号，用watch的nearby_tile+tile_types以及nearby_chest/nearby_drop订阅。"
         + "普通机会可加入watch.passive_events，只通知不自动打断；配合action_start和script_events边执行边评估，决定值得插入时再action_control pause，避免每发现一株植物就重启导航。"
@@ -56,10 +63,7 @@ public static class AgentScript
         + "普通敌怪受阻可用npc_combat_observe，npc/npc_type取原candidate的who/npc_type。站位候选不是路径或安全承诺；先检查危险，再尝试导航，抵达后刷新NPC射界和身份，最后显式resume失败的原采集句柄。"
         + "默认站位探针没有通畅射界不代表所有位置都不可用。可依据已观察的地形选择其他支撑格，通过npc_combat_observe.stance_cells测量；核对requested_stances的supported/body_fits/shot_line及支撑形状，勿把空中射线通畅当作可以站立。"
         + "观察发现危险、判断失败或局部调整仍无进展时调用decision_point交回审阅。审阅时读取原程序及workflow进度，修改源码版本后续接；保留已完成step和原句柄，uncertain先核对，不从头重放。"
-        + "事件本地消费不占模型唤醒次数，显式decision_point仍受限；源码可跨启动保存，workflow进度只保留本世界。"
-        + "\n以下是脚本内tool可调用的完整游戏API定义（name、description、parameters），不是执行结果：\n"
-        + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
-            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString();
+        + "事件本地消费不占模型唤醒次数，显式decision_point仍受限；源码可跨启动保存，workflow进度只保留本世界。";
 
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
