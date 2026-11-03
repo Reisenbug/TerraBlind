@@ -141,6 +141,7 @@ namespace TerraBlind
         }
 
         static volatile bool _fieldReady;
+        internal static bool FieldReady => _fieldReady;
         static long _startedAt;
         static bool _startupWalkReported;
         static Vector2 _attemptStart;
@@ -201,6 +202,7 @@ namespace TerraBlind
 
         public static void Start(int goalWx, int goalWy, Mode mode)
         {
+            long requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             // 【同一个目标已经在跑就别重来】。Start 会作废建场任务、清掉 Commitment/Trap
             // 的全部记录。每帧调一次的话场永远建不完,人一步不动,屏幕刷满 building field
             // (现场:WofPrep 的兜底每帧调,日志 6413~6857 连着几百条)。
@@ -211,6 +213,7 @@ namespace TerraBlind
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
             if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            int latencyRequest = NavigationLatency.Begin(requestedAt, goalWx, goalWy);
             _startupWalkReported = false;
             _noProgressSteps = 0; _failureRecoveryPending = false; _failureRecoveryTried = false;
             LegacyNativePrediction.Reset();
@@ -233,10 +236,15 @@ namespace TerraBlind
             _altered = 0;
             _fieldReady = false;
             int gx = goalWx, gy = goalWy;
+            long queuedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             System.Threading.Tasks.Task.Run(() =>
             {
+                long fieldStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 try { MazeWand.GetField(gx, gy); RecedingVis.SetField(gx, gy); _fieldReady = true; }
                 catch (System.Exception e) { DiagLog.Write($"[recede] field build EXC {e.Message}"); _fieldReady = true; }
+                finally { NavigationLatency.Field(latencyRequest,
+                    System.Diagnostics.Stopwatch.GetElapsedTime(queuedAt, fieldStartedAt).TotalMilliseconds,
+                    System.Diagnostics.Stopwatch.GetElapsedTime(fieldStartedAt).TotalMilliseconds); }
             });
             EventLog.W(Ev.Goal, $"new goal ({goalWx},{goalWy}) — building field");
             Chatter.Say($"[TerraBlind] receding nav → ({goalWx},{goalWy}) (building field…)");
@@ -497,7 +505,9 @@ namespace TerraBlind
             {
                 // goalSnapCap:0。目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
                 // 建房整套坐标全错。宁可 fail fast。
+                long searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
+                NavigationLatency.Search(System.Diagnostics.Stopwatch.GetElapsedTime(searchStarted).TotalMilliseconds, "stand_astar");
                 if (ap.Found && ap.Steps.Count > 0)
                 {
                     DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
@@ -547,7 +557,9 @@ namespace TerraBlind
             if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }
 
             Trap.JustTrapped = false;
+            long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
+            NavigationLatency.Search(System.Diagnostics.Stopwatch.GetElapsedTime(stepStarted).TotalMilliseconds, "first_segment");
             // 贪心当场承认走不动(物理候选没一个降 H)。这是它的理论缺陷,补丁修不好。
             // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
             if (Trap.JustTrapped)

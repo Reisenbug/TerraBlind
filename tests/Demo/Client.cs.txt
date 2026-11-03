@@ -712,6 +712,7 @@ public sealed class Driver : ModSystem
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavslopestallcheck")) { SlopeStall(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalcheck")) { SurvivalControl(); return; }
             if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavshortrequests")) { ShortRequests(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
             if (warmup-- > 0) return;
@@ -1240,6 +1241,50 @@ public sealed class Driver : ModSystem
         }
         finally { BridgeBuilder.Stop(); RecedingNav.Active = false; Unstick.Reset(); }
         enabled = false; FinishProcess(0);
+    }
+
+    int shortCase, shortTick;
+    long shortStarted;
+    Vector2 shortOrigin;
+    readonly JsonArray shortResults = new();
+
+    void ShortRequests()
+    {
+        var player = Main.LocalPlayer;
+        int[] offsets = { 10, 30, 60, 60, -30, -30 };
+        if (shortCase >= offsets.Length)
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(Main.SavePath, "short-requests.json"), shortResults.ToJsonString());
+            Console.WriteLine("SHORT_REQUESTS_MEASURED " + shortResults.ToJsonString());
+            Console.WriteLine("VNAV_DEMO_COMPLETE");
+            enabled = false; FinishProcess(0); return;
+        }
+        if (shortTick++ == 0)
+        {
+            RecedingNav.Stop();
+            if (shortCase == 0) MazeWand.InvalidateField();
+            foreach (var item in player.armor) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[1].SetDefaults(ItemID.WoodPlatform); player.inventory[1].stack = 9999;
+            player.statLife = player.statLifeMax = player.statLifeMax2 = 400;
+            player.Teleport(new Vector2(3384 * 16, 243 * 16 - player.height));
+            player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+        }
+        if (shortTick < 30) return;
+        if (shortTick == 30)
+        {
+            shortOrigin = player.position;
+            shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            RecedingNav.Start(3384 + offsets[shortCase], 242);
+            return;
+        }
+        bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
+        bool moved = input && Vector2.DistanceSquared(player.position, shortOrigin) >= 64;
+        if (!moved && shortTick < 1230 && RecedingNav.Active) return;
+        shortResults.Add(new JsonObject { ["case"] = shortCase, ["offset"] = offsets[shortCase],
+            ["moved"] = moved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
+            ["frames"] = shortTick - 30, ["stop"] = RecedingNav.LastStop });
+        RecedingNav.Stop(); shortCase++; shortTick = 0;
     }
 
     void PreviewIsolation()

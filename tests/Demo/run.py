@@ -13,7 +13,7 @@ import time
 def main():
     routed = "--route" in sys.argv
     worker_check = "--worker-startup" in sys.argv
-    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check", "--slope-stall", "--survival"))
+    focused = any(flag in sys.argv for flag in ("--preview-isolation", "--bridge-recovery", "--pillar-probe", "--snapshot-check", "--slope-stall", "--survival", "--short-requests"))
     unlimited = "--no-time-limit" in sys.argv
     continuity = "--continuity" in sys.argv
     circuit = "--circuit" in sys.argv
@@ -124,6 +124,8 @@ def main():
         command.append("-vnavsurvivalplatforms")
     if unlimited:
         command.append("-vnavnotimelimit")
+    if "--short-requests" in sys.argv:
+        command.append("-vnavshortrequests")
     log = (root / "demo-client.log").open("w")
     process = subprocess.Popen(command, cwd=tml, env=dict(os.environ, DYLD_LIBRARY_PATH=str(tml / "Libraries/Native/OSX")),
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -143,6 +145,10 @@ def main():
             time.sleep(.25)
         else:
             raise TimeoutError("Demo did not complete within 240 seconds")
+        if "--short-requests" in sys.argv:
+            assert "SHORT_REQUESTS_MEASURED" in output
+            print((root / "short-requests.json").read_text(), flush=True)
+            return
         if worker_check:
             print("WORKER_LIFECYCLE_CHECK_COMPLETE", flush=True)
             return
