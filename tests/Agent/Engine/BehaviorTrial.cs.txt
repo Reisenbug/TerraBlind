@@ -21,6 +21,7 @@ public sealed class BehaviorTrial : ModSystem
     bool enabled, opened, finished;
     int frames, movingAttackFrames, originX, floor, target = -1;
     Task trial;
+    bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
@@ -62,7 +63,13 @@ public sealed class BehaviorTrial : ModSystem
         var p = Main.LocalPlayer;
         if (p.controlUseItem && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > 0.2f) movingAttackFrames++;
         if (frames == 60) trial = Task.Run(Run);
-        if (frames % 120 == 0) Console.WriteLine($"BEHAVIOR_SAMPLE frame={frames} pos={p.position} hp={p.statLife} moving_attack={movingAttackFrames}");
+        if (frames % 120 == 0)
+        {
+            var npc = target >= 0 && target < Main.maxNPCs ? Main.npc[target] : null;
+            Console.WriteLine($"BEHAVIOR_SAMPLE frame={frames} pos={p.position} hp={p.statLife} moving_attack={movingAttackFrames}"
+                + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
+                + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
+        }
         if (trial?.IsCompleted == true || frames > 7200)
         {
             finished = true;
@@ -85,7 +92,22 @@ public sealed class BehaviorTrial : ModSystem
             NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
             Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset();
             var p = Main.LocalPlayer; originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16 + 3;
-            for (int x = originX - 30; x <= originX + 35; x++)
+            if (Natural)
+            {
+                bool found = false;
+                for (int y = (int)Main.rockLayer; y < Main.maxTilesY - 250 && !found; y += 3)
+                for (int x = 100; x < Main.maxTilesX - 100 && !found; x += 3)
+                {
+                    if (!WorldGen.SolidTile(x, y) || Main.tile[x, y].TileType != TileID.JungleGrass) continue;
+                    if (Collision.SolidCollision(new Vector2((x - 3) * 16, (y - 4) * 16), 8 * 16, 4 * 16)
+                        || Collision.SolidCollision(new Vector2((x + 8) * 16, (y - 6) * 16), 40, 40)) continue;
+                    if (Main.tile[x, y - 1].LiquidAmount > 0 || !WorldGen.SolidTile(x + 3, y)) continue;
+                    originX = x; floor = y; found = true;
+                }
+                if (!found) throw new Exception("no suitable native jungle cave found; terrain was not altered");
+                Console.WriteLine($"BEHAVIOR_NATURAL x={originX} y={floor} fixture_tile_edits=0");
+            }
+            else for (int x = originX - 30; x <= originX + 35; x++)
             {
                 for (int y = floor - 15; y < floor; y++) Main.tile[x, y].ClearEverything();
                 Main.tile[x, floor].ResetToType(TileID.Stone);
@@ -95,38 +117,55 @@ public sealed class BehaviorTrial : ModSystem
             p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
             p.position = new Vector2(originX * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
             p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
-            target = NPC.NewNPC(new EntitySource_Misc("BehaviorTrial"), (int)p.Center.X + 75, (int)p.Bottom.Y, NPCID.BlueSlime);
-            Main.npc[target].life = Main.npc[target].lifeMax = 120;
+            target = NPC.NewNPC(new EntitySource_Misc("BehaviorTrial"), (int)p.Center.X + (Natural ? 128 : 75),
+                (int)p.Bottom.Y - (Natural ? 80 : 0), Natural ? NPCID.Hornet : NPCID.BlueSlime);
+            if (!Natural) Main.npc[target].life = Main.npc[target].lifeMax = 120;
             return true;
         });
         string code = """
             tool('watch',{events:['nearby_npc_killed','nearby_drop'],radius:40});
             const original = step('original',()=>tool('action_start',{tool:'nav_to',args:{x:GOAL_X,y:GOAL_Y}}));
-            tool('action_control',{handle:original.handle,command:'pause'});
-            step('moving-attack',()=>tool('fight',{npc_types:[1],max_dist:40,seconds:1,movement:'left'}));
-            const fight = step('combat',()=>tool('action_start',{tool:'fight',args:{npc_types:[1],max_dist:40,seconds:60}}));
-            let death=false;
+            step('pause-original',()=>tool('action_control',{handle:original.handle,command:'pause'}));
+            const moving=step('moving-attack',()=>{
+              const result=tool('fight',{npc_types:[NPC_TYPE],max_dist:40,seconds:1,movement:'left'});
+              if(result.error) throw new Error(JSON.stringify(result));
+              return {events:result.events??[],handle:result.handle};
+            });
+            if(moving.handle) tool('action_control',{handle:moving.handle,command:'cancel'});
+            let death=moving.events.some(e=>e.kind==='nearby_npc_killed');
+            const fight = death?null:step('combat',()=>tool('action_start',{tool:'fight',args:{npc_types:[NPC_TYPE],max_dist:40,seconds:60}}));
             for(let i=0;i<30&&!death;i++) {
               const notice=tool('script_events',{wait_ms:1000});
               death=notice.events.some(e=>e.kind==='nearby_npc_killed');
               if(notice.paused_action&&!death) tool('action_control',{handle:notice.paused_action,command:'resume'});
             }
             if(!death) throw new Error('no native death event');
-            tool('action_control',{handle:fight.handle,command:'cancel'});
+            if(fight) tool('action_control',{handle:fight.handle,command:'cancel'});
             let drops=[];
             for(let i=0;i<5&&!drops.length;i++) {
-              drops=tool('nearby_drops',{radius:40}).drops.filter(d=>d.item_type===23);
+              drops=tool('nearby_drops',{radius:40}).drops.filter(d=>d.item_type!==279);
               if(!drops.length) tool('script_events',{wait_ms:250});
             }
-            if(!drops.length) throw new Error('no visible gel drop to judge');
-            const decision=tool('jev_judge',{state:{goal:'Collect one additional gel then return to the original destination',drops,
-              terrain:'Controlled test arena: flat solid floor, no liquids, no traps; only the just-killed slime was spawned.'},
-              questions:{pickup:{type:'noul',instructions:'Is collecting one of these gel drops useful for the stated goal?'}}});
+            if(!drops.length) throw new Error('no visible native drop to judge');
+            const terrain=tool('inspect_terrain',{radius:12});
+            const decision=tool('jev_judge',{state:{goal:'Collect a useful dropped material or money then return to the original destination',drops,terrain},
+              questions:{pickup:{type:'noul',instructions:'Is collecting one of these drops useful for the stated goal? This is usefulness, not a claim that the route is safe.'}}});
             if(decision.error) throw new Error(JSON.stringify(decision));
             if(decision.answers.pickup.noul<0.7) {tool('decision_point',{reason:'drop judgment needs review'});}
-            const before=tool('get_state').inventory_slots.filter(i=>i.type===23).reduce((n,i)=>n+i.stack,0);
-            const collected=tool('gather',{targets:[{item_type:23,count:before+1}]});
-            const after=tool('get_state').inventory_slots.filter(i=>i.type===23).reduce((n,i)=>n+i.stack,0);
+            const itemType=drops.find(d=>d.item_type===209||d.item_type===23)?.item_type??drops[0].item_type;
+            const before=tool('get_state').inventory_slots.filter(i=>i.type===itemType).reduce((n,i)=>n+i.stack,0);
+            let collected=tool('gather',{targets:[{item_type:itemType,count:before+1}]});
+            for(let i=0;i<20&&collected.handle;i++) {
+              const notice=tool('script_events',{wait_ms:0});
+              if([...(collected.events??[]),...notice.events].some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                tool('decision_point',{reason:'Danger while collecting; inspect current state before resuming the preserved gather handle.'});
+              let status=tool('action_query',{handle:collected.handle,wait_ms:1000});
+              if(status.status==='completed') {collected=status;break;}
+              if(status.status==='paused') tool('action_control',{handle:collected.handle,command:'resume'});
+              else if(status.status!=='running') throw new Error(JSON.stringify(status));
+              collected={handle:collected.handle};
+            }
+            const after=tool('get_state').inventory_slots.filter(i=>i.type===itemType).reduce((n,i)=>n+i.stack,0);
             if(after<=before) throw new Error('drop not verified in inventory: '+JSON.stringify(collected));
             tool('action_control',{handle:original.handle,command:'resume'});
             let status;
@@ -135,16 +174,28 @@ public sealed class BehaviorTrial : ModSystem
               if(status.status!=='running') break;
             }
             if(status.status!=='completed') throw new Error('original goal not resumed: '+JSON.stringify(status));
-            return {gel_gained:after-before,original_handle:original.handle,judgment:decision,returned:true};
-            """.Replace("GOAL_X", (originX + 18).ToString()).Replace("GOAL_Y", (floor - 1).ToString());
-        var saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = 0, ["code"] = code });
+            return {item_type:itemType,gained:after-before,original_handle:original.handle,judgment:decision,returned:true};
+            """.Replace("GOAL_X", (originX + (Natural ? 3 : 18)).ToString()).Replace("GOAL_Y", (floor - 1).ToString())
+                .Replace("NPC_TYPE", (Natural ? NPCID.Hornet : NPCID.BlueSlime).ToString());
+        string reviewCode = code[..code.IndexOf("const moving=", StringComparison.Ordinal)]
+            + "tool('decision_point',{reason:'Review local terrain before selecting combat movement; retain original action handle.'});";
+        var saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = 0, ["code"] = reviewCode });
+        var review = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
+            ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
+        if (review["value"]?["status"]?.ToString() != "yield" || review["value"]?["wake"] == null)
+            throw new Exception("review did not yield: " + review.ToJsonString());
+        saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(), ["code"] = code });
         var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
         if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
         await OnMain(() =>
         {
-            if (Main.LocalPlayer.dead || movingAttackFrames == 0 || !Main.LocalPlayer.inventory.Any(i => i.type == ItemID.Gel && i.stack > 0))
+            if (Main.LocalPlayer.dead || movingAttackFrames == 0 || result["value"]?["gained"]?.GetValue<int>() <= 0)
                 throw new Exception("native movement/combat/loot evidence missing");
+            var originalActions = AgentTools.Actions.Summary().Where(a => a["tool"]?.ToString() == "nav_to").ToArray();
+            if (originalActions.Length != 1 || originalActions[0]["handle"]?.ToString() != result["value"]?["original_handle"]?.ToString()
+                || result["program"]?["revision"]?.GetValue<int>() != 2)
+                throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
     }
