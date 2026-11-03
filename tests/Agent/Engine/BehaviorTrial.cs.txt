@@ -766,6 +766,20 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1")
+        {
+            await OnMain(() => { materialNavigationStub = true; return true; });
+            var sourceReview = await Call("gather", new JsonObject { ["targets"] = new JsonArray(new JsonObject
+                { ["item_type"] = (int)ItemID.JungleSpores, ["count"] = 6,
+                    ["tile_names"] = new JsonArray("JungleGrass") }) });
+            File.WriteAllText(Path.Combine(Main.SavePath, "source-review-probe.json"), sourceReview.ToJsonString());
+            if (sourceReview["ok"]?.GetValue<bool>() != false || sourceReview["outcome"]?.ToString() != "source_needs_review"
+                || sourceReview["actions"]?.GetValue<int>() != 3 || sourceReview["targets"][0]["actual"]?.GetValue<int>() != 0
+                || sourceReview["source_error"]["observations"]?.AsArray().Count != 3)
+                throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
+            Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
             int modelTokenBudget = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TOKEN_BUDGET") is string configuredBudget

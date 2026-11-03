@@ -57,6 +57,30 @@ static class GatherTests
             "source diagnostics rejected legitimate collection of existing drops");
         Console.WriteLine("PASS: missing drops and absent sources retain evidence without false collection success or unbounded retries");
 
+        var probe = new ProbeWorld();
+        var probeTargets = new[] { new GatherTarget(10, 2, new[] { "unverified plant" }, Array.Empty<int>()) };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "source_needs_review"
+            && probe.Actions == 3 && probe.Stops == 1 && result["source_error"]["observations"].AsArray().Count == 3
+            && result["source_error"]["observations"][2]["count_after"].GetValue<int>() == 0,
+            "unproductive tile harvesting continued across new coordinates or lost inventory evidence");
+        string reviewResult = result.ToJsonString();
+        var progress = new ScriptProgress();
+        var handoff = await AgentScript.Run("tool('gather');", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult(reviewResult), _ => Task.CompletedTask, default, progress);
+        Check(handoff["error"]?.ToString() == "tool_failed"
+            && progress.Summary()["last_execution"]["failure"]["evidence"]["source_error"]["observations"].AsArray().Count == 3,
+            "script continuation lost measured source review evidence");
+        probe = new ProbeWorld { GainEvery = 2 };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(result["ok"].GetValue<bool>() && probe.Actions == 4,
+            "actual inventory gains did not reset the unproductive source streak");
+        probe = new ProbeWorld { DropAfterThree = true };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(result["ok"].GetValue<bool>() && probe.Actions == 4,
+            "source review prevented collecting a target drop already visible after harvesting");
+        Console.WriteLine("PASS: unproductive tile sources yield with evidence; real gains reset review and visible drops remain collectible");
+
         world = new World { Unsafe = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "unsafe"
@@ -261,6 +285,27 @@ static class GatherTests
         }
         finally { FightCoordinator.Stop(); p.inventory[0] = oldWeapon; Main.npc[0] = oldA; Main.npc[1] = oldB; p.controlUseItem = false; }
         Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");
+    }
+
+    sealed class ProbeWorld : IGatherWorld
+    {
+        public int Actions, Stops, GainEvery, Count;
+        public bool DropAfterThree;
+        public Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject
+        {
+            ["counts"] = new JsonObject { ["10"] = Count },
+            ["candidates"] = new JsonArray(new JsonObject { ["id"] = "source:" + Actions,
+                ["item_type"] = 10, ["kind"] = DropAfterThree && Actions >= 3 ? "drop" : "tile",
+                ["x"] = Actions, ["y"] = 10, ["distance"] = 1f })
+        });
+        public Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            Actions++;
+            if (candidate["kind"].ToString() == "drop") Count += 2;
+            else if (GainEvery > 0 && Actions % GainEvery == 0) Count++;
+            return Task.FromResult(new JsonObject { ["outcome"] = "removed" });
+        }
+        public Task Stop(CancellationToken token) { Stops++; return Task.CompletedTask; }
     }
 
     sealed class World : IGatherWorld

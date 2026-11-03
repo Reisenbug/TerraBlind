@@ -61,11 +61,13 @@ public static class Gather
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
+        var unproductiveTiles = new Dictionary<int, JsonArray>();
         JsonObject scene = null, last = null;
         var blockedSources = new JsonArray();
         JsonNode sourceError = null;
         string outcome = "attempt_limit";
         int actions = 0;
+        int previousCount = 0;
         int Count(GatherTarget target) => scene?["counts"]?[target.ItemType.ToString()]?.GetValue<int>() ?? 0;
         try
         {
@@ -79,6 +81,28 @@ public static class Gather
                     .Where(c => area == null || area.Contains(c))
                     .Where(c => targets.Any(t => t.ItemType == c["item_type"].GetValue<int>() && Count(t) < t.Count))
                     .ToArray();
+                if (last != null)
+                {
+                    int item = last["candidate"]["item_type"].GetValue<int>();
+                    int actual = scene["counts"]?[item.ToString()]?.GetValue<int>() ?? 0;
+                    if (actual > previousCount) unproductiveTiles.Remove(item);
+                    else if (last["candidate"]["kind"].ToString() == "tile"
+                        && last["result"]?["outcome"]?.ToString() == "removed")
+                    {
+                        if (!unproductiveTiles.TryGetValue(item, out var evidence))
+                            unproductiveTiles[item] = evidence = new JsonArray();
+                        evidence.Add(new JsonObject { ["candidate"] = last["candidate"].DeepClone(),
+                            ["count_before"] = previousCount, ["count_after"] = actual });
+                        if (evidence.Count >= 3 && !available.Any(c => c["kind"].ToString() == "drop"
+                            && c["item_type"].GetValue<int>() == item))
+                        {
+                            outcome = "source_needs_review";
+                            sourceError = new JsonObject { ["item_type"] = item, ["observations"] = evidence.DeepClone(),
+                                ["detail"] = "连续移除方块但目标库存未增长，现场也没有目标掉落物。先核查来源、变体和拾取条件；这不是该来源永远无效的证明，不要原样重复整批采集。" };
+                            break;
+                        }
+                    }
+                }
                 var candidate = available
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
@@ -94,6 +118,7 @@ public static class Gather
                 string id = candidate["id"].ToString();
                 attempts[id] = attempts.GetValueOrDefault(id) + 1;
                 actions++;
+                previousCount = scene["counts"]?[candidate["item_type"].ToString()]?.GetValue<int>() ?? 0;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
                 if (last["result"]?["outcome"]?.ToString() == "combat_obstructed")

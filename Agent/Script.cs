@@ -76,6 +76,7 @@ public static class AgentScript
         + "last_automatic_heal记录默认生存反射最近一次实际回血或治疗冷却变化的tick和前后值；默认代码可能已用掉药水，不能照旧槽位重复用药。它是历史证据，继续查看当前healing_items、hp和potion_delay_ticks；可通过control禁止survival，但需自行承担恢复控制。"
         + "get_state.health_dynamics是同一tick的原生血量、死亡状态、life_regen_raw和life_regen_count_raw；regen_direction只说明当前引擎持续回血/掉血方向，不证明安全或预测未来血量。结合buffs剩余时间和last_damage.tick区分持续掉血与新受击，撤离后仍掉血不必然需要再次换位；判断能否等待由你的策略决定，继续观察新威胁并保留原任务。raw字段是引擎原始单位，不是每秒伤害。"
         + "gather返回source_unavailable时，用相同targets/source_area调用只读gather_observe确认当前库存和来源，不要反复启动gather探测。出现值得获取的新来源后可恢复原handle；否则决定换区域、执行其他步骤或交回观察。候选不是可达或安全证明，仍需opportunity_assess。"
+        + "gather返回source_needs_review时，source_error.observations记录连续移除方块却没有目标库存增长的证据。先核查材料来源、变体和拾取条件，修正原handle的targets/source_area后再恢复；不要把挖掉方块当作收集成功，也不要原样重跑整批采集。"
         + "gather返回combat_obstructed表示连续射界受阻且目标未掉血；读取last_result.result里的目标格坐标、武器和血量证据，先观察地形、换位或改武器，不要原样重试。clear_line只是当前直线碰撞检查，不预测弹道或证明可达。"
         + "普通敌怪受阻可用npc_combat_observe，npc/npc_type取原candidate的who/npc_type。站位候选不是路径或安全承诺；先检查危险，再尝试导航，抵达后刷新NPC射界和身份，最后显式resume失败的原采集句柄。"
         + "默认站位探针没有通畅射界不代表所有位置都不可用。可依据已观察的地形选择其他支撑格，通过npc_combat_observe.stance_cells测量；核对requested_stances的supported/body_fits/shot_line及支撑形状，勿把空中射线通畅当作可以站立。"
@@ -176,7 +177,7 @@ public static class AgentScript
                         if (toolResult["error"] != null || toolResult["ok"]?.ToString() == "false")
                         {
                             var facts = new JsonObject();
-                            foreach (string field in new[] { "error", "detail", "outcome", "active_handle", "name_candidates", "requested_name", "targets", "source_rules" })
+                            foreach (string field in new[] { "error", "detail", "outcome", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error" })
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
                         }
