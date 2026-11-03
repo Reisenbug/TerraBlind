@@ -968,7 +968,13 @@ public sealed class BehaviorTrial : ModSystem
                               }
                               if(retreat) {
                                 tool('script_events',{wait_ms:0});
-                                const moved=tool('nav_to',retreat.anchor);
+                                const policy={events:state.watch.events,passive_events:state.watch.passive_events,
+                                  tile_types:state.watch.tile_types,radius:state.watch.radius,health_below:state.watch.health_below};
+                                recovery.retreat_health_floor=Math.min(state.player.hp,policy.health_below);
+                                tool('watch',{...policy,health_below:recovery.retreat_health_floor});
+                                let moved;
+                                try { moved=tool('nav_to',retreat.anchor); }
+                                finally { tool('watch',policy); }
                                 recovery.retreat={anchor:retreat.anchor,hazards:retreat.facts.hazards,
                                   result:{done:moved.done,outcome:moved.outcome,handle:moved.handle??moved.managed_handle,state:moved.state,error:moved.error}};
                                 step('combat-retreat:'+action.attempt,()=>recovery.retreat);
