@@ -19,15 +19,24 @@ public sealed class ControlTrial : ModSystem
 {
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, started, opened, finished;
-    int frames, sandX, floor;
+    int frames, sandX, floor, sandPickAttempts;
     Task trial;
 
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck");
-        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; }
+        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
     }
-    public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; } }
+    public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; } }
+    void ObservePick(On_Player.orig_PickTile original, Player player, int x, int y, int power)
+    {
+        if (started && player == Main.LocalPlayer && x >= sandX && x < sandX + 4 && y >= floor - 7 && y < floor)
+        {
+            sandPickAttempts++;
+            Console.WriteLine($"CONTROL_SAND_PICK frame={frames} target=({x},{y}) player={player.position} power={power} attempt={sandPickAttempts}");
+        }
+        original(player, x, y, power);
+    }
     void OpenWorld(On_Main.orig_Update original, Main game, GameTime time)
     {
         original(game, time);
@@ -130,7 +139,15 @@ public sealed class ControlTrial : ModSystem
             ["args"] = new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 } });
         Check(action["handle"] != null, "navigation did not start");
         string handle = action["handle"].ToString();
-        await DelayFrames(15);
+        int excavationDeadline = await OnMain(() => frames + 900);
+        while (await OnMain(() => sandPickAttempts == 0 && frames < excavationDeadline && !Main.LocalPlayer.dead))
+            await DelayFrames(1);
+        await OnMain(() =>
+        {
+            Check(sandPickAttempts > 0, "no real sand excavation occurred; takeover scenario not reproduced");
+            Check(!Main.LocalPlayer.dead, "player died before takeover");
+            return true;
+        });
         var claim = await Call("control", new JsonObject { ["operation"] = "claim",
             ["channels"] = new JsonArray("movement", "item_use"), ["scope"] = "task", ["reason"] = "stop excavating under sand" });
         Check(claim["status"]?.ToString() == "ready", "takeover was not ready");
