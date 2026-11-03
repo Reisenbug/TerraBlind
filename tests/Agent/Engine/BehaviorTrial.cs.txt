@@ -839,15 +839,38 @@ public sealed class BehaviorTrial : ModSystem
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
-                if (combat["value"]?["status"]?.ToString() == "yield")
+                for (int review = 0; review < 3 && (review == 0 && combat["value"]?["status"]?.ToString() == "yield"
+                    || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() == "combat_obstructed"); review++)
                 {
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
                             let state=tool('get_state');
-                            const action=state.action_tasks.find(a=>a.tool==='gather'&&a.status==='paused'
+                            const action=state.action_tasks.find(a=>a.tool==='gather'&&(a.status==='paused'||a.status==='failed'&&a.result?.outcome==='combat_obstructed')
                               &&a.args.targets.some(t=>t.item_type===209));
                             if(!action||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
+                            if(action.result?.outcome==='combat_obstructed') {
+                              const detail=tool('action_query',{handle:action.handle}).result.last_result;
+                              const target={npc:detail.candidate.who,npc_type:detail.candidate.npc_type};
+                              const scene=tool('npc_combat_observe',target);
+                              if(scene.error) tool('decision_point',{reason:'Obstructed target changed; inspect sources before resuming'});
+                              const candidates=scene.terrain.stance_probes.filter(p=>p.shot_line.clear)
+                                .sort((a,b)=>Math.hypot(a.x-state.player.pos.x,a.y-state.player.pos.y)-Math.hypot(b.x-state.player.pos.x,b.y-state.player.pos.y));
+                              let selected=null;
+                              for(const p of candidates) {
+                                const facts=tool('opportunity_assess',{x:p.support_x,y:p.support_y-1});
+                                if(!facts.hazards.length){selected={probe:p,facts};break;}
+                              }
+                              if(!selected) tool('decision_point',{reason:'No measured clear-line stance without reported hazards; change equipment or terrain plan'});
+                              tool('script_events',{wait_ms:0});
+                              const moved=tool('nav_to',{x:selected.probe.support_x,y:selected.probe.support_y-1});
+                              if(moved.done!==true) tool('decision_point',{reason:'Combat reposition navigation incomplete; preserve its action handle'});
+                              const after=tool('npc_combat_observe',target);
+                              step('combat-reposition:'+action.attempt,()=>({target,selected,after,original_handle:action.handle}));
+                              if(after.error||!after.terrain.direct_line.clear)
+                                tool('decision_point',{reason:'Reposition did not establish current line of sight; do not blindly retry combat'});
+                              state=tool('get_state');
+                            }
                             const recovery={hp_before:state.player.hp,potion_delay_ticks:state.player.potion_delay_ticks,candidates:[]};
                             if(state.player.potion_delay_ticks===0) {
                               for(const item of state.inventory_slots.filter(i=>i.type>0)) {
@@ -863,11 +886,11 @@ public sealed class BehaviorTrial : ModSystem
                             }
                             state=tool('get_state');
                             recovery.hp_after=state.player.hp;
-                            step('combat-recovery',()=>recovery);
+                            step('combat-recovery:'+action.attempt,()=>recovery);
                             if(state.player.hp<80||state.player.suffocating)
                               tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below 80: '+JSON.stringify(recovery)});
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
-                            step('combat-review',()=>({handle:action.handle,hp:state.player.hp,
+                            step('combat-review:'+action.attempt,()=>({handle:action.handle,hp:state.player.hp,
                               reason:'Recovery checked against actual inventory and health; retain the same material target'}));
                             tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:80});
                             tool('script_events',{wait_ms:0});
@@ -881,8 +904,10 @@ public sealed class BehaviorTrial : ModSystem
                               if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
                             }
                             const after=tool('get_state').inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);
+                            const final=tool('action_query',{handle:action.handle});
                             return {before,after,gained:after-before,resumed_handle:action.handle,
-                              action:tool('action_query',{handle:action.handle})};
+                              action:{handle:final.handle,status:final.status,attempt:final.attempt,
+                                result:{outcome:final.result?.outcome,targets:final.result?.targets,last_result:final.result?.last_result}}};
                             """ });
                 }
                 await OnMain(() => { collectingStingers = false; return true; });
