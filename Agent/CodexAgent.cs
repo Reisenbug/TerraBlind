@@ -382,10 +382,16 @@ public sealed class CodexAgent : IDisposable
             foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
                 if (args[field.ToString()] == null) throw new InvalidOperationException("缺少参数：" + field);
             output = await execute(name, args, token);
-            try { success = !AgentTools.Rejected(JsonNode.Parse(output) as JsonObject); } catch (System.Text.Json.JsonException) { }
+            try
+            {
+                var result = JsonNode.Parse(output);
+                success = !AgentTools.Rejected(result as JsonObject);
+                output = result?.ToJsonString(AgentTools.ModelJson) ?? "null";
+            }
+            catch (System.Text.Json.JsonException) { }
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }
+        catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(AgentTools.ModelJson); }
         await _rpc.Send(new JsonObject { ["id"] = request["id"].DeepClone(), ["result"] = new JsonObject
         {
             ["success"] = success, ["contentItems"] = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output })

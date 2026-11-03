@@ -68,6 +68,12 @@ static class CodexTests
             Check(server.ToolResponses.Last()["contentItems"][0]["text"].ToString() == rejected, "Codex lost rejection details");
         }
         Console.WriteLine("PASS: Codex rejects unknown/malformed calls and accepts non-object tool output");
+        var unicodeResult = new JsonObject { ["name"] = "生命水晶", ["code"] = "const text = '\\u4e2d';\nreturn text;", ["hp"] = 60 };
+        await agent.RunAsync("保留中文与代码", "mock", "/tmp", "", "game instructions", Tools,
+            (_, _, _) => Task.FromResult(unicodeResult.ToJsonString()), spoken.Add, default);
+        string unicodeText = server.ToolResponses.Last()["contentItems"][0]["text"].ToString();
+        Check(unicodeText.Contains("生命水晶") && JsonNode.DeepEquals(JsonNode.Parse(unicodeText), unicodeResult),
+            "model result serialization expands Chinese or changes literal code escapes");
 
         using var cancel = new CancellationTokenSource();
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -12,6 +12,8 @@ namespace TerraBlind;
 
 public static partial class AgentTools
 {
+    internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new()
+    { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
@@ -145,7 +147,7 @@ public static partial class AgentTools
         state["codex_goal"] = NativeAgent.GoalState;
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
-        return state.ToJsonString();
+        return state.ToJsonString(ModelJson);
     }, token);
 
     static JsonObject BossStatus() => new()

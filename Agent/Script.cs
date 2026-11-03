@@ -40,7 +40,7 @@ public static class AgentScript
         + RuntimeInstructions
         + "\n以下是脚本内tool可调用的完整游戏API定义（name、description、parameters），不是执行结果：\n"
         + new JsonArray(tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
-            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString();
+            .Select(t => t["function"].DeepClone()).ToArray()).ToJsonString(AgentTools.ModelJson);
 
     public const string RuntimeInstructions =
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"

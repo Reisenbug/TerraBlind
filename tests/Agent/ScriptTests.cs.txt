@@ -190,6 +190,8 @@ static class ScriptTests
         string instructions = AgentScript.Instructions("original-system", definitions);
         Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
             && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
+        var description = definitions.First(t => t["function"]["name"].ToString() == "gather")["function"]["description"].ToString();
+        Check(instructions.Contains(description), "model API descriptions were expanded into Unicode escape text");
         Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
         var activityProgress = new ScriptProgress();
         var activityReport = await AgentScript.Run("tool('effect'); for(let i=0;i<14;i++) tool('get_state'); tool('action_control',{command:'pause'});", 5,
