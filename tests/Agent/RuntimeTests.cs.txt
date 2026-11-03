@@ -1437,9 +1437,9 @@ static class RuntimeTests
     {
         var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
         var previous = field.GetValue(Agent);
-        foreach (bool repeat in new[] { false, true })
+        foreach (var (repeat, recordOnly) in new[] { (false, false), (true, false), (true, true) })
         {
-            var handler = new PreparationHandler(repeat);
+            var handler = new PreparationHandler(repeat, recordOnly);
             using var http = new HttpClient(handler);
             field.SetValue(Agent, new AgentConversation(http));
             AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); Game.LocalPlayer.statLifeMax = 100;
@@ -1455,6 +1455,8 @@ static class RuntimeTests
                 await PumpUntil(() => handler.Calls >= 2 && NativeAgent.Status is "paused" or "idle");
                 Check(handler.Calls == (repeat ? 6 : 8) && Game.LocalPlayer.statLifeMax == (repeat ? 100 : 120),
                     "preparation ended before acting or repeated queries renewed its budget");
+                if (recordOnly) Check(AgentTools.Workflows["observation-only"].Completed == 3 && AgentTools.Plan.Incomplete,
+                    "observation steps were erased or mistaken for task completion");
             }
             finally
             {
@@ -1466,7 +1468,7 @@ static class RuntimeTests
         Console.WriteLine("PASS: distinct research permits bounded preparation before action; repeated queries stop without looping");
     }
 
-    sealed class PreparationHandler(bool repeat) : HttpMessageHandler
+    sealed class PreparationHandler(bool repeat, bool recordOnly = false) : HttpMessageHandler
     {
         public int Calls;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -1480,8 +1482,11 @@ static class RuntimeTests
                     : call == 2 ? "tool('recipe',{name:'Thorn Chakram'});"
                     : call == 4 ? "tool('find_biome',{name:'jungle'});"
                     : "tool('use_item',{x:0,y:0,slot:0}); tool('task_step',{id:'health',action:'verify'});";
+                if (recordOnly) code += $"step('observation-{call}',()=>({{observed:true}})); return {{status:'yield'}};";
+                var args = new JsonObject { ["code"] = code };
+                if (recordOnly) args["workflow"] = "observation-only";
                 message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "prepare-" + call, ["type"] = "function",
-                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject { ["code"] = code }.ToJsonString() } });
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = args.ToJsonString() } });
             }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
                 new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });

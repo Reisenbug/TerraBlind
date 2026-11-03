@@ -275,7 +275,6 @@ public class NativeAgent : ModSystem
                     int arrivalsBefore = AgentTools.Actions.NavigationArrivals;
                     int discoveriesBefore = await OnMain(() => AgentTools.DiscoveryRevision, token);
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
-                    int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
                     else
@@ -316,7 +315,6 @@ public class NativeAgent : ModSystem
                     if (scriptYielded)
                     {
                         canContinue = true;
-                        progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
                     }
                     if (progressed) { noProgressContinuations = 0; preparationContinuations = 0; }
                     if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) canContinue = false;
