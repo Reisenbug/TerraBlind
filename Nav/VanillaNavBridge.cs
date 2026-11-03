@@ -50,6 +50,8 @@ public static class VanillaNavBridge
     public static bool Tick(Player player, int gx, int gy)
     {
         if (!Enabled) return false;
+        if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+        { Fail("agent_navigation_forbidden"); return true; }
         try { Drive(player, gx, gy); }
         catch (Exception error) { Fail("engine_route:" + error.GetBaseException().Message); }
         return true;
@@ -269,6 +271,8 @@ public static class VanillaNavBridge
 
     static void StartEdit()
     {
+        if (AgentTools.Control.CheckAt(edit.Type < 0 ? ControlBehavior.Mining : ControlBehavior.Placement, edit.X, edit.Y) != null)
+        { Fail("agent_region_forbidden"); return; }
         ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = edit.X, TargetWy = edit.Y,
             Slot = edit.Slot, Strict = edit.Type < 0 });
         useAt = uint.MaxValue;
@@ -310,6 +314,8 @@ public static class VanillaNavBridge
     public static void ApplyTerrainUse(Player player)
     {
         if (phase is not Phase.Using and not Phase.Mining) return;
+        if (AgentTools.Control.CheckAt(edit.Type < 0 ? ControlBehavior.Mining : ControlBehavior.Placement, edit.X, edit.Y) != null)
+        { player.controlUseItem = false; Fail("agent_region_forbidden"); return; }
         player.delayUseItem = player.mouseInterface = false;
         Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
         if (edit.Type < 0 && !LavaSafety.CanMine(edit.X, edit.Y))

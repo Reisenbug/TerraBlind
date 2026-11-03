@@ -60,7 +60,8 @@ public class AgentContactEscape : ModSystem
         if (Main.dedServ || Main.gameMenu) return;
         var player = Main.LocalPlayer;
         if (!Config.I.AgentEnabled || !AgentNetwork.CanAutomate || !AgentTools.Watches.Armed
-            || !AgentPermissions.Dodge || PvpDuel.Active || player.dead || player.gravDir != 1)
+            || !AgentPermissions.Dodge || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All)
+            || PvpDuel.Active || player.dead || player.gravDir != 1)
         {
             if (AgentTools.ContactEscapeActive)
             {

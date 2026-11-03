@@ -738,6 +738,8 @@ namespace TerraBlind
 
         public static void ApplyControls()
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { Stop(); return; }
             lock (_lock)
             {
                 if (!_started) return;

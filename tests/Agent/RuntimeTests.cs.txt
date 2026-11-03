@@ -43,6 +43,30 @@ static class RuntimeTests
         Agent.Load();
         try
         {
+            AgentPermissions.Reset();
+            var claimed = JsonNode.Parse(await Execute(AgentTools.Execute("control", new JsonObject
+            {
+                ["operation"] = "claim", ["channels"] = new JsonArray("movement", "item_use"),
+                ["scope"] = "task", ["reason"] = "recover from unsafe route"
+            }, default)));
+            Check(claimed["status"]?.ToString() == "ready" && !AgentPermissions.Attack && !AgentPermissions.Dodge,
+                "control tool failed to acquire inputs or default combat ignored takeover");
+            string claimId = claimed["id"].ToString();
+            var action = JsonNode.Parse("{\"steps\":[{\"keys\":[\"right\"],\"until\":{\"frames\":5}}]}").AsObject();
+            var forbidden = JsonNode.Parse(await Execute(AgentTools.Execute("act", action, default)));
+            Check(forbidden["error"]?.ToString() == "control_owned_by_agent", "unclaimed direct tool bypassed takeover");
+            action["control_claim"] = claimId;
+            var claimedAction = JsonNode.Parse(await Execute(AgentTools.Execute("act", action, default)));
+            Check(claimedAction["error"] == null && !AgentTools.ControlSession.Active,
+                "claimed tool did not execute or failed to release its execution ticket");
+            await Execute(AgentTools.Execute("set_combat", new JsonObject { ["auto_attack"] = true, ["auto_dodge"] = true }, default));
+            Check(!AgentPermissions.Attack && !AgentPermissions.Dodge, "combat toggles bypassed higher-level ownership");
+            var released = JsonNode.Parse(await Execute(AgentTools.Execute("control",
+                new JsonObject { ["operation"] = "release", ["id"] = claimId }, default)));
+            Check(released["status"]?.ToString() == "ready" && AgentPermissions.Attack && AgentPermissions.Dodge,
+                "explicit handback did not restore permitted defaults");
+            Console.WriteLine("PASS: real control tool gates direct execution and persistent defaults until explicit release");
+
             using var cancel = new CancellationTokenSource();
             bool executed = false;
             var queued = NativeAgent.OnMain(() => executed = true, cancel.Token);

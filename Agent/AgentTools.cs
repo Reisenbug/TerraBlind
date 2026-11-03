@@ -10,7 +10,7 @@ using Terraria;
 
 namespace TerraBlind;
 
-public static class AgentTools
+public static partial class AgentTools
 {
     internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
@@ -18,6 +18,7 @@ public static class AgentTools
     internal static readonly AgentWatch Watches = new();
     internal static readonly AgentRecovery Recovery = new();
     internal static readonly AgentControlPolicy Control = new();
+    internal static readonly AgentControlSession ControlSession = new(Control);
     internal static JsonObject LastDamage, LastDeath, LastContactEscape;
     internal static bool ContactEscapeActive;
     internal static JsonObject RecentContactDamage(long tick)
@@ -55,10 +56,18 @@ public static class AgentTools
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
         FightCoordinator.Stop(); ReplaySystem.Stop(); KeyPress.Clear();
+        Combat.Stop(); Dodge.Stop();
         PlayerCombat.Stop();
         PvpDuel.Stop();
         StateSpacePlanner.PreserveTerrain = false;
         HttpServerSystem.PendingControl = null;
+        if (ContactEscapeActive && LastContactEscape != null) LastContactEscape["status"] = "cancelled";
+        ContactEscapeActive = false;
+        var player = Main.LocalPlayer;
+        player.controlLeft = player.controlRight = player.controlUp = player.controlDown = false;
+        player.controlJump = player.controlHook = player.controlMount = false;
+        player.controlUseItem = player.controlUseTile = player.controlThrow = false;
+        player.releaseUseItem = true;
     }
 
     static int Int(JsonObject args, string key, int fallback = 0) => args[key]?.GetValue<int>() ?? fallback;
@@ -125,6 +134,7 @@ public static class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Summary();
         state["control_overrides"] = Control.Snapshot();
+        state["control_execution"] = ControlSession.Snapshot();
         state["watch"] = Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
@@ -262,8 +272,15 @@ public static class AgentTools
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
+        long controlTicket = 0;
         try
         {
+            if (action)
+            {
+                var denied = await NativeAgent.OnMain(() => ControlSession.Begin(name,
+                    args["control_claim"]?.ToString(), out controlTicket, AgentControlSession.RequiredChannels(name, args)), token);
+                if (denied != null) return denied.ToJsonString();
+            }
             string output = await ExecuteCore(name, args, token);
             if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query" or "run_script" or "watch"))
                 output = await NativeAgent.OnMain(() =>
@@ -311,6 +328,8 @@ public static class AgentTools
         }
         finally
         {
+            if (controlTicket != 0)
+                await NativeAgent.OnMain(() => { ControlSession.End(controlTicket); return true; }, default);
             if (lease != 0 && !token.IsCancellationRequested)
                 await NativeAgent.OnMain(() => { PvpDuel.EndAction(lease); return true; }, token);
         }
@@ -367,6 +386,8 @@ public static class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "control":
+                return (await ManageControl(args, token)).ToJsonString();
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
             case "run_script":

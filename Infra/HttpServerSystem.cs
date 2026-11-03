@@ -2110,6 +2110,8 @@ namespace TerraBlind
 			// ---- LLM agent bridge (see AgentChat.cs) ----
 			else if (path == "/nav_recede")
 			{
+				if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+					return (409, "{\"error\":\"agent_navigation_forbidden\"}");
 				// Bellman receding-horizon nav (same engine as the K keybind). Poll /nav_recede_done for the outcome.
 				string reqBody;
 				reqBody = payload;

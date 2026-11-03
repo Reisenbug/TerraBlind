@@ -136,6 +136,11 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _steps = null; return; }
 			var s = _steps[_i];
+			var channels = ControlChannels.None;
+			if (s.Left || s.Right || s.Up || s.Down || s.Jump || s.Mount || s.Hook) channels |= ControlChannels.Movement;
+			if (s.UseItem || s.UseTile || s.Throw || s.Hook || s.HasCursor || s.Slot >= 0) channels |= ControlChannels.ItemUse;
+			if (!AgentTools.ControlAllows(ControlBehavior.Direct, channels, delegated: true))
+			{ _why.Add("agent_control_forbidden"); Finish("control_forbidden"); return; }
 
 			_stepFrames++; _totalFrames++;
 			if (_totalFrames > _timeout) { Finish("timeout"); return; }

@@ -408,6 +408,8 @@ namespace TerraBlind
 			return 40;
 		}
 
+		public static void Stop() { _pending = null; Release(); Last = "stopped"; }
+
 		static void Release()
 		{
 			_releasedAtMs = _clock.ElapsedMilliseconds;

@@ -48,6 +48,7 @@ public class NativeAgent : ModSystem
         _conversation = new AgentConversation(_http);
         _system = Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/System.txt"));
         _schemas = JsonNode.Parse(Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentControlSession.DescribeClaims(_schemas);
     }
 
     public static void Submit(string text)
@@ -411,6 +412,7 @@ public class NativeAgent : ModSystem
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
         AgentTools.Control.Reset();
+        AgentTools.ControlSession.Reset();
         AgentTools.LastDamage = AgentTools.LastDeath = AgentTools.LastContactEscape = null;
         AgentTools.ContactEscapeActive = false;
         CombatLoadout.PreferredType = 0;
@@ -435,7 +437,10 @@ public class NativeAgent : ModSystem
 
 public static class AgentPermissions
 {
-    public static bool Dodge = true;
-    public static bool Attack = true;
-    public static void Reset() { Dodge = Attack = true; }
+    static bool dodge = true, attack = true;
+    public static bool CanDodge(bool delegated = false) => dodge && AgentTools.ControlAllows(ControlBehavior.Dodge, ControlChannels.Movement, delegated);
+    public static bool CanAttack(bool delegated = false) => attack && AgentTools.ControlAllows(ControlBehavior.Attack, ControlChannels.ItemUse, delegated);
+    public static bool Dodge { get => CanDodge(); set => dodge = value; }
+    public static bool Attack { get => CanAttack(); set => attack = value; }
+    public static void Reset() { dodge = attack = true; }
 }

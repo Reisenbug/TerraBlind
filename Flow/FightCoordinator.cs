@@ -108,6 +108,7 @@ namespace TerraBlind
 
         public static void Tick(Player p)
         {
+            if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
             if (!_active || _framesLeft <= 0)
             {
                 ReleaseMovement(p);
@@ -118,7 +119,7 @@ namespace TerraBlind
             if (target == null) { ReleaseMovement(p); _framesLeft--; return; }
             _framesLeft = TimeoutFrames;
 
-            if (AgentPermissions.Dodge)
+            if (AgentPermissions.CanDodge(delegated: true))
             {
                 var evade = Evade(p, target);
                 if (evade.Jump) _jumpHold = 12;

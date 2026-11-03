@@ -19,10 +19,13 @@ public sealed class AgentControlPolicy
         public ControlChannels Channels;
         public ControlBehavior[] Behaviors;
         public bool Ready;
+        public (int X, int Y, int Width, int Height)? Region;
     }
 
     readonly Dictionary<string, Rule> rules = new();
     public long Revision { get; private set; }
+    public bool HasClaims => rules.Values.Any(rule => rule.Channels != ControlChannels.None);
+    public bool Contains(string id) => rules.ContainsKey(id);
 
     static void Validate(ControlLifetime lifetime, string action, string reason)
     {
@@ -42,13 +45,19 @@ public sealed class AgentControlPolicy
         return Add(new Rule { Channels = channels, Lifetime = lifetime, Action = action, Reason = reason });
     }
 
-    public string Deny(IEnumerable<ControlBehavior> behaviors, ControlLifetime lifetime, string action, string reason)
+    public string Deny(IEnumerable<ControlBehavior> behaviors, ControlLifetime lifetime, string action, string reason,
+        (int X, int Y, int Width, int Height)? region = null)
     {
         Validate(lifetime, action, reason);
         var values = behaviors.Distinct().ToArray();
         if (values.Length == 0 || values.Any(value => !Enum.IsDefined(value)))
             throw new ArgumentException("需要有效的行为名称。");
-        return Add(new Rule { Behaviors = values, Lifetime = lifetime, Action = action, Reason = reason });
+        if (region is { } area && (area.X < 0 || area.Y < 0 || area.Width <= 0 || area.Height <= 0
+            || (long)area.X + area.Width > int.MaxValue || (long)area.Y + area.Height > int.MaxValue))
+            throw new ArgumentException("区域需要非负世界格坐标和正数宽高。");
+        if (region != null && values.Any(value => value is not (ControlBehavior.Mining or ControlBehavior.Placement or ControlBehavior.Navigation)))
+            throw new ArgumentException("区域禁令只支持navigation/mining/placement。");
+        return Add(new Rule { Behaviors = values, Lifetime = lifetime, Action = action, Reason = reason, Region = region });
     }
 
     string Add(Rule rule)
@@ -72,13 +81,26 @@ public sealed class AgentControlPolicy
             return new JsonObject { ["error"] = "control_claim_expired", ["claim"] = claim, ["revision"] = Revision };
         foreach (var rule in rules.Values)
         {
-            if (rule.Behaviors?.Contains(behavior) == true)
+            if (rule.Region == null && rule.Behaviors?.Contains(behavior) == true)
                 return Denied(rule, "behavior_forbidden", behavior);
             if ((rule.Channels & channels) != 0 && (rule.Id != claim || !rule.Ready))
                 return Denied(rule, rule.Ready ? "control_owned_by_agent" : "control_handoff_pending", behavior);
         }
         if (granted != null && (granted.Channels & channels) != channels)
             return Denied(granted, "control_claim_missing_channel", behavior);
+        return null;
+    }
+
+    public JsonObject CheckAt(ControlBehavior behavior, int x, int y)
+    {
+        foreach (var rule in rules.Values)
+            if (rule.Region is { } area && rule.Behaviors?.Contains(behavior) == true
+                && x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height)
+            {
+                var denied = Denied(rule, "region_forbidden", behavior);
+                denied["x"] = x; denied["y"] = y;
+                return denied;
+            }
         return null;
     }
 
@@ -113,6 +135,8 @@ public sealed class AgentControlPolicy
             ["id"] = rule.Id, ["kind"] = rule.Behaviors == null ? "claim" : "deny",
             ["scope"] = rule.Lifetime.ToString().ToLowerInvariant(), ["action"] = rule.Action,
             ["reason"] = rule.Reason,
+            ["region"] = rule.Region is { } area ? new JsonObject { ["x"] = area.X, ["y"] = area.Y,
+                ["width"] = area.Width, ["height"] = area.Height } : null,
             ["status"] = rule.Behaviors != null ? "active" : rule.Ready ? "ready" : "acquiring",
             ["channels"] = new JsonArray(new[] { ControlChannels.Movement, ControlChannels.ItemUse }
                 .Where(channel => (rule.Channels & channel) != 0)

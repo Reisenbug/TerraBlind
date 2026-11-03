@@ -21,6 +21,7 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
+			if (!AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All)) { AxisLock.Release(Owner); return; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) { _firedThisEmergency = false; _prevPx = float.NaN; return; }
 

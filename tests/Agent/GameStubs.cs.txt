@@ -43,7 +43,7 @@ namespace Terraria
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
-        public bool controlUp, controlDown, controlHook, ExtraJump;
+        public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;
         public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
@@ -241,7 +241,7 @@ namespace TerraBlind
         public static int Stops;
         public static void Stop() => Stops++;
     }
-    public static class Dodge { public static bool Enabled; public static string Last = "idle"; }
+    public static class Dodge { public static bool Enabled; public static string Last = "idle"; public static void Stop() { Last = "stopped"; } }
     public static class Equipment
     {
         public static JsonArray Snapshot() => new();

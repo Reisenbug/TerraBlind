@@ -35,6 +35,7 @@ namespace TerraBlind
 		public override void PostUpdateInput()
 		{
 			if (!AgentNetwork.CanAutomate) return;
+			if (!AgentTools.ControlAllows(ControlBehavior.Direct, ControlChannels.All)) { Clear(); return; }
 			var cur = PlayerInput.Triggers.Current.KeyStatus;
 			if (KeysJson == "[]") KeysJson = Snapshot(cur);
 			while (_inbox.TryDequeue(out var c))

@@ -2114,7 +2114,7 @@ namespace TerraBlind
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
-        public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; StopSteps(); StopExec(); DiagLog.EndRun(); }
+        public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; _asyncSeq++; _asyncPending = false; _asyncRes = null; StopGreedy(); StopSteps(); StopExec(); DiagLog.EndRun(); }
 
         // 执行状态机(和 NavCoordinator.Done/IsActive/FailCode 对齐),这样 HTTP /nav 能用同一套方式驱动新规划器。
         static bool _execDone;
@@ -2147,6 +2147,11 @@ namespace TerraBlind
 
         static void StartSteps(List<ExecStep> steps)
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
+            if (steps.Exists(step => AgentTools.Control.CheckAt(ControlBehavior.Navigation, step.TargetCx, step.TargetCy) != null
+                || step.MineTiles?.Exists(tile => AgentTools.Control.CheckAt(ControlBehavior.Mining, tile.wx, tile.wy) != null) == true))
+            { RecedingNav.LastStop = "agent_region_forbidden"; RecedingNav.Stop(); return; }
             if (PreserveTerrain && steps.Exists(step => step.Dig || step.Pillar || step.Bridge
                 || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))
             {
@@ -3145,6 +3150,8 @@ namespace TerraBlind
         static int _asyncGoalWx, _asyncGoalWy, _asyncSeq;
         public static void ExecuteAsync(int goalWx, int goalWy)
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
             _rolling = false; _rollFinalWx = goalWx; _rollFinalWy = goalWy;
@@ -3549,6 +3556,8 @@ namespace TerraBlind
 
         public static void ApplyControls()
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
             if (_walkActive) { WatchUnplannedFall(); WalkTick(); return; }
             if (_execFrames == null) { WatchUnplannedFall(); return; }
             var p = Main.LocalPlayer;

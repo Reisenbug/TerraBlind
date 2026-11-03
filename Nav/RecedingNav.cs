@@ -146,6 +146,8 @@ namespace TerraBlind
 
         public static void Start(int goalWx, int goalWy, Mode mode)
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { LastStop = "agent_navigation_forbidden"; Stop(); return; }
             // 【同一个目标已经在跑就别重来】。Start 会作废建场任务、清掉 Commitment/Trap
             // 的全部记录。每帧调一次的话场永远建不完,人一步不动,屏幕刷满 building field
             // (现场:WofPrep 的兜底每帧调,日志 6413~6857 连着几百条)。
@@ -205,6 +207,8 @@ namespace TerraBlind
         // 一个像素不动、plan 日志一片空白,而看日志的人以为是选边逻辑的毛病(现场 2000 帧)。
         public static void Tick()
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { if (Active) { LastStop = "agent_navigation_forbidden"; Stop(); } return; }
             try { TickInner(); }
             catch (System.Exception e)
             {

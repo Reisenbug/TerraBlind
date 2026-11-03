@@ -10,6 +10,8 @@
     <Compile Include="../../Agent/ScriptProgress.cs" Link="ScriptProgress.cs" />
     <Compile Include="../../Agent/ActionTasks.cs" Link="ActionTasks.cs" />
     <Compile Include="../../Agent/ControlPolicy.cs" Link="ControlPolicy.cs" />
+    <Compile Include="../../Agent/ControlSession.cs" Link="ControlSession.cs" />
+    <Compile Include="../../Agent/AgentTools.Control.cs" Link="AgentTools.Control.cs" />
     <Compile Include="ControlTests.cs.txt" />
     <Compile Include="../../Agent/AgentWatch.cs" Link="AgentWatch.cs" />
     <Compile Include="../../Agent/NavigationProgress.cs" Link="NavigationProgress.cs" />

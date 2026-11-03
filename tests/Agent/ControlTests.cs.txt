@@ -51,5 +51,46 @@ static class ControlTests
         Check(policy.Check(ControlBehavior.Navigation, movement) == null, "explicit release did not restore navigation");
         Check(policy.Snapshot()["rules"].AsArray().Count == 0, "released rules remained in observation");
         Console.WriteLine("PASS: control overrides have independent scopes and stale claims cannot regain control");
+
+        var session = new AgentControlSession(policy);
+        claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "manual recovery");
+        policy.ConfirmReleased(claim);
+        Check(session.Begin("act", null, out _) != null, "unclaimed action acquired reserved input");
+        Check(session.Begin("act", claim, out long execution) == null, "claim holder could not execute direct controls");
+        Check(session.Check(ControlBehavior.Direct, movement, delegated: true) == null, "direct actuator lost delegated claim");
+        Check(session.Check(ControlBehavior.Navigation, movement, delegated: true) != null,
+            "late navigator borrowed a direct action claim");
+        Check(session.Check(ControlBehavior.Attack, use) != null && session.Check(ControlBehavior.Survival, movement) != null,
+            "automatic defense borrowed explicit action authority");
+        session.End(execution);
+        Check(session.Check(ControlBehavior.Direct, movement, delegated: true) != null,
+            "finished action retained authority over claimed input");
+        Check(session.Begin("nav_to", claim, out long next) == null, "explicit navigation could not receive claim");
+        session.End(execution);
+        Check(session.Active, "old action cleanup cleared a newer execution");
+        string noMining = policy.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Task, null, "sand collapse");
+        Check(session.Check(ControlBehavior.Mining, use, delegated: true) != null,
+            "navigation delegation bypassed an independent mining prohibition");
+        session.End(next); policy.Release(noMining); policy.Release(claim);
+        Check(AgentControlSession.RequiredChannels("act", System.Text.Json.Nodes.JsonNode.Parse(
+            "{\"steps\":[{\"keys\":[\"right\"],\"until\":{\"frames\":10}}]}").AsObject()) == movement,
+            "movement-only primitive falsely requires item ownership");
+        Console.WriteLine("PASS: explicit action delegation excludes stale controllers and respects independent prohibitions");
+        string sand = policy.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Task, null,
+            "sand collapse at measured tiles", (20, 30, 4, 8));
+        claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "recover from sand");
+        policy.ConfirmReleased(claim);
+        policy.Release(claim);
+        Check(policy.Check(ControlBehavior.Navigation, ControlChannels.All) == null,
+            "local veto disabled all navigation");
+        Check(policy.CheckAt(ControlBehavior.Mining, 23, 37)?["rule"].ToString() == sand,
+            "handback forgot rejected excavation");
+        Check(policy.CheckAt(ControlBehavior.Mining, 24, 37) == null
+            && policy.CheckAt(ControlBehavior.Mining, 23, 38) == null
+            && policy.CheckAt(ControlBehavior.Placement, 23, 37) == null,
+            "local mining veto blocked unrelated actions or adjacent cells");
+        policy.BeginTask();
+        Check(policy.CheckAt(ControlBehavior.Mining, 23, 37) == null, "local task veto leaked into new task");
+        Console.WriteLine("PASS: rejected excavation remains forbidden after handback while other terrain actions remain available");
     }
 }
