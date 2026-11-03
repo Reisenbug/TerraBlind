@@ -58,4 +58,21 @@ public sealed class ScriptLibrary
             return saved;
         }
     }
+
+    public JsonObject Patch(string name, string oldText, string newText, int expectedRevision)
+    {
+        if (string.IsNullOrEmpty(oldText) || newText == null) throw new ArgumentException("patch需要非空old_text和new_text。");
+        lock (gate)
+        {
+            var previous = Get(name);
+            int revision = previous["revision"].GetValue<int>();
+            if (revision != expectedRevision)
+                return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name, ["revision"] = revision };
+            string code = previous["code"]?.GetValue<string>();
+            int start = code?.IndexOf(oldText, StringComparison.Ordinal) ?? -1;
+            if (start < 0 || code.IndexOf(oldText, start + 1, StringComparison.Ordinal) >= 0)
+                return new JsonObject { ["error"] = "program_patch_not_unique", ["name"] = name, ["revision"] = revision };
+            return Save(name, code[..start] + newText + code[(start + oldText.Length)..], expectedRevision);
+        }
+    }
 }

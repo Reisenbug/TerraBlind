@@ -405,7 +405,8 @@ public static partial class AgentTools
                     "list" => (JsonNode)library.List(),
                     "get" => library.Get(Text(args, "name")),
                     "save" => library.Save(Text(args, "name"), Text(args, "code"), Int(args, "expected_revision", -1)),
-                    _ => throw new ArgumentException("operation需要list/get/save。")
+                    "patch" => library.Patch(Text(args, "name"), Text(args, "old_text"), args["new_text"]?.GetValue<string>(), Int(args, "expected_revision", -1)),
+                    _ => throw new ArgumentException("operation需要list/get/save/patch。")
                 }).ToJsonString();
             case "control":
                 return (await ManageControl(args, token)).ToJsonString();

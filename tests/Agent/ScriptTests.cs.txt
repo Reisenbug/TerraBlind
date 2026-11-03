@@ -134,6 +134,15 @@ static class ScriptTests
             Check(second["ok"].GetValue<bool>() && effects == 2 && savedProgress.Completed == 2,
                 "edited program replayed a completed effect or lost progress");
             Check(reopened.List()[0]["code"] == null, "listing unnecessarily exposes full program source");
+            Check(library.Patch("collect", "tool('effect', {})", "", 2)["error"]?.ToString() == "program_patch_not_unique",
+                "ambiguous patch modified multiple completed steps");
+            Check(library.Patch("collect", "return 'done';", "return 'patched';", 1)["error"]?.ToString() == "program_revision_conflict",
+                "stale patch replaced newer source");
+            Check(library.Patch("collect", "return 'done';", "return 'patched';", 2)["revision"].GetValue<int>() == 3,
+                "unique patch did not create a new revision");
+            var patched = await AgentScript.Run(reopened.Get("collect")["code"].ToString(), 30,
+                (_, _) => { }, Effect, _ => Task.CompletedTask, default, savedProgress);
+            Check(patched["value"]?.ToString() == "patched" && effects == 2, "patched continuation replayed completed effects");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }
             catch (ArgumentException) { escaped = true; }
