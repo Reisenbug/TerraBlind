@@ -860,7 +860,7 @@ public sealed class BehaviorTrial : ModSystem
                               if(sources.error||!sources.candidates?.length)
                                 tool('decision_point',{reason:'No new observed source; choose another area or activity, retaining gather '+action.handle});
                             }
-                            if(action.result?.outcome==='combat_obstructed') {
+                            function restoreShotLine() {
                               const detail=tool('action_query',{handle:action.handle}).result.last_result;
                               const target={npc:detail.candidate.who,npc_type:detail.candidate.npc_type};
                               const scene=tool('npc_combat_observe',target);
@@ -875,7 +875,7 @@ public sealed class BehaviorTrial : ModSystem
                               if(!selected) tool('decision_point',{reason:'No measured clear-line stance without reported hazards; change equipment or terrain plan'});
                               tool('script_events',{wait_ms:0});
                               const moved=tool('nav_to',{x:selected.probe.support_x,y:selected.probe.support_y-1});
-                              if(moved.done!==true) tool('decision_point',{reason:'Combat reposition navigation incomplete; preserve its action handle'});
+                              if(moved.done!==true) tool('decision_point',{reason:'Combat reposition interrupted; preserve handle '+moved.handle+'; outcome='+moved.outcome+'; hp='+moved.action?.observation?.hp});
                               const after=tool('npc_combat_observe',target);
                               step('combat-reposition:'+action.attempt,()=>({target,selected,after,original_handle:action.handle}));
                               if(after.error||!after.terrain.direct_line.clear)
@@ -883,7 +883,7 @@ public sealed class BehaviorTrial : ModSystem
                               state=tool('get_state');
                             }
                             const recovery={hp_before:state.player.hp,potion_delay_ticks:state.player.potion_delay_ticks,candidates:[]};
-                            if(state.player.potion_delay_ticks===0) {
+                            if(state.player.hp<80&&state.player.potion_delay_ticks===0) {
                               for(const item of state.inventory_slots.filter(i=>i.type>0)) {
                                 const info=tool('item_info',{slot:item.slot});
                                 if(info.found&&info.healLife>0&&info.consumable)
@@ -897,14 +897,18 @@ public sealed class BehaviorTrial : ModSystem
                             }
                             state=tool('get_state');
                             if(state.player.hp<80&&!state.player.suffocating) {
-                              const anchors=state.action_tasks.filter(a=>a.tool==='nav_to'&&a.status==='completed')
-                                .map(a=>({x:a.args.x,y:a.args.y}));
+                              const anchors=state.action_tasks.filter(a=>a.status==='completed')
+                                .map(a=>a.result?.state?.pos??(a.tool==='nav_to'?{x:a.args.x,y:a.args.y}:null))
+                                .filter(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y));
                               const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
                               anchors.sort((a,b)=>distanceToEnemy(b)-distanceToEnemy(a));
                               let retreat=null;
+                              recovery.retreat_candidates=[];
                               for(const anchor of anchors) {
-                                if(distanceToEnemy(anchor)<20) continue;
+                                const enemyDistance=distanceToEnemy(anchor);
+                                if(enemyDistance<20){recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'enemy_nearby'});continue;}
                                 const facts=tool('opportunity_assess',anchor);
+                                recovery.retreat_candidates.push({anchor,enemyDistance,hazards:facts.hazards});
                                 if(!facts.hazards.length){retreat={anchor,facts};break;}
                               }
                               if(retreat) {
@@ -930,6 +934,7 @@ public sealed class BehaviorTrial : ModSystem
                             step('combat-recovery:'+action.attempt,()=>recovery);
                             if(state.player.hp<80||state.player.suffocating)
                               tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below 80: '+JSON.stringify(recovery)});
+                            if(action.result?.outcome==='combat_obstructed') restoreShotLine();
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review:'+action.attempt,()=>({handle:action.handle,hp:state.player.hp,
                               reason:'Recovery checked against actual inventory and health; retain the same material target'}));
