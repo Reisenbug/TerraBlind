@@ -911,6 +911,10 @@ public sealed class BehaviorTrial : ModSystem
                                 const enemyDistance=distanceToEnemy(anchor);
                                 if(enemyDistance<20){recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'enemy_nearby'});continue;}
                                 const facts=tool('opportunity_assess',anchor);
+                                if(facts.error||!Array.isArray(facts.hazards)) {
+                                  recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'observation_failed',evidence:facts});
+                                  continue;
+                                }
                                 recovery.retreat_candidates.push({anchor,enemyDistance,hazards:facts.hazards});
                                 if(!facts.hazards.length){retreat={anchor,facts};break;}
                               }
