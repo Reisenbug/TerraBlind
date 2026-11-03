@@ -121,6 +121,13 @@ public static class Gather
                 previousCount = scene["counts"]?[candidate["item_type"].ToString()]?.GetValue<int>() ?? 0;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
+                if (candidate["kind"]?.ToString() == "npc" && last["result"] is JsonObject combat
+                    && combat["error"] == null && combat["outcome"] == null
+                    && combat["target_present"]?.GetValue<bool>() == true && combat["self_dead"]?.GetValue<bool>() == false
+                    && combat["hp_before"] is JsonValue beforeHp && beforeHp.TryGetValue<int>(out int before)
+                    && combat["hp_after"] is JsonValue afterHp && afterHp.TryGetValue<int>(out int after)
+                    && after > 0 && after < before)
+                    attempts[id] = 0;
                 if (last["result"]?["outcome"]?.ToString() == "combat_obstructed")
                 { outcome = "combat_obstructed"; break; }
                 if (last["result"]?["outcome"]?.ToString() == "unsafe"

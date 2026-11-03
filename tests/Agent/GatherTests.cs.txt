@@ -21,6 +21,19 @@ static class GatherTests
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
         Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
+        var combatTarget = new[] { new GatherTarget(20, 1, Array.Empty<string>(), new[] { 2 }) };
+        var combatWorld = new CombatProgressWorld { Hp = 3, Damage = 1 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(result["ok"].GetValue<bool>() && combatWorld.Actions == 3,
+            "measured damage exhausted candidate attempts before a kill and actual pickup");
+        combatWorld = new CombatProgressWorld { Hp = 3, Damage = 0 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(!result["ok"].GetValue<bool>() && combatWorld.Actions == 2 && result["outcome"].ToString() == "attempt_limit",
+            "unchanged enemy health bypassed bounded failed attempts");
+        combatWorld = new CombatProgressWorld { Hp = 100, Damage = 1 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(!result["ok"].GetValue<bool>() && combatWorld.Actions == 32 && result["targets"][0]["actual"].GetValue<int>() == 0,
+            "damage removed the overall action bound or counted as inventory gain");
 
         world = new World();
         result = await Gather.Run(Targets, 5, world, default, new GatherArea(10, 0, 1, 1));
@@ -305,6 +318,25 @@ static class GatherTests
         }
         finally { FightCoordinator.Stop(); p.inventory[0] = oldWeapon; Main.npc[0] = oldA; Main.npc[1] = oldB; p.controlUseItem = false; }
         Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");
+    }
+
+    sealed class CombatProgressWorld : IGatherWorld
+    {
+        public int Hp, Damage, Actions;
+        public Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject
+        {
+            ["counts"] = new JsonObject { ["20"] = Hp == 0 ? 1 : 0 },
+            ["candidates"] = new JsonArray(new JsonObject { ["id"] = "npc:0:1", ["item_type"] = 20,
+                ["kind"] = "npc", ["distance"] = 1f })
+        });
+        public Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            int before = Hp;
+            Hp = Math.Max(0, Hp - Damage); Actions++;
+            return Task.FromResult(new JsonObject { ["target_present"] = Hp > 0, ["self_dead"] = false,
+                ["hp_before"] = before, ["hp_after"] = Hp });
+        }
+        public Task Stop(CancellationToken token) => Task.CompletedTask;
     }
 
     sealed class ProbeWorld : IGatherWorld
