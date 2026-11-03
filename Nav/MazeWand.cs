@@ -270,7 +270,7 @@ namespace TerraBlind
             _fieldPickPower = BestPickPower();
             // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
-            int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
+            int m = bigMargin ? FieldMargin : System.Math.Min(120, 24 + span / 4);
             int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
             int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
 
