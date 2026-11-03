@@ -48,6 +48,10 @@ static class CodexTests
             "game thread forbids its own behavior scripts or permits editing mod source");
         Check(server.ThreadArgs["dynamicTools"][0]["type"].ToString() == "function" && server.ToolResponses.All(r => r["success"].GetValue<bool>()),
             "dynamic tool registration/result contract changed");
+        Check(server.ThreadArgs["dynamicTools"][0]["description"].ToString().Contains("JSON文本(string)")
+            && gameInstructions.Contains("JSON.parse(await tools.get_state({}))")
+            && gameInstructions.Contains("游戏脚本内的tool已经返回解析后的对象"),
+            "Codex text transport was confused with parsed in-game script values");
         Console.WriteLine("PASS: Codex protocol registers game tools, isolates thread settings, reuses context and deduplicates replies");
 
         server.ToolName = "unknown";

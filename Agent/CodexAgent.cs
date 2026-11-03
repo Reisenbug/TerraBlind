@@ -228,15 +228,21 @@ public sealed class CodexAgent : IDisposable
             foreach (var tool in tools)
             {
                 var function = tool["function"];
+                string description = function["description"]?.ToString() ?? "";
+                if (function["name"]?.ToString() is "get_state" or "game_api" or "run_script" or "ask")
+                    description = "Codex exec调用返回JSON文本(string)，不是对象。直接text(await tools." + function["name"]
+                        + "(参数))可读取全文；需在exec访问字段时先JSON.parse返回文本。不要对原始文本再JSON.stringify。\n" + description;
                 dynamicTools.Add(new JsonObject { ["type"] = "function", ["name"] = function["name"].DeepClone(),
-                    ["description"] = function["description"]?.DeepClone() ?? JsonValue.Create(""),
+                    ["description"] = description,
                     ["inputSchema"] = function["parameters"].DeepClone() });
             }
             var args = new JsonObject
             {
                 ["cwd"] = cwd, ["ephemeral"] = !managedGoal, ["environments"] = new JsonArray(),
                 ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["baseInstructions"] = system,
-                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。允许通过 script_program 编写和修改游戏行为 JavaScript，通过 run_script 执行；遵守宿主提供的脚本接口和当前任务授权。不要修改模组源码、直接读写文件或使用终端。",
+                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。允许通过 script_program 编写和修改游戏行为 JavaScript，通过 run_script 执行；遵守宿主提供的脚本接口和当前任务授权。不要修改模组源码、直接读写文件或使用终端。"
+                    + "外层Codex exec与游戏run_script是两个执行环境：外层只有注册的tools函数，get_state/game_api/run_script返回JSON字符串。例：const s=JSON.parse(await tools.get_state({})); text(s.player.hp); 不要把字符串当对象。"
+                    + "game_api列出的其余函数仅能在run_script代码里用tool(name,args)调用；不能写tools.inspect_terrain等未注册函数。游戏脚本内的tool已经返回解析后的对象，无需JSON.parse。",
                 ["dynamicTools"] = dynamicTools, ["config"] = overrides
             };
             if (!string.IsNullOrWhiteSpace(model)) args["model"] = model;
