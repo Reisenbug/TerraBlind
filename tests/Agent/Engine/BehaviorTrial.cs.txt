@@ -23,6 +23,10 @@ public sealed class BehaviorTrial : ModSystem
     bool enabled, opened, finished;
     int frames, movingAttackFrames, originX, floor, target = -1;
     bool collectingStingers;
+    bool materialNavigationStub;
+    delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
+    delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
+    StartHook materialNavigationHook;
     int hornetsSpawned;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
@@ -73,6 +77,20 @@ public sealed class BehaviorTrial : ModSystem
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
         if (enabled) { On_Main.Update += Open; IL_Main.DoUpdate += Focus; }
+        if (enabled && Environment.GetEnvironmentVariable("TB_MATERIAL_NAV_STUB") == "1")
+        {
+            materialNavigationHook = (original, x, y, mode) =>
+            {
+                if (!materialNavigationStub) { original(x, y, mode); return; }
+                var player = Main.LocalPlayer;
+                player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f, y * 16 + 8 - player.height / 2f));
+                player.velocity = Vector2.Zero;
+                player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
+                RecedingNav.Active = false; RecedingNav.LastStop = "done";
+                Console.WriteLine($"MATERIAL_TEST_NAV x={x} y={y} navigation=teleport_stub");
+            };
+            MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), materialNavigationHook);
+        }
     }
     public override void Unload() { if (enabled) { On_Main.Update -= Open; IL_Main.DoUpdate -= Focus; } }
     static void Focus(ILContext il)
@@ -570,6 +588,7 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("OPPORTUNITY_NATURAL_COMPLETE native_engine=true model_calls=0 fixture_tile_edits=0 teleports_after_start=0");
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MATERIALS") == "1")
         {
+            await OnMain(() => { materialNavigationStub = Environment.GetEnvironmentVariable("TB_MATERIAL_NAV_STUB") == "1"; return true; });
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
             File.WriteAllText(Path.Combine(Main.SavePath, "material-recipe.json"), recipe.ToJsonString());
             string materials = """
