@@ -528,6 +528,16 @@ static class RuntimeTests
                     ["source_area"] = new JsonObject { ["x"] = 30, ["y"] = 30, ["width"] = 2, ["height"] = 2 } }, default));
                 Check(areaTiles["tiles"].AsArray().Count == 1 && areaTiles["tiles"][0]["x"].GetValue<int>() == 30,
                     "source query substituted a nearer outside tile for the selected region");
+                Game.tile[31, 30] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther, TileFrameX = 18 };
+                var limitedTiles = await Execute(AgentTools.FindTiles(new JsonObject { ["name"] = "FixtureOther", ["n"] = 1,
+                    ["source_area"] = new JsonObject { ["x"] = 30, ["y"] = 30, ["width"] = 2, ["height"] = 2 } }, default));
+                Check(limitedTiles["tiles"].AsArray().Count == 1 && limitedTiles["total_matches"].GetValue<int>() == 2
+                    && limitedTiles["truncated"].GetValue<bool>(), "bounded source list concealed omitted candidates");
+                var filteredTiles = await Execute(AgentTools.FindTiles(new JsonObject { ["name"] = "FixtureOther", ["n"] = 1,
+                    ["frame_x"] = 18, ["source_area"] = new JsonObject { ["x"] = 30, ["y"] = 30, ["width"] = 2, ["height"] = 2 } }, default));
+                Check(filteredTiles["tiles"][0]["x"].GetValue<int>() == 31 && filteredTiles["total_matches"].GetValue<int>() == 1
+                    && !filteredTiles["truncated"].GetValue<bool>(), "variant filtering occurred after truncation or misreported coverage");
+                Game.tile[31, 30] = default;
                 var scopedGather = new GameGather(new[] { new GatherTarget(987, 1, new[] { "FixtureOther" }, Array.Empty<int>()) },
                     new GatherArea(30, 30, 2, 2));
                 var sourceScene = await Execute(scopedGather.Observe(default));

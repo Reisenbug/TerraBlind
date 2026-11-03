@@ -1006,8 +1006,10 @@ public static partial class AgentTools
                             matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy),
                                 ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY });
                         }
+                int limit = Math.Clamp(Int(args, "n", 12), 1, 100);
                 return new JsonObject { ["tiles"] = new JsonArray(matches.OrderBy(m => m["dist"].GetValue<float>())
-                    .Take(Math.Clamp(Int(args, "n", 12), 1, 100)).Select(m => (JsonNode)m).ToArray()),
+                    .Take(limit).Select(m => (JsonNode)m).ToArray()),
+                    ["total_matches"] = matches.Count, ["truncated"] = matches.Count > limit,
                     ["source_area"] = area.Snapshot(), ["resolved_name"] = resolved["name"].DeepClone() };
             }, token);
         var result = await Call("/find_tiles", resolved, token);
