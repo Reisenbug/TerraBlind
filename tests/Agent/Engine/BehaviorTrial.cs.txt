@@ -628,6 +628,7 @@ public sealed class BehaviorTrial : ModSystem
                     after = await Call("get_state", new JsonObject());
                     started |= NativeAgent.Status != "queued" && NativeAgent.Status != "idle";
                     samples.Add(new JsonObject { ["tick"] = after["tick"]?.DeepClone(), ["status"] = NativeAgent.Status,
+                        ["idle_defense_active"] = after["idle_defense_active"]?.DeepClone(),
                         ["player"] = after["player"]?.DeepClone(), ["task_plan"] = after["task_plan"]?.DeepClone(),
                         ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone() });
                     string status = after["codex_goal"]?["native"]?["status"]?.ToString();
