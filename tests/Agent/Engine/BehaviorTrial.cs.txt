@@ -608,17 +608,39 @@ public sealed class BehaviorTrial : ModSystem
             if(!notice.events.some(e=>e.kind==='nearby_chest')||!notice.events.some(e=>e.kind==='nearby_tile'&&e.evidence.tile_type===12))
               throw new Error('native chest/crystal not observed');
             const decisions=[];
-            for(const point of [{x:CHEST_X,y:CHEST_Y},{x:HEART_X,y:HEART_Y}]) {
-              const facts=tool('opportunity_assess',{...point,destination:goal});
-              if(facts.hazards.some(h=>h.kind==='lava'||h.kind==='trap_tile'))
-                tool('decision_point',{reason:'Natural opportunity has a measured hazard; preserved original handle requires review: '+JSON.stringify(facts)});
-              decisions.push(step('choice:'+point.x+','+point.y,()=>({decision:'collect',reason:'needed resource; inspect real interaction and verify inventory',facts})));
+            const candidates=new Map();
+            for(const e of notice.events) {
+              const t=e.evidence;
+              if(e.kind!=='nearby_chest'&&!(e.kind==='nearby_tile'&&t.tile_type===12)) continue;
+              const kind=e.kind==='nearby_chest'?'chest':'crystal';
+              const x=t.x-(kind==='crystal'?(t.frame_x%36)/18:0);
+              const y=t.y-(kind==='crystal'?(t.frame_y%36)/18:0);
+              candidates.set(kind+':'+x+','+y,{kind,x,y});
             }
+            const selected={};
+            const position=tool('get_state').player.pos;
+            const ordered=[...candidates.values()].sort((a,b)=>Math.hypot(a.x-position.x/16,a.y-position.y/16)-Math.hypot(b.x-position.x/16,b.y-position.y/16));
+            for(const point of ordered) {
+              let decision='defer', reason='one target of this kind already selected for this bounded detour', evidence=null;
+              {
+                const facts=tool('opportunity_assess',{x:point.x,y:point.y,destination:goal});
+                evidence={error:facts.error||null,distance:facts.approach_direct_distance,route_relation:facts.route_relation,
+                  solid_cells:facts.direct_corridor_solid_cells?.length,hazards:facts.hazards};
+                if(facts.error) {decision='skip';reason='target not assessed: '+facts.error;}
+                else if(facts.hazards.some(h=>h.kind==='lava'||h.kind==='trap_tile'||h.kind==='falling_block'&&h.on_direct_corridor)) {
+                  decision='skip';reason='measured lava/trap or falling block on approach';
+                } else if(facts.route_relation.extra_direct_distance>20) {decision='skip';reason='geometric detour exceeds this script policy of 20 tiles; actual route cost remains unknown';}
+                else if(!selected[point.kind]) {decision='collect';reason='needed target within detour budget; reachability and gain still require execution';selected[point.kind]=point;}
+              }
+              decisions.push(step('choice:'+point.kind+':'+point.x+','+point.y,()=>({point,decision,reason,evidence})));
+            }
+            if(!selected.chest||!selected.crystal) tool('decision_point',{reason:'Observed candidates did not provide both acceptable targets; review recorded choices and preserve original navigation'});
             function count(type){return tool('get_state').inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);}
-            const beforeLoot=count(LOOT_TYPE), beforeCrystal=count(29);
-            const loot=tool('collect_treasure',{x:CHEST_X,y:CHEST_Y});
-            if(count(LOOT_TYPE)<=beforeLoot) throw new Error('natural chest not looted: '+JSON.stringify(loot));
-            let gather=tool('gather',{targets:[{item_type:29,count:beforeCrystal+1,tile_names:['Heart']}],source_area:{x:HEART_X,y:HEART_Y,width:3,height:3}});
+            const beforeCrystal=count(29);
+            const loot=tool('collect_treasure',{x:selected.chest.x,y:selected.chest.y});
+            const lootGained=Object.values(loot.got||{}).reduce((n,v)=>n+v,0);
+            if(lootGained<=0) throw new Error('natural chest not looted: '+JSON.stringify(loot));
+            let gather=tool('gather',{targets:[{item_type:29,count:beforeCrystal+1,tile_names:['Heart']}],source_area:{x:selected.crystal.x,y:selected.crystal.y,width:3,height:3}});
             for(let i=0;i<30&&gather.handle;i++) {
               const events=tool('script_events',{wait_ms:0});
               if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger during natural gathering'});
@@ -636,14 +658,15 @@ public sealed class BehaviorTrial : ModSystem
               if(restored.status!=='running') break;
             }
             if(restored.status!=='completed'||restored.result.done!==true) throw new Error('natural original goal not reached: '+JSON.stringify(restored));
-            return {decisions,original_handle:original.handle,loot_gained:count(LOOT_TYPE)-beforeLoot,crystals_gained:count(29)-beforeCrystal,restored};
-            """.Replace("GOAL_X", goalX.ToString()).Replace("GOAL_Y", goalY.ToString())
-                .Replace("CHEST_X", chestX.ToString()).Replace("CHEST_Y", chestY.ToString())
-                .Replace("HEART_X", heartX.ToString()).Replace("HEART_Y", heartY.ToString()).Replace("LOOT_TYPE", lootType.ToString());
+            return {decisions,original_handle:original.handle,loot_gained:lootGained,crystals_gained:count(29)-beforeCrystal,restored};
+            """.Replace("GOAL_X", goalX.ToString()).Replace("GOAL_Y", goalY.ToString());
         var result = await Call("run_script", new JsonObject { ["code"] = code, ["workflow"] = "natural-opportunity-trial", ["event_delivery"] = "script" });
         File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-result.json"), result.ToJsonString());
         if (result["ok"]?.GetValue<bool>() != true || result["value"]?["crystals_gained"]?.GetValue<int>() != 1)
             throw new Exception("natural opportunity continuation incomplete: " + result["detail"] + " " + result["value"]);
+        if (!result["value"]["decisions"].AsArray().Any(d => d["decision"]?.ToString() == "skip"
+            && d["evidence"] != null && !string.IsNullOrWhiteSpace(d["reason"]?.ToString())))
+            throw new Exception("natural opportunity trial did not exercise an evidence-based skip");
         Console.WriteLine("OPPORTUNITY_NATURAL_COMPLETE native_engine=true model_calls=0 fixture_tile_edits=0 teleports_after_start=0");
         var loadout = await Call("run_script", new JsonObject { ["code"] = """
             const state=tool('get_state');
