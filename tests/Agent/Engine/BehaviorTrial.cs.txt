@@ -844,9 +844,17 @@ public sealed class BehaviorTrial : ModSystem
                         return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
+                string previousReviewReason = null;
                 for (int review = 0; review < 3 && (combat["value"]?["status"]?.ToString() == "yield"
                     || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "source_unavailable"); review++)
                 {
+                    string reviewReason = combat["value"]?["wake"]?["event"]?["reason"]?.ToString();
+                    if (reviewReason != null && reviewReason == previousReviewReason)
+                    {
+                        Console.WriteLine("MATERIAL_REVIEW_UNCHANGED " + reviewReason);
+                        break;
+                    }
+                    previousReviewReason = reviewReason;
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
                             let state=tool('get_state');
