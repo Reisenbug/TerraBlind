@@ -566,18 +566,22 @@ public sealed class BehaviorTrial : ModSystem
                 var combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                     ["code"] = """
                         function count(){return tool('get_state').inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);}
+                        function review(events){
+                          if((events??[]).some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                            tool('decision_point',{reason:'Health or terrain danger during material combat; preserve collected resources and review before resuming'});
+                        }
                         const before=count();
                         tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
                         for(let round=0;round<6&&count()===before;round++) {
                           let action=tool('gather',{targets:[{item_type:209,count:before+1,npc_types:[NPC_TYPE]}]});
+                          review(action.events);
                           for(let i=0;i<15&&action.handle;i++) {
                             const events=tool('script_events',{wait_ms:0});
+                            review(events.events);
                             const current=tool('action_query',{handle:action.handle,wait_ms:1000});
                             if(current.status==='completed'||current.status==='failed'){action=current;break;}
-                            if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
-                              tool('decision_point',{reason:'Health or terrain danger during material combat; preserve collected resources and review before resuming'});
                             if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
                           }
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
