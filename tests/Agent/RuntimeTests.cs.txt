@@ -816,6 +816,8 @@ static class RuntimeTests
 
             Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
             Terraria.Lang.MapLabels[16] = "Fixture Resource";
+            var previousSourceTile = Game.tile[100, 101];
+            Game.tile[100, 101] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, TileFrameX = 54, TileFrameY = 18 };
             int tileQueries = 0;
             HttpServerSystem.Handler = (path, payload) =>
             {
@@ -838,6 +840,20 @@ static class RuntimeTests
             var resourceScene = await Execute(new GameGather(new[] { new GatherTarget(99, 10, new[] { "FixtureResource" }, Array.Empty<int>()) }).Observe(default));
             Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 1,
                 "batch gathering did not reuse tile name resolution");
+            Check(resourceScene["candidates"][0]["tile_type"].GetValue<int>() == 1
+                && resourceScene["candidates"][0]["frame_x"].GetValue<int>() == 54
+                && resourceScene["candidates"][0]["frame_y"].GetValue<int>() == 18,
+                "global gathering lost the observed tile variant");
+            Game.tile[100, 101].TileFrameX = 90;
+            var changedGlobalVariant = await Execute(new GameGather(new[] { new GatherTarget(99, 10,
+                new[] { "FixtureResource" }, Array.Empty<int>()) }).Act((JsonObject)resourceScene["candidates"][0], default));
+            Check(changedGlobalVariant["error"]?.ToString() == "target_changed",
+                "gathering acted on a different variant after global observation");
+            Game.tile[100, 101].HasUnactuatedTile = false;
+            var staleSource = await Execute(AgentTools.FindTiles(aliasArgs, default));
+            Check(staleSource["tiles"].AsArray().Count == 0 && staleSource["stale_candidates_removed"].GetValue<int>() == 1,
+                "global tile query retained a source removed before observation");
+            Game.tile[100, 101] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, TileFrameX = 54, TileFrameY = 18 };
             var spaced = (JsonObject)aliasArgs.DeepClone();
             spaced["name"] = "Fixture Resource";
             tileQueries = 0;
@@ -851,6 +867,7 @@ static class RuntimeTests
                 && ambiguous["name_candidates"].AsArray().Count == 2, "ambiguous map name guessed a source");
             Terraria.Lang.MapLabels.Clear();
             Terraria.Map.MapHelper.tileOptionCounts = Array.Empty<int>();
+            Game.tile[100, 101] = previousSourceTile;
             Console.WriteLine("PASS: tile queries reuse unique game map names, preserve bounds and refuse ambiguous source names");
 
             int scriptQueries = 0;

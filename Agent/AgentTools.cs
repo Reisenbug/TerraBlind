@@ -998,6 +998,23 @@ public static partial class AgentTools
                     ["source_area"] = area.Snapshot(), ["resolved_name"] = resolved["name"].DeepClone() };
             }, token);
         var result = await Call("/find_tiles", resolved, token);
+        if (result["tiles"] is JsonArray tiles)
+            await NativeAgent.OnMain(() =>
+            {
+                int stale = 0;
+                for (int i = tiles.Count - 1; i >= 0; i--)
+                {
+                    int x = tiles[i]["x"].GetValue<int>(), y = tiles[i]["y"].GetValue<int>();
+                    if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY
+                        || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != exact[0]["type"].GetValue<int>())
+                    { tiles.RemoveAt(i); stale++; continue; }
+                    tiles[i]["tile_type"] = (int)Main.tile[x, y].TileType;
+                    tiles[i]["frame_x"] = (int)Main.tile[x, y].TileFrameX;
+                    tiles[i]["frame_y"] = (int)Main.tile[x, y].TileFrameY;
+                }
+                result["stale_candidates_removed"] = stale;
+                return true;
+            }, token);
         result["requested_name"] = Text(args, "name");
         result["resolved_name"] = resolved["name"].DeepClone();
         return result;

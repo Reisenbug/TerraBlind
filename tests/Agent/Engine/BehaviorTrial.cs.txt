@@ -298,6 +298,23 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("production drop source tool reported incorrect sources or mutated inventory");
             File.WriteAllText(Path.Combine(Main.SavePath, "npc-drop-sources-tool.json"), queried.ToJsonString());
             Console.WriteLine("NPC_DROP_SOURCES_TOOL_PASS real_rules=true inventory_unchanged=true");
+            var observedPlants = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 12, ["max_dist"] = 2000 });
+            await OnMain(() =>
+            {
+                if (observedPlants["error"] != null || observedPlants["tiles"]?.AsArray().Count is not > 0)
+                    throw new Exception("global plant observation found no native candidates");
+                foreach (var cell in observedPlants["tiles"].AsArray())
+                {
+                    var tile = Main.tile[cell["x"].GetValue<int>(), cell["y"].GetValue<int>()];
+                    if (cell["tile_type"]?.GetValue<int>() != tile.TileType
+                        || cell["frame_x"]?.GetValue<int>() != tile.TileFrameX
+                        || cell["frame_y"]?.GetValue<int>() != tile.TileFrameY)
+                        throw new Exception("global plant observation lost native variant data");
+                }
+                return true;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "global-plant-variants.json"), observedPlants.ToJsonString());
+            Console.WriteLine($"GLOBAL_PLANT_VARIANTS_PASS count={observedPlants["tiles"].AsArray().Count}");
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")
