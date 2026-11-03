@@ -2219,6 +2219,8 @@ namespace TerraBlind
         public static SSResult LastExecResult => _lastExecResult;   // the plan the current/last leg dispatched (for lookahead landing prediction)
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
+        internal static bool ReplayAtHandoff => _execFrames != null && _execIdx == _execFrames.Count
+            && _ssSteps?.Count == 1 && _ssDispatched;
 
         // 逐边执行:帧步重放自己模拟出的帧(规划即执行),pillar 步交给 SkillExecutor 的宏。
         // 每一步都要等上一个执行器空闲、人落地站稳(干净静止态)才开始。

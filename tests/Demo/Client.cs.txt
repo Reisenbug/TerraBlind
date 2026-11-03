@@ -1307,6 +1307,7 @@ public sealed class Driver : ModSystem
                     throw new InvalidOperationException("natural_field_cost_baseline_changed:" + hash);
                 Console.WriteLine($"FIELD_COST_BASELINE edges={costs.Count} sha256={hash}");
                 for (int change = 0; change < 5; change++) CheckCanceledPrediction(player, change);
+                for (int change = 0; change < 6; change++) CheckMovementLookahead(player, change);
             }
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1388,6 +1389,50 @@ public sealed class Driver : ModSystem
             tile.HasTile = hadTile; tile.TileType = tileType;
             type.GetMethod("Reset", flags).Invoke(null, null);
             pending.TrySetCanceled();
+        }
+    }
+
+    static void CheckMovementLookahead(Player player, int change)
+    {
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyMovementLookahead", true);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+        var cancellation = new System.Threading.CancellationTokenSource();
+        var from = ((int, int))typeof(StateSpacePlanner).GetMethod("StandCell", flags)
+            .Invoke(null, new object[] { player.position.X, player.position.Y });
+        var target = (from.Item1 + 1, from.Item2);
+        var cached = typeof(MazeWand).GetField("_cachedField", flags);
+        var cachedGoal = typeof(MazeWand).GetField("_cachedGoal", flags);
+        var oldField = cached.GetValue(null); var oldGoal = cachedGoal.GetValue(null);
+        var anchor = VanillaPrediction.Observe(player, false);
+        var sample = anchor.DeepClone().AsObject(); sample["x"] = player.position.X + 16f;
+        var tile = Main.tile[from.Item1 + 1, from.Item2];
+        bool hadTile = tile.HasTile; ushort tileType = tile.TileType;
+        try
+        {
+            cached.SetValue(null, new System.Collections.Generic.Dictionary<(int, int), int> { [from] = 20, [target] = 10 });
+            cachedGoal.SetValue(null, target);
+            type.GetField("pending", flags).SetValue(null, pending.Task);
+            type.GetField("cancellation", flags).SetValue(null, cancellation);
+            type.GetField("context", flags).SetValue(null, VanillaFrame.Capture(player,
+                new Rectangle(from.Item1 - 10, from.Item2 - 10, 21, 21), true));
+            type.GetField("started", flags).SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+            if (change == 2) type.GetMethod("Reset", flags).Invoke(null, null);
+            if (change == 3) anchor["x"] = player.position.X + 16f;
+            if (change == 4) { tile.HasTile = true; tile.TileType = tileType == TileID.Stone ? TileID.Dirt : TileID.Stone; }
+            if (change != 1) pending.SetResult(new JsonObject { ["status"] = "planned", ["anchor"] = anchor,
+                ["controls"] = new JsonArray(2), ["forecast"] = new JsonObject { ["outcome"] = "complete", ["frames"] = new JsonArray(sample) } });
+            if (change == 5) cancellation.Cancel();
+            var result = type.GetMethod("Take", flags).Invoke(null, new object[] { player, target.Item1, target.Item2 });
+            if ((result != null) != (change is 0 or 5) || type.GetField("pending", flags).GetValue(null) != null)
+                throw new InvalidOperationException("movement_lookahead_check_failed:" + change);
+            Console.WriteLine("MOVEMENT_LOOKAHEAD_PASS change=" + change);
+        }
+        finally
+        {
+            type.GetMethod("Reset", flags).Invoke(null, null); pending.TrySetCanceled();
+            tile.HasTile = hadTile; tile.TileType = tileType;
+            cached.SetValue(null, oldField); cachedGoal.SetValue(null, oldGoal);
         }
     }
 

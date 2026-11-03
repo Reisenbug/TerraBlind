@@ -218,6 +218,7 @@ namespace TerraBlind
             _startupWalkReported = false;
             _noProgressSteps = 0; _failureRecoveryPending = false; _failureRecoveryTried = false;
             LegacyNativePrediction.Reset();
+            LegacyMovementLookahead.Reset();
             VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
             _mode = mode;
@@ -266,6 +267,7 @@ namespace TerraBlind
             ++_fieldGeneration;
             TrapEscape.Reset();
             LegacyNativePrediction.Reset();
+            LegacyMovementLookahead.Reset();
             VanillaNavBridge.Reset();
             // 刹车没停稳就被外部叫停:别让 SettleAt 留在后台继续抢控制
             if (_braking) { SettleAt.Stop(); _braking = false; }
@@ -281,6 +283,7 @@ namespace TerraBlind
         internal static void InterruptForSurvival()
         {
             LegacyNativePrediction.Reset();
+            LegacyMovementLookahead.Reset();
             StateSpacePlanner.StopNav();
             SkillExecutor.Stop(); MineCoordinator.Stop(); BridgeBuilder.Stop(); ItemUseCoordinator.Stop();
             TrapEscape.Reset(); StuckSentinel.Reset();
@@ -314,6 +317,7 @@ namespace TerraBlind
             // 不 Stop 自己:导航是长期状态,停了整段就没了;等它放开接着走。
             if (!AxisLock.Take(Owner, Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use, () => Active))
             {
+                LegacyMovementLookahead.Reset();
                 if (_waitOn != AxisLock.Held(Ax.Move))
                 {
                     _waitOn = AxisLock.Held(Ax.Move);
@@ -445,7 +449,14 @@ namespace TerraBlind
             }
             if (StuckSentinel.Nudging) return;
 
-            if (StateSpacePlanner.ExecRunning) return;        // current action still executing
+            if (StateSpacePlanner.ExecRunning && !StateSpacePlanner.ReplayAtHandoff) return;
+            var prepared = LegacyMovementLookahead.Take(p, _goalWx, _goalWy);
+            if (prepared != null)
+            {
+                DispatchLegacy(prepared, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
+                return;
+            }
+            if (StateSpacePlanner.ExecRunning) return;
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled
 
             // one label function everywhere: same rounding AND same body-fit snap as the planner's landing labels.
@@ -660,6 +671,8 @@ namespace TerraBlind
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;
             _lastLandPy = res.Steps.Count > 0 ? res.Steps[0].LandPy : 0f;
             StateSpacePlanner.DispatchPlan(res);
+            if (StateSpacePlanner.ExecRunning)
+                LegacyMovementLookahead.Start(Main.LocalPlayer, res, _goalWx, _goalWy);
         }
     }
 }
