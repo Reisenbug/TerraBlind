@@ -33,6 +33,7 @@ public class AgentTaskEvidence : GlobalNPC
         return kind switch
         {
             "permanent_health" => Main.LocalPlayer.statLifeMax,
+            "position" => AtPosition(condition) ? 1 : 0,
             "item" => Main.LocalPlayer.inventory.Where(item => item != null && !item.IsAir && item.type == type).Sum(item => item.stack),
             "equipped" => Enumerable.Range(0, 10).Where(slot => Main.LocalPlayer.IsItemSlotUnlockedAndUsable(slot)
                 && Main.LocalPlayer.armor[slot].type == type).Sum(slot => Main.LocalPlayer.armor[slot].stack),
@@ -41,5 +42,16 @@ public class AgentTaskEvidence : GlobalNPC
             "npc_kills" => throw new InvalidOperationException("当前本次击杀证据仅支持单人游戏；联机需要服务器确认，不能用历史Boss进度代替。"),
             _ => throw new InvalidOperationException("未知完成条件。")
         };
+    }
+
+    static bool AtPosition(JsonObject condition)
+    {
+        var player = Main.LocalPlayer;
+        int x = condition["x"].GetValue<int>(), y = condition["y"].GetValue<int>();
+        if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY)
+            throw new InvalidOperationException("position目标超出当前世界。");
+        float radius = condition["radius"].GetValue<int>() * 16f;
+        float dx = player.Center.X - (x + 0.5f) * 16f, dy = player.Center.Y - (y + 0.5f) * 16f;
+        return player.active && !player.dead && player.statLife > 0 && dx * dx + dy * dy <= radius * radius;
     }
 }

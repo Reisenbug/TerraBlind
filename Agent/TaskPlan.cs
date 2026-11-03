@@ -40,11 +40,21 @@ public sealed class AgentTaskPlan
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "item" or "equipped" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
-                    || kind != "permanent_health" && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件仅支持 permanent_health、item、equipped、npc_kills、npc_alive，count/type 必须为正数。");
+                if (kind is not ("permanent_health" or "position" or "item" or "equipped" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
+                    || kind is not ("permanent_health" or "position") && check["type"]?.GetValue<int>() is not > 0)
+                    throw new InvalidOperationException("条件仅支持 permanent_health、position、item、equipped、npc_kills、npc_alive，count/type 必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
-                if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
+                if (kind == "position")
+                {
+                    int radius = check["radius"]?.GetValue<int>() ?? 2;
+                    if (check["count"].GetValue<int>() != 1 || check["x"]?.GetValue<int>() is not >= 0
+                        || check["y"]?.GetValue<int>() is not >= 0 || radius is < 1 or > 60)
+                        throw new InvalidOperationException("position需要count=1、非负格坐标x/y、radius为1..60格（默认2）。");
+                    verified["x"] = check["x"].DeepClone();
+                    verified["y"] = check["y"].DeepClone();
+                    verified["radius"] = radius;
+                }
+                else if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
                 int value = measure(verified);
                 if (kind == "npc_kills") verified["baseline"] = value;
                 copy["conditions"].AsArray().Add(verified);

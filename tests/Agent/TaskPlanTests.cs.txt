@@ -11,6 +11,7 @@ static class TaskPlanTests
 
     public static void Run()
     {
+        VerifyPosition();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
         Main.netMode = NetmodeID.SinglePlayer;
@@ -170,5 +171,59 @@ static class TaskPlanTests
         plan.Advance("weapon", Measure); plan.Advance("final", Measure);
         Check(plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "corrected identity did not verify earned inventory and preserved fresh kill");
         Console.WriteLine("PASS: atomic plan identity correction preserves earned steps and kill baseline, rejects stale/completed edits and never invents progress");
+    }
+
+    static void VerifyPosition()
+    {
+        var player = Main.LocalPlayer;
+        var savedPosition = player.position;
+        bool savedActive = player.active, savedDead = player.dead;
+        int savedLife = player.statLife;
+        try
+        {
+            player.active = true; player.dead = false; player.statLife = 100;
+            var request = Parse("""
+            {"goal":"arrive then collect","steps":[
+              {"id":"arrival","description":"reach target","conditions":[{"kind":"position","x":10,"y":20,"count":1}]},
+              {"id":"health","description":"recover","conditions":[{"kind":"permanent_health","count":500}]}
+            ]}
+            """);
+            var plan = new AgentTaskPlan();
+            player.position = new(168 - player.width / 2f + 32, 328 - player.height / 2f + 32);
+            var snapshot = plan.Create(request, AgentTaskEvidence.Measure);
+            var condition = snapshot["steps"][0]["conditions"][0].AsObject();
+            Check(condition["x"].GetValue<int>() == 10 && condition["y"].GetValue<int>() == 20
+                && condition["radius"].GetValue<int>() == 2, "position target or default radius lost");
+            Check(!plan.Advance("arrival", AgentTaskEvidence.Measure)["verified"].GetValue<bool>() && plan.Cursor == 0,
+                "diagonal outside circular radius completed arrival");
+            player.position = new(168 - player.width / 2f + 32, 328 - player.height / 2f);
+            Check(AgentTaskEvidence.Measure(condition) == 1, "exact radius boundary rejected");
+            player.dead = true;
+            Check(!plan.Advance("arrival", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "dead player completed arrival");
+            player.dead = false; player.active = false;
+            Check(AgentTaskEvidence.Measure(condition) == 0, "inactive player completed arrival");
+            player.active = true; player.statLife = 0;
+            Check(AgentTaskEvidence.Measure(condition) == 0, "zero life completed arrival");
+            player.statLife = 100;
+            Check(plan.Advance("arrival", AgentTaskEvidence.Measure)["verified"].GetValue<bool>() && plan.Cursor == 1 && plan.Incomplete,
+                "verified arrival did not preserve following task");
+            foreach (var invalid in new[]
+            {
+                "{\"kind\":\"position\",\"count\":1,\"x\":10}",
+                "{\"kind\":\"position\",\"count\":2,\"x\":10,\"y\":20}",
+                "{\"kind\":\"position\",\"count\":1,\"x\":-1,\"y\":20}",
+                "{\"kind\":\"position\",\"count\":1,\"x\":10,\"y\":20,\"radius\":61}"
+            })
+            {
+                request["steps"][0]["conditions"][0] = Parse(invalid);
+                try { new AgentTaskPlan().Create(request, AgentTaskEvidence.Measure); throw new Exception("invalid position accepted"); }
+                catch (InvalidOperationException) { }
+            }
+            condition["x"] = Main.maxTilesX;
+            try { AgentTaskEvidence.Measure(condition); throw new Exception("out of world position accepted"); }
+            catch (InvalidOperationException) { }
+        }
+        finally { player.position = savedPosition; player.active = savedActive; player.dead = savedDead; player.statLife = savedLife; }
+        Console.WriteLine("PASS: position completion checks live player center, circular radius, world bounds and continuation");
     }
 }
