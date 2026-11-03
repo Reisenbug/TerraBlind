@@ -363,7 +363,7 @@
         "properties": {
           "item": {
             "type": "string",
-            "description": "物品名,如 '工作台' 或 'Wood'"
+            "description": "优先传get_state.inventory_slots的type转成字符串，如'36'；也支持背包里的实际显示名。不要把配方内部名当显示名，例如WorkBench的显示名可能为Work Bench或工作台。"
           },
           "x": {
             "type": "integer",

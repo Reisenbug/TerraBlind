@@ -704,6 +704,65 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine("OPPORTUNITY_MATERIAL_PROGRESS verified_recipe_spores=true");
             if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_STINGERS") == "1")
             {
+                var preparation = await Call("run_script", new JsonObject { ["workflow"] = "material-equipment", ["event_delivery"] = "script",
+                    ["code"] = """
+                        const planBefore=tool('get_state').task_plan;
+                        function resolve(name){
+                          const matches=tool('game_catalog',{kind:'item',name}).matches.filter(i=>i.internal===name);
+                          if(matches.length!==1) throw new Error('ambiguous equipment item: '+name);
+                          return matches[0].type;
+                        }
+                        function inventory(type){return tool('get_state').inventory_slots.find(i=>i.type===type);}
+                        function requireResult(result){if(result.error||result.ok===false) throw new Error(JSON.stringify(result));return result;}
+                        const benchType=resolve('WorkBench');
+                        const benchRecipe=tool('recipe',{name:'WorkBench'}).recipes.find(r=>r.internal==='WorkBench');
+                        if(!benchRecipe?.can_craft_now) tool('decision_point',{reason:'No available workbench recipe; retain material plan and find a station'});
+                        requireResult(tool('craft',{name:'WorkBench'}));
+                        const bench=inventory(benchType);
+                        if(!bench) throw new Error('crafted workbench missing from inventory');
+                        const benchInfo=tool('item_info',{slot:bench.slot});
+                        tool('watch',{events:['nearby_tile'],passive_events:['nearby_tile'],tile_types:[benchInfo.createTile],radius:12});
+                        let placed=requireResult(tool('place_at',{item:String(bench.type)}));
+                        if(placed.outcome!=='done') {
+                          const terrain=tool('inspect_terrain',{radius:12}), candidates=[];
+                          for(let y=0;y<terrain.rows.length-1;y++) for(let x=0;x<terrain.rows[y].length-1;x++) {
+                            if(terrain.rows[y].slice(x,x+2)!=='..'||terrain.rows[y+1].slice(x,x+2)!=='##') continue;
+                            const wx=terrain.origin.x+x,wy=terrain.origin.y+y,b=terrain.player_bounds;
+                            if(wx<=b.right&&wx+1>=b.left&&wy>=b.top&&wy<=b.bottom) continue;
+                            candidates.push({x:wx,y:wy,d:Math.abs(wx-b.left)+Math.abs(wy-b.bottom)});
+                          }
+                          candidates.sort((a,b)=>a.d-b.d);
+                          for(const location of candidates.slice(0,3)) {
+                            const facts=tool('opportunity_assess',{x:location.x,y:location.y});
+                            if(facts.hazards.length) continue;
+                            placed=tool('place_at',{item:String(bench.type),x:location.x,y:location.y});
+                            if(placed.outcome==='done') break;
+                          }
+                          step('workstation-placement',()=>({terrain,candidates,result:placed}));
+                        }
+                        if(placed.outcome!=='done') tool('decision_point',{reason:'Measured workstation candidates failed; preserve bench and material plan'});
+                        const noticed=tool('script_events',{wait_ms:500}).events.some(e=>e.kind==='nearby_tile'&&e.evidence.tile_type===benchInfo.createTile);
+                        if(!noticed) throw new Error('placed workstation was not observed');
+                        const equipped=[];
+                        for(const [name,slot] of [['WoodHelmet',0],['WoodBreastplate',1],['WoodGreaves',2]]) {
+                          const type=resolve(name);
+                          const recipe=tool('recipe',{name}).recipes.find(r=>r.internal===name);
+                          if(!recipe?.can_craft_now) tool('decision_point',{reason:'Equipment recipe unavailable at current station: '+name});
+                          requireResult(tool('craft',{name}));
+                          const item=inventory(type), previous=tool('equipment_list').find(i=>i.slot===slot);
+                          if(!item) throw new Error('crafted equipment missing: '+name);
+                          requireResult(tool('equip_item',{inventory_slot:item.slot,equipment_slot:slot,expected_inventory:item,expected_equipment:previous}));
+                          const actual=tool('equipment_list').find(i=>i.slot===slot);
+                          if(actual.type!==type) throw new Error('equipment not actually worn: '+name);
+                          equipped.push({slot,type});
+                        }
+                        const planAfter=tool('get_state').task_plan;
+                        if(planBefore.goal!==planAfter.goal||planAfter.current_step!=='materials') throw new Error('equipment preparation replaced material goal');
+                        return {workstation_observed:noticed,equipped,original_plan_preserved:true};
+                        """ });
+                File.WriteAllText(Path.Combine(Main.SavePath, "material-equipment.json"), preparation.ToJsonString());
+                if (preparation["value"]?["original_plan_preserved"]?.GetValue<bool>() != true)
+                    throw new Exception("material equipment preparation incomplete; inspect material-equipment.json");
                 await OnMain(() =>
                 {
                     stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
