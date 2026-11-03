@@ -31,7 +31,8 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
-    int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1" ? 14400
+    int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
+        || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
         : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1" ? 9600 : 7200;
     const int ReviewExecutionFrames = (45 + 20 + 20 + 5) * 60;
     async Task<JsonObject> Review(JsonObject wake, bool materials = false, CodexAgent session = null, string reportName = "behavior-review")
@@ -970,6 +971,46 @@ public sealed class BehaviorTrial : ModSystem
                         && a["args"]?["targets"]?.AsArray().Any(t => t["item_type"]?.GetValue<int>() == 209) == true).ToArray();
                 if (materialActions.Length > 1)
                     throw new Exception("material trial duplicated the original gather instead of preserving its handle");
+                if (Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1")
+                {
+                    string originalHandle = materialActions.Single()["handle"].ToString();
+                    var original = await Call("action_query", new JsonObject { ["handle"] = originalHandle });
+                    if (original["status"]?.ToString() == "running")
+                        await Call("action_control", new JsonObject { ["handle"] = originalHandle, ["command"] = "pause" });
+                    var beforeRecovery = await Call("get_state", new JsonObject());
+                    var samples = new JsonArray();
+                    try
+                    {
+                        await OnMain(() =>
+                        {
+                            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
+                            NativeAgent.Submit("/goal --tokens 150000 继续现有荆棘旋刃材料任务。之前顺路开箱、收集生命水晶的进度保留，水晶先别使用。"
+                                + "原毒刺采集句柄是" + originalHandle + "，工作流是stinger-continuation。不要重建计划或清空步骤。"
+                                + "根据当前健康、地形和附近来源决定恢复方案，允许直接执行工具与JS，不只是保存代码。"
+                                + "沿途值得拿的箱子、水晶、材料和工作站要考虑；用实际代价决定插入或跳过并记录依据。"
+                                + "处理后恢复同一采集句柄，验证实际材料和合成结果。已有投刀可防身。");
+                            return true;
+                        });
+                        for (int sample = 0; sample < 60; sample++)
+                        {
+                            await Task.Delay(1000);
+                            var state = await Call("get_state", new JsonObject());
+                            samples.Add(new JsonObject { ["tick"] = state["tick"]?.DeepClone(), ["status"] = NativeAgent.Status,
+                                ["player"] = state["player"]?.DeepClone(), ["task_plan"] = state["task_plan"]?.DeepClone(),
+                                ["actions"] = state["action_tasks"]?.DeepClone(), ["codex_goal"] = state["codex_goal"]?.DeepClone() });
+                            if (state["codex_goal"]?["native"]?["status"]?.ToString() is "complete" or "budgetLimited" or "usageLimited") break;
+                        }
+                    }
+                    finally
+                    {
+                        File.WriteAllText(Path.Combine(Main.SavePath, "material-agent-live.json"), new JsonObject
+                        { ["before"] = beforeRecovery, ["original_handle"] = originalHandle, ["samples"] = samples,
+                            ["after"] = await Call("get_state", new JsonObject()), ["navigation_stub"] = materialNavigationStub,
+                            ["model_token_budget"] = 150000 }.ToJsonString());
+                        await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
+                    }
+                    throw new Exception("bounded production material recovery ended; inspect verified effects and preserved original handle");
+                }
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_CONTINUED_DEFENSE") == "1")
                 {
                     var state = await Call("get_state", new JsonObject());
