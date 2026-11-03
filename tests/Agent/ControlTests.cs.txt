@@ -53,6 +53,15 @@ static class ControlTests
         Console.WriteLine("PASS: control overrides have independent scopes and stale claims cannot regain control");
 
         var session = new AgentControlSession(policy);
+        Check(session.CheckWorkflow("start_run") == null, "uncontrolled legacy workflow was disabled");
+        Check(session.Begin("gather", null, out long gathering) == null, "gather could not acquire free controls");
+        Check(session.CheckWorkflow("start_run") != null && session.CheckWorkflow("collect_treasure") != null,
+            "legacy workflow borrowed another active action's input ownership");
+        session.End(gathering);
+        Check(session.Begin("collect_treasure", null, out long treasure) == null
+            && session.CheckWorkflow("collect_treasure") == null && session.CheckWorkflow("start_run") != null,
+            "workflow ownership blocked its own implementation or admitted an unrelated workflow");
+        session.End(treasure);
         claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "manual recovery");
         policy.ConfirmReleased(claim);
         Check(session.Begin("act", null, out _) != null, "unclaimed action acquired reserved input");

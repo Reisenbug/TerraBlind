@@ -35,6 +35,8 @@ namespace TerraBlind
 		public static bool Start(out string why)
 		{
 			why = "";
+			var denied = AgentTools.ControlSession.CheckWorkflow("start_run");
+			if (denied != null) { why = denied["error"].ToString(); return false; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			if (IsRunning) { why = "已经在跑了"; return false; }
@@ -73,6 +75,7 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			if (!IsRunning) return;
+			if (AgentTools.ControlSession.CheckWorkflow("start_run") != null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			_frames++;

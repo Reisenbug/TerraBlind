@@ -33,6 +33,8 @@ namespace TerraBlind
 		public static bool Start(int tx, int ty, out string why)
 		{
 			why = "";
+			var denied = AgentTools.ControlSession.CheckWorkflow("collect_treasure");
+			if (denied != null) { why = denied["error"].ToString(); return false; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { why = "no_player"; return false; }
 			_tx = tx; _ty = ty; _frames = 0; _lootFrames = 0; _idx = -1;
@@ -150,6 +152,7 @@ namespace TerraBlind
 			if (_ph != Ph.Idle && _ph != Ph.Done && Main.GameUpdateCount % 120 == 0)
 				DiagLog.Write($"[grab] tick进来了 ph={_ph} frames={_frames}");
 			if (!IsRunning) return;
+			if (AgentTools.ControlSession.CheckWorkflow("collect_treasure") != null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			_frames++;

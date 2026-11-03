@@ -60,6 +60,13 @@ public sealed class AgentControlSession
     public JsonObject Check(ControlBehavior behavior, ControlChannels channels, bool delegated = false)
         => policy.Check(behavior, channels, delegated && Active && delegates.Contains(behavior) ? claim : null);
 
+    public JsonObject CheckWorkflow(string ownerTool)
+    {
+        if (Active && tool != ownerTool)
+            return new JsonObject { ["error"] = "workflow_owned_by_another_action", ["owner"] = tool, ["requested"] = ownerTool };
+        return Check(ControlBehavior.Workflow, ControlChannels.All, delegated: true);
+    }
+
     public static ControlChannels RequiredChannels(string name, JsonObject args)
     {
         if (name != "act") return ControlChannels.All;
