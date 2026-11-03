@@ -20,7 +20,15 @@ public static class TerrainInspection
         double tx = x + 0.5, ty = y + 0.5;
         double Distance(double ax, double ay, double bx, double by) => Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
         double approach = Distance(sx, sy, tx, ty);
-        if (approach > 60) throw new ArgumentException("机会检查仅支持人物附近60格；远处目标先接近再观察。");
+        if (approach > 60) return new JsonObject
+        {
+            ["error"] = "target_out_of_observation_range",
+            ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["target"] = new JsonObject { ["x"] = x, ["y"] = y },
+            ["approach_direct_distance"] = approach, ["observation_radius_tiles"] = 60,
+            ["sampled_cells"] = 0, ["hazards"] = null, ["reachable"] = null,
+            ["detail"] = "未检查目标或沿途方块，危险与可达性未知；由Agent决定接近后重查、选择其他目标或跳过。"
+        };
         var solids = new JsonArray(); var hazards = new JsonArray();
         var sampled = new HashSet<(int, int)>();
         var approachCells = new HashSet<(int, int)>();

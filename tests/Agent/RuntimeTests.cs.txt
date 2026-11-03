@@ -413,8 +413,14 @@ static class RuntimeTests
                     "opportunity behind player looked like free forward progress");
                 Check(Game.tile[15, 11].HasTile && Game.tile[19, 11].LiquidAmount == 255,
                     "assessment changed the world while estimating access");
-                try { TerrainInspection.Opportunity(200, 200, null); throw new Exception("unbounded assessment accepted"); }
-                catch (ArgumentException) { }
+                var distant = JsonNode.Parse(await Execute(AgentTools.Execute("opportunity_assess",
+                    new JsonObject { ["x"] = 200, ["y"] = 200 }, default)));
+                Check(distant["error"]?.ToString() == "target_out_of_observation_range"
+                    && distant["approach_direct_distance"].GetValue<double>() > 60
+                    && distant["observation_radius_tiles"].GetValue<int>() == 60
+                    && distant["sampled_cells"].GetValue<int>() == 0
+                    && distant.AsObject().ContainsKey("hazards") && distant["hazards"] == null && distant["reachable"] == null,
+                    "unobserved opportunity lost range evidence or claimed hazards were absent");
                 Console.WriteLine("PASS: opportunity assessment reports obstacles/hazards and measured geometry; elapsed_ms=" + assessed["elapsed_ms"]);
                 Game.tile[30, 30] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther };
                 Game.tile[5, 5] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther };
