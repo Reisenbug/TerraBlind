@@ -44,6 +44,19 @@ static class RuntimeTests
         try
         {
             var dropWatch = new AgentWatch();
+            dropWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+            var opportunityState = new JsonObject { ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 }) };
+            dropWatch.Observe(opportunityState);
+            Check(dropWatch.Reconsider("nearby_chest", "10,20", "changed goal")["status"].ToString() == "already_pending",
+                "reconsider duplicated an unconsumed opportunity");
+            dropWatch.Take();
+            dropWatch.Reconsider("nearby_chest", "10,20", "inventory now has room");
+            dropWatch.Observe(new JsonObject { ["chests"] = new JsonArray() });
+            Check(!dropWatch.HasPending, "reconsider replayed a vanished chest from stale evidence");
+            dropWatch.Observe(opportunityState);
+            Check(dropWatch.Take().Count == 1 && dropWatch.Snapshot()["wake_count"].GetValue<int>() == 2,
+                "reconsider did not require fresh observation or reset the model budget");
+            dropWatch.Reset();
             dropWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_drop\",\"nearby_npc_killed\"]}").AsObject());
             var dropState = JsonNode.Parse("{\"drops\":[{\"who\":2,\"item_type\":209,\"stack\":1,\"x\":10,\"y\":12}]}").AsObject();
             dropWatch.Observe(dropState); dropWatch.Observe(dropState);

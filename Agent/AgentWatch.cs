@@ -114,6 +114,19 @@ public sealed class AgentWatch
     }
     public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()) };
 
+    public JsonObject Reconsider(string kind, string key, string reason)
+    {
+        if (kind is not ("nearby_tile" or "nearby_chest" or "nearby_drop") || string.IsNullOrWhiteSpace(key)
+            || string.IsNullOrWhiteSpace(reason) || reason.Length > 500)
+            throw new ArgumentException("需要机会事件kind/key及1..500字符的重新考虑原因。");
+        if (!events.Contains(kind)) throw new ArgumentException("该事件尚未订阅。");
+        if (pending.Any(e => e["kind"]?.ToString() == kind && e["key"]?.ToString() == key))
+            return new JsonObject { ["status"] = "already_pending", ["kind"] = kind, ["key"] = key };
+        if (!seen.Remove(kind + ":" + key)) throw new ArgumentException("没有已处理的对应机会事件。");
+        return new JsonObject { ["status"] = "rearmed", ["kind"] = kind, ["key"] = key, ["reason"] = reason,
+            ["detail"] = "下次实际观察仍发现该机会时重新通知；不复用旧现场，不重置模型唤醒额度。" };
+    }
+
     public JsonObject Request(string reason)
     {
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("决策点需要原因。");

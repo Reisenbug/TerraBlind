@@ -466,6 +466,8 @@ public static partial class AgentTools
                 break;
             case "watch":
                 return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();
+            case "opportunity_reconsider":
+                return (await NativeAgent.OnMain(() => Watches.Reconsider(Text(args, "kind"), Text(args, "key"), Text(args, "reason")), token)).ToJsonString();
             case "script_events":
                 int eventWait = Int(args, "wait_ms", 1000);
                 if (eventWait < 0 || eventWait > 1000) throw new ArgumentException("wait_ms需要0..1000。");
