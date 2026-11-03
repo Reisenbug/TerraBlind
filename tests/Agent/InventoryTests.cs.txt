@@ -11,6 +11,7 @@ static class InventoryTests
         var self = Game.LocalPlayer;
         var old0 = self.inventory[0]; var old12 = self.inventory[12];
         int net = Game.netMode;
+        var oldItems = Game.item;
         try
         {
             Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
@@ -29,10 +30,31 @@ static class InventoryTests
                 throw new Exception("inventory swap lost an item or did not synchronize both actual slots");
             if (PvpInventory.Swap(args)["error"]?.ToString() != "stale_inventory") throw new Exception("stale expected items were swapped again");
             if (PvpInventory.Snapshot()[0]["prefix"].GetValue<int>() != 0) throw new Exception("snapshot omitted exact prefix");
+            self.inventory[12] = new Terraria.Item { type = 3, stack = 20, favorited = true, material = true };
+            var review = PvpInventory.Review();
+            if (!review["inventory"].AsArray().Any(i => i["slot"].GetValue<int>() == 12 && i["favorited"].GetValue<bool>()
+                && i["material"].GetValue<bool>()) || review["equipment"].AsArray().Count != 10)
+                throw new Exception("inventory review omitted preservation or equipment facts");
+            var drop = new JsonObject { ["slot"] = 12,
+                ["expected"] = new JsonObject { ["type"] = 3, ["prefix"] = 0, ["stack"] = 20 } };
+            if (PvpInventory.Drop(drop)["error"]?.ToString() != "favorited_item") throw new Exception("favorite was discarded");
+            self.inventory[12].favorited = false;
+            drop["expected"]["stack"] = 19;
+            if (PvpInventory.Drop(drop)["error"]?.ToString() != "stale_inventory") throw new Exception("stale slot was discarded");
+            drop["expected"]["stack"] = 20;
+            Game.item = Enumerable.Range(0, Game.maxItems).Select(_ => new Terraria.Item { active = true }).ToArray();
+            if (PvpInventory.Drop(drop)["error"]?.ToString() != "world_item_capacity" || self.inventory[12].stack != 20)
+                throw new Exception("full world item array lost inventory");
+            Game.item[0].active = false;
+            var original = self.inventory[12];
+            var dropped = PvpInventory.Drop(drop);
+            if (dropped["ok"]?.GetValue<bool>() != true || !self.inventory[12].IsAir || !ReferenceEquals(Game.item[0], original)
+                || Game.item[0].stack != 20 || dropped["world_item"].GetValue<int>() != 0)
+                throw new Exception("drop lost the item instance or reported an unverified world slot");
         }
         finally
         {
-            self.itemAnimation = 0; self.inventory[0] = old0; self.inventory[12] = old12; Game.netMode = net;
+            self.itemAnimation = 0; self.inventory[0] = old0; self.inventory[12] = old12; Game.netMode = net; Game.item = oldItems;
         }
         Console.WriteLine("PASS: inventory swap validates busy/stale states, preserves both items and emits two slot syncs");
     }

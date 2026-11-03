@@ -971,7 +971,7 @@ static class RuntimeTests
                 Check(conflicting["error"].ToString() == "action_busy", "foreground action stole managed input");
                 var bossConflict = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
                 Check(bossConflict["error"].ToString() == "action_busy", "Boss controller stole managed action input");
-                foreach (string interaction in new[] { "equip_item", "npc_chat" })
+                foreach (string interaction in new[] { "equip_item", "inventory_drop", "npc_chat" })
                 {
                     var busy = JsonNode.Parse(await Execute(AgentTools.Execute(interaction, new JsonObject(), default)));
                     Check(busy["error"].ToString() == "action_busy", "interaction stole managed action input");

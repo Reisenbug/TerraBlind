@@ -49,6 +49,7 @@ namespace Terraria
         public static Player LocalPlayer = player[0];
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
         public static int maxNPCs = 20, maxItems = 20;
+        public static Item mouseItem = new();
         public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
         public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
@@ -88,6 +89,11 @@ namespace Terraria
         public bool HasAmmo(Item item) => HasAmmunition;
         public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+        public void DropSelectedItem(int slot, ref Item item)
+        {
+            int index = Array.FindIndex(Main.item, value => !value.active);
+            Main.item[index] = item; item.active = true; item = new Item();
+        }
     }
     public class NPC
     {
@@ -107,6 +113,8 @@ namespace Terraria
     public class Item
     {
         public bool active, consumable;
+        public bool favorited, accessory, material;
+        public int defense, headSlot = -1, bodySlot = -1, legSlot = -1;
         public int healLife;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;

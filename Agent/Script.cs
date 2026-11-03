@@ -68,6 +68,7 @@ public static class AgentScript
         + "插入动作前保存并暂停原action句柄，插入后核对实际库存增量或箱子返回got；失败保留证据，不记成功。继续时resume同一原句柄，而不是新建重复目标。"
         + "暂停会释放该动作的攻击和移动，不代表仍在防身。敌怪附近需要连续只读观察时，可明确action_start fight临时防身（短seconds、有限max_dist），观察放在try中，finally用action_control cancel该防身句柄并等待释放，再导航、用物品或resume原任务；不能让两个动作同时持有输入。防身会改变人物和敌怪位置，行动前刷新现场；不保证安全，不可绕过攻击/闪避禁令或忽略危险事件。"
         + "Agent可以修改resume的args，或cancel已经暂停的原意图；不值得的机会可直接跳过并继续，不能无条件见宝必拿。"
+        + "开箱、获得装备或inventory_full后可用inventory_review批量检查背包和功能装备，结合item_info、当前任务配方及玩家保留要求选择换装、整理或丢弃，不按售价或防御单项固定评分。用equip_item穿戴、inventory_swap整理、inventory_drop丢整叠；先暂停原动作，使用新鲜槽位证据，核对实际结果再恢复原handle。丢到地上的物品仍可能被捡回，收藏物品不可丢弃。"
         + "长动作返回outcome:interrupted不是完成；保存返回的handle和events，核对现场后暂停/恢复同一动作。不要把中断结果直接作为成功step。"
         + "动作返回的events已从事件队列取走，下一次script_events不会重放；必须先处理该返回值中的危险事件，再决定是否resume。空事件队列不代表现场安全。"
         + "恢复失败任务前先刷新get_state并处理低血量、持续受伤或窒息，再处理射界等任务障碍。治疗须核对实际库存和使用后的血量；无药可依据现场选择撤离休整或其他方案，不能只反复yield。撤离和换位也可能被事件中断，保留新旧句柄及返回events，勿把中断误判为寻路不可达。"

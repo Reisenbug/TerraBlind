@@ -290,7 +290,7 @@ public static partial class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure" or "equip_item" or "npc_chat";
+            or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
         if (action && ContactEscapeActive)
         {
@@ -329,7 +329,7 @@ public static partial class AgentTools
                     {
                         var facts = JsonNode.Parse(output);
                         if (name is "game_api" or "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome"
-                            or "find_tiles" or "tile_names" or "find_descent" or "descent_route" or "equipment_list" or "inspect_terrain")
+                            or "find_tiles" or "tile_names" or "find_descent" or "descent_route" or "equipment_list" or "inventory_review" or "inspect_terrain")
                             if (!Rejected(facts as JsonObject)) Discoveries.Add(name + ":" + args.ToJsonString());
                         if (facts is JsonObject result && result.ContainsKey("task_plan"))
                         {
@@ -667,14 +667,17 @@ public static partial class AgentTools
                         destination["before_y"].GetValue<float>())), token);
                 break;
             case "inventory_swap":
+            case "inventory_drop":
                 var idleClock = Stopwatch.StartNew();
                 while (idleClock.Elapsed.TotalSeconds < 2 && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead
                     || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
                     await Task.Delay(50, token);
-                result = await NativeAgent.OnMain(() => PvpInventory.Swap(args), token);
+                result = await NativeAgent.OnMain(() => name == "inventory_drop" ? PvpInventory.Drop(args) : PvpInventory.Swap(args), token);
                 break;
             case "equipment_list":
                 return (await NativeAgent.OnMain(Equipment.Snapshot, token)).ToJsonString();
+            case "inventory_review":
+                return (await NativeAgent.OnMain(PvpInventory.Review, token)).ToJsonString();
             case "equip_item":
                 result = await NativeAgent.OnMain(() => Equipment.Swap(args), token);
                 break;
