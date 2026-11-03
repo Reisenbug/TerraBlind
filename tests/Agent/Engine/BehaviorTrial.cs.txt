@@ -973,6 +973,9 @@ public sealed class BehaviorTrial : ModSystem
                     throw new Exception("material trial duplicated the original gather instead of preserving its handle");
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1")
                 {
+                    int tokenBudget = Environment.GetEnvironmentVariable("TB_MATERIAL_TOKEN_BUDGET") is string configuredBudget
+                        ? int.Parse(configuredBudget) : 150000;
+                    if (tokenBudget <= 0) throw new ArgumentException("material model token budget must be positive");
                     string originalHandle = materialActions.Single()["handle"].ToString();
                     var original = await Call("action_query", new JsonObject { ["handle"] = originalHandle });
                     if (original["status"]?.ToString() == "running")
@@ -984,7 +987,7 @@ public sealed class BehaviorTrial : ModSystem
                         await OnMain(() =>
                         {
                             Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
-                            NativeAgent.Submit("/goal --tokens 150000 继续现有荆棘旋刃材料任务。之前顺路开箱、收集生命水晶的进度保留，水晶先别使用。"
+                            NativeAgent.Submit($"/goal --tokens {tokenBudget} 继续现有荆棘旋刃材料任务。之前顺路开箱、收集生命水晶的进度保留，水晶先别使用。"
                                 + "原毒刺采集句柄是" + originalHandle + "，工作流是stinger-continuation。不要重建计划或清空步骤。"
                                 + "根据当前健康、地形和附近来源决定恢复方案，允许直接执行工具与JS，不只是保存代码。"
                                 + "沿途值得拿的箱子、水晶、材料和工作站要考虑；用实际代价决定插入或跳过并记录依据。"
@@ -1006,7 +1009,7 @@ public sealed class BehaviorTrial : ModSystem
                         File.WriteAllText(Path.Combine(Main.SavePath, "material-agent-live.json"), new JsonObject
                         { ["before"] = beforeRecovery, ["original_handle"] = originalHandle, ["samples"] = samples,
                             ["after"] = await Call("get_state", new JsonObject()), ["navigation_stub"] = materialNavigationStub,
-                            ["model_token_budget"] = 150000 }.ToJsonString());
+                            ["model_token_budget"] = tokenBudget }.ToJsonString());
                         await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
                     }
                     throw new Exception("bounded production material recovery ended; inspect verified effects and preserved original handle");
