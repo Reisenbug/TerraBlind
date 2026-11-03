@@ -16,6 +16,7 @@ namespace TerraBlind
         private static HashSet<int> _types;
         private static bool _moving;
         private static int _jumpHold;
+        private static string _movement = "auto";
 
         private static void ReleaseMovement(Player p)
         {
@@ -90,8 +91,10 @@ namespace TerraBlind
 
         public static bool IsActive => _active && _framesLeft > 0;
 
-        public static void Start(float maxDistTiles, int[] types = null)
+        public static void Start(float maxDistTiles, int[] types = null, string movement = "auto")
         {
+            if (movement is not ("auto" or "left" or "right")) throw new ArgumentException("movement需要auto/left/right。");
+            _movement = movement;
             _maxDistTiles = maxDistTiles;
             _framesLeft = TimeoutFrames;
             _active = true;
@@ -104,6 +107,7 @@ namespace TerraBlind
             _active = false;
             _framesLeft = 0;
             _types = null;
+            _movement = "auto";
         }
 
         public static void Tick(Player p)
@@ -121,7 +125,8 @@ namespace TerraBlind
 
             if (AgentPermissions.CanDodge(delegated: true))
             {
-                var evade = Evade(p, target);
+                var evade = _movement == "auto" ? Evade(p, target)
+                    : (Direction: _movement == "left" ? -1 : 1, Jump: false);
                 if (evade.Jump) _jumpHold = 12;
                 if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
                 p.controlLeft |= evade.Direction < 0;

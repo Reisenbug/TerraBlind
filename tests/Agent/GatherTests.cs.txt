@@ -146,6 +146,10 @@ static class GatherTests
             Main.npc[1] = new NPC { type = 2, active = true, position = new(80, 0) };
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[1].Center.X, "targeted fight attacked closer unrelated enemy");
+            FightCoordinator.Stop(); FightCoordinator.Start(40, new[] { 2 }, "left"); FightCoordinator.Tick(p);
+            Check(p.controlLeft && !p.controlRight && p.controlUseItem, "explicit strafe did not retain attack");
+            FightCoordinator.Stop();
+            Check(!p.controlLeft && !p.controlRight, "stopped strafe retained movement");
             FightCoordinator.Stop(); FightCoordinator.Start(40); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[0].Center.X, "target filter leaked into ordinary fight");
             Main.npc[1].friendly = true; p.controlUseItem = false;

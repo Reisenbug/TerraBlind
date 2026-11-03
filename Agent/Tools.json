@@ -424,6 +424,7 @@
             "description": "锁敌半径(格),默认25"
           },
           "npc_types": {"type":"array","minItems":1,"items":{"type":"integer","minimum":1}},
+          "movement": {"type":"string","enum":["auto","left","right"],"description":"默认auto按威胁避让；left/right在有目标时持续向该方向移动并攻击，替代自动避让，仍受移动许可约束。建议短时使用后重新观察，不保证避坑或绕障。"},
           "seconds": {
             "type": "number",
             "description": "打多久(秒),默认10;还有敌人可以再调一次"

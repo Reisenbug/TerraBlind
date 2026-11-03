@@ -778,12 +778,13 @@ public static partial class AgentTools
             case "fight":
                 if (!await NativeAgent.OnMain(() => AgentPermissions.Attack, token))
                     return "{\"error\":\"玩家禁止自动攻击，请先确认是否修改许可。\"}";
-                if (args["npc_types"] is JsonArray npcTypes)
+                if (args["npc_types"] is JsonArray || args.ContainsKey("movement"))
                 {
-                    int[] types = npcTypes.Select(n => n.GetValue<int>()).ToArray();
-                    if (types.Length == 0 || types.Any(t => t <= 0)) throw new ArgumentException("npc_types 不能为空且编号必须为正数。");
+                    int[] types = (args["npc_types"] as JsonArray)?.Select(n => n.GetValue<int>()).ToArray();
+                    if (types != null && (types.Length == 0 || types.Any(t => t <= 0))) throw new ArgumentException("npc_types 不能为空且编号必须为正数。");
+                    string movement = args["movement"]?.GetValue<string>() ?? "auto";
                     result = await NativeAgent.OnMain(() =>
-                    { FightCoordinator.Start(Int(args, "max_dist", 40), types); return new JsonObject { ["ok"] = true }; }, token);
+                    { FightCoordinator.Start(Int(args, "max_dist", 40), types, movement); return new JsonObject { ["ok"] = true }; }, token);
                 }
                 else result = await Call("/fight", args, token);
                 if (!Rejected(result))
