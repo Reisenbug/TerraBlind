@@ -845,15 +845,21 @@ public sealed class BehaviorTrial : ModSystem
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
                 for (int review = 0; review < 3 && (review == 0 && combat["value"]?["status"]?.ToString() == "yield"
-                    || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() == "combat_obstructed"); review++)
+                    || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "source_unavailable"); review++)
                 {
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
                             let state=tool('get_state');
-                            const action=state.action_tasks.find(a=>a.tool==='gather'&&(a.status==='paused'||a.status==='failed'&&a.result?.outcome==='combat_obstructed')
+                            const action=state.action_tasks.find(a=>a.tool==='gather'&&(a.status==='paused'||a.status==='failed'&&['combat_obstructed','source_unavailable'].includes(a.result?.outcome))
                               &&a.args.targets.some(t=>t.item_type===209));
                             if(!action||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
+                            if(action.result?.outcome==='source_unavailable') {
+                              const sources=tool('gather_observe',action.args);
+                              step('material-source-review:'+action.attempt,()=>({handle:action.handle,sources}));
+                              if(sources.error||!sources.candidates?.length)
+                                tool('decision_point',{reason:'No new observed source; choose another area or activity, retaining gather '+action.handle});
+                            }
                             if(action.result?.outcome==='combat_obstructed') {
                               const detail=tool('action_query',{handle:action.handle}).result.last_result;
                               const target={npc:detail.candidate.who,npc_type:detail.candidate.npc_type};
@@ -890,6 +896,36 @@ public sealed class BehaviorTrial : ModSystem
                               }
                             }
                             state=tool('get_state');
+                            if(state.player.hp<80&&!state.player.suffocating) {
+                              const anchors=state.action_tasks.filter(a=>a.tool==='nav_to'&&a.status==='completed')
+                                .map(a=>({x:a.args.x,y:a.args.y}));
+                              const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
+                              anchors.sort((a,b)=>distanceToEnemy(b)-distanceToEnemy(a));
+                              let retreat=null;
+                              for(const anchor of anchors) {
+                                if(distanceToEnemy(anchor)<20) continue;
+                                const facts=tool('opportunity_assess',anchor);
+                                if(!facts.hazards.length){retreat={anchor,facts};break;}
+                              }
+                              if(retreat) {
+                                tool('script_events',{wait_ms:0});
+                                recovery.retreat={...retreat,result:tool('nav_to',retreat.anchor)};
+                                step('combat-retreat:'+action.attempt,()=>recovery.retreat);
+                                if(recovery.retreat.result.done!==true)
+                                  tool('decision_point',{reason:'Recovery retreat interrupted; retain original gather and inspect navigation handle'});
+                                state=tool('get_state');
+                                recovery.rest=[];
+                                let previousHp=state.player.hp;
+                                for(let sample=0;sample<20&&state.player.hp<80;sample++) {
+                                  const position={x:state.player.pos.x/16,y:state.player.pos.y/16};
+                                  if(state.player.suffocating||state.player.hp<previousHp||distanceToEnemy(position)<20) break;
+                                  previousHp=state.player.hp;
+                                  tool('script_events',{wait_ms:1000});
+                                  state=tool('get_state');
+                                  recovery.rest.push({hp:state.player.hp,pos:state.player.pos});
+                                }
+                              }
+                            }
                             recovery.hp_after=state.player.hp;
                             step('combat-recovery:'+action.attempt,()=>recovery);
                             if(state.player.hp<80||state.player.suffocating)
