@@ -845,16 +845,21 @@ public sealed class BehaviorTrial : ModSystem
                         """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-first-segment.json"), combat.ToJsonString());
                 string previousReviewReason = null;
+                string previousReviewActions = null;
                 for (int review = 0; review < 3 && (combat["value"]?["status"]?.ToString() == "yield"
                     || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "source_unavailable"); review++)
                 {
                     string reviewReason = combat["value"]?["wake"]?["event"]?["reason"]?.ToString();
-                    if (reviewReason != null && reviewReason == previousReviewReason)
+                    string reviewActions = await OnMain(() => string.Join(";", AgentTools.Actions.Summary()
+                        .Where(a => a["tool"]?.ToString() == "gather")
+                        .Select(a => $"{a["handle"]}:{a["attempt"]}:{a["status"]}")));
+                    if (reviewReason != null && reviewReason == previousReviewReason && reviewActions == previousReviewActions)
                     {
                         Console.WriteLine("MATERIAL_REVIEW_UNCHANGED " + reviewReason);
                         break;
                     }
                     previousReviewReason = reviewReason;
+                    previousReviewActions = reviewActions;
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
                             let state=tool('get_state');
@@ -863,8 +868,18 @@ public sealed class BehaviorTrial : ModSystem
                             if(!action||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
                             if(action.result?.outcome==='source_unavailable') {
-                              const sources=tool('gather_observe',action.args);
-                              step('material-source-review:'+action.attempt,()=>({handle:action.handle,sources}));
+                              let sources=tool('gather_observe',action.args), waited=false;
+                              const last=tool('action_query',{handle:action.handle}).result?.last_result;
+                              if(!sources.error&&!sources.candidates?.length&&last?.candidate?.kind==='npc'&&last.result?.target_present===false) {
+                                const pending=tool('script_events',{wait_ms:0});
+                                const next=tool('script_events',{wait_ms:1000});
+                                if([...pending.events,...next.events].some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                                  tool('decision_point',{reason:'Danger during bounded source observation; retain gather '+action.handle});
+                                waited=true;
+                                sources=tool('gather_observe',action.args);
+                              }
+                              step('material-source-review:'+action.attempt,()=>({handle:action.handle,waited,
+                                counts:sources.counts,source_count:sources.candidates?.length,candidates:sources.candidates?.slice(0,12),error:sources.error}));
                               if(sources.error||!sources.candidates?.length)
                                 tool('decision_point',{reason:'No new observed source; choose another area or activity, retaining gather '+action.handle});
                             }
