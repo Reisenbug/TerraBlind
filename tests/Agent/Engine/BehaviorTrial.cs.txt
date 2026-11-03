@@ -728,15 +728,33 @@ public sealed class BehaviorTrial : ModSystem
                 {
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
-                            const state=tool('get_state');
+                            let state=tool('get_state');
                             const action=state.action_tasks.find(a=>a.tool==='gather'&&a.status==='paused'
                               &&a.args.targets.some(t=>t.item_type===209));
-                            if(!action||state.player.hp<=60||state.player.suffocating)
+                            if(!action||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
+                            const recovery={hp_before:state.player.hp,potion_delay_ticks:state.player.potion_delay_ticks,candidates:[]};
+                            if(state.player.potion_delay_ticks===0) {
+                              for(const item of state.inventory_slots.filter(i=>i.type>0)) {
+                                const info=tool('item_info',{slot:item.slot});
+                                if(info.found&&info.healLife>0&&info.consumable)
+                                  recovery.candidates.push({slot:item.slot,type:item.type,heal:info.healLife});
+                              }
+                              recovery.candidates.sort((a,b)=>b.heal-a.heal);
+                              if(recovery.candidates.length) {
+                                const medicine=recovery.candidates[0];
+                                recovery.used=tool('use_item',{slot:medicine.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16)});
+                              }
+                            }
+                            state=tool('get_state');
+                            recovery.hp_after=state.player.hp;
+                            step('combat-recovery',()=>recovery);
+                            if(state.player.hp<80||state.player.suffocating)
+                              tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below 80: '+JSON.stringify(recovery)});
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review',()=>({handle:action.handle,hp:state.player.hp,
-                              reason:'Accept limited damage while above 60 health; retain the same material target and throwing weapon'}));
-                            tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:60});
+                              reason:'Recovery checked against actual inventory and health; retain the same material target'}));
+                            tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:80});
                             tool('script_events',{wait_ms:0});
                             tool('action_control',{handle:action.handle,command:'resume'});
                             for(let i=0;i<20;i++) {
