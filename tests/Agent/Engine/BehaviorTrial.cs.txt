@@ -850,9 +850,10 @@ public sealed class BehaviorTrial : ModSystem
                     || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "source_unavailable"); review++)
                 {
                     string reviewReason = combat["value"]?["wake"]?["event"]?["reason"]?.ToString();
-                    string reviewActions = await OnMain(() => string.Join(";", AgentTools.Actions.Summary()
+                    var reviewSnapshot = await Call("get_state", new JsonObject());
+                    string reviewActions = string.Join(";", reviewSnapshot["action_tasks"].AsArray()
                         .Where(a => a["tool"]?.ToString() == "gather")
-                        .Select(a => $"{a["handle"]}:{a["attempt"]}:{a["status"]}")));
+                        .Select(a => $"{a["handle"]}:{a["attempt"]}:{a["status"]}"));
                     if (reviewReason != null && reviewReason == previousReviewReason && reviewActions == previousReviewActions)
                     {
                         Console.WriteLine("MATERIAL_REVIEW_UNCHANGED " + reviewReason);
