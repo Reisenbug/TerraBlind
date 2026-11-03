@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -11,6 +12,8 @@ public sealed class GameGather : IGatherWorld
 {
     readonly GatherTarget[] _targets;
     readonly GatherArea _area;
+    readonly Dictionary<int, (NPC Entity, int Generation)> observedNpcs = new();
+    int npcGeneration;
     public GameGather(GatherTarget[] targets, GatherArea area = null) { _targets = targets; _area = area; }
 
     public async Task<JsonObject> Observe(CancellationToken token)
@@ -35,6 +38,10 @@ public sealed class GameGather : IGatherWorld
                         && Microsoft.Xna.Framework.Vector2.Distance(npc.Center, p.Center) < 1280)
                     {
                         var candidate = Candidate(target.ItemType, "npc", i, npc.Center.X / 16, npc.Center.Y / 16, p);
+                        if (!observedNpcs.TryGetValue(i, out var identity) || !ReferenceEquals(identity.Entity, npc))
+                            observedNpcs[i] = identity = (npc, ++npcGeneration);
+                        candidate["npc_generation"] = identity.Generation;
+                        candidate["id"] = $"{target.ItemType}:npc:{i}:{identity.Generation}";
                         candidate["npc_type"] = npc.type;
                         candidates.Add(candidate);
                     }
@@ -126,7 +133,9 @@ public sealed class GameGather : IGatherWorld
             return result;
         }
         bool Valid() => who >= 0 && who < Main.maxNPCs && Main.npc[who].active && !Main.npc[who].friendly
-            && !Main.npc[who].townNPC && Main.npc[who].type == candidate["npc_type"].GetValue<int>();
+            && !Main.npc[who].townNPC && Main.npc[who].type == candidate["npc_type"].GetValue<int>()
+            && observedNpcs.TryGetValue(who, out var identity) && ReferenceEquals(identity.Entity, Main.npc[who])
+            && candidate["npc_generation"]?.GetValue<int>() == identity.Generation;
         if (!await NativeAgent.OnMain(Valid, token)) return new JsonObject { ["error"] = "target_changed" };
         if (candidate["distance"].GetValue<float>() > 30)
         {

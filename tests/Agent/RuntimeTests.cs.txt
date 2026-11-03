@@ -39,6 +39,22 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        var previousGatherNpc = Game.npc[0];
+        try
+        {
+            var gather = new GameGather(new[] { new GatherTarget(209, 9, Array.Empty<string>(), new[] { 42 }) });
+            Game.npc[0] = new Terraria.NPC { type = 42, active = true, position = new(Game.LocalPlayer.position.X, Game.LocalPlayer.position.Y) };
+            var first = (await Execute(gather.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "npc").AsObject();
+            var same = (await Execute(gather.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "npc");
+            Check(first["id"].ToString() == same["id"].ToString(), "same live NPC changed collection identity");
+            Game.npc[0] = new Terraria.NPC { type = 42, active = true, position = new(Game.LocalPlayer.position.X, Game.LocalPlayer.position.Y) };
+            var replacement = (await Execute(gather.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "npc");
+            Check(first["id"].ToString() != replacement["id"].ToString(), "new NPC inherited the reused slot's retry identity");
+            var stale = await Execute(gather.Act(first, default));
+            Check(stale["error"]?.ToString() == "target_changed", "stale NPC observation attacked a replacement entity");
+        }
+        finally { Game.npc[0] = previousGatherNpc; }
+        Console.WriteLine("PASS: gathering distinguishes replacement NPCs and rejects stale entity targets");
         ControlTests.Run();
         Agent.Load();
         try
