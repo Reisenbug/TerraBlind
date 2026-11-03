@@ -464,7 +464,8 @@ public static partial class AgentTools
                 if (result["value"]?["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;
-                    if (activeHandle != null) await Actions.Control(activeHandle, "pause", null, token);
+                    if (activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
+                        await Actions.Control(activeHandle, "pause", null, token);
                     var deliveredEvents = await NativeAgent.OnMain(Watches.Take, token);
                     if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
                 }
@@ -491,7 +492,11 @@ public static partial class AgentTools
                 return new JsonObject { ["events"] = await NativeAgent.OnMain(Watches.Take, token),
                     ["paused_action"] = eventHandle }.ToJsonString();
             case "decision_point":
-                return new JsonObject { ["status"] = "yield", ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token) }.ToJsonString();
+                string continueAction = Text(args, "continue_action");
+                if (continueAction.Length > 0 && Actions.ActiveHandle != continueAction)
+                    return new JsonObject { ["error"] = "continue_action_not_active", ["handle"] = continueAction }.ToJsonString();
+                return new JsonObject { ["status"] = "yield", ["continue_action"] = continueAction.Length > 0 ? continueAction : null,
+                    ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token) }.ToJsonString();
             case "action_start":
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");

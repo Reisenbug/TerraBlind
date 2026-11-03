@@ -259,7 +259,9 @@ public class NativeAgent : ModSystem
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
-                    while (await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
+                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
+                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    while (!scriptYielded && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasInterrupting, token))
                         await Task.Delay(100, token);
                     if (await OnMain(() => AgentTools.Watches.HasInterrupting, token))
@@ -290,8 +292,6 @@ public class NativeAgent : ModSystem
                         || AgentTools.Actions.NavigationArrivals > arrivalsBefore;
                     if (AgentTools.Actions.NavigationArrivals > arrivalsBefore)
                         await OnMain(() => { DiagLog.Write("[agent_progress] navigation_arrivals=" + AgentTools.Actions.NavigationArrivals); return true; }, token);
-                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
-                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     if (scriptYielded)
                     {
                         canContinue = true;

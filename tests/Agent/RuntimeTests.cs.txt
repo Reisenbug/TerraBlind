@@ -925,6 +925,7 @@ static class RuntimeTests
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
+            await TestContinuedReview();
             await TestPassiveOpportunity();
             await TestBoundedState();
             await TestQueryRecovery();
@@ -1025,12 +1026,83 @@ static class RuntimeTests
             }, default)));
             Check(review["value"]["status"].ToString() == "yield" && !AgentChat.Messages.Contains("must-not-run-after-review"),
                 "local event mode swallowed an explicit request for Agent review");
+            await Execute(AgentTools.Actions.Control(pausedHandle, "resume", null, default));
+            await PumpUntil(() => RecedingNav.Active);
+            var invalidReview = JsonNode.Parse(await Execute(AgentTools.Execute("decision_point", new JsonObject
+                { ["reason"] = "invalid delegation", ["continue_action"] = "not-the-owner" }, default)));
+            Check(invalidReview["error"]?.ToString() == "continue_action_not_active"
+                && AgentTools.Actions.ActiveHandle == pausedHandle && !AgentTools.Watches.HasPending,
+                "invalid continued handle changed ownership or queued a review");
+            var continued = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["workflow"] = "local-delivery", ["event_delivery"] = "script",
+                ["code"] = "tool('decision_point',{reason:'observe while the delegated action continues',continue_action:'" + pausedHandle + "'});"
+            }, default)));
+            Check(continued["value"]["wake"]["continue_action"].ToString() == pausedHandle
+                && AgentTools.Actions.ActiveHandle == pausedHandle && RecedingNav.Active,
+                "explicit continued action was stopped when yielding for review");
+            var conflict = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 200, ["y"] = 100 }, default)));
+            Check(conflict["error"] != null && AgentTools.Actions.ActiveHandle == pausedHandle,
+                "review continuation allowed competing input ownership");
+            await Execute(AgentTools.Execute("run_script", new JsonObject { ["event_delivery"] = "script",
+                ["code"] = "tool('decision_point',{reason:'stop the delegated action for the next plan'});" }, default));
+            Check(!AgentTools.Actions.HasActive && !RecedingNav.Active, "default review no longer paused input");
         }
         finally
         {
             NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
         }
         Console.WriteLine("PASS: event delivery pauses inputs, local JS continues without a model turn, and explicit review still yields");
+    }
+
+    sealed class ContinuedReviewHandler : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            int call = Calls++;
+            Check(call < 4, "continued review repeatedly called the model without new work");
+            var message = new JsonObject { ["content"] = "审阅" };
+            if (call % 2 == 0)
+            {
+                if (call == 2) Check(AgentTools.Actions.HasActive, "host waited for or stopped the delegated action before reviewing");
+                string code = call == 0
+                    ? "const a=tool('action_start',{tool:'nav_to',args:{x:100,y:100}}); tool('decision_point',{reason:'review while moving',continue_action:a.handle});"
+                    : "const s=tool('get_state'); const a=s.action_tasks.find(x=>x.status==='running'); return tool('action_control',{handle:a.handle,command:'cancel'});";
+                message["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "continue-review-" + call, ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "run_script", ["arguments"] = new JsonObject
+                        { ["workflow"] = "continued-review", ["event_delivery"] = "script", ["code"] = code }.ToJsonString() } });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) });
+        }
+    }
+
+    static async Task TestContinuedReview()
+    {
+        var field = typeof(NativeAgent).GetField("_conversation", BindingFlags.Instance | BindingFlags.NonPublic);
+        var previous = field.GetValue(Agent);
+        var handler = new ContinuedReviewHandler();
+        using var http = new HttpClient(handler);
+        field.SetValue(Agent, new AgentConversation(http));
+        AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            NativeAgent.Submit("移动期间交回审阅，再显式取消原动作");
+            await PumpUntil(() => handler.Calls == 4 && NativeAgent.Status == "idle");
+            Check(!AgentTools.Actions.HasActive && !RecedingNav.Active, "review cancellation left delegated input active");
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
+            field.SetValue(Agent, previous);
+        }
+        Console.WriteLine("PASS: explicit continued action remains active across model review and obeys subsequent cancellation");
     }
 
     static async Task TestPassiveOpportunity()
