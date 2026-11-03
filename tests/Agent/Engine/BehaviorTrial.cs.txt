@@ -136,14 +136,31 @@ public sealed class BehaviorTrial : ModSystem
                 if (!materialNavigationStub) { original(x, y, mode); return; }
                 var player = Main.LocalPlayer;
                 bool feetTarget = mode is RecedingNav.Mode.Snap or RecedingNav.Mode.Stand;
-                player.Teleport(new Vector2(x * 16 + 8 - player.width / 2f,
-                    feetTarget ? (y + 1) * 16 - player.height : y * 16 + 8 - player.height / 2f));
+                var destination = new Vector2(x * 16 + 8 - player.width / 2f,
+                    feetTarget ? (y + 1) * 16 - player.height : y * 16 + 8 - player.height / 2f);
+                if (mode == RecedingNav.Mode.Stand)
+                {
+                    bool fits = false;
+                    foreach (int offset in new[] { 0, -2, 2, -4, 4, -6, 6, -7, 7 })
+                    {
+                        var candidate = destination + new Vector2(offset, 0);
+                        if (Collision.SolidCollision(candidate, player.width, player.height)) continue;
+                        destination = candidate; fits = true; break;
+                    }
+                    if (!fits)
+                    {
+                        RecedingNav.Active = false; RecedingNav.LastStop = "test_stand_body_blocked";
+                        Console.WriteLine($"MATERIAL_TEST_NAV_REJECT x={x} y={y} mode={mode} reason=body_blocked navigation=teleport_stub");
+                        return;
+                    }
+                }
+                player.Teleport(destination);
                 player.velocity = Vector2.Zero;
                 player.fallStart = player.fallStart2 = (int)(player.position.Y / 16f);
                 if (feetTarget && (ActExecutor.OriginCy(player) != y || player.Bottom.Y != (y + 1) * 16))
                     throw new Exception("material navigation substitute violated feet-cell arrival contract");
                 RecedingNav.Active = false; RecedingNav.LastStop = "done";
-                Console.WriteLine($"MATERIAL_TEST_NAV x={x} y={y} mode={mode} center={player.Center} feet={player.Bottom.Y} navigation=teleport_stub");
+                Console.WriteLine($"MATERIAL_TEST_NAV x={x} y={y} mode={mode} center={player.Center} feet={player.Bottom.Y} body_blocked={Collision.SolidCollision(player.position, player.width, player.height)} navigation=teleport_stub");
             };
             MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), materialNavigationHook);
         }
@@ -234,6 +251,30 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")
+        {
+            await OnMain(() =>
+            {
+                materialNavigationStub = true;
+                var p = Main.LocalPlayer;
+                int x = Main.spawnTileX, y = Main.spawnTileY - 10;
+                for (int tx = x - 3; tx <= x + 2; tx++)
+                    for (int ty = y - 4; ty <= y + 1; ty++) Main.tile[tx, ty].ClearEverything();
+                for (int ty = y - 3; ty <= y; ty++) Main.tile[x + 1, ty].ResetToType(TileID.Stone);
+                RecedingNav.Start(x, y, RecedingNav.Mode.Stand);
+                if (RecedingNav.LastStop != "done" || Collision.SolidCollision(p.position, p.width, p.height)
+                    || (int)(p.Center.X / 16) != x || ActExecutor.OriginCy(p) != y)
+                    throw new Exception("stand substitute failed to fit the body within the requested arrival cell");
+                var position = p.position;
+                for (int ty = y - 3; ty <= y; ty++) Main.tile[x, ty].ResetToType(TileID.Stone);
+                RecedingNav.Start(x, y, RecedingNav.Mode.Stand);
+                if (RecedingNav.LastStop != "test_stand_body_blocked" || RecedingNav.Active || p.position != position)
+                    throw new Exception("stand substitute reported arrival or moved into a blocked body footprint");
+                Console.WriteLine("STAND_BODY_CONTRACT_PASS adjusted_within_cell=true rejected_blocked=true");
+                return true;
+            });
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_AUTOMATIC_HEAL_EVIDENCE") == "1")
         {
             await OnMain(() => { NativeAgent.Stop(); return true; });
