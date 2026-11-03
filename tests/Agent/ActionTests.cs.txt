@@ -36,9 +36,15 @@ static class ActionTests
         await InterruptedChest();
         int stock = 0, attempts = 0, stops = 0, hp = 80;
         var collecting = Signal(); var cleaning = Signal(); var release = Signal();
+        var defending = Signal();
         Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject { ["stock"] = Volatile.Read(ref stock), ["hp"] = hp });
         async Task<string> Execute(string tool, JsonObject args, CancellationToken token)
         {
+            if (tool == "fight")
+            {
+                defending.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+            }
             if (Interlocked.Increment(ref attempts) == 1)
             {
                 Interlocked.Exchange(ref stock, 3); collecting.TrySetResult(true);
@@ -71,6 +77,18 @@ static class ActionTests
             && !actions.HasActive && stops == 1, "pause lost progress or failed to release input");
         Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
 
+        string guard = actions.Start("fight", new JsonObject { ["seconds"] = 15 }, default)["handle"].ToString();
+        await defending.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check((await actions.Query(id, 0, default))["status"].ToString() == "paused"
+            && (await actions.Query(guard, 0, default))["status"].ToString() == "running",
+            "observing paused collection displaced temporary defense");
+        try { await actions.Control(id, "resume", null, default); throw new Exception("collection stole defense input"); }
+        catch (InvalidOperationException) { }
+        var guardEnd = await actions.Control(guard, "cancel", null, default);
+        Check(guardEnd["status"].ToString() == "cancelled" && !actions.HasActive && stops == 2,
+            "temporary defense did not release input before continuation");
+        Console.WriteLine("PASS: temporary defense permits observation and releases ownership before same-handle continuation");
+
         hp = 100;
         var resumed = await actions.Control(id, "resume", null, default);
         Check(resumed["handle"].ToString() == id && resumed["attempt"].GetValue<int>() == 2, "resume replaced the task handle");
@@ -80,7 +98,7 @@ static class ActionTests
             "fresh observations erased the actual pause-time condition");
         JsonObject completed;
         do { completed = await actions.Query(id, 100, default); } while (completed["status"].ToString() == "running");
-        Check(completed["status"].ToString() == "completed" && stock == 10 && attempts == 2 && stops == 2,
+        Check(completed["status"].ToString() == "completed" && stock == 10 && attempts == 2 && stops == 3,
             "resumed gather did not continue its original total inventory target");
         try { await actions.Control(id, "resume", null, default); throw new Exception("completed action restarted"); }
         catch (InvalidOperationException) { }

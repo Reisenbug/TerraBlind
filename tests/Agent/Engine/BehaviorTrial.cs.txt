@@ -958,6 +958,10 @@ public sealed class BehaviorTrial : ModSystem
                             }
                             state=tool('get_state');
                             if(state.player.hp<80&&!state.player.suffocating) {
+                              const guard=tool('action_start',{tool:'fight',args:{max_dist:25,seconds:15,movement:'auto'}});
+                              if(guard.error||!guard.handle) tool('decision_point',{reason:'Temporary defense could not acquire input; inspect current owner'});
+                              let retreat=null;
+                              try {
                               const anchors=state.action_tasks.filter(a=>a.status==='completed')
                                 .map(a=>a.result?.state?.pos??(a.tool==='nav_to'?{x:a.args.x,y:a.args.y}:null))
                                 .filter(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y));
@@ -970,7 +974,6 @@ public sealed class BehaviorTrial : ModSystem
                               }
                               const distanceToEnemy=p=>Math.min(1000,...state.enemies.map(e=>Math.hypot(e.pos.x/16-p.x,e.pos.y/16-p.y)));
                               anchors.sort((a,b)=>distanceToEnemy(b)-distanceToEnemy(a));
-                              let retreat=null;
                               recovery.retreat_candidates=[];
                               for(const anchor of anchors) {
                                 const enemyDistance=distanceToEnemy(anchor);
@@ -992,6 +995,13 @@ public sealed class BehaviorTrial : ModSystem
                                   retreat={anchor,facts};break;
                                 }
                               }
+                              } finally {
+                                const released=tool('action_control',{handle:guard.handle,command:'cancel'});
+                                recovery.defense={handle:guard.handle,status:released.status,hp:released.observation?.hp,pos:released.observation?.pos};
+                              }
+                              state=tool('get_state');
+                              if(state.player.dead||state.player.suffocating)
+                                tool('decision_point',{reason:'Recovery observation ended in danger; retain original gather and defense evidence'});
                               if(retreat) {
                                 tool('script_events',{wait_ms:0});
                                 const policy={events:state.watch.events,passive_events:state.watch.passive_events,
