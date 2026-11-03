@@ -235,6 +235,34 @@ static class ScriptTests
         Console.WriteLine("PASS: compact API index retrieves exact full schemas on demand without mutating registration");
         Console.WriteLine($"API_CONTEXT instructions_chars={instructions.Length} full_schema_chars={definitions.ToJsonString(AgentTools.ModelJson).Length}");
         var activityProgress = new ScriptProgress();
+        foreach (int recovery in new[] { 0, 1, 2 })
+        {
+            bool guardActive = true;
+            int handoffResumes = 0, handoffStops = 0;
+            Task<string> HandoffTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "decision_point") return Task.FromResult("{\"status\":\"yield\"}");
+                if (args["handle"].ToString() == "guard")
+                { guardActive = false; return Task.FromResult("{\"status\":\"paused\"}"); }
+                if (guardActive) return Task.FromResult("{\"error\":\"action_busy\",\"active_handle\":\"guard\"}");
+                handoffResumes++; return Task.FromResult("{\"status\":\"running\"}");
+            }
+            string code = "tool('action_control',{handle:'original',command:'resume'});"
+                + (recovery >= 1 ? "tool('action_control',{handle:'guard',command:'pause'});" : "")
+                + (recovery == 2 ? "tool('action_control',{handle:'original',command:'resume'});" : "")
+                + "tool('decision_point',{reason:'resumed'});";
+            var handoffProgress = new ScriptProgress();
+            var handoff = await AgentScript.Run(code, 5, (_, _) => { }, HandoffTool,
+                _ => { handoffStops++; return Task.CompletedTask; }, default, handoffProgress);
+            Check(handoff["value"]["status"].ToString() == "yield" && handoffProgress.Yielded && handoffStops == 0,
+                "failed handoff lost resumable yield or invoked global cleanup");
+            Check(handoff["ok"].GetValue<bool>() == (recovery == 2) && handoffResumes == (recovery == 2 ? 1 : 0),
+                "ignored resume failure or unrelated pause was reported as recovered");
+            if (recovery < 2) Check(handoff["error"].ToString() == "tool_failed"
+                && handoff["failure"]["evidence"]["active_handle"].ToString() == "guard",
+                "failed yield lost owning handle evidence");
+        }
+        Console.WriteLine("PASS: failed resume remains failed across yield and unrelated controls until that request succeeds");
         var activityReport = await AgentScript.Run("tool('effect'); for(let i=0;i<14;i++) tool('get_state'); tool('action_control',{command:'pause'});", 5,
             (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default, activityProgress);
         Check(activityReport["trace"].AsArray().Count == 12 && activityReport["tool_counts"]["effect"].GetValue<int>() == 1

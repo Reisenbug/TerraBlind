@@ -177,7 +177,8 @@ public static class AgentScript
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
                         }
-                        else if (lastFailure?["tool"]?.ToString() == name) lastFailure = null;
+                        else if (lastFailure?["tool"]?.ToString() == name
+                            && (name != "action_control" || JsonNode.DeepEquals(lastFailure["args"], args))) lastFailure = null;
                     }
                     if (name == "decision_point" || toolResult?["host_yield"]?.GetValue<bool>() == true)
                     {
@@ -259,7 +260,9 @@ public static class AgentScript
         catch (Exception error)
         {
             if (wake != null)
-                return Report(null, "宿主事件或主动决策点交回模型；未完成step需核对。", new JsonObject
+                return Report(lastFailure == null ? null : "tool_failed",
+                    lastFailure == null ? "宿主事件或主动决策点交回模型；未完成step需核对。"
+                        : "交回模型时仍有未解决的工具失败；读取failure，不得把请求或脚本文字当作执行成功。", new JsonObject
                 { ["status"] = "yield", ["wake"] = wake.DeepClone() });
             string cleanup = null;
             if (inTool)
