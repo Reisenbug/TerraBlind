@@ -298,13 +298,21 @@ namespace TerraBlind
                 if (!closed.Add((cx, cy))) continue;
                 if (stopAtStart && cx == sx && cy == sy) break;
 
+                (int fixedCost, int digCells, bool wall) cellCost = default;
+                bool cellPrepared = false;
+
                 for (int i = 0; i < 4; i++)
                 {
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
                     long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                    int sc = StepCost(cx, cy, nx, ny);
+                    if (!cellPrepared)
+                    {
+                        cellCost = PrepareStepCost(cx, cy);
+                        cellPrepared = true;
+                    }
+                    int sc = StepCost(cx, cy, nx, ny, cellCost);
                     stepTicks += System.Diagnostics.Stopwatch.GetTimestamp() - stepStarted;
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // H = 站在 (nx,ny) 还要多少,先问站不站得住。悬空格照发 H 会在空中连成
@@ -436,12 +444,15 @@ namespace TerraBlind
         }
 
         static int StepCost(int cx, int cy, int nx, int ny)
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy));
+
+        static (int fixedCost, int digCells, bool wall) PrepareStepCost(int cx, int cy)
         {
             // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
             for (int dx = -1; dx <= 1; dx++)
-                if (IsLava(cx + dx, cy - r)) return Impassable;
+                if (IsLava(cx + dx, cy - r)) return (Impassable, 0, false);
             // 压力板踩下去就触发,有的连着岩浆陷阱。能绕就绕,绕不开也别当免费。
             for (int r = 0; r < 3; r++)
             {
@@ -449,7 +460,7 @@ namespace TerraBlind
                 if (py2 < 0 || py2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
                 var pt = Main.tile[cx, py2];
                 if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
-                    return PlateCost;
+                    return (PlateCost, 0, false);
             }
             // 人 3 行高,只看脚下会把烟囱当免费爬。斜砖只在脚那行豁免(胸口一块斜砖就卡住);
             // 上锁的门另判:MineableWith 说能挖,可神庙门没钥匙砸不开
@@ -457,7 +468,7 @@ namespace TerraBlind
             {
                 int dy2 = cy - r;
                 if (dy2 < 0 || dy2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
-                if (WorldGen.IsLockedDoor(cx, dy2)) return Impassable;
+                if (WorldGen.IsLockedDoor(cx, dy2)) return (Impassable, 0, false);
             }
 
             // 数出到底要挖几格,不只是"要不要挖":身体 3 行高,横着进一格得挖 1~3 格,价钱差 3 倍。
@@ -468,14 +479,14 @@ namespace TerraBlind
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
                 digCells++;
-                if (!LavaSafety.CanMine(cx, cy - r)) return Impassable;
-                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return Impassable;   // 镐挖不动 → 真不可达,不是"贵"
+                if (!LavaSafety.CanMine(cx, cy - r)) return (Impassable, 0, false);
+                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return (Impassable, 0, false);   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
                 digCells++;
-                if (!LavaSafety.CanMine(cx, cy - 3)) return Impassable;
-                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
+                if (!LavaSafety.CanMine(cx, cy - 3)) return (Impassable, 0, false);
+                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return (Impassable, 0, false);
             }
             bool wall = digCells > 0;
             // 20px 的身子跨两列:左右邻列都堵的 1 格宽缝身体进不去,按免费算 H 会顺着神庙墙缝往上流
@@ -490,12 +501,20 @@ namespace TerraBlind
                 // 唯一的出口 (1343,232) 探针说 can_stand=True,场却说不可达。
                 if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy))
                 {
-                    if (!CellKind.Stands(cx, cy)) return Impassable;
+                    if (!CellKind.Stands(cx, cy)) return (Impassable, 0, false);
                     // 【按普通格收费】。挤进去本身不慢,慢的是出来 --- 而出来是下一格的事,
                     // StepCost 到那一格自然会按 pillar/跳放定价。在这儿再加价等于同一件事收两次钱。
                     wall = false; digCells = 0;
                 }
             }
+            return (-1, digCells, wall);
+        }
+
+        static int StepCost(int cx, int cy, int nx, int ny, (int fixedCost, int digCells, bool wall) cellCost)
+        {
+            if (cellCost.fixedCost >= 0) return cellCost.fixedCost;
+            int digCells = cellCost.digCells;
+            bool wall = cellCost.wall;
             // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
             // 取左右里实心行少的那侧。人可以站偏,挑便宜的那半边走。
             if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));

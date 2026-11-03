@@ -1294,7 +1294,20 @@ public sealed class Driver : ModSystem
         if (shortTick == 30)
         {
             if (shortCase == 0)
+            {
+                typeof(MazeWand).GetField("_fieldPickPower", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                    .SetValue(null, MazeWand.BestPickPower());
+                var costs = new JsonArray();
+                for (int y = 230; y <= 290; y++)
+                for (int x = 3350; x <= 3450; x++)
+                foreach (var direction in new[] { new Point(1, 0), new Point(-1, 0), new Point(0, 1), new Point(0, -1) })
+                    costs.Add(MazeWand.StepCostPublic(x, y, x + direction.X, y + direction.Y));
+                string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(costs.ToJsonString())));
+                if (hash != "3BE2AF3E00877FABBB55423BB351A8C6C37212120C32D6DE01B7BE02151E56B0")
+                    throw new InvalidOperationException("natural_field_cost_baseline_changed:" + hash);
+                Console.WriteLine($"FIELD_COST_BASELINE edges={costs.Count} sha256={hash}");
                 for (int change = 0; change < 5; change++) CheckCanceledPrediction(player, change);
+            }
             shortOrigin = player.position;
             shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool flat = shortCase == 0 || shortCase >= 7;
