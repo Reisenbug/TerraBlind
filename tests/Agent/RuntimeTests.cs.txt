@@ -131,6 +131,7 @@ static class RuntimeTests
 
             var savedInventory = Game.LocalPlayer.inventory;
             int savedSelection = Game.LocalPlayer.selectedItem;
+            bool savedAmmunition = Game.LocalPlayer.HasAmmunition;
             try
             {
                 Game.LocalPlayer.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
@@ -154,10 +155,21 @@ static class RuntimeTests
                 Check(rejected["error"] != null && CombatLoadout.PreferredType == 65, "tool replaced preferred weapon");
                 Game.LocalPlayer.inventory[7] = new Terraria.Item();
                 Check(CombatLoadout.Select(Game.LocalPlayer) == -1, "missing preferred weapon silently switched to shortsword");
+                CombatLoadout.PreferredType = 0;
+                Game.LocalPlayer.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
+                Game.LocalPlayer.inventory[1] = new Terraria.Item { type = 279, stack = 500, damage = 12, consumable = true };
+                Game.LocalPlayer.inventory[3] = new Terraria.Item { type = 964, stack = 1, damage = 14, useAmmo = 97 };
+                Game.LocalPlayer.HasAmmunition = false;
+                Check(CombatLoadout.Select(Game.LocalPlayer) == 1, "empty gun displaced usable throwing knives after looting");
+                CombatLoadout.PreferredType = 964;
+                Check(CombatLoadout.Select(Game.LocalPlayer) == -1, "explicit empty gun appeared usable or silently switched weapons");
+                Game.LocalPlayer.HasAmmunition = true;
+                Check(CombatLoadout.Select(Game.LocalPlayer) == 3, "restocked preferred gun stayed unavailable");
             }
             finally
             {
                 Game.LocalPlayer.inventory = savedInventory; Game.LocalPlayer.selectedItem = savedSelection;
+                Game.LocalPlayer.HasAmmunition = savedAmmunition;
                 CombatLoadout.PreferredType = 0;
             }
             Console.WriteLine("PASS: model weapon choice survives mining and inventory reordering, rejecting tools and silent fallback");

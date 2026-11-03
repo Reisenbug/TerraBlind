@@ -14,7 +14,7 @@ public static class CombatLoadout
         for (int slot = 0; slot < 10; slot++)
         {
             var item = player.inventory[slot];
-            if (!Usable(item)) continue;
+            if (!Usable(item) || item.useAmmo > 0 && !player.HasAmmo(item)) continue;
             if (PreferredType > 0)
             {
                 if (item.type == PreferredType) return slot;
