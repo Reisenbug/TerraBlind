@@ -285,6 +285,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Opportunities()
     {
+        if (Natural) { await NaturalOpportunities(); return; }
         await OnMain(() =>
         {
             NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
@@ -368,5 +369,112 @@ public sealed class BehaviorTrial : ModSystem
             return true;
         });
         Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
+    }
+
+    async Task NaturalOpportunities()
+    {
+        int chestX = 0, chestY = 0, heartX = 0, heartY = 0, lootType = 0, goalX = 0, goalY = 0;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false; Manual.On = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset();
+            var p = Main.LocalPlayer;
+            (int X, int Y)? Stand(int cx, int cy)
+            {
+                for (int r = 0; r <= 8; r++)
+                    for (int dx = -r; dx <= r; dx++)
+                        for (int dy = -r; dy <= r; dy++)
+                        {
+                            int x = cx + dx, y = cy + dy;
+                            if (x < 2 || y < 10 || x >= Main.maxTilesX - 2 || y >= Main.maxTilesY - 2) continue;
+                            if (WorldGen.SolidTile(x, y) && WorldGen.SolidTile(x + 1, y)
+                                && !Collision.SolidCollision(new Vector2(x * 16, y * 16 - p.height), p.width, p.height)
+                                && Main.tile[x, y - 1].LiquidAmount == 0 && Main.tile[x, y - 2].LiquidAmount == 0)
+                                return (x, y);
+                        }
+                return null;
+            }
+            foreach (var chest in Main.chest)
+            {
+                if (chest == null || chest.y < Main.worldSurface || !chest.item.Any(i => !i.IsAir) || Chest.IsLocked(chest.x, chest.y)) continue;
+                int jungle = 0;
+                for (int x = Math.Max(1, chest.x - 25); x <= Math.Min(Main.maxTilesX - 2, chest.x + 25); x++)
+                    for (int y = Math.Max(1, chest.y - 25); y <= Math.Min(Main.maxTilesY - 2, chest.y + 25); y++)
+                        if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.JungleGrass) jungle++;
+                if (jungle < 60) continue;
+                var start = Stand(chest.x - 5, chest.y + 2);
+                if (start == null) continue;
+                bool found = false;
+                for (int x = Math.Max(1, chest.x - 25); x <= Math.Min(Main.maxTilesX - 2, chest.x + 25) && !found; x++)
+                    for (int y = Math.Max(1, chest.y - 25); y <= Math.Min(Main.maxTilesY - 2, chest.y + 25) && !found; y++)
+                    {
+                        var tile = Main.tile[x, y];
+                        if (!tile.HasTile || tile.TileType != TileID.Heart || tile.TileFrameX % 36 != 0 || tile.TileFrameY % 36 != 0) continue;
+                        var goal = Stand(x + 6, y + 2);
+                        if (goal == null || Math.Abs(goal.Value.X - start.Value.X) + Math.Abs(goal.Value.Y - start.Value.Y) < 8) continue;
+                        heartX = x; heartY = y; goalX = goal.Value.X; goalY = goal.Value.Y - 1; found = true;
+                    }
+                if (!found) continue;
+                chestX = chest.x; chestY = chest.y; lootType = chest.item.First(i => !i.IsAir && i.type != ItemID.Wood).type;
+                originX = start.Value.X; floor = start.Value.Y;
+                break;
+            }
+            if (lootType == 0) throw new Exception("no native jungle chest/crystal scene found; no terrain was modified");
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.ThrowingKnife); p.inventory[1].stack = 500;
+            p.inventory[2].SetDefaults(ItemID.Wood); p.inventory[2].stack = 100;
+            p.ConsumedLifeCrystals = 0; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            p.position = new Vector2(originX * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
+            return true;
+        });
+        string code = """
+            const goal={x:GOAL_X,y:GOAL_Y};
+            tool('watch',{events:['nearby_chest','nearby_tile'],passive_events:['nearby_tile'],tile_types:[12,61,16],radius:60});
+            const original=step('original',()=>tool('action_start',{tool:'nav_to',args:goal}));
+            const notice=tool('script_events',{wait_ms:1000});
+            tool('action_control',{handle:original.handle,command:'pause'});
+            if(!notice.events.some(e=>e.kind==='nearby_chest')||!notice.events.some(e=>e.kind==='nearby_tile'&&e.evidence.tile_type===12))
+              throw new Error('native chest/crystal not observed');
+            const decisions=[];
+            for(const point of [{x:CHEST_X,y:CHEST_Y},{x:HEART_X,y:HEART_Y}]) {
+              const facts=tool('opportunity_assess',{...point,destination:goal});
+              if(facts.hazards.some(h=>h.kind==='lava'||h.kind==='trap_tile'))
+                tool('decision_point',{reason:'Natural opportunity has a measured hazard; preserved original handle requires review: '+JSON.stringify(facts)});
+              decisions.push(step('choice:'+point.x+','+point.y,()=>({decision:'collect',reason:'needed resource; inspect real interaction and verify inventory',facts})));
+            }
+            function count(type){return tool('get_state').inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);}
+            const beforeLoot=count(LOOT_TYPE), beforeCrystal=count(29);
+            const loot=tool('collect_treasure',{x:CHEST_X,y:CHEST_Y});
+            if(count(LOOT_TYPE)<=beforeLoot) throw new Error('natural chest not looted: '+JSON.stringify(loot));
+            let gather=tool('gather',{targets:[{item_type:29,count:beforeCrystal+1,tile_names:['Heart']}],source_area:{x:HEART_X,y:HEART_Y,width:3,height:3}});
+            for(let i=0;i<30&&gather.handle;i++) {
+              const events=tool('script_events',{wait_ms:0});
+              if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind))) tool('decision_point',{reason:'Danger during natural gathering'});
+              const current=tool('action_query',{handle:gather.handle,wait_ms:1000});
+              if(current.status==='completed'){gather=current;break;}
+              if(current.status==='paused') tool('action_control',{handle:gather.handle,command:'resume'});
+              else if(current.status!=='running') throw new Error(JSON.stringify(current));
+            }
+            if(count(29)<=beforeCrystal) throw new Error('natural crystal not acquired: '+JSON.stringify(gather));
+            tool('script_events',{wait_ms:0});
+            tool('action_control',{handle:original.handle,command:'resume'});
+            let restored;
+            for(let i=0;i<30;i++) {
+              restored=tool('action_query',{handle:original.handle,wait_ms:1000});
+              if(restored.status!=='running') break;
+            }
+            if(restored.status!=='completed'||restored.result.done!==true) throw new Error('natural original goal not reached: '+JSON.stringify(restored));
+            return {decisions,original_handle:original.handle,loot_gained:count(LOOT_TYPE)-beforeLoot,crystals_gained:count(29)-beforeCrystal,restored};
+            """.Replace("GOAL_X", goalX.ToString()).Replace("GOAL_Y", goalY.ToString())
+                .Replace("CHEST_X", chestX.ToString()).Replace("CHEST_Y", chestY.ToString())
+                .Replace("HEART_X", heartX.ToString()).Replace("HEART_Y", heartY.ToString()).Replace("LOOT_TYPE", lootType.ToString());
+        var result = await Call("run_script", new JsonObject { ["code"] = code, ["workflow"] = "natural-opportunity-trial", ["event_delivery"] = "script" });
+        File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-result.json"), result.ToJsonString());
+        if (result["ok"]?.GetValue<bool>() != true || result["value"]?["crystals_gained"]?.GetValue<int>() != 1)
+            throw new Exception("natural opportunity continuation incomplete: " + result["detail"] + " " + result["value"]);
+        Console.WriteLine("OPPORTUNITY_NATURAL_COMPLETE native_engine=true model_calls=0 fixture_tile_edits=0 teleports_after_start=0");
     }
 }
