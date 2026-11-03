@@ -386,6 +386,9 @@ public static partial class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "jev_judge":
+                string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
+                return (await ScriptDecision.Judge(HarvestHttp, decisionKey, args, token)).ToJsonString();
             case "script_program":
                 var library = new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));
                 return (Text(args, "operation") switch

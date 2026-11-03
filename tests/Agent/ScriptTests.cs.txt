@@ -9,6 +9,20 @@ using TerraBlind;
 
 static class ScriptTests
 {
+    sealed class DecisionHandler : System.Net.Http.HttpMessageHandler
+    {
+        public string Reply = "{\"answers\":{\"useful\":{\"type\":\"noul\",\"noul\":0.9},\"route\":{\"type\":\"choice\",\"choice\":\"retreat\"}}}";
+        public bool Wait;
+        public System.Net.HttpStatusCode Status = System.Net.HttpStatusCode.OK;
+        public JsonObject Sent;
+        protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken token)
+        {
+            Sent = JsonNode.Parse(await request.Content.ReadAsStringAsync(token)).AsObject();
+            if (Wait) await Task.Delay(Timeout.Infinite, token);
+            return new System.Net.Http.HttpResponseMessage(Status) { Content = new System.Net.Http.StringContent(Reply) };
+        }
+    }
+
     static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
 
     public static async Task Replay(string path)
@@ -46,6 +60,50 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var judgeHandler = new DecisionHandler();
+        using (var judgeHttp = new System.Net.Http.HttpClient(judgeHandler))
+        {
+            var request = JsonNode.Parse("""
+                {"state":{"drop":"Stinger","hazard":"lava"},"questions":{
+                "useful":{"type":"noul","instructions":"Does this drop contribute to the task?"},
+                "route":{"type":"choice","instructions":"Which candidate has less immediate exposure?","criteria":{"approach":"Approach the drop","retreat":"Move away from lava"}}}}
+                """).AsObject();
+            var answer = await ScriptDecision.Judge(judgeHttp, "test-key", request, default);
+            Check(answer["answers"]["route"]["choice"].ToString() == "retreat"
+                && judgeHandler.Sent["state"]["hazard"].ToString() == "lava", "script judgment lost scene or typed answer");
+            string selectedAction = null;
+            var scripted = await AgentScript.Run("""
+                const judgment = tool('jev_judge', {
+                  state:{drop:'Stinger',hazard:'lava'},
+                  questions:{useful:{type:'noul',instructions:'Does the drop contribute to the task?'},
+                    route:{type:'choice',instructions:'Which candidate has less immediate exposure?',
+                      criteria:{approach:'Approach the drop',retreat:'Move away from lava'}}}
+                });
+                if (judgment.error) return judgment;
+                return tool('move', {direction:judgment.answers.route.choice});
+                """, 30, (_, _) => { }, async (name, args, token) =>
+                {
+                    if (name == "jev_judge") return (await ScriptDecision.Judge(judgeHttp, "test-key", args, token)).ToJsonString();
+                    selectedAction = args["direction"].ToString(); return "{\"ok\":true}";
+                }, _ => Task.CompletedTask, default);
+            Check(scripted["ok"].GetValue<bool>() && selectedAction == "retreat", "JS did not continue from Jev judgment to selected action");
+            judgeHandler.Status = System.Net.HttpStatusCode.TooManyRequests;
+            Check((await ScriptDecision.Judge(judgeHttp, "test-key", request, default))["error"].ToString() == "jev_http_error",
+                "Jev failure became a default action");
+            judgeHandler.Status = System.Net.HttpStatusCode.OK;
+            judgeHandler.Reply = "{\"answers\":{\"useful\":{\"type\":\"noul\",\"noul\":0.8},\"route\":{\"type\":\"choice\",\"choice\":\"invented\"}}}";
+            bool rejected = false;
+            try { await ScriptDecision.Judge(judgeHttp, "test-key", request, default); }
+            catch (ArgumentException) { rejected = true; }
+            Check(rejected, "unknown Jev choice reached the script");
+            judgeHandler.Wait = true;
+            using var cancelJudge = new CancellationTokenSource(30);
+            bool cancelled = false;
+            try { await ScriptDecision.Judge(judgeHttp, "test-key", request, cancelJudge.Token); }
+            catch (OperationCanceledException) { cancelled = true; }
+            Check(cancelled, "player cancellation became a model answer");
+            Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
+        }
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
