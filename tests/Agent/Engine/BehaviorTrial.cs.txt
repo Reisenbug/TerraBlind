@@ -22,6 +22,8 @@ public sealed class BehaviorTrial : ModSystem
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, opened, finished;
     int frames, movingAttackFrames, originX, floor, target = -1;
+    bool collectingStingers;
+    int hornetsSpawned;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
     async Task<JsonObject> Review(JsonObject wake)
@@ -104,8 +106,12 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
-        for (int i = 0; i < Main.maxNPCs; i++) if (i != target) Main.npc[i].active = false;
+        for (int i = 0; i < Main.maxNPCs; i++)
+            if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (collectingStingers && frames % 60 == 0 && hornetsSpawned < 6
+            && (target < 0 || !Main.npc[target].active) && !p.inventory.Any(i => i.type == ItemID.Stinger && i.stack > 0))
+            SpawnMaterialHornet();
         if (p.controlUseItem && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > 0.2f) movingAttackFrames++;
         if (frames == 60) trial = Task.Run(Run);
         if (frames % 120 == 0)
@@ -129,6 +135,28 @@ public sealed class BehaviorTrial : ModSystem
         var result = JsonNode.Parse(await AgentTools.Execute(tool, args, default)).AsObject();
         Console.WriteLine("BEHAVIOR_TOOL " + tool + " " + result.ToJsonString());
         return result;
+    }
+    bool SpawnMaterialHornet()
+    {
+        var p = Main.LocalPlayer;
+        int selected = CombatLoadout.Select(p);
+        if (selected >= 0)
+        {
+            var weapon = p.inventory[selected];
+            Console.WriteLine($"MATERIAL_LOADOUT slot={selected} type={weapon.type} name={weapon.Name} use_ammo={weapon.useAmmo} has_ammo={p.HasAmmo(weapon)}");
+        }
+        foreach (int dx in new[] { 96, -96, 64, -64 })
+            foreach (int dy in new[] { -64, 0, 64 })
+            {
+                var position = p.Center + new Vector2(dx, dy);
+                if (Collision.SolidCollision(position - new Vector2(20), 40, 40)
+                    || !Collision.CanHitLine(p.Center, 4, 4, position, 4, 4)) continue;
+                target = NPC.NewNPC(new EntitySource_Misc("OpportunityMaterialTrial"), (int)position.X, (int)position.Y, NPCID.Hornet);
+                hornetsSpawned++;
+                Console.WriteLine($"MATERIAL_HORNET spawn={hornetsSpawned} who={target} hp={Main.npc[target].life} pos={Main.npc[target].position}");
+                return true;
+            }
+        return false;
     }
     async Task Run()
     {
@@ -313,6 +341,19 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception($"opportunity fixture failed heart={Main.tile[originX + 12, floor - 1].HasTile}/{Main.tile[originX + 12, floor - 1].TileType} trap={Main.tile[originX - 10, floor - 1].HasTile}/{Main.tile[originX - 10, floor - 1].TileType}");
             return true;
         });
+        var claim = await Call("control", new JsonObject { ["operation"] = "claim", ["scope"] = "task",
+            ["channels"] = new JsonArray("movement", "item_use"), ["reason"] = "verify legacy workflows cannot retake agent input" });
+        await OnMain(() =>
+        {
+            if (StartRun.Start(out string startReason) || startReason != "control_owned_by_agent")
+                throw new Exception("legacy run ignored the agent claim");
+            if (TreasureGrab.Start(originX + 5, floor - 2, out string grabReason) || grabReason != "control_owned_by_agent")
+                throw new Exception("legacy treasure start ignored the agent claim");
+            if (StartRun.IsRunning || TreasureGrab.IsRunning || RecedingNav.Active)
+                throw new Exception("denied workflow mutated execution state");
+            return true;
+        });
+        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claim["id"].DeepClone() });
         string code = """
             const goal={x:GOAL_X,y:GOAL_Y};
             tool('watch',{events:['nearby_chest','nearby_tile'],tile_types:[12],radius:35});
@@ -514,6 +555,44 @@ public sealed class BehaviorTrial : ModSystem
             if (progress["value"]?["gained"]?.GetValue<int>() < 1 || progress["value"]?["gained"] == null)
                 throw new Exception("material continuation has no verified spore gain; inspect material-result.json");
             Console.WriteLine("OPPORTUNITY_MATERIAL_PROGRESS verified_spore_gain=true");
+            if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_STINGERS") == "1")
+            {
+                await OnMain(() =>
+                {
+                    collectingStingers = true;
+                    if (!SpawnMaterialHornet()) throw new Exception("no clear native encounter position; terrain was not modified");
+                    return true;
+                });
+                var combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
+                    ["code"] = """
+                        function count(){return tool('get_state').inventory_slots.filter(i=>i.type===209).reduce((n,i)=>n+i.stack,0);}
+                        const before=count();
+                        tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
+                        tool('script_events',{wait_ms:0});
+                        const attempts=[];
+                        for(let round=0;round<6&&count()===before;round++) {
+                          let action=tool('gather',{targets:[{item_type:209,count:before+1,npc_types:[NPC_TYPE]}]});
+                          for(let i=0;i<15&&action.handle;i++) {
+                            const events=tool('script_events',{wait_ms:0});
+                            const current=tool('action_query',{handle:action.handle,wait_ms:1000});
+                            if(current.status==='completed'||current.status==='failed'){action=current;break;}
+                            if(events.events.some(e=>['player_died','low_health','suffocating'].includes(e.kind)))
+                              tool('decision_point',{reason:'Health or terrain danger during material combat; preserve collected resources and review before resuming'});
+                            if(current.status==='paused') tool('action_control',{handle:action.handle,command:'resume'});
+                          }
+                          attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
+                          if(action.error==='repeated_failure_blocked')
+                            tool('decision_point',{reason:'Repeated material acquisition failure requires a different source or plan'});
+                          if(count()===before) tool('script_events',{wait_ms:1000});
+                        }
+                        return {before,after:count(),gained:count()-before,attempts,recipe:tool('recipe',{name:'ThornChakram'})};
+                        """.Replace("NPC_TYPE", NPCID.Hornet.ToString()) });
+                await OnMain(() => { collectingStingers = false; return true; });
+                File.WriteAllText(Path.Combine(Main.SavePath, "stinger-result.json"), combat.ToJsonString());
+                if (combat["value"]?["gained"]?.GetValue<int>() < 1 || combat["value"]?["gained"] == null)
+                    throw new Exception("no verified native stinger acquisition; inspect stinger-result.json");
+                Console.WriteLine($"OPPORTUNITY_STINGER_PROGRESS verified_stinger_gain=true spawned_hornets={hornetsSpawned}");
+            }
         }
     }
 }
