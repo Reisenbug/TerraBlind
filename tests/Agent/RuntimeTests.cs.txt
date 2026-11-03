@@ -875,6 +875,16 @@ static class RuntimeTests
                 JsonNode.Parse("{\"names\":[\"nav_to\",\"action_control\"]}").AsObject(), default)));
             Check(api["tools"].AsArray().Count == 2 && api["tools"][0]["parameters"]["properties"]["control_claim"] != null,
                 "live API discovery omitted registered control claim metadata");
+            var watchApi = JsonNode.Parse(await Execute(AgentTools.Execute("game_api",
+                JsonNode.Parse("{\"names\":[\"watch\"]}").AsObject(), default)));
+            var watchEvents = watchApi["tools"][0]["parameters"]["properties"]["events"]["items"]["enum"].AsArray();
+            Check(new[] { "nearby_drop", "nearby_npc_killed" }.All(kind => watchEvents.Any(value => value.ToString() == kind)),
+                "watch API concealed supported material acquisition events");
+            script = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "return tool('watch',{events:['nearby_drop','nearby_npc_killed'],passive_events:['nearby_drop']});" }, default)));
+            Check(script["ok"]?.GetValue<bool>() == true && script["value"]?["error"] == null,
+                "registered script validation rejected material acquisition subscriptions");
+            AgentTools.Watches.Reset();
 
             HttpServerSystem.Handler = (path, payload) =>
             {
