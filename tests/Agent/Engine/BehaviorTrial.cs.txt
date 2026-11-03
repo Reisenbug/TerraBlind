@@ -96,10 +96,10 @@ public sealed class BehaviorTrial : ModSystem
                 if (name != "get_state") return Record(output);
                 var state = JsonNode.Parse(output);
                 var compact = new JsonObject();
-                foreach (string field in new[] { "player", "buffs", "enemies", "healing_items", "health_dynamics", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
+                foreach (string field in new[] { "player", "buffs", "enemies", "terrain", "healing_items", "health_dynamics", "task_plan", "permanent_max_health", "last_damage", "last_death", "control_overrides" })
                     if (state[field] != null) compact[field] = state[field].DeepClone();
                 var watch = new JsonObject();
-                foreach (string field in new[] { "events", "passive_events", "tile_types", "radius", "health_below" })
+                foreach (string field in new[] { "events", "passive_events", "tile_types", "radius", "health_below", "pending" })
                     watch[field] = state["watch"]?[field]?.DeepClone();
                 compact["watch"] = watch;
                 compact["inventory_slots"] = new JsonArray(state["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray());
