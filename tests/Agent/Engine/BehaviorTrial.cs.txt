@@ -234,6 +234,54 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_AUTOMATIC_HEAL_EVIDENCE") == "1")
+        {
+            await OnMain(() => { NativeAgent.Stop(); return true; });
+            var veto = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
+                ["behaviors"] = new JsonArray("survival"), ["reason"] = "verify recovery ownership" });
+            var before = await Call("get_state", new JsonObject());
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                p.statLife = 40; p.potionDelay = 0;
+                p.inventory[0].SetDefaults(ItemID.LesserHealingPotion); p.inventory[0].stack = 2;
+                SurvivalReflex.Tick();
+                if (p.statLife != 40 || p.inventory[0].stack != 2)
+                    throw new Exception("survival reflex ignored the agent veto");
+                return true;
+            });
+            var denied = await Call("get_state", new JsonObject());
+            if (!JsonNode.DeepEquals(before["last_automatic_heal"], denied["last_automatic_heal"]))
+                throw new Exception("denied healing changed the evidence");
+            await Call("control", new JsonObject { ["operation"] = "release", ["id"] = veto["id"].DeepClone() });
+            var actual = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                SurvivalReflex.Tick();
+                if (p.statLife <= 40 || p.potionDelay <= 0 || p.inventory[0].stack != 1)
+                    throw new Exception("automatic healing did not match actual engine health, cooldown and consumption");
+                return p.statLife;
+            });
+            var healed = await Call("get_state", new JsonObject());
+            var recorded = healed["last_automatic_heal"];
+            if (recorded == null || recorded["hp_before"].GetValue<int>() != 40
+                || recorded["hp_after"].GetValue<int>() != actual || recorded["potion_delay_after"].GetValue<int>() <= 0)
+                throw new Exception("healing evidence did not match the engine");
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                p.statLife = 40;
+                SurvivalReflex.Tick();
+                if (p.statLife != 40 || p.inventory[0].stack != 1)
+                    throw new Exception("cooldown call fabricated another heal or consumed a second potion");
+                return true;
+            });
+            var cooldown = await Call("get_state", new JsonObject());
+            if (!JsonNode.DeepEquals(recorded, cooldown["last_automatic_heal"]))
+                throw new Exception("cooldown call replaced healing evidence");
+            File.WriteAllText(Path.Combine(Main.SavePath, "automatic-heal-evidence.json"), recorded.ToJsonString());
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TRIAL") == "1")
         { await Opportunities(); return; }
         await OnMain(() =>

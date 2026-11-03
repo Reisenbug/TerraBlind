@@ -21,7 +21,7 @@ public static partial class AgentTools
     internal static readonly AgentRecovery Recovery = new();
     internal static readonly AgentControlPolicy Control = new();
     internal static readonly AgentControlSession ControlSession = new(Control);
-    internal static JsonObject LastDamage, LastDeath, LastContactEscape;
+    internal static JsonObject LastDamage, LastDeath, LastContactEscape, LastAutomaticHeal;
     internal static bool ContactEscapeActive;
     internal static JsonObject RecentContactDamage(long tick)
     {
@@ -149,6 +149,7 @@ public static partial class AgentTools
         state["permanent_max_health"] = Main.LocalPlayer.statLifeMax;
         state["last_damage"] = LastDamage?.DeepClone();
         state["last_death"] = LastDeath?.DeepClone();
+        state["last_automatic_heal"] = LastAutomaticHeal?.DeepClone();
         state["contact_escape"] = LastContactEscape?.DeepClone();
         var workflows = new JsonObject();
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();

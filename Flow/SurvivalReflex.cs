@@ -57,7 +57,17 @@ namespace TerraBlind
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
+			{
+				int hpBefore = p.statLife, cooldownBefore = p.potionDelay;
 				p.QuickHeal();
+				if (p.statLife != hpBefore || p.potionDelay != cooldownBefore)
+					AgentTools.LastAutomaticHeal = new System.Text.Json.Nodes.JsonObject
+					{
+						["tick"] = Main.GameUpdateCount, ["source"] = "survival_reflex",
+						["hp_before"] = hpBefore, ["hp_after"] = p.statLife,
+						["potion_delay_before"] = cooldownBefore, ["potion_delay_after"] = p.potionDelay
+					};
+			}
 
 			// 够得着的敌人就挥两下。纯反射,不追不打策略,出了圈立刻松手
 			var foe = MeleeReflexEnabled ? ClosestFoe(p, 3.5f * 16f) : null;
