@@ -303,6 +303,15 @@ static class RuntimeTests
                 Game.tile = new Terraria.Tile[1000, 1000];
                 Game.LocalPlayer.position = new(160, 160);
                 Game.tileSolid[1] = true;
+                Game.tile[18, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, Slope = 1 };
+                Game.tile[19, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, IsHalfBlock = true };
+                Game.tile[20, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+                Game.tile[23, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, Slope = 2 };
+                var shapes = TerrainInspection.Read(12)["shaped_tiles"]?.AsArray();
+                Check(shapes != null && shapes.Count == 2
+                    && shapes.Any(t => t["x"].GetValue<int>() == 18 && t["slope"].GetValue<int>() == 1)
+                    && shapes.Any(t => t["x"].GetValue<int>() == 19 && t["half_block"].GetValue<bool>()),
+                    "terrain inspection hides distant slopes/half blocks or leaks shapes outside observed radius");
                 Game.tile[15, 11] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
                 Game.tile[19, 11] = new Terraria.Tile { LiquidAmount = 255, LiquidType = 1 };
                 Game.tile[21, 12] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.PressurePlates };

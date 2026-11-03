@@ -118,7 +118,7 @@ public static class TerrainInspection
         int bodyLeft = (int)Math.Floor(player.position.X / 16), bodyTop = (int)Math.Floor(player.position.Y / 16);
         int bodyRight = (int)Math.Floor((player.position.X + player.width - 1) / 16);
         int bodyBottom = (int)Math.Floor((player.position.Y + player.height - 1) / 16);
-        var rows = new JsonArray(); var nearby = new JsonArray(); var hazards = new JsonArray();
+        var rows = new JsonArray(); var nearby = new JsonArray(); var hazards = new JsonArray(); var shapes = new JsonArray();
         for (int y = top; y <= bottom; y++)
         {
             var row = new StringBuilder();
@@ -129,6 +129,9 @@ public static class TerrainInspection
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
                 int touchDamage = active ? TileID.Sets.TouchDamageImmediate[tile.TileType] : 0;
+                if (active && ((int)tile.Slope != 0 || tile.IsHalfBlock))
+                    shapes.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
+                        ["solid"] = solid, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock });
                 if (tile.HasTile && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives
                     or TileID.RollingCactus or TileID.BouncyBoulder or TileID.LifeCrystalBoulder)
                     hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
@@ -148,7 +151,7 @@ public static class TerrainInspection
         return new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["hp"] = player.statLife,
             ["suffocating"] = player.suffocating, ["origin"] = new JsonObject { ["x"] = left, ["y"] = top },
             ["player_bounds"] = new JsonObject { ["left"] = bodyLeft, ["top"] = bodyTop, ["right"] = bodyRight, ["bottom"] = bodyBottom },
-            ["rows"] = rows, ["near_body_tiles"] = nearby, ["trap_tiles"] = hazards,
-            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；H原生接触伤害方块，F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。人物范围见player_bounds；不是未来碰撞预测。" };
+            ["rows"] = rows, ["near_body_tiles"] = nearby, ["trap_tiles"] = hazards, ["shaped_tiles"] = shapes,
+            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；H原生接触伤害方块，F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。#不保证完整平顶，整个观察范围的斜砖/半砖见shaped_tiles；slope是游戏原始枚举值，0无斜坡。人物范围见player_bounds；不是未来碰撞预测或家具放置许可。" };
     }
 }
