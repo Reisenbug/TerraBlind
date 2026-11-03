@@ -31,6 +31,7 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
+    bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1";
     int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
         || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
         : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1" ? 9600 : 7200;
@@ -197,10 +198,11 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
-        for (int i = 0; i < Main.maxNPCs; i++)
-            if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
+        if (!NaturalEncounters)
+            for (int i = 0; i < Main.maxNPCs; i++)
+                if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
-        if (collectingStingers && frames % 60 == 0 && hornetsSpawned < 40
+        if (!NaturalEncounters && collectingStingers && frames % 60 == 0 && hornetsSpawned < 40
             && (target < 0 || !Main.npc[target].active) && p.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack) < stingersRequired)
             SpawnMaterialHornet();
         if (p.controlUseItem && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > 0.2f) movingAttackFrames++;
@@ -740,6 +742,7 @@ public sealed class BehaviorTrial : ModSystem
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-agent-live.json"), new JsonObject
                 { ["before"] = before, ["samples"] = samples, ["after"] = after,
                     ["navigation_stub"] = materialNavigationStub, ["spawned_hornets"] = hornetsSpawned,
+                    ["natural_encounters"] = NaturalEncounters,
                     ["model_token_budget"] = modelTokenBudget }.ToJsonString());
                 await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
             }
