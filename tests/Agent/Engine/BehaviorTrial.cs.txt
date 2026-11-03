@@ -31,7 +31,7 @@ public sealed class BehaviorTrial : ModSystem
     int stingersRequired = 1;
     Task trial;
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
-    async Task<JsonObject> Review(JsonObject wake, bool materials = false)
+    async Task<JsonObject> Review(JsonObject wake, bool materials = false, CodexAgent session = null, string reportName = "behavior-review")
     {
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
@@ -40,13 +40,14 @@ public sealed class BehaviorTrial : ModSystem
             ? new[] { "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
             : new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
         var programTools = allowed.Concat(new[] { "watch", "fight", "action_start", "action_control", "action_query", "script_events",
-            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress", "nav_to", "use_item", "craft" }).ToArray();
+            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress", "nav_to", "use_item", "craft", "task_step" }).ToArray();
         var definitions = new JsonArray(schemas.Where(t => programTools.Contains(t["function"]["name"].ToString())).Select(t => t["function"].DeepClone()).ToArray());
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
         var reviewCalls = new JsonArray();
-        using var agent = new CodexAgent();
+        using var ownedAgent = session == null ? new CodexAgent() : null;
+        var agent = session ?? ownedAgent;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(materials ? 45 : 90));
         string request = materials
             ? "Inspect the failed material collection and save a JavaScript continuation named material_recovery. Do not execute it during this review. "
@@ -110,7 +111,7 @@ public sealed class BehaviorTrial : ModSystem
         }
         finally
         {
-        File.WriteAllText(Path.Combine(Main.SavePath, "behavior-review.json"), new JsonObject
+        File.WriteAllText(Path.Combine(Main.SavePath, reportName + ".json"), new JsonObject
         { ["model"] = "gpt-6-luna", ["calls"] = calls, ["tool_calls"] = reviewCalls,
             ["replies"] = replies, ["usage"] = agent.TokenUsage }.ToJsonString());
         }
@@ -930,6 +931,7 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1")
                 {
+                    using var modelSession = new CodexAgent();
                     JsonObject defense = null;
                     if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_GUARD") == "1")
                     {
@@ -944,18 +946,36 @@ public sealed class BehaviorTrial : ModSystem
                         ["continued_defense"] = defense?["value"]?["wake"]?["continue_action"]?.DeepClone(),
                         ["reason"] = combat["value"]?["wake"]?["event"]?["reason"]?.DeepClone(),
                         ["status"] = combat["value"]?["status"]?.DeepClone(),
-                        ["state"] = combat["state"]?.DeepClone() }, materials: true);
+                        ["state"] = combat["state"]?.DeepClone() }, materials: true, session: modelSession);
                     File.WriteAllText(Path.Combine(Main.SavePath, "material-reviewed-program.json"), reviewed.ToJsonString());
                     if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_EXECUTE") == "1")
                     {
+                        int segments = Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REPAIR") == "1" ? 2 : 1;
+                        for (int segment = 0; segment < segments; segment++)
+                        {
                         if (reviewed["found"]?.GetValue<bool>() != true) throw new Exception("model did not save a runnable recovery program");
                         var before = await Call("get_state", new JsonObject());
                         var execution = await Call("run_script", new JsonObject { ["program"] = "material_recovery",
                             ["expected_revision"] = reviewed["revision"].DeepClone(), ["workflow"] = "stinger-continuation",
                             ["event_delivery"] = "script", ["seconds"] = 20 });
                         var after = await Call("get_state", new JsonObject());
-                        File.WriteAllText(Path.Combine(Main.SavePath, "material-model-execution.json"), new JsonObject
+                        File.WriteAllText(Path.Combine(Main.SavePath, segment == 0 ? "material-model-execution.json" : "material-model-repair-execution.json"), new JsonObject
                         { ["before"] = before, ["execution"] = execution, ["after"] = after }.ToJsonString());
+                        if (segment + 1 < segments)
+                        {
+                            var feedback = new JsonObject { ["workflow"] = "stinger-continuation",
+                                ["program_revision"] = reviewed["revision"].DeepClone(),
+                                ["execution"] = new JsonObject { ["ok"] = execution["ok"]?.DeepClone(), ["error"] = execution["error"]?.DeepClone(),
+                                    ["detail"] = execution["detail"]?.DeepClone(), ["tool_counts"] = execution["tool_counts"]?.DeepClone(),
+                                    ["yield_reason"] = execution["value"]?["wake"]?["event"]?["reason"]?.DeepClone() },
+                                ["inventory_before"] = new JsonArray(before["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),
+                                ["inventory_after"] = new JsonArray(after["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0).Select(i => i.DeepClone()).ToArray()),
+                                ["task_plan"] = after["task_plan"].DeepClone(),
+                                ["review_request"] = "Execution ended but the host has not verified the goal. Read the saved revision, account for actual effects, and repair missing or failed continuation without replaying completed work." };
+                            reviewed = await Review(feedback, materials: true, session: modelSession, reportName: "behavior-review-repair");
+                            File.WriteAllText(Path.Combine(Main.SavePath, "material-repaired-program.json"), reviewed.ToJsonString());
+                        }
+                        }
                         throw new Exception("bounded material model execution ended; inspect inventory and preserved handles, not model text, for progress; full acceptance remains unverified");
                     }
                     throw new Exception("material model review ended without executing the saved continuation; full acceptance remains unverified");
