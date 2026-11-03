@@ -983,18 +983,33 @@ public sealed class BehaviorTrial : ModSystem
                             ["event_delivery"] = "script", ["seconds"] = 20 });
                         var after = await Call("get_state", new JsonObject());
                         var background = new JsonArray();
+                        bool yielded = execution["value"]?["status"]?.ToString() == "yield";
+                        bool Interrupted(JsonObject state)
+                        {
+                            var passive = state["watch"]["passive_events"].AsArray().Select(e => e.ToString()).ToHashSet();
+                            return state["watch"]["pending"].AsArray().Any(e => !passive.Contains(e["kind"].ToString()));
+                        }
                         string running = after["action_tasks"].AsArray()
                             .FirstOrDefault(a => a["status"]?.ToString() == "running")?["handle"]?.ToString();
-                        if (running != null)
-                            for (int sample = 0; sample < 5; sample++)
+                        if (running != null && !yielded)
+                            for (int sample = 0; sample < 20 && !Interrupted(after); sample++)
                             {
                                 var observation = await Call("action_query", new JsonObject { ["handle"] = running, ["wait_ms"] = 1000 });
                                 background.Add(observation);
+                                after = await Call("get_state", new JsonObject());
                                 if (observation["status"]?.ToString() != "running") break;
                             }
                         after = await Call("get_state", new JsonObject());
+                        bool awaitingAction = !yielded && !Interrupted(after)
+                            && after["action_tasks"].AsArray().Any(a => a["status"]?.ToString() == "running");
                         File.WriteAllText(Path.Combine(Main.SavePath, segment == 0 ? "material-model-execution.json" : "material-model-repair-execution.json"), new JsonObject
-                        { ["before"] = before, ["execution"] = execution, ["background_observations"] = background, ["after"] = after }.ToJsonString());
+                        { ["before"] = before, ["execution"] = execution, ["background_observations"] = background,
+                            ["awaiting_action"] = awaitingAction, ["after"] = after }.ToJsonString());
+                        if (awaitingAction)
+                        {
+                            Console.WriteLine($"MATERIAL_ACTION_PENDING handle={running} observation_budget_exhausted=true repair_requested=false");
+                            break;
+                        }
                         if (segment + 1 < segments)
                         {
                             var feedback = new JsonObject { ["workflow"] = "stinger-continuation",
