@@ -287,6 +287,9 @@ namespace TerraBlind
             int[] dys = { 0, 0, 1, -1 };
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            double cpuStart = NavigationLatency.ThreadCpuMilliseconds();
+            var pauseStart = System.GC.GetTotalPauseDuration();
+            long stepTicks = 0, standTicks = 0;
             while (pq.Count > 0)
             {
                 pq.TryDequeue(out var cur, out var priority);
@@ -300,13 +303,17 @@ namespace TerraBlind
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
+                    long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     int sc = StepCost(cx, cy, nx, ny);
+                    stepTicks += System.Diagnostics.Stopwatch.GetTimestamp() - stepStarted;
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // H = 站在 (nx,ny) 还要多少,先问站不站得住。悬空格照发 H 会在空中连成
                     // 一条 H 递减的假路把人吸进死角(腐化区 1341..1343 那次)
                     if (!standCosts.TryGetValue((nx, ny), out int stand))
                     {
+                        long standStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                         stand = StandPenalty(nx, ny);
+                        standTicks += System.Diagnostics.Stopwatch.GetTimestamp() - standStarted;
                         standCosts[(nx, ny)] = stand;
                     }
                     else standCacheHits++;
@@ -323,6 +330,11 @@ namespace TerraBlind
                 foreach (var cell in dist.Keys) if (!closed.Contains(cell)) unsettled.Add(cell);
                 foreach (var cell in unsettled) dist.Remove(cell);
             }
+            double loopMs = sw.Elapsed.TotalMilliseconds;
+            double cpuMs = NavigationLatency.ThreadCpuMilliseconds() - cpuStart;
+            double gcPauseMs = (System.GC.GetTotalPauseDuration() - pauseStart).TotalMilliseconds;
+            double tickMs = 1000d / System.Diagnostics.Stopwatch.Frequency;
+            DiagLog.Write($"[field-work] goal=({gx},{gy}) wall_ms={loopMs:0.###} thread_cpu_ms={cpuMs:0.###} gc_pause_ms={gcPauseMs:0.###} step_ms={stepTicks * tickMs:0.###} stand_ms={standTicks * tickMs:0.###} other_ms={loopMs - (stepTicks + standTicks) * tickMs:0.###}");
             // 谁建的、在不在主线程:一次 ~500ms,重建风暴看得见却归不了因。
             string who = "?";
             try

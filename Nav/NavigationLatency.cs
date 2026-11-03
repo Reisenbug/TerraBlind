@@ -6,6 +6,18 @@ namespace TerraBlind;
 
 internal static class NavigationLatency
 {
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct Timespec { public long Seconds, Nanoseconds; }
+
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "clock_gettime")]
+    static extern int ClockGetTime(int clock, out Timespec time);
+
+    internal static double ThreadCpuMilliseconds()
+    {
+        if (!System.OperatingSystem.IsMacOS() || ClockGetTime(16, out var time) != 0) return double.NaN;
+        return time.Seconds * 1000d + time.Nanoseconds / 1_000_000d;
+    }
+
     static long requestedAt;
     static int requestId;
     static bool waiting;
