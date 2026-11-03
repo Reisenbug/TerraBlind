@@ -17,6 +17,9 @@ public static class AgentScript
         parameters["properties"]["program"] = new JsonObject { ["type"] = "string", ["description"] = "已保存程序名称；与code二选一。" };
         parameters["properties"]["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["description"] = "使用program时必填，必须匹配刚读取的源码版本。" };
+        parameters["properties"]["event_delivery"] = new JsonObject { ["type"] = "string",
+            ["enum"] = new JsonArray("agent", "script"),
+            ["description"] = "默认agent遇事件交回模型；script由代码调用script_events消费事件，长动作被事件暂停时返回handle/events供代码处理。显式decision_point仍交回模型。" };
         parameters["required"] = new JsonArray();
     }
 

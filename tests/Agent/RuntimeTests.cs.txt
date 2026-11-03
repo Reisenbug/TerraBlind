@@ -770,12 +770,31 @@ static class RuntimeTests
                 { ["workflow"] = "delivery", ["code"] = "tool('say',{text:'after-event-delivery'});" }, default)));
             Check(next["tool_calls"].GetValue<int>() == 1 && AgentChat.Messages.Contains("after-event-delivery")
                 && !AgentChat.Messages.Contains("must-not-run-before-event-delivery"), "same-turn follow-up was blocked by a delivered event");
+            string pausedHandle = AgentTools.Actions.Summary()[0]["handle"].ToString();
+            await Execute(AgentTools.Actions.Control(pausedHandle, "resume", null, default));
+            await PumpUntil(() => RecedingNav.Active);
+            AgentTools.Watches.Observe(JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":3,\"y\":4}]}").AsObject());
+            var local = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["workflow"] = "local-delivery", ["event_delivery"] = "script",
+                ["code"] = "const event = tool('script_events',{wait_ms:0}); tool('say',{text:'handled-without-model'}); return event;"
+            }, default)));
+            Check(local["value"]["events"].AsArray().Count == 1 && local["value"]["paused_action"].ToString() == pausedHandle
+                && !RecedingNav.Active && !AgentTools.Watches.HasPending && AgentChat.Messages.Contains("handled-without-model"),
+                "script-local event failed to pause old input or continue without a model turn");
+            var review = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["workflow"] = "local-delivery", ["event_delivery"] = "script",
+                ["code"] = "tool('decision_point',{reason:'route needs a new plan'}); tool('say',{text:'must-not-run-after-review'});"
+            }, default)));
+            Check(review["value"]["status"].ToString() == "yield" && !AgentChat.Messages.Contains("must-not-run-after-review"),
+                "local event mode swallowed an explicit request for Agent review");
         }
         finally
         {
             NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
         }
-        Console.WriteLine("PASS: script event delivery pauses inputs and consumes events before another model tool call");
+        Console.WriteLine("PASS: event delivery pauses inputs, local JS continues without a model turn, and explicit review still yields");
     }
 
     static async Task TestBoundedState()

@@ -60,6 +60,13 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var interruptedProgress = new ScriptProgress();
+        var interruptedStep = await AgentScript.Run("return step('approach', () => tool('nav_to', {}));", 30,
+            (_, _) => { }, (_, _, _) => Task.FromResult("{\"outcome\":\"interrupted\",\"handle\":\"keep-this-handle\",\"events\":[]}"),
+            _ => Task.CompletedTask, default, interruptedProgress);
+        Check(interruptedStep["error"] != null && interruptedProgress.Completed == 0
+            && interruptedProgress.Snapshot()["steps"][0]["status"].ToString() == "uncertain",
+            "locally delivered interruption incorrectly completed the workflow step");
         var judgeHandler = new DecisionHandler();
         using (var judgeHttp = new System.Net.Http.HttpClient(judgeHandler))
         {

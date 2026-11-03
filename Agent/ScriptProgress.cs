@@ -56,7 +56,8 @@ public sealed class ScriptProgress
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "running")
                 throw new InvalidOperationException("step不是当前运行步骤。");
             if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("step返回值超过8000字符。");
-            if (value is JsonObject result && (result["error"] != null || result["ok"]?.ToString() == "false"))
+            if (value is JsonObject result && (result["error"] != null || result["ok"]?.ToString() == "false"
+                || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress"))
                 throw new InvalidOperationException("step返回失败；保留证据，不能标为完成。");
             step["status"] = "completed"; step["value"] = value?.DeepClone(); revision++;
         }

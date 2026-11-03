@@ -335,7 +335,7 @@ public static partial class AgentTools
         }
     }
 
-    static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token)
+    static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
         if (name is not ("nav_to" or "gather" or "fight" or "mine_vein" or "chop_wood"))
             return await Execute(name, args, name == "action_start" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
@@ -349,6 +349,9 @@ public static partial class AgentTools
             if (current["status"]?.ToString() == "running" && pending)
             {
                 current = await Actions.Control(handle, "pause", null, root);
+                if (scriptEvents)
+                    return new JsonObject { ["outcome"] = "interrupted", ["handle"] = handle, ["action"] = current,
+                        ["events"] = await NativeAgent.OnMain(Watches.Take, token) }.ToJsonString();
                 return new JsonObject { ["host_yield"] = true, ["handle"] = handle, ["action"] = current }.ToJsonString();
             }
             if (current["status"]?.ToString() == "running") continue;
@@ -362,7 +365,8 @@ public static partial class AgentTools
                         ["actions"] = new JsonArray(current.DeepClone()) });
                     return true;
                 }, token);
-                result["host_yield"] = true;
+                if (!scriptEvents) result["host_yield"] = true;
+                else result["events"] = await NativeAgent.OnMain(Watches.Take, token);
             }
             return result.ToJsonString();
         }
@@ -403,6 +407,9 @@ public static partial class AgentTools
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
             case "run_script":
+                string eventDelivery = Text(args, "event_delivery");
+                if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
+                bool localEvents = eventDelivery == "script";
                 string source = Text(args, "code");
                 JsonObject program = null;
                 if (Text(args, "program") != "")
@@ -427,9 +434,9 @@ public static partial class AgentTools
                     return saved;
                 }, token);
                 result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
-                    (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken),
+                    (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken, localEvents),
                     async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
-                    checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                    localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
                 if (result["value"]?["wake"] is JsonObject deliveredWake)
@@ -442,6 +449,18 @@ public static partial class AgentTools
                 break;
             case "watch":
                 return (await NativeAgent.OnMain(() => Watches.Configure(args), token)).ToJsonString();
+            case "script_events":
+                int eventWait = Int(args, "wait_ms", 1000);
+                if (eventWait < 0 || eventWait > 1000) throw new ArgumentException("wait_ms需要0..1000。");
+                var eventClock = Stopwatch.StartNew();
+                while (!await NativeAgent.OnMain(() => Watches.HasPending, token) && eventClock.ElapsedMilliseconds < eventWait)
+                    await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
+                if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
+                    return new JsonObject { ["events"] = new JsonArray(), ["paused_action"] = null }.ToJsonString();
+                string eventHandle = Actions.ActiveHandle;
+                if (eventHandle != null) await Actions.Control(eventHandle, "pause", null, token);
+                return new JsonObject { ["events"] = await NativeAgent.OnMain(Watches.Take, token),
+                    ["paused_action"] = eventHandle }.ToJsonString();
             case "decision_point":
                 return new JsonObject { ["status"] = "yield", ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason")), token) }.ToJsonString();
             case "action_start":
