@@ -182,21 +182,33 @@ static class ScriptTests
         Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
             && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
         Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
+        var activityProgress = new ScriptProgress();
         var activityReport = await AgentScript.Run("tool('effect'); for(let i=0;i<14;i++) tool('get_state'); tool('action_control',{command:'pause'});", 5,
-            (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default);
+            (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default, activityProgress);
         Check(activityReport["trace"].AsArray().Count == 12 && activityReport["tool_counts"]["effect"].GetValue<int>() == 1
             && activityReport["tool_counts"]["get_state"].GetValue<int>() == 14
             && activityReport["tool_counts"]["action_control.pause"].GetValue<int>() == 1
             && activityReport["tool_counts"]["action_control.resume"] == null,
             "script activity summary lost earlier calls or confused pause with resume");
+        Check(activityProgress.Summary()["last_execution"]?["tool_counts"]?["effect"]?.GetValue<int>() == 1
+            && activityProgress.Snapshot()["last_segment"]?["tool_calls"]?.GetValue<int>() == 16,
+            "workflow continuation lost activity outside its recent-call window");
+        await AgentScript.Run("tool('get_state'); return {decision:'resume later'};", 5,
+            (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default, activityProgress);
+        var latestActivity = activityProgress.Summary()["last_execution"];
+        Check(latestActivity["tool_counts"]["get_state"].GetValue<int>() == 1
+            && latestActivity["tool_counts"]["effect"] == null && latestActivity["tool_calls"].GetValue<int>() == 1,
+            "query-only continuation inherited an earlier segment's effects");
         var maskedFailure = await AgentScript.Run("const a=tool('action_start'); tool('action_query',{handle:a.handle});", 5,
             (name, args) => { if (name == "action_query" && args["handle"] == null) throw new ArgumentException("missing handle"); },
             (_, _, _) => Task.FromResult("{\"error\":\"action_busy\",\"active_handle\":\"defense-owner\"}"),
-            _ => Task.CompletedTask, default);
+            _ => Task.CompletedTask, default, activityProgress);
         Check(!maskedFailure["ok"].GetValue<bool>() && maskedFailure["failure"]["tool"].ToString() == "action_start"
             && maskedFailure["failure"]["evidence"]["error"].ToString() == "action_busy"
             && maskedFailure["failure"]["evidence"]["active_handle"].ToString() == "defense-owner",
             "later argument error hid the original input conflict and owning handle");
+        Check(activityProgress.Summary()["last_execution"]["failure"]["evidence"]["active_handle"].ToString() == "defense-owner",
+            "workflow state discarded the failure that prevents continuation");
         var progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;

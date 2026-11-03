@@ -102,6 +102,7 @@ public sealed class BehaviorTrial : ModSystem
                 var workflows = new JsonObject();
                 foreach (var workflow in state["script_workflows"].AsObject())
                     workflows[workflow.Key] = new JsonObject { ["segment"] = workflow.Value["segment"]?.DeepClone(),
+                        ["last_execution"] = workflow.Value["last_execution"]?.DeepClone(),
                         ["steps"] = new JsonArray(workflow.Value["steps"].AsArray().Select(step => (JsonNode)new JsonObject
                         { ["id"] = step["id"]?.DeepClone(), ["status"] = step["status"]?.DeepClone() }).ToArray()) };
                 compact["script_workflows"] = workflows;

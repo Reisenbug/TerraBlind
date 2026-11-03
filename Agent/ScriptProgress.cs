@@ -80,7 +80,9 @@ public sealed class ScriptProgress
         {
             foreach (var step in steps.Values.Where(s => s["status"].ToString() == "running")) step["status"] = "uncertain";
             last = new JsonObject { ["error"] = result["error"]?.DeepClone(), ["detail"] = result["detail"]?.DeepClone(),
-                ["value"] = result["value"]?.DeepClone() };
+                ["value"] = result["value"]?.DeepClone(), ["tool_counts"] = result["tool_counts"]?.DeepClone(),
+                ["tool_calls"] = result["tool_calls"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
+                ["failure"] = result["failure"]?.DeepClone() };
             running = false; revision++;
         }
     }
@@ -117,8 +119,16 @@ public sealed class ScriptProgress
                 { brief.Remove("value"); brief["value_omitted"] = true; }
                 saved.Add(brief);
             }
+            JsonObject execution = null;
+            if (last != null)
+            {
+                execution = new JsonObject();
+                foreach (string field in new[] { "error", "tool_counts", "tool_calls", "elapsed_ms", "failure" })
+                    execution[field] = last[field]?.DeepClone();
+            }
             return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
                 ["steps"] = saved, ["last_error"] = last?["error"]?.DeepClone(),
+                ["last_execution"] = execution,
                 ["detail_tool"] = "script_progress" };
         }
     }
