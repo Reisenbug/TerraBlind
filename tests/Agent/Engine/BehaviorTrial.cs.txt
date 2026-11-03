@@ -911,7 +911,28 @@ public sealed class BehaviorTrial : ModSystem
                                 const blocking=facts.hazards.filter(h=>h.kind!=='contact_damage'||h.on_direct_corridor||overlaps(h));
                                 if(!blocking.length){selected={probe:p,facts:{hazards:facts.hazards,distance:facts.approach_direct_distance,solid_cells:facts.direct_corridor_solid_cells.length},reason:'Current shot line clear; no reported hazard on direct corridor or candidate body; nearby non-contact thorns do not veto stance. Actual route remains unverified.'};break;}
                               }
-                              if(!selected) tool('decision_point',{reason:'No acceptable stance after default and custom probes; change equipment or terrain plan. Survey: '+JSON.stringify(custom)});
+                              if(!selected) {
+                                const blocker=scene.terrain.direct_line.blocker;
+                                if(!blocker) tool('decision_point',{reason:'No acceptable stance or measured obstruction; choose another source or weapon'});
+                                const facts=tool('opportunity_assess',{x:blocker.x,y:blocker.y});
+                                if(facts.error||facts.hazards.length||!facts.target.has_tile)
+                                  tool('decision_point',{reason:'Obstruction cannot be safely selected for a one-tile edit: '+JSON.stringify({blocker,error:facts.error,hazards:facts.hazards})});
+                                let pick=null;
+                                for(const item of tool('get_state').inventory_slots.filter(i=>i.type>0)) {
+                                  const info=tool('item_info',{slot:item.slot});
+                                  if(info.pick>0&&(!pick||info.pick>pick.power)) pick={slot:item.slot,power:info.pick};
+                                }
+                                if(!pick) tool('decision_point',{reason:'No pickaxe for the measured obstruction; choose another source or equipment'});
+                                const edited=tool('use_item',{slot:pick.slot,x:blocker.x,y:blocker.y,strict:true,duration_ticks:0});
+                                const after=tool('npc_combat_observe',target);
+                                step('combat-obstruction-edit:'+action.attempt+':'+blocker.x+':'+blocker.y,()=>({target,blocker,pick,
+                                  result:{outcome:edited.outcome,error:edited.error,reason:edited.reason},
+                                  after:{error:after.error,direct_line:after.terrain?.direct_line},original_handle:action.handle}));
+                                if(edited.outcome!=='removed'||after.error||!after.terrain.direct_line.clear)
+                                  tool('decision_point',{reason:'One-tile obstruction edit did not establish a clear shot; inspect edit evidence before changing terrain again'});
+                                state=tool('get_state');
+                                return;
+                              }
                               tool('script_events',{wait_ms:0});
                               const moved=tool('nav_to',{x:selected.probe.support_x,y:selected.probe.support_y-1});
                               if(moved.done!==true) tool('decision_point',{reason:'Combat reposition interrupted; preserve handle '+moved.handle+'; outcome='+moved.outcome+'; hp='+moved.action?.observation?.hp});
@@ -964,7 +985,12 @@ public sealed class BehaviorTrial : ModSystem
                                   continue;
                                 }
                                 recovery.retreat_candidates.push({anchor,enemyDistance,hazards:facts.hazards});
-                                if(!facts.hazards.length){retreat={anchor,facts};break;}
+                                const cx=anchor.x*16+8,cy=(anchor.y+1)*16-state.player.height/2;
+                                const overlaps=h=>h.x*16<cx+state.player.width/2&&(h.x+1)*16>cx-state.player.width/2
+                                  &&h.y*16<cy+state.player.height/2&&(h.y+1)*16>cy-state.player.height/2;
+                                if(!facts.hazards.some(h=>h.kind!=='contact_damage'||h.on_direct_corridor||overlaps(h))) {
+                                  retreat={anchor,facts};break;
+                                }
                               }
                               if(retreat) {
                                 tool('script_events',{wait_ms:0});
