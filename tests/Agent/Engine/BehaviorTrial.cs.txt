@@ -188,11 +188,12 @@ public sealed class BehaviorTrial : ModSystem
         var result = await Call("run_script", new JsonObject { ["program"] = "combat_loot_return", ["expected_revision"] = saved["revision"].DeepClone(),
             ["workflow"] = "behavior-trial", ["event_delivery"] = "script" });
         if (result["error"] != null || result["value"]?["returned"]?.GetValue<bool>() != true) throw new Exception("behavior did not complete: " + result.ToJsonString());
+        var finalState = await Call("get_state", new JsonObject());
         await OnMain(() =>
         {
             if (Main.LocalPlayer.dead || movingAttackFrames == 0 || result["value"]?["gained"]?.GetValue<int>() <= 0)
                 throw new Exception("native movement/combat/loot evidence missing");
-            var originalActions = AgentTools.Actions.Summary().Where(a => a["tool"]?.ToString() == "nav_to").ToArray();
+            var originalActions = finalState["action_tasks"].AsArray().Where(a => a["tool"]?.ToString() == "nav_to").ToArray();
             if (originalActions.Length != 1 || originalActions[0]["handle"]?.ToString() != result["value"]?["original_handle"]?.ToString()
                 || result["program"]?["revision"]?.GetValue<int>() != 2)
                 throw new Exception("edited program replayed the original task or did not use revision 2");
