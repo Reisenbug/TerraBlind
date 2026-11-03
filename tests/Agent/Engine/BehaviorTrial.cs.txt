@@ -37,13 +37,13 @@ public sealed class BehaviorTrial : ModSystem
     {
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new Exception("production mod missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentControlSession.DescribeClaims(schemas);
         AgentScript.DescribePrograms(schemas);
         var allowed = materials
             ? new[] { "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
             : new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
-        var programTools = allowed.Concat(new[] { "watch", "fight", "action_start", "action_control", "action_query", "script_events",
-            "decision_point", "jev_judge", "nearby_drops", "gather", "script_progress", "nav_to", "use_item", "craft", "task_step" }).ToArray();
-        var definitions = new JsonArray(schemas.Where(t => programTools.Contains(t["function"]["name"].ToString())).Select(t => t["function"].DeepClone()).ToArray());
+        var definitions = new JsonArray(schemas.Where(t => t["function"]["name"].ToString() is not ("run_script" or "ask"))
+            .Select(t => t["function"].DeepClone()).ToArray());
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
