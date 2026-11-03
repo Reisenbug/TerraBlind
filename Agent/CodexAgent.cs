@@ -151,6 +151,7 @@ public sealed class CodexAgent : IDisposable
             "memory_tool", "code_mode", "view_image", "skill_search" })
         { start.ArgumentList.Add("-c"); start.ArgumentList.Add($"features.{feature}=false"); }
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.skip_host_skill_discovery=true");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("skills.include_instructions=false");
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("project_doc_max_bytes=0");
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("web_search=\"disabled\"");
         if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
