@@ -13,6 +13,11 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var watch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
+        watch["parameters"]["properties"]["events"]["items"]["enum"].AsArray().Add("nearby_drop");
+        watch["parameters"]["properties"]["events"]["items"]["enum"].AsArray().Add("nearby_npc_killed");
+        watch["description"] = watch["description"].ToString()
+            + "另支持nearby_drop(附近可见掉落，坐标单位格，需用nearby_drops刷新)和nearby_npc_killed(仅单人原生死亡事件，不证明谁击杀、不保证有掉落)。script本地处理的事件不消耗模型唤醒额度，显式decision_point仍受额度限制。不代表已拾取。";
         var parameters = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"]["parameters"];
         parameters["properties"]["program"] = new JsonObject { ["type"] = "string", ["description"] = "已保存程序名称；与code二选一。" };
         parameters["properties"]["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,

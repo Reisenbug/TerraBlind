@@ -390,6 +390,8 @@ public static partial class AgentTools
         JsonObject result;
         switch (name)
         {
+            case "nearby_drops":
+                return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
             case "jev_judge":
                 string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
                 return (await ScriptDecision.Judge(HarvestHttp, decisionKey, args, token)).ToJsonString();
@@ -433,10 +435,18 @@ public static partial class AgentTools
                     }
                     return saved;
                 }, token);
-                result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
-                    (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken, localEvents),
-                    async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
-                    localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                await NativeAgent.OnMain(() => { Watches.LocalDelivery = localEvents; return true; }, token);
+                try
+                {
+                    result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
+                        (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken, localEvents),
+                        async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
+                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                }
+                finally
+                {
+                    await NativeAgent.OnMain(() => { Watches.LocalDelivery = false; return true; }, default);
+                }
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
                 if (result["value"]?["wake"] is JsonObject deliveredWake)

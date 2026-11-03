@@ -16,6 +16,7 @@
     <Compile Include="../../Agent/AgentTools.Control.cs" Link="AgentTools.Control.cs" />
     <Compile Include="ControlTests.cs.txt" />
     <Compile Include="../../Agent/AgentWatch.cs" Link="AgentWatch.cs" />
+    <Compile Include="../../Agent/NearbyDrops.cs" Link="NearbyDrops.cs" />
     <Compile Include="../../Agent/NavigationProgress.cs" Link="NavigationProgress.cs" />
     <Compile Include="../../Agent/CombatLoadout.cs" Link="CombatLoadout.cs" />
     <Compile Include="../../Agent/TerrainInspection.cs" Link="TerrainInspection.cs" />

@@ -8,9 +8,11 @@ namespace TerraBlind;
 public sealed class AgentWatch
 {
     readonly HashSet<string> events = new(), seen = new();
+    readonly HashSet<string> visibleDrops = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
-    int issued;
+    int issued, wakeCount;
+    public bool LocalDelivery { get; set; }
     int samples;
     bool configured;
     JsonObject lastObservation;
@@ -19,6 +21,7 @@ public sealed class AgentWatch
     public int HealthBelow { get; private set; } = 80;
     public bool HasPending => pending.Count > 0;
     public bool Armed => events.Count > 0;
+    public bool Subscribed(string kind) => events.Contains(kind);
     public int Samples => samples;
     public JsonObject LastObservation => lastObservation?.DeepClone() as JsonObject;
     public void IgnorePriorActions(JsonArray actions)
@@ -33,7 +36,7 @@ public sealed class AgentWatch
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
-        if (requested.Any(x => x is not ("nearby_chest" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
+        if (requested.Any(x => x is not ("nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
             throw new ArgumentException("不支持的观察事件。");
         int radius = args["radius"]?.GetValue<int>() ?? 25, health = args["health_below"]?.GetValue<int>() ?? 80;
         if (radius is < 1 or > 60 || health is < 1 or > 500) throw new ArgumentException("radius须1..60，health_below须1..500。");
@@ -49,13 +52,6 @@ public sealed class AgentWatch
         lastObservation = new JsonObject { ["hp"] = state["hp"]?.DeepClone(), ["dead"] = state["dead"]?.DeepClone(),
             ["suffocating"] = state["suffocating"]?.DeepClone(),
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
-        void Emit(string kind, string key, JsonNode evidence)
-        {
-            if (!events.Contains(kind) || issued >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
-            var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key,
-                ["evidence"] = evidence?.DeepClone() };
-            pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
-        }
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
         string dangerKey = running == null ? "task" : running["handle"] + ":" + running["attempt"];
         if (state["item_counts"] is JsonObject current)
@@ -80,9 +76,24 @@ public sealed class AgentWatch
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         foreach (var chest in state["chests"]?.AsArray() ?? new JsonArray())
             Emit("nearby_chest", chest["x"] + "," + chest["y"], chest);
+        if (state["drops"] is JsonArray drops)
+        {
+            var currentDrops = drops.Select(drop => drop["who"] + ":" + drop["item_type"]).ToHashSet();
+            foreach (string vanished in visibleDrops.Except(currentDrops)) seen.Remove("nearby_drop:" + vanished);
+            visibleDrops.Clear(); visibleDrops.UnionWith(currentDrops);
+            foreach (var drop in drops) Emit("nearby_drop", drop["who"] + ":" + drop["item_type"], drop);
+        }
         foreach (var action in state["actions"]?.AsArray() ?? new JsonArray())
             if (action["status"]?.ToString() == "failed" || action["status"]?.ToString() == "completed" && action["inline"]?.GetValue<bool>() != true)
                 Emit("action_finished", action["handle"] + ":" + action["attempt"], action);
+    }
+
+    public void Emit(string kind, string key, JsonNode evidence)
+    {
+        if (!events.Contains(kind) || !LocalDelivery && wakeCount >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
+        if (!LocalDelivery) wakeCount++;
+        var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
+        pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 
     public JsonArray Take()
@@ -96,7 +107,8 @@ public sealed class AgentWatch
     public JsonObject Request(string reason)
     {
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("决策点需要原因。");
-        if (issued >= 6) throw new InvalidOperationException("本指令唤醒预算已用完，请报告阻塞或完成。");
+        if (wakeCount >= 6) throw new InvalidOperationException("本指令唤醒预算已用完，请报告阻塞或完成。");
+        wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = "decision_point", ["reason"] = reason };
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
         return (JsonObject)value.DeepClone();
@@ -105,7 +117,7 @@ public sealed class AgentWatch
     public JsonObject Summary() => new()
     {
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = issued, ["wake_limit"] = 6,
+        ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = Pending()["events"].DeepClone(), ["samples"] = samples, ["last_observation"] = LastObservation,
         ["history"] = new JsonArray(history.Select(value => (JsonNode)new JsonObject
             { ["id"] = value["id"]?.DeepClone(), ["kind"] = value["kind"]?.DeepClone(), ["key"] = value["key"]?.DeepClone() }).ToArray())
@@ -114,13 +126,13 @@ public sealed class AgentWatch
     public JsonObject Snapshot() => new()
     {
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = issued, ["wake_limit"] = 6,
+        ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()),
         ["history"] = new JsonArray(history.Select(x => x.DeepClone()).ToArray()), ["scope"] = "current_instruction",
         ["samples"] = samples, ["last_observation"] = lastObservation?.DeepClone()
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); pending.Clear(); history.Clear(); issued = samples = 0; configured = false; lastObservation = itemCounts = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

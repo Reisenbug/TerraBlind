@@ -16,7 +16,14 @@ public class AgentTaskEvidence : GlobalNPC
     public override void OnKill(NPC npc)
     {
         if (Main.netMode == NetmodeID.SinglePlayer)
+        {
             Kills[npc.type] = Kills.GetValueOrDefault(npc.type) + 1;
+            if (Config.I.AgentEnabled && AgentNetwork.CanAutomate && AgentTools.Watches.Subscribed("nearby_npc_killed")
+                && Microsoft.Xna.Framework.Vector2.Distance(npc.Center, Main.LocalPlayer.Center) / 16 <= AgentTools.Watches.Radius)
+                AgentTools.Watches.Emit("nearby_npc_killed", npc.type + ":" + Kills[npc.type], new JsonObject
+                { ["npc_type"] = npc.type, ["x"] = npc.Center.X / 16, ["y"] = npc.Center.Y / 16,
+                    ["killer_verified"] = false, ["drops_verified"] = false });
+        }
     }
 
     internal static int Measure(JsonObject condition)

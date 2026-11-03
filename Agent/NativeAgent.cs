@@ -175,6 +175,7 @@ public class NativeAgent : ModSystem
                     .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
+                ["drops"] = AgentTools.Watches.Subscribed("nearby_drop") ? NearbyDrops.Read(AgentTools.Watches.Radius) : null,
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());

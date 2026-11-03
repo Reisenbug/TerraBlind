@@ -43,6 +43,38 @@ static class RuntimeTests
         Agent.Load();
         try
         {
+            var dropWatch = new AgentWatch();
+            dropWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_drop\",\"nearby_npc_killed\"]}").AsObject());
+            var dropState = JsonNode.Parse("{\"drops\":[{\"who\":2,\"item_type\":209,\"stack\":1,\"x\":10,\"y\":12}]}").AsObject();
+            dropWatch.Observe(dropState); dropWatch.Observe(dropState);
+            Check(dropWatch.Take().Count == 1, "unchanged drop repeatedly interrupted the script");
+            dropWatch.Observe(new JsonObject { ["drops"] = new JsonArray() });
+            dropWatch.Observe(dropState);
+            Check(dropWatch.Take().Count == 1, "reused item slot suppressed a new visible drop");
+            dropWatch.Emit("nearby_npc_killed", "42:1", new JsonObject { ["npc_type"] = 42, ["killer_verified"] = false });
+            Check(dropWatch.Take()[0]["evidence"]["killer_verified"].GetValue<bool>() == false,
+                "nearby death falsely attributed a kill to the player");
+            dropWatch.Reset(); dropWatch.LocalDelivery = true;
+            dropWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_drop\"]}").AsObject());
+            for (int drop = 0; drop < 10; drop++)
+            {
+                dropWatch.Observe(new JsonObject { ["drops"] = new JsonArray() });
+                dropWatch.Observe(dropState);
+                Check(dropWatch.Take().Count == 1, "local event processing exhausted model wake budget");
+            }
+            Check(dropWatch.Summary()["wake_count"].GetValue<int>() == 0, "local events charged model wakes");
+            Check(dropWatch.Request("needs a new strategy")["kind"].ToString() == "decision_point", "local events prevented explicit review");
+            var oldDrop = Game.item[0];
+            try
+            {
+                Game.item[0] = new Terraria.Item { active = true, type = 209, stack = 2, Name = "Stinger",
+                    position = new Microsoft.Xna.Framework.Vector2(Game.LocalPlayer.Center.X, Game.LocalPlayer.Center.Y) };
+                var observedDrop = NearbyDrops.Read(5).First(drop => drop["who"].GetValue<int>() == 0);
+                Check(observedDrop["stack"].GetValue<int>() == 2 && !observedDrop["route_safety_assessed"].GetValue<bool>(),
+                    "drop observation omitted actual stack or invented safety");
+            }
+            finally { Game.item[0] = oldDrop; }
+            Console.WriteLine("PASS: nearby drop observations deduplicate visibility, handle reused slots and keep death distinct from verified loot");
             AgentPermissions.Reset();
             var claimed = JsonNode.Parse(await Execute(AgentTools.Execute("control", new JsonObject
             {
