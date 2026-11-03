@@ -64,6 +64,7 @@ public static class AgentScript
         + "发现机会先opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；ok只表示查询完成，即使有岩浆或陷阱也可为true，不是安全、可达或值得拿的结论。直线距离不是可达证明。"
         + "把每次选择及原因保存在稳定step结果中；跳过不能写成已收集。多格物体可能发多个tile_cell事件，按现场物体合并处理。"
         + "step单个结果上限8000字符；只存选择理由、目标坐标、handle、outcome和实际所得等必要证据，不复制工具返回中整份task_plan、历史和背包。需要完整动作证据时用action_query读取原handle，不能用截断的记录冒充完成证明。"
+        + "print用于诊断，每条最多1000字符；log_truncations列出被截断的日志及原长度。截断后未出现的字段不代表不存在，不能据此下结论。把决策所需字段从工具结果中提取后return，避免print整份状态或多份查询；JSON字符串直接print即可，不会再次转义。"
         + "已选定局部采集目标时给gather传source_area包住该物体和预计掉落位置，防止默认最近来源选择重新选回已跳过的目标；来源区域不是导航路径限制。"
         + "插入动作前保存并暂停原action句柄，插入后核对实际库存增量或箱子返回got；失败保留证据，不记成功。继续时resume同一原句柄，而不是新建重复目标。"
         + "暂停会释放该动作的攻击和移动，不代表仍在防身。敌怪附近需要连续只读观察时，可明确action_start fight临时防身（短seconds、有限max_dist），观察放在try中，finally用action_control cancel该防身句柄并等待释放，再导航、用物品或resume原任务；不能让两个动作同时持有输入。防身会改变人物和敌怪位置，行动前刷新现场；不保证安全，不可绕过攻击/闪避禁令或忽略危险事件。"
@@ -99,6 +100,7 @@ public static class AgentScript
         var clock = Stopwatch.StartNew();
         var trace = new Queue<JsonNode>();
         var logs = new JsonArray();
+        var logTruncations = new JsonArray();
         var toolCounts = new JsonObject();
         int calls = 0;
         bool inTool = false;
@@ -113,7 +115,7 @@ public static class AgentScript
                 ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
                 ["tool_counts"] = toolCounts.DeepClone(),
-                ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs,
+                ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs, ["log_truncations"] = logTruncations,
                 ["failure"] = lastFailure?.DeepClone()
             };
             if (omittedOutputChars.HasValue) result["output_limit"] = new JsonObject
@@ -202,6 +204,8 @@ public static class AgentScript
                 {
                     budget.Token.ThrowIfCancellationRequested();
                     if (logs.Count >= 20) throw new InvalidOperationException("脚本最多print 20次。");
+                    if (text?.Length > 1000) logTruncations.Add(new JsonObject
+                        { ["index"] = logs.Count, ["original_chars"] = text.Length, ["retained_chars"] = 1000 });
                     logs.Add(Clip(text ?? "null", 1000));
                 }));
                 engine.SetValue("__stepEnter", new Func<string, string>(id =>
@@ -227,7 +231,7 @@ public static class AgentScript
                                 }
                             });
                         };
-                        const print = value => log(stringify(value));
+                        const print = value => log(typeof value === 'string' ? value : stringify(value));
                         const step = (id, action) => {
                             const saved = parse(enter(id));
                             if (!saved.execute) return saved.value;

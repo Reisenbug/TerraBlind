@@ -60,6 +60,18 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var printedEvidence = await AgentScript.Run("const evidence={type:61,frame_x:144}; print(evidence); print(JSON.stringify(evidence)); print('x'.repeat(1200)); return evidence;",
+            5, (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default);
+        Check(printedEvidence["ok"].GetValue<bool>()
+            && printedEvidence["logs"][0].GetValue<string>() == printedEvidence["logs"][1].GetValue<string>()
+            && JsonNode.Parse(printedEvidence["logs"][1].GetValue<string>())["frame_x"].GetValue<int>() == 144,
+            "printing serialized evidence double-escaped it instead of preserving readable JSON");
+        Check(printedEvidence["log_truncations"].AsArray().Count == 1
+            && printedEvidence["log_truncations"][0]["index"].GetValue<int>() == 2
+            && printedEvidence["log_truncations"][0]["original_chars"].GetValue<int>() == 1200
+            && printedEvidence["log_truncations"][0]["retained_chars"].GetValue<int>() == 1000
+            && printedEvidence["value"]["frame_x"].GetValue<int>() == 144,
+            "truncated diagnostics hid missing evidence or damaged the separately returned result");
         int outputEffects = 0, outputStops = 0;
         var outputProgress = new ScriptProgress();
         Task<string> OutputEffect(string name, JsonObject args, CancellationToken token)
