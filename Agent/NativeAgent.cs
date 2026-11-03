@@ -40,6 +40,27 @@ public class NativeAgent : ModSystem
     }
     public static string Status { get; private set; } = "idle";
 
+    internal static JsonArray ObserveTiles(Player player)
+    {
+        var result = new JsonArray();
+        var watch = AgentTools.Watches;
+        if (!watch.Subscribed("nearby_tile")) return result;
+        int px = (int)(player.Center.X / 16), py = (int)(player.Center.Y / 16), radius = watch.Radius;
+        for (int x = Math.Max(0, px - radius); x <= Math.Min(Main.maxTilesX - 1, px + radius); x++)
+            for (int y = Math.Max(0, py - radius); y <= Math.Min(Main.maxTilesY - 1, py + radius); y++)
+            {
+                int distance = Math.Abs(x - px) + Math.Abs(y - py);
+                if (distance > radius) continue;
+                var tile = Main.tile[x, y];
+                if (!tile.HasTile || !watch.WatchesTile(tile.TileType)) continue;
+                result.Add(new JsonObject { ["tile_type"] = (int)tile.TileType, ["x"] = x, ["y"] = y,
+                    ["distance_tiles_manhattan"] = distance, ["liquid_amount"] = (int)tile.LiquidAmount,
+                    ["liquid_type"] = tile.LiquidType, ["route_assessed"] = false,
+                    ["unit"] = "tile_cell", ["collection_verified"] = false });
+            }
+        return result;
+    }
+
     public override void Load()
     {
         if (Main.dedServ) return;
@@ -175,6 +196,7 @@ public class NativeAgent : ModSystem
                     .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
+                ["tiles"] = ObserveTiles(p),
                 ["drops"] = AgentTools.Watches.Subscribed("nearby_drop") ? NearbyDrops.Read(AgentTools.Watches.Radius) : null,
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)

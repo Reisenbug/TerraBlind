@@ -9,6 +9,7 @@ public sealed class AgentWatch
 {
     readonly HashSet<string> events = new(), seen = new();
     readonly HashSet<string> visibleDrops = new();
+    readonly HashSet<int> tileTypes = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
@@ -22,6 +23,7 @@ public sealed class AgentWatch
     public bool HasPending => pending.Count > 0;
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
+    public bool WatchesTile(int type) => tileTypes.Contains(type);
     public int Samples => samples;
     public JsonObject LastObservation => lastObservation?.DeepClone() as JsonObject;
     public void IgnorePriorActions(JsonArray actions)
@@ -36,10 +38,15 @@ public sealed class AgentWatch
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
-        if (requested.Any(x => x is not ("nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
+        if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
             throw new ArgumentException("不支持的观察事件。");
         int radius = args["radius"]?.GetValue<int>() ?? 25, health = args["health_below"]?.GetValue<int>() ?? 80;
         if (radius is < 1 or > 60 || health is < 1 or > 500) throw new ArgumentException("radius须1..60，health_below须1..500。");
+        var types = args["tile_types"]?.AsArray().Select(x => x.GetValue<int>()).Distinct().ToArray() ?? Array.Empty<int>();
+        if (types.Length > 64 || types.Any(x => x < 0 || x > ushort.MaxValue)
+            || requested.Contains("nearby_tile") && types.Length == 0)
+            throw new ArgumentException("nearby_tile需要1..64个tile_types方块编号，请通过game_catalog查询。");
+        tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; HealthBelow = health;
         configured = true;
         return Snapshot();
@@ -76,6 +83,9 @@ public sealed class AgentWatch
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         foreach (var chest in state["chests"]?.AsArray() ?? new JsonArray())
             Emit("nearby_chest", chest["x"] + "," + chest["y"], chest);
+        foreach (var tile in state["tiles"]?.AsArray() ?? new JsonArray())
+            if (tile["tile_type"] is JsonValue type && tileTypes.Contains(type.GetValue<int>()))
+                Emit("nearby_tile", tile["tile_type"] + ":" + tile["x"] + "," + tile["y"], tile);
         if (state["drops"] is JsonArray drops)
         {
             var currentDrops = drops.Select(drop => drop["who"] + ":" + drop["item_type"]).ToHashSet();
@@ -116,6 +126,7 @@ public sealed class AgentWatch
 
     public JsonObject Summary() => new()
     {
+        ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = Pending()["events"].DeepClone(), ["samples"] = samples, ["last_observation"] = LastObservation,
@@ -125,6 +136,7 @@ public sealed class AgentWatch
 
     public JsonObject Snapshot() => new()
     {
+        ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()),
@@ -133,6 +145,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

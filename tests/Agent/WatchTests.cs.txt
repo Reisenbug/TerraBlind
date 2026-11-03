@@ -9,6 +9,41 @@ static class WatchTests
 
     public static async Task Run()
     {
+        var tilesWatch = AgentTools.Watches;
+        tilesWatch.Reset();
+        tilesWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_tile\"],\"tile_types\":[12,59],\"radius\":5}").AsObject());
+        tilesWatch.LocalDelivery = true;
+        var player = new Terraria.Player { position = new System.Numerics.Vector2(1600, 1600), width = 0, height = 0 };
+        var oldTiles = Terraria.Main.tile;
+        Terraria.Main.tile = new Terraria.Tile[1000, 1000];
+        try
+        {
+            Terraria.Main.tile[103, 102] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            Terraria.Main.tile[104, 102] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            Terraria.Main.tile[101, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            var tiles = NativeAgent.ObserveTiles(player);
+            Check(tiles.Count == 1 && tiles[0]["x"].GetValue<int>() == 103
+                && !tiles[0]["route_assessed"].GetValue<bool>(), "tile scanner confused range, subscription or reachability");
+            var observation = new JsonObject { ["hp"] = 100, ["tiles"] = tiles };
+            tilesWatch.Observe(observation);
+            Check(tilesWatch.Take().Count == 1, "subscribed tile was not observed");
+            tilesWatch.Observe(observation);
+            Check(!tilesWatch.HasPending, "unchanged tile repeatedly interrupted execution");
+            for (int i = 0; i < 8; i++)
+                tilesWatch.Observe(new JsonObject { ["tiles"] = new JsonArray(new JsonObject
+                    { ["tile_type"] = 59, ["x"] = 100 + i, ["y"] = 100 }) });
+            Check(tilesWatch.Take().Count == 8 && tilesWatch.Snapshot()["wake_count"].GetValue<int>() == 0,
+                "local opportunity handling consumed model budget or lost later resources");
+            try
+            {
+                tilesWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_tile\"]}").AsObject());
+                throw new Exception("empty tile subscription accepted");
+            }
+            catch (ArgumentException) { }
+            Check(tilesWatch.WatchesTile(12), "invalid reconfiguration destroyed existing watch");
+        }
+        finally { Terraria.Main.tile = oldTiles; tilesWatch.Reset(); }
+        Console.WriteLine("PASS: subscribed world tiles observed within range without claiming route safety or consuming model wakes");
         var recovery = new AgentRecovery();
         var bad = JsonNode.Parse("{\"name\":\"wrong\"}").AsObject();
         for (int i = 0; i < 3; i++) recovery.Record("find_tiles", bad, "{\"error\":\"ambiguous_tile_name\",\"name_candidates\":[{\"internal\":\"Heart\"}]}");
