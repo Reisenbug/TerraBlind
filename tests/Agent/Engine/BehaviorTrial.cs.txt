@@ -873,7 +873,19 @@ public sealed class BehaviorTrial : ModSystem
                               const target={npc:detail.candidate.who,npc_type:detail.candidate.npc_type};
                               const scene=tool('npc_combat_observe',target);
                               if(scene.error) tool('decision_point',{reason:'Obstructed target changed; inspect sources before resuming'});
-                              const candidates=scene.terrain.stance_probes.filter(p=>p.shot_line.clear)
+                              const terrain=tool('inspect_terrain',{radius:12}), cells=[];
+                              const defaults=new Set(scene.terrain.stance_probes.map(p=>p.support_x+':'+p.support_y));
+                              for(let y=1;y<terrain.rows.length;y++) for(let x=0;x<terrain.rows[y].length;x++) {
+                                const cell={x:terrain.origin.x+x,y:terrain.origin.y+y};
+                                if('#='.includes(terrain.rows[y][x])&&terrain.rows[y-1][x]==='.'&&!defaults.has(cell.x+':'+cell.y)) cells.push(cell);
+                              }
+                              cells.sort((a,b)=>Math.hypot(a.x*16+8-scene.target_pos.x,a.y*16-state.player.height/2-scene.target_pos.y)
+                                -Math.hypot(b.x*16+8-scene.target_pos.x,b.y*16-state.player.height/2-scene.target_pos.y));
+                              const surveyed=cells.length?tool('npc_combat_observe',{...target,stance_cells:cells.slice(0,12)}):null;
+                              if(surveyed?.error) tool('decision_point',{reason:'Custom stance survey target changed; inspect current sources'});
+                              const custom=surveyed?.requested_stances??[];
+                              const candidates=[...scene.terrain.stance_probes,...custom.filter(p=>p.supported&&p.body_fits&&!p.support_half_block&&p.support_slope===0)]
+                                .filter(p=>p.shot_line?.clear)
                                 .sort((a,b)=>Math.hypot(a.x-state.player.pos.x,a.y-state.player.pos.y)-Math.hypot(b.x-state.player.pos.x,b.y-state.player.pos.y));
                               let selected=null;
                               for(const p of candidates) {
@@ -881,14 +893,14 @@ public sealed class BehaviorTrial : ModSystem
                                 const overlaps=h=>h.x*16<p.x+state.player.width/2&&(h.x+1)*16>p.x-state.player.width/2
                                   &&h.y*16<p.y+state.player.height/2&&(h.y+1)*16>p.y-state.player.height/2;
                                 const blocking=facts.hazards.filter(h=>h.kind!=='contact_damage'||h.on_direct_corridor||overlaps(h));
-                                if(!blocking.length){selected={probe:p,facts,reason:'Current shot line clear; no reported hazard on direct corridor or candidate body; nearby non-contact thorns do not veto stance. Actual route remains unverified.'};break;}
+                                if(!blocking.length){selected={probe:p,facts:{hazards:facts.hazards,distance:facts.approach_direct_distance,solid_cells:facts.direct_corridor_solid_cells.length},reason:'Current shot line clear; no reported hazard on direct corridor or candidate body; nearby non-contact thorns do not veto stance. Actual route remains unverified.'};break;}
                               }
-                              if(!selected) tool('decision_point',{reason:'No measured clear-line stance without reported hazards; change equipment or terrain plan'});
+                              if(!selected) tool('decision_point',{reason:'No acceptable stance after default and custom probes; change equipment or terrain plan. Survey: '+JSON.stringify(custom)});
                               tool('script_events',{wait_ms:0});
                               const moved=tool('nav_to',{x:selected.probe.support_x,y:selected.probe.support_y-1});
                               if(moved.done!==true) tool('decision_point',{reason:'Combat reposition interrupted; preserve handle '+moved.handle+'; outcome='+moved.outcome+'; hp='+moved.action?.observation?.hp});
                               const after=tool('npc_combat_observe',target);
-                              step('combat-reposition:'+action.attempt,()=>({target,selected,after,original_handle:action.handle}));
+                              step('combat-reposition:'+action.attempt,()=>({target,selected,after:{error:after.error,hp:after.hp,target_pos:after.target_pos,direct_line:after.terrain?.direct_line},original_handle:action.handle}));
                               if(after.error||!after.terrain.direct_line.clear)
                                 tool('decision_point',{reason:'Reposition did not establish current line of sight; do not blindly retry combat'});
                               state=tool('get_state');
