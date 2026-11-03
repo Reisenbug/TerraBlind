@@ -322,6 +322,7 @@ public sealed class BehaviorTrial : ModSystem
                         var map = Terraria.Map.MapHelper.CreateMapTile(x, y, 255);
                         plants.Add(new JsonObject { ["x"] = x, ["y"] = y, ["frame_x"] = tile.TileFrameX,
                             ["map_name"] = Lang.GetMapObjectName(map.Type),
+                            ["object_style"] = Terraria.ObjectData.TileObjectData.GetTileStyle(tile),
                             ["spelunkable"] = Main.IsTileSpelunkable(x, y) });
                     }
                 File.WriteAllText(Path.Combine(Main.SavePath, "source-database-probe.json"), new JsonObject
