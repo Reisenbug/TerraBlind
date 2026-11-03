@@ -105,7 +105,7 @@ public static class AgentScript
         JsonObject wake = null;
         JsonObject lastFailure = null;
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
-        JsonObject Report(string error, string detail, JsonNode value = null)
+        JsonObject Report(string error, string detail, JsonNode value = null, int? omittedOutputChars = null)
         {
             var result = new JsonObject
             {
@@ -115,6 +115,8 @@ public static class AgentScript
                 ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs,
                 ["failure"] = lastFailure?.DeepClone()
             };
+            if (omittedOutputChars.HasValue) result["output_limit"] = new JsonObject
+                { ["characters"] = omittedOutputChars.Value, ["limit"] = 16000, ["body_completed"] = true, ["value_omitted"] = true };
             progress?.End(result);
             if (progress != null) result["workflow"] = progress.Summary();
             return result;
@@ -241,13 +243,16 @@ public static class AgentScript
                         })();
                         if (value && typeof value.then === 'function') throw new Error('使用同步tool调用，不支持Promise返回');
                         const result = stringify({value});
-                        if (result.length > 16000) throw new Error('返回结果超过16000字符');
                         return result;
                     })(__gameTool, __gamePrint, __stepEnter, __stepComplete)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;
                 budget.Token.ThrowIfCancellationRequested();
+                if (output.Length > 16000)
+                    return Report(lastFailure == null ? "script_result_too_large" : "tool_failed",
+                        "脚本主体已执行，但返回值超过16000字符，已省略；这不是任务完成或动作回滚。先用action_query/get_state/script_progress核对实际效果与原句柄，只返回所需字段，不要重跑已执行动作。",
+                        omittedOutputChars: output.Length);
                 var value = JsonNode.Parse(output)?["value"]?.DeepClone();
                 return Report(lastFailure != null && value == null ? "tool_failed" : null,
                     lastFailure != null && value == null ? "工具失败未处理；返回完整失败证据以修复。" : "脚本执行结束；任务是否完成仍由task_step verify检查。", value);

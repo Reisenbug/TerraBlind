@@ -60,6 +60,21 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        int outputEffects = 0, outputStops = 0;
+        var outputProgress = new ScriptProgress();
+        Task<string> OutputEffect(string name, JsonObject args, CancellationToken token)
+        { outputEffects++; return Task.FromResult("{\"handle\":\"original-action\"}"); }
+        var oversized = await AgentScript.Run("step('started',()=>tool('effect',{})); return 'x'.repeat(17000);", 5,
+            (_, _) => { }, OutputEffect, _ => { outputStops++; return Task.CompletedTask; }, default, outputProgress);
+        Check(!oversized["ok"].GetValue<bool>() && oversized["error"].ToString() == "script_result_too_large"
+            && oversized["output_limit"]["body_completed"].GetValue<bool>() && oversized["value"] == null
+            && outputEffects == 1 && outputStops == 0 && outputProgress.Completed == 1
+            && JsonNode.DeepEquals(oversized["output_limit"], outputProgress.Summary()["last_execution"]["output_limit"]),
+            "oversized reporting hid completed effects, stopped the original action or claimed success");
+        var recoveredOutput = await AgentScript.Run("return step('started',()=>tool('effect',{}));", 5,
+            (_, _) => { }, OutputEffect, _ => Task.CompletedTask, default, outputProgress);
+        Check(recoveredOutput["ok"].GetValue<bool>() && recoveredOutput["value"]["handle"].ToString() == "original-action"
+            && outputEffects == 1, "repairing oversized output replayed the completed action");
         var retreatWatch = new AgentWatch { LocalDelivery = true };
         var reported = new JsonObject { ["handle"] = "original", ["tick"] = 12 };
         var decisionWatch = new AgentWatch();
