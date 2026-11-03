@@ -374,10 +374,14 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteCore(string name, JsonObject args, CancellationToken token)
     {
-        await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] tool {name} {args}"); return true; }, token);
-        if (name is not ("say" or "ask"))
-            await NativeAgent.OnMain(() => { NativeAgent.Progress("开始执行：" + name, "执行 " + name,
-                !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
+        var before = await NativeAgent.OnMain(() =>
+        {
+            DiagLog.Write($"[agent] tool {name} {args}");
+            if (name is not ("say" or "ask"))
+                NativeAgent.Progress("开始执行：" + name, "执行 " + name,
+                    !PvpDuel.Active && !name.StartsWith("combat_"));
+            return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
+        }, token);
         if (name == "get_state") return await State(token);
         if (name == "say")
         {
@@ -386,7 +390,6 @@ public static partial class AgentTools
         }
         if (name == "ask") return new JsonObject { ["player_answer"] = await NativeAgent.Ask(AgentConversation.VisibleText(Text(args, "question")), token) }.ToJsonString();
         if (name is "wiki_search" or "wiki_page") return await ToolFinished(name, await ReadWiki(name, args, token), token);
-        var before = await NativeAgent.OnMain(Inventory, token);
         JsonObject result;
         switch (name)
         {
