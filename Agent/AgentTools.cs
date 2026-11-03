@@ -688,10 +688,12 @@ public static partial class AgentTools
                             requestedStances.Add(PvpTerrain.ProbeStance(player, npc.Center,
                                 cell["x"].GetValue<int>(), cell["y"].GetValue<int>()));
                     }
+                    var terrain = PvpTerrain.Observe(player, npc.Center);
                     return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
+                        ["clear_line"] = terrain["direct_line"]["clear"].DeepClone(),
                         ["requested_stances"] = requestedStances,
                         ["target_pos"] = new JsonObject { ["x"] = npc.Center.X, ["y"] = npc.Center.Y },
-                        ["terrain"] = PvpTerrain.Observe(player, npc.Center),
+                        ["terrain"] = terrain,
                         ["limitations"] = "只读瞬时快照；NPC槽位可能复用。站位仅检查支撑和身体空间，未验证路径、落差、液体、陷阱或弹幕。选择后需检查危险，移动后刷新射界。" };
                 }, token);
                 break;

@@ -93,8 +93,16 @@ static class RuntimeTests
                 var observed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
                     new JsonObject { ["npc"] = 0, ["npc_type"] = 42 }, default)));
                 Check(observed["npc_type"].GetValue<int>() == 42 && observed["hp"].GetValue<int>() == Game.npc[0].life
+                    && observed["clear_line"]?.GetValue<bool>() == false
                     && !observed["terrain"]["direct_line"]["clear"].GetValue<bool>() && !FightCoordinator.IsActive,
                     "NPC observation changed combat or omitted current blocked line");
+                Terraria.Collision.Clear = true;
+                observed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
+                    new JsonObject { ["npc"] = 0, ["npc_type"] = 42 }, default)));
+                Check(observed["clear_line"]?.GetValue<bool>() == true
+                    && observed["terrain"]["direct_line"]["clear"].GetValue<bool>() && !FightCoordinator.IsActive,
+                    "NPC observation omitted clear line or disagreed with its terrain snapshot");
+                Terraria.Collision.Clear = false;
                 var changed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
                     new JsonObject { ["npc"] = 0, ["npc_type"] = 43 }, default)));
                 Check(changed["error"]?.ToString() == "target_changed", "NPC observation silently substituted a different target type");
