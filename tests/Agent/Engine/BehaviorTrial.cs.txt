@@ -895,7 +895,8 @@ public sealed class BehaviorTrial : ModSystem
                               recovery.candidates.sort((a,b)=>b.heal-a.heal);
                               if(recovery.candidates.length) {
                                 const medicine=recovery.candidates[0];
-                                recovery.used=tool('use_item',{slot:medicine.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16)});
+                                const used=tool('use_item',{slot:medicine.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16)});
+                                recovery.used={medicine,outcome:used.outcome,verified:used.verified,consumed:used.consumed,state:used.state,error:used.error};
                               }
                             }
                             state=tool('get_state');
@@ -912,7 +913,7 @@ public sealed class BehaviorTrial : ModSystem
                                 if(enemyDistance<20){recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'enemy_nearby'});continue;}
                                 const facts=tool('opportunity_assess',anchor);
                                 if(facts.error||!Array.isArray(facts.hazards)) {
-                                  recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'observation_failed',evidence:facts});
+                                  recovery.retreat_candidates.push({anchor,enemyDistance,rejected:'observation_failed',error:facts.error,detail:facts.detail});
                                   continue;
                                 }
                                 recovery.retreat_candidates.push({anchor,enemyDistance,hazards:facts.hazards});
@@ -920,7 +921,9 @@ public sealed class BehaviorTrial : ModSystem
                               }
                               if(retreat) {
                                 tool('script_events',{wait_ms:0});
-                                recovery.retreat={...retreat,result:tool('nav_to',retreat.anchor)};
+                                const moved=tool('nav_to',retreat.anchor);
+                                recovery.retreat={anchor:retreat.anchor,hazards:retreat.facts.hazards,
+                                  result:{done:moved.done,outcome:moved.outcome,handle:moved.handle??moved.managed_handle,state:moved.state,error:moved.error}};
                                 step('combat-retreat:'+action.attempt,()=>recovery.retreat);
                                 if(recovery.retreat.result.done!==true)
                                   tool('decision_point',{reason:'Recovery retreat interrupted; retain original gather and inspect navigation handle'});
