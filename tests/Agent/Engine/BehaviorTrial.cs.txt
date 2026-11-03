@@ -893,6 +893,18 @@ public sealed class BehaviorTrial : ModSystem
                         ["status"] = combat["value"]?["status"]?.DeepClone(),
                         ["state"] = combat["state"]?.DeepClone() }, materials: true);
                     File.WriteAllText(Path.Combine(Main.SavePath, "material-reviewed-program.json"), reviewed.ToJsonString());
+                    if (Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_EXECUTE") == "1")
+                    {
+                        if (reviewed["found"]?.GetValue<bool>() != true) throw new Exception("model did not save a runnable recovery program");
+                        var before = await Call("get_state", new JsonObject());
+                        var execution = await Call("run_script", new JsonObject { ["program"] = "material_recovery",
+                            ["expected_revision"] = reviewed["revision"].DeepClone(), ["workflow"] = "stinger-continuation",
+                            ["event_delivery"] = "script", ["seconds"] = 20 });
+                        var after = await Call("get_state", new JsonObject());
+                        File.WriteAllText(Path.Combine(Main.SavePath, "material-model-execution.json"), new JsonObject
+                        { ["before"] = before, ["execution"] = execution, ["after"] = after }.ToJsonString());
+                        throw new Exception("bounded material model execution ended; inspect inventory and preserved handles, not model text, for progress; full acceptance remains unverified");
+                    }
                     throw new Exception("material model review ended without executing the saved continuation; full acceptance remains unverified");
                 }
                 string previousReviewReason = null;
