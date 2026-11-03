@@ -61,7 +61,7 @@ public static class AgentScript
         + "有沿途收集要求时，先用recipe确认所需物品和数量、game_catalog确认编号，再查证来源。game_catalog的matches[].type是对应kind的编号；物品编号、NPC编号和方块编号不能混用，名称相似也不证明掉落关系。NPC材料先用npc_drop_sources查询注册掉落及条件；植物来源与变体查wiki或依据实际采集证据，不能把材料名当TileID、把生长基底当材料来源，也不能猜npc_types或frame。未知来源应报告未查证，不得假装已经配置正确。"
         + "按查证的来源配置watch：方块和工作站使用nearby_tile+tile_types，箱子使用nearby_chest，已掉落材料使用nearby_drop；发现候选不代表必定取得目标物品。"
         + "普通机会可加入watch.passive_events，只通知不自动打断；配合action_start和script_events边执行边评估，决定值得插入时再action_control pause，避免每发现一株植物就重启导航。"
-        + "发现机会先opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；直线距离不是可达证明。"
+        + "发现机会先opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；ok只表示查询完成，即使有岩浆或陷阱也可为true，不是安全、可达或值得拿的结论。直线距离不是可达证明。"
         + "把每次选择及原因保存在稳定step结果中；跳过不能写成已收集。多格物体可能发多个tile_cell事件，按现场物体合并处理。"
         + "step单个结果上限8000字符；只存选择理由、目标坐标、handle、outcome和实际所得等必要证据，不复制工具返回中整份task_plan、历史和背包。需要完整动作证据时用action_query读取原handle，不能用截断的记录冒充完成证明。"
         + "已选定局部采集目标时给gather传source_area包住该物体和预计掉落位置，防止默认最近来源选择重新选回已跳过的目标；来源区域不是导航路径限制。"

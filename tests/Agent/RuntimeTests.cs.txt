@@ -480,7 +480,7 @@ static class RuntimeTests
                     && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "lava")
                     && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "trap_tile"),
                     "opportunity hid direct obstruction, target lava or nearby trap");
-                Check(assessed["reachable"] == null && assessed["travel_time_ms"] == null
+                Check(assessed["ok"]?.GetValue<bool>() == true && assessed["reachable"] == null && assessed["travel_time_ms"] == null
                     && assessed["required_mining_cells"] == null && assessed["route_relation"]["extra_direct_distance"].GetValue<double>() < 0.01,
                     "geometric assessment invented a navigable route, mining requirement or arrival time");
                 var behind = TerrainInspection.Opportunity(5, 11, new JsonObject { ["x"] = 40, ["y"] = 11 });
@@ -491,7 +491,7 @@ static class RuntimeTests
                     "assessment changed the world while estimating access");
                 var distant = JsonNode.Parse(await Execute(AgentTools.Execute("opportunity_assess",
                     new JsonObject { ["x"] = 200, ["y"] = 200 }, default)));
-                Check(distant["error"]?.ToString() == "target_out_of_observation_range"
+                Check(distant["ok"]?.GetValue<bool>() == false && distant["error"]?.ToString() == "target_out_of_observation_range"
                     && distant["approach_direct_distance"].GetValue<double>() > 60
                     && distant["observation_radius_tiles"].GetValue<int>() == 60
                     && distant["sampled_cells"].GetValue<int>() == 0

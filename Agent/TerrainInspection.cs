@@ -22,6 +22,7 @@ public static class TerrainInspection
         double approach = Distance(sx, sy, tx, ty);
         if (approach > 60) return new JsonObject
         {
+            ["ok"] = false,
             ["error"] = "target_out_of_observation_range",
             ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
             ["target"] = new JsonObject { ["x"] = x, ["y"] = y },
@@ -84,7 +85,7 @@ public static class TerrainInspection
                 ["basis"] = "straight_line_geometry_not_navigation_route" };
         }
         var target = Main.tile[x, y];
-        return new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+        return new JsonObject { ["ok"] = true, ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
             ["target"] = new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = target.HasTile,
                 ["tile_type"] = target.HasTile ? (int)target.TileType : null },
             ["approach_direct_distance"] = approach, ["direct_corridor_solid_cells"] = solids,
