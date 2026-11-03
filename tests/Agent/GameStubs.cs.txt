@@ -101,7 +101,7 @@ namespace Terraria
     {
         public bool HasUnactuatedTile, IsActuated, IsHalfBlock;
         public bool HasTile => HasUnactuatedTile;
-        public int TileType, Slope, LiquidType, LiquidAmount;
+        public int TileType, WallType, Slope, LiquidType, LiquidAmount;
         public int TileFrameX, TileFrameY;
         public bool RedWire, BlueWire, GreenWire, YellowWire;
     }

@@ -1860,9 +1860,12 @@ namespace TerraBlind
 						else
 							haveAt = true;
 					}
+					int paSlot = PlaceAction.ResolveSlot(paIt.Groups[1].Value);
+					int paTile = paSlot >= 0 ? Main.LocalPlayer.inventory[paSlot].createTile : -1;
+					int paWall = paSlot >= 0 ? Main.LocalPlayer.inventory[paSlot].createWall : -1;
 					if (haveAt)
 						paOk = PlaceAnywhere.Start(paIt.Groups[1].Value, paX, paY, out paWhy);
-					body = paOk ? "{\"accepted\":true,\"world\":[" + paX + "," + paY + "],\"note\":\"poll /place_anywhere_status\"}"
+					body = paOk ? "{\"accepted\":true,\"world\":[" + paX + "," + paY + "],\"expected_tile\":" + paTile + ",\"expected_wall\":" + paWall + ",\"note\":\"poll /place_anywhere_status\"}"
 								: "{\"accepted\":false,\"reason\":\"" + JsonEsc(paWhy) + "\"}";
 				}
 			}

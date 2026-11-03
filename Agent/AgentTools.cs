@@ -1046,7 +1046,20 @@ public static partial class AgentTools
             if (args["x"] != null && args["y"] != null)
                 payload["world"] = new JsonArray(Int(args, "x") + i * Int(args, "step_x"), Int(args, "y") + i * Int(args, "step_y"));
             var result = await Call("/place_anywhere", payload, token);
+            var placement = (JsonObject)result.DeepClone();
             if (!Rejected(result)) result = await Wait("/place_anywhere_status", "running", "/place_anywhere_stop", 120, token);
+            if (Text(result, "outcome") == "done")
+                result = await NativeAgent.OnMain(() =>
+                {
+                    int x = placement["world"]?[0]?.GetValue<int>() ?? -1, y = placement["world"]?[1]?.GetValue<int>() ?? -1;
+                    int expectedTile = Int(placement, "expected_tile", -1), expectedWall = Int(placement, "expected_wall", -1);
+                    bool inWorld = x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
+                    bool verified = inWorld && (expectedTile >= 0 && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == expectedTile
+                        || expectedWall > 0 && Main.tile[x, y].WallType == expectedWall);
+                    result["world"] = placement["world"]?.DeepClone(); result["verified"] = verified;
+                    if (!verified) { result["outcome"] = "stuck"; result["error"] = "placement_not_verified"; }
+                    return result;
+                }, token);
             cells.Add(result);
             if (Text(result, "outcome") != "done") break;
             placed++;
