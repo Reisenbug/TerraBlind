@@ -141,6 +141,7 @@ namespace TerraBlind
         }
 
         static volatile bool _fieldReady;
+        static int _fieldGeneration;
         internal static bool FieldReady => _fieldReady;
         static long _startedAt;
         static bool _startupWalkReported;
@@ -236,12 +237,22 @@ namespace TerraBlind
             _altered = 0;
             _fieldReady = false;
             int gx = goalWx, gy = goalWy;
+            int fieldGeneration = ++_fieldGeneration;
             long queuedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             System.Threading.Tasks.Task.Run(() =>
             {
                 long fieldStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-                try { MazeWand.GetField(gx, gy); RecedingVis.SetField(gx, gy); _fieldReady = true; }
-                catch (System.Exception e) { DiagLog.Write($"[recede] field build EXC {e.Message}"); _fieldReady = true; }
+                try
+                {
+                    MazeWand.GetField(gx, gy);
+                    if (fieldGeneration == _fieldGeneration)
+                    { RecedingVis.SetField(gx, gy); _fieldReady = true; }
+                }
+                catch (System.Exception e)
+                {
+                    DiagLog.Write($"[recede] field build EXC {e.Message}");
+                    if (fieldGeneration == _fieldGeneration) _fieldReady = true;
+                }
                 finally { NavigationLatency.Field(latencyRequest,
                     System.Diagnostics.Stopwatch.GetElapsedTime(queuedAt, fieldStartedAt).TotalMilliseconds,
                     System.Diagnostics.Stopwatch.GetElapsedTime(fieldStartedAt).TotalMilliseconds); }
@@ -252,6 +263,7 @@ namespace TerraBlind
 
         public static void Stop()
         {
+            ++_fieldGeneration;
             TrapEscape.Reset();
             LegacyNativePrediction.Reset();
             VanillaNavBridge.Reset();
