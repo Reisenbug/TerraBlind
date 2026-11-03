@@ -444,7 +444,20 @@ public sealed class BehaviorTrial : ModSystem
               throw new Error('opportunity choice did not distinguish measured hazards');
             function count(type){return tool('get_state').inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);}
             const barsBefore=count(22), crystalsBefore=count(29);
-            const looted=tool('collect_treasure',{x:chest.evidence.x,y:chest.evidence.y});
+            const chestAction=tool('action_start',{tool:'collect_treasure',args:{x:chest.evidence.x,y:chest.evidence.y}});
+            const opening=tool('action_query',{handle:chestAction.handle,wait_ms:100});
+            if(opening.status!=='running') throw new Error('chest finished before interruption was exercised');
+            const interrupted=tool('action_control',{handle:chestAction.handle,command:'pause'});
+            if(interrupted.status!=='paused'||tool('action_query',{handle:original.handle}).status!=='paused')
+              throw new Error('interrupted chest discarded itself or original navigation');
+            tool('script_events',{wait_ms:0});
+            tool('action_control',{handle:chestAction.handle,command:'resume'});
+            let looted;
+            for(let i=0;i<15;i++) {
+              looted=tool('action_query',{handle:chestAction.handle,wait_ms:1000});
+              if(looted.status!=='running') break;
+            }
+            if(looted.status!=='completed'||looted.attempt!==2) throw new Error('chest failed to resume: '+JSON.stringify(looted));
             if(count(22)-barsBefore!==7) throw new Error('chest contents not acquired: '+JSON.stringify(looted));
             let gathered=tool('gather',{targets:[{item_type:29,count:crystalsBefore+1,tile_names:['Heart']}],
               source_area:{x:safe.evidence.x-1,y:safe.evidence.y-1,width:3,height:3}});
@@ -466,7 +479,9 @@ public sealed class BehaviorTrial : ModSystem
             if(restored.status!=='completed'||restored.result.done!==true) throw new Error('original destination not reached: '+JSON.stringify(restored));
             const verified=tool('task_step',{id:'selected-loot',action:'verify'});
             if(verified.verified!==true||verified.status!=='completed') throw new Error('task plan lost or actual collection not verified');
-            return {choices,original_handle:original.handle,bars_gained:count(22)-barsBefore,crystals_gained:count(29)-crystalsBefore,restored,
+            return {choices,chest_handle:chestAction.handle,chest_result:{status:looted.status,attempt:looted.attempt,outcome:looted.result.outcome},
+              original_handle:original.handle,bars_gained:count(22)-barsBefore,crystals_gained:count(29)-crystalsBefore,
+              restored:{handle:restored.handle,status:restored.status,attempt:restored.attempt,done:restored.result.done},
               verification:{verified:verified.verified,status:verified.status,evidence:verified.steps[0].evidence}};
             """.Replace("GOAL_X", (originX + 28).ToString()).Replace("GOAL_Y", (floor - 1).ToString());
         var result = await Call("run_script", new JsonObject { ["code"] = code, ["workflow"] = "opportunity-trial", ["event_delivery"] = "script" });
