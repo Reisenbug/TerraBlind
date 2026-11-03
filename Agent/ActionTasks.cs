@@ -222,7 +222,14 @@ public sealed class ActionTasks
     public void CancelAll()
     {
         lock (gate)
+        {
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
+            foreach (var entry in entries.Values.Where(entry => entry.Status == "paused").ToArray())
+            {
+                entry.Status = "cancelling"; entry.Requested = "cancelled";
+                entry.Running = CancelPaused(entry);
+            }
+        }
     }
 
     public async Task<JsonObject> Handoff(Func<Func<bool>, Task> acquire, CancellationToken token)

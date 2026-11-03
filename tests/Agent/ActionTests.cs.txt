@@ -218,5 +218,20 @@ static class ActionTests
             "cancelling a paused original task left it paused or stopped the inserted action");
         await detached.Control(sideHandle, "cancel", null, default);
         Console.WriteLine("PASS: vetoing a paused intent finalizes its scope without stopping the inserted action or allowing resume races");
+        int allEnded = 0;
+        var all = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => Task.CompletedTask, (_, valid) => { if (valid()) allEnded++; return Task.CompletedTask; });
+        string parked = all.Start("nav_to", new JsonObject { ["x"] = 200 }, default)["handle"].ToString();
+        await all.Control(parked, "pause", null, default);
+        string inserted = all.Start("fight", new JsonObject(), default)["handle"].ToString();
+        all.CancelAll();
+        foreach (string handle in new[] { parked, inserted })
+        {
+            var ended = await all.Query(handle, 1000, default);
+            Check(ended["status"].ToString() == "cancelled", "global stop left a parked or inserted intent alive");
+        }
+        Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
+        Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
     }
 }
