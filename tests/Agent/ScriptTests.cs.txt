@@ -233,6 +233,9 @@ static class ScriptTests
             "later argument error hid the original input conflict and owning handle");
         Check(activityProgress.Summary()["last_execution"]["failure"]["evidence"]["active_handle"].ToString() == "defense-owner",
             "workflow state discarded the failure that prevents continuation");
+        Check(maskedFailure["failure"]["validation_failure"]["tool"].ToString() == "action_query"
+            && !maskedFailure["failure"]["validation_failure"]["evidence"]["executed"].GetValue<bool>(),
+            "root failure preservation lost the subsequent invalid call evidence");
         var progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;

@@ -141,7 +141,16 @@ public static class AgentScript
                     if (name is "run_script" or "ask") throw new InvalidOperationException("脚本内禁止嵌套run_script或ask；需要决策时return交回模型。");
                     if (json == null || json.Length > 32000) throw new ArgumentException("工具参数超过32000字符。");
                     var args = JsonNode.Parse(json) as JsonObject ?? throw new ArgumentException("工具参数必须是JSON对象。");
-                    validate(name, args);
+                    try { validate(name, args); }
+                    catch (ArgumentException error)
+                    {
+                        var validationFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(),
+                            ["evidence"] = new JsonObject { ["error"] = "invalid_tool_arguments", ["detail"] = error.Message,
+                                ["executed"] = false, ["tool_schema"] = (error.Data["tool_schema"] as JsonNode)?.DeepClone() } };
+                        if (lastFailure == null) lastFailure = validationFailure;
+                        else lastFailure["validation_failure"] = validationFailure;
+                        throw;
+                    }
                     if (calls >= 100) throw hostFailure = new InvalidOperationException("脚本达到100次工具调用上限。");
                     calls++;
                     string activity = name == "action_control" ? name + "." + args["command"]

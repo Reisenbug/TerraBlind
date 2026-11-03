@@ -153,6 +153,18 @@ static class RuntimeTests
         Console.WriteLine("PASS: gathering distinguishes replacement NPCs and rejects stale entity targets");
         ControlTests.Run();
         Agent.Load();
+        int invalidCalls = 0, invalidStops = 0;
+        var invalidControl = await AgentScript.Run("return tool('action_control',{handle:'preserve-original',action:'pause'});", 5,
+            NativeAgent.ValidateTool, (_, _, _) => { invalidCalls++; return Task.FromResult("{}"); },
+            _ => { invalidStops++; return Task.CompletedTask; }, default);
+        var invalidEvidence = invalidControl["failure"]?["evidence"];
+        Check(invalidControl["ok"].GetValue<bool>() == false && invalidCalls == 0 && invalidStops == 0
+            && invalidControl["failure"]["args"]["handle"].ToString() == "preserve-original"
+            && invalidEvidence?["executed"]?.GetValue<bool>() == false
+            && invalidEvidence["tool_schema"]["parameters"]["required"].AsArray().Any(f => f.ToString() == "command")
+            && invalidEvidence["tool_schema"]["parameters"]["properties"]["command"]["enum"].AsArray().Any(v => v.ToString() == "pause"),
+            "invalid control arguments lost repair schema or executed/stopped the original action");
+        Console.WriteLine("PASS: invalid action control returns full repair schema without executing or stopping inputs");
         try
         {
             var dropWatch = new AgentWatch();

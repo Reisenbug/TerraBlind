@@ -436,7 +436,12 @@ public class NativeAgent : ModSystem
         var schema = _instance?._schemas?.FirstOrDefault(t => t["function"]?["name"]?.ToString() == name);
         if (schema == null) throw new ArgumentException("未知游戏工具：" + name);
         foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
-            if (args[field.ToString()] == null) throw new ArgumentException("工具缺少必填参数：" + field);
+            if (args[field.ToString()] == null)
+            {
+                var error = new ArgumentException("工具缺少必填参数：" + field);
+                error.Data["tool_schema"] = schema["function"].DeepClone();
+                throw error;
+            }
     }
 
     internal static JsonObject DescribeApi(JsonObject args) => AgentScript.DescribeApi(_instance._schemas, args);
