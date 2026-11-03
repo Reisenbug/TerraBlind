@@ -714,6 +714,23 @@ public sealed class BehaviorTrial : ModSystem
                         }
                         function inventory(type){return tool('get_state').inventory_slots.find(i=>i.type===type);}
                         function requireResult(result){if(result.error||result.ok===false) throw new Error(JSON.stringify(result));return result;}
+                        const benchTile=tool('game_catalog',{kind:'tile',name:'WorkBenches'}).matches.find(t=>t.internal==='WorkBenches').type;
+                        tool('watch',{events:['nearby_tile'],passive_events:['nearby_tile'],tile_types:[benchTile],radius:12});
+                        tool('script_events',{wait_ms:0});
+                        const stations=tool('find_tiles',{name:'WorkBenches',max_dist:60,n:5}).tiles;
+                        let destination=null;
+                        for(const station of stations) {
+                          const facts=tool('opportunity_assess',{x:station.x,y:station.y});
+                          if(!facts.hazards.length){destination={x:station.x,y:station.y,reach:true};break;}
+                        }
+                        if(!destination) destination=tool('get_state').action_tasks.find(a=>a.tool==='nav_to'&&a.status==='completed')?.args;
+                        if(destination) {
+                          const arrived=tool('nav_to',destination);
+                          if(arrived.done!==true) tool('decision_point',{reason:'Workstation approach interrupted; retain navigation handle and material plan'});
+                        }
+                        let noticed=false;
+                        const ready=tool('recipe',{name:'WoodHelmet'}).recipes.some(r=>r.internal==='WoodHelmet'&&r.can_craft_now);
+                        if(!ready) {
                         const benchType=resolve('WorkBench');
                         const benchRecipe=tool('recipe',{name:'WorkBench'}).recipes.find(r=>r.internal==='WorkBench');
                         if(!benchRecipe?.can_craft_now) tool('decision_point',{reason:'No available workbench recipe; retain material plan and find a station'});
@@ -759,7 +776,8 @@ public sealed class BehaviorTrial : ModSystem
                           step('workstation-placement',()=>({terrain,candidates,result:placed}));
                         }
                         if(placed.outcome!=='done') tool('decision_point',{reason:'Measured workstation candidates failed; preserve bench and material plan'});
-                        const noticed=tool('script_events',{wait_ms:500}).events.some(e=>e.kind==='nearby_tile'&&e.evidence.tile_type===benchInfo.createTile);
+                        }
+                        noticed=tool('script_events',{wait_ms:500}).events.some(e=>e.kind==='nearby_tile'&&e.evidence.tile_type===benchTile);
                         if(!noticed) throw new Error('placed workstation was not observed');
                         const equipped=[];
                         for(const [name,slot] of [['WoodHelmet',0],['WoodBreastplate',1],['WoodGreaves',2]]) {
