@@ -11,7 +11,9 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--world", type=Path, default=Path("/tmp/terrablind-descent-world/Worlds/World.wld"), help="World copied into the disposable save")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--control", action="store_true", help="Native control takeover and terrain veto trial, no model calls")
     mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
@@ -38,7 +40,7 @@ def main():
         if len(scripts) != 1:
             raise ValueError("This per-item acceptance requires exactly one model-authored script")
         shutil.copy2(args.model_script, root / "model-script.json")
-    source = Path("/tmp/terrablind-descent-world/Worlds/World.wld")
+    source = args.world
     if not source.exists():
         raise RuntimeError("The isolated test world is missing")
     shutil.copy2(source, root / "Worlds/Checks.wld")
@@ -57,6 +59,9 @@ def main():
     print("AGENT_ENGINE_ROOT", root, flush=True)
     command = [str(tml / "dotnet_arm64/dotnet"), "tModLoader.dll", "-nosteam",
         "-tmlsavedirectory", str(root), "-agentenginecheck", "-tbhttpport", str(port)]
+    if args.control:
+        command.remove("-agentenginecheck")
+        command.append("-agentcontrolcheck")
     if args.live:
         command.append("-agentlivecheck")
     if args.batch:
@@ -111,6 +116,11 @@ def main():
                     process.kill()
                     process.wait(timeout=5)
     report = root / "agent-engine-result.json"
+    if args.control:
+        if not report.exists() or not json.loads(report.read_text())["ok"] or "CONTROL_TAKEOVER_COMPLETE native_engine=true model_calls=0" not in (root / "client.log").read_text():
+            raise RuntimeError(f"Control trial failed: exit={process.returncode}; inspect {root}/client.log")
+        print("CONTROL_TRIAL_PASS", root, flush=True)
+        return
     if not report.exists() or not json.loads(report.read_text())["ok"]:
         raise RuntimeError(f"Engine checks failed: exit={process.returncode}; inspect {root}/client.log and result JSON")
     print(json.loads(report.read_text())["detail"], flush=True)

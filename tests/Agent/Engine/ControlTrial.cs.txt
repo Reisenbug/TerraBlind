@@ -1,0 +1,203 @@
+using System;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.IO;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
+using MonoMod.Cil;
+using Terraria;
+using Terraria.ID;
+using Terraria.ModLoader;
+using Terraria.IO;
+using TerraBlind;
+
+namespace Engine;
+
+public sealed class ControlTrial : ModSystem
+{
+    readonly ConcurrentQueue<Action> queue = new();
+    bool enabled, started, opened, finished;
+    int frames, sandX, floor;
+    Task trial;
+
+    public override void Load()
+    {
+        enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck");
+        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; }
+    }
+    public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; } }
+    void OpenWorld(On_Main.orig_Update original, Main game, GameTime time)
+    {
+        original(game, time);
+        if (opened || Main.menuMode != 0) return;
+        opened = true;
+        if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
+        WorldGen.clearWorld();
+        WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
+        var file = PlayerFileData.CreateAndSave(new Player { name = "Control trial" });
+        Check(!file.IsCloudSave && file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal), "player_not_isolated");
+        Player.LoadPlayer(file.Path, false).SetAsActive();
+        WorldGen.playWorld();
+    }
+    static void Focus(ILContext il)
+    {
+        var cursor = new ILCursor(il);
+        if (!cursor.TryGotoNext(MoveType.After, instruction => instruction.MatchStsfld<Main>("hasFocus")))
+            throw new InvalidOperationException("focus boundary missing");
+        cursor.EmitDelegate<Action>(() => Main.hasFocus = true);
+    }
+    Task<T> OnMain<T>(Func<T> body)
+    {
+        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Enqueue(() => { try { result.SetResult(body()); } catch (Exception error) { result.SetException(error); } });
+        return result.Task;
+    }
+    static void Check(bool valid, string message) { if (!valid) throw new Exception(message); }
+    static async Task<JsonObject> Call(string tool, JsonObject args)
+    {
+        var result = JsonNode.Parse(await AgentTools.Execute(tool, args, default)).AsObject();
+        Console.WriteLine("CONTROL_TOOL " + tool + " " + result.ToJsonString());
+        return result;
+    }
+    async Task DelayFrames(int count)
+    {
+        int until = await OnMain(() => frames + count);
+        while (await OnMain(() => frames < until)) await Task.Delay(10);
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!enabled || finished) return;
+        Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0;
+        Main.autoPause = false;
+        while (queue.TryDequeue(out var work)) work();
+        if (Main.gameMenu || !Main.LocalPlayer.active) return;
+        frames++;
+        foreach (var npc in Main.npc) npc.active = false;
+        if (!started && frames >= 60)
+        {
+            started = true;
+            trial = Task.Run(Run);
+        }
+        if (frames % 60 == 0)
+        {
+            var p = Main.LocalPlayer;
+            Console.WriteLine($"CONTROL_SAMPLE frame={frames} pos={p.position} hp={p.statLife} dead={p.dead} nav={RecedingNav.Active} act={ActExecutor.IsActive} use={p.controlUseItem}");
+        }
+        if (trial?.IsCompleted == true)
+        {
+            if (trial.IsFaulted) Console.WriteLine("CONTROL_TAKEOVER_FAILED " + trial.Exception.GetBaseException());
+            else Console.WriteLine("CONTROL_TAKEOVER_COMPLETE native_engine=true model_calls=0");
+            File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"),
+                new JsonObject { ["ok"] = !trial.IsFaulted, ["detail"] = trial.Exception?.GetBaseException().ToString() ?? "control takeover verified" }.ToJsonString());
+            finished = true;
+        }
+    }
+
+    async Task Run()
+    {
+        await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            AgentPermissions.Reset();
+            var p = Main.LocalPlayer;
+            p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Starfury);
+            p.inventory[2].SetDefaults(ItemID.DirtBlock); p.inventory[2].stack = 999;
+            p.selectedItem = 0;
+            int x = (int)p.Center.X / 16;
+            floor = (int)p.Bottom.Y / 16 + 3; sandX = x + 4;
+            for (int tx = x - 15; tx <= x + 18; tx++)
+            {
+                for (int ty = floor - 12; ty < floor; ty++)
+                { Main.tile[tx, ty].ClearTile(); Main.tile[tx, ty].LiquidAmount = 0; }
+                Main.tile[tx, floor].ResetToType(TileID.Stone);
+            }
+            for (int tx = sandX; tx <= sandX + 3; tx++)
+                for (int ty = floor - 7; ty < floor; ty++) Main.tile[tx, ty].ResetToType(TileID.Sand);
+            p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            Console.WriteLine($"CONTROL_FIXTURE sand=({sandX},{floor - 7})..({sandX + 3},{floor - 1}) player={p.position}");
+            return true;
+        });
+        var action = await Call("action_start", new JsonObject { ["tool"] = "nav_to",
+            ["args"] = new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 } });
+        Check(action["handle"] != null, "navigation did not start");
+        string handle = action["handle"].ToString();
+        await DelayFrames(15);
+        var claim = await Call("control", new JsonObject { ["operation"] = "claim",
+            ["channels"] = new JsonArray("movement", "item_use"), ["scope"] = "task", ["reason"] = "stop excavating under sand" });
+        Check(claim["status"]?.ToString() == "ready", "takeover was not ready");
+        string claimId = claim["id"].ToString();
+        int sandBefore = await OnMain(CountSand);
+        Vector2 before = await OnMain(() => Main.LocalPlayer.position);
+        await OnMain(() =>
+        {
+            Combat.Enabled = Dodge.Enabled = true;
+            RecedingNav.Start(sandX + 8, floor - 1);
+            StateSpacePlanner.ExecuteAsync(sandX + 8, floor - 1);
+            FightCoordinator.Start(60);
+            return true;
+        });
+        await DelayFrames(90);
+        await OnMain(() =>
+        {
+            Check(!RecedingNav.Active && !StateSpacePlanner.ExecRunning, "late/default navigation regained control");
+            Check(CountSand() == sandBefore, "sand was excavated after takeover");
+            Check(Vector2.Distance(before, Main.LocalPlayer.position) < 4, "default controls moved the player");
+            Check(!Main.LocalPlayer.controlUseItem, "default attack wrote use input");
+            return true;
+        });
+        var moved = await Call("act", new JsonObject { ["control_claim"] = claimId,
+            ["steps"] = JsonNode.Parse("[{\"keys\":[\"left\"],\"until\":{\"frames\":30}}]") });
+        Check(moved["error"] == null && moved["outcome"]?.ToString() == "done", "claimed movement did not finish");
+        await OnMain(() =>
+        { Check(Main.LocalPlayer.position.X < before.X - 30, "claimed action failed to move left"); return true; });
+        var veto = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
+            ["behaviors"] = new JsonArray("navigation"), ["reason"] = "do not repeat unsafe sand approach" });
+        Check(veto["id"] != null, "navigation prohibition not recorded");
+        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claimId });
+        var retried = await Call("nav_to", new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 });
+        Check(retried["error"]?.ToString() == "behavior_forbidden", "handback erased independent navigation prohibition");
+        await OnMain(() =>
+        {
+            RecedingNav.Start(sandX + 8, floor - 1);
+            Check(!RecedingNav.Active, "native navigation bypassed agent prohibition");
+            Check(!Main.LocalPlayer.dead && CountSand() == sandBefore, "sand changed or player died after handback");
+            return true;
+        });
+        await Call("control", new JsonObject { ["operation"] = "release", ["id"] = veto["id"].ToString() });
+        var localVeto = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
+            ["behaviors"] = new JsonArray("mining"), ["reason"] = "do not undermine this sand wall",
+            ["region"] = new JsonObject { ["x"] = sandX, ["y"] = floor - 7, ["width"] = 4, ["height"] = 7 } });
+        Check(localVeto["status"]?.ToString() == "ready", "local excavation veto not ready");
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            Check(AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All), "local veto disabled all navigation");
+            p.PickTile(sandX, floor - 1, 10000);
+            Check(CountSand() == sandBefore, "native pick bypassed local excavation veto");
+            Main.tile[sandX - 2, floor - 4].ResetToType(TileID.Stone);
+            p.PickTile(sandX - 2, floor - 4, 10000);
+            Check(!Main.tile[sandX - 2, floor - 4].HasTile, "local veto blocked unrelated native mining");
+            return true;
+        });
+        Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
+        Console.WriteLine("CONTROL_REGION_ASSERTIONS protected_native_pick_blocked=true outside_native_pick_allowed=true navigation_enabled=true");
+    }
+
+    int CountSand()
+    {
+        int count = 0;
+        for (int x = sandX; x <= sandX + 3; x++)
+        for (int y = floor - 7; y < floor; y++)
+            if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Sand) count++;
+        return count;
+    }
+}
