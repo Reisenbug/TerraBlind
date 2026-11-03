@@ -65,7 +65,8 @@ public static class AgentScript
         + "默认站位探针没有通畅射界不代表所有位置都不可用。可依据已观察的地形选择其他支撑格，通过npc_combat_observe.stance_cells测量；核对requested_stances的supported/body_fits/shot_line及支撑形状，勿把空中射线通畅当作可以站立。"
         + "观察发现危险、判断失败或局部调整仍无进展时调用decision_point交回审阅。审阅时读取原程序及workflow进度，修改源码版本后续接；保留已完成step和原句柄，uncertain先核对，不从头重放。"
         + "decision_point默认暂停当前动作；确需让有时限的防身等动作在模型审阅时继续，可传continue_action为当前active句柄。模型会继续审阅而非等待该动作结束；下一轮须观察并完成输入交接，不能直接启动冲突动作。这不绕过权限、死亡或后续危险事件。"
-        + "事件本地消费不占模型唤醒次数，显式decision_point仍受限；源码可跨启动保存，workflow进度只保留本世界。";
+        + "事件本地消费不占模型唤醒次数，显式decision_point仍受限；源码可跨启动保存，workflow进度只保留本世界。"
+        + "run_script.tool_counts记录本段全部工具请求，action_control按pause/resume/cancel分开；trace仅保留最近12次。请求不代表成功。若只查询或暂停而未推进目标，必须补上依据观察结果执行的分支或说明真实阻塞，不能把脚本正常结束当作已经采取恢复行动。";
 
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
@@ -80,6 +81,7 @@ public static class AgentScript
         var clock = Stopwatch.StartNew();
         var trace = new Queue<JsonNode>();
         var logs = new JsonArray();
+        var toolCounts = new JsonObject();
         int calls = 0;
         bool inTool = false;
         Exception hostFailure = null;
@@ -92,6 +94,7 @@ public static class AgentScript
             {
                 ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["tool_counts"] = toolCounts.DeepClone(),
                 ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs,
                 ["failure"] = lastFailure?.DeepClone()
             };
@@ -126,6 +129,9 @@ public static class AgentScript
                     validate(name, args);
                     if (calls >= 100) throw hostFailure = new InvalidOperationException("脚本达到100次工具调用上限。");
                     calls++;
+                    string activity = name == "action_control" ? name + "." + args["command"]
+                        : name == "script_program" ? name + "." + args["operation"] : name;
+                    toolCounts[activity] = (toolCounts[activity]?.GetValue<int>() ?? 0) + 1;
                     var entry = new JsonObject { ["step"] = calls, ["tool"] = name, ["args"] = Clip(json, 400) };
                     trace.Enqueue(entry);
                     if (trace.Count > 12) trace.Dequeue();

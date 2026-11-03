@@ -182,6 +182,13 @@ static class ScriptTests
         Check(instructions.Contains("original-system") && instructions.Contains("\"name\":\"gather\"")
             && instructions.Contains("\"targets\""), "script API documentation lost tool names or argument definitions");
         Console.WriteLine("PASS: model entry exposes scripting and dialogue while retaining complete game API metadata");
+        var activityReport = await AgentScript.Run("tool('effect'); for(let i=0;i<14;i++) tool('get_state'); tool('action_control',{command:'pause'});", 5,
+            (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default);
+        Check(activityReport["trace"].AsArray().Count == 12 && activityReport["tool_counts"]["effect"].GetValue<int>() == 1
+            && activityReport["tool_counts"]["get_state"].GetValue<int>() == 14
+            && activityReport["tool_counts"]["action_control.pause"].GetValue<int>() == 1
+            && activityReport["tool_counts"]["action_control.resume"] == null,
+            "script activity summary lost earlier calls or confused pause with resume");
         var progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;
