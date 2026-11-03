@@ -41,10 +41,11 @@ public sealed class BehaviorTrial : ModSystem
         AgentControlSession.DescribeClaims(schemas);
         AgentScript.DescribePrograms(schemas);
         var allowed = materials
-            ? new[] { "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
-            : new[] { "get_state", "npc_find", "inspect_terrain", "script_program" };
+            ? new[] { "game_api", "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
+            : new[] { "game_api", "get_state", "npc_find", "inspect_terrain", "script_program" };
         var definitions = new JsonArray(schemas.Where(t => t["function"]["name"].ToString() is not ("run_script" or "ask"))
-            .Select(t => t["function"].DeepClone()).ToArray());
+            .Select(t => (JsonNode)new JsonObject { ["name"] = t["function"]["name"].DeepClone(),
+                ["summary"] = t["function"]["description"]?.ToString().Split('。')[0] }).ToArray());
         var entries = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
         int calls = 0;
         var replies = new JsonArray();
@@ -75,7 +76,9 @@ public sealed class BehaviorTrial : ModSystem
             + "You may only query or save source during this review. No shell/files/network. Existing workflow step results are reused on resume.\n"
             + "During review get_state is a compact current-state view, not the full runtime snapshot.\n"
             + "The saved program will execute under this production runtime contract (execution is not authorized during this review):\n"
-            + AgentScript.RuntimeInstructions + "\n" + definitions.ToJsonString(), entries,
+            + AgentScript.RuntimeInstructions + "\nThe following is an API purpose index, not parameter schemas. Before writing calls in saved source, use game_api with names to obtain exact schemas; reuse already obtained definitions.\n"
+            + definitions.ToJsonString(new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerOptions.Default)
+                { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }), entries,
             async (name, args, token) =>
             {
                 if (!allowed.Contains(name) || ++calls > 8) throw new InvalidOperationException("review tool budget or scope exceeded");
