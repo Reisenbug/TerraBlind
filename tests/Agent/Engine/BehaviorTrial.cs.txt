@@ -805,18 +805,63 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
             return true;
         });
-        if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1")
+        if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
         {
             await OnMain(() => { materialNavigationStub = true; return true; });
-            var sourceReview = await Call("gather", new JsonObject { ["targets"] = new JsonArray(new JsonObject
+            var sourceArgs = new JsonObject { ["targets"] = new JsonArray(new JsonObject
                 { ["item_type"] = (int)ItemID.JungleSpores, ["count"] = 6,
-                    ["tile_names"] = new JsonArray("JungleGrass") }) });
+                    ["tile_names"] = new JsonArray("JungleGrass") }) };
+            var sourceAction = await Call("action_start", new JsonObject { ["tool"] = "gather", ["args"] = sourceArgs });
+            string sourceHandle = sourceAction["handle"].GetValue<string>();
+            JsonObject sourceQuery;
+            do
+            {
+                sourceQuery = await Call("action_query", new JsonObject { ["handle"] = sourceHandle, ["wait_ms"] = 1000 });
+            } while (sourceQuery["status"]?.ToString() == "running");
+            var sourceReview = sourceQuery["result"].AsObject();
             File.WriteAllText(Path.Combine(Main.SavePath, "source-review-probe.json"), sourceReview.ToJsonString());
             if (sourceReview["ok"]?.GetValue<bool>() != false || sourceReview["outcome"]?.ToString() != "source_needs_review"
                 || sourceReview["actions"]?.GetValue<int>() != 3 || sourceReview["targets"][0]["actual"]?.GetValue<int>() != 0
                 || sourceReview["source_error"]["observations"]?.AsArray().Count != 3)
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
             Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true");
+            if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
+            {
+                var beforeSourceRecovery = await Call("get_state", new JsonObject());
+                var sourceSamples = new JsonArray();
+                try
+                {
+                    await OnMain(() =>
+                    {
+                        Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
+                        NativeAgent.Submit("/goal --tokens 400000 继续采集荆棘旋刃材料。原采集句柄是" + sourceHandle
+                            + "，刚因source_needs_review停止。查清失败原因和真正来源，修正并恢复同一个句柄，实际收集6个丛林孢子；不要使用生命水晶，不重跑旧的错误参数。"
+                            + "当前只验收这个材料步骤，随后仍需继续毒刺和荆棘旋刃任务；不要把查询或挖掉方块当成拿到材料。允许查询知识、观察具体候选、用JS执行及验证。");
+                        return true;
+                    });
+                    for (int sample = 0; sample < 60; sample++)
+                    {
+                        await Task.Delay(1000);
+                        var observedSourceState = await Call("get_state", new JsonObject());
+                        sourceSamples.Add(new JsonObject { ["player"] = observedSourceState["player"].DeepClone(),
+                            ["actions"] = observedSourceState["action_tasks"].DeepClone(),
+                            ["goal"] = observedSourceState["codex_goal"]?.DeepClone() });
+                        if (observedSourceState["codex_goal"]?["native"]?["status"]?.ToString()
+                            is "complete" or "budgetLimited" or "usageLimited") break;
+                    }
+                }
+                finally
+                {
+                    File.WriteAllText(Path.Combine(Main.SavePath, "source-review-agent.json"), new JsonObject
+                    { ["before"] = beforeSourceRecovery, ["after"] = await Call("get_state", new JsonObject()),
+                        ["original_handle"] = sourceHandle, ["initial_failure"] = sourceReview.DeepClone(),
+                        ["samples"] = sourceSamples, ["navigation_stub"] = true,
+                        ["natural_encounters"] = NaturalEncounters, ["model_token_budget"] = 400000 }.ToJsonString());
+                    await OnMain(() => { NativeAgent.Stop(); return true; });
+                }
+                throw new Exception("bounded source recovery model test ended; inspect actual inventory and original handle");
+            }
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
