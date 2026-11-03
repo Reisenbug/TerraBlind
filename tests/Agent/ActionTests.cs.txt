@@ -51,9 +51,10 @@ static class ActionTests
         Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
 
         hp = 100;
-        await actions.Query(id, 0, default);
         var resumed = await actions.Control(id, "resume", null, default);
         Check(resumed["handle"].ToString() == id && resumed["attempt"].GetValue<int>() == 2, "resume replaced the task handle");
+        Check(resumed["observation"] == null || resumed["observation"]["hp"].GetValue<int>() == 100,
+            "resume presented pause-time health as the new attempt's current observation");
         Check(resumed["previous_attempt"]["observation"]["hp"].GetValue<int>() == 80,
             "fresh observations erased the actual pause-time condition");
         JsonObject completed;

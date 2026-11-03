@@ -69,6 +69,7 @@ public sealed class ActionTasks
             ["status"] = entry.Status, ["result"] = entry.Result?.DeepClone(),
             ["observation"] = (entry.StoppedObservation ?? entry.Observation)?.DeepClone() };
         entry.Result = null;
+        entry.Observation = null;
         entry.StoppedObservation = null;
         entry.Status = "running"; entry.Requested = null; entry.Attempt++;
         entry.TaskSerial = taskSerial;
@@ -91,6 +92,8 @@ public sealed class ActionTasks
         {
             observed = await observe(entry.Cancel.Token);
             starting = (JsonObject)observed.DeepClone();
+            lock (gate)
+                if (Owns(entry, attempt)) entry.Observation = (JsonObject)observed.DeepClone();
             string output = await execute(entry.Tool, (JsonObject)entry.Args.DeepClone(), entry.Cancel.Token);
             try { result = JsonNode.Parse(output); }
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
