@@ -345,7 +345,7 @@ public static partial class AgentTools
         while (true)
         {
             var current = await Actions.Query(handle, 250, token);
-            bool pending = await NativeAgent.OnMain(() => Watches.HasPending, token);
+            bool pending = await NativeAgent.OnMain(() => Watches.HasInterrupting, token);
             if (current["status"]?.ToString() == "running" && pending)
             {
                 current = await Actions.Control(handle, "pause", null, root);
@@ -448,7 +448,7 @@ public static partial class AgentTools
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
                         (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken, localEvents),
                         async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
-                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasPending ? Watches.Pending() : null, checkToken));
+                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasInterrupting ? Watches.Pending() : null, checkToken));
                 }
                 finally
                 {
@@ -476,7 +476,7 @@ public static partial class AgentTools
                     await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
                 if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
                     return new JsonObject { ["events"] = new JsonArray(), ["paused_action"] = null }.ToJsonString();
-                string eventHandle = Actions.ActiveHandle;
+                string eventHandle = await NativeAgent.OnMain(() => Watches.HasInterrupting ? Actions.ActiveHandle : null, token);
                 if (eventHandle != null) await Actions.Control(eventHandle, "pause", null, token);
                 return new JsonObject { ["events"] = await NativeAgent.OnMain(Watches.Take, token),
                     ["paused_action"] = eventHandle }.ToJsonString();

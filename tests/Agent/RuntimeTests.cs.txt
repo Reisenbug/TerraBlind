@@ -778,6 +778,7 @@ static class RuntimeTests
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
+            await TestPassiveOpportunity();
             await TestBoundedState();
             await TestQueryRecovery();
             await TestPartialProgress();
@@ -883,6 +884,35 @@ static class RuntimeTests
             NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
         }
         Console.WriteLine("PASS: event delivery pauses inputs, local JS continues without a model turn, and explicit review still yields");
+    }
+
+    static async Task TestPassiveOpportunity()
+    {
+        AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            AgentTools.Watches.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\",\"low_health\"],\"passive_events\":[\"nearby_chest\"]}").AsObject());
+            var original = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
+            await PumpUntil(() => RecedingNav.Active);
+            for (int i = 0; i < 10; i++)
+                AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = i, ["y"] = 2 }) });
+            var observed = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
+            Check(observed["events"].AsArray().Count == 10 && observed["paused_action"] == null
+                && AgentTools.Actions.ActiveHandle == original["handle"].ToString() && RecedingNav.Active
+                && AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 0,
+                "passive opportunities interrupted navigation, dropped evidence or charged model calls");
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = 10 });
+            var danger = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
+            Check(danger["paused_action"].ToString() == original["handle"].ToString() && !RecedingNav.Active,
+                "passive opportunity policy suppressed a separate health interruption");
+        }
+        finally { NativeAgent.Stop(); AgentTools.Actions.Reset(); HttpServerSystem.Handler = null; }
+        Console.WriteLine("PASS: passive discoveries retain evidence without stopping movement; independent danger still pauses the same action");
     }
 
     static async Task TestBoundedState()

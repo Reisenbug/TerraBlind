@@ -259,9 +259,9 @@ public class NativeAgent : ModSystem
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
                     while (await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
-                        && !AgentTools.Watches.HasPending, token))
+                        && !AgentTools.Watches.HasInterrupting, token))
                         await Task.Delay(100, token);
-                    if (await OnMain(() => AgentTools.Watches.HasPending, token))
+                    if (await OnMain(() => AgentTools.Watches.HasInterrupting, token))
                     {
                         if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
                         string handle = AgentTools.Actions.ActiveHandle;

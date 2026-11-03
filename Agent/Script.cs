@@ -40,6 +40,7 @@ public static class AgentScript
         + "\n需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
         + "有沿途收集要求时，先查game_catalog确定材料/工作站的tile编号，用watch的nearby_tile+tile_types以及nearby_chest/nearby_drop订阅。"
+        + "普通机会可加入watch.passive_events，只通知不自动打断；配合action_start和script_events边执行边评估，决定值得插入时再action_control pause，避免每发现一株植物就重启导航。"
         + "发现机会先opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；直线距离不是可达证明。"
         + "把每次选择及原因保存在稳定step结果中；跳过不能写成已收集。多格物体可能发多个tile_cell事件，按现场物体合并处理。"
         + "已选定局部采集目标时给gather传source_area包住该物体和预计掉落位置，防止默认最近来源选择重新选回已跳过的目标；来源区域不是导航路径限制。"

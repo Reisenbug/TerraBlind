@@ -10,6 +10,7 @@ public sealed class AgentWatch
     readonly HashSet<string> events = new(), seen = new();
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<int> tileTypes = new();
+    readonly HashSet<string> passive = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
@@ -21,6 +22,7 @@ public sealed class AgentWatch
     public int Radius { get; private set; } = 25;
     public int HealthBelow { get; private set; } = 80;
     public bool HasPending => pending.Count > 0;
+    public bool HasInterrupting => pending.Any(e => !passive.Contains(e["kind"]?.ToString()));
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
     public bool WatchesTile(int type) => tileTypes.Contains(type);
@@ -46,6 +48,10 @@ public sealed class AgentWatch
         if (types.Length > 64 || types.Any(x => x < 0 || x > ushort.MaxValue)
             || requested.Contains("nearby_tile") && types.Length == 0)
             throw new ArgumentException("nearby_tile需要1..64个tile_types方块编号，请通过game_catalog查询。");
+        var passiveEvents = args["passive_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
+        if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop")))
+            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop。");
+        passive.Clear(); passive.UnionWith(passiveEvents);
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; HealthBelow = health;
         configured = true;
@@ -100,8 +106,8 @@ public sealed class AgentWatch
 
     public void Emit(string kind, string key, JsonNode evidence)
     {
-        if (!events.Contains(kind) || !LocalDelivery && wakeCount >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
-        if (!LocalDelivery) wakeCount++;
+        if (!events.Contains(kind) || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
+        if (!LocalDelivery && !passive.Contains(kind)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
@@ -139,6 +145,7 @@ public sealed class AgentWatch
 
     public JsonObject Summary() => new()
     {
+        ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
@@ -149,6 +156,7 @@ public sealed class AgentWatch
 
     public JsonObject Snapshot() => new()
     {
+        ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
@@ -158,6 +166,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }
