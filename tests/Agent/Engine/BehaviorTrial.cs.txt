@@ -1088,6 +1088,58 @@ public sealed class BehaviorTrial : ModSystem
             }
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_HANDOFF_AGENT") == "1"
+            || Environment.GetEnvironmentVariable("TB_OPPORTUNITY_HANDOFF_PROBE") == "1")
+        {
+            string setup = """
+                tool('watch',{events:['nearby_chest','nearby_tile'],passive_events:['nearby_tile'],tile_types:[12,61,16],radius:60});
+                const original=step('original-navigation',()=>tool('action_start',{tool:'nav_to',args:{x:GOAL_X,y:GOAL_Y}}));
+                const notice=tool('script_events',{wait_ms:1000});
+                tool('action_control',{handle:original.handle,command:'pause'});
+                return {original,notice};
+                """.Replace("GOAL_X", goalX.ToString()).Replace("GOAL_Y", goalY.ToString());
+            var interrupted = await Call("run_script", new JsonObject { ["workflow"] = "opportunity-handoff",
+                ["event_delivery"] = "script", ["code"] = setup });
+            if (interrupted["ok"]?.GetValue<bool>() != true || interrupted["value"]?["notice"]?["events"]?.AsArray().Count == 0)
+                throw new Exception("no actual opportunity interruption: " + interrupted);
+            var before = await Call("get_state", new JsonObject());
+            if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_HANDOFF_PROBE") == "1")
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-setup.json"), interrupted.ToJsonString());
+                Console.WriteLine("OPPORTUNITY_HANDOFF_READY model_calls=0");
+                return;
+            }
+            if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
+            var schemas = JsonNode.Parse(Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
+            AgentControlSession.DescribeClaims(schemas); AgentScript.DescribePrograms(schemas);
+            var calls = new JsonArray(); var replies = new JsonArray();
+            using var model = new CodexAgent();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            try
+            {
+                await model.RunAsync("继续已有任务：前往丛林目标格，沿途选择容易取得且值得的箱子和生命水晶，新增水晶先别使用，之后推进毒刺、孢子和荆棘旋刃。"
+                    + "现在原导航因机会暂停，保存于opportunity-handoff的original-navigation步骤。依据真实评估选择拿或跳过，保存理由；核实插入行动实际所得后恢复同一句柄。不要重建或清空已有进度。请实际执行。\n中断证据："
+                    + interrupted.ToJsonString() + "\n当前现场：" + before.ToJsonString(),
+                    "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
+                    AgentScript.Instructions(Encoding.UTF8.GetString(production.GetFileBytes("Agent/System.txt")), schemas),
+                    AgentScript.EntryTools(schemas), async (name, args, token) =>
+                    {
+                        var result = await AgentTools.Execute(name, args, token);
+                        calls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = result });
+                        return result;
+                    }, reply => replies.Add(reply), timeout.Token,
+                    new JsonObject { ["request"] = "opportunity-handoff", ["objective"] = "Continue interrupted jungle collection with verified gains and original navigation handle", ["tokenBudget"] = 400000 });
+            }
+            finally
+            {
+                var after = await Call("get_state", new JsonObject());
+                File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-agent.json"), new JsonObject
+                { ["before"] = before, ["interrupted"] = interrupted, ["after"] = after, ["calls"] = calls,
+                    ["replies"] = replies, ["usage"] = model.TokenUsage, ["navigation_stub"] = materialNavigationStub }.ToJsonString());
+                await OnMain(() => { AgentTools.Stop(); return true; });
+            }
+            throw new Exception("bounded model handoff ended; verify decisions, inventory and original handle in artifact");
+        }
         if (Environment.GetEnvironmentVariable("TB_OWN_CHEST_PROBE") == "1")
         {
             var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
