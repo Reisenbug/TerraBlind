@@ -2434,6 +2434,10 @@ namespace TerraBlind
 				var mdM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"max_dist\"\\s*:\\s*(\\d+)");
 				int wantN = nM2.Success ? int.Parse(nM2.Groups[1].Value) : 5;
 				int maxD = mdM.Success ? int.Parse(mdM.Groups[1].Value) : 300;
+				var frameXM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"frame_x\"\\s*:\\s*(\\d+)");
+				var frameYM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"frame_y\"\\s*:\\s*(\\d+)");
+				int? frameX = frameXM.Success ? int.Parse(frameXM.Groups[1].Value) : null;
+				int? frameY = frameYM.Success ? int.Parse(frameYM.Groups[1].Value) : null;
 				var pl = Main.LocalPlayer;
 				if (!nameM.Success || pl == null)
 				{
@@ -2463,6 +2467,7 @@ namespace TerraBlind
 								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 								var t = Main.tile[x, y];
 								if (!t.HasTile || t.TileType != wantType) continue;
+								if (frameX.HasValue && t.TileFrameX != frameX.Value || frameY.HasValue && t.TileFrameY != frameY.Value) continue;
 								// 箱子是 2x2 一个 TileID,只有左上角那格(frameX%36==0 && frameY%36==0)算锚点。
 								// 去重到它,顺便用 frameX 认出是哪种箱子。
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)

@@ -26,6 +26,7 @@ public sealed class BehaviorTrial : ModSystem
     int frames, movingAttackFrames, originX, floor, target = -1;
     bool collectingStingers;
     bool materialNavigationStub;
+    bool UsingNavigationStub => materialNavigationStub && materialNavigationHook != null;
     readonly List<string> sourceInputSamples = new();
     bool samplingSources;
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
@@ -473,6 +474,13 @@ public sealed class BehaviorTrial : ModSystem
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "global-plant-variants.json"), observedPlants.ToJsonString());
             Console.WriteLine($"GLOBAL_PLANT_VARIANTS_PASS count={observedPlants["tiles"].AsArray().Count}");
+            var filteredGlobal = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 1,
+                ["max_dist"] = 2000, ["frame_x"] = 144, ["frame_y"] = 0 });
+            if (filteredGlobal["tiles"]?.AsArray().Count != 1 || filteredGlobal["tiles"][0]["frame_x"].GetValue<int>() != 144
+                || filteredGlobal["stale_candidates_removed"].GetValue<int>() != 0)
+                throw new Exception("global native frame filter ran after nearest truncation: " + filteredGlobal);
+            File.WriteAllText(Path.Combine(Main.SavePath, "global-frame-filter.json"), filteredGlobal.ToJsonString());
+            Console.WriteLine("GLOBAL_FRAME_FILTER_PASS native_engine=true n=1 source_area=false");
             var luminousPlants = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 100,
                 ["emits_light"] = true, ["source_area"] = new JsonObject
                 { ["x"] = 3340, ["y"] = 507, ["width"] = 17, ["height"] = 17 } });
@@ -1061,7 +1069,7 @@ public sealed class BehaviorTrial : ModSystem
                 {
                     File.WriteAllText(Path.Combine(Main.SavePath, "source-knowledge-agent.json"), new JsonObject
                     { ["before"] = before, ["after"] = await Call("get_state", new JsonObject()), ["samples"] = samples,
-                        ["scheduler"] = "NativeAgent", ["navigation_stub"] = materialNavigationStub }.ToJsonString());
+                        ["scheduler"] = "NativeAgent", ["navigation_stub"] = UsingNavigationStub }.ToJsonString());
                     await OnMain(() => { NativeAgent.Stop(); return true; });
                 }
                 throw new Exception("bounded material model test ended; inspect actual gains and saved decisions");
@@ -1104,7 +1112,7 @@ public sealed class BehaviorTrial : ModSystem
                 || sourceReview["source_error"]["observations"].AsArray().Select(o => o["candidate"]["id"].ToString()).Distinct().Count() != 3
                 || sourceReview["source_error"]["observations"].AsArray().Any(o => o["count_after"].GetValue<int>() != o["count_before"].GetValue<int>()))
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
-            Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true attempts=" + sourceReview["actions"]);
+            Console.WriteLine($"SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub={UsingNavigationStub} attempts=" + sourceReview["actions"]);
             if (Environment.GetEnvironmentVariable("TB_SOURCE_EXAMPLE_SCRIPT") == "1")
             {
                 var example = await Call("script_program", new JsonObject { ["operation"] = "example", ["name"] = "sample_tile_variants" });
@@ -1118,13 +1126,13 @@ public sealed class BehaviorTrial : ModSystem
                         .Replace("const config = null;", "const config = " + config.ToJsonString() + ";") });
                 var after = await Call("get_state", new JsonObject());
                 File.WriteAllText(Path.Combine(Main.SavePath, "source-example-native.json"), new JsonObject
-                    { ["config"] = config, ["script"] = trial, ["after"] = after, ["navigation_stub"] = true }.ToJsonString());
+                    { ["config"] = config, ["script"] = trial, ["after"] = after, ["navigation_stub"] = UsingNavigationStub }.ToJsonString());
                 if (trial["value"]?["target_met"]?.GetValue<bool>() != true
                     || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.JungleSpores).Sum(i => i["stack"].GetValue<int>()) < 1
                     || after["action_tasks"].AsArray().Count(a => a["tool"]?.ToString() == "gather") != 1
                     || trial["value"]?["handle"]?.ToString() != sourceHandle)
                     throw new Exception("editable example did not verify native gain on original gather handle; inspect source-example-native.json");
-                Console.WriteLine("SOURCE_EXAMPLE_NATIVE_PASS original_handle=true native_inventory=true navigation_stub=true model_calls=0");
+                Console.WriteLine($"SOURCE_EXAMPLE_NATIVE_PASS original_handle=true native_inventory=true navigation_stub={UsingNavigationStub} model_calls=0");
                 return;
             }
             if (Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
@@ -1223,13 +1231,14 @@ public sealed class BehaviorTrial : ModSystem
                         .Sum(i => i["stack"].GetValue<int>()) < 6
                     || afterVariants["action_tasks"].AsArray().Count(a => a["tool"]?.ToString() == "gather") != 1)
                     throw new Exception("variant sampling incomplete; inspect actual inventory, decisions and original handle");
-                Console.WriteLine("SOURCE_VARIANT_SCRIPT_PASS native_items=true original_handle=true predefined_variant=false navigation_stub=true");
+                Console.WriteLine($"SOURCE_VARIANT_SCRIPT_PASS native_items=true original_handle=true predefined_variant=false navigation_stub={UsingNavigationStub}");
                 return;
             }
             if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1")
             {
                 var beforeSourceRecovery = await Call("get_state", new JsonObject());
                 var sourceSamples = new JsonArray();
+                JsonObject afterSourceRecovery = null;
                 try
                 {
                     await OnMain(() =>
@@ -1247,18 +1256,31 @@ public sealed class BehaviorTrial : ModSystem
                         sourceSamples.Add(new JsonObject { ["player"] = observedSourceState["player"].DeepClone(),
                             ["actions"] = observedSourceState["action_tasks"].DeepClone(),
                             ["goal"] = observedSourceState["codex_goal"]?.DeepClone() });
+                        if (observedSourceState["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() == ItemID.JungleSpores)
+                            .Sum(i => i["stack"].GetValue<int>()) >= 6
+                            && observedSourceState["action_tasks"].AsArray().Any(a => a["handle"].ToString() == sourceHandle
+                                && a["status"].ToString() == "completed")) break;
                         if (observedSourceState["codex_goal"]?["native"]?["status"]?.ToString()
                             is "complete" or "budgetLimited" or "usageLimited") break;
                     }
                 }
                 finally
                 {
+                    afterSourceRecovery = await Call("get_state", new JsonObject());
                     File.WriteAllText(Path.Combine(Main.SavePath, "source-review-agent.json"), new JsonObject
-                    { ["before"] = beforeSourceRecovery, ["after"] = await Call("get_state", new JsonObject()),
+                    { ["before"] = beforeSourceRecovery, ["after"] = afterSourceRecovery,
                         ["original_handle"] = sourceHandle, ["initial_failure"] = sourceReview.DeepClone(),
-                        ["samples"] = sourceSamples, ["navigation_stub"] = true,
+                        ["samples"] = sourceSamples, ["navigation_stub"] = UsingNavigationStub,
                         ["natural_encounters"] = NaturalEncounters, ["model_token_budget"] = 400000 }.ToJsonString());
                     await OnMain(() => { NativeAgent.Stop(); return true; });
+                }
+                int sourceGained = afterSourceRecovery["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() == ItemID.JungleSpores)
+                    .Sum(i => i["stack"].GetValue<int>());
+                if (sourceGained >= 6 && afterSourceRecovery["action_tasks"].AsArray().Any(a => a["handle"].ToString() == sourceHandle
+                    && a["status"].ToString() == "completed" && a["attempt"].GetValue<int>() > 1))
+                {
+                    Console.WriteLine($"SOURCE_REVIEW_AGENT_PASS actual_spores={sourceGained} original_handle={sourceHandle} navigation_stub={UsingNavigationStub}");
+                    return;
                 }
                 throw new Exception("bounded source recovery model test ended; inspect actual inventory and original handle");
             }
@@ -1327,7 +1349,7 @@ public sealed class BehaviorTrial : ModSystem
                         new JsonObject { ["gather"] = gathered, ["after"] = after }.ToJsonString());
                     int crystals = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack));
                     if (crystals < 1) throw new Exception("native continuation did not acquire a life crystal: " + gathered);
-                    Console.WriteLine("OPPORTUNITY_HANDOFF_CRYSTAL_PASS model_calls=0 navigation_stub=" + materialNavigationStub);
+                    Console.WriteLine("OPPORTUNITY_HANDOFF_CRYSTAL_PASS model_calls=0 navigation_stub=" + UsingNavigationStub);
                 }
                 return;
             }
@@ -1357,7 +1379,7 @@ public sealed class BehaviorTrial : ModSystem
                 var after = await Call("get_state", new JsonObject());
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-agent.json"), new JsonObject
                 { ["before"] = before, ["interrupted"] = interrupted, ["after"] = after, ["calls"] = calls,
-                    ["replies"] = replies, ["usage"] = model.TokenUsage, ["navigation_stub"] = materialNavigationStub }.ToJsonString());
+                    ["replies"] = replies, ["usage"] = model.TokenUsage, ["navigation_stub"] = UsingNavigationStub }.ToJsonString());
                 await OnMain(() => { AgentTools.Stop(); return true; });
             }
             throw new Exception("bounded model handoff ended; verify decisions, inventory and original handle in artifact");
@@ -1484,7 +1506,7 @@ public sealed class BehaviorTrial : ModSystem
                     after = await Call("get_state", new JsonObject());
                     started |= agentStatus != "queued" && agentStatus != "idle";
                     samples.Add(new JsonObject { ["tick"] = after["tick"]?.DeepClone(), ["status"] = agentStatus,
-                        ["navigation_stub"] = materialNavigationStub,
+                        ["navigation_stub"] = UsingNavigationStub,
                         ["idle_defense_active"] = after["idle_defense_active"]?.DeepClone(),
                         ["player"] = after["player"]?.DeepClone(), ["task_plan"] = after["task_plan"]?.DeepClone(),
                         ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone() });
@@ -1498,7 +1520,7 @@ public sealed class BehaviorTrial : ModSystem
                 after = await Call("get_state", new JsonObject());
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-agent-live.json"), new JsonObject
                 { ["before"] = before, ["samples"] = samples, ["after"] = after,
-                    ["navigation_stub"] = materialNavigationStub, ["spawned_hornets"] = hornetsSpawned,
+                    ["navigation_stub"] = UsingNavigationStub, ["spawned_hornets"] = hornetsSpawned,
                     ["natural_encounters"] = NaturalEncounters,
                     ["model_token_budget"] = FullCraftTrial ? null : JsonValue.Create(modelTokenBudget),
                     ["full_craft_trial"] = FullCraftTrial }.ToJsonString());
@@ -1863,7 +1885,7 @@ public sealed class BehaviorTrial : ModSystem
                     {
                         File.WriteAllText(Path.Combine(Main.SavePath, "material-agent-live.json"), new JsonObject
                         { ["before"] = beforeRecovery, ["original_handle"] = originalHandle, ["samples"] = samples,
-                            ["after"] = await Call("get_state", new JsonObject()), ["navigation_stub"] = materialNavigationStub,
+                            ["after"] = await Call("get_state", new JsonObject()), ["navigation_stub"] = UsingNavigationStub,
                             ["model_token_budget"] = tokenBudget }.ToJsonString());
                         await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
                     }

@@ -1057,8 +1057,8 @@ public static partial class AgentTools
         int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
         var area = GatherArea.Parse(args["source_area"] as JsonObject);
         const string unknownSourceDetail = "find_tiles查询方块类型，不是物品获取来源。若输入的是材料名，先game_catalog(kind:item)查物品编号，再用npc_drop_sources查NPC掉落或wiki_search/wiki_page查方块来源与变体；不要猜方块、NPC或frame编号。";
-        if (area == null && (args["frame_x"] != null || args["frame_y"] != null || args["emits_light"] != null))
-            throw new ArgumentException("按frame或emits_light筛选find_tiles需要source_area，不能忽略筛选条件。");
+        if (area == null && args["emits_light"] != null)
+            throw new ArgumentException("按emits_light筛选find_tiles需要source_area，不能忽略筛选条件。");
         if (area != null && types == 0)
             return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone(),
                 ["detail"] = unknownSourceDetail };
@@ -1119,7 +1119,9 @@ public static partial class AgentTools
                 {
                     int x = tiles[i]["x"].GetValue<int>(), y = tiles[i]["y"].GetValue<int>();
                     if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY
-                        || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != exact[0]["type"].GetValue<int>())
+                        || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != exact[0]["type"].GetValue<int>()
+                        || args["frame_x"] != null && Main.tile[x, y].TileFrameX != Int(args, "frame_x")
+                        || args["frame_y"] != null && Main.tile[x, y].TileFrameY != Int(args, "frame_y"))
                     { tiles.RemoveAt(i); stale++; continue; }
                     tiles[i]["tile_type"] = (int)Main.tile[x, y].TileType;
                     tiles[i]["frame_x"] = (int)Main.tile[x, y].TileFrameX;

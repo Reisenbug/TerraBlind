@@ -1050,6 +1050,16 @@ static class RuntimeTests
                 && resourceScene["candidates"][0]["frame_y"].GetValue<int>() == 18,
                 "global gathering lost the observed tile variant");
             Game.tile[100, 101].TileFrameX = 90;
+            var specificSource = new GameGather(new[] { new GatherTarget(99, 10,
+                new[] { "FixtureResource" }, Array.Empty<int>(), 54, 18) });
+            var rejectedVariant = await Execute(specificSource.Observe(default));
+            Check(rejectedVariant["error"] == null && rejectedVariant["candidates"].AsArray().Count == 0,
+                "global variant selection was rejected without an area or retained a mismatched live variant");
+            Game.tile[100, 101].TileFrameX = 54;
+            var acceptedVariant = await Execute(specificSource.Observe(default));
+            Check(acceptedVariant["candidates"].AsArray().Count == 1,
+                "global variant selection could not retain the matching live candidate");
+            Game.tile[100, 101].TileFrameX = 90;
             var changedGlobalVariant = await Execute(new GameGather(new[] { new GatherTarget(99, 10,
                 new[] { "FixtureResource" }, Array.Empty<int>()) }).Act((JsonObject)resourceScene["candidates"][0], default));
             Check(changedGlobalVariant["error"]?.ToString() == "target_changed",
