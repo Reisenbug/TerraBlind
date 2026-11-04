@@ -1373,7 +1373,7 @@ public sealed class BehaviorTrial : ModSystem
                           const action=tool('action_query',{handle:started.handle,wait_ms:1000});
                           review(action.events);
                           attempts.push({handle:action.handle,status:action.status,error:action.error,outcome:action.result?.outcome??action.outcome});
-                          if((action.result?.outcome??action.outcome)==='combat_obstructed')
+                          if(['combat_obstructed','combat_out_of_range'].includes(action.result?.outcome??action.outcome))
                             tool('decision_point',{reason:'Material combat requires a changed approach before resuming the same handle',
                               evidence:{handle:started.handle,status:action.status,outcome:action.result?.outcome,
                                 last_result:action.result?.last_result??action.last_result}});
@@ -1570,7 +1570,7 @@ public sealed class BehaviorTrial : ModSystem
                 string previousReviewReason = null;
                 string previousReviewActions = null;
                 for (int review = 0; review < 3 && (combat["value"]?["status"]?.ToString() == "yield"
-                    || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "source_unavailable"); review++)
+                    || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range" or "source_unavailable"); review++)
                 {
                     string reviewReason = combat["value"]?["wake"]?["event"]?["reason"]?.ToString();
                     var reviewSnapshot = await Call("get_state", new JsonObject());
@@ -1587,7 +1587,7 @@ public sealed class BehaviorTrial : ModSystem
                     combat = await Call("run_script", new JsonObject { ["workflow"] = "stinger-continuation", ["event_delivery"] = "script",
                         ["code"] = """
                             let state=tool('get_state');
-                            const action=state.action_tasks.find(a=>a.tool==='gather'&&(a.status==='paused'||a.status==='failed'&&['combat_obstructed','source_unavailable'].includes(a.result?.outcome))
+                            const action=state.action_tasks.find(a=>a.tool==='gather'&&(a.status==='paused'||a.status==='failed'&&['combat_obstructed','combat_out_of_range','source_unavailable'].includes(a.result?.outcome))
                               &&a.args.targets.some(t=>t.item_type===209));
                             if(!action||state.player.suffocating)
                               tool('decision_point',{reason:'Cannot safely resume the preserved material action; further review required'});
@@ -1624,7 +1624,7 @@ public sealed class BehaviorTrial : ModSystem
                               if(surveyed?.error) tool('decision_point',{reason:'Custom stance survey target changed; inspect current sources'});
                               const custom=surveyed?.requested_stances??[];
                               const candidates=[...scene.terrain.stance_probes,...custom.filter(p=>p.supported&&p.body_fits&&!p.support_half_block&&p.support_slope===0)]
-                                .filter(p=>p.shot_line?.clear)
+                                .filter(p=>p.shot_line?.clear&&Math.hypot(p.x-scene.target_pos.x,p.y-scene.target_pos.y)<=(detail.result.combat_range_tiles??40)*16)
                                 .sort((a,b)=>Math.hypot(a.x-state.player.pos.x,a.y-state.player.pos.y)-Math.hypot(b.x-state.player.pos.x,b.y-state.player.pos.y));
                               let selected=null;
                               for(const p of candidates) {
@@ -1755,7 +1755,7 @@ public sealed class BehaviorTrial : ModSystem
                             step('combat-recovery:'+action.attempt,()=>recovery);
                             if(state.player.hp<80||state.player.suffocating)
                               tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below 80: '+JSON.stringify(recovery)});
-                            if(action.result?.outcome==='combat_obstructed') restoreShotLine();
+                            if(['combat_obstructed','combat_out_of_range'].includes(action.result?.outcome)) restoreShotLine();
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review:'+action.attempt,()=>({handle:action.handle,hp:state.player.hp,
                               reason:'Recovery checked against actual inventory and health; retain the same material target'}));

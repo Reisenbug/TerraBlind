@@ -148,11 +148,21 @@ public sealed class GameGather : IGatherWorld
             && observedNpcs.TryGetValue(who, out var identity) && ReferenceEquals(identity.Entity, Main.npc[who])
             && candidate["npc_generation"]?.GetValue<int>() == identity.Generation;
         if (!await NativeAgent.OnMain(Valid, token)) return new JsonObject { ["error"] = "target_changed" };
-        if (candidate["distance"].GetValue<float>() > 30)
+        var engagement = await NativeAgent.OnMain(() =>
         {
-            var approach = await AgentTools.Navigate(new JsonObject { ["x"] = x, ["y"] = y }, token, 8);
-            if (approach["done"]?.GetValue<bool>() != true) return approach;
-        }
+            if (!Valid()) return new JsonObject { ["error"] = "target_changed" };
+            var player = Main.LocalPlayer;
+            var npc = Main.npc[who];
+            float distance = Microsoft.Xna.Framework.Vector2.Distance(player.Center, npc.Center) / 16;
+            return distance <= 40 ? null : new JsonObject { ["outcome"] = "combat_out_of_range",
+                ["npc"] = who, ["npc_type"] = npc.type, ["distance_tiles"] = distance, ["combat_range_tiles"] = 40,
+                ["target_x"] = npc.Center.X / 16, ["target_y"] = npc.Center.Y / 16,
+                ["player_x"] = player.Center.X / 16, ["player_y"] = player.Center.Y / 16,
+                ["hp"] = player.statLife, ["target_hp"] = npc.life,
+                ["clear_line"] = Collision.CanHitLine(player.Center, 4, 4, npc.Center, 4, 4),
+                ["detail"] = "敌怪超出当前战斗范围，未向敌怪坐标导航；选择并验证人物站位后恢复原采集句柄。" };
+        }, token);
+        if (engagement != null) return engagement;
         int hpBefore = 0;
         var startFight = await NativeAgent.OnMain(() =>
         {

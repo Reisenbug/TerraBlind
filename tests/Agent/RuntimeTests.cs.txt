@@ -159,6 +159,24 @@ static class RuntimeTests
             Check(sources["candidates"].AsArray().Count == 0 && FightCoordinator.IsActive,
                 "source observation escaped the requested area or took input ownership");
             FightCoordinator.Stop();
+            var nearbyPosition = Game.npc[0].position;
+            Game.npc[0].position = new(Game.LocalPlayer.position.X + 800, Game.LocalPlayer.position.Y);
+            int requestsBefore = HttpServerSystem.Calls.Count;
+            var playerBefore = Game.LocalPlayer.position;
+            var outOfRange = await Execute(gather.Act(replacement.AsObject(), default));
+            Check(outOfRange["outcome"]?.ToString() == "combat_out_of_range"
+                && outOfRange["distance_tiles"].GetValue<float>() > 40
+                && outOfRange["target_x"].GetValue<float>() == Game.npc[0].Center.X / 16
+                && HttpServerSystem.Calls.Count == requestsBefore && !FightCoordinator.IsActive
+                && Game.LocalPlayer.position == playerBefore,
+                "gather navigated to a moving NPC or trusted its stale observed distance");
+            var rangeResult = await Execute(Gather.Run(new[] { new GatherTarget(209, 9, Array.Empty<string>(), new[] { 42 }) },
+                5, gather, default));
+            Check(rangeResult["ok"]?.GetValue<bool>() == false && rangeResult["outcome"]?.ToString() == "combat_out_of_range"
+                && rangeResult["actions"].GetValue<int>() == 1
+                && rangeResult["last_result"]["result"]["combat_range_tiles"].GetValue<int>() == 40,
+                "out-of-range gathering retried blindly or lost reposition evidence");
+            Game.npc[0].position = nearbyPosition;
             bool clear = Terraria.Collision.Clear;
             try
             {

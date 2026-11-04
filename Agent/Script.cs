@@ -83,6 +83,7 @@ public static class AgentScript
         + "gather返回source_unavailable时，用相同targets/source_area调用只读gather_observe确认当前库存和来源，不要反复启动gather探测。出现值得获取的新来源后可恢复原handle；否则决定换区域、执行其他步骤或交回观察。候选不是可达或安全证明，仍需opportunity_assess。"
         + "gather返回source_needs_review时，source_error.observations记录连续移除方块却没有目标库存增长的证据。先核查材料来源、变体和拾取条件，修正原handle的targets/source_area后再恢复；不要把挖掉方块当作收集成功，也不要原样重跑整批采集。"
         + "gather返回combat_obstructed表示连续射界受阻且目标未掉血；读取last_result.result里的目标格坐标、武器和血量证据，先观察地形、换位或改武器，不要原样重试。clear_line只是当前直线碰撞检查，不预测弹道或证明可达。"
+        + "gather返回combat_out_of_range表示敌怪超出40格战斗范围，执行层没有向敌怪当前位置导航。last_result.result提供实时距离、双方格坐标、血量和射界；根据地形选择人物可站的位置，必要时用npc_combat_observe测量，再导航并resume原handle。飞行敌怪坐标不是人物站位，射界通畅也不等于在攻击范围内。"
         + "普通敌怪受阻可用npc_combat_observe，npc/npc_type取原candidate的who/npc_type。站位候选不是路径或安全承诺；先检查危险，再尝试导航，抵达后刷新NPC射界和身份，最后显式resume失败的原采集句柄。"
         + "默认站位探针没有通畅射界不代表所有位置都不可用。可依据已观察的地形选择其他支撑格，通过npc_combat_observe.stance_cells测量；核对requested_stances的supported/body_fits/shot_line及支撑形状，勿把空中射线通畅当作可以站立。"
         + "观察发现危险、判断失败或局部调整仍无进展时调用decision_point交回审阅。审阅时读取原程序及workflow进度，修改源码版本后续接；保留已完成step和原句柄，uncertain先核对，不从头重放。"

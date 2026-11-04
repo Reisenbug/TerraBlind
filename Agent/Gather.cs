@@ -128,8 +128,8 @@ public static class Gather
                     && combat["hp_after"] is JsonValue afterHp && afterHp.TryGetValue<int>(out int after)
                     && after > 0 && after < before)
                     attempts[id] = 0;
-                if (last["result"]?["outcome"]?.ToString() == "combat_obstructed")
-                { outcome = "combat_obstructed"; break; }
+                if (last["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range")
+                { outcome = last["result"]["outcome"].ToString(); break; }
                 if (last["result"]?["outcome"]?.ToString() == "unsafe"
                     || last["result"]?["navigation"]?["outcome"]?.ToString() == "unsafe")
                 { outcome = "unsafe"; break; }
