@@ -1153,7 +1153,7 @@ public sealed class BehaviorTrial : ModSystem
             await OnMain(() =>
             {
                 Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
-                materialNavigationStub = Environment.GetEnvironmentVariable("TB_MATERIAL_NAV_STUB") == "1";
+                materialNavigationStub = false;
                 stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                 collectingStingers = true;
@@ -1171,6 +1171,7 @@ public sealed class BehaviorTrial : ModSystem
                     after = await Call("get_state", new JsonObject());
                     started |= NativeAgent.Status != "queued" && NativeAgent.Status != "idle";
                     samples.Add(new JsonObject { ["tick"] = after["tick"]?.DeepClone(), ["status"] = NativeAgent.Status,
+                        ["navigation_stub"] = materialNavigationStub,
                         ["idle_defense_active"] = after["idle_defense_active"]?.DeepClone(),
                         ["player"] = after["player"]?.DeepClone(), ["task_plan"] = after["task_plan"]?.DeepClone(),
                         ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone() });
