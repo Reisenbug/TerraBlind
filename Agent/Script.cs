@@ -68,7 +68,7 @@ public static class AgentScript
         + "普通机会可加入watch.passive_events，只通知不自动打断；配合action_start和script_events边执行边评估，决定值得插入时再action_control pause，避免每发现一株植物就重启导航。"
         + "target_acquired是目标物品库存增加，不代表数量达标；持续采集时可同时订阅并加入passive_events，让增量通知不自动暂停采集。是否插入行动由JS按进度、现场和机会决定，完成仍须核对实际数量，危险事件独立处理。"
         + "script_events若本次暂停了动作，action返回暂停清理后的handle/status/observation，事件evidence仍是触发时的历史快照。等待或操作后用action.observation或新查询核对血量与位置，不要复用等待前的值；action为null仅表示本次未暂停，当前动作状态用action_query核对，running表示仍在执行。"
-        + "发现机会先opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；ok只表示查询完成，即使有岩浆或陷阱也可为true，不是安全、可达或值得拿的结论。直线距离不是可达证明。"
+        + "机会交付时可附assessment，使用它的tick、障碍和route_relation作判断；navigation保存发现时原导航句柄和目的地。每批最多评估6个，其余assessment_deferred=true仍是未评估，不代表安全。缺少评估或人物、地形已改变时再opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；ok只表示查询完成，即使有岩浆或陷阱也可为true，不是安全、可达或值得拿的结论。直线距离不是可达证明。"
         + "把每次选择及原因保存在稳定step结果中；跳过不能写成已收集。多格物体可能发多个tile_cell事件，按现场物体合并处理。"
         + "step单个结果上限8000字符；只存选择理由、目标坐标、handle、outcome和实际所得等必要证据，不复制工具返回中整份task_plan、历史和背包。需要完整动作证据时用action_query读取原handle，不能用截断的记录冒充完成证明。"
         + "print用于诊断，每条最多1000字符；log_truncations列出被截断的日志及原长度。截断后未出现的字段不代表不存在，不能据此下结论。把决策所需字段从工具结果中提取后return，避免print整份状态或多份查询；JSON字符串直接print即可，不会再次转义。"

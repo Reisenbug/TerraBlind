@@ -1113,10 +1113,12 @@ public sealed class BehaviorTrial : ModSystem
                 action = await Call("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 1000 });
             }
             var state = await Call("get_state", new JsonObject());
+            var notices = await Call("script_events", new JsonObject { ["wait_ms"] = 0 });
             File.WriteAllText(Path.Combine(Main.SavePath, "own-chest.json"), new JsonObject
-                { ["action"] = action, ["state"] = state, ["model_calls"] = 0 }.ToJsonString());
+                { ["action"] = action, ["state"] = state, ["notices"] = notices, ["model_calls"] = 0 }.ToJsonString());
             if (action["status"]?.ToString() != "completed" || action["attempt"]?.GetValue<int>() != 1
                 || state["watch"]["samples"].GetValue<int>() == 0 || state["watch"]["event_count"].GetValue<int>() == 0
+                || !notices["events"].AsArray().Any(e => e["assessment"]?["sampled_cells"]?.GetValue<int>() > 0)
                 || !state["inventory_slots"].AsArray().Any(i => i["type"].GetValue<int>() == lootType && i["stack"].GetValue<int>() > 0))
                 throw new Exception("own chest did not complete once with actual loot: " + action);
             Console.WriteLine("OWN_CHEST_PASS attempts=1 actual_loot=true model_calls=0");

@@ -297,6 +297,26 @@ static class ScriptTests
         Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "low_health",
             "passive default opportunities suppressed danger interruption");
         var entries = AgentScript.EntryTools(definitions);
+        int assessments = 0;
+        var assessedWatch = new AgentWatch(notice =>
+        {
+            assessments++;
+            Check(notice["navigation"]["destination"]["x"].GetValue<int>() == 100,
+                "opportunity delivery lost the original destination after pause");
+            return new JsonObject { ["reachable"] = null, ["sampled_cells"] = 20 };
+        });
+        assessedWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        assessedWatch.Observe(JsonNode.Parse("""
+            {"hp":100,"actions":[{"handle":"route","tool":"nav_to","status":"running","attempt":1,"args":{"x":100,"y":200}}]}
+            """).AsObject());
+        for (int i = 0; i < 8; i++) assessedWatch.Emit("nearby_chest", i.ToString(), new JsonObject { ["x"] = i + 1, ["y"] = 2 });
+        assessedWatch.Observe(new JsonObject { ["hp"] = 100 });
+        Check(assessments == 0, "opportunity assessment ran during frame observation");
+        var assessedEvents = assessedWatch.Take();
+        Check(assessments == 6 && assessedEvents.Count == 8
+            && assessedEvents[0]["assessment"]["sampled_cells"].GetValue<int>() == 20
+            && assessedEvents[6]["assessment_deferred"].GetValue<bool>() && assessedEvents[6]["assessment"] == null,
+            "delivery exceeded assessment bound, dropped opportunities or invented unmeasured facts");
         var ownChest = new AgentWatch();
         ownChest.EnsureDefaults();
         var chestScene = JsonNode.Parse("""

@@ -17,7 +17,15 @@ public static partial class AgentTools
     internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
-    internal static readonly AgentWatch Watches = new();
+    internal static readonly AgentWatch Watches = new(AssessNotice);
+    static JsonObject AssessNotice(JsonObject notice)
+    {
+        if (notice["evidence"]?["x"] is not JsonValue xv || !xv.TryGetValue<int>(out int x)
+            || notice["evidence"]?["y"] is not JsonValue yv || !yv.TryGetValue<int>(out int y)
+            || x < 1 || y < 1 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1)
+            return new JsonObject { ["ok"] = false, ["error"] = "invalid_opportunity_coordinates", ["reachable"] = null };
+        return TerrainInspection.Opportunity(x, y, notice["navigation"]?["destination"] as JsonObject);
+    }
     internal static readonly AgentRecovery Recovery = new();
     internal static readonly AgentControlPolicy Control = new();
     internal static readonly AgentControlSession ControlSession = new(Control);

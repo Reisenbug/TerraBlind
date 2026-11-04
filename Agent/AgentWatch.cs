@@ -7,6 +7,9 @@ namespace TerraBlind;
 
 public sealed class AgentWatch
 {
+    readonly Func<JsonObject, JsonObject> assessOpportunity;
+    JsonObject navigation;
+    public AgentWatch(Func<JsonObject, JsonObject> assessOpportunity = null) => this.assessOpportunity = assessOpportunity;
     readonly HashSet<string> events = new(), seen = new();
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<int> tileTypes = new();
@@ -89,6 +92,9 @@ public sealed class AgentWatch
             ["suffocating"] = state["suffocating"]?.DeepClone(),
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
+        navigation = running?["tool"]?.ToString() == "nav_to" && running["args"] is JsonObject destination
+            ? new JsonObject { ["handle"] = running["handle"]?.DeepClone(),
+                ["destination"] = new JsonObject { ["x"] = destination["x"]?.DeepClone(), ["y"] = destination["y"]?.DeepClone() } } : null;
         currentChestTarget = !configured && running?["tool"]?.ToString() == "collect_treasure"
             && running["args"]?["x"] != null && running["args"]?["y"] != null
             ? running["args"]["x"] + "," + running["args"]["y"] : null;
@@ -149,6 +155,7 @@ public sealed class AgentWatch
         if (!LocalDelivery && !passive.Contains(kind) && !deferred
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
+        if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
         if (deferred) value["wake_deferred"] = true;
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
@@ -156,7 +163,16 @@ public sealed class AgentWatch
     public JsonArray Take()
     {
         var result = new JsonArray();
-        while (pending.TryDequeue(out var item)) result.Add(item);
+        int assessed = 0;
+        while (pending.TryDequeue(out var item))
+        {
+            if (assessOpportunity != null && item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop")
+            {
+                if (assessed++ < 6) item["assessment"] = assessOpportunity(item);
+                else item["assessment_deferred"] = true;
+            }
+            result.Add(item);
+        }
         return result;
     }
     public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()) };
@@ -212,6 +228,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }
