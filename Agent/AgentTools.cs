@@ -521,11 +521,11 @@ public static partial class AgentTools
                 while (!await NativeAgent.OnMain(() => Watches.HasPending, token) && eventClock.ElapsedMilliseconds < eventWait)
                     await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
                 if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
-                    return new JsonObject { ["events"] = new JsonArray(), ["paused_action"] = null }.ToJsonString();
+                    return new JsonObject { ["events"] = new JsonArray(), ["paused_action"] = null, ["action"] = null }.ToJsonString();
                 string eventHandle = await NativeAgent.OnMain(() => Watches.HasInterrupting ? Actions.ActiveHandle : null, token);
-                if (eventHandle != null) await Actions.Control(eventHandle, "pause", null, token);
+                var pausedAction = eventHandle != null ? await Actions.Control(eventHandle, "pause", null, token) : null;
                 return new JsonObject { ["events"] = await NativeAgent.OnMain(Watches.Take, token),
-                    ["paused_action"] = eventHandle }.ToJsonString();
+                    ["paused_action"] = eventHandle, ["action"] = pausedAction }.ToJsonString();
             case "decision_point":
                 string continueAction = Text(args, "continue_action");
                 if (continueAction.Length > 0 && Actions.ActiveHandle != continueAction)

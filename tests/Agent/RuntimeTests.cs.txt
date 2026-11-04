@@ -1344,6 +1344,11 @@ static class RuntimeTests
             var danger = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
             Check(danger["paused_action"].ToString() == original["handle"].ToString() && !RecedingNav.Active,
                 "passive opportunity policy suppressed a separate health interruption");
+            Check(danger["action"]["handle"].ToString() == original["handle"].ToString()
+                && danger["action"]["status"].ToString() == "paused"
+                && danger["action"]["observation"]["hp"].GetValue<int>() == Terraria.Main.LocalPlayer.statLife
+                && danger["events"][0]["evidence"]["hp"].GetValue<int>() == 10,
+                "event delivery lost post-pause observation or overwrote historical danger evidence");
         }
         finally { NativeAgent.Stop(); AgentTools.Actions.Reset(); HttpServerSystem.Handler = null; }
         Console.WriteLine("PASS: passive discoveries retain evidence without stopping movement; independent danger still pauses the same action");
