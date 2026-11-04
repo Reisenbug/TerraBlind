@@ -611,7 +611,7 @@ static class RuntimeTests
             var deathState = JsonNode.Parse(await Execute(AgentTools.State(default)));
             Check(AgentTools.Watches.Armed && AgentTools.Watches.Subscribed("low_health")
                 && AgentTools.Watches.Subscribed("nearby_chest"), "task preparation started without default observations");
-            AgentTools.Watches.Observe(new JsonObject { ["hp"] = 40, ["actions"] = new JsonArray(),
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = 29, ["max_hp"] = 100, ["actions"] = new JsonArray(),
                 ["chests"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) });
             var preparingEvents = AgentTools.Watches.Take();
             Check(preparingEvents.Any(e => e["kind"].ToString() == "low_health")

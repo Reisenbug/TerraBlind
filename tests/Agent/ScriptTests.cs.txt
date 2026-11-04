@@ -104,7 +104,7 @@ static class ScriptTests
         try { decisionWatch.Request("oversized", new JsonObject { ["data"] = new string('x', 32001) }); throw new Exception("oversized evidence accepted"); }
         catch (ArgumentException) { }
         Check(decisionWatch.Snapshot().ToJsonString() == beforeRejected, "rejected evidence consumed wake budget or mutated events");
-        retreatWatch.Configure(JsonNode.Parse("{\"events\":[\"low_health\",\"suffocating\",\"player_died\"],\"passive_events\":[\"low_health\"]}").AsObject());
+        retreatWatch.Configure(JsonNode.Parse("{\"events\":[\"low_health\",\"suffocating\",\"player_died\"],\"passive_events\":[\"low_health\"],\"health_below\":80}").AsObject());
         retreatWatch.Observe(JsonNode.Parse("{\"hp\":74,\"dead\":false,\"suffocating\":false}").AsObject());
         Check(retreatWatch.HasPending && !retreatWatch.HasInterrupting, "explicit JS health policy stopped retreat or lost danger evidence");
         retreatWatch.LocalDelivery = false;

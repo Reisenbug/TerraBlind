@@ -1691,7 +1691,7 @@ public sealed class BehaviorTrial : ModSystem
                               state=tool('get_state');
                             }
                             const recovery={hp_before:state.player.hp,potion_delay_ticks:state.player.potion_delay_ticks,candidates:[]};
-                            if(state.player.hp<80&&state.player.potion_delay_ticks===0) {
+                            if(state.player.hp<state.watch.health_below&&state.player.potion_delay_ticks===0) {
                               recovery.candidates=state.healing_items.filter(i=>i.consumable)
                                 .map(i=>({slot:i.slot,type:i.type,heal:i.base_heal_life}));
                               recovery.candidates.sort((a,b)=>b.heal-a.heal);
@@ -1702,7 +1702,7 @@ public sealed class BehaviorTrial : ModSystem
                               }
                             }
                             state=tool('get_state');
-                            if(state.player.hp<80&&!state.player.suffocating) {
+                            if(state.player.hp<state.watch.health_below&&!state.player.suffocating) {
                               const guard=tool('action_start',{tool:'fight',args:{max_dist:25,seconds:15,movement:'auto'}});
                               if(guard.error||!guard.handle) tool('decision_point',{reason:'Temporary defense could not acquire input; inspect current owner'});
                               let retreat=null;
@@ -1764,7 +1764,7 @@ public sealed class BehaviorTrial : ModSystem
                                 recovery.rest=[];
                                 let previousHp=state.player.hp;
                                 const damageTick=state.last_damage?.tick;
-                                for(let sample=0;sample<20&&state.player.hp<80;sample++) {
+                                for(let sample=0;sample<20&&state.player.hp<state.watch.health_below;sample++) {
                                   const position={x:state.player.pos.x/16,y:state.player.pos.y/16};
                                   if(state.player.suffocating||state.player.hp<=40||state.last_damage?.tick!==damageTick
                                     ||(state.player.hp<previousHp&&state.health_dynamics?.regen_direction!=='damage')||distanceToEnemy(position)<20) break;
@@ -1778,8 +1778,8 @@ public sealed class BehaviorTrial : ModSystem
                             }
                             recovery.hp_after=state.player.hp;
                             step('combat-recovery:'+action.attempt,()=>recovery);
-                            if(state.player.hp<80||state.player.suffocating)
-                              tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below 80: '+JSON.stringify(recovery)});
+                            if(state.player.hp<state.watch.health_below||state.player.suffocating)
+                              tool('decision_point',{reason:'Material combat needs a different recovery or equipment plan; health remains below the configured threshold: '+JSON.stringify(recovery)});
                             if(['combat_obstructed','combat_out_of_range'].includes(action.result?.outcome)) restoreShotLine();
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review:'+action.attempt,()=>({handle:action.handle,hp:state.player.hp,

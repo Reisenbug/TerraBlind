@@ -30,7 +30,9 @@ public sealed class AgentWatch
     JsonObject lastObservation;
     JsonObject itemCounts;
     public int Radius { get; private set; } = 25;
-    public int HealthBelow { get; private set; } = 80;
+    int? healthOverride;
+    int maxHealth = 100;
+    public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
     public bool HasPending => pending.Count > 0;
     public bool HasInterrupting => pending.Any(e => !passive.Contains(e["kind"]?.ToString())
         || e["kind"]?.ToString() == "low_health" && !LocalDelivery);
@@ -57,7 +59,8 @@ public sealed class AgentWatch
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
         if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
             throw new ArgumentException("不支持的观察事件。");
-        int radius = args["radius"]?.GetValue<int>() ?? 25, health = args["health_below"]?.GetValue<int>() ?? 80;
+        int radius = args["radius"]?.GetValue<int>() ?? 25;
+        int? health = args["health_below"]?.GetValue<int>();
         if (radius is < 1 or > 60 || health is < 1 or > 500) throw new ArgumentException("radius须1..60，health_below须1..500。");
         var types = args["tile_types"]?.AsArray().Select(x => x.GetValue<int>()).Distinct().ToArray() ?? Array.Empty<int>();
         if (types.Length > 64 || types.Any(x => x < 0 || x > ushort.MaxValue)
@@ -68,7 +71,7 @@ public sealed class AgentWatch
             throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health仅在本地JS执行期间不强制中断。");
         passive.Clear(); passive.UnionWith(passiveEvents);
         tileTypes.Clear(); tileTypes.UnionWith(types);
-        events.Clear(); events.UnionWith(requested); Radius = radius; HealthBelow = health;
+        events.Clear(); events.UnionWith(requested); Radius = radius; healthOverride = health;
         configured = true;
         return Snapshot();
     }
@@ -77,7 +80,9 @@ public sealed class AgentWatch
     {
         if (!Armed) return;
         samples++;
+        if (state["max_hp"]?.GetValue<int>() is > 0 and var maximum) maxHealth = maximum;
         lastObservation = new JsonObject { ["hp"] = state["hp"]?.DeepClone(), ["dead"] = state["dead"]?.DeepClone(),
+            ["max_hp"] = maxHealth,
             ["suffocating"] = state["suffocating"]?.DeepClone(),
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
@@ -195,6 +200,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; }
     public void End() { events.Clear(); pending.Clear(); }
 }

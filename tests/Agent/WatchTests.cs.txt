@@ -9,6 +9,24 @@ static class WatchTests
 
     public static async Task Run()
     {
+        var healthWatch = new AgentWatch();
+        healthWatch.EnsureDefaults();
+        foreach (int hp in new[] { 100, 80, 30 })
+            healthWatch.Observe(new JsonObject { ["hp"] = hp, ["max_hp"] = 100 });
+        Check(!healthWatch.HasPending, "default health warning fired at or above 30 percent");
+        healthWatch.Observe(new JsonObject { ["hp"] = 29, ["max_hp"] = 100 });
+        Check(healthWatch.Take().Count == 1, "health below 30 percent did not warn");
+        healthWatch.Observe(new JsonObject { ["hp"] = 120, ["max_hp"] = 400 });
+        Check(!healthWatch.HasPending, "30 percent boundary warned after maximum health changed");
+        healthWatch.Observe(new JsonObject { ["hp"] = 119, ["max_hp"] = 400 });
+        Check(healthWatch.Take().Count == 1, "health warning did not scale with maximum health");
+        healthWatch.Configure(new JsonObject { ["events"] = new JsonArray("low_health"), ["health_below"] = 80 });
+        healthWatch.Observe(new JsonObject { ["hp"] = 80, ["max_hp"] = 100 });
+        healthWatch.Observe(new JsonObject { ["hp"] = 79, ["max_hp"] = 100 });
+        Check(healthWatch.Take().Count == 1, "explicit absolute health threshold was ignored");
+        healthWatch.Reset(); healthWatch.EnsureDefaults();
+        healthWatch.Observe(new JsonObject { ["hp"] = 79, ["max_hp"] = 100 });
+        Check(!healthWatch.HasPending && healthWatch.HealthBelow == 30, "reset retained explicit health threshold");
         var tilesWatch = AgentTools.Watches;
         tilesWatch.Reset();
         tilesWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_tile\"],\"tile_types\":[12,59],\"radius\":5}").AsObject());
@@ -61,7 +79,7 @@ static class WatchTests
         Check(watch.Take().Count == 1, "chest did not emit one event");
         watch.Configure(config); watch.Observe(state);
         Check(!watch.HasPending, "reconfiguration reset same-chest deduplication");
-        state["hp"] = 50; watch.Observe(state); watch.Observe(state);
+        state["hp"] = 29; watch.Observe(state); watch.Observe(state);
         Check(watch.Take().Count == 1, "unchanged health repeatedly woke model");
         Console.WriteLine("PASS: event evidence deduplicates chests and health across reconfiguration");
 
@@ -89,7 +107,7 @@ static class WatchTests
             watch.Observe(state);
         }
         watch.Take();
-        state["chests"] = new JsonArray(); state["hp"] = 34; state["suffocating"] = true;
+        state["chests"] = new JsonArray(); state["hp"] = 29; state["suffocating"] = true;
         state["actions"] = new JsonArray(new JsonObject { ["handle"] = "buried", ["attempt"] = 1, ["status"] = "running" });
         watch.Observe(state);
         var danger = watch.Take();
@@ -100,7 +118,7 @@ static class WatchTests
         state["hp"] = 100; state["suffocating"] = false;
         watch.Observe(state);
         Check(!watch.HasPending, "recovery incorrectly emitted danger");
-        state["hp"] = 34; state["suffocating"] = true;
+        state["hp"] = 29; state["suffocating"] = true;
         watch.Observe(state);
         Check(watch.Take().Count == 2, "new danger after recovery was hidden within the same action");
         state["actions"][0]["attempt"] = 2;
