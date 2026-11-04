@@ -37,6 +37,8 @@ public static class AgentScript
         "单次游戏API用run_script({tool:名称,args:参数})；组合行为用run_script提交JavaScript，代码里用tool(name,args)。"
         + "顶层只提供run_script、get_state、say、ask、game_api；其余API不是顶层工具，不要直接发起函数调用。"
         + "逐次行为、条件和循环应写在代码里，读取真实返回后推进；不能只登记计划或口头承诺。\n"
+        + "玩家要求沿途择机行动时，把它作为执行条件：出发前配置watch，按已查证的类型观察；用稳定workflow和step保存原action_start句柄。用script_events读取机会，opportunity_assess提供现场依据，由你选择拿或跳过并保存理由；插入前暂停原句柄，核实实际所得后恢复同一句柄。不能用先抵达终点再回头搜集代替沿途处理。"
+        + "按当前可执行的一步查询接口和知识，不必先查清所有后续材料来源才行动；已读取的定义可复用，已有返回值直接用于下一步。已确定的查询、判断、动作和验证尽量组合在同一段脚本，遇未知情况再带证据交回审阅。\n"
         + system
         + RuntimeInstructions
         + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
