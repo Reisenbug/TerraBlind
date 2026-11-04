@@ -99,7 +99,8 @@ public static class Gather
                         {
                             outcome = "source_needs_review";
                             sourceError = new JsonObject { ["item_type"] = item, ["observations"] = evidence.DeepClone(),
-                                ["detail"] = "连续移除方块但目标库存未增长，现场也没有目标掉落物。先核查来源、变体和拾取条件；这不是该来源永远无效的证明，不要原样重复整批采集。" };
+                                ["detail"] = "连续移除方块但目标库存未增长，现场也没有目标掉落物。先核查来源、变体和拾取条件；这不是该来源永远无效的证明，不要原样重复整批采集。",
+                                ["recovery"] = SourceReview(targets.Single(t => t.ItemType == item), area, evidence) };
                             break;
                         }
                     }
@@ -150,5 +151,26 @@ public static class Gather
             ["blocked_sources"] = blockedSources,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
                 { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t), ["met"] = Count(t) >= t.Count }).ToArray()) };
+    }
+
+    static JsonObject SourceReview(GatherTarget target, GatherArea area, JsonArray evidence)
+    {
+        var cells = evidence.Select(e => e["candidate"]).ToArray();
+        int x = cells.Min(c => c["x"].GetValue<int>()), y = cells.Min(c => c["y"].GetValue<int>());
+        area ??= new GatherArea(x, y,
+            Math.Min(120, cells.Max(c => c["x"].GetValue<int>()) - x + 1),
+            Math.Min(120, cells.Max(c => c["y"].GetValue<int>()) - y + 1));
+        return new JsonObject
+        {
+            ["observe"] = new JsonArray(target.Tiles.Select(name => (JsonNode)new JsonObject
+            {
+                ["tool"] = "find_tiles", ["args"] = new JsonObject
+                { ["name"] = name, ["n"] = 1, ["source_area"] = area.Snapshot() }
+            }).ToArray()),
+            ["example"] = new JsonObject { ["tool"] = "script_program",
+                ["args"] = new JsonObject { ["operation"] = "example", ["name"] = "sample_tile_variants" } },
+            ["item_type"] = target.ItemType, ["wanted"] = target.Count,
+            ["detail"] = "先读取查询结果的variants，不只保留tiles；n只限制最近坐标，不限制变体汇总。对照observations选择尚未验证的变体或扩大区域。可读取并修改示例，用原action_query句柄恢复采集；是否试采、跳过或换区由你决定。没有库存增量的样本不是永久排除规则。"
+        };
     }
 }
