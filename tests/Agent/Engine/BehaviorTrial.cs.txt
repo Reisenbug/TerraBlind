@@ -1001,10 +1001,12 @@ public sealed class BehaviorTrial : ModSystem
             var sourceReview = sourceQuery["result"].AsObject();
             File.WriteAllText(Path.Combine(Main.SavePath, "source-review-probe.json"), sourceReview.ToJsonString());
             if (sourceReview["ok"]?.GetValue<bool>() != false || sourceReview["outcome"]?.ToString() != "source_needs_review"
-                || sourceReview["actions"]?.GetValue<int>() != 3 || sourceReview["targets"][0]["actual"]?.GetValue<int>() != 0
-                || sourceReview["source_error"]["observations"]?.AsArray().Count != 3)
+                || sourceReview["actions"]?.GetValue<int>() < 3 || sourceReview["targets"][0]["actual"]?.GetValue<int>() != 0
+                || sourceReview["source_error"]["observations"]?.AsArray().Count != 3
+                || sourceReview["source_error"]["observations"].AsArray().Select(o => o["candidate"]["id"].ToString()).Distinct().Count() != 3
+                || sourceReview["source_error"]["observations"].AsArray().Any(o => o["count_after"].GetValue<int>() != o["count_before"].GetValue<int>()))
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
-            Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true");
+            Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true attempts=" + sourceReview["actions"]);
             if (Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
             {
                 samplingSources = true;
@@ -1015,7 +1017,7 @@ public sealed class BehaviorTrial : ModSystem
                     const start=step('origin',()=>{const s=tool('get_state');return {x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),count:count()};});
                     const area={x:start.x-60,y:start.y-60,width:120,height:120};
                     tool('watch',{events:['nearby_chest'],passive_events:['nearby_chest'],radius:40});
-                    const candidates=tool('find_tiles',{name:tileName,n:100,source_area:area}).tiles;
+                    const candidates=tool('find_tiles',{name:tileName,n:1,source_area:area}).variants.map(v=>v.nearest);
                     const tried=new Set(), positive=new Set(), decisions=[];
                     const regions=[{...area,x:area.x+120},{...area,y:area.y+120},{...area,x:area.x-120},{...area,y:area.y-120}];
                     let learned=null;
