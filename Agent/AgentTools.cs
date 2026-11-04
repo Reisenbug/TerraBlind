@@ -658,6 +658,13 @@ public static partial class AgentTools
                 result = kind == "tile" ? await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token)
                     : AgentCatalog.Query(constants, Text(args, "name"));
                 result["kind"] = kind;
+                if (kind == "tile" && result["found"]?.GetValue<bool>() == false)
+                {
+                    result["source_guidance"] = "方块目录没有匹配名称，不代表该物品无来源。物品名可能不同于来源方块名；不要猜相似方块名或frame。先查物品编号，NPC来源用npc_drop_sources，方块来源与变体用wiki_search/wiki_page查证。以下只是查询建议，不是来源证据。";
+                    result["suggested_queries"] = new JsonArray(
+                        new JsonObject { ["tool"] = "game_catalog", ["args"] = new JsonObject { ["kind"] = "item", ["name"] = Text(args, "name") } },
+                        new JsonObject { ["tool"] = "wiki_search", ["args"] = new JsonObject { ["query"] = Text(args, "name") } });
+                }
                 if (kind == "item") await NativeAgent.OnMain(() =>
                 {
                     foreach (var match in result["matches"].AsArray())

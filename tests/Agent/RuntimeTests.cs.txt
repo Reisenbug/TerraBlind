@@ -956,6 +956,16 @@ static class RuntimeTests
 
             Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
             Terraria.Lang.MapLabels[16] = "Fixture Resource";
+            var missingTile = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
+                new JsonObject { ["kind"] = "tile", ["name"] = "Unknown material" }, default)));
+            Check(!missingTile["found"].GetValue<bool>() && missingTile["matches"].AsArray().Count == 0
+                && missingTile["suggested_queries"][0]["args"]["name"].ToString() == "Unknown material"
+                && missingTile["suggested_queries"][1]["tool"].ToString() == "wiki_search",
+                "missing tile catalog fabricated a source or lost the original material query");
+            var knownTile = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
+                new JsonObject { ["kind"] = "tile", ["name"] = "FixtureSource" }, default)));
+            Check(knownTile["found"].GetValue<bool>() && knownTile["suggested_queries"] == null,
+                "known tile was redirected to an unrelated source lookup");
             var previousSourceTile = Game.tile[100, 101];
             Game.tile[100, 101] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, TileFrameX = 54, TileFrameY = 18 };
             int tileQueries = 0;
