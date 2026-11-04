@@ -1088,6 +1088,24 @@ public sealed class BehaviorTrial : ModSystem
             }
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_TILE_LABEL_PROBE") == "1")
+        {
+            var found = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 100,
+                ["source_area"] = new JsonObject { ["x"] = originX - 60, ["y"] = floor - 60, ["width"] = 120, ["height"] = 120 } });
+            var cells = found["tiles"]?.AsArray() ?? throw new Exception("native tile query failed: " + found);
+            await OnMain(() =>
+            {
+                foreach (var cell in cells)
+                    cell["map_name"] = Lang.GetMapObjectName(Terraria.Map.MapHelper.CreateMapTile(
+                        cell["x"].GetValue<int>(), cell["y"].GetValue<int>(), 255).Type);
+                return true;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "tile-labels.json"), found.ToJsonString());
+            if (cells.Count == 0 || cells.Any(cell => cell["map_name"] == null))
+                throw new Exception("native query omitted map labels or found no plants");
+            Console.WriteLine("TILE_LABELS_OBSERVED cells=" + cells.Count + " model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_DEFENSE_TERRAIN_PROBE") == "1")
         {
             var terrain = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
