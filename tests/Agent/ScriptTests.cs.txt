@@ -442,6 +442,15 @@ static class ScriptTests
             && missingSources["failure"]["evidence"]["source_rules"][0]["drops_only"].GetValue<bool>()
             && progress.Summary()["last_execution"]["failure"]["evidence"]["source_rules"] != null,
             "script handoff lost the distinction between unconfigured sources and absent resources");
+        var decisionProgress = new ScriptProgress();
+        try { decisionProgress.Resolve("choice", 0, true, new JsonObject(), new JsonObject()); throw new Exception("reconciliation created a missing decision"); }
+        catch (InvalidOperationException error) { Check(error.Message.Contains("step("), "missing decision did not explain the supported recording API"); }
+        Check(decisionProgress.Snapshot()["steps"].AsArray().Count == 0 && decisionProgress.Snapshot()["revision"].GetValue<int>() == 0,
+            "rejected decision reconciliation changed saved progress");
+        var savedDecision = await AgentScript.Run("return step('choice',()=>({decision:'skip',reason:'observed blocked corridor'}));",
+            5, (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default, decisionProgress);
+        Check(savedDecision["ok"].GetValue<bool>() && decisionProgress.Snapshot()["steps"][0]["value"]["reason"].ToString() == "observed blocked corridor",
+            "correcting the decision API did not persist the actual reason");
         progress = new ScriptProgress();
         var performed = new List<string>();
         bool failSecond = true;

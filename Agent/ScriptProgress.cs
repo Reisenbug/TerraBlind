@@ -99,7 +99,7 @@ public sealed class ScriptProgress
             if (steps.Values.Any(s => s["status"].ToString() == "running") || revision != expectedRevision)
                 throw new InvalidOperationException("workflow状态已改变，请重新读取。");
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "uncertain")
-                throw new InvalidOperationException("只能核对uncertain步骤。");
+                throw new InvalidOperationException("只能核对已有uncertain步骤，complete不能创建记录。保存新的决定或理由，请在run_script指定同一workflow，使用step('稳定步骤id',()=>({decision:'skip',reason:'实际依据'}))；step是JS函数，不是tool。已完成步骤无需complete。");
             if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("核对结果超过8000字符。");
             if (completed)
             {
