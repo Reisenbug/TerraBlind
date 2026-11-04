@@ -460,6 +460,15 @@ public static partial class AgentTools
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
                 bool localEvents = eventDelivery == "script";
                 string source = Text(args, "code");
+                if (Text(args, "tool") != "")
+                {
+                    if (args["code"] != null || args["program"] != null)
+                        throw new ArgumentException("tool与code/program不能同时提供。");
+                    if (args["args"] != null && args["args"] is not JsonObject)
+                        throw new ArgumentException("args必须为JSON对象。");
+                    source = "return tool(" + JsonValue.Create(Text(args, "tool")).ToJsonString()
+                        + "," + (args["args"] ?? new JsonObject()).ToJsonString() + ");";
+                }
                 JsonObject program = null;
                 if (Text(args, "program") != "")
                 {

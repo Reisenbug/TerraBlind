@@ -17,7 +17,10 @@ public static class AgentScript
         watch["description"] = watch["description"].ToString()
             + "另支持nearby_drop(附近可见掉落，坐标单位格，需用nearby_drops刷新)和nearby_npc_killed(仅单人原生死亡事件，不证明谁击杀、不保证有掉落)。script本地处理的事件不消耗模型唤醒额度，显式decision_point仍受额度限制。不代表已拾取。";
         var parameters = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"]["parameters"];
-        parameters["properties"]["program"] = new JsonObject { ["type"] = "string", ["description"] = "已保存程序名称；与code二选一。" };
+        parameters["properties"]["tool"] = new JsonObject { ["type"] = "string", ["minLength"] = 1,
+            ["description"] = "单次游戏API调用的名称；配合args使用，不必写JS。与code/program三选一，经过相同权限和参数校验。" };
+        parameters["properties"]["args"] = new JsonObject { ["type"] = "object", ["description"] = "tool对应的参数，先用game_api读取定义。" };
+        parameters["properties"]["program"] = new JsonObject { ["type"] = "string", ["description"] = "已保存程序名称；与code/tool三选一。" };
         parameters["properties"]["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["description"] = "使用program时必填，必须匹配刚读取的源码版本。" };
         parameters["properties"]["event_delivery"] = new JsonObject { ["type"] = "string",
@@ -31,7 +34,7 @@ public static class AgentScript
         .Select(t => t.DeepClone()).ToArray());
 
     public static string Instructions(string system, JsonArray tools) =>
-        "游戏操作通过run_script提交JavaScript代码，代码里用tool(name,args)调用下面的游戏API。"
+        "单次游戏API用run_script({tool:名称,args:参数})；组合行为用run_script提交JavaScript，代码里用tool(name,args)。"
         + "顶层只提供run_script、get_state、say、ask、game_api；其余API不是顶层工具，不要直接发起函数调用。"
         + "逐次行为、条件和循环应写在代码里，读取真实返回后推进；不能只登记计划或口头承诺。\n"
         + system
@@ -50,7 +53,7 @@ public static class AgentScript
             ["unknown"] = new JsonArray(missing.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()),
             ["available"] = new JsonArray(functions.Select(f => f["name"].DeepClone()).ToArray()) };
         return new JsonObject { ["tools"] = new JsonArray(names.Select(n => functions.First(f => f["name"].ToString() == n).DeepClone()).ToArray()),
-            ["detail"] = "仅接口定义，不是执行结果。通过run_script里的tool(name,args)执行游戏操作。" };
+            ["detail"] = "仅接口定义，不会向外层tools注册这些函数。单次调用run_script({tool:名称,args:参数})；组合行为用run_script({code:源码})，源码内tool(name,args)。" };
     }
 
     public const string RuntimeInstructions =
