@@ -116,7 +116,14 @@ public sealed class ScriptProgress
             foreach (var step in steps.Values)
             {
                 var brief = (JsonObject)step.DeepClone();
-                if ((brief["value"]?.ToJsonString(JsonOptions).Length ?? 0) > 512)
+                if (brief["value"] is JsonObject value && value["handle"] is JsonValue handle
+                    && value["tool"] is JsonValue && value["status"] is JsonValue)
+                {
+                    brief["value"] = new JsonObject { ["handle"] = handle.DeepClone(), ["tool"] = value["tool"].DeepClone() };
+                    brief["value_omitted"] = true;
+                    brief["current_state_tool"] = "action_query";
+                }
+                else if ((brief["value"]?.ToJsonString(JsonOptions).Length ?? 0) > 512)
                 { brief.Remove("value"); brief["value_omitted"] = true; }
                 saved.Add(brief);
             }

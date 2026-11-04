@@ -61,6 +61,17 @@ static class ScriptTests
     public static async Task Run()
     {
         var helperProgress = new ScriptProgress();
+        var actionProgress = new ScriptProgress();
+        var savedAction = new JsonObject { ["handle"] = "preserved-action", ["tool"] = "gather", ["status"] = "running",
+            ["args"] = new JsonObject { ["description"] = new string('x', 700) }, ["attempt"] = 1 };
+        await AgentScript.Run("return step('started',()=>tool('effect'));", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult(savedAction.ToJsonString()), _ => Task.CompletedTask, default, actionProgress);
+        var actionBrief = actionProgress.Summary()["steps"][0];
+        Check(actionBrief["value"]["handle"].ToString() == "preserved-action" && actionBrief["value"]["status"] == null
+            && actionBrief["current_state_tool"].ToString() == "action_query" && actionBrief["value_omitted"].GetValue<bool>(),
+            "historical action summary hid its handle or presented stale status as current");
+        Check(JsonNode.DeepEquals(actionProgress.Snapshot()["steps"][0]["value"], savedAction),
+            "compact action summary destroyed original execution evidence");
         int helperEffects = 0;
         Task<string> HelperEffect(string name, JsonObject args, CancellationToken token)
         { helperEffects++; return Task.FromResult("{\"handle\":\"original\"}"); }
