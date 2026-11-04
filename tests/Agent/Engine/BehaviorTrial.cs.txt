@@ -1088,6 +1088,44 @@ public sealed class BehaviorTrial : ModSystem
             }
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_DEFENSE_TERRAIN_PROBE") == "1")
+        {
+            var terrain = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+            await OnMain(() => { if (!SpawnMaterialHornet()) throw new Exception("no native hornet spawn"); return true; });
+            var fight = await Call("action_start", JsonNode.Parse("""
+                {"tool":"fight","args":{"max_dist":20,"seconds":20,"movement":"auto"}}
+                """).AsObject());
+            var samples = new JsonArray();
+            for (int sample = 0; sample < 80; sample++)
+            {
+                await Task.Delay(250);
+                var measured = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer; var npc = Main.npc[target];
+                    return new JsonObject { ["tick"] = Main.GameUpdateCount, ["hp"] = p.statLife, ["dead"] = p.dead,
+                        ["x"] = p.position.X, ["y"] = p.position.Y, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
+                        ["left"] = p.controlLeft, ["right"] = p.controlRight, ["jump"] = p.controlJump,
+                        ["solid_left"] = Collision.SolidCollision(p.position - new Vector2(2, 0), p.width, p.height),
+                        ["solid_right"] = Collision.SolidCollision(p.position + new Vector2(2, 0), p.width, p.height),
+                        ["solid_above"] = Collision.SolidCollision(p.position - new Vector2(0, 2), p.width, p.height),
+                        ["attack"] = p.controlUseItem,
+                        ["weapon"] = p.HeldItem.type, ["target_active"] = npc.active, ["target_hp"] = npc.life,
+                        ["target_x"] = npc.position.X, ["target_y"] = npc.position.Y,
+                        ["line_clear"] = Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4) };
+                });
+                samples.Add(measured);
+                var action = await Call("action_query", new JsonObject { ["handle"] = fight["handle"].DeepClone() });
+                if (action["status"]?.ToString() == "failed")
+                    throw new Exception("defense probe action failed: " + action["result"]);
+                if (measured["dead"].GetValue<bool>() || !measured["target_active"].GetValue<bool>()) break;
+            }
+            var stopped = await Call("action_control", new JsonObject { ["handle"] = fight["handle"].DeepClone(), ["command"] = "pause" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "defense-terrain.json"), new JsonObject
+                { ["terrain"] = terrain, ["fight"] = fight, ["samples"] = samples, ["stopped"] = stopped,
+                    ["spawned_hornets"] = hornetsSpawned, ["model_calls"] = 0 }.ToJsonString());
+            Console.WriteLine("DEFENSE_TERRAIN_OBSERVED samples=" + samples.Count + " model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
             int modelTokenBudget = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TOKEN_BUDGET") is string configuredBudget
