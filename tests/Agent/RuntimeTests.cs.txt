@@ -37,6 +37,53 @@ static class RuntimeTests
         return await task;
     }
 
+    public static async Task EntryModel()
+    {
+        Agent.Load(); AgentTools.NewTask();
+        await Execute(AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "preserved-task",
+            ["code"] = "return step('original-action',()=>({handle:'fixture-original-47'}));" }, default));
+        var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        AgentControlSession.DescribeClaims(schemas); AgentScript.DescribePrograms(schemas);
+        var events = new JsonArray();
+        bool read = false, reported = false;
+        int calls = 0;
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-entry-model-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var model = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try
+        {
+            await model.RunAsync("只做接口检查，不进行游戏动作：读取preserved-task工作流中original-action步骤保存的handle，"
+                + "通过say原样报告这个handle。不要重建或修改工作流，不猜测handle。", "", root, "gpt-6-luna",
+                AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), schemas), AgentScript.EntryTools(schemas),
+                async (name, args, token) =>
+                {
+                    if (++calls > 8) throw new InvalidOperationException("entry probe call limit");
+                    var response = await Execute(AgentTools.Execute(name, args, token));
+                    events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = response });
+                    if (name == "run_script")
+                        read |= JsonNode.Parse(response)?["tool_counts"]?["script_progress"]?.GetValue<int>() > 0;
+                    if (name == "say") reported |= args["text"]?.ToString() == "fixture-original-47";
+                    return response;
+                }, text => events.Add(new JsonObject { ["reply"] = text }), timeout.Token,
+                new JsonObject { ["objective"] = "Read preserved fixture handle without changing progress",
+                    ["request"] = "entry-probe", ["tokenBudget"] = 60000 });
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(root, "result.json"), new JsonObject { ["read"] = read, ["reported"] = reported,
+                ["mock_world"] = true, ["events"] = events, ["usage"] = model.TokenUsage,
+                ["progress"] = AgentTools.Workflows["preserved-task"].Snapshot() }.ToJsonString());
+            Console.WriteLine("ENTRY_MODEL_REPORT " + root);
+        }
+        var preserved = AgentTools.Workflows["preserved-task"].Snapshot();
+        Check(read && preserved["revision"].GetValue<int>() == 4 && preserved["steps"].AsArray().Count == 1
+            && preserved["steps"][0]["value"]["handle"].ToString() == "fixture-original-47",
+            "model did not read the handle or changed preserved progress");
+        Check(reported, "model read the handle but did not report it through the requested say tool");
+        Console.WriteLine("ENTRY_MODEL_PASS actual_model=true production_dispatch=true mock_world=true");
+    }
+
     public static async Task Run()
     {
         var depthPlayer = Game.LocalPlayer;

@@ -397,6 +397,8 @@ static class CodexTests
 
     public static async Task ScriptModel(bool fullTools = false, string selectedModel = "")
     {
+        if (Environment.GetEnvironmentVariable("TB_SCRIPT_ENTRY_CHECK") == "1")
+        { await RuntimeTests.EntryModel(); return; }
         string root = Directory.GetCurrentDirectory();
         var names = new[] { "run_script", "get_state", "gather", "say", "game_catalog" };
         var tools = new JsonArray(JsonNode.Parse(File.ReadAllText(Path.Combine(root, "Agent/Tools.json"))).AsArray()
