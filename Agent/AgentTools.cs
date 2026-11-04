@@ -24,7 +24,19 @@ public static partial class AgentTools
             || notice["evidence"]?["y"] is not JsonValue yv || !yv.TryGetValue<int>(out int y)
             || x < 1 || y < 1 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1)
             return new JsonObject { ["ok"] = false, ["error"] = "invalid_opportunity_coordinates", ["reachable"] = null };
-        return TerrainInspection.Opportunity(x, y, notice["navigation"]?["destination"] as JsonObject);
+        var destination = notice["navigation"]?["destination"] as JsonObject;
+        var assessment = TerrainInspection.Opportunity(x, y, destination);
+        foreach (string field in new[] { "hazards", "direct_corridor_solid_cells" })
+            if (assessment[field] is JsonArray facts)
+            {
+                assessment[field + "_count"] = facts.Count;
+                if (facts.Count <= 8) continue;
+                assessment[field] = new JsonArray(facts.Take(8).Select(f => f.DeepClone()).ToArray());
+                assessment[field + "_truncated"] = true;
+                assessment["detail_request"] = new JsonObject { ["tool"] = "opportunity_assess",
+                    ["args"] = new JsonObject { ["x"] = x, ["y"] = y, ["destination"] = destination?.DeepClone() } };
+            }
+        return assessment;
     }
     internal static readonly AgentRecovery Recovery = new();
     internal static readonly AgentControlPolicy Control = new();
@@ -539,16 +551,19 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => Watches.Reconsider(Text(args, "kind"), Text(args, "key"), Text(args, "reason")), token)).ToJsonString();
             case "script_events":
                 int eventWait = Int(args, "wait_ms", 1000);
+                int eventLimit = Int(args, "max_events", 4);
+                if (eventLimit is < 1 or > 16) throw new ArgumentException("max_events需要1..16。");
                 if (eventWait < 0 || eventWait > 1000) throw new ArgumentException("wait_ms需要0..1000。");
                 var eventClock = Stopwatch.StartNew();
                 while (!await NativeAgent.OnMain(() => Watches.HasPending, token) && eventClock.ElapsedMilliseconds < eventWait)
                     await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
                 if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
-                    return new JsonObject { ["events"] = new JsonArray(), ["paused_action"] = null, ["action"] = null }.ToJsonString();
+                    return new JsonObject { ["events"] = new JsonArray(), ["remaining_events"] = 0, ["paused_action"] = null, ["action"] = null }.ToJsonString();
                 string eventHandle = await NativeAgent.OnMain(() => Watches.HasInterrupting ? Actions.ActiveHandle : null, token);
                 var pausedAction = eventHandle != null ? await Actions.Control(eventHandle, "pause", null, token) : null;
-                return new JsonObject { ["events"] = await NativeAgent.OnMain(Watches.Take, token),
-                    ["paused_action"] = eventHandle, ["action"] = pausedAction }.ToJsonString();
+                return (await NativeAgent.OnMain(() => new JsonObject { ["events"] = Watches.Take(eventLimit),
+                    ["remaining_events"] = Watches.PendingCount,
+                    ["paused_action"] = eventHandle, ["action"] = pausedAction }, token)).ToJsonString();
             case "decision_point":
                 string continueAction = Text(args, "continue_action");
                 if (continueAction.Length > 0 && Actions.ActiveHandle != continueAction)

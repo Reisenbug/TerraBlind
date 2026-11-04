@@ -1505,10 +1505,14 @@ static class RuntimeTests
             for (int i = 0; i < 10; i++)
                 AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = i, ["y"] = 2 }) });
             var observed = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
-            Check(observed["events"].AsArray().Count == 10 && observed["paused_action"] == null
+            Check(observed["events"].AsArray().Count == 4 && observed["remaining_events"].GetValue<int>() == 6 && observed["paused_action"] == null
                 && AgentTools.Actions.ActiveHandle == original["handle"].ToString() && RecedingNav.Active
                 && AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 0,
                 "passive opportunities interrupted navigation, dropped evidence or charged model calls");
+            var remainder = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0, ["max_events"] = 16 }, default)));
+            Check(remainder["events"].AsArray().Count == 6 && remainder["remaining_events"].GetValue<int>() == 0
+                && remainder["events"][0]["key"].ToString() == "4,2" && RecedingNav.Active,
+                "remaining opportunity page lost order or interrupted the original action");
             AgentTools.Watches.Emit("target_acquired", "progress", new JsonObject { ["gained"] = 1 });
             var gain = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
             Check(gain["events"][0]["kind"].ToString() == "target_acquired" && gain["paused_action"] == null

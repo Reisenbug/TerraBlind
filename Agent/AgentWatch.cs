@@ -38,6 +38,7 @@ public sealed class AgentWatch
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
     public bool HasPending => pending.Count > 0;
+    public int PendingCount => pending.Count;
     public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && (!passive.Contains(e["kind"]?.ToString()) || e["kind"]?.ToString() == "low_health" && !LocalDelivery));
@@ -160,11 +161,18 @@ public sealed class AgentWatch
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 
-    public JsonArray Take()
+    public JsonArray Take() => Take(int.MaxValue);
+    public JsonArray Take(int maxEvents)
     {
         var result = new JsonArray();
+        if (maxEvents < pending.Count)
+        {
+            var ordered = pending.OrderBy(item => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" ? 0 : 1).ToArray();
+            pending.Clear();
+            foreach (var item in ordered) pending.Enqueue(item);
+        }
         int assessed = 0;
-        while (pending.TryDequeue(out var item))
+        while (result.Count < maxEvents && pending.TryDequeue(out var item))
         {
             if (assessOpportunity != null && item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop")
             {

@@ -298,6 +298,20 @@ static class ScriptTests
             "passive default opportunities suppressed danger interruption");
         var entries = AgentScript.EntryTools(definitions);
         int assessments = 0;
+        var pagedWatch = new AgentWatch();
+        pagedWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        for (int i = 0; i < 9; i++) pagedWatch.Emit("nearby_chest", i.ToString(), new JsonObject { ["x"] = i + 1, ["y"] = 2 });
+        var page = pagedWatch.Take(4);
+        Check(page.Count == 4 && pagedWatch.PendingCount == 5 && page[3]["key"].ToString() == "3",
+            "bounded event delivery drained unseen events or reordered evidence");
+        page = pagedWatch.Take(4);
+        Check(page[0]["key"].ToString() == "4" && pagedWatch.PendingCount == 1 && pagedWatch.Take().Count == 1,
+            "following event page duplicated or lost pending observations");
+        pagedWatch.EnsureDefaults();
+        for (int i = 10; i < 18; i++) pagedWatch.Emit("nearby_chest", i.ToString(), new JsonObject { ["x"] = i, ["y"] = 2 });
+        pagedWatch.Emit("low_health", "danger", new JsonObject { ["hp"] = 1 });
+        Check(pagedWatch.Take(1)[0]["kind"].ToString() == "low_health" && pagedWatch.PendingCount == 8,
+            "opportunity pagination delayed danger behind unrelated discoveries");
         var assessedWatch = new AgentWatch(notice =>
         {
             assessments++;
