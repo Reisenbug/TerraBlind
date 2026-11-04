@@ -1364,6 +1364,19 @@ public static partial class AgentTools
         page["nearby_listed_tiles"] = observations;
         page["nearby_listed_tiles_truncated"] = listed.Length > 4;
         page["nearby_listed_tiles_detail"] = "按本页明确列出的Tile ID查询玩家附近120×120格，不从正文中的生长基底猜来源。variants包含每种现场帧的最近样本及自身发光emission，可结合正文描述选择；wiki_style不直接转成frame。空结果仅表示这个局部没有匹配。仅观察，未采集，不证明掉落或安全可达。";
+        var lines = new List<string> { "【当前游戏现场，非Wiki原文】以下仅为本页明确列出类型的附近候选，不证明掉落或可达；格坐标。每类最多展示8种变体，发光样本优先；完整列表见nearby_listed_tiles。" };
+        foreach (var observation in observations)
+        {
+            var found = observation["observed"];
+            lines.Add($"TileID={observation["wiki_tile_id"]} {found["resolved_name"]}，本区域匹配={found["total_matches"]}。");
+            foreach (var variant in (found["variants"] as JsonArray ?? new JsonArray())
+                .OrderByDescending(v => v["nearest"]?["emission"]?["emits_light"]?.GetValue<bool>() == true).Take(8))
+            {
+                var cell = variant["nearest"];
+                lines.Add($"({cell["x"]},{cell["y"]}) frame=({cell["frame_x"]},{cell["frame_y"]}) emission={cell["emission"]?.ToJsonString()}。");
+            }
+        }
+        page["text"] = string.Join("\n", lines) + "\n【Wiki正文】\n" + page["text"]?.GetValue<string>();
         return page;
     }
 

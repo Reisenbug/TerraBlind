@@ -996,6 +996,12 @@ static class RuntimeTests
                         && v["nearest"]["emission"]["g"].GetValue<float>() == .8f)
                     && Game.tile[101, 101].HasTile,
                     "wiki observation guessed style coordinates, lost visible variants, or harvested during lookup");
+                var projected = await AgentScript.Run("const p=tool('wiki_page'); return String(p.text).slice(0,1800);", 5,
+                    (_, _) => { }, (_, _, _) => Task.FromResult(namedWiki.ToJsonString()), _ => Task.CompletedTask, default);
+                string retained = projected["value"].GetValue<string>();
+                Check(retained.Contains("非Wiki原文") && retained.Contains("(101,101)")
+                    && retained.Contains("frame=(54,0)") && retained.Contains("0.8"),
+                    "the observed text-only model projection still discarded native source evidence");
             }
             finally
             {
