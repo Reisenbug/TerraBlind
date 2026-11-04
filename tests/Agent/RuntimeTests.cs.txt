@@ -301,6 +301,12 @@ static class RuntimeTests
             Game.LocalPlayer.dead = true;
             var deadState = JsonNode.Parse(await Execute(AgentTools.State(default)));
             Check(deadState["player"]["dead"].GetValue<bool>(), "state omitted current death despite readable HP");
+            Check(deadState["player"]["hp"].GetValue<int>() == Game.LocalPlayer.statLife
+                && deadState["player"]["max_hp"].GetValue<int>() == Game.LocalPlayer.statLifeMax2
+                && deadState["player"]["tick"].ToString() == Game.GameUpdateCount.ToString()
+                && deadState["player"]["pos"]["x"].GetValue<float>() == Game.LocalPlayer.position.X
+                && deadState["player"]["vel"]["y"].GetValue<float>() == Game.LocalPlayer.velocity.Y,
+                "current death state mixed with cached health or motion");
             var deadApi = JsonNode.Parse(await Execute(AgentTools.Execute("game_api", new JsonObject
                 { ["names"] = new JsonArray("action_control") }, default)));
             Check(deadApi["tools"]?.AsArray().Count == 1 && Game.LocalPlayer.dead,

@@ -109,6 +109,11 @@ public static partial class AgentTools
         };
         if (state["player"] is JsonObject observedPlayer)
         {
+            observedPlayer["tick"] = Main.GameUpdateCount;
+            observedPlayer["hp"] = healthPlayer.statLife;
+            observedPlayer["max_hp"] = healthPlayer.statLifeMax2;
+            observedPlayer["pos"] = new JsonObject { ["x"] = healthPlayer.position.X, ["y"] = healthPlayer.position.Y };
+            observedPlayer["vel"] = new JsonObject { ["x"] = healthPlayer.velocity.X, ["y"] = healthPlayer.velocity.Y };
             observedPlayer["dead"] = Main.LocalPlayer.dead;
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
             observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
