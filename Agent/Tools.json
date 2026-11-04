@@ -234,6 +234,14 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "accepted_traps": {
+            "type": "array",
+            "description": "仅本次导航接受指定已观察机关的风险，可用于绕行或离开附近机关。按inspect_terrain或navigation_near_trap返回填入坐标、type和frame；新机关或不同变体仍会停止。不证明路线安全，不改变其他安全检查。",
+            "items": { "type": "object", "properties": {
+              "x": { "type": "integer" }, "y": { "type": "integer" },
+              "type": { "type": "integer" }, "frame_x": { "type": "integer" }, "frame_y": { "type": "integer" }
+            }, "required": ["x", "y", "type", "frame_x", "frame_y"] }
+          },
           "x": {
             "type": "integer"
           },

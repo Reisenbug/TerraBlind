@@ -1171,8 +1171,9 @@ public static partial class AgentTools
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
     {
         JsonObject escapeBefore = null;
+        var acceptedTraps = args["accepted_traps"]?.AsArray();
         var hazard = await NativeAgent.OnMain(() =>
-        { escapeBefore = LastContactEscape; return TerrainInspection.NavigationHazard(); }, token);
+        { escapeBefore = LastContactEscape; return TerrainInspection.NavigationHazard(acceptedTraps); }, token);
         if (hazard != null) return hazard;
         var request = await NativeAgent.OnMain(() =>
         {
@@ -1193,7 +1194,7 @@ public static partial class AgentTools
             elapsed => NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;
-                var trap = TerrainInspection.NavigationHazard();
+                var trap = TerrainInspection.NavigationHazard(acceptedTraps);
                 if (trap != null) return trap;
                 if (player.suffocating)
                     return new JsonObject { ["error"] = "navigation_suffocating", ["outcome"] = "unsafe",

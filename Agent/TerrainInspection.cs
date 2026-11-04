@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.Json.Nodes;
 using Terraria;
@@ -94,7 +95,7 @@ public static class TerrainInspection
             ["limitations"] = "只检查当前方块、直线人物扫掠范围及目标周边4格。挡路格数不是必挖数量；未模拟跳跃、落差、绕路、敌人、射出的机关或返程，不证明安全可达。由Agent/JS决定接近、跳过或进一步调查。" };
     }
 
-    internal static JsonObject NavigationHazard()
+    internal static JsonObject NavigationHazard(JsonArray acceptedTraps = null)
     {
         var player = Main.LocalPlayer;
         int px = (int)player.Center.X / 16, py = (int)player.Bottom.Y / 16;
@@ -110,11 +111,18 @@ public static class TerrainInspection
             bool overheadBoulder = tile.TileType is TileID.Boulder or TileID.BouncyBoulder or TileID.LifeCrystalBoulder
                 && y < py && Math.Abs(x - px) <= 2;
             if (trigger || explosive || overheadBoulder || rollingCactus)
+            {
+                if (acceptedTraps?.Any(t => t?["x"]?.GetValue<int>() == x && t?["y"]?.GetValue<int>() == y
+                    && t?["type"]?.GetValue<int>() == tile.TileType
+                    && t?["frame_x"]?.GetValue<int>() == tile.TileFrameX
+                    && t?["frame_y"]?.GetValue<int>() == tile.TileFrameY) == true) continue;
                 hazards.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
+                    ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY,
                     ["kind"] = trigger ? "pressure_plate" : explosive ? "explosive" : rollingCactus ? "rolling_cactus" : "overhead_boulder" });
+            }
         }
         return hazards.Count == 0 ? null : new JsonObject { ["error"] = "navigation_near_trap", ["outcome"] = "unsafe",
-            ["trap_tiles"] = hazards, ["detail"] = "已停止接近机关。先用inspect_terrain检查并拆除可达触发器；不要挖落头顶巨石或原样重试路线。" };
+            ["trap_tiles"] = hazards, ["detail"] = "附近存在机关，导航已停止；这不证明所有离开方向都危险。用inspect_terrain检查，选择绕行、拆除或换目标。若决定接受这些已观察机关的风险，可将其x/y/type/frame_x/frame_y放入本次nav_to的accepted_traps；只影响此次导航的附近机关检查，不关闭其他安全检查。不要原样重试或挖落头顶巨石。" };
     }
 
     public static JsonObject Read(int radius)

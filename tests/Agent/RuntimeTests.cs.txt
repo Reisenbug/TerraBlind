@@ -676,6 +676,22 @@ static class RuntimeTests
                 var blocked = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 10, ["y"] = 6 }, default));
                 Check(blocked["error"].ToString() == "navigation_near_trap" && starts == 0,
                     "nearby trap allowed navigation to acquire movement controls");
+                var accepted = blocked["trap_tiles"].DeepClone().AsArray();
+                Check(TerrainInspection.NavigationHazard(accepted) == null,
+                    "agent acceptance could not release the observed nearby trap guard");
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") starts++;
+                    return (200, "{\"done\":true,\"nav\":false}");
+                };
+                await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 10, ["y"] = 6,
+                    ["accepted_traps"] = accepted.DeepClone() }, default));
+                Check(starts == 1 && TerrainInspection.NavigationHazard() != null,
+                    "explicit trap acceptance failed to start navigation or leaked into later calls");
+                Game.tile[4, 6] = new Terraria.Tile { HasUnactuatedTile = true,
+                    TileType = Terraria.ID.TileID.PressurePlates, TileFrameX = 18 };
+                Check(TerrainInspection.NavigationHazard(accepted) != null,
+                    "trap acceptance silently covered a changed variant");
                 Game.tile[4, 6] = default;
                 Check(TerrainInspection.NavigationHazard() == null, "removed trigger permanently blocked navigation");
                 Game.tile[4, 6] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.RollingCactus };
