@@ -1023,6 +1023,18 @@ static class RuntimeTests
             var spacedResult = await Execute(AgentTools.FindTiles(spaced, default));
             Check(spacedResult["resolved_name"].ToString() == "FixtureSource" && tileQueries == 1,
                 "display name containing spaces reached legacy parser");
+            var oldVariant = Game.tile[101, 101];
+            Game.tile[101, 101] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, TileFrameX = 144 };
+            try
+            {
+                var variants = await Execute(AgentTools.FindTiles(JsonNode.Parse("{\"name\":\"FixtureSource\",\"n\":1,\"source_area\":{\"x\":100,\"y\":101,\"width\":2,\"height\":1}}").AsObject(), default));
+                Check(variants["tiles"].AsArray().Count == 1 && variants["variants"].AsArray().Count == 2
+                    && variants["variants"].AsArray().Sum(v => v["count"].GetValue<int>()) == 2
+                    && variants["variants"].AsArray().Any(v => v["frame_x"].GetValue<int>() == 144
+                        && v["nearest"]["x"].GetValue<int>() == 101),
+                    "nearest result limit hid a distinct source variant or invented its sample location");
+            }
+            finally { Game.tile[101, 101] = oldVariant; }
             Terraria.Lang.MapLabels[32] = "Fixture Resource";
             tileQueries = 0;
             var ambiguous = await Execute(AgentTools.FindTiles(aliasArgs, default));

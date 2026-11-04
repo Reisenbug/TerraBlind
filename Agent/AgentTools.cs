@@ -1063,8 +1063,15 @@ public static partial class AgentTools
                                 ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY });
                         }
                 int limit = Math.Clamp(Int(args, "n", 12), 1, 100);
-                return new JsonObject { ["tiles"] = new JsonArray(matches.OrderBy(m => m["dist"].GetValue<float>())
+                var ordered = matches.OrderBy(m => m["dist"].GetValue<float>()).ToArray();
+                var variants = ordered.GroupBy(m => (X: m["frame_x"].GetValue<int>(), Y: m["frame_y"].GetValue<int>())).ToArray();
+                return new JsonObject { ["tiles"] = new JsonArray(ordered
                     .Take(limit).Select(m => (JsonNode)m).ToArray()),
+                    ["variants"] = new JsonArray(variants.Take(32).Select(group => (JsonNode)new JsonObject
+                    { ["frame_x"] = group.Key.X, ["frame_y"] = group.Key.Y, ["count"] = group.Count(),
+                        ["nearest"] = group.First().DeepClone() }).ToArray()),
+                    ["variants_truncated"] = variants.Length > 32,
+                    ["variants_detail"] = "汇总本次source_area和frame筛选下全部匹配格，独立于n截取；最多32种，按最近样本距离排序。frame不是Wiki样式号，不证明掉落物。由Agent选择进一步观察或试采，并核实所得。",
                     ["total_matches"] = matches.Count, ["truncated"] = matches.Count > limit,
                     ["source_area"] = area.Snapshot(), ["resolved_name"] = resolved["name"].DeepClone() };
             }, token);
