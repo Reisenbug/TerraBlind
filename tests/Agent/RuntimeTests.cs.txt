@@ -293,6 +293,23 @@ static class RuntimeTests
         ControlTests.Run();
         Agent.Load();
         int invalidCalls = 0, invalidStops = 0;
+        bool previousDead = Game.LocalPlayer.dead;
+        var beforeDeathSnapshot = HttpServerSystem.LatestSnapshot;
+        try
+        {
+            HttpServerSystem.LatestSnapshot = new JsonObject { ["player"] = new JsonObject { ["hp"] = 14 } };
+            Game.LocalPlayer.dead = true;
+            var deadState = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(deadState["player"]["dead"].GetValue<bool>(), "state omitted current death despite readable HP");
+            var deadApi = JsonNode.Parse(await Execute(AgentTools.Execute("game_api", new JsonObject
+                { ["names"] = new JsonArray("action_control") }, default)));
+            Check(deadApi["tools"]?.AsArray().Count == 1 && Game.LocalPlayer.dead,
+                "death blocked interface discovery or querying it changed player state");
+            Game.LocalPlayer.dead = false;
+            Check(JsonNode.Parse(await Execute(AgentTools.State(default)))["player"]["dead"].GetValue<bool>() == false,
+                "respawn retained stale death state");
+        }
+        finally { Game.LocalPlayer.dead = previousDead; HttpServerSystem.LatestSnapshot = beforeDeathSnapshot; }
         var invalidControl = await AgentScript.Run("return tool('action_control',{handle:'preserve-original',action:'pause'});", 5,
             NativeAgent.ValidateTool, (_, _, _) => { invalidCalls++; return Task.FromResult("{}"); },
             _ => { invalidStops++; return Task.CompletedTask; }, default);
