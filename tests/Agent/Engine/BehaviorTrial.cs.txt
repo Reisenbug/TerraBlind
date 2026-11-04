@@ -1630,7 +1630,12 @@ public sealed class BehaviorTrial : ModSystem
                     var reviewSnapshot = await Call("get_state", new JsonObject());
                     string reviewActions = string.Join(";", reviewSnapshot["action_tasks"].AsArray()
                         .Where(a => a["tool"]?.ToString() == "gather")
-                        .Select(a => $"{a["handle"]}:{a["attempt"]}:{a["status"]}"));
+                        .Select(a => $"{a["handle"]}:{a["attempt"]}:{a["status"]}"))
+                        + string.Join(";", (combat["workflow"]?["steps"]?.AsArray() ?? new JsonArray())
+                            .Where(s => s["status"]?.ToString() == "completed"
+                                && s["id"]?.ToString().StartsWith("combat-obstruction-edit:") == true
+                                && s["value"]?["result"]?["outcome"]?.ToString() == "removed")
+                            .Select(s => s["id"].ToString()));
                     if (reviewReason != null && reviewReason == previousReviewReason && reviewActions == previousReviewActions)
                     {
                         Console.WriteLine("MATERIAL_REVIEW_UNCHANGED " + reviewReason);
