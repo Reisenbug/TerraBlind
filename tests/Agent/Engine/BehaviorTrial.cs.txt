@@ -1088,6 +1088,23 @@ public sealed class BehaviorTrial : ModSystem
             }
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_OWN_CHEST_PROBE") == "1")
+        {
+            await OnMain(() => { AgentTools.NewTask(); return true; });
+            var action = await Call("action_start", new JsonObject { ["tool"] = "collect_treasure",
+                ["args"] = new JsonObject { ["x"] = chestX, ["y"] = chestY } });
+            string handle = action["handle"].ToString();
+            for (int sample = 0; sample < 40 && action["status"]?.ToString() == "running"; sample++)
+                action = await Call("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 1000 });
+            var state = await Call("get_state", new JsonObject());
+            File.WriteAllText(Path.Combine(Main.SavePath, "own-chest.json"), new JsonObject
+                { ["action"] = action, ["state"] = state, ["model_calls"] = 0 }.ToJsonString());
+            if (action["status"]?.ToString() != "completed" || action["attempt"]?.GetValue<int>() != 1
+                || !state["inventory_slots"].AsArray().Any(i => i["type"].GetValue<int>() == lootType && i["stack"].GetValue<int>() > 0))
+                throw new Exception("own chest did not complete once with actual loot: " + action);
+            Console.WriteLine("OWN_CHEST_PASS attempts=1 actual_loot=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_TILE_LABEL_PROBE") == "1")
         {
             var found = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 100,

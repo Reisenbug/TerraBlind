@@ -297,6 +297,30 @@ static class ScriptTests
         Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "low_health",
             "passive default opportunities suppressed danger interruption");
         var entries = AgentScript.EntryTools(definitions);
+        var ownChest = new AgentWatch();
+        ownChest.EnsureDefaults();
+        var chestScene = JsonNode.Parse("""
+            {"hp":100,"chests":[{"x":10,"y":20}]}
+            """).AsObject();
+        ownChest.Observe(chestScene);
+        chestScene["actions"] = JsonNode.Parse("""
+            [{"handle":"open-chest","tool":"collect_treasure","status":"running","attempt":1,"args":{"x":10,"y":20}}]
+            """);
+        ownChest.Observe(chestScene);
+        Check(ownChest.HasPending && !ownChest.HasInterrupting,
+            "default discovery interrupted collection of its own target");
+        chestScene["chests"].AsArray().Add(new JsonObject { ["x"] = 11, ["y"] = 20 });
+        ownChest.Observe(chestScene);
+        Check(ownChest.HasInterrupting && ownChest.Take().Count == 2,
+            "own-target suppression hid a different opportunity");
+        ownChest.Reset(); ownChest.EnsureDefaults(); ownChest.Observe(chestScene);
+        Check(ownChest.Snapshot()["wake_count"].GetValue<int>() == 1,
+            "own-target discovery consumed a model wake allowance");
+        ownChest.Take(); ownChest.Reset();
+        ownChest.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        chestScene["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 });
+        ownChest.Observe(chestScene);
+        Check(ownChest.HasInterrupting, "default own-target policy overrode explicit Agent observation policy");
         Check(entries.Count == 5 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
         string instructions = AgentScript.Instructions("original-system", definitions);

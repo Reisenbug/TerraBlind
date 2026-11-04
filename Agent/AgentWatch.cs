@@ -27,6 +27,7 @@ public sealed class AgentWatch
     }
     int samples;
     bool configured;
+    string currentChestTarget;
     JsonObject lastObservation;
     JsonObject itemCounts;
     public int Radius { get; private set; } = 25;
@@ -35,6 +36,7 @@ public sealed class AgentWatch
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
     public bool HasPending => pending.Count > 0;
     public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
+        && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && (!passive.Contains(e["kind"]?.ToString()) || e["kind"]?.ToString() == "low_health" && !LocalDelivery));
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
@@ -70,6 +72,7 @@ public sealed class AgentWatch
         if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired" or "low_health")))
             throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health仅在本地JS执行期间不强制中断。");
         passive.Clear(); passive.UnionWith(passiveEvents);
+        currentChestTarget = null;
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; healthOverride = health;
         configured = true;
@@ -86,6 +89,9 @@ public sealed class AgentWatch
             ["suffocating"] = state["suffocating"]?.DeepClone(),
             ["pos"] = state["pos"]?.DeepClone(), ["sample"] = samples, ["utc"] = DateTime.UtcNow.ToString("O") };
         var running = state["actions"]?.AsArray().LastOrDefault(action => action["status"]?.ToString() == "running");
+        currentChestTarget = !configured && running?["tool"]?.ToString() == "collect_treasure"
+            && running["args"]?["x"] != null && running["args"]?["y"] != null
+            ? running["args"]["x"] + "," + running["args"]["y"] : null;
         if (!configured)
         {
             if (running == null) passive.Add("nearby_chest");
@@ -140,7 +146,8 @@ public sealed class AgentWatch
         if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
         bool deferred = !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
-        if (!LocalDelivery && !passive.Contains(kind) && !deferred) wakeCount++;
+        if (!LocalDelivery && !passive.Contains(kind) && !deferred
+            && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (deferred) value["wake_deferred"] = true;
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
@@ -205,6 +212,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }
