@@ -52,6 +52,7 @@ public sealed class GameGather : IGatherWorld
                         candidate["npc_generation"] = identity.Generation;
                         candidate["id"] = $"{target.ItemType}:npc:{i}:{identity.Generation}";
                         candidate["npc_type"] = npc.type;
+                        candidate["source_verified"] = false;
                         candidate["hp"] = npc.life;
                         candidate["clear_line"] = Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4);
                         candidates.Add(candidate);
@@ -72,6 +73,7 @@ public sealed class GameGather : IGatherWorld
             { scene["error"] = found["error"].DeepClone(); scene["source_error"] = found.DeepClone(); return scene; }
             foreach (var cell in found["tiles"]?.AsArray() ?? new JsonArray())
                 scene["candidates"].AsArray().Add(new JsonObject { ["item_type"] = target.ItemType, ["kind"] = "tile",
+                    ["source_verified"] = false,
                     ["id"] = $"{target.ItemType}:tile:{cell["x"]}:{cell["y"]}", ["x"] = cell["x"].DeepClone(),
                     ["y"] = cell["y"].DeepClone(), ["distance"] = cell["dist"]?.DeepClone() ?? JsonValue.Create(0),
                     ["tile_type"] = cell["tile_type"]?.DeepClone(), ["frame_x"] = cell["frame_x"]?.DeepClone(), ["frame_y"] = cell["frame_y"]?.DeepClone() });

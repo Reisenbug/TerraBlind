@@ -990,6 +990,9 @@ static class RuntimeTests
             var resourceScene = await Execute(new GameGather(new[] { new GatherTarget(99, 10, new[] { "FixtureResource" }, Array.Empty<int>()) }).Observe(default));
             Check(resourceScene["error"] == null && resourceScene["candidates"].AsArray().Count == 1 && tileQueries == 1,
                 "batch gathering did not reuse tile name resolution");
+            Check(!resourceScene["candidates"][0]["source_verified"].GetValue<bool>()
+                && resourceScene["source_rules"][0]["detail"] != null,
+                "caller-provided tile filter was presented as verified item drop evidence");
             Check(resourceScene["candidates"][0]["tile_type"].GetValue<int>() == 1
                 && resourceScene["candidates"][0]["frame_x"].GetValue<int>() == 54
                 && resourceScene["candidates"][0]["frame_y"].GetValue<int>() == 18,
