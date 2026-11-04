@@ -471,10 +471,11 @@ public static partial class AgentTools
                 return (Text(args, "operation") switch
                 {
                     "list" => (JsonNode)library.List(),
+                    "example" => ScriptLibrary.Example(Text(args, "name")),
                     "get" => library.Get(Text(args, "name")),
                     "save" => library.Save(Text(args, "name"), Text(args, "code"), Int(args, "expected_revision", -1)),
                     "patch" => library.Patch(Text(args, "name"), Text(args, "old_text"), args["new_text"]?.GetValue<string>(), Int(args, "expected_revision", -1)),
-                    _ => throw new ArgumentException("operation需要list/get/save/patch。")
+                    _ => throw new ArgumentException("operation需要list/get/save/patch/example。")
                 }).ToJsonString();
             case "control":
                 return (await ManageControl(args, token)).ToJsonString();

@@ -208,6 +208,58 @@ static class ScriptTests
         try
         {
             var library = new ScriptLibrary(programDirectory);
+            string recipe = ScriptLibrary.Example("sample_tile_variants")["code"].ToString();
+            int recipeCalls = 0, recipeItems = 0, recipeResumes = 0;
+            Task<string> RecipeTool(string name, JsonObject args, CancellationToken token)
+            {
+                recipeCalls++;
+                return Task.FromResult(name switch
+                {
+                    "get_state" => "{\"inventory_slots\":[{\"type\":77,\"stack\":" + recipeItems + "}]}",
+                    "find_tiles" => "{\"variants\":[{\"nearest\":{\"x\":11,\"y\":10,\"frame_x\":18,\"frame_y\":0}},{\"nearest\":{\"x\":12,\"y\":10,\"frame_x\":36,\"frame_y\":0}},{\"nearest\":{\"x\":13,\"y\":10,\"frame_x\":54,\"frame_y\":0}}]}",
+                    "script_events" => "{\"remaining_events\":0,\"events\":[{\"kind\":\"action_finished\",\"evidence\":{\"handle\":\"original\"}}]}",
+                    "opportunity_assess" => args["x"].GetValue<int>() == 11
+                        ? "{\"ok\":true,\"hazards\":[{\"x\":11,\"y\":10,\"on_direct_corridor\":true}]}" : "{\"ok\":true,\"hazards\":[]}",
+                    "action_query" => "{\"tool\":\"gather\",\"status\":\"failed\",\"result\":{\"outcome\":\"source_unavailable\"}}",
+                    "action_control" => ResumeRecipe(args),
+                    _ => throw new Exception("unexpected recipe tool: " + name)
+                });
+            }
+            string ResumeRecipe(JsonObject args)
+            {
+                Check(args["handle"].ToString() == "original" && args["command"].ToString() == "resume", "source example replaced original action");
+                recipeResumes++;
+                if (args["args"]["targets"][0]["tile_frame_x"].GetValue<int>() == 54) recipeItems += 2;
+                return "{\"handle\":\"original\",\"status\":\"running\"}";
+            }
+            var unconfigured = await AgentScript.Run(recipe, 5, (_, _) => { }, RecipeTool, _ => Task.CompletedTask, default);
+            Check(!unconfigured["ok"].GetValue<bool>() && recipeCalls == 0, "unconfigured example performed game actions");
+            string configured = recipe.Replace("const config = null;", "const config={handle:'original',item_type:77,count:2,tile_name:'Fixture',source_area:{x:10,y:10,width:5,height:5},max_samples:3};");
+            var recipeProgress = new ScriptProgress();
+            var sampled = await AgentScript.Run(configured, 5, (_, _) => { }, RecipeTool, _ => Task.CompletedTask, default, recipeProgress);
+            Check(sampled["ok"].GetValue<bool>() && sampled["value"]["target_met"].GetValue<bool>() && recipeResumes == 2
+                && recipeProgress.Completed == 3 && sampled["value"]["decisions"][0]["decision"].ToString() == "skip"
+                && sampled["value"]["decisions"][1]["gained"].GetValue<int>() == 0
+                && sampled["value"]["decisions"][2]["gained"].GetValue<int>() == 2,
+                "editable source example lost hazard choice, negative evidence, inventory verification or saved decisions");
+            recipeItems = 0; recipeResumes = 0;
+            int reviews = 0;
+            Task<string> InterruptedRecipeTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "script_events")
+                    return Task.FromResult("{\"remaining_events\":0,\"events\":[{\"kind\":\"nearby_chest\",\"evidence\":{\"x\":12,\"y\":10}}]}");
+                if (name == "decision_point")
+                {
+                    reviews++;
+                    Check(args["evidence"]["handle"].ToString() == "original", "source review lost original handle");
+                    return Task.FromResult("{\"status\":\"yield\"}");
+                }
+                return RecipeTool(name, args, token);
+            }
+            var sampleReviewProgress = new ScriptProgress();
+            await AgentScript.Run(configured, 5, (_, _) => { }, InterruptedRecipeTool, _ => Task.CompletedTask, default, sampleReviewProgress);
+            Check(reviews == 1 && recipeResumes == 0 && sampleReviewProgress.Completed == 0,
+                "source example resumed or recorded success before agent reviewed a new opportunity");
             string firstCode = "step('first', () => tool('effect', {})); return {status:'yield'};";
             Check(library.Save("collect", firstCode, 0)["revision"].GetValue<int>() == 1, "program not saved");
             var savedProgress = new ScriptProgress();

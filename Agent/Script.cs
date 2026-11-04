@@ -13,6 +13,10 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var programs = tools.First(t => t["function"]?["name"]?.ToString() == "script_program")["function"];
+        programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
+        programs["description"] = programs["description"].ToString()
+            + "example返回可编辑JS示例，name为空列出名称；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
         var events = tools.First(t => t["function"]?["name"]?.ToString() == "script_events")["function"];
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["maximum"] = 16, ["description"] = "每次读取数量，默认4。remaining_events表示队列剩余数；可继续读取，未读事件不会丢弃。" };
