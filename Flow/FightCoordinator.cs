@@ -14,16 +14,8 @@ namespace TerraBlind
         private static float _maxDistTiles = 20f;
         private const int TimeoutFrames = 360;
         private static HashSet<int> _types;
-        private static bool _moving;
-        private static int _jumpHold;
-        private static string _movement = "auto";
         private static bool _idleDefense;
-
-        private static void ReleaseMovement(Player p)
-        {
-            if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
-            _moving = false; _jumpHold = 0;
-        }
+        private static bool _usingItem;
 
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
@@ -44,7 +36,7 @@ namespace TerraBlind
             {
                 Vector2 position = p.Center, velocity = p.velocity;
                 if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
-                int hold = jump ? 12 : _jumpHold;
+                int hold = jump ? 12 : 0;
                 float score = direction == 0 ? 0 : .01f;
                 if (jump) score += .02f;
                 for (int frame = 1; frame <= 24; frame++)
@@ -97,7 +89,6 @@ namespace TerraBlind
         {
             if (movement is not ("auto" or "left" or "right")) throw new ArgumentException("movement需要auto/left/right。");
             StopIdleDefense();
-            _movement = movement;
             _maxDistTiles = maxDistTiles;
             _framesLeft = TimeoutFrames;
             _active = true;
@@ -107,57 +98,52 @@ namespace TerraBlind
         public static void Stop()
         {
             StopIdleDefense();
-            ReleaseMovement(Main.LocalPlayer);
+            if (_usingItem && !ItemUseCoordinator.IsActive) Main.LocalPlayer.controlUseItem = false;
+            _usingItem = false;
             _active = false;
             _framesLeft = 0;
             _types = null;
-            _movement = "auto";
         }
 
         internal static void StopIdleDefense()
         {
             if (!_idleDefense) return;
-            ReleaseMovement(Main.LocalPlayer);
-            Main.LocalPlayer.controlUseItem = false;
+            if (_usingItem && !ItemUseCoordinator.IsActive) Main.LocalPlayer.controlUseItem = false;
+            _usingItem = false;
             _idleDefense = false;
             DiagLog.Write("[agent_defense] released");
         }
 
         public static void Tick(Player p) => Tick(p, NativeAgent.Processing);
 
-        internal static void Tick(Player p, bool processing)
+        internal static void Tick(Player p, bool processing, bool primaryItemUse = false)
         {
             if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
+            bool itemBusy = primaryItemUse || ItemUseCoordinator.IsActive
+                || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure");
+            if (itemBusy)
+            {
+                _idleDefense = false;
+                _usingItem = false;
+                return;
+            }
             bool idle = !IsActive;
             if (idle && (!processing || !Config.I.AgentEnabled || !AgentNetwork.CanAutomate || Manual.On
-                || p.dead || AgentTools.ControlSession.Active || AgentTools.Actions.HasActive
+                || p.dead
                 || AgentTools.ContactEscapeActive || PvpDuel.Active || PlayerCombat.Active
-                || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All)))
+                || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.ItemUse, delegated: true)))
             {
                 StopIdleDefense();
-                ReleaseMovement(p);
                 _active = false;
                 return;
             }
             NPC target = FindNearest(p, idle);
-            if (AgentPermissions.CanDodge(delegated: true))
-            {
-                var evade = idle || _movement == "auto" ? Evade(p, target)
-                    : (Direction: _movement == "left" ? -1 : 1, Jump: false);
-                if (evade.Jump) _jumpHold = 12;
-                if (_moving) p.controlLeft = p.controlRight = p.controlJump = false;
-                p.controlLeft |= evade.Direction < 0;
-                p.controlRight |= evade.Direction > 0;
-                p.controlJump |= _jumpHold > 0;
-                _moving = evade.Direction != 0 || _jumpHold > 0;
-                if (_jumpHold > 0) _jumpHold--;
-            }
-            else ReleaseMovement(p);
 
             if (target == null)
             {
                 p.controlUseItem = false;
-                _idleDefense = idle && _moving;
+                _idleDefense = false;
+                _usingItem = false;
                 if (!idle) _framesLeft--;
                 return;
             }
@@ -175,6 +161,7 @@ namespace TerraBlind
             p.selectedItem = weaponSlot;
             if (idle) p.delayUseItem = p.mouseInterface = false;
             p.controlUseItem = !NeedsClearLine(p.HeldItem) || Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
+            _usingItem = p.controlUseItem;
         }
 
         private static NPC FindNearest(Player p, bool idle = false)

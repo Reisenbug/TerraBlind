@@ -9,11 +9,13 @@ public sealed class AgentControlSession
     readonly AgentControlPolicy policy;
     long sequence, current;
     string tool, claim;
+    long attackTicket;
+    string attackClaim;
     ControlBehavior[] delegates = Array.Empty<ControlBehavior>();
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
-    public bool Active => current != 0;
-    public string Tool => tool;
+    public bool Active => current != 0 || attackTicket != 0;
+    public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
         or "combat_reposition" or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
@@ -39,13 +41,21 @@ public sealed class AgentControlSession
     public JsonObject Begin(string name, string controlClaim, out long ticket, ControlChannels channels = ControlChannels.All)
     {
         ticket = 0;
-        if (Active) return new JsonObject { ["error"] = "control_action_busy", ["owner"] = tool };
+        if (name == "fight")
+        {
+            if (attackTicket != 0) return new JsonObject { ["error"] = "control_action_busy", ["owner"] = "fight" };
+            var attackDenied = policy.Check(ControlBehavior.Attack, ControlChannels.ItemUse, controlClaim);
+            if (attackDenied != null) return attackDenied;
+            attackClaim = controlClaim; attackTicket = ticket = ++sequence;
+            return null;
+        }
+        if (current != 0) return new JsonObject { ["error"] = "control_action_busy", ["owner"] = tool };
         var denied = policy.Check(Behavior(name), channels, controlClaim);
         if (denied != null) return denied;
         tool = name; claim = controlClaim; current = ticket = ++sequence;
         delegates = name switch
         {
-            "nav_to" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct },
+            "nav_to" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct, ControlBehavior.Attack },
             "mine" or "mine_vein" or "chop_wood" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Direct },
             "place_at" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct },
             "gather" or "collect_treasure" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement,
@@ -58,17 +68,19 @@ public sealed class AgentControlSession
     }
 
     public JsonObject Check(ControlBehavior behavior, ControlChannels channels, bool delegated = false)
-        => policy.Check(behavior, channels, delegated && Active && delegates.Contains(behavior) ? claim : null);
+        => policy.Check(behavior, channels, delegated && behavior == ControlBehavior.Attack && attackTicket != 0
+            ? attackClaim : delegated && current != 0 && delegates.Contains(behavior) ? claim : null);
 
     public JsonObject CheckWorkflow(string ownerTool)
     {
-        if (Active && tool != ownerTool)
+        if (current != 0 && tool != ownerTool)
             return new JsonObject { ["error"] = "workflow_owned_by_another_action", ["owner"] = tool, ["requested"] = ownerTool };
         return Check(ControlBehavior.Workflow, ControlChannels.All, delegated: true);
     }
 
     public static ControlChannels RequiredChannels(string name, JsonObject args)
     {
+        if (name == "fight") return ControlChannels.ItemUse;
         if (name != "act") return ControlChannels.All;
         var channels = ControlChannels.None;
         foreach (var step in args["steps"]?.AsArray() ?? new JsonArray())
@@ -88,14 +100,16 @@ public sealed class AgentControlSession
 
     public void End(long ticket)
     {
+        if (ticket != 0 && ticket == attackTicket) { attackTicket = 0; attackClaim = null; return; }
         if (ticket != current) return;
         current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
     }
 
-    public void Reset() { End(current); sequence++; }
+    public void Reset() { End(current); End(attackTicket); sequence++; }
     public JsonObject Snapshot() => new()
     {
         ["tool"] = tool, ["claim"] = claim, ["execution"] = current,
+        ["attack_execution"] = attackTicket, ["attack_claim"] = attackClaim,
         ["delegated_behaviors"] = new JsonArray(delegates.Select(value => JsonValue.Create(value.ToString().ToLowerInvariant())).ToArray())
     };
 }

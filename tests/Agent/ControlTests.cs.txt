@@ -8,6 +8,14 @@ static class ControlTests
 
     public static void Run()
     {
+        var parallel = new AgentControlSession(new AgentControlPolicy());
+        Check(parallel.Begin("nav_to", null, out long navTicket) == null, "navigation session failed");
+        Check(parallel.Begin("fight", null, out long attackTicket) == null, "attack reserved navigation channel");
+        parallel.End(attackTicket);
+        Check(parallel.Active && parallel.Tool == "nav_to", "attack cleanup released navigation session");
+        Check(AgentControlSession.RequiredChannels("fight", new System.Text.Json.Nodes.JsonObject()) == ControlChannels.ItemUse,
+            "attack requires movement ownership");
+        parallel.End(navTicket);
         var policy = new AgentControlPolicy();
         var movement = ControlChannels.Movement;
         var use = ControlChannels.ItemUse;

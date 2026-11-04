@@ -69,7 +69,7 @@ static class ActionTests
         var pause = actions.Control(id, "pause", null, default);
         await cleaning.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Check(!pause.IsCompleted && actions.HasActive, "pause released input before cancellation cleanup finished");
-        try { actions.Start("fight", new JsonObject(), default); throw new Exception("overlapping action accepted"); }
+        try { actions.Start("gather", new JsonObject(), default); throw new Exception("overlapping action accepted"); }
         catch (InvalidOperationException) { }
         release.TrySetResult(true);
         var paused = await pause.WaitAsync(TimeSpan.FromSeconds(3));
@@ -82,7 +82,7 @@ static class ActionTests
         Check((await actions.Query(id, 0, default))["status"].ToString() == "paused"
             && (await actions.Query(guard, 0, default))["status"].ToString() == "running",
             "observing paused collection displaced temporary defense");
-        try { await actions.Control(id, "resume", null, default); throw new Exception("collection stole defense input"); }
+        try { actions.Start("fight", new JsonObject(), default); throw new Exception("second attack stole defense input"); }
         catch (InvalidOperationException) { }
         var guardEnd = await actions.Control(guard, "cancel", null, default);
         Check(guardEnd["status"].ToString() == "cancelled" && !actions.HasActive && stops == 2,
@@ -119,6 +119,37 @@ static class ActionTests
                 "parent cancellation left navigation or fight running");
         }
         Console.WriteLine("PASS: navigation and fight handles honor root cancellation and release owned input");
+
+        var laneStarts = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>();
+        var laneStops = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var lanes = new ActionTasks(async (name, _, token) =>
+        {
+            laneStarts[name] = true;
+            await Task.Delay(Timeout.Infinite, token);
+            return "{}";
+        }, Observe, _ => throw new Exception("parallel action used global cleanup"), stopTool: (name, owns) =>
+        {
+            if (owns()) laneStops.Enqueue(name);
+            return Task.CompletedTask;
+        });
+        string walking = lanes.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+        string shooting = lanes.Start("fight", new JsonObject(), default)["handle"].ToString();
+        for (int i = 0; i < 100 && laneStarts.Count < 2; i++) await Task.Delay(10);
+        Check(laneStarts.Count == 2, "attack and navigation did not run concurrently");
+        await lanes.Control(shooting, "cancel", null, default);
+        Check((await lanes.Query(walking, 0, default))["status"].ToString() == "running"
+            && laneStops.Count == 1 && laneStops.TryPeek(out var cleanedLane) && cleanedLane == "fight",
+            "stopping attack cleaned navigation inputs");
+        await lanes.Control(walking, "cancel", null, default);
+        foreach (string status in new[] { "completed", "cancelled", "failed" })
+        {
+            var attackWatch = new AgentWatch(); attackWatch.EnsureDefaults();
+            attackWatch.Emit("action_finished", status, new JsonObject { ["tool"] = "fight", ["status"] = status });
+            Check(attackWatch.HasPending && !attackWatch.HasInterrupting,
+                "attack completion or failure forced navigation to pause");
+            attackWatch.Emit("low_health", status, new JsonObject { ["hp"] = 10 });
+            Check(attackWatch.HasInterrupting, "attack event suppression hid low health");
+        }
 
         var staleEntered = Signal(); var staleRelease = Signal(); int staleStops = 0;
         var stale = new ActionTasks(async (_, _, token) => { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,

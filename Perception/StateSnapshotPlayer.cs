@@ -440,6 +440,13 @@ namespace TerraBlind
 
 		public override void SetControls()
 		{
+			ApplyPrimaryControls();
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
+				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
+		}
+
+		void ApplyPrimaryControls()
+		{
 			MazeWand.MarkMainThread();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && AgentTools.Control.HasClaims)
 			{
@@ -792,7 +799,6 @@ namespace TerraBlind
 			bool jumpFromAuto = false, jumpFromCi = false;
 			bool walking = false, blocked = false;
 
-			FightCoordinator.Tick(Player);
 			if (WalkTraceEnabled && (System.Math.Abs(Player.velocity.X) > 0.02f || System.Math.Abs(Player.velocity.Y) > 0.02f))
 				DiagLog.Write($"[jump-trace] py={Player.position.Y:0.##} vy={Player.velocity.Y:0.###} jump={Player.jump} feetCy={(int)((Player.position.Y + Player.height) / 16f)} wet={Player.wet} jumpH={Player.jumpHeight}");
 			if (ci == null)

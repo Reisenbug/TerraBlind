@@ -196,7 +196,7 @@ static class GatherTests
             Main.npc = new NPC[Main.maxNPCs];
             for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
             FightCoordinator.Tick(p, true);
-            Check(FightCoordinator.IsIdleDefending && (p.controlLeft || p.controlRight) && !p.controlUseItem,
+            Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
                 $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");
             string noDodge = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "hold still");
             try
@@ -208,8 +208,8 @@ static class GatherTests
             finally { AgentTools.Control.Release(noDodge); }
             FightCoordinator.Start(20);
             FightCoordinator.Tick(p, true);
-            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
-                "explicit fight ignored projectiles when no NPC was in acquisition range");
+            Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
+                "explicit attack changed movement in response to projectiles");
             FightCoordinator.Stop();
             float wall = p.position.X - 1;
             Collision.SolidTest = (position, width, height) => position.X < wall;
@@ -258,7 +258,7 @@ static class GatherTests
             var denied = AgentTools.ControlSession.Begin("nav_to", null, out long ticket);
             Check(denied == null, "idle defense reserved the action slot");
             FightCoordinator.Tick(p, true);
-            Check(!p.controlUseItem, "thinking defense overrode navigation owner");
+            Check(p.controlUseItem, "navigation incorrectly blocked concurrent defense");
             AgentTools.ControlSession.End(ticket);
             string claim = AgentTools.Control.Claim(ControlChannels.All, ControlLifetime.Task, null, "test ownership");
             FightCoordinator.Tick(p, true);
@@ -311,11 +311,23 @@ static class GatherTests
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[1].Center.X, "targeted fight attacked closer unrelated enemy");
             FightCoordinator.Stop(); FightCoordinator.Start(40, new[] { 2 }, "left"); FightCoordinator.Tick(p);
-            Check(p.controlLeft && !p.controlRight && p.controlUseItem, "explicit strafe did not retain attack");
+            Check(!p.controlLeft && !p.controlRight && p.controlUseItem, "attack changed movement for a legacy strafe argument");
             FightCoordinator.Stop();
             Check(!p.controlLeft && !p.controlRight, "stopped strafe retained movement");
             FightCoordinator.Stop(); FightCoordinator.Start(40); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[0].Center.X, "target filter leaked into ordinary fight");
+            p.controlRight = p.controlJump = true;
+            FightCoordinator.Tick(p);
+            Check(p.controlRight && p.controlJump && p.controlUseItem, "attack overwrote navigation controls");
+            ItemUseCoordinator.IsActive = true;
+            p.selectedItem = 2; p.controlUseItem = true;
+            FightCoordinator.Tick(p);
+            Check(p.selectedItem == 2 && p.controlUseItem && p.controlRight && p.controlJump,
+                "attack stole active mining or placement inputs");
+            ItemUseCoordinator.IsActive = false;
+            FightCoordinator.Stop();
+            Check(p.controlRight && p.controlJump, "stopping attack released navigation controls");
+            p.controlRight = p.controlJump = false; p.selectedItem = 0;
             Main.npc[1].friendly = true; p.controlUseItem = false;
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(!p.controlUseItem, "target filter bypassed friendly NPC protection");

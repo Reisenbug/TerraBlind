@@ -55,7 +55,16 @@ public static partial class AgentTools
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default),
-        (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default));
+        (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default),
+        (tool, owns) => NativeAgent.OnMain(() =>
+        {
+            if (owns())
+            {
+                if (tool == "fight") FightCoordinator.Stop();
+                else StopInputs(preserveAttack: Actions.HasAttack);
+            }
+            return true;
+        }, default));
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HashSet<string> Discoveries = new();
     internal static int DiscoveryRevision => Discoveries.Count;
@@ -73,11 +82,12 @@ public static partial class AgentTools
         StopInputs();
     }
 
-    internal static void StopInputs()
+    internal static void StopInputs(bool preserveAttack = false)
     {
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
-        FightCoordinator.Stop(); ReplaySystem.Stop(); KeyPress.Clear();
+        if (!preserveAttack) FightCoordinator.Stop();
+        ReplaySystem.Stop(); KeyPress.Clear();
         Combat.Stop(); Dodge.Stop();
         PlayerCombat.Stop();
         PvpDuel.Stop();
@@ -327,9 +337,12 @@ public static partial class AgentTools
                 ["detail"] = "短程脱离接触伤害已结束，原动作尚未执行；依据最新位置和危险状态重新决策。",
                 ["state"] = JsonNode.Parse(await State(token)) }.ToJsonString();
         }
+        string requestedTool = name == "action_start" ? Text(args, "tool")
+            : name == "action_control" && Text(args, "command") == "resume"
+                ? Actions.Summary().FirstOrDefault(a => a["handle"]?.ToString() == Text(args, "handle"))?["tool"]?.ToString() : name;
         if ((action || name is "action_start" or "combat_start" or "combat_reposition"
             || name == "action_control" && Text(args, "command") == "resume"
-            || name == "set_combat" && Bool(args, "boss_control")) && Actions.Conflicts)
+            || name == "set_combat" && Bool(args, "boss_control")) && Actions.ConflictsWith(requestedTool))
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
                 ["active_handle"] = Actions.ActiveHandle,
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();
@@ -960,6 +973,9 @@ public static partial class AgentTools
                 {
                     result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token);
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
+                    if (Text(result, "outcome") == "timeout")
+                        result = new JsonObject { ["outcome"] = "duration_elapsed",
+                            ["detail"] = "本次攻击时段结束，不代表敌怪已击杀；导航继续，按实际需要决定是否再次攻击。" };
                 }
                 break;
             case "combat_start":

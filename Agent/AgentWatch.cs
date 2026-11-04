@@ -151,7 +151,8 @@ public sealed class AgentWatch
     public void Emit(string kind, string key, JsonNode evidence)
     {
         if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
-        bool deferred = !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
+        bool attackFinished = kind == "action_finished" && evidence?["tool"]?.ToString() == "fight";
+        bool deferred = attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
         if (!LocalDelivery && !passive.Contains(kind) && !deferred
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;

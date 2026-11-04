@@ -13,6 +13,10 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var fight = tools.First(t => t["function"]?["name"]?.ToString() == "fight")["function"];
+        fight["description"] = "仅控制攻击，不改变移动；可与nav_to并行，不需暂停原导航。挖掘、放置使用物品时攻击让位；结束攻击不停止导航。" + fight["description"];
+        if (fight["parameters"]?["properties"]?["movement"] is JsonObject movement)
+            movement["description"] = "旧参数已不控制移动；移动由nav_to或独立移动指令负责。";
         var programs = tools.First(t => t["function"]?["name"]?.ToString() == "script_program")["function"];
         programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
         programs["description"] = programs["description"].ToString()
@@ -83,7 +87,7 @@ public static class AgentScript
         + "已选定局部采集目标时给gather传source_area包住该物体和预计掉落位置，防止默认最近来源选择重新选回已跳过的目标；来源区域不是导航路径限制。"
         + "插入动作前保存并暂停原action句柄，插入后核对实际库存增量或箱子返回got；失败保留证据，不记成功。继续时resume同一原句柄，而不是新建重复目标。"
         + "找回原句柄：get_state.action_tasks是数组，每项含handle/tool/args/status；按原任务参数匹配，不能随便选第一个gather。script_progress({workflow,action:'get'})直接返回steps数组，step保存的action_start结果位于steps[i].value.handle，不存在顶层gather_handle或original_gather_handle。step.value里的status是当时的快照，当前状态用action_query({handle})核对。先读取真实结构，不得把猜错字段当作句柄丢失。"
-        + "暂停会释放该动作的攻击和移动，不代表仍在防身。敌怪附近需要连续只读观察时，可明确action_start fight临时防身（短seconds、有限max_dist），观察放在try中，finally用action_control cancel该防身句柄并等待释放，再导航、用物品或resume原任务；不能让两个动作同时持有输入。防身会改变人物和敌怪位置，行动前刷新现场；不保证安全，不可绕过攻击/闪避禁令或忽略危险事件。"
+        + "fight仅占攻击通道，不控制移动。导航途中防身可action_start fight（短seconds、有限max_dist），无需暂停nav_to；结束或取消fight不停止原导航，挖掘、放置时攻击自动让出物品使用权。不要为普通防身停下赶路或反复追求清光刷新的敌怪；需要绕行、撤离或追击时独立选择移动目标。暂停导航不取消并行攻击，停止攻击用其自己的handle。"
         + "Agent可以修改resume的args，或cancel已经暂停的原意图；不值得的机会可直接跳过并继续，不能无条件见宝必拿。"
         + "开箱、获得装备或inventory_full后可用inventory_review批量检查背包、功能装备和trash垃圾桶，结合item_info、当前任务配方及玩家保留要求选择换装、整理或丢弃，不按售价或防御单项固定评分。用equip_item穿戴、inventory_swap整理、inventory_drop丢整叠到地上、inventory_trash移整叠到垃圾桶；先暂停原动作，使用新鲜槽位证据，核对实际结果再恢复原handle。地面物品可能被捡回；垃圾桶会覆盖旧垃圾，必须同时提供expected_trash。收藏物品不可丢弃。"
         + "长动作返回outcome:interrupted不是完成；保存返回的handle和events，核对现场后暂停/恢复同一动作。不要把中断结果直接作为成功step。"

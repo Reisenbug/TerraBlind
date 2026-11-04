@@ -937,6 +937,46 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_ATTACK_LANES_TRIAL") == "1")
+        {
+            await OnMain(() =>
+            {
+                materialNavigationStub = false;
+                var p = Main.LocalPlayer;
+                p.inventory[1].SetDefaults(ItemID.Starfury);
+                target = NPC.NewNPC(new EntitySource_Misc("AttackLanesTrial"), (int)p.Center.X + 48, (int)p.Center.Y, NPCID.Hornet);
+                Main.npc[target].life = Main.npc[target].lifeMax = 10000;
+                Main.npc[target].damage = 0;
+                return true;
+            });
+            var nav = await Call("action_start", new JsonObject { ["tool"] = "nav_to",
+                ["args"] = new JsonObject { ["x"] = goalX, ["y"] = goalY } });
+            var fight = await Call("action_start", new JsonObject { ["tool"] = "fight",
+                ["args"] = new JsonObject { ["npc_types"] = new JsonArray((int)NPCID.Hornet), ["seconds"] = 30d, ["max_dist"] = 60 } });
+            if (nav["handle"] == null || fight["handle"] == null) throw new Exception("parallel attack/navigation rejected: " + nav + fight);
+            int movingBefore = movingAttackFrames;
+            var samples = new JsonArray();
+            for (int i = 0; i < 20; i++)
+            {
+                await Task.Delay(250);
+                samples.Add(await OnMain(() => new JsonObject { ["tick"] = Main.GameUpdateCount,
+                    ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y,
+                    ["attack"] = Main.LocalPlayer.controlUseItem, ["nav"] = RecedingNav.Active,
+                    ["moving_attack_frames"] = movingAttackFrames, ["target_hp"] = Main.npc[target].life }));
+            }
+            var stopped = await Call("action_control", new JsonObject { ["handle"] = fight["handle"].DeepClone(), ["command"] = "cancel" });
+            var navigation = await Call("action_query", new JsonObject { ["handle"] = nav["handle"].DeepClone() });
+            File.WriteAllText(Path.Combine(Main.SavePath, "attack-lanes-native.json"), new JsonObject
+                { ["nav"] = nav, ["fight"] = fight, ["samples"] = samples, ["stopped_attack"] = stopped,
+                    ["navigation_after"] = navigation, ["moving_attack_frames"] = movingAttackFrames - movingBefore,
+                    ["navigation_stub"] = false }.ToJsonString());
+            if (movingAttackFrames == movingBefore || navigation["status"]?.ToString() is not ("running" or "completed")
+                || stopped["status"]?.ToString() != "cancelled")
+                throw new Exception("attack did not overlap movement or its cleanup interrupted navigation");
+            await Call("action_control", new JsonObject { ["handle"] = nav["handle"].DeepClone(), ["command"] = "cancel" });
+            Console.WriteLine("ATTACK_LANES_PASS moving_attack_frames=" + (movingAttackFrames - movingBefore) + " navigation_stub=false");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_PROBE") == "1")
         {
             var sources = await Call("npc_drop_sources", new JsonObject { ["item_type"] = (int)ItemID.Stinger });

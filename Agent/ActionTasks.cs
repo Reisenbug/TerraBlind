@@ -32,18 +32,22 @@ public sealed class ActionTasks
     readonly Func<CancellationToken, Task<JsonObject>> observe;
     readonly Func<Func<bool>, Task> stop;
     readonly Func<string, Func<bool>, Task> finished;
-    Entry active;
+    readonly Func<string, Func<bool>, Task> stopTool;
+    Entry active, attack;
     bool handingOff;
     int handoffGeneration;
 
     public ActionTasks(Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task<JsonObject>> observe, Func<Func<bool>, Task> stop,
-        Func<string, Func<bool>, Task> finished = null)
-    { this.execute = execute; this.observe = observe; this.stop = stop; this.finished = finished; }
+        Func<string, Func<bool>, Task> finished = null, Func<string, Func<bool>, Task> stopTool = null)
+    { this.execute = execute; this.observe = observe; this.stop = stop; this.finished = finished; this.stopTool = stopTool; }
 
-    public bool Conflicts { get { lock (gate) return handingOff || active != null && caller.Value != active.Id; } }
-    public bool HasActive { get { lock (gate) return active != null; } }
-    public string ActiveHandle { get { lock (gate) return active?.Id; } }
+    public bool Conflicts { get { lock (gate) return handingOff || active != null && caller.Value != active.Id || attack != null && caller.Value != attack.Id; } }
+    public bool ConflictsWith(string tool)
+    { lock (gate) { var owner = tool == "fight" ? attack : active; return handingOff || owner != null && caller.Value != owner.Id; } }
+    public bool HasActive { get { lock (gate) return active != null || attack != null; } }
+    public bool HasAttack { get { lock (gate) return attack != null; } }
+    public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
 
     internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
         or "mine_vein" or "chop_wood" or "collect_treasure";
@@ -54,7 +58,7 @@ public sealed class ActionTasks
         root.ThrowIfCancellationRequested();
         lock (gate)
         {
-            if (handingOff || active != null) throw new InvalidOperationException("已有动作或控制交接持有角色输入，请先等待释放。");
+            if (handingOff || (tool == "fight" ? attack : active) != null) throw new InvalidOperationException("已有动作或控制交接持有相同输入通道，请先等待释放。");
             if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline };
             entries.Add(entry.Id, entry);
@@ -74,12 +78,12 @@ public sealed class ActionTasks
         entry.Status = "running"; entry.Requested = null; entry.Attempt++;
         entry.TaskSerial = taskSerial;
         entry.Cancel = CancellationTokenSource.CreateLinkedTokenSource(root);
-        active = entry;
+        if (entry.Tool == "fight") attack = entry; else active = entry;
         entry.Running = Task.Run(() => Run(entry, entry.Attempt));
     }
 
     bool Owns(Entry entry, int attempt)
-    { lock (gate) return active == entry && entry.Attempt == attempt; }
+    { lock (gate) return (entry.Tool == "fight" ? attack : active) == entry && entry.Attempt == attempt; }
 
     async Task Run(Entry entry, int attempt)
     {
@@ -109,7 +113,8 @@ public sealed class ActionTasks
             {
                 try
                 {
-                    await stop(() => Owns(entry, attempt));
+                    if (stopTool != null) await stopTool(entry.Tool, () => Owns(entry, attempt));
+                    else await stop(() => Owns(entry, attempt));
                     if (!entry.Cancel.IsCancellationRequested) observed = await observe(entry.Cancel.Token);
                     string ending;
                     lock (gate) ending = status == "failed" ? status : entry.Requested ?? status;
@@ -132,7 +137,7 @@ public sealed class ActionTasks
                     if (entry.TaskSerial == taskSerial && entry.Status == "completed" && entry.Tool == "nav_to"
                         && result?["done"]?.ToString() == "true" && Moved(starting, observed)
                         && arrivals.Add(entry.Args["x"] + "," + entry.Args["y"])) navigationArrivals++;
-                    active = null;
+                    if (entry.Tool == "fight") attack = null; else active = null;
                 }
                 entry.Cancel.Dispose();
             }
@@ -174,7 +179,7 @@ public sealed class ActionTasks
             if (command == "resume")
             {
                 root.ThrowIfCancellationRequested();
-                if (handingOff || active != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
+                if (handingOff || (entry.Tool == "fight" ? attack : active) != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (entry.Status == "cancelling") throw new InvalidOperationException("取消清理尚未完成，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
                 if (updatedArgs != null) entry.Args = (JsonObject)updatedArgs.DeepClone();
@@ -230,6 +235,7 @@ public sealed class ActionTasks
         lock (gate)
         {
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
+            if (attack != null) { attack.Requested = "cancelled"; attack.Cancel.Cancel(); }
             foreach (var entry in entries.Values.Where(entry => entry.Status == "paused").ToArray())
             {
                 entry.Status = "cancelling"; entry.Requested = "cancelled";
@@ -240,7 +246,7 @@ public sealed class ActionTasks
 
     public async Task<JsonObject> Handoff(Func<Func<bool>, Task> acquire, CancellationToken token)
     {
-        Entry previous;
+        Entry previous, previousAttack;
         int generation;
         lock (gate)
         {
@@ -248,7 +254,9 @@ public sealed class ActionTasks
             if (handingOff) throw new InvalidOperationException("已有控制交接正在进行。");
             handingOff = true; generation = ++handoffGeneration;
             previous = active;
+            previousAttack = attack;
             if (previous != null) { previous.Requested = "paused"; previous.Cancel.Cancel(); }
+            if (previousAttack != null) { previousAttack.Requested = "paused"; previousAttack.Cancel.Cancel(); }
         }
         bool Valid() { lock (gate) return handingOff && generation == handoffGeneration && !token.IsCancellationRequested; }
         try
@@ -260,10 +268,18 @@ public sealed class ActionTasks
                     if (previous.Result is JsonObject result && result["error"]?.ToString() == "action_cleanup_failed")
                         return new JsonObject { ["error"] = "control_handoff_cleanup_failed", ["action"] = Snapshot(previous) };
             }
+            if (previousAttack != null)
+            {
+                await previousAttack.Running.WaitAsync(token);
+                lock (gate)
+                    if (previousAttack.Result is JsonObject result && result["error"]?.ToString() == "action_cleanup_failed")
+                        return new JsonObject { ["error"] = "control_handoff_cleanup_failed", ["action"] = Snapshot(previousAttack) };
+            }
             if (!Valid()) throw new OperationCanceledException("控制交接已失效。");
             await acquire(Valid);
             if (!Valid()) throw new OperationCanceledException("控制交接已失效。");
-            return new JsonObject { ["status"] = "ready", ["paused_action"] = previous?.Id };
+            return new JsonObject { ["status"] = "ready", ["paused_action"] = previous?.Id ?? previousAttack?.Id,
+                ["paused_attack"] = previousAttack?.Id };
         }
         finally
         {
@@ -278,7 +294,8 @@ public sealed class ActionTasks
             handoffGeneration++; handingOff = false;
             taskSerial++; arrivals.Clear(); navigationArrivals = 0;
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
-            active = null; entries.Clear();
+            if (attack != null) { attack.Requested = "cancelled"; attack.Cancel.Cancel(); }
+            active = attack = null; entries.Clear();
         }
     }
 
