@@ -155,6 +155,9 @@ namespace Terraria
         public static bool Clear = true;
         public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
         public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;
+        public static bool TupleHitLine(int x1, int y1, int x2, int y2, int ignoreX, int ignoreY,
+            List<Tuple<int, int>> ignoreTargets, out Tuple<int, int> col)
+        { col = null; return false; }
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, bool> SolidTest;
         public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => SolidTest?.Invoke(position, width, height) ?? false;
     }

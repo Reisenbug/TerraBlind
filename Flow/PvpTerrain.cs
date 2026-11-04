@@ -56,33 +56,22 @@ public static class PvpTerrain
     {
         if (Collision.CanHitLine(from, 4, 4, to, 4, 4))
             return new JsonObject { ["clear"] = true, ["collision_model"] = "engine_line_probe" };
-        int steps = Math.Max(1, (int)Math.Ceiling(Vector2.Distance(from, to) / 4f));
-        Vector2 previous = from;
-        for (int i = 1; i <= steps; i++)
+        var result = new JsonObject { ["clear"] = false, ["collision_model"] = "engine_line_probe" };
+        if (Collision.TupleHitLine((int)((from.X + 2) / 16), (int)((from.Y + 2) / 16),
+            (int)((to.X + 2) / 16), (int)((to.Y + 2) / 16), 0, 0, new(), out var hit)
+            && InWorld(hit.Item1, hit.Item2))
         {
-            Vector2 point = Vector2.Lerp(from, to, i / (float)steps);
-            if (!Collision.CanHitLine(previous, 4, 4, point, 4, 4))
+            var tile = Main.tile[hit.Item1, hit.Item2];
+            if (tile.HasTile && !tile.IsActuated && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
             {
-                int x = (int)(point.X / 16), y = (int)(point.Y / 16);
-                var result = new JsonObject { ["clear"] = false, ["sample_x"] = point.X, ["sample_y"] = point.Y,
-                    ["collision_model"] = "four_pixel_line_probe" };
-                for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                    if (Support(x + dx, y + dy))
-                    {
-                        var tile = Main.tile[x + dx, y + dy];
-                        result["blocker"] = new JsonObject { ["x"] = x + dx, ["y"] = y + dy,
-                            ["type"] = (int)tile.TileType, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
-                            ["location_precision"] = "tile_near_first_failed_probe" };
-                        return result;
-                    }
-                result["blocker_unknown"] = "collision_failed_without_identified_support_tile";
+                result["blocker"] = new JsonObject { ["x"] = hit.Item1, ["y"] = hit.Item2,
+                    ["type"] = (int)tile.TileType, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
+                    ["location_precision"] = "engine_tuple_hit_line" };
                 return result;
             }
-            previous = point;
         }
-        return new JsonObject { ["clear"] = false, ["collision_model"] = "engine_line_probe",
-            ["blocker_unknown"] = "whole_line_failed_without_identified_subsegment" };
+        result["blocker_unknown"] = "engine_tile_probe_did_not_identify_a_solid_blocker";
+        return result;
     }
 
     public static bool ValidStance(Player self, float x, float y)

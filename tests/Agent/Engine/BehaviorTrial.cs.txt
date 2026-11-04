@@ -265,6 +265,34 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_COMBAT_TRACE") == "1")
+        {
+            await OnMain(() =>
+            {
+                for (int x = 95; x <= 115; x++)
+                    for (int y = 95; y <= 105; y++) Main.tile[x, y].ClearEverything();
+                var from = new Vector2(100 * 16 + 8, 100 * 16 + 8);
+                var to = new Vector2(112 * 16 + 8, 100 * 16 + 8);
+                var platform = Main.tile[105, 99]; platform.HasTile = true; platform.TileType = TileID.Platforms;
+                var platformOnly = PvpTerrain.Trace(from, to);
+                var wall = Main.tile[106, 100]; wall.HasTile = true; wall.TileType = TileID.Stone;
+                var withWall = PvpTerrain.Trace(from, to);
+                Main.tile[105, 99].ClearEverything();
+                var withoutPlatform = PvpTerrain.Trace(from, to);
+                Main.tile[106, 100].ClearEverything();
+                var cleared = PvpTerrain.Trace(from, to);
+                File.WriteAllText(Path.Combine(Main.SavePath, "combat-trace.json"), new JsonObject
+                { ["platform_only"] = platformOnly, ["wall_and_platform"] = withWall,
+                    ["removed_platform"] = withoutPlatform, ["removed_wall"] = cleared }.ToJsonString());
+                if (platformOnly["clear"]?.GetValue<bool>() != true || cleared["clear"]?.GetValue<bool>() != true
+                    || withWall["blocker"]?["x"]?.GetValue<int>() != 106 || withWall["blocker"]?["y"]?.GetValue<int>() != 100
+                    || withoutPlatform["clear"]?.GetValue<bool>() != false)
+                    throw new Exception("combat trace mistook nearby platform for the native line obstruction");
+                return true;
+            });
+            Console.WriteLine("COMBAT_TRACE_PASS native_collision=true platform_not_blocker=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_INVENTORY_MANAGEMENT") == "1")
         {
             await OnMain(() =>
@@ -1640,11 +1668,8 @@ public sealed class BehaviorTrial : ModSystem
                                 const facts=tool('opportunity_assess',{x:blocker.x,y:blocker.y});
                                 if(facts.error||facts.hazards.length||!facts.target.has_tile)
                                   tool('decision_point',{reason:'Obstruction cannot be safely selected for a one-tile edit: '+JSON.stringify({blocker,error:facts.error,hazards:facts.hazards})});
-                                let pick=null;
-                                for(const item of tool('get_state').inventory_slots.filter(i=>i.type>0)) {
-                                  const info=tool('item_info',{slot:item.slot});
-                                  if(info.pick>0&&(!pick||info.pick>pick.power)) pick={slot:item.slot,power:info.pick};
-                                }
+                                const picks=tool('inventory_review').inventory.filter(i=>i.pick>0).sort((a,b)=>b.pick-a.pick);
+                                const pick=picks.length?{slot:picks[0].slot,power:picks[0].pick}:null;
                                 if(!pick) tool('decision_point',{reason:'No pickaxe for the measured obstruction; choose another source or equipment'});
                                 const edited=tool('use_item',{slot:pick.slot,x:blocker.x,y:blocker.y,strict:true,duration_ticks:0});
                                 const after=tool('npc_combat_observe',target);
