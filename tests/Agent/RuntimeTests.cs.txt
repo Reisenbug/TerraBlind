@@ -1307,6 +1307,13 @@ static class RuntimeTests
         var secondPage = orderedWatch.Take(1);
         Check(secondPage[0]["evidence"]["x"].GetValue<int>() == 105 && orderedWatch.Take()[0]["evidence"]["x"].GetValue<int>() == 140,
             "distance ordering lost an opportunity or confused pixel and tile coordinates");
+        for (int i = 0; i < 30; i++)
+            orderedWatch.Emit("nearby_tile", "preview:" + i, new JsonObject { ["x"] = i, ["y"] = 1 });
+        var preview = orderedWatch.Summary();
+        Check(preview["pending"].AsArray().Count == 12 && preview["pending_count"].GetValue<int>() == 30
+            && preview["pending_truncated"].GetValue<bool>() && preview["pending_detail_request"]["tool"].ToString() == "script_events"
+            && orderedWatch.Snapshot()["pending"].AsArray().Count == 30 && orderedWatch.Take().Count == 30,
+            "bounded state preview discarded pending opportunities or hid how to retrieve them");
         AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
         HttpServerSystem.Handler = (path, _) =>
         {
