@@ -15,10 +15,291 @@ namespace Demo;
 
 public sealed class Demo : Mod { }
 
+public sealed class FieldTimingCheck : ModSystem
+{
+    public override void Load()
+    {
+        if (Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-fieldtimingcheck"))
+            Main.OnEnginePreload += Run;
+    }
+    public override void Unload() => Main.OnEnginePreload -= Run;
+    static void Run()
+    {
+        try
+        {
+            var fixture = JsonNode.Parse(File.ReadAllText(Terraria.Program.LaunchParameters["-fieldtimingcheck"]));
+            var player = VanillaFrame.RestoreInWorker(fixture["request"]["snapshot"].AsObject());
+            Main.myPlayer = player.whoAmI;
+            var start = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            var snapshot = fixture["request"]["snapshot"].AsObject();
+            var area = snapshot["area"].AsArray();
+            int walkChecks = 0;
+            double decisionMs = 0;
+            int decisions = 0;
+            for (int y = area[1].GetValue<int>() + 4; y < area[1].GetValue<int>() + area[3].GetValue<int>() - 4 && walkChecks < 6; y++)
+            for (int x = area[0].GetValue<int>() + 12; x < area[0].GetValue<int>() + area[2].GetValue<int>() - 12 && walkChecks < 6; x++)
+            {
+                player.position = new Vector2(x * 16, y * 16 - player.height);
+                player.velocity = Vector2.Zero; player.jump = 0; player.releaseJump = true;
+                var goal = player.position + new Vector2(160, 0);
+                if (!VanillaContactRegion.TryWalk(player, goal, out _)) continue;
+                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+                var startupFields = new[] { "_fieldReady", "_goalWx", "_goalWy", "_mode", "_startedAt", "_startupWalkReported" }
+                    .Select(name => typeof(RecedingNav).GetField(name, flags)).ToArray();
+                var saved = startupFields.Select(field => field.GetValue(null)).ToArray();
+                bool oldRegions = VanillaNavBridge.RegionsEnabled;
+                try
+                {
+                    startupFields[0].SetValue(null, false);
+                    startupFields[1].SetValue(null, x + 600);
+                    startupFields[2].SetValue(null, y - 1);
+                    startupFields[3].SetValue(null, RecedingNav.Mode.Snap);
+                    startupFields[4].SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+                    startupFields[5].SetValue(null, false);
+                    VanillaNavBridge.RegionsEnabled = true; RecedingNav.Active = true;
+                    player.controlRight = false;
+                    RecedingNav.Tick();
+                    if (!player.controlRight) throw new InvalidOperationException("startup_waited_for_global_field");
+                }
+                finally
+                {
+                    RecedingNav.Active = false; VanillaNavBridge.RegionsEnabled = oldRegions;
+                    AxisLock.Release("recede");
+                    for (int i = 0; i < startupFields.Length; i++) startupFields[i].SetValue(null, saved[i]);
+                    player.controlRight = false;
+                }
+                int hp = player.statLife;
+                var origin = player.position;
+                int requests = 0, moving = 0;
+                var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+                Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> send = (request, token) =>
+                { requests++; token.Register(() => pending.TrySetCanceled(token)); return pending.Task; };
+                var type = typeof(VanillaNavigationDemo).Assembly.GetType("TerraBlind.VanillaRegionNavigation", true);
+                var obsolete = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+                Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> delayed = (request, token) =>
+                { token.Register(() => obsolete.TrySetCanceled(token)); return obsolete.Task; };
+                using (var switcher = (IDisposable)Activator.CreateInstance(type, delayed))
+                {
+                    type.GetMethod("Tick").Invoke(switcher, new object[] { player, 0L, goal - new Vector2(0, 160) });
+                    type.GetMethod("Tick").Invoke(switcher, new object[] { player, 1L, goal });
+                    var resumed = (VanillaPrediction.Input)type.GetMethod("InputAt").Invoke(switcher, new object[] { 2L });
+                    if (!obsolete.Task.IsCanceled || resumed.Keys == VanillaKeys.None)
+                        throw new InvalidOperationException("pending_plan_blocked_safe_walk");
+                }
+                using var controller = (IDisposable)Activator.CreateInstance(type, send);
+                for (int frame = 0; frame < 45; frame++)
+                {
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    bool walkable = VanillaContactRegion.TryWalk(player, goal, out _);
+                    type.GetMethod("Tick").Invoke(controller, new object[] { player, (long)frame, goal });
+                    var input = (VanillaPrediction.Input)type.GetMethod("InputAt").Invoke(controller, new object[] { (long)frame + 1 });
+                    decisionMs += timer.Elapsed.TotalMilliseconds; decisions++;
+                    if (walkable && requests == 0 && input.Keys == VanillaKeys.None)
+                        throw new InvalidOperationException("quick_walk_controller_gap");
+                    if (input.Keys != VanillaKeys.None) moving++;
+                    VanillaPrediction.Advance(player, input.Keys);
+                    if (player.statLife < hp || player.dead || !VanillaContactRegion.Supported(player.position, player.width, player.height))
+                        throw new InvalidOperationException("quick_walk_left_safe_ground");
+                }
+                if (requests > 1 || moving == 0) throw new InvalidOperationException("quick_walk_request_storm");
+                if (player.position.X <= origin.X) throw new InvalidOperationException("quick_walk_no_progress");
+                walkChecks++;
+                player = VanillaFrame.RestoreInWorker(snapshot);
+            }
+            if (walkChecks == 0) throw new InvalidOperationException("no_real_map_walk_samples");
+            Console.WriteLine($"QUICK_WALK_PASS samples={walkChecks} decisions={decisions} decision_ms={decisionMs:0.###}");
+            player = VanillaFrame.RestoreInWorker(snapshot);
+            var rows = new JsonArray();
+            foreach (int distance in new[] { 60, 600 })
+            foreach (bool wide in new[] { false, true })
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                int gx = start.x + (start.x + distance < Main.maxTilesX - 10 ? distance : -distance);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                var field = MazeWand.BuildField(gx, start.y, start.x, start.y, wide);
+                double elapsed = timer.Elapsed.TotalMilliseconds;
+                timer.Restart();
+                var bounded = MazeWand.BuildField(gx, start.y, start.x, start.y, wide, stopAtStart: true);
+                double boundedMs = timer.Elapsed.TotalMilliseconds;
+                if (!bounded.TryGetValue(start, out int cost) || !field.TryGetValue(start, out int fullCost) || cost != fullCost)
+                    throw new InvalidOperationException("bounded_field_cost_mismatch");
+                var path = MazeWand.TraceFrom(bounded, start.x, start.y, gx, start.y);
+                if (path.Count == 0 || path[^1] != (gx, start.y)) throw new InvalidOperationException("bounded_field_route_incomplete");
+                var row = new JsonObject { ["distance"] = distance, ["wide"] = wide, ["repeat"] = repeat,
+                    ["elapsed_ms"] = elapsed, ["cells"] = field.Count, ["start_reachable"] = field.ContainsKey(start),
+                    ["bounded_ms"] = boundedMs, ["bounded_cells"] = bounded.Count, ["route_cells"] = path.Count };
+                rows.Add(row); Console.WriteLine("FIELD_TIMING " + row.ToJsonString());
+                if (!field.ContainsKey(start)) throw new InvalidOperationException("field_did_not_reach_start");
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "field-timing.json"), rows.ToJsonString());
+            Console.WriteLine("FIELD_TIMING_PASS");
+            Environment.Exit(0);
+        }
+        catch (Exception error) { Console.WriteLine("FIELD_TIMING_FAIL " + error); Environment.Exit(1); }
+    }
+}
+
+public sealed class RegionHandoffCheck : ModSystem
+{
+    public override void Load()
+    {
+        if (Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-regionhandoffcheck"))
+            Main.OnEnginePreload += Run;
+    }
+    public override void Unload() => Main.OnEnginePreload -= Run;
+
+    static void Run()
+    {
+        object controller = null;
+        VanillaWorkerConnection worker = null;
+        try
+        {
+            var fixture = JsonNode.Parse(File.ReadAllText(Terraria.Program.LaunchParameters["-regionhandoffcheck"])).AsObject();
+            var snapshot = fixture["snapshot"].AsObject();
+            var results = fixture["results"].AsArray();
+            string scenario = fixture["scenario"]?.GetValue<string>() ?? "early";
+            if (scenario == "worker")
+                worker = VanillaWorkerConnection.Start(ModLoader.GetMod("TerraBlind").GetFileBytes("Assets/VanillaWorker.bin"),
+                    Path.Combine(Main.SavePath, "World.wld"), System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+            var packed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(
+                Convert.FromBase64String(fixture["guidance"].GetValue<string>()).AsSpan()).ToArray();
+            var field = new System.Collections.Generic.Dictionary<(int, int), int>();
+            for (int i = 0; i < packed.Length; i += 3) field[(packed[i], packed[i + 1])] = packed[i + 2];
+            typeof(VanillaNavBridge).GetField("field", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, field);
+            var player = VanillaFrame.RestoreInWorker(snapshot);
+            var startCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            int startCost = field[startCell];
+            var type = typeof(VanillaNavigationDemo).Assembly.GetType("TerraBlind.VanillaRegionNavigation", true);
+            var tickMethod = type.GetMethod("Tick");
+            var inputMethod = type.GetMethod("InputAt");
+            int requests = 0;
+            var waiting = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+            var delayed = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+            async System.Threading.Tasks.Task<JsonObject> SendWorker(JsonObject request, System.Threading.CancellationToken token, int index)
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, $"region-request-{index}.json"), request.ToJsonString());
+                var response = await worker.Send(request, token);
+                File.WriteAllText(Path.Combine(Main.SavePath, $"region-response-{index}.json"), response.ToJsonString());
+                return response;
+            }
+            Func<JsonObject, System.Threading.CancellationToken, System.Threading.Tasks.Task<JsonObject>> send = (request, token) =>
+            {
+                int index = requests++;
+                if (worker != null) return SendWorker(request, token, index);
+                if (scenario == "late" && index == 1)
+                {
+                    token.Register(() => delayed.TrySetCanceled(token));
+                    return delayed.Task;
+                }
+                int available = scenario == "early" ? results.Count : scenario == "late" ? 1 : 2;
+                if (index < available) return System.Threading.Tasks.Task.FromResult(results[index].DeepClone().AsObject());
+                token.Register(() => waiting.TrySetCanceled(token));
+                return waiting.Task;
+            };
+            controller = Activator.CreateInstance(type, send);
+            var goal = player.position + new Vector2(0, 160);
+            void Tick(long frame) => tickMethod.Invoke(controller, new object[] { player, frame, goal });
+            Tick(0); Tick(0);
+            int firstFrames = results[0]["controls"].AsArray().Count;
+            int frames = scenario == "worker" ? 1800 : scenario == "early" ? results.Sum(result => result["controls"].AsArray().Count)
+                : firstFrames + (scenario == "late" ? 5 : 0);
+            int missing = 0, hp = player.statLife;
+            int initialWaiting = 0, intersegmentWaiting = 0;
+            int firstInputFrame = -1, longestWait = 0, waitRun = 0;
+            int completedSegments = 0;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            for (long frame = 1; frame <= frames; frame++)
+            {
+                if (!(bool)type.GetMethod("HasInput").Invoke(controller, new object[] { frame }))
+                {
+                    missing++;
+                    longestWait = Math.Max(longestWait, ++waitRun);
+                    if ((int)type.GetProperty("Accepted").GetValue(controller) == 0) initialWaiting++;
+                    else intersegmentWaiting++;
+                }
+                else
+                {
+                    if (firstInputFrame < 0) firstInputFrame = (int)frame;
+                    waitRun = 0;
+                }
+                var input = (VanillaPrediction.Input)inputMethod.Invoke(controller, new object[] { frame });
+                VanillaPrediction.Advance(player, input.Keys, input.UseSlot, input.Target);
+                if (scenario == "worker" && type.GetProperty("Result").GetValue(controller) is JsonObject current
+                    && (int)type.GetMethod("Index").Invoke(controller, new object[] { frame }) == current["controls"].AsArray().Count - 1)
+                {
+                    if (!VanillaPrediction.RegionPlayback.MatchesAnchor(player, current["frames"].AsArray()[^1].AsObject(), out string mismatch))
+                        throw new InvalidOperationException("handoff_endpoint_mismatch:" + mismatch);
+                    completedSegments++;
+                    if (completedSegments == 4) { frames = (int)frame; break; }
+                }
+                if (scenario == "terrain" && frame == firstFrames)
+                {
+                    var next = results[1]["frames"][0];
+                    var tile = Main.tile[(int)Math.Floor(next["x"].GetValue<float>() / 16) - 1,
+                        (int)Math.Floor(next["y"].GetValue<float>() / 16) - 1];
+                    tile.HasTile = !tile.HasTile; tile.TileType = TileID.Stone;
+                }
+                if (scenario == "late" && frame == frames)
+                {
+                    if (delayed.Task.IsCanceled) throw new InvalidOperationException("late_request_cancelled_before_observation");
+                    delayed.SetResult(results[1].DeepClone().AsObject());
+                }
+                Tick(frame);
+                if (scenario == "worker")
+                {
+                    double remaining = frame * 1000d / 60 - clock.Elapsed.TotalMilliseconds;
+                    if (remaining > 0) System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(remaining));
+                }
+            }
+            int accepted = (int)type.GetProperty("Accepted").GetValue(controller);
+            int rejected = (int)type.GetProperty("Rejected").GetValue(controller);
+            int expectedAccepted = scenario == "worker" ? 4 : scenario == "early" ? results.Count : 1;
+            int expectedRejected = scenario is "worker" or "early" ? 0 : 1;
+            int expectedMissing = scenario == "worker" ? missing : scenario == "late" ? 5 : 0;
+            var endCell = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
+            bool hasEndCost = field.TryGetValue(endCell, out int endCost);
+            bool passed = accepted == expectedAccepted && rejected == expectedRejected && missing == expectedMissing
+                && !player.dead && player.statLife >= hp && hasEndCost && endCost < startCost
+                && (scenario != "worker" || intersegmentWaiting == 0 && completedSegments == 4);
+            ((IDisposable)controller).Dispose(); controller = null;
+            if (scenario != "worker" && !waiting.Task.IsCanceled) throw new InvalidOperationException("pending_request_not_cancelled");
+            worker?.Dispose(); worker = null;
+            var report = new JsonObject { ["passed"] = passed, ["scenario"] = scenario, ["accepted"] = accepted, ["rejected"] = rejected,
+                ["frames"] = frames, ["missing_input_frames"] = missing, ["pending_cancelled"] = scenario != "worker",
+                ["initial_wait_frames"] = initialWaiting, ["intersegment_wait_frames"] = intersegmentWaiting,
+                ["first_input_frame"] = firstInputFrame, ["longest_wait_frames"] = longestWait,
+                ["start_hp"] = hp, ["end_hp"] = player.statLife, ["dead"] = player.dead,
+                ["wall_ms"] = clock.Elapsed.TotalMilliseconds,
+                ["completed_segments"] = scenario == "worker" ? completedSegments : scenario == "early" ? accepted : 1,
+                ["start_cost"] = startCost, ["end_cost"] = endCost,
+                ["end"] = VanillaPrediction.Observe(player, false) };
+            File.WriteAllText(Path.Combine(Main.SavePath, "region-handoff-result.json"), report.ToJsonString());
+            if (!passed) throw new InvalidOperationException("handoff_failed " + report.ToJsonString());
+            Console.WriteLine("REGION_HANDOFF_PASS " + report.ToJsonString());
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            (controller as IDisposable)?.Dispose();
+            worker?.Dispose();
+            Console.WriteLine("REGION_HANDOFF_FAIL " + error);
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class DamageTrace : ModPlayer
 {
+    public static bool SurvivalRoute => Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalroute");
+    public static int FallHits, DrowningFrames;
+    public override bool FreeDodge(Player.HurtInfo info)
+        => Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute;
+
     public override void PostUpdate()
     {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute") && !SurvivalRoute)
+            Player.AddBuff(BuffID.Gills, 216000);
+        if (SurvivalRoute && Player.breath <= 0 && Collision.DrownCollision(Player.position, Player.width, Player.height, Player.gravDir)) DrowningFrames++;
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck") && Player.FindBuffIndex(BuffID.Shine) < 0)
             Player.AddBuff(BuffID.Shine, 216000);
     }
@@ -27,6 +308,7 @@ public sealed class DamageTrace : ModPlayer
     {
         if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck")) return;
         var source = info.DamageSource;
+        if (SurvivalRoute && source.SourceOtherIndex is 0 or 5) FallHits++;
         Console.WriteLine(FormattableString.Invariant($"VNAV_HURT tick={Main.GameUpdateCount} damage={info.Damage} hp_before={Player.statLife} x={Player.Center.X / 16} y={Player.Bottom.Y / 16} fall_start={Player.fallStart} other={source.SourceOtherIndex} npc={source.SourceNPCIndex} projectile={source.SourceProjectileType}"));
     }
 }
@@ -41,6 +323,14 @@ public sealed class Caller : CommandCaller
 
 public sealed class NoSpawns : GlobalNPC
 {
+    public override void OnSpawn(NPC npc, Terraria.DataStructures.IEntitySource source)
+    {
+        if ((!Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal")
+            && !Terraria.Program.LaunchParameters.ContainsKey("-vnavregionscheck")) || npc.friendly || npc.damage <= 0) return;
+        Console.WriteLine($"VNAV_SUPPRESSED_SPAWN type={npc.type} source={source.GetType().Name}");
+        npc.active = false;
+    }
+
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck")
@@ -50,15 +340,30 @@ public sealed class NoSpawns : GlobalNPC
 
 public sealed class Driver : ModSystem
 {
-    bool enabled, opened, prepared, started, shot;
+    bool enabled, opened, prepared, started, shot, regionShot;
     int trial, ticks, warmup;
     int menuTicks;
+    int routeExtraJumps, previousAvailableJumps = -1;
+    StateSpacePlanner.SSResult nudgeReplay;
+    int nudgeReplayTicks;
     readonly Caller caller = new();
     readonly JsonArray results = new();
     JsonArray trace = new();
     bool routed;
     bool descent;
     bool continuity;
+    bool journey, journeyActionStarted;
+    bool readmeRoute;
+    uint journeyActionAt;
+    int journeyItemBefore;
+    double journeyLegStartedMs;
+    readonly record struct JourneyStop(string Kind, int X, int Y, int Item = 0);
+    readonly JourneyStop[] journeyStops = {
+        new("main", 3459, 454), new("crystal", 3358, 475, ItemID.LifeCrystal),
+        new("chest", 3339, 496), new("spore", 3348, 515, ItemID.JungleSpores),
+        new("main_return", 3459, 454), new("surface", 3384, 243) };
+    bool unlimited;
+    int routeGoalX = 3383, routeGoalY = 1069;
     int continuityLeg;
     int[] offsets = { 180 };
     int barrierTiles;
@@ -69,9 +374,56 @@ public sealed class Driver : ModSystem
     readonly JsonArray timingSegments = new();
     readonly JsonArray planTimings = new();
     readonly System.Collections.Generic.Dictionary<string, double> timingTotals = new();
+    readonly System.Collections.Generic.Dictionary<string, double> activityTotals = new();
+    double activityAt;
     string timingPhase;
     double phaseStart;
     Vector2 phasePosition, previousPosition;
+    Vector2 snapshotAnchor;
+    int snapshotStationaryFrames;
+    bool snapshotSaved;
+    object prewarming;
+
+    static void FinishProcess(int exitCode)
+    {
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavkeepopen")) return;
+        VanillaNavigationDemo.Instance.OnWorldUnload();
+        Environment.Exit(exitCode);
+    }
+
+    void WorkerLifecycle()
+    {
+        var demo = VanillaNavigationDemo.Instance;
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var startupField = typeof(VanillaNavigationDemo).GetField("startup", flags);
+        var workerField = typeof(VanillaNavigationDemo).GetField("worker", flags);
+        var worker = workerField.GetValue(demo) as VanillaWorkerConnection;
+        if (++ticks > 5400) throw new TimeoutException("worker_prewarm_timeout");
+        if (ticks == 1)
+        {
+            prewarming = startupField.GetValue(demo);
+            if (prewarming == null) throw new InvalidOperationException("world_prewarm_not_started");
+            demo.Stop();
+            if (!ReferenceEquals(prewarming, startupField.GetValue(demo)))
+                throw new InvalidOperationException("stop_cancelled_prewarm");
+        }
+        if (worker == null) return;
+        var start = typeof(VanillaNavigationDemo).GetMethod("StartNavigation", flags);
+        for (int task = 0; task < 2; task++)
+        {
+            start.Invoke(demo, new object[] { Main.LocalPlayer.position });
+            if (!demo.PlannerReady || !ReferenceEquals(worker, workerField.GetValue(demo)))
+                throw new InvalidOperationException("task_did_not_reuse_worker");
+            demo.Stop();
+            if (!worker.Alive) throw new InvalidOperationException("stop_closed_worker");
+        }
+        demo.OnWorldUnload();
+        if (worker.Alive || workerField.GetValue(demo) != null || startupField.GetValue(demo) != null)
+            throw new InvalidOperationException("world_unload_leaked_worker");
+        Console.WriteLine("VNAV_WORKER_COMPLETE tasks=2 starts=1 pending_stop=preserved unload=closed");
+        enabled = false;
+        Environment.Exit(0);
+    }
 
     static void RestoreBaseline(Player player, string directory)
     {
@@ -125,10 +477,92 @@ public sealed class Driver : ModSystem
         foreach (var item in Main.item) item.active = false;
     }
 
+    static void RestoreSnapshot(Player player, string snapshotPath)
+    {
+        void RestoreItems(Item[] items, JsonArray values)
+        {
+            for (int i = 0; i < items.Length; i++)
+            {
+                items[i].SetDefaults(values[i][0].GetValue<int>());
+                int prefix = values[i][1].GetValue<int>();
+                if (prefix != 0) items[i].Prefix(prefix);
+                items[i].stack = values[i][2].GetValue<int>();
+            }
+        }
+        {
+            var capture = JsonNode.Parse(File.ReadAllText(snapshotPath));
+            var snapshot = (capture["request"] ?? capture)["snapshot"].AsObject();
+            if (snapshot["engine"].GetValue<string>() != VanillaFrame.EngineId
+                || snapshot["world_width"].GetValue<int>() != Main.maxTilesX
+                || snapshot["world_height"].GetValue<int>() != Main.maxTilesY)
+                throw new InvalidOperationException("snapshot_engine_or_world_mismatch");
+            int who = player.whoAmI;
+            VanillaFrame.RestoreFields(player, snapshot["player"].AsObject());
+            player.whoAmI = who;
+            RestoreItems(player.inventory, snapshot["inventory"].AsArray());
+            RestoreItems(player.armor, snapshot["armor"].AsArray());
+            RestoreItems(player.dye, snapshot["dye"].AsArray());
+            RestoreItems(player.miscEquips, snapshot["misc_equips"].AsArray());
+            int x0 = snapshot["area"][0].GetValue<int>(), y0 = snapshot["area"][1].GetValue<int>();
+            int width = snapshot["area"][2].GetValue<int>();
+            var bytes = Convert.FromBase64String(snapshot["tiles"].GetValue<string>());
+            var tiles = new int[bytes.Length / sizeof(int)]; Buffer.BlockCopy(bytes, 0, tiles, 0, bytes.Length);
+            for (int i = 0; i < tiles.Length / 10; i++)
+            {
+                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
+                tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
+                tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
+                tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
+                tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
+                tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
+            }
+            Console.WriteLine($"VNAV_SNAPSHOT_START x={player.position.X} y={player.position.Y} source={snapshotPath}");
+        }
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in Main.item) item.active = false;
+    }
+
+    void CaptureStall(Player player)
+    {
+        if (Vector2.DistanceSquared(player.position, snapshotAnchor) > 32 * 32)
+        {
+            snapshotAnchor = player.position;
+            snapshotStationaryFrames = 0;
+            snapshotSaved = false;
+        }
+        if (++snapshotStationaryFrames < 120 || snapshotSaved) return;
+        snapshotSaved = true;
+        try
+        {
+            int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+            var area = Rectangle.Intersect(new Rectangle(x - 64, y - 64, 129, 129),
+                new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY));
+            var fixture = new JsonObject { ["snapshot"] = VanillaFrame.Capture(player, area, true),
+                ["goal_x"] = routeGoalX, ["goal_y"] = routeGoalY, ["tick"] = ticks,
+                ["phase"] = timingPhase, ["macro_running"] = StateSpacePlanner.ExecRunning,
+                ["skill_running"] = SkillExecutor.IsActive, ["bridge_running"] = BridgeBuilder.IsRunning };
+            string directory = Path.Combine(Main.SavePath, "NavSnapshots");
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, $"stall-{ticks}-{x}-{y}.json");
+            File.WriteAllText(path, fixture.ToJsonString());
+            Console.WriteLine("VNAV_STALL_SNAPSHOT " + path);
+        }
+        catch (Exception error) { Console.WriteLine("VNAV_STALL_SNAPSHOT_FAILED " + error.Message); }
+    }
+
     string TimingPhase(Player player, VanillaNavigationDemo demo)
     {
+        if (!VanillaNavBridge.Enabled)
+        {
+            bool moving = Vector2.DistanceSquared(player.position, previousPosition) > .0625f;
+            if (MineCoordinator.IsActive) return moving ? "legacy_moving_mining" : "legacy_mining";
+            if (SkillExecutor.IsActive || BridgeBuilder.IsRunning) return "legacy_building";
+            if (moving) return "legacy_moving";
+            return StateSpacePlanner.ExecRunning ? "legacy_executing" : "legacy_waiting";
+        }
         string stage = VanillaNavBridge.Stage;
-        if (stage != "Moving") return stage;
+        if (stage is not "Moving" and not "Approaching") return stage;
         if (!VanillaNavigationDemo.Active) return "field_setup";
         if (!demo.PlannerReady) return "worker_startup";
         if (!demo.LastControl.Queued) return "queue_empty";
@@ -162,11 +596,13 @@ public sealed class Driver : ModSystem
         routeClock.Stop();
         var totals = new JsonObject();
         foreach (var pair in timingTotals) totals[pair.Key] = pair.Value;
+        var activity = new JsonObject();
+        foreach (var pair in activityTotals) activity[pair.Key] = pair.Value;
         string report = new JsonObject {
             ["done"] = done, ["reason"] = reason, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds,
-            ["game_frames"] = ticks, ["limit_ms"] = continuity ? null : 150000,
-            ["goal_x"] = continuity ? null : 3383, ["goal_y"] = continuity ? null : 1069,
-            ["phase_ms"] = totals, ["segments"] = timingSegments.DeepClone(),
+            ["game_frames"] = ticks,
+            ["goal_x"] = continuity ? null : routeGoalX, ["goal_y"] = continuity ? null : routeGoalY,
+            ["phase_ms"] = totals, ["activity_ms"] = activity, ["segments"] = timingSegments.DeepClone(),
             ["plans"] = planTimings.DeepClone() }.ToJsonString();
         File.WriteAllText(Path.Combine(Main.SavePath, "route-timing.json"), report);
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastDirectory != null)
@@ -176,7 +612,11 @@ public sealed class Driver : ModSystem
     public override void Load()
     {
         descent = Terraria.Program.LaunchParameters.ContainsKey("-vnavdescentcheck");
+        readmeRoute = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmeroute");
+        unlimited = Terraria.Program.LaunchParameters.ContainsKey("-vnavnotimelimit");
         continuity = Terraria.Program.LaunchParameters.ContainsKey("-vnavcontinuitycheck");
+        journey = Terraria.Program.LaunchParameters.ContainsKey("-vnavjourneycheck");
+        continuity |= journey;
         if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcircuitcheck")) offsets = new[] { 180, 360, -180 };
         enabled = !Main.dedServ && (Terraria.Program.LaunchParameters.ContainsKey("-vnavdemocheck") || descent);
         if (!enabled) return;
@@ -253,7 +693,7 @@ public sealed class Driver : ModSystem
         player.position = new Vector2(500 * 16, 400 * 16 - player.height);
         barrierTiles = Enumerable.Range(456, 118).Sum(x => Enumerable.Range(390, 10).Count(y => Main.tile[x, y].HasTile));
         player.fallStart = (int)(player.position.Y / 16); player.velocity = Vector2.Zero;
-        ticks = 0; warmup = 8; started = false; shot = false; prepared = true; trace = new JsonArray();
+        ticks = 0; warmup = 8; started = false; shot = regionShot = false; prepared = true; trace = new JsonArray();
         if (Terraria.Program.LaunchParameters.ContainsKey("-navrecordcheck")) NavigationRecording.Start("human", 522, 399);
         Main.NewText(routed ? $"挖掘测试：{(trial == 0 ? "沙暴瓶" : "翅膀")}，相同封闭通道"
             : trial == 0 ? "演示1：只用沙暴瓶登上12格高台" : "演示2：翅膀登上同一个高台", Color.LightGreen);
@@ -262,8 +702,17 @@ public sealed class Driver : ModSystem
     public override void PostUpdateEverything()
     {
         if (!enabled || Main.gameMenu) return;
+        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavtrace")) DiagLog.Trace = true;
         try
         {
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpreviewcheck")) { PreviewIsolation(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbridgerecoverycheck")) { BridgeRecovery(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavpillarprobe")) { PillarProbe(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsnapshotcheck")) { SnapshotRoundtrip(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavslopestallcheck")) { SlopeStall(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalcheck")) { SurvivalControl(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavworkercheck")) { WorkerLifecycle(); return; }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavshortrequests")) { ShortRequests(); return; }
             if (descent) { Descent(); return; }
             if (!prepared) { Scene(); return; }
             if (warmup-- > 0) return;
@@ -331,19 +780,710 @@ public sealed class Driver : ModSystem
             if (VanillaNavigationDemo.Active || AxisLock.Held(Ax.Move) == "vanilla-demo") throw new InvalidOperationException("stop_did_not_release_control");
             Console.WriteLine("VNAV_DEMO_COMPLETE cases=2");
             enabled = false;
-            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
+            FinishProcess(0);
             Main.NewText("演示已通过。可以输入 /vnav X Y 继续尝试；/vnav stop 停止。", Color.LightGreen);
         }
         catch (Exception error)
         {
             if (NavigationRecording.Active) NavigationRecording.Stop(error.Message);
-            if (descent) SaveTiming(false, error.Message);
+            if (descent && routeClock.IsRunning) SaveTiming(false, error.Message);
             controlTrace?.Flush();
             Console.WriteLine("VNAV_DEMO_FAILED " + error);
-            enabled = false; VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
-            if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(1);
+            enabled = false;
+            RecedingNav.Stop(); VanillaNavigationDemo.Instance.Stop("演示失败：" + error.Message);
+            FinishProcess(1);
             Main.NewText("演示失败，窗口已保留：" + error.Message, Color.OrangeRed);
         }
+    }
+
+    int survivalCase, survivalMinHp, survivalInterventions, survivalLanded;
+    readonly string[] survivalKinds = { "bare", "horseshoe", "wings", "cloud", "umbrella_bag", "cobweb", "cobweb_bag", "featherfall_bag", "gravity_pair", "air_pocket", "air_sealed" };
+
+    void SurvivalControl()
+    {
+        var p = Main.LocalPlayer;
+        string kind = survivalKinds[survivalCase];
+        bool air = kind.StartsWith("air_");
+        bool resume = kind == "air_sealed" && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalresume");
+        if (!prepared)
+        {
+            RecedingNav.Stop(); NavigationSurvival.Reset(p);
+            Config.I.AlwaysGillsAndShine = false;
+            Concessions.Enabled = false;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var projectile in Main.projectile) projectile.active = false;
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            for (int x = 490; x <= 510; x++)
+            for (int y = 330; y <= 402; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= 400 || y == 330 || x == 490 || x == 510)
+                { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            Array.Clear(p.buffType); Array.Clear(p.buffTime);
+            p.ConsumedLifeCrystals = 15; p.statLifeMax = p.statLifeMax2 = p.statLife = 400;
+            p.position = new Vector2(500 * 16, 400 * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16);
+            if (kind == "horseshoe") p.armor[3].SetDefaults(ItemID.LuckyHorseshoe);
+            if (kind == "wings") p.armor[3].SetDefaults(ItemID.AngelWings);
+            if (kind == "cloud") p.armor[3].SetDefaults(ItemID.CloudinaBottle);
+            if (kind == "umbrella_bag") p.inventory[12].SetDefaults(ItemID.Umbrella);
+            if (kind == "cobweb") { p.inventory[0].SetDefaults(ItemID.Cobweb); p.inventory[0].stack = 10; }
+            if (kind == "cobweb_bag") { p.inventory[12].SetDefaults(ItemID.Cobweb); p.inventory[12].stack = 10; }
+            if (kind == "featherfall_bag") { p.inventory[12].SetDefaults(ItemID.FeatherfallPotion); p.inventory[12].stack = 2; }
+            if (kind == "gravity_pair") p.AddBuff(BuffID.Gravitation, 3600);
+            p.inventory[9].SetDefaults(ItemID.Wood); p.inventory[9].stack = 23; p.selectedItem = 9;
+            if (air)
+            {
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                if (resume && Terraria.Program.LaunchParameters.ContainsKey("-vnavsurvivalplatforms"))
+                { p.inventory[1].SetDefaults(ItemID.WoodPlatform); p.inventory[1].stack = 6; }
+                for (int x = 495; x <= 506; x++)
+                for (int y = 388; y <= 400; y++)
+                {
+                    var tile = Main.tile[x, y]; tile.ClearEverything();
+                    bool solid = x == 495 || (kind == "air_sealed" ? x == 506 : x >= 502) || y == 388 || y == 400;
+                    tile.HasTile = solid; tile.TileType = TileID.Dirt;
+                    if (!solid) { tile.LiquidType = LiquidID.Water; tile.LiquidAmount = 255; Liquid.AddWater(x, y); }
+                }
+                for (int x = 495; x <= 506; x++)
+                for (int y = 400; y <= 405; y++)
+                { var tile = Main.tile[x, y]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            prepared = true; started = false; warmup = 12;
+            return;
+        }
+        if (warmup-- > 0) return;
+        if (!started)
+        {
+            p.position.Y = air ? 6400 - p.height : 340 * 16; p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16); p.statLife = 400;
+            typeof(RecedingNav).GetField("_fieldReady", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).SetValue(null, false);
+            RecedingNav.Active = kind != "bare";
+            survivalInterventions = NavigationSurvival.Interventions;
+            if (air) { p.breath = 170; survivalInterventions = NavigationAirPocket.Recoveries; }
+            if (resume) RecedingNav.Start(508, 399, RecedingNav.Mode.Stand);
+            survivalMinHp = 400; survivalLanded = ticks = 0; started = true;
+            return;
+        }
+        ticks++; survivalMinHp = Math.Min(survivalMinHp, p.statLife);
+        if (air && ticks % 15 == 0)
+        {
+            string water = string.Join(",", Enumerable.Range(394, 6).Select(y => $"{y}:{Main.tile[502,y].LiquidAmount}/{Main.tile[503,y].LiquidAmount}"));
+            Console.WriteLine($"AIR_TRACE tick={ticks} pos={p.position} vy={p.velocity.Y} breath={p.breath} drown={Collision.DrownCollision(p.position,p.width,p.height,p.gravDir)} water={water}");
+        }
+        if (ticks % 120 == 0)
+        {
+            Console.WriteLine($"SURVIVAL_CONTROL_TRACE kind={kind} tick={ticks} pos={p.position} velocity={p.velocity} gravity={p.gravDir} hp={p.statLife} nav={RecedingNav.Active} engine={VanillaNavigationDemo.Active}");
+            int tx = (int)(p.Center.X / 16), ty = (int)(p.Bottom.Y / 16);
+            for (int y = ty - 1; y <= ty + 1; y++)
+            {
+                var tile = Main.tile[tx, y];
+                Console.WriteLine($"SURVIVAL_SUPPORT x={tx} y={y} active={tile.HasTile} type={tile.TileType} liquid={tile.LiquidAmount} slope={tile.Slope} half={tile.IsHalfBlock} wood={p.inventory[9].stack} jump={p.controlJump} use={p.controlUseItem}");
+            }
+        }
+        if (air) survivalLanded = NavigationAirPocket.Recoveries > survivalInterventions
+            && (!resume || !RecedingNav.Active && RecedingNav.LastStop == "done"
+                && Math.Abs(p.Center.X / 16 - 508.5f) < 2) ? 3 : 0;
+        else if (p.velocity.Y == 0 && p.Bottom.Y >= 6400 - 1) survivalLanded++; else survivalLanded = 0;
+        if (survivalLanded < 3 && ticks < (air ? 3600 : 900) && !p.dead) return;
+        int interventions = (air ? NavigationAirPocket.Recoveries : NavigationSurvival.Interventions) - survivalInterventions;
+        Console.WriteLine($"SURVIVAL_CONTROL_CASE kind={kind} ticks={ticks} hp_loss={400 - survivalMinHp} interventions={interventions} breath={p.breath}/{p.breathMax} landed={survivalLanded} dead={p.dead} pos={p.position} velocity={p.velocity}");
+        if (p.dead || survivalLanded < 3 || (kind == "bare" ? survivalMinHp >= 400 : survivalMinHp != 400)
+            || (kind is "cloud" or "umbrella_bag" or "cobweb" or "cobweb_bag" or "featherfall_bag" or "gravity_pair") && interventions == 0)
+            throw new InvalidOperationException("survival_control_failed:" + kind);
+        if (kind == "umbrella_bag" && (p.inventory[12].type != ItemID.Umbrella
+            || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
+            throw new InvalidOperationException("survival_inventory_not_restored");
+        if (kind == "featherfall_bag" && (!p.HasBuff(BuffID.Featherfall) || p.inventory[12].type != ItemID.FeatherfallPotion
+            || p.inventory[12].stack != 1 || p.inventory[9].type != ItemID.Wood || p.inventory[9].stack != 23 || p.selectedItem != 9))
+            throw new InvalidOperationException("survival_potion_not_used_or_restored");
+        if (kind == "gravity_pair" && p.gravDir != 1) throw new InvalidOperationException("gravity_not_restored");
+        if (kind == "cobweb_bag" && (p.inventory[12].type != ItemID.Cobweb || p.inventory[9].type != ItemID.Wood
+            || p.inventory[9].stack != 23 || p.selectedItem != 9)) throw new InvalidOperationException("web_inventory_not_restored");
+        RecedingNav.Stop(); NavigationSurvival.Reset(p);
+        prepared = false;
+        if (++survivalCase < survivalKinds.Length) return;
+        Console.WriteLine("VNAV_DEMO_COMPLETE SURVIVAL_CONTROL_PASS cases=11");
+        enabled = false; FinishProcess(0);
+    }
+
+    void PillarProbe()
+    {
+        var p = Main.LocalPlayer;
+        if (!prepared)
+        {
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+            p.position = new Vector2(54223.8f, 16262); p.velocity = Vector2.Zero;
+            p.fallStart = (int)(p.position.Y / 16);
+            for (int row = 1017; row <= 1019; row++)
+            {
+                var tile = Main.tile[3388, row];
+                Console.WriteLine($"PILLAR_PROBE_TILE x=3388 y={row} has={tile.HasTile} type={tile.TileType} cut={Main.tileCut[tile.TileType]} solid={Main.tileSolid[tile.TileType]} wall={tile.WallType}");
+            }
+            prepared = true; warmup = 8; ticks = 0; return;
+        }
+        if (warmup-- > 0) return;
+        if (!started) { SkillExecutor.StartPillarJump(false, 1004, true, 3388); started = true; return; }
+        if (SkillExecutor.IsActive && ++ticks < 600) return;
+        if (SkillExecutor.IsActive || ticks > 2 || p.inventory[2].stack != 999)
+            throw new InvalidOperationException("unanchored_pillar_not_rejected_before_jump");
+        Console.WriteLine($"VNAV_DEMO_COMPLETE PILLAR_PROBE_RESULT frames={ticks} remaining={p.inventory[2].stack} x={p.position.X} y={p.position.Y}");
+        SkillExecutor.Stop(); enabled = false; FinishProcess(0);
+    }
+
+    void SnapshotRoundtrip()
+    {
+        var p = Main.LocalPlayer;
+        p.position = new Vector2(54223.8f, 16262); p.velocity = Vector2.Zero;
+        p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+        snapshotAnchor = p.position; snapshotStationaryFrames = 119;
+        CaptureStall(p);
+        string path = Directory.GetFiles(Path.Combine(Main.SavePath, "NavSnapshots"), "stall-*.json").Single();
+        Vector2 originalPosition = p.position;
+        var originalTile = Main.tile[3388, 1019];
+        ushort originalType = originalTile.TileType;
+        SlopeType originalSlope = originalTile.Slope;
+        bool originalHalf = originalTile.IsHalfBlock;
+        p.position += new Vector2(100, 100); p.inventory[2].stack = 1;
+        originalTile.ClearEverything();
+        RestoreSnapshot(p, path);
+        var restoredTile = Main.tile[3388, 1019];
+        if (p.position != originalPosition || p.inventory[2].stack != 999 || !restoredTile.HasTile
+            || restoredTile.TileType != originalType || restoredTile.Slope != originalSlope || restoredTile.IsHalfBlock != originalHalf)
+            throw new InvalidOperationException("stall_snapshot_roundtrip_failed");
+        Console.WriteLine("VNAV_DEMO_COMPLETE SNAPSHOT_ROUNDTRIP_PASS " + path);
+        enabled = false; FinishProcess(0);
+    }
+
+    void SlopeStall()
+    {
+        var p = Main.LocalPlayer;
+        if (nudgeReplay != null)
+        {
+            nudgeReplayTicks++;
+            if (StateSpacePlanner.ExecRunning && nudgeReplayTicks < 180) return;
+            var last = nudgeReplay.ExecFrames[^1];
+            var placement = nudgeReplay.ExecFrames.First(frame => frame.Place);
+            bool placed = Main.tile[placement.PlaceCx, placement.PlaceCy].HasTile
+                && Main.tile[placement.PlaceCx, placement.PlaceCy].TileType == TileID.Platforms;
+            Console.WriteLine($"NUDGE_JUMP_PLACE_REPLAY ticks={nudgeReplayTicks} placed={placed} actual=({p.position.X},{p.position.Y}) expected=({last.Px},{last.Py}) active={StateSpacePlanner.ExecRunning} dead={p.dead} hp={p.statLife} paused={Main.gamePaused} focus={Main.hasFocus} gameTick={Main.GameUpdateCount}");
+            if (!placed || StateSpacePlanner.ExecRunning || Math.Abs(p.position.Y - last.Py) > 1f
+                || Math.Abs(p.position.X - last.Px) > 2f || p.velocity.Y != 0f)
+                throw new InvalidOperationException("recorded_nudge_jump_place_replay_failed");
+            Console.WriteLine("VNAV_DEMO_COMPLETE SLOPE_STALL_MEASURED");
+            enabled = false; FinishProcess(0); return;
+        }
+        foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+        p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+        p.position = new Vector2(55514, 5686); p.velocity = Vector2.Zero;
+        var support = Main.tile[3470, 358];
+        support.ClearEverything(); support.HasTile = true; support.TileType = TileID.Platforms;
+        foreach (var cell in new[] { (3470, 354), (3470, 353), (3469, 354), (3469, 353) })
+        {
+            var tile = Main.tile[cell.Item1, cell.Item2]; tile.HasTile = false;
+        }
+        for (int y = 352; y <= 358; y++)
+        for (int x = 3468; x <= 3472; x++)
+        {
+            var tile = Main.tile[x, y];
+            if (tile.HasTile) Console.WriteLine($"SLOPE_TILE x={x} y={y} type={tile.TileType} slope={tile.Slope} half={tile.IsHalfBlock}");
+        }
+        var physics = PhysicsSimulator.Params.FromPlayer(p);
+        foreach (float x in new[] { 55510f, 55514f, 55518f, 55522f })
+        {
+            var sim = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = x, Py = p.position.Y,
+                Grounded = true, JumpFramesLeft = 15 }, 0, 15, physics);
+            Console.WriteLine($"SLOPE_RISE x={x} rise={p.position.Y - sim.MinPy}");
+        }
+        bool accepted = SkillExecutor.CanPillarFrom(p.position.X, p.position.Y, out int top);
+        Console.WriteLine($"SLOPE_CANDIDATE accepted={accepted} top={top}");
+        if (accepted) throw new InvalidOperationException("blocked_actual_pillar_start_accepted");
+        if (!SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
+            throw new InvalidOperationException("clear_pillar_start_rejected");
+        var lavaAnchor = Main.tile[3470, 357];
+        byte liquidAmount = lavaAnchor.LiquidAmount;
+        int liquidType = lavaAnchor.LiquidType;
+        lavaAnchor.LiquidType = LiquidID.Lava; lavaAnchor.LiquidAmount = 255;
+        if (SkillExecutor.CanPillarFrom(55522f, p.position.Y, out _))
+            throw new InvalidOperationException("lava_pillar_start_accepted");
+        lavaAnchor.LiquidAmount = liquidAmount; lavaAnchor.LiquidType = liquidType;
+        Console.WriteLine("PILLAR_LAVA_REJECTION_PASS");
+        const System.Reflection.BindingFlags guardFlags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var beginAttempt = typeof(RecedingNav).GetMethod("BeginAttempt", guardFlags);
+        var recordAttempt = typeof(RecedingNav).GetMethod("RecordAttempt", guardFlags);
+        bool FailedAttempt() => (bool)recordAttempt.Invoke(null, new object[] { p, false });
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 1; attempt <= 4; attempt++)
+            if (FailedAttempt() != (attempt == 4)) throw new InvalidOperationException("no_progress_attempt_count");
+        p.position.X += 2f;
+        if (FailedAttempt()) throw new InvalidOperationException("movement_not_counted_as_progress");
+        p.position.X -= 2f;
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 0; attempt < 3; attempt++) FailedAttempt();
+        bool anchorHadTile = lavaAnchor.HasTile;
+        lavaAnchor.HasTile = !anchorHadTile;
+        if (FailedAttempt()) throw new InvalidOperationException("terrain_edit_not_counted_as_progress");
+        lavaAnchor.HasTile = anchorHadTile;
+        beginAttempt.Invoke(null, new object[] { p });
+        for (int attempt = 0; attempt < 3; attempt++) FailedAttempt();
+        lavaAnchor.LiquidAmount = liquidAmount == 0 ? (byte)1 : (byte)0;
+        if (!FailedAttempt()) throw new InvalidOperationException("flowing_liquid_reset_failure_count");
+        lavaAnchor.LiquidAmount = liquidAmount;
+        recordAttempt.Invoke(null, new object[] { p, true });
+        Console.WriteLine("NAV_ATTEMPT_PROGRESS_PASS repeated=4 movement=true terrain=true liquid_ignored=true");
+        var escapeTask = new System.Threading.Tasks.TaskCompletionSource<StateSpacePlanner.SSResult>();
+        typeof(TrapEscape).GetField("_search", guardFlags).SetValue(null, escapeTask.Task);
+        typeof(TrapEscape).GetField("_searchGeneration", guardFlags).SetValue(null,
+            typeof(TrapEscape).GetField("_generation", guardFlags).GetValue(null));
+        typeof(RecedingNav).GetField("_failureRecoveryPending", guardFlags).SetValue(null, true);
+        var pollRecovery = typeof(RecedingNav).GetMethod("PollFailureRecovery", guardFlags);
+        RecedingNav.Active = true; RecedingNav.LastStop = null;
+        pollRecovery.Invoke(null, null);
+        if (!RecedingNav.Active || !TrapEscape.Busy)
+            throw new InvalidOperationException("unfinished_escape_not_waited");
+        escapeTask.SetResult(new StateSpacePlanner.SSResult { Found = false });
+        pollRecovery.Invoke(null, null);
+        if (RecedingNav.Active || TrapEscape.Busy || RecedingNav.LastStop != "repeated_action_failure")
+            throw new InvalidOperationException("completed_escape_not_consumed");
+        RecedingNav.LastStop = null;
+        Console.WriteLine("NAV_ESCAPE_COMPLETION_PASS pending_waited=true finished_consumed=true failure_reported=true");
+        var brake = typeof(StateSpacePlanner).GetMethod("AppendBrake",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 364) }))
+        {
+            foreach (var test in new[] { (55519.973f, 2.0399995f, false), (55504f, .5f, true), (55504f, 0f, true) })
+            {
+                var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
+                var node = new StateSpacePlanner.SSNode { Px = test.Item1, Py = 5782, Vx = test.Item2, Grounded = true };
+                object result = brake.Invoke(null, new object[] { node, frames, physics });
+                Console.WriteLine($"PLATFORM_BRAKE x={test.Item1} vx={test.Item2} accepted={result != null} frames={frames.Count}");
+                if ((result != null) != test.Item3) throw new InvalidOperationException("platform_brake_admission_mismatch");
+                if (result != null && frames.Count > 0 && frames[^1].Vx != 0f)
+                    throw new InvalidOperationException("platform_brake_left_residual_velocity");
+            }
+        }
+        routeGoalX = 3384; routeGoalY = 242;
+        snapshotAnchor = p.position; snapshotStationaryFrames = 119; CaptureStall(p);
+        var edgeSupport = Main.tile[3376, 920];
+        edgeSupport.ClearEverything(); edgeSupport.HasTile = true; edgeSupport.TileType = TileID.Platforms;
+        p.position = new Vector2(54022.67f, 14678); p.velocity = Vector2.Zero; p.controlJump = false;
+        if (Predicates.IsGround(3377, 920) || Collision.TileCollision(p.position, Vector2.UnitY, p.width, p.height).Y != 0)
+            throw new InvalidOperationException("pillar_edge_fixture_does_not_match_recorded_support");
+        SkillExecutor.StartPillarJump(true, 921, true, 3376);
+        SkillExecutor.ApplyControls();
+        if (SkillExecutor.IsActive || p.controlJump)
+            throw new InvalidOperationException("pillar_rejumped_after_supported_arrival");
+        Console.WriteLine("PILLAR_EDGE_COMPLETION_PASS");
+        var simulate = typeof(StateSpacePlanner).GetMethod("SimulateSegment",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        int recovered = 0;
+        using (var preview = new PhysicsSimulator.PlatformPreview(new[] { (3469, 368), (3469, 364) }))
+        {
+            var start = new StateSpacePlanner.SSNode { Px = 55497.89f, Py = 5846, Vx = -1.8000009f, Grounded = true };
+            for (int hold = 4; hold <= 28; hold += 2)
+            {
+                object original = simulate.Invoke(null, new object[] { start, 1, hold, physics, null });
+                if (original is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> before
+                    || Math.Abs(before.Item1.Py - 5782) > .1f || brake.Invoke(null, new object[] { before.Item1, before.Item2, physics }) != null) continue;
+                object aimed = simulate.Invoke(null, new object[] { start, 1, hold, physics, 55502f });
+                if (aimed is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> after
+                    || Math.Abs(after.Item1.Py - 5782) > .1f || brake.Invoke(null, new object[] { after.Item1, after.Item2, physics }) == null) continue;
+                recovered++;
+                Console.WriteLine($"JUMP_PLACE_RECOVERED hold={hold} frames={after.Item2.Count} x={after.Item1.Px} y={after.Item1.Py}");
+            }
+        }
+        if (recovered == 0) throw new InvalidOperationException("air_braking_recovered_no_recorded_jump");
+        EscapeResultAdmission(p);
+        RecordedJumpPlace(p);
+    }
+
+    void RecordedJumpPlace(Player p)
+    {
+        var tile = Main.tile[3321, 740];
+        tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Platforms;
+        p.position = new Vector2(53132.4f, 11798); p.velocity = Vector2.Zero;
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var planner = typeof(StateSpacePlanner);
+        planner.GetMethod("ClearPlaceCache", flags).Invoke(null, null);
+        var ctx = new StateSpacePlanner.PlanCtx { TraceJumpPlace = true };
+        var jump = planner.GetMethod("JumpPlace", flags);
+        var physics = PhysicsSimulator.Params.FromPlayer(p);
+        int accepted = 0;
+        foreach (float offset in new[] { 0f, -4f, 4f })
+        foreach (float vx in new[] { 0f, -.2f })
+        for (int hold = 2; hold <= 28; hold += 2)
+        {
+            var start = new StateSpacePlanner.SSNode { Px = p.position.X + offset, Py = p.position.Y, Vx = vx, Grounded = true };
+            if (hold == 2)
+            {
+                var arc = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = start.Px, Py = start.Py,
+                    Vx = vx, Grounded = true, JumpFramesLeft = 15 }, 0, 15, physics);
+                bool pillar = SkillExecutor.CanPillarFrom(start.Px, start.Py, out int top);
+                Console.WriteLine($"RECORDED_RISE offset={offset} vx={vx} rise={start.Py - arc.MinPy} pillar={pillar} top={top}");
+            }
+            object result = jump.Invoke(null, new object[] { ctx, start, 0, hold, physics, (int)TileID.Platforms });
+            if (result is ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> edge)
+            {
+                accepted++;
+                Console.WriteLine($"RECORDED_JUMP_PLACE offset={offset} vx={vx} hold={hold} frames={edge.Item2.Count} rise={p.position.Y - edge.Item1.Py}");
+            }
+        }
+        Console.WriteLine($"RECORDED_JUMP_PLACE_TOTAL accepted={accepted}");
+        var nudge = planner.GetMethod("NudgeJumpPlace", flags);
+        var originalStart = new StateSpacePlanner.SSNode { Px = p.position.X, Py = p.position.Y, Grounded = true };
+        var recovered = nudge.Invoke(null, new object[] { ctx, originalStart, -1, 12, physics, (int)TileID.Platforms });
+        if (recovered is not ValueTuple<StateSpacePlanner.SSNode, System.Collections.Generic.List<PhysicsSimulator.ControlInput>> combined
+            || originalStart.Py - combined.Item1.Py < 48f || combined.Item2[0].Jump
+            || !combined.Item2.Exists(frame => frame.Jump) || !combined.Item2.Exists(frame => frame.Place))
+            throw new InvalidOperationException("recorded_nudge_jump_place_not_recovered");
+        Console.WriteLine($"NUDGE_JUMP_PLACE_PASS frames={combined.Item2.Count} rise={originalStart.Py - combined.Item1.Py}");
+        ctx.DistField = new System.Collections.Generic.Dictionary<(int, int), int> {
+            [(3321, 739)] = 19003, [(3321, 735)] = 18886 };
+        var candidates = (System.Collections.Generic.IEnumerable<(StateSpacePlanner.SSNode node,
+            System.Collections.Generic.List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar,
+            System.Collections.Generic.List<(int, int)> dig)>)planner.GetMethod("OnDemandPlatformEdges", flags)
+                .Invoke(null, new object[] { ctx, originalStart, physics, (int)TileID.Platforms, 0, false, false, 243 * 16f });
+        var edges = candidates.ToArray();
+        if (edges.Any(edge => edge.pillar) || !edges.Any(edge => edge.frames?.Exists(frame => frame.Place) == true
+            && originalStart.Py - edge.node.Py >= 48f))
+            throw new InvalidOperationException("recorded_jump_place_did_not_replace_pillar_fallback");
+        Console.WriteLine($"NUDGE_CANDIDATES_PASS count={edges.Length} pillars={edges.Count(edge => edge.pillar)}");
+        var last = combined.Item2[^1];
+        int targetX = (int)((last.Px + p.width / 2f) / 16f), targetY = (int)((last.Py + p.height) / 16f) - 1;
+        nudgeReplay = new StateSpacePlanner.SSResult { Found = true, StartPx = p.position.X, StartPy = p.position.Y,
+            GoalWx = targetX, GoalWy = targetY, ExecFrames = combined.Item2 };
+        nudgeReplay.Steps.Add(new StateSpacePlanner.ExecStep { Frames = combined.Item2,
+            TargetCx = targetX, TargetCy = targetY, LandPx = last.Px, LandPy = last.Py });
+        p.releaseJump = true; p.itemAnimation = p.itemTime = 0;
+        p.fallStart = p.fallStart2 = (int)(p.position.Y / 16f);
+        StateSpacePlanner.DispatchPlan(nudgeReplay);
+    }
+
+    void EscapeResultAdmission(Player p)
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(TrapEscape);
+        var search = type.GetField("_search", flags);
+        var generation = type.GetField("_generation", flags);
+        var searchGeneration = type.GetField("_searchGeneration", flags);
+        var startVx = type.GetField("_startVx", flags);
+        foreach (string scenario in new[] { "moved", "velocity", "falling", "reset", "fresh" })
+        {
+            StateSpacePlanner.StopNav();
+            TrapEscape.Reset();
+            p.position = new Vector2(54022.67f, 14678); p.velocity = Vector2.Zero;
+            var cell = (3377, 919);
+            var frame = new PhysicsSimulator.ControlInput { Px = p.position.X, Py = p.position.Y };
+            var result = new StateSpacePlanner.SSResult { Found = true, StartPx = p.position.X,
+                StartPy = p.position.Y, GoalWx = cell.Item1, GoalWy = cell.Item2 };
+            result.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
+                Frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput> { frame } });
+            var completion = new System.Threading.Tasks.TaskCompletionSource<StateSpacePlanner.SSResult>();
+            search.SetValue(null, completion.Task);
+            searchGeneration.SetValue(null, generation.GetValue(null));
+            startVx.SetValue(null, 0f);
+            if (TrapEscape.Poll() || !TrapEscape.Busy) throw new InvalidOperationException("escape_did_not_wait_for_result");
+            if (scenario == "moved") p.position += new Vector2(-6.4f, -64f);
+            if (scenario == "velocity") p.velocity.X = 2f;
+            if (scenario == "falling") p.velocity.Y = 1f;
+            if (scenario == "reset") TrapEscape.Reset();
+            completion.SetResult(result);
+            bool accepted = TrapEscape.Poll();
+            if (accepted != (scenario == "fresh") || TrapEscape.Busy || StateSpacePlanner.StepsActive != accepted)
+                throw new InvalidOperationException($"escape_admission_failed:{scenario}");
+            if (result.Steps[0].Frames[0].Px != frame.Px || result.Steps[0].Frames[0].Py != frame.Py)
+                throw new InvalidOperationException("escape_translated_prediction");
+            Console.WriteLine($"ESCAPE_ADMISSION_PASS scenario={scenario} accepted={accepted}");
+        }
+        StateSpacePlanner.StopNav();
+        TrapEscape.Reset();
+    }
+
+    void BridgeRecovery()
+    {
+        var p = Main.LocalPlayer;
+        p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 999;
+        p.position = new Vector2(Main.spawnTileX * 16, 50 * 16 - p.height);
+        p.velocity = Vector2.Zero;
+        int row = ActExecutor.OriginCy(p) + 1, x = ActExecutor.OriginCx(p);
+        RecedingNav.Active = true; Unstick.Reset();
+        try
+        {
+            var recorded = new PhysicsSimulator.State { Px = 54158.96f, Py = 13222, Vx = -2.739999f, Vy = 0, Grounded = true };
+            var physics = PhysicsSimulator.Params.FromPlayer(p);
+            if (BridgeBuilder.CanBrakeOnRow(recorded, physics, 829))
+                throw new InvalidOperationException("recorded_unsafe_bridge_accepted");
+            recorded.Vx = 0;
+            if (!BridgeBuilder.CanBrakeOnRow(recorded, physics, 829))
+                throw new InvalidOperationException("stationary_bridge_rejected");
+            if (!BridgeBuilder.Start(ItemID.WoodPlatform.ToString(), "left", 4, x - 100, row, out string why))
+                throw new InvalidOperationException("bridge_start:" + why);
+            BridgeBuilder.Tick();
+            if (!BridgeBuilder.IsRunning) throw new InvalidOperationException("valid_bridge_aborted");
+            p.velocity.X = .5f; p.controlLeft = p.controlRight = false;
+            BridgeBuilder.Tick();
+            if (!p.controlLeft || p.controlRight) throw new InvalidOperationException("bridge_did_not_brake");
+            p.velocity = Vector2.Zero;
+            p.position.Y += 29 * 16;
+            BridgeBuilder.Tick();
+            if (BridgeBuilder.IsRunning || ItemUseCoordinator.IsActive || BridgeBuilder.Outcome != "bad_stand" || !RecedingNav.Active)
+                throw new InvalidOperationException("fallen_bridge_not_released");
+            p.position.Y -= 29 * 16;
+            if (!BridgeBuilder.Start(ItemID.WoodPlatform.ToString(), "left", 4, x - 100, row, out why))
+                throw new InvalidOperationException("bridge_restart:" + why);
+            int frames = 0;
+            while (BridgeBuilder.IsRunning && frames++ < 1000) BridgeBuilder.Tick();
+            if (BridgeBuilder.IsRunning || Unstick.Busy || !RecedingNav.Active || BridgeBuilder.Outcome != "stuck")
+                throw new InvalidOperationException("bridge_parent_wait_cycle");
+            Console.WriteLine($"VNAV_DEMO_COMPLETE BRIDGE_RECOVERY_PASS cases=6 unreachable_frames={frames}");
+        }
+        finally { BridgeBuilder.Stop(); RecedingNav.Active = false; Unstick.Reset(); }
+        enabled = false; FinishProcess(0);
+    }
+
+    int shortCase, shortTick;
+    int shortIdleFrames, shortIdleRun, shortLongestIdle;
+    bool shortMoved;
+    long shortStarted;
+    Vector2 shortOrigin;
+    readonly JsonArray shortResults = new();
+    Vector2 shortFlat;
+
+    void ShortRequests()
+    {
+        var player = Main.LocalPlayer;
+        int[] offsets = { 6, 10, 30, 60, 60, -30, -30, 6, 6, 6 };
+        if (shortCase >= offsets.Length)
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(Main.SavePath, "short-requests.json"), shortResults.ToJsonString());
+            Console.WriteLine("SHORT_REQUESTS_MEASURED " + shortResults.ToJsonString());
+            Console.WriteLine("VNAV_DEMO_COMPLETE");
+            enabled = false; FinishProcess(0); return;
+        }
+        if (shortTick++ == 0)
+        {
+            shortIdleFrames = shortIdleRun = shortLongestIdle = 0;
+            shortMoved = false;
+            RecedingNav.Stop();
+            if (shortCase <= 1) MazeWand.InvalidateField();
+            foreach (var item in player.armor) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[1].SetDefaults(ItemID.WoodPlatform); player.inventory[1].stack = 9999;
+            player.statLife = player.statLifeMax = player.statLifeMax2 = 400;
+            player.Teleport(new Vector2(3384 * 16, 243 * 16 - player.height));
+            if (shortCase == 0)
+            {
+                bool found = false;
+                for (int y = 200; y < 350 && !found; y++)
+                for (int x = 3000; x < 3500 && !found; x++)
+                {
+                    var from = new Vector2(x * 16, y * 16 - player.height);
+                    var to = from + new Vector2(8 * 16, 0);
+                    if (!VanillaContactRegion.ConnectedSupport(from, to, player.width, player.height)) continue;
+                    shortFlat = from; found = true;
+                }
+                if (!found) throw new InvalidOperationException("natural_flat_start_missing");
+                player.Teleport(shortFlat);
+            }
+            if (shortCase >= 7) player.Teleport(shortFlat);
+            player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+        }
+        if (shortTick < 30) return;
+        if (shortTick == 30)
+        {
+            if (shortCase == 0)
+            {
+                typeof(MazeWand).GetField("_fieldPickPower", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                    .SetValue(null, MazeWand.BestPickPower());
+                var costs = new JsonArray();
+                for (int y = 230; y <= 290; y++)
+                for (int x = 3350; x <= 3450; x++)
+                foreach (var direction in new[] { new Point(1, 0), new Point(-1, 0), new Point(0, 1), new Point(0, -1) })
+                    costs.Add(MazeWand.StepCostPublic(x, y, x + direction.X, y + direction.Y));
+                string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(costs.ToJsonString())));
+                if (hash != "3BE2AF3E00877FABBB55423BB351A8C6C37212120C32D6DE01B7BE02151E56B0")
+                    throw new InvalidOperationException("natural_field_cost_baseline_changed:" + hash);
+                Console.WriteLine($"FIELD_COST_BASELINE edges={costs.Count} sha256={hash}");
+                for (int change = 0; change < 5; change++) CheckCanceledPrediction(player, change);
+                for (int change = 0; change < 6; change++) CheckMovementLookahead(player, change);
+            }
+            shortOrigin = player.position;
+            shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool flat = shortCase == 0 || shortCase >= 7;
+            if (shortCase == 9 && !AxisLock.Take("short-request-owner", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use))
+                throw new InvalidOperationException("short_request_owner_lock_failed");
+            RecedingNav.Start(flat ? (int)(shortFlat.X / 16) + offsets[shortCase] : 3384 + offsets[shortCase],
+                flat ? (int)((shortFlat.Y + player.height) / 16) - 1 : 242,
+                shortCase >= 7 ? RecedingNav.Mode.Stand : RecedingNav.Mode.Snap);
+            return;
+        }
+        bool input = player.controlLeft || player.controlRight || player.controlJump || player.controlDown;
+        if (shortCase == 9 && shortTick <= 60)
+        {
+            if (input || Vector2.DistanceSquared(player.position, shortOrigin) > .01f)
+                throw new InvalidOperationException("short_request_ignored_owner");
+            if (shortTick == 60)
+            {
+                AxisLock.Release("short-request-owner");
+                shortStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
+            return;
+        }
+        bool moved = input && Vector2.DistanceSquared(player.position, shortOrigin) >= 64;
+        shortMoved |= moved;
+        if (RecedingNav.Active && !input)
+        {
+            shortIdleFrames++;
+            shortLongestIdle = Math.Max(shortLongestIdle, ++shortIdleRun);
+        }
+        else shortIdleRun = 0;
+        bool arrivalCheck = shortCase != 0;
+        if ((arrivalCheck || !moved) && shortTick < 1230 && RecedingNav.Active && !player.dead) return;
+        shortResults.Add(new JsonObject { ["case"] = shortCase, ["offset"] = offsets[shortCase],
+            ["moved"] = shortMoved, ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(shortStarted).TotalMilliseconds,
+            ["frames"] = shortTick - (shortCase == 9 ? 60 : 30), ["stop"] = RecedingNav.LastStop,
+            ["arrival_check"] = arrivalCheck, ["arrived"] = RecedingNav.LastStop == "done",
+            ["owner_hold_verified"] = shortCase == 9,
+            ["dead"] = player.dead, ["idle_frames"] = shortIdleFrames, ["longest_idle_frames"] = shortLongestIdle });
+        RecedingNav.Stop(); shortCase++; shortTick = 0;
+    }
+
+    static void CheckCanceledPrediction(Player player, int change)
+    {
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction", true);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+        var cancellation = new System.Threading.CancellationTokenSource();
+        var candidate = new StateSpacePlanner.SSResult { StartPx = player.position.X, StartPy = player.position.Y };
+        candidate.Steps.Add(new StateSpacePlanner.ExecStep {
+            Frames = new() { new PhysicsSimulator.ControlInput { Px = player.position.X, Py = player.position.Y, Place = change == 4 } } });
+        int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+        int changedX = change == 2 ? x : x - 9, changedY = change == 2 ? y : y + 9;
+        var tile = Main.tile[changedX, changedY];
+        bool hadTile = tile.HasTile;
+        ushort tileType = tile.TileType;
+        type.GetField("pending", flags).SetValue(null, pending.Task);
+        type.GetField("cancellation", flags).SetValue(null, cancellation);
+        type.GetField("plan", flags).SetValue(null, candidate);
+        type.GetField("snapshot", flags).SetValue(null, VanillaFrame.Capture(player, new Rectangle(x - 10, y - 10, 21, 21), true));
+        type.GetField("anchor", flags).SetValue(null, VanillaPrediction.Observe(player, false));
+        type.GetField("requestedAt", flags).SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+        cancellation.Cancel();
+        if (change == 3)
+            pending.SetResult(new JsonObject { ["frames"] = new JsonArray(new JsonObject {
+                ["x"] = changedX * 16f, ["y"] = changedY * 16f }) });
+        try
+        {
+            if (change != 0) { tile.HasTile = true; tile.TileType = tileType == TileID.Stone ? TileID.Dirt : TileID.Stone; }
+            object[] arguments = { player, null };
+            bool handled = (bool)type.GetMethod("Poll", flags).Invoke(null, arguments);
+            bool expected = change >= 2 ? arguments[1] == null : ReferenceEquals(arguments[1], candidate);
+            if (!handled || !expected || pending.Task.IsCompleted != (change == 3))
+                throw new InvalidOperationException($"canceled_prediction_context_check_failed:{change} position={player.position} changed=({changedX},{changedY}) before={hadTile}/{tileType} after={Main.tile[changedX, changedY].HasTile}/{Main.tile[changedX, changedY].TileType} handled={handled} returned_plan={ReferenceEquals(arguments[1], candidate)}");
+            Console.WriteLine("CANCELED_PREDICTION_CONTEXT_PASS change=" + change);
+        }
+        finally
+        {
+            tile.HasTile = hadTile; tile.TileType = tileType;
+            type.GetMethod("Reset", flags).Invoke(null, null);
+            pending.TrySetCanceled();
+        }
+    }
+
+    static void CheckMovementLookahead(Player player, int change)
+    {
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyMovementLookahead", true);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var pending = new System.Threading.Tasks.TaskCompletionSource<JsonObject>();
+        var cancellation = new System.Threading.CancellationTokenSource();
+        var from = ((int, int))typeof(StateSpacePlanner).GetMethod("StandCell", flags)
+            .Invoke(null, new object[] { player.position.X, player.position.Y });
+        var target = (from.Item1 + 1, from.Item2);
+        var cached = typeof(MazeWand).GetField("_cachedField", flags);
+        var cachedGoal = typeof(MazeWand).GetField("_cachedGoal", flags);
+        var oldField = cached.GetValue(null); var oldGoal = cachedGoal.GetValue(null);
+        var anchor = VanillaPrediction.Observe(player, false);
+        var sample = anchor.DeepClone().AsObject(); sample["x"] = player.position.X + 16f;
+        var tile = Main.tile[from.Item1 + 1, from.Item2];
+        bool hadTile = tile.HasTile; ushort tileType = tile.TileType;
+        try
+        {
+            cached.SetValue(null, new System.Collections.Generic.Dictionary<(int, int), int> { [from] = 20, [target] = 10 });
+            cachedGoal.SetValue(null, target);
+            type.GetField("pending", flags).SetValue(null, pending.Task);
+            type.GetField("cancellation", flags).SetValue(null, cancellation);
+            type.GetField("context", flags).SetValue(null, VanillaFrame.Capture(player,
+                new Rectangle(from.Item1 - 10, from.Item2 - 10, 21, 21), true));
+            type.GetField("started", flags).SetValue(null, System.Diagnostics.Stopwatch.GetTimestamp());
+            if (change == 2) type.GetMethod("Reset", flags).Invoke(null, null);
+            if (change == 3) anchor["x"] = player.position.X + 16f;
+            if (change == 4) { tile.HasTile = true; tile.TileType = tileType == TileID.Stone ? TileID.Dirt : TileID.Stone; }
+            if (change != 1) pending.SetResult(new JsonObject { ["status"] = "planned", ["anchor"] = anchor,
+                ["controls"] = new JsonArray(2), ["forecast"] = new JsonObject { ["outcome"] = "complete", ["frames"] = new JsonArray(sample) } });
+            if (change == 5) cancellation.Cancel();
+            var result = type.GetMethod("Take", flags).Invoke(null, new object[] { player, target.Item1, target.Item2 });
+            if ((result != null) != (change is 0 or 5) || type.GetField("pending", flags).GetValue(null) != null)
+                throw new InvalidOperationException("movement_lookahead_check_failed:" + change);
+            Console.WriteLine("MOVEMENT_LOOKAHEAD_PASS change=" + change);
+        }
+        finally
+        {
+            type.GetMethod("Reset", flags).Invoke(null, null); pending.TrySetCanceled();
+            tile.HasTile = hadTile; tile.TileType = tileType;
+            cached.SetValue(null, oldField); cachedGoal.SetValue(null, oldGoal);
+        }
+    }
+
+    void PreviewIsolation()
+    {
+        int x = Main.spawnTileX, y = 50;
+        var cells = Enumerable.Range(x - 3, 7).Select(tx => (tx, y)).ToArray();
+        if (cells.Any(c => Main.tile[c.tx, c.y].HasTile)) throw new InvalidOperationException("preview_fixture_occupied");
+        var types = cells.Select(c => Main.tile[c.tx, c.y].TileType).ToArray();
+        var ph = PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer);
+        int cases = 0;
+        foreach (bool down in new[] { false, true })
+        foreach (float vx in new[] { 0f, 2f })
+        {
+            var start = new PhysicsSimulator.State { Px = x * 16, Py = y * 16 - 90, Vx = vx, Vy = 4 };
+            var input = new PhysicsSimulator.ControlInput { Down = down };
+            var native = new System.Collections.Generic.List<PhysicsSimulator.State>();
+            try
+            {
+                foreach (var c in cells) { var t = Main.tile[c.tx, c.y]; t.HasTile = true; t.TileType = TileID.Platforms; }
+                var s = start;
+                for (int f = 0; f < 30; f++) { s = PhysicsSimulator.Step(s, input, ph); native.Add(s); }
+            }
+            finally
+            {
+                for (int i = 0; i < cells.Length; i++)
+                { var t = Main.tile[cells[i].tx, y]; t.HasTile = false; t.TileType = types[i]; }
+            }
+            using (new PhysicsSimulator.PlatformPreview(cells))
+            {
+                if (cells.Any(c => Main.tile[c.tx, c.y].HasTile)) throw new InvalidOperationException("preview_wrote_world");
+                if (System.Threading.Tasks.Task.Run(() => PhysicsSimulator.HasPreviewPlatforms).GetAwaiter().GetResult())
+                    throw new InvalidOperationException("preview_leaked_thread");
+                using (new PhysicsSimulator.PlatformPreview(new[] { (x, y - 1) }))
+                    if (!PhysicsSimulator.PreviewPlatform(x, y - 1)) throw new InvalidOperationException("preview_nested_missing");
+                if (PhysicsSimulator.PreviewPlatform(x, y - 1)) throw new InvalidOperationException("preview_nested_leaked");
+                var s = start;
+                for (int f = 0; f < native.Count; f++)
+                {
+                    s = PhysicsSimulator.Step(s, input, ph);
+                    var n = native[f];
+                    if (Math.Abs(s.Px - n.Px) > .01f || Math.Abs(s.Py - n.Py) > .01f
+                        || Math.Abs(s.Vy - n.Vy) > .01f || s.Grounded != n.Grounded)
+                        throw new InvalidOperationException($"preview_collision_mismatch case={cases} frame={f} virtual=({s.Px},{s.Py},{s.Vy},{s.Grounded}) native=({n.Px},{n.Py},{n.Vy},{n.Grounded})");
+                }
+            }
+            if (PhysicsSimulator.HasPreviewPlatforms) throw new InvalidOperationException("preview_scope_leaked");
+            cases++;
+        }
+        Console.WriteLine($"VNAV_DEMO_COMPLETE PREVIEW_ISOLATION_PASS cases={cases}");
+        enabled = false; FinishProcess(0);
     }
 
     void Descent()
@@ -357,20 +1497,65 @@ public sealed class Driver : ModSystem
             foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.SetDefaults(ItemID.None);
             player.armor[0].SetDefaults(ItemID.MoltenHelmet); player.armor[1].SetDefaults(ItemID.MoltenBreastplate); player.armor[2].SetDefaults(ItemID.MoltenGreaves);
             int slot = 3;
-            foreach (int item in new[] { ItemID.SandstorminaBottle, ItemID.NeptunesShell, ItemID.CobaltShield, ItemID.HermesBoots, ItemID.BandofRegeneration }) player.armor[slot++].SetDefaults(item);
+            foreach (int item in new[] { ItemID.SandstorminaBottle, ItemID.CobaltShield, ItemID.HermesBoots, ItemID.BandofRegeneration }) player.armor[slot++].SetDefaults(item);
             player.inventory[0].SetDefaults(ItemID.Starfury);
             player.inventory[1].SetDefaults(ItemID.MoltenPickaxe);
             player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 999;
             player.inventory[3].SetDefaults(ItemID.Torch); player.inventory[3].stack = 999;
             player.inventory[4].SetDefaults(ItemID.HealingPotion); player.inventory[4].stack = 50;
             player.inventory[5].SetDefaults(ItemID.Cobweb); player.inventory[5].stack = 999;
+            if (readmeRoute)
+            {
+                foreach (var item in player.inventory.Concat(player.armor).Concat(player.miscEquips)) item.TurnToAir();
+                player.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                player.inventory[1].SetDefaults(ItemID.Wood); player.inventory[1].stack = 9999;
+                player.inventory[2].SetDefaults(ItemID.WoodPlatform); player.inventory[2].stack = 9999;
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
+                {
+                    player.armor[3].SetDefaults(ItemID.CloudinaBottle);
+                    Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE slot=3 item=53");
+                }
+                if (DamageTrace.SurvivalRoute)
+                {
+                    Config.I.AlwaysGillsAndShine = false; Concessions.Enabled = false;
+                    DamageTrace.FallHits = DamageTrace.DrowningFrames = 0;
+                    Array.Clear(player.buffType); Array.Clear(player.buffTime);
+                    player.inventory[5].SetDefaults(ItemID.Cobweb); player.inventory[5].stack = 100;
+                    player.armor[0].SetDefaults(ItemID.MoltenHelmet);
+                    player.armor[1].SetDefaults(ItemID.MoltenBreastplate);
+                    player.armor[2].SetDefaults(ItemID.MoltenGreaves);
+                }
+                Console.WriteLine($"README_ROUTE_SETUP seed={Main.ActiveWorldFileData.SeedText} gear={(player.armor[3].IsAir ? "none" : "cloud")} pick=copper godmode={!DamageTrace.SurvivalRoute} gills={!DamageTrace.SurvivalRoute} start=jungle_entrance");
+                bool reverse = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse");
+                int startX = reverse ? 3383 : 3384, startY = reverse ? 1069 : 242;
+                player.Teleport(new Vector2(startX * 16 + 8 - player.width / 2f, (startY + 1) * 16 - player.height));
+                player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+            }
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string initialSnapshot))
+                RestoreSnapshot(player, initialSnapshot);
+            Console.WriteLine($"VNAV_EARLY_START x={player.position.X} y={player.position.Y} tick={Main.GameUpdateCount}");
             prepared = true; warmup = 10; return;
         }
         if (warmup-- > 0) return;
         if (!started)
         {
             string[] args;
-            if (continuity)
+            if (readmeRoute && Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string directSnapshot))
+            {
+                var fixture = JsonNode.Parse(File.ReadAllText(directSnapshot));
+                routeGoalX = fixture["goal_x"].GetValue<int>(); routeGoalY = fixture["goal_y"].GetValue<int>();
+                args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+            }
+            else if (journey)
+            {
+                var goal = JourneyApproach(player);
+                routeGoalX = goal.X; routeGoalY = goal.Y;
+                journeyLegStartedMs = routeClock.Elapsed.TotalMilliseconds;
+                bool resource = journeyStops[continuityLeg].Kind is "crystal" or "chest" or "spore";
+                args = new[] { resource ? "reach" : "route", goal.X.ToString(), goal.Y.ToString() };
+                Console.WriteLine($"VNAV_JOURNEY_START leg={continuityLeg} kind={journeyStops[continuityLeg].Kind} goal=({goal.X},{goal.Y})");
+            }
+            else if (continuity)
             {
                 int x = Main.spawnTileX + offsets[continuityLeg], y = Math.Max(10, Main.spawnTileY - 60);
                 while (y < Main.maxTilesY - 200 && !Predicates.IsGround(x, y)) y++;
@@ -385,6 +1570,17 @@ public sealed class Driver : ModSystem
                 player.Teleport(new Vector2(x * 16 + 8 - player.width / 2, (y + 1) * 16 - player.height));
                 player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
                 args = new[] { "route", "3383", "1069" };
+                if (readmeRoute) { routeGoalX = int.Parse(args[1]); routeGoalY = int.Parse(args[2]); }
+                if (readmeRoute && Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse"))
+                {
+                    routeGoalX = x; routeGoalY = y;
+                    args = new[] { "route", x.ToString(), y.ToString() };
+                    player.Teleport(new Vector2(3383 * 16 + 8 - player.width / 2f, 1070 * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+                    if (Collision.SolidCollision(player.position, player.width, player.height))
+                        throw new InvalidOperationException("reverse_start_inside_terrain");
+                    Console.WriteLine($"README_REVERSE_SETUP start=(3383,1069) goal=({x},{y}) gear=none");
+                }
                 goals["hell_x"] = 3383; goals["hell_y"] = 1069;
                 Console.WriteLine("VNAV_DESCENT_GOALS " + goals.ToJsonString());
                 if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualcheck"))
@@ -394,7 +1590,7 @@ public sealed class Driver : ModSystem
                     if (Terraria.Program.LaunchParameters.ContainsKey("-vnavmanualstart"))
                         ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
                     enabled = false;
-                    Main.NewText("手动测试：已关闭刷怪并添加光芒效果。DragonLens 已启用。", Color.LightGreen);
+                    Main.NewText("手动测试：已关闭刷怪并添加光芒效果。", Color.LightGreen);
                     Main.NewText($"自动寻路：/vnav route {args[1]} {args[2]}；停止：/vnav stop", Color.LightGreen);
                     Console.WriteLine("VNAV_MANUAL_READY " + goals.ToJsonString());
                     return;
@@ -403,30 +1599,89 @@ public sealed class Driver : ModSystem
             if (!routeClock.IsRunning)
             {
                 routeClock.Start(); timingPhase = "command_setup"; phaseStart = 0;
+                if (Terraria.Program.LaunchParameters.TryGetValue("-vnavregionscheck", out string regionalGoal))
+                {
+                    var coordinates = regionalGoal.Split(',');
+                    routeGoalX = int.Parse(coordinates[0]); routeGoalY = int.Parse(coordinates[1]);
+                    args = new[] { "regions", routeGoalX.ToString(), routeGoalY.ToString() };
+                }
                 phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
             }
-            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline))
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavbaseline", out string baseline) && (!journey || continuityLeg == 0))
             {
                 RestoreBaseline(player, baseline);
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavrecordedgoal"))
+                {
+                    var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(baseline, "metadata.json")));
+                    routeGoalX = metadata["goal_x"].GetValue<int>(); routeGoalY = metadata["goal_y"].GetValue<int>();
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                    Console.WriteLine($"VNAV_RECORDED_GOAL goal=({routeGoalX},{routeGoalY})");
+                }
+                foreach (var accessory in player.armor.Where(item => item.type == ItemID.NeptunesShell)) accessory.TurnToAir();
+                Console.WriteLine("VNAV_EQUIPMENT_OVERRIDE removed=NeptunesShell");
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavcloudcheck"))
+                {
+                    int bottle = Array.FindIndex(player.armor, item => item.type == ItemID.SandstorminaBottle);
+                    if (bottle < 0) throw new InvalidOperationException("baseline_missing_sandstorm_slot");
+                    player.armor[bottle].SetDefaults(ItemID.CloudinaBottle);
+                    Console.WriteLine($"VNAV_EQUIPMENT_OVERRIDE slot={bottle} item={ItemID.CloudinaBottle}");
+                }
+                if (Terraria.Program.LaunchParameters.ContainsKey("-vnavreversecheck"))
+                {
+                    routeGoalX = (int)(player.Center.X / 16); routeGoalY = (int)(player.Bottom.Y / 16);
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                    player.Teleport(new Vector2(3382 * 16 - player.width / 2f, 1068 * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = (int)(player.position.Y / 16);
+                    if (Collision.SolidCollision(player.position, player.width, player.height))
+                        throw new InvalidOperationException("reverse_start_inside_terrain");
+                    Console.WriteLine($"VNAV_REVERSE_ROUTE start=(3382,1068) goal=({routeGoalX},{routeGoalY}) baseline={baseline}");
+                }
+                phasePosition = new Vector2(player.Center.X, player.Bottom.Y);
+                previousPosition = player.position;
                 routeClock.Restart();
-                NavigationRecording.Start("bot", 3383, 1069);
+                NavigationRecording.Start("bot", routeGoalX, routeGoalY);
                 Console.WriteLine("VNAV_BASELINE_RECORDING " + NavigationRecording.LastDirectory);
             }
-            ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
-            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck")) VanillaNavBridge.Enabled = false;
+            else if (journey) NavigationRecording.Start("bot", routeGoalX, routeGoalY);
+            if (Terraria.Program.LaunchParameters.TryGetValue("-vnavsnapshot", out string snapshotPath))
+            {
+                RestoreSnapshot(player, snapshotPath);
+                var fixture = JsonNode.Parse(File.ReadAllText(snapshotPath));
+                if (fixture["goal_x"] != null && fixture["goal_y"] != null)
+                {
+                    routeGoalX = fixture["goal_x"].GetValue<int>();
+                    routeGoalY = fixture["goal_y"].GetValue<int>();
+                    args = new[] { "route", routeGoalX.ToString(), routeGoalY.ToString() };
+                }
+                previousPosition = snapshotAnchor = player.position;
+            }
+            if (Terraria.Program.LaunchParameters.ContainsKey("-vnavoldnavcheck"))
+            {
+                VanillaNavBridge.Enabled = false; VanillaNavBridge.RegionsEnabled = false;
+                RecedingNav.Start(int.Parse(args[1]), int.Parse(args[2]), args[0] == "reach" ? RecedingNav.Mode.Reach : RecedingNav.Mode.Snap);
+            }
+            else ModContent.GetInstance<VanillaNavigationCommand>().Action(caller, "/vnav", args);
             if (!RecedingNav.Active) throw new InvalidOperationException(caller.Last);
             started = true;
         }
         ticks++;
-        if (Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
+        if (RecedingNav.Active) CaptureStall(player);
+        if (RecedingNav.Active && Terraria.Program.LaunchParameters.ContainsKey("-vnavbaseline") && NavigationRecording.LastReason == "goal")
         { RecedingNav.LastStop = "done"; RecedingNav.Stop(); }
         if (VanillaNavBridge.Enabled && RecedingNav.Active && (StateSpacePlanner.ExecRunning
-            || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
+            || MineCoordinator.IsActive && !VanillaNavBridge.OwnsExcavation || SkillExecutor.IsActive || BridgeBuilder.IsRunning))
             throw new InvalidOperationException("legacy_executor_in_native_route");
         var sample = VanillaPrediction.Observe(player);
         var control = VanillaNavigationDemo.Instance.LastControl;
         var timingDemo = VanillaNavigationDemo.Instance;
         RecordPhase(TimingPhase(player, timingDemo), player);
+        bool moved = Vector2.DistanceSquared(player.position, previousPosition) > .0001f;
+        bool pick = player.HeldItem.pick > 0 && (player.controlUseItem || player.itemAnimation > 0);
+        string activity = moved ? pick ? "moving_with_pick" : "moving" : pick ? "stationary_with_pick" : "stationary_without_pick";
+        double activityNow = routeClock.Elapsed.TotalMilliseconds;
+        activityTotals.TryGetValue(activity, out double activityTotal);
+        activityTotals[activity] = activityTotal + activityNow - activityAt;
+        activityAt = activityNow;
         previousPosition = player.position;
         controlTrace.WriteLine(FormattableString.Invariant($"{ticks},{continuityLeg},{player.position.X},{player.position.Y},{player.velocity.X},{player.velocity.Y},{sample["keys"]},{control.Keys},{control.Queued},{control.Plan},{control.Index},{control.Terminal},{control.Goal.X},{control.Goal.Y},{control.PlanGoal.X},{control.Anchor.X},{VanillaNavigationDemo.Active},{StateSpacePlanner.ExecRunning},{timingDemo.PlannerRejection},{player.statLife},{player.dead},{player.fallStart},{routeClock.Elapsed.TotalMilliseconds},{timingPhase},{player.controlUseItem},{Main.npc.Count(npc => npc.active && !npc.friendly && npc.damage > 0)},{timingDemo.PlannerResult?["request_compute_ms"]},{timingDemo.PlannerResult?["roundtrip_ms"]}"));
         sample["phase"] = continuity ? "continuity" : "jungle_descent";
@@ -458,6 +1713,14 @@ public sealed class Driver : ModSystem
             sample["selected"] = plan["selected"]?.DeepClone();
             sample["timing"] = plan["timing"]?.DeepClone();
         }
+        int availableJumps = 0;
+        foreach (var jump in player.ExtraJumps) if (jump.Available) availableJumps++;
+        if (previousAvailableJumps >= 0 && availableJumps < previousAvailableJumps && player.velocity.Y != 0)
+        {
+            routeExtraJumps += previousAvailableJumps - availableJumps;
+            Console.WriteLine($"VNAV_EXTRA_JUMP tick={ticks} used={routeExtraJumps} x={player.position.X} y={player.position.Y}");
+        }
+        previousAvailableJumps = availableJumps;
         if (ticks % 6 == 0) { trace.Add(sample); if (trace.Count > 600) trace.RemoveAt(0); }
         if (ticks % 120 == 0)
         {
@@ -465,35 +1728,118 @@ public sealed class Driver : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "descent-trace.json"), trace.ToJsonString());
             Console.WriteLine($"VNAV_DESCENT_PROGRESS tick={ticks} wall_s={routeClock.Elapsed.TotalSeconds:0.000} cell=({player.Center.X / 16:0},{player.Bottom.Y / 16:0}) hp={player.statLife} phase={timingPhase} nav={RecedingNav.LastStop} engine={VanillaNavigationDemo.Instance.Status}");
         }
+        if (DamageTrace.SurvivalRoute && (DamageTrace.FallHits > 0 || DamageTrace.DrowningFrames > 0))
+            throw new InvalidOperationException($"survival_route_hurt fall_hits={DamageTrace.FallHits} drowning_frames={DamageTrace.DrowningFrames}");
         if (player.dead) throw new InvalidOperationException("navigation_player_dead");
-        if (!continuity && routeClock.Elapsed.TotalSeconds > 150) throw new TimeoutException("route_exceeded_150_seconds");
-        if (RecedingNav.Active && ticks < 54000) return;
+        if (RecedingNav.Active) return;
         if (RecedingNav.LastStop != "done") throw new InvalidOperationException(RecedingNav.LastStop ?? "navigation_timeout");
+        if (readmeRoute)
+        {
+            results.Add(new JsonObject { ["kind"] = Terraria.Program.LaunchParameters.ContainsKey("-vnavreadmereverse") ? "hell_to_jungle" : "jungle_to_hell",
+                ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16, ["wall_ms"] = routeClock.Elapsed.TotalMilliseconds });
+            Console.WriteLine("README_ROUTE_LEG " + results[^1].ToJsonString());
+        }
         if (continuity)
         {
-            results.Add(new JsonObject { ["offset"] = offsets[continuityLeg], ["tick"] = ticks,
+            if (journey && !JourneyInteraction(player)) return;
+            results.Add(new JsonObject { ["offset"] = journey ? null : offsets[continuityLeg],
+                ["kind"] = journey ? journeyStops[continuityLeg].Kind : null, ["tick"] = ticks,
+                ["wall_ms"] = journey ? routeClock.Elapsed.TotalMilliseconds - journeyLegStartedMs : null,
                 ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16 });
             File.WriteAllText(Path.Combine(Main.SavePath, "continuity-legs.json"), results.ToJsonString());
-            Console.WriteLine($"VNAV_CONTINUITY_LEG_PASS offset={offsets[continuityLeg]} tick={ticks}");
-            if (++continuityLeg < offsets.Length) { started = false; return; }
+            Console.WriteLine($"VNAV_CONTINUITY_LEG_PASS leg={continuityLeg} tick={ticks}");
+            if (NavigationRecording.Active) NavigationRecording.Stop("leg_complete");
+            journeyActionStarted = false;
+            if (++continuityLeg < (journey ? journeyStops.Length : offsets.Length)) { started = false; return; }
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "descent-result.json"), new JsonObject { ["done"] = true,
+            ["survival_route"] = DamageTrace.SurvivalRoute, ["fall_hits"] = DamageTrace.FallHits,
+            ["drowning_frames"] = DamageTrace.DrowningFrames,
             ["ticks"] = ticks, ["hp"] = player.statLife, ["x"] = player.Center.X / 16, ["y"] = player.Bottom.Y / 16,
-            ["underworld"] = Main.UnderworldLayer, ["legs"] = results.DeepClone() }.ToJsonString());
+            ["underworld"] = Main.UnderworldLayer, ["extra_jumps_used"] = routeExtraJumps,
+            ["platforms_remaining"] = player.inventory.Where(item => item.type == ItemID.WoodPlatform).Sum(item => item.stack),
+            ["legs"] = results.DeepClone() }.ToJsonString());
         SaveTiming(true, "done");
         Console.WriteLine(continuity ? "VNAV_CONTINUITY_COMPLETE" : "VNAV_DESCENT_COMPLETE"); enabled = false;
         controlTrace.Flush();
-        if (!Terraria.Program.LaunchParameters.ContainsKey("-vnavshow")) Environment.Exit(0);
+        FinishProcess(0);
+    }
+
+    Point JourneyApproach(Player player)
+    {
+        var target = journeyStops[continuityLeg];
+        if (target.Kind is "main" or "main_return" or "surface") return new Point(target.X, target.Y);
+        var tile = Main.tile[target.X, target.Y];
+        bool present = tile.HasTile && (target.Kind == "crystal" ? tile.TileType == TileID.Heart
+            : target.Kind == "chest" ? TileID.Sets.BasicChest[tile.TileType]
+            : tile.TileType == TileID.JunglePlants && tile.TileFrameX == 144);
+        if (!present) throw new InvalidOperationException("journey_resource_missing:" + target.Kind);
+        return new Point(target.X, target.Y);
+    }
+
+    bool JourneyInteraction(Player player)
+    {
+        var target = journeyStops[continuityLeg];
+        if (target.Kind is "main" or "main_return" or "surface") return true;
+        if (target.Kind == "chest")
+        {
+            int chest = Chest.FindChest(target.X, target.Y);
+            if (chest < 0 || !player.IsInInteractionRangeToMultiTileHitbox(target.X, target.Y))
+                throw new InvalidOperationException("journey_chest_out_of_range");
+            player.OpenChest(target.X, target.Y, chest);
+            if (player.chest != chest) throw new InvalidOperationException("journey_chest_not_opened");
+            Console.WriteLine($"VNAV_JOURNEY_INTERACTION kind=chest chest={chest} tile=({target.X},{target.Y})");
+            player.chest = -1;
+            return true;
+        }
+        int count = player.inventory.Where(item => item.type == target.Item).Sum(item => item.stack);
+        if (!journeyActionStarted)
+        {
+            player.selectedItem = 1;
+            if (!Reach.CanMine(player, target.X, target.Y)) throw new InvalidOperationException("journey_resource_out_of_range");
+            journeyItemBefore = count; journeyActionAt = Main.GameUpdateCount; journeyActionStarted = true;
+            ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = target.X, TargetWy = target.Y, Slot = 1, Strict = true });
+        }
+        if (count > journeyItemBefore)
+        {
+            ItemUseCoordinator.Stop();
+            Console.WriteLine($"VNAV_JOURNEY_INTERACTION kind={target.Kind} item={target.Item} before={journeyItemBefore} after={count}");
+            return true;
+        }
+        if (Main.GameUpdateCount - journeyActionAt > 300)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "journey-interaction-failure.json"), new JsonObject {
+                ["kind"] = target.Kind, ["item"] = target.Item,
+                ["before"] = journeyItemBefore, ["after"] = count,
+                ["outcome"] = ItemUseCoordinator.Outcome, ["reason"] = ItemUseCoordinator.Reason,
+                ["active"] = ItemUseCoordinator.IsActive, ["focused"] = Main.hasFocus,
+                ["reachable"] = Reach.CanMine(player, target.X, target.Y),
+                ["target_present"] = Main.tile[target.X, target.Y].HasTile,
+                ["player"] = VanillaPrediction.Observe(player) }.ToJsonString());
+            ItemUseCoordinator.Stop();
+            throw new InvalidOperationException("journey_resource_not_collected:" + target.Kind);
+        }
+        return false;
     }
 
     public override void PostDrawInterface(SpriteBatch batch)
     {
-        if (!enabled || !started || shot || !VanillaNavigationDemo.Active || VanillaNavigationDemo.Instance.RoutePoints < 2) return;
+        if (!enabled || !started || !VanillaNavigationDemo.Active || VanillaNavigationDemo.Instance.RoutePoints < 2) return;
+        bool hasRegion = VanillaNavigationDemo.Instance.PlannerResult?["goal_contact_region"] is JsonArray;
+        if (shot && (!hasRegion || regionShot)) return;
         var device = Main.instance.GraphicsDevice;
         int width = device.PresentationParameters.BackBufferWidth, height = device.PresentationParameters.BackBufferHeight;
         var pixels = new Color[width * height]; device.GetBackBufferData(pixels);
         using var texture = new Texture2D(device, width, height); texture.SetData(pixels);
-        using var stream = File.Create(Path.Combine(Main.SavePath, $"demo-{trial}.png")); texture.SaveAsPng(stream, width, height);
+        if (!shot)
+        {
+            using var stream = File.Create(Path.Combine(Main.SavePath, $"demo-{trial}.png")); texture.SaveAsPng(stream, width, height);
+        }
+        if (hasRegion && !regionShot)
+        {
+            using var stream = File.Create(Path.Combine(Main.SavePath, "demo-contact-region.png")); texture.SaveAsPng(stream, width, height);
+            regionShot = true;
+        }
         shot = true;
     }
 

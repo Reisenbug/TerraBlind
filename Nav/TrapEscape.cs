@@ -23,27 +23,40 @@ namespace TerraBlind
         const int MaxFails = 3;
         static int _lastH = int.MinValue;   // 上次脱困时的 H,用来判断"是不是真出去了"
 
-        // 后台搜索的状态。_pending 由后台线程写、主线程读。用 volatile 保证可见性,
-        // 而它只在写完【整个结果】后才赋值一次,读到非 null 就是完整的
-        static volatile bool _busy;
-        static volatile StateSpacePlanner.SSResult _pending;
+        static System.Threading.Tasks.Task<StateSpacePlanner.SSResult> _search;
+        static int _generation, _searchGeneration;
+        static float _startVx;
         static (int x, int y) _reqAt, _reqTo;
         static int _reqH, _reqTH;
 
-        public static bool Busy => _busy || _pending != null;
+        public static bool Busy => _search != null;
 
         public static void Reset()
         {
             _fails = 0; _lastH = int.MinValue;
-            _pending = null;   // 换目标了,旧结果作废(它是按旧地形/旧起点算的)
+            _generation++;
         }
 
         // 主线程每帧调:后台搜完了就在这儿派发。派发必须在主线程。DispatchPlan 会动执行器
         public static bool Poll()
         {
-            var res = _pending;
-            if (res == null) return false;
-            _pending = null;
+            if (_search == null || !_search.IsCompleted) return false;
+            var search = _search;
+            _search = null;
+            if (_searchGeneration != _generation)
+            {
+                DiagLog.Write("[escape] discard reset search");
+                return false;
+            }
+            var res = search.GetAwaiter().GetResult();
+            var p = Main.LocalPlayer;
+            if (res.Found && (System.MathF.Abs(p.position.X - res.StartPx) > .01f
+                || System.MathF.Abs(p.position.Y - res.StartPy) > .01f
+                || System.MathF.Abs(p.velocity.X - _startVx) > .01f || p.velocity.Y != 0f))
+            {
+                DiagLog.Write($"[escape] discard moved start d=({p.position.X - res.StartPx:0.##},{p.position.Y - res.StartPy:0.##}) vx={_startVx:0.##}->{p.velocity.X:0.##} vy={p.velocity.Y:0.##} steps={res.Steps.Count}");
+                return false;
+            }
             // 【只认 Found】。partial 的落点常常就是起点本身(死胡同里 A* 哪都去不了),
             // 派发出去人绕一圈回原地,下一周期一模一样。那是把贪心的死循环换成 A* 的死循环。
             if (!res.Found || res.Steps.Count == 0)
@@ -67,6 +80,7 @@ namespace TerraBlind
         public static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
                                      int goalWx, int goalWy)
         {
+            if (Busy) return false;
             // H 比上次卡的时候明显低了 = 中间真出去过,这是个新坑,失败计数重新开始。
             // 不清的话:一趟里前面某个坑用光了 3 次机会,后面所有坑都不再尝试
             if (_lastH != int.MinValue && curH < _lastH - MinDrop) _fails = 0;
@@ -78,22 +92,16 @@ namespace TerraBlind
             var target = t.Value;
             int tH = field[(target.x, target.y)];
 
-            // 【搜索不许在主线程跑】。这一段最坏 20000 次展开 = 十几秒,同步跑就是整局卡死。
-            // 照建场那条的样子扔后台(RecedingNav.Start 的 Task.Run),主线程立刻返回。
-            // 结果下一帧由 Poll() 取,期间人走 Commitment 兜底,不会干站着。
-            //
-            // 后台只读地形和 H 场,不碰玩家。Plan() 开头就把位置/速度/物理参数取好了,
-            // 之后整个搜索只查 Main.tile。人在等结果时没有动作,地形不会变。
-            if (_busy) return false;                 // 上一次还在搜,别叠第二个
-            if (_pending != null) return false;      // 结果还没取走
-            _busy = true;
             _reqAt = (curCx, curCy); _reqTo = (target.x, target.y); _reqH = curH; _reqTH = tH;
             int tx = target.x, ty = target.y;
-            System.Threading.Tasks.Task.Run(() =>
+            var p = Main.LocalPlayer;
+            var start = (p.position.X, p.position.Y, p.velocity.X);
+            _startVx = p.velocity.X;
+            _searchGeneration = _generation;
+            _search = System.Threading.Tasks.Task.Run(() =>
             {
-                try { _pending = StateSpacePlanner.Plan(tx, ty, maxExp: Budget, goalSnapCap: 0, coarseStates: true); }
-                catch (System.Exception e) { DiagLog.Write($"[escape] A* EXC {e.Message}"); _pending = new StateSpacePlanner.SSResult(); }
-                finally { _busy = false; }
+                try { return StateSpacePlanner.Plan(tx, ty, start, maxExp: Budget, goalSnapCap: 0, coarseStates: true); }
+                catch (System.Exception e) { DiagLog.Write($"[escape] A* EXC {e.Message}"); return new StateSpacePlanner.SSResult(); }
             });
             DiagLog.Write($"[escape] A* 后台开搜 ({curCx},{curCy})→({tx},{ty})");
             return false;   // 这一帧没有路可派;调用方走 Commitment 兜底

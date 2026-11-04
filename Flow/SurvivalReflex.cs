@@ -42,13 +42,6 @@ namespace TerraBlind
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
 			bool emergency = inLava || lowHp;
 
-			if (inLava && RecedingNav.Active)
-			{
-				RecedingNav.LastStop = "lava_emergency";
-				RecedingNav.Stop();
-				MineCoordinator.Stop();
-				p.controlUseItem = p.controlDown = false;
-			}
 			// 泡着就按跳,并把危险交给上层处理。
 			// 【只在自己拿着 Jump 时按】-- 不然会和寻路派发的跳跃边打架
 			if (inLava && AxisLock.Take(Owner, Ax.Jump, () => TouchesLava(Main.LocalPlayer)))

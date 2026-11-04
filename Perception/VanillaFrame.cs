@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -12,6 +13,50 @@ namespace TerraBlind;
 
 public static class VanillaFrame
 {
+    internal static Rectangle WorkerBounds { get; private set; }
+    public sealed class SnapshotBoundaryException(int x, int y) : InvalidOperationException($"snapshot_boundary:{x},{y}")
+    {
+        public Point Tile { get; } = new(x, y);
+    }
+
+    sealed class MiningState
+    {
+        static readonly FieldInfo order = typeof(HitTile).GetField("order", BindingFlags.Instance | BindingFlags.NonPublic);
+        static readonly FieldInfo buffer = typeof(HitTile).GetField("bufferLocation", BindingFlags.Instance | BindingFlags.NonPublic);
+        readonly int[] values;
+
+        public MiningState(HitTile source)
+        {
+            int count = source.data.Length;
+            values = new int[2 + count * 6];
+            values[0] = count; values[1] = (int)buffer.GetValue(source);
+            ((int[])order.GetValue(source)).CopyTo(values, 2);
+            for (int i = 0; i < count; i++)
+            {
+                var hit = source.data[i]; int offset = 2 + count + i * 5;
+                values[offset] = hit.X; values[offset + 1] = hit.Y; values[offset + 2] = hit.damage;
+                values[offset + 3] = hit.type; values[offset + 4] = hit.timeToLive;
+            }
+        }
+
+        public MiningState(string packed) => values = UnpackInts(packed);
+        public string Pack() => PackInts(values);
+
+        public void Restore(HitTile target)
+        {
+            int count = target.data.Length;
+            if (values.Length != 2 + count * 6 || values[0] != count)
+                throw new InvalidOperationException("mining_state_size_mismatch");
+            buffer.SetValue(target, values[1]);
+            order.SetValue(target, values.AsSpan(2, count).ToArray());
+            for (int i = 0; i < count; i++)
+            {
+                var hit = target.data[i]; int offset = 2 + count + i * 5;
+                hit.X = values[offset]; hit.Y = values[offset + 1]; hit.damage = values[offset + 2];
+                hit.type = values[offset + 3]; hit.timeToLive = values[offset + 4];
+            }
+        }
+    }
     static readonly ConcurrentDictionary<Type, FieldInfo[]> fields = new();
     static readonly ConcurrentDictionary<Type, bool> supported = new();
     static readonly string[] mainFields = { "dayTime", "time", "windSpeedCurrent", "windSpeedTarget", "raining", "maxRaining",
@@ -163,7 +208,8 @@ public static class VanillaFrame
         if (player.mount.Active || player.grapCount > 0 || player.grappling[0] >= 0)
             throw new NotSupportedException("active_mount_or_grapple");
         if ((player.itemAnimation > 0 || player.itemTime > 0)
-            && !(navigation && player.HeldItem.pick > 0)) throw new NotSupportedException("active_item_use");
+            && !(navigation && (player.HeldItem.pick > 0 || player.HeldItem.createTile >= 0)))
+            throw new NotSupportedException("active_item_use");
         if (area.Width < 8 || area.Height < 8 || area.Width > 256 || area.Height > 256
             || area.X < 0 || area.Y < 0 || area.Right > Main.maxTilesX || area.Bottom > Main.maxTilesY)
             throw new ArgumentOutOfRangeException(nameof(area));
@@ -189,6 +235,8 @@ public static class VanillaFrame
         return new JsonObject { ["navigation"] = navigation, ["engine"] = EngineId, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
             ["game_mode"] = Main.GameMode,
             ["player"] = CaptureFields(player),
+            ["hit_tile"] = new MiningState(player.hitTile).Pack(),
+            ["hit_replace"] = new MiningState(player.hitReplace).Pack(),
             ["inventory"] = Items(player.inventory), ["armor"] = Items(player.armor),
             ["dye"] = Items(player.dye), ["misc_equips"] = Items(player.miscEquips),
             ["main"] = CaptureStatics(typeof(Main)), ["player_statics"] = CaptureStatics(typeof(Player)),
@@ -205,6 +253,32 @@ public static class VanillaFrame
 
     public static bool ContextMatches(JsonObject state, Player player)
         => ContextMatches(state, player, out _);
+
+    public static JsonObject RefreshFutureTerrain(Player player, JsonObject before, JsonObject after, Rectangle area)
+    {
+        if (!JsonNode.DeepEquals(before["area"], after["area"]))
+            throw new ArgumentException("forecast_terrain_area_mismatch");
+        var live = Capture(player, area, true);
+        var current = ReadTiles(live);
+        var initial = ReadTiles(before);
+        var predicted = ReadTiles(after);
+        var bounds = before["area"];
+        int left = bounds[0].GetValue<int>(), top = bounds[1].GetValue<int>(), width = bounds[2].GetValue<int>();
+        for (int i = 0; i < initial.Length / 10; i++)
+        {
+            int x = left + i % width, y = top + i / width;
+            if (!area.Contains(x, y)) continue;
+            int destination = ((y - area.Y) * area.Width + x - area.X) * 10;
+            for (int field = 0; field < 10; field++)
+                if (initial[i * 10 + field] != predicted[i * 10 + field])
+                    current[destination + field] = predicted[i * 10 + field];
+        }
+        var result = after.DeepClone().AsObject();
+        result["area"] = live["area"].DeepClone();
+        result["tiles"] = PackInts(current);
+        result["tile_encoding"] = "i32-native";
+        return result;
+    }
 
     internal static int[] ReadTiles(JsonObject state)
     {
@@ -231,7 +305,8 @@ public static class VanillaFrame
         && type != TileID.Cobweb && TileID.Sets.TouchDamageImmediate[type] == 0
         && !TileID.Sets.TouchDamageHot[type] && !TileID.Sets.TouchDamageBleeding[type];
 
-    public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null)
+    public static bool ContextMatches(JsonObject state, Player player, out string difference, JsonArray trajectory = null,
+        int[] cachedTiles = null, int firstFrame = 0, int frameCount = int.MaxValue)
     {
         difference = "active player state";
         bool navigation = state["navigation"]?.GetValue<bool>() == true;
@@ -243,7 +318,7 @@ public static class VanillaFrame
             || !JsonNode.DeepEquals(state["armor"], Items(player.armor))
             || !JsonNode.DeepEquals(state["misc_equips"], Items(player.miscEquips))) return false;
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
-        var tiles = ReadTiles(state);
+        var tiles = cachedTiles ?? ReadTiles(state);
         var bounds = new Rectangle(x0 * 16, y0 * 16, width * 16, state["area"][3].GetValue<int>() * 16);
         difference = "dynamic entity";
         if (!navigation && (Main.npc.Any(npc => npc.active && bounds.Intersects(npc.Hitbox))
@@ -253,20 +328,25 @@ public static class VanillaFrame
         if (navigation && trajectory != null)
         {
             corridor = new();
-            foreach (var frame in trajectory)
+            foreach (var frame in trajectory.Skip(firstFrame).Take(frameCount))
             {
                 int fx = (int)Math.Floor(frame["x"].GetValue<float>() / 16), fy = (int)Math.Floor(frame["y"].GetValue<float>() / 16);
                 for (int x = fx - 2; x <= fx + 3; x++)
                 for (int y = fy - 2; y <= fy + 5; y++) corridor.Add((x, y));
             }
         }
-        for (int i = 0; i < tiles.Length / 10; i++)
+        var indices = corridor == null ? Enumerable.Range(0, tiles.Length / 10)
+            : corridor.Where(cell => cell.Item1 >= x0 && cell.Item1 < x0 + width
+                && cell.Item2 >= y0 && cell.Item2 < y0 + tiles.Length / 10 / width)
+                .Select(cell => (cell.Item2 - y0) * width + cell.Item1 - x0);
+        foreach (int i in indices)
         {
-            if (corridor != null && !corridor.Contains((x0 + i % width, y0 + i / width))) continue;
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
             if (!navigation && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire))
             { difference = $"wire ({x0 + i % width},{y0 + i / width})"; return false; }
-            if (tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
+            bool flowingWater = navigation && (data[9] == 0 || data[8] == LiquidID.Water)
+                && (tile.LiquidAmount == 0 || tile.LiquidType == LiquidID.Water);
+            if (!flowingWater && (tile.LiquidType != data[8] || tile.LiquidAmount != data[9]))
             { difference = $"liquid ({x0 + i % width},{y0 + i / width}): {data[8]}/{data[9]} -> {tile.LiquidType}/{tile.LiquidAmount}"; return false; }
             if (navigation && HarmlessDecoration(data[0] != 0, data[1])
                 && HarmlessDecoration(tile.HasTile, tile.TileType)) continue;
@@ -274,8 +354,7 @@ public static class VanillaFrame
                 || (!navigation || Main.tileFrameImportant[tile.TileType])
                     && (tile.WallType != data[2] || tile.TileFrameX != data[3] || tile.TileFrameY != data[4])
                 || (int)tile.Slope != data[5]
-                || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7]
-                || tile.LiquidType != data[8] || tile.LiquidAmount != data[9])
+                || (tile.IsHalfBlock ? 1 : 0) != data[6] || (tile.IsActuated ? 1 : 0) != data[7])
             {
                 difference = $"tile ({x0 + i % width},{y0 + i / width}): [{string.Join(",", data.ToArray())}] -> "
                     + $"[{(tile.HasTile ? 1 : 0)},{tile.TileType},{tile.WallType},{tile.TileFrameX},{tile.TileFrameY},{(int)tile.Slope},{(tile.IsHalfBlock ? 1 : 0)},{(tile.IsActuated ? 1 : 0)},{tile.LiquidType},{tile.LiquidAmount}]";
@@ -299,6 +378,8 @@ public static class VanillaFrame
         RestoreFields(Main.SceneMetrics, state["scene"].AsObject());
         var player = new Player();
         RestoreFields(player, state["player"].AsObject());
+        if (state["hit_tile"] is JsonValue hits) new MiningState(hits.GetValue<string>()).Restore(player.hitTile);
+        if (state["hit_replace"] is JsonValue replaces) new MiningState(replaces.GetValue<string>()).Restore(player.hitReplace);
         RestoreItems(player.inventory, state["inventory"].AsArray());
         RestoreItems(player.armor, state["armor"].AsArray());
         RestoreItems(player.dye, state["dye"].AsArray());
@@ -311,6 +392,7 @@ public static class VanillaFrame
         RestoreFields(WorldGen.genRand, state["world_random"].AsObject());
         int x0 = state["area"][0].GetValue<int>(), y0 = state["area"][1].GetValue<int>(), width = state["area"][2].GetValue<int>();
         var tiles = ReadTiles(state);
+        WorkerBounds = new Rectangle(x0, y0, width, tiles.Length / 10 / width);
         for (int i = 0; i < tiles.Length / 10; i++)
         {
             var tile = Main.tile[x0 + i % width, y0 + i / width]; var data = tiles.AsSpan(i * 10, 10);
@@ -325,14 +407,124 @@ public static class VanillaFrame
 
     public sealed class WorkerState
     {
+        sealed class WorkerPlayer
+        {
+            static readonly MethodInfo shallowCopy = typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic);
+            static readonly ConcurrentDictionary<Type, Action<object, object>> copiers = new();
+            readonly Player player = new();
+            readonly System.Collections.Generic.List<Action> resets = new();
+
+            public WorkerPlayer()
+            {
+                var visited = new System.Collections.Generic.HashSet<object>(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+                Capture(player, new Player(), visited);
+            }
+
+            void Capture(object target, object twin, System.Collections.Generic.HashSet<object> visited)
+            {
+                if (target == null || ReferenceEquals(target, twin) || target is string || !visited.Add(target)) return;
+                if (target is Array array)
+                {
+                    var saved = (Array)array.Clone();
+                    resets.Add(() => Array.Copy(saved, array, saved.Length));
+                    if (!array.GetType().GetElementType().IsPrimitive)
+                        for (int i = 0; i < array.Length; i++) Capture(array.GetValue(i), ((Array)twin)?.GetValue(i), visited);
+                    return;
+                }
+                Type type = target.GetType();
+                if (type.IsPrimitive || type.IsEnum) return;
+                if (!type.IsValueType)
+                {
+                    var saved = shallowCopy.Invoke(target, null);
+                    var copy = copiers.GetOrAdd(type, CreateCopier);
+                    resets.Add(() => copy(saved, target));
+                }
+                foreach (var field in Fields(type))
+                    if (!field.FieldType.IsPrimitive && !field.FieldType.IsEnum)
+                        Capture(field.GetValue(target), twin == null ? null : field.GetValue(twin), visited);
+            }
+
+            static Action<object, object> CreateCopier(Type type)
+            {
+                var source = Expression.Parameter(typeof(object), "source");
+                var target = Expression.Parameter(typeof(object), "target");
+                var copies = Fields(type).Where(field => !field.IsInitOnly).Select(field =>
+                    (Expression)Expression.Assign(Expression.Field(Expression.Convert(target, type), field),
+                        Expression.Field(Expression.Convert(source, type), field))).Append(Expression.Empty());
+                return Expression.Lambda<Action<object, object>>(Expression.Block(copies), source, target).Compile();
+            }
+
+            public Player Restore()
+            {
+                foreach (var reset in resets) reset();
+                return player;
+            }
+        }
+
+        static readonly Func<Item, Item, Item> restoreItem = CreateItemRestorer();
+
+        static Func<Item, Item, Item> CreateItemRestorer()
+        {
+            var source = Expression.Parameter(typeof(Item), "source");
+            var target = Expression.Parameter(typeof(Item), "target");
+            Expression reusable = Expression.Equal(Expression.Property(source, nameof(Item.ModItem)), Expression.Constant(null));
+            var globals = Expression.Field(source, typeof(Item).GetField("_globals", BindingFlags.Instance | BindingFlags.NonPublic));
+            reusable = Expression.AndAlso(reusable, Expression.OrElse(
+                Expression.Equal(globals, Expression.Constant(null)), Expression.Equal(Expression.ArrayLength(globals), Expression.Constant(0))));
+            var assignments = new System.Collections.Generic.List<Expression>();
+            foreach (var field in Fields(typeof(Item)))
+            {
+                var from = Expression.Field(source, field); var to = Expression.Field(target, field);
+                if (field.IsInitOnly)
+                {
+                    var comparer = typeof(System.Collections.Generic.EqualityComparer<>).MakeGenericType(field.FieldType);
+                    reusable = Expression.AndAlso(reusable, Expression.Call(Expression.Property(null, comparer, "Default"),
+                        comparer.GetMethod("Equals", new[] { field.FieldType, field.FieldType }), from, to));
+                }
+                else assignments.Add(Expression.Assign(to, from));
+            }
+            assignments.Add(target);
+            return Expression.Lambda<Func<Item, Item, Item>>(Expression.Condition(reusable,
+                Expression.Block(assignments), Expression.Call(source, typeof(Item).GetMethod(nameof(Item.Clone)))), source, target).Compile();
+        }
+
+        static void RestoreItems(Item[] source, Item[] target)
+        {
+            for (int i = 0; i < source.Length; i++) target[i] = restoreItem(source[i], target[i]);
+        }
+
         readonly (FieldInfo field, object value)[] playerFields, main, statics, collision, scene, random, worldRandom;
         readonly Item[] inventory, armor, dye, misc;
+        readonly MiningState hitTile, hitReplace;
         readonly int[] tiles;
+        readonly TileTypeData[][] tileTypes;
+        readonly WallTypeData[][] wallTypes;
+        readonly TileWallWireStateData[][] tileStates;
+        readonly LiquidData[][] liquids;
         readonly int x0, y0, width, gameMode;
+        readonly bool shareArrays;
+        readonly bool reusePlayer;
+        WorkerPlayer workerPlayer;
+        public int CapturedTileChanges { get; private set; }
+        public int RestoredTileWrites { get; private set; }
+        public double FieldsMs { get; private set; }
+        public double PlayerPreparationMs { get; private set; }
+        public double ItemsMs { get; private set; }
+        public double TilesMs { get; private set; }
+        public long SharedArrayBytes { get; private set; }
+        public long FieldsBytes { get; private set; }
+        public long PlayerPreparationBytes { get; private set; }
+        public long ItemsBytes { get; private set; }
+        public long TilesBytes { get; private set; }
 
-        public WorkerState(JsonObject state)
+        public WorkerState(JsonObject state) : this(state, RestoreInWorker(state)) { }
+
+        public WorkerState(JsonObject state, Player source, bool shareArrays = true, bool reusePlayer = true)
         {
-            var source = RestoreInWorker(state);
+            RequireWorker();
+            this.shareArrays = shareArrays;
+            this.reusePlayer = reusePlayer;
+            hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
             playerFields = DecodeFields(typeof(Player), state["player"].AsObject());
             main = DecodeFields(typeof(Main), state["main"].AsObject(), true);
             statics = DecodeFields(typeof(Player), state["player_statics"].AsObject(), true);
@@ -347,6 +539,10 @@ public static class VanillaFrame
             x0 = state["area"][0].GetValue<int>(); y0 = state["area"][1].GetValue<int>(); width = state["area"][2].GetValue<int>();
             gameMode = state["game_mode"].GetValue<int>();
             tiles = ReadTiles(state);
+            tileTypes = CaptureColumns<TileTypeData>(null, null);
+            wallTypes = CaptureColumns<WallTypeData>(null, null);
+            tileStates = CaptureColumns<TileWallWireStateData>(null, null);
+            liquids = CaptureColumns<LiquidData>(null, null);
         }
 
         static (FieldInfo, object)[] DecodeFields(Type type, JsonObject state, bool isStatic = false)
@@ -354,6 +550,108 @@ public static class VanillaFrame
                     .Where(field => StaticField(type, field)) : Fields(type).Where(field => Supported(field.FieldType)))
                 .Where(field => state.ContainsKey(isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name))
                 .Select(field => (field, Decode(state[isStatic ? field.Name : field.DeclaringType.FullName + ":" + field.Name], field.FieldType))).ToArray();
+
+        WorkerState(WorkerState template, Player source)
+        {
+            RequireWorker();
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
+            shareArrays = template.shareArrays;
+            reusePlayer = template.reusePlayer;
+            workerPlayer = template.workerPlayer;
+            hitTile = new MiningState(source.hitTile); hitReplace = new MiningState(source.hitReplace);
+            playerFields = CaptureValues(source, template.playerFields);
+            main = CaptureValues(null, template.main); statics = CaptureValues(null, template.statics);
+            collision = CaptureValues(null, template.collision); scene = CaptureValues(Main.SceneMetrics, template.scene);
+            random = CaptureValues(Main.rand, template.random); worldRandom = CaptureValues(WorldGen.genRand, template.worldRandom);
+            FieldsMs = timer.Elapsed.TotalMilliseconds;
+            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
+            timer.Restart();
+            inventory = source.inventory.Select(item => item.Clone()).ToArray();
+            armor = source.armor.Select(item => item.Clone()).ToArray();
+            dye = source.dye.Select(item => item.Clone()).ToArray();
+            misc = source.miscEquips.Select(item => item.Clone()).ToArray();
+            ItemsMs = timer.Elapsed.TotalMilliseconds;
+            ItemsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
+            timer.Restart();
+            x0 = template.x0; y0 = template.y0; width = template.width; gameMode = Main.GameMode;
+            tiles = template.tiles;
+            var changedColumns = new bool[width];
+            tileTypes = CaptureColumns(template.tileTypes, changedColumns);
+            wallTypes = CaptureColumns(template.wallTypes, changedColumns);
+            tileStates = CaptureColumns(template.tileStates, changedColumns);
+            liquids = CaptureColumns(template.liquids, changedColumns);
+            for (int x = 0; x < width; x++)
+            {
+                if (!changedColumns[x]) continue;
+                for (int y = 0; y < tiles.Length / 10 / width; y++)
+                {
+                    if (!ColumnCellMatches(tileTypes, template.tileTypes, x, y)
+                        || !ColumnCellMatches(wallTypes, template.wallTypes, x, y)
+                        || !ColumnCellMatches(tileStates, template.tileStates, x, y)
+                        || !ColumnCellMatches(liquids, template.liquids, x, y)) CapturedTileChanges++;
+                }
+            }
+            TilesMs = timer.Elapsed.TotalMilliseconds;
+            TilesBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        }
+
+        T[][] CaptureColumns<T>(T[][] previous, bool[] changed) where T : unmanaged, ITileData
+        {
+            var data = Main.tile.GetData<T>();
+            int height = tiles.Length / 10 / width;
+            var result = previous ?? new T[width][];
+            for (int x = 0; x < width; x++)
+            {
+                var current = data.AsSpan((x0 + x) * Main.tile.Height + y0, height);
+                if (previous != null && System.Runtime.InteropServices.MemoryMarshal.AsBytes(current)
+                    .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(previous[x].AsSpan()))) continue;
+                if (ReferenceEquals(result, previous)) result = (T[][])previous.Clone();
+                result[x] = current.ToArray();
+                if (changed != null) changed[x] = true;
+            }
+            return result;
+        }
+
+        (FieldInfo field, object value)[] CaptureValues(object source, (FieldInfo field, object value)[] template)
+            => template.Select(entry => (entry.field, CaptureValue(entry.field.GetValue(source), entry.value))).ToArray();
+
+        object CaptureValue(object value, object previous)
+        {
+            if (!shareArrays) return CopyValue(value);
+            bool unchanged = (value, previous) switch {
+                (bool[] current, bool[] saved) => current.AsSpan().SequenceEqual(saved),
+                (int[] current, int[] saved) => current.AsSpan().SequenceEqual(saved),
+                (float[] current, float[] saved) => current.AsSpan().SequenceEqual(saved),
+                (byte[] current, byte[] saved) => current.AsSpan().SequenceEqual(saved),
+                (double[] current, double[] saved) => current.AsSpan().SequenceEqual(saved),
+                _ => false
+            };
+            if (unchanged) SharedArrayBytes += Buffer.ByteLength((Array)value);
+            return unchanged ? previous : CopyValue(value);
+        }
+
+        void RestoreColumns<T>(T[][] columns, T[][] known) where T : unmanaged, ITileData
+        {
+            var data = Main.tile.GetData<T>();
+            for (int x = 0; x < width; x++)
+            {
+                if (known != null && ReferenceEquals(columns[x], known[x])) continue;
+                var current = data.AsSpan((x0 + x) * Main.tile.Height + y0, columns[x].Length);
+                if (System.Runtime.InteropServices.MemoryMarshal.AsBytes(current)
+                    .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(columns[x].AsSpan()))) continue;
+                columns[x].AsSpan().CopyTo(current);
+                RestoredTileWrites += columns[x].Length;
+            }
+        }
+
+        public WorkerState CaptureCurrent(Player player) => new(this, player);
+
+        static bool ColumnCellMatches<T>(T[][] current, T[][] previous, int x, int y) where T : unmanaged
+            => ReferenceEquals(current[x], previous[x]) || System.Runtime.InteropServices.MemoryMarshal.AsBytes(current[x].AsSpan(y, 1))
+                .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(previous[x].AsSpan(y, 1)));
 
         static object CopyValue(object value)
         {
@@ -369,30 +667,47 @@ public static class VanillaFrame
             foreach (var (field, value) in values) field.SetValue(target, CopyValue(value));
         }
 
-        public Player Restore()
+        public Player Restore(WorkerState knownWorld = null)
         {
             RequireWorker();
+            WorkerBounds = new Rectangle(x0, y0, width, tiles.Length / 10 / width);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
             Apply(null, main); Main.GameMode = gameMode; Apply(null, statics); Apply(null, collision);
             Apply(Main.SceneMetrics, scene);
-            var player = new Player(); Apply(player, playerFields);
-            player.inventory = inventory.Select(item => item.Clone()).ToArray();
-            player.armor = armor.Select(item => item.Clone()).ToArray();
-            player.dye = dye.Select(item => item.Clone()).ToArray();
-            player.miscEquips = misc.Select(item => item.Clone()).ToArray();
+            long constructorStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            long constructorAllocated = GC.GetAllocatedBytesForCurrentThread();
+            var player = reusePlayer ? (workerPlayer ??= new WorkerPlayer()).Restore() : new Player();
+            PlayerPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - constructorAllocated;
+            PlayerPreparationMs = System.Diagnostics.Stopwatch.GetElapsedTime(constructorStarted).TotalMilliseconds;
+            Apply(player, playerFields);
+            hitTile.Restore(player.hitTile); hitReplace.Restore(player.hitReplace);
+            FieldsMs = timer.Elapsed.TotalMilliseconds;
+            FieldsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated - PlayerPreparationBytes;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
+            timer.Restart();
+            RestoreItems(inventory, player.inventory);
+            RestoreItems(armor, player.armor);
+            RestoreItems(dye, player.dye);
+            RestoreItems(misc, player.miscEquips);
+            ItemsMs = timer.Elapsed.TotalMilliseconds;
+            ItemsBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
+            timer.Restart();
             Main.player[player.whoAmI] = player;
             foreach (var npc in Main.npc) npc.active = false;
             foreach (var projectile in Main.projectile) projectile.active = false;
             foreach (var item in Main.item) item.active = false;
             Apply(Main.rand, random); Apply(WorldGen.genRand, worldRandom);
-            for (int i = 0; i < tiles.Length / 10; i++)
-            {
-                var tile = Main.tile[x0 + i % width, y0 + i / width]; int offset = i * 10;
-                tile.ClearEverything(); tile.HasTile = tiles[offset] != 0;
-                tile.TileType = (ushort)tiles[offset + 1]; tile.WallType = (ushort)tiles[offset + 2];
-                tile.TileFrameX = (short)tiles[offset + 3]; tile.TileFrameY = (short)tiles[offset + 4];
-                tile.Slope = (SlopeType)tiles[offset + 5]; tile.IsHalfBlock = tiles[offset + 6] != 0;
-                tile.IsActuated = tiles[offset + 7] != 0; tile.LiquidType = tiles[offset + 8]; tile.LiquidAmount = (byte)tiles[offset + 9];
-            }
+            RestoredTileWrites = 0;
+            bool known = knownWorld != null && knownWorld.x0 == x0 && knownWorld.y0 == y0
+                && knownWorld.width == width && knownWorld.tiles.Length == tiles.Length;
+            RestoreColumns(tileTypes, known ? knownWorld.tileTypes : null);
+            RestoreColumns(wallTypes, known ? knownWorld.wallTypes : null);
+            RestoreColumns(tileStates, known ? knownWorld.tileStates : null);
+            RestoreColumns(liquids, known ? knownWorld.liquids : null);
+            TilesMs = timer.Elapsed.TotalMilliseconds;
+            TilesBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             return player;
         }
     }

@@ -78,17 +78,19 @@ namespace TerraBlind
 
         // 推进到【下次重规划真正会读到的那个状态】:RecedingNav 在帧跑完且 vy==0 后的第一 tick 重规划,中间至少一个 idle 步。
         // 标最后一帧会撒谎。残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
-        const int SettleMaxFrames = 30;
-        static SSNode SettleNode(SSNode n, PhysicsSimulator.Params ph)
+        const int SettleMaxFrames = 120;
+        static SSNode? SettleNode(SSNode n, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = n.Px, Py = n.Py, Vx = n.Vx, Vy = n.Vy, Grounded = n.Grounded };
             var idle = new PhysicsSimulator.ControlInput();
             for (int f = 0; f < SettleMaxFrames; f++)
             {
                 s = PhysicsSimulator.Step(s, idle, ph);
-                if (s.Grounded) break;
+                if (BodyTouchesLava(s.Px, s.Py)) return null;
+                if (s.Grounded)
+                    return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             }
-            return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = s.Grounded };
+            return null;
         }
 
         // support includes platforms (solidTop), unlike DigSolid
@@ -150,6 +152,7 @@ namespace TerraBlind
             public List<(float px, float py)> Path = new();
             public List<PathSeg> Segments = new();
             public List<PhysicsSimulator.ControlInput> ExecFrames = new();
+            public bool NativeVerified;
             public float BestPx, BestPy, BestDx, BestDy;
             public float StartPx, StartPy; // the player position this plan was computed from (for lookahead frame realignment)
             public bool Partial;           // true = this leg stops at the nearest grounded node, NOT the final goal (roll again from there)
@@ -238,6 +241,7 @@ namespace TerraBlind
             // "铺一段再跳过去"这条链就永远搜不出来
             public Dictionary<SSNode, List<(int, int)>> Laid;
             public int JpNoSpot, JpNoLand, JpFellThrough, JpSlidOff, JpOk;
+            public bool TraceJumpPlace;
             // coarseStates 那条路线(TrapEscape 脱困)只问"出不出得去",残速无所谓 --
             // 落点同格的边可以只留最便宜的一条。正常规划【不能】开:斜坡连滑要靠残速接力
             public bool Coarse;
@@ -284,12 +288,39 @@ namespace TerraBlind
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
+            var walkGoal = new Microsoft.Xna.Framework.Vector2(goalCx - p.width / 2f, goalFeetY - p.height);
+            if (!startOverride.HasValue && p.width == PhysicsSimulator.PlayerW && p.height == PhysicsSimulator.PlayerH
+                && MathF.Abs(walkGoal.X - startPx) <= WalkStridePx
+                && VanillaContactRegion.TryWalk(p, walkGoal, out _)
+                && VanillaContactRegion.ConnectedSupport(p.position, walkGoal, p.width, p.height))
+            {
+                var from = new SSNode { Px = startPx, Py = startPy, Vx = startVx, Grounded = true };
+                var walk = SimulateSegment(from, Math.Sign(walkGoal.X - startPx), 0, ph, walkStopPx: walkGoal.X);
+                if (walk.HasValue && StandCell(walk.Value.node.Px, walk.Value.node.Py) == (goalWx, goalWy)
+                    && walk.Value.frames.TrueForAll(frame => MathF.Abs(frame.Py - startPy) < .01f))
+                {
+                    res.Found = true;
+                    res.Steps = EdgeToSteps(from, walk.Value.node, walk.Value.frames, false, null);
+                    res.ExecFrames = walk.Value.frames;
+                    res.CostFrames = walk.Value.frames.Count;
+                    res.Path.Add((startPx, startPy));
+                    res.Path.Add((walk.Value.node.Px, walk.Value.node.Py));
+                    res.Millis = sw.Elapsed.TotalMilliseconds;
+                    DiagLog.Write($"[ss-direct-walk] goal=({goalWx},{goalWy}) frames={res.ExecFrames.Count} compute_ms={res.Millis:0.###}");
+                    return res;
+                }
+            }
             // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
             // 单点绝不能走大场。那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
                 ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
             else
-                ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            {
+                var cached = MazeWand.PeekFieldOrNull(goalWx, goalWy);
+                bool reusable = cached != null && cached.ContainsKey((spx, spy)) && !MazeWand.FieldPickStale();
+                ctx.DistField = reusable ? cached : MazeWand.BuildField(goalWx, goalWy, spx, spy);
+                DiagLog.Write($"[ss-field-reuse] reused={reusable} goal=({goalWx},{goalWy}) start=({spx},{spy})");
+            }
             ctx.BlockH = null;
             ctx.Laid = new Dictionary<SSNode, List<(int, int)>>();
 
@@ -596,6 +627,8 @@ namespace TerraBlind
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, int platformTile, float goalCx)
         {
             var (ccx, ccy) = StandCell(cur.Px, cur.Py);
+            if (!BridgeBuilder.CanBrakeOnRow(new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py,
+                Vx = cur.Vx, Vy = cur.Vy, Grounded = cur.Grounded }, ph, ccy + 1)) yield break;
             // 和 pillar 同样的毛病:只有固定档位就会冲过头/差一截。目标列已知,就补上"正好到"那一档。
             int goalCol = (int)(goalCx / 16f);
             foreach (int dir in new[] { 1, -1 })
@@ -682,20 +715,8 @@ namespace TerraBlind
         static IEnumerable<(SSNode next, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> digTiles)> Expand(
             PlanCtx ctx, SSNode cur, PhysicsSimulator.Params ph, float goalCx, float goalFeetY, int[] holdOptions, int platformTile, bool hasPickaxe)
         {
-            // 把这个节点一路铺出来的桥面【临时】写进世界再展开,展开完还原。
-            // 和 SimulateWithPlatform 同一个手法,只是那个只铺一块,这个铺一整段。
             var laid = ctx.Laid != null && ctx.Laid.TryGetValue(cur, out var lz) ? lz : null;
-            var saved = laid == null ? null : new List<(bool had, ushort type, bool half, Terraria.ID.SlopeType slope)>();
-            if (laid != null)
-                foreach (var (lx, ly) in laid)
-                {
-                    var t = Main.tile[lx, ly];
-                    saved.Add((t.HasTile, t.TileType, t.IsHalfBlock, t.Slope));
-                    t.HasTile = true; t.TileType = (ushort)(platformTile >= 0 ? platformTile : 19);
-                    t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
-                }
-            try
-            {
+            using var preview = new PhysicsSimulator.PlatformPreview(laid);
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
@@ -708,17 +729,6 @@ namespace TerraBlind
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
                 if (!selfBuilt && e.next.Grounded && !Predicates.IsGround(ex, ey) && OverLavaVoid(ex, ey)) continue;
                 yield return e;
-            }
-            }
-            finally
-            {
-                if (laid != null)
-                    for (int i = 0; i < laid.Count; i++)
-                    {
-                        var t = Main.tile[laid[i].Item1, laid[i].Item2];
-                        t.HasTile = saved[i].had; t.TileType = saved[i].type;
-                        t.IsHalfBlock = saved[i].half; t.Slope = saved[i].slope;
-                    }
             }
         }
 
@@ -840,12 +850,12 @@ namespace TerraBlind
             int gdir = hl < hr ? -1 : 1;                 // gradient-descent horizontal direction (toward lower maze H)
             int targetDir = gdir;
             int maxScan = MaxScan(ph);
+            bool anyVertJumpPlace = false;
 
             // 向上优先【原地跳放】:竖直跳起,弧顶拍一块平台,落上去,一次能升好几格;够不到 VertPlaceMinRise 才退回 pillar。
             // 向上无条件发,不加 upH<curH 的门:坑底正上方那格 H 本来就不低(得先升起来再走出去),加了门就把人钉死在坑底。
             if (platformTile >= 0 && MathF.Abs(cur.Vx) < VerticalJumpVxMax && ctx.DistField != null)
             {
-                bool anyVertJumpPlace = false;
                 foreach (int hold in BuildHoldOptions())
                 {
                     var jp = Prof("jplaceV", () => JumpPlace(ctx, cur, 0, hold, ph, platformTile));
@@ -855,9 +865,23 @@ namespace TerraBlind
                     anyVertJumpPlace = true;
                     yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
                 }
+                if (!anyVertJumpPlace)
+                    foreach (int dir in new[] { -1, 1 })
+                    {
+                        var seen = new HashSet<(int, int)>();
+                        foreach (int hold in BuildHoldOptions())
+                        {
+                            var jp = NudgeJumpPlace(ctx, cur, dir, hold, ph, platformTile);
+                            if (!jp.HasValue) continue;
+                            var cell = StandCell(jp.Value.node.Px, jp.Value.node.Py);
+                            if (ccy - cell.Item2 < VertPlaceMinRise || !seen.Add(cell)) continue;
+                            anyVertJumpPlace = true;
+                            yield return (jp.Value.node, jp.Value.frames, jp.Value.frames.Count + JumpPlaceCost, false, null);
+                        }
+                    }
                 // 只发【爬到顶】这一条:一跳升几格由地形定,铺中间落点兑现不了(50条45条MISS)。
                 // 跳得慢就让 pillar 进候选,由代价决定谁赢。门只筛"根本不必搭"
-                bool canPil = SkillExecutor.CanPillarFrom(ccx, ccy, out int topFeetY);
+                bool canPil = SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int topFeetY);
                 if (_pilLogCell != (ccx, ccy))
                 {
                     _pilLogCell = (ccx, ccy);
@@ -1000,7 +1024,7 @@ namespace TerraBlind
                 // 墙:跳放候选上面已经无条件发过了,这里只剩兜底。一个 hold 都找不到落点(纯陡壁)才退回 pillar。
                 if (platformTile >= 0)
                 {
-                    if (!anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(ccx, ccy, out int wallTopFeetY) && wallTopFeetY < ccy)
+                    if (!anyVertJumpPlace && !anyLateralJp && vertRise < PillarBeatsJumpRise && SkillExecutor.CanPillarFrom(cur.Px, cur.Py, out int wallTopFeetY) && wallTopFeetY < ccy)
                     {
                         float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                         for (int fy = ccy - 2; fy >= wallTopFeetY; fy -= 2)
@@ -1061,6 +1085,19 @@ namespace TerraBlind
             return LandVoid;
         }
 
+        static bool CanExcavateBody(float px, float py)
+        {
+            var (left, right) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
+            int top = (int)(py / 16f);
+            int bottom = (int)((py + PhysicsSimulator.PlayerH - 1f) / 16f);
+            for (int x = left; x <= right; x++)
+                for (int y = top; y <= bottom; y++)
+                    if (Predicates.IsLava(x, y)
+                        || (DigSolid(x, y) && DigTable.CostFrames(x, y) >= DigTable.Unmineable))
+                        return false;
+            return true;
+        }
+
         // 身体占的 3 行里,前进方向那一侧有实心 → 挖【最近的一格】。一次只挖一格:
         // 挖完重规划,能走就走,还堵着下一周期再发一条。这就是"挖一格试一格"
         static (SSNode node, List<(int wx, int wy)> tiles, float cost)? DigBodyBlock(PlanCtx ctx, SSNode cur, int ccx, int ccy, int gdir)
@@ -1070,6 +1107,8 @@ namespace TerraBlind
             // 挖完还走不动的话,下一周期会再发一条挖下一格。这就是挖一格试一格
             int nx = ccx + gdir;
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((nx, ccy))) return null;
+            float npx = nx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
+            if (!CanExcavateBody(npx, cur.Py)) return null;
             var (bl, br) = Predicates.TouchCols(cur.Px, PhysicsSimulator.PlayerW);
             // 从头往脚扫:头顶那格最常是元凶(斜半砖顶高 6px),而且挖它人不会掉下去
             for (int y = ccy - 2; y <= ccy; y++)
@@ -1079,7 +1118,6 @@ namespace TerraBlind
                     int fc = DigTable.CostFrames(c, y);
                     if (fc >= DigTable.Unmineable) continue;   // 这格挖不动,看下一格
                     SegLog($"[ss-digbody] 身体压着的({c},{y})是实心,挖开它 {fc}帧");
-                    float npx = nx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
                     var node = new SSNode { Px = npx, Py = cur.Py, Vx = 0f, Vy = 0f, Grounded = true };
                     return (node, new List<(int, int)> { (c, y) }, fc);
                 }
@@ -1249,6 +1287,7 @@ namespace TerraBlind
             if (ctx.DistField == null || !ctx.DistField.ContainsKey((x, ccy))) return null;
             float npx = x * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
             float npy = (ccy + 1) * 16f - PhysicsSimulator.PlayerH;
+            if (!CanExcavateBody(npx, npy)) return null;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
             return (node, tiles, cost);
         }
@@ -1265,7 +1304,6 @@ namespace TerraBlind
         // temporary bisection switches: flip one off, rebuild, see which filter was killing valid plans
         const bool F_Gate = true;        // anyProgress gating of placement
         const bool F_Dominance = true;   // velocity dominance pruning
-        const bool F_Brake = false;      // reject jump-place when brake can't settle
         const bool F_LandOnPlat = false; // true killed ~all jump-place (fellThrough) → pillar overuse; 6/2 working ver had no such check
         const bool F_DescentOnly = true; // place only during descent (vy>0)
         const bool F_Trend = true;       // two-phase up-then-left heuristic bias
@@ -1314,6 +1352,30 @@ namespace TerraBlind
             return false;
         }
 
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? NudgeJumpPlace(
+            PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
+        {
+            var state = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx,
+                Vy = cur.Vy, Grounded = cur.Grounded };
+            var prefix = new List<PhysicsSimulator.ControlInput>();
+            for (int i = 0; i < MaxSegFrames && (state.Px - cur.Px) * dir < 4f; i++)
+            {
+                var input = new PhysicsSimulator.ControlInput { Left = dir < 0, Right = dir > 0 };
+                float beforeX = state.Px;
+                state = PhysicsSimulator.Step(state, input, ph);
+                if (!state.Grounded || (state.Px == beforeX && i > 0)) return null;
+                input.Px = state.Px; input.Py = state.Py; input.Vx = state.Vx; input.Vy = state.Vy;
+                prefix.Add(input);
+            }
+            var stopped = AppendBrake(new SSNode { Px = state.Px, Py = state.Py,
+                Vx = state.Vx, Vy = state.Vy, Grounded = state.Grounded }, prefix, ph);
+            if (!stopped.HasValue || FallHitsLava(prefix, ph)) return null;
+            var jump = JumpPlace(ctx, stopped.Value.node, 0, hold, ph, platformTile);
+            if (!jump.HasValue) return null;
+            prefix.AddRange(jump.Value.frames);
+            return (jump.Value.node, prefix);
+        }
+
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? JumpPlace(
             PlanCtx ctx, SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int platformTile)
         {
@@ -1351,6 +1413,7 @@ namespace TerraBlind
             // 列的顺序:弧顶列优先,再左右邻列。斜坡上能锚住的格通常偏向坡面一列,只扫自己那列会一无所获。
             int startFootCy = (int)((cur.Py + PhysicsSimulator.PlayerH) / 16f);
             int placeCx = int.MinValue, placeCy = 0;
+            int spots = 0, simulated = 0, rising = 0, brakedCount = 0;
             (SSNode node, List<PhysicsSimulator.ControlInput> frames)? seg = null;
             foreach (int pcxTry in new[] { apexFootCx, apexFootCx + 1, apexFootCx - 1 })
             {
@@ -1358,14 +1421,33 @@ namespace TerraBlind
                 {
                     if (!CanPlaceReal(pcxTry, py)) continue;
                     if (!ClearOfBody(minPy, pcxTry, py)) continue;
+                    spots++;
                     var trySeg = SimulateWithPlatform(cur, dir, hold, ph, pcxTry, py, platformTile);
                     if (!trySeg.HasValue || !trySeg.Value.node.Grounded) continue;
+                    simulated++;
                     int landFc = (int)((trySeg.Value.node.Py + PhysicsSimulator.PlayerH) / 16f);
                     if (landFc >= startFootCy) continue; // landed at/below start = fell back, not a rise
-                    placeCx = pcxTry; placeCy = py; seg = trySeg; break;
+                    rising++;
+                    using var preview = new PhysicsSimulator.PlatformPreview(new[] { (pcxTry, py) });
+                    var braked = AppendBrake(trySeg.Value.node, trySeg.Value.frames, ph);
+                    if (!braked.HasValue && dir != 0)
+                    {
+                        var aimed = SimulateSegment(cur, dir, hold, ph, pcxTry * 16f + 8f - PhysicsSimulator.PlayerW / 2f);
+                        if (aimed.HasValue && aimed.Value.node.Grounded
+                            && (int)((aimed.Value.node.Py + PhysicsSimulator.PlayerH) / 16f) == py)
+                        {
+                            braked = AppendBrake(aimed.Value.node, aimed.Value.frames, ph);
+                            if (braked.HasValue) DiagLog.Trc($"[ss-jp-brake] restored platform=({pcxTry},{py}) frames={braked.Value.frames.Count}");
+                        }
+                    }
+                    if (!braked.HasValue) { ctx.JpSlidOff++; continue; }
+                    brakedCount++;
+                    placeCx = pcxTry; placeCy = py; seg = braked; break;
                 }
                 if (placeCx != int.MinValue) break;
             }
+            if (ctx.TraceJumpPlace)
+                DiagLog.Write($"[ss-jp-admission] start=({cur.Px},{cur.Py}) vx={cur.Vx} dir={dir} hold={hold} apex=({apexFootCx},{apexFootCy}) spots={spots} landed={simulated} rising={rising} braked={brakedCount}");
             if (placeCx == int.MinValue) { ctx.JpNoSpot++; return null; }
             float probeVy = 0f, probeFootPy = 0f;
             // 必须真的落【在】那块平台上。穿过去落到别处的"放了但没接住"边毫无用处,放进来还会用廉价空操作淹没搜索(指数爆炸)。
@@ -1376,17 +1458,12 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-ft] place=({placeCx},{placeCy}) hold={hold} dir={dir} probeVy={probeVy:0.#} probeFootPy={probeFootPy:0.#} platTopPy={placeCy * 16} landFeetCy={landFeetCy}");
                 ctx.JpFellThrough++; return null;
             }
-            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy)) { ctx.JpNoSpot++; return null; } // unreachable placement
-
-            // 落在一格宽的平台上带着残余 vx 下一帧就滑下去了。追加一段反向按键刹车,落点节点取真正停稳的位置。
-            // 只有滑到脱离地面(掉下去)才判这条边无效。
-            if (F_Brake)
+            if (!MarkPlaceFrame(seg.Value.frames, placeCx, placeCy))
             {
-                var braked = AppendBrake(seg.Value.node, seg.Value.frames, ph);
-                if (braked == null) { ctx.JpSlidOff++; return null; }
-                ctx.JpOk++;
-                return braked.Value;
+                if (ctx.TraceJumpPlace) DiagLog.Write($"[ss-jp-admission] no_place_frame tile=({placeCx},{placeCy}) dir={dir} hold={hold}");
+                ctx.JpNoSpot++; return null;
             }
+
             ctx.JpOk++;
             return seg.Value;
         }
@@ -1415,6 +1492,9 @@ namespace TerraBlind
                 if (!CanPlaceReal(fcx, fcy)) continue;
                 var seg = SimulateWithPlatform(cur, dir, hold, ph, fcx, fcy, platformTile);
                 if (!seg.HasValue || !seg.Value.node.Grounded) continue;
+                using var preview = new PhysicsSimulator.PlatformPreview(new[] { (fcx, fcy) });
+                seg = AppendBrake(seg.Value.node, seg.Value.frames, ph);
+                if (!seg.HasValue) { ctx.JpSlidOff++; continue; }
                 var (lcx, lcy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                 // 【必须真的落在那块平台上】。JumpPlace 早就有这条,横穿版漏了
                 // 平台是 solidTop 只有顶面接人,人从它旁边穿过去继续往下掉,照样 Grounded、H 照样更低,
@@ -1434,7 +1514,6 @@ namespace TerraBlind
             return null;
         }
 
-        const float BrakeVxEps = 0.3f;   // |Vx| below this counts as settled
         const int   BrakeMaxFrames = 30;
 
         // 落在窄平台上带残速要反压刹车。落点节点取【实际】停稳的位置。墙或平台边缘挡住滑动也是合法站位,
@@ -1443,14 +1522,16 @@ namespace TerraBlind
             SSNode land, List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
             var s = new PhysicsSimulator.State { Px = land.Px, Py = land.Py, Vx = land.Vx, Vy = land.Vy, Grounded = true };
-            for (int k = 0; k < BrakeMaxFrames && MathF.Abs(s.Vx) > BrakeVxEps; k++)
+            for (int k = 0; k < BrakeMaxFrames && s.Vx != 0f; k++)
             {
-                var input = new PhysicsSimulator.ControlInput { Left = s.Vx > 0f, Right = s.Vx < 0f };
+                var input = new PhysicsSimulator.ControlInput {
+                    Left = s.Vx > ph.AccRun, Right = s.Vx < -ph.AccRun };
                 s = PhysicsSimulator.Step(s, input, ph);
-                input.Px = s.Px; input.Py = s.Py;
+                input.Px = s.Px; input.Py = s.Py; input.Vx = s.Vx; input.Vy = s.Vy;
                 frames.Add(input);
                 if (!s.Grounded) return null; // slid off and started falling, not a valid stand
             }
+            if (s.Vx != 0f) return null;
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
             return (node, frames);
         }
@@ -1472,6 +1553,7 @@ namespace TerraBlind
 
         static bool CanPlaceReal(int wx, int wy)
         {
+            if (PhysicsSimulator.HasPreviewPlatforms) return CanPlaceRealUncached(wx, wy);
             if (_placeCache.TryGetValue((wx, wy), out bool hit)) return hit;
             bool r = CanPlaceRealUncached(wx, wy);
             _placeCache[(wx, wy)] = r;
@@ -1481,21 +1563,15 @@ namespace TerraBlind
         static bool CanPlaceRealUncached(int wx, int wy)
         {
             if (wx < 0 || wy < 0 || wx >= Main.maxTilesX || wy >= Main.maxTilesY) return false;
+            if (PhysicsSimulator.PreviewPlatform(wx, wy)) return false;
             var t = Main.tile[wx, wy];
             if (t.HasTile && !Main.tileCut[t.TileType]) return false;
             if (Predicates.IsLava(wx, wy)) return false;
-            for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    int nx = wx + dx, ny = wy + dy;
-                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
-                    var nb = Main.tile[nx, ny];
-                    if (nb.HasTile || nb.WallType > 0) return true;
-                }
-            return false;
+            return VanillaTerrainPlan.HasPlatformAnchor(wx, wy)
+                || PhysicsSimulator.PreviewPlatform(wx - 1, wy) || PhysicsSimulator.PreviewPlatform(wx + 1, wy)
+                || PhysicsSimulator.PreviewPlatform(wx, wy - 1) || PhysicsSimulator.PreviewPlatform(wx, wy + 1);
         }
 
-        // 临时把一块平台写进 Main.tile,模拟,再还原。那块砖不进节点,只为这一段的落地物理存在。
         // 搭桥要精确停在新砖那一格(一块砖只有一格站立空间,走完整段会滑出去掉下)。一次一块,贪心每步重挑。
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? BridgePlace(
             SSNode cur, int dir, PhysicsSimulator.Params ph, int platformTile)
@@ -1513,10 +1589,7 @@ namespace TerraBlind
             if (PathPlanner.IsBlockPublic(placeCx, scy)) return null;          // walk target (head) blocked
             DiagLog.Write($"[bridge-dbg] dir={dir} px={cur.Px:0.#} footCols[{lcol}..{rcol}] baseCol={baseCol} placeCx={placeCx} placeCy={placeCy}");
 
-            var t = Main.tile[placeCx, placeCy];
-            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock; var oSlope = t.Slope;
-            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false; t.Slope = Terraria.ID.SlopeType.Solid;
-            try
+            using var preview = new PhysicsSimulator.PlatformPreview(new[] { (placeCx, placeCy) });
             {
                 var s = new PhysicsSimulator.State { Px = cur.Px, Py = cur.Py, Vx = cur.Vx, Vy = cur.Vy, Grounded = true };
                 // 走到【刚好不再压住 baseCol】,不是走到新砖格心:格心那个位置身体还骑在原来那列上,
@@ -1556,22 +1629,13 @@ namespace TerraBlind
                 var node = new SSNode { Px = standPx, Py = standPy, Vx = 0f, Vy = 0f, Grounded = true };
                 return (node, frames);
             }
-            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
         }
 
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateWithPlatform(
             SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, int cx, int cy, int platformTile)
         {
-            var t = Main.tile[cx, cy];
-            bool oHad = t.HasTile; ushort oType = t.TileType; bool oHalf = t.IsHalfBlock;
-            var oSlope = t.Slope;
-            // 脆:保留原生 slope,【不】强制 Solid。Solid 平台会挡住原地竖直跳放的上升。人永远够不到,落回原地成自环。
-            // 真平台是 solidTop:上升穿过去,下降接住。
-            t.HasTile = true; t.TileType = (ushort)platformTile; t.IsHalfBlock = false;
-            // 【这个窗口里绝不能查地形】。_placeCache/_reachCache 会把"平台在场"的答案存下来,
-            // 还原之后缓存就是错的。SimulateSegment 是纯物理,不碰 CanPlaceReal -- 保持这样。
-            try { return SimulateSegment(cur, dir, hold, ph); }
-            finally { t.HasTile = oHad; t.TileType = oType; t.IsHalfBlock = oHalf; t.Slope = oSlope; }
+            using var preview = new PhysicsSimulator.PlatformPreview(new[] { (cx, cy) });
+            return SimulateSegment(cur, dir, hold, ph);
         }
 
         // Vanilla placement reach = tileRangeX + 手上那件的 tileBoost + blockRange(Player.cs:38990)。
@@ -1757,7 +1821,7 @@ namespace TerraBlind
         // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
         static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph)
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null, float? walkStopPx = null)
         {
             var s = new PhysicsSimulator.State
             {
@@ -1769,9 +1833,19 @@ namespace TerraBlind
             float startPx = s.Px;
             for (int f = 0; f < MaxSegFrames; f++)
             {
+                int steer = dir;
+                if (landingPx.HasValue)
+                {
+                    float dx = landingPx.Value - s.Px;
+                    float speed = MathF.Abs(s.Vx);
+                    float stopDistance = speed * (speed / (2 * (ph.AccRun + ph.RunSlowdown)) + .5f);
+                    steer = MathF.Abs(dx) < 1f && speed <= ph.RunSlowdown ? 0
+                        : s.Vx * dx > 0 && MathF.Abs(dx) <= stopDistance + 1f ? -Math.Sign(s.Vx)
+                        : Math.Sign(dx);
+                }
                 var input = new PhysicsSimulator.ControlInput
                 {
-                    Right = dir > 0, Left = dir < 0, Jump = f < hold,
+                    Right = steer > 0, Left = steer < 0, Jump = f < hold,
                 };
                 float prevPx = s.Px;
                 s = PhysicsSimulator.Step(s, input, ph);
@@ -1782,8 +1856,11 @@ namespace TerraBlind
                 {
                     // 泰拉的跳跃碰地后不能立刻起跳,至少在地上待一帧,带着残余 vx 滑行。
                     // 规划器原先在触地帧就结束边,漏掉这一帧滑行 → 每条边的落点都比执行短 ~vx*1帧(~3px) → 接缝漂移累积。
-                    var settle = PhysicsSimulator.Step(s, input, ph);
-                    var sf = input; sf.Jump = false; sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
+                    var sf = landingPx.HasValue ? new PhysicsSimulator.ControlInput {
+                        Left = s.Vx > ph.AccRun, Right = s.Vx < -ph.AccRun } : input;
+                    sf.Jump = false;
+                    var settle = PhysicsSimulator.Step(s, sf, ph);
+                    sf.Px = settle.Px; sf.Py = settle.Py; sf.Vx = settle.Vx; sf.Vy = settle.Vy;
                     frames.Add(sf);
                     s = settle;
                     break;
@@ -1794,6 +1871,7 @@ namespace TerraBlind
                     // 在这儿结束会产出被拒的假站位,把"走下崖"这条边杀掉。继续模拟,让人真的落到下面的地板。
                     var (wcx, wcy) = StandCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
+                    if (footSupported && walkStopPx.HasValue && dir * (s.Px - walkStopPx.Value) >= 0) break;
                     // 走满一个完整步幅再结束,不是 24px。24px 时边死在加速斜坡里(0.08/帧,要 37 帧才到 maxRun),
                     // 于是每条走路边平均 ~1px/帧,看起来比跳慢得多,A* 在平地上就一路跳。步幅取一次跳的射程,两者才可比。
                     if (footSupported && MathF.Abs(s.Px - startPx) >= WalkStridePx) break;
@@ -1802,7 +1880,7 @@ namespace TerraBlind
             }
             if (frames.Count == 0) { SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 一帧都没有"); return null; }
             // 模拟器把岩浆当空气,穿过岩浆落到对岸也报 Grounded(日志:jump→(3427,1135) 掉92行进坑)
-            if (FallHitsLava(frames))
+            if (FallHitsLava(frames, ph))
             {
                 SegLog($"[ss-seg] dir={dir} hold={hold} NULL: 轨迹穿过岩浆");
                 return null;
@@ -1860,7 +1938,7 @@ namespace TerraBlind
             if (s.Py - startPy < FallMinDropPx) return null;        // shallow step, not a fall
             // 掉进岩浆这把就完了,得重开。所以这条边【不发】。物理 Step 把岩浆当空气,
             // 落点和整条下落轨迹都要查:穿过岩浆再落到对岸石头上,人已经死了。
-            if (FallHitsLava(frames)) return null;
+            if (FallHitsLava(frames, ph)) return null;
             // 不复查 IsFloorPublic:真实下落后物理 Step 返回的 Grounded 就是权威落点。
             // 假站位守卫会在 StandCell 把亚像素 py 向上取整时误杀真实的竖直下落 ((2944,364) 的 bug)。
             var node = new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
@@ -1870,16 +1948,32 @@ namespace TerraBlind
         // 站不上去的目标格 = 不可达,搜索会烧光整个预算。navwand 点击有两种:目标浮在空中,或点进了实心块。
         // 身子扫过的每一格都查岩浆。只查落点不够:高速下落一帧走十几像素,能直接跨过整层岩浆。
 
-        static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames)
+        static bool FallHitsLava(List<PhysicsSimulator.ControlInput> frames, PhysicsSimulator.Params ph)
         {
-            foreach (var f in frames)
+            foreach (var f in frames) if (BodyTouchesLava(f.Px, f.Py)) return true;
+            if (frames.Count == 0 || frames[^1].Vy != 0f) return false;
+            var last = frames[^1];
+            var coast = new PhysicsSimulator.State { Px = last.Px, Py = last.Py,
+                Vx = last.Vx, Vy = last.Vy, Grounded = true };
+            for (int i = 0; i < 60 && (coast.Vx != 0f || coast.Vy != 0f); i++)
             {
-                int x0 = (int)(f.Px / 16f), x1 = (int)((f.Px + PhysicsSimulator.PlayerW - 1) / 16f);
-                int y0 = (int)(f.Py / 16f), y1 = (int)((f.Py + PhysicsSimulator.PlayerH - 1) / 16f);
-                for (int x = x0; x <= x1; x++)
-                    for (int y = y0; y <= y1; y++)
-                        if (Predicates.IsLava(x, y)) return true;
+                coast = PhysicsSimulator.Step(coast, default, ph);
+                if (BodyTouchesLava(coast.Px, coast.Py))
+                {
+                    SegLog($"[ss-lava-coast] end=({last.Px:0.#},{last.Py:0.#}) vx={last.Vx:0.##} hit_after={i + 1}");
+                    return true;
+                }
             }
+            return false;
+        }
+
+        static bool BodyTouchesLava(float px, float py)
+        {
+            int x0 = (int)(px / 16f), x1 = (int)((px + PhysicsSimulator.PlayerW - 1) / 16f);
+            int y0 = (int)(py / 16f), y1 = (int)((py + PhysicsSimulator.PlayerH - 1) / 16f);
+            for (int x = x0; x <= x1; x++)
+                for (int y = y0; y <= y1; y++)
+                    if (Predicates.IsLava(x, y)) return true;
             return false;
         }
 
@@ -2128,6 +2222,8 @@ namespace TerraBlind
         public static SSResult LastExecResult => _lastExecResult;   // the plan the current/last leg dispatched (for lookahead landing prediction)
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
+        internal static bool ReplayAtHandoff => _execFrames != null && _execIdx == _execFrames.Count
+            && _ssSteps?.Count == 1 && _ssDispatched;
 
         // 逐边执行:帧步重放自己模拟出的帧(规划即执行),pillar 步交给 SkillExecutor 的宏。
         // 每一步都要等上一个执行器空闲、人落地站稳(干净静止态)才开始。
@@ -2200,6 +2296,15 @@ namespace TerraBlind
             if (_ssDispatched)
             {
                 if (busy) return;
+                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome == "lava_risk")
+                {
+                    var from = StandCell(p.position.X, p.position.Y);
+                    PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
+                    _execFailCode = "lava_risk";
+                    DiagLog.Write("[ss-steps] mining refused lava release; reselect route");
+                    StopSteps(); DiagLog.EndRun();
+                    return;
+                }
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
                 // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
                 if (_ssPrevStep != null && _ssPrevStep.Frames != null && _ssPrevStep.Frames.Count > 0)
@@ -2220,6 +2325,13 @@ namespace TerraBlind
             if (busy || p.velocity.Y != 0f) return; // start each step from rest on the ground
 
             var st = _ssSteps[_ssStepIdx];
+            if (_ssStepIdx > 0 && _ssStepIdx == _ssSteps.Count - 1 && _ssPrevStep?.Dig == true
+                && MineCoordinator.Outcome == "done" && st.Pillar && st.MineTiles?.Count is not > 0
+                && RecedingNav.UpgradeAfterMining(p, st, EstStepFrames(st, p)))
+            {
+                StopSteps();
+                return;
+            }
             int ccx = (int)(p.Center.X / 16f);
             DiagLog.Write($"[ss-steps] #{_ssStepIdx}/{_ssSteps.Count} {EdgeKind(st)} ->({st.TargetCx},{st.TargetCy})");
             _ssDispatched = true;
@@ -2255,7 +2367,7 @@ namespace TerraBlind
                         TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
                 }
                 else
-                    SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy, true, st.TargetCx);
+                    SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy + 1, true, st.TargetCx);
             }
             else if (st.Dig)
             {
@@ -2273,8 +2385,10 @@ namespace TerraBlind
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
             // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理。闭环不会按下键。
-            else if (st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
-                     && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down))
+            else if (_lastExecResult?.NativeVerified != true
+                     && st.Frames != null && st.Frames.Count > 0 && st.TargetCx != StandCell(p.position.X, p.position.Y).cx
+                     && !st.Frames.Exists(fr => fr.Place || fr.Jump || fr.Down
+                         || MathF.Abs(fr.Vy) > 0.01f || MathF.Abs(fr.Py - p.position.Y) > 1f))
             {
                 _walkActive = true; _walkTargetCx = st.TargetCx; _walkDir = st.TargetCx >= ccx ? 1 : -1;
             }
@@ -2526,7 +2640,9 @@ namespace TerraBlind
                      Expand(ctx, node, ph, goalCx, goalFeetY, BuildHoldOptions(), platformTile, hasPick))
             {
                 bool alters = dig != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var landed = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph);
+                if (!settled.HasValue) continue;
+                var landed = settled.Value;
                 var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (nx == cx && ny == cy) continue;
                 if (field.TryGetValue((nx, ny), out int nH) && nH < curH) return false;   // 有降 H 的路,不卡
@@ -2556,6 +2672,7 @@ namespace TerraBlind
             Trap.FootBlockCol = -1;   // 这一周期重新算。留着上一周期的会在早就走开的地方触发换站位
             var cur = new SSNode { Px = p.position.X, Py = p.position.Y, Vx = p.velocity.X, Vy = 0f, Grounded = true };
             var (curCx, curCy) = StandCell(cur.Px, cur.Py);
+            ctx.TraceJumpPlace = DiagLog.Trace && _pilLogCell != (curCx, curCy);
             int curH = field.TryGetValue((curCx, curCy), out int ch) ? ch : int.MaxValue;
             float gx = goalWx * 16f + 8f, gy = (goalWy + 1) * 16f;
             // 四邻真相行:场想从这儿往哪降,那里物理上到底是什么。Dijkstra 保证必有一个邻居 H 更低;
@@ -2594,7 +2711,9 @@ namespace TerraBlind
                 // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
                 // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降。它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var landed = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph);
+                if (!settled.HasValue) continue;
+                var landed = settled.Value;
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
@@ -2816,7 +2935,7 @@ namespace TerraBlind
             string pickKind = b.pillar ? "pillar"
                 : b.dig != null && b.dig.Count > 0 ? $"dig×{b.dig.Count}"
                 : b.frames == null ? "bridge"
-                : b.frames.Exists(f => f.Place) ? (b.frames[0].Jump ? "jumpPlace" : "place")
+                : b.frames.Exists(f => f.Place) ? (b.frames.Exists(f => f.Jump) ? "jumpPlace" : "place")
                 : b.frames.Exists(f => f.Jump) ? "jump" : "walk";
             EventLog.W(Ev.Plan, $"({curCx},{curCy})H{curH} → ({pickCell.Item1},{pickCell.Item2})H{landH} {pickKind} {b.cost:0}f{(b.dig == null || b.dig.Count == 0 ? "" : " " + string.Join(",", b.dig.ConvertAll(d => $"({d.Item1},{d.Item2})")))}");
             // 选了要挖的边就把左右两边的账一起打出来。"旁边明明能走却偏要挖"每次都得回答这个
@@ -3320,6 +3439,7 @@ namespace TerraBlind
             // 把 26 条完全有效的边全否了,人钉在原地反复重规划。
             if (MathF.Abs(p.position.X - res.StartPx) < 0.01f && MathF.Abs(p.position.Y - res.StartPy) < 0.01f)
                 return true;
+            if (res.NativeVerified) return false;
             var ph = PhysicsSimulator.Params.FromPlayer(p);
             for (int si = 0; si < res.Steps.Count; si++)
             {
@@ -3329,6 +3449,7 @@ namespace TerraBlind
                 foreach (var f in st.Frames) if (f.Place) { hasPlace = true; break; }
                 if (!hasPlace) continue;                 // 只有放置边对起点像素敏感
                 if (si > 0) break;                       // 只重验第一条:后面那些的起点本来就是预测值
+                if (!st.Frames[0].Jump && st.Frames.Exists(frame => frame.Jump)) return false;
 
                 // 【调同一个函数】,不自己再跑一遍循环。SimulateSegment 有走满步幅就停、撞墙就停、
                 // 落地后滑一帧、AppendBrake 追加刹车等一整套终止逻辑。照抄必然对不齐,
@@ -3556,6 +3677,17 @@ namespace TerraBlind
         }
         static int _fallFrames;
         const int UnplannedFallFrames = 14;   // ~14 帧自由落体 ≈ 4 格,超过一次跳跃的正常落差
+
+        internal static bool NativeReplayMatches(Player player)
+        {
+            if (_lastExecResult?.NativeVerified != true || _execFrames == null
+                || _execIdx < 1 || _execIdx >= _execFrames.Count) return false;
+            var previous = _execFrames[_execIdx - 1];
+            return MathF.Abs(player.position.X - previous.Px) <= 2f
+                && MathF.Abs(player.position.Y - previous.Py) <= 2f
+                && MathF.Abs(player.velocity.X - previous.Vx) <= 0.1f
+                && MathF.Abs(player.velocity.Y - previous.Vy) <= 0.1f;
+        }
 
         public static void ApplyControls()
         {

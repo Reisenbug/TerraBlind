@@ -235,9 +235,11 @@ namespace TerraBlind
 
         static Dictionary<(int, int), int> BuildCachedField(int gx, int gy, int sx, int sy)
         {
-            var field = BuildField(gx, gy, sx, sy, bigMargin: !VanillaNavBridge.Enabled);
-            if (VanillaNavBridge.Enabled && !field.ContainsKey((sx, sy)))
-                field = BuildField(gx, gy, sx, sy, bigMargin: true);
+            bool narrow = VanillaNavBridge.Enabled || System.Math.Max(System.Math.Abs(gx - sx), System.Math.Abs(gy - sy)) <= 120;
+            var field = BuildField(gx, gy, sx, sy, bigMargin: !narrow,
+                stopAtStart: VanillaNavBridge.RegionsEnabled);
+            if (narrow && !field.ContainsKey((sx, sy)))
+                field = BuildField(gx, gy, sx, sy, bigMargin: true, stopAtStart: VanillaNavBridge.RegionsEnabled);
             return field;
         }
 
@@ -272,51 +274,86 @@ namespace TerraBlind
             return best;
         }
 
-        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false)
+        public static Dictionary<(int, int), int> BuildField(int gx, int gy, int sx, int sy, bool bigMargin = false, bool stopAtStart = false)
         {
             // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
             // 边全被拒,只剩回头路,循环。
             _fieldPickPower = BestPickPower();
             // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
-            int m = bigMargin ? FieldMargin : System.Math.Min(120, System.Math.Max(40, span));
+            int m = bigMargin ? FieldMargin : System.Math.Min(120, 24 + span / 4);
             int minX = System.Math.Max(0, System.Math.Min(sx, gx) - m), maxX = System.Math.Min(Main.maxTilesX - 1, System.Math.Max(sx, gx) + m);
             int minY = System.Math.Max(0, System.Math.Min(sy, gy) - m), maxY = System.Math.Min(Main.maxTilesY - 1, System.Math.Max(sy, gy) + m);
 
             var dist = new Dictionary<(int, int), int>();
+            var standCosts = new Dictionary<(int, int), int>();
+            int standCacheHits = 0;
             var closed = new HashSet<(int, int)>();
             var pq = new PriorityQueue<(int x, int y), (int cost, int x, int y)>();
+            int Estimate(int x, int y) => stopAtStart ? System.Math.Abs(x - sx) * MoveSide + System.Math.Abs(y - sy) * MoveDown : 0;
             dist[(gx, gy)] = 0;
-            pq.Enqueue((gx, gy), (0, gx, gy));
+            pq.Enqueue((gx, gy), (Estimate(gx, gy), gx, gy));
 
             int[] dxs = { 1, -1, 0, 0 };
             int[] dys = { 0, 0, 1, -1 };
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            double cpuStart = NavigationLatency.ThreadCpuMilliseconds();
+            var pauseStart = System.GC.GetTotalPauseDuration();
+            long stepTicks = 0, standTicks = 0;
             while (pq.Count > 0)
             {
                 pq.TryDequeue(out var cur, out var priority);
                 var (cx, cy) = cur;
-                int cost = priority.cost;
+                int cost = dist[cur];
                 if (!closed.Add((cx, cy))) continue;
+                if (stopAtStart && cx == sx && cy == sy) break;
+
+                (int fixedCost, int digCells, bool wall) cellCost = default;
+                bool cellPrepared = false;
 
                 for (int i = 0; i < 4; i++)
                 {
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
-                    int sc = StepCost(cx, cy, nx, ny);
+                    long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                    if (!cellPrepared)
+                    {
+                        cellCost = PrepareStepCost(cx, cy);
+                        cellPrepared = true;
+                    }
+                    int sc = StepCost(cx, cy, nx, ny, cellCost);
+                    stepTicks += System.Diagnostics.Stopwatch.GetTimestamp() - stepStarted;
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // H = 站在 (nx,ny) 还要多少,先问站不站得住。悬空格照发 H 会在空中连成
                     // 一条 H 递减的假路把人吸进死角(腐化区 1341..1343 那次)
-                    int stand = StandPenalty(nx, ny);
+                    if (!standCosts.TryGetValue((nx, ny), out int stand))
+                    {
+                        long standStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                        stand = StandPenalty(nx, ny);
+                        standTicks += System.Diagnostics.Stopwatch.GetTimestamp() - standStarted;
+                        standCosts[(nx, ny)] = stand;
+                    }
+                    else standCacheHits++;
                     if (stand == Impassable) continue;
                     int nc = cost + sc + stand;
                     if (dist.TryGetValue((nx, ny), out int old) && nc >= old) continue;
                     dist[(nx, ny)] = nc;
-                    pq.Enqueue((nx, ny), (nc, nx, ny));
+                    pq.Enqueue((nx, ny), (nc + Estimate(nx, ny), nx, ny));
                 }
             }
+            if (stopAtStart)
+            {
+                var unsettled = new List<(int, int)>();
+                foreach (var cell in dist.Keys) if (!closed.Contains(cell)) unsettled.Add(cell);
+                foreach (var cell in unsettled) dist.Remove(cell);
+            }
+            double loopMs = sw.Elapsed.TotalMilliseconds;
+            double cpuMs = NavigationLatency.ThreadCpuMilliseconds() - cpuStart;
+            double gcPauseMs = (System.GC.GetTotalPauseDuration() - pauseStart).TotalMilliseconds;
+            double tickMs = 1000d / System.Diagnostics.Stopwatch.Frequency;
+            DiagLog.Write($"[field-work] goal=({gx},{gy}) wall_ms={loopMs:0.###} thread_cpu_ms={cpuMs:0.###} gc_pause_ms={gcPauseMs:0.###} step_ms={stepTicks * tickMs:0.###} stand_ms={standTicks * tickMs:0.###} other_ms={loopMs - (stepTicks + standTicks) * tickMs:0.###}");
             // 谁建的、在不在主线程:一次 ~500ms,重建风暴看得见却归不了因。
             string who = "?";
             try
@@ -335,7 +372,7 @@ namespace TerraBlind
             catch { }
             bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId;
             EventLog.W(Ev.Field, $"goal=({gx},{gy}) {sw.Elapsed.TotalMilliseconds:0}ms cells={dist.Count} {(mainThread ? "MAIN" : "bg")}");
-            DiagLog.Write($"[field-timing] goal=({gx},{gy}) elapsed_ms={sw.Elapsed.TotalMilliseconds:0.###} cells={dist.Count} main={mainThread}");
+            DiagLog.Write($"[field-timing] goal=({gx},{gy}) elapsed_ms={sw.Elapsed.TotalMilliseconds:0.###} cells={dist.Count} stand_checks={standCosts.Count} stand_cache_hits={standCacheHits} main={mainThread}");
             return dist;
         }
 
@@ -418,17 +455,21 @@ namespace TerraBlind
         }
 
         static int StepCost(int cx, int cy, int nx, int ny)
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy));
+
+        static (int fixedCost, int digCells, bool wall) PrepareStepCost(int cx, int cy)
         {
             for (int row = 0; row < 3; row++)
             {
-                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, cx, cy - row)) return Impassable;
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, cx, cy - row)) return (Impassable, 0, false);
                 if (AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, cx, cy - row)
-                    && SolidAnyShape(cx, cy - row)) return Impassable;
+                    && SolidAnyShape(cx, cy - row)) return (Impassable, 0, false);
             }
             // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
-                if (IsLava(cx, cy - r)) return Impassable;
+            for (int dx = -1; dx <= 1; dx++)
+                if (IsLava(cx + dx, cy - r)) return (Impassable, 0, false);
             // 压力板踩下去就触发,有的连着岩浆陷阱。能绕就绕,绕不开也别当免费。
             for (int r = 0; r < 3; r++)
             {
@@ -436,7 +477,7 @@ namespace TerraBlind
                 if (py2 < 0 || py2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
                 var pt = Main.tile[cx, py2];
                 if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
-                    return PlateCost;
+                    return (PlateCost, 0, false);
             }
             // 人 3 行高,只看脚下会把烟囱当免费爬。斜砖只在脚那行豁免(胸口一块斜砖就卡住);
             // 上锁的门另判:MineableWith 说能挖,可神庙门没钥匙砸不开
@@ -444,7 +485,7 @@ namespace TerraBlind
             {
                 int dy2 = cy - r;
                 if (dy2 < 0 || dy2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
-                if (WorldGen.IsLockedDoor(cx, dy2)) return Impassable;
+                if (WorldGen.IsLockedDoor(cx, dy2)) return (Impassable, 0, false);
             }
 
             // 数出到底要挖几格,不只是"要不要挖":身体 3 行高,横着进一格得挖 1~3 格,价钱差 3 倍。
@@ -455,12 +496,14 @@ namespace TerraBlind
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
                 digCells++;
-                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return Impassable;   // 镐挖不动 → 真不可达,不是"贵"
+                if (!LavaSafety.CanMine(cx, cy - r)) return (Impassable, 0, false);
+                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return (Impassable, 0, false);   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
                 digCells++;
-                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return Impassable;
+                if (!LavaSafety.CanMine(cx, cy - 3)) return (Impassable, 0, false);
+                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return (Impassable, 0, false);
             }
             bool wall = digCells > 0;
             // 20px 的身子跨两列:左右邻列都堵的 1 格宽缝身体进不去,按免费算 H 会顺着神庙墙缝往上流
@@ -475,12 +518,20 @@ namespace TerraBlind
                 // 唯一的出口 (1343,232) 探针说 can_stand=True,场却说不可达。
                 if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy))
                 {
-                    if (!CellKind.Stands(cx, cy)) return Impassable;
+                    if (!CellKind.Stands(cx, cy)) return (Impassable, 0, false);
                     // 【按普通格收费】。挤进去本身不慢,慢的是出来 --- 而出来是下一格的事,
                     // StepCost 到那一格自然会按 pillar/跳放定价。在这儿再加价等于同一件事收两次钱。
                     wall = false; digCells = 0;
                 }
             }
+            return (-1, digCells, wall);
+        }
+
+        static int StepCost(int cx, int cy, int nx, int ny, (int fixedCost, int digCells, bool wall) cellCost)
+        {
+            if (cellCost.fixedCost >= 0) return cellCost.fixedCost;
+            int digCells = cellCost.digCells;
+            bool wall = cellCost.wall;
             // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
             // 取左右里实心行少的那侧。人可以站偏,挑便宜的那半边走。
             if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
@@ -537,7 +588,7 @@ namespace TerraBlind
         const int DropProbe = 24;   // 比一次自由落体够用的深度;探太深每格都做会拖垮 110 万格的场
 
         // 放得住吗。【判据跟着料走】:
-        //   平台 -> PlatformAnchor:3x3 邻域(含斜角),任何 tile 或背景墙(宽松)
+        //   平台 -> PlatformAnchor:本格背景墙,或四邻背景墙/可附着方块
         //   方块 -> BlockAnchor:只认【四邻】的实心,背景墙【也认】(严格在邻域,不在墙)
         public static bool AnchorFor(int x, int y)
             => !IsLava(x, y) && PlatformAnchor(x, y);
@@ -566,20 +617,7 @@ namespace TerraBlind
             return false;
         }
 
-        // a platform placed at (x,y) would have something to attach to, same 3x3 neighborhood rule as the planner's
-        // CanPlaceReal: ANY tile (grass, vine, rubble, tree trunk...) or back wall anchors it.
-        public static bool PlatformAnchor(int x, int y)
-        {
-            for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    int nx = x + dx, ny = y + dy;
-                    if (nx < 0 || ny < 0 || nx >= Main.maxTilesX || ny >= Main.maxTilesY) continue;
-                    var t = Main.tile[nx, ny];
-                    if (t.HasTile || t.WallType > 0) return true;
-                }
-            return false;
-        }
+        public static bool PlatformAnchor(int x, int y) => VanillaTerrainPlan.HasPlatformAnchor(x, y);
 
         // 3 body rows of column c are open at stand height cy (feet row keeps the slope/half footing exemption)
         static bool ColumnOpen(int c, int cy)
@@ -597,7 +635,8 @@ namespace TerraBlind
         static bool ColumnWidenable(int c, int cy)
         {
             for (int r = 0; r < 3; r++)
-                if (SolidAnyShape(c, cy - r) && !DigTable.MineableWith(c, cy - r, _fieldPickPower)) return false;
+                if (SolidAnyShape(c, cy - r)
+                    && (!LavaSafety.CanMine(c, cy - r) || !DigTable.MineableWith(c, cy - r, _fieldPickPower))) return false;
             return true;
         }
 

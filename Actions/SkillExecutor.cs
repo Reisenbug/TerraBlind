@@ -92,6 +92,7 @@ namespace TerraBlind
         static bool CanPlaceNow(Player p, int x, int y)
         {
             if (!Predicates.InBounds(x, y)) { _placeVeto = "oob"; return false; }
+            if (LavaSafety.IsLava(x, y)) { _placeVeto = "lava"; return false; }
             if (Main.tile[x, y].HasTile) { _placeVeto = "occupied"; return false; }
             int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);
             int bt = (int)(p.position.Y / 16f), bb = (int)((p.position.Y + p.height - 1) / 16f);
@@ -134,22 +135,26 @@ namespace TerraBlind
         private static int Pcx(Player p) => (int)((p.position.X + p.width / 2f) / 16f);
 
         // 规划和执行共用这一个判据,否则图里会有执行不了的假边。返回脚能升到的最高行。
-        public static bool CanPillarFrom(int feetCx, int feetCy, out int topFeetY)
+        public static bool CanPillarFrom(float px, float startPy, out int topFeetY)
         {
+            var (feetCx, feetCy) = StateSpacePlanner.StandCell(px, startPy);
             topFeetY = feetCy;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) return false;
             if (FindPlatformSlot(p) < 0) return false;
+            int firstPlatformRow = SupportRow(feetCx, feetCy + 1) - 1;
+            while (firstPlatformRow > 0 && Main.tile[feetCx, firstPlatformRow].HasTile) firstPlatformRow--;
+            if (LavaSafety.IsLava(feetCx, firstPlatformRow)) return false;
+            if (!PlatAnchor(feetCx, firstPlatformRow)) return false;
 
-            // player box left/right columns when standing centered on feetCx
-            float px = feetCx * 16f + 8f - p.width / 2f;
             int leftCol = (int)(px / 16f);
             int rightCol = (int)((px + p.width - 1) / 16f);
 
             // a tree (or other non-cuttable non-solid tile) in the body columns blocks platform placement → the
             // pillar would stall in place. reject the edge so the planner routes around instead of replanning.
             for (int y = feetCy; y >= feetCy - 2; y--)
-                if (BlocksPlacement(leftCol, y) || BlocksPlacement(rightCol, y)) { topFeetY = feetCy; return false; }
+                for (int x = leftCol; x <= rightCol; x++)
+                    if (BlocksPlacement(x, y) || LavaSafety.IsLava(x, y)) { topFeetY = feetCy; return false; }
 
             // 升 2 格后身体新进入 feetY-3/-4 两行,这两行不干净就会把头卡进墙里
             int feetY = feetCy;
@@ -159,6 +164,8 @@ namespace TerraBlind
                 int newRowA = feetY - 3, newRowB = feetY - 4; // rows the body newly enters on the next 2-tile climb
                 bool blocked = IsSolidNonPlatform(leftCol, newRowA) || IsSolidNonPlatform(rightCol, newRowA)
                              || IsSolidNonPlatform(leftCol, newRowB) || IsSolidNonPlatform(rightCol, newRowB);
+                for (int x = leftCol; x <= rightCol; x++)
+                    blocked |= LavaSafety.IsLava(x, newRowA) || LavaSafety.IsLava(x, newRowB);
                 if (blocked) break;
                 feetY -= 2;
                 reached = feetY;
@@ -168,7 +175,6 @@ namespace TerraBlind
 
             // jump must not be boxed in at the start (hold=15 vertical rise ≥ 10px, allowing a small left/right nudge)
             var ph = PhysicsSimulator.Params.FromPlayer(p);
-            float startPy = feetCy * 16f + 16f - p.height; // feet on (feetCy+1) floor top → top-left py
             bool RiseOk(float ox)
             {
                 var sim = PhysicsSimulator.SimulateJump(new PhysicsSimulator.State { Px = px + ox, Py = startPy, Vx = 0f, Vy = 0f, Grounded = true, JumpFramesLeft = 15 }, 0, 15, ph);
@@ -243,10 +249,16 @@ namespace TerraBlind
                 if (platformSlot < 0) { DiagLog.Write("[pillar] stop: no platform slot"); Stop(); return; }
                 int feetYNow = (int)((p.position.Y + p.height) / 16f);
                 int pcxNow = Pcx(p);
+                bool grounded = p.velocity.Y == 0f && VanillaTerrainPlan.HasSupport(p);
+                if (feetYNow <= _targetWy && grounded)
+                {
+                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} attempts={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
+                    Stop(); return;
+                }
                 // 只有脚踏实地时问"能不能起跳"才有意义:人在空中头顶本来就贴着方块,一算就说跳不起来,
                 // 于是一跳到半路把自己判死。平台其实已经放出去了
                 var nudgePh = PhysicsSimulator.Params.FromPlayer(p);
-                bool onGround = p.velocity.Y == 0f;
+                bool onGround = grounded;
                 bool jumpBlocked = false;
                 if (onGround)
                 {
@@ -283,15 +295,6 @@ namespace TerraBlind
                 // 闭环:跳一次能放几格就放几格。人一路上升,射程窗口跟着走,头顶那格进射程就放,
                 // 放成功锚点上移,继续找下一格。不回放录制。录制写死一 cycle 2 格,地形一变就错。
                 _totalFrames++;
-                // 脚下真有东西才算到。只比行号会在起步那一帧就"到了"(脚下地面行本来就等于目标行),
-                // 调用方按身体行判又说没到,两边基准差一格 → start/done 空转
-                if (feetYNow <= _targetWy && p.velocity.Y == 0f
-                    && Predicates.IsGround(Pcx(p), feetYNow))
-                {
-                    DiagLog.Write($"[pillar] done feetY={feetYNow} target={_targetWy} placed={_cyclesDone} jumps={_jumps} frames={_totalFrames} hold={JumpHoldFrames}");
-                    Stop(); return;
-                }
-                bool grounded = p.velocity.Y == 0f;
                 if (grounded)
                 {
                     if (_airFrames > 0)   // 刚落地:这一跳到底升了没有
@@ -299,7 +302,7 @@ namespace TerraBlind
                         if (feetYNow >= _jumpStartFeetY)
                         {
                             _stalledCycles++;
-                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles} anchor=({_pillarCol},{_anchorWy}) target={_targetWy} veto={_placeVeto} placed={_cyclesDone}");
+                            DiagLog.Write($"[pillar] stall feetY={feetYNow} was={_jumpStartFeetY} stalls={_stalledCycles} anchor=({_pillarCol},{_anchorWy}) target={_targetWy} veto={_placeVeto} attempts={_cyclesDone}");
                             if (_stalledCycles >= 3) { DiagLog.Write("[pillar] stop: no progress"); Stop(); return; }
                         }
                         else _stalledCycles = 0;
@@ -313,6 +316,12 @@ namespace TerraBlind
                     bool pinnedOk = _pinnedCol != int.MinValue && Predicates.IsSolid(_pinnedCol, SupportRow(_pinnedCol, feetYNow));
                     _pillarCol = pinnedOk ? _pinnedCol : FootedCol(p, feetYNow);
                     _anchorWy = SupportRow(_pillarCol, feetYNow) - 1;
+                    while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
+                    if (!PlatAnchor(_pillarCol, _anchorWy))
+                    {
+                        DiagLog.Write($"[pillar] stop: no anchor at ({_pillarCol},{_anchorWy})");
+                        Stop(); return;
+                    }
                     _jumpFramesLeft = JumpHoldFrames;
                     _lastAirVeto = "";
                     _jumps++;
@@ -323,10 +332,21 @@ namespace TerraBlind
                 // 悬空起步时第一跳还没发生,锚点仍是 Start 填的 int.MaxValue --
                 // 拿它当下标就是 IndexOutOfRange(整局刷屏)。等落地那一跳把锚定好再干活
                 if (_anchorWy == int.MaxValue) return;
+                if (LavaSafety.IsLava(_pillarCol, _anchorWy))
+                {
+                    DiagLog.Write($"[pillar] stop: lava at ({_pillarCol},{_anchorWy})");
+                    Stop(); return;
+                }
                 // 锚点已经有东西了(上一帧放上的)→ 往上找下一个空格
                 while (_anchorWy > _targetWy - 1 && Main.tile[_pillarCol, _anchorWy].HasTile) _anchorWy--;
 
                 bool canPlace = _anchorWy >= _targetWy - 1 && CanPlaceNow(p, _pillarCol, _anchorWy);
+                string veto = canPlace ? "OK" : _placeVeto;
+                if (PillarTrace && veto != _lastAirVeto)
+                {
+                    DiagLog.Write($"[pillar-placement] veto={veto} anchor=({_pillarCol},{_anchorWy}) pos=({p.position.X:0.##},{p.position.Y:0.##}) vy={p.velocity.Y:0.##} itemTime={p.itemTime}");
+                    _lastAirVeto = veto;
+                }
                 if (PillarTrace)
                 {
                     int bl = (int)(p.position.X / 16f), br = (int)((p.position.X + p.width - 1) / 16f);

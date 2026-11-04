@@ -19,7 +19,7 @@ public class BackgroundAutomation : ModSystem
     }
 
     static bool LocalNavigation => Main.netMode == NetmodeID.SinglePlayer
-        && (RecedingNav.Active || VanillaNavigationDemo.Active);
+        && (RecedingNav.Active || VanillaNavigationDemo.Active || ItemUseCoordinator.IsActive);
 
     static void PatchBackgroundPause(ILContext il)
     {

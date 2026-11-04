@@ -53,6 +53,18 @@ namespace TerraBlind
 		public static int NextWx => _targetWx;   // 停在哪一格没铺。换料续铺要从这儿接上
 		public static int RowWy => _rowWy;
 
+		public static bool CanBrakeOnRow(PhysicsSimulator.State state, PhysicsSimulator.Params physics, int row)
+		{
+			for (int frame = 0; frame < 120; frame++)
+			{
+				if (state.Py + PhysicsSimulator.PlayerH > row * 16f + 1f) return false;
+				if (System.Math.Abs(state.Vx) <= physics.AccRun) return true;
+				state = PhysicsSimulator.Step(state, new PhysicsSimulator.ControlInput
+				{ Left = state.Vx > 0, Right = state.Vx < 0 }, physics);
+			}
+			return false;
+		}
+
 		public static bool Start(string itemName, string dir, int n, out string why)
 			=> Start(itemName, dir, n, int.MinValue, int.MinValue, out why);
 
@@ -76,6 +88,13 @@ namespace TerraBlind
 			{
 				why = $"人在{ActExecutor.OriginCy(p)},该站在{wantRow - 1}才能沿{wantRow}行铺";
 				Outcome = "bad_stand"; Reason = why; return false;
+			}
+			if (!CanBrakeOnRow(new PhysicsSimulator.State { Px = p.position.X, Py = p.position.Y,
+				Vx = p.velocity.X, Vy = p.velocity.Y, Grounded = p.velocity.Y == 0 }, PhysicsSimulator.Params.FromPlayer(p), wantRow))
+			{
+				why = "unsafe_bridge_momentum"; Outcome = "bad_stand"; Reason = why;
+				DiagLog.Write($"[bridge] rejected momentum px={p.position.X:0.##} vx={p.velocity.X:0.##} row={wantRow}");
+				return false;
 			}
 
 			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
@@ -146,6 +165,13 @@ namespace TerraBlind
 			if (!IsRunning) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Reason = "no_player"; Finish("stuck"); return; }
+			if (p.Bottom.Y > (_rowWy + 1) * 16f)
+			{
+				Reason = $"left_bridge_row feet={p.Bottom.Y / 16f:0.##} row={_rowWy}";
+				ItemUseCoordinator.Stop();
+				Finish("bad_stand");
+				return;
+			}
 
 			// 卡死判据和"人在哪一列"无关:只看【有没有真铺出格子来】。
 			// 铺出一格就清零,长时间没进展就是卡住了,不管人这会儿在原地还是来回走
@@ -184,6 +210,11 @@ namespace TerraBlind
 			if (advance)
 			{
 				if (_dir > 0) p.controlRight = true; else p.controlLeft = true;
+			}
+			else if (System.Math.Abs(p.velocity.X) > p.runAcceleration)
+			{
+				p.controlLeft = p.velocity.X > 0;
+				p.controlRight = p.velocity.X < 0;
 			}
 
 			// 卡死:手够不着、脚又没挪窝,才是真卡住。
@@ -242,6 +273,12 @@ namespace TerraBlind
 		// 以前 5 处 stuck 各自 return,现场只剩一句给人看的话,代码没法据此补救
 		private static void Stuck(Blocker b)
 		{
+			if (RecedingNav.Active)
+			{
+				ItemUseCoordinator.Stop();
+				Finish("stuck");
+				return;
+			}
 			if (Unstick.Handle("bridge", b)) { _frames = 0; _sinceProgress = 0; _walkStall = 0; _reachStall = 0; _digStall = 0; return; }
 			Finish("stuck");
 		}

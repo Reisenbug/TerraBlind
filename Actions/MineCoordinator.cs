@@ -11,6 +11,7 @@ namespace TerraBlind
 		public int StartWx, StartWy;   // cell the player stood on when mining began, defines the valid box with Target
 		public int TargetWx, TargetWy; // landing cell from the planner, mining ends when the player stands here
 		public System.Collections.Generic.List<(int wx, int wy)> MineTiles; // planned tiles (fallback when the live hitbox window slides past an obstacle, e.g. a slope half-brick that lifted the player)
+		public bool OnlyPlannedTiles;
 	}
 
 	public class MineCoordinator : ModSystem
@@ -18,6 +19,7 @@ namespace TerraBlind
 		private static volatile MineRequest _active;
 		// 连着多少帧扫不出要挖的格就认输。横向挖有"走进已挖开的隧道"这种合法空帧,给足余量
 		private static int _idleFrames;
+		private static int _alignFrames;
 		private const int IdleMax = 90;
 		// 上次为够不着而伸手的那一格。只为日志去重。每帧都打会刷满
 		private static (int, int) _boostLogAt = (int.MinValue, int.MinValue);
@@ -33,16 +35,19 @@ namespace TerraBlind
 		public static string Outcome = "idle";
 		public static string Reason = "";
 		public static int MinedCount;
+		public static uint ReadyTick { get; private set; } = uint.MaxValue;
 
 		public static void Start(MineRequest r)
 		{
 			_active = r;
 			_stallFrames = 0;
 			_idleFrames = 0;
+			_alignFrames = 0;
 			_lastRemaining = int.MaxValue;
 			Outcome = "running";
 			Reason = "";
 			MinedCount = 0;
+			ReadyTick = uint.MaxValue;
 		}
 
 		public static void Stop()
@@ -88,6 +93,8 @@ namespace TerraBlind
 			if (req == null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Finish("stopped", "no_player"); return; }
+			bool Required(int x, int y) => DigSolid(x, y)
+				&& (!req.OnlyPlannedTiles || req.MineTiles?.Contains((x, y)) == true);
 
 			int slot = FindPickaxeSlot(p);
 			if (slot < 0) { Finish("no_pickaxe", "背包前十格没有镐"); return; }
@@ -99,6 +106,12 @@ namespace TerraBlind
 			int rightC = (int)((p.position.X + p.width - 1) / 16f);
 			int headR = (int)(p.position.Y / 16f);
 			int footR = (int)((p.position.Y + p.height - 1) / 16f);
+			if (req.Dir is MineDir.Up or MineDir.Down && rightC - leftC == 2
+				&& p.velocity.Y == 0f && _alignFrames < 16 && NarrowShaft(p, leftC, rightC))
+			{
+				_alignFrames++;
+				return;
+			}
 
 			int pcx = (int)(p.Center.X / 16f), pfeet = (int)((p.position.Y + p.height) / 16f) - 1;
 
@@ -130,12 +143,12 @@ namespace TerraBlind
 					int loRow = System.Math.Max(footR - 4, System.Math.Min(footR - 2, req.TargetWy));
 					int hiRow = System.Math.Min(footR + 2, System.Math.Max(footR, req.TargetWy));
 					for (int y = hiRow; y >= loRow; y--)
-						if (DigSolid(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
+						if (Required(col, y)) { remaining++; if (ty == int.MinValue) { tx = col; ty = y; } }
 					// fallback: live window empty but planner still lists an un-mined cell ahead → aim at it (covers
 					// obstacles the live hitbox slid past, e.g. a slope half-brick that lifted the player).
 					if (remaining == 0 && req.MineTiles != null)
 						foreach (var (mwx, mwy) in req.MineTiles)
-							if (DigSolid(mwx, mwy) && ((req.Dir == MineDir.Right && mwx >= pcx) || (req.Dir == MineDir.Left && mwx <= pcx)))
+							if (Required(mwx, mwy) && ((req.Dir == MineDir.Right && mwx >= pcx) || (req.Dir == MineDir.Left && mwx <= pcx)))
 							{ remaining++; tx = mwx; ty = mwy; break; }
 					if (req.Dir == MineDir.Right) p.controlRight = true; else p.controlLeft = true;
 					// done = reached OR passed the target column (don't require pfeet exact: a slope/half-brick at the
@@ -156,7 +169,7 @@ namespace TerraBlind
 					// on a full block footR is air (DigSolid false) so this is a harmless no-op there.
 					for (int row = footR; row <= footR + 1; row++)
 						for (int x = leftC; x <= rightC; x++) // 2 body columns
-							if (DigSolid(x, row)) { remaining++; if (tx == int.MinValue) { tx = x; ty = row; } }
+							if (Required(x, row)) { remaining++; if (tx == int.MinValue) { tx = x; ty = row; } }
 					CenterInShaft(p, leftC, rightC);
 					p.controlDown = true; // drop through platforms in the shaft
 					done = pfeet >= req.TargetWy; // sank to (or below) the landing cell
@@ -167,7 +180,7 @@ namespace TerraBlind
 					// one dig-up cycle clears the 2 rows above the head so the pillar step can lift 2 tiles.
 					for (int y = headR - 1; y >= headR - 2; y--)
 						for (int x = leftC; x <= rightC; x++)
-							if (DigSolid(x, y)) { remaining++; if (ty == int.MinValue) { tx = x; ty = y; } }
+							if (Required(x, y)) { remaining++; if (ty == int.MinValue) { tx = x; ty = y; } }
 					CenterInShaft(p, leftC, rightC);
 					done = remaining == 0; // headroom cleared → let the pillar step take over
 					break;
@@ -212,7 +225,6 @@ namespace TerraBlind
 				p.controlUseItem = p.controlLeft = p.controlRight = p.controlDown = false;
 				Finish("lava_risk", $"挖掘({tx},{ty})可能释放岩浆");
 				DiagLog.Write($"[mine] lava_risk at ({tx},{ty})");
-				if (RecedingNav.Active) { RecedingNav.LastStop = "lava_risk"; RecedingNav.Stop(); }
 				return;
 			}
 
@@ -254,10 +266,34 @@ namespace TerraBlind
 			{
 				Cursor.AimTile(tx, ty);
 				p.selectedItem = slot;
+				p.controlUseItem = true;
 				if (p.itemTime == 0)
-					p.controlUseItem = true;
+				{
+					ReadyTick = Main.GameUpdateCount;
+				}
 			}
 			finally { if (boosted) Concessions.LongArmEnd(); }
+		}
+
+		private static bool NarrowShaft(Player p, int leftC, int rightC)
+		{
+			float left = (rightC * 16f) - p.width - 1f;
+			float right = (leftC + 1) * 16f + 1f;
+			foreach (float target in System.Math.Abs(p.position.X - left) <= System.Math.Abs(right - p.position.X)
+				? new[] { left, right } : new[] { right, left })
+			{
+				var position = new Microsoft.Xna.Framework.Vector2(target, p.position.Y);
+				int first = (int)(target / 16), last = (int)((target + p.width - 1) / 16);
+				int floor = (int)(p.Bottom.Y / 16);
+				if (Collision.SolidCollision(position, p.width, p.height)
+					|| Predicates.IsLava(first, floor) || Predicates.IsLava(last, floor)
+					|| !Predicates.IsGround(first, floor) && !Predicates.IsGround(last, floor)) continue;
+				p.controlLeft = target < p.position.X;
+				p.controlRight = target > p.position.X;
+				if (_alignFrames == 0) DiagLog.Write($"[mine-align] from={p.position.X:0.##} target={target:0.##} cols={leftC}..{rightC} to={first}..{last}");
+				return true;
+			}
+			return false;
 		}
 
 		// aim for the 2-column shaft center (±2px), not the edge, an edge-snug stop leaves a sub-pixel lip

@@ -11,6 +11,7 @@
     <Compile Include="../../Perception/VanillaTerrainPlan.cs" />
     <Compile Include="../../Core/LavaSafety.cs" />
     <Compile Include="../../Perception/VanillaAsyncMovement.cs" />
+    <Compile Include="../../Perception/VanillaContactRegion.cs" />
     <Compile Include="../../Perception/VanillaForecastHeadless.cs" />
     <Compile Include="Engine.cs.txt" />
     <Compile Include="Client.cs.txt" />
