@@ -473,6 +473,17 @@ public sealed class BehaviorTrial : ModSystem
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "global-plant-variants.json"), observedPlants.ToJsonString());
             Console.WriteLine($"GLOBAL_PLANT_VARIANTS_PASS count={observedPlants["tiles"].AsArray().Count}");
+            var luminousPlants = await Call("find_tiles", new JsonObject { ["name"] = "JunglePlants", ["n"] = 100,
+                ["emits_light"] = true, ["source_area"] = new JsonObject
+                { ["x"] = 3340, ["y"] = 507, ["width"] = 17, ["height"] = 17 } });
+            var glowingCells = luminousPlants["tiles"]?.AsArray();
+            if (glowingCells?.Count is not > 0 || glowingCells.Any(c => c["frame_x"].GetValue<int>() != 144
+                || c["emission"]["g"].GetValue<float>() <= c["emission"]["r"].GetValue<float>()
+                || c["emission"]["emits_light"].GetValue<bool>() != true)
+                || luminousPlants["got"].AsObject().Count != 0 || luminousPlants["lost"].AsObject().Count != 0)
+                throw new Exception("native emitted light did not distinguish green glowing plants without inventory changes: " + luminousPlants);
+            File.WriteAllText(Path.Combine(Main.SavePath, "plant-emission.json"), luminousPlants.ToJsonString());
+            Console.WriteLine($"PLANT_EMISSION_PASS native_engine=true glowing_plants={glowingCells.Count} model_calls=0");
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")

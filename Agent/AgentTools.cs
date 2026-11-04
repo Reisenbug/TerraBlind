@@ -1035,6 +1035,21 @@ public static partial class AgentTools
             .Select(option => Lang.GetMapObjectName(Terraria.Map.MapHelper.TileToLookup(type, option)))
             .Where(label => !string.IsNullOrWhiteSpace(label)).Distinct().ToArray());
 
+    delegate void TileLight(Terraria.Tile tile, int x, int y, ref Terraria.Utilities.FastRandom random,
+        ref Microsoft.Xna.Framework.Vector3 color);
+    static readonly TileLight ReadTileLight = typeof(Terraria.Graphics.Light.TileLightScanner)
+        .GetMethod("ApplyTileLight", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+        .CreateDelegate<TileLight>(new Terraria.Graphics.Light.TileLightScanner());
+
+    static JsonObject TileEmission(int x, int y)
+    {
+        var random = new Terraria.Utilities.FastRandom(0);
+        var color = Microsoft.Xna.Framework.Vector3.Zero;
+        ReadTileLight(Main.tile[x, y], x, y, ref random, ref color);
+        return new JsonObject { ["r"] = color.X, ["g"] = color.Y, ["b"] = color.Z,
+            ["emits_light"] = color.X > 0 || color.Y > 0 || color.Z > 0 };
+    }
+
     internal static async Task<JsonObject> FindTiles(JsonObject args, CancellationToken token)
     {
         var catalog = await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token);
@@ -1042,8 +1057,8 @@ public static partial class AgentTools
         int types = exact.Select(m => m["type"].GetValue<int>()).Distinct().Count();
         var area = GatherArea.Parse(args["source_area"] as JsonObject);
         const string unknownSourceDetail = "find_tiles查询方块类型，不是物品获取来源。若输入的是材料名，先game_catalog(kind:item)查物品编号，再用npc_drop_sources查NPC掉落或wiki_search/wiki_page查方块来源与变体；不要猜方块、NPC或frame编号。";
-        if (area == null && (args["frame_x"] != null || args["frame_y"] != null))
-            throw new ArgumentException("按frame筛选find_tiles需要source_area，不能忽略变体条件。");
+        if (area == null && (args["frame_x"] != null || args["frame_y"] != null || args["emits_light"] != null))
+            throw new ArgumentException("按frame或emits_light筛选find_tiles需要source_area，不能忽略筛选条件。");
         if (area != null && types == 0)
             return new JsonObject { ["error"] = "unknown_tile_name", ["name_candidates"] = catalog["matches"].DeepClone(),
                 ["detail"] = unknownSourceDetail };
@@ -1075,8 +1090,11 @@ public static partial class AgentTools
                             && (args["frame_x"] == null || Main.tile[x, y].TileFrameX == Int(args, "frame_x"))
                             && (args["frame_y"] == null || Main.tile[x, y].TileFrameY == Int(args, "frame_y")))
                         {
+                            var emission = TileEmission(x, y);
+                            if (args["emits_light"] != null && Bool(args, "emits_light") != emission["emits_light"].GetValue<bool>()) continue;
                             double dx = x - Main.LocalPlayer.Center.X / 16, dy = y - Main.LocalPlayer.Center.Y / 16;
                             matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy),
+                                ["emission"] = emission,
                                 ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY });
                         }
                 int limit = Math.Clamp(Int(args, "n", 12), 1, 100);
@@ -1106,6 +1124,7 @@ public static partial class AgentTools
                     tiles[i]["tile_type"] = (int)Main.tile[x, y].TileType;
                     tiles[i]["frame_x"] = (int)Main.tile[x, y].TileFrameX;
                     tiles[i]["frame_y"] = (int)Main.tile[x, y].TileFrameY;
+                    tiles[i]["emission"] = TileEmission(x, y);
                 }
                 result["stale_candidates_removed"] = stale;
                 return true;

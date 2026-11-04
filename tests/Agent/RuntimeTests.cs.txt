@@ -1049,6 +1049,16 @@ static class RuntimeTests
                     && variants["variants"].AsArray().Any(v => v["frame_x"].GetValue<int>() == 144
                         && v["nearest"]["x"].GetValue<int>() == 101),
                     "nearest result limit hid a distinct source variant or invented its sample location");
+                Terraria.Graphics.Light.TileLightScanner.Emissions[(101, 101)] = new Microsoft.Xna.Framework.Vector3(.2f, .8f, .3f);
+                try
+                {
+                    var luminous = await Execute(AgentTools.FindTiles(JsonNode.Parse("{\"name\":\"FixtureSource\",\"n\":1,\"emits_light\":true,\"source_area\":{\"x\":100,\"y\":101,\"width\":2,\"height\":1}}").AsObject(), default));
+                    Check(luminous["tiles"].AsArray().Count == 1 && luminous["tiles"][0]["x"].GetValue<int>() == 101
+                        && luminous["tiles"][0]["emission"]["g"].GetValue<float>() == .8f
+                        && luminous["total_matches"].GetValue<int>() == 1,
+                        "light filter ran after nearest truncation or lost the engine emission");
+                }
+                finally { Terraria.Graphics.Light.TileLightScanner.Emissions.Clear(); }
             }
             finally { Game.tile[101, 101] = oldVariant; }
             Terraria.Lang.MapLabels[32] = "Fixture Resource";

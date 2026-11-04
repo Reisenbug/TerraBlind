@@ -207,6 +207,7 @@
           "source_area": {"type":"object","description":"可选：只查询该格区域，不截取全局最近结果后再过滤。支持局部材料来源检查。","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1,"maximum":120},"height":{"type":"integer","minimum":1,"maximum":120}},"required":["x","y","width","height"]},
           "frame_x": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；需source_area，不代表物品编号。"},
           "frame_y": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；需source_area。"},
+          "emits_light": {"type":"boolean","description":"需source_area。按当前方块自身是否发光筛选，在n截取前执行。所有结果的emission提供游戏发光计算的r/g/b及emits_light，不是周围照明，不证明掉落。可结合Wiki描述辨认发光植物等变体，不必猜frame。"},
           "name": {
             "type": "string",
             "description": "TileID 精确名,如 'Iron'"

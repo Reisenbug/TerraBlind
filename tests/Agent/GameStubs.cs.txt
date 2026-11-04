@@ -6,6 +6,21 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace Terraria.Utilities
+{
+    public struct FastRandom { public FastRandom(ulong seed) { } }
+}
+
+namespace Terraria.Graphics.Light
+{
+    public class TileLightScanner
+    {
+        public static readonly Dictionary<(int, int), Microsoft.Xna.Framework.Vector3> Emissions = new();
+        private void ApplyTileLight(Terraria.Tile tile, int x, int y, ref Terraria.Utilities.FastRandom random,
+            ref Microsoft.Xna.Framework.Vector3 color) => color = Emissions.GetValueOrDefault((x, y));
+    }
+}
+
 namespace Terraria.Map
 {
     public static class MapHelper
