@@ -1090,16 +1090,33 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_OWN_CHEST_PROBE") == "1")
         {
-            await OnMain(() => { AgentTools.NewTask(); return true; });
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var watch = (AgentWatch)typeof(AgentTools).GetField("Watches", flags).GetValue(null);
+            var tasks = (ActionTasks)typeof(AgentTools).GetField("Actions", flags).GetValue(null);
+            await OnMain(() => { AgentTools.NewTask(); watch.EnsureDefaults(); return true; });
+            async Task ObserveChest() => await OnMain(() =>
+            {
+                var nearby = new JsonArray();
+                if (Main.chest.Any(c => c != null && c.x == chestX && c.y == chestY && c.item.Any(i => !i.IsAir)))
+                    nearby.Add(new JsonObject { ["x"] = chestX, ["y"] = chestY });
+                watch.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife,
+                    ["chests"] = nearby, ["actions"] = tasks.Snapshot() });
+                return true;
+            });
+            await ObserveChest();
             var action = await Call("action_start", new JsonObject { ["tool"] = "collect_treasure",
                 ["args"] = new JsonObject { ["x"] = chestX, ["y"] = chestY } });
             string handle = action["handle"].ToString();
             for (int sample = 0; sample < 40 && action["status"]?.ToString() == "running"; sample++)
+            {
+                await ObserveChest();
                 action = await Call("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 1000 });
+            }
             var state = await Call("get_state", new JsonObject());
             File.WriteAllText(Path.Combine(Main.SavePath, "own-chest.json"), new JsonObject
                 { ["action"] = action, ["state"] = state, ["model_calls"] = 0 }.ToJsonString());
             if (action["status"]?.ToString() != "completed" || action["attempt"]?.GetValue<int>() != 1
+                || state["watch"]["samples"].GetValue<int>() == 0 || state["watch"]["event_count"].GetValue<int>() == 0
                 || !state["inventory_slots"].AsArray().Any(i => i["type"].GetValue<int>() == lootType && i["stack"].GetValue<int>() > 0))
                 throw new Exception("own chest did not complete once with actual loot: " + action);
             Console.WriteLine("OWN_CHEST_PASS attempts=1 actual_loot=true model_calls=0");
