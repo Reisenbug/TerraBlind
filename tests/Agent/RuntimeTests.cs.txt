@@ -962,6 +962,10 @@ static class RuntimeTests
             Check(wiki["listed_ids"].AsArray().Count == 2 && wiki["listed_ids"][1]["type"].GetValue<int>() == 72
                 && wiki["listed_ids"][1]["wiki_style"].GetValue<int>() == 4 && wiki["listed_ids"][1]["frame_x"] == null,
                 "wiki ID extraction guessed an ambiguous label, substrate ID or frame coordinate");
+            var namedWiki = AgentTools.WikiPage("Fixture", "<li>Internal Tile ID: 1 (4)</li>");
+            Check(namedWiki["listed_ids"][0]["catalog_matches"][0]["internal"].ToString() == "FixtureSource"
+                && wiki["listed_ids"][1]["catalog_matches"].AsArray().Count == 0,
+                "wiki identifiers were resolved by prose instead of exact loaded ID or unknown ID was invented");
             var missingTile = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
                 new JsonObject { ["kind"] = "tile", ["name"] = "Unknown material" }, default)));
             Check(!missingTile["found"].GetValue<bool>() && missingTile["matches"].AsArray().Count == 0

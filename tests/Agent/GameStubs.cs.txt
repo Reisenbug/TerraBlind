@@ -173,6 +173,7 @@ namespace Terraria.ID
 {
     public static class ItemID { }
     public static class NPCID { }
+    public static class ProjectileID { }
     public static class LiquidID { public const int Lava = 1; }
     public static class TileID
     {

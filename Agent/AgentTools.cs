@@ -1311,12 +1311,16 @@ public static partial class AgentTools
                 style = parsedStyle;
             }
             if (++total > 32) continue;
-            ids.Add(new JsonObject { ["kind"] = match.Groups[1].Value.ToLowerInvariant(), ["type"] = type,
+            string kind = match.Groups[1].Value.ToLowerInvariant();
+            Type constants = kind switch { "item" => typeof(Terraria.ID.ItemID), "tile" => typeof(Terraria.ID.TileID),
+                "npc" => typeof(Terraria.ID.NPCID), _ => typeof(Terraria.ID.ProjectileID) };
+            ids.Add(new JsonObject { ["kind"] = kind, ["type"] = type,
+                ["catalog_matches"] = AgentCatalog.Query(constants, type.ToString())["matches"].DeepClone(),
                 ["wiki_style"] = style, ["label"] = label });
         }
         string plain = Plain(html);
-        return new JsonObject { ["title"] = title, ["text"] = plain[..Math.Min(plain.Length, 6000)],
-            ["text_truncated"] = plain.Length > 6000, ["listed_ids"] = ids, ["listed_ids_truncated"] = total > 32,
-            ["listed_ids_detail"] = "仅提取页面明确列出的Internal ID，不是运行时掉落验证；wiki_style不是frame_x/frame_y。先用game_catalog核对编号对应的类型，来源条件仍需阅读正文，变体需现场查证。未匹配的格式不会猜测，空列表不证明没有编号。" };
+        return new JsonObject { ["title"] = title, ["listed_ids"] = ids, ["listed_ids_truncated"] = total > 32,
+            ["listed_ids_detail"] = "仅提取页面明确列出的Internal ID，catalog_matches是本机原版编号目录对应名称，不是运行时掉落验证；wiki_style不是frame_x/frame_y。来源条件仍需阅读正文，变体需现场查证。未匹配的格式不会猜测，空列表不证明没有编号。",
+            ["text"] = plain[..Math.Min(plain.Length, 6000)], ["text_truncated"] = plain.Length > 6000 };
     }
 }
