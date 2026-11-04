@@ -917,6 +917,20 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_PROBE") == "1")
+        {
+            var sources = await Call("npc_drop_sources", new JsonObject { ["item_type"] = (int)ItemID.Stinger });
+            var search = JsonNode.Parse(await AgentTools.Execute("wiki_search", new JsonObject { ["query"] = "Jungle Spores" }, default));
+            JsonNode page = null;
+            if (search is JsonArray matches && matches.Count > 0)
+                page = JsonNode.Parse(await AgentTools.Execute("wiki_page", new JsonObject { ["title"] = matches[0]["title"].ToString() }, default));
+            File.WriteAllText(Path.Combine(Main.SavePath, "source-knowledge.json"), new JsonObject
+            { ["npc_sources"] = sources, ["wiki_search"] = search, ["wiki_page"] = page, ["model_calls"] = 0 }.ToJsonString());
+            if (sources["sources"]?.AsArray().Count is not > 0 || page?["text"] == null)
+                throw new Exception("source knowledge query unavailable; inspect source-knowledge.json");
+            Console.WriteLine("SOURCE_KNOWLEDGE_PASS model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
