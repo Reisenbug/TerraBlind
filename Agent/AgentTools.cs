@@ -1335,7 +1335,36 @@ public static partial class AgentTools
         if (name == "wiki_search") return (data?["query"]?["search"] ?? data).ToJsonString();
         string html = data?["parse"]?["text"]?["*"]?.GetValue<string>();
         if (html == null) return new JsonObject { ["error"] = "wiki_not_found", ["title"] = Text(args, "title") }.ToJsonString();
-        return WikiPage(Text(args, "title"), html).ToJsonString();
+        var page = WikiPage(Text(args, "title"), html);
+        await ObserveWikiTiles(page, token);
+        return page.ToJsonString();
+    }
+
+    internal static async Task<JsonObject> ObserveWikiTiles(JsonObject page, CancellationToken token)
+    {
+        var listed = page["listed_ids"].AsArray().Where(id => Text(id.AsObject(), "kind") == "tile")
+            .GroupBy(id => id["type"].GetValue<int>()).Select(group => group.First()).ToArray();
+        if (listed.Length == 0) return page;
+        var area = await NativeAgent.OnMain(() =>
+        {
+            int x = Math.Max(0, (int)Main.LocalPlayer.Center.X / 16 - 60);
+            int y = Math.Max(0, (int)Main.LocalPlayer.Center.Y / 16 - 60);
+            return new GatherArea(x, y, Math.Min(120, Main.maxTilesX - x), Math.Min(120, Main.maxTilesY - y));
+        }, token);
+        var observations = new JsonArray();
+        foreach (var id in listed.Take(4))
+        {
+            var match = id["catalog_matches"].AsArray().FirstOrDefault();
+            if (match == null) continue;
+            var found = await FindTiles(new JsonObject { ["name"] = match["internal"].DeepClone(),
+                ["n"] = 3, ["source_area"] = area.Snapshot() }, token);
+            observations.Add(new JsonObject { ["wiki_tile_id"] = id["type"].DeepClone(),
+                ["wiki_style"] = id["wiki_style"]?.DeepClone(), ["observed"] = found });
+        }
+        page["nearby_listed_tiles"] = observations;
+        page["nearby_listed_tiles_truncated"] = listed.Length > 4;
+        page["nearby_listed_tiles_detail"] = "按本页明确列出的Tile ID查询玩家附近120×120格，不从正文中的生长基底猜来源。variants包含每种现场帧的最近样本及自身发光emission，可结合正文描述选择；wiki_style不直接转成frame。空结果仅表示这个局部没有匹配。仅观察，未采集，不证明掉落或安全可达。";
+        return page;
     }
 
     internal static JsonObject WikiPage(string title, string html)

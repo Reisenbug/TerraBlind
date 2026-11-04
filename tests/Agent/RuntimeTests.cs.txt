@@ -982,6 +982,26 @@ static class RuntimeTests
             Check(namedWiki["listed_ids"][0]["catalog_matches"][0]["internal"].ToString() == "FixtureSource"
                 && wiki["listed_ids"][1]["catalog_matches"].AsArray().Count == 0,
                 "wiki identifiers were resolved by prose instead of exact loaded ID or unknown ID was invented");
+            var wikiPosition = Game.LocalPlayer.position;
+            var wikiTile = Game.tile[101, 101];
+            try
+            {
+                Game.LocalPlayer.position = new(1600, 1600);
+                Game.tile[101, 101] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1, TileFrameX = 54 };
+                Terraria.Graphics.Light.TileLightScanner.Emissions[(101, 101)] = new Microsoft.Xna.Framework.Vector3(.2f, .8f, .3f);
+                await Execute(AgentTools.ObserveWikiTiles(namedWiki, default));
+                var nearby = namedWiki["nearby_listed_tiles"][0]["observed"];
+                Check(nearby["resolved_name"].ToString() == "FixtureSource"
+                    && nearby["variants"].AsArray().Any(v => v["frame_x"].GetValue<int>() == 54
+                        && v["nearest"]["emission"]["g"].GetValue<float>() == .8f)
+                    && Game.tile[101, 101].HasTile,
+                    "wiki observation guessed style coordinates, lost visible variants, or harvested during lookup");
+            }
+            finally
+            {
+                Game.LocalPlayer.position = wikiPosition; Game.tile[101, 101] = wikiTile;
+                Terraria.Graphics.Light.TileLightScanner.Emissions.Clear();
+            }
             var missingTile = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
                 new JsonObject { ["kind"] = "tile", ["name"] = "Unknown material" }, default)));
             Check(!missingTile["found"].GetValue<bool>() && missingTile["matches"].AsArray().Count == 0

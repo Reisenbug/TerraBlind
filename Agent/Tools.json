@@ -72,7 +72,7 @@
     "type": "function",
     "function": {
       "name": "wiki_page",
-      "description": "读 Terraria wiki 某个页面的正文(纯文本,含数据表如掉落率/伤害/配方)。title 用 wiki_search 返回的准确标题。",
+      "description": "读 Terraria wiki 某个页面的正文(纯文本,含数据表如掉落率/伤害/配方)。title 用 wiki_search 返回的准确标题。若页面明确列出Tile ID，同时返回nearby_listed_tiles：对应类型在玩家附近的坐标、变体及自身发光，便于辨认采集对象而非生长基底；不自动采集，不证明掉落。",
       "parameters": {
         "type": "object",
         "properties": {

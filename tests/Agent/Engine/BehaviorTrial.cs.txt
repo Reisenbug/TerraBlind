@@ -484,6 +484,32 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("native emitted light did not distinguish green glowing plants without inventory changes: " + luminousPlants);
             File.WriteAllText(Path.Combine(Main.SavePath, "plant-emission.json"), luminousPlants.ToJsonString());
             Console.WriteLine($"PLANT_EMISSION_PASS native_engine=true glowing_plants={glowingCells.Count} model_calls=0");
+            var wikiPosition = await OnMain(() =>
+            {
+                var previous = (Main.LocalPlayer.position, Main.LocalPlayer.velocity, Main.LocalPlayer.ghost, Main.LocalPlayer.fallStart);
+                Main.LocalPlayer.ghost = true;
+                Main.LocalPlayer.velocity = Vector2.Zero;
+                Main.LocalPlayer.position = new Vector2(3348 * 16, 515 * 16);
+                return previous;
+            });
+            try
+            {
+                var sourcePage = await Call("wiki_page", new JsonObject { ["title"] = "Jungle Spores" });
+                var source = sourcePage["nearby_listed_tiles"]?.AsArray().FirstOrDefault(t => t["wiki_tile_id"].GetValue<int>() == 61);
+                if (source?["observed"]?["variants"]?.AsArray().Any(v => v["frame_x"].GetValue<int>() == 144
+                    && v["nearest"]["emission"]["emits_light"].GetValue<bool>()) != true)
+                    throw new Exception("wiki material page did not expose the native luminous source: " + sourcePage);
+                File.WriteAllText(Path.Combine(Main.SavePath, "wiki-source-observation.json"), sourcePage.ToJsonString());
+                Console.WriteLine("WIKI_SOURCE_OBSERVATION_PASS real_wiki=true native_tiles=true model_calls=0");
+            }
+            finally { await OnMain(() =>
+            {
+                Main.LocalPlayer.position = wikiPosition.position;
+                Main.LocalPlayer.velocity = wikiPosition.velocity;
+                Main.LocalPlayer.ghost = wikiPosition.ghost;
+                Main.LocalPlayer.fallStart = wikiPosition.fallStart;
+                return true;
+            }); }
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_STAND_BODY_CONTRACT") == "1")

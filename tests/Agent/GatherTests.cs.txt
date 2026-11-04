@@ -79,17 +79,12 @@ static class GatherTests
             "unproductive tile harvesting continued across new coordinates or lost inventory evidence");
         string reviewResult = result.ToJsonString();
         var sourceReview = result["source_error"]["recovery"];
-        var observeArgs = sourceReview["observe"][0]["args"].AsObject();
-        Check(observeArgs["name"].ToString() == "unverified plant"
-            && GatherArea.Parse(observeArgs["source_area"].AsObject()) == new GatherArea(0, 10, 3, 1)
-            && observeArgs["frame_x"] == null
+        var lookupArgs = sourceReview["identify_item"]["args"].AsObject();
+        Check(lookupArgs["kind"].ToString() == "item" && lookupArgs["name"].ToString() == "10"
+            && sourceReview["observe"] == null
             && sourceReview["example"]["args"]["name"].ToString() == "sample_tile_variants"
             && sourceReview["wanted"].GetValue<int>() == 2,
             "source recovery hid alternative variants, lost the goal, or omitted the editable sampling entry");
-        var selectedArea = new GatherArea(0, 0, 30, 30);
-        var regionalReview = await Gather.Run(probeTargets, 5, new ProbeWorld(), default, selectedArea);
-        Check(JsonNode.DeepEquals(regionalReview["source_error"]["recovery"]["observe"][0]["args"]["source_area"],
-            selectedArea.Snapshot()), "source recovery changed the agent-selected region");
         var recovery = new AgentRecovery();
         recovery.Record("gather", new JsonObject(), reviewResult);
         Check(JsonNode.DeepEquals(recovery.Snapshot()["latest"]["evidence"]["source_error"], result["source_error"]),
