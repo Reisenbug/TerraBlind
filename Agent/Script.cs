@@ -15,7 +15,7 @@ public static class AgentScript
     {
         var watch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
         watch["description"] = watch["description"].ToString()
-            + "另支持nearby_drop(附近可见掉落，坐标单位格，需用nearby_drops刷新)和nearby_npc_killed(仅单人原生死亡事件，不证明谁击杀、不保证有掉落)。script本地处理的事件不消耗模型唤醒额度，显式decision_point仍受额度限制。不代表已拾取。";
+            + "另支持nearby_drop(附近可见掉落，坐标单位格，需用nearby_drops刷新)和nearby_npc_killed(仅单人原生死亡事件，不证明谁击杀、不保证有掉落)。script本地处理的事件不消耗模型唤醒额度，显式decision_point仍受额度限制。额度耗尽后的机会仍记录在pending/history，wake_deferred=true表示未主动中断；可用script_events读取，行动前重新核对现场。不代表已拾取。";
         var parameters = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"]["parameters"];
         parameters["properties"]["tool"] = new JsonObject { ["type"] = "string", ["minLength"] = 1,
             ["description"] = "单次游戏API调用的名称；配合args使用，不必写JS。与code/program三选一，经过相同权限和参数校验。" };

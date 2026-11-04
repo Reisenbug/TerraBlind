@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using TerraBlind;
@@ -88,12 +89,20 @@ static class WatchTests
             state["chests"] = new JsonArray(new JsonObject { ["x"] = i + 100, ["y"] = 1 });
             watch.Observe(state);
         }
-        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && watch.Take().Count == 4 && watch.Armed,
-            "wake budget failed to bound repeated changed events");
+        var boundedEvents = watch.Take();
+        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && boundedEvents.Count == 10 && watch.Armed
+            && boundedEvents.Count(e => e["wake_deferred"]?.GetValue<bool>() == true) == 6,
+            "wake budget lost observed opportunities or allowed extra interruptions");
+        state["chests"] = new JsonArray(new JsonObject { ["x"] = 999, ["y"] = 1 });
+        watch.Observe(state);
+        Check(watch.HasPending && !watch.HasInterrupting && watch.Take()[0]["evidence"]["x"].GetValue<int>() == 999,
+            "deferred opportunity lost evidence or woke the model");
+        watch.Observe(state);
+        Check(!watch.HasPending, "deferred opportunity was not deduplicated");
         try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
         catch (InvalidOperationException) { }
         watch.End();
-        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 6,
+        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 13,
             "completion left observations active or erased acceptance evidence");
         watch.Reset(); Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 0,
             "task scope leaked events or state");

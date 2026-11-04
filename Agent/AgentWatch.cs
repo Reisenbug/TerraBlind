@@ -34,8 +34,8 @@ public sealed class AgentWatch
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
     public bool HasPending => pending.Count > 0;
-    public bool HasInterrupting => pending.Any(e => !passive.Contains(e["kind"]?.ToString())
-        || e["kind"]?.ToString() == "low_health" && !LocalDelivery);
+    public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
+        && (!passive.Contains(e["kind"]?.ToString()) || e["kind"]?.ToString() == "low_health" && !LocalDelivery));
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
     public bool WatchesTile(int type) => tileTypes.Contains(type);
@@ -137,9 +137,12 @@ public sealed class AgentWatch
 
     public void Emit(string kind, string key, JsonNode evidence)
     {
-        if (!events.Contains(kind) || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6 && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died") || !seen.Add(kind + ":" + key)) return;
-        if (!LocalDelivery && !passive.Contains(kind)) wakeCount++;
+        if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
+        bool deferred = !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
+            && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
+        if (!LocalDelivery && !passive.Contains(kind) && !deferred) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
+        if (deferred) value["wake_deferred"] = true;
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 
