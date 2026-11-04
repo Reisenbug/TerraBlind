@@ -1303,6 +1303,24 @@ static class RuntimeTests
         {
             AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
             await PumpUntil(() => RecedingNav.Active);
+            string originalHandle = AgentTools.Actions.ActiveHandle;
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+            for (int i = 0; i < 6; i++)
+                AgentTools.Watches.Emit("nearby_chest", "used-" + i, new JsonObject { ["x"] = i, ["y"] = 1 });
+            AgentTools.Watches.Take();
+            AgentTools.Watches.Emit("nearby_chest", "later-chest", new JsonObject { ["x"] = 300, ["y"] = 400 });
+            var deferred = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["workflow"] = "deferred-choice", ["event_delivery"] = "script",
+                ["code"] = "const notice=tool('script_events',{wait_ms:0}); return step('skip-later-chest',()=>({notice,decision:'skip',reason:'outside current local route; retain original destination'}));"
+            }, default)));
+            Check(deferred["ok"].GetValue<bool>() && deferred["value"]["notice"]["paused_action"] == null
+                && deferred["value"]["notice"]["events"][0]["wake_deferred"].GetValue<bool>()
+                && deferred["value"]["notice"]["events"][0]["evidence"]["x"].GetValue<int>() == 300
+                && RecedingNav.Active && AgentTools.Actions.ActiveHandle == originalHandle
+                && AgentTools.Workflows["deferred-choice"].Snapshot()["steps"][0]["value"]["decision"].ToString() == "skip",
+                "deferred opportunity lost evidence, interrupted navigation or discarded the script decision");
+            AgentTools.Watches.Reset();
             AgentTools.Watches.EnsureDefaults();
             var firstObservation = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":1,\"y\":2}]}").AsObject();
             firstObservation["actions"] = AgentTools.Actions.Snapshot();
