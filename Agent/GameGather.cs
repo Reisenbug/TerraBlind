@@ -13,6 +13,8 @@ public sealed class GameGather : IGatherWorld
     readonly GatherTarget[] _targets;
     readonly GatherArea _area;
     readonly Dictionary<int, (NPC Entity, int Generation)> observedNpcs = new();
+    readonly Dictionary<int, (Item Entity, int Generation)> observedDrops = new();
+    int dropGeneration;
     int npcGeneration;
     public GameGather(GatherTarget[] targets, GatherArea area = null) { _targets = targets; _area = area; }
 
@@ -29,7 +31,14 @@ public sealed class GameGather : IGatherWorld
                 {
                     var item = Main.item[i];
                     if (item.active && item.type == target.ItemType && Microsoft.Xna.Framework.Vector2.Distance(item.Center, p.Center) < 1600)
-                        candidates.Add(Candidate(target.ItemType, "drop", i, item.Center.X / 16, item.Center.Y / 16, p));
+                    {
+                        if (!observedDrops.TryGetValue(i, out var identity) || !ReferenceEquals(identity.Entity, item))
+                            observedDrops[i] = identity = (item, ++dropGeneration);
+                        var candidate = Candidate(target.ItemType, "drop", i, item.Center.X / 16, item.Center.Y / 16, p);
+                        candidate["drop_generation"] = identity.Generation;
+                        candidate["id"] = $"{target.ItemType}:drop:{i}:{identity.Generation}";
+                        candidates.Add(candidate);
+                    }
                 }
                 for (int i = 0; i < Main.maxNPCs; i++)
                 {
@@ -104,6 +113,10 @@ public sealed class GameGather : IGatherWorld
         int who = candidate["who"].GetValue<int>();
         if (kind == "drop")
         {
+            bool ValidDrop() => observedDrops.TryGetValue(who, out var identity)
+                && identity.Generation == candidate["drop_generation"]?.GetValue<int>()
+                && ReferenceEquals(identity.Entity, Main.item[who]) && Main.item[who].active
+                && Main.item[who].type == candidate["item_type"].GetValue<int>();
             int stable = 0;
             Microsoft.Xna.Framework.Vector2? previousPosition = null;
             for (int i = 0; i < 20; i++)
@@ -111,7 +124,7 @@ public sealed class GameGather : IGatherWorld
                 var sample = await NativeAgent.OnMain(() =>
                 {
                     var item = Main.item[who];
-                    return (Valid: item.active && item.type == candidate["item_type"].GetValue<int>(), Position: item.Center);
+                    return (Valid: ValidDrop(), Position: item.Center);
                 }, token);
                 if (!sample.Valid) return new JsonObject { ["outcome"] = "target_changed" };
                 stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
@@ -123,6 +136,7 @@ public sealed class GameGather : IGatherWorld
             {
                 var item = Main.item[who];
                 DiagLog.Write($"[gather] drop who={who} pos={item.Center} velocity={item.velocity} player={Main.LocalPlayer.Center}");
+                if (!ValidDrop()) return null;
                 if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
                     return new JsonObject { ["moving"] = true };
                 return item.active && item.type == candidate["item_type"].GetValue<int>()

@@ -95,13 +95,21 @@ static class RuntimeTests
             var collector = new GameGather(new[] { new GatherTarget(209, 1, Array.Empty<string>(), Array.Empty<int>()) });
             Game.item[0] = new Terraria.Item { active = true, type = 209, stack = 1,
                 position = new(Game.LocalPlayer.Center.X - 15, Game.LocalPlayer.Center.Y - 15), velocity = new(0, .1f) };
-            var candidate = JsonNode.Parse("{\"kind\":\"drop\",\"item_type\":209,\"who\":0,\"id\":\"209:drop:0\",\"x\":0,\"y\":0}").AsObject();
+            var candidate = (await Execute(collector.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "drop").AsObject();
+            var sameDrop = (await Execute(collector.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "drop");
+            Check(candidate["id"].ToString() == sameDrop["id"].ToString(), "unchanged drop reset its retry identity");
             var settled = await Execute(collector.Act(candidate, default));
             Check(settled["outcome"].ToString() == "waited_for_pickup" && Game.item[0].active,
                 "stationary native-style velocity residue blocked pickup or claimed inventory gain");
             Game.item[0].active = false;
             Check((await Execute(collector.Act(candidate, default)))["outcome"].ToString() == "target_changed",
                 "missing drop was treated as settled loot");
+            Game.item[0] = new Terraria.Item { active = true, type = 209, stack = 1,
+                position = new(Game.LocalPlayer.Center.X - 15, Game.LocalPlayer.Center.Y - 15) };
+            var replacement = (await Execute(collector.Observe(default)))["candidates"].AsArray().First(c => c["kind"].ToString() == "drop");
+            Check(candidate["id"].ToString() != replacement["id"].ToString(), "new drop inherited exhausted retries from a reused slot");
+            Check((await Execute(collector.Act(candidate, default)))["outcome"].ToString() == "target_changed",
+                "old drop candidate acted on a replacement entity");
         }
         finally { Game.item[0] = savedDrop; }
         Console.WriteLine("PASS: drop stability uses observed position instead of residual vertical velocity; pickup remains unverified");

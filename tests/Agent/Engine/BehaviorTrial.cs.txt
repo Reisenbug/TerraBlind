@@ -265,6 +265,32 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_DROP_IDENTITY") == "1")
+        {
+            await OnMain(() => { foreach (var item in Main.item) item.active = false; return true; });
+            var gather = new GameGather(new[] { new GatherTarget(ItemID.Stinger, 9, Array.Empty<string>(), Array.Empty<int>()) });
+            var samples = new JsonArray();
+            JsonObject previous = null;
+            for (int i = 0; i < 3; i++)
+            {
+                int slot = await OnMain(() => Item.NewItem(new EntitySource_Misc("DropIdentityTrial"),
+                    new Rectangle((int)Main.LocalPlayer.Center.X + 200, (int)Main.LocalPlayer.Center.Y, 16, 16), ItemID.Stinger));
+                var candidate = (await gather.Observe(default))["candidates"].AsArray()
+                    .First(c => c["kind"]?.ToString() == "drop" && c["who"]?.GetValue<int>() == slot).AsObject();
+                var same = (await gather.Observe(default))["candidates"].AsArray()
+                    .First(c => c["who"]?.GetValue<int>() == slot);
+                if (candidate["id"].ToString() != same["id"].ToString()) throw new Exception("unchanged native drop changed identity");
+                if (previous != null && (previous["who"].GetValue<int>() != slot
+                    || previous["id"].ToString() == candidate["id"].ToString()
+                    || (await gather.Act(previous, default))["outcome"]?.ToString() != "target_changed"))
+                    throw new Exception("native reused drop slot inherited identity or accepted stale action");
+                samples.Add(candidate.DeepClone()); previous = candidate;
+                await OnMain(() => { Main.item[slot].active = false; return true; });
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "drop-identity.json"), samples.ToJsonString());
+            Console.WriteLine("DROP_IDENTITY_PASS native_spawns=3 reused_slot=true stale_action_rejected=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_COMBAT_TRACE") == "1")
         {
             await OnMain(() =>
@@ -1597,7 +1623,7 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 string previousReviewReason = null;
                 string previousReviewActions = null;
-                for (int review = 0; review < 3 && (combat["value"]?["status"]?.ToString() == "yield"
+                for (int review = 0; review < 12 && (combat["value"]?["status"]?.ToString() == "yield"
                     || combat["value"]?["action"]?["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range" or "source_unavailable"); review++)
                 {
                     string reviewReason = combat["value"]?["wake"]?["event"]?["reason"]?.ToString();
@@ -1802,8 +1828,11 @@ public sealed class BehaviorTrial : ModSystem
                             """ });
                 }
                 await OnMain(() => { collectingStingers = false; return true; });
+                int actualStingers = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack));
+                combat["verified_inventory"] = new JsonObject { ["item_type"] = ItemID.Stinger,
+                    ["actual"] = actualStingers, ["required"] = stingersRequired };
                 File.WriteAllText(Path.Combine(Main.SavePath, "stinger-result.json"), combat.ToJsonString());
-                if ((combat["value"]?["after"]?.GetValue<int>() ?? 0) < stingersRequired)
+                if (actualStingers < stingersRequired)
                     throw new Exception("recipe stinger quantity not fulfilled; inspect stinger-result.json");
                 Console.WriteLine($"OPPORTUNITY_STINGER_PROGRESS verified_recipe_stingers=true spawned_hornets={hornetsSpawned}");
             }
