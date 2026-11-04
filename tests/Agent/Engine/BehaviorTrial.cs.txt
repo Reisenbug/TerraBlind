@@ -47,7 +47,7 @@ public sealed class BehaviorTrial : ModSystem
         AgentControlSession.DescribeClaims(schemas);
         AgentScript.DescribePrograms(schemas);
         var allowed = materials
-            ? new[] { "game_api", "get_state", "npc_find", "inspect_terrain", "script_program", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
+            ? new[] { "game_api", "get_state", "npc_find", "inspect_terrain", "script_program", "script_progress", "inventory_review", "action_query", "gather_observe", "opportunity_assess", "npc_combat_observe", "item_info", "recipe" }
             : new[] { "game_api", "get_state", "npc_find", "inspect_terrain", "script_program" };
         var definitions = new JsonArray(schemas.Where(t => t["function"]["name"].ToString() is not ("run_script" or "ask"))
             .Select(t => (JsonNode)new JsonObject { ["name"] = t["function"]["name"].DeepClone(),
@@ -88,9 +88,11 @@ public sealed class BehaviorTrial : ModSystem
             async (name, args, token) =>
             {
                 if (!allowed.Contains(name) || ++calls > 8) throw new InvalidOperationException("review tool budget or scope exceeded");
-                if (materials && name == "script_program" && (args["name"]?.ToString() != "material_recovery"
-                    || args["operation"]?.ToString() is not ("get" or "save" or "patch")))
-                    throw new InvalidOperationException("review may only read or edit material_recovery");
+                if (materials && name == "script_program" && args["operation"]?.ToString() is not ("get" or "list")
+                    && (args["name"]?.ToString() != "material_recovery" || args["operation"]?.ToString() is not ("save" or "patch")))
+                    throw new InvalidOperationException("review may read programs but only edit material_recovery");
+                if (name == "script_progress" && args["action"]?.ToString() is not (null or "" or "get"))
+                    throw new InvalidOperationException("review may only read workflow progress");
                 string Record(string value)
                 {
                     reviewCalls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(),

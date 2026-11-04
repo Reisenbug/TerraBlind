@@ -66,6 +66,7 @@ public static class AgentScript
         + "print用于诊断，每条最多1000字符；log_truncations列出被截断的日志及原长度。截断后未出现的字段不代表不存在，不能据此下结论。把决策所需字段从工具结果中提取后return，避免print整份状态或多份查询；JSON字符串直接print即可，不会再次转义。"
         + "已选定局部采集目标时给gather传source_area包住该物体和预计掉落位置，防止默认最近来源选择重新选回已跳过的目标；来源区域不是导航路径限制。"
         + "插入动作前保存并暂停原action句柄，插入后核对实际库存增量或箱子返回got；失败保留证据，不记成功。继续时resume同一原句柄，而不是新建重复目标。"
+        + "找回原句柄：get_state.action_tasks是数组，每项含handle/tool/args/status；按原任务参数匹配，不能随便选第一个gather。script_progress({workflow,action:'get'})直接返回steps数组，step保存的action_start结果位于steps[i].value.handle，不存在顶层gather_handle或original_gather_handle。step.value里的status是当时的快照，当前状态用action_query({handle})核对。先读取真实结构，不得把猜错字段当作句柄丢失。"
         + "暂停会释放该动作的攻击和移动，不代表仍在防身。敌怪附近需要连续只读观察时，可明确action_start fight临时防身（短seconds、有限max_dist），观察放在try中，finally用action_control cancel该防身句柄并等待释放，再导航、用物品或resume原任务；不能让两个动作同时持有输入。防身会改变人物和敌怪位置，行动前刷新现场；不保证安全，不可绕过攻击/闪避禁令或忽略危险事件。"
         + "Agent可以修改resume的args，或cancel已经暂停的原意图；不值得的机会可直接跳过并继续，不能无条件见宝必拿。"
         + "开箱、获得装备或inventory_full后可用inventory_review批量检查背包、功能装备和trash垃圾桶，结合item_info、当前任务配方及玩家保留要求选择换装、整理或丢弃，不按售价或防御单项固定评分。用equip_item穿戴、inventory_swap整理、inventory_drop丢整叠到地上、inventory_trash移整叠到垃圾桶；先暂停原动作，使用新鲜槽位证据，核对实际结果再恢复原handle。地面物品可能被捡回；垃圾桶会覆盖旧垃圾，必须同时提供expected_trash。收藏物品不可丢弃。"
