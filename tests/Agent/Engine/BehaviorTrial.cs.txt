@@ -973,6 +973,7 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1"
+            || Environment.GetEnvironmentVariable("TB_SOURCE_EXAMPLE_SCRIPT") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
         {
             await OnMain(() => { materialNavigationStub = true; return true; });
@@ -1007,6 +1008,28 @@ public sealed class BehaviorTrial : ModSystem
                 || sourceReview["source_error"]["observations"].AsArray().Any(o => o["count_after"].GetValue<int>() != o["count_before"].GetValue<int>()))
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
             Console.WriteLine("SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub=true attempts=" + sourceReview["actions"]);
+            if (Environment.GetEnvironmentVariable("TB_SOURCE_EXAMPLE_SCRIPT") == "1")
+            {
+                var example = await Call("script_program", new JsonObject { ["operation"] = "example", ["name"] = "sample_tile_variants" });
+                var config = new JsonObject { ["handle"] = sourceHandle, ["item_type"] = (int)ItemID.JungleSpores,
+                    ["count"] = 1, ["tile_name"] = "JunglePlants", ["max_samples"] = 12,
+                    ["source_area"] = new JsonObject { ["x"] = 3276, ["y"] = 438, ["width"] = 120, ["height"] = 120 } };
+                await Call("watch", new JsonObject { ["events"] = new JsonArray() });
+                await Call("script_events", new JsonObject { ["wait_ms"] = 0, ["max_events"] = 16 });
+                var trial = await Call("run_script", new JsonObject { ["workflow"] = "source-library-example",
+                    ["event_delivery"] = "script", ["code"] = example["code"].ToString()
+                        .Replace("const config = null;", "const config = " + config.ToJsonString() + ";") });
+                var after = await Call("get_state", new JsonObject());
+                File.WriteAllText(Path.Combine(Main.SavePath, "source-example-native.json"), new JsonObject
+                    { ["config"] = config, ["script"] = trial, ["after"] = after, ["navigation_stub"] = true }.ToJsonString());
+                if (trial["value"]?["target_met"]?.GetValue<bool>() != true
+                    || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.JungleSpores).Sum(i => i["stack"].GetValue<int>()) < 1
+                    || after["action_tasks"].AsArray().Count(a => a["tool"]?.ToString() == "gather") != 1
+                    || trial["value"]?["handle"]?.ToString() != sourceHandle)
+                    throw new Exception("editable example did not verify native gain on original gather handle; inspect source-example-native.json");
+                Console.WriteLine("SOURCE_EXAMPLE_NATIVE_PASS original_handle=true native_inventory=true navigation_stub=true model_calls=0");
+                return;
+            }
             if (Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
             {
                 samplingSources = true;
