@@ -229,6 +229,7 @@ public static class AgentScript
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
                         const tool = (name, args = {}) => {
+                            if (name === 'step') throw new Error('step是JS内置函数，不是游戏API。请直接写step(id, () => valueOrAction)，不要写tool("step", ...)。修正调用并沿用原workflow，已完成步骤不会重做。');
                             const result = parse(call(name, stringify(args)));
                             if (name !== 'get_state' || result === null || typeof result !== 'object') return result;
                             return new Proxy(result, {

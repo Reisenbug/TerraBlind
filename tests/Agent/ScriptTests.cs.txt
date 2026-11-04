@@ -60,6 +60,18 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        var helperProgress = new ScriptProgress();
+        int helperEffects = 0;
+        Task<string> HelperEffect(string name, JsonObject args, CancellationToken token)
+        { helperEffects++; return Task.FromResult("{\"handle\":\"original\"}"); }
+        var mistakenHelper = await AgentScript.Run("step('started',()=>tool('effect')); tool('step',{id:'choice',fn:()=>({decision:'skip'})});",
+            5, (_, _) => { }, HelperEffect, _ => Task.CompletedTask, default, helperProgress);
+        Check(!mistakenHelper["ok"].GetValue<bool>() && mistakenHelper["detail"].ToString().Contains("step是JS内置函数")
+            && helperEffects == 1, "helper misuse lost correction details or dispatched an invented game tool");
+        var correctedHelper = await AgentScript.Run("const original=step('started',()=>tool('effect')); step('choice',()=>({decision:'skip'})); return original;",
+            5, (_, _) => { }, HelperEffect, _ => Task.CompletedTask, default, helperProgress);
+        Check(correctedHelper["ok"].GetValue<bool>() && correctedHelper["value"]["handle"].ToString() == "original"
+            && helperEffects == 1, "correcting helper misuse replayed an already completed action");
         var printedEvidence = await AgentScript.Run("const evidence={type:61,frame_x:144}; print(evidence); print(JSON.stringify(evidence)); print('x'.repeat(1200)); return evidence;",
             5, (_, _) => { }, (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default);
         Check(printedEvidence["ok"].GetValue<bool>()
