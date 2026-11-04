@@ -123,10 +123,12 @@ public sealed class AgentWatch
                 Emit("nearby_tile", tile["tile_type"] + ":" + tile["x"] + "," + tile["y"], tile);
         if (state["drops"] is JsonArray drops)
         {
-            var currentDrops = drops.Select(drop => drop["who"] + ":" + drop["item_type"]).ToHashSet();
+            string DropKey(JsonNode drop) => drop["who"] + ":" + drop["item_type"]
+                + (drop["generation"] == null ? "" : ":" + drop["generation"]);
+            var currentDrops = drops.Select(DropKey).ToHashSet();
             foreach (string vanished in visibleDrops.Except(currentDrops)) seen.Remove("nearby_drop:" + vanished);
             visibleDrops.Clear(); visibleDrops.UnionWith(currentDrops);
-            foreach (var drop in drops) Emit("nearby_drop", drop["who"] + ":" + drop["item_type"], drop);
+            foreach (var drop in drops) Emit("nearby_drop", DropKey(drop), drop);
         }
         foreach (var action in state["actions"]?.AsArray() ?? new JsonArray())
             if (action["status"]?.ToString() == "failed" || action["status"]?.ToString() == "completed" && action["inline"]?.GetValue<bool>() != true)

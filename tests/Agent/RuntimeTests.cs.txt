@@ -301,6 +301,16 @@ static class RuntimeTests
                 var observedDrop = NearbyDrops.Read(5).First(drop => drop["who"].GetValue<int>() == 0);
                 Check(observedDrop["stack"].GetValue<int>() == 2 && !observedDrop["route_safety_assessed"].GetValue<bool>(),
                     "drop observation omitted actual stack or invented safety");
+                dropWatch.Reset(); dropWatch.LocalDelivery = true;
+                dropWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_drop") });
+                dropWatch.Observe(new JsonObject { ["drops"] = NearbyDrops.Read(5) });
+                Check(dropWatch.Take().Count == 1, "first nearby drop missing");
+                dropWatch.Observe(new JsonObject { ["drops"] = NearbyDrops.Read(5) });
+                Check(!dropWatch.HasPending, "unchanged native drop repeatedly notified");
+                Game.item[0] = new Terraria.Item { active = true, type = 209, stack = 2, Name = "Stinger",
+                    position = new Microsoft.Xna.Framework.Vector2(Game.LocalPlayer.Center.X, Game.LocalPlayer.Center.Y) };
+                dropWatch.Observe(new JsonObject { ["drops"] = NearbyDrops.Read(5) });
+                Check(dropWatch.Take().Count == 1, "replacement drop between samples was hidden by reused slot");
             }
             finally { Game.item[0] = oldDrop; }
             Console.WriteLine("PASS: nearby drop observations deduplicate visibility, handle reused slots and keep death distinct from verified loot");
