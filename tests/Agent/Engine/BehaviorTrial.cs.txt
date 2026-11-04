@@ -1109,11 +1109,20 @@ public sealed class BehaviorTrial : ModSystem
                 string originalHandle = interrupted["value"]["original"]["handle"].ToString();
                 string replay = """
                     const p=tool('script_progress',{workflow:'opportunity-handoff',action:'get'});
+                    let remaining=1;
+                    while(remaining>0){
+                      const page=tool('script_events',{wait_ms:0,max_events:16});
+                      for(const e of page.events){
+                        if(e.kind!=='nearby_chest'&&e.kind!=='nearby_tile') throw new Error('review non-opportunity event '+e.kind);
+                        step('defer:'+e.id,()=>({key:e.key,decision:'defer',reason:'先验证已经选定的邻近箱子；其他机会尚未采集，之后重新评估'}));
+                      }
+                      remaining=page.remaining_events;
+                    }
                     const r=tool('collect_treasure',{x:CHEST_X,y:CHEST_Y});
                     const q=tool('action_control',{handle:'ORIGINAL_HANDLE',command:'resume'});
                     return {progress:p,chest:r,resumed:q};
                     """.Replace("CHEST_X", chestX.ToString()).Replace("CHEST_Y", chestY.ToString()).Replace("ORIGINAL_HANDLE", originalHandle);
-                var continuation = await Call("run_script", new JsonObject { ["workflow"] = "opportunity-handoff", ["code"] = replay });
+                var continuation = await Call("run_script", new JsonObject { ["workflow"] = "opportunity-handoff", ["event_delivery"] = "script", ["code"] = replay });
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-replay.json"), continuation.ToJsonString());
                 if (continuation["ok"]?.GetValue<bool>() != true
                     || continuation["value"]?["resumed"]?["handle"]?.ToString() != originalHandle

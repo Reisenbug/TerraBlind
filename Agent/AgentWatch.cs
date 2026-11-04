@@ -167,7 +167,18 @@ public sealed class AgentWatch
         var result = new JsonArray();
         if (maxEvents < pending.Count)
         {
-            var ordered = pending.OrderBy(item => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" ? 0 : 1).ToArray();
+            double Distance(JsonObject item)
+            {
+                if (lastObservation?["pos"]?["x"] == null || lastObservation["pos"]["y"] == null
+                    || item["kind"]?.ToString() is not ("nearby_chest" or "nearby_tile" or "nearby_drop")
+                    || item["evidence"]?["x"] == null || item["evidence"]["y"] == null) return 0;
+                double Number(JsonNode value) => double.Parse(value.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
+                double dx = Number(item["evidence"]["x"]) - Number(lastObservation["pos"]["x"]) / 16;
+                double dy = Number(item["evidence"]["y"]) - Number(lastObservation["pos"]["y"]) / 16;
+                return dx * dx + dy * dy;
+            }
+            var ordered = pending.OrderBy(item => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" ? 0 : 1)
+                .ThenBy(Distance).ToArray();
             pending.Clear();
             foreach (var item in ordered) pending.Enqueue(item);
         }

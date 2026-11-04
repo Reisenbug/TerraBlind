@@ -1293,6 +1293,20 @@ static class RuntimeTests
 
     static async Task TestEventDelivery()
     {
+        var orderedWatch = new AgentWatch();
+        orderedWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\",\"nearby_tile\",\"low_health\"],\"tile_types\":[12]}").AsObject());
+        orderedWatch.Observe(new JsonObject
+        {
+            ["hp"] = 10, ["pos"] = new JsonObject { ["x"] = 1600f, ["y"] = 1600f },
+            ["chests"] = new JsonArray(new JsonObject { ["x"] = 140, ["y"] = 100 }, new JsonObject { ["x"] = 105, ["y"] = 100 }),
+            ["tiles"] = new JsonArray(new JsonObject { ["tile_type"] = 12, ["x"] = 102, ["y"] = 100 })
+        });
+        var firstPage = orderedWatch.Take(2);
+        Check(firstPage[0]["kind"].ToString() == "low_health" && firstPage[1]["kind"].ToString() == "nearby_tile",
+            "paged opportunities buried a nearby crystal behind distant chests or delayed danger");
+        var secondPage = orderedWatch.Take(1);
+        Check(secondPage[0]["evidence"]["x"].GetValue<int>() == 105 && orderedWatch.Take()[0]["evidence"]["x"].GetValue<int>() == 140,
+            "distance ordering lost an opportunity or confused pixel and tile coordinates");
         AgentTools.Actions.Reset(); AgentTools.Workflows.Clear(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
         HttpServerSystem.Handler = (path, _) =>
         {
