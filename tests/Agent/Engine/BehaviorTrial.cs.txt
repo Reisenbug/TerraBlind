@@ -1120,6 +1120,30 @@ public sealed class BehaviorTrial : ModSystem
                     || continuation["value"]?["chest"]?["got"] is not JsonObject gains || gains.Count == 0)
                     throw new Exception("reference continuation lost its result, original handle or actual gains: " + continuation);
                 Console.WriteLine("OPPORTUNITY_HANDOFF_REPLAY_PASS model_calls=0");
+                if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_HANDOFF_ARRIVAL") == "1")
+                {
+                    JsonObject arrival = null;
+                    for (int sample = 0; sample < 60; sample++)
+                    {
+                        arrival = await Call("action_query", new JsonObject { ["handle"] = originalHandle, ["wait_ms"] = 1000 });
+                        if (arrival["status"]?.ToString() != "running") break;
+                    }
+                    File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-arrival.json"), arrival.ToJsonString());
+                    if (arrival["status"]?.ToString() != "completed")
+                        throw new Exception("resumed original navigation did not complete: " + arrival);
+                    var gathered = await Call("gather", new JsonObject
+                    {
+                        ["targets"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = 1,
+                            ["tile_names"] = new JsonArray("Heart") }),
+                        ["source_area"] = new JsonObject { ["x"] = heartX - 1, ["y"] = heartY - 1, ["width"] = 4, ["height"] = 4 }
+                    });
+                    var after = await Call("get_state", new JsonObject());
+                    File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-crystal.json"),
+                        new JsonObject { ["gather"] = gathered, ["after"] = after }.ToJsonString());
+                    int crystals = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack));
+                    if (crystals < 1) throw new Exception("native continuation did not acquire a life crystal: " + gathered);
+                    Console.WriteLine("OPPORTUNITY_HANDOFF_CRYSTAL_PASS model_calls=0 navigation_stub=" + materialNavigationStub);
+                }
                 return;
             }
             if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
