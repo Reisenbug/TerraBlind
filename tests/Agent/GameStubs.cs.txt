@@ -62,6 +62,7 @@ namespace Terraria
     public class Chest { public int x, y; public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray(); }
     public class Player
     {
+        public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;

@@ -12,6 +12,7 @@ static class InventoryTests
         var old0 = self.inventory[0]; var old12 = self.inventory[12];
         int net = Game.netMode;
         var oldItems = Game.item;
+        var oldTrash = self.trashItem;
         try
         {
             Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
@@ -51,10 +52,29 @@ static class InventoryTests
             if (dropped["ok"]?.GetValue<bool>() != true || !self.inventory[12].IsAir || !ReferenceEquals(Game.item[0], original)
                 || Game.item[0].stack != 20 || dropped["world_item"].GetValue<int>() != 0)
                 throw new Exception("drop lost the item instance or reported an unverified world slot");
+            self.inventory[12] = new Terraria.Item { type = 3, stack = 20, favorited = true };
+            self.trashItem = new Terraria.Item { type = 4, prefix = 1, stack = 7 };
+            var trash = (JsonObject)drop.DeepClone();
+            trash["expected_trash"] = PvpInventory.Review()["trash"].DeepClone();
+            if (PvpInventory.Trash(trash)["error"]?.ToString() != "favorited_item")
+                throw new Exception("favorite was trashed");
+            self.inventory[12].favorited = false;
+            self.trashItem.stack = 8;
+            if (PvpInventory.Trash(trash)["error"]?.ToString() != "stale_trash" || self.inventory[12].stack != 20)
+                throw new Exception("unobserved trash was overwritten");
+            trash["expected_trash"]["stack"] = 8;
+            int worldCount = Game.item.Count(i => i.active);
+            original = self.inventory[12];
+            var trashed = PvpInventory.Trash(trash);
+            if (trashed["outcome"]?.ToString() != "trashed" || !self.inventory[12].IsAir
+                || !ReferenceEquals(self.trashItem, original) || self.trashItem.stack != 20
+                || trashed["replaced"]["stack"].GetValue<int>() != 8 || Game.item.Count(i => i.active) != worldCount)
+                throw new Exception("trash failed to retain the stack or created a ground drop");
         }
         finally
         {
             self.itemAnimation = 0; self.inventory[0] = old0; self.inventory[12] = old12; Game.netMode = net; Game.item = oldItems;
+            self.trashItem = oldTrash;
         }
         Console.WriteLine("PASS: inventory swap validates busy/stale states, preserves both items and emits two slot syncs");
     }

@@ -16,7 +16,7 @@ public sealed class AgentControlSession
     public string Tool => tool;
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
-        or "combat_reposition" or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "npc_chat" or "fight" or "fight_player";
+        or "combat_reposition" or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
 
     public static void DescribeClaims(JsonArray schemas)
     {

@@ -290,7 +290,7 @@ public static partial class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "npc_chat";
+            or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
         if (action && ContactEscapeActive)
         {
@@ -668,11 +668,17 @@ public static partial class AgentTools
                 break;
             case "inventory_swap":
             case "inventory_drop":
+            case "inventory_trash":
                 var idleClock = Stopwatch.StartNew();
                 while (idleClock.Elapsed.TotalSeconds < 2 && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead
                     || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
                     await Task.Delay(50, token);
-                result = await NativeAgent.OnMain(() => name == "inventory_drop" ? PvpInventory.Drop(args) : PvpInventory.Swap(args), token);
+                result = await NativeAgent.OnMain(() => name switch
+                {
+                    "inventory_drop" => PvpInventory.Drop(args),
+                    "inventory_trash" => PvpInventory.Trash(args),
+                    _ => PvpInventory.Swap(args)
+                }, token);
                 break;
             case "equipment_list":
                 return (await NativeAgent.OnMain(Equipment.Snapshot, token)).ToJsonString();

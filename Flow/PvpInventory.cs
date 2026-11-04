@@ -37,6 +37,7 @@ public static class PvpInventory
         }
         return new JsonObject
         {
+            ["trash"] = ItemState(player.trashItem),
             ["inventory"] = new JsonArray(Enumerable.Range(0, 50).Where(i => !player.inventory[i].IsAir)
                 .Select(i => (JsonNode)Describe(player.inventory[i], i)).ToArray()),
             ["empty_slots"] = new JsonArray(Enumerable.Range(0, 50).Where(i => player.inventory[i].IsAir)
@@ -52,7 +53,11 @@ public static class PvpInventory
         };
     }
 
-    public static JsonObject Drop(JsonObject args)
+    public static JsonObject Drop(JsonObject args) => Discard(args, false);
+
+    public static JsonObject Trash(JsonObject args) => Discard(args, true);
+
+    static JsonObject Discard(JsonObject args, bool trash)
     {
         var player = Main.LocalPlayer;
         int slot = args["slot"]?.GetValue<int>() ?? -1;
@@ -66,6 +71,23 @@ public static class PvpInventory
             || expected["prefix"]?.GetValue<int>() != item.prefix || expected["stack"]?.GetValue<int>() != item.stack)
             return new JsonObject { ["error"] = "stale_inventory", ["actual"] = ItemState(item) };
         if (item.IsAir || item.favorited) return new JsonObject { ["error"] = item.IsAir ? "empty_slot" : "favorited_item" };
+        if (trash)
+        {
+            var expectedTrash = args["expected_trash"];
+            if (expectedTrash is not JsonObject || expectedTrash["type"]?.GetValue<int>() != player.trashItem.type
+                || expectedTrash["prefix"]?.GetValue<int>() != player.trashItem.prefix
+                || expectedTrash["stack"]?.GetValue<int>() != player.trashItem.stack)
+                return new JsonObject { ["error"] = "stale_trash", ["actual"] = ItemState(player.trashItem) };
+            var replaced = ItemState(player.trashItem);
+            player.trashItem = item;
+            player.inventory[slot] = new Item();
+            if (Main.netMode == NetmodeID.MultiplayerClient)
+                NetMessage.SendData(MessageID.SyncEquipment, number: player.whoAmI, number2: slot);
+            PvpDuel.InventoryChanged();
+            return new JsonObject { ["ok"] = true, ["outcome"] = "trashed", ["slot"] = slot,
+                ["after"] = ItemState(player.inventory[slot]), ["trash"] = ItemState(player.trashItem),
+                ["replaced"] = replaced, ["detail"] = "整叠移入垃圾桶，不生成地面掉落；旧垃圾被覆盖。当前垃圾桶物品仍可在游戏界面取回。" };
+        }
         if (!Main.item.Take(Main.maxItems).Any(i => !i.active)) return new JsonObject { ["error"] = "world_item_capacity" };
         var before = ItemState(item);
         player.DropSelectedItem(slot, ref player.inventory[slot]);
