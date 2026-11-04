@@ -218,7 +218,9 @@ public static partial class AgentTools
         var player = Main.LocalPlayer;
         return new JsonObject { ["hp"] = player.statLife, ["dead"] = player.dead,
             ["pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y },
-            ["inventory_slots"] = PvpInventory.Snapshot(), ["permanent_max_health"] = player.statLifeMax };
+            ["inventory_slots"] = new JsonArray(PvpInventory.Snapshot().Where(item => item["type"].GetValue<int>() > 0 && item["stack"].GetValue<int>() > 0)
+                .Select(item => item.DeepClone()).ToArray()), ["inventory_empty_slots_omitted"] = true,
+            ["permanent_max_health"] = player.statLifeMax };
     }, token);
 
     static Dictionary<string, int> Inventory()

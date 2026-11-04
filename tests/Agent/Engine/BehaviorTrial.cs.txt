@@ -1106,7 +1106,20 @@ public sealed class BehaviorTrial : ModSystem
             if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_HANDOFF_PROBE") == "1")
             {
                 File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-setup.json"), interrupted.ToJsonString());
-                Console.WriteLine("OPPORTUNITY_HANDOFF_READY model_calls=0");
+                string originalHandle = interrupted["value"]["original"]["handle"].ToString();
+                string replay = """
+                    const p=tool('script_progress',{workflow:'opportunity-handoff',action:'get'});
+                    const r=tool('collect_treasure',{x:CHEST_X,y:CHEST_Y});
+                    const q=tool('action_control',{handle:'ORIGINAL_HANDLE',command:'resume'});
+                    return {progress:p,chest:r,resumed:q};
+                    """.Replace("CHEST_X", chestX.ToString()).Replace("CHEST_Y", chestY.ToString()).Replace("ORIGINAL_HANDLE", originalHandle);
+                var continuation = await Call("run_script", new JsonObject { ["workflow"] = "opportunity-handoff", ["code"] = replay });
+                File.WriteAllText(Path.Combine(Main.SavePath, "opportunity-handoff-replay.json"), continuation.ToJsonString());
+                if (continuation["ok"]?.GetValue<bool>() != true
+                    || continuation["value"]?["resumed"]?["handle"]?.ToString() != originalHandle
+                    || continuation["value"]?["chest"]?["got"] is not JsonObject gains || gains.Count == 0)
+                    throw new Exception("reference continuation lost its result, original handle or actual gains: " + continuation);
+                Console.WriteLine("OPPORTUNITY_HANDOFF_REPLAY_PASS model_calls=0");
                 return;
             }
             if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");

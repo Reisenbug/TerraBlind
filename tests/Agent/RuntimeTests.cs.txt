@@ -1334,6 +1334,13 @@ static class RuntimeTests
             Check(next["tool_calls"].GetValue<int>() == 1 && AgentChat.Messages.Contains("after-event-delivery")
                 && !AgentChat.Messages.Contains("must-not-run-before-event-delivery"), "same-turn follow-up was blocked by a delivered event");
             string pausedHandle = AgentTools.Actions.Summary()[0]["handle"].ToString();
+            var pausedObservation = (await Execute(AgentTools.Actions.Query(pausedHandle, 0, default)))["observation"];
+            var slots = pausedObservation["inventory_slots"].AsArray();
+            Check(pausedObservation["inventory_empty_slots_omitted"].GetValue<bool>()
+                && slots.Count == Game.LocalPlayer.inventory.Take(50).Count(item => item.type > 0 && item.stack > 0)
+                && slots.All(item => item["type"].GetValue<int>() > 0
+                    && Game.LocalPlayer.inventory[item["slot"].GetValue<int>()].type == item["type"].GetValue<int>()),
+                "action handoff retained empty-slot noise or lost item slot identity");
             await Execute(AgentTools.Actions.Control(pausedHandle, "resume", null, default));
             await PumpUntil(() => RecedingNav.Active);
             var resumedObservation = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":3,\"y\":4}]}").AsObject();
