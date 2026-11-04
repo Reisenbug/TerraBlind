@@ -1291,7 +1291,32 @@ public static partial class AgentTools
         if (name == "wiki_search") return (data?["query"]?["search"] ?? data).ToJsonString();
         string html = data?["parse"]?["text"]?["*"]?.GetValue<string>();
         if (html == null) return new JsonObject { ["error"] = "wiki_not_found", ["title"] = Text(args, "title") }.ToJsonString();
-        string plain = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", " "));
-        return new JsonObject { ["title"] = Text(args, "title"), ["text"] = plain[..Math.Min(plain.Length, 6000)] }.ToJsonString();
+        return WikiPage(Text(args, "title"), html).ToJsonString();
+    }
+
+    internal static JsonObject WikiPage(string title, string html)
+    {
+        string Plain(string value) => System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(value, "<[^>]+>", " "));
+        var ids = new JsonArray();
+        int total = 0;
+        foreach (System.Text.RegularExpressions.Match entry in System.Text.RegularExpressions.Regex.Matches(html, @"<li\b[^>]*>(.*?)</li>", System.Text.RegularExpressions.RegexOptions.Singleline))
+        {
+            string label = System.Text.RegularExpressions.Regex.Replace(Plain(entry.Groups[1].Value), @"\s+", " ").Trim();
+            var match = System.Text.RegularExpressions.Regex.Match(label, @"^Internal (Item|Tile|NPC|Projectile) ID\s*:\s*(\d+)(?:\s*\((\d+)\))?$");
+            if (!match.Success || !int.TryParse(match.Groups[2].Value, out int type)) continue;
+            int? style = null;
+            if (match.Groups[3].Success)
+            {
+                if (!int.TryParse(match.Groups[3].Value, out int parsedStyle)) continue;
+                style = parsedStyle;
+            }
+            if (++total > 32) continue;
+            ids.Add(new JsonObject { ["kind"] = match.Groups[1].Value.ToLowerInvariant(), ["type"] = type,
+                ["wiki_style"] = style, ["label"] = label });
+        }
+        string plain = Plain(html);
+        return new JsonObject { ["title"] = title, ["text"] = plain[..Math.Min(plain.Length, 6000)],
+            ["text_truncated"] = plain.Length > 6000, ["listed_ids"] = ids, ["listed_ids_truncated"] = total > 32,
+            ["listed_ids_detail"] = "仅提取页面明确列出的Internal ID，不是运行时掉落验证；wiki_style不是frame_x/frame_y。先用game_catalog核对编号对应的类型，来源条件仍需阅读正文，变体需现场查证。未匹配的格式不会猜测，空列表不证明没有编号。" };
     }
 }

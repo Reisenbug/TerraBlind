@@ -956,6 +956,12 @@ static class RuntimeTests
 
             Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };
             Terraria.Lang.MapLabels[16] = "Fixture Resource";
+            var wiki = AgentTools.WikiPage("Fixture", "<li>Internal <a>Item ID</a>:&#32;<b>991</b></li>"
+                + "<li>Internal <a>Tile ID</a>: <b>72 (4)</b></li><li>Internal Tile ID: 60 or 61</li>"
+                + "<p>Found on Tile ID: 99; this is not an internal ID label.</p>");
+            Check(wiki["listed_ids"].AsArray().Count == 2 && wiki["listed_ids"][1]["type"].GetValue<int>() == 72
+                && wiki["listed_ids"][1]["wiki_style"].GetValue<int>() == 4 && wiki["listed_ids"][1]["frame_x"] == null,
+                "wiki ID extraction guessed an ambiguous label, substrate ID or frame coordinate");
             var missingTile = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
                 new JsonObject { ["kind"] = "tile", ["name"] = "Unknown material" }, default)));
             Check(!missingTile["found"].GetValue<bool>() && missingTile["matches"].AsArray().Count == 0
