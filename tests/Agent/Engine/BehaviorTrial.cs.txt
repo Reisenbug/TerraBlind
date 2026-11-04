@@ -38,7 +38,8 @@ public sealed class BehaviorTrial : ModSystem
     bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1";
     int FrameLimit => Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
         || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
-        : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1" ? 9600 : 7200;
+        : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1"
+            || Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_AGENT") == "1" ? 9600 : 7200;
     const int ReviewExecutionFrames = (45 + 20 + 20 + 5) * 60;
     async Task<JsonObject> Review(JsonObject wake, bool materials = false, CodexAgent session = null, string reportName = "behavior-review")
     {
@@ -931,46 +932,40 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine("SOURCE_KNOWLEDGE_PASS model_calls=0");
             if (Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_AGENT") == "1")
             {
-                if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
-                var schemas = JsonNode.Parse(Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
-                AgentControlSession.DescribeClaims(schemas); AgentScript.DescribePrograms(schemas);
                 var before = await Call("get_state", new JsonObject());
-                var calls = new JsonArray(); var replies = new JsonArray();
-                var backgroundResults = new JsonArray();
-                using var model = new CodexAgent();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                var samples = new JsonArray();
+                var knowledge = await Call("run_script", new JsonObject { ["workflow"] = "material-knowledge",
+                    ["code"] = "step('npc-drop-rules',()=> (" + sources.ToJsonString() + "));step('wiki-source',()=> ("
+                        + page.ToJsonString() + "));return {saved:true};" });
+                if (knowledge["ok"]?.GetValue<bool>() != true) throw new Exception("knowledge workflow could not be saved: " + knowledge);
+                await OnMain(() =>
+                {
+                    Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
+                    NativeAgent.Submit("/goal --tokens 250000 继续丛林材料阶段：为制作荆棘旋刃收集孢子和毒刺。当前先实际新增获得至少1个丛林孢子，并把来源判断、实际所得及后续毒刺来源选择保存到workflow步骤。观察附近有用机会，依据现场决定拿、暂缓或跳过并保存理由，不要仅查询后结束。已有投刀可防身。material-knowledge工作流的npc-drop-rules和wiki-source步骤保存了刚查询的真实来源证据，用script_progress读取；这不是已收集证明，不必重复同一查询。");
+                    return true;
+                });
+                bool started = false;
                 try
                 {
-                    await model.RunAsync("继续丛林材料阶段：为制作荆棘旋刃收集孢子和毒刺。当前先实际新增获得至少1个丛林孢子，并把来源判断、实际所得及后续毒刺来源选择保存到workflow步骤。观察附近有用机会，依据现场决定拿、暂缓或跳过并保存理由，不要仅查询后结束。已有投刀可防身。以下为刚查询的真实来源证据，不是已收集证明；不必重复同一查询。\nNPC掉落："
-                        + sources.ToJsonString() + "\nWiki正文：" + page.ToJsonString() + "\n当前状态：" + before.ToJsonString(),
-                        "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6-luna",
-                        AgentScript.Instructions(Encoding.UTF8.GetString(production.GetFileBytes("Agent/System.txt")), schemas),
-                        AgentScript.EntryTools(schemas), async (name, args, token) =>
-                        {
-                            string result = await AgentTools.Execute(name, args, token);
-                            calls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = result });
-                            return result;
-                        }, reply => replies.Add(reply), timeout.Token,
-                        new JsonObject { ["request"] = "source-knowledge", ["objective"] = "Acquire jungle material from verified source and preserve evidence", ["tokenBudget"] = 250000 });
-                    var runningState = await Call("get_state", new JsonObject());
-                    foreach (var action in runningState["action_tasks"].AsArray().Where(a => a["status"]?.ToString() == "running"))
+                    for (int sample = 0; sample < 120; sample++)
                     {
-                        JsonObject observed = null;
-                        for (int sample = 0; sample < 40 && !timeout.IsCancellationRequested; sample++)
-                        {
-                            observed = await Call("action_query", new JsonObject { ["handle"] = action["handle"].ToString(), ["wait_ms"] = 1000 });
-                            if (observed["status"]?.ToString() != "running") break;
-                        }
-                        backgroundResults.Add(observed);
+                        await Task.Delay(1000);
+                        string agentStatus = NativeAgent.Status;
+                        var observed = await Call("get_state", new JsonObject());
+                        started |= agentStatus != "queued" && agentStatus != "idle";
+                        samples.Add(new JsonObject { ["tick"] = observed["tick"]?.DeepClone(), ["status"] = agentStatus,
+                            ["player"] = observed["player"]?.DeepClone(), ["actions"] = observed["action_tasks"]?.DeepClone(),
+                            ["codex_goal"] = observed["codex_goal"]?.DeepClone() });
+                        string status = observed["codex_goal"]?["native"]?["status"]?.ToString();
+                        if (status is "complete" or "budgetLimited" or "usageLimited" || agentStatus == "failed" || started && agentStatus == "idle") break;
                     }
                 }
                 finally
                 {
                     File.WriteAllText(Path.Combine(Main.SavePath, "source-knowledge-agent.json"), new JsonObject
-                    { ["before"] = before, ["after"] = await Call("get_state", new JsonObject()), ["calls"] = calls,
-                        ["replies"] = replies, ["background_results"] = backgroundResults,
-                        ["usage"] = model.TokenUsage, ["navigation_stub"] = materialNavigationStub }.ToJsonString());
-                    await OnMain(() => { AgentTools.Stop(); return true; });
+                    { ["before"] = before, ["after"] = await Call("get_state", new JsonObject()), ["samples"] = samples,
+                        ["scheduler"] = "NativeAgent", ["navigation_stub"] = materialNavigationStub }.ToJsonString());
+                    await OnMain(() => { NativeAgent.Stop(); return true; });
                 }
                 throw new Exception("bounded material model test ended; inspect actual gains and saved decisions");
             }
