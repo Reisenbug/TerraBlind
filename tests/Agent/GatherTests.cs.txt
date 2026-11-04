@@ -78,6 +78,10 @@ static class GatherTests
             && result["source_error"]["observations"][2]["count_after"].GetValue<int>() == 0,
             "unproductive tile harvesting continued across new coordinates or lost inventory evidence");
         string reviewResult = result.ToJsonString();
+        var recovery = new AgentRecovery();
+        recovery.Record("gather", new JsonObject(), reviewResult);
+        Check(JsonNode.DeepEquals(recovery.Snapshot()["latest"]["evidence"]["source_error"], result["source_error"]),
+            "recovery discarded measured source variants and inventory observations");
         var progress = new ScriptProgress();
         var handoff = await AgentScript.Run("tool('gather');", 5, (_, _) => { },
             (_, _, _) => Task.FromResult(reviewResult), _ => Task.CompletedTask, default, progress);
