@@ -61,6 +61,17 @@ static class ScriptTests
     public static async Task Run()
     {
         var helperProgress = new ScriptProgress();
+        var watchProgress = new ScriptProgress();
+        var savedWatch = new JsonObject { ["events"] = new JsonArray("nearby_tile", "nearby_chest"),
+            ["tile_types"] = new JsonArray(12, 61, 16), ["passive_events"] = new JsonArray("nearby_tile"), ["radius"] = 40 };
+        watchProgress.Record("watch", savedWatch, "{\"events\":[\"nearby_tile\",\"nearby_chest\"],\"health_below\":30}");
+        savedWatch["radius"] = 1;
+        for (int i = 0; i < 20; i++) watchProgress.Record("get_state", new JsonObject(), "{}");
+        watchProgress.Record("watch", new JsonObject { ["events"] = new JsonArray("invalid") }, "{\"error\":\"invalid\"}");
+        var preservedWatch = watchProgress.Summary()["watch_policy"];
+        Check(preservedWatch["radius"].GetValue<int>() == 40 && preservedWatch["health_below"] == null
+            && JsonNode.DeepEquals(preservedWatch, watchProgress.Snapshot()["watch_policy"]),
+            "workflow lost watch policy, accepted failed configuration or froze the proportional health default");
         var actionProgress = new ScriptProgress();
         var savedAction = new JsonObject { ["handle"] = "preserved-action", ["tool"] = "gather", ["status"] = "running",
             ["args"] = new JsonObject { ["description"] = new string('x', 700) }, ["attempt"] = 1 };

@@ -15,6 +15,7 @@ public sealed class ScriptProgress
     int revision, segment;
     bool running;
     JsonObject last;
+    JsonObject watchPolicy;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
@@ -68,6 +69,9 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
+            if (name == "watch" && JsonNode.Parse(result) is JsonObject observed
+                && observed["error"] == null && observed["events"] is JsonArray)
+                watchPolicy = (JsonObject)args.DeepClone();
             static string Clip(string text) => text.Length > 1000 ? text[..1000] + "…" : text;
             calls.Enqueue(new JsonObject { ["tool"] = name, ["args"] = Clip(args.ToJsonString()),
                 ["result"] = Clip(result), ["segment"] = segment });
@@ -137,6 +141,7 @@ public sealed class ScriptProgress
             return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
                 ["steps"] = saved, ["last_error"] = last?["error"]?.DeepClone(),
                 ["last_execution"] = execution,
+                ["watch_policy"] = watchPolicy?.DeepClone(),
                 ["detail_tool"] = "script_progress" };
         }
     }
@@ -144,6 +149,7 @@ public sealed class ScriptProgress
     public JsonObject Snapshot()
     {
         lock (gate) return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
+            ["watch_policy"] = watchPolicy?.DeepClone(),
             ["steps"] = new JsonArray(steps.Values.Select(s => s.DeepClone()).ToArray()),
             ["last_segment"] = last?.DeepClone(), ["recent_calls"] = new JsonArray(calls.Select(c => c.DeepClone()).ToArray()) };
     }

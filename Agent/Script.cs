@@ -59,6 +59,7 @@ public static class AgentScript
     public const string RuntimeInstructions =
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
+        + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
         + "有沿途收集要求时，先用recipe确认所需物品和数量、game_catalog确认编号，再查证来源。game_catalog的matches[].type是对应kind的编号；物品编号、NPC编号和方块编号不能混用，名称相似也不证明掉落关系。NPC材料先用npc_drop_sources查询注册掉落及条件；植物来源与变体查wiki或依据实际采集证据，不能把材料名当TileID、把生长基底当材料来源，也不能猜npc_types或frame。未知来源应报告未查证，不得假装已经配置正确。"
         + "按查证的来源配置watch：方块和工作站使用nearby_tile+tile_types，箱子使用nearby_chest，已掉落材料使用nearby_drop；发现候选不代表必定取得目标物品。"
