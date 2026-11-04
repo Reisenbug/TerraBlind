@@ -1322,6 +1322,21 @@ static class RuntimeTests
 
     static async Task TestPassiveOpportunity()
     {
+        var progressWatch = new AgentWatch();
+        var progressPolicy = JsonNode.Parse("{\"events\":[\"target_acquired\",\"low_health\"],\"passive_events\":[\"target_acquired\"]}").AsObject();
+        progressWatch.Configure(progressPolicy); progressWatch.EnsureDefaults();
+        var gathering = JsonNode.Parse("{\"hp\":100,\"item_counts\":{\"209\":0},\"actions\":[{\"handle\":\"materials\",\"tool\":\"gather\",\"status\":\"running\",\"attempt\":1,\"args\":{\"targets\":[{\"item_type\":209,\"count\":9}]}}]}").AsObject();
+        progressWatch.Observe(gathering);
+        gathering["item_counts"]["209"] = 1;
+        progressWatch.Observe(gathering);
+        Check(progressWatch.HasPending && !progressWatch.HasInterrupting
+            && progressWatch.Take()[0]["evidence"]["gained"].GetValue<int>() == 1,
+            "partial target gain ignored the selected passive policy or lost actual evidence");
+        progressPolicy["passive_events"] = new JsonArray();
+        progressWatch.Configure(progressPolicy); progressWatch.EnsureDefaults();
+        gathering["item_counts"]["209"] = 2;
+        progressWatch.Observe(gathering);
+        Check(progressWatch.HasInterrupting, "agent could not restore interruption on target gains");
         AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
         HttpServerSystem.Handler = (path, _) =>
         {
@@ -1330,7 +1345,7 @@ static class RuntimeTests
         };
         try
         {
-            AgentTools.Watches.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\",\"low_health\"],\"passive_events\":[\"nearby_chest\"]}").AsObject());
+            AgentTools.Watches.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\",\"target_acquired\",\"low_health\"],\"passive_events\":[\"nearby_chest\",\"target_acquired\"]}").AsObject());
             var original = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
             await PumpUntil(() => RecedingNav.Active);
             for (int i = 0; i < 10; i++)
@@ -1340,6 +1355,11 @@ static class RuntimeTests
                 && AgentTools.Actions.ActiveHandle == original["handle"].ToString() && RecedingNav.Active
                 && AgentTools.Watches.Snapshot()["wake_count"].GetValue<int>() == 0,
                 "passive opportunities interrupted navigation, dropped evidence or charged model calls");
+            AgentTools.Watches.Emit("target_acquired", "progress", new JsonObject { ["gained"] = 1 });
+            var gain = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
+            Check(gain["events"][0]["kind"].ToString() == "target_acquired" && gain["paused_action"] == null
+                && AgentTools.Actions.ActiveHandle == original["handle"].ToString() && RecedingNav.Active,
+                "consuming passive progress stopped the active action");
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = 10 });
             var danger = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
             Check(danger["paused_action"].ToString() == original["handle"].ToString() && !RecedingNav.Active,

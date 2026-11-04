@@ -1363,7 +1363,7 @@ public sealed class BehaviorTrial : ModSystem
                         }
                         const before=step('stinger-baseline',()=>count());
                         const required=tool('recipe',{name:'ThornChakram'}).recipes.find(r=>r.internal==='ThornChakram').ingredients.find(i=>i.internal==='Stinger').need;
-                        tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40});
+                        tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop','target_acquired'],passive_events:['nearby_chest','nearby_tile','nearby_drop','target_acquired'],tile_types:[12,61,16],radius:40});
                         tool('script_events',{wait_ms:0});
                         const attempts=[];
                         const started=step('stinger-action',()=>tool('action_start',{tool:'gather',args:{targets:[{item_type:209,count:required,npc_types:[NPC_TYPE]}]}}));
@@ -1759,7 +1759,6 @@ public sealed class BehaviorTrial : ModSystem
                             const before=step('stinger-baseline',()=>{throw new Error('original material baseline missing');});
                             step('combat-review:'+action.attempt,()=>({handle:action.handle,hp:state.player.hp,
                               reason:'Recovery checked against actual inventory and health; retain the same material target'}));
-                            tool('watch',{events:['nearby_chest','nearby_tile','nearby_drop'],passive_events:['nearby_chest','nearby_tile','nearby_drop'],tile_types:[12,61,16],radius:40,health_below:80});
                             tool('script_events',{wait_ms:0});
                             tool('action_control',{handle:action.handle,command:'resume'});
                             for(let i=0;i<20;i++) {

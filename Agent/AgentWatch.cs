@@ -64,8 +64,8 @@ public sealed class AgentWatch
             || requested.Contains("nearby_tile") && types.Length == 0)
             throw new ArgumentException("nearby_tile需要1..64个tile_types方块编号，请通过game_catalog查询。");
         var passiveEvents = args["passive_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
-        if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "low_health")))
-            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/low_health；low_health仅在本地JS执行期间不强制中断。");
+        if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired" or "low_health")))
+            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health仅在本地JS执行期间不强制中断。");
         passive.Clear(); passive.UnionWith(passiveEvents);
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; HealthBelow = health;
