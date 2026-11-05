@@ -978,6 +978,60 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine($"OPPORTUNITY_NATURAL start={originX},{floor} chest={chestX},{chestY} heart={heartX},{heartY} goal={goalX},{goalY} loot={lootType} fixture_tile_edits=0");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_DAG_HANDOFF") == "1")
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            JsonObject Node(string id, string[] parents, string code, JsonObject condition) => new()
+            {
+                ["id"] = id, ["description"] = id, ["depends_on"] = new JsonArray(parents.Select(p => (JsonNode)JsonValue.Create(p)).ToArray()),
+                ["script"] = code, ["conditions"] = new JsonArray(condition)
+            };
+            JsonObject Position(int x, int y, int radius) => new() { ["kind"] = "position", ["count"] = 1, ["x"] = x, ["y"] = y, ["radius"] = radius };
+            JsonObject ItemCondition(int type) => new() { ["kind"] = "item", ["type"] = type, ["count"] = 1 };
+            string travel = "const a=step('start',()=>tool('action_start',{tool:'nav_to',args:{x:" + goalX + ",y:" + goalY
+                + "}}));let q=tool('action_query',{handle:a.handle});if(q.status==='paused')q=tool('action_control',{handle:a.handle,command:'resume'});return {handle:a.handle,status:q.status};";
+            var plan = await Call("task_plan", new JsonObject { ["goal"] = "native DAG opportunity handoff", ["mode"] = "dag",
+                ["steps"] = new JsonArray(
+                    Node("approach", Array.Empty<string>(), "return tool('get_state',{});", Position(originX, floor - 1, 3)),
+                    Node("travel", new[] { "approach" }, travel, Position(goalX, goalY, 3)),
+                    Node("chest", new[] { "approach" }, "return step('loot',()=>tool('collect_treasure',{x:" + chestX + ",y:" + chestY + "}));", ItemCondition(lootType)),
+                    Node("crystal", new[] { "travel" }, "return tool('gather',{targets:[{item_type:" + ItemID.LifeCrystal
+                        + ",count:1,tile_names:['Heart']}],source_area:{x:" + (heartX - 1) + ",y:" + (heartY - 1) + ",width:4,height:4}});", ItemCondition(ItemID.LifeCrystal))) });
+            var approach = await Call("task_step", new JsonObject { ["id"] = "approach", ["action"] = "verify" });
+            if (approach["verified"]?.GetValue<bool>() != true) throw new Exception("DAG shared prerequisite not verified: " + approach);
+            await Call("watch", new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["passive_events"] = new JsonArray("nearby_chest"), ["radius"] = 60 });
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "travel", ["event_delivery"] = "script" });
+            string handle = started["value"]?["handle"]?.ToString() ?? throw new Exception("DAG failed to start: " + started);
+            var paused = await Call("action_control", new JsonObject { ["handle"] = handle, ["command"] = "pause" });
+            if (paused["status"]?.ToString() != "paused") throw new Exception("DAG original action was not paused: " + paused);
+            var assessment = await Call("opportunity_assess", new JsonObject { ["x"] = chestX, ["y"] = chestY });
+            var loot = await Call("run_script", new JsonObject { ["task_node"] = "chest", ["event_delivery"] = "script" });
+            var chestVerified = await Call("task_step", new JsonObject { ["id"] = "chest", ["action"] = "verify" });
+            if (chestVerified["verified"]?.GetValue<bool>() != true) throw new Exception("DAG chest produced no verified loot: " + loot);
+            var resumed = await Call("run_script", new JsonObject { ["task_node"] = "travel", ["event_delivery"] = "script" });
+            if (resumed["value"]?["handle"]?.ToString() != handle) throw new Exception("DAG continuation replaced handle: " + resumed);
+            JsonObject arrival = null;
+            for (int sample = 0; sample < 60; sample++)
+            {
+                arrival = await Call("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 1000 });
+                if (arrival["status"]?.ToString() != "running") break;
+            }
+            var travelVerified = await Call("task_step", new JsonObject { ["id"] = "travel", ["action"] = "verify" });
+            if (travelVerified["verified"]?.GetValue<bool>() != true) throw new Exception("DAG resumed route did not arrive: " + arrival);
+            var crystal = await Call("run_script", new JsonObject { ["task_node"] = "crystal", ["event_delivery"] = "script" });
+            var verified = await Call("task_step", new JsonObject { ["id"] = "crystal", ["action"] = "verify" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "dag-handoff.json"), new JsonObject
+            {
+                ["initial_plan"] = plan, ["paused"] = paused, ["assessment"] = assessment, ["loot"] = loot,
+                ["resumed"] = resumed, ["arrival"] = arrival, ["crystal"] = crystal, ["verified"] = verified,
+                ["after"] = await Call("get_state", new JsonObject()), ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                ["navigation_stub"] = UsingNavigationStub, ["model_calls"] = 0
+            }.ToJsonString());
+            if (verified["verified"]?.GetValue<bool>() != true || verified["status"]?.ToString() != "completed")
+                throw new Exception("DAG crystal not actually acquired: " + crystal);
+            Console.WriteLine($"DAG_HANDOFF_PASS original_handle={handle} actual_loot=true actual_crystal=true navigation_stub={UsingNavigationStub} model_calls=0 elapsed_ms={timer.ElapsedMilliseconds}");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_ATTACK_LANES_TRIAL") == "1")
         {
             await OnMain(() =>
