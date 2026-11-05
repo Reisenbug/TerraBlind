@@ -28,10 +28,10 @@ public static class TerrainInspection
             ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
             ["target"] = new JsonObject { ["x"] = x, ["y"] = y },
             ["approach_direct_distance"] = approach, ["observation_radius_tiles"] = 60,
-            ["sampled_cells"] = 0, ["hazards"] = null, ["reachable"] = null,
+            ["sampled_cells"] = 0, ["hazards"] = null, ["liquids"] = null, ["reachable"] = null,
             ["detail"] = "未检查目标或沿途方块，危险与可达性未知；由Agent决定接近后重查、选择其他目标或跳过。"
         };
-        var solids = new JsonArray(); var hazards = new JsonArray();
+        var solids = new JsonArray(); var hazards = new JsonArray(); var liquids = new JsonArray();
         var sampled = new HashSet<(int, int)>();
         var approachCells = new HashSet<(int, int)>();
         double halfWidth = player.width / 32.0, halfHeight = player.height / 32.0;
@@ -59,9 +59,14 @@ public static class TerrainInspection
             if (active && TileID.Sets.TouchDamageImmediate[tile.TileType] > 0) hazards.Add(Fact("contact_damage"));
             if (tile.LiquidAmount > 0)
             {
-                var liquid = Fact(tile.LiquidType == LiquidID.Lava ? "lava" : "liquid");
+                var liquid = Fact(tile.LiquidType switch
+                {
+                    LiquidID.Water => "water", LiquidID.Lava => "lava",
+                    LiquidID.Honey => "honey", LiquidID.Shimmer => "shimmer", _ => "unknown_liquid"
+                });
                 liquid["liquid_type"] = tile.LiquidType; liquid["amount"] = (int)tile.LiquidAmount;
-                hazards.Add(liquid);
+                liquids.Add(liquid);
+                if (tile.LiquidType == LiquidID.Lava) hazards.Add(liquid.DeepClone());
             }
             if (active && tile.TileType is TileID.PressurePlates or TileID.Traps or TileID.Boulder or TileID.Explosives
                 or TileID.RollingCactus or TileID.BouncyBoulder or TileID.LifeCrystalBoulder)
@@ -90,9 +95,9 @@ public static class TerrainInspection
             ["target"] = new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = target.HasTile,
                 ["tile_type"] = target.HasTile ? (int)target.TileType : null },
             ["approach_direct_distance"] = approach, ["direct_corridor_solid_cells"] = solids,
-            ["hazards"] = hazards, ["sampled_cells"] = sampled.Count, ["route_relation"] = relation,
+            ["hazards"] = hazards, ["liquids"] = liquids, ["sampled_cells"] = sampled.Count, ["route_relation"] = relation,
             ["reachable"] = null, ["travel_time_ms"] = null, ["required_mining_cells"] = null,
-            ["limitations"] = "只检查当前方块、直线人物扫掠范围及目标周边4格。挡路格数不是必挖数量；未模拟跳跃、落差、绕路、敌人、射出的机关或返程，不证明安全可达。由Agent/JS决定接近、跳过或进一步调查。" };
+            ["limitations"] = "只检查当前方块、直线人物扫掠范围及目标周边4格。liquids报告种类及0..255水量，不等于危险判定；未判断头部浸没、呼吸余量、停留时长或液体对当前装备的影响。附近有水不等于必须涉水或溺水。挡路格数不是必挖数量；未模拟跳跃、落差、绕路、敌人、射出的机关或返程，不证明安全可达。由Agent/JS决定接近、跳过或进一步调查。" };
     }
 
     internal static JsonObject NavigationHazard(JsonArray acceptedTraps = null)

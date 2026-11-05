@@ -26,7 +26,7 @@ public static partial class AgentTools
             return new JsonObject { ["ok"] = false, ["error"] = "invalid_opportunity_coordinates", ["reachable"] = null };
         var destination = notice["navigation"]?["destination"] as JsonObject;
         var assessment = TerrainInspection.Opportunity(x, y, destination);
-        foreach (string field in new[] { "hazards", "direct_corridor_solid_cells" })
+        foreach (string field in new[] { "hazards", "liquids", "direct_corridor_solid_cells" })
             if (assessment[field] is JsonArray facts)
             {
                 assessment[field + "_count"] = facts.Count;

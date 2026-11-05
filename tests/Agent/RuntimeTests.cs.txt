@@ -639,6 +639,9 @@ static class RuntimeTests
                     "terrain inspection hides distant slopes/half blocks or leaks shapes outside observed radius");
                 Game.tile[15, 11] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
                 Game.tile[19, 11] = new Terraria.Tile { LiquidAmount = 255, LiquidType = 1 };
+                Game.tile[20, 12] = new Terraria.Tile { LiquidAmount = 117, LiquidType = LiquidID.Water };
+                Game.tile[20, 13] = new Terraria.Tile { LiquidAmount = 200, LiquidType = LiquidID.Honey };
+                Game.tile[20, 14] = new Terraria.Tile { LiquidAmount = 255, LiquidType = LiquidID.Shimmer };
                 Game.tile[21, 12] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.PressurePlates };
                 var assessed = JsonNode.Parse(await Execute(AgentTools.Execute("opportunity_assess", new JsonObject
                     { ["x"] = 20, ["y"] = 11, ["destination"] = new JsonObject { ["x"] = 40, ["y"] = 11 } }, default)));
@@ -646,6 +649,12 @@ static class RuntimeTests
                     && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "lava")
                     && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "trap_tile"),
                     "opportunity hid direct obstruction, target lava or nearby trap");
+                Check(assessed["liquids"].AsArray().Count == 4
+                    && assessed["liquids"].AsArray().Any(t => t["kind"].ToString() == "water" && t["amount"].GetValue<int>() == 117)
+                    && assessed["liquids"].AsArray().Any(t => t["kind"].ToString() == "honey")
+                    && assessed["liquids"].AsArray().Any(t => t["kind"].ToString() == "shimmer")
+                    && !assessed["hazards"].AsArray().Any(t => t["x"].GetValue<int>() == 20 && t["y"].GetValue<int>() is >= 12 and <= 14),
+                    "opportunity conflated liquid presence with danger or lost liquid type/amount");
                 Check(assessed["ok"]?.GetValue<bool>() == true && assessed["reachable"] == null && assessed["travel_time_ms"] == null
                     && assessed["required_mining_cells"] == null && assessed["route_relation"]["extra_direct_distance"].GetValue<double>() < 0.01,
                     "geometric assessment invented a navigable route, mining requirement or arrival time");
@@ -661,7 +670,8 @@ static class RuntimeTests
                     && distant["approach_direct_distance"].GetValue<double>() > 60
                     && distant["observation_radius_tiles"].GetValue<int>() == 60
                     && distant["sampled_cells"].GetValue<int>() == 0
-                    && distant.AsObject().ContainsKey("hazards") && distant["hazards"] == null && distant["reachable"] == null,
+                    && distant.AsObject().ContainsKey("hazards") && distant["hazards"] == null && distant["reachable"] == null
+                    && distant.AsObject().ContainsKey("liquids") && distant["liquids"] == null,
                     "unobserved opportunity lost range evidence or claimed hazards were absent");
                 Console.WriteLine("PASS: opportunity assessment reports obstacles/hazards and measured geometry; elapsed_ms=" + assessed["elapsed_ms"]);
                 Game.tile[30, 30] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureOther };
