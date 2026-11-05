@@ -1564,13 +1564,14 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
+            string trialModel = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MODEL") ?? "gpt-6-luna";
             int modelTokenBudget = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TOKEN_BUDGET") is string configuredBudget
                 ? int.Parse(configuredBudget) : 200000;
             var before = await Call("get_state", new JsonObject());
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
             await OnMain(() =>
             {
-                Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6-luna";
+                Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = trialModel;
                 materialNavigationStub = false;
                 stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
@@ -1617,6 +1618,7 @@ public sealed class BehaviorTrial : ModSystem
                 { ["before"] = before, ["samples"] = samples, ["after"] = after,
                     ["navigation_stub"] = UsingNavigationStub, ["spawned_hornets"] = hornetsSpawned,
                     ["natural_encounters"] = NaturalEncounters,
+                    ["model"] = trialModel,
                     ["model_token_budget"] = FullCraftTrial ? null : JsonValue.Create(modelTokenBudget),
                     ["elapsed_ms"] = elapsed.ElapsedMilliseconds, ["looted_chest"] = lootedChest,
                     ["full_craft_trial"] = FullCraftTrial }.ToJsonString());
