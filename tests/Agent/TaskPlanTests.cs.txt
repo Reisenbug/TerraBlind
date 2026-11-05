@@ -11,6 +11,7 @@ static class TaskPlanTests
 
     public static void Run()
     {
+        VerifyDag();
         VerifyPosition();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
@@ -118,6 +119,44 @@ static class TaskPlanTests
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
         PatchChecks();
+    }
+
+    static void VerifyDag()
+    {
+        var plan = new AgentTaskPlan();
+        var request = Parse("""
+        {"goal":"shared prerequisite","mode":"dag","steps":[
+          {"id":"a","description":"shared approach","depends_on":[],"script":"return tool('get_state',{});","conditions":[{"kind":"item","type":1,"count":1}]},
+          {"id":"b","description":"first branch","depends_on":["a"],"script":"return tool('get_state',{});","conditions":[{"kind":"item","type":2,"count":1}]},
+          {"id":"c","description":"second branch","depends_on":["a"],"script":"return tool('get_state',{});","conditions":[{"kind":"item","type":3,"count":1}]},
+          {"id":"d","description":"joined result","depends_on":["b","c"],"script":"return tool('get_state',{});","conditions":[{"kind":"item","type":4,"count":1}]},
+          {"id":"e","description":"independent final requirement","depends_on":[],"script":"return tool('get_state',{});","conditions":[{"kind":"item","type":5,"count":1}]}
+        ]}
+        """);
+        int Measure(JsonObject c) => c["type"].GetValue<int>() == 4 ? 0 : 1;
+        plan.Create(request, Measure);
+        Check(plan.Snapshot()["ready_steps"].ToJsonString() == "[\"a\",\"e\"]", "DAG did not expose independent roots");
+        try { plan.Advance("b", Measure); throw new Exception("DAG bypassed prerequisite"); }
+        catch (InvalidOperationException) { }
+        plan.Advance("a", Measure);
+        plan.Select("c"); plan.Advance("c", Measure);
+        Check(plan.Snapshot()["steps"][1]["status"].ToString() != "completed", "DAG completed unrelated branch");
+        try { plan.Advance("d", Measure); throw new Exception("join ignored incomplete branch"); }
+        catch (InvalidOperationException) { }
+        plan.Advance("b", Measure);
+        Check(!plan.Advance("d", Measure)["verified"].GetValue<bool>(), "DAG trusted execution instead of state");
+        plan.Advance("e", Measure); plan.Advance("d", _ => 1);
+        Check(!plan.Incomplete && plan.VerifyFinal(_ => 1)["verified"].GetValue<bool>(), "DAG could not finish out of order");
+        Check(!plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "DAG audited only last array element");
+        var before = plan.Snapshot().ToJsonString();
+        request["steps"][0]["depends_on"] = new JsonArray("d");
+        try { plan.Create(request, Measure); throw new Exception("cyclic DAG accepted"); }
+        catch (InvalidOperationException) { }
+        Check(plan.Snapshot().ToJsonString() == before, "invalid graph destroyed verified progress");
+        request["steps"][0]["depends_on"] = new JsonArray("missing");
+        try { plan.Create(request, Measure); throw new Exception("missing dependency accepted"); }
+        catch (InvalidOperationException) { }
+        Console.WriteLine("PASS: DAG shared prerequisites, independent branches, joins, atomic validation and all-sink verification");
     }
 
     static void PatchChecks()

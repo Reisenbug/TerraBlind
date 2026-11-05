@@ -12,11 +12,12 @@ public sealed class AgentTaskPlan
     int _cursor;
     int _progress;
     int _revision;
+    bool _dag;
     public int Cursor => _cursor;
     public int Progress => _progress;
-    public bool Incomplete => _steps.Count > _cursor;
+    public bool Incomplete => _steps.Any(s => s["status"]?.ToString() != "completed");
 
-    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _revision++; }
+    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; _revision++; }
 
     public JsonObject Create(JsonObject args, Func<JsonObject, int> measure)
     {
@@ -26,6 +27,7 @@ public sealed class AgentTaskPlan
         if (string.IsNullOrWhiteSpace(goal) || args["steps"] is not JsonArray steps || steps.Count == 0 || steps.Count > 20)
             throw new InvalidOperationException("计划需要 goal 和 1..20 个步骤。");
         var parsed = new List<JsonObject>();
+        bool dag = args["mode"]?.ToString() == "dag";
         var ids = new HashSet<string>();
         foreach (var node in steps)
         {
@@ -36,6 +38,11 @@ public sealed class AgentTaskPlan
                 throw new InvalidOperationException("步骤需要唯一 id、description 和非空 conditions。");
             var copy = new JsonObject { ["id"] = id, ["description"] = step["description"].DeepClone(),
                 ["status"] = "pending", ["conditions"] = new JsonArray(), ["best_actual"] = new JsonArray() };
+            if (dag && (step["depends_on"] is not JsonArray || string.IsNullOrWhiteSpace(step["script"]?.GetValue<string>())))
+                throw new InvalidOperationException("DAG节点需要depends_on数组和可执行script；根节点使用空依赖数组。");
+            copy["depends_on"] = dag ? step["depends_on"].DeepClone()
+                : new JsonArray(parsed.Count == 0 ? Array.Empty<JsonNode>() : new[] { JsonValue.Create(parsed[^1]["id"].ToString()) });
+            if (dag) copy["script"] = step["script"].DeepClone();
             foreach (var condition in conditions)
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
@@ -62,8 +69,54 @@ public sealed class AgentTaskPlan
             }
             parsed.Add(copy);
         }
+        ValidateDependencies(parsed);
         _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
-        _steps[0]["status"] = "active";
+        _dag = dag;
+        SelectReady();
+        _revision++;
+        return Snapshot();
+    }
+
+    static void ValidateDependencies(List<JsonObject> steps)
+    {
+        var byId = steps.ToDictionary(s => s["id"].GetValue<string>());
+        var visiting = new HashSet<string>();
+        var visited = new HashSet<string>();
+        void Visit(string id)
+        {
+            if (visited.Contains(id)) return;
+            if (!visiting.Add(id)) throw new InvalidOperationException("任务依赖存在环。");
+            var seen = new HashSet<string>();
+            foreach (var dependency in byId[id]["depends_on"].AsArray())
+            {
+                string parent = dependency?.GetValue<string>();
+                if (parent == null || !byId.ContainsKey(parent) || !seen.Add(parent))
+                    throw new InvalidOperationException("依赖必须引用存在且不重复的节点。");
+                Visit(parent);
+            }
+            visiting.Remove(id); visited.Add(id);
+        }
+        foreach (string id in byId.Keys) Visit(id);
+    }
+
+    bool Ready(JsonObject step) => step["status"]?.ToString() != "completed"
+        && step["depends_on"].AsArray().All(id => _steps.Any(s => s["id"]?.ToString() == id.ToString()
+            && s["status"]?.ToString() == "completed"));
+
+    void SelectReady()
+    {
+        _cursor = _steps.FindIndex(Ready);
+        if (_cursor < 0) _cursor = _steps.Count;
+        else if (_steps[_cursor]["status"]?.ToString() == "pending") _steps[_cursor]["status"] = "active";
+    }
+
+    public JsonObject Select(string id)
+    {
+        int index = _steps.FindIndex(s => s["id"]?.ToString() == id);
+        if (index < 0 || !Ready(_steps[index])) throw new InvalidOperationException("节点不存在、已完成或前置尚未验收。");
+        if (Incomplete && _steps[_cursor]["status"]?.ToString() == "active") _steps[_cursor]["status"] = "pending";
+        _cursor = index;
+        if (_steps[index]["status"]?.ToString() == "pending") _steps[index]["status"] = "active";
         _revision++;
         return Snapshot();
     }
@@ -125,10 +178,10 @@ public sealed class AgentTaskPlan
 
     public JsonObject Advance(string id, Func<JsonObject, int> measure)
     {
-        if (!Incomplete || _steps[_cursor]["id"]?.GetValue<string>() != id)
-            throw new InvalidOperationException("只能验证当前步骤，不能跳过步骤。");
+        var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+        if (step == null || !Ready(step))
+            throw new InvalidOperationException("只能验证前置已完成的未完成节点。");
         Observe(measure);
-        var step = _steps[_cursor];
         var evidence = new JsonArray();
         bool passed = true;
         foreach (var node in step["conditions"].AsArray())
@@ -145,7 +198,7 @@ public sealed class AgentTaskPlan
         {
             step["status"] = "completed";
             _progress++;
-            if (++_cursor < _steps.Count) _steps[_cursor]["status"] = "active";
+            if (_steps[_cursor] == step) SelectReady();
             _revision++;
         }
         var result = Snapshot();
@@ -206,14 +259,16 @@ public sealed class AgentTaskPlan
     {
         var evidence = new JsonArray();
         bool passed = _steps.Count > 0 && !Incomplete;
-        if (_steps.Count > 0)
-            foreach (var node in _steps[^1]["conditions"].AsArray())
+        foreach (var terminal in _steps.Where(s => !_steps.Any(other => other["depends_on"].AsArray()
+            .Any(id => id.ToString() == s["id"].ToString()))))
+            foreach (var node in terminal["conditions"].AsArray())
             {
                 var condition = node.AsObject();
                 int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
                 bool met = actual >= condition["count"].GetValue<int>();
                 passed &= met;
-                evidence.Add(new JsonObject { ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
+                evidence.Add(new JsonObject { ["step"] = terminal["id"].DeepClone(),
+                    ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
             }
         return new JsonObject { ["verified"] = passed, ["plan"] = Snapshot(), ["final_evidence"] = evidence };
     }
@@ -238,6 +293,8 @@ public sealed class AgentTaskPlan
     {
         ["goal"] = _goal, ["status"] = _steps.Count == 0 ? "none" : Incomplete ? _steps[_cursor]["status"]?.DeepClone() : JsonValue.Create("completed"),
         ["cursor"] = _cursor, ["progress_revision"] = _progress, ["revision"] = _revision,
+        ["mode"] = _dag ? "dag" : "sequential",
+        ["ready_steps"] = new JsonArray(_steps.Where(Ready).Select(s => s["id"].DeepClone()).ToArray()),
         ["current_step"] = Incomplete ? _steps[_cursor]["id"]?.DeepClone() : null,
         ["steps"] = new JsonArray(_steps.Select(step => step.DeepClone()).ToArray())
     };
