@@ -139,7 +139,19 @@ static class TaskPlanTests
         try { plan.Advance("b", Measure); throw new Exception("DAG bypassed prerequisite"); }
         catch (InvalidOperationException) { }
         plan.Advance("a", Measure);
+        string workflow = plan.Script("b")["workflow"].ToString();
+        int revision = plan.Snapshot()["revision"].GetValue<int>();
+        var update = Parse("""
+            {"reason":"new observed route","nodes":[{"id":"b","script":"return 7;","depends_on":["a","c"]}]}
+            """);
+        update["expected_revision"] = revision;
+        plan.Revise(update);
+        Check(plan.Snapshot()["steps"][0]["status"].ToString() == "completed", "graph edit lost shared prerequisite evidence");
+        try { plan.Revise(update); throw new Exception("stale graph edit accepted"); }
+        catch (InvalidOperationException) { }
         plan.Select("c"); plan.Advance("c", Measure);
+        Check(plan.Script("b")["workflow"].ToString() == workflow && plan.Script("b")["code"].ToString() == "return 7;",
+            "script revision discarded stable continuation identity");
         Check(plan.Snapshot()["steps"][1]["status"].ToString() != "completed", "DAG completed unrelated branch");
         try { plan.Advance("d", Measure); throw new Exception("join ignored incomplete branch"); }
         catch (InvalidOperationException) { }

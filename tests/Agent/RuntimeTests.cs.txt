@@ -40,6 +40,25 @@ static class RuntimeTests
     public static async Task EntryModel()
     {
         Agent.Load(); AgentTools.NewTask();
+        AgentTools.Plan.Reset();
+        AgentTools.Plan.Create(JsonNode.Parse("""
+            {"goal":"node script execution","mode":"dag","steps":[
+              {"id":"collect","description":"collect real item","depends_on":[],
+               "script":"return step('once',()=>({value:7}));",
+               "conditions":[{"kind":"item","type":191,"count":1}]}]}
+            """).AsObject(), _ => 0);
+        string nodeWorkflow = AgentTools.Plan.Script("collect")["workflow"].ToString();
+        for (int i = 0; i < 2; i++)
+        {
+            var nodeRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "collect" }, default)));
+            Check(nodeRun["ok"].GetValue<bool>() && nodeRun["value"]["value"].GetValue<int>() == 7,
+                "DAG node failed to execute through production JS entry");
+        }
+        Check(AgentTools.Workflows[nodeWorkflow].Completed == 1 && AgentTools.Workflows[nodeWorkflow].Segment == 2,
+            "DAG continuation replaced workflow or duplicated completed effect");
+        Check(AgentTools.Plan.Incomplete, "successful node script falsely completed inventory requirement");
+        AgentTools.Plan.Reset(); AgentTools.Workflows.Remove(nodeWorkflow);
         await Execute(AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "preserved-task",
             ["code"] = "return step('original-action',()=>({handle:'fixture-original-47'}));" }, default));
         var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();

@@ -498,6 +498,24 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();
             case "run_script":
+                if (Text(args, "task_node") != "")
+                {
+                    if (args["code"] != null || args["program"] != null || args["tool"] != null || args["workflow"] != null)
+                        throw new ArgumentException("task_node使用节点保存的脚本和workflow，不能另传code/program/tool/workflow。");
+                    string nodeId = Text(args, "task_node");
+                    var nodeScript = await NativeAgent.OnMain(() =>
+                    {
+                        var script = Plan.Script(nodeId);
+                        if (Plan.Snapshot()["current_step"]?.ToString() != nodeId
+                            && Actions.Summary().Any(a => a["tool"]?.ToString() != "fight" && a["status"]?.ToString() == "running"))
+                            throw new InvalidOperationException("切换节点前须暂停原动作并保留句柄；独立防身攻击不阻止切换。");
+                        Plan.Select(nodeId);
+                        return script;
+                    }, token);
+                    args = (JsonObject)args.DeepClone();
+                    args["code"] = nodeScript["code"].DeepClone();
+                    args["workflow"] = nodeScript["workflow"].DeepClone();
+                }
                 string eventDelivery = Text(args, "event_delivery");
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
                 bool localEvents = eventDelivery == "script";
@@ -528,7 +546,7 @@ public static partial class AgentTools
                     if (id.Length > 80) throw new ArgumentException("workflow需要1..80字符。");
                     if (!Workflows.TryGetValue(id, out var saved))
                     {
-                        if (Workflows.Count >= 8) throw new InvalidOperationException("本世界最多8个workflow。");
+                        if (Workflows.Count >= 32) throw new InvalidOperationException("本世界最多32个workflow。");
                         Workflows[id] = saved = new ScriptProgress();
                     }
                     return saved;
@@ -629,6 +647,13 @@ public static partial class AgentTools
                 else throw new ArgumentException("action需要get/retry/complete。");
                 break;
             case "task_plan_patch":
+                if (args["nodes"] != null)
+                {
+                    if (args["changes"] != null) throw new ArgumentException("nodes和changes不能同时提供。");
+                    if (Actions.HasActive) throw new InvalidOperationException("修改节点前须暂停活动动作，保留句柄后再修改与续接。");
+                    result = await NativeAgent.OnMain(() => Plan.Revise(args), token);
+                    break;
+                }
                 result = await NativeAgent.OnMain(() => Plan.Patch(args, AgentTaskEvidence.Measure), token);
                 break;
             case "gather_observe":

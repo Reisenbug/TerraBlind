@@ -42,7 +42,11 @@ public sealed class AgentTaskPlan
                 throw new InvalidOperationException("DAG节点需要depends_on数组和可执行script；根节点使用空依赖数组。");
             copy["depends_on"] = dag ? step["depends_on"].DeepClone()
                 : new JsonArray(parsed.Count == 0 ? Array.Empty<JsonNode>() : new[] { JsonValue.Create(parsed[^1]["id"].ToString()) });
-            if (dag) copy["script"] = step["script"].DeepClone();
+            if (dag)
+            {
+                copy["script"] = step["script"].DeepClone();
+                copy["workflow"] = "dag-" + Guid.NewGuid().ToString("N");
+            }
             foreach (var condition in conditions)
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
@@ -121,6 +125,54 @@ public sealed class AgentTaskPlan
         return Snapshot();
     }
 
+    public JsonObject Script(string id)
+    {
+        var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+        if (!_dag || step == null || !Ready(step)) throw new InvalidOperationException("需要前置已验收的DAG节点。");
+        return new JsonObject { ["code"] = step["script"].DeepClone(), ["workflow"] = step["workflow"].DeepClone() };
+    }
+
+    public JsonObject Revise(JsonObject args)
+    {
+        if (!_dag || !Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
+            throw new InvalidOperationException("需要当前未完成DAG的revision。");
+        string reason = args["reason"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(reason) || args["nodes"] is not JsonArray changes || changes.Count == 0)
+            throw new ArgumentException("节点修改需要reason和非空nodes。");
+        var revised = _steps.Select(s => (JsonObject)s.DeepClone()).ToList();
+        var seen = new HashSet<string>();
+        foreach (var change in changes)
+        {
+            string id = change["id"]?.GetValue<string>();
+            var step = revised.FirstOrDefault(s => s["id"]?.ToString() == id);
+            if (step == null || !seen.Add(id) || step["status"]?.ToString() == "completed")
+                throw new InvalidOperationException("只能修改已有未完成节点，不得重复修改。");
+            if (change["script"] == null && change["depends_on"] == null)
+                throw new ArgumentException("需要script或depends_on修改。");
+            if (change["script"] != null)
+            {
+                if (string.IsNullOrWhiteSpace(change["script"].GetValue<string>())) throw new ArgumentException("script不能为空。");
+                step["script"] = change["script"].DeepClone();
+            }
+            if (change["depends_on"] != null)
+                step["depends_on"] = (change["depends_on"] as JsonArray ?? throw new ArgumentException("depends_on需要数组。")).DeepClone();
+            var history = step["revisions"] as JsonArray;
+            if (history == null) step["revisions"] = history = new JsonArray();
+            history.Add(new JsonObject { ["reason"] = reason, ["revision"] = _revision,
+                ["before_script"] = _steps.First(s => s["id"]?.ToString() == id)["script"].DeepClone(),
+                ["before_dependencies"] = _steps.First(s => s["id"]?.ToString() == id)["depends_on"].DeepClone() });
+        }
+        ValidateDependencies(revised);
+        _steps.Clear(); _steps.AddRange(revised);
+        if (!Ready(_steps[_cursor]))
+        {
+            if (_steps[_cursor]["status"]?.ToString() == "active") _steps[_cursor]["status"] = "pending";
+            SelectReady();
+        }
+        _revision++;
+        return Snapshot();
+    }
+
     public JsonObject Patch(JsonObject args, Func<JsonObject, int> measure)
     {
         if (!Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
@@ -162,17 +214,19 @@ public sealed class AgentTaskPlan
 
     public void Observe(Func<JsonObject, int> measure)
     {
-        if (!Incomplete) return;
-        var conditions = _steps[_cursor]["conditions"].AsArray();
-        var best = _steps[_cursor]["best_actual"].AsArray();
-        for (int i = 0; i < conditions.Count; i++)
+        foreach (var step in _steps.Where(Ready))
         {
-            var condition = conditions[i].AsObject();
-            int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
-            int capped = Math.Min(actual, condition["count"].GetValue<int>());
-            if (capped <= best[i].GetValue<int>()) continue;
-            best[i] = capped;
-            _progress++;
+            var conditions = step["conditions"].AsArray();
+            var best = step["best_actual"].AsArray();
+            for (int i = 0; i < conditions.Count; i++)
+            {
+                var condition = conditions[i].AsObject();
+                int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
+                int capped = Math.Min(actual, condition["count"].GetValue<int>());
+                if (capped <= best[i].GetValue<int>()) continue;
+                best[i] = capped;
+                _progress++;
+            }
         }
     }
 
