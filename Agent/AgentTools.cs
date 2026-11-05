@@ -690,6 +690,9 @@ public static partial class AgentTools
                 break;
             case "gather_observe":
             case "gather":
+                foreach (string field in new[] { "item_type", "count", "tile_names", "npc_types", "tile_frame_x", "tile_frame_y" })
+                    if (args[field] != null)
+                        throw new ArgumentException(field + "必须放在targets数组的对应目标对象内；放在顶层不会配置该目标来源，请按工具定义修正。");
                 var targets = (args["targets"] as JsonArray ?? throw new ArgumentException("需要targets数组。"))
                     .Select(t => new GatherTarget(t["item_type"].GetValue<int>(), t["count"].GetValue<int>(),
                         t["tile_names"]?.AsArray().Select(n => n.GetValue<string>()).ToArray() ?? Array.Empty<string>(),

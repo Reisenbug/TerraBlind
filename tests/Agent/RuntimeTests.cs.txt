@@ -67,6 +67,15 @@ static class RuntimeTests
             "DAG continuation replaced workflow or duplicated completed effect");
         Check(AgentTools.Plan.Incomplete, "successful node script falsely completed inventory requirement");
         AgentTools.Plan.Reset(); AgentTools.Workflows.Remove(nodeWorkflow);
+        var misplacedSource = JsonNode.Parse(await Execute(AgentTools.Execute("gather_observe", new JsonObject
+        {
+            ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 29, ["count"] = 1 }),
+            ["tile_names"] = new JsonArray("Heart")
+        }, default)));
+        Check(misplacedSource["error"]?.ToString() == "tool_exception"
+            && misplacedSource["detail"]?.ToString().Contains("targets") == true,
+            "misplaced source silently became a drops-only scan");
+        AgentTools.Recovery.Reset();
         await Execute(AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "preserved-task",
             ["code"] = "return step('original-action',()=>({handle:'fixture-original-47'}));" }, default));
         var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
