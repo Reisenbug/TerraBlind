@@ -73,7 +73,7 @@ public sealed class AgentWatch
             }
     }
 
-    public void VerifyCompletion(JsonObject action)
+    public void AcknowledgeCompletion(JsonObject action)
     {
         if (action["status"]?.ToString() != "completed") return;
         string key = action["handle"] + ":" + action["attempt"];
@@ -82,7 +82,7 @@ public sealed class AgentWatch
             if (notice["kind"]?.ToString() == "action_finished" && notice["key"]?.ToString() == key)
             {
                 notice["wake_deferred"] = true;
-                notice["deferred_reason"] = "node_verified";
+                notice["deferred_reason"] = "completion_observed";
             }
     }
 
@@ -188,7 +188,7 @@ public sealed class AgentWatch
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
         if (deferred) value["wake_deferred"] = true;
-        if (verified) value["deferred_reason"] = "node_verified";
+        if (verified) value["deferred_reason"] = "completion_observed";
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 

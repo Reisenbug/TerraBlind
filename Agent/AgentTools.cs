@@ -629,6 +629,7 @@ public static partial class AgentTools
                 return result.ToJsonString();
             case "action_query":
                 result = await Actions.Query(Text(args, "handle"), Int(args, "wait_ms", 0), token);
+                await NativeAgent.OnMain(() => { Watches.AcknowledgeCompletion(result); return true; }, token);
                 return result.ToJsonString();
             case "action_control":
                 if (Text(args, "command") == "resume")
@@ -774,7 +775,7 @@ public static partial class AgentTools
                     await NativeAgent.OnMain(() =>
                     {
                         foreach (var actionState in Actions.Summary().OfType<JsonObject>())
-                            if (actionState["task_node"]?.ToString() == Text(args, "id")) Watches.VerifyCompletion(actionState);
+                            if (actionState["task_node"]?.ToString() == Text(args, "id")) Watches.AcknowledgeCompletion(actionState);
                         return true;
                     }, token);
                 break;

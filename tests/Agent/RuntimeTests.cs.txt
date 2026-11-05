@@ -1372,6 +1372,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestDagRepairDuringDefense();
+            await TestObservedActionCompletion();
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
@@ -1393,6 +1394,42 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestObservedActionCompletion()
+    {
+        AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        HttpServerSystem.Handler = (path, _) => (200,
+            path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+        try
+        {
+            foreach (bool emittedFirst in new[] { true, false })
+            {
+                AgentTools.Watches.Reset(); AgentTools.Watches.EnsureDefaults();
+                var started = AgentTools.Actions.Start("nav_to", new JsonObject
+                    { ["x"] = ActExecutor.OriginCx(Game.LocalPlayer), ["y"] = ActExecutor.OriginCy(Game.LocalPlayer) }, default);
+                await PumpUntil(() => !AgentTools.Actions.HasActive);
+                var done = await Execute(AgentTools.Actions.Query(started["handle"].ToString(), 0, default));
+                Check(done["status"]?.ToString() == "completed", "fixture navigation did not complete: " + done);
+                string key = done["handle"] + ":" + done["attempt"];
+                AgentTools.Watches.Reset(); AgentTools.Watches.EnsureDefaults();
+                if (emittedFirst) AgentTools.Watches.Emit("action_finished", key, done);
+                var queried = JsonNode.Parse(await Execute(AgentTools.Execute("action_query",
+                    new JsonObject { ["handle"] = done["handle"].DeepClone() }, default)));
+                if (!emittedFirst) AgentTools.Watches.Emit("action_finished", key, done);
+                Check(queried["status"]?.ToString() == "completed" && !AgentTools.Watches.HasInterrupting
+                    && AgentTools.Watches.HasPending, "read successful action still interrupts next tool or loses evidence");
+                var next = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                    new JsonObject { ["code"] = "return {health:tool('get_state').permanent_max_health};" }, default)));
+                Check(next["ok"]?.GetValue<bool>() == true, "observed completion interrupted successor script: " + next);
+            }
+            Console.WriteLine("PASS: querying completed action acknowledges early/late notification without discarding evidence");
+        }
+        finally
+        {
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Recovery.Reset();
+            HttpServerSystem.Handler = null;
+        }
     }
 
     static async Task TestDagRepairDuringDefense()

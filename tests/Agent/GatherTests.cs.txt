@@ -18,11 +18,11 @@ static class GatherTests
             var verifiedWatch = new AgentWatch(); verifiedWatch.EnsureDefaults();
             var done = new JsonObject { ["handle"] = "route", ["attempt"] = 2, ["status"] = "completed" };
             if (emittedFirst) verifiedWatch.Emit("action_finished", "route:2", done);
-            verifiedWatch.VerifyCompletion(done);
+            verifiedWatch.AcknowledgeCompletion(done);
             if (!emittedFirst) verifiedWatch.Emit("action_finished", "route:2", done);
             Check(verifiedWatch.HasPending && !verifiedWatch.HasInterrupting, "verified node completion interrupted its successor or lost evidence");
             var failed = new JsonObject { ["handle"] = "next", ["attempt"] = 1, ["status"] = "failed" };
-            verifiedWatch.VerifyCompletion(failed);
+            verifiedWatch.AcknowledgeCompletion(failed);
             verifiedWatch.Emit("action_finished", "next:1", failed);
             Check(verifiedWatch.HasInterrupting, "node verification suppressed a different action failure");
             verifiedWatch.Take();
