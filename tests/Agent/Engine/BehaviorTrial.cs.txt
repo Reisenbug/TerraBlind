@@ -1568,13 +1568,19 @@ public sealed class BehaviorTrial : ModSystem
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                 collectingStingers = true;
                 NativeAgent.Submit(FullCraftTrial
-                    ? "/goal 从出生点的新人物初始装备开始，自行寻找丛林，从零收集材料并制作一把荆棘旋刃，实际得到成品才算完成。已额外提供9999木头和星怒，不要砍树，用星怒防身。自行查配方和材料来源。附近值得拿的箱子、生命水晶、装备和工作站可以利用，取舍后继续制作目标。请实际行动，遇到失败调整方案继续。"
+                    ? "/goal 从出生点的新人物初始装备开始，自行寻找丛林，收集至少1颗生命水晶先别使用；顺路搜刮附近值得拿的箱子，至少实际开箱拿到一次物品。从零收集毒刺和丛林孢子，制作一把荆棘旋刃。使用DAG组织共享前置与可并行推进的子目标，执行遇到失败或新事实时修改方案并继续。最终必须实际持有生命水晶和荆棘旋刃，开箱核实所得。已额外提供9999木头和星怒，不要砍树，用星怒防身。自行查配方和来源；允许合理利用沿途装备与工作站。请实际行动，不只规划。"
                     : $"/goal --tokens {modelTokenBudget} 前往丛林目标格({goalX},{goalY})。途中观察附近箱子、生命水晶、材料和工作站：拿容易取得且值得的，跳过不值得的并记录实际依据，不能见宝必拿。至少新增收集1颗生命水晶，先别使用；开箱核实实际所得，插入行动后继续原任务。之后收集制作荆棘旋刃所需材料，制作一把荆棘旋刃。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。");
                 return true;
             });
             var samples = new JsonArray();
             JsonObject after = null;
             bool started = false;
+            bool lootedChest = false;
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            bool HasResults(JsonObject state) => lootedChest && state["task_plan"]?["mode"]?.ToString() == "dag"
+                && state["task_plan"]?["status"]?.ToString() == "completed"
+                && new[] { ItemID.LifeCrystal, ItemID.ThornChakram }.All(type => state["inventory_slots"].AsArray()
+                    .Any(i => i["type"]?.GetValue<int>() == type && i["stack"]?.GetValue<int>() > 0));
             try
             {
                 for (int sample = 0; sample < (FullCraftTrial ? 1800 : 120); sample++)
@@ -1582,15 +1588,18 @@ public sealed class BehaviorTrial : ModSystem
                     await Task.Delay(1000);
                     string agentStatus = NativeAgent.Status;
                     after = await Call("get_state", new JsonObject());
+                    lootedChest |= after["action_tasks"].AsArray().Any(a => a["tool"]?.ToString() == "collect_treasure"
+                        && a["status"]?.ToString() == "completed" && a["result"]?["got"] is JsonObject got && got.Count > 0);
                     started |= agentStatus != "queued" && agentStatus != "idle";
                     samples.Add(new JsonObject { ["tick"] = after["tick"]?.DeepClone(), ["status"] = agentStatus,
                         ["navigation_stub"] = UsingNavigationStub,
                         ["idle_defense_active"] = after["idle_defense_active"]?.DeepClone(),
                         ["player"] = after["player"]?.DeepClone(), ["task_plan"] = after["task_plan"]?.DeepClone(),
-                        ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone() });
+                        ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone(),
+                        ["inventory"] = after["inventory_slots"]?.DeepClone(), ["elapsed_ms"] = elapsed.ElapsedMilliseconds });
                     string status = after["codex_goal"]?["native"]?["status"]?.ToString();
-                    if (FullCraftTrial && after["inventory_slots"].AsArray().Any(i => i["type"]?.GetValue<int>() == ItemID.ThornChakram && i["stack"]?.GetValue<int>() > 0)) break;
-                    if (status is "complete" or "budgetLimited" or "usageLimited" || agentStatus == "failed" || started && agentStatus == "idle") break;
+                    if (FullCraftTrial && HasResults(after)) break;
+                    if (status is "complete" or "budgetLimited" or "usageLimited" or "paused" || agentStatus == "failed" || started && agentStatus == "idle") break;
                 }
             }
             finally
@@ -1601,12 +1610,13 @@ public sealed class BehaviorTrial : ModSystem
                     ["navigation_stub"] = UsingNavigationStub, ["spawned_hornets"] = hornetsSpawned,
                     ["natural_encounters"] = NaturalEncounters,
                     ["model_token_budget"] = FullCraftTrial ? null : JsonValue.Create(modelTokenBudget),
+                    ["elapsed_ms"] = elapsed.ElapsedMilliseconds, ["looted_chest"] = lootedChest,
                     ["full_craft_trial"] = FullCraftTrial }.ToJsonString());
                 await OnMain(() => { collectingStingers = false; NativeAgent.Stop(); return true; });
             }
-            if (FullCraftTrial && after["inventory_slots"].AsArray().Any(i => i["type"]?.GetValue<int>() == ItemID.ThornChakram && i["stack"]?.GetValue<int>() > 0))
+            if (FullCraftTrial && HasResults(after))
             {
-                Console.WriteLine("FULL_CRAFT_PASS native_inventory=true navigation_stub=false");
+                Console.WriteLine("FULL_CRAFT_PASS native_inventory=true navigation_stub=false dag=true chest=true crystal=true elapsed_ms=" + elapsed.ElapsedMilliseconds);
                 return;
             }
             throw new Exception("bounded production agent trial ended; inspect actual gains, choices and preserved handles before acceptance");
