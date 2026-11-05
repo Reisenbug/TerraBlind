@@ -81,6 +81,17 @@ static class ActionTests
         Check(paused["status"].ToString() == "paused" && paused["observation"]["stock"].GetValue<int>() == 3
             && !actions.HasActive && stops == 1, "pause lost progress or failed to release input");
         Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
+        ActionTasks.NodeContext.Value = "collection-node";
+        try
+        {
+            actions.Start("gather", new JsonObject { ["count"] = 10 }, default);
+            throw new Exception("DAG silently replaced paused action with identical new handle");
+        }
+        catch (InvalidOperationException error)
+        {
+            Check(error.Message.Contains(id), "duplicate action rejection omitted original continuation handle");
+        }
+        ActionTasks.NodeContext.Value = null;
 
         ActionTasks.NodeContext.Value = "defense-node";
         string guard = actions.Start("fight", new JsonObject { ["seconds"] = 15 }, default)["handle"].ToString();

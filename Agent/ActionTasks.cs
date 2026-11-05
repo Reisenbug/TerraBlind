@@ -60,6 +60,14 @@ public sealed class ActionTasks
         lock (gate)
         {
             if (handingOff || (tool == "fight" ? attack : active) != null) throw new InvalidOperationException("已有动作或控制交接持有相同输入通道，请先等待释放。");
+            if (!string.IsNullOrEmpty(NodeContext.Value))
+            {
+                var paused = entries.Values.FirstOrDefault(e => e.Node == NodeContext.Value && e.Tool == tool
+                    && e.Status == "paused" && JsonNode.DeepEquals(e.Args, args));
+                if (paused != null)
+                    throw new InvalidOperationException("已有相同节点的暂停动作，不能重复创建。用action_control resume恢复原句柄 "
+                        + paused.Id + "；若确需放弃，请先cancel并根据新事实调整方案。");
+            }
             if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline,
                 Node = NodeContext.Value };
