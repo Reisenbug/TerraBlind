@@ -55,7 +55,7 @@ public static class AgentScript
         + "\n长任务采用DAG：task_plan传mode:'dag'，节点包含id、depends_on、script和conditions。共享前置只建一个节点；依赖表示前置已验收，不代表输入互斥。先查当前必要知识，再建立可执行节点；未知后续行为可用调查脚本返回缺失事实，不能猜来源或假造完成条件。"
         + "用run_script({task_node:id})执行ready_steps中的节点，宿主保存独立稳定workflow。节点script中用step保存action_start句柄；再次执行先action_query，已暂停则恢复原handle，已完成则核对conditions，不能重复创建动作。脚本结束不等于节点完成，task_step verify读取真实状态。"
         + "多个ready节点可共同推进，但不轮流抢移动：默认继续当前动作，出现具体顺路收益、阻塞或危险才切换。切换前暂停原主动作并保存理由；插入结束核实所得，回到原节点恢复句柄。独立防身可与移动并行，不把所有怪物变成必须完成的前置任务。"
-        + "新事实需要修改方案时用task_plan_patch的nodes更新未完成节点script/depends_on，带expected_revision和reason；保留workflow与已完成step，不重建计划。脚本改动不会清除uncertain，仍须核对。最终验收检查所有末端节点，必须把最终仍需持有的物品等要求写入末端conditions。\n"
+        + "新事实需要修改方案时用task_plan_patch的nodes更新未完成节点script/depends_on，或add_nodes插入有实际完成条件的新机会/恢复节点，两者可同批提交，带expected_revision和reason；共享已有前置，保留workflow与已完成step，不重建计划。不要为开箱把采集节点脚本改成只有开箱；新机会单独成节点，原节点保留原意图与句柄。脚本改动不会清除uncertain，仍须核对。最终验收检查所有末端节点，必须把最终仍需持有的物品等要求写入末端conditions。\n"
         + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
         + string.Join("\n", tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
             .Select(t => t["function"]["name"] + ": " + t["function"]["description"]?.ToString().Split('。')[0]));

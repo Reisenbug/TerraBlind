@@ -679,11 +679,11 @@ public static partial class AgentTools
                 else throw new ArgumentException("action需要get/retry/complete。");
                 break;
             case "task_plan_patch":
-                if (args["nodes"] != null)
+                if (args["nodes"] != null || args["add_nodes"] != null)
                 {
                     if (args["changes"] != null) throw new ArgumentException("nodes和changes不能同时提供。");
                     if (Actions.HasActive) throw new InvalidOperationException("修改节点前须暂停活动动作，保留句柄后再修改与续接。");
-                    result = await NativeAgent.OnMain(() => Plan.Revise(args), token);
+                    result = await NativeAgent.OnMain(() => Plan.Revise(args, AgentTaskEvidence.Measure), token);
                     break;
                 }
                 result = await NativeAgent.OnMain(() => Plan.Patch(args, AgentTaskEvidence.Measure), token);

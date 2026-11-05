@@ -12,6 +12,7 @@ static class TaskPlanTests
     public static void Run()
     {
         VerifyDag();
+        VerifyDagInsertion();
         VerifyPosition();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
@@ -121,6 +122,46 @@ static class TaskPlanTests
         PatchChecks();
     }
 
+    static void VerifyDagInsertion()
+    {
+        var plan = new AgentTaskPlan();
+        int Measure(JsonObject _) => 0;
+        plan.Create(Parse("""
+            {"goal":"insert opportunity","mode":"dag","steps":[
+              {"id":"approach","description":"approach","depends_on":[],"script":"return 0;","conditions":[{"kind":"item","type":1,"count":1}]},
+              {"id":"original","description":"original","depends_on":["approach"],"script":"return 1;","conditions":[{"kind":"item","type":2,"count":1}]}]}
+            """), Measure);
+        plan.Advance("approach", _ => 1);
+        string workflow = plan.Script("original")["workflow"].ToString();
+        var edit = Parse("""
+            {"reason":"observed nearby opportunity","nodes":[{"id":"original","depends_on":["approach","opportunity"]}],
+             "add_nodes":[{"id":"opportunity","description":"opportunity","depends_on":["approach"],"script":"return 2;",
+               "status":"completed","workflow":"forged","conditions":[{"kind":"item","type":3,"count":1}]}]}
+            """);
+        edit["expected_revision"] = plan.Snapshot()["revision"].DeepClone();
+        var inserted = plan.Revise(edit, Measure);
+        Check(inserted["steps"][0]["status"].ToString() == "completed"
+            && inserted["current_step"].ToString() == "opportunity"
+            && inserted["steps"][1]["workflow"].ToString() == workflow,
+            "insertion lost shared prerequisite, original continuation or new dependency scheduling");
+        Check(inserted["steps"][2]["status"].ToString() != "completed" && inserted["steps"][2]["workflow"].ToString() != "forged",
+            "insertion trusted model-owned runtime progress");
+        string before = plan.Snapshot().ToJsonString();
+        edit["expected_revision"] = inserted["revision"].DeepClone();
+        edit["add_nodes"][0]["id"] = "cycle";
+        edit["add_nodes"][0]["depends_on"] = new JsonArray("original");
+        edit["nodes"][0]["depends_on"] = new JsonArray("cycle");
+        try { plan.Revise(edit, Measure); throw new Exception("insertion introduced dependency cycle"); }
+        catch (InvalidOperationException) { }
+        Check(before == plan.Snapshot().ToJsonString(), "invalid insertion partially changed existing graph");
+        Check(!plan.Advance("opportunity", Measure)["verified"].GetValue<bool>(), "inserted opportunity fabricated collection");
+        plan.Advance("opportunity", _ => 1);
+        Check(plan.Script("original")["workflow"].ToString() == workflow, "opportunity completion discarded original workflow");
+        plan.Advance("original", _ => 1);
+        Check(!plan.Incomplete, "could not finish after dynamic opportunity");
+        Console.WriteLine("PASS: dynamic DAG insertion shares prerequisites and preserves original progress; cyclic edits are atomic");
+    }
+
     static void VerifyDag()
     {
         var plan = new AgentTaskPlan();
@@ -145,9 +186,9 @@ static class TaskPlanTests
             {"reason":"new observed route","nodes":[{"id":"b","script":"return 7;","depends_on":["a","c"]}]}
             """);
         update["expected_revision"] = revision;
-        plan.Revise(update);
+        plan.Revise(update, Measure);
         Check(plan.Snapshot()["steps"][0]["status"].ToString() == "completed", "graph edit lost shared prerequisite evidence");
-        try { plan.Revise(update); throw new Exception("stale graph edit accepted"); }
+        try { plan.Revise(update, Measure); throw new Exception("stale graph edit accepted"); }
         catch (InvalidOperationException) { }
         plan.Select("c"); plan.Advance("c", Measure);
         plan.Select("e");

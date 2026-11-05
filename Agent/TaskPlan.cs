@@ -27,8 +27,19 @@ public sealed class AgentTaskPlan
         string goal = args["goal"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(goal) || args["steps"] is not JsonArray steps || steps.Count == 0 || steps.Count > 20)
             throw new InvalidOperationException("计划需要 goal 和 1..20 个步骤。");
-        var parsed = new List<JsonObject>();
         bool dag = args["mode"]?.ToString() == "dag";
+        var parsed = ParseSteps(steps, dag, measure);
+        ValidateDependencies(parsed);
+        _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
+        _dag = dag;
+        SelectReady();
+        _revision++;
+        return Snapshot();
+    }
+
+    static List<JsonObject> ParseSteps(JsonArray steps, bool dag, Func<JsonObject, int> measure)
+    {
+        var parsed = new List<JsonObject>();
         var ids = new HashSet<string>();
         foreach (var node in steps)
         {
@@ -74,12 +85,7 @@ public sealed class AgentTaskPlan
             }
             parsed.Add(copy);
         }
-        ValidateDependencies(parsed);
-        _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
-        _dag = dag;
-        SelectReady();
-        _revision++;
-        return Snapshot();
+        return parsed;
     }
 
     static void ValidateDependencies(List<JsonObject> steps)
@@ -133,14 +139,24 @@ public sealed class AgentTaskPlan
         return new JsonObject { ["code"] = step["script"].DeepClone(), ["workflow"] = step["workflow"].DeepClone() };
     }
 
-    public JsonObject Revise(JsonObject args)
+    public JsonObject Revise(JsonObject args, Func<JsonObject, int> measure)
     {
         if (!_dag || !Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
             throw new InvalidOperationException("需要当前未完成DAG的revision。");
         string reason = args["reason"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(reason) || args["nodes"] is not JsonArray changes || changes.Count == 0)
-            throw new ArgumentException("节点修改需要reason和非空nodes。");
+        var changes = args["nodes"] as JsonArray ?? new JsonArray();
+        var additions = args["add_nodes"] as JsonArray ?? new JsonArray();
+        if (string.IsNullOrWhiteSpace(reason) || changes.Count + additions.Count == 0 || additions.Count + _steps.Count > 20)
+            throw new ArgumentException("需要reason及nodes/add_nodes；计划总节点数不能超过20。");
         var revised = _steps.Select(s => (JsonObject)s.DeepClone()).ToList();
+        var added = ParseSteps(additions, true, measure);
+        if (added.Any(a => revised.Any(s => s["id"]?.ToString() == a["id"]?.ToString())))
+            throw new InvalidOperationException("新增节点id已存在；修改已有节点请用nodes。");
+        foreach (var step in added)
+        {
+            step["added_reason"] = reason;
+            step["added_revision"] = _revision;
+        }
         var seen = new HashSet<string>();
         foreach (var change in changes)
         {
@@ -163,6 +179,7 @@ public sealed class AgentTaskPlan
                 ["before_script"] = _steps.First(s => s["id"]?.ToString() == id)["script"].DeepClone(),
                 ["before_dependencies"] = _steps.First(s => s["id"]?.ToString() == id)["depends_on"].DeepClone() });
         }
+        revised.AddRange(added);
         ValidateDependencies(revised);
         _steps.Clear(); _steps.AddRange(revised);
         if (!Ready(_steps[_cursor]))
