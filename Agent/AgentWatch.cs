@@ -14,6 +14,7 @@ public sealed class AgentWatch
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<int> tileTypes = new();
     readonly HashSet<string> passive = new();
+    readonly HashSet<string> verifiedCompletions = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
@@ -69,6 +70,19 @@ public sealed class AgentWatch
             {
                 notice["wake_deferred"] = true;
                 notice["deferred_reason"] = "superseded_action_attempt";
+            }
+    }
+
+    public void VerifyCompletion(JsonObject action)
+    {
+        if (action["status"]?.ToString() != "completed") return;
+        string key = action["handle"] + ":" + action["attempt"];
+        verifiedCompletions.Add(key);
+        foreach (var notice in pending)
+            if (notice["kind"]?.ToString() == "action_finished" && notice["key"]?.ToString() == key)
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "node_verified";
             }
     }
 
@@ -166,13 +180,15 @@ public sealed class AgentWatch
     {
         if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
         bool attackFinished = kind == "action_finished" && evidence?["tool"]?.ToString() == "fight";
-        bool deferred = attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
+        bool verified = kind == "action_finished" && verifiedCompletions.Contains(key);
+        bool deferred = verified || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
         if (!LocalDelivery && !passive.Contains(kind) && !deferred
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
         if (deferred) value["wake_deferred"] = true;
+        if (verified) value["deferred_reason"] = "node_verified";
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 
@@ -266,6 +282,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

@@ -756,6 +756,13 @@ public static partial class AgentTools
                     "block" => Plan.Block(Text(args, "id"), Text(args, "reason")),
                     _ => throw new InvalidOperationException("action 必须是 verify 或 block。")
                 }, token);
+                if (Text(args, "action") == "verify" && result["verified"]?.GetValue<bool>() == true)
+                    await NativeAgent.OnMain(() =>
+                    {
+                        foreach (var actionState in Actions.Summary().OfType<JsonObject>())
+                            if (actionState["task_node"]?.ToString() == Text(args, "id")) Watches.VerifyCompletion(actionState);
+                        return true;
+                    }, token);
                 break;
             case "combat_reposition":
                 var destination = await NativeAgent.OnMain(() =>
