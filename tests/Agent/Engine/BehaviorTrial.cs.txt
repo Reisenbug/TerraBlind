@@ -211,11 +211,6 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
-        if (FullCraftTrial)
-        {
-            p.AddBuff(BuffID.Shine, 120);
-            p.AddBuff(BuffID.Gills, 120);
-        }
         if (samplingSources)
         {
             int x = ItemUseCoordinator.SnappedWx, y = ItemUseCoordinator.SnappedWy;
@@ -1519,7 +1514,7 @@ public sealed class BehaviorTrial : ModSystem
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                 collectingStingers = true;
                 NativeAgent.Submit(FullCraftTrial
-                    ? "/goal 从出生点的新人物初始装备开始，自行寻找丛林，从零收集材料并制作一把荆棘旋刃，实际得到成品才算完成。已额外提供9999木头和星怒，不要砍树，用星怒防身。自行查配方和材料来源，光芒和鱼鳃已开启。附近值得拿的箱子、生命水晶、装备和工作站可以利用，取舍后继续制作目标。请实际行动，遇到失败调整方案继续。"
+                    ? "/goal 从出生点的新人物初始装备开始，自行寻找丛林，从零收集材料并制作一把荆棘旋刃，实际得到成品才算完成。已额外提供9999木头和星怒，不要砍树，用星怒防身。自行查配方和材料来源。附近值得拿的箱子、生命水晶、装备和工作站可以利用，取舍后继续制作目标。请实际行动，遇到失败调整方案继续。"
                     : $"/goal --tokens {modelTokenBudget} 前往丛林目标格({goalX},{goalY})。途中观察附近箱子、生命水晶、材料和工作站：拿容易取得且值得的，跳过不值得的并记录实际依据，不能见宝必拿。至少新增收集1颗生命水晶，先别使用；开箱核实实际所得，插入行动后继续原任务。之后收集制作荆棘旋刃所需材料，制作一把荆棘旋刃。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。");
                 return true;
             });
