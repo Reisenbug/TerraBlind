@@ -9,9 +9,10 @@ namespace TerraBlind;
 
 public sealed class ActionTasks
 {
+    internal static readonly AsyncLocal<string> NodeContext = new();
     sealed class Entry
     {
-        public string Id, Tool, Status = "running", Requested;
+        public string Id, Tool, Status = "running", Requested, Node;
         public JsonObject Args, Observation, PreviousAttempt, StoppedObservation;
         public JsonNode Result;
         public int Attempt;
@@ -60,7 +61,8 @@ public sealed class ActionTasks
         {
             if (handingOff || (tool == "fight" ? attack : active) != null) throw new InvalidOperationException("已有动作或控制交接持有相同输入通道，请先等待释放。");
             if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
-            var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline };
+            var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline,
+                Node = NodeContext.Value };
             entries.Add(entry.Id, entry);
             Launch(entry, root);
             return Snapshot(entry);
@@ -88,6 +90,7 @@ public sealed class ActionTasks
     async Task Run(Entry entry, int attempt)
     {
         caller.Value = entry.Id;
+        NodeContext.Value = entry.Node;
         JsonNode result = null;
         JsonObject observed = null;
         JsonObject starting = null;
@@ -304,6 +307,7 @@ public sealed class ActionTasks
         ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
         ["status"] = entry.Status, ["attempt"] = entry.Attempt,
         ["inline"] = entry.Inline,
+        ["task_node"] = entry.Node,
         ["result"] = entry.Result?.DeepClone(), ["observation"] = entry.Observation?.DeepClone(),
         ["previous_attempt"] = entry.PreviousAttempt?.DeepClone(),
         ["requested"] = entry.Requested
@@ -325,6 +329,7 @@ public sealed class ActionTasks
                         if (full[key] != null) facts[key] = full[key].DeepClone();
                 result.Add(new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
                     ["status"] = entry.Status, ["attempt"] = entry.Attempt, ["inline"] = entry.Inline,
+                    ["task_node"] = entry.Node,
                     ["result"] = facts, ["detail_tool"] = "action_query" });
             }
             return result;

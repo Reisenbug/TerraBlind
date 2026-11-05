@@ -42,9 +42,11 @@ static class ActionTests
         {
             if (tool == "fight")
             {
+                Check(ActionTasks.NodeContext.Value == "defense-node", "defense inherited collection node");
                 defending.TrySetResult(true);
                 await Task.Delay(Timeout.Infinite, token);
             }
+            Check(ActionTasks.NodeContext.Value == "collection-node", "resumed action inherited caller node instead of original owner");
             if (Interlocked.Increment(ref attempts) == 1)
             {
                 Interlocked.Exchange(ref stock, 3); collecting.TrySetResult(true);
@@ -61,9 +63,12 @@ static class ActionTests
             Interlocked.Increment(ref stops);
         }
         var actions = new ActionTasks(Execute, Observe, Stop);
+        ActionTasks.NodeContext.Value = "collection-node";
         string id = actions.Start("gather", new JsonObject { ["count"] = 10 }, default)["handle"].ToString();
+        ActionTasks.NodeContext.Value = null;
         await collecting.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var running = await actions.Query(id, 0, default);
+        Check(running["task_node"].ToString() == "collection-node", "action query omitted owning node");
         Check(running["status"].ToString() == "running" && running["observation"]["stock"].GetValue<int>() == 3,
             "query could not observe inventory while collection was in flight");
         var pause = actions.Control(id, "pause", null, default);
@@ -77,6 +82,7 @@ static class ActionTests
             && !actions.HasActive && stops == 1, "pause lost progress or failed to release input");
         Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
 
+        ActionTasks.NodeContext.Value = "defense-node";
         string guard = actions.Start("fight", new JsonObject { ["seconds"] = 15 }, default)["handle"].ToString();
         await defending.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Check((await actions.Query(id, 0, default))["status"].ToString() == "paused"
@@ -91,6 +97,8 @@ static class ActionTests
 
         hp = 100;
         var resumed = await actions.Control(id, "resume", null, default);
+        ActionTasks.NodeContext.Value = null;
+        Check(resumed["task_node"].ToString() == "collection-node", "resume changed action owner");
         Check(resumed["handle"].ToString() == id && resumed["attempt"].GetValue<int>() == 2, "resume replaced the task handle");
         Check(resumed["observation"] == null || resumed["observation"]["hp"].GetValue<int>() == 100,
             "resume presented pause-time health as the new attempt's current observation");

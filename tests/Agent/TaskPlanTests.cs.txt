@@ -150,6 +150,12 @@ static class TaskPlanTests
         try { plan.Revise(update); throw new Exception("stale graph edit accepted"); }
         catch (InvalidOperationException) { }
         plan.Select("c"); plan.Advance("c", Measure);
+        plan.Select("e");
+        plan.Record("nav_to", "{\"error\":\"blocked\"}", true, "b");
+        Check(plan.Snapshot()["steps"][1]["blocking_evidence"] != null
+            && plan.Snapshot()["steps"][4]["last_action"] == null, "late action evidence was attributed to selected node");
+        plan.Record("fight", "{\"ok\":true}", true);
+        Check(plan.Snapshot()["steps"][4]["last_action"] == null, "global survival action polluted task evidence");
         Check(plan.Script("b")["workflow"].ToString() == workflow && plan.Script("b")["code"].ToString() == "return 7;",
             "script revision discarded stable continuation identity");
         Check(plan.Snapshot()["steps"][1]["status"].ToString() != "completed", "DAG completed unrelated branch");

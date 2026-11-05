@@ -260,9 +260,12 @@ public sealed class AgentTaskPlan
         return result;
     }
 
-    public void Record(string tool, string output, bool action = false)
+    public void Record(string tool, string output, bool action = false, string nodeId = null)
     {
         if (!Incomplete) return;
+        var step = nodeId == null ? (_dag ? null : _steps[_cursor])
+            : _steps.FirstOrDefault(s => s["id"]?.ToString() == nodeId && s["status"]?.ToString() != "completed");
+        if (step == null) return;
         JsonObject facts = null;
         try
         {
@@ -274,7 +277,7 @@ public sealed class AgentTaskPlan
             }
         }
         catch (System.Text.Json.JsonException) { }
-        _steps[_cursor]["last_action"] = new JsonObject
+        step["last_action"] = new JsonObject
         {
             ["tool"] = tool, ["result"] = output.Length <= 6000 ? output : output[..6000],
             ["utc"] = DateTime.UtcNow.ToString("O")
@@ -284,17 +287,17 @@ public sealed class AgentTaskPlan
              || facts["done"]?.ToString() == "false" || facts["status"]?.ToString() is "failed" or "stopped_short"
              || facts["outcome"]?.ToString() is "timeout" or "no_progress" or "stalled" or "unbreakable" or "out_of_reach"
                  or "no_tiles" or "stuck" or "partial" or "not_placed" or "interrupted_by_death"));
-        if (failed) _steps[_cursor]["blocking_evidence"] = _steps[_cursor]["last_action"].DeepClone();
-        else if (facts != null && facts["error"] == null && (action || _steps[_cursor]["blocking_evidence"]?["tool"]?.ToString() == tool))
+        if (failed) step["blocking_evidence"] = step["last_action"].DeepClone();
+        else if (facts != null && facts["error"] == null && (action || step["blocking_evidence"]?["tool"]?.ToString() == tool))
         {
-            if (_steps[_cursor]["status"]?.ToString() == "blocked")
+            if (step["status"]?.ToString() == "blocked")
             {
-                _steps[_cursor]["previous_failure"] = new JsonObject { ["reason"] = _steps[_cursor]["failure"]?.DeepClone(),
-                    ["evidence"] = _steps[_cursor]["blocking_evidence"]?.DeepClone() };
-                _steps[_cursor].Remove("failure");
-                _steps[_cursor]["status"] = "active";
+                step["previous_failure"] = new JsonObject { ["reason"] = step["failure"]?.DeepClone(),
+                    ["evidence"] = step["blocking_evidence"]?.DeepClone() };
+                step.Remove("failure");
+                step["status"] = _steps[_cursor] == step ? "active" : "pending";
             }
-            _steps[_cursor].Remove("blocking_evidence");
+            step.Remove("blocking_evidence");
         }
     }
 

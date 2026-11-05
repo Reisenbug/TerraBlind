@@ -315,6 +315,7 @@ public static partial class AgentTools
 
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
+        string taskNode = ActionTasks.NodeContext.Value;
         if (Recovery.Revision > 0 && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
             return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
                 ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();
@@ -364,7 +365,7 @@ public static partial class AgentTools
             if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query" or "run_script" or "watch"))
                 output = await NativeAgent.OnMain(() =>
                 {
-                    Plan.Record(name, output, action);
+                    Plan.Record(name, output, action, taskNode);
                     Recovery.Record(name, args, output);
                     try
                     {
@@ -397,7 +398,7 @@ public static partial class AgentTools
             return await NativeAgent.OnMain(() =>
             {
                 var result = new JsonObject { ["error"] = "tool_exception", ["tool"] = name, ["detail"] = ex.Message };
-                Plan.Record(name, result.ToJsonString(), action);
+                Plan.Record(name, result.ToJsonString(), action, taskNode);
                 Recovery.Record(name, args, result.ToJsonString());
                 result["task_plan"] = Plan.Summary();
                 DiagLog.Write($"[agent] tool_exception {name}: {ex.Message}");
@@ -555,7 +556,13 @@ public static partial class AgentTools
                 try
                 {
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
-                        (child, childArgs, childToken) => ExecuteScriptTool(child, childArgs, token, childToken, localEvents),
+                        async (child, childArgs, childToken) =>
+                        {
+                            string previousNode = ActionTasks.NodeContext.Value;
+                            ActionTasks.NodeContext.Value = Text(args, "task_node") is string owner && owner.Length > 0 ? owner : previousNode;
+                            try { return await ExecuteScriptTool(child, childArgs, token, childToken, localEvents); }
+                            finally { ActionTasks.NodeContext.Value = previousNode; }
+                        },
                         async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
                         localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasInterrupting ? Watches.Pending() : null, checkToken));
                 }
@@ -615,6 +622,22 @@ public static partial class AgentTools
                 result = await Actions.Query(Text(args, "handle"), Int(args, "wait_ms", 0), token);
                 return result.ToJsonString();
             case "action_control":
+                if (Text(args, "command") == "resume")
+                {
+                    string ownerNode = Actions.Summary().FirstOrDefault(a => a["handle"]?.ToString() == Text(args, "handle"))?["task_node"]?.ToString();
+                    if (!string.IsNullOrEmpty(ownerNode))
+                    {
+                        string callerNode = ActionTasks.NodeContext.Value;
+                        if (!string.IsNullOrEmpty(callerNode) && callerNode != ownerNode)
+                            throw new InvalidOperationException("不能在其他DAG节点的脚本内恢复此句柄；回到所属节点续接。");
+                        await NativeAgent.OnMain(() =>
+                        {
+                            Plan.Script(ownerNode);
+                            Plan.Select(ownerNode);
+                            return true;
+                        }, token);
+                    }
+                }
                 if (args["args"] is JsonObject resumeArgs)
                 {
                     string resumeTool = Actions.Snapshot().FirstOrDefault(a => a["handle"]?.ToString() == Text(args, "handle"))?["tool"]?.ToString()
