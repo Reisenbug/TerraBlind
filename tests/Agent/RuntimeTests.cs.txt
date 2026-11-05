@@ -1373,6 +1373,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestDagRepairDuringDefense();
             await TestObservedActionCompletion();
+            await TestDagReturnValues();
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
@@ -1394,6 +1395,46 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestDagReturnValues()
+    {
+        AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        try
+        {
+            foreach (string literal in new[] { "42", "true", "false", "\"route selected\"", "[1,2]", "null", "{\"count\":3}" })
+            {
+                AgentTools.Plan.Reset();
+                AgentTools.Plan.Create(new JsonObject
+                {
+                    ["goal"] = "preserve script results", ["mode"] = "dag",
+                    ["steps"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "collect", ["description"] = "collect target item", ["depends_on"] = new JsonArray(),
+                        ["script"] = "return step('saved',()=> (" + literal + "));",
+                        ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = 191, ["count"] = 9999 })
+                    })
+                }, _ => 0);
+                string workflow = AgentTools.Plan.Script("collect")["workflow"].ToString();
+                try
+                {
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                            new JsonObject { ["task_node"] = "collect" }, default)));
+                        Check(result["ok"]?.GetValue<bool>() == true && JsonNode.DeepEquals(result["value"], JsonNode.Parse(literal)),
+                            "DAG script return shape failed: " + literal + " result=" + result);
+                        var progress = AgentTools.Workflows[workflow];
+                        Check(!progress.ReviewRequested && !progress.Yielded && progress.Completed == 1
+                            && progress.Segment == attempt + 1 && AgentTools.Plan.Incomplete,
+                            "scalar result changed review, replay or completion semantics");
+                    }
+                }
+                finally { AgentTools.Workflows.Remove(workflow); }
+            }
+            Console.WriteLine("PASS: DAG scripts preserve scalar/array/null/object results across saved-step continuation");
+        }
+        finally { AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); }
     }
 
     static async Task TestObservedActionCompletion()

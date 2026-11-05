@@ -581,7 +581,7 @@ public static partial class AgentTools
                 }
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
-                if (result["value"]?["wake"] is JsonObject deliveredWake)
+                if (result["value"] is JsonObject returnedValue && returnedValue["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;
                     if (activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
