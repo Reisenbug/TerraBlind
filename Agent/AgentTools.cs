@@ -606,6 +606,9 @@ public static partial class AgentTools
                 if (Text(args, "command") == "resume")
                     await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
                 result = await Actions.Control(Text(args, "handle"), Text(args, "command"), args["args"] as JsonObject, token);
+                if (Text(args, "command") == "resume" && result["status"]?.ToString() == "running")
+                    await NativeAgent.OnMain(() =>
+                    { Watches.Resumed(Text(args, "handle"), Int(result, "attempt")); return true; }, token);
                 return result.ToJsonString();
             case "script_progress":
                 var savedProgress = await NativeAgent.OnMain(() => Workflows.TryGetValue(Text(args, "workflow"), out var saved)

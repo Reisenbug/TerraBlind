@@ -51,12 +51,25 @@ public sealed class AgentWatch
     { foreach (var action in actions) seen.Add("action_finished:" + action["handle"] + ":" + action["attempt"]); }
     public void EnsureDefaults()
     {
+        if (!events.Contains("target_acquired")) passive.Add("target_acquired");
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "inventory_full" });
         if (!configured)
         {
             events.Add("nearby_chest");
             passive.Add("nearby_chest");
         }
+    }
+
+    public void Resumed(string handle, int attempt)
+    {
+        foreach (var notice in pending)
+            if (notice["kind"]?.ToString() is "action_finished" or "target_acquired"
+                && notice["evidence"]?["handle"]?.ToString() == handle
+                && notice["evidence"]?["attempt"]?.GetValue<int>() < attempt)
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "superseded_action_attempt";
+            }
     }
 
     public JsonObject Configure(JsonObject args)
@@ -114,6 +127,7 @@ public sealed class AgentWatch
                     int before = itemCounts[type]?.GetValue<int>() ?? 0, after = current[type]?.GetValue<int>() ?? 0;
                     if (after > before) Emit("target_acquired", type + ":" + samples, new JsonObject
                     { ["handle"] = running["handle"]?.DeepClone(), ["item_type"] = target["item_type"].DeepClone(),
+                        ["attempt"] = running["attempt"]?.DeepClone(),
                         ["before"] = before, ["after"] = after, ["gained"] = after - before });
                 }
             itemCounts = (JsonObject)current.DeepClone();

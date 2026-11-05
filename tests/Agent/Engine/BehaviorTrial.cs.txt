@@ -1077,6 +1077,7 @@ public sealed class BehaviorTrial : ModSystem
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_SOURCE_GLOBAL_REPLAY") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_REVIEW_AGENT") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_EXAMPLE_SCRIPT") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_VARIANT_SCRIPT") == "1")
@@ -1113,6 +1114,34 @@ public sealed class BehaviorTrial : ModSystem
                 || sourceReview["source_error"]["observations"].AsArray().Any(o => o["count_after"].GetValue<int>() != o["count_before"].GetValue<int>()))
                 throw new Exception("native unproductive harvesting failed to return measured source review after three removals");
             Console.WriteLine($"SOURCE_REVIEW_PROBE_PASS native_removals=3 target_count=0 navigation_stub={UsingNavigationStub} attempts=" + sourceReview["actions"]);
+            if (Environment.GetEnvironmentVariable("TB_SOURCE_GLOBAL_REPLAY") == "1")
+            {
+                var replay = await Call("run_script", new JsonObject { ["workflow"] = "source-global-replay",
+                    ["event_delivery"] = "script", ["code"] = """
+                    const handle=HANDLE;
+                    const notices=[];
+                    tool('watch',{events:['nearby_chest'],passive_events:['nearby_chest'],radius:40});
+                    tool('action_control',{handle,command:'resume',args:{targets:[{
+                      item_type:331,count:6,tile_names:['JunglePlants'],tile_frame_x:144,tile_frame_y:0}]}});
+                    let q;
+                    do {
+                      q=tool('action_query',{handle,wait_ms:1000});
+                      const events=tool('script_events',{wait_ms:0}).events;
+                      notices.push(...events.map(e=>({kind:e.kind,key:e.key,gained:e.evidence?.gained})));
+                      if(events.some(e=>['low_health','player_died','suffocating'].includes(e.kind)))
+                        tool('decision_point',{reason:'Source replay interrupted by danger',evidence:{handle,events}});
+                    } while(q.status==='running');
+                    const actual=tool('get_state').inventory_slots.filter(i=>i.type===331).reduce((n,i)=>n+i.stack,0);
+                    return {handle,status:q.status,result:q.result,actual,notices};
+                    """.Replace("HANDLE", JsonValue.Create(sourceHandle).ToJsonString()) });
+                File.WriteAllText(Path.Combine(Main.SavePath, "source-global-replay.json"), replay.ToJsonString());
+                if (replay["value"]?["actual"]?.GetValue<int>() is not >= 6
+                    || replay["value"]?["status"]?.ToString() != "completed"
+                    || replay["value"]?["handle"]?.ToString() != sourceHandle)
+                    throw new Exception("recorded global source selection did not complete the original gather; inspect source-global-replay.json");
+                Console.WriteLine($"SOURCE_GLOBAL_REPLAY_PASS actual_spores={replay["value"]["actual"]} original_handle=true navigation_stub={UsingNavigationStub} model_calls=0 recorded_model_selection=true");
+                return;
+            }
             if (Environment.GetEnvironmentVariable("TB_SOURCE_EXAMPLE_SCRIPT") == "1")
             {
                 var example = await Call("script_program", new JsonObject { ["operation"] = "example", ["name"] = "sample_tile_variants" });

@@ -13,6 +13,25 @@ static class GatherTests
 
     public static async Task Run()
     {
+        foreach (bool explicitAcquisition in new[] { false, true })
+        {
+            var watch = new AgentWatch();
+            if (explicitAcquisition) watch.Configure(new JsonObject { ["events"] = new JsonArray("target_acquired") });
+            watch.EnsureDefaults(); watch.EnsureDefaults();
+            watch.Emit("target_acquired", "gain", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["gained"] = 2 });
+            Check(watch.HasPending && watch.HasInterrupting == explicitAcquisition,
+                "default collection progress interrupted gathering or explicit interruption was ignored");
+            watch.Emit("action_finished", "collect:1", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["status"] = "failed" });
+            watch.Resumed("collect", 2);
+            Check(watch.PendingCount == 2 && !watch.HasInterrupting,
+                "resumption erased evidence or an obsolete attempt still interrupted the new attempt");
+            watch.Emit("action_finished", "collect:2", new JsonObject { ["handle"] = "collect", ["attempt"] = 2, ["status"] = "failed" });
+            Check(watch.HasInterrupting, "the current attempt failure was incorrectly deferred");
+            watch.Take();
+            watch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
+            watch.Resumed("collect", 3);
+            Check(watch.HasInterrupting, "resumption suppressed a danger observation");
+        }
         var world = new World();
         var result = await Gather.Run(Targets, 5, world, default);
         Check(result["ok"].GetValue<bool>() && world.Actions.Count == 2 && world.Actions[0] == "npc" && world.Stops == 1,
