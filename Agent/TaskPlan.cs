@@ -15,6 +15,7 @@ public sealed class AgentTaskPlan
     bool _dag;
     public int Cursor => _cursor;
     public int Progress => _progress;
+    public bool RequiresNodeExecution => _dag && Incomplete;
     public bool Incomplete => _steps.Any(s => s["status"]?.ToString() != "completed");
 
     public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; _revision++; }

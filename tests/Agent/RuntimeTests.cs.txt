@@ -48,6 +48,14 @@ static class RuntimeTests
                "conditions":[{"kind":"item","type":191,"count":1}]}]}
             """).AsObject(), _ => 0);
         string nodeWorkflow = AgentTools.Plan.Script("collect")["workflow"].ToString();
+        foreach (var request in new[] {
+            new JsonObject { ["tool"] = "nav_to", ["args"] = new JsonObject { ["x"] = 20, ["y"] = 20 } },
+            new JsonObject { ["tool"] = "action_start", ["args"] = new JsonObject { ["tool"] = "nav_to",
+                ["args"] = new JsonObject { ["x"] = 20, ["y"] = 20 } } } })
+        {
+            var rejected = await Execute(AgentTools.Execute("run_script", request, default));
+            Check(rejected.Contains("dag_node_required"), "DAG task action bypassed its node through script entry");
+        }
         for (int i = 0; i < 2; i++)
         {
             var nodeRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",

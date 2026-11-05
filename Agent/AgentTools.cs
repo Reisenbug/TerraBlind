@@ -331,6 +331,12 @@ public static partial class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
+        bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
+        if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
+            && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
+            return new JsonObject { ["error"] = "dag_node_required",
+                ["detail"] = "已有DAG。请把本次任务动作写入所属节点script，用run_script({task_node:id})执行；需要修改脚本用task_plan_patch nodes。图外只读查询、暂停动作和独立fight防身仍可用。",
+                ["task_plan"] = await NativeAgent.OnMain(Plan.Summary, token) }.ToJsonString();
         if (action && ContactEscapeActive)
         {
             while (ContactEscapeActive) await Task.Delay(33, token);
@@ -419,6 +425,9 @@ public static partial class AgentTools
     {
         if (!ActionTasks.Supports(name))
             return await Execute(name, args, name == "action_start" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
+        if (name != "fight" && string.IsNullOrEmpty(ActionTasks.NodeContext.Value)
+            && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
+            return await Execute(name, args, token);
         if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
         await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
         string handle = Actions.Start(name, args, root, inline: true)["handle"].ToString();
