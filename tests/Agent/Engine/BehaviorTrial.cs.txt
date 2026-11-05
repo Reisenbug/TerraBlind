@@ -1010,7 +1010,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["expected_revision"] = beforeInsertion["task_plan"]["revision"].DeepClone(),
                 ["reason"] = "当前箱子邻近起点，先验证真实搜刮所得，再恢复已经暂停的原路线",
                 ["add_nodes"] = new JsonArray(Node("chest", new[] { "approach" },
-                    "return step('loot',()=>tool('collect_treasure',{x:" + chestX + ",y:" + chestY + "}));", ItemCondition(lootType))),
+                    "return step('loot',()=>tool('collect_treasure',{x:" + chestX + ",y:" + chestY + "}));", new JsonObject { ["kind"] = "chests_looted", ["count"] = 1 })),
                 ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel", ["depends_on"] = new JsonArray("approach", "chest") })
             });
             var loot = await Call("run_script", new JsonObject { ["task_node"] = "chest", ["event_delivery"] = "script" });

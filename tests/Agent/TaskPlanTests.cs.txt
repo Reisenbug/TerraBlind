@@ -13,6 +13,7 @@ static class TaskPlanTests
     {
         VerifyDag();
         VerifyDagInsertion();
+        VerifyChestEvidence();
         VerifyPosition();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
@@ -120,6 +121,34 @@ static class TaskPlanTests
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
         PatchChecks();
+    }
+
+    static void VerifyChestEvidence()
+    {
+        AgentTaskEvidence.Reset(); Main.netMode = NetmodeID.SinglePlayer;
+        var chest = new Chest { x = 20, y = 30 };
+        Main.chest[0] = chest;
+        chest.item[0] = new Item { type = 191, stack = 1 };
+        Main.LocalPlayer.inventory[0] = new Item { type = 191, stack = 0 };
+        var plan = new AgentTaskPlan();
+        plan.Create(Parse("""
+            {"goal":"actual chest loot","steps":[{"id":"loot","description":"loot one chest",
+              "conditions":[{"kind":"chests_looted","count":1}]}]}
+            """), AgentTaskEvidence.Measure);
+        var before = AgentTaskEvidence.ObserveChest(21, 31);
+        Check(!AgentTaskEvidence.VerifyChest(before), "opening unchanged chest counted as loot");
+        chest.item[0].stack = 0;
+        Check(!AgentTaskEvidence.VerifyChest(before), "chest removal without inventory gain counted as loot");
+        Main.LocalPlayer.inventory[0].stack = 1;
+        Check(AgentTaskEvidence.VerifyChest(before) && !AgentTaskEvidence.VerifyChest(before), "verified chest transfer missing or counted twice");
+        Check(plan.Advance("loot", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "host chest evidence did not verify plan");
+        plan.Create(Parse("""
+            {"goal":"another chest","steps":[{"id":"loot","description":"loot new chest",
+              "conditions":[{"kind":"chests_looted","count":1}]}]}
+            """), AgentTaskEvidence.Measure);
+        Check(!plan.Advance("loot", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "new plan reused historical chest loot");
+        Main.chest[0] = null; Main.LocalPlayer.inventory[0] = new Item(); AgentTaskEvidence.Reset();
+        Console.WriteLine("PASS: chest conditions verify fresh unique container-to-inventory transfers without guessing contents");
     }
 
     static void VerifyDagInsertion()

@@ -63,9 +63,9 @@ public sealed class AgentTaskPlan
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "position" or "item" or "equipped" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
-                    || kind is not ("permanent_health" or "position") && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件仅支持 permanent_health、position、item、equipped、npc_kills、npc_alive，count/type 必须为正数。");
+                if (kind is not ("permanent_health" or "position" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
+                    || kind is not ("permanent_health" or "position" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
+                    throw new InvalidOperationException("条件仅支持 permanent_health、position、item、equipped、npc_kills、npc_alive、chests_looted；count及需要的type必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
                 if (kind == "position")
                 {
@@ -77,11 +77,11 @@ public sealed class AgentTaskPlan
                     verified["y"] = check["y"].DeepClone();
                     verified["radius"] = radius;
                 }
-                else if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
+                else if (kind is not ("permanent_health" or "chests_looted")) verified["type"] = check["type"].DeepClone();
                 int value = measure(verified);
-                if (kind == "npc_kills") verified["baseline"] = value;
+                if (kind is "npc_kills" or "chests_looted") verified["baseline"] = value;
                 copy["conditions"].AsArray().Add(verified);
-                copy["best_actual"].AsArray().Add(Math.Min(kind == "npc_kills" ? 0 : value, check["count"].GetValue<int>()));
+                copy["best_actual"].AsArray().Add(Math.Min(kind is "npc_kills" or "chests_looted" ? 0 : value, check["count"].GetValue<int>()));
             }
             parsed.Add(copy);
         }
@@ -239,7 +239,7 @@ public sealed class AgentTaskPlan
             for (int i = 0; i < conditions.Count; i++)
             {
                 var condition = conditions[i].AsObject();
-                int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
+                int actual = measure(condition) - (condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0);
                 int capped = Math.Min(actual, condition["count"].GetValue<int>());
                 if (capped <= best[i].GetValue<int>()) continue;
                 best[i] = capped;
@@ -259,7 +259,7 @@ public sealed class AgentTaskPlan
         foreach (var node in step["conditions"].AsArray())
         {
             var condition = node.AsObject();
-            int actual = measure(condition) - (condition["kind"]?.GetValue<string>() == "npc_kills"
+            int actual = measure(condition) - (condition["kind"]?.GetValue<string>() is "npc_kills" or "chests_looted"
                 ? condition["baseline"].GetValue<int>() : 0);
             bool met = actual >= condition["count"].GetValue<int>();
             passed &= met;
@@ -339,7 +339,7 @@ public sealed class AgentTaskPlan
             foreach (var node in terminal["conditions"].AsArray())
             {
                 var condition = node.AsObject();
-                int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
+                int actual = measure(condition) - (condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0);
                 bool met = actual >= condition["count"].GetValue<int>();
                 passed &= met;
                 evidence.Add(new JsonObject { ["step"] = terminal["id"].DeepClone(),
