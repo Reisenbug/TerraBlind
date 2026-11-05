@@ -1371,6 +1371,7 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
+            await TestDagRepairDuringDefense();
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
@@ -1392,6 +1393,70 @@ static class RuntimeTests
             await TestPvp();
         }
         finally { Agent.Unload(); }
+    }
+
+    static async Task TestDagRepairDuringDefense()
+    {
+        AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        bool fighting = false;
+        bool attackPermission = AgentPermissions.Attack;
+        AgentPermissions.Attack = true;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/fight") fighting = true;
+            if (path == "/nav_recede") RecedingNav.Active = true;
+            return (200, path == "/fight_active" ? "{\"active\":true}"
+                : path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"repair with independent defense","mode":"dag","steps":[
+                  {"id":"travel","description":"travel","depends_on":[],"script":"return {};",
+                   "conditions":[{"kind":"item","type":191,"count":1}]}]}
+                """).AsObject(), _ => 0);
+            string workflow = AgentTools.Plan.Script("travel")["workflow"].ToString();
+            var defense = AgentTools.Actions.Start("fight", new JsonObject { ["seconds"] = 120.0 }, default);
+            await PumpUntil(() => fighting);
+            JsonObject Patch() => new()
+            {
+                ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "new observed route",
+                ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel", ["script"] = "return {revised:true};" })
+            };
+            var patched = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
+            Check(patched["error"] == null && AgentTools.Actions.HasAttack
+                && AgentTools.Plan.Script("travel")["workflow"].ToString() == workflow,
+                "independent defense blocked DAG repair or repair lost workflow/defense: " + patched.ToJsonString()
+                    + " defense=" + (await Execute(AgentTools.Actions.Query(defense["handle"].ToString(), 0, default))).ToJsonString());
+            ActionTasks.NodeContext.Value = "travel";
+            var walking = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
+            ActionTasks.NodeContext.Value = null;
+            await PumpUntil(() => RecedingNav.Active);
+            int revision = AgentTools.Plan.Snapshot()["revision"].GetValue<int>();
+            var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
+            Check(rejected["error"] != null && AgentTools.Plan.Snapshot()["revision"].GetValue<int>() == revision,
+                "DAG repair changed the plan while navigation owned movement");
+            string handle = walking["handle"].ToString();
+            await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
+            patched = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
+            Check(patched["error"] == null && AgentTools.Actions.HasAttack,
+                "paused navigation still blocked repair during defense");
+            var resumed = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
+                { ["handle"] = handle, ["command"] = "resume" }, default)));
+            Check(resumed["handle"]?.ToString() == handle && resumed["attempt"]?.GetValue<int>() == 2
+                && AgentTools.Actions.HasAttack, "repaired DAG did not resume original navigation alongside defense");
+            Console.WriteLine("PASS: DAG repair preserves independent defense and resumes paused navigation handle");
+        }
+        finally
+        {
+            ActionTasks.NodeContext.Value = null;
+            foreach (var entry in AgentTools.Actions.Summary().ToArray())
+                await Execute(AgentTools.Actions.Control(entry["handle"].ToString(), "cancel", null, default));
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Recovery.Reset();
+            AgentPermissions.Attack = attackPermission;
+            HttpServerSystem.Handler = null;
+        }
     }
 
     static async Task TestWakeHandoff(bool automatic = false)

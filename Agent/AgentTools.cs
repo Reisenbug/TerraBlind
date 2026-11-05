@@ -682,7 +682,7 @@ public static partial class AgentTools
                 if (args["nodes"] != null || args["add_nodes"] != null)
                 {
                     if (args["changes"] != null) throw new ArgumentException("nodes和changes不能同时提供。");
-                    if (Actions.HasActive) throw new InvalidOperationException("修改节点前须暂停活动动作，保留句柄后再修改与续接。");
+                    if (Actions.HasPrimaryControl) throw new InvalidOperationException("修改节点前须暂停主任务动作，保留句柄后再修改与续接；独立防身攻击无需停止。");
                     result = await NativeAgent.OnMain(() => Plan.Revise(args, AgentTaskEvidence.Measure), token);
                     break;
                 }

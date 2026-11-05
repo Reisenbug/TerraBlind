@@ -47,6 +47,7 @@ public sealed class ActionTasks
     public bool ConflictsWith(string tool)
     { lock (gate) { var owner = tool == "fight" ? attack : active; return handingOff || owner != null && caller.Value != owner.Id; } }
     public bool HasActive { get { lock (gate) return active != null || attack != null; } }
+    public bool HasPrimaryControl { get { lock (gate) return handingOff || active != null; } }
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
 
