@@ -86,6 +86,7 @@ namespace TerraBlind
 			if (req == null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _active = null; return; }
+			if (FightCoordinator.AttackAnimationActive) { _prevAnim = 0; return; }
 
 			_elapsed++;
 

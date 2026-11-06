@@ -181,8 +181,62 @@ static class GatherTests
         Console.WriteLine("PASS: long gathering has no implicit deadline; explicit cancellation propagates without follow-up actions or stale cleanup");
         FightFiltering();
         IdleDefense();
+        MiningAttackTurns();
         Evasion();
         FiringLane();
+    }
+
+    static void MiningAttackTurns()
+    {
+        var p = Main.LocalPlayer;
+        var oldInventory = p.inventory;
+        var oldNpcs = Main.npc;
+        int preferred = CombatLoadout.PreferredType;
+        bool oldManual = Manual.On;
+        try
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset(); CombatLoadout.PreferredType = 0;
+            Manual.On = false;
+            p.inventory = new Item[58];
+            for (int i = 0; i < 58; i++) p.inventory[i] = new Item();
+            p.inventory[0] = new Item { stack = 1, pick = 35, damage = 5 };
+            p.inventory[1] = new Item { stack = 1, damage = 20, shoot = 1, shootSpeed = 12 };
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.maxNPCs; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = new NPC { active = true, lifeMax = 100, damage = 10,
+                position = new(p.position.X + 100, p.position.Y), velocity = new(2, 0) };
+            var predicted = FightCoordinator.PredictAim(p, Main.npc[0], p.inventory[1]);
+            Check(predicted.X > Main.npc[0].Center.X, "moving NPC received no projectile lead");
+            FightCoordinator.Start(40);
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            Cursor.AimPx(20, 30);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0, "attack stole the first mining animation");
+            p.itemAnimation = 3; p.selectedItem = 1; Cursor.AimPx(90, 90);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && Cursor.X == 20 && Cursor.Y == 30,
+                $"mining animation lost its item or aim: slot={p.selectedItem} cursor={Cursor.X},{Cursor.Y} anim={p.itemAnimation} dead={p.dead} manual={Manual.On}");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 1 && p.controlUseItem && FightCoordinator.AimTarget.HasValue,
+                "completed mining animation did not yield an attack turn");
+            var attackAim = FightCoordinator.AimTarget.Value;
+            p.itemAnimation = 3; p.selectedItem = 0; Cursor.AimPx(20, 30);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 1 && System.Math.Abs(Cursor.X - attackAim.X) < 1,
+                "mining stole an unfinished attack animation");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && !FightCoordinator.AimTarget.HasValue,
+                "completed attack animation did not restore mining");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0;
+            p.inventory = oldInventory; Main.npc = oldNpcs; CombatLoadout.PreferredType = preferred;
+            Manual.On = oldManual;
+        }
+        Console.WriteLine("PASS: mining and attack alternate whole animations, preserve aim and lead moving NPCs");
     }
 
     static void FiringLane()

@@ -58,6 +58,8 @@ namespace Terraria
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
+        public static int mouseX, mouseY;
+        public static Microsoft.Xna.Framework.Vector2 screenPosition;
         public static double worldSurface, rockLayer;
         public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
@@ -284,7 +286,7 @@ namespace TerraBlind
     public static class Cursor
     {
         public static float X, Y;
-        public static void AimPx(float x, float y) { X = x; Y = y; }
+        public static void AimPx(float x, float y) { X = x; Y = y; Terraria.Main.mouseX = (int)x; Terraria.Main.mouseY = (int)y; }
     }
     public static class Halt
     {

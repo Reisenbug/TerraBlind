@@ -17,6 +17,33 @@ namespace TerraBlind
         private static bool _idleDefense;
         private static bool _usingItem;
         private static bool _evading;
+        private static int _animationSlot = -1;
+        private static Vector2 _animationAim;
+        private static bool _animationAttack, _animationSeen, _attackNext;
+        public static Vector2? AimTarget { get; private set; }
+        public static bool AttackAnimationActive => _animationSlot >= 0 && _animationAttack && Main.LocalPlayer.itemAnimation > 0;
+
+        static void RememberAnimation(Player p, bool attack)
+        {
+            if (!p.controlUseItem || p.itemAnimation != 0 || p.itemTime != 0) return;
+            _animationSlot = p.selectedItem;
+            _animationAim = new Vector2(Main.mouseX + Main.screenPosition.X, Main.mouseY + Main.screenPosition.Y);
+            _animationAttack = attack;
+            _animationSeen = false;
+        }
+
+        internal static Vector2 PredictAim(Player p, NPC target, Item weapon)
+        {
+            int shot = weapon.shoot;
+            float speed = weapon.shootSpeed;
+            if (weapon.useAmmo > 0 && !p.PickAmmo(weapon, out shot, out speed, out _, out _, out _, true)) return target.Center;
+            if (shot <= 0 || speed <= 0) return target.Center;
+            if (ContentSamples.ProjectilesByType.TryGetValue(shot, out var sample)) speed *= sample.extraUpdates + 1;
+            var point = PvpTactics.Aim(new(p.Center.X, p.Center.Y), new(target.Center.X, target.Center.Y),
+                new(target.velocity.X, target.velocity.Y), speed, 0,
+                (a, b) => !NeedsClearLine(weapon) || Collision.CanHitLine(new Vector2(a.X, a.Y), 2, 2, new Vector2(b.X, b.Y), 2, 2));
+            return point.HasValue ? new Vector2(point.Value.X, point.Value.Y) : target.Center;
+        }
 
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
@@ -104,6 +131,9 @@ namespace TerraBlind
             _active = false;
             _framesLeft = 0;
             _types = null;
+            _animationSlot = -1;
+            _attackNext = false;
+            AimTarget = null;
         }
 
         internal static void StopIdleDefense()
@@ -119,6 +149,7 @@ namespace TerraBlind
 
         internal static void Tick(Player p, bool processing, bool primaryItemUse = false)
         {
+            AimTarget = null;
             bool evading = false;
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
@@ -137,13 +168,35 @@ namespace TerraBlind
                 DiagLog.Write($"[agent_evade] active={evading} tick={Main.GameUpdateCount} x={p.position.X} y={p.position.Y} hp={p.statLife}");
             _evading = evading;
             if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
-            bool itemBusy = primaryItemUse || ItemUseCoordinator.IsActive
-                || PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
-                || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure");
+            if (_animationSlot >= 0 && p.itemAnimation > 0 && !p.dead && !Manual.On)
+            {
+                _animationSeen = true;
+                p.selectedItem = _animationSlot;
+                Cursor.AimPx(_animationAim.X, _animationAim.Y);
+                p.controlUseItem = false;
+                _usingItem = _animationAttack;
+                if (_animationAttack) AimTarget = _animationAim;
+                return;
+            }
+            if (_animationSlot >= 0)
+            {
+                if (_animationSeen)
+                {
+                    _attackNext = !_animationAttack;
+                    DiagLog.Write($"[agent_item_turn] completed={(_animationAttack ? "attack" : "primary")} slot={_animationSlot} tick={Main.GameUpdateCount}");
+                }
+                _animationSlot = -1;
+            }
+            bool mining = primaryItemUse && (p.HeldItem.pick > 0 || p.HeldItem.axe > 0 || p.HeldItem.hammer > 0);
+            bool placing = PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
+                || primaryItemUse && p.HeldItem.createTile >= 0;
+            bool itemBusy = placing || mining && !_attackNext || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
+                || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)
             {
                 _idleDefense = false;
                 _usingItem = false;
+                RememberAnimation(p, false);
                 return;
             }
             bool idle = !IsActive;
@@ -160,7 +213,8 @@ namespace TerraBlind
 
             if (target == null)
             {
-                p.controlUseItem = false;
+                if (!mining) p.controlUseItem = false;
+                else RememberAnimation(p, false);
                 _idleDefense = false;
                 _usingItem = false;
                 if (!idle) _framesLeft--;
@@ -173,14 +227,15 @@ namespace TerraBlind
             int weaponSlot = FindWeaponSlot(p);
             if (weaponSlot < 0) return;
 
-            float ncx = target.position.X + target.width / 2f;
-            float ncy = target.position.Y + target.height / 2f;
-            Cursor.AimPx(ncx, ncy);
+            var aim = PredictAim(p, target, p.inventory[weaponSlot]);
+            AimTarget = aim;
+            Cursor.AimPx(aim.X, aim.Y);
 
             p.selectedItem = weaponSlot;
             if (idle) p.delayUseItem = p.mouseInterface = false;
             p.controlUseItem = !NeedsClearLine(p.HeldItem) || Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
             _usingItem = p.controlUseItem;
+            RememberAnimation(p, true);
         }
 
         private static NPC FindNearest(Player p, bool idle = false)
