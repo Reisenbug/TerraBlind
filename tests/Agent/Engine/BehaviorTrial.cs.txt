@@ -48,7 +48,7 @@ public sealed class BehaviorTrial : ModSystem
         bool wasDead, entered, complete, closed, stationaryReported;
         int deaths;
         long? descentMs, healthMs, chakramMs, firstActionMs;
-        long stationarySince, longestStopMs;
+        long stationarySince, longestStopMs, lastReportMs;
         Vector2 anchor;
         JsonObject latest = new();
 
@@ -127,6 +127,11 @@ public sealed class BehaviorTrial : ModSystem
                 if (closed) return;
                 string failure = Failure();
                 if (failure != null) Fail(failure);
+                if (clock.ElapsedMilliseconds - lastReportMs >= 1000)
+                {
+                    lastReportMs = clock.ElapsedMilliseconds;
+                    File.WriteAllText(Path.Combine(directory, "acceptance-progress.json"), Report("running").ToJsonString());
+                }
             }
         }
 
