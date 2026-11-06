@@ -389,7 +389,7 @@ public sealed class BehaviorTrial : ModSystem
                 + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
                 + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
         }
-        if (trial?.IsCompleted == true || frames > FrameLimit)
+        if (trial?.IsCompleted == true || !JungleHealthTrial && frames > FrameLimit)
         {
             finished = true;
             bool ok = trial?.IsCompletedSuccessfully == true;
