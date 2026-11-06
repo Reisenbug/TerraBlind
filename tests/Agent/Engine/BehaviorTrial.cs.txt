@@ -47,7 +47,7 @@ public sealed class BehaviorTrial : ModSystem
         readonly JsonArray stops = new();
         bool wasDead, entered, complete, closed, stationaryReported;
         int deaths;
-        long? descentMs, healthMs, chakramMs, firstActionMs;
+        long? descentMs, healthMs, chakramMs, firstActionMs, firstMovementMs;
         long stationarySince, longestStopMs, lastReportMs;
         Vector2 anchor;
         JsonObject latest = new();
@@ -81,10 +81,12 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 if (firstActionMs == null && (RecedingNav.Active || p.controlUseItem || p.controlLeft || p.controlRight || p.controlJump))
                     firstActionMs = now;
-                long duration = now - stationarySince;
+                long duration = firstMovementMs == null ? 0 : now - stationarySince;
                 longestStopMs = Math.Max(longestStopMs, duration);
                 if (Vector2.DistanceSquared(p.position, anchor) > 16)
                 {
+                    if (firstMovementMs == null && (RecedingNav.Active || p.controlLeft || p.controlRight || p.controlJump))
+                        firstMovementMs = now;
                     if (stationaryReported) stops.Add(new JsonObject { ["start_ms"] = stationarySince,
                         ["duration_ms"] = duration, ["x"] = anchor.X / 16, ["y"] = anchor.Y / 16 });
                     stationarySince = now; anchor = p.position; stationaryReported = false;
@@ -101,7 +103,7 @@ public sealed class BehaviorTrial : ModSystem
             }
         }
 
-        string Failure() => clock.ElapsedMilliseconds - stationarySince > 10000 ? "stationary_10s"
+        string Failure() => firstMovementMs != null && clock.ElapsedMilliseconds - stationarySince > 10000 ? "stationary_10s"
             : deaths >= 2 ? "second_death"
             : clock.ElapsedMilliseconds >= 360000 && (descentMs == null || descentMs > 360000) ? "main_descent_deadline"
             : clock.ElapsedMilliseconds >= 1080000 && (healthMs == null || healthMs > 1080000) ? "health_200_deadline"
@@ -113,9 +115,11 @@ public sealed class BehaviorTrial : ModSystem
             ["ok"] = complete, ["reason"] = reason, ["elapsed_ms"] = clock.ElapsedMilliseconds,
             ["deaths"] = deaths, ["death_limit"] = 2, ["descent_ms"] = descentMs,
             ["health_200_ms"] = healthMs, ["chakram_ms"] = chakramMs, ["first_action_ms"] = firstActionMs,
-            ["longest_stationary_ms"] = Math.Max(longestStopMs, clock.ElapsedMilliseconds - stationarySince), ["stationary_over_5s"] = stops.DeepClone(),
-            ["stationary_limit_ms"] = 10000,
-            ["current_stationary_ms"] = clock.ElapsedMilliseconds - stationarySince,
+            ["first_movement_ms"] = firstMovementMs,
+            ["startup_wait_ms"] = firstMovementMs ?? clock.ElapsedMilliseconds,
+            ["longest_stationary_ms"] = Math.Max(longestStopMs, firstMovementMs == null ? 0 : clock.ElapsedMilliseconds - stationarySince), ["stationary_over_5s"] = stops.DeepClone(),
+            ["stationary_limit_ms"] = 10000, ["stationary_guard_armed"] = firstMovementMs != null,
+            ["current_stationary_ms"] = firstMovementMs == null ? 0 : clock.ElapsedMilliseconds - stationarySince,
             ["last_observation"] = latest.DeepClone(),
             ["main_route_rule"] = "within 10 tiles of measured entrance, then at least 12 tiles below it and within 6 tiles of measured route"
         };
