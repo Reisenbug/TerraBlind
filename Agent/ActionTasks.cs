@@ -72,7 +72,8 @@ public sealed class ActionTasks
         {
             var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight")
                 .OrderByDescending(e => e.ExecutionStarted).FirstOrDefault();
-            return entry == null ? null : Snapshot(entry);
+            return entry == null ? null : new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool,
+                ["status"] = entry.Status, ["task_node"] = entry.Node };
         }
     }
 
