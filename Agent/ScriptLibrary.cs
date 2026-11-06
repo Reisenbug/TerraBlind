@@ -10,10 +10,84 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants" };
+
+    static JsonObject Template(string name, string detail, string code) => new()
+    {
+        ["name"] = name, ["found"] = true, ["revision"] = 0, ["template"] = true,
+        ["validation"] = "example_not_live_verified", ["detail"] = detail, ["code"] = code
+    };
 
     public static JsonObject Example(string name)
     {
-        if (name != "sample_tile_variants") return new JsonObject { ["available"] = new JsonArray("sample_tile_variants") };
+        if (name == "navigate_observe") return Template(name,
+            "配置destination世界格坐标。在所属DAG节点中使用，首次启动后立即返回；后续沿用同一workflow观察原句柄。失败交回模型，不逐格修路，不自动重启。",
+            """
+            const config = null;
+            if(!config) throw new Error('Fill config.destination with a verified destination');
+            const started=step('navigation',()=>{
+              const a=tool('action_start',{tool:'nav_to',args:config.destination});
+              if(a.error||!a.handle) throw new Error(JSON.stringify(a));
+              return {handle:a.handle};
+            });
+            const action=tool('action_query',{handle:started.handle});
+            if(action.status==='running') return {status:'running',handle:started.handle,next:'Observe and plan while navigation continues; pause only to change action'};
+            if(action.status==='completed'&&action.result?.done===true)
+              return {status:'arrived',handle:started.handle,evidence:action.result,next:'Verify owning DAG node'};
+            return {status:'needs_review',handle:started.handle,evidence:action,next:'Inspect failure, choose route or report navigation limitation; do not manually rebuild its path'};
+            """);
+        if (name == "collect_detour") return Template(name,
+            "仅在已判断值得绕路后调用。配置route_handle和gather_args；须在拥有原导航的DAG节点中执行。保存原句柄、暂停、采集；多次运行同一workflow检查进度，采集完成后恢复原导航。不会自行认定所有宝物必拿。",
+            """
+            const config = null;
+            if(!config) throw new Error('Fill config.route_handle and verified gather_args');
+            const original=step('pause_route',()=>{
+              const a=tool('action_query',{handle:config.route_handle});
+              if(a.tool!=='nav_to'||!['running','paused'].includes(a.status)) throw new Error(JSON.stringify(a));
+              if(a.status==='running'){
+                const p=tool('action_control',{handle:a.handle,command:'pause'});
+                if(p.error||p.status!=='paused') throw new Error(JSON.stringify(p));
+              }
+              return {handle:a.handle};
+            });
+            const collection=step('collect',()=>{
+              const a=tool('action_start',{tool:'gather',args:config.gather_args});
+              if(a.error||!a.handle) throw new Error(JSON.stringify(a));
+              return {handle:a.handle};
+            });
+            const result=tool('action_query',{handle:collection.handle});
+            if(result.status==='running') return {status:'running',handle:collection.handle,route_handle:original.handle};
+            if(result.status!=='completed'||result.result?.outcome!=='enough')
+              return {status:'needs_review',collection:result,route_handle:original.handle};
+            const resumed=step('resume_route',()=>{
+              const r=tool('action_control',{handle:original.handle,command:'resume'});
+              if(r.error||r.status!=='running') throw new Error(JSON.stringify(r));
+              return {handle:r.handle,status:r.status};
+            });
+            return {status:'collected_route_resumed',collection:result.result,route:resumed};
+            """);
+        if (name == "use_life_crystals") return Template(name,
+            "配置target_health（例如160）。使用当前背包中的生命水晶，按永久上限核对；没有水晶就返回missing_crystals，不猜采集坐标。先暂停占用输入的动作；使用后由调用者恢复。",
+            """
+            const config = null;
+            if(!config||!Number.isInteger(config.target_health)||config.target_health<100||config.target_health>400)
+              throw new Error('Fill config.target_health between 100 and 400');
+            let state=tool('get_state',{});
+            while(state.permanent_max_health<config.target_health){
+              const crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
+              if(!crystal) return {status:'missing_crystals',permanent_health:state.permanent_max_health,target:config.target_health};
+              const before=state.permanent_max_health;
+              step('use_at_health_'+before,()=>{
+                const r=tool('use_item',{slot:crystal.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:30});
+                if(r.error||r.verified!==true) throw new Error(JSON.stringify(r));
+                return {outcome:r.outcome,verified:r.verified};
+              });
+              state=tool('get_state',{});
+              if(state.permanent_max_health<=before) return {status:'needs_review',reason:'permanent_health_did_not_increase',before,actual:state.permanent_max_health};
+            }
+            return {status:'target_met',permanent_health:state.permanent_max_health,next:'Verify permanent_health DAG condition'};
+            """);
+        if (name != "sample_tile_variants") return new JsonObject { ["available"] = new JsonArray(Templates.Select(n => (JsonNode)JsonValue.Create(n)).ToArray()) };
         return new JsonObject { ["name"] = name,
             ["detail"] = "可编辑示例，不会自动执行。填入已暂停或失败的gather句柄、目标物品及总数、查证的方块名、source_area和max_samples；保存后用稳定workflow和event_delivery:script执行。仅试采本区域，未达目标须继续规划；不推断Wiki样式与frame关系。",
             ["code"] = """
@@ -80,8 +154,15 @@ public sealed class ScriptLibrary
         lock (gate)
         {
             string path = FilePath(name);
-            return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)).AsObject()
-                : new JsonObject { ["name"] = name, ["revision"] = 0, ["found"] = false };
+            if (File.Exists(path)) return JsonNode.Parse(File.ReadAllText(path)).AsObject();
+            if (Templates.Contains(name))
+            {
+                var example = Example(name);
+                example["found"] = true; example["revision"] = 0; example["template"] = true;
+                example["validation"] = "example_not_live_verified";
+                return example;
+            }
+            return new JsonObject { ["name"] = name, ["revision"] = 0, ["found"] = false };
         }
     }
 
@@ -89,9 +170,9 @@ public sealed class ScriptLibrary
     {
         lock (gate)
         {
-            if (!Directory.Exists(directory)) return new JsonArray();
-            return new JsonArray(Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path)
-                .Select(path => { var entry = Get(Path.GetFileNameWithoutExtension(path)); entry.Remove("code"); return (JsonNode)entry; }).ToArray());
+            var saved = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension) : Enumerable.Empty<string>();
+            return new JsonArray(Templates.Concat(saved).Distinct().OrderBy(name => name)
+                .Select(name => { var entry = Get(name); entry.Remove("code"); return (JsonNode)entry; }).ToArray());
         }
     }
 

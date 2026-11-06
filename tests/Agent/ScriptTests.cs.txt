@@ -208,6 +208,74 @@ static class ScriptTests
         try
         {
             var library = new ScriptLibrary(programDirectory);
+            foreach (string name in new[] { "navigate_observe", "collect_detour", "use_life_crystals" })
+            {
+                Check(library.List().Any(p => p["name"].ToString() == name && p["template"].GetValue<bool>()), "starter template missing from empty library");
+                var template = library.Get(name);
+                Check(template["revision"].GetValue<int>() == 0 && template["validation"].ToString() == "example_not_live_verified", "template claimed live validation");
+                Check(library.Save(name, template["code"].ToString(), 0)["revision"].GetValue<int>() == 1, "starter template failed syntax validation or save");
+                Check(new ScriptLibrary(programDirectory).Get(name)["template"] == null, "saved skill was replaced by bundled template");
+            }
+            int starts = 0;
+            var navigationProgress = new ScriptProgress();
+            string navigationCode = library.Get("navigate_observe")["code"].ToString()
+                .Replace("const config = null;", "const config = {destination:{x:100,y:200}};");
+            Task<string> NavigationTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "action_start") { starts++; return Task.FromResult("{\"handle\":\"route\",\"status\":\"running\"}"); }
+                if (name == "action_query") return Task.FromResult("{\"handle\":\"route\",\"status\":\"running\"}");
+                throw new Exception("navigation example attempted unexpected operation " + name);
+            }
+            for (int i = 0; i < 2; i++)
+            {
+                var r = await AgentScript.Run(navigationCode, 30, (_, _) => { }, NavigationTool, _ => Task.CompletedTask, default, navigationProgress);
+                Check(r["ok"].GetValue<bool>() && r["value"]["status"].ToString() == "running", "navigation example blocked or lost active handle");
+            }
+            Check(starts == 1, "navigation example restarted its existing route");
+            int detourStarts = 0, pauses = 0, resumes = 0;
+            bool collected = false;
+            Task<string> DetourTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "action_start") { detourStarts++; return Task.FromResult("{\"handle\":\"collection\",\"status\":\"running\"}"); }
+                if (name == "action_control")
+                {
+                    if (args["command"].ToString() == "pause") { pauses++; return Task.FromResult("{\"status\":\"paused\"}"); }
+                    resumes++; return Task.FromResult("{\"handle\":\"route\",\"status\":\"running\"}");
+                }
+                if (name == "action_query" && args["handle"].ToString() == "route")
+                    return Task.FromResult("{\"handle\":\"route\",\"tool\":\"nav_to\",\"status\":\"running\"}");
+                if (name == "action_query") return Task.FromResult(collected
+                    ? "{\"status\":\"completed\",\"result\":{\"outcome\":\"enough\"}}" : "{\"status\":\"running\"}");
+                throw new Exception("unexpected detour operation " + name);
+            }
+            string detourCode = library.Get("collect_detour")["code"].ToString()
+                .Replace("const config = null;", "const config = {route_handle:'route',gather_args:{targets:[{item_type:29,count:1}]}};");
+            var detourProgress = new ScriptProgress();
+            var detour = await AgentScript.Run(detourCode, 30, (_, _) => { }, DetourTool, _ => Task.CompletedTask, default, detourProgress);
+            Check(detour["ok"].GetValue<bool>() && resumes == 0, "detour resumed route before collection completed");
+            collected = true;
+            for (int i = 0; i < 2; i++)
+            {
+                detour = await AgentScript.Run(detourCode, 30, (_, _) => { }, DetourTool, _ => Task.CompletedTask, default, detourProgress);
+                Check(detour["ok"].GetValue<bool>(), "detour continuation failed");
+            }
+            Check(pauses == 1 && detourStarts == 1 && resumes == 1, "detour replayed completed effects or failed to restore route");
+            int health = 100, crystals = 3, uses = 0;
+            Task<string> CrystalTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "get_state") return Task.FromResult(new JsonObject { ["permanent_max_health"] = health,
+                    ["player"] = new JsonObject { ["pos"] = new JsonObject { ["x"] = 160, ["y"] = 320 } },
+                    ["inventory_slots"] = new JsonArray(new JsonObject { ["type"] = 29, ["stack"] = crystals, ["slot"] = 7 }) }.ToJsonString());
+                if (name == "use_item") { uses++; crystals--; health += 20; return Task.FromResult("{\"outcome\":\"consumed\",\"verified\":true}"); }
+                throw new Exception("unexpected crystal skill operation " + name);
+            }
+            string crystalCode = library.Get("use_life_crystals")["code"].ToString()
+                .Replace("const config = null;", "const config = {target_health:160};");
+            var crystalProgress = new ScriptProgress();
+            var consumed = await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress);
+            Check(consumed["ok"].GetValue<bool>() && health == 160 && uses == 3, "crystal skill failed to verify permanent growth");
+            await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress);
+            Check(uses == 3, "crystal skill consumed again after reaching target");
             string recipe = ScriptLibrary.Example("sample_tile_variants")["code"].ToString();
             int recipeCalls = 0, recipeItems = 0, recipeResumes = 0;
             Task<string> RecipeTool(string name, JsonObject args, CancellationToken token)
