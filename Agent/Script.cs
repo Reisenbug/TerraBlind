@@ -13,6 +13,16 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        foreach (var (tool, field) in new[] { ("task_plan", "steps"), ("task_plan_patch", "add_nodes") })
+        {
+            var definition = tools.First(t => t["function"]?["name"]?.ToString() == tool)["function"];
+            definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"]["type"] = new JsonObject
+            {
+                ["anyOf"] = new JsonArray(new JsonObject { ["type"] = "integer", ["minimum"] = 1 },
+                    new JsonObject { ["type"] = "string", ["minLength"] = 1 }),
+                ["description"] = "真实编号或完整原版英文内部名称。宿主在建计划时解析名称并保存编号，可直接使用已知名称，无需先单独调用game_catalog；名称片段或歧义会拒绝。"
+            };
+        }
         var fight = tools.First(t => t["function"]?["name"]?.ToString() == "fight")["function"];
         fight["description"] = "仅控制攻击，不改变移动；可与nav_to并行，不需暂停原导航。挖掘、放置使用物品时攻击让位；结束攻击不停止导航。" + fight["description"];
         if (fight["parameters"]?["properties"]?["movement"] is JsonObject movement)

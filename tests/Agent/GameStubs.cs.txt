@@ -186,8 +186,8 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
-    public static class ItemID { }
-    public static class NPCID { }
+    public static class ItemID { public const int FixtureGoal = 191; }
+    public static class NPCID { public const int FixtureEnemy = 222; }
     public static class ProjectileID { }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID

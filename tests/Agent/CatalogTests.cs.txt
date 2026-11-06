@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Nodes;
 using TerraBlind;
 
 static class CatalogTests
@@ -28,6 +29,22 @@ static class CatalogTests
 
     public static void Run()
     {
+        var named = JsonNode.Parse("""
+            {"goal":"resolve final conditions before starting","steps":[{"id":"finish","description":"finish",
+            "conditions":[{"kind":"item","type":"Fixture Goal","count":1},{"kind":"npc_kills","type":"FixtureEnemy","count":1}]}]}
+            """).AsObject();
+        var normalized = AgentCatalog.ResolvePlanTypes(named);
+        var plan = new AgentTaskPlan();
+        var saved = plan.Create(normalized, _ => 0);
+        Check(saved["steps"][0]["conditions"][0]["type"].GetValue<int>() == 191
+            && saved["steps"][0]["conditions"][1]["type"].GetValue<int>() == 222
+            && named["steps"][0]["conditions"][0]["type"].ToString() == "Fixture Goal",
+            "named completion conditions were not normalized atomically into typed evidence");
+        named["steps"][0]["conditions"][0]["type"] = "Fixture";
+        try { AgentCatalog.ResolvePlanTypes(named); throw new Exception("partial condition name was accepted"); }
+        catch (ArgumentException) { }
+        Check(plan.Snapshot()["steps"][0]["conditions"][0]["type"].GetValue<int>() == 191,
+            "failed name resolution changed the existing plan");
         var result = AgentCatalog.Query(typeof(Sample), "ALPHA TOOL");
         Check(result["total"].GetValue<int>() == 1 && result["matches"][0]["type"].GetValue<int>() == 7
             && result["matches"][0]["exact"].GetValue<bool>(), "exact lookup included a different item's partial match");

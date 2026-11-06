@@ -7,6 +7,30 @@ namespace TerraBlind;
 
 public static class AgentCatalog
 {
+    public static JsonObject ResolvePlanTypes(JsonObject args)
+    {
+        var resolved = (JsonObject)args.DeepClone();
+        foreach (string field in new[] { "steps", "add_nodes" })
+        foreach (var step in resolved[field] as JsonArray ?? new JsonArray())
+        foreach (var condition in step["conditions"] as JsonArray ?? new JsonArray())
+        {
+            if (condition["type"] is not JsonValue value || !value.TryGetValue<string>(out string name)) continue;
+            string kind = condition["kind"]?.ToString();
+            Type constants = kind switch
+            {
+                "item" or "equipped" => typeof(Terraria.ID.ItemID),
+                "npc_alive" or "npc_kills" => typeof(Terraria.ID.NPCID),
+                _ => throw new ArgumentException("名称型type只用于物品、装备和NPC条件。")
+            };
+            var matches = Query(constants, name)["matches"].AsArray();
+            var ids = matches.Where(m => m["exact"]?.GetValue<bool>() == true)
+                .Select(m => m["type"].GetValue<int>()).Distinct().ToArray();
+            if (ids.Length != 1) throw new ArgumentException("条件type需要唯一的原版内部名称：" + name);
+            condition["type"] = ids[0];
+        }
+        return resolved;
+    }
+
     public static JsonObject NpcDropSources(int itemType, int limit = 40)
     {
         if (itemType <= 0 || itemType >= Terraria.ModLoader.ItemLoader.ItemCount || limit is < 1 or > 100)

@@ -717,7 +717,7 @@ public static partial class AgentTools
                         if (Actions.Summary().Any(a => a["tool"]?.ToString() != "fight"
                             && a["status"]?.ToString() is "running" or "queued" && edited.Contains(a["task_node"]?.ToString())))
                             throw new InvalidOperationException("修改执行中节点须暂停其动作；修改已排队节点须先取消待执行句柄再重新排队。其他节点可在导航途中修改。");
-                        return Plan.Revise(args, AgentTaskEvidence.Measure);
+                        return Plan.Revise(AgentCatalog.ResolvePlanTypes(args), AgentTaskEvidence.Measure);
                     }, token);
                     break;
                 }
@@ -796,7 +796,7 @@ public static partial class AgentTools
                 }, token);
                 break;
             case "task_plan":
-                result = await NativeAgent.OnMain(() => Plan.Create(args, AgentTaskEvidence.Measure), token);
+                result = await NativeAgent.OnMain(() => Plan.Create(AgentCatalog.ResolvePlanTypes(args), AgentTaskEvidence.Measure), token);
                 break;
             case "task_step":
                 result = await NativeAgent.OnMain(() => Text(args, "action") switch
