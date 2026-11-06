@@ -236,7 +236,7 @@
     "type": "function",
     "function": {
       "name": "nav_to",
-      "description": "移动到目标方块坐标，等待到达、失败或超时。exact 用于矿石或实心目标，reach 用于开箱等交互目标。生命水晶、罐子等非实心物体即使传exact也会转换为reach，接近后还需use_item等工具实际采集，不能把导航到达当收集成功。返回真实状态和物品增减。",
+      "description": "移动到世界格坐标。mode选择目标语义：travel到达路点或站位，mine接近待挖实心目标，interact进入箱子或非实心采集物的交互范围。沿主道移动使用travel；接近采集物后继续调用相应采集工具。返回真实状态和物品增减。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -254,13 +254,11 @@
           "y": {
             "type": "integer"
           },
-          "exact": {
-            "type": "boolean",
-            "description": "目标是矿石/实心块这种人站不上去的格子时传 true。寻路会切到挖矿模式:直接挖竖井过去,落点就在目标那一片里,不会贴到附近地面就说到了。挖矿几乎总该传 true"
-          },
-          "reach": {
-            "type": "boolean",
-            "description": "开箱子这种够得着就行的,传 true。不用挤到那一格上"
+          "mode": {
+            "type": "string",
+            "enum": ["travel", "mine", "interact"],
+            "default": "travel",
+            "description": "travel用于主道路点和站位；mine用于待挖实心物体；interact用于箱子、生命水晶等交互目标。"
           }
         },
         "required": [

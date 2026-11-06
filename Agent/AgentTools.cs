@@ -1558,6 +1558,12 @@ public static partial class AgentTools
         {
             int x = Int(args, "x"), y = Int(args, "y");
             bool reach = Bool(args, "reach"), exact = Bool(args, "exact");
+            string mode = Text(args, "mode");
+            if (mode.Length > 0)
+            {
+                if (mode is not ("travel" or "mine" or "interact")) throw new ArgumentException("mode需要travel/mine/interact。");
+                reach = mode == "interact"; exact = mode == "mine";
+            }
             if (exact && WorldGen.InWorld(x, y))
             {
                 var tile = Main.tile[x, y];
