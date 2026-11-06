@@ -927,7 +927,7 @@ static class RuntimeTests
                     {
                         var request = JsonNode.Parse(payload);
                         Check(request["gx"].GetValue<int>() == 100 && request["gy"].GetValue<int>() == 100
-                            && request["stand"].GetValue<bool>() && !request["reach"].GetValue<bool>() && !request["exact"].GetValue<bool>(),
+                            && !request["stand"].GetValue<bool>() && request["reach"].GetValue<bool>() && !request["exact"].GetValue<bool>(),
                             "coordinate waypoint enabled implicit downward ground snapping");
                     }
                     return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
@@ -935,16 +935,16 @@ static class RuntimeTests
                 await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100 }, default));
             }
             Console.WriteLine("PASS: coordinate navigation preserves the requested waypoint instead of snapping downward");
-            foreach (string mode in new[] { "travel", "mine", "interact" })
+            foreach (string mode in new[] { "travel", "mine", "interact", "stand" })
             {
                 HttpServerSystem.Handler = (path, payload) =>
                 {
                     if (path == "/nav_recede")
                     {
                         var request = JsonNode.Parse(payload);
-                        Check(request["stand"].GetValue<bool>() == (mode == "travel")
+                        Check(request["stand"].GetValue<bool>() == (mode == "stand")
                             && request["exact"].GetValue<bool>() == (mode == "mine")
-                            && request["reach"].GetValue<bool>() == (mode == "interact"),
+                            && request["reach"].GetValue<bool>() == (mode is "travel" or "interact"),
                             "navigation target mode was dispatched to the wrong native action");
                     }
                     return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");

@@ -236,7 +236,7 @@
     "type": "function",
     "function": {
       "name": "nav_to",
-      "description": "移动到世界格坐标。mode选择目标语义：travel到达路点或站位，mine接近待挖实心目标，interact进入箱子或非实心采集物的交互范围。沿主道移动使用travel；接近采集物后继续调用相应采集工具。返回真实状态和物品增减。",
+      "description": "移动到世界格坐标。mode选择目标语义：travel进入路点附近的交接范围，mine接近待挖实心目标，interact进入箱子或采集物的交互范围，stand搜索精确落脚位置。沿主道赶路使用travel；接近采集物后继续调用相应采集工具。返回真实状态和物品增减。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -256,9 +256,9 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["travel", "mine", "interact"],
+            "enum": ["travel", "mine", "interact", "stand"],
             "default": "travel",
-            "description": "travel用于主道路点和站位；mine用于待挖实心物体；interact用于箱子、生命水晶等交互目标。"
+            "description": "travel用于主道路点附近的交接；mine用于待挖实心物体；interact用于箱子、生命水晶等交互目标；stand用于精确落脚操作。"
           }
         },
         "required": [

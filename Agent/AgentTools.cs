@@ -1556,13 +1556,14 @@ public static partial class AgentTools
         var request = await NativeAgent.OnMain(() =>
         {
             int x = Int(args, "x"), y = Int(args, "y");
-            bool reach = Bool(args, "reach"), exact = Bool(args, "exact");
+            bool reach = Bool(args, "reach"), exact = Bool(args, "exact"), stand = Bool(args, "stand");
             string mode = Text(args, "mode");
             if (mode.Length > 0)
             {
-                if (mode is not ("travel" or "mine" or "interact")) throw new ArgumentException("mode需要travel/mine/interact。");
-                reach = mode == "interact"; exact = mode == "mine";
+                if (mode is not ("travel" or "mine" or "interact" or "stand")) throw new ArgumentException("mode需要travel/mine/interact/stand。");
+                reach = mode is "travel" or "interact"; exact = mode == "mine"; stand = mode == "stand";
             }
+            else if (!exact && !stand) reach = true;
             if (exact && WorldGen.InWorld(x, y))
             {
                 var tile = Main.tile[x, y];
@@ -1570,7 +1571,7 @@ public static partial class AgentTools
                     reach = true;
             }
             return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach,
-                ["stand"] = !reach && !exact };
+                ["stand"] = stand };
         }, token);
         var start = await Call("/nav_recede", request, token);
         if (Rejected(start)) return start;
@@ -1616,7 +1617,7 @@ public static partial class AgentTools
             }
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));
             bool arrived = Bool(request, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
-            if (Bool(request, "reach") && !Bool(args, "reach"))
+            if (Bool(request, "reach") && (Bool(args, "exact") || Text(args, "mode") == "mine"))
                 result["mode_adjustment"] = "non_solid_target_use_reach_then_use_tool";
             if (Bool(result, "done") && !arrived)
             { result["done"] = false; result["status"] = "stopped_short"; result["dist"] = distance; }

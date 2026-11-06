@@ -15,7 +15,7 @@ public static class AgentScript
     {
         var navigation = tools.First(t => t["function"]?["name"]?.ToString() == "nav_to")["function"];
         navigation["description"] = navigation["description"].ToString()
-            + "默认travel保持请求的站位坐标；mine按采挖距离接近实心目标，interact按交互距离接近目标。";
+            + "默认travel进入请求路点附近的交接范围；mine接近待挖实心目标，interact按交互距离接近目标，stand搜索精确落脚位置。";
         var run = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"];
         run["parameters"]["properties"]["background"] = new JsonObject { ["type"] = "boolean",
             ["description"] = "配合task_node启动持续后台脚本并立即返回句柄；Agent可同时查询和准备后续。脚本内直接顺序调用动作，不嵌套action_start。" };
