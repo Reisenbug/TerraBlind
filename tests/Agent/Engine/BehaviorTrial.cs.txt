@@ -1703,6 +1703,15 @@ public sealed class BehaviorTrial : ModSystem
             var before = await Call("get_state", new JsonObject());
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
             var acceptanceRoute = FullCraftTrial ? await Call("descent_route", new JsonObject { ["name"] = "jungle" }) : null;
+            if (FullCraftTrial && (acceptanceRoute["entrance"] is not JsonObject || acceptanceRoute["line"] is not JsonArray))
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "acceptance-setup.json"), new JsonObject
+                {
+                    ["ok"] = false, ["reason"] = "main_route_unavailable", ["task_started"] = false,
+                    ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["route"] = acceptanceRoute.DeepClone()
+                }.ToJsonString());
+                throw new InvalidOperationException("验收主道查询未返回入口和路线；任务尚未启动，见acceptance-setup.json。");
+            }
             string trialPrompt = null;
             var startedUtc = DateTime.UtcNow;
             using var journal = new StreamWriter(Path.Combine(Main.SavePath, "trial-samples.jsonl")) { AutoFlush = true };
