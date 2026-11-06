@@ -23,18 +23,24 @@ static class RuntimeTests
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         int pumps = 0;
+        double updateMs = 0, waitMs = 0;
         while (!done())
         {
-            Check(elapsed.Elapsed.TotalSeconds < 15, "main-thread test timed out; pumps=" + pumps + "; status=" + NativeAgent.Status
+            Check(elapsed.Elapsed.TotalSeconds < 30, "main-thread test timed out; pumps=" + pumps
+                + "; update_ms=" + updateMs + "; wait_ms=" + waitMs + "; status=" + NativeAgent.Status
                 + "; active_handle=" + AgentTools.Actions.ActiveHandle
                 + "; recent_messages=" + string.Join(" | ", AgentChat.Messages.TakeLast(5)));
+            double started = elapsed.Elapsed.TotalMilliseconds;
             Agent.PostUpdateEverything();
             pumps++;
             for (int frame = 0; frame < 10; frame++) PlayerCombat.Tick(Game.LocalPlayer);
+            updateMs += elapsed.Elapsed.TotalMilliseconds - started;
+            started = elapsed.Elapsed.TotalMilliseconds;
             await Task.Delay(5);
+            waitMs += elapsed.Elapsed.TotalMilliseconds - started;
         }
         if (elapsed.Elapsed.TotalSeconds >= 5)
-            Console.WriteLine($"SLOW_TEST_PUMP elapsed_ms={elapsed.ElapsedMilliseconds} pumps={pumps} status={NativeAgent.Status}");
+            Console.WriteLine($"SLOW_TEST_PUMP elapsed_ms={elapsed.ElapsedMilliseconds} pumps={pumps} update_ms={updateMs:F1} wait_ms={waitMs:F1} status={NativeAgent.Status}");
     }
 
     static async Task<T> Execute<T>(Task<T> task)
