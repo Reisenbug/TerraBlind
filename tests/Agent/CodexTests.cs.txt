@@ -21,6 +21,7 @@ static class CodexTests
     {
         await GoalProtocol();
         await NativeGoalProtocol();
+        await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
         CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12345"));
@@ -217,6 +218,47 @@ static class CodexTests
             Terraria.Main.netMode = Terraria.ID.NetmodeID.SinglePlayer;
         }
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
+    }
+
+    static async Task NativeBackgroundReview()
+    {
+        var native = new NativeAgent();
+        var server = new Server();
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        string handle = null;
+        HttpServerSystem.Handler = (_, _) => (200, "{\"done\":false}");
+        server.AfterTool = calls =>
+        {
+            if (calls == 1) _ = NativeAgent.OnMain(() =>
+            {
+                handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 200, ["y"] = 100 }, default)["handle"].ToString();
+                return true;
+            }, default);
+        };
+        try
+        {
+            NativeAgent.Submit("/goal observe while navigation remains active");
+            var deadline = DateTime.UtcNow.AddSeconds(25);
+            while (server.Inputs.Count < 2)
+            {
+                Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(server.Inputs[1].Contains("并行观察") && AgentTools.Actions.ActiveHandle == handle,
+                "model was not woken with the original active navigation handle");
+            var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
+            Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
+                "background review paused or restarted navigation");
+        }
+        finally
+        {
+            NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
+            HttpServerSystem.Handler = null; Config.I.AgentUseCodex = false;
+        }
+        Console.WriteLine("PASS: host wakes model during navigation without pausing or restarting its handle");
     }
 
     static async Task NativeGoalProtocol()
