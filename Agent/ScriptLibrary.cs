@@ -63,15 +63,22 @@ public sealed class ScriptLibrary
             return {status:'collected_route_resumed',collection:result.result,route:resumed};
             """);
         if (name == "use_life_crystals") return Template(name,
-            "配置target_health（例如160）。使用当前背包中的生命水晶，按永久上限核对；没有水晶就返回missing_crystals，不猜采集坐标。先暂停占用输入的动作；使用后由调用者恢复。",
+            "配置target_health和可选gather_args。在所属DAG后台节点内连续采集、使用生命水晶并核对永久生命；gather_args采用已查证的来源和采集区域。每颗水晶使用后立即继续下一颗，采集结果需要审阅时返回现场证据。仅使用背包水晶时提供target_health即可。",
             """
             const config = null;
             if(!config||!Number.isInteger(config.target_health)||config.target_health<100||config.target_health>400)
               throw new Error('Fill config.target_health between 100 and 400');
             let state=tool('get_state',{});
             while(state.permanent_max_health<config.target_health){
-              const crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
-              if(!crystal) return {status:'missing_crystals',permanent_health:state.permanent_max_health,target:config.target_health};
+              let crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
+              if(!crystal){
+                if(!config.gather_args) return {status:'missing_crystals',permanent_health:state.permanent_max_health,target:config.target_health};
+                const collection=tool('gather',config.gather_args);
+                if(collection.outcome!=='enough') return {status:'needs_review',collection,permanent_health:state.permanent_max_health};
+                state=tool('get_state',{});
+                crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
+                if(!crystal) return {status:'needs_review',reason:'collection_inventory_changed',collection};
+              }
               const before=state.permanent_max_health;
               step('use_at_health_'+before,()=>{
                 const r=tool('use_item',{slot:crystal.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:30});

@@ -259,13 +259,21 @@ static class ScriptTests
                 Check(detour["ok"].GetValue<bool>(), "detour continuation failed");
             }
             Check(pauses == 1 && detourStarts == 1 && resumes == 1, "detour replayed completed effects or failed to restore route");
-            int health = 100, crystals = 3, uses = 0;
+            int health = 100, crystals = 3, uses = 0, crystalCollections = 0;
+            bool crystalSourceAvailable = true;
             Task<string> CrystalTool(string name, JsonObject args, CancellationToken token)
             {
                 if (name == "get_state") return Task.FromResult(new JsonObject { ["permanent_max_health"] = health,
                     ["player"] = new JsonObject { ["pos"] = new JsonObject { ["x"] = 160, ["y"] = 320 } },
                     ["inventory_slots"] = new JsonArray(new JsonObject { ["type"] = 29, ["stack"] = crystals, ["slot"] = 7 }) }.ToJsonString());
                 if (name == "use_item") { uses++; crystals--; health += 20; return Task.FromResult("{\"outcome\":\"consumed\",\"verified\":true}"); }
+                if (name == "gather")
+                {
+                    crystalCollections++;
+                    if (!crystalSourceAvailable) return Task.FromResult("{\"outcome\":\"source_unavailable\"}");
+                    crystals++;
+                    return Task.FromResult("{\"outcome\":\"enough\"}");
+                }
                 throw new Exception("unexpected crystal skill operation " + name);
             }
             string crystalCode = library.Get("use_life_crystals")["code"].ToString()
@@ -275,6 +283,15 @@ static class ScriptTests
             Check(consumed["ok"].GetValue<bool>() && health == 160 && uses == 3, "crystal skill failed to verify permanent growth");
             await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress);
             Check(uses == 3, "crystal skill consumed again after reaching target");
+            string collectCrystalCode = library.Get("use_life_crystals")["code"].ToString()
+                .Replace("const config = null;", "const config = {target_health:220,gather_args:{targets:[{item_type:29,count:1,tile_names:['Heart']}]}};");
+            var collectedCrystals = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress());
+            Check(collectedCrystals["value"]?["status"]?.ToString() == "target_met" && health == 220
+                && uses == 6 && crystalCollections == 3, "crystal skill failed to continue collection and use in one script");
+            health = 200; crystalSourceAvailable = false;
+            var unavailableCrystal = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress());
+            Check(unavailableCrystal["value"]?["collection"]?["outcome"]?.ToString() == "source_unavailable"
+                && crystalCollections == 4 && uses == 6, "crystal skill retried an unavailable source or lost collection evidence");
             string recipe = ScriptLibrary.Example("sample_tile_variants")["code"].ToString();
             int recipeCalls = 0, recipeItems = 0, recipeResumes = 0;
             Task<string> RecipeTool(string name, JsonObject args, CancellationToken token)
