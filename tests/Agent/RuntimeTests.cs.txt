@@ -1523,6 +1523,8 @@ static class RuntimeTests
         try
         {
             foreach (bool verified in new[] { true, false })
+            foreach (bool script in new[] { false, true })
+            foreach (bool pause in verified && script ? new[] { false, true } : new[] { false })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
                 Game.LocalPlayer.statLifeMax = verified ? 100 : 80;
@@ -1530,7 +1532,11 @@ static class RuntimeTests
                 int starts = 0;
                 HttpServerSystem.Handler = (path, _) =>
                 {
-                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    if (path == "/nav_recede")
+                    {
+                        starts++; RecedingNav.Active = true;
+                        if (pause && starts == 2) arrived = false;
+                    }
                     return (200, path == "/nav_recede_done" ? new JsonObject { ["done"] = arrived }.ToJsonString()
                         : "{\"accepted\":true}");
                 };
@@ -1538,7 +1544,7 @@ static class RuntimeTests
                     {"goal":"prepared continuation","mode":"dag","steps":[
                       {"id":"travel","description":"travel","depends_on":[],"script":"return {};",
                        "conditions":[{"kind":"permanent_health","count":100}]},
-                      {"id":"collect","description":"collect","depends_on":["travel"],"script":"return {};",
+                      {"id":"collect","description":"collect","depends_on":["travel"],"script":"const s=tool('get_state'); const a=tool('nav_to',{x:16,y:34}); if(!a.done) return a; return tool('nav_to',{x:17,y:34});",
                        "conditions":[{"kind":"item","type":191,"count":1}]}]}
                     """).AsObject(), _ => 0);
                 ActionTasks.NodeContext.Value = "travel";
@@ -1548,23 +1554,32 @@ static class RuntimeTests
                 var queued = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
                 {
                     ["tool"] = "action_queue", ["args"] = new JsonObject { ["after_handle"] = first,
-                        ["task_node"] = "collect", ["tool"] = "nav_to",
-                        ["args"] = new JsonObject { ["x"] = 16, ["y"] = 34 } }
+                        ["task_node"] = "collect", ["tool"] = script ? "run_script" : "nav_to",
+                        ["args"] = script ? new JsonObject { ["task_node"] = "collect" }
+                            : new JsonObject { ["x"] = 16, ["y"] = 34 } }
                 }, default)));
                 string next = queued["value"]?["handle"]?.ToString();
                 Check(next != null && starts == 1 && RecedingNav.Active, "queue submission failed or interrupted navigation: " + queued);
                 arrived = true;
+                if (pause)
+                {
+                    await PumpUntil(() => starts == 2);
+                    var paused = await Execute(AgentTools.Actions.Control(next, "pause", null, default));
+                    Check(paused["status"].ToString() == "paused", "script cleanup cancelled the paused continuation: " + paused);
+                    arrived = true;
+                    await Execute(AgentTools.Actions.Control(next, "resume", null, default));
+                }
                 await PumpUntil(() => AgentTools.Actions.Summary().Any(a => a["handle"]?.ToString() == next
                     && a["status"]?.ToString() is not ("running" or "queued")));
                 var result = await Execute(AgentTools.Actions.Query(next, 0, default));
                 var travel = AgentTools.Plan.Snapshot()["steps"][0];
                 if (verified)
-                    Check(starts == 2 && result["status"].ToString() == "completed" && travel["status"].ToString() == "completed"
+                    Check(starts == (pause ? 4 : script ? 3 : 2) && result["status"].ToString() == "completed" && travel["status"].ToString() == "completed"
                         && result["task_node"].ToString() == "collect", "queued action did not verify and transfer DAG ownership: " + result);
                 else
                     Check(starts == 1 && result["status"].ToString() == "failed" && travel["status"].ToString() != "completed",
                         "action completion bypassed unmet DAG condition: " + result);
-                Console.WriteLine($"DAG_QUEUE verified={verified} starts={starts} handoff_ms={result["handoff_ms"]}");
+                Console.WriteLine($"DAG_QUEUE verified={verified} script={script} pause={pause} starts={starts} handoff_ms={result["handoff_ms"]}");
             }
         }
         finally

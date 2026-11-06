@@ -19,9 +19,21 @@ public sealed class AgentWatch
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
     bool localDelivery;
+    readonly HashSet<Guid> scriptReaders = new();
+    public Guid BeginScriptDelivery()
+    {
+        var reader = Guid.NewGuid();
+        scriptReaders.Add(reader);
+        return reader;
+    }
+    public void EndScriptDelivery(Guid reader)
+    {
+        if (scriptReaders.Remove(reader) && !LocalDelivery && passive.Contains("low_health"))
+            seen.RemoveWhere(key => key.StartsWith("low_health:", StringComparison.Ordinal));
+    }
     public bool LocalDelivery
     {
-        get => localDelivery;
+        get => localDelivery || scriptReaders.Count > 0;
         set
         {
             if (localDelivery && !value && passive.Contains("low_health"))
@@ -289,6 +301,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }

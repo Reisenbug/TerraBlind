@@ -13,6 +13,12 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var queue = tools.First(t => t["function"]?["name"]?.ToString() == "action_queue")["function"];
+        queue["parameters"]["properties"]["tool"]["enum"].AsArray().Add("run_script");
+        queue["description"] = queue["description"].ToString()
+            + "下一段需要现场查询、条件选择或多个连续动作时，tool用run_script，args为{task_node:同一节点id}。"
+            + "宿主读取该节点已保存的script，前置验收后立即后台执行，模型可继续思考。脚本内直接tool('nav_to',args)、tool('gather',args)等顺序执行；"
+            + "脚本本身已持有排队句柄，不能嵌套action_start。action_control可以暂停、取消该脚本；续接使用同一workflow，uncertain先核对。yield/wake会交回观察，不视为节点已完成。";
         foreach (var (tool, field) in new[] { ("task_plan", "steps"), ("task_plan_patch", "add_nodes") })
         {
             var definition = tools.First(t => t["function"]?["name"]?.ToString() == tool)["function"];

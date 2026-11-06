@@ -330,6 +330,16 @@ static class ActionTests
     static async Task QueuedActions()
     {
         var watch = new AgentWatch();
+        var reader1 = watch.BeginScriptDelivery();
+        var reader2 = watch.BeginScriptDelivery();
+        watch.EndScriptDelivery(reader1);
+        Check(watch.LocalDelivery, "ending one script disabled another script event reader");
+        watch.Reset();
+        var reader3 = watch.BeginScriptDelivery();
+        watch.EndScriptDelivery(reader2);
+        Check(watch.LocalDelivery, "stale script cleanup disabled the new task reader");
+        watch.EndScriptDelivery(reader3);
+        Check(!watch.LocalDelivery, "last script reader did not restore agent event delivery");
         watch.EnsureDefaults();
         JsonObject Chain(string status) => new() { ["hp"] = 100, ["actions"] = new JsonArray(
             new JsonObject { ["handle"] = "arrival", ["status"] = "completed", ["attempt"] = 1, ["tool"] = "nav_to" },
@@ -405,6 +415,17 @@ static class ActionTests
             }
         }
         Console.WriteLine("PASS: queued actions continue without model calls, preserve pause and stop after failure or task replacement");
+        foreach (string value in new[] { "{\"status\":\"yield\"}", "{\"done\":false,\"status\":\"stopped_short\"}", "{\"error\":\"blocked\"}", "42" })
+        {
+            var actions = new ActionTasks((_, _, _) => Task.FromResult("{\"ok\":true,\"value\":" + value + "}"),
+                _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+            string handle = actions.Start("run_script", new JsonObject(), default)["handle"].ToString();
+            JsonObject result;
+            do { result = await actions.Query(handle, 100, default); } while (result["status"].ToString() == "running");
+            Check(result["status"].ToString() == (value == "42" ? "completed" : "failed"),
+                "script transport success concealed an unfinished action or rejected a primitive result: " + result);
+        }
+        Console.WriteLine("PASS: queued scripts preserve yielded and failed outcomes instead of treating JS return as completion");
     }
 
     static async Task InterruptedChest()

@@ -55,9 +55,10 @@ public sealed class ActionTasks
     public bool HasPrimaryControl { get { lock (gate) return handingOff || active != null; } }
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
+    internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
 
     internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
-        or "mine_vein" or "chop_wood" or "collect_treasure";
+        or "mine_vein" or "chop_wood" or "collect_treasure" or "run_script";
 
     public JsonObject Start(string tool, JsonObject args, CancellationToken root, bool inline = false)
     {
@@ -179,6 +180,11 @@ public sealed class ActionTasks
             try { result = JsonNode.Parse(output); }
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
             status = result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false"
+                || entry.Tool == "run_script" && value["value"] is JsonObject returned
+                    && (returned["status"]?.ToString() is "yield" or "failed" or "stopped_short"
+                        || returned["wake"] != null || returned["error"] != null || returned["ok"]?.ToString() == "false"
+                        || returned["done"]?.ToString() == "false"
+                        || returned["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial")
                 || entry.Tool == "nav_to" && value["done"]?.ToString() == "false"
                 || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial"
                 || value["status"]?.ToString() is "failed" or "stopped_short") ? "failed" : "completed";

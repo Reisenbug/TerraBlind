@@ -444,6 +444,7 @@ public static partial class AgentTools
             && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
             return await Execute(name, args, token);
         if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
+        if (Actions.RunningScript) return await Execute(name, args, token);
         await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
         string handle = Actions.Start(name, args, root, inline: true)["handle"].ToString();
         while (true)
@@ -544,6 +545,7 @@ public static partial class AgentTools
                 string eventDelivery = Text(args, "event_delivery");
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
                 bool localEvents = eventDelivery == "script";
+                bool queuedScript = Actions.RunningScript;
                 string source = Text(args, "code");
                 if (Text(args, "tool") != "")
                 {
@@ -576,7 +578,7 @@ public static partial class AgentTools
                     }
                     return saved;
                 }, token);
-                await NativeAgent.OnMain(() => { Watches.LocalDelivery = localEvents; return true; }, token);
+                Guid eventReader = await NativeAgent.OnMain(() => localEvents ? Watches.BeginScriptDelivery() : Guid.Empty, token);
                 try
                 {
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
@@ -587,12 +589,17 @@ public static partial class AgentTools
                             try { return await ExecuteScriptTool(child, childArgs, token, childToken, localEvents); }
                             finally { ActionTasks.NodeContext.Value = previousNode; }
                         },
-                        async cleanupToken => await NativeAgent.OnMain(() => { Stop(); return true; }, cleanupToken), token, workflow,
+                        async cleanupToken => await NativeAgent.OnMain(() =>
+                        {
+                            if (queuedScript) StopInputs(preserveAttack: Actions.HasAttack);
+                            else Stop();
+                            return true;
+                        }, cleanupToken), token, workflow,
                         localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasInterrupting ? Watches.Pending() : null, checkToken));
                 }
                 finally
                 {
-                    await NativeAgent.OnMain(() => { Watches.LocalDelivery = false; return true; }, default);
+                    await NativeAgent.OnMain(() => { if (eventReader != Guid.Empty) Watches.EndScriptDelivery(eventReader); return true; }, default);
                 }
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
@@ -638,6 +645,9 @@ public static partial class AgentTools
             case "action_queue":
                 string queuedTool = Text(args, "tool");
                 var queuedArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
+                if (queuedTool == "run_script" && (Text(queuedArgs, "task_node") != Text(args, "task_node")
+                    || Text(args, "task_node") == "" || queuedArgs.Any(p => p.Key is not ("task_node" or "seconds" or "event_delivery"))))
+                    throw new ArgumentException("排队脚本须引用同一task_node保存的源码；args仅支持task_node、seconds、event_delivery。");
                 NativeAgent.ValidateTool(queuedTool, queuedArgs);
                 return (await NativeAgent.OnMain(() =>
                 {
@@ -649,6 +659,8 @@ public static partial class AgentTools
                     return Actions.Enqueue(Text(args, "after_handle"), queuedTool, queuedArgs, node, token);
                 }, token)).ToJsonString();
             case "action_start":
+                if (Actions.RunningScript)
+                    throw new InvalidOperationException("排队节点脚本已持有后台动作句柄；脚本内直接tool('nav_to',args)等顺序执行，不再嵌套action_start。");
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
                 NativeAgent.ValidateTool(actionTool, actionArgs);
