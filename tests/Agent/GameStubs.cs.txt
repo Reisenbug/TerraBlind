@@ -93,6 +93,8 @@ namespace Terraria
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
+        public bool noFallDmg;
+        public int fallStart, extraFall;
         public bool delayUseItem, mouseInterface;
         public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;

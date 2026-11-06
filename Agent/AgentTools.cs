@@ -317,6 +317,12 @@ public static partial class AgentTools
         }
         state["terrain"] = TerrainInspection.Read(6);
         var healthPlayer = Main.LocalPlayer;
+        state["movement_capabilities"] = new JsonObject
+        {
+            ["no_fall_damage"] = healthPlayer.noFallDmg, ["fall_start_tile_y"] = healthPlayer.fallStart,
+            ["extra_fall_tiles"] = healthPlayer.extraFall, ["extra_jump_usable"] = healthPlayer.AnyExtraJumpUsable(),
+            ["wing_time_frames"] = healthPlayer.wingTime
+        };
         state["health_dynamics"] = new JsonObject
         {
             ["tick"] = Main.GameUpdateCount, ["hp"] = healthPlayer.statLife, ["dead"] = healthPlayer.dead,

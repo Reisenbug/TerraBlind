@@ -21,7 +21,11 @@ public class AgentDamageEvidence : ModPlayer
             ["projectile_type"] = source.SourceProjectileType,
             ["npc_type"] = source.SourceNPCIndex >= 0 && source.SourceNPCIndex < Main.maxNPCs ? Main.npc[source.SourceNPCIndex].type : -1,
             ["other_source"] = source.SourceOtherIndex };
-        if (kind == "death") AgentTools.LastDeath = (JsonObject)AgentTools.LastDamage.DeepClone();
+        if (kind == "death")
+        {
+            AgentTools.LastDamage["death_text"] = source.GetDeathText(Player.name).ToString();
+            AgentTools.LastDeath = (JsonObject)AgentTools.LastDamage.DeepClone();
+        }
         DiagLog.Write($"[agent_damage] kind={kind} damage={damage} hp={Player.statLife} x={Player.Center.X / 16:F2} y={Player.Center.Y / 16:F2} projectile_type={source.SourceProjectileType} projectile_index={source.SourceProjectileLocalIndex} npc_index={source.SourceNPCIndex} other={source.SourceOtherIndex}");
         DiagLog.Write("[agent_damage_terrain] " + TerrainInspection.Read(12).ToJsonString());
     }
