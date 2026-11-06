@@ -259,9 +259,12 @@ public sealed class CodexAgent : IDisposable
         JsonObject goalOptions = null)
     {
         string turn = null;
+        var elapsed = Stopwatch.StartNew();
+        long lastToolFinished = 0;
         try
         {
             await Ensure(executable, cwd, model, system, tools, token, goalOptions != null);
+            DiagLog.Write($"[agent-timing] phase=connection_ready elapsed_ms={elapsed.ElapsedMilliseconds}");
             if (goalOptions != null)
             {
                 if (_goalRequest != goalOptions["request"]?.ToString())
@@ -287,6 +290,8 @@ public sealed class CodexAgent : IDisposable
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");
             _activeTurn = turn;
             TurnsStarted++;
+            lastToolFinished = elapsed.ElapsedMilliseconds;
+            DiagLog.Write($"[agent-timing] phase=turn_started turn={turn} elapsed_ms={lastToolFinished}");
             int toolCalls = 0;
             var delivered = new System.Collections.Generic.HashSet<string>();
             while (true)
@@ -298,6 +303,8 @@ public sealed class CodexAgent : IDisposable
                 {
                     if (method == "item/tool/call" && args?["threadId"]?.ToString() == _thread && args?["turnId"]?.ToString() == turn)
                     {
+                        long toolStarted = elapsed.ElapsedMilliseconds;
+                        DiagLog.Write($"[agent-timing] phase=tool_received turn={turn} tool={args["tool"]} elapsed_ms={toolStarted} response_gap_ms={toolStarted - lastToolFinished}");
                         if (++toolCalls > 32)
                         {
                             if (goalOptions == null) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
@@ -307,6 +314,8 @@ public sealed class CodexAgent : IDisposable
                             return;
                         }
                         await Tool(message, tools, execute, token);
+                        lastToolFinished = elapsed.ElapsedMilliseconds;
+                        DiagLog.Write($"[agent-timing] phase=tool_returned turn={turn} tool={args["tool"]} elapsed_ms={lastToolFinished} tool_ms={lastToolFinished - toolStarted}");
                     }
                     else await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),
                         ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "该游戏会话不支持此请求。" } }, token);
