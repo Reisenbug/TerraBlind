@@ -1569,6 +1569,9 @@ public sealed class BehaviorTrial : ModSystem
                 ? int.Parse(configuredBudget) : 200000;
             var before = await Call("get_state", new JsonObject());
             var recipe = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
+            string trialPrompt = null;
+            var startedUtc = DateTime.UtcNow;
+            using var journal = new StreamWriter(Path.Combine(Main.SavePath, "trial-samples.jsonl")) { AutoFlush = true };
             await OnMain(() =>
             {
                 Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = trialModel;
@@ -1576,9 +1579,26 @@ public sealed class BehaviorTrial : ModSystem
                 stingersRequired = recipe["recipes"].AsArray().First(r => r["internal"]?.ToString() == "ThornChakram")
                     ["ingredients"].AsArray().First(i => i["internal"]?.ToString() == "Stinger")["need"].GetValue<int>();
                 collectingStingers = true;
-                NativeAgent.Submit(FullCraftTrial
+                trialPrompt = FullCraftTrial
                     ? "/goal 从出生点的新人物初始装备开始，自行寻找丛林。生命水晶和丛林孢子越多越好：在探索、开箱、采集和打怪过程中持续留意并收集，不要拿到1颗水晶或凑够荆棘旋刃的孢子就停止关注，也不要把这些最低数量当作收集上限。生命水晶先别使用。顺路搜刮附近值得拿的箱子，开过一个不代表之后的箱子不再有价值；插入行动后继续原任务，跳过时记录现场依据。从零收集毒刺和孢子，制作一把荆棘旋刃；额外孢子保留用于后续丛林防具，食人怪掉落的藤蔓也值得收集，可与孢子等材料制作丛林头盔、丛林裤腿以提高防御，具体配方和属性自行查询当前游戏。使用DAG组织共享前置与可并行推进的子目标；制作所需材料凑齐只解锁制作，不关闭水晶、额外孢子、藤蔓和箱子的机会观察。越多越好是贯穿本次旅程的收集偏好，不是无限采集才允许完成的前置；结束前检查已发现未处理的机会，报告实际所得及跳过理由。执行遇到失败或新事实时修改方案并继续。最终必须实际持有生命水晶和荆棘旋刃，开箱核实所得。已额外提供9999木头和星怒，不要砍树，用星怒防身。允许合理利用沿途装备与工作站。请实际行动，不只规划。"
-                    : $"/goal --tokens {modelTokenBudget} 前往丛林目标格({goalX},{goalY})。生命水晶和丛林孢子越多越好，在导航、开箱、采集和打怪过程中持续收集，不以1颗水晶或荆棘旋刃所需孢子数量为上限；水晶先别使用。顺路搜刮附近值得拿的箱子和材料，开过一个箱子后继续关注新机会；跳过时记录实际依据，插入行动后继续原任务。收集毒刺和孢子制作一把荆棘旋刃。额外孢子保留用于后续丛林防具，食人怪掉落的藤蔓也值得收集；查询当前丛林头盔、丛林裤腿的配方与属性，为提高防御储备材料。制作条件满足不关闭上述机会观察；越多越好是本次旅程的收集偏好，不是无限采集前置。结束前检查已发现未处理的机会，报告实际所得与跳过理由。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。");
+                    : $"/goal --tokens {modelTokenBudget} 前往丛林目标格({goalX},{goalY})。生命水晶和丛林孢子越多越好，在导航、开箱、采集和打怪过程中持续收集，不以1颗水晶或荆棘旋刃所需孢子数量为上限；水晶先别使用。顺路搜刮附近值得拿的箱子和材料，开过一个箱子后继续关注新机会；跳过时记录实际依据，插入行动后继续原任务。收集毒刺和孢子制作一把荆棘旋刃。额外孢子保留用于后续丛林防具，食人怪掉落的藤蔓也值得收集；查询当前丛林头盔、丛林裤腿的配方与属性，为提高防御储备材料。制作条件满足不关闭上述机会观察；越多越好是本次旅程的收集偏好，不是无限采集前置。结束前检查已发现未处理的机会，报告实际所得与跳过理由。已有投刀可防身。请实际执行、验证和恢复失败，不只给方案。";
+                File.WriteAllText(Path.Combine(Main.SavePath, "trial-start.json"), new JsonObject
+                {
+                    ["started_utc"] = startedUtc.ToString("O"), ["model"] = trialModel, ["effort"] = "low",
+                    ["prompt"] = trialPrompt, ["before"] = before.DeepClone(), ["recipe"] = recipe.DeepClone(),
+                    ["time_limit_seconds"] = FullCraftTrial ? 1800 : 120,
+                    ["world_name"] = Main.worldName, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
+                    ["game_version"] = Main.versionNumber, ["assembly_mvid"] = typeof(NativeAgent).Assembly.ManifestModule.ModuleVersionId.ToString(),
+                    ["source_revision"] = Environment.GetEnvironmentVariable("TB_TRIAL_REVISION"),
+                    ["source_status"] = Environment.GetEnvironmentVariable("TB_TRIAL_SOURCE_STATUS"),
+                    ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                        File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))),
+                    ["world_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                        File.ReadAllBytes(Path.Combine(Main.SavePath, "Worlds", "Checks.wld")))),
+                    ["natural_encounters"] = NaturalEncounters, ["navigation_stub"] = UsingNavigationStub,
+                    ["sampling"] = "one-second snapshots; individual damage events also recorded in client log; no operator game actions planned"
+                }.ToJsonString());
+                NativeAgent.Submit(trialPrompt);
                 return true;
             });
             var samples = new JsonArray();
@@ -1586,13 +1606,14 @@ public sealed class BehaviorTrial : ModSystem
             bool started = false;
             bool lootedChest = false;
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            string endReason = "time_limit";
             bool HasResults(JsonObject state) => lootedChest && state["task_plan"]?["mode"]?.ToString() == "dag"
                 && state["task_plan"]?["status"]?.ToString() == "completed"
                 && new[] { ItemID.LifeCrystal, ItemID.ThornChakram }.All(type => state["inventory_slots"].AsArray()
                     .Any(i => i["type"]?.GetValue<int>() == type && i["stack"]?.GetValue<int>() > 0));
             try
             {
-                for (int sample = 0; sample < (FullCraftTrial ? 1800 : 120); sample++)
+                while (elapsed.Elapsed.TotalSeconds < (FullCraftTrial ? 1800 : 120))
                 {
                     await Task.Delay(1000);
                     string agentStatus = NativeAgent.Status;
@@ -1600,17 +1621,39 @@ public sealed class BehaviorTrial : ModSystem
                     lootedChest |= after["action_tasks"].AsArray().Any(a => a["tool"]?.ToString() == "collect_treasure"
                         && a["status"]?.ToString() == "completed" && a["result"]?["got"] is JsonObject got && got.Count > 0);
                     started |= agentStatus != "queued" && agentStatus != "idle";
-                    samples.Add(new JsonObject { ["tick"] = after["tick"]?.DeepClone(), ["status"] = agentStatus,
+                    var sample = new JsonObject { ["tick"] = after["player"]?["tick"]?.DeepClone(), ["status"] = agentStatus,
                         ["navigation_stub"] = UsingNavigationStub,
                         ["idle_defense_active"] = after["idle_defense_active"]?.DeepClone(),
                         ["player"] = after["player"]?.DeepClone(), ["task_plan"] = after["task_plan"]?.DeepClone(),
                         ["actions"] = after["action_tasks"]?.DeepClone(), ["codex_goal"] = after["codex_goal"]?.DeepClone(),
-                        ["inventory"] = after["inventory_slots"]?.DeepClone(), ["elapsed_ms"] = elapsed.ElapsedMilliseconds });
+                        ["inventory"] = after["inventory_slots"]?.DeepClone(), ["elapsed_ms"] = elapsed.ElapsedMilliseconds,
+                        ["utc"] = DateTime.UtcNow.ToString("O"),
+                        ["equipment"] = after["equipment_slots"]?.DeepClone(),
+                        ["last_damage"] = after["last_damage"]?.DeepClone(), ["last_death"] = after["last_death"]?.DeepClone(),
+                        ["last_automatic_heal"] = after["last_automatic_heal"]?.DeepClone(),
+                        ["contact_escape"] = after["contact_escape"]?.DeepClone(),
+                        ["health_dynamics"] = after["health_dynamics"]?.DeepClone(),
+                        ["watch"] = after["watch"]?.DeepClone(), ["recovery"] = after["recovery"]?.DeepClone(),
+                        ["script_workflows"] = after["script_workflows"]?.DeepClone(),
+                        ["physiology"] = await OnMain(() => new JsonObject
+                        {
+                            ["tick"] = (long)Main.GameUpdateCount, ["breath"] = Main.LocalPlayer.breath,
+                            ["breath_max"] = Main.LocalPlayer.breathMax, ["gills"] = Main.LocalPlayer.gills,
+                            ["no_fall_damage"] = Main.LocalPlayer.noFallDmg, ["fall_start"] = Main.LocalPlayer.fallStart,
+                            ["selected_item"] = Main.LocalPlayer.HeldItem.type,
+                            ["buffs"] = new JsonArray(Main.LocalPlayer.buffType.Select((type, index) => (type, index))
+                                .Where(b => b.type > 0).Select(b => (JsonNode)new JsonObject
+                                    { ["type"] = b.type, ["ticks"] = Main.LocalPlayer.buffTime[b.index] }).ToArray())
+                        }) };
+                    samples.Add(sample);
+                    journal.WriteLine(sample.ToJsonString());
                     string status = after["codex_goal"]?["native"]?["status"]?.ToString();
-                    if (FullCraftTrial && HasResults(after)) break;
-                    if (status is "complete" or "budgetLimited" or "usageLimited" or "paused" || agentStatus == "failed" || started && agentStatus == "idle") break;
+                    if (FullCraftTrial && HasResults(after)) { endReason = "verified_results"; break; }
+                    if (status is "complete" or "budgetLimited" or "usageLimited" or "paused" || agentStatus == "failed" || started && agentStatus == "idle")
+                    { endReason = "agent_terminal:" + status + ":" + agentStatus; break; }
                 }
             }
+            catch (Exception error) { endReason = "exception:" + error.Message; throw; }
             finally
             {
                 after = await Call("get_state", new JsonObject());
@@ -1619,6 +1662,8 @@ public sealed class BehaviorTrial : ModSystem
                     ["navigation_stub"] = UsingNavigationStub, ["spawned_hornets"] = hornetsSpawned,
                     ["natural_encounters"] = NaturalEncounters,
                     ["model"] = trialModel,
+                    ["prompt"] = trialPrompt, ["started_utc"] = startedUtc.ToString("O"),
+                    ["ended_utc"] = DateTime.UtcNow.ToString("O"), ["end_reason"] = endReason,
                     ["model_token_budget"] = FullCraftTrial ? null : JsonValue.Create(modelTokenBudget),
                     ["elapsed_ms"] = elapsed.ElapsedMilliseconds, ["looted_chest"] = lootedChest,
                     ["full_craft_trial"] = FullCraftTrial }.ToJsonString());
