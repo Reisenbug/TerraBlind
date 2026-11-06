@@ -238,11 +238,12 @@ static class GatherTests
             Main.npc = new NPC[Main.maxNPCs];
             for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
             FightCoordinator.Tick(p, true);
-            Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
+            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
                 $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");
             string noDodge = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "hold still");
             try
             {
+                p.controlLeft = p.controlRight = p.controlJump = false;
                 FightCoordinator.Tick(p, true);
                 Check(!p.controlLeft && !p.controlRight && !p.controlJump,
                     "projectile-only defense ignored agent movement veto");
@@ -250,8 +251,11 @@ static class GatherTests
             finally { AgentTools.Control.Release(noDodge); }
             FightCoordinator.Start(20);
             FightCoordinator.Tick(p, true);
-            Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
-                "explicit attack changed movement in response to projectiles");
+            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
+                "explicit attack did not evade incoming projectile");
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.controlLeft || p.controlRight, "item use suppressed emergency projectile evasion");
             FightCoordinator.Stop();
             float wall = p.position.X - 1;
             Collision.SolidTest = (position, width, height) => position.X < wall;

@@ -16,11 +16,12 @@ namespace TerraBlind
         private static HashSet<int> _types;
         private static bool _idleDefense;
         private static bool _usingItem;
+        private static bool _evading;
 
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
 
-        internal static (int Direction, bool Jump) Evade(Player p, NPC target = null)
+        internal static (int Direction, bool Jump) Evade(Player p, NPC target = null, bool projectilesOnly = false)
         {
             bool blocked = target != null && NeedsClearLine(p.HeldItem)
                 && !Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
@@ -28,7 +29,7 @@ namespace TerraBlind
             var enemies = new List<NPC>();
             foreach (var shot in Main.projectile)
                 if (shot.active && shot.hostile && shot.damage > 0) shots.Add(shot);
-            foreach (var npc in Main.npc)
+            foreach (var npc in projectilesOnly ? Array.Empty<NPC>() : Main.npc)
                 if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
                     && Vector2.Distance(npc.Center, p.Center) < 600) enemies.Add(npc);
             if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false);
@@ -118,6 +119,23 @@ namespace TerraBlind
 
         internal static void Tick(Player p, bool processing, bool primaryItemUse = false)
         {
+            bool evading = false;
+            if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
+                && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
+                && AgentPermissions.CanDodge(delegated: true))
+            {
+                var evade = Evade(p, projectilesOnly: true);
+                if (evade.Direction != 0 || evade.Jump)
+                {
+                    p.controlLeft = evade.Direction < 0;
+                    p.controlRight = evade.Direction > 0;
+                    p.controlJump = evade.Jump;
+                    evading = true;
+                }
+            }
+            if (evading != _evading)
+                DiagLog.Write($"[agent_evade] active={evading} tick={Main.GameUpdateCount} x={p.position.X} y={p.position.Y} hp={p.statLife}");
+            _evading = evading;
             if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
             bool itemBusy = primaryItemUse || ItemUseCoordinator.IsActive
                 || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure");
