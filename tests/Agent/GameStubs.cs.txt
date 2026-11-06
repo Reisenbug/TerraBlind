@@ -97,6 +97,7 @@ namespace Terraria
         public int fallStart, extraFall;
         public bool delayUseItem, mouseInterface;
         public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
+        public bool ZoneJungle, ZoneDesert, ZoneSnow, ZoneBeach, ZoneDungeon, ZoneCorrupt, ZoneCrimson, ZoneHallow;
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;

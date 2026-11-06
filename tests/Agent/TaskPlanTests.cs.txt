@@ -15,6 +15,7 @@ static class TaskPlanTests
         VerifyDagInsertion();
         VerifyChestEvidence();
         VerifyPosition();
+        VerifyBiome();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
         Main.netMode = NetmodeID.SinglePlayer;
@@ -303,6 +304,39 @@ static class TaskPlanTests
         plan.Advance("weapon", Measure); plan.Advance("final", Measure);
         Check(plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "corrected identity did not verify earned inventory and preserved fresh kill");
         Console.WriteLine("PASS: atomic plan identity correction preserves earned steps and kill baseline, rejects stale/completed edits and never invents progress");
+    }
+
+    static void VerifyBiome()
+    {
+        var p = Main.LocalPlayer;
+        var saved = (p.active, p.dead, p.statLife, p.ZoneJungle, p.ZoneDirtLayerHeight, p.ZoneRockLayerHeight, p.position);
+        try
+        {
+            p.active = true; p.dead = false; p.statLife = 100;
+            p.ZoneJungle = true; p.ZoneDirtLayerHeight = p.ZoneRockLayerHeight = false;
+            var request = Parse("""{"goal":"finish in underground jungle","steps":[{"id":"finish","description":"live location","conditions":[{"kind":"biome","name":"jungle","depth":"below_surface","count":1}]}]}""");
+            var plan = new AgentTaskPlan();
+            plan.Create(request, AgentTaskEvidence.Measure);
+            Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "surface jungle met underground condition");
+            p.ZoneRockLayerHeight = true; p.ZoneJungle = false;
+            Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "other cavern met jungle condition");
+            p.ZoneJungle = true; p.dead = true;
+            Check(!plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "death completed live biome condition");
+            p.dead = false; p.position = new(8000, 12000);
+            Check(plan.Advance("finish", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "real jungle cavern required arbitrary return coordinates");
+            p.ZoneRockLayerHeight = false;
+            Check(!plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "final audit accepted stale biome evidence");
+            foreach (string invalid in new[] { "{\"kind\":\"biome\",\"name\":\"jungle\",\"count\":2}", "{\"kind\":\"biome\",\"name\":\"unknown\",\"count\":1}", "{\"kind\":\"biome\",\"name\":\"jungle\",\"depth\":\"unknown\",\"count\":1}" })
+            {
+                request["steps"][0]["conditions"][0] = Parse(invalid);
+                bool rejected = false;
+                try { new AgentTaskPlan().Create(request, AgentTaskEvidence.Measure); }
+                catch (InvalidOperationException) { rejected = true; }
+                Check(rejected, "invalid biome condition accepted");
+            }
+        }
+        finally { (p.active, p.dead, p.statLife, p.ZoneJungle, p.ZoneDirtLayerHeight, p.ZoneRockLayerHeight, p.position) = saved; }
+        Console.WriteLine("PASS: biome completion uses live native flags, depth and life, with fresh final verification");
     }
 
     static void VerifyPosition()

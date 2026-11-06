@@ -55,6 +55,7 @@ public class AgentTaskEvidence : GlobalNPC
         {
             "permanent_health" => Main.LocalPlayer.statLifeMax,
             "position" => AtPosition(condition) ? 1 : 0,
+            "biome" => AtBiome(condition) ? 1 : 0,
             "item" => Main.LocalPlayer.inventory.Where(item => item != null && !item.IsAir && item.type == type).Sum(item => item.stack),
             "equipped" => Enumerable.Range(0, 10).Where(slot => Main.LocalPlayer.IsItemSlotUnlockedAndUsable(slot)
                 && Main.LocalPlayer.armor[slot].type == type).Sum(slot => Main.LocalPlayer.armor[slot].stack),
@@ -65,6 +66,35 @@ public class AgentTaskEvidence : GlobalNPC
             "chests_looted" => throw new InvalidOperationException("开箱转移证据目前仅支持单人游戏。"),
             _ => throw new InvalidOperationException("未知完成条件。")
         };
+    }
+
+    static bool AtBiome(JsonObject condition)
+    {
+        var p = Main.LocalPlayer;
+        bool biome = condition["name"].ToString() switch
+        {
+            "jungle" => p.ZoneJungle,
+            "desert" => p.ZoneDesert,
+            "snow" => p.ZoneSnow,
+            "ocean" => p.ZoneBeach,
+            "dungeon" => p.ZoneDungeon,
+            "corruption" => p.ZoneCorrupt,
+            "crimson" => p.ZoneCrimson,
+            "hallow" => p.ZoneHallow,
+            _ => throw new InvalidOperationException("biome name需要jungle/desert/snow/ocean/dungeon/corruption/crimson/hallow。")
+        };
+        bool depth = condition["depth"]?.ToString() switch
+        {
+            null or "any" => true,
+            "sky" => p.ZoneSkyHeight,
+            "surface" => p.ZoneOverworldHeight,
+            "below_surface" => p.ZoneDirtLayerHeight || p.ZoneRockLayerHeight,
+            "underground" => p.ZoneDirtLayerHeight,
+            "cavern" => p.ZoneRockLayerHeight,
+            "underworld" => p.ZoneUnderworldHeight,
+            _ => throw new InvalidOperationException("未知biome depth。")
+        };
+        return p.active && !p.dead && p.statLife > 0 && biome && depth;
     }
 
     static bool AtPosition(JsonObject condition)

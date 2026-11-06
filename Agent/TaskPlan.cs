@@ -63,9 +63,9 @@ public sealed class AgentTaskPlan
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "position" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
-                    || kind is not ("permanent_health" or "position" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件仅支持 permanent_health、position、item、equipped、npc_kills、npc_alive、chests_looted；count及需要的type必须为正数。");
+                if (kind is not ("permanent_health" or "position" or "biome" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
+                    || kind is not ("permanent_health" or "position" or "biome" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
+                    throw new InvalidOperationException("条件支持 permanent_health、position、biome、item、equipped、npc_kills、npc_alive、chests_looted；count及需要的type必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
                 if (kind == "position")
                 {
@@ -76,6 +76,15 @@ public sealed class AgentTaskPlan
                     verified["x"] = check["x"].DeepClone();
                     verified["y"] = check["y"].DeepClone();
                     verified["radius"] = radius;
+                }
+                else if (kind == "biome")
+                {
+                    string depth = check["depth"]?.ToString() ?? "any";
+                    if (check["count"].GetValue<int>() != 1 || string.IsNullOrWhiteSpace(check["name"]?.ToString())
+                        || depth is not ("any" or "sky" or "surface" or "below_surface" or "underground" or "cavern" or "underworld"))
+                        throw new InvalidOperationException("biome需要count=1、name及合法depth。");
+                    verified["name"] = check["name"].DeepClone();
+                    verified["depth"] = depth;
                 }
                 else if (kind is not ("permanent_health" or "chests_looted")) verified["type"] = check["type"].DeepClone();
                 int value = measure(verified);

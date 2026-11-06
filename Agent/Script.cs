@@ -35,6 +35,12 @@ public static class AgentScript
         foreach (var (tool, field) in new[] { ("task_plan", "steps"), ("task_plan_patch", "add_nodes") })
         {
             var definition = tools.First(t => t["function"]?["name"]?.ToString() == tool)["function"];
+            var conditions = definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"];
+            conditions["kind"]["enum"].AsArray().Add("biome");
+            conditions["name"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("jungle", "desert", "snow", "ocean", "dungeon", "corruption", "crimson", "hallow") };
+            conditions["depth"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("any", "sky", "surface", "below_surface", "underground", "cavern", "underworld"), ["default"] = "any" };
+            definition["description"] = definition["description"].ToString()
+                + "biome条件按原生人物群系与深度验收，count=1，name为群系名，depth=below_surface涵盖地下层和洞穴层。结束时身处某群系的要求使用biome条件，可在群系内任意位置验证。";
             definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"]["type"] = new JsonObject
             {
                 ["anyOf"] = new JsonArray(new JsonObject { ["type"] = "integer", ["minimum"] = 1 },
