@@ -1520,7 +1520,8 @@ public static partial class AgentTools
                 if (tile.HasTile && (!tile.HasUnactuatedTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]))
                     reach = true;
             }
-            return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach };
+            return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach,
+                ["stand"] = !reach && !exact };
         }, token);
         var start = await Call("/nav_recede", request, token);
         if (Rejected(start)) return start;

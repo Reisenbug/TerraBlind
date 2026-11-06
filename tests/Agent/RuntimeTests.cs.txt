@@ -920,6 +920,22 @@ static class RuntimeTests
             Game.tile[100, 100] = default;
             Console.WriteLine("PASS: live non-solid targets switch exact mining to interaction reach; solid targets retain mining and arrival checks");
 
+            {
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        var request = JsonNode.Parse(payload);
+                        Check(request["gx"].GetValue<int>() == 100 && request["gy"].GetValue<int>() == 100
+                            && request["stand"].GetValue<bool>() && !request["reach"].GetValue<bool>() && !request["exact"].GetValue<bool>(),
+                            "coordinate waypoint enabled implicit downward ground snapping");
+                    }
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+                };
+                await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 100, ["y"] = 100 }, default));
+            }
+            Console.WriteLine("PASS: coordinate navigation preserves the requested waypoint instead of snapping downward");
+
             Game.tile[100, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 0 };
             var noTool = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 100, ["target_y"] = 100 }, default)));
             Check(noTool["error"]?.ToString() == "no_collect_tool", "non-solid mining succeeded without a tool");

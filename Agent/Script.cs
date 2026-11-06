@@ -13,6 +13,9 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var navigation = tools.First(t => t["function"]?["name"]?.ToString() == "nav_to")["function"];
+        navigation["description"] = navigation["description"].ToString()
+            + "普通坐标导航使用Stand模式保持请求的站位坐标，reach/exact仍按各自语义执行。";
         var run = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"];
         run["parameters"]["properties"]["background"] = new JsonObject { ["type"] = "boolean",
             ["description"] = "配合task_node启动持续后台脚本并立即返回句柄；Agent可同时查询和准备后续。脚本内直接顺序调用动作，不嵌套action_start。" };
