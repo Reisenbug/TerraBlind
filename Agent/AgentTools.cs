@@ -29,7 +29,8 @@ public static partial class AgentTools
     {
         var last = Actions.LatestPrimary();
         if (last == null) return;
-        if (Actions.HasPrimaryControl || !Plan.Incomplete || Main.LocalPlayer.dead)
+        bool scriptOwnsInput = Actions.HasPrimaryControl && last["tool"]?.ToString() == "run_script";
+        if (Actions.HasPrimaryControl && (!scriptOwnsInput || ControlSession.Active) || !Plan.Incomplete || Main.LocalPlayer.dead)
         {
             if (gapStarted != null)
                 DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - gapStarted.Value} handle={Actions.ActiveHandle}");
