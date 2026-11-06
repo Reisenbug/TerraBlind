@@ -234,7 +234,7 @@ namespace TerraBlind
 			if (slot >= 10) { Last = "weapon not in hotbar"; NoFire("武器不在热键栏"); return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
-			var aim = UseLead ? Lead(p, Main.npc[n], ShotSpeed(p, p.inventory[slot])) : Main.npc[n].Center;
+			var aim = Aim(p, Main.npc[n], p.inventory[slot]);
 			AimTarget = aim;
 			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
@@ -250,6 +250,9 @@ namespace TerraBlind
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
 			if (!bossFight) AxisLock.Release(Owner);
 		}
+
+		internal static Microsoft.Xna.Framework.Vector2 Aim(Player p, NPC npc, Item weapon)
+			=> UseLead ? Lead(p, npc, ShotSpeed(p, weapon)) : npc.Center;
 
 		static float ShotSpeed(Player p, Item weapon)
 		{

@@ -19,6 +19,7 @@ namespace TerraBlind
         private static bool _evading;
         private static int _animationSlot = -1;
         private static Vector2 _animationAim;
+        private static NPC _animationTarget;
         private static bool _animationAttack, _animationSeen, _attackNext;
         public static Vector2? AimTarget { get; private set; }
         public static bool AttackAnimationActive => _animationSlot >= 0 && _animationAttack && Main.LocalPlayer.itemAnimation > 0;
@@ -30,19 +31,6 @@ namespace TerraBlind
             _animationAim = new Vector2(Main.mouseX + Main.screenPosition.X, Main.mouseY + Main.screenPosition.Y);
             _animationAttack = attack;
             _animationSeen = false;
-        }
-
-        internal static Vector2 PredictAim(Player p, NPC target, Item weapon)
-        {
-            int shot = weapon.shoot;
-            float speed = weapon.shootSpeed;
-            if (weapon.useAmmo > 0 && !p.PickAmmo(weapon, out shot, out speed, out _, out _, out _, true)) return target.Center;
-            if (shot <= 0 || speed <= 0) return target.Center;
-            if (ContentSamples.ProjectilesByType.TryGetValue(shot, out var sample)) speed *= sample.extraUpdates + 1;
-            var point = PvpTactics.Aim(new(p.Center.X, p.Center.Y), new(target.Center.X, target.Center.Y),
-                new(target.velocity.X, target.velocity.Y), speed, 0,
-                (a, b) => !NeedsClearLine(weapon) || Collision.CanHitLine(new Vector2(a.X, a.Y), 2, 2, new Vector2(b.X, b.Y), 2, 2));
-            return point.HasValue ? new Vector2(point.Value.X, point.Value.Y) : target.Center;
         }
 
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
@@ -132,6 +120,7 @@ namespace TerraBlind
             _framesLeft = 0;
             _types = null;
             _animationSlot = -1;
+            _animationTarget = null;
             _attackNext = false;
             AimTarget = null;
         }
@@ -172,6 +161,8 @@ namespace TerraBlind
             {
                 _animationSeen = true;
                 p.selectedItem = _animationSlot;
+                if (_animationAttack && _animationTarget is { active: true, friendly: false })
+                    _animationAim = Combat.Aim(p, _animationTarget, p.HeldItem);
                 Cursor.AimPx(_animationAim.X, _animationAim.Y);
                 p.controlUseItem = false;
                 _usingItem = _animationAttack;
@@ -231,7 +222,8 @@ namespace TerraBlind
                 return;
             }
 
-            var aim = PredictAim(p, target, p.inventory[weaponSlot]);
+            var aim = Combat.Aim(p, target, p.inventory[weaponSlot]);
+            _animationTarget = target;
             AimTarget = aim;
             Cursor.AimPx(aim.X, aim.Y);
 

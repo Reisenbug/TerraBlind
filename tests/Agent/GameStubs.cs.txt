@@ -298,6 +298,9 @@ namespace TerraBlind
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
     {
+        public static Func<Terraria.Player, Terraria.NPC, Terraria.Item, Microsoft.Xna.Framework.Vector2> AimHandler;
+        public static Microsoft.Xna.Framework.Vector2 Aim(Terraria.Player player, Terraria.NPC npc, Terraria.Item weapon)
+            => AimHandler?.Invoke(player, npc, weapon) ?? npc.Center;
         public static string Last = "idle";
         public static bool Enabled;
         public static int Stops;
