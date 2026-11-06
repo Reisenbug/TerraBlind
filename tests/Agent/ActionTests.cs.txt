@@ -329,6 +329,19 @@ static class ActionTests
 
     static async Task QueuedActions()
     {
+        var watch = new AgentWatch();
+        watch.EnsureDefaults();
+        JsonObject Chain(string status) => new() { ["hp"] = 100, ["actions"] = new JsonArray(
+            new JsonObject { ["handle"] = "arrival", ["status"] = "completed", ["attempt"] = 1, ["tool"] = "nav_to" },
+            new JsonObject { ["handle"] = "collection", ["after_handle"] = "arrival", ["status"] = status, ["attempt"] = 1, ["tool"] = "gather" }) };
+        watch.Observe(Chain("running"));
+        Check(watch.HasPending && !watch.HasInterrupting, "predecessor completion interrupts its already running continuation");
+        watch.Observe(Chain("failed"));
+        Check(watch.HasInterrupting, "continuation failure lost its wake event");
+        watch.Reset(); watch.EnsureDefaults();
+        var danger = Chain("running"); danger["suffocating"] = true;
+        watch.Observe(danger);
+        Check(watch.HasInterrupting, "queued handoff suppressed an independent survival event");
         foreach (string ending in new[] { "completed", "failed", "paused", "cancelled", "cancel_paused", "cancel_queued", "new_task" })
         {
             var began = Signal(); var release = Signal(); var nextBegan = Signal();

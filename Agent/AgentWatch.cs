@@ -171,9 +171,16 @@ public sealed class AgentWatch
             visibleDrops.Clear(); visibleDrops.UnionWith(currentDrops);
             foreach (var drop in drops) Emit("nearby_drop", DropKey(drop), drop);
         }
-        foreach (var action in state["actions"]?.AsArray() ?? new JsonArray())
+        var actions = state["actions"]?.AsArray() ?? new JsonArray();
+        foreach (var action in actions)
             if (action["status"]?.ToString() == "failed" || action["status"]?.ToString() == "completed" && action["inline"]?.GetValue<bool>() != true)
+            {
+                if (action["status"]?.ToString() == "completed" && actions.Any(next =>
+                    next["after_handle"]?.ToString() == action["handle"]?.ToString()
+                    && next["status"]?.ToString() is "running" or "completed"))
+                    AcknowledgeCompletion(action.AsObject());
                 Emit("action_finished", action["handle"] + ":" + action["attempt"], action);
+            }
     }
 
     public void Emit(string kind, string key, JsonNode evidence)
