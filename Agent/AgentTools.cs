@@ -34,12 +34,13 @@ public static partial class AgentTools
             && (workflow.Running || workflow.Yielded || workflow.ReviewRequested)) return;
         continuedActions.Add(handle);
         if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
-        if (previous["status"]?.ToString() != "completed"
-            && Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() != true) return;
+        bool verified = previous["status"]?.ToString() == "completed"
+            || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
+        if (!verified && workflow == null) return;
         Watches.AcknowledgeCompletion(action);
         if (Watches.HasInterrupting) return;
         plan = Plan.Snapshot();
-        string next = plan["current_step"]?.ToString();
+        string next = verified ? plan["current_step"]?.ToString() : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
         LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
@@ -57,6 +58,13 @@ public static partial class AgentTools
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
                         && (value["status"]?.ToString() == "yield" || value["wake"] != null || value["error"] != null))
                         Watches.Request("prepared_node_review", report);
+                    else if (!Actions.HasPrimaryControl
+                        && Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == next)
+                        && Plan.Advance(next, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() != true)
+                    {
+                        report["status"] = "execution_gap";
+                        Watches.Request("prepared_node_review", report);
+                    }
                     DiagLog.Write($"[dag-continuation] after={handle} node={next} result={result}");
                     return true;
                 }, token);

@@ -16,7 +16,8 @@ public static class AgentScript
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
-            + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。条件未满足、危险事件、暂停、取消或脚本主动yield/wake时交回模型，不自动推进。";
+            + "动作成功但节点条件尚未满足时，宿主自动续跑该节点原workflow；用step保存句柄，查询已完成动作后执行下一项，不重复启动。"
+            + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。危险事件、暂停、取消或脚本主动yield/wake时交回模型。脚本返回后既无动作也未达成条件会报告execution_gap，不空转。";
         var queue = tools.First(t => t["function"]?["name"]?.ToString() == "action_queue")["function"];
         queue["parameters"]["properties"]["tool"]["enum"].AsArray().Add("run_script");
         queue["description"] = queue["description"].ToString()

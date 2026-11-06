@@ -1523,15 +1523,19 @@ static class RuntimeTests
         int oldMax = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled" })
+            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
                 Game.LocalPlayer.statLifeMax = mode == "unmet" ? 80 : 100;
                 int starts = 0;
+                bool finishFirst = mode != "within_node";
+                bool finishSecond = false;
                 HttpServerSystem.Handler = (path, _) =>
                 {
                     if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
-                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+                    return (200, path == "/nav_recede_done"
+                        ? new JsonObject { ["done"] = finishFirst && (mode != "within_node" || starts == 1 || finishSecond) }.ToJsonString()
+                        : "{\"accepted\":true}");
                 };
                 AgentTools.Plan.Create(JsonNode.Parse("""
                     {"goal":"automatic prepared script","mode":"dag","steps":[
@@ -1541,6 +1545,37 @@ static class RuntimeTests
                        "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
                        "conditions":[{"kind":"item","type":191,"count":1}]}]}
                     """).AsObject(), _ => 0);
+                if (mode == "within_node")
+                {
+                    var plan = AgentTools.Plan.Snapshot();
+                    AgentTools.Plan.Revise(new JsonObject
+                    {
+                        ["expected_revision"] = plan["revision"].DeepClone(), ["reason"] = "test sequential actions",
+                        ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel",
+                            ["script"] = "const a=step('first',()=>tool('action_start',{tool:'nav_to',args:{x:12,y:34}})); if(tool('action_query',{handle:a.handle}).status==='completed') return step('second',()=>tool('action_start',{tool:'nav_to',args:{x:16,y:34}})); return a;" })
+                    }, _ => 0);
+                    Game.LocalPlayer.statLifeMax = 80;
+                    await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel" }, default));
+                    finishFirst = true;
+                    await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    AgentTools.ContinuePreparedNode(default);
+                    await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
+                    Check(timer.ElapsedMilliseconds < 1000 && AgentTools.LastContinuation["task_node"].ToString() == "travel"
+                        && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed",
+                        "same-node continuation lost its workflow or bypassed completion evidence");
+                    Console.WriteLine("DAG_WITHIN_NODE start_ms=" + timer.ElapsedMilliseconds + " model_calls=0");
+                    finishSecond = true;
+                    await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                    AgentTools.ContinuePreparedNode(default);
+                    await PumpUntil(() => AgentTools.LastContinuation?["status"]?.ToString() == "execution_gap");
+                    AgentTools.ContinuePreparedNode(default);
+                    Check(starts == 2 && AgentTools.Watches.HasInterrupting,
+                        "empty continuation replayed an action instead of reporting its execution gap");
+                    AgentTools.Stop();
+                    await PumpUntil(() => !AgentTools.Actions.HasActive);
+                    continue;
+                }
                 ActionTasks.NodeContext.Value = "travel";
                 string first = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
                 ActionTasks.NodeContext.Value = null;
