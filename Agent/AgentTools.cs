@@ -1570,10 +1570,17 @@ public static partial class AgentTools
         var start = await Call("/nav_recede", request, token);
         if (Rejected(start)) return start;
         var progress = new NavigationProgress();
+        bool? lastPlanning = null;
         var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token,
             elapsed => NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;
+                bool planning = !RecedingNav.FieldReady;
+                if (lastPlanning != planning)
+                {
+                    lastPlanning = planning;
+                    DiagLog.Write($"[agent_navigation_phase] phase={(planning ? "building_field" : "executing")} elapsed_seconds={elapsed:0.###}");
+                }
                 var trap = TerrainInspection.NavigationHazard(acceptedTraps);
                 if (trap != null) return trap;
                 if (player.suffocating)
@@ -1592,7 +1599,7 @@ public static partial class AgentTools
                     }
                 double distance = Math.Abs(player.Center.X - Int(args, "x") * 16)
                     + Math.Abs(player.Center.Y - Int(args, "y") * 16);
-                return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain);
+                return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning);
             }, token));
         return await NativeAgent.OnMain(() =>
         {

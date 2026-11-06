@@ -11,8 +11,9 @@ public sealed class NavigationProgress
     double anchorX, anchorY, bestDistance;
     double lastMovement, lastProgress;
 
-    public JsonObject Observe(double seconds, double x, double y, double distance, IReadOnlyDictionary<int, long> terrain)
+    public JsonObject Observe(double seconds, double x, double y, double distance, IReadOnlyDictionary<int, long> terrain, bool planning = false)
     {
+        if (planning) { initialized = false; return null; }
         bool edited = false;
         foreach (var cell in terrain)
         {

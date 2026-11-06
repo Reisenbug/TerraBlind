@@ -337,6 +337,7 @@ namespace TerraBlind
     public static class RecedingNav
     {
         public static bool Active;
+        public static bool FieldReady = true;
         public static string LastStop = "";
         public static void Start(int x, int y) => Active = true;
         public static void Stop() => Active = false;
