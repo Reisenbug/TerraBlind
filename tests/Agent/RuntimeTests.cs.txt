@@ -986,7 +986,8 @@ static class RuntimeTests
                 {
                     if (path == "/nav_recede")
                     {
-                        Check(!JsonNode.Parse(payload)["reach"].GetValue<bool>(), "non-solid collection stopped at interaction boundary");
+                        var request = JsonNode.Parse(payload);
+                        Check(request["reach"].GetValue<bool>() && !request["stand"].GetValue<bool>(), "collection did not approach within interaction range");
                         approachedForMining = true; Game.LocalPlayer.position = new(192, 544);
                     }
                     if (path == "/item_use") Check(approachedForMining, "interaction range incorrectly bypassed mining approach");
@@ -1001,7 +1002,7 @@ static class RuntimeTests
                 Reach.MineTest = null; Game.LocalPlayer.position = beforeRangePosition;
                 Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.tile[12, 34] = default;
             }
-            Console.WriteLine("PASS: collection measures the selected tool's mining range and approaches beyond interaction distance");
+            Console.WriteLine("PASS: collection approaches within interaction range and verifies the selected tool's mining range");
 
             var requestedPick = Game.LocalPlayer.inventory[1];
             try

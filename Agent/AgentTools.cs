@@ -1489,14 +1489,13 @@ public static partial class AgentTools
                 try { Main.LocalPlayer.selectedItem = slot; canMine = Reach.CanMine(Main.LocalPlayer, x, y); }
                 finally { Main.LocalPlayer.selectedItem = previous; }
             }
-            return new JsonObject { ["slot"] = slot, ["in_reach"] = canMine,
-                ["solid"] = Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType] };
+            return new JsonObject { ["slot"] = slot, ["in_reach"] = canMine };
         }, token);
         if (target == null) return null;
         if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
         if (!Bool(target, "in_reach"))
         {
-            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["reach"] = Bool(target, "solid") }, token);
+            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["mode"] = "interact" }, token);
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             bool reachable = await NativeAgent.OnMain(() =>
