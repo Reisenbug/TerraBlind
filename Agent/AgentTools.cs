@@ -466,7 +466,7 @@ public static partial class AgentTools
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
-            if (name is not ("say" or "ask"))
+            if (name is not ("say" or "ask" or "get_state"))
                 NativeAgent.Progress("开始执行：" + name, "执行 " + name,
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();

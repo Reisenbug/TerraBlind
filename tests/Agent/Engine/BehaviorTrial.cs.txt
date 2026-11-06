@@ -243,7 +243,8 @@ public sealed class BehaviorTrial : ModSystem
     static async Task<JsonObject> Call(string tool, JsonObject args)
     {
         var result = JsonNode.Parse(await AgentTools.Execute(tool, args, default)).AsObject();
-        Console.WriteLine("BEHAVIOR_TOOL " + tool + " " + result.ToJsonString());
+        if (tool != "get_state")
+            Console.WriteLine("BEHAVIOR_TOOL " + tool + " " + result.ToJsonString());
         return result;
     }
     bool SpawnMaterialHornet()
