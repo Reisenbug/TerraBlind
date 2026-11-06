@@ -142,7 +142,7 @@ public sealed class GameGather : IGatherWorld
                 if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
                     return new JsonObject { ["moving"] = true };
                 return item.active && item.type == candidate["item_type"].GetValue<int>()
-                    ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = true,
+                    ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = false,
                         ["near"] = Microsoft.Xna.Framework.Vector2.Distance(item.Center, Main.LocalPlayer.Center) <= 48 } : null;
             }, token);
             if (live == null) return new JsonObject { ["outcome"] = "target_changed" };
