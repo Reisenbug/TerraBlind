@@ -192,6 +192,7 @@ public class NativeAgent : ModSystem
         {
             AgentTools.ContinuePreparedNode(_cancel.Token);
             AgentTools.ObserveContinuity();
+            AgentTools.LootPassingChest();
         }
         if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))

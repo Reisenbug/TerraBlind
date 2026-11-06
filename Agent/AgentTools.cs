@@ -21,6 +21,49 @@ public static partial class AgentTools
     static Task continuation = Task.CompletedTask;
     static string pendingNode;
     internal static JsonObject LastContinuation;
+    static readonly HashSet<(int, int)> routeChests = new();
+    static bool routeLootEnabled;
+    internal static JsonObject LastRouteLoot;
+
+    internal static void LootPassingChest()
+    {
+        if (!Watches.LootChestsInReach)
+        { routeLootEnabled = false; return; }
+        if (!routeLootEnabled) { routeChests.Clear(); routeLootEnabled = true; }
+        var p = Main.LocalPlayer;
+        if (!Actions.HasPrimaryControl || !Plan.Incomplete || Main.netMode != Terraria.ID.NetmodeID.SinglePlayer
+            || p.dead || Manual.On || p.chest >= 0 || TreasureGrab.IsRunning || ContactEscapeActive
+            || !ControlAllows(ControlBehavior.Workflow, ControlChannels.ItemUse, delegated: true)) return;
+        foreach (var chest in Main.chest)
+        {
+            if (chest == null || routeChests.Contains((chest.x, chest.y)) || !chest.item.Any(i => !i.IsAir)
+                || !Reach.CanInteract(p, chest.x, chest.y)) continue;
+            routeChests.Add((chest.x, chest.y));
+            var before = AgentTaskEvidence.ObserveChest(chest.x, chest.y);
+            bool inventoryOpen = Main.playerInventory;
+            int opened = TreasureGrab.OpenAt(chest.x, chest.y, out string reason);
+            bool verified = false;
+            try
+            {
+                if (opened >= 0)
+                {
+                    Terraria.UI.ChestUI.LootAll();
+                    verified = AgentTaskEvidence.VerifyChest(before);
+                    reason = !verified ? "no_inventory_transfer" : chest.item.Any(i => !i.IsAir) ? "partial" : "looted";
+                }
+            }
+            finally
+            {
+                if (opened >= 0) TreasureGrab.CloseChest();
+                Main.playerInventory = inventoryOpen;
+            }
+            LastRouteLoot = new JsonObject { ["x"] = chest.x, ["y"] = chest.y,
+                ["outcome"] = reason, ["verified_transfer"] = verified, ["tick"] = Main.GameUpdateCount,
+                ["route_handle"] = Actions.ActiveHandle };
+            DiagLog.Write("[route_loot] " + LastRouteLoot.ToJsonString());
+            return;
+        }
+    }
     internal static JsonObject ExecutionContinuity;
     static ulong? gapStarted;
     static bool gapReported;
@@ -213,7 +256,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = null; LastContinuation = ExecutionContinuity = null; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -344,6 +387,7 @@ public static partial class AgentTools
         state["action_tasks"] = Actions.Summary();
         state["dag_continuation"] = LastContinuation?.DeepClone();
         state["execution_continuity"] = ExecutionContinuity?.DeepClone();
+        state["last_route_loot"] = LastRouteLoot?.DeepClone();
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;

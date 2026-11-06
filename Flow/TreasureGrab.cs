@@ -78,7 +78,7 @@ namespace TerraBlind
 		}
 
 		// 开着的箱子会挡下一个:vanilla 关箱就是 chest=-1 + FindRecipes
-		static void CloseChest()
+		internal static void CloseChest()
 		{
 			var p = Main.LocalPlayer;
 			if (p != null && p.chest != -1)

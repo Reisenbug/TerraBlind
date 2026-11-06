@@ -1678,6 +1678,42 @@ static class RuntimeTests
             var review = watches.Take(8);
             Check(review.Count == 8 && review[0]["kind"].ToString() == "action_finished" && watches.PendingCount == 23,
                 "review flooded the model or discarded remaining opportunity evidence");
+            var oldChest = Game.chest[0];
+            var oldItem = Game.LocalPlayer.inventory[0];
+            bool oldManual = Manual.On;
+            try
+            {
+                Manual.On = false; AgentTools.NewTask();
+                Game.chest[0] = new Terraria.Chest { x = 12, y = 34 };
+                Game.chest[0].item[0] = new Terraria.Item { type = 999, stack = 3 };
+                Game.LocalPlayer.inventory[0] = new Terraria.Item();
+                int opens = 0;
+                TreasureGrab.OpenHandler = (_, _) => { opens++; Game.LocalPlayer.chest = 0; return 0; };
+                Terraria.UI.ChestUI.LootHandler = () =>
+                { Game.LocalPlayer.inventory[0] = new Terraria.Item { type = 999, stack = 3 }; Game.chest[0].item[0].stack = 0; };
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") RecedingNav.Active = true;
+                    return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+                };
+                ActionTasks.NodeContext.Value = "travel";
+                string handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 20, ["y"] = 34 }, default)["handle"].ToString();
+                ActionTasks.NodeContext.Value = null;
+                await PumpUntil(() => RecedingNav.Active);
+                AgentTools.LootPassingChest();
+                Check(opens == 0, "route looting ran without script authorization");
+                AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["loot_chests_in_reach"] = true });
+                AgentTools.LootPassingChest(); AgentTools.LootPassingChest();
+                Check(opens == 1 && RecedingNav.Active && AgentTools.Actions.ActiveHandle == handle
+                    && AgentTools.LastRouteLoot["verified_transfer"].GetValue<bool>() && Game.LocalPlayer.chest == -1,
+                    "route loot failed verification, repeated or interrupted navigation");
+            }
+            finally
+            {
+                AgentTools.Stop(); await PumpUntil(() => !AgentTools.Actions.HasActive);
+                Game.chest[0] = oldChest; Game.LocalPlayer.inventory[0] = oldItem; Manual.On = oldManual;
+                TreasureGrab.OpenHandler = null; Terraria.UI.ChestUI.LootHandler = null;
+            }
         }
         finally
         {

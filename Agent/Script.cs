@@ -55,6 +55,8 @@ public static class AgentScript
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["maximum"] = 16, ["description"] = "每次读取数量，默认4。remaining_events表示队列剩余数；可继续读取，未读事件不会丢弃。" };
         var watch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
+        watch["parameters"]["properties"]["loot_chests_in_reach"] = new JsonObject { ["type"] = "boolean",
+            ["description"] = "提前授权在交互范围内立即开箱并loot，保持原移动；默认false。必须订阅nearby_chest。复用原陷阱/锁/占用检查，核对实际入包；不绕路、不整理或丢弃背包。false关闭；重新开启可重试本轮已处理箱子。" };
         watch["description"] = watch["description"].ToString()
             + "另支持nearby_drop(附近可见掉落，坐标单位格，需用nearby_drops刷新)和nearby_npc_killed(仅单人原生死亡事件，不证明谁击杀、不保证有掉落)。script本地处理的事件不消耗模型唤醒额度，显式decision_point仍受额度限制。额度耗尽后的机会仍记录在pending/history，wake_deferred=true表示未主动中断；可用script_events读取，行动前重新核对现场。不代表已拾取。";
         var parameters = tools.First(t => t["function"]?["name"]?.ToString() == "run_script")["function"]["parameters"];

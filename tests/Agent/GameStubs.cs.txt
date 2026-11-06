@@ -50,11 +50,20 @@ namespace Terraria.GameContent.ItemDropRules
     }
 }
 
+namespace Terraria.UI
+{
+    public static class ChestUI
+    {
+        public static Action LootHandler;
+        public static void LootAll() => LootHandler?.Invoke();
+    }
+}
+
 namespace Terraria
 {
     public static class Main
     {
-        public static bool dedServ, gameMenu;
+        public static bool dedServ, gameMenu, playerInventory;
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
@@ -96,7 +105,7 @@ namespace Terraria
         public bool AnyExtraJumpUsable() => ExtraJump;
         public bool PickAmmo(Item item, out int shot, out float speed, out int damage, out float knockback, out int ammo, bool dontConsume)
         { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
-        public int itemAnimation, potionDelay;
+        public int itemAnimation, potionDelay, chest = -1;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
         public int lifeRegen, lifeRegenCount;
         public System.Numerics.Vector2 position;
@@ -343,6 +352,13 @@ namespace TerraBlind
         public static Func<Terraria.Player, int, int, bool> MineTest;
         public static bool CanInteract(Terraria.Player player, int x, int y) => true;
         public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
+    }
+    public static class TreasureGrab
+    {
+        public static bool IsRunning;
+        public static Func<int, int, int> OpenHandler;
+        public static int OpenAt(int x, int y, out string why) { why = "test"; return OpenHandler?.Invoke(x,y) ?? -1; }
+        public static void CloseChest() => Terraria.Main.LocalPlayer.chest = -1;
     }
     public static class HttpServerSystem
     {

@@ -48,6 +48,7 @@ public sealed class AgentWatch
     JsonObject lastObservation;
     JsonObject itemCounts;
     public int Radius { get; private set; } = 25;
+    public bool LootChestsInReach { get; private set; }
     int? healthOverride;
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
@@ -116,6 +117,8 @@ public sealed class AgentWatch
         if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired" or "low_health")))
             throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health仅在本地JS执行期间不强制中断。");
         passive.Clear(); passive.UnionWith(passiveEvents);
+        LootChestsInReach = requested.Contains("nearby_chest")
+            && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? LootChestsInReach);
         currentChestTarget = null;
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; healthOverride = health;
@@ -297,6 +300,7 @@ public sealed class AgentWatch
 
     public JsonObject Summary() => new()
     {
+        ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
@@ -314,6 +318,7 @@ public sealed class AgentWatch
 
     public JsonObject Snapshot() => new()
     {
+        ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
@@ -324,6 +329,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
-    public void End() { events.Clear(); pending.Clear(); }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
+    public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
 }
