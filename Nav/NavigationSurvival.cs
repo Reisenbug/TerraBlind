@@ -56,7 +56,7 @@ public static class NavigationSurvival
             if (holdingWeb)
             {
                 ClearControls(player);
-                if (!Main.tile[webTarget.X, webTarget.Y].HasTile && player.inventory[heldSlot].type == ItemID.Cobweb)
+                if (WebCanReplace(webTarget) && player.inventory[heldSlot].type == ItemID.Cobweb)
                 {
                     player.selectedItem = heldSlot;
                     player.delayUseItem = false; player.mouseInterface = false;
@@ -113,15 +113,29 @@ public static class NavigationSurvival
             }
             if (player.gravDir != 1) return false;
             var target = new Point((int)((landing.X + player.width / 2f) / 16), (int)((landing.Y + player.height - 1) / 16));
-            if (!Reach.CanPlace(player, target.X, target.Y) || Main.tile[target.X, target.Y].HasTile
-                || !LavaSafety.CanMine(target.X, target.Y)) return false;
             for (int slot = 0; slot < 50; slot++)
             {
                 if (player.inventory[slot].type != ItemID.Cobweb) continue;
-                HoldItem(player, slot); holdingWeb = true; webTarget = target;
+                Point? placement = null;
+                int previous = player.selectedItem;
+                try
+                {
+                    player.selectedItem = slot;
+                    foreach (int offset in new[] { 0, 1, -1, -2 })
+                    {
+                        var candidate = new Point(target.X, target.Y + offset);
+                        if (!WorldGen.InWorld(candidate.X, candidate.Y) || !WebCanReplace(candidate)
+                            || !Reach.CanPlace(player, candidate.X, candidate.Y) || !LavaSafety.CanMine(candidate.X, candidate.Y)) continue;
+                        if (Main.tile[candidate.X, candidate.Y].WallType == 0 && !ItemUseCoordinator.HasAnchor(candidate.X, candidate.Y)) continue;
+                        placement = candidate; break;
+                    }
+                }
+                finally { player.selectedItem = previous; }
+                if (!placement.HasValue) return false;
+                HoldItem(player, slot); holdingWeb = true; webTarget = placement.Value;
                 Interrupt(player, "place_cobweb");
                 player.delayUseItem = false; player.mouseInterface = false;
-                Cursor.AimTile(target.X, target.Y); player.controlUseItem = true;
+                Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
                 return true;
             }
             return false;
@@ -130,6 +144,12 @@ public static class NavigationSurvival
         Interrupt(player, press ? "extra_jump" : "release_jump");
         player.controlJump = press;
         return true;
+    }
+
+    static bool WebCanReplace(Point target)
+    {
+        var tile = Main.tile[target.X, target.Y];
+        return !tile.HasTile || Main.tileCut[tile.TileType] || TileID.Sets.BreakableWhenPlacing[tile.TileType];
     }
 
     public static bool DangerousLandingSoon(Player player)

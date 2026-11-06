@@ -430,6 +430,85 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_WEB_LANDING_TRIAL") == "1")
+        {
+            var samples = new JsonArray();
+            int initialInterventions = NavigationSurvival.Interventions;
+            int supportedFrames = 0;
+            bool webPlaced = false;
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                for (int i = 0; i < p.inventory.Length; i++) p.inventory[i].TurnToAir();
+                for (int i = 0; i < p.armor.Length; i++) p.armor[i].TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[40].SetDefaults(ItemID.Cobweb); p.inventory[40].stack = 100;
+                p.selectedItem = 0; p.itemAnimation = p.itemTime = 0;
+                p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+                p.immune = false; p.immuneTime = 0;
+                p.position = new Vector2(10766.779f, 12102.987f);
+                p.velocity = new Vector2(0, 6.990001f);
+                p.fallStart = p.fallStart2 = 753;
+                var decoration = Main.tile[673, 826];
+                if (!decoration.HasTile || decoration.TileType != TileID.SmallPiles || Main.tile[673, 825].HasTile)
+                    throw new Exception("recorded natural landing tiles differ from the death evidence");
+                var cells = new JsonArray();
+                for (int y = 823; y <= 827; y++)
+                    cells.Add(new JsonObject { ["y"] = y, ["active"] = Main.tile[673, y].HasTile,
+                        ["type"] = Main.tile[673, y].TileType, ["solid"] = Main.tileSolid[Main.tile[673, y].TileType],
+                        ["replaceable"] = TileID.Sets.BreakableWhenPlacing[Main.tile[673, y].TileType] });
+                Console.WriteLine("WEB_LANDING_TILES " + cells.ToJsonString());
+                RecedingNav.Active = true;
+                if (!AxisLock.Take("fall-landing-check", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use))
+                    throw new Exception("fall check could not isolate vertical descent");
+                return true;
+            });
+            try
+            {
+                for (int i = 0; i < 300; i++)
+                {
+                    var sample = await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        var chosen = (Point)typeof(NavigationSurvival).GetField("webTarget", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                        return new JsonObject { ["tick"] = Main.GameUpdateCount, ["hp"] = p.statLife, ["dead"] = p.dead,
+                            ["x"] = p.position.X, ["y"] = p.position.Y, ["vy"] = p.velocity.Y, ["no_fall_damage"] = p.noFallDmg,
+                            ["fall_start"] = p.fallStart,
+                            ["web_count"] = p.inventory.Where(it => it.type == ItemID.Cobweb).Sum(it => it.stack),
+                            ["held_type"] = p.HeldItem.type, ["item_animation"] = p.itemAnimation, ["item_time"] = p.itemTime,
+                            ["use_item"] = p.controlUseItem, ["delay_use_item"] = p.delayUseItem, ["mouse_interface"] = p.mouseInterface,
+                            ["target_x"] = Player.tileTargetX, ["target_y"] = Player.tileTargetY,
+                            ["chosen_x"] = chosen.X, ["chosen_y"] = chosen.Y,
+                            ["chosen_has_tile"] = Main.tile[chosen.X, chosen.Y].HasTile,
+                            ["chosen_type"] = (int)Main.tile[chosen.X, chosen.Y].TileType,
+                            ["interventions"] = NavigationSurvival.Interventions,
+                            ["web_above_decoration"] = Main.tile[673, 825].HasTile && Main.tile[673, 825].TileType == TileID.Cobweb,
+                            ["supported"] = Collision.TileCollision(p.position, new Vector2(0, 2), p.width, p.height, false, false, 1).Y < 2 };
+                    });
+                    samples.Add(sample);
+                    if (sample["dead"].GetValue<bool>()) throw new Exception("recorded landing still caused death");
+                    webPlaced |= sample["web_count"].GetValue<int>() < 100 && sample["chosen_has_tile"].GetValue<bool>()
+                        && sample["chosen_type"].GetValue<int>() == TileID.Cobweb;
+                    bool protectedLanding = webPlaced && sample["interventions"].GetValue<int>() > initialInterventions
+                        && sample["supported"].GetValue<bool>()
+                        && sample["vy"].GetValue<float>() == 0;
+                    supportedFrames = protectedLanding ? supportedFrames + 1 : 0;
+                    if (supportedFrames >= 12)
+                    {
+                        File.WriteAllText(Path.Combine(Main.SavePath, "web-landing.json"), samples.ToJsonString());
+                        Console.WriteLine("WEB_LANDING_PASS native_engine=true recorded_world=true natural_decoration=true model_calls=0");
+                        return;
+                    }
+                }
+                throw new Exception("recorded landing did not finish a protected landing in 300 frames");
+            }
+            finally
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "web-landing.json"), samples.ToJsonString());
+                await OnMain(() => { AxisLock.Release("fall-landing-check"); RecedingNav.Stop(); NavigationSurvival.Reset(Main.LocalPlayer); return true; });
+            }
+        }
         if (Environment.GetEnvironmentVariable("TB_DROP_IDENTITY") == "1")
         {
             await OnMain(() => { foreach (var item in Main.item) item.active = false; return true; });
