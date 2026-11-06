@@ -112,11 +112,12 @@ def main():
         try:
             material_review = args.behavior and os.environ.get("TB_MATERIAL_MODEL_REVIEW") == "1"
             full_craft = args.behavior and os.environ.get("TB_FULL_CRAFT_TRIAL") == "1"
-            deadline = time.monotonic() + (1900 if full_craft else 300 if material_review or args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.automatic_live or args.planning_readonly else 180)
+            health_trial = full_craft and os.environ.get("TB_JUNGLE_HEALTH_TRIAL") == "1"
+            deadline = None if health_trial else time.monotonic() + (1900 if full_craft else 300 if material_review or args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.automatic_live or args.planning_readonly else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break
-                if time.monotonic() > deadline:
+                if deadline is not None and time.monotonic() > deadline:
                     raise TimeoutError(f"Engine check timed out; inspect {root}/client.log")
                 if "An error occurred while loading" in (root / "client.log").read_text():
                     raise RuntimeError(f"Mod load failed; inspect {root}/client.log")

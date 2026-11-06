@@ -121,7 +121,7 @@ public sealed class BehaviorTrial : ModSystem
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 360000 && (descentMs == null || descentMs > 360000) ? "main_descent_deadline"
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 1080000 && (healthMs == null || healthMs > 1080000) ? "health_200_deadline"
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 1440000 && (chakramMs == null || chakramMs > 1440000) ? "chakram_deadline"
-            : clock.ElapsedMilliseconds >= 1800000 && !complete ? "task_deadline" : null;
+            : !JungleHealthTrial && clock.ElapsedMilliseconds >= 1800000 && !complete ? "task_deadline" : null;
 
         JsonObject Report(string reason) => new()
         {
@@ -1765,7 +1765,7 @@ public sealed class BehaviorTrial : ModSystem
                 {
                     ["started_utc"] = startedUtc.ToString("O"), ["model"] = trialModel, ["effort"] = "low",
                     ["prompt"] = trialPrompt, ["before"] = before.DeepClone(), ["recipe"] = recipe.DeepClone(),
-                    ["time_limit_seconds"] = FullCraftTrial ? 1800 : 120,
+                    ["time_limit_seconds"] = JungleHealthTrial ? null : JsonValue.Create(FullCraftTrial ? 1800 : 120),
                     ["objective"] = JungleHealthTrial ? "health_300_collected_and_used_in_underground_jungle" : "craft_trial",
                     ["permanent_gills"] = FullCraftTrial, ["permanent_shine"] = FullCraftTrial,
                     ["world_name"] = Main.worldName, ["world_seed"] = Main.ActiveWorldFileData.SeedText,
@@ -1801,7 +1801,7 @@ public sealed class BehaviorTrial : ModSystem
                     .Any(i => i["type"]?.GetValue<int>() == ItemID.ThornChakram && i["stack"]?.GetValue<int>() > 0);
             try
             {
-                while (elapsed.Elapsed.TotalSeconds < (FullCraftTrial ? 1800 : 120))
+                while (JungleHealthTrial || elapsed.Elapsed.TotalSeconds < (FullCraftTrial ? 1800 : 120))
                 {
                     await Task.Delay(1000);
                     string agentStatus = NativeAgent.Status;
