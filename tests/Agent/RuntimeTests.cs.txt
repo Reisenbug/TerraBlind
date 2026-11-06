@@ -1385,6 +1385,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestDagRepairDuringDefense();
             await TestQueuedDagActions();
+            await TestAutomaticDagContinuation();
             await TestBackgroundDescent();
             await TestObservedActionCompletion();
             await TestDagReturnValues();
@@ -1515,6 +1516,63 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; }
         Console.WriteLine("PASS: descent exposes the main route immediately and retrieves separate paged background treasures");
+    }
+
+    static async Task TestAutomaticDagContinuation()
+    {
+        int oldMax = Game.LocalPlayer.statLifeMax;
+        try
+        {
+            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled" })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
+                Game.LocalPlayer.statLifeMax = mode == "unmet" ? 80 : 100;
+                int starts = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+                };
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"automatic prepared script","mode":"dag","steps":[
+                      {"id":"travel","description":"travel","depends_on":[],"script":"return {};",
+                       "conditions":[{"kind":"permanent_health","count":100}]},
+                      {"id":"collect","description":"collect","depends_on":["travel"],
+                       "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
+                       "conditions":[{"kind":"item","type":191,"count":1}]}]}
+                    """).AsObject(), _ => 0);
+                ActionTasks.NodeContext.Value = "travel";
+                string first = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
+                ActionTasks.NodeContext.Value = null;
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                if (mode == "danger") AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["suffocating"] = true });
+                using var cancel = new CancellationTokenSource();
+                if (mode == "cancelled") cancel.Cancel();
+                var elapsed = System.Diagnostics.Stopwatch.StartNew();
+                AgentTools.ContinuePreparedNode(cancel.Token);
+                if (mode == "ready")
+                {
+                    await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
+                    Check(elapsed.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
+                        "prepared DAG node did not start within one second after host verification");
+                    AgentTools.ContinuePreparedNode(cancel.Token);
+                    Check(starts == 2, "automatic continuation replayed the same predecessor");
+                    Console.WriteLine("DAG_AUTOMATIC start_ms=" + elapsed.ElapsedMilliseconds + " model_calls=0");
+                }
+                else Check(starts == 1 && AgentTools.LastContinuation == null, "automatic continuation ignored " + mode);
+                AgentTools.Stop();
+                await PumpUntil(() => !AgentTools.Actions.HasActive);
+            }
+        }
+        finally
+        {
+            ActionTasks.NodeContext.Value = null;
+            AgentTools.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive);
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
+            Game.LocalPlayer.statLifeMax = oldMax; HttpServerSystem.Handler = null;
+        }
+        Console.WriteLine("PASS: host starts prepared DAG scripts without a model call and respects evidence, danger and cancellation");
     }
 
     static async Task TestQueuedDagActions()

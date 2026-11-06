@@ -17,6 +17,62 @@ public static partial class AgentTools
     internal const int ApiRevision = 2;
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
+    static readonly HashSet<string> continuedActions = new();
+    static Task continuation = Task.CompletedTask;
+    internal static JsonObject LastContinuation;
+    internal static void ContinuePreparedNode(CancellationToken token)
+    {
+        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl
+            || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
+        var action = Actions.LatestCompletedPrimary();
+        string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
+        if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(handle)) return;
+        var plan = Plan.Snapshot();
+        var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
+        if (previous == null) return;
+        if (Workflows.TryGetValue(previous["workflow"]?.ToString() ?? "", out var workflow)
+            && (workflow.Running || workflow.Yielded || workflow.ReviewRequested)) return;
+        continuedActions.Add(handle);
+        if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
+        if (previous["status"]?.ToString() != "completed"
+            && Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() != true) return;
+        Watches.AcknowledgeCompletion(action);
+        if (Watches.HasInterrupting) return;
+        plan = Plan.Snapshot();
+        string next = plan["current_step"]?.ToString();
+        if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
+        LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
+            ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
+        var report = LastContinuation;
+        continuation = Task.Run(async () =>
+        {
+            try
+            {
+                string result = await Execute("run_script", new JsonObject { ["task_node"] = next }, token);
+                await NativeAgent.OnMain(() =>
+                {
+                    var returned = JsonNode.Parse(result);
+                    report["status"] = "returned"; report["ok"] = returned?["ok"]?.DeepClone();
+                    report["error"] = returned?["error"]?.DeepClone();
+                    if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
+                        && (value["status"]?.ToString() == "yield" || value["wake"] != null || value["error"] != null))
+                        Watches.Request("prepared_node_review", report);
+                    DiagLog.Write($"[dag-continuation] after={handle} node={next} result={result}");
+                    return true;
+                }, token);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error)
+            {
+                await NativeAgent.OnMain(() =>
+                {
+                    report["status"] = "failed"; report["error"] = error.Message;
+                    Watches.Request("prepared_node_failed", report);
+                    return true;
+                }, default);
+            }
+        }, token);
+    }
     internal static readonly AgentWatch Watches = new(AssessNotice);
     static JsonObject AssessNotice(JsonObject notice)
     {
@@ -85,7 +141,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); LastContinuation = null; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -214,6 +270,7 @@ public static partial class AgentTools
         foreach (var workflow in Workflows) workflows[workflow.Key] = workflow.Value.Summary();
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Summary();
+        state["dag_continuation"] = LastContinuation?.DeepClone();
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;

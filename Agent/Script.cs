@@ -13,6 +13,10 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
+        plan["description"] = plan["description"].ToString()
+            + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
+            + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。条件未满足、危险事件、暂停、取消或脚本主动yield/wake时交回模型，不自动推进。";
         var queue = tools.First(t => t["function"]?["name"]?.ToString() == "action_queue")["function"];
         queue["parameters"]["properties"]["tool"]["enum"].AsArray().Add("run_script");
         queue["description"] = queue["description"].ToString()

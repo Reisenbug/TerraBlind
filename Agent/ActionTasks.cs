@@ -56,6 +56,15 @@ public sealed class ActionTasks
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
+    internal JsonObject LatestCompletedPrimary()
+    {
+        lock (gate)
+        {
+            var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight" && e.Status == "completed")
+                .OrderByDescending(e => e.ExecutionEnded).FirstOrDefault();
+            return entry == null ? null : Snapshot(entry);
+        }
+    }
 
     internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
         or "mine_vein" or "chop_wood" or "collect_treasure" or "run_script";

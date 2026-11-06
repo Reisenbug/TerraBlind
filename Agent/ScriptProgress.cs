@@ -14,6 +14,7 @@ public sealed class ScriptProgress
     readonly Queue<JsonObject> calls = new();
     int revision, segment;
     bool running;
+    public bool Running { get { lock (gate) return running; } }
     JsonObject last;
     JsonObject watchPolicy;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
