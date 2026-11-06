@@ -2279,8 +2279,23 @@ static class RuntimeTests
                 && retried["observed"]?["permanent_max_health"] != null
                 && largeProgress.Snapshot()["steps"][0]["value"].ToString().Length == 3000,
                 "workflow reconciliation replayed large history, lost real evidence or failed to preserve saved effects");
+            AgentTools.Plan.Create(new JsonObject { ["goal"] = "bounded plan verification", ["mode"] = "dag",
+                ["steps"] = new JsonArray(new JsonObject { ["id"] = "checkpoint", ["description"] = "verify current health",
+                    ["depends_on"] = new JsonArray(), ["script"] = "return {};",
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = Game.LocalPlayer.statLifeMax }) }) }, _ => 0);
+            for (int i = 0; i < 8; i++)
+                AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                    ["reason"] = "observed route revision", ["nodes"] = new JsonArray(new JsonObject
+                        { ["id"] = "checkpoint", ["script"] = "return '" + new string('x', 3000) + "';" }) }, _ => 0);
+            var verifiedPlan = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "return tool('task_step',{id:'checkpoint',action:'verify'});" }, default)));
+            Check(verifiedPlan["ok"].GetValue<bool>() && verifiedPlan["value"]["verified"].GetValue<bool>()
+                && verifiedPlan["value"]["steps"][0]["revision_count"].GetValue<int>() == 8
+                && verifiedPlan["value"]["steps"][0]["script"] == null
+                && AgentTools.Plan.Snapshot()["steps"][0]["revisions"].AsArray().Count == 8,
+                "plan verification exceeded script output budget or lost real verification and revision history");
         }
-        finally { AgentTools.Workflows.Clear(); AgentTools.Watches.Reset(); }
+        finally { AgentTools.Workflows.Clear(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: large resumable history stays out of default state while explicit workflow detail remains intact");
     }
 

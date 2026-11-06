@@ -563,6 +563,17 @@ public static partial class AgentTools
                 if (denied != null) return denied.ToJsonString();
             }
             string output = await ExecuteCore(name, args, token);
+            if (name is "task_plan" or "task_step" or "task_plan_patch")
+                output = await NativeAgent.OnMain(() =>
+                {
+                    var result = JsonNode.Parse(output).AsObject();
+                    var summary = Plan.Summary();
+                    if (name == "task_step")
+                        foreach (var step in summary["steps"].AsArray().OfType<JsonObject>()) step.Remove("script");
+                    foreach (string field in new[] { "verified", "corrected" })
+                        if (result[field] != null) summary[field] = result[field].DeepClone();
+                    return summary.ToJsonString();
+                }, token);
             if (name is "run_script" or "game_api" && !Actions.RunningScript)
                 output = await NativeAgent.OnMain(() =>
                 {
