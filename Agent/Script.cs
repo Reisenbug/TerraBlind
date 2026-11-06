@@ -86,7 +86,7 @@ public static class AgentScript
         + RuntimeInstructions
         + "\n长任务采用DAG：task_plan传mode:'dag'，节点包含id、depends_on、script和conditions。共享前置只建一个节点；依赖表示前置已验收，不代表输入互斥。先查当前必要知识，再建立可执行节点；未知后续行为可用调查脚本返回缺失事实，不能猜来源或假造完成条件。"
         + "首个行动的目的地、必要条件和验收已明确时，先建立最小DAG，再从所属节点启动后台动作并立即返回；不要等全部配方、后续资源和完整路线查完才出发，也不要先启动无所属节点的动作再补建DAG。导航运行期间可查询知识、观察现场并用task_plan_patch添加后续节点；保留当前节点和原句柄，不为只读调查暂停导航。最终目标的验收条件从初始计划保留，后续细化不能遗漏原要求。导航的逐格移动、挖掘和搭桥交给导航执行器，不用模型反复生成逐格修路脚本替代导航。"
-        + "用run_script({task_node:id})执行ready_steps中的节点，宿主保存独立稳定workflow。节点script中用step保存action_start句柄；再次执行先action_query，已暂停则恢复原handle，已完成则核对conditions，不能重复创建动作。脚本结束不等于节点完成，task_step verify读取真实状态。"
+        + "长任务优先用run_script({task_node:id,background:true})执行ready_steps中的节点，宿主返回后台句柄并保存稳定workflow。此模式下节点script直接用tool('nav_to',参数)、tool('gather',参数)等顺序执行，step保存已完成效果；Agent同时观察和准备后继。action_control管理宿主返回的句柄。普通前台脚本可用action_start启动独立后台动作并保存返回句柄，再用action_query观察。task_step verify读取真实状态验收节点。"
         + "多个ready节点可共同推进，但不轮流抢移动：默认继续当前动作，出现具体顺路收益、阻塞或危险才切换。切换前暂停原主动作并保存理由；插入结束核实所得，回到原节点恢复句柄。独立防身可与移动并行，不把所有怪物变成必须完成的前置任务。"
         + "新事实需要修改方案时用task_plan_patch的nodes更新未完成节点script/depends_on，或add_nodes插入有实际完成条件的新机会/恢复节点，两者可同批提交，带expected_revision和reason；共享已有前置，保留workflow与已完成step，不重建计划。不要为开箱把采集节点脚本改成只有开箱；新机会单独成节点，原节点保留原意图与句柄。脚本改动不会清除uncertain，仍须核对。最终验收检查所有末端节点，必须把最终仍需持有的物品等要求写入末端conditions。\n"
         + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
@@ -111,7 +111,7 @@ public static class AgentScript
         + "find_biome负责辨认群系方向和大致位置，实际路线结合特殊知识、当前位置和现场环境选择。进入地下丛林优先利用find_descent/descent_route查证的主道，这是原有算法计算的高效下降道路。沿主道利用现有洞穴前进；遇红木、神庙、蜂巢等阻挡时，结合现场选择挖掘、绕行或接回主道，以行动效率为依据。"
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
         + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。实际跑通后保存验证条件与结果，失败则修订同一技能，不把未经执行的程序宣称为验证通过。不保存旧世界坐标或句柄作为下次任务的默认参数。"
-        + "长导航用action_start启动后立即返回句柄，让宿主在行动期间并行唤醒你观察，不要循环action_query等到导航结束才思考。连续主路线由脚本串联已查证路点，普通机会用passive_events，判断值得处理才暂停导航；短程躲避由独立实时控制器响应。"
+        + "长导航写入节点script，以run_script({task_node:id,background:true})启动，立即使用宿主返回的句柄进行并行观察和后续准备。后台脚本顺序调用动作，连续主路线串联已查证路点；普通机会通过passive_events观察，由策略决定插入行动，短程躲避由独立实时控制器响应。"
         + "永久生命上限低于160时，生命水晶具有更高优先级；获得后及时使用并核对永久上限增加，除非玩家明确要求保留。优先级不代表无视地形或为遥远水晶无限绕路。"
         + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
