@@ -320,7 +320,7 @@ public class NativeAgent : ModSystem
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
                         if (goalOptions == null && await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
-                        var events = await OnMain(() => AgentTools.Watches.Take(), token);
+                        var events = await OnMain(() => AgentTools.Watches.Take(8), token);
                         input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
                             + "\n现状：" + await AgentTools.State(token);

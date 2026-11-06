@@ -513,6 +513,15 @@ public static partial class AgentTools
                 if (denied != null) return denied.ToJsonString();
             }
             string output = await ExecuteCore(name, args, token);
+            if (name is "run_script" or "game_api" && !Actions.RunningScript)
+                output = await NativeAgent.OnMain(() =>
+                {
+                    var notices = Watches.Advisories();
+                    if (notices.Count == 0 || JsonNode.Parse(output) is not JsonObject response) return output;
+                    response["along_route_opportunities"] = notices;
+                    response["opportunity_delivery"] = "沿途新发现，当前动作未暂停。本轮评估并落实值得处理的机会；通知不代表已处理，完整事件仍可用script_events读取。";
+                    return response.ToJsonString();
+                }, token);
             if (name is not ("get_state" or "say" or "ask" or "task_plan" or "task_step" or "action_query" or "run_script" or "watch"))
                 output = await NativeAgent.OnMain(() =>
                 {
@@ -761,7 +770,7 @@ public static partial class AgentTools
                     string activeHandle = Actions.ActiveHandle;
                     if (activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
                         await Actions.Control(activeHandle, "pause", null, token);
-                    var deliveredEvents = await NativeAgent.OnMain(Watches.Take, token);
+                    var deliveredEvents = await NativeAgent.OnMain(() => Watches.Take(8), token);
                     if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
                 }
                 break;

@@ -1650,6 +1650,18 @@ static class RuntimeTests
             watches.ExecutionFault(new JsonObject { ["reason"] = "same_gap" });
             Check(watches.HasInterrupting && watches.PendingCount == 1,
                 "execution fault was budget-limited or duplicated");
+            watches.Reset(); watches.EnsureDefaults();
+            for (int i = 0; i < 30; i++) watches.Emit("nearby_chest", i.ToString(), new JsonObject { ["x"] = i, ["y"] = 1 });
+            var advice = watches.Advisories();
+            var nextAdvice = watches.Advisories();
+            Check(advice.Count == 4 && nextAdvice.Count == 4 && watches.PendingCount == 30 && !watches.HasInterrupting
+                && advice.All(a => nextAdvice.All(b => a["id"].ToString() != b["id"].ToString())),
+                "opportunity delivery paused, consumed or duplicated pending choices");
+            watches.Emit("action_finished", "failed", new JsonObject { ["handle"] = "failed", ["status"] = "failed" });
+            Check(watches.Pending()["events"][0]["kind"].ToString() == "action_finished", "failure was buried behind old chest notices");
+            var review = watches.Take(8);
+            Check(review.Count == 8 && review[0]["kind"].ToString() == "action_finished" && watches.PendingCount == 23,
+                "review flooded the model or discarded remaining opportunity evidence");
         }
         finally
         {

@@ -14,6 +14,7 @@ public sealed class AgentWatch
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<int> tileTypes = new();
     readonly HashSet<string> passive = new();
+    readonly HashSet<int> advised = new();
     readonly HashSet<string> verifiedCompletions = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
@@ -222,7 +223,7 @@ public sealed class AgentWatch
                 double dy = Number(item["evidence"]["y"]) - Number(lastObservation["pos"]["y"]) / 16;
                 return dx * dx + dy * dy;
             }
-            var ordered = pending.OrderBy(item => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" ? 0 : 1)
+            var ordered = pending.OrderBy(ReviewPriority)
                 .ThenBy(Distance).ToArray();
             pending.Clear();
             foreach (var item in ordered) pending.Enqueue(item);
@@ -239,7 +240,25 @@ public sealed class AgentWatch
         }
         return result;
     }
-    public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()) };
+    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" or "execution_gap"
+        || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
+
+    public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.OrderBy(ReviewPriority).Take(8).Select(x => x.DeepClone()).ToArray()),
+        ["remaining_events"] = Math.Max(0, pending.Count - 8) };
+
+    internal JsonArray Advisories()
+    {
+        var result = new JsonArray();
+        foreach (var item in pending.Where(e => e["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop"
+            && !advised.Contains(e["id"].GetValue<int>())).OrderBy(e => e["kind"]?.ToString() == "nearby_chest" ? 0 : 1).Take(4))
+        {
+            advised.Add(item["id"].GetValue<int>());
+            result.Add(new JsonObject { ["id"] = item["id"]?.DeepClone(), ["kind"] = item["kind"]?.DeepClone(),
+                ["key"] = item["key"]?.DeepClone(), ["evidence"] = item["evidence"]?.DeepClone(),
+                ["navigation"] = item["navigation"]?.DeepClone() });
+        }
+        return result;
+    }
 
     public JsonObject Reconsider(string kind, string key, string reason)
     {
@@ -305,6 +324,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
     public void End() { events.Clear(); pending.Clear(); }
 }
