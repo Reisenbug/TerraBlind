@@ -29,6 +29,8 @@ public sealed class BehaviorTrial : ModSystem
     bool UsingNavigationStub => materialNavigationStub && materialNavigationHook != null;
     readonly List<string> sourceInputSamples = new();
     bool samplingSources;
+    bool samplingLanding;
+    readonly JsonArray landingFrames = new();
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
@@ -371,6 +373,18 @@ public sealed class BehaviorTrial : ModSystem
             p.AddBuff(BuffID.Gills, 3600);
             p.AddBuff(BuffID.Shine, 3600);
         }
+        if (samplingLanding)
+        {
+            var chosen = (Point)typeof(NavigationSurvival).GetField("webTarget", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+            landingFrames.Add(new JsonObject { ["tick"] = Main.GameUpdateCount, ["x"] = p.position.X, ["y"] = p.position.Y,
+                ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["fall_start"] = p.fallStart, ["held"] = p.HeldItem.type, ["slot"] = p.selectedItem,
+                ["animation"] = p.itemAnimation, ["item_time"] = p.itemTime, ["use_item"] = p.controlUseItem,
+                ["attack_animation"] = FightCoordinator.AttackAnimationActive,
+                ["web_count"] = p.inventory.Where(it => it.type == ItemID.Cobweb).Sum(it => it.stack),
+                ["chosen_x"] = chosen.X, ["chosen_y"] = chosen.Y, ["tile_x"] = Player.tileTargetX, ["tile_y"] = Player.tileTargetY,
+                ["chosen_type"] = Main.tile[chosen.X, chosen.Y].HasTile ? (int)Main.tile[chosen.X, chosen.Y].TileType : -1 });
+        }
         if (samplingSources)
         {
             int x = ItemUseCoordinator.SnappedWx, y = ItemUseCoordinator.SnappedWy;
@@ -432,6 +446,7 @@ public sealed class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_WEB_LANDING_TRIAL") == "1")
         {
+            int landingCase = int.TryParse(Environment.GetEnvironmentVariable("TB_WEB_LANDING_CASE"), out int selectedCase) ? selectedCase : 1;
             var samples = new JsonArray();
             int initialInterventions = NavigationSurvival.Interventions;
             int supportedFrames = 0;
@@ -450,8 +465,24 @@ public sealed class BehaviorTrial : ModSystem
                 p.position = new Vector2(10766.779f, 12102.987f);
                 p.velocity = new Vector2(0, 6.990001f);
                 p.fallStart = p.fallStart2 = 753;
+                if (landingCase == 2)
+                {
+                    p.position = new Vector2(51510.98f, 7018.92f); p.velocity = new Vector2(2.94f, 10.01f);
+                    p.fallStart = p.fallStart2 = 395;
+                }
+                if (landingCase == 3)
+                {
+                    p.position = new Vector2(53227.12f, 15753.67f); p.velocity = new Vector2(0, 10.01f);
+                    p.fallStart = p.fallStart2 = 891;
+                    foreach (var cell in new[] { new Point(3326, 988), new Point(3327, 989) })
+                    {
+                        var plant = Main.tile[cell.X, cell.Y];
+                        plant.HasTile = true;
+                        plant.TileType = TileID.JunglePlants2;
+                    }
+                }
                 var decoration = Main.tile[673, 826];
-                if (!decoration.HasTile || decoration.TileType != TileID.SmallPiles || Main.tile[673, 825].HasTile)
+                if (landingCase == 1 && (!decoration.HasTile || decoration.TileType != TileID.SmallPiles || Main.tile[673, 825].HasTile))
                     throw new Exception("recorded natural landing tiles differ from the death evidence");
                 var cells = new JsonArray();
                 for (int y = 823; y <= 827; y++)
@@ -459,6 +490,19 @@ public sealed class BehaviorTrial : ModSystem
                         ["type"] = Main.tile[673, y].TileType, ["solid"] = Main.tileSolid[Main.tile[673, y].TileType],
                         ["replaceable"] = TileID.Sets.BreakableWhenPlacing[Main.tile[673, y].TileType] });
                 Console.WriteLine("WEB_LANDING_TILES " + cells.ToJsonString());
+                cells = new JsonArray();
+                int landingX = (int)p.Center.X / 16, landingY = (int)(p.Bottom.Y / 16) + 2;
+                for (int x = landingX - 1; x <= landingX + 1; x++)
+                for (int y = landingY - 2; y <= landingY + 2; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    cells.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.HasTile ? (int)tile.TileType : -1,
+                        ["wall"] = (int)tile.WallType, ["anchor"] = ItemUseCoordinator.HasAnchor(x, y),
+                        ["slope"] = (int)tile.Slope });
+                }
+                Console.WriteLine("WEB_LANDING_AREA " + cells.ToJsonString());
+                Main.screenPosition = p.Center - new Vector2(Main.screenWidth, Main.screenHeight) / 2;
+                samplingLanding = true;
                 RecedingNav.Active = true;
                 if (!AxisLock.Take("fall-landing-check", Ax.Move | Ax.Jump | Ax.Vertical | Ax.Use))
                     throw new Exception("fall check could not isolate vertical descent");
@@ -497,7 +541,17 @@ public sealed class BehaviorTrial : ModSystem
                     if (supportedFrames >= 12)
                     {
                         File.WriteAllText(Path.Combine(Main.SavePath, "web-landing.json"), samples.ToJsonString());
-                        Console.WriteLine("WEB_LANDING_PASS native_engine=true recorded_world=true natural_decoration=true model_calls=0");
+                        if (landingCase == 3)
+                        {
+                            var plan = JsonNode.Parse("""{"goal":"verify live underground jungle","steps":[{"id":"location","description":"native biome and layer","conditions":[{"kind":"biome","name":"jungle","depth":"below_surface","count":1}]}]}""").AsObject();
+                            await AgentTools.Execute("task_plan", plan, CancellationToken.None);
+                            var verified = JsonNode.Parse(await AgentTools.Execute("task_step",
+                                new JsonObject { ["id"] = "location", ["action"] = "verify" }, CancellationToken.None));
+                            File.WriteAllText(Path.Combine(Main.SavePath, "biome-condition.json"), verified.ToJsonString());
+                            if (verified["verified"]?.GetValue<bool>() != true) throw new Exception("native jungle cavern did not verify biome condition");
+                            Console.WriteLine("BIOME_CONDITION_PASS native_engine=true fixed_destination=false model_calls=0");
+                        }
+                        Console.WriteLine($"WEB_LANDING_PASS case={landingCase} native_engine=true recorded_world=true restored_plants={(landingCase == 3 ? 2 : 0)} model_calls=0");
                         return;
                     }
                 }
@@ -506,7 +560,12 @@ public sealed class BehaviorTrial : ModSystem
             finally
             {
                 File.WriteAllText(Path.Combine(Main.SavePath, "web-landing.json"), samples.ToJsonString());
-                await OnMain(() => { AxisLock.Release("fall-landing-check"); RecedingNav.Stop(); NavigationSurvival.Reset(Main.LocalPlayer); return true; });
+                await OnMain(() =>
+                {
+                    samplingLanding = false;
+                    File.WriteAllText(Path.Combine(Main.SavePath, "web-landing-frames.json"), landingFrames.ToJsonString());
+                    AxisLock.Release("fall-landing-check"); FightCoordinator.Stop(); RecedingNav.Stop(); NavigationSurvival.Reset(Main.LocalPlayer); return true;
+                });
             }
         }
         if (Environment.GetEnvironmentVariable("TB_DROP_IDENTITY") == "1")

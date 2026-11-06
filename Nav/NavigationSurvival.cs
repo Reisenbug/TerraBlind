@@ -121,13 +121,17 @@ public static class NavigationSurvival
                 try
                 {
                     player.selectedItem = slot;
-                    foreach (int offset in new[] { 0, 1, -1, -2 })
+                    foreach (int offset in new[] { -1, -2, 0, 1 })
                     {
-                        var candidate = new Point(target.X, target.Y + offset);
-                        if (!WorldGen.InWorld(candidate.X, candidate.Y) || !WebCanReplace(candidate)
-                            || !Reach.CanPlace(player, candidate.X, candidate.Y) || !LavaSafety.CanMine(candidate.X, candidate.Y)) continue;
-                        if (Main.tile[candidate.X, candidate.Y].WallType == 0 && !ItemUseCoordinator.HasAnchor(candidate.X, candidate.Y)) continue;
-                        placement = candidate; break;
+                        foreach (int x in new[] { target.X, (int)(landing.X / 16), (int)((landing.X + player.width - 1) / 16) })
+                        {
+                            var candidate = new Point(x, target.Y + offset);
+                            if (!WorldGen.InWorld(candidate.X, candidate.Y) || !WebCanReplace(candidate)
+                                || !Reach.CanPlace(player, candidate.X, candidate.Y) || !LavaSafety.CanMine(candidate.X, candidate.Y)) continue;
+                            if (Main.tile[candidate.X, candidate.Y].WallType == 0 && !ItemUseCoordinator.HasAnchor(candidate.X, candidate.Y)) continue;
+                            placement = candidate; break;
+                        }
+                        if (placement.HasValue) break;
                     }
                 }
                 finally { player.selectedItem = previous; }
