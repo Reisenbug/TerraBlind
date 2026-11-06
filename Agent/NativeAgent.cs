@@ -294,7 +294,9 @@ public class NativeAgent : ModSystem
                         && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
                     {
                         input = "原目标：" + goal + "\n后台动作仍在执行，本轮是并行观察，没有暂停输入。"
-                            + "可以查证后续资源、检查装备和评估沿途机会；不要等待导航结束，也不要重复启动当前动作。"
+                            + "本轮优先准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到task_plan_patch的可执行script。"
+                            + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
+                            + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"
                             + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
                             + await AgentTools.State(token);
                         await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle); return true; }, token);
