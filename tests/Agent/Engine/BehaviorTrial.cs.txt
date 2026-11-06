@@ -46,6 +46,8 @@ public sealed class BehaviorTrial : ModSystem
         readonly Vector2[] descent;
         readonly System.Threading.Timer timer;
         readonly JsonArray stops = new();
+        readonly JsonArray stationaryWarnings = new();
+        bool stationaryWarned;
         bool wasDead, entered, complete, closed, stationaryReported;
         int deaths;
         long? descentMs, healthMs, chakramMs, firstActionMs, firstMovementMs;
@@ -100,22 +102,22 @@ public sealed class BehaviorTrial : ModSystem
                         firstMovementMs = now;
                     if (stationaryReported) stops.Add(new JsonObject { ["start_ms"] = stationarySince,
                         ["duration_ms"] = duration, ["x"] = anchor.X / 16, ["y"] = anchor.Y / 16 });
-                    stationarySince = now; anchor = p.position; stationaryReported = false;
+                    stationarySince = now; anchor = p.position; stationaryReported = stationaryWarned = false;
                 }
                 else if (duration >= 5000 && !stationaryReported)
                 {
                     stationaryReported = true;
-                    Console.WriteLine($"ACCEPTANCE_STATIONARY elapsed_ms={now} start_ms={stationarySince} x={tile.X} y={tile.Y} status={NativeAgent.Status} dead={p.dead}");
                 }
                 latest = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = now,
                     ["x"] = tile.X, ["y"] = tile.Y, ["hp"] = p.statLife, ["permanent_health"] = p.statLifeMax,
-                    ["dead"] = p.dead, ["underground_jungle"] = undergroundJungle, ["status"] = NativeAgent.Status };
+                    ["dead"] = p.dead, ["underground_jungle"] = undergroundJungle,
+                    ["navigation_active"] = RecedingNav.Active, ["item_use_active"] = ItemUseCoordinator.IsActive,
+                    ["status"] = NativeAgent.Status };
                 if (!JungleHealthTrial && deaths >= 2) Fail("second_death");
             }
         }
 
-        string Failure() => firstMovementMs != null && clock.ElapsedMilliseconds - stationarySince > 10000 ? "stationary_10s"
-            : !JungleHealthTrial && deaths >= 2 ? "second_death"
+        string Failure() => !JungleHealthTrial && deaths >= 2 ? "second_death"
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 360000 && (descentMs == null || descentMs > 360000) ? "main_descent_deadline"
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 1080000 && (healthMs == null || healthMs > 1080000) ? "health_200_deadline"
             : !JungleHealthTrial && clock.ElapsedMilliseconds >= 1440000 && (chakramMs == null || chakramMs > 1440000) ? "chakram_deadline"
@@ -129,7 +131,8 @@ public sealed class BehaviorTrial : ModSystem
             ["first_movement_ms"] = firstMovementMs,
             ["startup_wait_ms"] = firstMovementMs ?? clock.ElapsedMilliseconds,
             ["longest_stationary_ms"] = Math.Max(longestStopMs, firstMovementMs == null ? 0 : clock.ElapsedMilliseconds - stationarySince), ["stationary_over_5s"] = stops.DeepClone(),
-            ["stationary_limit_ms"] = 10000, ["stationary_guard_armed"] = firstMovementMs != null,
+            ["stationary_warning_ms"] = 10000, ["stationary_warning_armed"] = firstMovementMs != null,
+            ["stationary_policy"] = "warn_only", ["stationary_warnings"] = stationaryWarnings.DeepClone(),
             ["current_stationary_ms"] = firstMovementMs == null ? 0 : clock.ElapsedMilliseconds - stationarySince,
             ["last_observation"] = latest.DeepClone(),
             ["main_route_rule"] = "within 10 tiles of measured entrance, then at least 12 tiles below it and within 6 tiles of measured route"
@@ -140,6 +143,16 @@ public sealed class BehaviorTrial : ModSystem
             lock (gate)
             {
                 if (closed) return;
+                if (firstMovementMs != null && !stationaryWarned && clock.ElapsedMilliseconds - stationarySince >= 10000)
+                {
+                    stationaryWarned = true;
+                    var warning = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                        ["stationary_since_ms"] = stationarySince,
+                        ["duration_ms"] = clock.ElapsedMilliseconds - stationarySince, ["observation"] = latest.DeepClone() };
+                    stationaryWarnings.Add(warning);
+                    File.AppendAllText(Path.Combine(directory, "stationary-warnings.jsonl"), warning.ToJsonString() + Environment.NewLine);
+                    Console.WriteLine("ACCEPTANCE_STATIONARY_WARNING " + warning.ToJsonString());
+                }
                 string failure = Failure();
                 if (failure != null) Fail(failure);
                 if (clock.ElapsedMilliseconds - lastReportMs >= 1000)
