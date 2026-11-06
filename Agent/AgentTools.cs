@@ -19,11 +19,56 @@ public static partial class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly HashSet<string> continuedActions = new();
     static Task continuation = Task.CompletedTask;
+    static string pendingNode;
     internal static JsonObject LastContinuation;
+    internal static JsonObject ExecutionContinuity;
+    static ulong? gapStarted;
+    static bool gapReported;
+
+    internal static void ObserveContinuity()
+    {
+        var last = Actions.LatestPrimary();
+        if (last == null) return;
+        if (Actions.HasPrimaryControl || !Plan.Incomplete || Main.LocalPlayer.dead)
+        {
+            if (gapStarted != null)
+                DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - gapStarted.Value} handle={Actions.ActiveHandle}");
+            gapStarted = null;
+            gapReported = false;
+            ExecutionContinuity = new JsonObject { ["status"] = Main.LocalPlayer.dead ? "waiting_respawn"
+                : !Plan.Incomplete ? "completed" : "executing", ["active_handle"] = Actions.ActiveHandle };
+            return;
+        }
+        gapStarted ??= Main.GameUpdateCount;
+        bool dispatching = !continuation.IsCompleted || pendingNode != null;
+        bool scriptRunning = Workflows.Values.Any(w => w.Running);
+        string reason = dispatching ? "dispatching_prepared_script" : scriptRunning ? "script_running_without_background_action"
+            : Watches.HasInterrupting ? "event_review_without_action" : "no_executable_action";
+        ExecutionContinuity = new JsonObject { ["status"] = "execution_gap", ["reason"] = reason,
+            ["started_tick"] = gapStarted.Value, ["gap_frames"] = Main.GameUpdateCount - gapStarted.Value,
+            ["last_handle"] = last["handle"]?.DeepClone(), ["last_tool"] = last["tool"]?.DeepClone(),
+            ["last_status"] = last["status"]?.DeepClone(), ["task_node"] = last["task_node"]?.DeepClone(),
+            ["current_node"] = Plan.Snapshot()["current_step"]?.DeepClone() };
+        if (!gapReported && !dispatching && !scriptRunning)
+        {
+            gapReported = true;
+            DiagLog.Write("[execution_gap] " + ExecutionContinuity.ToJsonString());
+            if (!Watches.HasInterrupting) Watches.ExecutionFault(ExecutionContinuity);
+        }
+    }
     internal static void ContinuePreparedNode(CancellationToken token)
     {
         if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
+        if (pendingNode != null)
+        {
+            if (Watches.HasInterrupting) return;
+            string ready = pendingNode;
+            pendingNode = null;
+            if (Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
+                StartPreparedNode(ready, LastContinuation?["after_handle"]?.ToString(), token);
+            return;
+        }
         var action = Actions.LatestCompletedPrimary();
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
         if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(handle)) return;
@@ -42,6 +87,11 @@ public static partial class AgentTools
         plan = Plan.Snapshot();
         string next = verified ? plan["current_step"]?.ToString() : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
+        StartPreparedNode(next, handle, token);
+    }
+
+    static void StartPreparedNode(string next, string handle, CancellationToken token)
+    {
         LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
         var report = LastContinuation;
@@ -57,13 +107,15 @@ public static partial class AgentTools
                     report["error"] = returned?["error"]?.DeepClone();
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
                         && (value["status"]?.ToString() == "yield" || value["wake"] != null || value["error"] != null))
-                        Watches.Request("prepared_node_review", report);
-                    else if (!Actions.HasPrimaryControl
-                        && Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == next)
-                        && Plan.Advance(next, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() != true)
+                        ReportExecutionGap(report, "script_requires_review");
+                    else if (!Actions.HasPrimaryControl)
                     {
-                        report["status"] = "execution_gap";
-                        Watches.Request("prepared_node_review", report);
+                        var plan = Plan.Snapshot();
+                        if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next))
+                            plan = Plan.Advance(next, AgentTaskEvidence.Measure);
+                        if (plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed"))
+                            pendingNode = plan["current_step"]?.ToString();
+                        else ReportExecutionGap(report, "script_returned_without_action_or_completion");
                     }
                     DiagLog.Write($"[dag-continuation] after={handle} node={next} result={result}");
                     return true;
@@ -75,11 +127,22 @@ public static partial class AgentTools
                 await NativeAgent.OnMain(() =>
                 {
                     report["status"] = "failed"; report["error"] = error.Message;
-                    Watches.Request("prepared_node_failed", report);
+                    ReportExecutionGap(report, "script_failed");
                     return true;
                 }, default);
             }
         }, token);
+    }
+
+    static void ReportExecutionGap(JsonObject report, string reason)
+    {
+        report["status"] = "execution_gap";
+        report["reason"] = reason;
+        report["detected_tick"] = Main.GameUpdateCount;
+        report["active_handle"] = Actions.ActiveHandle;
+        report["plan_revision"] = Plan.Snapshot()["revision"]?.DeepClone();
+        Watches.ExecutionFault(report);
+        DiagLog.Write("[execution_gap] " + report.ToJsonString());
     }
     internal static readonly AgentWatch Watches = new(AssessNotice);
     static JsonObject AssessNotice(JsonObject notice)
@@ -149,7 +212,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); LastContinuation = null; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = null; LastContinuation = ExecutionContinuity = null; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -279,6 +342,7 @@ public static partial class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Summary();
         state["dag_continuation"] = LastContinuation?.DeepClone();
+        state["execution_continuity"] = ExecutionContinuity?.DeepClone();
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;
@@ -357,7 +421,7 @@ public static partial class AgentTools
             var timer = Stopwatch.StartNew();
             while (seconds <= 0 || timer.Elapsed.TotalSeconds < seconds)
             {
-                await Task.Delay(150, token);
+                await NativeAgent.NextUpdate(token);
                 if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
                 {
                     await StopAction();
@@ -589,6 +653,29 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();
             case "run_script":
+                if (Bool(args, "background"))
+                {
+                    string node = Text(args, "task_node");
+                    if (node == "" || args.Any(p => p.Key is not ("task_node" or "background" or "event_delivery")))
+                        throw new ArgumentException("后台脚本需要task_node，仅可另传event_delivery。");
+                    if (Actions.RunningScript) throw new InvalidOperationException("后台脚本不能嵌套启动后台脚本。");
+                    return (await NativeAgent.OnMain(() =>
+                    {
+                        Plan.Script(node);
+                        if (Actions.HasPrimaryControl) throw new InvalidOperationException("已有主动作，先排队后继或暂停原句柄。");
+                        Plan.Select(node);
+                        Watches.EnsureDefaults();
+                        string previous = ActionTasks.NodeContext.Value;
+                        ActionTasks.NodeContext.Value = node;
+                        try
+                        {
+                            var scriptArgs = new JsonObject { ["task_node"] = node };
+                            if (args["event_delivery"] != null) scriptArgs["event_delivery"] = args["event_delivery"].DeepClone();
+                            return Actions.Start("run_script", scriptArgs, token);
+                        }
+                        finally { ActionTasks.NodeContext.Value = previous; }
+                    }, token)).ToJsonString();
+                }
                 if (Text(args, "task_node") != "")
                 {
                     if (args["code"] != null || args["program"] != null || args["tool"] != null || args["workflow"] != null)

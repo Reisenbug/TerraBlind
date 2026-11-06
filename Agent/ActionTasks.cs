@@ -66,6 +66,16 @@ public sealed class ActionTasks
         }
     }
 
+    internal JsonObject LatestPrimary()
+    {
+        lock (gate)
+        {
+            var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight")
+                .OrderByDescending(e => e.ExecutionStarted).FirstOrDefault();
+            return entry == null ? null : Snapshot(entry);
+        }
+    }
+
     internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
         or "mine_vein" or "chop_wood" or "collect_treasure" or "run_script";
 

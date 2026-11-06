@@ -267,6 +267,15 @@ public sealed class AgentWatch
         return (JsonObject)value.DeepClone();
     }
 
+    internal void ExecutionFault(JsonObject evidence)
+    {
+        if (pending.Any(e => e["kind"]?.ToString() == "execution_gap")) return;
+        var value = new JsonObject { ["id"] = ++issued, ["kind"] = "execution_gap",
+            ["reported_evidence"] = evidence.DeepClone() };
+        pending.Enqueue(value);
+        history.Add((JsonObject)value.DeepClone());
+    }
+
     public JsonObject Summary() => new()
     {
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),

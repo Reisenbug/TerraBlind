@@ -14,6 +14,7 @@ namespace TerraBlind;
 public class NativeAgent : ModSystem
 {
     static readonly ConcurrentQueue<Action> MainQueue = new();
+    static readonly ConcurrentQueue<Action> FrameQueue = new();
     static NativeAgent _instance;
     HttpClient _http;
     AgentConversation _conversation;
@@ -184,9 +185,14 @@ public class NativeAgent : ModSystem
             CloseCodex();
             return;
         }
+        int frameWaiters = FrameQueue.Count;
+        for (int i = 0; i < frameWaiters && FrameQueue.TryDequeue(out var waiter); i++) waiter();
         while (MainQueue.TryDequeue(out var action)) action();
         if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
+        {
             AgentTools.ContinuePreparedNode(_cancel.Token);
+            AgentTools.ObserveContinuity();
+        }
         if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
@@ -271,6 +277,7 @@ public class NativeAgent : ModSystem
                 long recoverySession = -1;
                 int noProgressContinuations = 0;
                 int preparationContinuations = 0;
+                string preparedHandle = null;
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
@@ -286,13 +293,18 @@ public class NativeAgent : ModSystem
                     bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
-                    while (!reviewRequested && backgroundReview.Elapsed.TotalSeconds < 15
+                    string preparingHandle = AgentTools.Actions.ActiveHandle;
+                    bool prepareNext = preparingHandle != null && preparingHandle != preparedHandle
+                        && await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token);
+                    double reviewDelay = prepareNext ? 0 : 15;
+                    while (!reviewRequested && backgroundReview.Elapsed.TotalSeconds < reviewDelay
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasInterrupting, token))
                         await Task.Delay(100, token);
-                    if (!reviewRequested && backgroundReview.Elapsed.TotalSeconds >= 15
+                    if (!reviewRequested && backgroundReview.Elapsed.TotalSeconds >= reviewDelay
                         && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
                     {
+                        preparedHandle = preparingHandle;
                         input = "原目标：" + goal + "\n后台动作仍在执行，本轮是并行观察，没有暂停输入。"
                             + "本轮优先准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到task_plan_patch的可执行script。"
                             + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
@@ -444,6 +456,14 @@ public class NativeAgent : ModSystem
             catch (Exception ex) { result.TrySetException(ex); }
             finally { registration.Dispose(); }
         });
+        return result.Task;
+    }
+
+    internal static Task NextUpdate(CancellationToken token)
+    {
+        var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registration = token.Register(() => result.TrySetCanceled(token));
+        FrameQueue.Enqueue(() => { result.TrySetResult(true); registration.Dispose(); });
         return result.Task;
     }
 

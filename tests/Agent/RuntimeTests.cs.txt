@@ -1523,18 +1523,18 @@ static class RuntimeTests
         int oldMax = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node" })
+            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node", "instant", "background" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
                 Game.LocalPlayer.statLifeMax = mode == "unmet" ? 80 : 100;
                 int starts = 0;
-                bool finishFirst = mode != "within_node";
+                bool finishFirst = mode is not ("within_node" or "background");
                 bool finishSecond = false;
                 HttpServerSystem.Handler = (path, _) =>
                 {
                     if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
                     return (200, path == "/nav_recede_done"
-                        ? new JsonObject { ["done"] = finishFirst && (mode != "within_node" || starts == 1 || finishSecond) }.ToJsonString()
+                        ? new JsonObject { ["done"] = finishFirst && (mode is not ("within_node" or "instant" or "background") || starts == 1 || finishSecond) }.ToJsonString()
                         : "{\"accepted\":true}");
                 };
                 AgentTools.Plan.Create(JsonNode.Parse("""
@@ -1545,6 +1545,45 @@ static class RuntimeTests
                        "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
                        "conditions":[{"kind":"item","type":191,"count":1}]}]}
                     """).AsObject(), _ => 0);
+                if (mode == "instant")
+                {
+                    AgentTools.Plan.Revise(new JsonObject
+                    {
+                        ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(), ["reason"] = "instant node handoff",
+                        ["add_nodes"] = JsonNode.Parse("""
+                            [{"id":"inspect","description":"inspect","depends_on":["travel"],
+                            "script":"return {checked:tool('get_state').permanent_max_health};",
+                            "conditions":[{"kind":"permanent_health","count":100}]}]
+                            """),
+                        ["nodes"] = new JsonArray(new JsonObject { ["id"] = "collect", ["depends_on"] = new JsonArray("inspect") })
+                    }, _ => 0);
+                }
+                if (mode == "background")
+                {
+                    AgentTools.Plan.Revise(new JsonObject
+                    {
+                        ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(), ["reason"] = "continuous script",
+                        ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel",
+                            ["script"] = "step('first',()=>tool('nav_to',{x:12,y:34})); return step('second',()=>tool('nav_to',{x:16,y:34}));" })
+                    }, _ => 0);
+                    var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                        new JsonObject { ["task_node"] = "travel", ["background"] = true }, default)));
+                    await PumpUntil(() => starts == 1);
+                    Check(started["handle"] != null && AgentTools.Actions.HasPrimaryControl,
+                        "background script did not return a live handle");
+                    var observed = JsonNode.Parse(await Execute(AgentTools.State(default)));
+                    Check(observed["action_tasks"] != null && starts == 1,
+                        "parallel observation interrupted the executing script");
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    finishFirst = true;
+                    await PumpUntil(() => starts == 2);
+                    Check(timer.ElapsedMilliseconds < 1000 && AgentTools.Actions.Summary().Count == 1,
+                        "script handoff required another model dispatch or action owner");
+                    Console.WriteLine("SCRIPT_CONTINUOUS handoff_ms=" + timer.ElapsedMilliseconds + " model_calls=0");
+                    AgentTools.Stop();
+                    await PumpUntil(() => !AgentTools.Actions.HasActive);
+                    continue;
+                }
                 if (mode == "within_node")
                 {
                     var plan = AgentTools.Plan.Snapshot();
@@ -1572,6 +1611,10 @@ static class RuntimeTests
                     AgentTools.ContinuePreparedNode(default);
                     Check(starts == 2 && AgentTools.Watches.HasInterrupting,
                         "empty continuation replayed an action instead of reporting its execution gap");
+                    AgentTools.ObserveContinuity();
+                    Check(AgentTools.ExecutionContinuity?["status"]?.ToString() == "execution_gap"
+                        && AgentTools.ExecutionContinuity["last_tool"]?.ToString() == "nav_to",
+                        "execution gap lost the last action evidence");
                     AgentTools.Stop();
                     await PumpUntil(() => !AgentTools.Actions.HasActive);
                     continue;
@@ -1585,8 +1628,10 @@ static class RuntimeTests
                 if (mode == "cancelled") cancel.Cancel();
                 var elapsed = System.Diagnostics.Stopwatch.StartNew();
                 AgentTools.ContinuePreparedNode(cancel.Token);
-                if (mode == "ready")
+                if (mode is "ready" or "instant")
                 {
+                    if (mode == "instant")
+                        await PumpUntil(() => { AgentTools.ContinuePreparedNode(cancel.Token); return starts == 2; });
                     await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
                     Check(elapsed.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
                         "prepared DAG node did not start within one second after host verification");
@@ -1598,6 +1643,13 @@ static class RuntimeTests
                 AgentTools.Stop();
                 await PumpUntil(() => !AgentTools.Actions.HasActive);
             }
+            var watches = new AgentWatch();
+            for (int i = 0; i < 6; i++) watches.Request("opportunity");
+            watches.Take();
+            watches.ExecutionFault(new JsonObject { ["reason"] = "no_action" });
+            watches.ExecutionFault(new JsonObject { ["reason"] = "same_gap" });
+            Check(watches.HasInterrupting && watches.PendingCount == 1,
+                "execution fault was budget-limited or duplicated");
         }
         finally
         {
