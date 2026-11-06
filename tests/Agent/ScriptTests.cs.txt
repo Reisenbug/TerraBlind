@@ -405,8 +405,8 @@ static class ScriptTests
             "default chest discovery interrupted policy preparation or lost the opportunity");
         defaults.Observe(new JsonObject { ["hp"] = 100, ["actions"] = new JsonArray(new JsonObject
             { ["handle"] = "travel", ["status"] = "running", ["attempt"] = 1 }) });
-        Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "nearby_chest",
-            "deferred opportunity was lost when travel began");
+        Check(!defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "nearby_chest",
+            "starting travel interrupted navigation or lost the deferred opportunity");
         defaults.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
         defaults.EnsureDefaults();
         defaults.Observe(new JsonObject { ["hp"] = 100,
@@ -465,11 +465,11 @@ static class ScriptTests
             "default discovery interrupted collection of its own target");
         chestScene["chests"].AsArray().Add(new JsonObject { ["x"] = 11, ["y"] = 20 });
         ownChest.Observe(chestScene);
-        Check(ownChest.HasInterrupting && ownChest.Take().Count == 2,
-            "own-target suppression hid a different opportunity");
+        Check(!ownChest.HasInterrupting && ownChest.Take().Count == 2,
+            "default chest notification interrupted collection or hid a different opportunity");
         ownChest.Reset(); ownChest.EnsureDefaults(); ownChest.Observe(chestScene);
-        Check(ownChest.Snapshot()["wake_count"].GetValue<int>() == 1,
-            "own-target discovery consumed a model wake allowance");
+        Check(ownChest.Snapshot()["wake_count"].GetValue<int>() == 0,
+            "passive chest discovery consumed a model wake allowance");
         ownChest.Take(); ownChest.Reset();
         ownChest.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
         chestScene["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 });

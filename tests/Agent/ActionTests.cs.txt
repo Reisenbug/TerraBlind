@@ -341,6 +341,16 @@ static class ActionTests
         watch.EndScriptDelivery(reader3);
         Check(!watch.LocalDelivery, "last script reader did not restore agent event delivery");
         watch.EnsureDefaults();
+        watch.Observe(new JsonObject { ["hp"] = 100,
+            ["actions"] = new JsonArray(new JsonObject { ["handle"] = "moving", ["tool"] = "nav_to", ["status"] = "running",
+                ["args"] = new JsonObject { ["x"] = 100, ["y"] = 100 } }),
+            ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 10 }) });
+        Check(watch.HasPending && !watch.HasInterrupting, "default chest discovery stopped navigation before agent selection");
+        watch.Reset();
+        watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        watch.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 10 }) });
+        Check(watch.HasInterrupting, "explicit chest interruption policy was ignored");
+        watch.Reset(); watch.EnsureDefaults();
         JsonObject Chain(string status) => new() { ["hp"] = 100, ["actions"] = new JsonArray(
             new JsonObject { ["handle"] = "arrival", ["status"] = "completed", ["attempt"] = 1, ["tool"] = "nav_to" },
             new JsonObject { ["handle"] = "collection", ["after_handle"] = "arrival", ["status"] = status, ["attempt"] = 1, ["tool"] = "gather" }) };

@@ -1828,6 +1828,7 @@ static class RuntimeTests
                 "deferred opportunity lost evidence, interrupted navigation or discarded the script decision");
             AgentTools.Watches.Reset();
             AgentTools.Watches.EnsureDefaults();
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
             var firstObservation = JsonNode.Parse("{\"hp\":100,\"chests\":[{\"x\":1,\"y\":2}]}").AsObject();
             firstObservation["actions"] = AgentTools.Actions.Snapshot();
             AgentTools.Watches.Observe(firstObservation);
@@ -2116,7 +2117,7 @@ static class RuntimeTests
             {
                 string code = call == 0
                     ? automatic
-                        ? "step('nav',()=>tool('nav_to',{x:100,y:100})); tool('say',{text:'must-not-run-after-event'});"
+                        ? "tool('watch',{events:['nearby_chest']}); step('nav',()=>tool('nav_to',{x:100,y:100})); tool('say',{text:'must-not-run-after-event'});"
                         : "tool('watch',{events:['nearby_chest']}); const a=step('nav',()=>tool('action_start',{tool:'nav_to',args:{x:100,y:100}})); return a;"
                     : automatic
                         ? "const s=tool('get_state'); const a=s.action_tasks.find(x=>x.status==='paused'); return tool('action_control',{handle:a.handle,command:'resume',args:{x:200,y:100}});"

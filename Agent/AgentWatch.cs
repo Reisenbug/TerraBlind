@@ -138,11 +138,6 @@ public sealed class AgentWatch
         currentChestTarget = !configured && running?["tool"]?.ToString() == "collect_treasure"
             && running["args"]?["x"] != null && running["args"]?["y"] != null
             ? running["args"]["x"] + "," + running["args"]["y"] : null;
-        if (!configured)
-        {
-            if (running == null) passive.Add("nearby_chest");
-            else passive.Remove("nearby_chest");
-        }
         string dangerKey = running == null ? "task" : running["handle"] + ":" + running["attempt"];
         if (state["item_counts"] is JsonObject current)
         {
