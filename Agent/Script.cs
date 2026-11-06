@@ -108,6 +108,7 @@ public static class AgentScript
 
     public const string RuntimeInstructions =
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"
+        + "find_biome负责辨认群系方向和大致位置，实际路线结合特殊知识、当前位置和现场环境选择。进入地下丛林优先利用find_descent/descent_route查证的主道，这是原有算法计算的高效下降道路。沿主道利用现有洞穴前进；遇红木、神庙、蜂巢等阻挡时，结合现场选择挖掘、绕行或接回主道，以行动效率为依据。"
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
         + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。实际跑通后保存验证条件与结果，失败则修订同一技能，不把未经执行的程序宣称为验证通过。不保存旧世界坐标或句柄作为下次任务的默认参数。"
         + "长导航用action_start启动后立即返回句柄，让宿主在行动期间并行唤醒你观察，不要循环action_query等到导航结束才思考。连续主路线由脚本串联已查证路点，普通机会用passive_events，判断值得处理才暂停导航；短程躲避由独立实时控制器响应。"

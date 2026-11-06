@@ -20,7 +20,9 @@ public static class BiomeSearch
                 return new BiomeCell(tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType],
                     tile.HasTile ? weights[tile.TileType] : 0, tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava);
             });
-        var result = new JsonObject { ["found"] = entrance.HasValue, ["biome"] = "jungle", ["target_kind"] = "verified_surface_entrance",
+        var result = new JsonObject { ["found"] = entrance.HasValue, ["biome"] = "jungle", ["target_kind"] = "verified_surface_biome_reference",
+            ["purpose"] = "群系方向和大致位置参考；实际路线结合特殊知识、当前位置和现场环境选择。",
+            ["route_knowledge"] = "find_descent/descent_route提供既有算法计算的丛林高效下降主道，可用于进入地下丛林。",
             ["threshold"] = SceneMetrics.JungleTileThreshold, ["elapsed_ms"] = clock.ElapsedMilliseconds,
             ["validation"] = "first solid ground from world sky; clear body footprint; native jungle tile weights and scan area" };
         if (entrance is { } point)

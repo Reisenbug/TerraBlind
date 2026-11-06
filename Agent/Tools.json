@@ -112,7 +112,7 @@
     "type": "function",
     "function": {
       "name": "find_biome",
-      "description": "查询生态入口。jungle返回从天空到地面无遮挡、人物站立空间无实心块和岩浆、局部原版生态计数达标的地表位置，附local_biome_tiles/threshold/elapsed_ms；不是地下草块或资源坐标。found=false不可猜位置。其他生态仍用旧入口逻辑。支持jungle/snow/desert/dungeon/corruption/crimson/hallow。到达后需按真实环境继续找资源，不代表已收集。",
+      "description": "辨认群系的方向和大致位置，实际行进方案结合特殊知识、当前位置及现场环境决定。进入地下丛林优先查询find_descent/descent_route，选择高效的主道接入方式。jungle参考点经过露天、人物空间、岩浆和局部原版生态计数校验，附local_biome_tiles/threshold/elapsed_ms。found=false时保留查询失败原因。支持jungle/snow/desert/dungeon/corruption/crimson/hallow。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -131,7 +131,7 @@
     "type": "function",
     "function": {
       "name": "find_descent",
-      "description": "找某 biome '下地狱代价最低'的地表主入口(main entrance)。不是逐列扫——用多源 Dijkstra 从地狱层整体向上流,顺着真实洞穴形状算代价,S形洞口从顶部进也算得出来。返回 {found,x,y,cost}。要速降地狱时先用它拿入口,再 nav_to 过去。biome 名同 find_biome。",
+      "description": "找某群系既有下降代价最低道路的地表主入口，返回{found,x,y,cost}。多源Dijkstra从地狱层向上计算，考虑真实洞穴形状及移动、挖掘代价。进入地下丛林可利用主道的前段；结合当前位置选择代价较低的入口或途中接入点。具体主道用descent_route查询。biome名同find_biome。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -150,7 +150,7 @@
     "type": "function",
     "function": {
       "name": "descent_route",
-      "description": "快速返回既有原始主道：entrance为入口，line从入口开始，line_kind=main_descent，不含宝藏绕行。line按offset/limit分页，line_len是总格数，next_offset非空时可继续取后段。取得入口即可启动导航；宝藏支线在后台计算，treasures_status=running/busy时稍后用相同参数查询，ready后返回宝藏分页。宝藏坐标、支线接驳点line_x/line_y和dig/walk供Agent选择，tier是代价分类而非必须拾取。不要把后台宝藏路线当作原始主道；此接口只返回原始主道line。",
+      "description": "快速返回既有原始主道：entrance为入口，line从入口开始，line_kind=main_descent。主道是既有算法计算的高效下降道路，进入地下丛林可沿其前段，结合当前位置和现场选择接入点。沿洞穴前进，遇红木、神庙、蜂巢等阻挡时按效率和目标需要选择处理方式。line按offset/limit分页，line_len是总格数，next_offset非空时继续取后段。取得入口即可启动导航；宝藏支线在后台计算，treasures_status=running/busy时稍后用相同参数查询，ready后返回宝藏分页。宝藏坐标、支线接驳点line_x/line_y和dig/walk供Agent评估拾取收益，tier表示代价分类。",
       "parameters": {
         "type": "object",
         "properties": {
