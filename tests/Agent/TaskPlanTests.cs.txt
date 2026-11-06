@@ -169,6 +169,11 @@ static class TaskPlanTests
             """);
         edit["expected_revision"] = plan.Snapshot()["revision"].DeepClone();
         var inserted = plan.Revise(edit, Measure);
+        var brief = plan.Summary()["steps"][1];
+        Check(brief["revision_count"]?.GetValue<int>() == 1 && brief["revisions"] == null
+            && plan.Snapshot()["steps"][1]["revisions"].AsArray().Count == 1
+            && brief["script"]?.ToString() == "return 1;",
+            "plan summary lost current script or retained full revision history");
         Check(inserted["steps"][0]["status"].ToString() == "completed"
             && inserted["current_step"].ToString() == "opportunity"
             && inserted["steps"][1]["workflow"].ToString() == workflow,
