@@ -924,9 +924,13 @@ public static partial class AgentTools
                 if (resolution is "retry" or "complete")
                 {
                     var observed = JsonNode.Parse(await State(token)).AsObject();
-                    result = savedProgress.Resolve(Text(args, "step"), Int(args, "expected_revision", -1), resolution == "complete",
-                        args["value"], new JsonObject { ["inventory_slots"] = observed["inventory_slots"]?.DeepClone(),
-                            ["permanent_max_health"] = observed["permanent_max_health"]?.DeepClone() });
+                    var evidence = new JsonObject { ["inventory_slots"] = observed["inventory_slots"]?.DeepClone(),
+                        ["permanent_max_health"] = observed["permanent_max_health"]?.DeepClone() };
+                    var resolved = savedProgress.Resolve(Text(args, "step"), Int(args, "expected_revision", -1), resolution == "complete",
+                        args["value"], evidence);
+                    result = new JsonObject { ["workflow"] = Text(args, "workflow"), ["revision"] = resolved["revision"]?.DeepClone(),
+                        ["step"] = Text(args, "step"), ["status"] = resolution == "complete" ? "completed" : "ready_to_retry",
+                        ["observed"] = evidence };
                 }
                 else if (resolution is "" or "get") result = savedProgress.Snapshot();
                 else throw new ArgumentException("action需要get/retry/complete。");

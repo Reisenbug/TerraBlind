@@ -2268,6 +2268,17 @@ static class RuntimeTests
             var detail = JsonNode.Parse(await Execute(AgentTools.Execute("script_progress",
                 new JsonObject { ["workflow"] = "large-0", ["action"] = "get" }, default)));
             Check(detail["steps"][0]["value"].ToString().Length == 3000, "summary discarded resumable detailed values");
+            var largeProgress = AgentTools.Workflows["large-0"];
+            largeProgress.Begin(); largeProgress.Enter("pending"); largeProgress.End(new JsonObject { ["error"] = "interrupted" });
+            int retryRevision = largeProgress.Snapshot()["revision"].GetValue<int>();
+            string retryReply = await Execute(AgentTools.Execute("script_progress", new JsonObject
+            { ["workflow"] = "large-0", ["action"] = "retry", ["step"] = "pending", ["expected_revision"] = retryRevision }, default));
+            var retried = JsonNode.Parse(retryReply);
+            Check(retryReply.Length < 16000 && retried["status"]?.ToString() == "ready_to_retry"
+                && retried["revision"]?.GetValue<int>() == retryRevision + 1
+                && retried["observed"]?["permanent_max_health"] != null
+                && largeProgress.Snapshot()["steps"][0]["value"].ToString().Length == 3000,
+                "workflow reconciliation replayed large history, lost real evidence or failed to preserve saved effects");
         }
         finally { AgentTools.Workflows.Clear(); AgentTools.Watches.Reset(); }
         Console.WriteLine("PASS: large resumable history stays out of default state while explicit workflow detail remains intact");
