@@ -1523,6 +1523,27 @@ static class RuntimeTests
             var walking = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
             ActionTasks.NodeContext.Value = null;
             await PumpUntil(() => RecedingNav.Active);
+            var future = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject
+            {
+                ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "prepare collection while travelling",
+                ["add_nodes"] = JsonNode.Parse("""
+                    [{"id":"collect","description":"collect after arrival","depends_on":["travel"],
+                      "script":"return {prepared:true};","conditions":[{"kind":"item","type":29,"count":1}]}]
+                    """)
+            }, default)));
+            Check(future["error"] == null && RecedingNav.Active && AgentTools.Actions.HasAttack,
+                "preparing a dependent node stopped or blocked current navigation");
+            var futureEdit = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject
+            {
+                ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "refine pending collection from new information",
+                ["nodes"] = new JsonArray(new JsonObject { ["id"] = "collect", ["script"] = "return {prepared:2};" })
+            }, default)));
+            var stillWalking = await Execute(AgentTools.Actions.Query(walking["handle"].ToString(), 0, default));
+            Check(futureEdit["error"] == null && stillWalking["status"]?.ToString() == "running"
+                && stillWalking["attempt"]?.GetValue<int>() == 1 && RecedingNav.Active,
+                "pending-node edit changed the active route or restarted its handle");
             int revision = AgentTools.Plan.Snapshot()["revision"].GetValue<int>();
             var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
             Check(rejected["error"] != null && AgentTools.Plan.Snapshot()["revision"].GetValue<int>() == revision,

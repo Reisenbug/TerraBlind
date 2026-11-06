@@ -683,8 +683,14 @@ public static partial class AgentTools
                 if (args["nodes"] != null || args["add_nodes"] != null)
                 {
                     if (args["changes"] != null) throw new ArgumentException("nodes和changes不能同时提供。");
-                    if (Actions.HasPrimaryControl) throw new InvalidOperationException("修改节点前须暂停主任务动作，保留句柄后再修改与续接；独立防身攻击无需停止。");
-                    result = await NativeAgent.OnMain(() => Plan.Revise(args, AgentTaskEvidence.Measure), token);
+                    result = await NativeAgent.OnMain(() =>
+                    {
+                        var edited = (args["nodes"] as JsonArray ?? new JsonArray()).Select(n => n["id"]?.ToString()).ToHashSet();
+                        if (Actions.Summary().Any(a => a["tool"]?.ToString() != "fight"
+                            && a["status"]?.ToString() == "running" && edited.Contains(a["task_node"]?.ToString())))
+                            throw new InvalidOperationException("修改正在执行的节点前须暂停其动作并保留句柄；新增或修改其他未执行节点可在导航途中进行。");
+                        return Plan.Revise(args, AgentTaskEvidence.Measure);
+                    }, token);
                     break;
                 }
                 result = await NativeAgent.OnMain(() => Plan.Patch(args, AgentTaskEvidence.Measure), token);
