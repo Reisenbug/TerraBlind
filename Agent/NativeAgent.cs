@@ -445,7 +445,7 @@ public class NativeAgent : ModSystem
 
     internal static Task<T> OnMain<T>(Func<T> action, CancellationToken token)
     {
-        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new TaskCompletionSource<T>();
         var registration = token.Register(() => result.TrySetCanceled(token));
         MainQueue.Enqueue(() =>
         {
