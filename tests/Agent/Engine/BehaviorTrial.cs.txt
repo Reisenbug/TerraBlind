@@ -180,7 +180,8 @@ public sealed class BehaviorTrial : ModSystem
             {
                 string failure = Failure();
                 if (failure != null) Fail(failure);
-                complete = verified && descentMs != null && healthMs != null && chakramMs != null && deaths < 2;
+                complete = verified && (JungleHealthTrial ? HealthGoalVerified && healthMs != null
+                    : descentMs != null && healthMs != null && chakramMs != null && deaths < 2);
                 if (!complete) Fail("task_ended_unverified");
                 closed = true;
                 timer.Dispose();
