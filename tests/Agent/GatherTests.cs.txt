@@ -305,6 +305,14 @@ static class GatherTests
             Check(denied == null, "idle defense reserved the action slot");
             FightCoordinator.Tick(p, true);
             Check(p.controlUseItem, "navigation incorrectly blocked concurrent defense");
+            PlaceAction.IsRunning = true;
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem && !FightCoordinator.IsIdleDefending,
+                "attack reclaimed placement's release frame");
+            PlaceAction.IsRunning = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem, "attack did not resume after placement finished");
             AgentTools.ControlSession.End(ticket);
             string claim = AgentTools.Control.Claim(ControlChannels.All, ControlLifetime.Task, null, "test ownership");
             FightCoordinator.Tick(p, true);
@@ -341,6 +349,7 @@ static class GatherTests
         {
             FightCoordinator.Stop(); AgentPermissions.Reset();
             Main.npc = oldNpcs; p.inventory[0] = oldWeapon; p.dead = oldDead; Manual.On = oldManual;
+            PlaceAction.IsRunning = false;
         }
         Console.WriteLine("PASS: thinking defense yields to task end, action ownership, attack denial and control claims without reserving a task");
     }

@@ -270,6 +270,9 @@ namespace TerraBlind
     public static class DiagLog { public static void Write(string text) { } }
     public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
     public static class PlaceAnywhere { public static bool IsRunning; }
+    public static class PlaceAction { public static bool IsRunning; }
+    public static class PlaceCoordinator { public static bool IsActive; }
+    public static class PlaceWalls { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {

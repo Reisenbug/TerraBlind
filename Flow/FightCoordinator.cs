@@ -138,6 +138,7 @@ namespace TerraBlind
             _evading = evading;
             if (!AgentPermissions.CanAttack(delegated: true)) { Stop(); return; }
             bool itemBusy = primaryItemUse || ItemUseCoordinator.IsActive
+                || PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
                 || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure");
             if (itemBusy)
             {
