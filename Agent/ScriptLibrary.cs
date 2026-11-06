@@ -21,20 +21,16 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "navigate_observe") return Template(name,
-            "配置destination世界格坐标。在所属DAG节点中使用，首次启动后立即返回；后续沿用同一workflow观察原句柄。失败交回模型，不逐格修路，不自动重启。",
+            "配置destination世界格坐标，写入所属DAG节点script，以run_script({task_node:id,background:true})启动。宿主立即返回后台句柄；脚本直接执行导航，Agent同时观察和准备后继。step保留实际完成效果。",
             """
             const config = null;
             if(!config) throw new Error('Fill config.destination with a verified destination');
-            const started=step('navigation',()=>{
-              const a=tool('action_start',{tool:'nav_to',args:config.destination});
-              if(a.error||!a.handle) throw new Error(JSON.stringify(a));
-              return {handle:a.handle};
+            const result=step('navigation',()=>{
+              const r=tool('nav_to',config.destination);
+              if(r.error||r.done!==true) throw new Error(JSON.stringify(r));
+              return {done:r.done,state:r.state};
             });
-            const action=tool('action_query',{handle:started.handle});
-            if(action.status==='running') return {status:'running',handle:started.handle,next:'Observe and plan while navigation continues; pause only to change action'};
-            if(action.status==='completed'&&action.result?.done===true)
-              return {status:'arrived',handle:started.handle,evidence:action.result,next:'Verify owning DAG node'};
-            return {status:'needs_review',handle:started.handle,evidence:action,next:'Inspect failure, choose route or report navigation limitation; do not manually rebuild its path'};
+            return {status:'arrived',evidence:result,next:'Verify owning DAG node'};
             """);
         if (name == "collect_detour") return Template(name,
             "仅在已判断值得绕路后调用。配置route_handle和gather_args；须在拥有原导航的DAG节点中执行。保存原句柄、暂停、采集；多次运行同一workflow检查进度，采集完成后恢复原导航。不会自行认定所有宝物必拿。",

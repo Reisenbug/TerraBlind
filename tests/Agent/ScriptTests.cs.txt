@@ -222,14 +222,13 @@ static class ScriptTests
                 .Replace("const config = null;", "const config = {destination:{x:100,y:200}};");
             Task<string> NavigationTool(string name, JsonObject args, CancellationToken token)
             {
-                if (name == "action_start") { starts++; return Task.FromResult("{\"handle\":\"route\",\"status\":\"running\"}"); }
-                if (name == "action_query") return Task.FromResult("{\"handle\":\"route\",\"status\":\"running\"}");
+                if (name == "nav_to") { starts++; return Task.FromResult("{\"done\":true,\"state\":{\"pos\":{\"x\":100,\"y\":200}}}"); }
                 throw new Exception("navigation example attempted unexpected operation " + name);
             }
             for (int i = 0; i < 2; i++)
             {
                 var r = await AgentScript.Run(navigationCode, 30, (_, _) => { }, NavigationTool, _ => Task.CompletedTask, default, navigationProgress);
-                Check(r["ok"].GetValue<bool>() && r["value"]["status"].ToString() == "running", "navigation example blocked or lost active handle");
+                Check(r["ok"].GetValue<bool>() && r["value"]["status"].ToString() == "arrived", "navigation example lost completed result");
             }
             Check(starts == 1, "navigation example restarted its existing route");
             int detourStarts = 0, pauses = 0, resumes = 0;
