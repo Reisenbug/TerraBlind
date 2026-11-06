@@ -211,8 +211,11 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
-        if (FullCraftTrial && Environment.GetEnvironmentVariable("TB_TRIAL_PERMANENT_GILLS") == "1")
+        if (FullCraftTrial)
+        {
             p.AddBuff(BuffID.Gills, 3600);
+            p.AddBuff(BuffID.Shine, 3600);
+        }
         if (samplingSources)
         {
             int x = ItemUseCoordinator.SnappedWx, y = ItemUseCoordinator.SnappedWy;
@@ -1590,7 +1593,7 @@ public sealed class BehaviorTrial : ModSystem
                     ["started_utc"] = startedUtc.ToString("O"), ["model"] = trialModel, ["effort"] = "low",
                     ["prompt"] = trialPrompt, ["before"] = before.DeepClone(), ["recipe"] = recipe.DeepClone(),
                     ["time_limit_seconds"] = FullCraftTrial ? 1800 : 120,
-                    ["permanent_gills"] = Environment.GetEnvironmentVariable("TB_TRIAL_PERMANENT_GILLS") == "1",
+                    ["permanent_gills"] = FullCraftTrial, ["permanent_shine"] = FullCraftTrial,
                     ["world_name"] = Main.worldName, ["world_width"] = Main.maxTilesX, ["world_height"] = Main.maxTilesY,
                     ["game_version"] = Main.versionNumber, ["assembly_mvid"] = typeof(NativeAgent).Assembly.ManifestModule.ModuleVersionId.ToString(),
                     ["source_revision"] = Environment.GetEnvironmentVariable("TB_TRIAL_REVISION"),

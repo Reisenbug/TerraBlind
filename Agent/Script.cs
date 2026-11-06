@@ -76,6 +76,9 @@ public static class AgentScript
     public const string RuntimeInstructions =
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
+        + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。实际跑通后保存验证条件与结果，失败则修订同一技能，不把未经执行的程序宣称为验证通过。不保存旧世界坐标或句柄作为下次任务的默认参数。"
+        + "长导航用action_start启动后立即返回句柄，让宿主在行动期间并行唤醒你观察，不要循环action_query等到导航结束才思考。连续主路线由脚本串联已查证路点，普通机会用passive_events，判断值得处理才暂停导航；短程躲避由独立实时控制器响应。"
+        + "永久生命上限低于160时，生命水晶具有更高优先级；获得后及时使用并核对永久上限增加，除非玩家明确要求保留。优先级不代表无视地形或为遥远水晶无限绕路。"
         + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
         + "有沿途收集要求时，先用recipe确认所需物品和数量、game_catalog确认编号，再查证来源。game_catalog的matches[].type是对应kind的编号；物品编号、NPC编号和方块编号不能混用，名称相似也不证明掉落关系。NPC材料先用npc_drop_sources查询注册掉落及条件；植物来源与变体查wiki或依据实际采集证据，不能把材料名当TileID、把生长基底当材料来源，也不能猜npc_types或frame。未知来源应报告未查证，不得假装已经配置正确。"

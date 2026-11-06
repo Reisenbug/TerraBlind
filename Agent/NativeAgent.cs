@@ -283,9 +283,21 @@ public class NativeAgent : ModSystem
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
-                    while (!reviewRequested && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
+                    var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
+                    while (!reviewRequested && backgroundReview.Elapsed.TotalSeconds < 15
+                        && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasInterrupting, token))
                         await Task.Delay(100, token);
+                    if (!reviewRequested && backgroundReview.Elapsed.TotalSeconds >= 15
+                        && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
+                    {
+                        input = "原目标：" + goal + "\n后台动作仍在执行，本轮是并行观察，没有暂停输入。"
+                            + "可以查证后续资源、检查装备和评估沿途机会；不要等待导航结束，也不要重复启动当前动作。"
+                            + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
+                            + await AgentTools.State(token);
+                        await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle); return true; }, token);
+                        continue;
+                    }
                     if (await OnMain(() => AgentTools.Watches.HasInterrupting, token))
                     {
                         if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
