@@ -2163,6 +2163,25 @@ namespace TerraBlind
 					}
 				}
 			}
+			else if (path == "/descent_main_route")
+			{
+				var request = System.Text.Json.Nodes.JsonNode.Parse(payload).AsObject();
+				body = MainDescentRoute(request).ToJsonString();
+			}
+			else if (path == "/descent_route_status")
+			{
+				var request = System.Text.Json.Nodes.JsonNode.Parse(payload).AsObject();
+				string biome = request["name"]?.ToString()?.ToLowerInvariant() ?? "";
+				lock (_rwLock)
+				{
+					bool matches = _rwKey == biome + "\u0001" + payload;
+					body = new System.Text.Json.Nodes.JsonObject
+					{
+						["status"] = _rwBusy ? (matches ? "running" : "busy") : !matches ? "not_started" : _rwJson == null ? "failed" : "ready",
+						["result"] = matches && !_rwBusy && _rwJson != null ? System.Text.Json.Nodes.JsonNode.Parse(_rwJson) : null
+					}.ToJsonString();
+				}
+			}
 			else if (path == "/descent_route_async")
 			{
 				// 【盖房那几十秒里把整条路线算完】。/descent_route 一趟约 4 秒(入口场 + 走廊场 + 每个宝藏一次
@@ -3302,6 +3321,52 @@ namespace TerraBlind
 				["hell_x"] = cell.x, ["hell_y"] = cell.y };
 		}
 
+		static System.Collections.Generic.List<(int x, int y)> MainDescentLine(DescentData data)
+		{
+			var line = new System.Collections.Generic.List<(int x, int y)>();
+			var seen = new System.Collections.Generic.HashSet<(int, int)>();
+			var cell = (x: data.EntX, y: data.EntY);
+			for (int step = 0; step < 20000 && seen.Add(cell); step++)
+			{
+				line.Add(cell);
+				if (data.Field.TryGetValue(cell, out int cost) && cost == 0) break;
+				int bestCost = int.MaxValue;
+				var best = cell;
+				foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+				{
+					var next = (x: cell.x + dx, y: cell.y + dy);
+					if (data.Field.TryGetValue(next, out int value) && value < bestCost)
+					{ bestCost = value; best = next; }
+				}
+				if (best == cell) break;
+				cell = best;
+			}
+			return line;
+		}
+
+		static System.Text.Json.Nodes.JsonObject MainDescentRoute(System.Text.Json.Nodes.JsonObject request)
+		{
+			var sig = BiomeSig(request["name"]?.ToString()?.ToLowerInvariant() ?? "");
+			if (sig == null) return new() { ["found"] = false, ["error"] = "unknown_biome" };
+			int offset = request["offset"]?.GetValue<int>() ?? 0;
+			int limit = request["limit"]?.GetValue<int>() ?? 256;
+			if (offset < 0 || limit < 1 || limit > 512) return new() { ["error"] = "invalid_route_page" };
+			var data = ComputeDescent(sig, out string why);
+			if (data == null) return new() { ["found"] = false, ["reason"] = why };
+			var line = MainDescentLine(data);
+			var points = new System.Text.Json.Nodes.JsonArray();
+			for (int i = offset; i < line.Count && i < offset + limit; i++)
+				points.Add(new System.Text.Json.Nodes.JsonArray(line[i].x, line[i].y));
+			return new()
+			{
+				["found"] = true, ["line_kind"] = "main_descent", ["cost"] = data.Cost,
+				["entrance"] = new System.Text.Json.Nodes.JsonObject { ["x"] = data.EntX, ["y"] = data.EntY },
+				["hell_x"] = line[^1].x, ["hell_y"] = line[^1].y,
+				["line"] = points, ["line_len"] = line.Count, ["line_offset"] = offset,
+				["next_offset"] = offset + points.Count < line.Count ? System.Text.Json.Nodes.JsonValue.Create(offset + points.Count) : null
+			};
+		}
+
 		static string DescentRouteJson(ushort[] sigTypes, string reqBody)
 		{
 					var dd = ComputeDescent(sigTypes, out string why);
@@ -3345,23 +3410,7 @@ namespace TerraBlind
 						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
 						// 算进去等于凭空多发一倍额度,而那些额度全花在地表。空岛就是这么去的。
 						int surfaceLen = line.Count;
-						var cur = (dd.EntX, dd.EntY);
-						var seen = new System.Collections.Generic.HashSet<(int, int)>();
-						for (int step = 0; step < 20000; step++)
-						{
-							line.Add(cur);
-							if (!seen.Add(cur)) break;
-							if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
-							int bestN = int.MaxValue; var best = cur;
-							foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-							{
-								var n = (cur.Item1 + dx2, cur.Item2 + dy2);
-								if (!dd.Field.TryGetValue(n, out int dn)) continue;
-								if (dn < bestN) { bestN = dn; best = n; }
-							}
-							if (best == cur) break;
-							cur = best;
-						}
+						line.AddRange(MainDescentLine(dd));
 						// 走廊按【绕道代价】划,不按直线距离:走一格 3、挖一格 26,"离 25 格"说明不了值不值。
 						// 第二张多源场种在主线上(线上每格 0),从宝藏往下降就描出真实绕道路径,沿途 StepCost 就是价钱。
 						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");

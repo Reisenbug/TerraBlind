@@ -150,7 +150,7 @@
     "type": "function",
     "function": {
       "name": "descent_route",
-      "description": "在 find_descent 基础上,把'主入口→地狱'整条路线画进游戏画面(青色主线,持续2分钟),并列出绕路可及的箱子(金)和生命水晶(粉),真实支线路径相连。两档范围:挖<=dig_max且走<=walk_max → tier=main(顺手必捡);挖<=dig_max2且走<=walk_max2 → tier=optional(值不值你判断);再远不列。返回 {found,entrance,cost,line_len,treasures:[{x,y,kind,tier,line_x,line_y,dig,walk}]},dig/walk 是实际要挖/走的格数,line_x/line_y 是接驳点。规划'下地狱顺路搜刮'先调它。",
+      "description": "快速返回既有原始主道：entrance为入口，line从入口开始，line_kind=main_descent，不含宝藏绕行。line按offset/limit分页，line_len是总格数，next_offset非空时可继续取后段。取得入口即可启动导航；宝藏支线在后台计算，treasures_status=running/busy时稍后用相同参数查询，ready后返回宝藏分页。宝藏坐标、支线接驳点line_x/line_y和dig/walk供Agent选择，tier是代价分类而非必须拾取。不要把后台宝藏路线当作原始主道；此接口只返回原始主道line。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -158,6 +158,10 @@
             "type": "string",
             "description": "biome 名,如 'jungle'"
           },
+          "offset": { "type": "integer", "minimum": 0, "description": "主道格点偏移，默认0" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 512, "description": "主道格点数量，默认256" },
+          "treasure_offset": { "type": "integer", "minimum": 0, "description": "后台宝藏列表偏移，默认0" },
+          "treasure_limit": { "type": "integer", "minimum": 1, "maximum": 32, "description": "宝藏列表数量，默认16" },
           "dig_max": {
             "type": "integer",
             "description": "main档挖掘格数上限,默认20"

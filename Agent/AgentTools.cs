@@ -960,7 +960,10 @@ public static partial class AgentTools
                     return new JsonObject { ["outcome"] = "tracking" };
                 }, token);
                 break;
-            case "item_info": case "find_biome": case "find_descent": case "descent_route":
+            case "descent_route":
+                result = await DescentRoute(args, token);
+                break;
+            case "item_info": case "find_biome": case "find_descent":
             case "tile_names": case "recipe":
                 result = await Call("/" + name, args, token);
                 break;
@@ -1294,6 +1297,36 @@ public static partial class AgentTools
         if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
         result["mode_adjustment"] = "target_use_collect_tool";
         return result;
+    }
+
+    static async Task<JsonObject> DescentRoute(JsonObject args, CancellationToken token)
+    {
+        int treasureOffset = Int(args, "treasure_offset", 0), treasureLimit = Int(args, "treasure_limit", 16);
+        if (treasureOffset < 0 || treasureLimit is < 1 or > 32) throw new ArgumentException("宝藏分页需要非负offset和1..32的limit。");
+        var route = await Call("/descent_main_route", new JsonObject { ["name"] = Text(args, "name"),
+            ["offset"] = Int(args, "offset", 0), ["limit"] = Int(args, "limit", 256) }, token);
+        if (Rejected(route) || route["found"]?.GetValue<bool>() != true) return route;
+        var query = new JsonObject { ["name"] = Text(args, "name") };
+        foreach (string field in new[] { "dig_max", "walk_max", "dig_max2", "walk_max2" })
+            if (args[field] != null) query[field] = args[field].DeepClone();
+        var background = await Call("/descent_route_status", query, token);
+        string status = background["status"]?.ToString();
+        if (status == "not_started")
+        {
+            var started = await Call("/descent_route_async", query, token);
+            status = Rejected(started) ? "failed" : "running";
+            if (Rejected(started)) route["treasures_error"] = started;
+        }
+        route["treasures_status"] = status;
+        route["treasure_offset"] = treasureOffset;
+        if (status == "ready" && background["result"]?["treasures"] is JsonArray treasures)
+        {
+            route["treasures"] = new JsonArray(treasures.Skip(treasureOffset).Take(treasureLimit).Select(t => t.DeepClone()).ToArray());
+            route["treasures_total"] = treasures.Count;
+            route["treasures_next_offset"] = treasureOffset + treasureLimit < treasures.Count
+                ? JsonValue.Create(treasureOffset + treasureLimit) : null;
+        }
+        return route;
     }
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)

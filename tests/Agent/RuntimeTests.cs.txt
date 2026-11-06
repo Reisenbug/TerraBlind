@@ -1385,6 +1385,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestDagRepairDuringDefense();
             await TestQueuedDagActions();
+            await TestBackgroundDescent();
             await TestObservedActionCompletion();
             await TestDagReturnValues();
             await TestWakeHandoff();
@@ -1484,6 +1485,36 @@ static class RuntimeTests
             AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Recovery.Reset();
             HttpServerSystem.Handler = null;
         }
+    }
+
+    static async Task TestBackgroundDescent()
+    {
+        string status = "not_started";
+        int started = 0;
+        HttpServerSystem.Handler = (path, _) => path switch
+        {
+            "/descent_main_route" => (200, "{\"found\":true,\"line_kind\":\"main_descent\",\"entrance\":{\"x\":10,\"y\":10},\"line\":[[10,10],[11,10]],\"line_len\":100,\"next_offset\":2}"),
+            "/descent_route_status" => (200, new JsonObject { ["status"] = status,
+                ["result"] = status == "ready" ? JsonNode.Parse("{\"line\":[[1,99]],\"treasures\":[{\"x\":1,\"y\":1},{\"x\":2,\"y\":2}]}") : null }.ToJsonString()),
+            "/descent_route_async" => (++started > 0 ? 200 : 500, "{\"ok\":true}"),
+            _ => throw new Exception("unexpected blocking route call: " + path)
+        };
+        try
+        {
+            var pending = JsonNode.Parse(await Execute(AgentTools.Execute("descent_route", new JsonObject { ["name"] = "jungle" }, default)));
+            Check(started == 1 && pending["treasures_status"].ToString() == "running"
+                && pending["line"][0][0].GetValue<int>() == 10 && pending["next_offset"].GetValue<int>() == 2,
+                "background query withheld the main route or blocked waiting for treasures");
+            status = "ready";
+            var ready = JsonNode.Parse(await Execute(AgentTools.Execute("descent_route", new JsonObject
+                { ["name"] = "jungle", ["treasure_offset"] = 1, ["treasure_limit"] = 1 }, default)));
+            Check(started == 1 && ready["line"][0][0].GetValue<int>() == 10
+                && ready["treasures"].AsArray().Count == 1 && ready["treasures"][0]["x"].GetValue<int>() == 2
+                && ready["treasures_total"].GetValue<int>() == 2,
+                "treasure route replaced the main route or result paging restarted computation");
+        }
+        finally { HttpServerSystem.Handler = null; }
+        Console.WriteLine("PASS: descent exposes the main route immediately and retrieves separate paged background treasures");
     }
 
     static async Task TestQueuedDagActions()
