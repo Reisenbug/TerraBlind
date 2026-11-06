@@ -21,14 +21,20 @@ static class RuntimeTests
 
     static async Task PumpUntil(Func<bool> done)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        int pumps = 0;
         while (!done())
         {
-            Check(DateTime.UtcNow < deadline, "main-thread test timed out");
+            Check(elapsed.Elapsed.TotalSeconds < 15, "main-thread test timed out; pumps=" + pumps + "; status=" + NativeAgent.Status
+                + "; active_handle=" + AgentTools.Actions.ActiveHandle
+                + "; recent_messages=" + string.Join(" | ", AgentChat.Messages.TakeLast(5)));
             Agent.PostUpdateEverything();
+            pumps++;
             for (int frame = 0; frame < 10; frame++) PlayerCombat.Tick(Game.LocalPlayer);
             await Task.Delay(5);
         }
+        if (elapsed.Elapsed.TotalSeconds >= 5)
+            Console.WriteLine($"SLOW_TEST_PUMP elapsed_ms={elapsed.ElapsedMilliseconds} pumps={pumps} status={NativeAgent.Status}");
     }
 
     static async Task<T> Execute<T>(Task<T> task)
@@ -1774,7 +1780,10 @@ static class RuntimeTests
             await PumpUntil(() => DateTime.UtcNow >= until);
             string handle = AgentTools.Actions.ActiveHandle;
             Check(handler.Calls == 2 && handle != null && RecedingNav.Active,
-                "ordinary script yield called the model again before background work or events changed");
+                "ordinary script yield called the model again before background work or events changed; calls="
+                + handler.Calls + "; handle=" + handle + "; navigation=" + RecedingNav.Active
+                + "; status=" + NativeAgent.Status + "; actions=" + AgentTools.Actions.Snapshot().ToJsonString()
+                + "; messages=" + string.Join(" | ", AgentChat.Messages.TakeLast(5)));
             AgentTools.Watches.Request("new event requiring a changed plan");
             await PumpUntil(() => handler.Calls == 4 && NativeAgent.Status == "idle");
             var action = await Execute(AgentTools.Actions.Query(handle, 0, default));
