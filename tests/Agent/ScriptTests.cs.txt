@@ -142,17 +142,17 @@ static class ScriptTests
         retreatWatch.Observe(JsonNode.Parse("{\"hp\":74,\"dead\":false,\"suffocating\":false}").AsObject());
         Check(retreatWatch.HasPending && !retreatWatch.HasInterrupting, "explicit JS health policy stopped retreat or lost danger evidence");
         retreatWatch.LocalDelivery = false;
-        Check(retreatWatch.HasInterrupting, "local health override leaked into model thinking time");
+        Check(!retreatWatch.HasInterrupting && retreatWatch.HasHealthNotice, "health notice paused movement during model thinking");
         retreatWatch.Take();
         retreatWatch.Observe(JsonNode.Parse("{\"hp\":73,\"dead\":false,\"suffocating\":false}").AsObject());
-        Check(retreatWatch.HasInterrupting, "consumed local health event prevented host recheck after handoff");
+        Check(!retreatWatch.HasInterrupting && retreatWatch.HasHealthNotice, "health recheck paused movement after handoff");
         retreatWatch.LocalDelivery = true;
         retreatWatch.Observe(JsonNode.Parse("{\"hp\":73,\"dead\":false,\"suffocating\":true}").AsObject());
         Check(retreatWatch.HasInterrupting, "health policy suppressed suffocation");
         retreatWatch.Take();
         retreatWatch.Observe(JsonNode.Parse("{\"hp\":0,\"dead\":true,\"suffocating\":false}").AsObject());
         Check(retreatWatch.HasInterrupting, "health policy suppressed death");
-        Console.WriteLine("PASS: explicit local health policy retains notifications, restores host interruption and preserves independent dangers");
+        Console.WriteLine("PASS: low health remains informational through script handoff; suffocation and death still interrupt");
         var interruptedProgress = new ScriptProgress();
         var interruptedStep = await AgentScript.Run("return step('approach', () => tool('nav_to', {}));", 30,
             (_, _) => { }, (_, _, _) => Task.FromResult("{\"outcome\":\"interrupted\",\"handle\":\"keep-this-handle\",\"events\":[]}"),
@@ -414,8 +414,15 @@ static class ScriptTests
         Check(defaults.HasInterrupting, "defaults overrode explicit opportunity interruption policy");
         defaults.Take();
         defaults.Observe(new JsonObject { ["hp"] = 20 });
-        Check(defaults.HasInterrupting && defaults.Take()[0]["kind"].ToString() == "low_health",
-            "passive default opportunities suppressed danger interruption");
+        Check(!defaults.HasInterrupting && defaults.HasHealthNotice && defaults.Take()[0]["kind"].ToString() == "low_health",
+            "default low health paused navigation or lost its notification");
+        defaults.Emit("nearby_chest", "keep-choice", new JsonObject { ["x"] = 12, ["y"] = 20 });
+        defaults.Emit("low_health", "next-action", new JsonObject { ["hp"] = 15 });
+        int noticeBudget = defaults.Snapshot()["wake_count"].GetValue<int>();
+        Check(defaults.TakeHealthNotices().Count == 1 && !defaults.HasHealthNotice && defaults.PendingCount == 1
+            && defaults.Take()[0]["key"].ToString() == "keep-choice"
+            && defaults.Snapshot()["wake_count"].GetValue<int>() == noticeBudget,
+            "health review consumed another opportunity or a wake allowance");
         var entries = AgentScript.EntryTools(definitions);
         int assessments = 0;
         var pagedWatch = new AgentWatch();

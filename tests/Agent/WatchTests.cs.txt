@@ -91,7 +91,7 @@ static class WatchTests
         }
         var boundedEvents = watch.Take();
         Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && boundedEvents.Count == 10 && watch.Armed
-            && boundedEvents.Count(e => e["wake_deferred"]?.GetValue<bool>() == true) == 6,
+            && boundedEvents.Count(e => e["wake_deferred"]?.GetValue<bool>() == true) == 5,
             "wake budget lost observed opportunities or allowed extra interruptions");
         state["chests"] = new JsonArray(new JsonObject { ["x"] = 999, ["y"] = 1 });
         watch.Observe(state);

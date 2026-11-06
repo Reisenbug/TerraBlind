@@ -168,7 +168,7 @@ static class ActionTests
             Check(attackWatch.HasPending && !attackWatch.HasInterrupting,
                 "attack completion or failure forced navigation to pause");
             attackWatch.Emit("low_health", status, new JsonObject { ["hp"] = 10 });
-            Check(attackWatch.HasInterrupting, "attack event suppression hid low health");
+            Check(!attackWatch.HasInterrupting && attackWatch.HasHealthNotice, "low health stopped navigation or lost its notice");
         }
 
         var staleEntered = Signal(); var staleRelease = Signal(); int staleStops = 0;

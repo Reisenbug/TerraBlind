@@ -27,7 +27,7 @@ static class GatherTests
             Check(verifiedWatch.HasInterrupting, "node verification suppressed a different action failure");
             verifiedWatch.Take();
             verifiedWatch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
-            Check(verifiedWatch.HasInterrupting, "node verification suppressed survival interruption");
+            Check(!verifiedWatch.HasInterrupting && verifiedWatch.HasHealthNotice, "node verification lost the informational health notice");
         }
         foreach (bool explicitAcquisition in new[] { false, true })
         {
@@ -46,7 +46,7 @@ static class GatherTests
             watch.Take();
             watch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
             watch.Resumed("collect", 3);
-            Check(watch.HasInterrupting, "resumption suppressed a danger observation");
+            Check(!watch.HasInterrupting && watch.HasHealthNotice, "resumption lost the health notice or paused the route");
         }
         var world = new World();
         var result = await Gather.Run(Targets, 5, world, default);

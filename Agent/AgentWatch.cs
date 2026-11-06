@@ -53,10 +53,24 @@ public sealed class AgentWatch
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
     public bool HasPending => pending.Count > 0;
+    public bool HasHealthNotice => pending.Any(e => e["kind"]?.ToString() == "low_health");
+    public JsonArray TakeHealthNotices()
+    {
+        var result = new JsonArray();
+        int count = pending.Count;
+        for (int i = 0; i < count; i++)
+        {
+            var item = pending.Dequeue();
+            if (item["kind"]?.ToString() == "low_health") result.Add(item);
+            else pending.Enqueue(item);
+        }
+        return result;
+    }
     public int PendingCount => pending.Count;
     public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
+        && e["kind"]?.ToString() != "low_health"
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
-        && (!passive.Contains(e["kind"]?.ToString()) || e["kind"]?.ToString() == "low_health" && !LocalDelivery));
+        && !passive.Contains(e["kind"]?.ToString()));
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
     public bool WatchesTile(int type) => tileTypes.Contains(type);
@@ -115,7 +129,7 @@ public sealed class AgentWatch
             throw new ArgumentException("nearby_tile需要1..64个tile_types方块编号，请通过game_catalog查询。");
         var passiveEvents = args["passive_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
         if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired" or "low_health")))
-            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health仅在本地JS执行期间不强制中断。");
+            throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health；low_health始终只通知，不暂停动作。");
         passive.Clear(); passive.UnionWith(passiveEvents);
         LootChestsInReach = requested.Contains("nearby_chest")
             && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? LootChestsInReach);
@@ -201,7 +215,7 @@ public sealed class AgentWatch
         bool verified = kind == "action_finished" && verifiedCompletions.Contains(key);
         bool deferred = verified || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
-        if (!LocalDelivery && !passive.Contains(kind) && !deferred
+        if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind != "low_health"
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();

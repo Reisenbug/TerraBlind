@@ -215,11 +215,12 @@ public class NativeAgent : ModSystem
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
-            if (_codex != null && Processing && !AgentTools.Watches.LocalDelivery && _dangerDelivery.IsCompleted)
+            if (_codex != null && Processing && _dangerDelivery.IsCompleted)
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
                     e["id"].GetValue<int>() > _lastDangerNotice
-                    && e["kind"].ToString() is "low_health" or "suffocating" or "player_died");
+                    && (e["kind"].ToString() == "low_health" || !AgentTools.Watches.LocalDelivery
+                        && e["kind"].ToString() is "suffocating" or "player_died"));
                 if (danger != null)
                 {
                     _lastDangerNotice = danger["id"].GetValue<int>();
@@ -227,7 +228,7 @@ public class NativeAgent : ModSystem
                         ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2, ["dead"] = p.dead,
                         ["potion_delay_ticks"] = p.potionDelay, ["active_handle"] = AgentTools.Actions.ActiveHandle,
                         ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
-                    _dangerDelivery = _codex.Steer("宿主实时危险观察，原目标和进度保留。请按最新现场调整尚未执行的动作；此通知不代表已经脱险："
+                    _dangerDelivery = _codex.Steer("宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案："
                         + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
                 }
             }
@@ -300,13 +301,16 @@ public class NativeAgent : ModSystem
                     double reviewDelay = prepareNext ? 0 : 15;
                     while (!reviewRequested && backgroundReview.Elapsed.TotalSeconds < reviewDelay
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
-                        && !AgentTools.Watches.HasInterrupting, token))
+                        && !AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasHealthNotice, token))
                         await Task.Delay(100, token);
-                    if (!reviewRequested && backgroundReview.Elapsed.TotalSeconds >= reviewDelay
+                    if (!reviewRequested && (backgroundReview.Elapsed.TotalSeconds >= reviewDelay
+                        || await OnMain(() => AgentTools.Watches.HasHealthNotice, token))
                         && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
                     {
                         preparedHandle = preparingHandle;
+                        var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
                         input = "原目标：" + goal + "\n后台动作仍在执行，本轮是并行观察，没有暂停输入。"
+                            + "低血量仅唤醒观察，不能因此暂停、取消原动作或原地等回血；继续行动并调整后续方案，任务明确规定死亡限制时才按其限制处理。\n健康通知：" + healthNotices.ToJsonString()
                             + "本轮优先准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到task_plan_patch的可执行script。"
                             + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
                             + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"

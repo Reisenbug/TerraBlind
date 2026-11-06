@@ -2187,9 +2187,16 @@ static class RuntimeTests
                 && AgentTools.Actions.ActiveHandle == original["handle"].ToString() && RecedingNav.Active,
                 "consuming passive progress stopped the active action");
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = 10 });
+            var health = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
+            Check(health["paused_action"] == null && RecedingNav.Active
+                && AgentTools.Actions.ActiveHandle == original["handle"].ToString()
+                && health["events"].AsArray().Any(e => e["kind"]?.ToString() == "low_health"),
+                "low health paused the original route instead of notifying the agent");
+            AgentTools.Watches.EnsureDefaults();
+            AgentTools.Watches.Emit("suffocating", "separate-danger", new JsonObject { ["hp"] = 10 });
             var danger = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
             Check(danger["paused_action"].ToString() == original["handle"].ToString() && !RecedingNav.Active,
-                "passive opportunity policy suppressed a separate health interruption");
+                "informational low health suppressed a separate suffocation interruption");
             Check(danger["action"]["handle"].ToString() == original["handle"].ToString()
                 && danger["action"]["status"].ToString() == "paused"
                 && danger["action"]["observation"]["hp"].GetValue<int>() == Terraria.Main.LocalPlayer.statLife
