@@ -12,7 +12,7 @@ public sealed class ActionTasks
     internal static readonly AsyncLocal<string> NodeContext = new();
     sealed class Entry
     {
-        public string Id, Tool, Status = "running", Requested, Node;
+        public string Id, Tool, Status = "running", Requested, Node, After;
         public JsonObject Args, Observation, PreviousAttempt, StoppedObservation;
         public JsonNode Result;
         public int Attempt;
@@ -20,13 +20,16 @@ public sealed class ActionTasks
         public bool Inline;
         public CancellationTokenSource Cancel;
         public Task Running;
+        public CancellationToken Root;
+        public long ExecutionEnded, ExecutionStarted;
+        public double? HandoffMs;
     }
 
     readonly object gate = new();
     readonly HashSet<string> arrivals = new();
     int navigationArrivals, taskSerial;
     public int NavigationArrivals { get { lock (gate) return navigationArrivals; } }
-    public void BeginTask() { lock (gate) { taskSerial++; arrivals.Clear(); navigationArrivals = 0; } }
+    public void BeginTask() { lock (gate) { CancelQueued(); taskSerial++; arrivals.Clear(); navigationArrivals = 0; } }
     readonly Dictionary<string, Entry> entries = new();
     readonly AsyncLocal<string> caller = new();
     readonly Func<string, JsonObject, CancellationToken, Task<string>> execute;
@@ -34,14 +37,16 @@ public sealed class ActionTasks
     readonly Func<Func<bool>, Task> stop;
     readonly Func<string, Func<bool>, Task> finished;
     readonly Func<string, Func<bool>, Task> stopTool;
+    readonly Func<string, string, CancellationToken, Task> prepareQueued;
     Entry active, attack;
     bool handingOff;
     int handoffGeneration;
 
     public ActionTasks(Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task<JsonObject>> observe, Func<Func<bool>, Task> stop,
-        Func<string, Func<bool>, Task> finished = null, Func<string, Func<bool>, Task> stopTool = null)
-    { this.execute = execute; this.observe = observe; this.stop = stop; this.finished = finished; this.stopTool = stopTool; }
+        Func<string, Func<bool>, Task> finished = null, Func<string, Func<bool>, Task> stopTool = null,
+        Func<string, string, CancellationToken, Task> prepareQueued = null)
+    { this.execute = execute; this.observe = observe; this.stop = stop; this.finished = finished; this.stopTool = stopTool; this.prepareQueued = prepareQueued; }
 
     public bool Conflicts { get { lock (gate) return handingOff || active != null && caller.Value != active.Id || attack != null && caller.Value != attack.Id; } }
     public bool ConflictsWith(string tool)
@@ -88,9 +93,57 @@ public sealed class ActionTasks
         entry.StoppedObservation = null;
         entry.Status = "running"; entry.Requested = null; entry.Attempt++;
         entry.TaskSerial = taskSerial;
+        entry.Root = root;
         entry.Cancel = CancellationTokenSource.CreateLinkedTokenSource(root);
         if (entry.Tool == "fight") attack = entry; else active = entry;
         entry.Running = Task.Run(() => Run(entry, entry.Attempt));
+    }
+
+    public JsonObject Enqueue(string after, string tool, JsonObject args, string node, CancellationToken root)
+    {
+        if (!Supports(tool) || tool == "fight") throw new ArgumentException("排队只支持主任务动作。");
+        root.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            var previous = Find(after);
+            if (previous.Tool == "fight" || previous.TaskSerial != taskSerial
+                || previous.Status is not ("running" or "paused" or "queued" or "completed"))
+                throw new InvalidOperationException("前置动作必须属于本任务且可继续执行。");
+            if (entries.Values.Any(e => e.After == after && e.Status is "queued" or "running" or "paused" or "cancelling"))
+                throw new InvalidOperationException("此动作已有待执行的下一段，先取消原排队动作再替换。");
+            if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
+            if (previous.Status == "completed" && (active != null || handingOff))
+                throw new InvalidOperationException("前置已完成但输入已被其他动作占用。");
+            var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool,
+                Args = (JsonObject)args.DeepClone(), Node = node, After = after, Root = root,
+                Status = "queued", TaskSerial = taskSerial, Running = Task.CompletedTask };
+            entries.Add(entry.Id, entry);
+            if (previous.Status == "completed") Launch(entry, root);
+            return Snapshot(entry);
+        }
+    }
+
+    void ContinueQueued(Entry previous)
+    {
+        foreach (var next in entries.Values.Where(e => e.After == previous.Id && e.Status == "queued").ToArray())
+        {
+            if (previous.Status == "paused") continue;
+            if (previous.Status == "completed" && next.TaskSerial == taskSerial && !next.Root.IsCancellationRequested
+                && active == null && !handingOff)
+                Launch(next, next.Root);
+            else
+            {
+                next.Status = "blocked";
+                next.Result = new JsonObject { ["error"] = "predecessor_not_completed", ["handle"] = previous.Id,
+                    ["status"] = previous.Status, ["result"] = previous.Result?.DeepClone() };
+                ContinueQueued(next);
+            }
+        }
+    }
+
+    void CancelQueued()
+    {
+        foreach (var entry in entries.Values.Where(e => e.Status == "queued")) entry.Status = "cancelled";
     }
 
     bool Owns(Entry entry, int attempt)
@@ -106,14 +159,27 @@ public sealed class ActionTasks
         string status = "failed";
         try
         {
+            if (entry.After != null && prepareQueued != null)
+            {
+                string previousNode;
+                lock (gate) previousNode = Find(entry.After).Node;
+                await prepareQueued(previousNode, entry.Node, entry.Cancel.Token);
+            }
             observed = await observe(entry.Cancel.Token);
             starting = (JsonObject)observed.DeepClone();
             lock (gate)
                 if (Owns(entry, attempt)) entry.Observation = (JsonObject)observed.DeepClone();
+            entry.ExecutionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (entry.After != null)
+            {
+                lock (gate) entry.HandoffMs = System.Diagnostics.Stopwatch.GetElapsedTime(Find(entry.After).ExecutionEnded, entry.ExecutionStarted).TotalMilliseconds;
+            }
             string output = await execute(entry.Tool, (JsonObject)entry.Args.DeepClone(), entry.Cancel.Token);
+            entry.ExecutionEnded = System.Diagnostics.Stopwatch.GetTimestamp();
             try { result = JsonNode.Parse(output); }
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
             status = result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false"
+                || entry.Tool == "nav_to" && value["done"]?.ToString() == "false"
                 || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial"
                 || value["status"]?.ToString() is "failed" or "stopped_short") ? "failed" : "completed";
         }
@@ -150,6 +216,7 @@ public sealed class ActionTasks
                         && result?["done"]?.ToString() == "true" && Moved(starting, observed)
                         && arrivals.Add(entry.Args["x"] + "," + entry.Args["y"])) navigationArrivals++;
                     if (entry.Tool == "fight") attack = null; else active = null;
+                    ContinueQueued(entry);
                 }
                 entry.Cancel.Dispose();
             }
@@ -188,9 +255,18 @@ public sealed class ActionTasks
         lock (gate)
         {
             var entry = Find(id);
+            if (entry.Status == "queued")
+            {
+                if (command != "cancel") throw new InvalidOperationException("待执行动作可取消；暂停或恢复其前置动作即可保留排队。");
+                entry.Status = "cancelled";
+                ContinueQueued(entry);
+                return Snapshot(entry);
+            }
             if (command == "resume")
             {
                 root.ThrowIfCancellationRequested();
+                if (entry.After != null && Find(entry.After).Status != "completed")
+                    throw new InvalidOperationException("前置动作尚未完成，不能恢复后续动作。");
                 if (handingOff || (entry.Tool == "fight" ? attack : active) != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (entry.Status == "cancelling") throw new InvalidOperationException("取消清理尚未完成，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
@@ -229,7 +305,7 @@ public sealed class ActionTasks
         try
         {
             if (finished != null) await finished(entry.Id, Valid);
-            lock (gate) if (Valid()) entry.Status = "cancelled";
+            lock (gate) if (Valid()) { entry.Status = "cancelled"; ContinueQueued(entry); }
         }
         catch (Exception error)
         {
@@ -238,6 +314,7 @@ public sealed class ActionTasks
                 entry.Status = "failed";
                 entry.Result = new JsonObject { ["error"] = "action_cleanup_failed", ["detail"] = error.Message,
                     ["action_result"] = entry.Result?.DeepClone() };
+                ContinueQueued(entry);
             }
         }
     }
@@ -246,6 +323,7 @@ public sealed class ActionTasks
     {
         lock (gate)
         {
+            CancelQueued();
             if (active != null) { active.Requested = "cancelled"; active.Cancel.Cancel(); }
             if (attack != null) { attack.Requested = "cancelled"; attack.Cancel.Cancel(); }
             foreach (var entry in entries.Values.Where(entry => entry.Status == "paused").ToArray())
@@ -317,6 +395,7 @@ public sealed class ActionTasks
         ["status"] = entry.Status, ["attempt"] = entry.Attempt,
         ["inline"] = entry.Inline,
         ["task_node"] = entry.Node,
+        ["after_handle"] = entry.After, ["handoff_ms"] = entry.HandoffMs,
         ["result"] = entry.Result?.DeepClone(), ["observation"] = entry.Observation?.DeepClone(),
         ["previous_attempt"] = entry.PreviousAttempt?.DeepClone(),
         ["requested"] = entry.Requested
@@ -339,6 +418,7 @@ public sealed class ActionTasks
                 result.Add(new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
                     ["status"] = entry.Status, ["attempt"] = entry.Attempt, ["inline"] = entry.Inline,
                     ["task_node"] = entry.Node,
+                    ["after_handle"] = entry.After, ["handoff_ms"] = entry.HandoffMs,
                     ["result"] = facts, ["detail_tool"] = "action_query" });
             }
             return result;

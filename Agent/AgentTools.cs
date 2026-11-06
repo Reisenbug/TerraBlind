@@ -64,7 +64,22 @@ public static partial class AgentTools
                 else StopInputs(preserveAttack: Actions.HasAttack);
             }
             return true;
-        }, default));
+        }, default),
+        (previous, next, token) => NativeAgent.OnMain(() =>
+        {
+            if (!Plan.RequiresNodeExecution) return true;
+            if (string.IsNullOrEmpty(next)) throw new InvalidOperationException("待执行动作需要所属DAG节点。");
+            if (previous != next && !string.IsNullOrEmpty(previous))
+            {
+                var predecessor = Plan.Snapshot()["steps"].AsArray().First(s => s["id"]?.ToString() == previous);
+                if (predecessor["status"]?.ToString() != "completed"
+                    && Plan.Advance(previous, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() != true)
+                    throw new InvalidOperationException("前置动作结束，但DAG节点的实际完成条件尚未满足。");
+            }
+            Plan.Script(next);
+            Plan.Select(next);
+            return true;
+        }, token));
     static readonly Dictionary<string, int> Tracking = new();
     static readonly HashSet<string> Discoveries = new();
     internal static int DiscoveryRevision => Discoveries.Count;
@@ -424,7 +439,7 @@ public static partial class AgentTools
     static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
         if (!ActionTasks.Supports(name))
-            return await Execute(name, args, name == "action_start" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
+            return await Execute(name, args, name is "action_start" or "action_queue" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
         if (name != "fight" && string.IsNullOrEmpty(ActionTasks.NodeContext.Value)
             && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
             return await Execute(name, args, token);
@@ -620,6 +635,19 @@ public static partial class AgentTools
                     return new JsonObject { ["error"] = "continue_action_not_active", ["handle"] = continueAction }.ToJsonString();
                 return new JsonObject { ["status"] = "yield", ["continue_action"] = continueAction.Length > 0 ? continueAction : null,
                     ["event"] = await NativeAgent.OnMain(() => Watches.Request(Text(args, "reason"), args["evidence"] as JsonObject), token) }.ToJsonString();
+            case "action_queue":
+                string queuedTool = Text(args, "tool");
+                var queuedArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
+                NativeAgent.ValidateTool(queuedTool, queuedArgs);
+                return (await NativeAgent.OnMain(() =>
+                {
+                    string node = Text(args, "task_node");
+                    if (Plan.RequiresNodeExecution && !Plan.Snapshot()["steps"].AsArray().Any(s =>
+                        s["id"]?.ToString() == node && s["status"]?.ToString() != "completed"))
+                        throw new InvalidOperationException("排队需要现有的未完成DAG节点。");
+                    Watches.EnsureDefaults();
+                    return Actions.Enqueue(Text(args, "after_handle"), queuedTool, queuedArgs, node, token);
+                }, token)).ToJsonString();
             case "action_start":
                 string actionTool = Text(args, "tool");
                 var actionArgs = args["args"] as JsonObject ?? throw new ArgumentException("需要动作args对象。");
@@ -687,8 +715,8 @@ public static partial class AgentTools
                     {
                         var edited = (args["nodes"] as JsonArray ?? new JsonArray()).Select(n => n["id"]?.ToString()).ToHashSet();
                         if (Actions.Summary().Any(a => a["tool"]?.ToString() != "fight"
-                            && a["status"]?.ToString() == "running" && edited.Contains(a["task_node"]?.ToString())))
-                            throw new InvalidOperationException("修改正在执行的节点前须暂停其动作并保留句柄；新增或修改其他未执行节点可在导航途中进行。");
+                            && a["status"]?.ToString() is "running" or "queued" && edited.Contains(a["task_node"]?.ToString())))
+                            throw new InvalidOperationException("修改执行中节点须暂停其动作；修改已排队节点须先取消待执行句柄再重新排队。其他节点可在导航途中修改。");
                         return Plan.Revise(args, AgentTaskEvidence.Measure);
                     }, token);
                     break;

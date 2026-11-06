@@ -12,6 +12,7 @@ static class ActionTests
 
     public static async Task Run()
     {
+        await QueuedActions();
         var recovery = new AgentRecovery();
         var gatherArgs = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":9}]}").AsObject();
         void RecordStock(int count) => recovery.Record("gather", gatherArgs, new JsonObject
@@ -324,6 +325,73 @@ static class ActionTests
         }
         Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
         Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
+    }
+
+    static async Task QueuedActions()
+    {
+        foreach (string ending in new[] { "completed", "failed", "paused", "cancelled", "cancel_paused", "cancel_queued", "new_task" })
+        {
+            var began = Signal(); var release = Signal(); var nextBegan = Signal();
+            int attempts = 0, preparations = 0;
+            var actions = new ActionTasks(async (tool, _, token) =>
+            {
+                if (tool == "nav_to")
+                {
+                    attempts++; began.TrySetResult(true);
+                    await release.Task.WaitAsync(token);
+                    return ending == "failed" ? "{\"done\":false}" : "{\"done\":true}";
+                }
+                Check(ActionTasks.NodeContext.Value == "collect", "queued action lost DAG owner");
+                nextBegan.TrySetResult(true);
+                return "{\"outcome\":\"enough\"}";
+            }, _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask,
+            prepareQueued: (before, after, _) =>
+            {
+                Check(before == "travel" && after == "collect", "queue did not provide predecessor ownership");
+                preparations++;
+                return Task.CompletedTask;
+            });
+            ActionTasks.NodeContext.Value = "travel";
+            string first = actions.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+            ActionTasks.NodeContext.Value = null;
+            await began.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            string next = actions.Enqueue(first, "gather", new JsonObject(), "collect", default)["handle"].ToString();
+            Check(!nextBegan.Task.IsCompleted && actions.ActiveHandle == first,
+                "queue interrupted navigation or launched before arrival");
+            if (ending == "paused")
+            {
+                await actions.Control(first, "pause", null, default);
+                Check((await actions.Query(next, 0, default))["status"].ToString() == "queued", "pause discarded continuation");
+                await actions.Control(first, "resume", null, default);
+            }
+            if (ending == "cancelled") await actions.Control(first, "cancel", null, default);
+            if (ending == "cancel_paused")
+            {
+                await actions.Control(first, "pause", null, default);
+                await actions.Control(first, "cancel", null, default);
+            }
+            if (ending == "cancel_queued") await actions.Control(next, "cancel", null, default);
+            if (ending == "new_task") actions.BeginTask();
+            release.TrySetResult(true);
+            JsonObject result;
+            do { result = await actions.Query(first, 100, default); } while (result["status"].ToString() == "running");
+            if (ending is "completed" or "paused")
+            {
+                await nextBegan.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                do { result = await actions.Query(next, 100, default); } while (result["status"].ToString() == "running");
+                Check(result["status"].ToString() == "completed" && preparations == 1
+                    && result["handoff_ms"].GetValue<double>() < 1000, "prepared continuation did not run within one second");
+                Console.WriteLine($"QUEUE_HANDOFF ending={ending} handoff_ms={result["handoff_ms"]} attempts={attempts}");
+            }
+            else
+            {
+                result = await actions.Query(next, 0, default);
+                Check(!nextBegan.Task.IsCompleted && preparations == 0
+                    && result["status"].ToString() == (ending is "new_task" or "cancel_queued" ? "cancelled" : "blocked"),
+                    "failed/cancelled/old task automatically launched continuation");
+            }
+        }
+        Console.WriteLine("PASS: queued actions continue without model calls, preserve pause and stop after failure or task replacement");
     }
 
     static async Task InterruptedChest()

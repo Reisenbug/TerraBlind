@@ -1384,6 +1384,7 @@ static class RuntimeTests
             Console.WriteLine("PASS: yielded workflow resumes through host state without replaying completed effects");
             Console.WriteLine("PASS: empty workflow yield receives only one extra turn and pauses instead of looping");
             await TestDagRepairDuringDefense();
+            await TestQueuedDagActions();
             await TestObservedActionCompletion();
             await TestDagReturnValues();
             await TestWakeHandoff();
@@ -1483,6 +1484,67 @@ static class RuntimeTests
             AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Recovery.Reset();
             HttpServerSystem.Handler = null;
         }
+    }
+
+    static async Task TestQueuedDagActions()
+    {
+        int oldMax = Game.LocalPlayer.statLifeMax;
+        try
+        {
+            foreach (bool verified in new[] { true, false })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+                Game.LocalPlayer.statLifeMax = verified ? 100 : 80;
+                bool arrived = false;
+                int starts = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    return (200, path == "/nav_recede_done" ? new JsonObject { ["done"] = arrived }.ToJsonString()
+                        : "{\"accepted\":true}");
+                };
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"prepared continuation","mode":"dag","steps":[
+                      {"id":"travel","description":"travel","depends_on":[],"script":"return {};",
+                       "conditions":[{"kind":"permanent_health","count":100}]},
+                      {"id":"collect","description":"collect","depends_on":["travel"],"script":"return {};",
+                       "conditions":[{"kind":"item","type":191,"count":1}]}]}
+                    """).AsObject(), _ => 0);
+                ActionTasks.NodeContext.Value = "travel";
+                string first = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
+                ActionTasks.NodeContext.Value = null;
+                await PumpUntil(() => starts == 1);
+                var queued = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                {
+                    ["tool"] = "action_queue", ["args"] = new JsonObject { ["after_handle"] = first,
+                        ["task_node"] = "collect", ["tool"] = "nav_to",
+                        ["args"] = new JsonObject { ["x"] = 16, ["y"] = 34 } }
+                }, default)));
+                string next = queued["value"]?["handle"]?.ToString();
+                Check(next != null && starts == 1 && RecedingNav.Active, "queue submission failed or interrupted navigation: " + queued);
+                arrived = true;
+                await PumpUntil(() => AgentTools.Actions.Summary().Any(a => a["handle"]?.ToString() == next
+                    && a["status"]?.ToString() is not ("running" or "queued")));
+                var result = await Execute(AgentTools.Actions.Query(next, 0, default));
+                var travel = AgentTools.Plan.Snapshot()["steps"][0];
+                if (verified)
+                    Check(starts == 2 && result["status"].ToString() == "completed" && travel["status"].ToString() == "completed"
+                        && result["task_node"].ToString() == "collect", "queued action did not verify and transfer DAG ownership: " + result);
+                else
+                    Check(starts == 1 && result["status"].ToString() == "failed" && travel["status"].ToString() != "completed",
+                        "action completion bypassed unmet DAG condition: " + result);
+                Console.WriteLine($"DAG_QUEUE verified={verified} starts={starts} handoff_ms={result["handoff_ms"]}");
+            }
+        }
+        finally
+        {
+            ActionTasks.NodeContext.Value = null;
+            AgentTools.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive);
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            Game.LocalPlayer.statLifeMax = oldMax; HttpServerSystem.Handler = null;
+        }
+        Console.WriteLine("PASS: queued DAG actions survive script return and start only after real prerequisite verification");
     }
 
     static async Task TestDagRepairDuringDefense()
