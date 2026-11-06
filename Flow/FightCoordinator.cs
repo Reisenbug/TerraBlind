@@ -225,7 +225,11 @@ namespace TerraBlind
             if (!idle) _framesLeft = TimeoutFrames;
 
             int weaponSlot = FindWeaponSlot(p);
-            if (weaponSlot < 0) return;
+            if (weaponSlot < 0)
+            {
+                if (mining) RememberAnimation(p, false);
+                return;
+            }
 
             var aim = PredictAim(p, target, p.inventory[weaponSlot]);
             AimTarget = aim;

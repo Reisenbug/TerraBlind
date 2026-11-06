@@ -207,6 +207,9 @@ static class GatherTests
                 position = new(p.position.X + 100, p.position.Y), velocity = new(2, 0) };
             var predicted = FightCoordinator.PredictAim(p, Main.npc[0], p.inventory[1]);
             Check(predicted.X > Main.npc[0].Center.X, "moving NPC received no projectile lead");
+            p.inventory[1].mana = p.statMana + 100;
+            Check(CombatLoadout.Select(p) == -1, "weapon without enough mana was selected for an attack turn");
+            p.inventory[1].mana = 0;
             FightCoordinator.Start(40);
             p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
             Cursor.AimPx(20, 30);
