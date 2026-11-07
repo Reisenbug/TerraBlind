@@ -23,6 +23,9 @@ public sealed class ScriptProgress
     public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield"; } }
     public bool ReviewRequested { get { lock (gate) return !running && last?["value"] is JsonObject value && value["wake"] is JsonObject; } }
 
+    internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"
+        || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress";
+
     public void Begin()
     {
         lock (gate)
@@ -59,8 +62,7 @@ public sealed class ScriptProgress
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "running")
                 throw new InvalidOperationException("step不是当前运行步骤。");
             if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("step返回值超过8000字符。");
-            if (value is JsonObject result && (result["error"] != null || result["ok"]?.ToString() == "false"
-                || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress"))
+            if (value is JsonObject result && Failed(result))
                 throw new InvalidOperationException("step返回失败；保留证据，不能标为完成。");
             step["status"] = "completed"; step["value"] = value?.DeepClone(); revision++;
         }

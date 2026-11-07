@@ -599,6 +599,20 @@ static class ScriptTests
             && hazard["result"]["navigation"]["trap_tiles"][0]["y"].GetValue<int>() == 527,
             "script yield discarded the failed target and the exact trap that stopped collection");
         var decisionProgress = new ScriptProgress();
+        var stalledProgress = new ScriptProgress();
+        var stalledNavigation = await AgentScript.Run("step('walk',()=>tool('nav_to',{x:20,y:30}));", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("""
+                {"outcome":"no_progress","reason":"local_oscillation","progress_idle_seconds":8,
+                 "pos":{"x":321,"y":480},"state":{"hp":96}}
+                """), _ => Task.CompletedTask, default, stalledProgress);
+        Check(!stalledNavigation["ok"].GetValue<bool>()
+            && stalledNavigation["failure"]?["evidence"]?["reason"]?.ToString() == "local_oscillation"
+            && stalledProgress.Summary()["last_execution"]["failure"]["evidence"]["state"]["hp"].GetValue<int>() == 96
+            && stalledProgress.Completed == 0, "navigation stall lost its cause and observed state during script handoff: " + stalledNavigation);
+        var waitTimeout = await AgentScript.Run("return tool('script_events');", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("{\"outcome\":\"timeout\",\"events\":[]}"), _ => Task.CompletedTask, default);
+        Check(waitTimeout["ok"].GetValue<bool>() && waitTimeout["failure"] == null,
+            "ordinary observation timeout was treated as an action failure");
         try { decisionProgress.Resolve("choice", 0, true, new JsonObject(), new JsonObject()); throw new Exception("reconciliation created a missing decision"); }
         catch (InvalidOperationException error) { Check(error.Message.Contains("step("), "missing decision did not explain the supported recording API"); }
         Check(decisionProgress.Snapshot()["steps"].AsArray().Count == 0 && decisionProgress.Snapshot()["revision"].GetValue<int>() == 0,

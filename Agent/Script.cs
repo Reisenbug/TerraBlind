@@ -250,10 +250,10 @@ public static class AgentScript
                     catch (System.Text.Json.JsonException) { }
                     if (toolResult != null)
                     {
-                        if (toolResult["error"] != null || toolResult["ok"]?.ToString() == "false")
+                        if (ScriptProgress.Failed(toolResult))
                         {
                             var facts = new JsonObject();
-                            foreach (string field in new[] { "error", "detail", "outcome", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result" })
+                            foreach (string field in new[] { "error", "detail", "outcome", "reason", "state", "pos", "progress_idle_seconds", "stationary_seconds", "distance_pixels", "best_distance_pixels", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result" })
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
                         }
