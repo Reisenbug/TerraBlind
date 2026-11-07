@@ -453,6 +453,59 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_MINING_DEFENSE_PROBE") == "1")
+        {
+            var stages = new JsonArray();
+            for (int mode = 0; mode < 2; mode++)
+            {
+                int wallX = 0, floorY = 0;
+                await OnMain(() =>
+                {
+                    NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                    Combat.Enabled = Dodge.Enabled = false; Config.I.AgentEnabled = true; Concessions.Enabled = false;
+                    AgentPermissions.Reset(); AgentPermissions.Attack = mode == 1;
+                    var p = Main.LocalPlayer; int x = Main.spawnTileX; floorY = Main.spawnTileY;
+                    foreach (var npc in Main.npc) npc.active = false;
+                    foreach (var shot in Main.projectile) shot.active = false;
+                    for (int tx = x - 15; tx <= x + 15; tx++)
+                    for (int ty = floorY - 8; ty <= floorY + 2; ty++)
+                    {
+                        Main.tile[tx, ty].ClearEverything();
+                        if (ty >= floorY) WorldGen.PlaceTile(tx, ty, TileID.Stone, mute: true, forced: true);
+                    }
+                    foreach (var item in p.inventory) item.TurnToAir();
+                    p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.inventory[1].SetDefaults(ItemID.ThornChakram);
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0;
+                    p.position = new Vector2(x * 16, floorY * 16 - p.height); p.velocity = Vector2.Zero;
+                    wallX = x + 2;
+                    for (int y = floorY - 3; y < floorY; y++) WorldGen.PlaceTile(wallX, y, TileID.Hive, mute: true, forced: true);
+                    target = NPC.NewNPC(p.GetSource_Misc("mining-defense-probe"), (int)p.Center.X - 120, (int)p.Center.Y, NPCID.BlueSlime);
+                    var enemy = Main.npc[target]; enemy.aiStyle = -1; enemy.velocity = Vector2.Zero;
+                    enemy.noGravity = enemy.noTileCollide = enemy.dontTakeDamage = true; enemy.damage = 1;
+                    sourceInputSamples.Clear(); samplingSources = true;
+                    if (mode == 1) FightCoordinator.Start(20);
+                    MineCoordinator.Start(new MineRequest { Dir = MineDir.Right, StartWx = x, StartWy = floorY - 1,
+                        TargetWx = x + 4, TargetWy = floorY - 1 });
+                    return true;
+                });
+                var clock = Stopwatch.StartNew();
+                while (await OnMain(() => MineCoordinator.IsActive) && clock.Elapsed.TotalSeconds < 20) await Task.Delay(20);
+                stages.Add(await OnMain(() =>
+                {
+                    samplingSources = false;
+                    int remaining = Enumerable.Range(floorY - 3, 3).Count(y => Main.tile[wallX, y].HasTile);
+                    var result = new JsonObject { ["attack_enabled"] = mode == 1, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                        ["outcome"] = MineCoordinator.Outcome, ["remaining"] = remaining,
+                        ["samples"] = new JsonArray(sourceInputSamples.Select(sample => (JsonNode)JsonValue.Create(sample)).ToArray()) };
+                    FightCoordinator.Stop(); MineCoordinator.Stop(); return result;
+                }));
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "mining-defense.json"), stages.ToJsonString());
+            if (stages.Any(stage => stage["remaining"].GetValue<int>() != 0 || stage["outcome"].ToString() != "done"))
+                throw new Exception("native mining/defense failed; inspect mining-defense.json");
+            Console.WriteLine("MINING_DEFENSE_PASS native_tiles=true attack_off_and_on=true");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CRAFT_ADJ_TRIAL") == "1")
         {
             var observations = new JsonObject();
