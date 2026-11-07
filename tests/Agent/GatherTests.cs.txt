@@ -73,6 +73,12 @@ static class GatherTests
         Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
             && weakResult["last_result"]["result"]["reason"].ToString() == "tool_weak",
             "collection failure was retried or mislabeled as a navigation failure");
+        var outsideMiningRange = new World { OutsideMiningRange = true };
+        var outsideRangeResult = await Gather.Run(new[] { Targets[0] }, 5, outsideMiningRange, default);
+        Check(outsideMiningRange.Actions.Count == 1 && outsideRangeResult["outcome"].ToString() == "collection_out_of_range"
+            && outsideRangeResult["last_result"]["result"]["error"].ToString() == "collect_target_out_of_mining_range"
+            && outsideRangeResult["targets"][0]["actual"].GetValue<int>() == 0,
+            "gather repeated a completed approach outside tool reach instead of returning its actual failure");
         var combatTarget = new[] { new GatherTarget(20, 1, Array.Empty<string>(), new[] { 2 }) };
         var combatWorld = new CombatProgressWorld { Hp = 3, Damage = 1 };
         result = await Gather.Run(combatTarget, 5, combatWorld, default);
@@ -554,7 +560,7 @@ static class GatherTests
 
     sealed class World : IGatherWorld
     {
-        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled;
+        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -578,6 +584,8 @@ static class GatherTests
             if (NavigationStalled) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
             if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
+            if (OutsideMiningRange) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
+                ["x"] = 10, ["y"] = 0, ["navigation"] = new JsonObject { ["done"] = true, ["status"] = "done" } };
             if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
             if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",

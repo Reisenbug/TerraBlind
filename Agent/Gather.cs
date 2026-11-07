@@ -131,6 +131,8 @@ public static class Gather
                 { outcome = "navigation_no_progress"; break; }
                 if (last["result"]?["outcome"]?.ToString() == "no_progress")
                 { outcome = "collection_no_progress"; break; }
+                if (last["result"]?["error"]?.ToString() == "collect_target_out_of_mining_range")
+                { outcome = "collection_out_of_range"; break; }
                 if (candidate["kind"]?.ToString() == "npc" && last["result"] is JsonObject combat
                     && combat["error"] == null && combat["outcome"] == null
                     && combat["target_present"]?.GetValue<bool>() == true && combat["self_dead"]?.GetValue<bool>() == false
