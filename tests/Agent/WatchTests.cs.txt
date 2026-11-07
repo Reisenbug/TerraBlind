@@ -161,13 +161,13 @@ static class WatchTests
         Check(navigation.Observe(0, 0, 0, 1000, terrain, planning: true) == null
             && navigation.Observe(40, 0, 0, 1000, terrain, planning: true) == null
             && navigation.Observe(41, 0, 0, 1000, terrain) == null
-            && navigation.Observe(70, 0, 0, 1000, terrain) == null
-            && navigation.Observe(71, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary",
+            && navigation.Observe(48.9, 0, 0, 1000, terrain) == null
+            && navigation.Observe(49, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary",
             "navigation stall timing did not start after field preparation");
         navigation = new NavigationProgress();
         Check(navigation.Observe(0, 0, 0, 1000, terrain) == null
-            && navigation.Observe(29, 0, 0, 1000, terrain) == null, "planning grace interrupted");
-        Check(navigation.Observe(30, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary", "stationary planning waited forever");
+            && navigation.Observe(7.9, 0, 0, 1000, terrain) == null, "execution grace interrupted");
+        Check(navigation.Observe(8, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary", "stationary execution retained the former thirty-second minimum");
         navigation = new NavigationProgress();
         navigation.Observe(0, 0, 0, 1000, terrain);
         navigation.Observe(25, 100, 0, 900, terrain);

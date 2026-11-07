@@ -239,6 +239,7 @@ static class CodexTests
     {
         var native = new NativeAgent();
         var server = new Server();
+        var originalPosition = Terraria.Main.LocalPlayer.position;
         Config.I.AgentUseCodex = true;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
@@ -260,6 +261,7 @@ static class CodexTests
             while (server.Inputs.Count < 2)
             {
                 Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
+                Terraria.Main.LocalPlayer.position.X += 1;
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(server.Inputs[1].Contains("并行观察") && AgentTools.Actions.ActiveHandle == handle,
@@ -271,6 +273,7 @@ static class CodexTests
         finally
         {
             NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
+            Terraria.Main.LocalPlayer.position = originalPosition;
             HttpServerSystem.Handler = null; Config.I.AgentUseCodex = false;
         }
         Console.WriteLine("PASS: host wakes model during navigation without pausing or restarting its handle");
