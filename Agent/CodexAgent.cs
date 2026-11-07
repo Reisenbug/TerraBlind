@@ -251,6 +251,8 @@ public sealed class CodexAgent : IDisposable
                 if (function["name"]?.ToString() is "get_state" or "game_api" or "run_script" or "ask")
                     description = "Codex exec调用返回JSON文本(string)，不是对象。直接text(await tools." + function["name"]
                         + "(参数))可读取全文；需在exec访问字段时先JSON.parse返回文本。不要对原始文本再JSON.stringify。\n" + description;
+                if (function["name"]?.ToString() == "terrain_map")
+                    description = "Codex exec返回字符串：JSON元数据后换行接data:image/图片URI。显示方式：const r=await tools.terrain_map(参数); const i=r.indexOf('\\ndata:image/'); if(i>=0){text(r.slice(0,i));image(r.slice(i+1).trim());}else text(r);\n" + description;
                 dynamicTools.Add(new JsonObject { ["type"] = "function", ["name"] = function["name"].DeepClone(),
                     ["description"] = description,
                     ["inputSchema"] = function["parameters"].DeepClone() });
