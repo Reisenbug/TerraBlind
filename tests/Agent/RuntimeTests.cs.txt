@@ -1531,6 +1531,7 @@ static class RuntimeTests
             await TestWakeHandoff(true);
             await TestEventDelivery();
             await TestBackgroundBossObservation();
+            await TestMineVeinInventoryLoop();
             await TestContinuedReview();
             await TestPassiveOpportunity();
             await TestBoundedState();
@@ -2549,6 +2550,66 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestMineVeinInventoryLoop()
+    {
+        var oldSamples = ContentSamples.ItemsByType;
+        var oldOre = Game.LocalPlayer.inventory[0]; var oldPick = Game.LocalPlayer.inventory[1];
+        var oldPosition = Game.LocalPlayer.position; var oldFirst = Game.tile[103, 100]; var oldSecond = Game.tile[104, 100];
+        var oldReach = Reach.MineTest;
+        try
+        {
+            AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+            ContentSamples.ItemsByType = new() { [700] = new Terraria.Item { type = 700, Name = "Fixture Ore", stack = 1, createTile = TileID.FixtureSource } };
+            foreach (bool blocked in new[] { false, true })
+            {
+                AgentTools.Recovery.Reset();
+                Game.LocalPlayer.position = new(1600, 1600);
+                Game.LocalPlayer.inventory[0] = new Terraria.Item { type = 700, Name = "Fixture Ore", stack = 2 };
+                Game.LocalPlayer.inventory[1] = new Terraria.Item { type = 3509, Name = "Fixture Pick", stack = 1, pick = 40 };
+                foreach (int x in new[] { 103, 104 }) Game.tile[x, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.FixtureSource };
+                Reach.MineTest = (_, _, _) => !blocked;
+                int navigationStarts = 0, itemUses = 0;
+                HttpServerSystem.Handler = (path, args) =>
+                {
+                    if (path == "/find_tiles") return (200, new JsonObject { ["tiles"] = new JsonArray(new[] { 103, 104 }
+                        .Where(x => Game.tile[x, 100].HasTile).Select(x => (JsonNode)new JsonObject
+                        { ["x"] = x, ["y"] = 100, ["dist"] = (float)(x - 100) }).ToArray()) }.ToJsonString());
+                    if (path == "/nav_recede") { navigationStarts++; RecedingNav.Active = true; }
+                    if (path == "/nav_recede_done") return (200, blocked
+                        ? "{\"done\":false,\"status\":\"failed\",\"outcome\":\"no_progress\",\"reason\":\"local_oscillation\"}" : "{\"done\":true}");
+                    if (path == "/mine_reach") return (200, "{\"lx\":0,\"hx\":1000,\"ly\":0,\"hy\":1000}");
+                    if (path == "/item_use")
+                    {
+                        int x = JsonNode.Parse(args)["target_wx"].GetValue<int>();
+                        Game.tile[x, 100].HasUnactuatedTile = false; Game.LocalPlayer.inventory[0].stack++; itemUses++;
+                    }
+                    return (200, path == "/item_use_status" ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"accepted\":true}");
+                };
+                var result = JsonNode.Parse(await Execute(AgentTools.Execute("mine_vein",
+                    new JsonObject { ["name"] = "FixtureSource", ["count"] = 4 }, default)));
+                if (!blocked)
+                {
+                    Check(result["ok"]?.GetValue<bool>() == true && Game.LocalPlayer.inventory[0].stack == 4
+                        && navigationStarts == 0 && itemUses == 2, "vein collection ignored actual inventory or navigated to reachable ore: " + result);
+                    var retained = JsonNode.Parse(await Execute(AgentTools.Execute("mine_vein",
+                        new JsonObject { ["name"] = "FixtureSource", ["count"] = 4 }, default)));
+                    Check(retained["ok"].GetValue<bool>() && retained["actions"].GetValue<int>() == 0 && itemUses == 2,
+                        "reissuing the same inventory target collected an additional batch");
+                }
+                else Check(result["ok"]?.GetValue<bool>() == false && navigationStarts == 1 && itemUses == 0
+                    && result["last_result"]?["result"]?["navigation"]?["reason"]?.ToString() == "local_oscillation",
+                    "vein collection retried a blocked cluster or mined after failed navigation: " + result);
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Plan.Reset(); HttpServerSystem.Handler = null;
+            ContentSamples.ItemsByType = oldSamples; Game.LocalPlayer.inventory[0] = oldOre; Game.LocalPlayer.inventory[1] = oldPick;
+            Game.LocalPlayer.position = oldPosition; Game.tile[103, 100] = oldFirst; Game.tile[104, 100] = oldSecond; Reach.MineTest = oldReach;
+        }
+        Console.WriteLine("PASS: vein collection uses an absolute inventory target, skips reachable approaches and yields one blocked approach");
     }
 
     static async Task TestBackgroundBossObservation()

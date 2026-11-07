@@ -57,6 +57,22 @@ static class GatherTests
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
         Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
+        var largeCollection = new ProbeWorld { GainEvery = 1 };
+        var largeResult = await Gather.Run(new[] { new GatherTarget(10, 65, new[] { "test tile" }, Array.Empty<int>()) },
+            5, largeCollection, default);
+        Check(largeResult["ok"].GetValue<bool>() && largeCollection.Actions == 65,
+            "successful inventory progress hit a lifetime thirty-two-action limit");
+        var stalledSource = new World { NavigationStalled = true };
+        var stalledResult = await Gather.Run(Targets, 5, stalledSource, default);
+        Check(!stalledResult["ok"].GetValue<bool>() && stalledSource.Actions.Count == 1
+            && stalledResult["outcome"].ToString() == "navigation_no_progress"
+            && stalledResult["last_result"]["result"]["navigation"]["reason"].ToString() == "local_oscillation",
+            "gather retried adjacent sources after failed navigation instead of preserving the blocker");
+        var weakTool = new World { CollectionStalled = true };
+        var weakResult = await Gather.Run(Targets, 5, weakTool, default);
+        Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
+            && weakResult["last_result"]["result"]["reason"].ToString() == "tool_weak",
+            "collection failure was retried or mislabeled as a navigation failure");
         var combatTarget = new[] { new GatherTarget(20, 1, Array.Empty<string>(), new[] { 2 }) };
         var combatWorld = new CombatProgressWorld { Hp = 3, Damage = 1 };
         result = await Gather.Run(combatTarget, 5, combatWorld, default);
@@ -538,7 +554,7 @@ static class GatherTests
 
     sealed class World : IGatherWorld
     {
-        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed;
+        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -559,6 +575,9 @@ static class GatherTests
             Actions.Add(candidate["kind"].ToString());
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (NavigationStalled) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+                ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
+            if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
             if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
             if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",

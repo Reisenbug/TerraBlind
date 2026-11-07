@@ -1735,39 +1735,30 @@ public static partial class AgentTools
     static async Task<JsonObject> MineVein(JsonObject args, CancellationToken token)
     {
         string name = Text(args, "name");
-        int wanted = Math.Clamp(Int(args, "count", 1), 1, 1000), removed = 0;
-        var skipped = new HashSet<(int, int)>();
-        string outcome = "exhausted";
-        for (int attempt = 0; attempt < wanted + 8 && removed < wanted; attempt++)
+        int wanted = Int(args, "count", 1);
+        if (wanted is < 1 or > 9999) throw new ArgumentException("count需要1..9999。");
+        var source = await NativeAgent.OnMain(() =>
         {
-            var found = await Call("/find_tiles", new JsonObject { ["name"] = name, ["n"] = 30, ["max_dist"] = 2000 }, token);
-            var target = found["tiles"]?.AsArray().OfType<JsonObject>().FirstOrDefault(t => !skipped.Contains((Int(t, "x"), Int(t, "y"))));
-            if (target == null) break;
-            int x = Int(target, "x"), y = Int(target, "y");
-            skipped.Add((x, y));
-            await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["exact"] = true }, token);
-            var reach = await Call("/mine_reach", null, token);
-            if (Rejected(reach)) continue;
-            int slot = await NativeAgent.OnMain(() => Enumerable.Range(0, 10)
-                .OrderByDescending(i => Main.LocalPlayer.inventory[i].pick)
-                .FirstOrDefault(i => Main.LocalPlayer.inventory[i].pick > 0, -1), token);
-            if (slot < 0) return new JsonObject { ["outcome"] = "no_pickaxe", ["tiles_removed"] = removed };
-            var nearby = await Call("/find_tiles", new JsonObject { ["name"] = name, ["n"] = 40, ["max_dist"] = 60 }, token);
-            foreach (var tile in nearby["tiles"]?.AsArray().OfType<JsonObject>() ?? Enumerable.Empty<JsonObject>())
-            {
-                if (removed >= wanted) break;
-                int tx = Int(tile, "x"), ty = Int(tile, "y");
-                if (tx < Int(reach, "lx") || tx > Int(reach, "hx") || ty < Int(reach, "ly") || ty > Int(reach, "hy")) continue;
-                var started = await Call("/item_use", new JsonObject { ["target_wx"] = tx, ["target_wy"] = ty, ["slot"] = slot, ["strict"] = true, ["duration_ticks"] = 0 }, token);
-                if (Rejected(started)) continue;
-                var result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token);
-                if (Text(result, "outcome") == "removed") removed++;
-                if (Text(result, "reason") == "tool_weak") return new JsonObject { ["outcome"] = "tool_weak", ["tiles_removed"] = removed };
-            }
-        }
-        if (removed >= wanted) outcome = "enough";
-        return new JsonObject { ["outcome"] = outcome, ["tiles_removed"] = removed, ["wanted"] = wanted,
-            ["note"] = "清除方块数不代表获得物品数，以 got 和背包实际数量为准。" };
+            var catalog = TileCatalog(name);
+            var exact = catalog["matches"].AsArray().Where(match => Bool(match.AsObject(), "exact")).ToArray();
+            if (catalog["truncated"]?.GetValue<bool>() == true || exact.Select(match => Int(match.AsObject(), "type")).Distinct().Count() != 1)
+                return new JsonObject { ["error"] = "ambiguous_tile_name", ["name_candidates"] = catalog["matches"].DeepClone() };
+            int tile = Int(exact[0].AsObject(), "type");
+            var items = Terraria.ID.ContentSamples.ItemsByType.Values.Where(item => item.createTile == tile).ToArray();
+            if (args["item_type"] == null && items.Length != 1)
+                return new JsonObject { ["error"] = "item_type_required", ["tile_type"] = tile,
+                    ["item_candidates"] = new JsonArray(items.Select(item => (JsonNode)new JsonObject { ["type"] = item.type, ["name"] = item.Name }).ToArray()) };
+            int type = args["item_type"] == null ? items[0].type : Int(args, "item_type");
+            return new JsonObject { ["item_type"] = type, ["tile_name"] = exact[0]["internal"].DeepClone(),
+                ["item_inference"] = args["item_type"] == null ? "unique_placing_item" : "caller" };
+        }, token);
+        if (source["error"] != null) return source;
+        var targets = new[] { new GatherTarget(Int(source, "item_type"), wanted,
+            new[] { Text(source, "tile_name") }, Array.Empty<int>()) };
+        var gathered = await Gather.Run(targets, 0, new GameGather(targets), token);
+        gathered["requested_count"] = wanted;
+        gathered["item_inference"] = source["item_inference"].DeepClone();
+        return gathered;
     }
 
     static async Task<string> ReadWiki(string name, JsonObject args, CancellationToken token)

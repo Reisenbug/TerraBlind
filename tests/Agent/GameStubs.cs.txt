@@ -220,7 +220,11 @@ namespace Terraria.ID
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int None = 0, Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
-    public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
+    public static class ContentSamples
+    {
+        public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new();
+        public static Dictionary<int, Terraria.Item> ItemsByType = new();
+    }
 }
 namespace Terraria.ModLoader
 {

@@ -288,7 +288,7 @@
     "type": "function",
     "function": {
       "name": "mine_vein",
-      "description": "【要攒够多少个矿就用这个,一次搞定】。给矿种和数量,它自己跑完整个循环:找最近的矿脉 → 挖竖井过去(落在矿脉中间) → 站着把射程内同种矿一次挖光 → 不够就去下一个矿脉,直到数量够或附近没了。**不要自己 find_tiles + nav_to + use_item 一颗颗挖**,那要十几轮还容易数错。返回两个数,别搞混:**tiles_removed=清掉了几格(不代表到手)**,**got=真正进背包的东西(这个才算数)**。两者对不上时会给 warn,通常是寻路挖竖井时把矿顺手清了、掉落物没吸到。停止原因:enough=够了/exhausted=附近没了/tool_weak=镐不够硬/interrupted=玩家打断。挖铁/铅/银/钨/铜/锡/金/铂金这些都走这个。",
+      "description": "按实际库存收集矿物，count是目标库存总数，与gather及DAG物品条件一致，续接时保留该目标。item_type可显式指定目标物品；省略时从该方块唯一的可放置物品推导候选，实际库存用于验收；无法唯一确定时返回item_type_required及item_candidates。复用gather循环：够得着就直接挖并拾取，需要接近时导航，导航停滞立即返回现场。ok=true/outcome=enough表示库存已达标；targets含inventory_before、inventory_delta、actual、remaining，last_result保留未完成动作。source_unavailable表示当前查询范围无候选，navigation_no_progress表示需要根据导航证据调整方案。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -296,9 +296,16 @@
             "type": "string",
             "description": "矿的 TileID 名,如 Iron/Lead/Silver/Tungsten(不确定先 tile_names 查)"
           },
+          "item_type": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "已查证的目标矿物物品type；省略时尝试唯一的可放置物品映射。"
+          },
           "count": {
             "type": "integer",
-            "description": "要挖到几个"
+            "minimum": 1,
+            "maximum": 9999,
+            "description": "目标库存总数"
           }
         },
         "required": [

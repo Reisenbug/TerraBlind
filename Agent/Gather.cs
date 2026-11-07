@@ -66,12 +66,12 @@ public static class Gather
         var blockedSources = new JsonArray();
         JsonNode sourceError = null;
         string outcome = "attempt_limit";
-        int actions = 0;
+        int actions = 0, stalledActions = 0;
         int previousCount = 0;
         int Count(GatherTarget target) => scene?["counts"]?[target.ItemType.ToString()]?.GetValue<int>() ?? 0;
         try
         {
-            for (int step = 0; step < 32; step++)
+            for (int step = 0; ; step++)
             {
                 scene = await world.Observe(budget.Token);
                 if (step == 0)
@@ -87,6 +87,7 @@ public static class Gather
                 {
                     int item = last["candidate"]["item_type"].GetValue<int>();
                     int actual = scene["counts"]?[item.ToString()]?.GetValue<int>() ?? 0;
+                    stalledActions = actual > previousCount ? 0 : stalledActions + 1;
                     if (actual > previousCount) unproductiveTiles.Remove(item);
                     else if (last["candidate"]["kind"].ToString() == "tile"
                         && last["result"]?["outcome"]?.ToString() == "removed")
@@ -106,6 +107,7 @@ public static class Gather
                         }
                     }
                 }
+                if (stalledActions >= 32) break;
                 var candidate = available
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
@@ -124,6 +126,11 @@ public static class Gather
                 previousCount = scene["counts"]?[candidate["item_type"].ToString()]?.GetValue<int>() ?? 0;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
+                if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_progress"
+                    || candidate["kind"].ToString() == "drop" && last["result"]?["outcome"]?.ToString() == "no_progress")
+                { outcome = "navigation_no_progress"; break; }
+                if (last["result"]?["outcome"]?.ToString() == "no_progress")
+                { outcome = "collection_no_progress"; break; }
                 if (candidate["kind"]?.ToString() == "npc" && last["result"] is JsonObject combat
                     && combat["error"] == null && combat["outcome"] == null
                     && combat["target_present"]?.GetValue<bool>() == true && combat["self_dead"]?.GetValue<bool>() == false
