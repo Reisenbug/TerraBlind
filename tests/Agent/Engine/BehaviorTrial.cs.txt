@@ -578,8 +578,9 @@ public sealed class BehaviorTrial : ModSystem
         {
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
             bool weaponProbe = Environment.GetEnvironmentVariable("TB_HIVE_WEAPON_PROBE") == "1";
+            bool noticeProbe = Environment.GetEnvironmentVariable("TB_BOSS_NOTICE_PROBE") == "1";
             bool combatProbe = weaponProbe || Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_TRIAL") == "1";
-            bool roomProbe = combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
+            bool roomProbe = noticeProbe || combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
             bool vision = building || roomProbe || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
             JsonObject lake = null;
@@ -677,9 +678,18 @@ public sealed class BehaviorTrial : ModSystem
                         ["compact_options"] = Options(.075f), ["map"] = map.DeepClone() };
                 });
                 report["configured"] = await Call("set_combat", new JsonObject { ["movement_reserve_scale"] = .075 });
+                AgentWatch noticeWatch = null;
+                long bossSpawnTick = 0;
                 report["actual_controller_snapshot"] = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
+                    if (noticeProbe)
+                    {
+                        noticeWatch = (AgentWatch)typeof(AgentTools).GetField("Watches",
+                            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                        noticeWatch.Reset(); noticeWatch.EnsureDefaults(); noticeWatch.LocalDelivery = true;
+                        bossSpawnTick = (long)Main.GameUpdateCount;
+                    }
                     target = NPC.NewNPC(new EntitySource_Misc("HiveRoomProbe"), (int)p.Center.X + 120, (int)p.Center.Y, NPCID.QueenBee);
                     var sensor = (TerraBlind.JevariaCombat.GameSensor)typeof(Dodge).GetField("_sensor",
                         System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
@@ -688,6 +698,26 @@ public sealed class BehaviorTrial : ModSystem
                     return new JsonObject { ["reserve_scale"] = snapshot.MovementReserveScale,
                         ["options"] = new JsonArray(snapshot.AvailableActions.Select(option => (JsonNode)JsonValue.Create(option.Intent.Direction.ToString())).ToArray()) };
                 });
+                if (noticeProbe)
+                {
+                    JsonNode notice = null;
+                    var clock = Stopwatch.StartNew();
+                    while (notice == null && clock.Elapsed.TotalSeconds < 2)
+                    {
+                        await Task.Delay(25);
+                        notice = await OnMain(() => noticeWatch.Take().FirstOrDefault(e => e["kind"]?.ToString() == "boss_appeared")?.DeepClone());
+                    }
+                    if (notice == null) throw new Exception("native Boss appearance did not reach the watch queue");
+                    long frames = long.Parse(notice["evidence"]["tick"].ToString()) - bossSpawnTick;
+                    var evidence = new JsonObject { ["spawn_tick"] = bossSpawnTick, ["detection_frames"] = frames,
+                        ["notice"] = notice, ["model_calls"] = 0, ["native_boss"] = true };
+                    File.WriteAllText(Path.Combine(Main.SavePath, "boss-notice.json"), evidence.ToJsonString());
+                    await OnMain(() => { AgentTools.Stop(); noticeWatch.LocalDelivery = false; return true; });
+                    if (frames > 16 || notice["evidence"]["type"].GetValue<int>() != NPCID.QueenBee)
+                        throw new Exception("native Boss observation missed the sampling interval: " + evidence);
+                    Console.WriteLine("BOSS_NOTICE_PASS " + evidence);
+                    return;
+                }
                 report["restored_reserve"] = await OnMain(() => { AgentTools.Stop(); return Dodge.MovementReserveScale; });
                 File.WriteAllText(Path.Combine(Main.SavePath, "hive-room.json"), report.ToJsonString());
                 if (Math.Abs(report["actual_controller_snapshot"]["reserve_scale"].GetValue<float>() - .075f) > .0001f

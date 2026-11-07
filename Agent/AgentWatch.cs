@@ -12,6 +12,7 @@ public sealed class AgentWatch
     public AgentWatch(Func<JsonObject, JsonObject> assessOpportunity = null) => this.assessOpportunity = assessOpportunity;
     readonly HashSet<string> events = new(), seen = new();
     readonly HashSet<string> visibleDrops = new();
+    readonly HashSet<string> visibleBosses = new();
     readonly HashSet<int> tileTypes = new();
     readonly HashSet<string> passive = new();
     readonly HashSet<int> advised = new();
@@ -81,7 +82,7 @@ public sealed class AgentWatch
     public void EnsureDefaults()
     {
         if (!events.Contains("target_acquired")) passive.Add("target_acquired");
-        events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "inventory_full" });
+        events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "boss_appeared", "inventory_full" });
         if (!configured)
         {
             events.Add("nearby_chest");
@@ -118,7 +119,7 @@ public sealed class AgentWatch
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
-        if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "inventory_full")))
+        if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared" or "inventory_full")))
             throw new ArgumentException("不支持的观察事件。");
         int radius = args["radius"]?.GetValue<int>() ?? 25;
         int? health = args["health_below"]?.GetValue<int>();
@@ -182,6 +183,14 @@ public sealed class AgentWatch
                 seen.RemoveWhere(key => key.StartsWith("suffocating:", StringComparison.Ordinal));
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
+        if (state["bosses"] is JsonArray bosses)
+        {
+            string BossKey(JsonNode boss) => boss["who"] + ":" + boss["type"];
+            var currentBosses = bosses.Select(BossKey).ToHashSet();
+            foreach (string vanished in visibleBosses.Except(currentBosses)) seen.Remove("boss_appeared:" + vanished);
+            visibleBosses.Clear(); visibleBosses.UnionWith(currentBosses);
+            foreach (var boss in bosses) Emit("boss_appeared", BossKey(boss), boss);
+        }
         foreach (var chest in state["chests"]?.AsArray() ?? new JsonArray())
             Emit("nearby_chest", chest["x"] + "," + chest["y"], chest);
         foreach (var tile in state["tiles"]?.AsArray() ?? new JsonArray())
@@ -214,8 +223,8 @@ public sealed class AgentWatch
         bool attackFinished = kind == "action_finished" && evidence?["tool"]?.ToString() == "fight";
         bool verified = kind == "action_finished" && verifiedCompletions.Contains(key);
         bool deferred = verified || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
-            && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died");
-        if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind != "low_health"
+            && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared");
+        if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind is not ("low_health" or "boss_appeared")
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
@@ -257,7 +266,7 @@ public sealed class AgentWatch
         }
         return result;
     }
-    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "decision_point" or "execution_gap"
+    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "decision_point" or "execution_gap"
         || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
 
     public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.OrderBy(ReviewPriority).Take(8).Select(x => x.DeepClone()).ToArray()),
@@ -343,6 +352,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; }
     public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
 }

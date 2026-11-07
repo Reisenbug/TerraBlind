@@ -340,6 +340,39 @@ static class RuntimeTests
         Console.WriteLine("PASS: gathering distinguishes replacement NPCs and rejects stale entity targets");
         ControlTests.Run();
         Agent.Load();
+        var bossWatch = new AgentWatch();
+        bossWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") }); bossWatch.EnsureDefaults();
+        for (int i = 0; i < 6; i++) bossWatch.Emit("nearby_chest", i.ToString(), new JsonObject());
+        bossWatch.Take(); bossWatch.Emit("nearby_chest", "deferred", new JsonObject());
+        var bossScene = JsonNode.Parse("""
+            {"hp":100,"bosses":[{"who":0,"type":222,"hp":3400,"x":20,"y":30}]}
+            """).AsObject();
+        bossWatch.Observe(bossScene);
+        var bossNotice = bossWatch.Take(1);
+        Check(bossNotice.Count == 1 && bossNotice[0]["kind"].ToString() == "boss_appeared"
+            && bossNotice[0]["wake_deferred"] == null && bossNotice[0]["evidence"]["type"].GetValue<int>() == 222
+            && bossWatch.Summary()["wake_count"].GetValue<int>() == 6,
+            "unexpected Boss was absent, hidden by chest notices or exhausted the opportunity wake budget");
+        bossWatch.Observe(bossScene);
+        Check(!bossWatch.Take().Any(e => e["kind"].ToString() == "boss_appeared"), "visible Boss repeatedly interrupted the same encounter");
+        bossWatch.Observe(new JsonObject { ["bosses"] = new JsonArray() }); bossWatch.Observe(bossScene);
+        Check(bossWatch.Take().Single()["kind"].ToString() == "boss_appeared", "a later Boss encounter inherited the prior encounter's acknowledgement");
+        var beforeBoss = Game.npc[0];
+        try
+        {
+            Game.npc[0] = new Terraria.NPC { active = true, boss = true, type = 222, whoAmI = 0,
+                life = 3400, position = new Microsoft.Xna.Framework.Vector2(Game.LocalPlayer.position.X + 4000, Game.LocalPlayer.position.Y) };
+            AgentTools.Watches.Reset(); AgentTools.Watches.EnsureDefaults(); AgentTools.Watches.LocalDelivery = true;
+            typeof(NativeAgent).GetField("_lastWatch", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, DateTime.MinValue);
+            Agent.PostUpdateEverything();
+            Check(!AgentTools.Watches.Take().Any(e => e["kind"].ToString() == "boss_appeared"), "distant Boss interrupted local work");
+            Game.npc[0].position = new Microsoft.Xna.Framework.Vector2(Game.LocalPlayer.position.X + 120, Game.LocalPlayer.position.Y);
+            typeof(NativeAgent).GetField("_lastWatch", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, DateTime.MinValue);
+            Agent.PostUpdateEverything();
+            Check(AgentTools.Watches.Take().Any(e => e["kind"].ToString() == "boss_appeared"
+                && e["evidence"]["hp"].GetValue<int>() == 3400), "native observer omitted the nearby Boss and its real health");
+        }
+        finally { Game.npc[0] = beforeBoss; AgentTools.Watches.Reset(); }
         int observedHp = Game.LocalPlayer.statLife, observedMaximum = Game.LocalPlayer.statLifeMax2;
         try
         {
@@ -1323,7 +1356,7 @@ static class RuntimeTests
             var watchApi = JsonNode.Parse(await Execute(AgentTools.Execute("game_api",
                 JsonNode.Parse("{\"names\":[\"watch\"]}").AsObject(), default)));
             var watchEvents = watchApi["tools"][0]["parameters"]["properties"]["events"]["items"]["enum"].AsArray();
-            Check(new[] { "nearby_drop", "nearby_npc_killed" }.All(kind => watchEvents.Any(value => value.ToString() == kind)),
+            Check(new[] { "nearby_drop", "nearby_npc_killed", "boss_appeared" }.All(kind => watchEvents.Any(value => value.ToString() == kind)),
                 "watch API concealed supported material acquisition events");
             Check(watchEvents.Select(value => value.ToString()).Distinct().Count() == watchEvents.Count,
                 "watch API duplicated events while augmenting program metadata");

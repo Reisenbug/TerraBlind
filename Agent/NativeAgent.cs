@@ -211,6 +211,11 @@ public class NativeAgent : ModSystem
                     .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
+                ["bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0
+                    && Math.Abs(n.Center.X - p.Center.X) + Math.Abs(n.Center.Y - p.Center.Y) <= 200 * 16)
+                    .Select(n => (JsonNode)new JsonObject { ["who"] = n.whoAmI, ["type"] = n.type,
+                        ["name"] = Terraria.Lang.GetNPCNameValue(n.type), ["hp"] = n.life, ["max_hp"] = n.lifeMax,
+                        ["x"] = n.Center.X / 16f, ["y"] = n.Center.Y / 16f, ["tick"] = Main.GameUpdateCount }).ToArray()),
                 ["tiles"] = ObserveTiles(p),
                 ["drops"] = AgentTools.Watches.Subscribed("nearby_drop") ? NearbyDrops.Read(AgentTools.Watches.Radius) : null,
                 ["actions"] = AgentTools.Actions.Summary() });
@@ -221,7 +226,7 @@ public class NativeAgent : ModSystem
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
                     e["id"].GetValue<int>() > _lastDangerNotice
                     && (e["kind"].ToString() == "low_health" || !AgentTools.Watches.LocalDelivery
-                        && e["kind"].ToString() is "suffocating" or "player_died"));
+                        && e["kind"].ToString() is "suffocating" or "player_died" or "boss_appeared"));
                 if (danger != null)
                 {
                     _lastDangerNotice = danger["id"].GetValue<int>();
@@ -229,8 +234,12 @@ public class NativeAgent : ModSystem
                         ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2, ["dead"] = p.dead,
                         ["potion_delay_ticks"] = p.potionDelay, ["active_handle"] = AgentTools.Actions.ActiveHandle,
                         ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
-                    _dangerDelivery = _codex.Steer("宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案："
-                        + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
+                    bool bossAppeared = danger["kind"].ToString() == "boss_appeared";
+                    if (bossAppeared) observation["boss"] = danger["evidence"]?.DeepClone();
+                    string instruction = bossAppeared
+                        ? "宿主观察到附近Boss，原目标及进度保留。依据任务、战斗许可与现场，决定交接战斗、调整路线或继续当前行动。调整前核对当前动作句柄。现场："
+                        : "宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案：";
+                    _dangerDelivery = _codex.Steer(instruction + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
                 }
             }
         }
