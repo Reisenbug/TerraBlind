@@ -286,6 +286,10 @@ public sealed class AgentWatch
         return result;
     }
 
+    internal bool HasAdvisories => !LocalDelivery && pending.Any(item =>
+        item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop"
+        && !advised.Contains(item["id"].GetValue<int>()));
+
     public JsonObject Reconsider(string kind, string key, string reason)
     {
         if (kind is not ("nearby_tile" or "nearby_chest" or "nearby_drop") || string.IsNullOrWhiteSpace(key)

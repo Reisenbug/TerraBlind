@@ -135,6 +135,7 @@ public sealed class CodexAgent : IDisposable
     public JsonObject TokenUsage => (JsonObject)_usage?.DeepClone();
     public int UsageUpdates { get; private set; }
     public int TurnsStarted { get; private set; }
+    public int ContextRevision { get; private set; }
 
     internal async Task<bool> Steer(string observation, CancellationToken token)
     {
@@ -221,7 +222,7 @@ public sealed class CodexAgent : IDisposable
         if (_rpc?.Closed == false && _thread != null && _signature == signature) return;
         Dispose();
         _signature = signature;
-        _usage = null; UsageUpdates = TurnsStarted = 0;
+        _usage = null; UsageUpdates = TurnsStarted = ContextRevision = 0;
         lock (_goalGate) { _goal = null; _goalRequest = null; _goalHistory.Clear(); }
         _rpc = _connect(executable, cwd);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -239,6 +240,7 @@ public sealed class CodexAgent : IDisposable
             var config = await _rpc.Request("config/read", new JsonObject { ["includeLayers"] = false }, deadline.Token);
             var overrides = new JsonObject();
             overrides["features.goals"] = false;
+            overrides["model_auto_compact_token_limit"] = 64000;
             if (config["config"]?["mcp_servers"] is JsonObject servers)
                 foreach (var server in servers) overrides[$"mcp_servers.{server.Key}.enabled"] = false;
             var dynamicTools = new JsonArray();
@@ -339,11 +341,13 @@ public sealed class CodexAgent : IDisposable
                     continue;
                 }
                 if (args?["threadId"]?.ToString() != _thread) continue;
+                if (method == "item/completed" && args["item"]?["type"]?.ToString() == "contextCompaction") ContextRevision++;
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
                 if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
                 {
                     if (usage["total"]?["totalTokens"]?.ToString() != _usage?["total"]?["totalTokens"]?.ToString()) UsageUpdates++;
                     _usage = (JsonObject)usage.DeepClone();
+                    DiagLog.Write("[agent-usage] " + usage.ToJsonString());
                     if (_goal?["tokenBudget"] is JsonValue limit && GoalTokens >= limit.GetValue<long>())
                     {
                         await Interrupt(turn);

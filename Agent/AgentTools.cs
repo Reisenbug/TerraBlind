@@ -1866,3 +1866,77 @@ public static partial class AgentTools
             ["text"] = plain[..Math.Min(plain.Length, 6000)], ["text_truncated"] = plain.Length > 6000 };
     }
 }
+
+internal sealed class AgentContext
+{
+    JsonObject previous;
+    internal void Reset() => previous = null;
+
+    static JsonObject Pick(JsonNode value, params string[] fields)
+    {
+        var result = new JsonObject();
+        foreach (string field in fields)
+            if (value?[field] != null) result[field] = value[field].DeepClone();
+        return result;
+    }
+
+    internal JsonObject Capture(JsonObject state)
+    {
+        var current = (JsonObject)state.DeepClone();
+        foreach (string field in new[] { "equipment", "camera", "tiles", "objects", "detected_tiles", "available_recipes", "codex_goal" })
+            current.Remove(field);
+        if (state["inventory_slots"] is JsonArray inventory)
+            current["inventory_slots"] = new JsonArray(inventory.Where(item => item["type"]?.GetValue<int>() > 0)
+                .Select(item => item.DeepClone()).ToArray());
+        if (state["task_plan"] is JsonObject plan)
+        {
+            var brief = Pick(plan, "status", "mode", "revision", "progress_revision", "current_step", "ready_steps");
+            brief["steps"] = new JsonArray((plan["steps"] as JsonArray ?? new JsonArray()).Select(step =>
+            {
+                var item = Pick(step, "id", "description", "status", "depends_on", "conditions");
+                item["script_present"] = !string.IsNullOrWhiteSpace(step["script"]?.ToString());
+                return (JsonNode)item;
+            }).ToArray());
+            current["task_plan"] = brief;
+        }
+        if (state["script_workflows"] is JsonObject workflows)
+        {
+            var brief = new JsonObject();
+            foreach (var workflow in workflows)
+            {
+                var item = Pick(workflow.Value, "revision", "segment", "running", "last_error");
+                item["steps"] = new JsonArray((workflow.Value?["steps"] as JsonArray ?? new JsonArray())
+                    .Select(step => (JsonNode)Pick(step, "id", "status")).ToArray());
+                item["detail_tool"] = "script_progress";
+                brief[workflow.Key] = item;
+            }
+            current["script_workflows"] = brief;
+        }
+        if (state["action_tasks"] is JsonArray actions)
+        {
+            var live = actions.Where(action => action["status"]?.ToString() is "running" or "paused" or "queued").ToArray();
+            current["action_tasks"] = new JsonArray((live.Length > 0 ? live : actions.TakeLast(1)).Select(action =>
+            {
+                var item = Pick(action, "handle", "tool", "status", "attempt", "task_node", "after_handle", "result");
+                if (action["args"] is JsonObject args)
+                {
+                    item["args"] = args.DeepClone();
+                    item["args"].AsObject().Remove("code");
+                }
+                return (JsonNode)item;
+            }).ToArray());
+        }
+        if (state["watch"] is JsonObject watch)
+            current["watch"] = Pick(watch, "pending_count", "events", "passive_events", "radius", "health_below");
+        var changed = new JsonObject();
+        foreach (var field in current)
+            if (previous == null || !previous.ContainsKey(field.Key) || !JsonNode.DeepEquals(previous[field.Key], field.Value))
+                changed[field.Key] = field.Value?.DeepClone();
+        var result = new JsonObject { ["mode"] = previous == null ? "snapshot" : "delta", ["state"] = changed,
+            ["removed"] = new JsonArray(previous == null ? Array.Empty<JsonNode>() : previous.Where(field => !current.ContainsKey(field.Key))
+                .Select(field => (JsonNode)JsonValue.Create(field.Key)).ToArray()),
+            ["detail"] = "state仅更新列出的字段，其余沿用上一份；removed删除字段。完整现场用get_state，动作详情用action_query，脚本进度用script_progress。" };
+        previous = current;
+        return result;
+    }
+}

@@ -19,6 +19,7 @@ static class CodexTests
 
     public static async Task Run()
     {
+        ContextChanges();
         await GoalProtocol();
         await NativeGoalProtocol();
         await NativeBackgroundReview();
@@ -29,7 +30,7 @@ static class CodexTests
         launch.Environment["HTTPS_PROXY"] = "http://explicit:8080";
         CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12346"));
         Check(launch.Environment["HTTPS_PROXY"] == "http://explicit:8080", "explicit proxy was overwritten");
-        var server = new Server();
+        var server = new Server { EmitCompaction = true };
         using var agent = new CodexAgent((_, _) => server.Connect());
         int calls = 0;
         var spoken = new List<string>();
@@ -40,6 +41,8 @@ static class CodexTests
         Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
         Check(agent.TokenUsage["total"]["totalTokens"].GetValue<int>() == 200 && agent.UsageUpdates == 2 && agent.TurnsStarted == 2,
             "Codex usage telemetry did not preserve cumulative token usage across turns");
+        Check(agent.ContextRevision == 2 && server.ThreadArgs["config"]["model_auto_compact_token_limit"]?.GetValue<int>() == 64000,
+            "Codex compaction did not invalidate delta context or use the smaller history threshold");
         Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
             && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
             "game thread did not override instructions/environments/MCP");
@@ -235,6 +238,55 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
+    static void ContextChanges()
+    {
+        var context = new AgentContext();
+        var state = JsonNode.Parse("""
+            {"player":{"hp":240},"inventory_slots":[{"type":191,"stack":1}],
+             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","status":"active","script":"move()","conditions":[{"kind":"position","x":10,"y":20}]}]},
+             "script_workflows":{"walk":{"revision":5,"running":true,"steps":[{"id":"first","status":"completed","value":{"large":"old result"}}]}},
+             "action_tasks":[{"handle":"old","status":"completed","args":{"code":"large old code"}},
+                 {"handle":"live","status":"running","tool":"nav_to","args":{"x":10,"y":20}}],
+             "equipment":{"duplicate_inventory":"large"},"last_death":{"npc_type":222}}
+            """).AsObject();
+        var first = context.Capture(state);
+        Check(first["mode"].ToString() == "snapshot" && first["state"]["task_plan"]["steps"][0]["script"] == null
+            && first["state"]["script_workflows"]["walk"]["steps"][0]["value"] == null
+            && first["state"]["action_tasks"].AsArray().Count == 1 && first["state"]["equipment"] == null,
+            "automatic context repeated completed effects, program source or duplicate inventory");
+        Check(first["state"]["action_tasks"][0]["handle"].ToString() == "live"
+            && first["state"]["last_death"]["npc_type"].GetValue<int>() == 222,
+            "compact context lost live ownership or actual death evidence");
+        state["player"]["hp"] = 70; state["last_death"] = null;
+        var changed = context.Capture(state);
+        Check(changed["mode"].ToString() == "delta" && changed["state"]["player"]["hp"].GetValue<int>() == 70
+            && changed["state"]["inventory_slots"] == null && changed["state"]["task_plan"] == null
+            && changed["state"].AsObject().ContainsKey("last_death") && changed["state"]["last_death"] == null,
+            "delta resent stable sections or retained a cleared danger fact");
+        Check(state["task_plan"]["steps"][0]["script"].ToString() == "move()",
+            "model context altered host-owned task source");
+        context.Reset();
+        Check(context.Capture(state)["mode"].ToString() == "snapshot", "compaction did not restore the current host snapshot");
+        Console.WriteLine("PASS: model context emits bounded summaries and changed sections while retaining live evidence");
+        if (Environment.GetEnvironmentVariable("TB_CONTEXT_REPLAY") is string recording)
+        {
+            context.Reset();
+            long before = 0, after = 0, next = 0; int samples = 0;
+            foreach (string line in File.ReadLines(recording))
+            {
+                var sample = JsonNode.Parse(line);
+                long time = sample["elapsed_ms"].GetValue<long>();
+                if (time < next) continue;
+                next = time + 15000;
+                var full = sample["state"].AsObject();
+                before += full.ToJsonString(AgentTools.ModelJson).Length;
+                after += context.Capture(full).ToJsonString(AgentTools.ModelJson).Length;
+                samples++;
+            }
+            Console.WriteLine($"CONTEXT_REPLAY samples={samples} original_chars={before} delta_chars={after}");
+        }
+    }
+
     static async Task NativeBackgroundReview()
     {
         var native = new NativeAgent();
@@ -245,12 +297,13 @@ static class CodexTests
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             .SetValue(native, new CodexAgent((_, _) => server.Connect()));
         string handle = null;
+        Terraria.Main.LocalPlayer.position = new(1600, 1600);
         HttpServerSystem.Handler = (_, _) => (200, "{\"done\":false}");
         server.AfterTool = calls =>
         {
             if (calls == 1) _ = NativeAgent.OnMain(() =>
             {
-                handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 200, ["y"] = 100 }, default)["handle"].ToString();
+                handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString();
                 return true;
             }, default);
         };
@@ -261,7 +314,7 @@ static class CodexTests
             while (server.Inputs.Count < 2)
             {
                 Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
-                Terraria.Main.LocalPlayer.position.X += 1;
+                Terraria.Main.LocalPlayer.position.X += .25f;
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(server.Inputs[1].Contains("并行观察") && AgentTools.Actions.ActiveHandle == handle,
@@ -269,6 +322,34 @@ static class CodexTests
             var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
                 "background review paused or restarted navigation");
+            var quietUntil = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < quietUntil)
+            {
+                Terraria.Main.LocalPlayer.position.X += .25f;
+                native.PostUpdateEverything(); await Task.Delay(5);
+                Check(server.Inputs.Count == 2, "unchanged background action caused another periodic model request: "
+                    + AgentTools.Actions.Summary().ToJsonString() + " input=" + server.Inputs.Last()[..Math.Min(1000, server.Inputs.Last().Length)]);
+            }
+            AgentTools.Watches.Emit("low_health", "measured-low-health", new JsonObject { ["hp"] = 20 });
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (server.Inputs.Count < 3)
+            {
+                Check(DateTime.UtcNow < deadline, "low health did not wake the waiting model");
+                Terraria.Main.LocalPlayer.position.X += .25f;
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(AgentTools.Actions.ActiveHandle == handle, "health notification paused the ongoing action");
+            AgentTools.Watches.Emit("nearby_chest", "new-chest", new JsonObject { ["x"] = 10, ["y"] = 20 });
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (server.Inputs.Count < 4)
+            {
+                Check(DateTime.UtcNow < deadline, "new passive resource did not wake the waiting model");
+                Terraria.Main.LocalPlayer.position.X += .25f;
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            for (int i = 0; i < 50; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Inputs.Count == 4 && !AgentTools.Watches.HasAdvisories && AgentTools.Actions.ActiveHandle == handle,
+                "reported resource repeatedly woke the model or stopped navigation");
         }
         finally
         {
@@ -588,7 +669,7 @@ static class CodexTests
         readonly Lines _input = new();
         public int Threads, Interrupts;
         int _turn;
-        public bool Stopped, LoggedIn = true, FailTurn;
+        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction;
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
@@ -628,6 +709,8 @@ static class CodexTests
                 _turn++;
                 Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });
                 if (FailTurn) { Completed("failed"); return; }
+                if (EmitCompaction) Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
                 Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "tool" + _turn, ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
             }

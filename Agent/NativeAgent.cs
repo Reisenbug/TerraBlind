@@ -283,7 +283,17 @@ public class NativeAgent : ModSystem
             try
             {
                 await _goalStopping.WaitAsync(token);
-                string state = await AgentTools.State(token);
+                var modelContext = new AgentContext();
+                int contextRevision = 0;
+                async Task<string> Context()
+                {
+                    if (useCodex && contextRevision != codex.ContextRevision)
+                    { modelContext.Reset(); contextRevision = codex.ContextRevision; }
+                    string result = modelContext.Capture(JsonNode.Parse(await AgentTools.State(token)).AsObject()).ToJsonString(AgentTools.ModelJson);
+                    DiagLog.Write($"[agent-context] chars={result.Length} revision={contextRevision}");
+                    return result;
+                }
+                string state = await Context();
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
                 string input = goal + "\n现状：" + state;
                 long recoverySession = -1;
@@ -306,26 +316,31 @@ public class NativeAgent : ModSystem
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
                     string preparingHandle = AgentTools.Actions.ActiveHandle;
-                    bool prepareNext = preparingHandle != null && preparingHandle != preparedHandle
-                        && await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token);
-                    double reviewDelay = prepareNext ? 0 : 15;
-                    while (!reviewRequested && backgroundReview.Elapsed.TotalSeconds < reviewDelay
+                    bool prepareNext = preparingHandle != null && preparingHandle != preparedHandle;
+                    double reviewDelay = await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token) ? 0 : 15;
+                    while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
-                        && !AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasHealthNotice, token))
+                        && !AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
+                    {
                         await Task.Delay(100, token);
-                    if (!reviewRequested && (backgroundReview.Elapsed.TotalSeconds >= reviewDelay
-                        || await OnMain(() => AgentTools.Watches.HasHealthNotice, token))
+                        preparingHandle = AgentTools.Actions.ActiveHandle;
+                        prepareNext = preparingHandle != null && preparingHandle != preparedHandle;
+                    }
+                    if (!reviewRequested && (prepareNext
+                        || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))
                         && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
                     {
                         preparedHandle = preparingHandle;
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
-                        input = "原目标：" + goal + "\n后台动作仍在执行，本轮是并行观察，没有暂停输入。"
+                        var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
+                        input = "继续原目标。后台动作仍在执行，本轮是并行观察，没有暂停输入。"
                             + "低血量仅唤醒观察，不能因此暂停、取消原动作或原地等回血；继续行动并调整后续方案，任务明确规定死亡限制时才按其限制处理。\n健康通知：" + healthNotices.ToJsonString()
+                            + "\n新增沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
                             + "本轮优先准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到task_plan_patch的可执行script。"
                             + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
                             + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"
                             + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
-                            + await AgentTools.State(token);
+                            + await Context();
                         await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle); return true; }, token);
                         continue;
                     }
@@ -338,14 +353,14 @@ public class NativeAgent : ModSystem
                         var events = await OnMain(() => AgentTools.Watches.Take(8), token);
                         input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
-                            + "\n现状：" + await AgentTools.State(token);
+                            + "\n现状：" + await Context();
                         continue;
                     }
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
                         while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
-                        input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
+                        input = "继续原目标。刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await Context();
                         continue;
                     }
                     bool canContinue = await OnMain(() => AgentTools.Plan.Incomplete
@@ -367,14 +382,14 @@ public class NativeAgent : ModSystem
                     {
                         input = "原目标：" + goal + "\n最近工具失败，先修正实际错误，再继续原任务。参数歧义请选返回的精确internal重试，缺来源请换区域；不能把错误打印出来就结束。"
                             + "长导航不因耗时失败，不重复启动已有句柄。修复最多3轮，同一失败参数最多3次。\n失败证据与完整候选："
-                            + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString() + "\n现状：" + await AgentTools.State(token);
+                            + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString(AgentTools.ModelJson) + "\n现状：" + await Context();
                         continue;
                     }
                     bool discovered = await OnMain(() => AgentTools.DiscoveryRevision > discoveriesBefore, token);
                     if (canContinue && (progressed || discovered && preparationContinuations++ < 4 || noProgressContinuations++ < 1))
                     {
                         input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作。\n现状："
-                            + await AgentTools.State(token);
+                            + await Context();
                         continue;
                     }
                     if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
@@ -384,7 +399,7 @@ public class NativeAgent : ModSystem
                         input = "原目标：" + goal + "\n目标尚未通过宿主验收，继续执行。不要结束等待玩家resume。"
                             + "已有后台动作则等待它或处理真实事件；已失败动作依据最新证据换方案，不重放相同失败参数。"
                             + "当前步骤blocked不等于永久放弃：调查实际阻塞，修复后继续原计划，不清空既有进度。"
-                            + "普通探索按已有权限处理可达障碍；只有必须由玩家决定的问题才ask。\n现状：" + await AgentTools.State(token);
+                            + "普通探索按已有权限处理可达障碍；只有必须由玩家决定的问题才ask。\n现状：" + await Context();
                         continue;
                     }
                     JsonObject report;
