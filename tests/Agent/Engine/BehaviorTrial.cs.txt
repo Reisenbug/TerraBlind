@@ -453,6 +453,44 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_VEIN_COLLECTION_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset(); Concessions.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, floorRow = Main.spawnTileY;
+                for (int tx = x - 10; tx <= x + 10; tx++)
+                for (int ty = floorRow - 8; ty <= floorRow + 2; ty++)
+                {
+                    Main.tile[tx, ty].ClearEverything();
+                    if (ty >= floorRow) WorldGen.PlaceTile(tx, ty, TileID.Stone, mute: true, forced: true);
+                }
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[3].SetDefaults(ItemID.LeadOre); p.inventory[3].stack = 5;
+                p.position = new Vector2(x * 16, floorRow * 16 - p.height); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                for (int tx = x + 2; tx <= x + 3; tx++) WorldGen.PlaceTile(tx, floorRow - 2, TileID.Lead, mute: true, forced: true);
+                sourceInputSamples.Clear(); samplingSources = true;
+                return true;
+            });
+            var veinClock = Stopwatch.StartNew();
+            var veinProof = await Call("mine_vein", new JsonObject { ["name"] = "Lead", ["count"] = 7 });
+            veinProof["actual_inventory"] = await OnMain(() =>
+            {
+                samplingSources = false;
+                File.WriteAllLines(Path.Combine(Main.SavePath, "vein-inputs.csv"), sourceInputSamples);
+                return Main.LocalPlayer.inventory.Where(item => item.type == ItemID.LeadOre).Sum(item => item.stack);
+            });
+            veinProof["trial_elapsed_ms"] = veinClock.ElapsedMilliseconds;
+            File.WriteAllText(Path.Combine(Main.SavePath, "vein-collection.json"), veinProof.ToJsonString());
+            if (veinProof["ok"]?.GetValue<bool>() != true || veinProof["actual_inventory"].GetValue<int>() < 7
+                || veinProof["targets"]?[0]?["inventory_delta"]?.GetValue<int>() < 2)
+                throw new Exception("native additional ore inventory not collected: " + veinProof);
+            Console.WriteLine("VEIN_COLLECTION_PASS native_inventory=true initial=5 target=7 " + veinProof);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_MINING_DEFENSE_PROBE") == "1")
         {
             var stages = new JsonArray();
