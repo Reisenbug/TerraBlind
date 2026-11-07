@@ -632,6 +632,14 @@ static class ScriptTests
             && hazard["result"]["navigation"]["trap_tiles"][0]["y"].GetValue<int>() == 527,
             "script yield discarded the failed target and the exact trap that stopped collection");
         var decisionProgress = new ScriptProgress();
+        var blockedPlacement = await AgentScript.Run("step('floor',()=>tool('place_at'));", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("""
+                {"ok":false,"outcome":"stuck","placed":0,"wanted":1,"cells":[{"error":"placement_target_occupied",
+                 "world":[931,507],"expected_tile":30,"actual_tile":{"type":85,"frame_x":0,"frame_y":18}}]}
+                """), _ => Task.CompletedTask, default, new ScriptProgress());
+        Check(blockedPlacement["failure"]?["evidence"]?["last_cell"]?["actual_tile"]?["type"]?.GetValue<int>() == 85
+            && blockedPlacement["failure"]["evidence"]["placed"].GetValue<int>() == 0,
+            "script failure handoff lost the specific object occupying the construction cell");
         var stalledProgress = new ScriptProgress();
         var stalledNavigation = await AgentScript.Run("step('walk',()=>tool('nav_to',{x:20,y:30}));", 5, (_, _) => { },
             (_, _, _) => Task.FromResult("""

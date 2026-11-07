@@ -614,7 +614,11 @@ static class RuntimeTests
                 Game.tile[10, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 59 };
                 var wrong = JsonNode.Parse(await Execute(AgentTools.Execute("place_at", new JsonObject { ["item"] = "36" }, default)));
                 Check(wrong["outcome"].ToString() == "stuck" && wrong["placed"].GetValue<int>() == 0
-                    && wrong["cells"][0]["error"].ToString() == "placement_not_verified", "unrelated occupied tile counted as placed workstation");
+                    && wrong["ok"]?.GetValue<bool>() == false
+                    && wrong["cells"][0]["error"].ToString() == "placement_target_occupied", "unrelated occupied tile counted as placed workstation");
+                Check(wrong["cells"][0]["actual_tile"]["type"].GetValue<int>() == 59
+                    && wrong["cells"][0]["expected_tile"].GetValue<int>() == 18,
+                    "occupied placement lost the actual object and requested tile needed for recovery");
                 Game.tile[10, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 18 };
                 var correct = JsonNode.Parse(await Execute(AgentTools.Execute("place_at", new JsonObject { ["item"] = "36" }, default)));
                 Check(correct["outcome"].ToString() == "done" && correct["cells"][0]["verified"].GetValue<bool>(),

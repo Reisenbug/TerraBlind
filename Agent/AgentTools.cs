@@ -1722,14 +1722,27 @@ public static partial class AgentTools
                     bool verified = inWorld && (expectedTile >= 0 && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == expectedTile
                         || expectedWall > 0 && Main.tile[x, y].WallType == expectedWall);
                     result["world"] = placement["world"]?.DeepClone(); result["verified"] = verified;
-                    if (!verified) { result["outcome"] = "stuck"; result["error"] = "placement_not_verified"; }
+                    if (!verified)
+                    {
+                        bool occupied = inWorld && Main.tile[x, y].HasTile;
+                        result["outcome"] = "stuck";
+                        result["error"] = occupied ? "placement_target_occupied" : "placement_not_verified";
+                        result["expected_tile"] = expectedTile; result["expected_wall"] = expectedWall;
+                        result["actual_tile"] = occupied ? new JsonObject { ["type"] = (int)Main.tile[x, y].TileType,
+                            ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY,
+                            ["solid"] = Main.tileSolid[Main.tile[x, y].TileType] } : null;
+                        result["actual_wall"] = inWorld ? Main.tile[x, y].WallType : -1;
+                        result["detail"] = occupied ? "目标格已有其他方块或物件，actual_tile记录现场；按建造方案处理占位物或改选坐标后继续。"
+                            : "放置执行器已结束，目标格尚未出现所需方块；结合实际坐标及地形重新检查。";
+                    }
                     return result;
                 }, token);
             cells.Add(result);
             if (Text(result, "outcome") != "done") break;
             placed++;
         }
-        return new JsonObject { ["outcome"] = placed == count ? "done" : placed > 0 ? "partial" : "stuck", ["placed"] = placed, ["wanted"] = count, ["cells"] = cells };
+        return new JsonObject { ["ok"] = placed == count, ["outcome"] = placed == count ? "done" : placed > 0 ? "partial" : "stuck",
+            ["placed"] = placed, ["wanted"] = count, ["cells"] = cells };
     }
 
     static async Task<JsonObject> MineVein(JsonObject args, CancellationToken token)
