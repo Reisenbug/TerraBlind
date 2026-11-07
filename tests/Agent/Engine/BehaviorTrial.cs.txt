@@ -444,6 +444,92 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CRYSTAL_HANDOFF_TRIAL") == "1")
+        {
+            Point first = default, second = default;
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                var hearts = new List<Point>();
+                for (int x = 20; x < Main.maxTilesX - 20; x++)
+                for (int y = (int)Main.worldSurface + 12; y < Main.maxTilesY - 210; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    if (!tile.HasTile || tile.TileType != TileID.Heart || tile.TileFrameX % 36 != 0 || tile.TileFrameY != 0) continue;
+                    var position = new Vector2(x * 16 + 16 - p.width / 2f, (y + 2) * 16 - p.height);
+                    if (Collision.SolidCollision(position, p.width, p.height)
+                        || Collision.TileCollision(position, new Vector2(0, 2), p.width, p.height).Y >= 2) continue;
+                    int grass = 0;
+                    for (int tx = x - 12; tx <= x + 12; tx++)
+                    for (int ty = y - 12; ty <= y + 12; ty++)
+                        if (Main.tile[tx, ty].HasTile && Main.tile[tx, ty].TileType == TileID.JungleGrass) grass++;
+                    if (grass >= 20) hearts.Add(new Point(x, y));
+                }
+                var pair = (from a in hearts from b in hearts
+                    let distance = Vector2.Distance(a.ToVector2(), b.ToVector2())
+                    where Math.Abs(a.X - b.X) >= 12 && distance is >= 20 and <= 80
+                    orderby distance select (a, b)).First();
+                first = pair.a; second = pair.b;
+                for (int i = 0; i < p.inventory.Length; i++) p.inventory[i].TurnToAir();
+                for (int i = 0; i < p.armor.Length; i++) p.armor[i].TurnToAir();
+                p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 9999;
+                p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 500;
+                p.selectedItem = 1; p.itemAnimation = p.itemTime = 0;
+                p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+                p.position = new Vector2(first.X * 16 + 16 - p.width / 2f, (first.Y + 2) * 16 - p.height);
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                p.AddBuff(BuffID.Gills, 3600); p.AddBuff(BuffID.Shine, 3600);
+                Main.screenPosition = p.Center - new Vector2(Main.screenWidth, Main.screenHeight) / 2;
+                Console.WriteLine($"CRYSTAL_HANDOFF_SOURCE first={first} second={second} natural=true navigation_stub=false");
+                return true;
+            });
+            using var cancel = new CancellationTokenSource();
+            string handoffCode = $"const r=tool('gather',{{targets:[{{item_type:29,count:1,tile_names:['Heart']}}],source_area:{{x:{first.X - 1},y:{first.Y - 1},width:4,height:4}}}});if(!r.ok)throw new Error(JSON.stringify(r));return tool('nav_to',{{x:{second.X},y:{second.Y},mode:'interact'}});";
+            var clock = Stopwatch.StartNew();
+            var operation = AgentTools.Execute("run_script", new JsonObject { ["code"] = handoffCode }, cancel.Token);
+            var samples = new JsonArray();
+            long pickup = -1, request = -1, fieldReady = -1;
+            try
+            {
+                for (int i = 0; i < 1800; i++)
+                {
+                    var sample = await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        bool secondRoute = RecedingNav.Active
+                            && (int)typeof(RecedingNav).GetField("_goalWx", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).GetValue(null) == second.X
+                            && (int)typeof(RecedingNav).GetField("_goalWy", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).GetValue(null) == second.Y;
+                        return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
+                            ["crystals"] = p.inventory.Where(it => it.type == ItemID.LifeCrystal).Sum(it => it.stack),
+                            ["x"] = p.position.X, ["y"] = p.position.Y, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
+                            ["second_route"] = secondRoute, ["field_ready"] = (bool)typeof(RecedingNav).GetField("_fieldReady", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).GetValue(null) };
+                    });
+                    samples.Add(sample);
+                    long elapsed = sample["elapsed_ms"].GetValue<long>();
+                    if (pickup < 0 && sample["crystals"].GetValue<int>() > 0) pickup = elapsed;
+                    if (sample["second_route"].GetValue<bool>())
+                    {
+                        if (request < 0) request = elapsed;
+                        if (sample["field_ready"].GetValue<bool>() && fieldReady < 0) fieldReady = elapsed;
+                        if (pickup >= 0 && Math.Abs(sample["vx"].GetValue<float>()) > .01f)
+                        {
+                            Console.WriteLine($"CRYSTAL_HANDOFF_PASS pickup_ms={pickup} request_after_pickup_ms={request - pickup} field_after_pickup_ms={fieldReady - pickup} movement_after_pickup_ms={elapsed - pickup} model_calls=0");
+                            return;
+                        }
+                    }
+                    if (operation.IsCompleted) throw new Exception("crystal sequence ended before second movement: " + await operation);
+                }
+                throw new Exception("crystal handoff did not start moving within 1800 frames");
+            }
+            finally
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "crystal-handoff.json"), samples.ToJsonString());
+                cancel.Cancel();
+                try { await operation; } catch (OperationCanceledException) { }
+            }
+        }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_STAND_TRIAL") is string standCase)
         {
             int gx = 0, gy = 0;
