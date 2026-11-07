@@ -179,6 +179,7 @@ namespace TerraBlind
 			if (!Enabled || !AgentPermissions.Attack) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
+			if (FightCoordinator.HoldingFallProtection(p)) { Last = "fall protection"; return; }
 			if (BossOnField())
 			{
 				if (Dodge.TryAttackBoss(p, out var bossAim))

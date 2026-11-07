@@ -39,6 +39,10 @@ namespace TerraBlind
         internal static bool CanHitTarget(Player player, Item weapon, Vector2 target)
             => !NeedsClearLine(weapon) || Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
 
+        internal static bool HoldingFallProtection(Player player)
+            => player.velocity.Y * player.gravDir > 0
+                && player.HeldItem.type is ItemID.Umbrella or ItemID.TragicUmbrella;
+
         internal static (int Direction, bool Jump, bool Apply) Evade(Player p, NPC target = null, bool projectilesOnly = false)
         {
             bool blocked = target != null && NeedsClearLine(p.HeldItem)
@@ -147,6 +151,12 @@ namespace TerraBlind
         internal static void Tick(Player p, bool processing, bool primaryItemUse = false)
         {
             AimTarget = null;
+            if (HoldingFallProtection(p))
+            {
+                _animationSlot = -1; _animationTarget = null;
+                _usingItem = _idleDefense = _evading = false;
+                return;
+            }
             bool evading = false;
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive

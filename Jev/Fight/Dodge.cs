@@ -117,6 +117,7 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }
+			if (FightCoordinator.HoldingFallProtection(p)) { Gate("fall protection"); return; }
 			if (Manual.On) { Gate("人工"); Release(); return; }
 			if (Main.gameMenu || Main.playerInventory) { Gate("paused"); _movement.Release(p); return; }
 			bool manualInput = p.controlLeft || p.controlRight || p.controlUp || p.controlDown
@@ -234,6 +235,7 @@ namespace TerraBlind
 
 		static bool SelectWeapon(Player p)
 		{
+			if (FightCoordinator.HoldingFallProtection(p)) return false;
 			if (CombatLoadout.PreferredType <= 0) { _attack.SelectFirstWeapon(p); return true; }
 			int slot = CombatLoadout.Select(p);
 			if (slot < 0) return false;

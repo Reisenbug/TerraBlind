@@ -453,6 +453,63 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_FALL_ITEM_PROBE") == "1")
+        {
+            int driven = 0, wrongSlot = 0, startHp = 0, endHp = 0;
+            var samples = new JsonArray();
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                AgentPermissions.Reset(); AgentPermissions.Dodge = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, y = Main.spawnTileY;
+                for (int tx = x - 10; tx <= x + 12; tx++)
+                for (int ty = y - 30; ty <= y + 2; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                foreach (var item in p.armor) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.ThornChakram); p.inventory[1].SetDefaults(ItemID.Umbrella);
+                p.position = new Vector2(x * 16, y * 16 - p.height - 200); p.velocity = new Vector2(0, 10);
+                p.fallStart = p.fallStart2 = y - 80; p.statLife = startHp = 100;
+                p.selectedItem = 1; p.itemAnimation = p.itemTime = 0;
+                target = NPC.NewNPC(new EntitySource_Misc("fall-item-probe"), (x + 6) * 16, y * 16 - 40, NPCID.BlueSlime);
+                Main.npc[target].damage = 0;
+                CombatLoadout.PreferredType = ItemID.ThornChakram;
+                FightCoordinator.Start(20); FightCoordinator.Tick(p);
+                if (p.selectedItem != 1) throw new Exception("thinking defense replaced fall-protection item");
+                Combat.Enabled = true; Combat.Tick();
+                if (p.selectedItem != 1) throw new Exception("legacy attack replaced fall-protection item");
+                Main.npc[target].boss = true;
+                Dodge.TryAttackBoss(p, out _);
+                if (p.selectedItem != 1) throw new Exception("boss attack replaced fall-protection item");
+                Main.npc[target].boss = false;
+                BoundaryInputPlayer.Drive = player =>
+                {
+                    if (driven >= 90) return;
+                    if (player.velocity.Y > 0)
+                    {
+                        player.selectedItem = 1; player.controlDown = true; player.controlUseItem = false;
+                        FightCoordinator.Tick(player);
+                        if (player.selectedItem != 1) wrongSlot++;
+                    }
+                    samples.Add(new JsonObject { ["frame"] = driven, ["y"] = player.position.Y,
+                        ["vy"] = player.velocity.Y, ["hp"] = player.statLife, ["slot"] = player.selectedItem,
+                        ["animation"] = player.itemAnimation, ["fall_start"] = player.fallStart });
+                    endHp = player.statLife; driven++;
+                };
+                return true;
+            });
+            try { while (driven < 90) await Task.Delay(20); }
+            finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; Combat.Enabled = false; FightCoordinator.Stop(); return true; }); }
+            File.WriteAllText(Path.Combine(Main.SavePath, "fall-item.json"), new JsonObject
+                { ["hp_before"] = startHp, ["hp_after"] = endHp, ["wrong_slot_frames"] = wrongSlot, ["samples"] = samples }.ToJsonString());
+            if (endHp != startHp || wrongSlot > 0) throw new Exception($"fall item failed hp={endHp}/{startHp} wrong_slot={wrongSlot}");
+            Console.WriteLine("FALL_ITEM_PASS native_physics=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_HONEY_SAFETY_PROBE") == "1")
         {
             var cases = new JsonArray();

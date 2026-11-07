@@ -273,6 +273,19 @@ static class GatherTests
             FightCoordinator.Tick(p, true, true);
             Check(p.selectedItem == 0 && !FightCoordinator.AimTarget.HasValue,
                 "completed attack animation did not restore mining");
+            var oldVelocity = p.velocity;
+            try
+            {
+                p.inventory[2] = new Item { type = Terraria.ID.ItemID.Umbrella, stack = 1 };
+                p.velocity = new(0, 10); p.selectedItem = 2; p.controlDown = true; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 2 && p.controlDown && !p.controlUseItem,
+                    "automatic defense replaced the umbrella or its falling controls");
+                p.velocity = default; p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "defense did not resume after landing");
+            }
+            finally { p.velocity = oldVelocity; p.controlDown = false; }
         }
         finally
         {
