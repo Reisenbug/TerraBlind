@@ -224,6 +224,9 @@ namespace TerraBlind
 					for (int row = y - AsideRows; row <= y + AsideRows; row++)
 					{
 						if (!Predicates.IsSolid(col, row + 1)) continue;   // 脚下要有地
+						var position = new Microsoft.Xna.Framework.Vector2(col * 16f + 8f - p.width / 2f,
+							(row + 1) * 16f - p.height);
+						if (Collision.SolidCollision(position, p.width, p.height)) continue;
 						if (WouldOverlap(p, col, row, x, y)) continue;     // 站上去还压着目标就白搭
 						if (!ReachesFrom(p, col, row, x, y)) continue;     // 站上去够不着也白搭
 						int d = System.Math.Abs(col - cx) + System.Math.Abs(row - y);
