@@ -407,29 +407,35 @@ public static partial class AgentTools
         return state.ToJsonString(ModelJson);
     }, token);
 
-    static JsonObject BossStatus() => new()
+    static JsonObject BossStatus(bool fresh = false)
     {
-        ["attack_enabled"] = Combat.Enabled, ["movement_enabled"] = Dodge.Enabled,
-        ["attack_permitted"] = AgentPermissions.Attack, ["movement_permitted"] = AgentPermissions.Dodge,
-        ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
-        ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory ? "inventory_open" : null,
-        ["movement_reserve_scale"] = Dodge.MovementReserveScale,
-        ["movement_snapshot"] = Dodge.Snapshot is { } movement ? new JsonObject
+        var movement = fresh ? new JevariaCombat.GameSensor { MovementReserveScale = Dodge.MovementReserveScale }
+            .Capture(Main.LocalPlayer, 0, JevariaCombat.DodgeIntent.Idle, 0) : Dodge.Snapshot;
+        return new JsonObject
         {
-            ["captured_tick"] = movement.Tick, ["reserve_scale"] = movement.MovementReserveScale,
-            ["solid_room_tiles"] = new JsonObject { ["left"] = movement.SolidDistances.Left / 16,
-                ["right"] = movement.SolidDistances.Right / 16, ["up"] = movement.SolidDistances.Up / 16, ["down"] = movement.SolidDistances.Down / 16 },
-            ["options"] = new JsonArray(movement.AvailableActions.Select(option => (JsonNode)new JsonObject
-                { ["direction"] = option.Intent.Direction.ToString(), ["horizontal"] = option.Intent.HorizontalSize.ToString(),
-                    ["vertical"] = option.Intent.VerticalSize.ToString() }).ToArray())
-        } : null,
-        ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
-        ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
-        ["other_key_sources"] = "not_checked",
-        ["active_bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0)
-            .Select(n => (JsonNode)new JsonObject { ["type"] = n.type, ["hp"] = n.life,
-                ["x"] = n.Center.X, ["y"] = n.Center.Y }).ToArray())
-    };
+            ["attack_enabled"] = Combat.Enabled, ["movement_enabled"] = Dodge.Enabled,
+            ["attack_permitted"] = AgentPermissions.Attack, ["movement_permitted"] = AgentPermissions.Dodge,
+            ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
+            ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory ? "inventory_open" : null,
+            ["movement_reserve_scale"] = Dodge.MovementReserveScale,
+            ["movement_snapshot"] = movement != null ? new JsonObject
+            {
+                ["source"] = fresh ? "live_preview" : "jev_request",
+                ["captured_tick"] = movement.Tick, ["reserve_scale"] = movement.MovementReserveScale,
+                ["solid_room_tiles"] = new JsonObject { ["left"] = movement.SolidDistances.Left / 16,
+                    ["right"] = movement.SolidDistances.Right / 16, ["up"] = movement.SolidDistances.Up / 16, ["down"] = movement.SolidDistances.Down / 16 },
+                ["options"] = new JsonArray(movement.AvailableActions.Select(option => (JsonNode)new JsonObject
+                    { ["direction"] = option.Intent.Direction.ToString(), ["horizontal"] = option.Intent.HorizontalSize.ToString(),
+                        ["vertical"] = option.Intent.VerticalSize.ToString() }).ToArray())
+            } : null,
+            ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
+            ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
+            ["other_key_sources"] = "not_checked",
+            ["active_bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0)
+                .Select(n => (JsonNode)new JsonObject { ["type"] = n.type, ["hp"] = n.life,
+                    ["x"] = n.Center.X, ["y"] = n.Center.Y }).ToArray())
+        };
+    }
 
     static Task<JsonObject> ObserveAction(CancellationToken token) => NativeAgent.OnMain(() =>
     {
@@ -1231,11 +1237,11 @@ public static partial class AgentTools
                     if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); PlayerCombat.Stop(); }
                     return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack,
                         ["weapon_type"] = CombatLoadout.PreferredType,
-                        ["boss_control"] = BossStatus() };
+                        ["boss_control"] = BossStatus(fresh: true) };
                 }, token);
                 break;
             case "boss_status":
-                return (await NativeAgent.OnMain(BossStatus, token)).ToJsonString();
+                return (await NativeAgent.OnMain(() => BossStatus(fresh: true), token)).ToJsonString();
             case "track":
                 result = await NativeAgent.OnMain(() =>
                 {

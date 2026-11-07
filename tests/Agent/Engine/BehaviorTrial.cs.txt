@@ -730,6 +730,17 @@ public sealed class BehaviorTrial : ModSystem
                     Console.WriteLine("BOSS_NOTICE_PASS " + evidence);
                     return;
                 }
+                var defaultPreview = await Call("set_combat", new JsonObject { ["movement_reserve_scale"] = 1d });
+                var compactPreview = await Call("set_combat", new JsonObject { ["movement_reserve_scale"] = .075 });
+                report["live_previews"] = new JsonObject { ["default"] = defaultPreview["boss_control"]?.DeepClone(),
+                    ["compact"] = compactPreview["boss_control"]?.DeepClone() };
+                bool Lateral(JsonNode preview) => preview?["boss_control"]?["movement_snapshot"]?["options"] is JsonArray options
+                    && options.Any(option => option["direction"]?.ToString().Contains("Left") == true
+                        || option["direction"]?.ToString().Contains("Right") == true);
+                if (defaultPreview["boss_control"]?["movement_snapshot"]?["source"]?.ToString() != "live_preview"
+                    || Lateral(defaultPreview) || !Lateral(compactPreview)
+                    || compactPreview["boss_control"]?["movement_snapshot"]?["source"]?.ToString() != "live_preview")
+                    throw new Exception("Boss status returned stale or inconsistent movement options: " + report);
                 report["restored_reserve"] = await OnMain(() => { AgentTools.Stop(); return Dodge.MovementReserveScale; });
                 File.WriteAllText(Path.Combine(Main.SavePath, "hive-room.json"), report.ToJsonString());
                 if (Math.Abs(report["actual_controller_snapshot"]["reserve_scale"].GetValue<float>() - .075f) > .0001f
