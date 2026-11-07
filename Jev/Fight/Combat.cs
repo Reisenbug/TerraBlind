@@ -92,7 +92,7 @@ namespace TerraBlind
 			   && !(npc.lifeMax <= 5 && npc.damage == 0);
 
 		// 小怪优先
-		static int Worst(Player p, out int cx, out int cy, out int dist)
+		static int Worst(Player p, Item weapon, out int cx, out int cy, out int dist)
 		{
 			int wall = WallBody();
 			if (wall >= 0)
@@ -103,12 +103,12 @@ namespace TerraBlind
 					 + System.Math.Abs(cy - (int)(p.Center.Y / 16f));
 				return wall;
 			}
-			int n = Pick(p, false, out cx, out cy, out dist);
-			return n >= 0 ? n : Pick(p, true, out cx, out cy, out dist);
+			int n = Pick(p, weapon, false, out cx, out cy, out dist);
+			return n >= 0 ? n : Pick(p, weapon, true, out cx, out cy, out dist);
 		}
 
 		// bossPass=false 只看小怪(有射程限制);true 只看 boss(不限射程,它会飞远再冲回来)
-		static int Pick(Player p, bool bossPass, out int cx, out int cy, out int dist)
+		static int Pick(Player p, Item weapon, bool bossPass, out int cx, out int cy, out int dist)
 		{
 			cx = cy = 0; dist = 0;
 			int best = -1;
@@ -121,6 +121,7 @@ namespace TerraBlind
 			{
 				var npc = Main.npc[i];
 				if (!Hostile(npc)) continue;
+				if (!FightCoordinator.CanHitTarget(p, weapon, npc.Center)) continue;
 				// 毁灭者只有头带 boss 标志,身体算小怪就被 30 格射程滤掉
 				if ((npc.boss || DestroyerSegment(npc.type)) != bossPass) continue;
 				// 毁灭者打最近的体节
@@ -189,7 +190,9 @@ namespace TerraBlind
 			}
 			Dodge.EndBossAttack(p);
 
-			int n = Worst(p, out int tcx, out int tcy, out int dist);
+			int slot = CombatLoadout.Select(p);
+			if (slot < 0) { Last = "no weapon"; Release(); return; }
+			int n = Worst(p, p.inventory[slot], out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "no enemies"; _target = -1; Release(); return; }
 
 			// 【有目标就打,不问 Jev】。问的是"要不要停下赶路",boss 战里它对探测器和手答了 36% 的 Ignore,
@@ -214,10 +217,6 @@ namespace TerraBlind
 
 			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); Release(); return; }
 			_noFire = "";
-
-			int slot = CombatLoadout.Select(p);
-			if (slot < 0)
-			{ Last = "no weapon"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
 			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
 			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))

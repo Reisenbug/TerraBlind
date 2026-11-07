@@ -453,6 +453,61 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_WALL_ATTACK_PROBE") == "1")
+        {
+            var proof = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                AgentPermissions.Reset(); AgentPermissions.Dodge = false; Concessions.Enabled = false;
+                Combat.Enabled = true; Dodge.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, y = Main.spawnTileY;
+                for (int tx = x - 4; tx <= x + 12; tx++)
+                for (int ty = y - 12; ty <= y + 2; ty++)
+                {
+                    Main.tile[tx, ty].ClearEverything();
+                    if (ty >= y || tx == x + 3) WorldGen.PlaceTile(tx, ty, TileID.Stone, mute: true, forced: true);
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.ThornChakram); p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                p.position = new Vector2(x * 16, y * 16 - p.height); p.velocity = Vector2.Zero;
+                p.statMana = p.statManaMax2 = 200; p.itemAnimation = p.itemTime = 0;
+                int who = NPC.NewNPC(new EntitySource_Misc("wall-attack-probe"), (x + 7) * 16, y * 16, NPCID.BlueSlime);
+                var enemy = Main.npc[who]; enemy.velocity = Vector2.Zero;
+                if (Collision.CanHitLine(p.Center, 4, 4, enemy.Center, 4, 4)) throw new Exception("native wall setup left a firing lane");
+                CombatLoadout.PreferredType = ItemID.ThornChakram;
+                p.selectedItem = 1; p.controlUseItem = false;
+                FightCoordinator.Start(40); FightCoordinator.Tick(p);
+                bool defenseBlocked = !p.controlUseItem && p.selectedItem == 1;
+                FightCoordinator.Stop(); p.controlUseItem = false; p.selectedItem = 1;
+                Combat.Tick();
+                bool legacyBlocked = !p.controlUseItem && p.selectedItem == 1;
+                enemy.boss = true;
+                p.selectedItem = 0; p.controlUseItem = true;
+                var sensor = new TerraBlind.JevariaCombat.GameSensor();
+                var snapshot = sensor.Capture(p, 0, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                var aimer = new TerraBlind.JevariaCombat.ProjectileAim();
+                bool bossBlocked = !aimer.TryAttack(p, snapshot, out _) && !p.controlUseItem;
+                enemy.boss = false;
+                p.inventory[0].SetDefaults(ItemID.Vilethorn); CombatLoadout.PreferredType = ItemID.Vilethorn;
+                if (ContentSamples.ProjectilesByType[p.inventory[0].shoot].tileCollide) throw new Exception("native passing weapon setup invalid");
+                p.controlUseItem = false;
+                FightCoordinator.Start(40); FightCoordinator.Tick(p);
+                bool defensePassing = p.controlUseItem;
+                FightCoordinator.Stop(); p.controlUseItem = false;
+                Combat.Tick(); bool legacyPassing = p.controlUseItem;
+                enemy.boss = true; p.controlUseItem = false;
+                snapshot = sensor.Capture(p, 1, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                bool bossPassing = aimer.TryAttack(p, snapshot, out _) && p.controlUseItem;
+                return new JsonObject { ["defense_blocked"] = defenseBlocked, ["legacy_blocked"] = legacyBlocked,
+                    ["boss_blocked"] = bossBlocked, ["defense_passing"] = defensePassing,
+                    ["legacy_passing"] = legacyPassing, ["boss_passing"] = bossPassing };
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "wall-target.json"), proof.ToJsonString());
+            if (proof.Any(field => field.Value?.GetValue<bool>() != true)) throw new Exception("native wall policy failed: " + proof);
+            Console.WriteLine("WALL_TARGET_PASS native_collision=true native_projectile_defaults=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PLACEMENT_OCCUPANCY_PROBE") == "1")
         {
             int placementTx = 0, placementTy = 0;

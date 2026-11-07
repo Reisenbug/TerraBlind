@@ -36,6 +36,9 @@ namespace TerraBlind
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
 
+        internal static bool CanHitTarget(Player player, Item weapon, Vector2 target)
+            => !NeedsClearLine(weapon) || Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+
         internal static (int Direction, bool Jump, bool Apply) Evade(Player p, NPC target = null, bool projectilesOnly = false)
         {
             bool blocked = target != null && NeedsClearLine(p.HeldItem)
@@ -210,7 +213,8 @@ namespace TerraBlind
                 _active = false;
                 return;
             }
-            NPC target = FindNearest(p, idle);
+            int weaponSlot = FindWeaponSlot(p);
+            NPC target = weaponSlot >= 0 ? FindNearest(p, p.inventory[weaponSlot], idle) : null;
 
             if (target == null)
             {
@@ -225,13 +229,6 @@ namespace TerraBlind
             _idleDefense = idle;
             if (!idle) _framesLeft = TimeoutFrames;
 
-            int weaponSlot = FindWeaponSlot(p);
-            if (weaponSlot < 0)
-            {
-                if (mining) RememberAnimation(p, false);
-                return;
-            }
-
             var aim = Combat.Aim(p, target, p.inventory[weaponSlot]);
             _animationTarget = target;
             AimTarget = aim;
@@ -239,12 +236,12 @@ namespace TerraBlind
 
             p.selectedItem = weaponSlot;
             if (idle) p.delayUseItem = p.mouseInterface = false;
-            p.controlUseItem = !NeedsClearLine(p.HeldItem) || Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
+            p.controlUseItem = CanHitTarget(p, p.HeldItem, target.Center);
             _usingItem = p.controlUseItem;
             RememberAnimation(p, true);
         }
 
-        private static NPC FindNearest(Player p, bool idle = false)
+        private static NPC FindNearest(Player p, Item weapon, bool idle = false)
         {
             float pcx = p.position.X + p.width / 2f;
             float pcy = p.position.Y + p.height / 2f;
@@ -258,6 +255,7 @@ namespace TerraBlind
                 if (idle ? npc.damage <= 0 : _types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
+                if (!CanHitTarget(p, weapon, npc.Center)) continue;
                 float ncx = npc.position.X + npc.width / 2f;
                 float ncy = npc.position.Y + npc.height / 2f;
                 float dx = ncx - pcx;

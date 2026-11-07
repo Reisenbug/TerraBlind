@@ -305,6 +305,13 @@ static class GatherTests
             Collision.LineTest = (from, to) => false;
             FightCoordinator.Start(40, new[] { 9 }); FightCoordinator.Tick(p);
             Check(!p.controlUseItem, "blocked projectile weapon continued firing into terrain");
+            Check(FightCoordinator.AimTarget == null, "blocked enemy still occupied automatic targeting");
+            var visible = new NPC { type = 9, active = true, damage = 10, position = new(p.Center.X + 300, p.Center.Y - 10) };
+            Main.npc[1] = visible;
+            Collision.LineTest = (from, to) => to.X > p.Center.X + 250;
+            FightCoordinator.Tick(p);
+            Check(p.controlUseItem && Cursor.X == visible.Center.X, "blocked nearest enemy hid a farther visible target");
+            Main.npc[1].active = false; Collision.LineTest = (_, _) => false;
             Terraria.ID.ContentSamples.ProjectilesByType[77].tileCollide = false;
             FightCoordinator.Tick(p);
             Check(p.controlUseItem, "wall-passing projectile was incorrectly blocked by line-of-sight guard");
