@@ -13,6 +13,18 @@ static class ActionTests
     public static async Task Run()
     {
         await QueuedActions();
+        string failureDetail = "step_requires_reconciliation: second " + new string('x', 1200);
+        var failedAction = new ActionTasks((_, _, _) => Task.FromException<string>(new InvalidOperationException(failureDetail)),
+            _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+        string failedHandle = failedAction.Start("run_script", new JsonObject(), default)["handle"].ToString();
+        JsonObject failedResult;
+        do { failedResult = await failedAction.Query(failedHandle, 100, default); }
+        while (failedResult["status"].ToString() == "running");
+        var failedSummary = failedAction.Summary()[0]["result"];
+        Check(failedSummary["detail"]?.ToString() == failureDetail[..1000] + "…"
+            && failedSummary["error"].ToString() == "action_failed"
+            && failedResult["result"]["detail"].ToString() == failureDetail,
+            "action summary lost bounded failure context or changed the full evidence");
         var recovery = new AgentRecovery();
         var gatherArgs = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":9}]}").AsObject();
         void RecordStock(int count) => recovery.Record("gather", gatherArgs, new JsonObject

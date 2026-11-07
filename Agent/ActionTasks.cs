@@ -439,8 +439,15 @@ public sealed class ActionTasks
             {
                 var facts = new JsonObject();
                 if (entry.Result is JsonObject full)
+                {
                     foreach (string key in new[] { "done", "outcome", "error", "reason", "status", "got", "lost", "state" })
                         if (full[key] != null) facts[key] = full[key].DeepClone();
+                    if (full["detail"] is JsonValue detail)
+                    {
+                        string text = detail.ToString();
+                        facts["detail"] = text.Length > 1000 ? text[..1000] + "…" : text;
+                    }
+                }
                 result.Add(new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(),
                     ["status"] = entry.Status, ["attempt"] = entry.Attempt, ["inline"] = entry.Inline,
                     ["task_node"] = entry.Node,

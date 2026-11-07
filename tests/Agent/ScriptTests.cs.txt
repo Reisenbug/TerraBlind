@@ -612,6 +612,8 @@ static class ScriptTests
         var blockedReplay = await RunSegment();
         Check(!blockedReplay["ok"].GetValue<bool>() && performed.Count == 2,
             "workflow replayed completed behavior or retried an uncertain step without reconciliation");
+        Check(progress.Summary()["last_execution"]["detail"]?.ToString().Contains("step_requires_reconciliation: second") == true,
+            "workflow summary omitted the uncertain step requiring reconciliation");
         int revision = progress.Snapshot()["revision"].GetValue<int>();
         try { progress.Resolve("second", revision - 1, false, null, new JsonObject()); throw new Exception("stale resolution accepted"); }
         catch (InvalidOperationException) { }

@@ -138,6 +138,11 @@ public sealed class ScriptProgress
                 execution = new JsonObject();
                 foreach (string field in new[] { "error", "tool_counts", "tool_calls", "elapsed_ms", "failure", "output_limit" })
                     execution[field] = last[field]?.DeepClone();
+                if (last["detail"] is JsonValue detail)
+                {
+                    string text = detail.ToString();
+                    execution["detail"] = text.Length > 1000 ? text[..1000] + "…" : text;
+                }
             }
             return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
                 ["steps"] = saved, ["last_error"] = last?["error"]?.DeepClone(),
