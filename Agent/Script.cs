@@ -20,7 +20,8 @@ public static class AgentScript
         run["parameters"]["properties"]["background"] = new JsonObject { ["type"] = "boolean",
             ["description"] = "配合task_node启动持续后台脚本并立即返回句柄；Agent可同时查询和准备后续。脚本内直接顺序调用动作，不嵌套action_start。" };
         run["description"] = run["description"].ToString()
-            + "多动作连续执行可用background:true，脚本拥有主动作句柄，内部直接tool('nav_to',...)、tool('gather',...)及条件循环；action_control暂停/取消，原workflow保留。运行中改当前脚本需先暂停，后续节点可直接修改。";
+            + "多动作连续执行可用background:true，脚本拥有主动作句柄，内部直接tool('nav_to',...)、tool('gather',...)及条件循环；action_control暂停/取消，原workflow保留。运行中改当前脚本需先暂停，后续节点可直接修改。"
+            + "临时恢复可传task_node、code及独立workflow，动作仍归属该节点，恢复进度单独保存，原节点script和workflow保留；恢复后可继续原句柄或节点。临时脚本使用前台模式。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"

@@ -86,6 +86,61 @@ static class RuntimeTests
             if (gapWorkflow != null) AgentTools.Workflows.Remove(gapWorkflow);
         }
     }
+    static async Task TestOwnedRecovery()
+    {
+        var previousHandler = HttpServerSystem.Handler;
+        string originalWorkflow = null;
+        const string recoveryWorkflow = "owned-recovery-probe";
+        int actions = 0;
+        try
+        {
+            AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"recover within a node","mode":"dag","steps":[
+                  {"id":"travel","description":"preserve original movement","depends_on":[],
+                   "script":"return step('original',()=>tool('act',{steps:[{keys:['left'],until:{frames:1}}]}));",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            var original = AgentTools.Plan.Script("travel");
+            originalWorkflow = original["workflow"].ToString();
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") actions++;
+                return (200, path == "/act_status" ? "{\"active\":false}" : "{}");
+            };
+            var recovery = new JsonObject { ["task_node"] = "travel", ["workflow"] = recoveryWorkflow,
+                ["code"] = "return step('unblock',()=>tool('act',{steps:[{keys:['right'],until:{frames:1}}]}));" };
+            var repaired = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", recovery, default)));
+            Check(repaired["ok"]?.GetValue<bool>() == true && actions == 1,
+                "owned temporary recovery was rejected: " + repaired);
+            Check(JsonNode.DeepEquals(AgentTools.Plan.Script("travel"), original)
+                && !AgentTools.Workflows.ContainsKey(originalWorkflow), "temporary recovery replaced the original script or cursor");
+            await Execute(AgentTools.Execute("run_script", recovery, default));
+            Check(actions == 1 && AgentTools.Workflows[recoveryWorkflow].Completed == 1,
+                "temporary recovery lost its separate completed checkpoint");
+            var collision = (JsonObject)recovery.DeepClone(); collision["workflow"] = originalWorkflow;
+            var denied = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", collision, default)));
+            Check(denied["error"] != null && actions == 1, "temporary recovery overwrote the original workflow");
+            var missingWorkflow = (JsonObject)recovery.DeepClone(); missingWorkflow.Remove("workflow");
+            var missing = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", missingWorkflow, default)));
+            Check(missing["error"] != null && actions == 1, "temporary recovery ran without its own checkpoint identity");
+            var unowned = (JsonObject)recovery.DeepClone(); unowned.Remove("task_node");
+            unowned["code"] = "return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});";
+            var outside = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", unowned, default)));
+            Check(outside["value"]?["error"]?.ToString() == "dag_node_required" && actions == 1,
+                "temporary recovery bypassed DAG ownership");
+            await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel" }, default));
+            Check(actions == 2 && AgentTools.Workflows[originalWorkflow].Completed == 1,
+                "original node failed to continue with its own script and checkpoint");
+            Console.WriteLine("PASS: temporary recovery keeps explicit node ownership, separate checkpoints and the original node script");
+        }
+        finally
+        {
+            HttpServerSystem.Handler = previousHandler; AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            AgentTools.Workflows.Remove(recoveryWorkflow);
+            if (originalWorkflow != null) AgentTools.Workflows.Remove(originalWorkflow);
+        }
+    }
     static void TestHoneyNotice()
     {
         var watch = new AgentWatch(); watch.EnsureDefaults();
@@ -222,6 +277,7 @@ static class RuntimeTests
     {
         TestHoneyNotice();
         await TestGapContinuation();
+        await TestOwnedRecovery();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
             depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);

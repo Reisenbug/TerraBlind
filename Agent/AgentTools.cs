@@ -557,7 +557,7 @@ public static partial class AgentTools
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
             && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
             return new JsonObject { ["error"] = "dag_node_required",
-                ["detail"] = "已有DAG。请把本次任务动作写入所属节点script，用run_script({task_node:id})执行；需要修改脚本用task_plan_patch nodes。图外只读查询、暂停动作和独立fight防身仍可用。",
+                ["detail"] = "动作需要所属DAG节点。执行原脚本用run_script({task_node:id})；临时恢复用run_script({task_node:id,workflow:'独立恢复名称',code:'恢复代码'})，原节点脚本保留。修改原脚本用task_plan_patch nodes。",
                 ["task_plan"] = await NativeAgent.OnMain(Plan.Summary, token) }.ToJsonString();
         if (action && ContactEscapeActive)
         {
@@ -789,12 +789,16 @@ public static partial class AgentTools
                 }
                 if (Text(args, "task_node") != "")
                 {
-                    if (args["code"] != null || args["program"] != null || args["tool"] != null || args["workflow"] != null)
-                        throw new ArgumentException("task_node使用节点保存的脚本和workflow，不能另传code/program/tool/workflow。");
+                    bool temporary = args["code"] != null;
+                    if (args["program"] != null || args["tool"] != null
+                        || !temporary && args["workflow"] != null || temporary && Text(args, "workflow") == "")
+                        throw new ArgumentException("task_node执行原脚本；临时恢复须同时提供code和独立workflow，不支持program/tool。");
                     string nodeId = Text(args, "task_node");
                     var nodeScript = await NativeAgent.OnMain(() =>
                     {
                         var script = Plan.Script(nodeId);
+                        if (temporary && Text(args, "workflow") == script["workflow"]?.ToString())
+                            throw new ArgumentException("临时恢复workflow须与原节点workflow不同，保留原步骤进度。");
                         if (Plan.Snapshot()["current_step"]?.ToString() != nodeId
                             && Actions.Summary().Any(a => a["tool"]?.ToString() != "fight" && a["status"]?.ToString() == "running"))
                             throw new InvalidOperationException("切换节点前须暂停原动作并保留句柄；独立防身攻击不阻止切换。");
@@ -803,8 +807,11 @@ public static partial class AgentTools
                         return script;
                     }, token);
                     args = (JsonObject)args.DeepClone();
-                    args["code"] = nodeScript["code"].DeepClone();
-                    args["workflow"] = nodeScript["workflow"].DeepClone();
+                    if (!temporary)
+                    {
+                        args["code"] = nodeScript["code"].DeepClone();
+                        args["workflow"] = nodeScript["workflow"].DeepClone();
+                    }
                 }
                 string eventDelivery = Text(args, "event_delivery");
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
