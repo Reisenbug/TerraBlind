@@ -453,6 +453,76 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_HONEY_MOVEMENT_PROBE") == "1")
+        {
+            var cases = new JsonArray();
+            foreach (int depth in new[] { 3, 8 })
+            foreach (bool driver in new[] { false, true })
+            {
+                int driven = 0, wetFrames = 0, firstDry = -1;
+                float startY = 0, highest = float.MaxValue;
+                var samples = new JsonArray();
+                await OnMain(() =>
+                {
+                    NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                    AgentPermissions.Reset(); Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+                    var p = Main.LocalPlayer;
+                    int x = Main.spawnTileX, y = Main.spawnTileY - 8;
+                    for (int tx = x - 20; tx <= x + 20; tx++)
+                    for (int ty = y - 20; ty <= y + depth + 3; ty++)
+                    {
+                        var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                        if (ty >= y + depth || tx == x - 20 || tx == x + 20)
+                        { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                        else if (ty >= y)
+                        { tile.LiquidType = LiquidID.Honey; tile.LiquidAmount = 255; }
+                    }
+                    foreach (var item in p.armor) item.TurnToAir();
+                    p.armor[3].SetDefaults(ItemID.CloudinaBottle); p.armor[4].SetDefaults(ItemID.HermesBoots);
+                    p.position = new Vector2(x * 16, (y + depth) * 16 - p.height);
+                    p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true; p.RefreshExtraJumps();
+                    p.fallStart = p.fallStart2 = (int)(p.position.Y / 16f);
+                    startY = p.position.Y;
+                    var sensor = new TerraBlind.JevariaCombat.GameSensor();
+                    var movement = new TerraBlind.JevariaCombat.GameMovement();
+                    var intent = new TerraBlind.JevariaCombat.DodgeIntent(TerraBlind.JevariaCombat.DodgeDirection.UpRight,
+                        TerraBlind.JevariaCombat.Magnitude.Small, TerraBlind.JevariaCombat.Magnitude.Small, false);
+                    BoundaryInputPlayer.Drive = player =>
+                    {
+                        if (driven >= 360) { movement.Release(player); return; }
+                        string reason = "raw";
+                        if (driver)
+                        {
+                            var snapshot = sensor.CapturePlayer(player, player, (ulong)(driven / 18 + 1), intent, 0);
+                            reason = movement.Apply(player, intent, snapshot with { MovementReserveScale = .25f }).Reason;
+                        }
+                        else
+                        {
+                            player.controlLeft = player.controlDown = false;
+                            player.controlRight = player.controlUp = true;
+                            player.controlJump = driven % 30 != 0;
+                        }
+                        if (player.honeyWet) wetFrames++;
+                        else if (wetFrames > 0 && firstDry < 0) firstDry = driven;
+                        highest = Math.Min(highest, player.position.Y);
+                        if (driven % 5 == 0) samples.Add(new JsonObject { ["frame"] = driven,
+                            ["x"] = player.position.X, ["y"] = player.position.Y, ["vx"] = player.velocity.X,
+                            ["vy"] = player.velocity.Y, ["honey"] = player.honeyWet, ["jump"] = player.controlJump,
+                            ["extra_jump"] = player.AnyExtraJumpUsable(), ["reason"] = reason });
+                        driven++;
+                    };
+                    return true;
+                });
+                try { while (driven < 360) await Task.Delay(20); }
+                finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; return true; }); }
+                cases.Add(new JsonObject { ["depth"] = depth, ["driver"] = driver, ["wet_frames"] = wetFrames,
+                    ["first_dry"] = firstDry, ["rise_pixels"] = startY - highest, ["samples"] = samples });
+                File.WriteAllText(Path.Combine(Main.SavePath, "honey-movement.json"), cases.ToJsonString());
+                Console.WriteLine($"HONEY_MOVEMENT depth={depth} driver={driver} wet_frames={wetFrames} first_dry={firstDry} rise={startY - highest:0.0}");
+            }
+            Console.WriteLine("HONEY_MOVEMENT_MEASURED native_physics=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_WALL_ATTACK_PROBE") == "1")
         {
             var proof = await OnMain(() =>
