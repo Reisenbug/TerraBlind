@@ -391,6 +391,17 @@ public sealed class BehaviorTrial : ModSystem
         queue.Enqueue(() => { try { done.SetResult(body()); } catch (Exception error) { done.SetException(error); } });
         return done.Task;
     }
+    public override void PreUpdatePlayers()
+    {
+        if (!enabled || Main.gameMenu || Manual.On) return;
+        if (Environment.GetEnvironmentVariable("TB_IDLE_INPUT_PROBE") == "1")
+        {
+            Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft = true;
+            Main.mouseLeft = true;
+        }
+        Terraria.GameInput.PlayerInput.Triggers.Current.Reset();
+        Main.mouseLeft = Main.mouseRight = false;
+    }
     public override void PostUpdateEverything()
     {
         if (!enabled || finished) return;
@@ -504,7 +515,9 @@ public sealed class BehaviorTrial : ModSystem
             try { while (sampled < 120) await Task.Delay(20); }
             finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; return true; }); }
             File.WriteAllText(Path.Combine(Main.SavePath, "idle-input.json"), samples.ToJsonString());
-            Console.WriteLine("IDLE_INPUT_MEASURED native_controls=true model_calls=0");
+            if (samples.Any(sample => sample["use_item"].GetValue<bool>() || sample["trigger_left"].GetValue<bool>()))
+                throw new Exception("human mouse input leaked into the automated engine trial");
+            Console.WriteLine("IDLE_INPUT_PASS held_mouse_injected=true native_controls=true model_calls=0");
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_BOSS_CONTACT_PROBE") == "1")
