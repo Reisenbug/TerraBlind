@@ -340,6 +340,26 @@ static class RuntimeTests
         Console.WriteLine("PASS: gathering distinguishes replacement NPCs and rejects stale entity targets");
         ControlTests.Run();
         Agent.Load();
+        int observedHp = Game.LocalPlayer.statLife, observedMaximum = Game.LocalPlayer.statLifeMax2;
+        try
+        {
+            foreach (int maximum in new[] { 240, 400 })
+            {
+                AgentTools.Watches.Reset(); AgentTools.Watches.EnsureDefaults(); AgentTools.Watches.LocalDelivery = true;
+                Game.LocalPlayer.statLife = maximum / 4; Game.LocalPlayer.statLifeMax2 = maximum;
+                typeof(NativeAgent).GetField("_lastWatch", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(Agent, DateTime.MinValue);
+                Agent.PostUpdateEverything();
+                Check(AgentTools.Watches.LastObservation["max_hp"].GetValue<int>() == maximum
+                    && AgentTools.Watches.HealthBelow == (int)Math.Ceiling(maximum * .3)
+                    && AgentTools.Watches.Take().Any(e => e["kind"].ToString() == "low_health"),
+                    "native health observer retained the starting maximum after permanent health increased");
+            }
+        }
+        finally
+        {
+            Game.LocalPlayer.statLife = observedHp; Game.LocalPlayer.statLifeMax2 = observedMaximum;
+            AgentTools.Watches.Reset();
+        }
         int invalidCalls = 0, invalidStops = 0;
         bool previousDead = Game.LocalPlayer.dead;
         var beforeDeathSnapshot = HttpServerSystem.LatestSnapshot;

@@ -434,7 +434,7 @@ public static partial class AgentTools
     static Task<JsonObject> ObserveAction(CancellationToken token) => NativeAgent.OnMain(() =>
     {
         var player = Main.LocalPlayer;
-        return new JsonObject { ["hp"] = player.statLife, ["dead"] = player.dead,
+        return new JsonObject { ["hp"] = player.statLife, ["max_hp"] = player.statLifeMax2, ["dead"] = player.dead,
             ["pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y },
             ["inventory_slots"] = new JsonArray(PvpInventory.Snapshot().Where(item => item["type"].GetValue<int>() > 0 && item["stack"].GetValue<int>() > 0)
                 .Select(item => item.DeepClone()).ToArray()), ["inventory_empty_slots_omitted"] = true,
@@ -679,7 +679,8 @@ public static partial class AgentTools
             {
                 await NativeAgent.OnMain(() =>
                 {
-                    Watches.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead,
+                    Watches.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife, ["max_hp"] = Main.LocalPlayer.statLifeMax2,
+                        ["dead"] = Main.LocalPlayer.dead,
                         ["actions"] = new JsonArray(current.DeepClone()) });
                     return true;
                 }, token);

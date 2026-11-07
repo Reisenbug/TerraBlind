@@ -204,7 +204,8 @@ public class NativeAgent : ModSystem
                 if (chest != null && chest.item.Any(i => !i.IsAir)
                     && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
-            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead, ["suffocating"] = p.suffocating,
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2,
+                ["dead"] = p.dead, ["suffocating"] = p.suffocating,
                 ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)
                     .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
