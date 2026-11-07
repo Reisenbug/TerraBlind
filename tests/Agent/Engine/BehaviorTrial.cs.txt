@@ -39,6 +39,7 @@ public sealed class BehaviorTrial : ModSystem
     Task trial;
     AcceptanceClock acceptance;
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
+    static string QueenResumeRoot => Environment.GetEnvironmentVariable("TB_QUEEN_RESUME");
     sealed class AcceptanceClock
     {
         readonly object gate = new();
@@ -345,8 +346,16 @@ public sealed class BehaviorTrial : ModSystem
         opened = true;
         if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
         WorldGen.clearWorld();
+        if (!string.IsNullOrEmpty(QueenResumeRoot))
+            foreach (string relative in new[] { "Worlds/Checks.wld", "Worlds/Checks.twld", "Players/JS_behavior_trial.plr", "Players/JS_behavior_trial.tplr" })
+            {
+                string destination = Path.Combine(Main.SavePath, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                File.Copy(Path.Combine(QueenResumeRoot, relative), destination, true);
+            }
         WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
-        var player = PlayerFileData.CreateAndSave(new Player { name = "JS behavior trial" });
+        var player = string.IsNullOrEmpty(QueenResumeRoot) ? PlayerFileData.CreateAndSave(new Player { name = "JS behavior trial" })
+            : Player.LoadPlayer(Path.Combine(Main.SavePath, "Players", "JS_behavior_trial.plr"), false);
         if (player.IsCloudSave || !player.Path.StartsWith(Main.SavePath, StringComparison.Ordinal)) throw new Exception("nonisolated player");
         Player.LoadPlayer(player.Path, false).SetAsActive(); WorldGen.playWorld();
     }
@@ -1795,7 +1804,9 @@ public sealed class BehaviorTrial : ModSystem
     {
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
-        const string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
+        string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
+        if (!string.IsNullOrEmpty(QueenResumeRoot))
+            prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";
         var clock = Stopwatch.StartNew();
         var deaths = new JsonArray(); bool wasDead = false;
         long? healthMs = null, chakramMs = null, queenSpawnMs = null;
@@ -1807,7 +1818,8 @@ public sealed class BehaviorTrial : ModSystem
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
         { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
-            ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters }.ToJsonString());
+            ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
+            ["resumed_from"] = QueenResumeRoot }.ToJsonString());
         using var journal = new StreamWriter(Path.Combine(Main.SavePath, "queen-samples.jsonl")) { AutoFlush = true };
         try
         {
@@ -1850,6 +1862,12 @@ public sealed class BehaviorTrial : ModSystem
             if (FullCraftTrial)
             {
                 Concessions.Enabled = false;
+                if (!string.IsNullOrEmpty(QueenResumeRoot))
+                {
+                    originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16;
+                    Console.WriteLine($"FULL_CRAFT_RESUME source={QueenResumeRoot} x={originX} y={floor} max_hp={p.statLifeMax} chakram={p.inventory.Where(item => item.type == ItemID.ThornChakram).Sum(item => item.stack)} concessions=false");
+                    return true;
+                }
                 foreach (var item in p.inventory) item.TurnToAir();
                 p.inventory[0].SetDefaults(ItemID.CopperShortsword);
                 p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
