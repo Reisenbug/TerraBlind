@@ -427,6 +427,9 @@ public static partial class AgentTools
             {
                 ["source"] = fresh ? "live_preview" : "jev_request",
                 ["captured_tick"] = movement.Tick, ["reserve_scale"] = movement.MovementReserveScale,
+                ["velocity_pixels_per_tick"] = new JsonObject { ["x"] = movement.Player.Velocity.X, ["y"] = movement.Player.Velocity.Y },
+                ["extra_jump_available"] = movement.CanDoubleJump, ["wing_time_available"] = movement.CanFly,
+                ["hook_equipped"] = movement.HasHook, ["vertical_mount_equipped"] = movement.HasMount,
                 ["solid_room_tiles"] = new JsonObject { ["left"] = movement.SolidDistances.Left / 16,
                     ["right"] = movement.SolidDistances.Right / 16, ["up"] = movement.SolidDistances.Up / 16, ["down"] = movement.SolidDistances.Down / 16 },
                 ["options"] = new JsonArray(movement.AvailableActions.Select(option => (JsonNode)new JsonObject

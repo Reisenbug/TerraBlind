@@ -1097,6 +1097,7 @@ static class RuntimeTests
             bool previousInventory = Game.playerInventory;
             float previousReserve = Dodge.MovementReserveScale;
             var previousMovementSnapshot = Dodge.Snapshot;
+            var previousMobility = (Game.LocalPlayer.ExtraJump, Game.LocalPlayer.wingTime, Game.LocalPlayer.velocity);
             var previousNpc = Game.npc[0];
             Game.npc[0] = new Terraria.NPC { active = true, boss = true, type = 123, life = 75 };
             try
@@ -1111,7 +1112,12 @@ static class RuntimeTests
                     "Boss handoff left the inventory UI blocking movement and attack");
                 Check(Math.Abs(enabled["boss_control"]["movement_snapshot"]["reserve_scale"].GetValue<float>() - .075f) < .0001,
                     "Boss handoff returned movement options computed before the new clearance setting");
+                Game.LocalPlayer.ExtraJump = true; Game.LocalPlayer.wingTime = 12; Game.LocalPlayer.velocity = new(2, -3);
                 var status = JsonNode.Parse(await Execute(AgentTools.Execute("boss_status", new JsonObject(), default)));
+                Check(status["movement_snapshot"]["extra_jump_available"]?.GetValue<bool>() == true
+                    && status["movement_snapshot"]["wing_time_available"]?.GetValue<bool>() == true
+                    && status["movement_snapshot"]["velocity_pixels_per_tick"]?["y"]?.GetValue<float>() == -3,
+                    "Boss input options omitted the sampled mobility resources and velocity");
                 Check(Math.Abs(Dodge.MovementReserveScale - .075f) < .0001
                     && Math.Abs(status["movement_reserve_scale"].GetValue<float>() - .075f) < .0001, "Agent movement clearance did not reach controller status");
                 var invalidReserve = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["movement_reserve_scale"] = 0, ["auto_dodge"] = false }, default)));
@@ -1125,7 +1131,8 @@ static class RuntimeTests
                 Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride && Dodge.MovementReserveScale == previousReserve,
                     "Agent stop did not restore existing user controller settings");
             }
-            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; Dodge.MovementReserveScale = previousReserve; Dodge.Snapshot = previousMovementSnapshot; Game.playerInventory = previousInventory; }
+            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; Dodge.MovementReserveScale = previousReserve; Dodge.Snapshot = previousMovementSnapshot; Game.playerInventory = previousInventory;
+                (Game.LocalPlayer.ExtraJump, Game.LocalPlayer.wingTime, Game.LocalPlayer.velocity) = previousMobility; }
             Console.WriteLine("PASS: Boss controls expose actual state, preserve independent permissions and restore user settings on stop");
             var savedBag = Game.LocalPlayer.inventory[49];
             var savedArmor = Game.LocalPlayer.armor;
