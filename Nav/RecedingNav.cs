@@ -26,10 +26,6 @@ namespace TerraBlind
         static Mode _mode;
         const float GoalDistPx = 24f;
         const float StandDistPx = 8f;    // 建房契约要求脚踩准那一格,±24px 会站到隔壁列
-        const int StandSwitch = 20;      // 离目标这么近就把最后一段交给 A*
-        const int StandMaxTries = 3;     // A* 连着搜不到就认输,别让 greedy 在这地形上空转
-        static int _standTries;
-        static (int, int)? _standCell;   // 上次搜不出路时人在哪。同一格不重复计次
         static bool _braking;   // 位置到了,正在刹停
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
@@ -227,7 +223,6 @@ namespace TerraBlind
             // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
             StateSpacePlanner.PreciseMode = goalWy >= Main.UnderworldLayer
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
-            _standTries = 0;
             _braking = false;
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
@@ -405,9 +400,9 @@ namespace TerraBlind
                 }
             }
 
-            if (VanillaNavBridge.Enabled)
+            if (VanillaNavBridge.Enabled || _mode == Mode.Stand)
             {
-                VanillaNavBridge.Tick(p, _goalWx, _goalWy);
+                VanillaNavBridge.Tick(p, _goalWx, _goalWy, _mode == Mode.Stand);
                 return;
             }
 
@@ -524,60 +519,6 @@ namespace TerraBlind
                     Stop(); return;
                 }
             }
-            // STAND 末段交给 A*:H 场是格子 Dijkstra,不知道悬空格竖直跳不上去,梯度会把人吸到正下方打转
-            // Reach 不走这条:"先变差再变好"主体的 PUSH 已经在做,不需要第二套会搜索的选边逻辑
-            if (_mode == Mode.Stand && System.Math.Abs(cell.Item1 - _goalWx) <= StandSwitch
-                                    && System.Math.Abs(cell.Item2 - _goalWy) <= StandSwitch)
-            {
-                // goalSnapCap:0。目标本来就悬空,一旦被 snap 拉到地面,人会踩着地面报"到了",
-                // 建房整套坐标全错。宁可 fail fast。
-                long searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                var ap = StateSpacePlanner.Plan(_goalWx, _goalWy, goalSnapCap: 0);
-                NavigationLatency.Search(System.Diagnostics.Stopwatch.GetElapsedTime(searchStarted).TotalMilliseconds, "stand_astar");
-                if (ap.Found && ap.Steps.Count > 0)
-                {
-                    DiagLog.Write($"[recede] STAND A* from {cell} → ({_goalWx},{_goalWy}) steps={ap.Steps.Count} exp={ap.Expansions}");
-                    // 往上垫平台/pillar 时人几乎不横移、H 也几乎不降。正好是 sentinel 判"卡死"的特征。
-                    // A* 每次真给出一条路就把它的计时清零,否则爬到一半就被当成卡住放弃。
-                    StuckSentinel.Reset();
-                    _standTries = 0;
-                    _lastFrom = cell; _lastTarget = (_goalWx, _goalWy); _haveLast = true;
-                    _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
-                    _lastLandPx = ap.Steps.Count > 0 ? ap.Steps[0].LandPx : 0f;
-                    _lastLandPy = ap.Steps.Count > 0 ? ap.Steps[0].LandPy : 0f;
-                    StateSpacePlanner.DispatchPlan(ap);
-                    return;
-                }
-                if (ap.Partial && ap.Steps.Count > 0)
-                {
-                    // 搜不到终点但有更近的落脚点。走过去换个角度再搜。人真的动了,不算一次失败。
-                    StuckSentinel.Reset();
-                    _standTries = 0;
-                    _lastFrom = cell; _lastTarget = (ap.GoalWx, ap.GoalWy); _haveLast = true;
-                    _lastPillar = ap.Steps.Count > 0 && ap.Steps[0].Pillar;
-                    _lastLandPx = ap.Steps.Count > 0 ? ap.Steps[0].LandPx : 0f;
-                    _lastLandPy = ap.Steps.Count > 0 ? ap.Steps[0].LandPy : 0f;
-                    StateSpacePlanner.DispatchPlan(ap);
-                    return;
-                }
-                // 一步都给不出来。别退回 greedy。它在这地形上只会打转到 sentinel 报卡死。
-                //
-                // 【同一个位置只算一次尝试】。原来每帧 +1,三帧就烧完。而这三帧人一步没动,
-                // 搜的是同一个局面,结果必然一样,等于只试了一次就判死
-                // (现场:675/676/677 三个连续帧报完 1/3 2/3 3/3,然后 unreachable)。
-                // 人挪过窝才是真的"换个角度再试"。
-                if (_standCell != cell) { _standCell = cell; _standTries = 0; }
-                else { DiagLog.Write($"[recede] STAND A* no plan at {cell} → ({_goalWx},{_goalWy}) exp={ap.Expansions} 原地不动,不计次"); return; }
-                DiagLog.Write($"[recede] STAND A* no plan at {cell} → ({_goalWx},{_goalWy}) exp={ap.Expansions} try={_standTries + 1}/{StandMaxTries}");
-                if (++_standTries >= StandMaxTries)
-                {
-                    LastStop = "unreachable"; Stop();
-                    Chatter.Say("[TerraBlind] receding: can't stand on goal");
-                    return;
-                }
-                return;
-            }
-
             // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
             // 这一帧只是取结果。主线程一次展开都不做
             if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }

@@ -444,6 +444,97 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_NATIVE_STAND_TRIAL") is string standCase)
+        {
+            int gx = 0, gy = 0;
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                VanillaNavBridge.Enabled = false;
+                var p = Main.LocalPlayer;
+                for (int i = 0; i < p.inventory.Length; i++) p.inventory[i].TurnToAir();
+                for (int i = 0; i < p.armor.Length; i++) p.armor[i].TurnToAir();
+                p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 9999;
+                p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 500;
+                p.selectedItem = 1; p.itemAnimation = p.itemTime = 0;
+                p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+                if (standCase == "recorded")
+                {
+                    p.position = new Vector2(48928.566f, 12838);
+                    gx = 3056; gy = 803;
+                }
+                else
+                {
+                    int x = Main.spawnTileX, y = (int)Main.worldSurface + 40;
+                    for (int tx = x - 12; tx <= x + 30; tx++)
+                    for (int ty = y - 18; ty <= y + 3; ty++)
+                    {
+                        var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                        if (ty > y) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                    }
+                    gx = x + 8; gy = y;
+                    if (standCase == "platform") gy--;
+                    if (standCase == "step")
+                    {
+                        for (int tx = x + 5; tx <= x + 12; tx++)
+                        for (int ty = y - 3; ty <= y; ty++)
+                        { var tile = Main.tile[tx, ty]; tile.HasTile = true; tile.TileType = TileID.Stone; }
+                        gy -= 4;
+                    }
+                    p.position = new Vector2(x * 16 - 2, (y + 1) * 16 - p.height);
+                }
+                p.velocity = Vector2.Zero; p.releaseJump = true;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                Main.screenPosition = p.Center - new Vector2(Main.screenWidth, Main.screenHeight) / 2;
+                var tiles = new JsonArray();
+                for (int tx = gx - 1; tx <= gx + 1; tx++)
+                for (int ty = gy - 2; ty <= gy + 2; ty++)
+                {
+                    var tile = Main.tile[tx, ty];
+                    tiles.Add(new JsonObject { ["x"] = tx, ["y"] = ty, ["type"] = tile.HasTile ? (int)tile.TileType : -1,
+                        ["slope"] = (int)tile.Slope, ["half"] = tile.IsHalfBlock });
+                }
+                Console.WriteLine("NATIVE_STAND_TERRAIN " + tiles.ToJsonString());
+                RecedingNav.Start(gx, gy, RecedingNav.Mode.Stand);
+                return true;
+            });
+            var clock = Stopwatch.StartNew();
+            var samples = new JsonArray();
+            try
+            {
+                for (int i = 0; i < 1800; i++)
+                {
+                    var sample = await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        return new JsonObject { ["tick"] = Main.GameUpdateCount, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                            ["x"] = p.position.X, ["y"] = p.position.Y, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
+                            ["dx"] = Math.Abs(p.Center.X - (gx * 16 + 8)), ["dy"] = Math.Abs(p.Bottom.Y - (gy + 1) * 16),
+                            ["hp"] = p.statLife, ["active"] = RecedingNav.Active, ["outcome"] = RecedingNav.LastStop,
+                            ["engine_owned"] = VanillaNavigationDemo.Instance.NavigationOwned, ["stage"] = VanillaNavBridge.Stage,
+                            ["plan"] = VanillaNavigationDemo.Instance.LastControl.Plan };
+                    });
+                    samples.Add(sample);
+                    if (sample["hp"].GetValue<int>() <= 0) throw new Exception("stand trial died");
+                    if (!sample["active"].GetValue<bool>())
+                    {
+                        bool arrived = sample["outcome"]?.ToString() == "done";
+                        if (standCase != "recorded" && !arrived) throw new Exception("reachable stand target failed: " + sample);
+                        if (arrived && (sample["dx"].GetValue<float>() > 8 || sample["dy"].GetValue<float>() > 8 || sample["vy"].GetValue<float>() != 0))
+                            throw new Exception("stand arrival violated exact position or ground contract");
+                        Console.WriteLine($"NATIVE_STAND_PASS case={standCase} elapsed_ms={clock.ElapsedMilliseconds} outcome={sample["outcome"]} model_calls=0");
+                        return;
+                    }
+                }
+                throw new Exception("native stand did not produce arrival or failure within 1800 frames");
+            }
+            finally
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "native-stand.json"), samples.ToJsonString());
+                await OnMain(() => { RecedingNav.Stop(); return true; });
+            }
+        }
         if (Environment.GetEnvironmentVariable("TB_WEB_LANDING_TRIAL") == "1")
         {
             int landingCase = int.TryParse(Environment.GetEnvironmentVariable("TB_WEB_LANDING_CASE"), out int selectedCase) ? selectedCase : 1;
