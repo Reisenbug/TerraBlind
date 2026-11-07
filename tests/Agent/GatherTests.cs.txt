@@ -402,9 +402,14 @@ static class GatherTests
                 "thinking defense ignored a monster predicted to collide with the player");
             p.controlLeft = p.controlRight = p.controlJump = false;
             enemy.boss = true; Dodge.Enabled = true;
+            enemy.velocity = new(-1, 0);
             FightCoordinator.Tick(p, true);
             Check(!p.controlLeft && !p.controlRight && !p.controlJump,
                 "ordinary contact reflex replaced active Boss movement");
+            enemy.velocity = new(-5, 0);
+            FightCoordinator.Tick(p, true);
+            Check(p.controlLeft || p.controlRight || p.controlJump,
+                "imminent Boss collision waited for the next Jev decision");
             enemy.boss = false; Dodge.Enabled = oldDodge;
             enemy.velocity = default; enemy.position += new Microsoft.Xna.Framework.Vector2(240, 0);
             p.controlLeft = p.controlJump = false; p.controlRight = true;

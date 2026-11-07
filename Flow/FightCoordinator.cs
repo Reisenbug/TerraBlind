@@ -51,9 +51,19 @@ namespace TerraBlind
             var enemies = new List<NPC>();
             foreach (var shot in Main.projectile)
                 if (shot.active && shot.hostile && shot.damage > 0) shots.Add(shot);
-            foreach (var npc in projectilesOnly ? Array.Empty<NPC>() : Main.npc)
+            foreach (var npc in Main.npc)
                 if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
-                    && Vector2.Distance(npc.Center, p.Center) < 600) enemies.Add(npc);
+                    && Vector2.Distance(npc.Center, p.Center) < 600)
+                {
+                    bool imminent = !projectilesOnly;
+                    for (int frame = 0; !imminent && frame <= 18; frame++)
+                    {
+                        var relative = npc.Center - p.Center + (npc.velocity - p.velocity) * frame;
+                        imminent = Math.Abs(relative.X) < (p.width + npc.width) / 2f + 4
+                            && Math.Abs(relative.Y) < (p.height + npc.height) / 2f + 4;
+                    }
+                    if (imminent) enemies.Add(npc);
+                }
             if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false, false);
             int currentDirection = p.controlRight ? 1 : p.controlLeft ? -1 : 0;
             bool currentJump = p.controlJump && p.velocity.Y == 0;

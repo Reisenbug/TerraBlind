@@ -453,6 +453,40 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_BOSS_CONTACT_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                AgentPermissions.Reset(); Concessions.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, y = Main.spawnTileY;
+                for (int tx = x - 20; tx <= x + 30; tx++)
+                for (int ty = y - 20; ty <= y + 3; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (ty >= y) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                p.position = new Vector2(x * 16, y * 16 - p.height); p.velocity = Vector2.Zero;
+                p.inventory[0].SetDefaults(ItemID.ThornChakram); p.selectedItem = 0;
+                target = NPC.NewNPC(new EntitySource_Misc("boss-contact-probe"), (x + 20) * 16, y * 16 - 80, NPCID.QueenBee);
+                var boss = Main.npc[target]; boss.Center = p.Center + new Vector2(300, 0); boss.velocity = new Vector2(-1, 0);
+                var evade = typeof(FightCoordinator).GetMethod("Evade", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                var far = ((int Direction, bool Jump, bool Apply))evade.Invoke(null, new object[] { p, null, true });
+                if (far.Apply) throw new Exception("distant Boss contact replaced Jev movement");
+                boss.Center = p.Center + new Vector2((p.width + boss.width) / 2f + 120, 0); boss.velocity = new Vector2(-8, 0);
+                var near = ((int Direction, bool Jump, bool Apply))evade.Invoke(null, new object[] { p, null, true });
+                File.WriteAllText(Path.Combine(Main.SavePath, "boss-contact.json"), new JsonObject
+                { ["npc_type"] = boss.type, ["npc_width"] = boss.width, ["npc_height"] = boss.height,
+                    ["distance_x"] = boss.Center.X - p.Center.X,
+                    ["far_applied"] = far.Apply, ["near_applied"] = near.Apply,
+                    ["direction"] = near.Direction, ["jump"] = near.Jump }.ToJsonString());
+                if (!near.Apply) throw new Exception("imminent native Queen contact waited for Jev");
+                return true;
+            });
+            Console.WriteLine("BOSS_CONTACT_PASS native_collision=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_FALL_ITEM_PROBE") == "1")
         {
             int driven = 0, wrongSlot = 0, startHp = 0, endHp = 0;
