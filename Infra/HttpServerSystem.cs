@@ -881,6 +881,7 @@ namespace TerraBlind
 				var amtMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"amount\":(\\d+)");
 				int amount = amtMatch.Success ? int.Parse(amtMatch.Groups[1].Value) : 1;
 				// 先刷配方表:vanilla 只在背包 UI 那条路上刷,传送直达地狱时表是空的
+				Main.LocalPlayer.AdjTiles();
 				Recipe.FindRecipes();
 				int targetId = -1;
 				if (idMatch.Success)
@@ -989,6 +990,7 @@ namespace TerraBlind
 						if (Terraria.ID.ItemID.Search.ContainsName(nm))
 						{ want = Terraria.ID.ItemID.Search.GetId(nm); break; }
 					var p2 = Main.LocalPlayer;
+					p2.AdjTiles();
 					Recipe.FindRecipes();
 					var available = new System.Collections.Generic.HashSet<int>();
 					for (int i = 0; i < Main.numAvailableRecipes; i++) available.Add(Main.availableRecipe[i]);

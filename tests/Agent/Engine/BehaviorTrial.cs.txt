@@ -444,6 +444,77 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CRAFT_ADJ_TRIAL") == "1")
+        {
+            var observations = new JsonObject();
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                var p = Main.LocalPlayer;
+                Point? anvil = null;
+                for (int x = 20; x < Main.maxTilesX - 20 && anvil == null; x++)
+                for (int y = (int)Main.worldSurface; y < Main.maxTilesY - 200; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    if (!tile.HasTile || tile.TileType != TileID.Anvils || tile.TileFrameX % 36 != 0) continue;
+                    var position = new Vector2((x + 2) * 16, (y + 1) * 16 - p.height);
+                    if (!Collision.SolidCollision(position, p.width, p.height)) { anvil = new Point(x, y); break; }
+                }
+                if (anvil is not Point station) throw new Exception("natural anvil missing");
+                p.position = new Vector2((station.X + 2) * 16, (station.Y + 1) * 16 - p.height);
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                foreach (var item in p.inventory) item.TurnToAir();
+                var recipe = Main.recipe.First(r => r != null && r.createItem.type == ItemID.ThornChakram);
+                int slot = 0;
+                foreach (var item in recipe.requiredItem.Where(item => !item.IsAir)) p.inventory[slot++] = item.Clone();
+                observations["anvil"] = new JsonArray(station.X, station.Y);
+                observations["adj_before"] = p.adjTile[TileID.Anvils];
+                observations["inventory_open"] = Main.playerInventory;
+                return true;
+            });
+            observations["first"] = await Call("craft", new JsonObject { ["name"] = "ThornChakram" });
+            if (Environment.GetEnvironmentVariable("TB_CRAFT_ADJ_EXPECT_FIXED") == "1")
+            {
+                Vector2 position = default;
+                await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer; position = p.position;
+                    observations["adj_after_craft"] = p.adjTile[TileID.Anvils];
+                    observations["actual_crafted"] = p.inventory.Where(i => i.type == ItemID.ThornChakram).Sum(i => i.stack);
+                    p.position += new Vector2(32 * 16, 0); p.velocity = Vector2.Zero;
+                    return true;
+                });
+                observations["recipe_far"] = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
+                await OnMain(() =>
+                {
+                    observations["adj_far"] = Main.LocalPlayer.adjTile[TileID.Anvils];
+                    Main.LocalPlayer.position = position; Main.LocalPlayer.velocity = Vector2.Zero;
+                    return true;
+                });
+                observations["recipe_back"] = await Call("recipe", new JsonObject { ["name"] = "ThornChakram" });
+                await OnMain(() => { observations["adj_back"] = Main.LocalPlayer.adjTile[TileID.Anvils]; return true; });
+                File.WriteAllText(Path.Combine(Main.SavePath, "craft-adjacency.json"), observations.ToJsonString());
+                if (observations["first"]["ok"]?.GetValue<bool>() != true || observations["actual_crafted"].GetValue<int>() != 1
+                    || !observations["adj_after_craft"].GetValue<bool>() || observations["adj_far"].GetValue<bool>()
+                    || !observations["adj_back"].GetValue<bool>()) throw new Exception("craft station refresh failed: " + observations);
+                Console.WriteLine("CRAFT_ADJ_PASS inventory_open=false native_crafted=1 recipe_far_and_back=true");
+                return;
+            }
+            await OnMain(() =>
+            {
+                Main.LocalPlayer.AdjTiles();
+                observations["adj_refreshed"] = Main.LocalPlayer.adjTile[TileID.Anvils];
+                return true;
+            });
+            observations["second"] = await Call("craft", new JsonObject { ["name"] = "ThornChakram" });
+            File.WriteAllText(Path.Combine(Main.SavePath, "craft-adjacency.json"), observations.ToJsonString());
+            if (observations["first"]["error"]?.ToString() != "item_not_found"
+                || observations["adj_before"].GetValue<bool>() || !observations["adj_refreshed"].GetValue<bool>()
+                || observations["second"]["ok"]?.GetValue<bool>() != true)
+                throw new Exception("craft adjacency hypothesis not reproduced: " + observations);
+            Console.WriteLine("CRAFT_ADJ_REPRODUCED native_anvil=true inventory_open=false " + observations);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_JEV_BOUNDARY_TRIAL") == "1")
         {
             int driven = 0, rejected = 0, violations = 0, filtered = 0;
