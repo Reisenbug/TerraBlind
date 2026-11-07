@@ -360,6 +360,30 @@ static class RuntimeTests
             Game.LocalPlayer.statLife = observedHp; Game.LocalPlayer.statLifeMax2 = observedMaximum;
             AgentTools.Watches.Reset();
         }
+        var beforeCompactHandler = HttpServerSystem.Handler;
+        try
+        {
+            var nodes = new JsonArray();
+            for (int i = 0; i < 8; i++) nodes.Add(new JsonObject { ["id"] = "bounded" + i,
+                ["description"] = "retain node program " + i,
+                ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("bounded" + (i - 1)),
+                ["script"] = i == 0 ? "return step('craft_once',()=>tool('craft',{name:'WorkBench'}));"
+                    : "const saved='" + new string('x', 2000) + "'; return saved.length;",
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = 1000 }) });
+            AgentTools.Plan.Create(new JsonObject { ["goal"] = "bounded successful tool facts", ["mode"] = "dag", ["steps"] = nodes }, _ => 0);
+            HttpServerSystem.Handler = (_, _) => (200, "{\"ok\":true,\"crafted\":1}");
+            var compactRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "bounded0", ["event_delivery"] = "script" }, default)));
+            Check(compactRun["ok"].GetValue<bool>() && compactRun["value"]["crafted"].GetValue<int>() == 1
+                && compactRun["value"]["task_plan"]["steps"] == null
+                && compactRun["value"]["task_plan"]["current_step"].ToString() == "bounded0",
+                "successful craft inherited all DAG programs and overflowed its durable step result: ok=" + compactRun["ok"]
+                    + "; error=" + compactRun["error"] + "; detail=" + compactRun["detail"] + "; value=" + compactRun["value"]);
+            var retainedPlan = JsonNode.Parse(await Execute(AgentTools.State(default)))["task_plan"];
+            Check(retainedPlan["steps"].AsArray().Count == 8 && retainedPlan["steps"][1]["script"].ToString().Contains(new string('x', 2000)),
+                "compact action result erased the full plan available to explicit observation");
+        }
+        finally { HttpServerSystem.Handler = beforeCompactHandler; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
         int invalidCalls = 0, invalidStops = 0;
         bool previousDead = Game.LocalPlayer.dead;
         var beforeDeathSnapshot = HttpServerSystem.LatestSnapshot;
@@ -1441,7 +1465,9 @@ static class RuntimeTests
                 {
                     NativeAgent.Submit("分两段执行并保存步骤");
                     await PumpUntil(() => NativeAgent.Status == (emptyYield ? "paused" : "idle"));
-                    Check(handler.Calls == 4, "workflow continuation did not use exactly two model turns");
+                    Check(handler.Calls == 4, "workflow continuation did not use exactly two model turns: calls=" + handler.Calls
+                        + "; empty_yield=" + emptyYield + "; hp=" + Game.LocalPlayer.statLife + "/" + Game.LocalPlayer.statLifeMax2
+                        + "; status=" + NativeAgent.Status + "; pending=" + AgentTools.Watches.Pending());
                     if (!emptyYield) Check(AgentChat.Messages.Count(m => m == "workflow-first") == beforeFirst + 1
                         && AgentTools.Workflows["test-flow"].Completed == 2, "workflow continuation repeated completed effects");
                 }

@@ -616,6 +616,16 @@ public static partial class AgentTools
                     catch (System.Text.Json.JsonException) { }
                     return output;
                 }, token);
+            if (name is not ("get_state" or "say") && JsonNode.Parse(output) is JsonObject response
+                && response["error"] == null && response["ok"]?.ToString() != "false"
+                && response["task_plan"] is JsonObject plan)
+            {
+                var brief = new JsonObject { ["detail_tool"] = "get_state" };
+                foreach (string field in new[] { "status", "cursor", "revision", "progress_revision", "current_step", "ready_steps", "mode" })
+                    brief[field] = plan[field]?.DeepClone();
+                response["task_plan"] = brief;
+                output = response.ToJsonString();
+            }
             if (lease != 0)
                 return await NativeAgent.OnMain(() =>
                 {
