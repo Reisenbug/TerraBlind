@@ -56,6 +56,7 @@ public class AgentTaskEvidence : GlobalNPC
             "permanent_health" => Main.LocalPlayer.statLifeMax,
             "position" => AtPosition(condition) ? 1 : 0,
             "biome" => AtBiome(condition) ? 1 : 0,
+            "tiles" => CountTiles(condition),
             "item" => Main.LocalPlayer.inventory.Where(item => item != null && !item.IsAir && item.type == type).Sum(item => item.stack),
             "equipped" => Enumerable.Range(0, 10).Where(slot => Main.LocalPlayer.IsItemSlotUnlockedAndUsable(slot)
                 && Main.LocalPlayer.armor[slot].type == type).Sum(slot => Main.LocalPlayer.armor[slot].stack),
@@ -66,6 +67,22 @@ public class AgentTaskEvidence : GlobalNPC
             "chests_looted" => throw new InvalidOperationException("开箱转移证据目前仅支持单人游戏。"),
             _ => throw new InvalidOperationException("未知完成条件。")
         };
+    }
+
+    static int CountTiles(JsonObject condition)
+    {
+        int x = condition["x"].GetValue<int>(), y = condition["y"].GetValue<int>();
+        int width = condition["width"].GetValue<int>(), height = condition["height"].GetValue<int>(), type = condition["type"].GetValue<int>();
+        if (!WorldGen.InWorld(x, y, 1) || (long)x + width >= Main.maxTilesX || (long)y + height >= Main.maxTilesY)
+            throw new ArgumentException("施工验收区域需要位于世界内。");
+        int count = 0;
+        for (int tx = x; tx < x + width; tx++)
+        for (int ty = y; ty < y + height; ty++)
+        {
+            var tile = Main.tile[tx, ty];
+            if (type == -1 ? !tile.HasTile : tile.HasUnactuatedTile && tile.TileType == type) count++;
+        }
+        return count;
     }
 
     static bool AtBiome(JsonObject condition)

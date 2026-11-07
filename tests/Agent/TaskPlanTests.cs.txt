@@ -16,6 +16,7 @@ static class TaskPlanTests
         VerifyChestEvidence();
         VerifyPosition();
         VerifyBiome();
+        VerifyTiles();
         var plan = new AgentTaskPlan();
         var hook = new AgentTaskEvidence();
         Main.netMode = NetmodeID.SinglePlayer;
@@ -304,6 +305,33 @@ static class TaskPlanTests
         plan.Advance("weapon", Measure); plan.Advance("final", Measure);
         Check(plan.VerifyFinal(Measure)["verified"].GetValue<bool>(), "corrected identity did not verify earned inventory and preserved fresh kill");
         Console.WriteLine("PASS: atomic plan identity correction preserves earned steps and kill baseline, rejects stale/completed edits and never invents progress");
+    }
+
+    static void VerifyTiles()
+    {
+        var original = new[] { Main.tile[910, 910], Main.tile[911, 910], Main.tile[912, 910] };
+        try
+        {
+            var request = Parse("""{"goal":"three wooden tiles","steps":[{"id":"floor","description":"wooden floor","conditions":[{"kind":"tiles","type":30,"x":910,"y":910,"width":3,"height":1,"count":3}]}]}""");
+            for (int i = 0; i < 3; i++) Main.tile[910 + i, 910] = default;
+            var plan = new AgentTaskPlan(); plan.Create(request, AgentTaskEvidence.Measure);
+            for (int i = 0; i < 2; i++) Main.tile[910 + i, 910] = new Tile { HasUnactuatedTile = true, TileType = 30 };
+            Check(!plan.Advance("floor", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "partial floor passed structure verification");
+            Main.tile[912, 910] = new Tile { HasUnactuatedTile = true, TileType = 30 };
+            Check(plan.Advance("floor", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "complete real floor failed verification");
+            Main.tile[911, 910] = new Tile { HasUnactuatedTile = true, TileType = 1 };
+            Check(!plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "changed structure retained stale completion");
+            request["steps"][0]["conditions"][0]["count"] = 1;
+            bool rejected = false;
+            try { new AgentTaskPlan().Create(request, AgentTaskEvidence.Measure); } catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "rectangle accepted count smaller than complete structure");
+            var empty = Parse("""{"kind":"tiles","type":-1,"x":910,"y":910,"width":3,"height":1,"count":3}""");
+            Check(AgentTaskEvidence.Measure(empty) == 0, "solid tiles counted as cleared region");
+            for (int i = 0; i < 3; i++) Main.tile[910 + i, 910] = default;
+            Check(AgentTaskEvidence.Measure(empty) == 3, "empty real cells failed clear verification");
+        }
+        finally { for (int i = 0; i < 3; i++) Main.tile[910 + i, 910] = original[i]; }
+        Console.WriteLine("PASS: structure verification reads actual tile type and every cell, then rechecks the final world");
     }
 
     static void VerifyBiome()

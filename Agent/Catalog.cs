@@ -20,6 +20,7 @@ public static class AgentCatalog
             {
                 "item" or "equipped" => typeof(Terraria.ID.ItemID),
                 "npc_alive" or "npc_kills" => typeof(Terraria.ID.NPCID),
+                "tiles" => typeof(Terraria.ID.TileID),
                 _ => throw new ArgumentException("名称型type只用于物品、装备和NPC条件。")
             };
             var matches = Query(constants, name)["matches"].AsArray();

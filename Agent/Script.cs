@@ -37,13 +37,17 @@ public static class AgentScript
             var definition = tools.First(t => t["function"]?["name"]?.ToString() == tool)["function"];
             var conditions = definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"];
             conditions["kind"]["enum"].AsArray().Add("biome");
+            conditions["kind"]["enum"].AsArray().Add("tiles");
+            conditions["width"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 4096 };
+            conditions["height"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 4096 };
             conditions["name"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("jungle", "desert", "snow", "ocean", "dungeon", "corruption", "crimson", "hallow") };
             conditions["depth"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("any", "sky", "surface", "below_surface", "underground", "cavern", "underworld"), ["default"] = "any" };
             definition["description"] = definition["description"].ToString()
-                + "biome条件按原生人物群系与深度验收，count=1，name为群系名，depth=below_surface涵盖地下层和洞穴层。结束时身处某群系的要求使用biome条件，可在群系内任意位置验证。";
+                + "biome条件按原生人物群系与深度验收，count=1，name为群系名，depth=below_surface涵盖地下层和洞穴层。结束时身处某群系的要求使用biome条件，可在群系内任意位置验证。"
+                + "施工使用tiles条件：x/y为矩形左上世界格，width/height为大小，count=面积且面积<=4096，type为原版方块编号或内部名称，-1为空格。宿主逐格读取真实世界验收，不规则图形可拆成若干矩形条件。";
             definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"]["type"] = new JsonObject
             {
-                ["anyOf"] = new JsonArray(new JsonObject { ["type"] = "integer", ["minimum"] = 1 },
+                ["anyOf"] = new JsonArray(new JsonObject { ["type"] = "integer", ["minimum"] = -1 },
                     new JsonObject { ["type"] = "string", ["minLength"] = 1 }),
                 ["description"] = "真实编号或完整原版英文内部名称。宿主在建计划时解析名称并保存编号，可直接使用已知名称，无需先单独调用game_catalog；名称片段或歧义会拒绝。"
             };

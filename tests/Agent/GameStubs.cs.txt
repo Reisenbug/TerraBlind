@@ -178,7 +178,8 @@ namespace Terraria
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
-    public static class WorldGen { public static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < 1000 && y < 1000; }
+    public static class WorldGen { public static bool InWorld(int x, int y, int margin = 0)
+        => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin; }
     public static class Collision
     {
         public static bool Clear = true;
