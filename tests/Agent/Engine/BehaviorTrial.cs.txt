@@ -34,6 +34,9 @@ public sealed class BehaviorTrial : ModSystem
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
+    delegate void OriginalPrimary(StateSnapshotPlayer player);
+    delegate void PrimaryHook(OriginalPrimary original, StateSnapshotPlayer player);
+    PrimaryHook primaryHook;
     int hornetsSpawned;
     int stingersRequired = 1;
     Task trial;
@@ -296,6 +299,29 @@ public sealed class BehaviorTrial : ModSystem
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
         if (enabled) { On_Main.Update += Open; IL_Main.DoUpdate += Focus; }
+        if (enabled && Environment.GetEnvironmentVariable("TB_TRACE_PRIMARY") == "1")
+        {
+            primaryHook = (original, instance) =>
+            {
+                var player = instance.Player;
+                bool before = player.controlUseItem;
+                int slot = player.selectedItem;
+                original(instance);
+                if (player != Main.LocalPlayer || Main.gameMenu || Main.GameUpdateCount % 15 != 0) return;
+                File.AppendAllText(Path.Combine(Main.SavePath, "primary-input.jsonl"), new JsonObject
+                {
+                    ["tick"] = Main.GameUpdateCount, ["before_use"] = before, ["before_slot"] = slot,
+                    ["primary_use"] = player.controlUseItem, ["primary_slot"] = player.selectedItem,
+                    ["type"] = player.HeldItem.type, ["animation"] = player.itemAnimation,
+                    ["mouse_left"] = Main.mouseLeft, ["trigger_left"] = Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft,
+                    ["nav"] = RecedingNav.Active, ["ssp"] = StateSpacePlanner.IsActive,
+                    ["item_use"] = ItemUseCoordinator.IsActive, ["mine"] = MineCoordinator.IsActive,
+                    ["place"] = PlaceCoordinator.IsActive, ["place_action"] = PlaceAction.IsRunning,
+                    ["legacy_combat"] = Combat.Enabled, ["x"] = player.position.X, ["y"] = player.position.Y
+                }.ToJsonString() + Environment.NewLine);
+            };
+            MonoModHooks.Add(typeof(StateSnapshotPlayer).GetMethod("ApplyPrimaryControls", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic), primaryHook);
+        }
         if (enabled && Environment.GetEnvironmentVariable("TB_MATERIAL_NAV_STUB") == "1")
         {
             materialNavigationHook = (original, x, y, mode) =>
@@ -453,6 +479,34 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_IDLE_INPUT_PROBE") == "1")
+        {
+            int sampled = 0;
+            var samples = new JsonArray();
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false;
+                Combat.Enabled = Dodge.Enabled = false; FightCoordinator.Stop();
+                BoundaryInputPlayer.Drive = player =>
+                {
+                    if (sampled >= 120) return;
+                    samples.Add(new JsonObject { ["tick"] = Main.GameUpdateCount,
+                        ["use_item"] = player.controlUseItem, ["animation"] = player.itemAnimation,
+                        ["mouse_left"] = Main.mouseLeft,
+                        ["trigger_left"] = Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft,
+                        ["game_active"] = Main.instance.IsActive, ["forced_focus"] = Main.hasFocus,
+                        ["nav"] = RecedingNav.Active, ["item_use"] = ItemUseCoordinator.IsActive,
+                        ["place"] = PlaceCoordinator.IsActive, ["agent_status"] = NativeAgent.Status });
+                    sampled++;
+                };
+                return true;
+            });
+            try { while (sampled < 120) await Task.Delay(20); }
+            finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; return true; }); }
+            File.WriteAllText(Path.Combine(Main.SavePath, "idle-input.json"), samples.ToJsonString());
+            Console.WriteLine("IDLE_INPUT_MEASURED native_controls=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_BOSS_CONTACT_PROBE") == "1")
         {
             await OnMain(() =>
