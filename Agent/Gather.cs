@@ -60,6 +60,7 @@ public static class Gather
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
+        var inventoryBefore = new Dictionary<int, int>();
         var unproductiveTiles = new Dictionary<int, JsonArray>();
         JsonObject scene = null, last = null;
         var blockedSources = new JsonArray();
@@ -73,6 +74,8 @@ public static class Gather
             for (int step = 0; step < 32; step++)
             {
                 scene = await world.Observe(budget.Token);
+                if (step == 0)
+                    foreach (var target in targets) inventoryBefore[target.ItemType] = Count(target);
                 if (targets.All(t => Count(t) >= t.Count)) { outcome = "enough"; break; }
                 if (scene["error"] != null)
                 { outcome = scene["error"].ToString(); sourceError = scene["source_error"]?.DeepClone(); break; }
@@ -141,14 +144,20 @@ public static class Gather
         }
         scene = await world.Observe(token);
         bool enough = targets.All(t => Count(t) >= t.Count);
+        if (!enough && outcome == "source_unavailable" && area != null
+            && targets.Any(t => Count(t) > inventoryBefore[t.ItemType])) outcome = "source_area_exhausted";
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
+            ["detail"] = outcome == "source_area_exhausted"
+                ? "本轮已获得部分目标物品，指定source_area内当前已无符合筛选条件的候选。保留实际库存进度，选择下一处来源或调整source_area后继续剩余目标。" : null,
             ["source_rules"] = DescribeSources(targets),
             ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,
             ["blocked_sources"] = blockedSources,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
-                { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t), ["met"] = Count(t) >= t.Count }).ToArray()) };
+                { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t),
+                    ["inventory_before"] = inventoryBefore[t.ItemType], ["inventory_delta"] = Count(t) - inventoryBefore[t.ItemType],
+                    ["remaining"] = Math.Max(0, t.Count - Count(t)), ["met"] = Count(t) >= t.Count }).ToArray()) };
     }
 
     static JsonObject SourceReview(GatherTarget target)

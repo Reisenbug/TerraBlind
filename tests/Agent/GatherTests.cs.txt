@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -73,8 +74,18 @@ static class GatherTests
         world = new World();
         result = await Gather.Run(Targets, 5, world, default, new GatherArea(10, 0, 1, 1));
         Check(world.Actions.Count == 1 && world.Actions[0] == "tile" && !result["ok"].GetValue<bool>()
-            && result["outcome"].ToString() == "source_unavailable" && result["targets"][0]["actual"].GetValue<int>() == 1,
+            && result["outcome"].ToString() == "source_area_exhausted" && result["targets"][0]["actual"].GetValue<int>() == 1,
             "gather ignored source area to chase an outside NPC or counted incomplete target as success");
+        Check(result["targets"][0]["inventory_before"].GetValue<int>() == 0
+            && result["targets"][0]["inventory_delta"].GetValue<int>() == 1
+            && result["targets"][1]["remaining"].GetValue<int>() == 1 && result["detail"] != null,
+            "partial collection lost verified gain or the remaining goal when the selected source area emptied");
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(20, 0, 1, 1));
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" })
+            && result["targets"][0]["inventory_before"].GetValue<int>() == 1
+            && result["targets"][0]["inventory_delta"].GetValue<int>() == 0
+            && result["targets"][1]["remaining"].GetValue<int>() == 0,
+            "continuing in the next source area restarted a fulfilled target or lost retained inventory progress");
         world = new World { Drop = true };
         result = await Gather.Run(Targets, 5, world, default, new GatherArea(30, 0, 1, 1));
         Check(world.Actions.Count == 0 && result["outcome"].ToString() == "source_unavailable",
