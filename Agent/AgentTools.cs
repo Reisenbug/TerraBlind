@@ -538,7 +538,10 @@ public static partial class AgentTools
         if (Recovery.Revision > 0 && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
             return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
                 ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();
-        if (name is not ("say" or "ask" or "get_state" or "game_api" or "combat_observe" or "combat_stop")
+        bool needsLivingPlayer = AgentControlSession.ActionTool(name)
+            || name is "combat_start" or "duel_player" or "set_combat"
+            || name == "action_control" && Text(args, "command") == "resume";
+        if (needsLivingPlayer
             && await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
         {
             while (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);

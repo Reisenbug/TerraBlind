@@ -457,6 +457,24 @@ static class RuntimeTests
                 { ["names"] = new JsonArray("action_control") }, default)));
             Check(deadApi["tools"]?.AsArray().Count == 1 && Game.LocalPlayer.dead,
                 "death blocked interface discovery or querying it changed player state");
+            using (var preparationDeadline = new CancellationTokenSource(1000))
+            {
+                var deadCatalog = JsonNode.Parse(await Execute(AgentTools.Execute("game_catalog",
+                    new JsonObject { ["kind"] = "item", ["name"] = "FixtureGoal" }, preparationDeadline.Token)));
+                Check(deadCatalog["matches"]?.AsArray().Count > 0 && Game.LocalPlayer.dead,
+                    "waiting for respawn blocked read-only preparation");
+                var deadScript = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                    new JsonObject { ["code"] = "return {alive:!tool('get_state').player.dead};" }, preparationDeadline.Token)));
+                Check(deadScript["ok"]?.GetValue<bool>() == true && deadScript["value"]?["alive"]?.GetValue<bool>() == false,
+                    "read-only script could not prepare while waiting for respawn");
+            }
+            using (var actionDeadline = new CancellationTokenSource(150))
+            {
+                bool cancelled = false;
+                try { await Execute(AgentTools.Execute("act", new JsonObject { ["move_x"] = 1, ["ticks"] = 1 }, actionDeadline.Token)); }
+                catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled && Game.LocalPlayer.dead, "physical action ran before respawn");
+            }
             Game.LocalPlayer.dead = false;
             Check(JsonNode.Parse(await Execute(AgentTools.State(default)))["player"]["dead"].GetValue<bool>() == false,
                 "respawn retained stale death state");

@@ -302,6 +302,7 @@ public class NativeAgent : ModSystem
                 int noProgressContinuations = 0;
                 int preparationContinuations = 0;
                 string preparedHandle = null;
+                bool preparedDuringRespawn = false;
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
@@ -361,10 +362,15 @@ public class NativeAgent : ModSystem
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
-                        while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
-                        input = "继续原目标。刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await Context();
+                        if (preparedDuringRespawn)
+                            while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
+                        preparedDuringRespawn = await OnMain(() => Main.LocalPlayer.dead, token);
+                        input = preparedDuringRespawn
+                            ? "继续原目标。角色正在等待复活，现在查询资源、配方和现场证据，修订未完成节点的script，准备恢复方案。实际动作在复活后核对新位置再执行。\n现状：" + await Context()
+                            : "继续原目标。刚才死亡，现已复活。依据实际现状执行已准备的恢复方案。\n现状：" + await Context();
                         continue;
                     }
+                    preparedDuringRespawn = false;
                     bool canContinue = await OnMain(() => AgentTools.Plan.Incomplete
                         && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
                         && !PvpDuel.Active, token);
@@ -397,7 +403,6 @@ public class NativeAgent : ModSystem
                     if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
                     {
                         await OnMain(() => { Progress("目标未完成，继续调整方案。", "目标续接中", false); return true; }, token);
-                        await Task.Delay(5000, token);
                         input = "原目标：" + goal + "\n目标尚未通过宿主验收，继续执行。不要结束等待玩家resume。"
                             + "已有后台动作则等待它或处理真实事件；已失败动作依据最新证据换方案，不重放相同失败参数。"
                             + "当前步骤blocked不等于永久放弃：调查实际阻塞，修复后继续原计划，不清空既有进度。"
