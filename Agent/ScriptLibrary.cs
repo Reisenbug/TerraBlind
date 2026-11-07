@@ -10,7 +10,7 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -20,6 +20,31 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "observe_boss_control") return Template(name,
+            "Boss控制器已交接后，在所属DAG节点中观察。config.boss_type可限定Boss，required_axes可设horizontal/vertical。每秒读取即时预览，所需移动轴缺失、危险事件或Boss离场就交回模型，保留控制器运行；离场后由宿主条件验收击败事实。可按现场修改观察条件。",
+            """
+            const config = null;
+            if(!config) throw new Error('Fill config.boss_type and required_axes from the combat plan');
+            const required=config.required_axes??[];
+            if(required.some(axis=>!['horizontal','vertical'].includes(axis))) throw new Error('required_axes needs horizontal/vertical');
+            for(let sample=0;sample<40;sample++) {
+              const state=tool('boss_status');
+              const bosses=(state.active_bosses??[]).filter(b=>config.boss_type==null||b.type===config.boss_type);
+              if(!bosses.length) return {status:'verify',reason:'boss_absent',next:'Verify actual defeat condition in owning DAG node'};
+              const snapshot=state.movement_snapshot;
+              if(state.input_gate||!state.movement_enabled||!state.movement_permitted)
+                return {status:'yield',reason:'controller_unavailable',controller:state};
+              if(snapshot?.source==='live_preview') {
+                const options=snapshot.options??[];
+                const missing=required.filter(axis=>!options.some(option=>(axis==='horizontal'?/Left|Right/:/Up|Down/).test(option.direction)));
+                if(missing.length) return {status:'yield',reason:'movement_axis_unavailable',missing,bosses,movement:snapshot};
+              }
+              const observed=tool('script_events',{wait_ms:1000,max_events:8});
+              const danger=(observed.events??[]).filter(event=>['low_health','suffocating','player_died','boss_appeared'].includes(event.kind));
+              if(danger.length) return {status:'yield',reason:'combat_observation',events:danger,bosses};
+            }
+            return {status:'yield',reason:'combat_review_interval',next:'Inspect damage, equipment and continued controller state'};
+            """);
         if (name == "navigate_observe") return Template(name,
             "配置destination世界格坐标，写入所属DAG节点script，以run_script({task_node:id,background:true})启动。宿主立即返回后台句柄；脚本直接执行导航，Agent同时观察和准备后继。step保留实际完成效果。",
             """

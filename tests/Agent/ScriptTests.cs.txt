@@ -208,7 +208,7 @@ static class ScriptTests
         try
         {
             var library = new ScriptLibrary(programDirectory);
-            foreach (string name in new[] { "navigate_observe", "collect_detour", "use_life_crystals" })
+            foreach (string name in new[] { "navigate_observe", "collect_detour", "use_life_crystals", "observe_boss_control" })
             {
                 Check(library.List().Any(p => p["name"].ToString() == name && p["template"].GetValue<bool>()), "starter template missing from empty library");
                 var template = library.Get(name);
@@ -231,6 +231,39 @@ static class ScriptTests
                 Check(r["ok"].GetValue<bool>() && r["value"]["status"].ToString() == "arrived", "navigation example lost completed result");
             }
             Check(starts == 1, "navigation example restarted its existing route");
+            string bossCode = library.Get("observe_boss_control")["code"].ToString()
+                .Replace("const config = null;", "const config = {boss_type:222,required_axes:['horizontal']};");
+            int bossStops = 0, bossPolls = 0, bossWaits = 0;
+            bool restrictedBoss = true, combatDanger = false;
+            Task<string> BossTool(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "script_events")
+                {
+                    bossWaits++;
+                    return Task.FromResult(combatDanger ? "{\"events\":[{\"kind\":\"low_health\",\"evidence\":{\"hp\":60}}]}" : "{\"events\":[]}");
+                }
+                Check(name == "boss_status", "Boss observer changed controls: " + name);
+                bossPolls++;
+                return Task.FromResult(new JsonObject { ["movement_enabled"] = true, ["movement_permitted"] = true,
+                    ["active_bosses"] = bossPolls > 1 ? new JsonArray() : new JsonArray(new JsonObject { ["type"] = 222, ["hp"] = 1000 }),
+                    ["movement_snapshot"] = new JsonObject { ["source"] = "live_preview", ["options"] = new JsonArray(
+                        new JsonObject { ["direction"] = restrictedBoss ? "Stay" : "Left" }) } }.ToJsonString());
+            }
+            var restrictedControl = await AgentScript.Run(bossCode, 5, (_, _) => { }, BossTool,
+                _ => { bossStops++; return Task.CompletedTask; }, default);
+            Check(restrictedControl["value"]["reason"].ToString() == "movement_axis_unavailable"
+                && bossPolls == 1 && bossWaits == 0 && bossStops == 0,
+                "Boss observer waited with a missing required movement axis or stopped the controller");
+            restrictedBoss = false; bossPolls = 0;
+            var bossGone = await AgentScript.Run(bossCode, 5, (_, _) => { }, BossTool,
+                _ => { bossStops++; return Task.CompletedTask; }, default);
+            Check(bossGone["value"]["status"].ToString() == "verify" && bossPolls == 2 && bossWaits == 1 && bossStops == 0,
+                "Boss disappearance was mistaken for verified completion or interrupted retained controls");
+            combatDanger = true; bossPolls = 0;
+            var bossDanger = await AgentScript.Run(bossCode, 5, (_, _) => { }, BossTool,
+                _ => { bossStops++; return Task.CompletedTask; }, default);
+            Check(bossDanger["value"]["reason"].ToString() == "combat_observation" && bossStops == 0,
+                "combat health observation stopped the controller instead of handing facts to the Agent");
             int detourStarts = 0, pauses = 0, resumes = 0;
             bool collected = false;
             Task<string> DetourTool(string name, JsonObject args, CancellationToken token)
