@@ -1902,7 +1902,25 @@ public sealed class BehaviorTrial : ModSystem
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
         if (!string.IsNullOrEmpty(QueenResumeRoot))
+        {
             prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";
+            string progressFile = Path.Combine(QueenResumeRoot, "queen-progress.json");
+            if (File.Exists(progressFile))
+            {
+                var previous = JsonNode.Parse(File.ReadAllText(progressFile));
+                var state = previous?["after"];
+                var evidence = new JsonObject { ["previous_elapsed_ms"] = previous?["elapsed_ms"]?.DeepClone(),
+                    ["last_death"] = state?["last_death"]?.DeepClone(),
+                    ["last_movement_snapshot"] = state?["boss_control"]?["movement_snapshot"]?.DeepClone(),
+                    ["failed_strategies"] = state?["recovery"]?["failure_history"]?.DeepClone(),
+                    ["steps"] = new JsonArray((state?["task_plan"]?["steps"] as JsonArray ?? new JsonArray())
+                        .Select(step => (JsonNode)new JsonObject { ["id"] = step["id"]?.DeepClone(),
+                            ["description"] = step["description"]?.DeepClone(), ["status"] = step["status"]?.DeepClone(),
+                            ["actual"] = step["best_actual"]?.DeepClone() }).ToArray()) };
+                prompt += "上次会话的历史实测记录如下，当前情况以本轮工具观察为准：" + evidence.ToJsonString();
+                File.WriteAllText(Path.Combine(Main.SavePath, "queen-resume-evidence.json"), evidence.ToJsonString());
+            }
+        }
         var clock = Stopwatch.StartNew();
         var deaths = new JsonArray(); bool wasDead = false;
         long? healthMs = null, chakramMs = null, queenSpawnMs = null;
