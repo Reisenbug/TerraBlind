@@ -21,8 +21,8 @@ public static class DecisionFacts
         {
             hp_percent = snapshot.Health * 100 / Math.Max(1, snapshot.MaxHealth),
             i_am_losing_health_over_time = snapshot.LosingHealthOverTime,
-            my_speed_to_the_right = (int)(snapshot.Player.Velocity.X * 60f / 16f),
-            my_speed_upward = (int)(-snapshot.Player.Velocity.Y * 60f / 16f),
+            my_speed_to_the_right = (int)(snapshot.Player.Velocity.X * (snapshot.HoneyWet ? .25f : 1f) * 60f / 16f),
+            my_speed_upward = (int)(-snapshot.Player.Velocity.Y * (snapshot.HoneyWet ? .25f : 1f) * 60f / 16f),
             honey = new { touching = snapshot.HoneyWet, surface_below_feet_tiles = snapshot.HoneyBelowPixels / 16,
                 effect = "While touching honey, actual displacement is one quarter of velocity; upward escape takes priority. Platforms above honey support walking; descending through them enters the pool." },
             movement = new
@@ -115,6 +115,7 @@ public static class DecisionFacts
             : Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down) - GameMovement.LowerReserveCells * snapshot.MovementReserveScale;
         float travelEstimate = burst ? (y < 0 ? 18f : 22f) : (y < 0 ? 10f : 18f);
         float vertical = y * Math.Max(0f, Math.Min(travelEstimate, verticalRoom));
+        if (snapshot.HoneyWet) { horizontal *= .25f; vertical *= .25f; }
         Vector2 displacement = new(horizontal * 16f, vertical * 16f);
         Vector2 playerAfter = snapshot.Player.Center + displacement;
         string bossClearance = string.Join("; ", snapshot.Bosses.Concat(snapshot.Parts)
