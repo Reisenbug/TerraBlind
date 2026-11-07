@@ -453,6 +453,49 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PLACEMENT_OCCUPANCY_PROBE") == "1")
+        {
+            int placementTx = 0, placementTy = 0;
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
+                Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Reset(); Concessions.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, floorRow = Main.spawnTileY;
+                for (int tx = x - 10; tx <= x + 10; tx++)
+                for (int ty = floorRow - 8; ty <= floorRow + 2; ty++)
+                {
+                    Main.tile[tx, ty].ClearEverything();
+                    if (ty >= floorRow) WorldGen.PlaceTile(tx, ty, TileID.Stone, mute: true, forced: true);
+                }
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.inventory[1].SetDefaults(ItemID.CopperHammer);
+                p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 200;
+                p.position = new Vector2(x * 16, floorRow * 16 - p.height); p.velocity = Vector2.Zero;
+                placementTx = x + 3; placementTy = floorRow - 1;
+                WorldGen.PlaceTile(placementTx, placementTy, TileID.Tombstones, mute: true, forced: true);
+                if (!Main.tile[placementTx, placementTy].HasTile || Main.tile[placementTx, placementTy].TileType != TileID.Tombstones)
+                    throw new Exception("native tombstone setup failed");
+                return true;
+            });
+            var occupiedPlacement = await Call("place_at", new JsonObject { ["item"] = "9", ["x"] = placementTx, ["y"] = placementTy });
+            var proof = new JsonObject { ["occupied"] = occupiedPlacement.DeepClone() };
+            File.WriteAllText(Path.Combine(Main.SavePath, "placement-occupancy.json"), proof.ToJsonString());
+            if (occupiedPlacement["ok"]?.GetValue<bool>() != false
+                || occupiedPlacement["cells"]?[0]?["actual_tile"]?["type"]?.GetValue<int>() != TileID.Tombstones
+                || occupiedPlacement["cells"]?[0]?["expected_tile"]?.GetValue<int>() != TileID.WoodBlock
+                || !await OnMain(() => Main.tile[placementTx, placementTy].TileType == TileID.Tombstones
+                    && Main.LocalPlayer.inventory.Where(item => item.type == ItemID.Wood).Sum(item => item.stack) == 200))
+                throw new Exception("native occupied placement lost object evidence or changed terrain: " + proof);
+            proof["mining"] = await Call("mine", new JsonObject { ["dir"] = "right", ["target_x"] = placementTx, ["target_y"] = placementTy });
+            var repairPlacement = await Call("place_at", new JsonObject { ["item"] = "9", ["x"] = placementTx, ["y"] = placementTy });
+            proof["repaired"] = repairPlacement.DeepClone();
+            File.WriteAllText(Path.Combine(Main.SavePath, "placement-occupancy.json"), proof.ToJsonString());
+            if (repairPlacement["ok"]?.GetValue<bool>() != true
+                || !await OnMain(() => Main.tile[placementTx, placementTy].HasTile && Main.tile[placementTx, placementTy].TileType == TileID.WoodBlock))
+                throw new Exception("explicit obstacle removal did not enable native placement: " + proof);
+            Console.WriteLine("PLACEMENT_OCCUPANCY_PASS native_tombstone=true explicit_mining=true native_wood=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_VEIN_COLLECTION_PROBE") == "1")
         {
             await OnMain(() =>
