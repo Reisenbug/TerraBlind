@@ -186,6 +186,19 @@ static class WatchTests
         Check(navigation.Observe(30, 0, 0, 1000, terrain)?["reason"]?.ToString() == "moving_without_route_progress",
             "oscillation or newly visible tiles masked no progress");
         Console.WriteLine("PASS: navigation separates planning, execution stalls, excavation and oscillation");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i < 8; i++)
+            Check(navigation.Observe(i, i % 2 * 22, 0, 1000 + i % 2 * 22, terrain) == null,
+                "local movement interrupted before its recovery window");
+        Check(navigation.Observe(8, 0, 0, 1000, terrain)?["reason"]?.ToString() == "local_oscillation",
+            "small local oscillation retained the thirty-second recovery delay");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i <= 12; i++)
+            Check(navigation.Observe(i, i * 3, 0, 1000 - i * 3, terrain) == null,
+                "slow movement toward the target was treated as local oscillation");
+        Console.WriteLine("PASS: bounded oscillation yields early while slow forward progress continues");
 
         int effects = 0;
         var progress = new ScriptProgress();
