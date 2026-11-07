@@ -674,12 +674,18 @@
     "type": "function",
     "function": {
       "name": "set_combat",
-      "description": "设置战斗许可及既有Boss控制器。auto_dodge/auto_attack只修改许可，不会自己开启控制器。boss_control=true启用Jev Boss走位和自动攻击，false关闭；仍受许可、人工控制、PvP模式和Key是否可用约束。战前先暂停采集/移动，再启用；Boss出现后自动接管，不需fight轮询。不负责召唤或装备，不保证获胜。通过boss_status或返回boss_control读取实际状态。未指定字段保持不变；停止Agent或离开世界会恢复Agent修改前的控制器开关。",
+      "description": "设置战斗许可及既有Boss控制器。auto_dodge/auto_attack修改许可。boss_control=true启用Jev Boss走位和自动攻击，false关闭；仍受许可、人工控制、PvP模式和Key是否可用约束。战前先暂停采集/移动，再启用。movement_reserve_scale设置靠墙余量比例：默认1对应水平至少35格、上方至少18格、下方至少4格；紧凑场地可降低比例，实际碰撞遵循原版，control活动区域约束继续生效。boss_status返回input_gate、最近采样的空间与合法移动选项，可据此调整。未指定字段保持不变；停止Agent恢复修改前的开关和余量比例。",
       "parameters": {
         "type": "object",
         "properties": {
           "boss_control": {
             "type": "boolean"
+          },
+          "movement_reserve_scale": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 1,
+            "description": "Boss走位的靠墙余量比例；结合地图空间和boss_status中的合法选项选择。默认1，紧凑场地可用较小值。"
           },
           "auto_dodge": {
             "type": "boolean"

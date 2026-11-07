@@ -843,24 +843,30 @@ static class RuntimeTests
             Check(AgentPermissions.Dodge && !AgentPermissions.Attack, "partial permission update changed unrelated permission");
             Console.WriteLine("PASS: combat denial stops attack, rejects fight and preserves partial updates");
             bool previousAttackController = Combat.Enabled, previousMovementController = Dodge.Enabled;
+            float previousReserve = Dodge.MovementReserveScale;
             var previousNpc = Game.npc[0];
             Game.npc[0] = new Terraria.NPC { active = true, boss = true, type = 123, life = 75 };
             try
             {
                 Combat.Enabled = true; Dodge.Enabled = false;
-                var enabled = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true }, default)));
+                var enabled = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = true, ["movement_reserve_scale"] = .075 }, default)));
                 Check(Combat.Enabled && Dodge.Enabled && enabled["boss_control"]["attack_permitted"].GetValue<bool>() == false,
                     "Boss controller enable bypassed separate attack permission");
                 var status = JsonNode.Parse(await Execute(AgentTools.Execute("boss_status", new JsonObject(), default)));
+                Check(Math.Abs(Dodge.MovementReserveScale - .075f) < .0001
+                    && Math.Abs(status["movement_reserve_scale"].GetValue<float>() - .075f) < .0001, "Agent movement clearance did not reach controller status");
+                var invalidReserve = JsonNode.Parse(await Execute(AgentTools.Execute("set_combat", new JsonObject { ["movement_reserve_scale"] = 0, ["auto_dodge"] = false }, default)));
+                Check(invalidReserve["error"] != null && AgentPermissions.Dodge && Math.Abs(Dodge.MovementReserveScale - .075f) < .0001,
+                    "invalid reserve partially changed movement permission or clearance");
                 Check(status["active_bosses"].AsArray().Any(b => b["type"].GetValue<int>() == 123 && b["hp"].GetValue<int>() == 75)
                     && Combat.Enabled && Dodge.Enabled, "Boss status omitted current state or mutated controller flags");
                 await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = false }, default));
                 Check(!Combat.Enabled && !Dodge.Enabled, "Boss controller did not disable");
                 NativeAgent.Stop();
-                Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride,
+                Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride && Dodge.MovementReserveScale == previousReserve,
                     "Agent stop did not restore existing user controller settings");
             }
-            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; }
+            finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; Dodge.MovementReserveScale = previousReserve; }
             Console.WriteLine("PASS: Boss controls expose actual state, preserve independent permissions and restore user settings on stop");
             var savedBag = Game.LocalPlayer.inventory[49];
             var savedArmor = Game.LocalPlayer.armor;
@@ -1647,7 +1653,7 @@ static class RuntimeTests
                     await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
                     Check(timer.ElapsedMilliseconds < 1000 && AgentTools.LastContinuation["task_node"].ToString() == "travel"
                         && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed",
-                        "same-node continuation lost its workflow or bypassed completion evidence");
+                        $"same-node continuation failed elapsed_ms={timer.ElapsedMilliseconds} node={AgentTools.LastContinuation?["task_node"]} status={AgentTools.Plan.Snapshot()["steps"][0]["status"]} threads={System.Threading.ThreadPool.ThreadCount} pending={System.Threading.ThreadPool.PendingWorkItemCount}");
                     Console.WriteLine("DAG_WITHIN_NODE start_ms=" + timer.ElapsedMilliseconds + " model_calls=0");
                     finishSecond = true;
                     await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
@@ -1679,7 +1685,7 @@ static class RuntimeTests
                         await PumpUntil(() => { AgentTools.ContinuePreparedNode(cancel.Token); return starts == 2; });
                     await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
                     Check(elapsed.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
-                        "prepared DAG node did not start within one second after host verification");
+                        $"prepared DAG handoff mode={mode} elapsed_ms={elapsed.ElapsedMilliseconds} status={AgentTools.Plan.Snapshot()["steps"][0]["status"]} threads={System.Threading.ThreadPool.ThreadCount} pending={System.Threading.ThreadPool.PendingWorkItemCount}");
                     AgentTools.ContinuePreparedNode(cancel.Token);
                     Check(starts == 2, "automatic continuation replayed the same predecessor");
                     Console.WriteLine("DAG_AUTOMATIC start_ms=" + elapsed.ElapsedMilliseconds + " model_calls=0");

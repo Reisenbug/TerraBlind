@@ -224,7 +224,7 @@ public static partial class AgentTools
         long age = tick - damage["tick"].GetValue<long>();
         return age is >= 0 and <= 2 ? damage : null;
     }
-    static (bool Attack, bool Dodge)? bossBefore;
+    static (bool Attack, bool Dodge, float Reserve)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default),
@@ -265,7 +265,7 @@ public static partial class AgentTools
         Watches.Reset();
         if (bossBefore is { } previous)
         {
-            Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; bossBefore = null;
+            Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; Dodge.MovementReserveScale = previous.Reserve; bossBefore = null;
         }
         StopInputs();
     }
@@ -412,6 +412,17 @@ public static partial class AgentTools
         ["attack_enabled"] = Combat.Enabled, ["movement_enabled"] = Dodge.Enabled,
         ["attack_permitted"] = AgentPermissions.Attack, ["movement_permitted"] = AgentPermissions.Dodge,
         ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
+        ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory ? "inventory_open" : null,
+        ["movement_reserve_scale"] = Dodge.MovementReserveScale,
+        ["movement_snapshot"] = Dodge.Snapshot is { } movement ? new JsonObject
+        {
+            ["captured_tick"] = movement.Tick, ["reserve_scale"] = movement.MovementReserveScale,
+            ["solid_room_tiles"] = new JsonObject { ["left"] = movement.SolidDistances.Left / 16,
+                ["right"] = movement.SolidDistances.Right / 16, ["up"] = movement.SolidDistances.Up / 16, ["down"] = movement.SolidDistances.Down / 16 },
+            ["options"] = new JsonArray(movement.AvailableActions.Select(option => (JsonNode)new JsonObject
+                { ["direction"] = option.Intent.Direction.ToString(), ["horizontal"] = option.Intent.HorizontalSize.ToString(),
+                    ["vertical"] = option.Intent.VerticalSize.ToString() }).ToArray())
+        } : null,
         ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
         ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
         ["other_key_sources"] = "not_checked",
@@ -1175,6 +1186,9 @@ public static partial class AgentTools
             case "set_combat":
                 result = await NativeAgent.OnMain(() =>
                 {
+                    double? reserve = args["movement_reserve_scale"]?.GetValue<double>();
+                    if (reserve is double scale && (!double.IsFinite(scale) || scale < .05 || scale > 1))
+                        return new JsonObject { ["error"] = "movement_reserve_scale_needs_0_05_to_1" };
                     if (args["weapon_type"] != null)
                     {
                         int weaponType = Int(args, "weapon_type");
@@ -1191,9 +1205,14 @@ public static partial class AgentTools
                     }
                     if (args["boss_control"] != null)
                     {
-                        bossBefore ??= (Combat.Enabled, Dodge.Enabled);
+                        bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
                         Combat.Enabled = Dodge.Enabled = Bool(args, "boss_control");
                         if (!Combat.Enabled) Combat.Stop();
+                    }
+                    if (reserve is double requestedReserve)
+                    {
+                        bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
+                        Dodge.MovementReserveScale = (float)requestedReserve;
                     }
                     if (args["auto_dodge"] != null) AgentPermissions.Dodge = Bool(args, "auto_dodge");
                     if (args["auto_attack"] != null) AgentPermissions.Attack = Bool(args, "auto_attack");

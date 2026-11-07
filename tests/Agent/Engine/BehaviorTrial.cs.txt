@@ -577,7 +577,8 @@ public sealed class BehaviorTrial : ModSystem
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
         {
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
-            bool vision = building || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
+            bool roomProbe = Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
+            bool vision = building || roomProbe || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
             JsonObject lake = null;
             var map = await OnMain(() =>
@@ -642,6 +643,42 @@ public sealed class BehaviorTrial : ModSystem
             if (!File.Exists(map["image_path"].ToString()) || new FileInfo(map["image_path"].ToString()).Length < 1000)
                 throw new Exception("native map PNG missing or empty");
             Console.WriteLine("TERRAIN_MAP_PASS " + map);
+            if (roomProbe)
+            {
+                var report = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    var solid = TerraBlind.JevariaCombat.GameSensor.ScanSolids(p.Hitbox);
+                    var world = new TerraBlind.JevariaCombat.BoundaryDistances(p.Hitbox.Left,
+                        Main.maxTilesX * 16f - p.Hitbox.Right, p.Hitbox.Top, Main.maxTilesY * 16f - p.Hitbox.Bottom);
+                    JsonArray Options(float scale) => new(TerraBlind.JevariaCombat.GameMovement.AvailableActions(p, solid, world,
+                        false, false, scale).Select(option => (JsonNode)JsonValue.Create(option.Intent.Direction.ToString())).ToArray());
+                    return new JsonObject { ["solid_room_tiles"] = new JsonObject { ["left"] = solid.Left / 16,
+                        ["right"] = solid.Right / 16, ["up"] = solid.Up / 16, ["down"] = solid.Down / 16 },
+                        ["default_scale"] = 1, ["default_options"] = Options(1), ["compact_scale"] = .075f,
+                        ["compact_options"] = Options(.075f), ["map"] = map.DeepClone() };
+                });
+                report["configured"] = await Call("set_combat", new JsonObject { ["movement_reserve_scale"] = .075 });
+                report["actual_controller_snapshot"] = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    target = NPC.NewNPC(new EntitySource_Misc("HiveRoomProbe"), (int)p.Center.X + 120, (int)p.Center.Y, NPCID.QueenBee);
+                    var sensor = (TerraBlind.JevariaCombat.GameSensor)typeof(Dodge).GetField("_sensor",
+                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                    sensor.Observe(p);
+                    var snapshot = sensor.Capture(p, 1, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                    return new JsonObject { ["reserve_scale"] = snapshot.MovementReserveScale,
+                        ["options"] = new JsonArray(snapshot.AvailableActions.Select(option => (JsonNode)JsonValue.Create(option.Intent.Direction.ToString())).ToArray()) };
+                });
+                report["restored_reserve"] = await OnMain(() => { AgentTools.Stop(); return Dodge.MovementReserveScale; });
+                File.WriteAllText(Path.Combine(Main.SavePath, "hive-room.json"), report.ToJsonString());
+                if (Math.Abs(report["actual_controller_snapshot"]["reserve_scale"].GetValue<float>() - .075f) > .0001f
+                    || !report["actual_controller_snapshot"]["options"].AsArray().Any(o => o.ToString() is "Left" or "Right")
+                    || report["restored_reserve"].GetValue<float>() != 1)
+                    throw new Exception("Agent reserve did not reach real Boss sensor or restore after stop: " + report);
+                Console.WriteLine("HIVE_ROOM_OBSERVED " + report);
+                return;
+            }
             if (vision && !building)
             {
                 var definitions = JsonNode.Parse(Encoding.UTF8.GetString(ModLoader.GetMod("TerraBlind").GetFileBytes("Agent/Tools.json"))).AsArray();

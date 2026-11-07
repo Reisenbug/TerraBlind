@@ -38,6 +38,8 @@ namespace TerraBlind
 		static readonly Port.GameMovement _movement = new();
 		static readonly Port.ProjectileAim _attack = new();
 		static Port.CombatSnapshot _snapshot;
+		public static Port.CombatSnapshot Snapshot => _snapshot;
+		public static float MovementReserveScale { get => _sensor.MovementReserveScale; set => _sensor.MovementReserveScale = value; }
 		static string _movementReason = "";
 		public static string Last = "idle";
 		public static DodgeAction Action = DodgeAction.Idle;

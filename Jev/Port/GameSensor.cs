@@ -9,6 +9,7 @@ namespace TerraBlind.JevariaCombat;
 public sealed class GameSensor : ICombatSensor
 {
     public const int WorldEdgeCells = 40;
+    public float MovementReserveScale { get; set; } = 1f;
     private readonly Dictionary<int, Queue<(ulong Tick, float Speed)>> _speedHistory = new();
 
     public bool Observe(Player player)
@@ -78,7 +79,7 @@ public sealed class GameSensor : ICombatSensor
 
         return CaptureScene(player, sequence, previous, previousDurationMs,
             Entity(boss.whoAmI, BossName(boss), boss.Center, boss.velocity, boss.width, boss.height, boss.damage),
-            bosses, motion, parts, false, 1f);
+            bosses, motion, parts, false, MovementReserveScale);
     }
 
     public CombatSnapshot CapturePlayer(Player player, Player target, ulong sequence, DodgeIntent previous, long durationMs)
