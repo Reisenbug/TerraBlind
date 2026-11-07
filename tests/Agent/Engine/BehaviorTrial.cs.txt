@@ -577,7 +577,8 @@ public sealed class BehaviorTrial : ModSystem
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
         {
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
-            bool roomProbe = Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
+            bool combatProbe = Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_TRIAL") == "1";
+            bool roomProbe = combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
             bool vision = building || roomProbe || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
             JsonObject lake = null;
@@ -645,6 +646,22 @@ public sealed class BehaviorTrial : ModSystem
             Console.WriteLine("TERRAIN_MAP_PASS " + map);
             if (roomProbe)
             {
+                if (combatProbe) await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    int left = lake["left"].GetValue<int>(), right = lake["right"].GetValue<int>();
+                    int row = lake["surface_y"].GetValue<int>() - 2;
+                    for (int x = left - 1; x <= right + 1; x++)
+                        if (!Main.tile[x, row].HasTile) WorldGen.PlaceTile(x, row, TileID.WoodBlock, mute: true, forced: true);
+                    p.position = new Vector2(mapX * 16, row * 16 - p.height);
+                    p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                    p.ConsumedLifeCrystals = 7; p.statLife = p.statLifeMax = p.statLifeMax2 = 240;
+                    foreach (var item in p.inventory) item.TurnToAir();
+                    p.inventory[0].SetDefaults(ItemID.Starfury); p.inventory[1].SetDefaults(ItemID.ThornChakram);
+                    Main.playerInventory = false; Config.I.AgentEnabled = true;
+                    AgentPermissions.Reset();
+                    return true;
+                });
                 var report = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
@@ -677,6 +694,29 @@ public sealed class BehaviorTrial : ModSystem
                     || report["restored_reserve"].GetValue<float>() != 1)
                     throw new Exception("Agent reserve did not reach real Boss sensor or restore after stop: " + report);
                 Console.WriteLine("HIVE_ROOM_OBSERVED " + report);
+                if (combatProbe)
+                {
+                    await Call("set_combat", new JsonObject { ["boss_control"] = true, ["auto_dodge"] = true,
+                        ["auto_attack"] = true, ["movement_reserve_scale"] = .075 });
+                    var clock = Stopwatch.StartNew(); var samples = new JsonArray();
+                    while (clock.Elapsed.TotalSeconds < 180)
+                    {
+                        await Task.Delay(500);
+                        var state = await OnMain(() => new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                            ["hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead,
+                            ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y,
+                            ["boss_hp"] = Main.npc[target].life, ["boss_active"] = Main.npc[target].active,
+                            ["defeated"] = NPC.downedQueenBee });
+                        state["controller"] = await Call("boss_status", new JsonObject()); samples.Add(state);
+                        if (state["dead"].GetValue<bool>() || !state["boss_active"].GetValue<bool>()) break;
+                    }
+                    samples.Last().AsObject()["last_death"] = (await Call("get_state", new JsonObject()))["last_death"]?.DeepClone();
+                    File.WriteAllText(Path.Combine(Main.SavePath, "hive-combat.json"), samples.ToJsonString());
+                    await Call("set_combat", new JsonObject { ["boss_control"] = false });
+                    if (samples.Last()?["defeated"]?.GetValue<bool>() != true)
+                        throw new Exception("native hive combat did not defeat Queen Bee: " + samples.Last());
+                    Console.WriteLine($"HIVE_COMBAT_PASS elapsed_ms={clock.ElapsedMilliseconds} native_physics=true setup_hp=240 setup_weapons=Starfury,ThornChakram");
+                }
                 return;
             }
             if (vision && !building)
