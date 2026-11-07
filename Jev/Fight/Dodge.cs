@@ -125,7 +125,7 @@ namespace TerraBlind
 			var boss = Boss(p, out int dist);
 			if (boss == null) { FightEnd("boss 没了(击败或离场)"); Gate("no boss"); Release(); return; }
 			if (!_inFight) FightStart();
-			_attack.SelectFirstWeapon(p);
+			SelectWeapon(p);
 			_sensor.Observe(p);
 
 			var done = _pending;
@@ -232,12 +232,21 @@ namespace TerraBlind
 			Last = $"{_lastApplied} boss {dist}格 {result.Reason}";
 		}
 
+		static bool SelectWeapon(Player p)
+		{
+			if (CombatLoadout.PreferredType <= 0) { _attack.SelectFirstWeapon(p); return true; }
+			int slot = CombatLoadout.Select(p);
+			if (slot < 0) return false;
+			p.selectedItem = slot;
+			return true;
+		}
+
 		public static bool TryAttackBoss(Player p, out Vector2 target)
 		{
 			target = p.Center;
 			if (Main.gameMenu || Main.playerInventory) return false;
 			if (p.statLife < p.statLifeMax2 * 0.5f || p.lavaWet) p.QuickHeal();
-			_attack.SelectFirstWeapon(p);
+			if (!SelectWeapon(p)) return false;
 			_sensor.Observe(p);
 			var live = _sensor.Capture(p, (ulong)_appliedSequence, ToIntent(_appliedAction), 0);
 			if (live == null) return false;

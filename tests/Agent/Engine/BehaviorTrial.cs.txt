@@ -577,7 +577,8 @@ public sealed class BehaviorTrial : ModSystem
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
         {
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
-            bool combatProbe = Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_TRIAL") == "1";
+            bool weaponProbe = Environment.GetEnvironmentVariable("TB_HIVE_WEAPON_PROBE") == "1";
+            bool combatProbe = weaponProbe || Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_TRIAL") == "1";
             bool roomProbe = combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
             bool vision = building || roomProbe || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
@@ -696,6 +697,23 @@ public sealed class BehaviorTrial : ModSystem
                 Console.WriteLine("HIVE_ROOM_OBSERVED " + report);
                 if (combatProbe)
                 {
+                    if (weaponProbe)
+                    {
+                        var observed = new JsonArray();
+                        foreach (int weapon in new[] { ItemID.ThornChakram, ItemID.Starfury })
+                        {
+                            await Call("set_combat", new JsonObject { ["boss_control"] = true, ["weapon_type"] = weapon,
+                                ["movement_reserve_scale"] = .075 });
+                            await Task.Delay(500);
+                            observed.Add(await OnMain(() => new JsonObject { ["requested"] = weapon,
+                                ["actual"] = Main.LocalPlayer.HeldItem.type, ["tick"] = Main.GameUpdateCount }));
+                        }
+                        File.WriteAllText(Path.Combine(Main.SavePath, "hive-weapons.json"), observed.ToJsonString());
+                        if (observed.Any(row => row["actual"].GetValue<int>() != row["requested"].GetValue<int>()))
+                            throw new Exception("Boss controller ignored Agent weapon preference: " + observed);
+                        Console.WriteLine("HIVE_WEAPONS_PASS " + observed);
+                        return;
+                    }
                     await Call("set_combat", new JsonObject { ["boss_control"] = true, ["auto_dodge"] = true,
                         ["auto_attack"] = true, ["movement_reserve_scale"] = .075 });
                     var clock = Stopwatch.StartNew(); var samples = new JsonArray();
