@@ -444,6 +444,78 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
+        {
+            bool vision = Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
+            int mapX = 0, mapY = 0;
+            JsonObject lake = null;
+            var map = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                int x = Main.spawnTileX, y = Main.spawnTileY;
+                if (vision)
+                {
+                    var seen = new HashSet<Point>();
+                    var largest = new List<Point>();
+                    for (int tx = 100; tx < Main.maxTilesX - 100; tx++)
+                    for (int ty = (int)Main.worldSurface; ty < Main.maxTilesY - 200; ty++)
+                    {
+                        var start = new Point(tx, ty);
+                        if (seen.Contains(start) || Main.tile[tx, ty].LiquidType != LiquidID.Honey || Main.tile[tx, ty].LiquidAmount < 128) continue;
+                        var component = new List<Point>(); var pending = new Queue<Point>(); pending.Enqueue(start); seen.Add(start);
+                        while (pending.TryDequeue(out var cell))
+                        {
+                            component.Add(cell);
+                            foreach (var next in new[] { new Point(cell.X - 1, cell.Y), new Point(cell.X + 1, cell.Y), new Point(cell.X, cell.Y - 1), new Point(cell.X, cell.Y + 1) })
+                                if (WorldGen.InWorld(next.X, next.Y, 1) && !seen.Contains(next)
+                                    && Main.tile[next.X, next.Y].LiquidType == LiquidID.Honey && Main.tile[next.X, next.Y].LiquidAmount >= 128)
+                                { seen.Add(next); pending.Enqueue(next); }
+                        }
+                        if (component.Count > largest.Count) largest = component;
+                    }
+                    if (largest.Count < 100) throw new Exception("natural honey lake missing");
+                    var surface = largest.GroupBy(c => c.Y).OrderBy(g => g.Key).First(g => g.Count() >= 8).ToArray();
+                    int left = surface.Min(c => c.X), right = surface.Max(c => c.X);
+                    x = (largest.Min(c => c.X) + largest.Max(c => c.X)) / 2;
+                    y = (largest.Min(c => c.Y) + largest.Max(c => c.Y)) / 2;
+                    lake = new JsonObject { ["left"] = left, ["right"] = right, ["surface_y"] = surface[0].Y, ["honey_cells"] = largest.Count };
+                }
+                mapX = x; mapY = y;
+                p.position = new Vector2(x * 16, y * 16 - p.height);
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                return TerrainMap.Read(new JsonObject { ["x"] = x, ["y"] = y, ["width"] = 120, ["height"] = 80,
+                    ["marks"] = new JsonArray(new JsonObject { ["label"] = "SPAWN", ["x"] = x, ["y"] = y }) });
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "terrain-map.json"), map.ToJsonString());
+            if (!File.Exists(map["image_path"].ToString()) || new FileInfo(map["image_path"].ToString()).Length < 1000)
+                throw new Exception("native map PNG missing or empty");
+            Console.WriteLine("TERRAIN_MAP_PASS " + map);
+            if (vision)
+            {
+                var definitions = JsonNode.Parse(Encoding.UTF8.GetString(ModLoader.GetMod("TerraBlind").GetFileBytes("Agent/Tools.json"))).AsArray();
+                var tools = new JsonArray(definitions.First(t => t["function"]["name"].ToString() == "terrain_map").DeepClone());
+                using var codex = new CodexAgent();
+                var replies = new List<string>(); int mapCalls = 0;
+                var elapsed = Stopwatch.StartNew();
+                await codex.RunAsync($"调用terrain_map，中心x={mapX},y={mapY},width=120,height=80。读图片找金色蜂蜜湖，报告湖面主要连续蜂蜜段的左右世界格坐标和液面y。回复JSON：{{\"left\":整数,\"right\":整数,\"surface_y\":整数,\"layout\":\"上方空间的简短描述\"}}。",
+                    Config.I.AgentCodexPath, Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
+                    "通过提供的terrain_map工具观察游戏地图。工具包含图片和坐标换算，液体中金色表示蜂蜜。", tools,
+                    async (name, args, token) => { mapCalls++; return await AgentTools.Execute(name, args, token); },
+                    text => { replies.Add(text); Console.WriteLine("MAP_VISION_REPLY " + text); }, default);
+                string reply = replies.Last();
+                var answer = JsonNode.Parse(reply[reply.IndexOf('{')..(reply.LastIndexOf('}') + 1)]).AsObject();
+                File.WriteAllText(Path.Combine(Main.SavePath, "map-vision.json"), new JsonObject
+                { ["expected"] = lake, ["answer"] = answer, ["elapsed_ms"] = elapsed.ElapsedMilliseconds, ["map_calls"] = mapCalls,
+                    ["model"] = "gpt-6.1-sol", ["usage"] = codex.TokenUsage?.DeepClone() }.ToJsonString());
+                foreach (string key in new[] { "left", "right", "surface_y" })
+                    if (Math.Abs(answer[key].GetValue<int>() - lake[key].GetValue<int>()) > 5)
+                        throw new Exception("map vision coordinate mismatch " + key + ": " + answer + " expected=" + lake);
+                if (mapCalls == 0) throw new Exception("model did not request map image");
+                Console.WriteLine($"MAP_VISION_PASS calls={mapCalls} elapsed_ms={elapsed.ElapsedMilliseconds} expected={lake} answer={answer}");
+            }
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CRYSTAL_HANDOFF_TRIAL") == "1")
         {
             Point first = default, second = default;

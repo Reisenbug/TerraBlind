@@ -722,6 +722,8 @@ public static partial class AgentTools
                 return (await ManageControl(args, token)).ToJsonString();
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
+            case "terrain_map":
+                return (await NativeAgent.OnMain(() => TerrainMap.Read(args), token)).ToJsonString(ModelJson);
             case "opportunity_assess":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();

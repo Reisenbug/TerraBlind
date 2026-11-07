@@ -498,7 +498,7 @@ static class ScriptTests
         chestScene["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 });
         ownChest.Observe(chestScene);
         Check(ownChest.HasInterrupting, "default own-target policy overrode explicit Agent observation policy");
-        Check(entries.Count == 5 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api")
+        Check(entries.Count == 6 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api" or "terrain_map")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
         string instructions = AgentScript.Instructions("original-system", definitions);
         Check(instructions.Contains("original-system") && instructions.Contains("\ngather: ")

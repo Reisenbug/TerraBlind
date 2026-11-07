@@ -266,6 +266,10 @@ namespace Terraria.ModLoader
 }
 namespace TerraBlind
 {
+    public static class TerrainMap
+    {
+        public static JsonObject Read(JsonObject args) => new() { ["stub"] = true };
+    }
     public class TerraBlind : Terraria.ModLoader.Mod { }
     public class Config
     {

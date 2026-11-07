@@ -13,6 +13,23 @@ using System.Threading.Tasks;
 
 namespace TerraBlind;
 
+internal static class AgentImages
+{
+    static readonly ConcurrentDictionary<string, byte[]> images = new();
+    static readonly ConcurrentQueue<string> order = new();
+    internal static string Register(byte[] png)
+    {
+        if (png.Length is < 8 or > 4_000_000 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
+            throw new ArgumentException("地图图片需要4MB以内的PNG。");
+        string id = Guid.NewGuid().ToString("N"); images[id] = png; order.Enqueue(id);
+        while (order.Count > 16 && order.TryDequeue(out string old)) images.TryRemove(old, out _);
+        return id;
+    }
+    internal static string Take(JsonNode result)
+        => result?["image_id"]?.ToString() is string id && images.TryRemove(id, out var png)
+            ? "data:image/png;base64," + Convert.ToBase64String(png) : null;
+}
+
 public sealed class CodexConnection : IDisposable
 {
     readonly TextReader _reader;
@@ -409,6 +426,7 @@ public sealed class CodexAgent : IDisposable
     async Task Tool(JsonObject request, JsonArray tools, Func<string, JsonObject, CancellationToken, Task<string>> execute, CancellationToken token)
     {
         string output;
+        string image = null;
         bool success = true;
         try
         {
@@ -423,15 +441,18 @@ public sealed class CodexAgent : IDisposable
             {
                 var result = JsonNode.Parse(output);
                 success = !AgentTools.Rejected(result as JsonObject);
+                if (success && name == "terrain_map") image = AgentImages.Take(result);
                 output = result?.ToJsonString(AgentTools.ModelJson) ?? "null";
             }
             catch (System.Text.Json.JsonException) { }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(AgentTools.ModelJson); }
+        var content = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output });
+        if (image != null) content.Add(new JsonObject { ["type"] = "inputImage", ["imageUrl"] = image });
         await _rpc.Send(new JsonObject { ["id"] = request["id"].DeepClone(), ["result"] = new JsonObject
         {
-            ["success"] = success, ["contentItems"] = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output })
+            ["success"] = success, ["contentItems"] = content
         } }, token);
     }
 

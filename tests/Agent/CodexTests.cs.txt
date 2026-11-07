@@ -73,6 +73,21 @@ static class CodexTests
             Check(server.ToolResponses.Last()["contentItems"][0]["text"].ToString() == rejected, "Codex lost rejection details");
         }
         Console.WriteLine("PASS: Codex rejects unknown/malformed calls and accepts non-object tool output");
+        var mapTools = (JsonArray)Tools.DeepClone();
+        mapTools.Add(JsonNode.Parse("""{"type":"function","function":{"name":"terrain_map","parameters":{"type":"object","properties":{}}}}"""));
+        byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aVXkAAAAASUVORK5CYII=");
+        var map = new JsonObject { ["image_id"] = AgentImages.Register(png), ["bounds"] = new JsonObject { ["x"] = 12, ["y"] = 20 } };
+        var mapServer = new Server { ToolName = "terrain_map" };
+        using var mapAgent = new CodexAgent((_, _) => mapServer.Connect());
+        await mapAgent.RunAsync("查看地形", "mock", "/tmp", "", "game instructions", mapTools,
+            (_, _, _) => Task.FromResult(map.ToJsonString()), spoken.Add, default);
+        var content = mapServer.ToolResponses.Last()["contentItems"].AsArray();
+        Check(content.Count == 2 && content[1]["type"].ToString() == "inputImage"
+            && content[1]["imageUrl"].ToString() == "data:image/png;base64," + Convert.ToBase64String(png)
+            && JsonNode.DeepEquals(JsonNode.Parse(content[0]["text"].ToString()), map), "map image transport lost PNG or coordinates");
+        Check(AgentImages.Take(map) == null && AgentImages.Take(new JsonObject { ["image_id"] = "/tmp/arbitrary.png" }) == null,
+            "map image registration allowed replay or arbitrary file access");
+        Console.WriteLine("PASS: Codex map tool transports registered image and coordinate metadata together");
         var unicodeResult = new JsonObject { ["name"] = "生命水晶", ["code"] = "const text = '\\u4e2d';\nreturn text;", ["hp"] = 60 };
         await agent.RunAsync("保留中文与代码", "mock", "/tmp", "", "game instructions", Tools,
             (_, _, _) => Task.FromResult(unicodeResult.ToJsonString()), spoken.Add, default);
