@@ -2482,10 +2482,15 @@ public sealed class BehaviorTrial : ModSystem
                         var bosses = scene?["boss_control"]?["active_bosses"] as JsonArray;
                         if (bosses?.Count is not > 0 || scene["player"]?["dead"]?.GetValue<bool>() == true)
                         { encounter = null; continue; }
+                        float px = scene["player"]["pos"]["x"].GetValue<float>() / 16f;
+                        float py = scene["player"]["pos"]["y"].GetValue<float>() / 16f;
                         if (encounter == null)
                         {
                             encounter = new JsonObject { ["started_ms"] = sample["elapsed_ms"].DeepClone(),
                                 ["bosses_at_start"] = bosses.DeepClone(), ["min_player_hp"] = int.MaxValue,
+                                ["player_top_left_start_tiles"] = new JsonObject { ["x"] = px, ["y"] = py },
+                                ["player_top_left_extent_tiles"] = new JsonObject
+                                    { ["min_x"] = px, ["max_x"] = px, ["min_y"] = py, ["max_y"] = py },
                                 ["sample_count"] = 0, ["honey_samples"] = 0, ["held_weapons"] = new JsonObject() };
                             encounters.Add(encounter);
                         }
@@ -2493,6 +2498,12 @@ public sealed class BehaviorTrial : ModSystem
                         encounter["bosses_last_observed"] = bosses.DeepClone();
                         encounter["min_player_hp"] = Math.Min(encounter["min_player_hp"].GetValue<int>(), scene["player"]["hp"].GetValue<int>());
                         encounter["sample_count"] = encounter["sample_count"].GetValue<int>() + 1;
+                        encounter["player_top_left_last_tiles"] = new JsonObject { ["x"] = px, ["y"] = py };
+                        var extent = encounter["player_top_left_extent_tiles"].AsObject();
+                        extent["min_x"] = Math.Min(extent["min_x"].GetValue<float>(), px);
+                        extent["max_x"] = Math.Max(extent["max_x"].GetValue<float>(), px);
+                        extent["min_y"] = Math.Min(extent["min_y"].GetValue<float>(), py);
+                        extent["max_y"] = Math.Max(extent["max_y"].GetValue<float>(), py);
                         if (scene["boss_control"]?["honey_slowed"]?.GetValue<bool>() == true)
                             encounter["honey_samples"] = encounter["honey_samples"].GetValue<int>() + 1;
                         string weapon = scene["equipment"]?["held_item"]?["name"]?.ToString() ?? "unknown";
