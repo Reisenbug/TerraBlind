@@ -641,8 +641,9 @@ public sealed class BehaviorTrial : ModSystem
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
             bool weaponProbe = Environment.GetEnvironmentVariable("TB_HIVE_WEAPON_PROBE") == "1";
             bool noticeProbe = Environment.GetEnvironmentVariable("TB_BOSS_NOTICE_PROBE") == "1";
+            bool observerProbe = Environment.GetEnvironmentVariable("TB_BACKGROUND_BOSS_OBSERVER_PROBE") == "1";
             bool combatProbe = weaponProbe || Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_TRIAL") == "1";
-            bool roomProbe = noticeProbe || combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
+            bool roomProbe = observerProbe || noticeProbe || combatProbe || Environment.GetEnvironmentVariable("TB_HIVE_ROOM_PROBE") == "1";
             bool vision = building || roomProbe || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
             JsonObject lake = null;
@@ -781,6 +782,56 @@ public sealed class BehaviorTrial : ModSystem
                     if (frames > 16 || notice["evidence"]["type"].GetValue<int>() != NPCID.QueenBee)
                         throw new Exception("native Boss observation missed the sampling interval: " + evidence);
                     Console.WriteLine("BOSS_NOTICE_PASS " + evidence);
+                    return;
+                }
+                if (observerProbe)
+                {
+                    bool oldRandom = Dodge.RandomBrain;
+                    var evidence = new JsonArray();
+                    var livePlan = (AgentTaskPlan)typeof(AgentTools).GetField("Plan", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                    var liveWatch = (AgentWatch)typeof(AgentTools).GetField("Watches", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                    try
+                    {
+                        await OnMain(() =>
+                        {
+                            Dodge.RandomBrain = true; Main.playerInventory = false;
+                            Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 600;
+                            Main.npc[target].aiStyle = -1; Main.npc[target].velocity = Vector2.Zero;
+                            return true;
+                        });
+                        await Call("set_combat", new JsonObject { ["boss_control"] = true, ["movement_reserve_scale"] = .075 });
+                        await Task.Delay(100);
+                        foreach (bool observerReview in new[] { false, true })
+                        {
+                            long releasedBefore = await OnMain(() =>
+                            {
+                                livePlan.Reset(); AgentTools.NewTask();
+                                var plan = JsonNode.Parse("""
+                                    {"goal":"observe native Boss control","mode":"dag","steps":[{"id":"observe","description":"observe",
+                                    "depends_on":[],"script":"","conditions":[{"kind":"npc_kills","type":222,"count":1}]}]}
+                                    """).AsObject();
+                                plan["steps"][0]["script"] = observerReview ? "tool('decision_point',{reason:'review current movement'});"
+                                    : "return tool('script_events',{wait_ms:0});";
+                                livePlan.Create(plan, _ => 0);
+                                if (!observerReview) liveWatch.Emit("boss_appeared", "continuity-probe", new JsonObject { ["type"] = NPCID.QueenBee });
+                                return (long)typeof(Dodge).GetField("_releasedAtMs", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                            });
+                            var started = await Call("run_script", new JsonObject { ["task_node"] = "observe", ["background"] = true, ["event_delivery"] = "script" });
+                            var clock = Stopwatch.StartNew(); JsonObject observerResult;
+                            do { await Task.Delay(25); observerResult = await Call("action_query", new JsonObject { ["handle"] = started["handle"].DeepClone() }); }
+                            while (observerResult["status"]?.ToString() == "running" && clock.Elapsed.TotalSeconds < 3);
+                            long releasedAfter = await OnMain(() => (long)typeof(Dodge).GetField("_releasedAtMs", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null));
+                            bool delivered = observerReview ? observerResult["result"]?["value"]?["wake"] != null
+                                : observerResult["result"]?["value"]?["events"] is JsonArray events && events.Count > 0;
+                            evidence.Add(new JsonObject { ["explicit_review"] = observerReview, ["status"] = observerResult["status"]?.DeepClone(),
+                                ["delivered"] = delivered, ["release_before_ms"] = releasedBefore, ["release_after_ms"] = releasedAfter });
+                            File.WriteAllText(Path.Combine(Main.SavePath, "boss-observer-continuity.json"), evidence.ToJsonString());
+                            if (!delivered || releasedAfter != releasedBefore)
+                                throw new Exception("native observation cancelled itself or released Boss intent: " + evidence);
+                        }
+                    }
+                    finally { await OnMain(() => { AgentTools.Stop(); livePlan.Reset(); Dodge.RandomBrain = oldRandom; return true; }); }
+                    Console.WriteLine("BOSS_OBSERVER_CONTINUITY_PASS native_controller=true model_calls=0 random_brain=true damage_disabled_for_probe=true");
                     return;
                 }
                 var defaultPreview = await Call("set_combat", new JsonObject { ["movement_reserve_scale"] = 1d });
