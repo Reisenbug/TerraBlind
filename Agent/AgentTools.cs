@@ -402,6 +402,9 @@ public static partial class AgentTools
         state["watch"] = includeWatchHistory ? Watches.Snapshot() : Watches.Summary();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
+        var verification = Plan.VerifyFinal(AgentTaskEvidence.Measure);
+        verification.Remove("plan");
+        state["goal_verification"] = verification;
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
         return state.ToJsonString(ModelJson);

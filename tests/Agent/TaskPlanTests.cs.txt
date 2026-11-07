@@ -18,6 +18,9 @@ static class TaskPlanTests
         VerifyBiome();
         VerifyTiles();
         var plan = new AgentTaskPlan();
+        var missingPlan = plan.VerifyFinal(AgentTaskEvidence.Measure);
+        Check(missingPlan["verified"]?.GetValue<bool>() == false && missingPlan["reason"]?.ToString() == "plan_required",
+            "empty goal verifier did not identify the missing executable verification plan");
         var hook = new AgentTaskEvidence();
         Main.netMode = NetmodeID.SinglePlayer;
         AgentTaskEvidence.Reset();

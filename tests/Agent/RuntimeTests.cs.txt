@@ -164,6 +164,10 @@ static class RuntimeTests
             AgentTools.LastAutomaticHeal = new JsonObject { ["tick"] = 12, ["source"] = "survival_reflex",
                 ["hp_before"] = 40, ["hp_after"] = 90, ["potion_delay_before"] = 0, ["potion_delay_after"] = 3600 };
             var state = JsonNode.Parse(await Execute(AgentTools.State(default)));
+            Check(state["goal_verification"]?["reason"]?.ToString() == "plan_required"
+                && state["goal_verification"]["verified"]?.GetValue<bool>() == false
+                && state["goal_verification"]["plan"] == null,
+                "state omitted the actual missing-plan verdict or duplicated the full task plan");
             Check(JsonNode.DeepEquals(state["last_automatic_heal"], AgentTools.LastAutomaticHeal), "state omitted automatic healing evidence");
             state["last_automatic_heal"]["hp_after"] = 1;
             Check(AgentTools.LastAutomaticHeal["hp_after"].GetValue<int>() == 90, "state caller changed retained healing evidence");

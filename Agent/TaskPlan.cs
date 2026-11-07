@@ -364,7 +364,9 @@ public sealed class AgentTaskPlan
                 evidence.Add(new JsonObject { ["step"] = terminal["id"].DeepClone(),
                     ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
             }
-        return new JsonObject { ["verified"] = passed, ["plan"] = Snapshot(), ["final_evidence"] = evidence };
+        return new JsonObject { ["verified"] = passed,
+            ["reason"] = _steps.Count == 0 ? "plan_required" : Incomplete ? "steps_pending" : passed ? "verified" : "final_conditions_changed",
+            ["plan"] = Snapshot(), ["final_evidence"] = evidence };
     }
 
     public JsonObject Summary()
