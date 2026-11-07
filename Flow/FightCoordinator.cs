@@ -36,7 +36,7 @@ namespace TerraBlind
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
 
-        internal static (int Direction, bool Jump) Evade(Player p, NPC target = null, bool projectilesOnly = false)
+        internal static (int Direction, bool Jump, bool Apply) Evade(Player p, NPC target = null, bool projectilesOnly = false)
         {
             bool blocked = target != null && NeedsClearLine(p.HeldItem)
                 && !Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
@@ -47,14 +47,16 @@ namespace TerraBlind
             foreach (var npc in projectilesOnly ? Array.Empty<NPC>() : Main.npc)
                 if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
                     && Vector2.Distance(npc.Center, p.Center) < 600) enemies.Add(npc);
-            if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false);
+            if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false, false);
+            int currentDirection = p.controlRight ? 1 : p.controlLeft ? -1 : 0;
+            bool currentJump = p.controlJump && p.velocity.Y == 0;
             float Risk(int direction, bool jump)
             {
                 Vector2 position = p.Center, velocity = p.velocity;
                 if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
                 int hold = jump ? 12 : 0;
-                float score = direction == 0 ? 0 : .01f;
-                if (jump) score += .02f;
+                float score = direction == currentDirection ? 0 : .01f;
+                if (jump != currentJump) score += .02f;
                 for (int frame = 1; frame <= 24; frame++)
                 {
                     float desired = direction * Math.Max(p.maxRunSpeed, p.accRunSpeed);
@@ -68,6 +70,9 @@ namespace TerraBlind
                     next = position + new Vector2(0, velocity.Y);
                     if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
                     else velocity.Y = 0;
+                    if (!AgentTools.Control.BoundsAllowed(ControlBehavior.Dodge,
+                        (position.X - p.width / 2f) / 16, (position.Y - p.height / 2f) / 16, p.width / 16f, p.height / 16f))
+                        return float.PositiveInfinity;
                     if (blocked && !Collision.CanHitLine(position, 4, 4, target.Center + target.velocity * frame, 4, 4)) score++;
                     foreach (var shot in shots)
                     {
@@ -86,14 +91,14 @@ namespace TerraBlind
                 }
                 return score;
             }
-            (int Direction, bool Jump) best = (0, false);
-            float bestRisk = Risk(0, false);
+            (int Direction, bool Jump, bool Apply) best = (0, false, false);
+            float bestRisk = Risk(currentDirection, currentJump);
             foreach (int direction in new[] { -1, 0, 1 })
             foreach (bool jump in new[] { false, true })
             {
                 if (jump && p.velocity.Y != 0) continue;
                 float risk = Risk(direction, jump);
-                if (risk < bestRisk) { bestRisk = risk; best = (direction, jump); }
+                if (risk < bestRisk) { bestRisk = risk; best = (direction, jump, true); }
             }
             return best;
         }
@@ -144,8 +149,13 @@ namespace TerraBlind
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
                 && AgentPermissions.CanDodge(delegated: true))
             {
-                var evade = Evade(p, projectilesOnly: true);
-                if (evade.Direction != 0 || evade.Jump)
+                bool bossMovement = false;
+                if (Dodge.Enabled)
+                    foreach (var npc in Main.npc)
+                        if (npc is { active: true, boss: true } && Vector2.Distance(npc.Center, p.Center) < 3200)
+                        { bossMovement = true; break; }
+                var evade = Evade(p, projectilesOnly: bossMovement);
+                if (evade.Apply)
                 {
                     p.controlLeft = evade.Direction < 0;
                     p.controlRight = evade.Direction > 0;
