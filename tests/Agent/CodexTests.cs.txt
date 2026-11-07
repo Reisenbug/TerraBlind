@@ -41,8 +41,7 @@ static class CodexTests
         Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
         Check(agent.TokenUsage["total"]["totalTokens"].GetValue<int>() == 200 && agent.UsageUpdates == 2 && agent.TurnsStarted == 2,
             "Codex usage telemetry did not preserve cumulative token usage across turns");
-        Check(agent.ContextRevision == 2 && server.ThreadArgs["config"]["model_auto_compact_token_limit"]?.GetValue<int>() == 64000,
-            "Codex compaction did not invalidate delta context or use the smaller history threshold");
+        Check(agent.ContextRevision == 2, "Codex compaction did not invalidate delta context");
         Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
             && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
             "game thread did not override instructions/environments/MCP");

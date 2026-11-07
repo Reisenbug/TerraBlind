@@ -240,8 +240,6 @@ public sealed class CodexAgent : IDisposable
             var config = await _rpc.Request("config/read", new JsonObject { ["includeLayers"] = false }, deadline.Token);
             var overrides = new JsonObject();
             overrides["features.goals"] = false;
-            overrides["model_auto_compact_token_limit"] = 64000;
-            overrides["model_auto_compact_token_limit_scope"] = "body_after_prefix";
             if (config["config"]?["mcp_servers"] is JsonObject servers)
                 foreach (var server in servers) overrides[$"mcp_servers.{server.Key}.enabled"] = false;
             var dynamicTools = new JsonArray();
