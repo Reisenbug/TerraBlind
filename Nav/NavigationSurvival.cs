@@ -7,7 +7,7 @@ namespace TerraBlind;
 public static class NavigationSurvival
 {
     static int heldSlot = -1, previousSlot = -1, stashedSlot = -1;
-    static bool holdingWeb, holdingPotion;
+    static bool holdingPlacement, holdingPotion;
     static int heldType;
     static int gravityPhase, gravityTicks;
     static float originalGravity;
@@ -21,19 +21,20 @@ public static class NavigationSurvival
         if (heldSlot >= 0 && player.selectedItem == heldSlot && previousSlot >= 0)
             player.selectedItem = previousSlot;
         heldSlot = previousSlot = stashedSlot = -1;
-        holdingWeb = holdingPotion = false;
+        holdingPlacement = holdingPotion = false;
         gravityPhase = gravityTicks = 0;
     }
 
     public static bool Apply(Player player)
     {
-        if (!RecedingNav.Active || player.dead)
+        if (!(RecedingNav.Active || NativeAgent.Processing) || player.dead
+            || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All, delegated: true))
         {
             Reset(player);
             NavigationAirPocket.Reset(player);
             return false;
         }
-        if (NavigationAirPocket.Apply(player)) return true;
+        if (RecedingNav.Active && NavigationAirPocket.Apply(player)) return true;
         if (gravityPhase != 0)
         {
             ClearControls(player);
@@ -46,6 +47,9 @@ public static class NavigationSurvival
             player.controlUp = player.releaseUp;
             return true;
         }
+        if (heldSlot >= 0 && holdingPlacement && player.inventory[heldSlot].createTile == TileID.Platforms
+            && player.Bottom.Y > webTarget.Y * 16)
+            Reset(player);
         if (heldSlot >= 0)
         {
             if (player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player))
@@ -53,10 +57,10 @@ public static class NavigationSurvival
                 Reset(player);
                 return false;
             }
-            if (holdingWeb)
+            if (holdingPlacement)
             {
                 ClearControls(player);
-                if (WebCanReplace(webTarget) && player.inventory[heldSlot].type == ItemID.Cobweb)
+                if (WebCanReplace(webTarget) && player.inventory[heldSlot].type == heldType)
                 {
                     player.selectedItem = heldSlot;
                     player.delayUseItem = false; player.mouseInterface = false;
@@ -83,6 +87,7 @@ public static class NavigationSurvival
             }
             Reset(player);
         }
+        if (TryPlatformCatch(player)) return true;
         if (!DangerousLandingSoon(player, out var landing)) return false;
         for (int slot = 0; slot < 50; slot++)
         {
@@ -136,7 +141,7 @@ public static class NavigationSurvival
                 }
                 finally { player.selectedItem = previous; }
                 if (!placement.HasValue) return false;
-                HoldItem(player, slot); holdingWeb = true; webTarget = placement.Value;
+                HoldItem(player, slot); holdingPlacement = true; webTarget = placement.Value;
                 Interrupt(player, "place_cobweb");
                 player.delayUseItem = false; player.mouseInterface = false;
                 Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
@@ -156,17 +161,59 @@ public static class NavigationSurvival
         return !tile.HasTile || Main.tileCut[tile.TileType] || TileID.Sets.BreakableWhenPlacing[tile.TileType];
     }
 
+    static bool TryPlatformCatch(Player player)
+    {
+        if (player.gravDir != 1 || player.AnyExtraJumpUsable() || player.itemAnimation > 0 || player.itemTime > 0
+            || !DangerousLandingSoon(player, out _, includeOpenFall: true, horizon: 60)) return false;
+        float nextVelocity = System.Math.Min(player.velocity.Y + player.gravity, player.maxFallSpeed);
+        int y = (int)System.Math.Ceiling((player.Bottom.Y + nextVelocity) / 16);
+        if ((int)((y * 16 - player.height) / 16f) - player.fallStart > 25 + player.extraFall) return false;
+        int frames = 0;
+        float descent = 0, velocity = player.velocity.Y;
+        while (descent < y * 16 - player.Bottom.Y && frames < 60)
+        {
+            velocity = System.Math.Min(velocity + player.gravity, player.maxFallSpeed);
+            descent += velocity; frames++;
+        }
+        float left = player.position.X + player.velocity.X * frames;
+        for (int slot = 0; slot < 50; slot++)
+        {
+            if (player.inventory[slot].IsAir || player.inventory[slot].createTile != TileID.Platforms) continue;
+            int previous = player.selectedItem;
+            Point? placement = null;
+            try
+            {
+                player.selectedItem = slot;
+                foreach (int x in new[] { (int)((left + player.width / 2f) / 16), (int)(left / 16), (int)((left + player.width - 1) / 16) })
+                {
+                    var candidate = new Point(x, y);
+                    if (WorldGen.InWorld(x, y) && WebCanReplace(candidate) && Reach.CanPlace(player, x, y)
+                        && !LavaSafety.IsLava(x, y) && VanillaTerrainPlan.HasPlatformAnchor(x, y))
+                    { placement = candidate; break; }
+                }
+            }
+            finally { player.selectedItem = previous; }
+            if (!placement.HasValue) continue;
+            HoldItem(player, slot); holdingPlacement = true; webTarget = placement.Value;
+            Interrupt(player, "place_platform");
+            player.delayUseItem = false; player.mouseInterface = false;
+            Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
+            return true;
+        }
+        return false;
+    }
+
     public static bool DangerousLandingSoon(Player player)
         => DangerousLandingSoon(player, out _);
 
-    static bool DangerousLandingSoon(Player player, out Vector2 landing)
+    static bool DangerousLandingSoon(Player player, out Vector2 landing, bool includeOpenFall = false, int horizon = 12)
     {
         landing = player.position;
         if (player.stoned || player.noFallDmg || player.equippedWings != null || player.slowFall
             || player.wet || player.velocity.Y * player.gravDir <= 0) return false;
         var position = player.position;
         var velocity = player.velocity;
-        for (int frame = 0; frame < 12; frame++)
+        for (int frame = 0; frame < horizon; frame++)
         {
             velocity.Y += player.gravity * player.gravDir;
             if (velocity.Y * player.gravDir > player.maxFallSpeed)
@@ -180,7 +227,7 @@ public static class NavigationSurvival
                 return ((int)(position.Y / 16f) - player.fallStart) * player.gravDir > 25 + player.extraFall;
             }
         }
-        return false;
+        return includeOpenFall && ((int)(position.Y / 16f) - player.fallStart) * player.gravDir > 25 + player.extraFall;
     }
 
     static void Interrupt(Player player, string action)
