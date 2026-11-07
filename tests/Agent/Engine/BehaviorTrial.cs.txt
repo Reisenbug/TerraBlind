@@ -194,7 +194,7 @@ public sealed class BehaviorTrial : ModSystem
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
     bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1";
     bool FullCraftTrial => Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1";
-    int FrameLimit => FullCraftTrial ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
+    int FrameLimit => FullCraftTrial || Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1" ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
         || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
         : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_AGENT") == "1" ? 9600 : 7200;
@@ -446,7 +446,8 @@ public sealed class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
         {
-            bool vision = Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
+            bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
+            bool vision = building || Environment.GetEnvironmentVariable("TB_MAP_VISION") == "1";
             int mapX = 0, mapY = 0;
             JsonObject lake = null;
             var map = await OnMain(() =>
@@ -483,6 +484,26 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 mapX = x; mapY = y;
                 p.position = new Vector2(x * 16, y * 16 - p.height);
+                if (building)
+                {
+                    int left = lake["left"].GetValue<int>(), surface = lake["surface_y"].GetValue<int>();
+                    var stands = new List<Vector2>();
+                    for (int tx = left - 15; tx <= left + 10; tx++)
+                    for (int ty = surface - 15; ty <= surface + 10; ty++)
+                    {
+                        var position = new Vector2(tx * 16, ty * 16 - p.height);
+                        if (!Collision.SolidCollision(position, p.width, p.height)
+                            && Collision.TileCollision(position, new Vector2(0, 2), p.width, p.height).Y < 2) stands.Add(position);
+                    }
+                    p.position = stands.OrderBy(position => Vector2.DistanceSquared(position, new Vector2(left * 16, surface * 16 - p.height))).First();
+                    for (int i = 0; i < p.inventory.Length; i++) p.inventory[i].TurnToAir();
+                    p.inventory[0].SetDefaults(ItemID.Starfury);
+                    p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                    p.inventory[2].SetDefaults(ItemID.Wood); p.inventory[2].stack = 999;
+                    p.inventory[3].SetDefaults(ItemID.Rope); p.inventory[3].stack = 999;
+                    p.AddBuff(BuffID.Gills, 111600); p.AddBuff(BuffID.Shine, 111600);
+                    Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+                }
                 p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
                 return TerrainMap.Read(new JsonObject { ["x"] = x, ["y"] = y, ["width"] = 120, ["height"] = 80,
                     ["marks"] = new JsonArray(new JsonObject { ["label"] = "SPAWN", ["x"] = x, ["y"] = y }) });
@@ -491,7 +512,7 @@ public sealed class BehaviorTrial : ModSystem
             if (!File.Exists(map["image_path"].ToString()) || new FileInfo(map["image_path"].ToString()).Length < 1000)
                 throw new Exception("native map PNG missing or empty");
             Console.WriteLine("TERRAIN_MAP_PASS " + map);
-            if (vision)
+            if (vision && !building)
             {
                 var definitions = JsonNode.Parse(Encoding.UTF8.GetString(ModLoader.GetMod("TerraBlind").GetFileBytes("Agent/Tools.json"))).AsArray();
                 var tools = new JsonArray(definitions.First(t => t["function"]["name"].ToString() == "terrain_map").DeepClone());
@@ -513,6 +534,38 @@ public sealed class BehaviorTrial : ModSystem
                         throw new Exception("map vision coordinate mismatch " + key + ": " + answer + " expected=" + lake);
                 if (mapCalls == 0) throw new Exception("model did not request map image");
                 Console.WriteLine($"MAP_VISION_PASS calls={mapCalls} elapsed_ms={elapsed.ElapsedMilliseconds} expected={lake} answer={answer}");
+            }
+            if (building)
+            {
+                var clock = Stopwatch.StartNew();
+                await OnMain(() =>
+                {
+                    File.WriteAllText(Path.Combine(Main.SavePath, "hive-before.json"), lake.ToJsonString());
+                    NativeAgent.Submit("/goal 观察当前蜂巢的地图，在蜂蜜湖上方铺一层连续木方块，横跨整个湖面的左右两岸，形成可走的平台。施工高度选液面上方1到3格。用真实方块逐格验收整层覆盖，并保留可继续活动的上方空间。背包有足够木材、绳子和镐子。");
+                    return true;
+                });
+                using var journal = new StreamWriter(Path.Combine(Main.SavePath, "hive-build-samples.jsonl")) { AutoFlush = true };
+                while (clock.Elapsed.TotalSeconds < 1800)
+                {
+                    await Task.Delay(1000);
+                    var state = await Call("get_state", new JsonObject());
+                    journal.WriteLine(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["state"] = state }.ToJsonString());
+                    int coveredRow = await OnMain(() =>
+                    {
+                        int left = lake["left"].GetValue<int>(), right = lake["right"].GetValue<int>(), surface = lake["surface_y"].GetValue<int>();
+                        for (int y = surface - 3; y < surface; y++)
+                            if (Enumerable.Range(left, right - left + 1).All(x => Main.tile[x, y].HasUnactuatedTile && Main.tile[x, y].TileType == TileID.WoodBlock)) return y;
+                        return -1;
+                    });
+                    if (coveredRow >= 0 && state["task_plan"]?["status"]?.ToString() == "completed")
+                    {
+                        Console.WriteLine($"HIVE_BUILD_PASS elapsed_ms={clock.ElapsedMilliseconds} row={coveredRow} source={lake} native_tiles=true model=gpt-6.1-sol");
+                        await OnMain(() => { NativeAgent.Stop(); return true; });
+                        return;
+                    }
+                    if (state["dead"]?.GetValue<bool>() == true) throw new Exception("hive construction died: " + state);
+                }
+                throw new Exception("hive construction acceptance deadline");
             }
             return;
         }
@@ -1480,6 +1533,54 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
     }
 
+    async Task QueenGoalTrial()
+    {
+        var before = await Call("get_state", new JsonObject());
+        if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
+        const string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
+        var clock = Stopwatch.StartNew();
+        var deaths = new JsonArray(); bool wasDead = false;
+        long? healthMs = null, chakramMs = null, queenSpawnMs = null;
+        await OnMain(() =>
+        {
+            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+            NativeAgent.Submit(prompt);
+            return true;
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
+        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
+            ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters }.ToJsonString());
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "queen-samples.jsonl")) { AutoFlush = true };
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(1000);
+                var state = await Call("get_state", new JsonObject());
+                bool dead = state["player"]["dead"].GetValue<bool>();
+                if (dead && !wasDead) deaths.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                    ["evidence"] = state["last_death"]?.DeepClone() });
+                wasDead = dead;
+                if (healthMs == null && state["permanent_max_health"].GetValue<int>() >= 240) healthMs = clock.ElapsedMilliseconds;
+                bool chakram = state["inventory_slots"].AsArray().Any(i => i["type"]?.GetValue<int>() == ItemID.ThornChakram && i["stack"]?.GetValue<int>() > 0);
+                if (chakramMs == null && chakram) chakramMs = clock.ElapsedMilliseconds;
+                var boss = await OnMain(() => new JsonObject { ["alive"] = NPC.AnyNPCs(NPCID.QueenBee), ["defeated"] = NPC.downedQueenBee });
+                if (queenSpawnMs == null && boss["alive"].GetValue<bool>()) queenSpawnMs = clock.ElapsedMilliseconds;
+                journal.WriteLine(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["boss"] = boss.DeepClone(), ["state"] = state.DeepClone() }.ToJsonString());
+                bool completed = healthMs != null && chakram && boss["defeated"].GetValue<bool>()
+                    && state["task_plan"]?["status"]?.ToString() == "completed";
+                File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
+                { ["ok"] = completed, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["health_240_ms"] = healthMs,
+                    ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
+                    ["boss"] = boss.DeepClone(), ["after"] = state.DeepClone() }.ToJsonString());
+                if (completed)
+                { Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} health_240_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return; }
+                if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
+            }
+        }
+        finally { await OnMain(() => { NativeAgent.Stop(); return true; }); }
+    }
+
     async Task NaturalOpportunities()
     {
         int chestX = 0, chestY = 0, heartX = 0, heartY = 0, lootType = 0, goalX = 0, goalY = 0;
@@ -2139,6 +2240,8 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
+            if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1")
+            { await QueenGoalTrial(); return; }
             string trialModel = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MODEL") ?? "gpt-6-luna";
             int modelTokenBudget = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_TOKEN_BUDGET") is string configuredBudget
                 ? int.Parse(configuredBudget) : 200000;
