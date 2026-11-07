@@ -51,6 +51,9 @@ public sealed class AgentRecovery
             ["attempts"] = count, ["revision"] = ++revision };
         if (result["source_error"] is JsonObject sourceError)
             evidence["source_error"] = sourceError.DeepClone();
+        foreach (string field in new[] { "placed", "wanted" })
+            if (result[field] != null) evidence[field] = result[field].DeepClone();
+        if (result["cells"] is JsonArray cells && cells.Count > 0) evidence["last_cell"] = cells[^1]?.DeepClone();
     }
 
     public bool Offer()

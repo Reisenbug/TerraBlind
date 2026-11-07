@@ -619,6 +619,10 @@ static class RuntimeTests
                 Check(wrong["cells"][0]["actual_tile"]["type"].GetValue<int>() == 59
                     && wrong["cells"][0]["expected_tile"].GetValue<int>() == 18,
                     "occupied placement lost the actual object and requested tile needed for recovery");
+                var placementFailure = AgentTools.Recovery.Snapshot()["latest"]["evidence"];
+                Check(placementFailure["placed"]?.GetValue<int>() == 0
+                    && placementFailure["last_cell"]?["actual_tile"]?["type"]?.GetValue<int>() == 59,
+                    "recovery memory discarded the occupied cell from failed placement");
                 Game.tile[10, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 18 };
                 var correct = JsonNode.Parse(await Execute(AgentTools.Execute("place_at", new JsonObject { ["item"] = "36" }, default)));
                 Check(correct["outcome"].ToString() == "done" && correct["cells"][0]["verified"].GetValue<bool>(),
