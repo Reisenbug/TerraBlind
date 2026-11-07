@@ -2049,7 +2049,8 @@ public sealed class BehaviorTrial : ModSystem
                         .Select(step => (JsonNode)new JsonObject { ["id"] = step["id"]?.DeepClone(),
                             ["description"] = step["description"]?.DeepClone(), ["status"] = step["status"]?.DeepClone(),
                             ["actual"] = step["best_actual"]?.DeepClone() }).ToArray()) };
-                prompt += "上次会话的历史实测记录如下，当前情况以本轮工具观察为准：" + evidence.ToJsonString();
+                prompt += "上次会话的历史实测记录如下，当前情况以本轮工具观察为准：" + evidence.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                    { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-resume-evidence.json"), evidence.ToJsonString());
             }
         }
