@@ -213,7 +213,7 @@ namespace TerraBlind
             }
             bool mining = primaryItemUse && (p.HeldItem.pick > 0 || p.HeldItem.axe > 0 || p.HeldItem.hammer > 0);
             bool placing = PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
-                || primaryItemUse && p.HeldItem.createTile >= 0;
+                || p.HeldItem.createTile >= 0 && (primaryItemUse || p.itemTime > 0);
             bool itemBusy = placing || mining && !_attackNext || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
                 || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)

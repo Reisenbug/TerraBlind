@@ -273,6 +273,18 @@ static class GatherTests
             FightCoordinator.Tick(p, true, true);
             Check(p.selectedItem == 0 && !FightCoordinator.AimTarget.HasValue,
                 "completed attack animation did not restore mining");
+            p.inventory[2] = new Item { stack = 1, createTile = 19 };
+            p.selectedItem = 2; p.itemAnimation = 0; p.itemTime = 3; p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 2 && !p.controlUseItem,
+                "attack restarted while placement was waiting for the previous item cooldown");
+            p.itemTime = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 2 && p.controlUseItem, "ready placement lost its priority");
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 1 && p.controlUseItem,
+                "holding an idle building item indefinitely suppressed defense");
             var oldVelocity = p.velocity;
             try
             {

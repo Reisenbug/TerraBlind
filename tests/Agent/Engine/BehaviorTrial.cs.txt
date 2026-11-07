@@ -312,7 +312,7 @@ public sealed class BehaviorTrial : ModSystem
                 {
                     ["tick"] = Main.GameUpdateCount, ["before_use"] = before, ["before_slot"] = slot,
                     ["primary_use"] = player.controlUseItem, ["primary_slot"] = player.selectedItem,
-                    ["type"] = player.HeldItem.type, ["animation"] = player.itemAnimation,
+                    ["type"] = player.HeldItem.type, ["animation"] = player.itemAnimation, ["item_time"] = player.itemTime,
                     ["mouse_left"] = Main.mouseLeft, ["trigger_left"] = Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft,
                     ["nav"] = RecedingNav.Active, ["ssp"] = StateSpacePlanner.IsActive,
                     ["item_use"] = ItemUseCoordinator.IsActive, ["mine"] = MineCoordinator.IsActive,
@@ -490,6 +490,36 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PLACEMENT_COOLDOWN_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+                AgentPermissions.Dodge = false; Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer; int x = Main.spawnTileX, y = Main.spawnTileY;
+                for (int tx = x - 5; tx <= x + 12; tx++)
+                for (int ty = y - 8; ty <= y + 2; ty++) Main.tile[tx, ty].ClearEverything();
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.Starfury); p.inventory[1].SetDefaults(ItemID.WoodPlatform);
+                p.inventory[1].stack = 100; p.position = new Vector2(x * 16, y * 16); p.velocity = Vector2.Zero;
+                target = NPC.NewNPC(new EntitySource_Misc("placement-cooldown-probe"), (x + 7) * 16, y * 16, NPCID.BlueSlime);
+                var tick = typeof(FightCoordinator).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                    .Single(method => method.Name == "Tick" && method.GetParameters().Length == 3);
+                p.itemAnimation = 0; p.itemTime = 8; p.selectedItem = 1; p.controlUseItem = false;
+                tick.Invoke(null, new object[] { p, true, false });
+                if (p.selectedItem != 1 || p.controlUseItem) throw new Exception("native placement cooldown lost its pending item to defense");
+                p.itemTime = 0; p.controlUseItem = true;
+                tick.Invoke(null, new object[] { p, true, true });
+                if (p.selectedItem != 1 || !p.controlUseItem) throw new Exception("ready native placement lost priority");
+                p.controlUseItem = false;
+                tick.Invoke(null, new object[] { p, true, false });
+                if (p.selectedItem != 0 || !p.controlUseItem) throw new Exception("idle building item blocked native defense");
+                return true;
+            });
+            Console.WriteLine("PLACEMENT_COOLDOWN_PASS native_items=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_IDLE_INPUT_PROBE") == "1")
         {
             int sampled = 0;
