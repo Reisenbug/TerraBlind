@@ -13,6 +13,23 @@ static class ActionTests
     public static async Task Run()
     {
         await QueuedActions();
+        var history = new ActionTasks((_, args, _) => Task.FromResult(args.ToJsonString()),
+            _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+        string firstHandle = null, historyHandle = null;
+        for (int i = 0; i < 40; i++)
+        {
+            var args = new JsonObject { ["sequence"] = i };
+            var started = i % 2 == 0 ? history.Start("nav_to", args, default)
+                : history.Enqueue(historyHandle, "nav_to", args, null, default);
+            historyHandle = started["handle"].ToString();
+            firstHandle ??= historyHandle;
+            JsonObject terminal;
+            do { terminal = await history.Query(historyHandle, 100, default); }
+            while (terminal["status"].ToString() == "running");
+            Check(terminal["status"].ToString() == "completed", "long action history interrupted sequential work");
+        }
+        Check((await history.Query(firstHandle, 0, default))["result"]["sequence"].GetValue<int>() == 0,
+            "continuing a long task erased the evidence of its first action");
         string failureDetail = "step_requires_reconciliation: second " + new string('x', 1200);
         var failedAction = new ActionTasks((_, _, _) => Task.FromException<string>(new InvalidOperationException(failureDetail)),
             _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);

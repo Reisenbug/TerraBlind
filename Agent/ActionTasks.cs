@@ -95,7 +95,6 @@ public sealed class ActionTasks
                     throw new InvalidOperationException("已有相同节点的暂停动作，不能重复创建。用action_control resume恢复原句柄 "
                         + paused.Id + "；若确需放弃，请先cancel并根据新事实调整方案。");
             }
-            if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline,
                 Node = NodeContext.Value };
             entries.Add(entry.Id, entry);
@@ -132,7 +131,6 @@ public sealed class ActionTasks
                 throw new InvalidOperationException("前置动作必须属于本任务且可继续执行。");
             if (entries.Values.Any(e => e.After == after && e.Status is "queued" or "running" or "paused" or "cancelling"))
                 throw new InvalidOperationException("此动作已有待执行的下一段，先取消原排队动作再替换。");
-            if (entries.Count >= 32) throw new InvalidOperationException("本世界最多32个动作句柄。");
             if (previous.Status == "completed" && (active != null || handingOff))
                 throw new InvalidOperationException("前置已完成但输入已被其他动作占用。");
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool,
