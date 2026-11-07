@@ -667,8 +667,11 @@ public sealed class BehaviorTrial : ModSystem
                     p.position = new Vector2(mapX * 16, row * 16 - p.height);
                     p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
                     p.ConsumedLifeCrystals = 7; p.statLife = p.statLifeMax = p.statLifeMax2 = 240;
-                    foreach (var item in p.inventory) item.TurnToAir();
-                    p.inventory[0].SetDefaults(ItemID.Starfury); p.inventory[1].SetDefaults(ItemID.ThornChakram);
+                    if (string.IsNullOrEmpty(QueenResumeRoot))
+                    {
+                        foreach (var item in p.inventory) item.TurnToAir();
+                        p.inventory[0].SetDefaults(ItemID.Starfury); p.inventory[1].SetDefaults(ItemID.ThornChakram);
+                    }
                     Main.playerInventory = false; Config.I.AgentEnabled = true;
                     AgentPermissions.Reset();
                     return true;
@@ -757,7 +760,11 @@ public sealed class BehaviorTrial : ModSystem
                         return;
                     }
                     await Call("set_combat", new JsonObject { ["boss_control"] = true, ["auto_dodge"] = true,
-                        ["auto_attack"] = true, ["movement_reserve_scale"] = .075 });
+                        ["auto_attack"] = true, ["movement_reserve_scale"] = .075,
+                        ["weapon_type"] = int.Parse(Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_WEAPON") ?? "0") });
+                    if (Environment.GetEnvironmentVariable("TB_HIVE_COMBAT_GUARD") == "1")
+                        await OnMain(() => { FightCoordinator.Start(40); return true; });
+                    File.WriteAllText(Path.Combine(Main.SavePath, "hive-combat-setup.json"), (await Call("get_state", new JsonObject())).ToJsonString());
                     var clock = Stopwatch.StartNew(); var samples = new JsonArray();
                     while (clock.Elapsed.TotalSeconds < 180)
                     {
@@ -765,6 +772,7 @@ public sealed class BehaviorTrial : ModSystem
                         var state = await OnMain(() => new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
                             ["hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead,
                             ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y,
+                            ["weapon_type"] = Main.LocalPlayer.HeldItem.type,
                             ["boss_hp"] = Main.npc[target].life, ["boss_active"] = Main.npc[target].active,
                             ["defeated"] = NPC.downedQueenBee });
                         state["controller"] = await Call("boss_status", new JsonObject()); samples.Add(state);
@@ -1282,22 +1290,46 @@ public sealed class BehaviorTrial : ModSystem
                 var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control",
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
                 string veto = null;
+                int contact = -1;
                 try
                 {
                     FightCoordinator.Start(20);
                     FightCoordinator.Tick(p);
                     bool moved = p.controlLeft || p.controlRight;
                     if (!moved || p.controlUseItem) throw new Exception("native incoming projectile was ignored without an NPC target");
+                    veto = policy.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null,
+                        "native arena boundary", ((int)(p.position.X / 16), cy - 12, 20, 24), outside: true);
+                    p.controlLeft = p.controlRight = p.controlJump = false;
+                    FightCoordinator.Tick(p);
+                    if (!p.controlRight || p.controlLeft)
+                        throw new Exception("native projectile reflex crossed the confined left boundary");
+                    policy.Release(veto); veto = null;
                     veto = policy.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "test movement veto");
+                    p.controlLeft = p.controlRight = p.controlJump = false;
                     FightCoordinator.Tick(p);
                     if (p.controlLeft || p.controlRight || p.controlJump)
                         throw new Exception("native projectile defense overrode movement veto");
                     Console.WriteLine("PROJECTILE_ONLY_DEFENSE_PASS native_inputs=true no_npc=true veto_respected=true");
+                    policy.Release(veto); veto = null;
+                    Main.projectile[shot].active = false;
+                    contact = NPC.NewNPC(p.GetSource_Misc("contact-defense-test"), (int)p.Center.X + 80, (int)p.Center.Y, NPCID.BlueSlime);
+                    var enemy = Main.npc[contact];
+                    enemy.Center = p.Center + new Vector2(80, 0); enemy.velocity = new Vector2(-5, 0);
+                    p.controlLeft = p.controlRight = p.controlJump = false;
+                    FightCoordinator.Tick(p);
+                    var evidence = new JsonObject { ["npc_type"] = enemy.type, ["npc_velocity_x"] = enemy.velocity.X,
+                        ["player_velocity_x"] = p.velocity.X, ["left"] = p.controlLeft,
+                        ["right"] = p.controlRight, ["jump"] = p.controlJump, ["model_calls"] = 0 };
+                    File.WriteAllText(Path.Combine(Main.SavePath, "contact-defense.json"), evidence.ToJsonString());
+                    if (!p.controlLeft && !p.controlRight && !p.controlJump)
+                        throw new Exception("native approaching monster contact was ignored: " + evidence);
+                    Console.WriteLine("CONTACT_DEFENSE_PASS native_inputs=true boundary_respected=true " + evidence);
                 }
                 finally
                 {
                     if (veto != null) policy.Release(veto);
                     FightCoordinator.Stop(); Main.projectile[shot].active = false; p.gravity = oldGravity;
+                    if (contact >= 0) Main.npc[contact].active = false;
                 }
                 return true;
             });
