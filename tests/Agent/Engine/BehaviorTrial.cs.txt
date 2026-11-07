@@ -490,6 +490,49 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PLATFORM_CHAIN_PROBE") == "1")
+        {
+            int x = Main.spawnTileX - 3, y = Main.spawnTileY - 3;
+            var report = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+                AgentPermissions.Dodge = false; Combat.Enabled = Dodge.Enabled = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                for (int tx = x - 8; tx <= x + 10; tx++)
+                for (int ty = y - 8; ty <= y + 5; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (ty >= y + 3) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.WoodPlatform); p.inventory[0].stack = 30; p.selectedItem = 0;
+                p.position = new Vector2((x + 3) * 16, (y + 3) * 16 - p.height); p.velocity = Vector2.Zero;
+                var data = Terraria.ObjectData.TileObjectData.GetTileData(TileID.Platforms, p.HeldItem.placeStyle);
+                if (!PlaceAnywhere.Start("94", x, y, out string reason)) throw new Exception(reason);
+                return new JsonObject { ["target_x"] = x, ["target_y"] = y,
+                    ["tile_data_width"] = data?.Width, ["tile_data_height"] = data?.Height,
+                    ["custom_can_place"] = data?.UsesCustomCanPlace, ["started_tick"] = Main.GameUpdateCount };
+            });
+            try
+            {
+                for (int i = 0; i < 360 && PlaceAnywhere.IsRunning; i++) await Task.Delay(17);
+                await OnMain(() =>
+                {
+                    report["elapsed_frames"] = Main.GameUpdateCount - report["started_tick"].GetValue<uint>();
+                    report["outcome"] = PlaceAnywhere.Outcome; report["reason"] = PlaceAnywhere.Reason;
+                    report["target_placed"] = Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms;
+                    report["platforms_used"] = 30 - Main.LocalPlayer.inventory.Where(item => item.type == ItemID.WoodPlatform).Sum(item => item.stack);
+                    return true;
+                });
+                File.WriteAllText(Path.Combine(Main.SavePath, "platform-chain.json"), report.ToJsonString());
+                if (report["target_placed"].GetValue<bool>() != true || PlaceAnywhere.Outcome != "done")
+                    throw new Exception("native platform placement failed to connect an anchor chain: " + report);
+            }
+            finally { await OnMain(() => { PlaceAnywhere.Stop(); ItemUseCoordinator.Stop(); return true; }); }
+            Console.WriteLine("PLATFORM_CHAIN_PASS native_placement=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PLACEMENT_COOLDOWN_PROBE") == "1")
         {
             await OnMain(() =>

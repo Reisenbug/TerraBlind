@@ -103,15 +103,14 @@ namespace TerraBlind
 		static bool HasAnchor(int x, int y)
 			=> PlacingPlatform() ? MazeWand.PlatformAnchor(x, y) : MazeWand.BlockAnchor(x, y);
 
-		// 手上这件是不是【多格家具】(工作台/熔炉/铁砧/桌椅)。判据问 vanilla 的 TileObjectData:
-		// 有 data 就是多格对象,没有就是方块/平台这种单格的。不硬编尺寸表。
+		// 平台虽有 1x1 TileObjectData,仍走接锚点链的流程。
 		static bool IsMultiCell(out int itemId)
 		{
 			itemId = -1;
 			int slot = PlaceAction.ResolveSlot(_item);
 			if (slot < 0) return false;
 			var it = Main.LocalPlayer?.inventory[slot];
-			if (it == null || it.IsAir || it.createTile < 0) return false;
+			if (it == null || it.IsAir || it.createTile < 0 || Terraria.ID.TileID.Sets.Platforms[it.createTile]) return false;
 			itemId = it.type;
 			return Terraria.ObjectData.TileObjectData.GetTileData(it.createTile, it.placeStyle) != null;
 		}
