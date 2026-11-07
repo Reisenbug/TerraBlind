@@ -585,6 +585,19 @@ static class ScriptTests
             && missingSources["failure"]["evidence"]["source_rules"][0]["drops_only"].GetValue<bool>()
             && progress.Summary()["last_execution"]["failure"]["evidence"]["source_rules"] != null,
             "script handoff lost the distinction between unconfigured sources and absent resources");
+        var hazardProgress = new ScriptProgress();
+        var unsafeGather = await AgentScript.Run("tool('gather'); return {status:'yield'};", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("""
+                {"ok":false,"outcome":"unsafe","last_result":{"candidate":{"item_type":29,"x":892,"y":581},
+                  "result":{"error":"cannot_reach_collect_target","navigation":{"error":"navigation_near_trap",
+                    "trap_tiles":[{"x":997,"y":527,"type":135,"frame_x":0,"frame_y":36}]}}}}
+                """), _ => Task.CompletedTask, default, hazardProgress);
+        var hazard = hazardProgress.Summary()["last_execution"]["failure"]["evidence"]["last_result"];
+        Check(unsafeGather["failure"]["evidence"]["last_result"] != null
+            && hazard?["candidate"]?["x"]?.GetValue<int>() == 892
+            && hazard["result"]["navigation"]["error"].ToString() == "navigation_near_trap"
+            && hazard["result"]["navigation"]["trap_tiles"][0]["y"].GetValue<int>() == 527,
+            "script yield discarded the failed target and the exact trap that stopped collection");
         var decisionProgress = new ScriptProgress();
         try { decisionProgress.Resolve("choice", 0, true, new JsonObject(), new JsonObject()); throw new Exception("reconciliation created a missing decision"); }
         catch (InvalidOperationException error) { Check(error.Message.Contains("step("), "missing decision did not explain the supported recording API"); }
