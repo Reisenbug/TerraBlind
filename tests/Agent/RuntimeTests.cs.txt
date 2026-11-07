@@ -16,6 +16,53 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    static async Task TestGapContinuation()
+    {
+        Agent.Load();
+        var gapHandler = HttpServerSystem.Handler;
+        string gapWorkflow = null;
+        int gapActions = 0;
+        try
+        {
+            AgentTools.Watches.Reset(); AgentTools.Watches.EnsureDefaults(); AgentTools.Plan.Reset();
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"continue after a reported execution gap","mode":"dag","steps":[
+                  {"id":"resume","description":"execute repaired movement","depends_on":[],
+                   "script":"return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            gapWorkflow = AgentTools.Plan.Script("resume")["workflow"].ToString();
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") gapActions++;
+                return (200, path == "/act_status" ? "{\"active\":false}" : "{}");
+            };
+            AgentTools.Watches.ExecutionFault(new JsonObject { ["task_node"] = "resume",
+                ["reason"] = "script_returned_without_action_or_completion" });
+            var resumed = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "resume" }, default)));
+            Check(resumed["ok"]?.GetValue<bool>() == true && gapActions == 1,
+                "old execution-gap warning interrupted the explicitly repaired node: " + resumed);
+            Check(AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["kind"]?.ToString() == "execution_gap"
+                && e["wake_deferred"]?.GetValue<bool>() == true), "resolved gap lost its retained evidence");
+            AgentTools.Watches.ExecutionFault(new JsonObject { ["task_node"] = "resume", ["reason"] = "new_step_stalled" });
+            Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e => e["kind"]?.ToString() == "execution_gap") == 2,
+                "resolved gap prevented reporting a new execution failure");
+            AgentTools.Watches.Take();
+            AgentTools.Watches.Observe(new JsonObject { ["dead"] = true });
+            var unsafeRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "resume" }, default)));
+            Check(unsafeRun["value"]?["status"]?.ToString() == "yield" && gapActions == 1
+                && unsafeRun["value"]?["wake"]?["events"]?.AsArray().Any(e => e["kind"]?.ToString() == "player_died") == true,
+                "starting a repaired node suppressed a real danger event");
+            Console.WriteLine("PASS: explicit node continuation supersedes old gap warnings while retaining evidence and real danger delivery");
+        }
+        finally
+        {
+            HttpServerSystem.Handler = gapHandler; AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            if (gapWorkflow != null) AgentTools.Workflows.Remove(gapWorkflow);
+        }
+    }
     static void TestHoneyNotice()
     {
         var watch = new AgentWatch(); watch.EnsureDefaults();
@@ -151,6 +198,7 @@ static class RuntimeTests
     public static async Task Run()
     {
         TestHoneyNotice();
+        await TestGapContinuation();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
             depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);

@@ -118,6 +118,18 @@ public sealed class AgentWatch
             }
     }
 
+    internal void AcknowledgeExecutionStart(string node)
+    {
+        foreach (var notice in pending)
+            if (notice["kind"]?.ToString() == "execution_gap"
+                && (notice["reported_evidence"]?["task_node"]?.ToString() == node
+                    || notice["reported_evidence"]?["current_node"]?.ToString() == node))
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "node_execution_restarted";
+            }
+    }
+
     public JsonObject Configure(JsonObject args)
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
@@ -330,7 +342,7 @@ public sealed class AgentWatch
 
     internal void ExecutionFault(JsonObject evidence)
     {
-        if (pending.Any(e => e["kind"]?.ToString() == "execution_gap")) return;
+        if (pending.Any(e => e["kind"]?.ToString() == "execution_gap" && e["wake_deferred"]?.GetValue<bool>() != true)) return;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = "execution_gap",
             ["reported_evidence"] = evidence.DeepClone() };
         pending.Enqueue(value);
