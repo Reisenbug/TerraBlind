@@ -2332,6 +2332,35 @@ public sealed class BehaviorTrial : ModSystem
                     evidence["earlier_unfinished_steps"] = new JsonArray((unfinished ?? new JsonArray())
                         .Where(step => step["status"]?.ToString() != "completed").Select(step => step.DeepClone()).ToArray());
                 }
+                string samplesPath = Path.Combine(QueenResumeRoot, "queen-samples.jsonl");
+                if (File.Exists(samplesPath))
+                {
+                    var encounters = new JsonArray(); JsonObject encounter = null;
+                    foreach (string line in File.ReadLines(samplesPath))
+                    {
+                        var sample = JsonNode.Parse(line); var scene = sample["state"];
+                        var bosses = scene?["boss_control"]?["active_bosses"] as JsonArray;
+                        if (bosses?.Count is not > 0 || scene["player"]?["dead"]?.GetValue<bool>() == true)
+                        { encounter = null; continue; }
+                        if (encounter == null)
+                        {
+                            encounter = new JsonObject { ["started_ms"] = sample["elapsed_ms"].DeepClone(),
+                                ["bosses_at_start"] = bosses.DeepClone(), ["min_player_hp"] = int.MaxValue,
+                                ["sample_count"] = 0, ["honey_samples"] = 0, ["held_weapons"] = new JsonObject() };
+                            encounters.Add(encounter);
+                        }
+                        encounter["last_observed_ms"] = sample["elapsed_ms"].DeepClone();
+                        encounter["bosses_last_observed"] = bosses.DeepClone();
+                        encounter["min_player_hp"] = Math.Min(encounter["min_player_hp"].GetValue<int>(), scene["player"]["hp"].GetValue<int>());
+                        encounter["sample_count"] = encounter["sample_count"].GetValue<int>() + 1;
+                        if (scene["boss_control"]?["honey_slowed"]?.GetValue<bool>() == true)
+                            encounter["honey_samples"] = encounter["honey_samples"].GetValue<int>() + 1;
+                        string weapon = scene["equipment"]?["held_item"]?["name"]?.ToString() ?? "unknown";
+                        var weapons = encounter["held_weapons"].AsObject();
+                        weapons[weapon] = (weapons[weapon]?.GetValue<int>() ?? 0) + 1;
+                    }
+                    evidence["combat_observations"] = encounters;
+                }
                 new ScriptLibrary(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"))
                     .Save("resume_observations", "return " + evidence.ToJsonString() + ";", 0);
                 prompt += "用script_program get name=resume_observations读取上次会话的历史实测记录；当前情况以本轮工具观察为准。";
