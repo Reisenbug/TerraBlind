@@ -51,6 +51,8 @@ public sealed record CombatSnapshot(
 {
     public int MountType { get; init; } = -1;
     public float MovementReserveScale { get; init; } = 1f;
+    public bool HoneyWet { get; init; }
+    public float? HoneyBelowPixels { get; init; }
 }
 
 public sealed record DodgeDecision(

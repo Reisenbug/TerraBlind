@@ -206,6 +206,7 @@ public class NativeAgent : ModSystem
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2,
                 ["dead"] = p.dead, ["suffocating"] = p.suffocating,
+                ["tick"] = (long)Main.GameUpdateCount, ["honey_slowed"] = p.honeyWet && !p.ignoreWater,
                 ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)
                     .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
@@ -225,7 +226,7 @@ public class NativeAgent : ModSystem
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
                     e["id"].GetValue<int>() > _lastDangerNotice
-                    && (e["kind"].ToString() == "low_health" || !AgentTools.Watches.LocalDelivery
+                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" || !AgentTools.Watches.LocalDelivery
                         && e["kind"].ToString() is "suffocating" or "player_died" or "boss_appeared"));
                 if (danger != null)
                 {
@@ -236,6 +237,7 @@ public class NativeAgent : ModSystem
                         ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
                     bool bossAppeared = danger["kind"].ToString() == "boss_appeared";
                     if (bossAppeared) observation["boss"] = danger["evidence"]?.DeepClone();
+                    if (danger["kind"].ToString() == "honey_slowdown") observation["honey_slowed"] = true;
                     string instruction = bossAppeared
                         ? "宿主观察到附近Boss，原目标及进度保留。依据任务、战斗许可与现场，决定交接战斗、调整路线或继续当前行动。调整前核对当前动作句柄。现场："
                         : "宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案：";

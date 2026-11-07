@@ -16,6 +16,22 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    static void TestHoneyNotice()
+    {
+        var watch = new AgentWatch(); watch.EnsureDefaults();
+        JsonObject Sample(long tick, bool wet = true) => new() { ["tick"] = tick,
+            ["honey_slowed"] = wet, ["hp"] = 100, ["dead"] = false };
+        watch.Observe(Sample(0)); watch.Observe(Sample(119));
+        Check(!watch.HasPending, "brief honey contact woke the model");
+        watch.Observe(Sample(120));
+        Check(watch.HasAdvisories && !watch.HasInterrupting, "honey notice paused the current action");
+        Check(watch.Advisories().Single()["kind"].ToString() == "honey_slowdown", "honey slowdown was not delivered");
+        watch.Observe(Sample(240));
+        Check(!watch.HasAdvisories && watch.PendingCount == 1, "unchanged honey contact repeatedly woke the model");
+        watch.Observe(Sample(250, false)); watch.Observe(Sample(300)); watch.Observe(Sample(420));
+        Check(watch.HasAdvisories && watch.PendingCount == 2, "new honey episode failed to rearm observation");
+        Console.WriteLine("PASS: persistent honey slowdown wakes observation once per entry while current action continues");
+    }
     static void Check(bool condition, string message)
     { if (!condition) throw new Exception(message); }
 
@@ -134,6 +150,7 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        TestHoneyNotice();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
             depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);

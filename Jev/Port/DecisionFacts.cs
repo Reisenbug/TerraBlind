@@ -23,6 +23,8 @@ public static class DecisionFacts
             i_am_losing_health_over_time = snapshot.LosingHealthOverTime,
             my_speed_to_the_right = (int)(snapshot.Player.Velocity.X * 60f / 16f),
             my_speed_upward = (int)(-snapshot.Player.Velocity.Y * 60f / 16f),
+            honey = new { touching = snapshot.HoneyWet, surface_below_feet_tiles = snapshot.HoneyBelowPixels / 16,
+                effect = "While touching honey, actual displacement is one quarter of velocity; upward escape takes priority. Platforms above honey support walking; descending through them enters the pool." },
             movement = new
             {
                 can_double_jump = snapshot.CanDoubleJump,

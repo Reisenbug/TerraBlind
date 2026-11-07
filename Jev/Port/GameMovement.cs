@@ -44,6 +44,9 @@ public sealed class GameMovement : IMovementDriver
         BoundaryDistances solid, BoundaryDistances world, bool hasHook, bool hasMount, float reserveScale = 1f)
     {
         var options = new List<DodgeOption> { new(DodgeIntent.Idle, null) };
+        bool honey = player.honeyWet && !player.ignoreWater;
+        bool honeyBelow = GameSensor.HoneyBelow(player).HasValue;
+        if (honey) reserveScale = Math.Min(reserveScale, .025f);
         (int X, Magnitude Size)[] horizontal =
         {
             (0, Magnitude.None), (-1, Magnitude.Small), (-1, Magnitude.Medium),
@@ -59,6 +62,7 @@ public sealed class GameMovement : IMovementDriver
         foreach (var (y, verticalSize) in vertical)
         {
             if (x == 0 && y == 0) continue;
+            if (y > 0 && (honey || honeyBelow)) continue;
             if (Blocked(x, y, solid, world, player.velocity, reserveScale)) continue;
             bool horizontalHook = horizontalSize == Magnitude.Medium;
             bool verticalHook = y < 0 && verticalSize >= Magnitude.Medium;
@@ -114,29 +118,42 @@ public sealed class GameMovement : IMovementDriver
         foreach (DodgeOption option in snapshot.AvailableActions)
             if (option.Intent == intent) { plannedHook = option.HookTarget; break; }
         (int horizontal, int vertical) = Components(intent.Direction);
+        bool honey = player.honeyWet && !player.ignoreWater;
+        Magnitude horizontalSize = intent.HorizontalSize;
+        Magnitude verticalSize = intent.VerticalSize;
+        string reason = "";
+        if (honey && vertical >= 0)
+        {
+            vertical = -1;
+            verticalSize = snapshot.HasHook ? Magnitude.Medium : snapshot.HasMount ? Magnitude.Large : Magnitude.Small;
+            reason = "honey escape";
+        }
+        else if (vertical > 0 && GameSensor.HoneyBelow(player).HasValue)
+        {
+            vertical = 0; verticalSize = Magnitude.None;
+            reason = "honey below platform";
+        }
         if (!WithinAgentRegion(player, horizontal, vertical, plannedHook))
         {
             Release(player);
             return new ActionResult(intent, DodgeIntent.Idle, "agent spatial constraint");
         }
-        Magnitude horizontalSize = intent.HorizontalSize;
-        Magnitude verticalSize = intent.VerticalSize;
-        string reason = "";
+        float reserve = honey ? Math.Min(snapshot.MovementReserveScale, .025f) : snapshot.MovementReserveScale;
         Rectangle box = player.Hitbox;
         BoundaryDistances solid = GameSensor.ScanSolids(box);
         BoundaryDistances world = new(box.Left, Main.maxTilesX * 16f - box.Right,
             box.Top, Main.maxTilesY * 16f - box.Bottom);
 
-        if (Blocked(-1, 0, solid, world, player.velocity, snapshot.MovementReserveScale))
+        if (Blocked(-1, 0, solid, world, player.velocity, reserve))
             if (horizontal < 0) { horizontal = 0; reason = "left blocked"; }
-        if (Blocked(1, 0, solid, world, player.velocity, snapshot.MovementReserveScale))
+        if (Blocked(1, 0, solid, world, player.velocity, reserve))
             if (horizontal > 0) { horizontal = 0; reason = "right blocked"; }
 
-        if (Blocked(0, -1, solid, world, player.velocity, snapshot.MovementReserveScale))
+        if (Blocked(0, -1, solid, world, player.velocity, reserve))
         {
             if (vertical < 0) { vertical = 0; reason = "upper boundary"; }
         }
-        if (Blocked(0, 1, solid, world, player.velocity, snapshot.MovementReserveScale))
+        if (Blocked(0, 1, solid, world, player.velocity, reserve))
         {
             if (vertical > 0) { vertical = 0; reason = "lower boundary"; }
         }
@@ -258,7 +275,7 @@ public sealed class GameMovement : IMovementDriver
         player.controlUp = player.grapCount == 0 && vertical < 0;
         player.controlDown = player.grapCount == 0 && vertical > 0;
         bool useExtraJump = canJump && vertical < 0 &&
-            snapshot.CanDoubleJump && _jumpSequence != snapshot.Sequence;
+            (honey ? player.AnyExtraJumpUsable() : snapshot.CanDoubleJump) && _jumpSequence != snapshot.Sequence;
         player.controlJump = hookJump || ApplyJump(player, canJump && vertical < 0,
             useExtraJump, snapshot.Sequence);
         if (upMount && !_autoMountActive && _upMountSequence != snapshot.Sequence &&

@@ -340,6 +340,7 @@ public static partial class AgentTools
             observedPlayer["vel"] = new JsonObject { ["x"] = healthPlayer.velocity.X, ["y"] = healthPlayer.velocity.Y };
             observedPlayer["dead"] = Main.LocalPlayer.dead;
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
+            observedPlayer["honey_slowed"] = healthPlayer.honeyWet && !healthPlayer.ignoreWater;
             observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
         }
         state["depth"] = new JsonObject
@@ -421,6 +422,7 @@ public static partial class AgentTools
             ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
             ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory ? "inventory_open" : null,
             ["movement_reserve_scale"] = Dodge.MovementReserveScale,
+            ["honey_slowed"] = Main.LocalPlayer.honeyWet && !Main.LocalPlayer.ignoreWater,
             ["movement_snapshot"] = movement != null ? new JsonObject
             {
                 ["source"] = fresh ? "live_preview" : "jev_request",
