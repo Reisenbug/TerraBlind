@@ -861,7 +861,7 @@ public static partial class AgentTools
                 if (result["value"] is JsonObject returnedValue && returnedValue["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;
-                    if (activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
+                    if (!queuedScript && activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
                         await Actions.Control(activeHandle, "pause", null, token);
                     var deliveredEvents = await NativeAgent.OnMain(() => Watches.Take(8), token);
                     if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
@@ -886,7 +886,8 @@ public static partial class AgentTools
                     await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
                 if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
                     return new JsonObject { ["events"] = new JsonArray(), ["remaining_events"] = 0, ["paused_action"] = null, ["action"] = null }.ToJsonString();
-                string eventHandle = await NativeAgent.OnMain(() => Watches.HasInterrupting ? Actions.ActiveHandle : null, token);
+                bool scriptOwnsAction = Actions.RunningScript;
+                string eventHandle = await NativeAgent.OnMain(() => !scriptOwnsAction && Watches.HasInterrupting ? Actions.ActiveHandle : null, token);
                 var pausedAction = eventHandle != null ? await Actions.Control(eventHandle, "pause", null, token) : null;
                 return (await NativeAgent.OnMain(() => new JsonObject { ["events"] = Watches.Take(eventLimit),
                     ["remaining_events"] = Watches.PendingCount,

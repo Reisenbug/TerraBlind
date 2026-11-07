@@ -215,8 +215,13 @@ public sealed class ActionTasks
             {
                 try
                 {
-                    if (stopTool != null) await stopTool(entry.Tool, () => Owns(entry, attempt));
-                    else await stop(() => Owns(entry, attempt));
+                    bool observation = entry.Tool == "run_script" && result is JsonObject script
+                        && script["input_effects"] is JsonValue flag && flag.TryGetValue<bool>(out bool effects) && !effects;
+                    if (!observation)
+                    {
+                        if (stopTool != null) await stopTool(entry.Tool, () => Owns(entry, attempt));
+                        else await stop(() => Owns(entry, attempt));
+                    }
                     if (!entry.Cancel.IsCancellationRequested) observed = await observe(entry.Cancel.Token);
                     string ending;
                     lock (gate) ending = status == "failed" ? status : entry.Requested ?? status;

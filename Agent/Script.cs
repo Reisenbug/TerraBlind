@@ -178,6 +178,7 @@ public static class AgentScript
         var toolCounts = new JsonObject();
         int calls = 0;
         bool inTool = false;
+        bool inputEffects = false;
         Exception hostFailure = null;
         JsonObject wake = null;
         JsonObject lastFailure = null;
@@ -188,6 +189,7 @@ public static class AgentScript
             {
                 ["ok"] = error == null, ["error"] = error, ["detail"] = detail,
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["input_effects"] = inputEffects,
                 ["tool_counts"] = toolCounts.DeepClone(),
                 ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs, ["log_truncations"] = logTruncations,
                 ["failure"] = lastFailure?.DeepClone()
@@ -241,6 +243,7 @@ public static class AgentScript
                     trace.Enqueue(entry);
                     if (trace.Count > 12) trace.Dequeue();
                     long started = clock.ElapsedMilliseconds;
+                    inputEffects |= AgentControlSession.ActionTool(name) || name == "control";
                     inTool = true;
                     string result = execute(name, args, budget.Token).GetAwaiter().GetResult();
                     progress?.Record(name, args, result);

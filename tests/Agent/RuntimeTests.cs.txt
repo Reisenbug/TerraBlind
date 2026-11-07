@@ -1530,6 +1530,7 @@ static class RuntimeTests
             await TestWakeHandoff();
             await TestWakeHandoff(true);
             await TestEventDelivery();
+            await TestBackgroundBossObservation();
             await TestContinuedReview();
             await TestPassiveOpportunity();
             await TestBoundedState();
@@ -2548,6 +2549,46 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestBackgroundBossObservation()
+    {
+        bool oldDodge = Dodge.Enabled, oldCombat = Combat.Enabled;
+        string oldLast = Dodge.Last;
+        try
+        {
+            foreach (bool explicitReview in new[] { false, true })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
+                var plan = JsonNode.Parse("""
+                    {"goal":"observe active Boss","mode":"dag","steps":[{"id":"observe","description":"observe retained controls",
+                    "depends_on":[],"script":"","conditions":[{"kind":"item","type":191,"count":999}]}]}
+                    """).AsObject();
+                plan["steps"][0]["script"] = explicitReview
+                    ? "tool('decision_point',{reason:'movement options require a new plan'});"
+                    : "const r=tool('script_events',{wait_ms:0}); return {events:r.events.length};";
+                AgentTools.Plan.Create(plan, _ => 0);
+                if (!explicitReview) AgentTools.Watches.Emit("boss_appeared", "native-boss", new JsonObject { ["type"] = 222 });
+                Dodge.Enabled = Combat.Enabled = true; Dodge.Last = "retained boss intent";
+                int beforeStops = Combat.Stops;
+                var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["task_node"] = "observe", ["background"] = true, ["event_delivery"] = "script" }, default)));
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                var result = await Execute(AgentTools.Actions.Query(started["handle"].ToString(), 0, default));
+                Check(result["status"].ToString() != "cancelled"
+                    && (explicitReview ? result["result"]?["value"]?["wake"] != null
+                        : result["result"]?["value"]?["events"]?.GetValue<int>() == 1),
+                    "background observer paused itself instead of returning the observed event: " + result);
+                Check(Dodge.Last == "retained boss intent" && Combat.Stops == beforeStops && Dodge.Enabled && Combat.Enabled,
+                    "read-only background observer released the active Boss controller");
+            }
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
+            Dodge.Enabled = oldDodge; Combat.Enabled = oldCombat; Dodge.Last = oldLast;
+        }
+        Console.WriteLine("PASS: background Boss observations and explicit review return without self-pause or controller release");
     }
 
     static async Task TestVerifiedNodeHandoff()
