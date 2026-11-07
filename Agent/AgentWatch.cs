@@ -101,16 +101,16 @@ public sealed class AgentWatch
             }
     }
 
-    public void AcknowledgeCompletion(JsonObject action)
+    public void AcknowledgeCompletion(JsonObject action, bool nodeVerified = false)
     {
-        if (action["status"]?.ToString() != "completed") return;
+        if (action["status"]?.ToString() != "completed" && !nodeVerified) return;
         string key = action["handle"] + ":" + action["attempt"];
         verifiedCompletions.Add(key);
         foreach (var notice in pending)
             if (notice["kind"]?.ToString() == "action_finished" && notice["key"]?.ToString() == key)
             {
                 notice["wake_deferred"] = true;
-                notice["deferred_reason"] = "completion_observed";
+                notice["deferred_reason"] = nodeVerified ? "node_completion_verified" : "completion_observed";
             }
     }
 

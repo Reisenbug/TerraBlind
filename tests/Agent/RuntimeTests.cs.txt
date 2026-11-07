@@ -1419,6 +1419,7 @@ static class RuntimeTests
             await TestDagRepairDuringDefense();
             await TestQueuedDagActions();
             await TestAutomaticDagContinuation();
+            await TestVerifiedNodeHandoff();
             await TestBackgroundDescent();
             await TestObservedActionCompletion();
             await TestDagReturnValues();
@@ -2443,6 +2444,64 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestVerifiedNodeHandoff()
+    {
+        int oldHealth = Game.LocalPlayer.statLifeMax;
+        try
+        {
+            foreach (string ending in new[] { "yield", "oversized", "unmet" })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
+                Game.LocalPlayer.statLifeMax = 100;
+                int starts = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    if (path == "/nav_recede_done" && starts == 1 && ending != "unmet") Game.LocalPlayer.statLifeMax = 120;
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+                };
+                var plan = JsonNode.Parse("""
+                    {"goal":"verified handoff","mode":"dag","steps":[
+                    {"id":"first","description":"120 health","depends_on":[],"script":"",
+                     "conditions":[{"kind":"permanent_health","count":120}]},
+                    {"id":"next","description":"prepared successor","depends_on":["first"],
+                     "script":"return tool('nav_to',{x:16,y:34});","conditions":[{"kind":"item","type":191,"count":1}]}]}
+                    """).AsObject();
+                plan["steps"][0]["script"] = "tool('nav_to',{x:12,y:34}); "
+                    + (ending == "oversized" ? "return 'x'.repeat(17000);" : "return {status:'yield',reason:'observe completed work'};");
+                AgentTools.Plan.Create(plan, AgentTaskEvidence.Measure);
+                var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                    new JsonObject { ["task_node"] = "first", ["background"] = true }, default)));
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                string handle = started["handle"].ToString();
+                var failed = await Execute(AgentTools.Actions.Query(handle, 0, default));
+                Check(failed["status"].ToString() == "failed", "test did not produce a failed script wrapper");
+                AgentTools.Watches.Emit("action_finished", handle + ":1", failed);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                AgentTools.ContinuePreparedNode(default);
+                if (ending == "unmet")
+                {
+                    Check(starts == 1 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed"
+                        && AgentTools.Watches.HasInterrupting, "unmet yielded node advanced without evidence");
+                    continue;
+                }
+                await PumpUntil(() => starts == 2);
+                Check(timer.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
+                    "verified work waited for a model instead of starting its prepared successor");
+                var retained = await Execute(AgentTools.Actions.Query(handle, 0, default));
+                Check(retained["status"].ToString() == "failed"
+                    && !AgentTools.Watches.HasInterrupting, "handoff erased the wrapper failure or retained its blocking notice");
+                Console.WriteLine($"VERIFIED_NODE_HANDOFF ending={ending} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
+                AgentTools.Stop(); await PumpUntil(() => !AgentTools.Actions.HasActive);
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear(); HttpServerSystem.Handler = null;
+            Game.LocalPlayer.statLifeMax = oldHealth;
+        }
     }
 
     static async Task TestPartialProgress()

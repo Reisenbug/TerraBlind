@@ -113,20 +113,22 @@ public static partial class AgentTools
                 StartPreparedNode(ready, LastContinuation?["after_handle"]?.ToString(), token);
             return;
         }
-        var action = Actions.LatestCompletedPrimary();
+        var action = Actions.LatestFinishedPrimary();
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
-        if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(handle)) return;
+        string attempt = handle + ":" + action?["attempt"];
+        if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(attempt)) return;
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
         if (previous == null) return;
-        if (Workflows.TryGetValue(previous["workflow"]?.ToString() ?? "", out var workflow)
-            && (workflow.Running || workflow.Yielded || workflow.ReviewRequested)) return;
-        continuedActions.Add(handle);
+        Workflows.TryGetValue(previous["workflow"]?.ToString() ?? "", out var workflow);
+        if (workflow?.Running == true) return;
         if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
         bool verified = previous["status"]?.ToString() == "completed"
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
-        if (!verified && workflow == null) return;
-        Watches.AcknowledgeCompletion(action);
+        continuedActions.Add(attempt);
+        if (!verified && (workflow == null || workflow.Yielded || workflow.ReviewRequested
+            || action["status"]?.ToString() != "completed")) return;
+        Watches.AcknowledgeCompletion(action, nodeVerified: verified);
         if (Watches.HasInterrupting) return;
         plan = Plan.Snapshot();
         string next = verified ? plan["current_step"]?.ToString() : owner;

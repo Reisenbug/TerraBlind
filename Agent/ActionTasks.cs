@@ -56,13 +56,13 @@ public sealed class ActionTasks
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
-    internal JsonObject LatestCompletedPrimary()
+    internal JsonObject LatestFinishedPrimary()
     {
         lock (gate)
         {
-            var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight" && e.Status == "completed")
+            var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight" && e.ExecutionEnded > 0)
                 .OrderByDescending(e => e.ExecutionEnded).FirstOrDefault();
-            return entry == null ? null : Snapshot(entry);
+            return entry?.Status is "completed" or "failed" ? Snapshot(entry) : null;
         }
     }
 
