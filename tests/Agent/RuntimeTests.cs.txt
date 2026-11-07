@@ -20,6 +20,7 @@ static class RuntimeTests
     {
         Agent.Load();
         var gapHandler = HttpServerSystem.Handler;
+        bool previousDead = Game.LocalPlayer.dead, previousSuffocating = Game.LocalPlayer.suffocating;
         string gapWorkflow = null;
         int gapActions = 0;
         try
@@ -49,16 +50,38 @@ static class RuntimeTests
             Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e => e["kind"]?.ToString() == "execution_gap") == 2,
                 "resolved gap prevented reporting a new execution failure");
             AgentTools.Watches.Take();
+            AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = true, ["dead"] = false });
+            AgentTools.Watches.Observe(new JsonObject { ["dead"] = true });
+            Game.LocalPlayer.dead = false; Game.LocalPlayer.suffocating = false;
+            AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = false, ["dead"] = false });
+            var recovered = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "resume" }, default)));
+            Check(recovered["ok"]?.GetValue<bool>() == true && gapActions == 2,
+                "resolved suffocation or death interrupted the explicitly restarted node: " + recovered);
+            Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e =>
+                e["kind"]?.ToString() is "suffocating" or "player_died"
+                && e["wake_deferred"]?.GetValue<bool>() == true) == 2,
+                "resolved danger lost its retained evidence");
+            AgentTools.Watches.Take();
+            Game.LocalPlayer.suffocating = true;
+            AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = true, ["dead"] = false });
+            var stillBuried = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                new JsonObject { ["task_node"] = "resume" }, default)));
+            Check(stillBuried["value"]?["status"]?.ToString() == "yield" && gapActions == 2,
+                "restarting a node suppressed ongoing suffocation");
+            AgentTools.Watches.Take();
+            Game.LocalPlayer.dead = true;
             AgentTools.Watches.Observe(new JsonObject { ["dead"] = true });
             var unsafeRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
                 new JsonObject { ["task_node"] = "resume" }, default)));
-            Check(unsafeRun["value"]?["status"]?.ToString() == "yield" && gapActions == 1
+            Check(unsafeRun["value"]?["status"]?.ToString() == "yield" && gapActions == 2
                 && unsafeRun["value"]?["wake"]?["events"]?.AsArray().Any(e => e["kind"]?.ToString() == "player_died") == true,
                 "starting a repaired node suppressed a real danger event");
             Console.WriteLine("PASS: explicit node continuation supersedes old gap warnings while retaining evidence and real danger delivery");
         }
         finally
         {
+            Game.LocalPlayer.dead = previousDead; Game.LocalPlayer.suffocating = previousSuffocating;
             HttpServerSystem.Handler = gapHandler; AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
             if (gapWorkflow != null) AgentTools.Workflows.Remove(gapWorkflow);
         }

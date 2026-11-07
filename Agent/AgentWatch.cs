@@ -118,9 +118,10 @@ public sealed class AgentWatch
             }
     }
 
-    internal void AcknowledgeExecutionStart(string node)
+    internal void AcknowledgeExecutionStart(string node, bool dead, bool suffocating)
     {
         foreach (var notice in pending)
+        {
             if (notice["kind"]?.ToString() == "execution_gap"
                 && (notice["reported_evidence"]?["task_node"]?.ToString() == node
                     || notice["reported_evidence"]?["current_node"]?.ToString() == node))
@@ -128,6 +129,13 @@ public sealed class AgentWatch
                 notice["wake_deferred"] = true;
                 notice["deferred_reason"] = "node_execution_restarted";
             }
+            else if (!dead && (notice["kind"]?.ToString() == "player_died"
+                || notice["kind"]?.ToString() == "suffocating" && !suffocating))
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "danger_resolved_before_execution";
+            }
+        }
     }
 
     public JsonObject Configure(JsonObject args)
@@ -199,6 +207,8 @@ public sealed class AgentWatch
         if (state["dead"]?.GetValue<bool>() == true) Emit("player_died", dangerKey, state);
         else
         {
+            if (state["dead"]?.GetValue<bool>() == false)
+                seen.RemoveWhere(key => key.StartsWith("player_died:", StringComparison.Ordinal));
             if (state["hp"]?.GetValue<int>() < HealthBelow) Emit("low_health", dangerKey, state);
             else if (state["hp"]?.GetValue<int>() >= HealthBelow)
                 seen.RemoveWhere(key => key.StartsWith("low_health:", StringComparison.Ordinal));

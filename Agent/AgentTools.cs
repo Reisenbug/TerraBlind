@@ -799,7 +799,7 @@ public static partial class AgentTools
                             && Actions.Summary().Any(a => a["tool"]?.ToString() != "fight" && a["status"]?.ToString() == "running"))
                             throw new InvalidOperationException("切换节点前须暂停原动作并保留句柄；独立防身攻击不阻止切换。");
                         Plan.Select(nodeId);
-                        Watches.AcknowledgeExecutionStart(nodeId);
+                        Watches.AcknowledgeExecutionStart(nodeId, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating);
                         return script;
                     }, token);
                     args = (JsonObject)args.DeepClone();
