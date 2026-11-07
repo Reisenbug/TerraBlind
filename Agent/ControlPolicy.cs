@@ -19,6 +19,7 @@ public sealed class AgentControlPolicy
         public ControlChannels Channels;
         public ControlBehavior[] Behaviors;
         public bool Ready;
+        public bool Outside;
         public (int X, int Y, int Width, int Height)? Region;
     }
 
@@ -47,7 +48,7 @@ public sealed class AgentControlPolicy
     }
 
     public string Deny(IEnumerable<ControlBehavior> behaviors, ControlLifetime lifetime, string action, string reason,
-        (int X, int Y, int Width, int Height)? region = null)
+        (int X, int Y, int Width, int Height)? region = null, bool outside = false)
     {
         Validate(lifetime, action, reason);
         var values = behaviors.Distinct().ToArray();
@@ -56,9 +57,11 @@ public sealed class AgentControlPolicy
         if (region is { } area && (area.X < 0 || area.Y < 0 || area.Width <= 0 || area.Height <= 0
             || (long)area.X + area.Width > int.MaxValue || (long)area.Y + area.Height > int.MaxValue))
             throw new ArgumentException("区域需要非负世界格坐标和正数宽高。");
-        if (region != null && values.Any(value => value is not (ControlBehavior.Mining or ControlBehavior.Placement or ControlBehavior.Navigation)))
+        if (outside && region == null) throw new ArgumentException("confine需要明确的世界格矩形region。");
+        if (region != null && values.Any(value => value is not (ControlBehavior.Mining or ControlBehavior.Placement or ControlBehavior.Navigation)
+            && !(outside && value is ControlBehavior.Dodge or ControlBehavior.Survival or ControlBehavior.Direct)))
             throw new ArgumentException("区域禁令只支持navigation/mining/placement。");
-        return Add(new Rule { Behaviors = values, Lifetime = lifetime, Action = action, Reason = reason, Region = region });
+        return Add(new Rule { Behaviors = values, Lifetime = lifetime, Action = action, Reason = reason, Region = region, Outside = outside });
     }
 
     string Add(Rule rule)
@@ -97,7 +100,7 @@ public sealed class AgentControlPolicy
     {
         foreach (var rule in spatialRules)
             if (rule.Region is { } area && rule.Behaviors?.Contains(behavior) == true
-                && x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height)
+                && rule.Outside != (x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height))
             {
                 var denied = Denied(rule, "region_forbidden", behavior);
                 denied["x"] = x; denied["y"] = y;
@@ -110,9 +113,21 @@ public sealed class AgentControlPolicy
     {
         foreach (var rule in spatialRules)
             if (rule.Region is { } area && rule.Behaviors.Contains(behavior)
-                && x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height)
+                && rule.Outside != (x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height))
                 return true;
         return false;
+    }
+
+    public bool BoundsAllowed(ControlBehavior behavior, float x, float y, float width, float height)
+    {
+        foreach (var rule in spatialRules)
+        {
+            if (!rule.Behaviors.Contains(behavior) || rule.Region is not { } area) continue;
+            if (rule.Outside ? x < area.X || y < area.Y || x + width > (long)area.X + area.Width || y + height > (long)area.Y + area.Height
+                : x < (long)area.X + area.Width && y < (long)area.Y + area.Height && x + width > area.X && y + height > area.Y)
+                return false;
+        }
+        return true;
     }
 
     JsonObject Denied(Rule rule, string error, ControlBehavior behavior) => new()
@@ -148,7 +163,7 @@ public sealed class AgentControlPolicy
         ["revision"] = Revision,
         ["rules"] = new JsonArray(rules.Values.Select(rule => (JsonNode)new JsonObject
         {
-            ["id"] = rule.Id, ["kind"] = rule.Behaviors == null ? "claim" : "deny",
+            ["id"] = rule.Id, ["kind"] = rule.Behaviors == null ? "claim" : rule.Outside ? "confine" : "deny",
             ["scope"] = rule.Lifetime.ToString().ToLowerInvariant(), ["action"] = rule.Action,
             ["reason"] = rule.Reason,
             ["region"] = rule.Region is { } area ? new JsonObject { ["x"] = area.X, ["y"] = area.Y,

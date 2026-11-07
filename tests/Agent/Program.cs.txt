@@ -41,6 +41,11 @@ static class Tests
 
     static async Task Main(string[] args)
     {
+        if (args.Contains("--control-contracts"))
+        {
+            ControlTests.Run(); TaskPlanTests.Run(); await CodexTests.Run();
+            Console.WriteLine("CONTROL_CONTRACTS_COMPLETE model_calls=0"); return;
+        }
         if (args.Contains("--planning-probe")) { await CodexTests.PlanningProbe(); return; }
         if (args.Contains("--goal-smoke")) { await CodexTests.GoalSmoke(); return; }
         if (args.Contains("--goal-control-smoke")) { await CodexTests.GoalControlSmoke(); return; }

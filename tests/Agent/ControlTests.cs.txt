@@ -108,6 +108,17 @@ static class ControlTests
             "local mining veto blocked unrelated actions or adjacent cells");
         policy.BeginTask();
         Check(policy.CheckAt(ControlBehavior.Mining, 23, 37) == null, "local task veto leaked into new task");
+        string arena = policy.Deny(new[] { ControlBehavior.Navigation, ControlBehavior.Dodge }, ControlLifetime.Task, null,
+            "stay in measured arena", (20, 30, 40, 20), outside: true);
+        Check(!policy.ForbiddenAt(ControlBehavior.Navigation, 20, 30)
+            && policy.ForbiddenAt(ControlBehavior.Navigation, 60, 30)
+            && policy.CheckAt(ControlBehavior.Dodge, 40, 50)?["rule"].ToString() == arena,
+            "confinement reversed the permitted region or missed its edge");
+        Check(policy.BoundsAllowed(ControlBehavior.Dodge, 20, 30, 1.25f, 2.625f)
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f)
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 30, 48, 1.25f, 2.625f), "confinement ignored body width or height");
+        policy.Release(arena);
+        Check(policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f), "released arena still restricted movement");
         Console.WriteLine("PASS: rejected excavation remains forbidden after handback while other terrain actions remain available");
     }
 }

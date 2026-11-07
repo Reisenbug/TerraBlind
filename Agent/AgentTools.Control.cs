@@ -17,7 +17,7 @@ public static partial class AgentTools
         if (operation == "status")
             return await NativeAgent.OnMain(() => new JsonObject { ["overrides"] = Control.Snapshot(),
                 ["execution"] = ControlSession.Snapshot(), ["actions"] = Actions.Summary() }, token);
-        if (operation is not ("claim" or "deny" or "release")) throw new ArgumentException("operation需要claim/deny/release/status。");
+        if (operation is not ("claim" or "deny" or "confine" or "release")) throw new ArgumentException("operation需要claim/deny/confine/release/status。");
         if (ControlSession.Active && !Actions.HasActive)
             return new JsonObject { ["error"] = "control_direct_action_busy", ["detail"] = "当前直接动作尚未清理，不能宣告接管。" };
 
@@ -46,14 +46,15 @@ public static partial class AgentTools
             }
             else
             {
-                var behaviors = (args["behaviors"]?.AsArray() ?? new JsonArray()).Select(value =>
+                var behaviors = (args["behaviors"]?.AsArray() ?? (operation == "confine"
+                    ? new JsonArray("navigation", "dodge") : new JsonArray())).Select(value =>
                     Enum.TryParse<ControlBehavior>(value?.ToString(), true, out var behavior) && Enum.IsDefined(behavior)
                         ? behavior : throw new ArgumentException("未知自动行为。")).ToArray();
                 (int X, int Y, int Width, int Height)? region = null;
                 if (args["region"] is JsonObject area)
                     region = (area["x"].GetValue<int>(), area["y"].GetValue<int>(),
                         area["width"].GetValue<int>(), area["height"].GetValue<int>());
-                id = await NativeAgent.OnMain(() => Control.Deny(behaviors, lifetime, handle, reason, region), token);
+                id = await NativeAgent.OnMain(() => Control.Deny(behaviors, lifetime, handle, reason, region, operation == "confine"), token);
             }
         }
         var result = await Actions.Handoff(async valid =>
