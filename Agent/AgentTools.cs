@@ -1218,7 +1218,8 @@ public static partial class AgentTools
                     {
                         bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
                         Combat.Enabled = Dodge.Enabled = Bool(args, "boss_control");
-                        if (!Combat.Enabled) Combat.Stop();
+                        if (Combat.Enabled) { TreasureGrab.CloseChest(); Main.playerInventory = false; }
+                        else Combat.Stop();
                     }
                     if (reserve is double requestedReserve)
                     {

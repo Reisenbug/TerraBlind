@@ -732,14 +732,17 @@ public sealed class BehaviorTrial : ModSystem
                         var observed = new JsonArray();
                         foreach (int weapon in new[] { ItemID.ThornChakram, ItemID.Starfury })
                         {
+                            await OnMain(() => { Main.playerInventory = true; return true; });
                             await Call("set_combat", new JsonObject { ["boss_control"] = true, ["weapon_type"] = weapon,
                                 ["movement_reserve_scale"] = .075 });
                             await Task.Delay(500);
                             observed.Add(await OnMain(() => new JsonObject { ["requested"] = weapon,
-                                ["actual"] = Main.LocalPlayer.HeldItem.type, ["tick"] = Main.GameUpdateCount }));
+                                ["actual"] = Main.LocalPlayer.HeldItem.type, ["inventory_open"] = Main.playerInventory,
+                                ["tick"] = Main.GameUpdateCount }));
                         }
                         File.WriteAllText(Path.Combine(Main.SavePath, "hive-weapons.json"), observed.ToJsonString());
-                        if (observed.Any(row => row["actual"].GetValue<int>() != row["requested"].GetValue<int>()))
+                        if (observed.Any(row => row["actual"].GetValue<int>() != row["requested"].GetValue<int>()
+                            || row["inventory_open"].GetValue<bool>()))
                             throw new Exception("Boss controller ignored Agent weapon preference: " + observed);
                         Console.WriteLine("HIVE_WEAPONS_PASS " + observed);
                         return;
