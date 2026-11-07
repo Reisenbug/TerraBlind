@@ -444,6 +444,65 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_JEV_BOUNDARY_TRIAL") == "1")
+        {
+            int driven = 0, rejected = 0, violations = 0, filtered = 0;
+            string arena = null;
+            AgentControlPolicy policy = null;
+            var positions = new JsonArray();
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Combat.Enabled = Dodge.Enabled = false;
+                policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+                policy.Reset();
+                var p = Main.LocalPlayer;
+                int x = Main.spawnTileX, y = Main.spawnTileY - 5;
+                for (int tx = x - 100; tx <= x + 100; tx++)
+                for (int ty = y - 35; ty <= y + 10; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (ty >= y + 1) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                p.position = new Vector2(x * 16, (y + 1) * 16 - p.height); p.velocity = Vector2.Zero;
+                for (int i = 0; i < p.armor.Length; i++) p.armor[i].TurnToAir();
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                arena = policy.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null,
+                    "native walking confinement trial", (x - 12, y - 30, 24, 32), outside: true);
+                var sensor = new TerraBlind.JevariaCombat.GameSensor();
+                var movement = new TerraBlind.JevariaCombat.GameMovement();
+                var snapshot = sensor.CapturePlayer(p, p, 1, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                BoundaryInputPlayer.Drive = player =>
+                {
+                    if (driven >= 1080) { movement.Release(player); return; }
+                    int direction = driven < 360 ? 1 : -1;
+                    var intent = new TerraBlind.JevariaCombat.DodgeIntent(direction > 0
+                        ? TerraBlind.JevariaCombat.DodgeDirection.Right : TerraBlind.JevariaCombat.DodgeDirection.Left,
+                        TerraBlind.JevariaCombat.Magnitude.Small, TerraBlind.JevariaCombat.Magnitude.None, false);
+                    var result = movement.Apply(player, intent, snapshot);
+                    if (result.Reason == "agent spatial constraint") rejected++;
+                    var available = TerraBlind.JevariaCombat.GameMovement.AvailableActions(player,
+                        TerraBlind.JevariaCombat.GameSensor.ScanSolids(player.Hitbox), snapshot.WorldDistances, false, false, .075f);
+                    if (!available.Any(option => option.Intent == intent)) filtered++;
+                    if (!policy.BoundsAllowed(ControlBehavior.Dodge, player.position.X / 16, player.position.Y / 16,
+                        player.width / 16f, player.height / 16f)) violations++;
+                    positions.Add(new JsonObject { ["frame"] = driven, ["x"] = player.position.X, ["y"] = player.position.Y,
+                        ["vx"] = player.velocity.X, ["vy"] = player.velocity.Y, ["applied"] = result.Applied.Direction.ToString(), ["reason"] = result.Reason });
+                    driven++;
+                };
+                return true;
+            });
+            try
+            {
+                while (driven < 1080) await Task.Delay(20);
+                await OnMain(() => { BoundaryInputPlayer.Drive = null; policy.Release(arena); return true; });
+                File.WriteAllText(Path.Combine(Main.SavePath, "jev-boundary.json"), new JsonObject
+                { ["frames"] = driven, ["rejected"] = rejected, ["filtered"] = filtered, ["violations"] = violations, ["positions"] = positions }.ToJsonString());
+                if (violations > 0 || rejected == 0 || filtered == 0) throw new Exception($"native boundary check failed violations={violations} rejected={rejected} filtered={filtered}");
+                Console.WriteLine($"JEV_BOUNDARY_PASS frames={driven} rejected={rejected} filtered={filtered} violations={violations} model_calls=0 native_physics=true");
+                return;
+            }
+            finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; policy.Reset(); return true; }); }
+        }
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_MAP_TRIAL") == "1")
         {
             bool building = Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1";
@@ -506,7 +565,7 @@ public sealed class BehaviorTrial : ModSystem
                 }
                 p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
                 return TerrainMap.Read(new JsonObject { ["x"] = x, ["y"] = y, ["width"] = 120, ["height"] = 80,
-                    ["marks"] = new JsonArray(new JsonObject { ["label"] = "SPAWN", ["x"] = x, ["y"] = y }) });
+                    ["marks"] = new JsonArray(new JsonObject { ["label"] = vision ? "VIEW" : "SPAWN", ["x"] = x, ["y"] = y }) });
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "terrain-map.json"), map.ToJsonString());
             if (!File.Exists(map["image_path"].ToString()) || new FileInfo(map["image_path"].ToString()).Length < 1000)
@@ -3129,4 +3188,10 @@ public sealed class BehaviorTrial : ModSystem
             }
         }
     }
+}
+
+public sealed class BoundaryInputPlayer : ModPlayer
+{
+    public static Action<Player> Drive;
+    public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
 }

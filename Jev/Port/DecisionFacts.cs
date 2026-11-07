@@ -8,7 +8,9 @@ namespace TerraBlind.JevariaCombat;
 
 public static class DecisionFacts
 {
-    public static string State(CombatSnapshot snapshot, string bossNotes)
+    public static string State(CombatSnapshot snapshot, string bossNotes) => State(snapshot, bossNotes, null);
+
+    public static string State(CombatSnapshot snapshot, string bossNotes, System.Text.Json.Nodes.JsonObject agentConstraints)
     {
         bool pillion = snapshot.MountType == MountID.QueenSlime;
         string mountName = pillion ? "Gelatinous Pillion" : "Slimy Saddle";
@@ -52,7 +54,16 @@ public static class DecisionFacts
                 above = Room(snapshot.SolidDistances.Up, snapshot.WorldDistances.Up),
                 below = Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down)
             },
-            boss_notes = bossNotes
+            boss_notes = bossNotes,
+            agent_constraints = agentConstraints == null ? null : new
+            {
+                units = "world tiles, y increases downward",
+                meaning = "confine: player body stays inside region; deny: listed behaviors blocked inside region",
+                player_bounds = new { x = (snapshot.Player.Center.X - snapshot.Player.Size.X / 2) / 16,
+                    y = (snapshot.Player.Center.Y - snapshot.Player.Size.Y / 2) / 16,
+                    width = snapshot.Player.Size.X / 16, height = snapshot.Player.Size.Y / 16 },
+                policy = agentConstraints
+            }
         };
         return JsonSerializer.Serialize(state);
     }

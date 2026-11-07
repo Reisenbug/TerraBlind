@@ -92,7 +92,7 @@ public static partial class PvpDuel
     static JsonObject Perception(Player self, Player target, bool detailed = false, JevariaCombat.CombatSnapshot snapshot = null)
     {
         snapshot ??= Sensor.CapturePlayer(self, target, sequence, intent, choiceAge * 1000 / 60);
-        var movement = JsonNode.Parse(JevariaCombat.DecisionFacts.State(snapshot, "")).AsObject();
+        var movement = JsonNode.Parse(JevariaCombat.DecisionFacts.State(snapshot, "", AgentTools.Control.Snapshot())).AsObject();
         movement.Remove("threats"); movement.Remove("boss_notes");
         return new JsonObject
         {

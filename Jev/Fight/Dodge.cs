@@ -422,7 +422,7 @@ namespace TerraBlind
 			AxisLock.Release(Owner);
 		}
 
-		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss));
+		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss), AgentTools.Control.Snapshot());
 
 		static string ActionCriteria(Player p)
 		{

@@ -1574,6 +1574,8 @@ public static partial class AgentTools
 
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
     {
+        var region = await NativeAgent.OnMain(() => Control.CheckAt(ControlBehavior.Navigation, Int(args, "x"), Int(args, "y")), token);
+        if (region != null) return region;
         JsonObject escapeBefore = null;
         var acceptedTraps = args["accepted_traps"]?.AsArray();
         var hazard = await NativeAgent.OnMain(() =>

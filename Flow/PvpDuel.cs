@@ -359,7 +359,7 @@ public static partial class PvpDuel
                     ["contact_reach_pixels"] = contact ? MeleeReach(self, target, item) : (float?)null,
                     ["description"] = contact ? "接触近战，需要靠近并直接够到目标。" : "发射武器，需射界；追近/后退/跳跃都可以同时射击。" };
             }
-            var movementState = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "")).AsObject();
+            var movementState = JsonNode.Parse(Port.DecisionFacts.State(requestSnapshot, "", AgentTools.Control.Snapshot())).AsObject();
             movementState.Remove("threats");
             movementState.Remove("boss_notes");
             var scene = new JsonObject

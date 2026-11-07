@@ -28,6 +28,7 @@ public sealed class AgentControlPolicy
     public long Revision { get; private set; }
     public bool HasClaims => rules.Values.Any(rule => rule.Channels != ControlChannels.None);
     public bool Contains(string id) => rules.ContainsKey(id);
+    public bool HasSpatial(ControlBehavior behavior) => spatialRules.Any(rule => rule.Behaviors.Contains(behavior));
 
     static void Validate(ControlLifetime lifetime, string action, string reason)
     {
@@ -59,7 +60,7 @@ public sealed class AgentControlPolicy
             throw new ArgumentException("区域需要非负世界格坐标和正数宽高。");
         if (outside && region == null) throw new ArgumentException("confine需要明确的世界格矩形region。");
         if (region != null && values.Any(value => value is not (ControlBehavior.Mining or ControlBehavior.Placement or ControlBehavior.Navigation)
-            && !(outside && value is ControlBehavior.Dodge or ControlBehavior.Survival or ControlBehavior.Direct)))
+            && !(outside && value == ControlBehavior.Dodge)))
             throw new ArgumentException("区域禁令只支持navigation/mining/placement。");
         return Add(new Rule { Behaviors = values, Lifetime = lifetime, Action = action, Reason = reason, Region = region, Outside = outside });
     }
