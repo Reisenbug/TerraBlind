@@ -2281,7 +2281,7 @@ public sealed class BehaviorTrial : ModSystem
             var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
             var watch = (AgentWatch)typeof(AgentTools).GetField("Watches", flags).GetValue(null);
             var tasks = (ActionTasks)typeof(AgentTools).GetField("Actions", flags).GetValue(null);
-            await OnMain(() => { AgentTools.NewTask(); watch.EnsureDefaults(); return true; });
+            await OnMain(() => { AgentTools.NewTask(); watch.EnsureDefaults(); Main.playerInventory = false; return true; });
             async Task ObserveChest() => await OnMain(() =>
             {
                 var nearby = new JsonArray();
@@ -2292,6 +2292,7 @@ public sealed class BehaviorTrial : ModSystem
                 return true;
             });
             await ObserveChest();
+            bool inventoryBeforeAction = await OnMain(() => Main.playerInventory);
             var action = await Call("action_start", new JsonObject { ["tool"] = "collect_treasure",
                 ["args"] = new JsonObject { ["x"] = chestX, ["y"] = chestY } });
             string handle = action["handle"].ToString();
@@ -2301,10 +2302,14 @@ public sealed class BehaviorTrial : ModSystem
                 action = await Call("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 1000 });
             }
             var state = await Call("get_state", new JsonObject());
+            var liveUi = await OnMain(() => new JsonObject { ["inventory_open"] = Main.playerInventory,
+                ["chest"] = Main.LocalPlayer.chest, ["tick"] = Main.GameUpdateCount });
             var notices = await Call("script_events", new JsonObject { ["wait_ms"] = 0 });
             File.WriteAllText(Path.Combine(Main.SavePath, "own-chest.json"), new JsonObject
-                { ["action"] = action, ["state"] = state, ["notices"] = notices, ["model_calls"] = 0 }.ToJsonString());
+                { ["action"] = action, ["state"] = state, ["notices"] = notices, ["model_calls"] = 0,
+                    ["inventory_before_action"] = inventoryBeforeAction, ["live_ui"] = liveUi }.ToJsonString());
             if (action["status"]?.ToString() != "completed" || action["attempt"]?.GetValue<int>() != 1
+                || liveUi["inventory_open"].GetValue<bool>() != inventoryBeforeAction || liveUi["chest"].GetValue<int>() != -1
                 || state["watch"]["samples"].GetValue<int>() == 0 || state["watch"]["event_count"].GetValue<int>() == 0
                 || !notices["events"].AsArray().Any(e => e["assessment"]?["sampled_cells"]?.GetValue<int>() > 0)
                 || !state["inventory_slots"].AsArray().Any(i => i["type"].GetValue<int>() == lootType && i["stack"].GetValue<int>() > 0))

@@ -1051,14 +1051,25 @@ static class RuntimeTests
                     return (200, "{\"npcs\":[{\"idx\":4,\"type\":77}]}");
                 }
                 if (path == "/nav_recede") Check(JsonNode.Parse(payload)["reach"].GetValue<bool>(), "treasure approach did not use interaction reach");
+                if (path == "/collect_treasure") { Game.playerInventory = true; Game.LocalPlayer.chest = 0; }
                 return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/collect_treasure_status"
                     ? "{\"running\":false,\"outcome\":\"done\"}" : "{\"ok\":true}");
             };
             var npcs = JsonNode.Parse(await Execute(AgentTools.Execute("npc_find", new JsonObject { ["type"] = 77 }, default)));
             Check(npcs["npcs"][0]["type"].GetValue<int>() == 77, "NPC query did not return observed entities");
-            var treasure = JsonNode.Parse(await Execute(AgentTools.Execute("collect_treasure", new JsonObject { ["x"] = 100, ["y"] = 100 }, default)));
-            Check(treasure["outcome"].ToString() == "done" && treasureCalls.IndexOf("/nav_recede_done") < treasureCalls.IndexOf("/collect_treasure")
-                && treasureCalls.Contains("/collect_treasure_status"), "treasure tool skipped approach or existing verified looting workflow");
+            bool savedInventoryOpen = Game.playerInventory;
+            try
+            {
+                foreach (bool open in new[] { false, true })
+                {
+                    Game.playerInventory = open;
+                    var treasure = JsonNode.Parse(await Execute(AgentTools.Execute("collect_treasure", new JsonObject { ["x"] = 100, ["y"] = 100 }, default)));
+                    Check(treasure["outcome"].ToString() == "done" && treasureCalls.IndexOf("/nav_recede_done") < treasureCalls.IndexOf("/collect_treasure")
+                        && treasureCalls.Contains("/collect_treasure_status"), "treasure tool skipped approach or existing verified looting workflow");
+                    Check(Game.playerInventory == open && Game.LocalPlayer.chest == -1, "treasure collection leaked UI state or left chest open");
+                }
+            }
+            finally { Game.playerInventory = savedInventoryOpen; }
             Console.WriteLine("PASS: NPC query preserves filters and treasure delegation approaches before invoking existing looting verification");
 
             Terraria.Map.MapHelper.tileOptionCounts = new[] { 0, 1, 1 };

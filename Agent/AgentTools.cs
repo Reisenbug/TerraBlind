@@ -999,9 +999,18 @@ public static partial class AgentTools
                 result = await Navigate(new JsonObject { ["x"] = Int(args, "x"), ["y"] = Int(args, "y"), ["reach"] = true }, token);
                 if (result["done"]?.GetValue<bool>() != true) break;
                 var chestBefore = await NativeAgent.OnMain(() => AgentTaskEvidence.ObserveChest(Int(args, "x"), Int(args, "y")), token);
-                result = await Call("/collect_treasure", args, token);
-                if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
-                result["new_chest_loot_verified"] = await NativeAgent.OnMain(() => AgentTaskEvidence.VerifyChest(chestBefore), token);
+                bool inventoryWasOpen = await NativeAgent.OnMain(() => Main.playerInventory, token);
+                try
+                {
+                    result = await Call("/collect_treasure", args, token);
+                    if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
+                    result["new_chest_loot_verified"] = await NativeAgent.OnMain(() => AgentTaskEvidence.VerifyChest(chestBefore), token);
+                }
+                finally
+                {
+                    await NativeAgent.OnMain(() =>
+                    { TreasureGrab.CloseChest(); Main.playerInventory = inventoryWasOpen; return true; }, CancellationToken.None);
+                }
                 break;
             case "npc_drop_sources":
                 result = await NativeAgent.OnMain(() => AgentCatalog.NpcDropSources(Int(args, "item_type"), Int(args, "limit", 40)), token);
