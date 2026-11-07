@@ -1276,6 +1276,37 @@ static class RuntimeTests
             }
             Console.WriteLine("PASS: collection approaches within interaction range and verifies the selected tool's mining range");
 
+            bool previousOreSolid = Game.tileSolid[1];
+            var previousOrePosition = Game.LocalPlayer.position;
+            try
+            {
+                Game.tileSolid[1] = true;
+                Game.tile[12, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+                Game.LocalPlayer.inventory[6] = new Terraria.Item { stack = 1, pick = 50 };
+                Reach.MineTest = (_, _, _) => false;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        var request = JsonNode.Parse(payload);
+                        Check(request["exact"].GetValue<bool>() && !request["reach"].GetValue<bool>(),
+                            "solid ore used interaction arrival instead of the existing mining target mode");
+                        Game.tile[12, 34] = default;
+                    }
+                    Check(path != "/item_use", "collection swung again after navigation removed the ore target");
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"ok\":true}");
+                };
+                var mined = await Execute(AgentTools.CollectTarget(12, 34, default, false));
+                Check(mined?["outcome"]?.ToString() == "removed", "native mining completion was not returned to collection: " + mined);
+                Console.WriteLine("PASS: solid collection uses mining target navigation and observes removal before another swing");
+            }
+            finally
+            {
+                Game.tileSolid[1] = previousOreSolid; Game.tile[12, 34] = default;
+                Game.LocalPlayer.inventory[6] = new Terraria.Item(); Game.LocalPlayer.position = previousOrePosition;
+                Reach.MineTest = null;
+            }
+
             var requestedPick = Game.LocalPlayer.inventory[1];
             try
             {
