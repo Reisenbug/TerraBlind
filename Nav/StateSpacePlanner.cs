@@ -724,6 +724,8 @@ namespace TerraBlind
                     || e.digTiles?.Exists(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.Item1, tile.Item2)) == true)
                     continue;
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
+                if (e.frames != null && !FallSafety.SafeTrajectory(Main.LocalPlayer,
+                    new Microsoft.Xna.Framework.Vector2(cur.Px, cur.Py), e.frames)) continue;
                 // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
                 // 长 bridge 的标记是"没帧、不挖、不是柱"(EdgeToSteps 同一组合),别借 pillar 表示
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
@@ -1183,18 +1185,26 @@ namespace TerraBlind
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
             // 挖开脚下之后人会掉到哪。出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
             // 实心岩石,门槛必然短路放行。挖开才是竖井盖子的情况只能在这儿自己模拟。
+            int landing = int.MaxValue;
             for (int c = footL; c <= footR; c++)
             {
                 int land = FallLanding(c, y, tiles);
                 if (land == LandLava) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆"); return null; }
                 if (land == LandVoid) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})下方{FallProbe}行探不到底"); return null; }
+                landing = Math.Min(landing, land);
             }
-            // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
-            // it if that cell is lower H (toward goal). If ccy+2 is ALSO open, the next cycle's free-fall/dig continues.
-            bool hasH = ctx.DistField.TryGetValue((ccx, y), out int lh);
+            var player = Main.LocalPlayer;
+            int fallStart = (int)(((ccy + 1) * 16f - player.height) / 16);
+            for (int row = y; row <= landing; row++)
+                fallStart = FallSafety.ResetDistance(player,
+                    new Microsoft.Xna.Framework.Vector2(px, (row + 1) * 16f - player.height), fallStart, 1, int.MaxValue);
+            var landingPosition = new Microsoft.Xna.Framework.Vector2(px, (landing + 1) * 16f - player.height);
+            if (FallSafety.LandingDamage(player, landingPosition, fallStart) > 0)
+            { SegLog($"[ss-digdown] NULL: fall_damage landing=({ccx},{landing}) fall_start={fallStart}"); return null; }
+            bool hasH = ctx.DistField.TryGetValue((ccx, landing), out int lh);
             if (!(hasH && lh < curH)) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: landing H {(hasH ? lh.ToString() : "off-field")} !< {curH}"); return null; }
             float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-            float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
+            float npy = (landing + 1) * 16f - PhysicsSimulator.PlayerH;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
             return (node, tiles, cost);
         }
@@ -2381,7 +2391,8 @@ namespace TerraBlind
                     DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw} —— 就地挖");
                 }
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
-                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
+                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy,
+                    MineTiles = st.MineTiles, OnlyPlannedTiles = st.DigDir == MineDir.Down && st.MineTiles?.Count > 0 });
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
             // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理。闭环不会按下键。

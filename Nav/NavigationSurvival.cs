@@ -35,6 +35,11 @@ public static class NavigationSurvival
             return false;
         }
         if (RecedingNav.Active && NavigationAirPocket.Apply(player)) return true;
+        if (FallSafety.Immune(player))
+        {
+            Reset(player);
+            return false;
+        }
         if (gravityPhase != 0)
         {
             ClearControls(player);
@@ -49,11 +54,15 @@ public static class NavigationSurvival
         }
         if (heldSlot >= 0 && holdingPlacement && player.inventory[heldSlot].createTile == TileID.Platforms
             && player.Bottom.Y > webTarget.Y * 16)
+        {
+            DiagLog.Write($"[survival-placement] outcome=missed target=({webTarget.X},{webTarget.Y}) pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##}");
             Reset(player);
+        }
         if (heldSlot >= 0)
         {
             if (player.velocity.Y == 0 && VanillaTerrainPlan.HasSupport(player))
             {
+                if (holdingPlacement) DiagLog.Write($"[survival-placement] outcome=landed target=({webTarget.X},{webTarget.Y}) fall_start={player.fallStart}");
                 Reset(player);
                 return false;
             }
@@ -166,8 +175,9 @@ public static class NavigationSurvival
         if (player.gravDir != 1 || player.AnyExtraJumpUsable() || player.itemAnimation > 0 || player.itemTime > 0
             || !DangerousLandingSoon(player, out _, includeOpenFall: true, horizon: 60)) return false;
         float nextVelocity = System.Math.Min(player.velocity.Y + player.gravity, player.maxFallSpeed);
-        int y = (int)System.Math.Ceiling((player.Bottom.Y + nextVelocity) / 16);
-        if ((int)((y * 16 - player.height) / 16f) - player.fallStart > 25 + player.extraFall) return false;
+        float followingVelocity = System.Math.Min(nextVelocity + player.gravity, player.maxFallSpeed);
+        int y = (int)System.Math.Ceiling((player.Bottom.Y + nextVelocity + followingVelocity) / 16);
+        if (FallSafety.LandingDamage(player, new Vector2(player.position.X, y * 16 - player.height), player.fallStart) > 0) return false;
         int frames = 0;
         float descent = 0, velocity = player.velocity.Y;
         while (descent < y * 16 - player.Bottom.Y && frames < 60)
@@ -209,10 +219,10 @@ public static class NavigationSurvival
     static bool DangerousLandingSoon(Player player, out Vector2 landing, bool includeOpenFall = false, int horizon = 12)
     {
         landing = player.position;
-        if (player.stoned || player.noFallDmg || player.equippedWings != null || player.slowFall
-            || player.wet || player.velocity.Y * player.gravDir <= 0) return false;
+        if (FallSafety.Immune(player) || player.velocity.Y * player.gravDir <= 0) return false;
         var position = player.position;
         var velocity = player.velocity;
+        int fallStart = player.fallStart;
         for (int frame = 0; frame < horizon; frame++)
         {
             velocity.Y += player.gravity * player.gravDir;
@@ -224,10 +234,11 @@ public static class NavigationSurvival
             if (allowed.Y * player.gravDir < velocity.Y * player.gravDir)
             {
                 landing = position;
-                return ((int)(position.Y / 16f) - player.fallStart) * player.gravDir > 25 + player.extraFall;
+                return FallSafety.LandingDamage(player, position, fallStart) > 0;
             }
+            fallStart = FallSafety.ResetDistance(player, position, fallStart, velocity.Y, frame + 1);
         }
-        return includeOpenFall && ((int)(position.Y / 16f) - player.fallStart) * player.gravDir > 25 + player.extraFall;
+        return includeOpenFall && FallSafety.LandingDamage(player, position, fallStart) > 0;
     }
 
     static void Interrupt(Player player, string action)
@@ -235,7 +246,7 @@ public static class NavigationSurvival
         Interventions++;
         RecedingNav.InterruptForSurvival();
         ClearControls(player);
-        DiagLog.Write($"[survival] action={action} pos=({player.position.X:0.##},{player.position.Y:0.##}) vy={player.velocity.Y:0.##} fall_start={player.fallStart}");
+        DiagLog.Write($"[survival] action={action} pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##} fall_start={player.fallStart} target=({webTarget.X},{webTarget.Y})");
     }
 
     static void HoldItem(Player player, int slot)
