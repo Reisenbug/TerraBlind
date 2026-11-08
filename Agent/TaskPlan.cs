@@ -379,6 +379,8 @@ public sealed class AgentTaskPlan
         foreach (var step in result["steps"].AsArray().OfType<JsonObject>())
         {
             step.Remove("last_action"); step.Remove("previous_failure");
+            step["on_failure_present"] = !string.IsNullOrWhiteSpace(step["on_failure"]?.ToString());
+            step.Remove("on_failure");
             if (step["revisions"] is JsonArray revisions)
             {
                 step["revision_count"] = revisions.Count;

@@ -391,6 +391,9 @@ static class RuntimeTests
                     "conditions":[{"kind":"item","type":191,"count":9999}]}]}
                     """).AsObject(), _ => 0);
                 Check(plan["steps"][0]["on_failure"] != null, "DAG discarded its prepared failure policy");
+                var brief = AgentTools.Plan.Summary()["steps"][0];
+                Check(brief["on_failure"] == null && brief["on_failure_present"]?.GetValue<bool>() == true,
+                    "routine plan summaries resent recovery source or concealed the prepared policy");
                 ActionTasks.NodeContext.Value = "travel";
                 string handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
                 ActionTasks.NodeContext.Value = null;
