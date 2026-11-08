@@ -490,6 +490,99 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_FALL_SAFETY_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                for (int i = 0; i < p.armor.Length; i++) p.armor[i].TurnToAir();
+                p.mount.Dismount(p); p.noFallDmg = p.slowFall = p.stoned = p.tongued = false;
+                p.equippedWings = null; p.extraFall = 0; p.gravDir = 1;
+                int x = Main.spawnTileX, y = (int)Main.worldSurface + 100;
+                for (int tx = x - 4; tx <= x + 4; tx++)
+                for (int ty = y - 4; ty <= y + 64; ty++) Main.tile[tx, ty].ClearEverything();
+                var start = new Vector2(x * 16 - 2, (y + 1) * 16 - p.height);
+                var end = start + new Vector2(0, 36 * 16);
+                int begin = (int)(start.Y / 16);
+                void Check(bool ok, string name) { if (!ok) throw new Exception("fall safety: " + name); }
+                Check(FallSafety.LandingDamage(p, end, begin) == 110, "recorded 36-tile fall");
+                Check(FallSafety.LandingDamage(p, end + new Vector2(0, 16), begin) == 120, "recorded 37-tile fall");
+                Check(FallSafety.LandingDamage(p, end + new Vector2(0, 80), begin) == 160, "recorded 41-tile fall");
+                Check(FallSafety.LandingDamage(p, start + new Vector2(0, 25 * 16), begin) == 0, "safe distance");
+                p.extraFall = 11;
+                Check(FallSafety.LandingDamage(p, end, begin) == 0, "extra fall allowance");
+                p.extraFall = 0;
+                var trace = Enumerable.Range(1, 36).Select(row => new PhysicsSimulator.ControlInput {
+                    Px = start.X, Py = start.Y + row * 16, Vy = row == 36 ? 0 : 10 }).ToList();
+                Check(!FallSafety.SafeTrajectory(p, start, trace), "unprotected descent rejected");
+                p.immune = true;
+                Check(FallSafety.LandingDamage(p, end, begin) == 110, "hit immunity does not cancel falling damage");
+                p.immune = false; p.creativeGodMode = true;
+                Check(FallSafety.SafeTrajectory(p, start, trace), "journey god mode");
+                p.creativeGodMode = false; p.shimmering = true;
+                Check(FallSafety.SafeTrajectory(p, start, trace), "shimmer immunity");
+                p.shimmering = false;
+                p.noFallDmg = true;
+                Check(FallSafety.SafeTrajectory(p, start, trace), "accessory descent preserved");
+                RecedingNav.Active = true;
+                p.controlRight = p.controlJump = true;
+                Check(!NavigationSurvival.Apply(p) && p.controlRight && p.controlJump, "immune motion remains untouched");
+                RecedingNav.Active = false; p.controlRight = p.controlJump = false;
+                p.noFallDmg = false; p.equippedWings = new Item();
+                Check(FallSafety.SafeTrajectory(p, start, trace), "exhausted wings descent preserved");
+                p.stoned = true;
+                Check(FallSafety.LandingDamage(p, end, begin) == 680, "petrification uses its own damage rule");
+                p.stoned = false; p.equippedWings = null; p.slowFall = true;
+                Check(FallSafety.SafeTrajectory(p, start, trace), "featherfall resets distance");
+                p.slowFall = false; p.gravDir = -1;
+                Check(FallSafety.LandingDamage(p, start - new Vector2(0, 36 * 16), begin) == 110, "inverted gravity");
+                p.gravDir = 1;
+                int floorY = (int)((end.Y + p.height + 1) / 16);
+                var floorTile = Main.tile[x, floorY];
+                floorTile.HasTile = true;
+                floorTile.TileType = (ushort)Array.FindIndex(TileID.Sets.NegatesFallDamage, value => value);
+                Check(FallSafety.LandingDamage(p, end, begin) == 0, "landing tile cancels damage");
+                floorTile.ClearEverything();
+                for (int tx = x - 1; tx <= x + 1; tx++)
+                for (int ty = y + 17; ty <= y + 21; ty++) Main.tile[tx, ty].LiquidAmount = 255;
+                Check(FallSafety.SafeTrajectory(p, start, trace), "water entry resets distance");
+                for (int tx = x - 1; tx <= x + 1; tx++)
+                for (int ty = y + 17; ty <= y + 21; ty++) Main.tile[tx, ty].LiquidAmount = 0;
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
+                p.position = start; p.velocity = Vector2.Zero;
+                var dig = typeof(StateSpacePlanner).GetMethod("DigDownFrom", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                object Dig(int drop)
+                {
+                    for (int tx = x - 1; tx <= x; tx++)
+                    {
+                        var support = Main.tile[tx, y + 1]; support.HasTile = true; support.TileType = TileID.Stone;
+                        var bottom = Main.tile[tx, y + drop + 1]; bottom.HasTile = true; bottom.TileType = TileID.Stone;
+                    }
+                    var field = new System.Collections.Generic.Dictionary<(int, int), int> { [(x, y + 1)] = 1, [(x, y + drop)] = 1 };
+                    return dig.Invoke(null, new object[] { new StateSpacePlanner.PlanCtx { DistField = field }, start.X, x, y, 100 });
+                }
+                Check(Dig(36) == null, "mining cannot release a lethal shaft");
+                p.noFallDmg = true;
+                var safeDig = Dig(36);
+                Check(safeDig != null, "immune mining remains available");
+                var node = (StateSpacePlanner.SSNode)safeDig.GetType().GetField("Item1").GetValue(safeDig);
+                Check(Math.Abs(node.Py - end.Y) < .01f, "dig reports the actual landing");
+                p.noFallDmg = false;
+                var shortDig = Dig(20);
+                Check(shortDig != null, "safe mining remains available");
+                p.mount.SetMount(MountID.Bunny, p);
+                Check(FallSafety.LandingDamage(p, end, begin) == 0, "bunny mount immunity");
+                p.mount.Dismount(p);
+                p.mount.SetMount(MountID.Slime, p);
+                Check(FallSafety.LandingDamage(p, end, begin) == (int)(110 * p.mount.FallDamage), "mount damage multiplier");
+                p.mount.Dismount(p);
+                p.position = start; p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = begin;
+                Console.WriteLine("FALL_SAFETY_PASS cases=23 native_engine=true model_calls=0");
+                return true;
+            });
+        }
         if (Environment.GetEnvironmentVariable("TB_SCRIPT_GAP_PROBE") == "1")
         {
             await OnMain(() => { NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false; return true; });
@@ -1859,7 +1952,7 @@ public sealed class BehaviorTrial : ModSystem
         if (Environment.GetEnvironmentVariable("TB_WEB_LANDING_TRIAL") == "1")
         {
             int landingCase = int.TryParse(Environment.GetEnvironmentVariable("TB_WEB_LANDING_CASE"), out int selectedCase) ? selectedCase : 1;
-            int placementType = landingCase == 4 ? TileID.Platforms : TileID.Cobweb;
+            int placementType = landingCase is 4 or 6 or 7 ? TileID.Platforms : TileID.Cobweb;
             int landingHealth = 100;
             var samples = new JsonArray();
             int initialInterventions = NavigationSurvival.Interventions;
@@ -1879,6 +1972,13 @@ public sealed class BehaviorTrial : ModSystem
                 p.position = new Vector2(10766.779f, 12102.987f);
                 p.velocity = new Vector2(0, 6.990001f);
                 p.fallStart = p.fallStart2 = 753;
+                if (landingCase is 6 or 7)
+                {
+                    p.inventory[40].SetDefaults(ItemID.WoodPlatform); p.inventory[40].stack = 100;
+                    p.position = landingCase == 6 ? new Vector2(44804.41f, 3951.2f) : new Vector2(45100.68f, 5417.08f);
+                    p.velocity = landingCase == 6 ? new Vector2(2.94f, .8f) : new Vector2(2.94f, .19f);
+                    p.fallStart = p.fallStart2 = landingCase == 6 ? 246 : 340;
+                }
                 if (landingCase == 2)
                 {
                     p.position = new Vector2(51510.98f, 7018.92f); p.velocity = new Vector2(2.94f, 10.01f);
@@ -1972,7 +2072,7 @@ public sealed class BehaviorTrial : ModSystem
                         throw new Exception("lethal accumulated fall used a platform instead of resetting fall speed");
                     webPlaced |= sample["placement_stock"].GetValue<int>() < 100 && sample["chosen_has_tile"].GetValue<bool>()
                         && sample["chosen_type"].GetValue<int>() == placementType;
-                    bool protectedLanding = webPlaced && sample["interventions"].GetValue<int>() > initialInterventions
+                    bool protectedLanding = (landingCase == 7 || webPlaced && sample["interventions"].GetValue<int>() > initialInterventions)
                         && sample["supported"].GetValue<bool>()
                         && sample["vy"].GetValue<float>() == 0;
                     supportedFrames = protectedLanding ? supportedFrames + 1 : 0;
@@ -1989,7 +2089,7 @@ public sealed class BehaviorTrial : ModSystem
                             if (verified["verified"]?.GetValue<bool>() != true) throw new Exception("native jungle cavern did not verify biome condition");
                             Console.WriteLine("BIOME_CONDITION_PASS native_engine=true fixed_destination=false model_calls=0");
                         }
-                        Console.WriteLine($"WEB_LANDING_PASS case={landingCase} native_engine=true recorded_world=true restored_plants={(landingCase is 3 or 5 ? 2 : 0)} model_calls=0");
+                        Console.WriteLine($"WEB_LANDING_PASS case={landingCase} native_engine=true recorded_world=true existing_support={landingCase == 7} restored_plants={(landingCase is 3 or 5 ? 2 : 0)} model_calls=0");
                         return;
                     }
                 }
