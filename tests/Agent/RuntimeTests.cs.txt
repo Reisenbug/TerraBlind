@@ -2729,6 +2729,34 @@ static class RuntimeTests
         };
         try
         {
+            AgentTools.Watches.Configure(new JsonObject {
+                ["events"] = new JsonArray("nearby_drop", "nearby_tile"), ["tile_types"] = new JsonArray(61),
+                ["passive_events"] = new JsonArray("nearby_drop") });
+            for (int i = 0; i < 12; i++)
+                AgentTools.Watches.Emit("nearby_drop", "debris-" + i, new JsonObject { ["item_type"] = 176 });
+            AgentTools.Watches.Emit("nearby_tile", "plant", new JsonObject { ["tile_type"] = 61 });
+            var blocked = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject {
+                ["code"] = "return tool('say',{text:'blocked-event-effect'});" }, default)));
+            var blockingEvents = blocked["value"]?["wake"]?["events"]?.AsArray();
+            Check(blockingEvents?.Count == 1 && blockingEvents[0]["kind"]?.ToString() == "nearby_tile"
+                && !AgentChat.Messages.Contains("blocked-event-effect") && !AgentTools.Watches.HasRecoveryBlocker
+                && AgentTools.Watches.PendingCount == 12,
+                "passive backlog hid the actual script blocker or consumed unrelated notices: " + blocked);
+            var afterReview = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject {
+                ["code"] = "return tool('say',{text:'reviewed-event-effect'});" }, default)));
+            Check(afterReview["ok"]?.GetValue<bool>() == true && AgentChat.Messages.Contains("reviewed-event-effect")
+                && AgentTools.Watches.Take().Count == 12, "passive notices blocked resumed execution or were lost");
+            AgentTools.Watches.Emit("nearby_tile", "local-plant", new JsonObject { ["tile_type"] = 61 });
+            var localReader = AgentTools.Watches.BeginScriptDelivery();
+            Check(AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasModelInterrupting,
+                "script-owned opportunity forced a model pause before JS could consume it");
+            AgentTools.Watches.Request("explicit local review");
+            Check(AgentTools.Watches.HasModelInterrupting, "script delivery swallowed explicit model review");
+            AgentTools.Watches.Take(); AgentTools.Watches.EnsureDefaults();
+            AgentTools.Watches.Emit("suffocating", "local-danger", new JsonObject());
+            Check(AgentTools.Watches.HasModelInterrupting, "script delivery swallowed ongoing danger");
+            AgentTools.Watches.EndScriptDelivery(localReader);
+            AgentTools.Watches.Reset();
             AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 100, ["y"] = 100 }, default);
             await PumpUntil(() => RecedingNav.Active);
             string originalHandle = AgentTools.Actions.ActiveHandle;

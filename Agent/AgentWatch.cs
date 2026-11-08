@@ -77,7 +77,10 @@ public sealed class AgentWatch
     }
     public int PendingCount => pending.Count;
     public bool HasInterrupting => pending.Any(Interrupting);
-    internal bool HasRecoveryBlocker => pending.Any(e => e["kind"]?.ToString() != "execution_gap" && Interrupting(e));
+    internal bool HasModelInterrupting => pending.Any(e => Interrupting(e)
+        && (!LocalDelivery || e["kind"]?.ToString() is not ("nearby_tile" or "nearby_chest" or "nearby_drop")));
+    internal bool HasRecoveryBlocker => pending.Any(RecoveryBlocker);
+    bool RecoveryBlocker(JsonObject e) => e["kind"]?.ToString() != "execution_gap" && Interrupting(e);
     bool Interrupting(JsonObject e) => e["wake_deferred"]?.GetValue<bool>() != true
         && e["kind"]?.ToString() != "low_health"
         && e["kind"]?.ToString() != "honey_slowdown"
@@ -306,7 +309,7 @@ public sealed class AgentWatch
     }
 
     public JsonArray Take() => Take(int.MaxValue);
-    public JsonArray Take(int maxEvents)
+    public JsonArray Take(int maxEvents, bool recoveryOnly = false)
     {
         var result = new JsonArray();
         if (maxEvents < pending.Count)
@@ -327,8 +330,10 @@ public sealed class AgentWatch
             foreach (var item in ordered) pending.Enqueue(item);
         }
         int assessed = 0;
-        while (result.Count < maxEvents && pending.TryDequeue(out var item))
+        int remaining = pending.Count;
+        while (result.Count < maxEvents && remaining-- > 0 && pending.TryDequeue(out var item))
         {
+            if (recoveryOnly && !RecoveryBlocker(item)) { pending.Enqueue(item); continue; }
             if (assessOpportunity != null && item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop")
             {
                 if (assessed++ < 6) item["assessment"] = assessOpportunity(item);
@@ -341,8 +346,12 @@ public sealed class AgentWatch
     static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "decision_point" or "execution_gap" or "honey_slowdown"
         || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
 
-    public JsonObject Pending() => new() { ["events"] = new JsonArray(pending.OrderBy(ReviewPriority).Take(8).Select(x => x.DeepClone()).ToArray()),
-        ["remaining_events"] = Math.Max(0, pending.Count - 8) };
+    public JsonObject Pending(bool recoveryOnly = false)
+    {
+        var selected = pending.Where(e => !recoveryOnly || RecoveryBlocker(e)).OrderBy(ReviewPriority).ToArray();
+        return new JsonObject { ["events"] = new JsonArray(selected.Take(8).Select(x => x.DeepClone()).ToArray()),
+            ["remaining_events"] = Math.Max(0, selected.Length - 8) };
+    }
 
     internal JsonArray Advisories()
     {

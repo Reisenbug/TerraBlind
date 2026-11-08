@@ -323,7 +323,7 @@ public class NativeAgent : ModSystem
                     double reviewDelay = await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token) ? 0 : 15;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
-                        && !AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
+                        && !AgentTools.Watches.HasModelInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
                     {
                         await Task.Delay(100, token);
                         preparingAttempt = AgentTools.Actions.ActiveAttempt;
@@ -331,7 +331,7 @@ public class NativeAgent : ModSystem
                     }
                     if (!reviewRequested && (prepareNext
                         || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))
-                        && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
+                        && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasModelInterrupting, token))
                     {
                         preparedAttempt = preparingAttempt;
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
@@ -348,7 +348,7 @@ public class NativeAgent : ModSystem
                         await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle); return true; }, token);
                         continue;
                     }
-                    if (await OnMain(() => AgentTools.Watches.HasInterrupting, token))
+                    if (await OnMain(() => AgentTools.Watches.HasModelInterrupting, token))
                     {
                         if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
                         string handle = AgentTools.Actions.ActiveHandle;

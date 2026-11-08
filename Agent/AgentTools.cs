@@ -950,7 +950,7 @@ public static partial class AgentTools
                             else Stop();
                             return true;
                         }, cleanupToken), token, workflow,
-                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending() : null, checkToken));
+                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken));
                 }
                 finally
                 {
@@ -965,7 +965,7 @@ public static partial class AgentTools
                     string activeHandle = Actions.ActiveHandle;
                     if (!queuedScript && activeHandle != null && deliveredWake["continue_action"]?.ToString() != activeHandle)
                         await Actions.Control(activeHandle, "pause", null, token);
-                    var deliveredEvents = await NativeAgent.OnMain(() => Watches.Take(8), token);
+                    var deliveredEvents = await NativeAgent.OnMain(() => Watches.Take(8, recoveryOnly: true), token);
                     if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
                 }
                 break;

@@ -324,6 +324,10 @@ static class CodexTests
             var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
                 "background review paused or restarted navigation");
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
+                ["tile_types"] = new JsonArray(61), ["passive_events"] = new JsonArray("nearby_chest") });
+            var localReader = AgentTools.Watches.BeginScriptDelivery();
+            AgentTools.Watches.Emit("nearby_tile", "script-owned-plant", new JsonObject { ["tile_type"] = 61 });
             var quietUntil = DateTime.UtcNow.AddSeconds(60);
             while (DateTime.UtcNow < quietUntil)
             {
@@ -332,6 +336,9 @@ static class CodexTests
                 Check(server.Inputs.Count == 2, "unchanged background action caused another periodic model request: "
                     + AgentTools.Actions.Summary().ToJsonString() + " input=" + server.Inputs.Last()[..Math.Min(1000, server.Inputs.Last().Length)]);
             }
+            Check(AgentTools.Actions.ActiveHandle == handle && AgentTools.Watches.PendingCount == 1,
+                "model loop paused script-owned movement or consumed its event queue");
+            AgentTools.Watches.Take(); AgentTools.Watches.EndScriptDelivery(localReader);
             async Task Pump(Task work)
             {
                 var until = DateTime.UtcNow.AddSeconds(3);
