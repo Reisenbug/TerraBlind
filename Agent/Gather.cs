@@ -130,7 +130,13 @@ public static class Gather
                     || candidate["kind"].ToString() == "drop" && last["result"]?["outcome"]?.ToString() == "no_progress")
                 { outcome = "navigation_no_progress"; break; }
                 if (last["result"]?["outcome"]?.ToString() == "no_progress")
-                { outcome = "collection_no_progress"; break; }
+                {
+                    if (candidate["kind"].ToString() == "tile" && attempts[id] < 2
+                        && last["result"]?["reason"]?.ToString() == "out_of_reach"
+                        && last["result"]?["target"]?["has_tile"]?.GetValue<bool>() == true
+                        && last["result"]?["target"]?["damage"]?.GetValue<int>() > 0) continue;
+                    outcome = "collection_no_progress"; break;
+                }
                 if (last["result"]?["error"]?.ToString() == "collect_target_out_of_mining_range")
                 { outcome = "collection_out_of_range"; break; }
                 if (candidate["kind"]?.ToString() == "npc" && last["result"] is JsonObject combat

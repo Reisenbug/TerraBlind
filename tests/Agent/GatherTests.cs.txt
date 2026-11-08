@@ -74,6 +74,13 @@ static class GatherTests
         Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
             && weakResult["last_result"]["result"]["reason"].ToString() == "tool_weak",
             "collection failure was retried or mislabeled as a navigation failure");
+        foreach (var (damage, recovers, expectedActions) in new[] { (70, true, 2), (70, false, 2), (0, true, 1) })
+        {
+            var displaced = new World { LostMiningReach = true, RecoverOnRetry = recovers, MiningDamage = damage };
+            var retried = await Gather.Run(new[] { Targets[0] }, 5, displaced, default);
+            Check(displaced.Actions.Count == expectedActions && retried["ok"].GetValue<bool>() == (damage > 0 && recovers),
+                "partial mining range loss did not reobserve and retry once, or hid persistent failure: " + retried);
+        }
         var outsideMiningRange = new World { OutsideMiningRange = true };
         var outsideRangeResult = await Gather.Run(new[] { Targets[0] }, 5, outsideMiningRange, default);
         Check(outsideMiningRange.Actions.Count == 1 && outsideRangeResult["outcome"].ToString() == "collection_out_of_range"
@@ -599,6 +606,8 @@ static class GatherTests
     sealed class World : IGatherWorld
     {
         public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
+        public bool LostMiningReach, RecoverOnRetry;
+        public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -622,6 +631,9 @@ static class GatherTests
             if (NavigationStalled) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
             if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
+            if (LostMiningReach && (Actions.Count == 1 || !RecoverOnRetry))
+                return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "out_of_reach",
+                    ["target"] = new JsonObject { ["has_tile"] = true, ["damage"] = MiningDamage } };
             if (OutsideMiningRange) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
                 ["x"] = 10, ["y"] = 0, ["navigation"] = new JsonObject { ["done"] = true, ["status"] = "done" } };
             if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
