@@ -25,6 +25,9 @@ public static class AgentScript
         run["description"] = run["description"].ToString()
             + "普通动作失败直接返回失败结果，JS可在同轮按现场执行已准备的恢复分支；step仍会拒绝把失败记录为完成。"
             + "只有一个就绪DAG节点时，带code和独立workflow的临时恢复自动归属该节点，返回task_node；多个就绪节点时显式指定。";
+        var inventoryWatch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
+        inventoryWatch["description"] = inventoryWatch["description"].ToString()
+            + "inventory_full始终为并行观察通知，当前动作继续执行；Agent结合任务整理背包，需要操作背包时显式交接输入。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"

@@ -490,6 +490,38 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_COLLECT_REACH_PROBE") is string reachProbe)
+        {
+            var values = reachProbe.Split(',').Select(value => float.Parse(value,
+                System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+            int tx = (int)values[0], ty = (int)values[1];
+            var report = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                AgentPermissions.Reset(); AgentPermissions.Dodge = false; Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
+                p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 200;
+                p.selectedItem = 0; p.position = new Vector2(values[2], values[3]); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                return new JsonObject { ["interaction_reach"] = Reach.CanInteract(p, tx, ty),
+                    ["mining_reach"] = Reach.CanMine(p, tx, ty), ["target_type"] = (int)Main.tile[tx, ty].TileType,
+                    ["target_present"] = Main.tile[tx, ty].HasTile };
+            });
+            if (!report["interaction_reach"].GetValue<bool>() || report["mining_reach"].GetValue<bool>()
+                || !report["target_present"].GetValue<bool>()) throw new Exception("recorded range mismatch not reproduced: " + report);
+            var timer = Stopwatch.StartNew();
+            var collected = await Call("use_item", new JsonObject { ["slot"] = 0, ["x"] = tx, ["y"] = ty });
+            report["elapsed_ms"] = timer.ElapsedMilliseconds; report["result"] = collected;
+            await OnMain(() => { report["target_remaining"] = Main.tile[tx, ty].HasTile; return true; });
+            File.WriteAllText(Path.Combine(Main.SavePath, "collection-reach.json"), report.ToJsonString());
+            if (collected["outcome"]?.ToString() != "removed" || report["target_remaining"].GetValue<bool>())
+                throw new Exception("native collection range recovery failed: " + report);
+            Console.WriteLine($"COLLECT_REACH_PASS native_world=true terrain_edits_before_start=0 model_calls=0 elapsed_ms={timer.ElapsedMilliseconds}");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PLACE_FAILURE_PROBE") == "1")
         {
             var failure = await OnMain(() =>

@@ -182,6 +182,19 @@ static class RuntimeTests
         Console.WriteLine("PASS: persistent honey slowdown wakes observation once per entry while current action continues");
     }
 
+    static void TestInventoryNotice()
+    {
+        var watch = new AgentWatch(); watch.EnsureDefaults();
+        watch.Observe(new JsonObject { ["hp"] = 100, ["dead"] = false, ["inventory_full"] = true });
+        Check(watch.HasPending && !watch.HasInterrupting && watch.HasAdvisories,
+            "full inventory stopped movement instead of requesting parallel review");
+        Check(watch.Advisories().Any(e => e["kind"]?.ToString() == "inventory_full") && !watch.HasAdvisories,
+            "inventory advisory was lost or repeatedly requested review");
+        watch.Observe(new JsonObject { ["hp"] = 100, ["dead"] = false, ["suffocating"] = true });
+        Check(watch.HasInterrupting, "inventory advisory weakened actual suffocation handling");
+        Console.WriteLine("PASS: full inventory requests parallel review while movement and safety handling remain active");
+    }
+
     static async Task TestInlineFailureRecovery()
     {
         var previous = HttpServerSystem.Handler;
@@ -214,6 +227,42 @@ static class RuntimeTests
         {
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
             HttpServerSystem.Handler = previous;
+        }
+    }
+
+    static async Task TestInlineCompletionHandoff()
+    {
+        var previous = HttpServerSystem.Handler;
+        var position = Game.LocalPlayer.position;
+        AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+        Game.LocalPlayer.position = new(192, 544);
+        int starts = 0, following = 0;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede" && ++starts == 2)
+            {
+                var prior = AgentTools.Actions.Summary().First(a => a["status"]?.ToString() == "completed");
+                AgentTools.Watches.Emit("action_finished", prior["handle"] + ":1", prior);
+            }
+            if (path == "/act") following++;
+            return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/act_status"
+                ? "{\"active\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["code"] = "tool('nav_to',{x:12,y:34});tool('nav_to',{x:13,y:34});"
+                    + "return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});"
+            }, default)));
+            Check(result["ok"]?.GetValue<bool>() == true && following == 1 && starts == 2,
+                "late completion notice interrupted the following action inside the same script: " + result);
+            Console.WriteLine("PASS: inline completed results acknowledge early and late notices before the next action");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            HttpServerSystem.Handler = previous; Game.LocalPlayer.position = position;
         }
     }
 
@@ -387,9 +436,11 @@ static class RuntimeTests
     public static async Task Run()
     {
         TestHoneyNotice();
+        TestInventoryNotice();
         await TestGapContinuation();
         await TestOwnedRecovery();
         await TestInlineFailureRecovery();
+        await TestInlineCompletionHandoff();
         await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
@@ -1381,6 +1432,23 @@ static class RuntimeTests
                 };
                 var reached = await Execute(AgentTools.CollectTarget(12, 34, default));
                 Check(approachedForMining && reached?["outcome"]?.ToString() == "removed", "collection failed to approach with actual tool distance: " + reached);
+                int approaches = 0;
+                Reach.MineTest = (player, _, _) => approaches == 2;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        approaches++;
+                        Check(JsonNode.Parse(payload)["stand"].GetValue<bool>() == (approaches == 2),
+                            "mining correction failed to request a closer native standing position");
+                    }
+                    if (path == "/item_use") Check(approaches == 2, "collection swung outside measured mining range");
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/item_use_status"
+                        ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+                };
+                var corrected = await Execute(AgentTools.CollectTarget(12, 34, default));
+                Check(approaches == 2 && corrected?["outcome"]?.ToString() == "removed",
+                    "interaction arrival handed a mining-range correction back to the model: " + corrected);
             }
             finally
             {
@@ -3012,7 +3080,7 @@ static class RuntimeTests
                 var failed = await Execute(AgentTools.Actions.Query(handle, 0, default));
                 Check(failed["status"].ToString() == "failed", "test did not produce a failed script wrapper");
                 AgentTools.Watches.Emit("action_finished", handle + ":1", failed);
-                if (ending == "notice") AgentTools.Watches.Emit("inventory_full", "handoff", new JsonObject());
+                if (ending == "notice") AgentTools.Watches.Request("review before the prepared handoff");
                 var timer = System.Diagnostics.Stopwatch.StartNew();
                 AgentTools.ContinuePreparedNode(default);
                 if (ending == "notice")

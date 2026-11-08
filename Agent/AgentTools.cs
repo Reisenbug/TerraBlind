@@ -717,11 +717,11 @@ public static partial class AgentTools
                     Watches.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife, ["max_hp"] = Main.LocalPlayer.statLifeMax2,
                         ["dead"] = Main.LocalPlayer.dead,
                         ["actions"] = new JsonArray(current.DeepClone()) });
-                    Watches.AcknowledgeResult(current);
                     return true;
                 }, token);
                 if (scriptEvents) result["events"] = await NativeAgent.OnMain(Watches.Take, token);
             }
+            await NativeAgent.OnMain(() => { Watches.AcknowledgeResult(current); return true; }, token);
             return result.ToJsonString();
         }
     }
@@ -1620,13 +1620,19 @@ public static partial class AgentTools
                 await Task.Delay(400, token);
                 return new JsonObject { ["outcome"] = "removed", ["mode_adjustment"] = "navigation_mined_target" };
             }
-            bool reachable = await NativeAgent.OnMain(() =>
+            bool InMiningRange()
             {
                 var player = Main.LocalPlayer;
                 int previous = player.selectedItem;
                 try { player.selectedItem = Int(target, "slot", -1); return Reach.CanMine(player, x, y); }
                 finally { player.selectedItem = previous; }
-            }, token);
+            }
+            bool reachable = await NativeAgent.OnMain(InMiningRange, token);
+            if (!reachable && !Bool(target, "solid"))
+            {
+                approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["mode"] = "stand" }, token);
+                reachable = approach["done"]?.GetValue<bool>() == true && await NativeAgent.OnMain(InMiningRange, token);
+            }
             if (!reachable) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
                 ["x"] = x, ["y"] = y, ["navigation"] = approach };
         }

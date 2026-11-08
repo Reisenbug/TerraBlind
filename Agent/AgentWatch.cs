@@ -73,6 +73,7 @@ public sealed class AgentWatch
     public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
         && e["kind"]?.ToString() != "low_health"
         && e["kind"]?.ToString() != "honey_slowdown"
+        && e["kind"]?.ToString() != "inventory_full"
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && !passive.Contains(e["kind"]?.ToString()));
     public bool Armed => events.Count > 0;
@@ -285,7 +286,7 @@ public sealed class AgentWatch
         bool continued = kind == "action_finished" && continuedAttempts.Contains(key);
         bool deferred = verified || continued || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared");
-        if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind is not ("low_health" or "boss_appeared" or "honey_slowdown")
+        if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind is not ("low_health" or "boss_appeared" or "honey_slowdown" or "inventory_full")
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
         var value = new JsonObject { ["id"] = ++issued, ["kind"] = kind, ["key"] = key, ["evidence"] = evidence?.DeepClone() };
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
@@ -337,7 +338,7 @@ public sealed class AgentWatch
     internal JsonArray Advisories()
     {
         var result = new JsonArray();
-        foreach (var item in pending.Where(e => e["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown"
+        foreach (var item in pending.Where(e => e["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full"
             && !advised.Contains(e["id"].GetValue<int>())).OrderBy(e => e["kind"]?.ToString() == "nearby_chest" ? 0 : 1).Take(4))
         {
             advised.Add(item["id"].GetValue<int>());
@@ -349,7 +350,7 @@ public sealed class AgentWatch
     }
 
     internal bool HasAdvisories => !LocalDelivery && pending.Any(item =>
-        item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown"
+        item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full"
         && !advised.Contains(item["id"].GetValue<int>()));
 
     public JsonObject Reconsider(string kind, string key, string reason)
