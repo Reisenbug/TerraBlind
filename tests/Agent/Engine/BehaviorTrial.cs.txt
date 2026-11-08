@@ -490,6 +490,61 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PREPARED_RECOVERY_PROBE") == "1")
+        {
+            const int tx = 3161, ty = 387;
+            var before = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                AgentPermissions.Reset(); AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+                p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
+                p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 200;
+                p.selectedItem = 0; p.position = new Vector2(50638.258f, 6112.1504f); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                var tile = Main.tile[tx, ty];
+                return new JsonObject { ["tile_type"] = (int)tile.TileType, ["has_tile"] = tile.HasTile,
+                    ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY };
+            });
+            if (before["has_tile"]?.GetValue<bool>() != true || before["tile_type"]?.GetValue<int>() != TileID.PressurePlates)
+                throw new Exception("recorded natural trap missing: " + before);
+            string policy = ScriptLibrary.Example("recover_pressure_plate")["code"].ToString()
+                .Replace("const config = null;", "const config={allow_trigger_removal:true,pick_slot:0,pick_type:" + ItemID.CopperPickaxe + "};");
+            var planned = await Call("task_plan", new JsonObject { ["goal"] = "native prepared local recovery probe", ["mode"] = "dag",
+                ["steps"] = new JsonArray(new JsonObject { ["id"] = "probe", ["description"] = "recover original navigation",
+                    ["depends_on"] = new JsonArray(), ["script"] = "return 42;", ["on_failure"] = policy,
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = (int)ItemID.LifeCrystal, ["count"] = 9999 }) }) });
+            if (planned["error"] != null) throw new Exception("native probe plan rejected: " + planned);
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "probe", ["workflow"] = "probe-start",
+                ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:3165,y:385}});" });
+            string handle = started["value"]?["handle"]?.ToString() ?? throw new Exception("missing native action handle: " + started);
+            async Task<JsonObject> Query() => JsonNode.Parse(await AgentTools.Execute("action_query",
+                new JsonObject { ["handle"] = handle }, default)).AsObject();
+            JsonObject failed;
+            do { await Task.Delay(16); failed = await Query(); } while (failed["status"]?.ToString() == "running");
+            if (failed["status"]?.ToString() != "failed" || failed["result"]?["error"]?.ToString() != "navigation_near_trap")
+                throw new Exception("native trap guard did not fail as recorded: " + failed);
+            var dispatch = typeof(AgentTools).GetMethod("ContinuePreparedNode", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            var timer = Stopwatch.StartNew(); JsonObject after;
+            do
+            {
+                await OnMain(() => { dispatch.Invoke(null, new object[] { CancellationToken.None }); return true; });
+                await Task.Delay(16); after = await Query();
+                if (timer.Elapsed.TotalSeconds > 10) throw new Exception("native prepared recovery stalled: " + after);
+            } while (after["attempt"]?.GetValue<int>() != 2 || after["status"]?.ToString() == "running");
+            var report = await OnMain(() => new JsonObject { ["before"] = before.DeepClone(), ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                ["original_handle"] = handle, ["after"] = after.DeepClone(), ["trap_remaining"] = Main.tile[tx, ty].HasTile,
+                ["pressure_plates_picked"] = Main.LocalPlayer.inventory.Where(i => i.createTile == TileID.PressurePlates).Sum(i => i.stack),
+                ["model_calls"] = 0, ["navigation_stub"] = UsingNavigationStub, ["terrain_edits_before_start"] = 0 });
+            File.WriteAllText(Path.Combine(Main.SavePath, "prepared-recovery.json"), report.ToJsonString());
+            if (after["status"]?.ToString() != "completed" || report["trap_remaining"]?.GetValue<bool>() != false)
+                throw new Exception("native prepared recovery failed: " + report);
+            Console.WriteLine("PREPARED_RECOVERY_PASS native_guard=true native_mining=true native_resume=true model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_COLLECT_REACH_PROBE") is string reachProbe)
         {
             var values = reachProbe.Split(',').Select(value => float.Parse(value,
@@ -2515,7 +2570,9 @@ public sealed class BehaviorTrial : ModSystem
     {
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
+        int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
+        prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
             prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";
@@ -2610,7 +2667,7 @@ public sealed class BehaviorTrial : ModSystem
                 if (dead && !wasDead) deaths.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
                     ["evidence"] = state["last_death"]?.DeepClone() });
                 wasDead = dead;
-                if (healthMs == null && state["permanent_max_health"].GetValue<int>() >= 240) healthMs = clock.ElapsedMilliseconds;
+                if (healthMs == null && state["permanent_max_health"].GetValue<int>() >= targetHealth) healthMs = clock.ElapsedMilliseconds;
                 bool chakram = state["inventory_slots"].AsArray().Any(i => i["type"]?.GetValue<int>() == ItemID.ThornChakram && i["stack"]?.GetValue<int>() > 0);
                 if (chakramMs == null && chakram) chakramMs = clock.ElapsedMilliseconds;
                 var boss = await OnMain(() => new JsonObject { ["alive"] = NPC.AnyNPCs(NPCID.QueenBee), ["defeated"] = NPC.downedQueenBee });
@@ -2619,11 +2676,11 @@ public sealed class BehaviorTrial : ModSystem
                 bool completed = healthMs != null && chakram && boss["defeated"].GetValue<bool>()
                     && state["task_plan"]?["status"]?.ToString() == "completed";
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
-                { ["ok"] = completed, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["health_240_ms"] = healthMs,
+                { ["ok"] = completed, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
                     ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
                     ["boss"] = boss.DeepClone(), ["after"] = state.DeepClone() }.ToJsonString());
                 if (completed)
-                { Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} health_240_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return; }
+                { Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return; }
                 if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
             }
         }
