@@ -317,6 +317,54 @@ static class RuntimeTests
         }
     }
 
+    static async Task TestInlinePauseResume()
+    {
+        var previous = HttpServerSystem.Handler;
+        AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+        int starts = 0;
+        bool observedGap = false;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") starts++;
+            if (path == "/recipe")
+            {
+                AgentTools.ObserveContinuity();
+                observedGap |= AgentTools.ExecutionContinuity?["status"]?.ToString() == "execution_gap";
+                return (200, "{}");
+            }
+            return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"temporary input handoff","mode":"dag","steps":[{"id":"travel","description":"continue route","depends_on":[],
+                "script":"return tool('nav_to',{x:12,y:34});","conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            ActionTasks.NodeContext.Value = "travel";
+            string handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
+            ActionTasks.NodeContext.Value = null;
+            await PumpUntil(() => starts == 1);
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["code"] = "tool('action_control',{handle:'" + handle + "',command:'pause'});"
+                    + "tool('recipe',{name:'WoodPlatform'});return tool('action_control',{handle:'" + handle + "',command:'resume'});"
+            }, default)));
+            Check(observedGap && result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "running"
+                && !AgentTools.Watches.HasInterrupting,
+                "continuity monitor interrupted an executing anonymous recovery script: " + result);
+            await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
+            AgentTools.ObserveContinuity();
+            Check(AgentTools.Watches.HasInterrupting, "finished inline script permanently suppressed a real execution gap");
+            Console.WriteLine("PASS: anonymous pause/query/resume remains atomic; actual abandoned gaps still request recovery");
+        }
+        finally
+        {
+            ActionTasks.NodeContext.Value = null;
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            HttpServerSystem.Handler = previous;
+        }
+    }
+
     static async Task TestPreparedScriptRevision()
     {
         var previous = HttpServerSystem.Handler;
@@ -493,6 +541,7 @@ static class RuntimeTests
         await TestOwnedRecovery();
         await TestInlineFailureRecovery();
         await TestInlineCompletionHandoff();
+        await TestInlinePauseResume();
         await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,

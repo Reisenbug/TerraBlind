@@ -19,6 +19,7 @@ public static partial class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly HashSet<string> continuedActions = new();
     static Task continuation = Task.CompletedTask;
+    static int executingScripts;
     static string pendingNode;
     internal static JsonObject LastContinuation;
     static readonly HashSet<(int, int)> routeChests = new();
@@ -85,7 +86,7 @@ public static partial class AgentTools
         }
         gapStarted ??= Main.GameUpdateCount;
         bool dispatching = !continuation.IsCompleted || pendingNode != null;
-        bool scriptRunning = Workflows.Values.Any(w => w.Running);
+        bool scriptRunning = Volatile.Read(ref executingScripts) > 0 || Workflows.Values.Any(w => w.Running);
         string reason = dispatching ? "dispatching_prepared_script" : scriptRunning ? "script_running_without_background_action"
             : Watches.HasInterrupting ? "event_review_without_action" : "no_executable_action";
         ExecutionContinuity = new JsonObject { ["status"] = "execution_gap", ["reason"] = reason,
@@ -102,7 +103,7 @@ public static partial class AgentTools
     }
     internal static void ContinuePreparedNode(CancellationToken token)
     {
-        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl
+        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || Volatile.Read(ref executingScripts) > 0
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
@@ -160,7 +161,7 @@ public static partial class AgentTools
                     report["status"] = "returned"; report["ok"] = returned?["ok"]?.DeepClone();
                     report["error"] = returned?["error"]?.DeepClone();
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
-                        && (value["status"]?.ToString() == "yield" || value["wake"] != null || value["error"] != null))
+                        && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null))
                         ReportExecutionGap(report, "script_requires_review");
                     else if (!Actions.HasPrimaryControl)
                     {
@@ -892,6 +893,7 @@ public static partial class AgentTools
                     return saved;
                 }, token);
                 Guid eventReader = await NativeAgent.OnMain(() => localEvents ? Watches.BeginScriptDelivery() : Guid.Empty, token);
+                Interlocked.Increment(ref executingScripts);
                 try
                 {
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
@@ -912,6 +914,7 @@ public static partial class AgentTools
                 }
                 finally
                 {
+                    Interlocked.Decrement(ref executingScripts);
                     await NativeAgent.OnMain(() => { if (eventReader != Guid.Empty) Watches.EndScriptDelivery(eventReader); return true; }, default);
                 }
                 if (program != null)

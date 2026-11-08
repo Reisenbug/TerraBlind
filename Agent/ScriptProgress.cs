@@ -23,7 +23,7 @@ public sealed class ScriptProgress
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
-    public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield"; } }
+    public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() is "yield" or "needs_review"; } }
     public bool ReviewRequested { get { lock (gate) return !running && last?["value"] is JsonObject value && value["wake"] is JsonObject; } }
 
     internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"

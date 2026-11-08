@@ -454,7 +454,7 @@ static class ActionTests
             }
         }
         Console.WriteLine("PASS: queued actions continue without model calls, preserve pause and stop after failure or task replacement");
-        foreach (string value in new[] { "{\"status\":\"yield\"}", "{\"done\":false,\"status\":\"stopped_short\"}", "{\"error\":\"blocked\"}", "42" })
+        foreach (string value in new[] { "{\"status\":\"yield\"}", "{\"status\":\"needs_review\"}", "{\"done\":false,\"status\":\"stopped_short\"}", "{\"error\":\"blocked\"}", "42" })
         {
             var actions = new ActionTasks((_, _, _) => Task.FromResult("{\"ok\":true,\"value\":" + value + "}"),
                 _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
@@ -464,6 +464,10 @@ static class ActionTests
             Check(result["status"].ToString() == (value == "42" ? "completed" : "failed"),
                 "script transport success concealed an unfinished action or rejected a primitive result: " + result);
         }
+        var progress = new ScriptProgress();
+        progress.Begin("return {status:'needs_review'};");
+        progress.End(new JsonObject { ["value"] = new JsonObject { ["status"] = "needs_review" } });
+        Check(progress.Yielded, "explicit review result allowed automatic replay of the unresolved script");
         Console.WriteLine("PASS: queued scripts preserve yielded and failed outcomes instead of treating JS return as completion");
     }
 

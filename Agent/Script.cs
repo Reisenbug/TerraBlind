@@ -149,7 +149,7 @@ public static class AgentScript
         + "找回原句柄：get_state.action_tasks是数组，每项含handle/tool/args/status；按原任务参数匹配，不能随便选第一个gather。script_progress({workflow,action:'get'})直接返回steps数组，step保存的action_start结果位于steps[i].value.handle，不存在顶层gather_handle或original_gather_handle。step.value里的status是当时的快照，当前状态用action_query({handle})核对。先读取真实结构，不得把猜错字段当作句柄丢失。"
         + "fight仅占攻击通道，不控制移动。导航途中防身可action_start fight（短seconds、有限max_dist），无需暂停nav_to；结束或取消fight不停止原导航，挖掘、放置时攻击自动让出物品使用权。不要为普通防身停下赶路或反复追求清光刷新的敌怪；需要绕行、撤离或追击时独立选择移动目标。暂停导航不取消并行攻击，停止攻击用其自己的handle。"
         + "Agent可以修改resume的args，或cancel已经暂停的原意图；不值得的机会可直接跳过并继续，不能无条件见宝必拿。"
-        + "开箱、获得装备或inventory_full后可用inventory_review批量检查背包、功能装备和trash垃圾桶，结合item_info、当前任务配方及玩家保留要求选择换装、整理或丢弃，不按售价或防御单项固定评分。用equip_item穿戴、inventory_swap整理、inventory_drop丢整叠到地上、inventory_trash移整叠到垃圾桶；先暂停原动作，使用新鲜槽位证据，核对实际结果再恢复原handle。地面物品可能被捡回；垃圾桶会覆盖旧垃圾，必须同时提供expected_trash。收藏物品不可丢弃。"
+        + "开箱、获得装备或inventory_full后可用inventory_review批量检查背包、功能装备和trash垃圾桶，结合item_info、当前任务配方及玩家保留要求选择换装、整理或丢弃，不按售价或防御单项固定评分。查询和选择在赶路中完成；用equip_item穿戴、inventory_swap整理、inventory_drop丢整叠到地上、inventory_trash移整叠到垃圾桶。需要输入交接时，将暂停、按新鲜槽位证据修改、核对、恢复原handle写在同一段JS，用try/finally保证恢复当场执行。地面物品可能被捡回；垃圾桶会覆盖旧垃圾，必须同时提供expected_trash。收藏物品不可丢弃。"
         + "长动作返回outcome:interrupted不是完成；保存返回的handle和events，核对现场后暂停/恢复同一动作。不要把中断结果直接作为成功step。"
         + "动作返回的events已从事件队列取走，下一次script_events不会重放；必须先处理该返回值中的危险事件，再决定是否resume。空事件队列不代表现场安全。"
         + "low_health仅通知并唤醒观察，当前动作继续执行，包括本地JS事件模式和模型思考期间。不得仅因低血量暂停、取消动作、原地等回血或空yield；边执行边调整后续方案。只有任务对死亡有明确特殊要求时，才按该要求另行处理。"
