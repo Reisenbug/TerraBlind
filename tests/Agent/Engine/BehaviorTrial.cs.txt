@@ -511,6 +511,11 @@ public sealed class BehaviorTrial : ModSystem
             });
             if (before["has_tile"]?.GetValue<bool>() != true || before["tile_type"]?.GetValue<int>() != TileID.PressurePlates)
                 throw new Exception("recorded natural trap missing: " + before);
+            for (int i = 0; i < 32; i++)
+            {
+                var filled = await Call("run_script", new JsonObject { ["workflow"] = "capacity-" + i, ["code"] = "return true;" });
+                if (filled["ok"]?.GetValue<bool>() != true) throw new Exception("failed to fill native workflow capacity: " + filled);
+            }
             string policy = ScriptLibrary.Example("recover_pressure_plate")["code"].ToString()
                 .Replace("const config = null;", "const config={allow_trigger_removal:true,pick_slot:0,pick_type:" + ItemID.CopperPickaxe + "};");
             var planned = await Call("task_plan", new JsonObject { ["goal"] = "native prepared local recovery probe", ["mode"] = "dag",
@@ -535,14 +540,18 @@ public sealed class BehaviorTrial : ModSystem
                 await Task.Delay(16); after = await Query();
                 if (timer.Elapsed.TotalSeconds > 10) throw new Exception("native prepared recovery stalled: " + after);
             } while (after["attempt"]?.GetValue<int>() != 2 || after["status"]?.ToString() == "running");
-            var report = await OnMain(() => new JsonObject { ["before"] = before.DeepClone(), ["elapsed_ms"] = timer.ElapsedMilliseconds,
+            long elapsed = timer.ElapsedMilliseconds;
+            var recoveredState = await Call("get_state", new JsonObject());
+            var report = await OnMain(() => new JsonObject { ["before"] = before.DeepClone(), ["elapsed_ms"] = elapsed,
                 ["original_handle"] = handle, ["after"] = after.DeepClone(), ["trap_remaining"] = Main.tile[tx, ty].HasTile,
                 ["pressure_plates_picked"] = Main.LocalPlayer.inventory.Where(i => i.createTile == TileID.PressurePlates).Sum(i => i.stack),
+                ["persistent_workflows"] = recoveredState["script_workflows"].AsObject().Count,
                 ["model_calls"] = 0, ["navigation_stub"] = UsingNavigationStub, ["terrain_edits_before_start"] = 0 });
             File.WriteAllText(Path.Combine(Main.SavePath, "prepared-recovery.json"), report.ToJsonString());
-            if (after["status"]?.ToString() != "completed" || report["trap_remaining"]?.GetValue<bool>() != false)
+            if (after["status"]?.ToString() != "completed" || report["trap_remaining"]?.GetValue<bool>() != false
+                || report["persistent_workflows"]?.GetValue<int>() != 32)
                 throw new Exception("native prepared recovery failed: " + report);
-            Console.WriteLine("PREPARED_RECOVERY_PASS native_guard=true native_mining=true native_resume=true model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
+            Console.WriteLine("PREPARED_RECOVERY_PASS native_guard=true native_mining=true native_resume=true persistent_workflows=32 model_calls=0 elapsed_ms=" + elapsed);
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_COLLECT_REACH_PROBE") is string reachProbe)

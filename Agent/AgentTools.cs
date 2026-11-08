@@ -20,6 +20,7 @@ public static partial class AgentTools
     static readonly HashSet<string> continuedActions = new();
     static Task continuation = Task.CompletedTask;
     static int executingScripts;
+    static readonly AsyncLocal<(string Id, ScriptProgress Progress)?> recoveryContext = new();
     static string pendingNode;
     internal static JsonObject LastContinuation;
     static readonly HashSet<(int, int)> routeChests = new();
@@ -161,20 +162,21 @@ public static partial class AgentTools
         if (recovery != null) report["mode"] = "recovery";
         continuation = Task.Run(async () =>
         {
-            string recoveryWorkflow = null;
+            ScriptProgress recoveryProgress = null;
             try
             {
                 var args = new JsonObject { ["task_node"] = next };
                 if (recovery != null)
                 {
                     var failure = await Actions.Query(handle, 0, token);
-                    recoveryWorkflow = await NativeAgent.OnMain(() =>
+                    string recoveryWorkflow = await NativeAgent.OnMain(() =>
                     {
                         string id = Plan.Script(next)["workflow"] + "-recovery";
-                        Workflows.Remove(id);
                         report["failed_attempt"] = failure["attempt"]?.DeepClone();
                         return id;
                     }, token);
+                    recoveryProgress = new ScriptProgress();
+                    recoveryContext.Value = (recoveryWorkflow, recoveryProgress);
                     args["code"] = "const failure=tool('action_query',{handle:" + JsonValue.Create(handle).ToJsonString() + "});\n" + recovery;
                     args["workflow"] = recoveryWorkflow;
                 }
@@ -214,14 +216,13 @@ public static partial class AgentTools
             }
             finally
             {
-                if (recoveryWorkflow != null)
+                if (recoveryProgress != null)
                     await NativeAgent.OnMain(() =>
                     {
-                        if (Workflows.TryGetValue(recoveryWorkflow, out var completed))
-                            report["recovery_execution"] = completed.Summary()["last_execution"]?.DeepClone();
-                        Workflows.Remove(recoveryWorkflow);
+                        report["recovery_execution"] = recoveryProgress.Summary()["last_execution"]?.DeepClone();
                         return true;
                     }, default);
+                recoveryContext.Value = null;
             }
         }, token);
     }
@@ -917,11 +918,13 @@ public static partial class AgentTools
                         return new JsonObject { ["error"] = "program_revision_conflict", ["revision"] = program["revision"].DeepClone() }.ToJsonString();
                     source = program["code"].GetValue<string>();
                 }
+                var localRecovery = recoveryContext.Value;
                 var workflow = await NativeAgent.OnMain(() =>
                 {
                     string id = Text(args, "workflow");
                     if (id == "") return null;
                     if (id.Length > 80) throw new ArgumentException("workflow需要1..80字符。");
+                    if (localRecovery is { } scoped && id == scoped.Id) return scoped.Progress;
                     if (!Workflows.TryGetValue(id, out var saved))
                     {
                         if (Workflows.Count >= 32) throw new InvalidOperationException("本世界最多32个workflow。");

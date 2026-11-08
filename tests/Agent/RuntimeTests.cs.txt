@@ -377,10 +377,14 @@ static class RuntimeTests
     static async Task TestPreparedFailureRecovery()
     {
         var previous = HttpServerSystem.Handler;
-        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled" })
+        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled", "capacity" })
         {
             AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
             var existingWorkflows = AgentTools.Workflows.Keys.ToHashSet();
+            if (mode == "capacity")
+                for (int i = AgentTools.Workflows.Count; i < 32; i++) AgentTools.Workflows.Add("recovery-capacity-" + i, new ScriptProgress());
+            var recoveryBaseKeys = AgentTools.Workflows.Keys.ToHashSet();
+            bool shouldRecover = mode is "recovered" or "capacity";
             int starts = 0, repairs = 0;
             bool fail = false;
             string detail = new('x', 20000);
@@ -435,19 +439,20 @@ static class RuntimeTests
                 await PumpUntil(() =>
                 {
                     AgentTools.ContinuePreparedNode(default);
-                    return mode == "recovered" ? starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned"
+                    Check(AgentTools.LastContinuation?["error"] == null, "prepared recovery failed: " + AgentTools.LastContinuation);
+                    return shouldRecover ? starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned"
                         : AgentTools.LastContinuation?["status"]?.ToString() == "execution_gap";
                 });
                 Check(timer.ElapsedMilliseconds < 1000, "prepared failure policy waited for a model turn");
                 for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
-                Check(repairs == (mode == "recovered" ? 1 : 0) && starts == (mode == "recovered" ? 2 : 1),
+                Check(repairs == (shouldRecover ? 1 : 0) && starts == (shouldRecover ? 2 : 1),
                     "unhandled failure retried itself or completed recovery replayed");
-                Check(AgentTools.Workflows.Keys.All(existingWorkflows.Contains)
+                Check(AgentTools.Workflows.Keys.All(recoveryBaseKeys.Contains)
                     && AgentTools.LastContinuation?["recovery_execution"] != null,
                     "one-shot recovery left a stale workflow or discarded execution evidence");
                 Check(AgentTools.Plan.Script("travel")["code"].ToString() == "return 42;" && AgentTools.Plan.Incomplete,
                     "temporary failure recovery overwrote the main script or completed the goal");
-                if (mode == "recovered")
+                if (shouldRecover)
                     Check(AgentTools.Actions.ActiveHandle == handle, "recovery lost the original action handle");
                 Console.WriteLine($"PREPARED_FAILURE mode={mode} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
             }
