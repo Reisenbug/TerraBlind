@@ -546,6 +546,23 @@ public static partial class AgentTools
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         string taskNode = ActionTasks.NodeContext.Value;
+        if (name == "action_control" && Text(args, "command") == "resume")
+        {
+            var completed = Actions.Summary().FirstOrDefault(a => a["handle"]?.ToString() == Text(args, "handle")
+                && a["status"]?.ToString() == "completed");
+            if (completed != null && (args["args"] == null || JsonNode.DeepEquals(args["args"], completed["args"])))
+            {
+                var observed = await Actions.Query(Text(args, "handle"), 0, token);
+                observed["no_action"] = "already_completed";
+                await NativeAgent.OnMain(() =>
+                {
+                    Watches.AcknowledgeCompletion(observed);
+                    Recovery.Record(name, args, observed.ToJsonString());
+                    return true;
+                }, token);
+                return observed.ToJsonString();
+            }
+        }
         if (Recovery.Revision > 0 && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
             return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
                 ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();

@@ -386,7 +386,7 @@ static class ActionTests
         watch.Observe(Chain("running"));
         Check(watch.HasPending && !watch.HasInterrupting, "predecessor completion interrupts its already running continuation");
         watch.Observe(Chain("failed"));
-        Check(watch.HasInterrupting, "continuation failure lost its wake event");
+        Check(!watch.HasInterrupting && watch.HasAdvisories, "continuation failure stopped control or lost its review notice");
         watch.Reset(); watch.EnsureDefaults();
         var danger = Chain("running"); danger["suffocating"] = true;
         watch.Observe(danger);

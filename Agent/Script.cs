@@ -27,7 +27,7 @@ public static class AgentScript
             + "只有一个就绪DAG节点时，带code和独立workflow的临时恢复自动归属该节点，返回task_node；多个就绪节点时显式指定。";
         var inventoryWatch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
         inventoryWatch["description"] = inventoryWatch["description"].ToString()
-            + "inventory_full始终为并行观察通知，当前动作继续执行；Agent结合任务整理背包，需要操作背包时显式交接输入。";
+            + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。JS处理工具结果后继续，切换控制用action_control或decision_point。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
@@ -137,7 +137,7 @@ public static class AgentScript
         + "有沿途收集要求时，先用recipe确认所需物品和数量、game_catalog确认编号，再查证来源。game_catalog的matches[].type是对应kind的编号；物品编号、NPC编号和方块编号不能混用，名称相似也不证明掉落关系。NPC材料先用npc_drop_sources查询注册掉落及条件；植物来源与变体查wiki或依据实际采集证据，不能把材料名当TileID、把生长基底当材料来源，也不能猜npc_types或frame。未知来源应报告未查证，不得假装已经配置正确。"
         + "按查证的来源配置watch：方块和工作站使用nearby_tile+tile_types，箱子使用nearby_chest，已掉落材料使用nearby_drop；发现候选不代表必定取得目标物品。"
         + "普通机会可加入watch.passive_events，只通知不自动打断；配合action_start和script_events边执行边评估，决定值得插入时再action_control pause，避免每发现一株植物就重启导航。"
-        + "target_acquired是目标物品库存增加，不代表数量达标；持续采集时可同时订阅并加入passive_events，让增量通知不自动暂停采集。是否插入行动由JS按进度、现场和机会决定，完成仍须核对实际数量，危险事件独立处理。"
+        + "target_acquired报告目标物品库存增加，动作继续执行。显式订阅请求并行观察，加入passive_events则由JS消费；是否插入行动由JS按进度、现场和机会决定，完成须核对实际数量，危险事件独立处理。"
         + "script_events若本次暂停了动作，action返回暂停清理后的handle/status/observation，事件evidence仍是触发时的历史快照。等待或操作后用action.observation或新查询核对血量与位置，不要复用等待前的值；action为null仅表示本次未暂停，当前动作状态用action_query核对，running表示仍在执行。"
         + "机会交付时可附assessment，使用它的tick、障碍和route_relation作判断；navigation保存发现时原导航句柄和目的地。每批最多评估6个，其余assessment_deferred=true仍是未评估，不代表安全。缺少评估或人物、地形已改变时再opportunity_assess(x,y,destination原目的地)，结合当前库存、任务需求和已测障碍取舍；ok只表示查询完成，即使有岩浆或陷阱也可为true，不是安全、可达或值得拿的结论。直线距离不是可达证明。"
         + "危险取舍要检查每项kind、坐标和on_direct_corridor，不能用hazards.length等于某个观测数量作为安全条件；列表可能截断，未列出不代表不存在。走廊外的危险也可能影响接近或返程，必要时进一步观察。"

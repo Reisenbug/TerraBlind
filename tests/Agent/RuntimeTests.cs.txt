@@ -195,6 +195,36 @@ static class RuntimeTests
         Console.WriteLine("PASS: full inventory requests parallel review while movement and safety handling remain active");
     }
 
+    static void TestActionNotices()
+    {
+        var watch = new AgentWatch();
+        watch.Configure(new JsonObject { ["events"] = new JsonArray("action_finished", "target_acquired", "suffocating") });
+        watch.Emit("action_finished", "success", new JsonObject { ["status"] = "completed" });
+        Check(!watch.HasInterrupting && !watch.HasAdvisories, "successful completion interrupted execution or requested redundant review");
+        watch.Emit("target_acquired", "growth", new JsonObject { ["gained"] = 1 });
+        Check(!watch.HasInterrupting && watch.HasAdvisories, "inventory growth stopped the action instead of requesting observation");
+        watch.Advisories();
+        var failed = new JsonObject { ["handle"] = "failed", ["attempt"] = 1, ["status"] = "failed" };
+        watch.Emit("action_finished", "failed:1", failed);
+        Check(!watch.HasInterrupting && watch.HasAdvisories, "failure notification stopped unrelated control");
+        watch.AcknowledgeResult(failed);
+        Check(!watch.HasAdvisories && watch.PendingCount == 3, "handled failure kept waking the model or lost evidence");
+        watch.Emit("suffocating", "danger", new JsonObject());
+        Check(watch.HasInterrupting, "notification handling suppressed real danger");
+        var local = new AgentWatch();
+        local.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile"),
+            ["tile_types"] = new JsonArray(1), ["passive_events"] = new JsonArray("nearby_tile"), ["radius"] = 25 });
+        JsonObject Position(int x) => new() { ["pos"] = new JsonObject { ["x"] = x * 16, ["y"] = 0 } };
+        local.Observe(Position(0));
+        local.Emit("nearby_tile", "old-local-cell", new JsonObject { ["x"] = 2, ["y"] = 2 });
+        Check(local.HasAdvisories, "local opportunity failed to request observation");
+        local.Observe(Position(100));
+        Check(!local.HasAdvisories && local.PendingCount == 1, "old faraway opportunity kept occupying model reviews or lost history");
+        local.Observe(Position(0));
+        Check(local.HasAdvisories, "returning to an unreviewed opportunity hid it permanently");
+        Console.WriteLine("PASS: action lifecycle and inventory growth notify without pausing control; actual danger remains interrupting");
+    }
+
     static async Task TestInlineFailureRecovery()
     {
         var previous = HttpServerSystem.Handler;
@@ -257,6 +287,11 @@ static class RuntimeTests
             }, default)));
             Check(result["ok"]?.GetValue<bool>() == true && following == 1 && starts == 2,
                 "late completion notice interrupted the following action inside the same script: " + result);
+            var completed = AgentTools.Actions.Summary().First(a => a["tool"]?.ToString() == "nav_to");
+            var resumed = JsonNode.Parse(await Execute(AgentTools.Execute("action_control", new JsonObject
+                { ["handle"] = completed["handle"].DeepClone(), ["command"] = "resume" }, default)));
+            Check(resumed["status"]?.ToString() == "completed" && starts == 2,
+                "completion racing with resume forced another model repair turn or replayed movement: " + resumed);
             Console.WriteLine("PASS: inline completed results acknowledge early and late notices before the next action");
         }
         finally
@@ -437,6 +472,7 @@ static class RuntimeTests
     {
         TestHoneyNotice();
         TestInventoryNotice();
+        TestActionNotices();
         await TestGapContinuation();
         await TestOwnedRecovery();
         await TestInlineFailureRecovery();
@@ -2677,7 +2713,8 @@ static class RuntimeTests
         progressWatch.Configure(progressPolicy); progressWatch.EnsureDefaults();
         gathering["item_counts"]["209"] = 2;
         progressWatch.Observe(gathering);
-        Check(progressWatch.HasInterrupting, "agent could not restore interruption on target gains");
+        Check(!progressWatch.HasInterrupting && progressWatch.HasAdvisories,
+            "explicit target observation stopped movement or failed to request parallel review");
         AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
         HttpServerSystem.Handler = (path, _) =>
         {
@@ -3092,7 +3129,7 @@ static class RuntimeTests
                 if (ending == "unmet")
                 {
                     Check(starts == 1 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed"
-                        && AgentTools.Watches.HasInterrupting, "unmet yielded node advanced without evidence");
+                        && AgentTools.Watches.HasAdvisories, "unmet yielded node advanced without evidence");
                     continue;
                 }
                 await PumpUntil(() => starts == 2);

@@ -338,7 +338,11 @@ static class CodexTests
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(AgentTools.Actions.ActiveHandle == handle, "health notification paused the ongoing action");
-            AgentTools.Watches.Emit("nearby_chest", "new-chest", new JsonObject { ["x"] = 10, ["y"] = 20 });
+            AgentTools.Watches.Emit("nearby_chest", "new-chest", new JsonObject
+            {
+                ["x"] = (int)(Terraria.Main.LocalPlayer.position.X / 16) + 3,
+                ["y"] = (int)(Terraria.Main.LocalPlayer.position.Y / 16)
+            });
             deadline = DateTime.UtcNow.AddSeconds(3);
             while (server.Inputs.Count < 4)
             {

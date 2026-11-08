@@ -25,7 +25,8 @@ static class GatherTests
             var failed = new JsonObject { ["handle"] = "next", ["attempt"] = 1, ["status"] = "failed" };
             verifiedWatch.AcknowledgeCompletion(failed);
             verifiedWatch.Emit("action_finished", "next:1", failed);
-            Check(verifiedWatch.HasInterrupting, "node verification suppressed a different action failure");
+            Check(!verifiedWatch.HasInterrupting && verifiedWatch.HasAdvisories,
+                "node verification suppressed a different failure review or stopped unrelated control");
             verifiedWatch.Take();
             verifiedWatch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
             Check(!verifiedWatch.HasInterrupting && verifiedWatch.HasHealthNotice, "node verification lost the informational health notice");
@@ -36,14 +37,14 @@ static class GatherTests
             if (explicitAcquisition) watch.Configure(new JsonObject { ["events"] = new JsonArray("target_acquired") });
             watch.EnsureDefaults(); watch.EnsureDefaults();
             watch.Emit("target_acquired", "gain", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["gained"] = 2 });
-            Check(watch.HasPending && watch.HasInterrupting == explicitAcquisition,
-                "default collection progress interrupted gathering or explicit interruption was ignored");
+            Check(watch.HasPending && !watch.HasInterrupting && watch.HasAdvisories == explicitAcquisition,
+                "default collection progress interrupted gathering or explicit parallel observation was ignored");
             watch.Emit("action_finished", "collect:1", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["status"] = "failed" });
             watch.Resumed("collect", 2);
             Check(watch.PendingCount == 2 && !watch.HasInterrupting,
                 "resumption erased evidence or an obsolete attempt still interrupted the new attempt");
             watch.Emit("action_finished", "collect:2", new JsonObject { ["handle"] = "collect", ["attempt"] = 2, ["status"] = "failed" });
-            Check(watch.HasInterrupting, "the current attempt failure was incorrectly deferred");
+            Check(!watch.HasInterrupting && watch.HasAdvisories, "the current attempt failure review was incorrectly deferred");
             watch.Take();
             watch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
             watch.Resumed("collect", 3);
