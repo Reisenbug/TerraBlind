@@ -2014,7 +2014,7 @@ internal sealed class AgentContext
             var brief = Pick(plan, "status", "mode", "revision", "progress_revision", "current_step", "ready_steps");
             brief["steps"] = new JsonArray((plan["steps"] as JsonArray ?? new JsonArray()).Select(step =>
             {
-                var item = Pick(step, "id", "description", "status", "depends_on", "conditions");
+                var item = Pick(step, "id", "description", "status", "depends_on", "conditions", "workflow");
                 item["script_present"] = !string.IsNullOrWhiteSpace(step["script"]?.ToString());
                 item["on_failure_present"] = !string.IsNullOrWhiteSpace(step["on_failure"]?.ToString());
                 return (JsonNode)item;

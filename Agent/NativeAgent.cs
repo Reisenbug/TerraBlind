@@ -301,7 +301,7 @@ public class NativeAgent : ModSystem
                 long recoverySession = -1;
                 int noProgressContinuations = 0;
                 int preparationContinuations = 0;
-                string preparedHandle = null;
+                string preparedAttempt = null;
                 bool preparedDuringRespawn = false;
                 while (true)
                 {
@@ -318,22 +318,22 @@ public class NativeAgent : ModSystem
                     bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
-                    string preparingHandle = AgentTools.Actions.ActiveHandle;
-                    bool prepareNext = preparingHandle != null && preparingHandle != preparedHandle;
+                    string preparingAttempt = AgentTools.Actions.ActiveAttempt;
+                    bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt;
                     double reviewDelay = await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token) ? 0 : 15;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
                     {
                         await Task.Delay(100, token);
-                        preparingHandle = AgentTools.Actions.ActiveHandle;
-                        prepareNext = preparingHandle != null && preparingHandle != preparedHandle;
+                        preparingAttempt = AgentTools.Actions.ActiveAttempt;
+                        prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt;
                     }
                     if (!reviewRequested && (prepareNext
                         || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))
                         && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasInterrupting, token))
                     {
-                        preparedHandle = preparingHandle;
+                        preparedAttempt = preparingAttempt;
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
                         var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
                         input = "继续原目标。后台动作仍在执行，本轮是并行观察，没有暂停输入。"
@@ -341,6 +341,7 @@ public class NativeAgent : ModSystem
                             + "\n新增沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
                             + "本轮先检查当前节点on_failure：按已有权限、工具与已查证故障，将适用的局部恢复写入task_plan_patch nodes，保持当前动作运行；可从技能库复用recover_pressure_plate并填写实际工具配置。随后准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到可执行script。"
                             + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
+                            + "若当前后台动作独立运行、所属节点脚本已经退出，用action_queue把该节点的run_script排在当前handle后，args只填task_node。先补齐该节点剩余script并核对uncertain步骤，再排队；父脚本仍在运行则由原脚本继续。"
                             + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"
                             + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
                             + await Context();

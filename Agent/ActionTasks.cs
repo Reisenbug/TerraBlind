@@ -55,6 +55,7 @@ public sealed class ActionTasks
     public bool HasPrimaryControl { get { lock (gate) return handingOff || active != null; } }
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
+    internal string ActiveAttempt { get { lock (gate) { var entry = active ?? attack; return entry == null ? null : entry.Id + ":" + entry.Attempt; } } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
     internal JsonObject LatestFinishedPrimary()
     {

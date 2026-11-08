@@ -242,7 +242,7 @@ static class CodexTests
         var context = new AgentContext();
         var state = JsonNode.Parse("""
             {"player":{"hp":240},"inventory_slots":[{"type":191,"stack":1}],
-             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","status":"active","script":"move()","on_failure":"repair()","conditions":[{"kind":"position","x":10,"y":20}]}]},
+             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","workflow":"walk","status":"active","script":"move()","on_failure":"repair()","conditions":[{"kind":"position","x":10,"y":20}]}]},
              "script_workflows":{"walk":{"revision":5,"running":true,"steps":[{"id":"first","status":"completed","value":{"large":"old result"}}]}},
              "action_tasks":[{"handle":"old","status":"completed","args":{"code":"large old code"}},
                  {"handle":"live","status":"running","tool":"nav_to","args":{"x":10,"y":20}}],
@@ -256,6 +256,7 @@ static class CodexTests
             && first["state"]["action_tasks"].AsArray().Count == 1 && first["state"]["equipment"] == null,
             "automatic context repeated completed effects, program source or duplicate inventory");
         Check(first["state"]["action_tasks"][0]["handle"].ToString() == "live"
+            && first["state"]["task_plan"]["steps"][0]["workflow"]?.ToString() == "walk"
             && first["state"]["last_death"]["npc_type"].GetValue<int>() == 222,
             "compact context lost live ownership or actual death evidence");
         state["player"]["hp"] = 70; state["last_death"] = null;
@@ -331,9 +332,38 @@ static class CodexTests
                 Check(server.Inputs.Count == 2, "unchanged background action caused another periodic model request: "
                     + AgentTools.Actions.Summary().ToJsonString() + " input=" + server.Inputs.Last()[..Math.Min(1000, server.Inputs.Last().Length)]);
             }
+            async Task Pump(Task work)
+            {
+                var until = DateTime.UtcNow.AddSeconds(3);
+                while (!work.IsCompleted)
+                {
+                    Check(DateTime.UtcNow < until, "resumed-action fixture did not release input");
+                    Terraria.Main.LocalPlayer.position.X += .25f;
+                    native.PostUpdateEverything(); await Task.Delay(5);
+                }
+                await work;
+            }
+            var resumed = Task.Run(async () =>
+            {
+                await AgentTools.Actions.Control(handle, "pause", null, default);
+                await AgentTools.Actions.Control(handle, "resume", new JsonObject { ["x"] = 901, ["y"] = 100 }, default);
+            });
+            await Pump(resumed);
+            deadline = DateTime.UtcNow.AddSeconds(20);
+            while (!server.Inputs.Skip(2).Any(input => input.Contains("并行观察")))
+            {
+                Check(DateTime.UtcNow < deadline, "resuming the same handle did not prepare its new execution attempt");
+                Terraria.Main.LocalPlayer.position.X += .25f;
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(AgentTools.Actions.ActiveHandle == handle
+                && AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == handle)["attempt"].GetValue<int>() == 2,
+                "background preparation replaced or restarted the resumed action");
+            Check(server.Inputs.Last().Contains("action_queue"), "resumed-action preparation omitted the existing continuation queue");
+            int preparedRequests = server.Inputs.Count;
             AgentTools.Watches.Emit("low_health", "measured-low-health", new JsonObject { ["hp"] = 20 });
             deadline = DateTime.UtcNow.AddSeconds(3);
-            while (server.Inputs.Count < 3)
+            while (server.Inputs.Count < preparedRequests + 1)
             {
                 Check(DateTime.UtcNow < deadline, "low health did not wake the waiting model");
                 Terraria.Main.LocalPlayer.position.X += .25f;
@@ -346,14 +376,14 @@ static class CodexTests
                 ["y"] = (int)(Terraria.Main.LocalPlayer.position.Y / 16)
             });
             deadline = DateTime.UtcNow.AddSeconds(3);
-            while (server.Inputs.Count < 4)
+            while (server.Inputs.Count < preparedRequests + 2)
             {
                 Check(DateTime.UtcNow < deadline, "new passive resource did not wake the waiting model");
                 Terraria.Main.LocalPlayer.position.X += .25f;
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             for (int i = 0; i < 50; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
-            Check(server.Inputs.Count == 4 && !AgentTools.Watches.HasAdvisories && AgentTools.Actions.ActiveHandle == handle,
+            Check(server.Inputs.Count == preparedRequests + 2 && !AgentTools.Watches.HasAdvisories && AgentTools.Actions.ActiveHandle == handle,
                 "reported resource repeatedly woke the model or stopped navigation");
         }
         finally
