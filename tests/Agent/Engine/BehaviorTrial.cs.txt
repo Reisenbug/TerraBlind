@@ -518,8 +518,8 @@ public sealed class BehaviorTrial : ModSystem
                     ["depends_on"] = new JsonArray(), ["script"] = "return 42;", ["on_failure"] = policy,
                     ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = (int)ItemID.LifeCrystal, ["count"] = 9999 }) }) });
             if (planned["error"] != null) throw new Exception("native probe plan rejected: " + planned);
-            var started = await Call("run_script", new JsonObject { ["task_node"] = "probe", ["workflow"] = "probe-start",
-                ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:3165,y:385}});" });
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "probe", ["tool"] = "action_start",
+                ["args"] = new JsonObject { ["tool"] = "nav_to", ["args"] = new JsonObject { ["x"] = 3165, ["y"] = 385 } } });
             string handle = started["value"]?["handle"]?.ToString() ?? throw new Exception("missing native action handle: " + started);
             async Task<JsonObject> Query() => JsonNode.Parse(await AgentTools.Execute("action_query",
                 new JsonObject { ["handle"] = handle }, default)).AsObject();

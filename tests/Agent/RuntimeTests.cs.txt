@@ -355,6 +355,15 @@ static class RuntimeTests
             await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
             AgentTools.ObserveContinuity();
             Check(AgentTools.Watches.HasInterrupting, "finished inline script permanently suppressed a real execution gap");
+            string originalScript = AgentTools.Plan.Script("travel")["code"].ToString();
+            var single = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["task_node"] = "travel", ["tool"] = "action_control",
+                ["args"] = new JsonObject { ["handle"] = handle, ["command"] = "resume" }
+            }, default)));
+            Check(single["ok"]?.GetValue<bool>() == true && single["value"]?["status"]?.ToString() == "running"
+                && AgentTools.Actions.ActiveHandle == handle && AgentTools.Plan.Script("travel")["code"].ToString() == originalScript,
+                "node-owned single-tool recovery was rejected or replaced its saved script: " + single);
             Console.WriteLine("PASS: anonymous pause/query/resume remains atomic; actual abandoned gaps still request recovery");
         }
         finally
@@ -1709,6 +1718,18 @@ static class RuntimeTests
                 var missed = JsonNode.Parse(await Execute(AgentTools.Execute("use_item",
                     new JsonObject { ["x"] = 12, ["y"] = 34, ["slot"] = 1 }, default)));
                 Check(missed["error"].ToString() == "collect_target_out_of_mining_range", "arrival alone was treated as mining reach");
+                int approachCount = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    Check(path != "/item_use", "collection swung after its positioning navigation failed");
+                    if (path == "/nav_recede") approachCount++;
+                    return (200, path == "/nav_recede_done" ? approachCount == 1 ? "{\"done\":true}"
+                        : "{\"done\":false,\"status\":\"failed\",\"reason\":\"terrain_start_changed:moving\"}" : "{\"ok\":true}");
+                };
+                var failedApproach = await Execute(AgentTools.CollectTarget(12, 34, default));
+                Check(failedApproach["error"]?.ToString() == "cannot_reach_collect_target"
+                    && failedApproach["navigation"]?["reason"]?.ToString() == "terrain_start_changed:moving",
+                    "failed positioning was mislabeled as a proven mining-range failure: " + failedApproach);
             }
             finally
             {

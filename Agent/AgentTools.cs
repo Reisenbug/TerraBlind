@@ -869,10 +869,10 @@ public static partial class AgentTools
                 }
                 if (Text(args, "task_node") != "")
                 {
-                    bool temporary = args["code"] != null;
-                    if (args["program"] != null || args["tool"] != null
-                        || !temporary && args["workflow"] != null || temporary && Text(args, "workflow") == "")
-                        throw new ArgumentException("task_node执行原脚本；临时恢复须同时提供code和独立workflow，不支持program/tool。");
+                    bool temporary = args["code"] != null || args["tool"] != null;
+                    if (args["program"] != null || !temporary && args["workflow"] != null
+                        || args["code"] != null && Text(args, "workflow") == "")
+                        throw new ArgumentException("task_node执行原脚本或tool/args单工具；代码恢复须同时提供code和独立workflow，不支持program。");
                     string nodeId = Text(args, "task_node");
                     var nodeScript = await NativeAgent.OnMain(() =>
                     {
@@ -1689,7 +1689,9 @@ public static partial class AgentTools
             if (!reachable && !Bool(target, "solid"))
             {
                 approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["mode"] = "stand" }, token);
-                reachable = approach["done"]?.GetValue<bool>() == true && await NativeAgent.OnMain(InMiningRange, token);
+                if (approach["done"]?.GetValue<bool>() != true)
+                    return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
+                reachable = await NativeAgent.OnMain(InMiningRange, token);
             }
             if (!reachable) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
                 ["x"] = x, ["y"] = y, ["navigation"] = approach };
