@@ -490,6 +490,49 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_SCRIPT_GAP_PROBE") == "1")
+        {
+            await OnMain(() => { NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false; return true; });
+            var planned = await Call("task_plan", new JsonObject { ["goal"] = "observe an unfinished action", ["mode"] = "dag",
+                ["steps"] = new JsonArray(new JsonObject { ["id"] = "probe", ["description"] = "retain missing successor evidence",
+                    ["depends_on"] = new JsonArray(), ["script"] = "return {status:'yield'};",
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = 400 }) }) });
+            string workflow = planned["steps"][0]["workflow"].ToString();
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "probe", ["background"] = true });
+            string handle = started["handle"].ToString();
+            JsonObject finishedAction;
+            do
+            {
+                await Task.Delay(20);
+                finishedAction = JsonNode.Parse(await AgentTools.Execute("action_query", new JsonObject { ["handle"] = handle }, default)).AsObject();
+            } while (finishedAction["status"]?.ToString() == "running");
+            await OnMain(() =>
+            {
+                typeof(AgentTools).GetMethod("ObserveContinuity", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(null, null);
+                return true;
+            });
+            var before = await Call("get_state", new JsonObject());
+            if (before["execution_continuity"]?["status"]?.ToString() != "execution_gap")
+                throw new Exception("native gap probe did not reach the actual missing-successor state");
+            var read = await Call("run_script", new JsonObject
+                { ["code"] = "return {state:tool('get_state').permanent_max_health,progress:tool('script_progress',{workflow:'" + workflow + "'}),action:tool('action_query',{handle:'" + handle + "'})};" });
+            var after = await Call("get_state", new JsonObject());
+            if (read["ok"]?.GetValue<bool>() != true || read["tool_calls"]?.GetValue<int>() != 3
+                || read["failure"] != null || read["value"]?["action"]?["status"]?.ToString() != "failed"
+                || after["task_plan"]?["status"]?.ToString() != "active"
+                || after["watch"]?["pending"].AsArray().Any(e => e["kind"]?.ToString() == "execution_gap") != true)
+                throw new Exception("gap observation failed or erased the unfinished task: " + read);
+            await Call("decision_point", new JsonObject { ["reason"] = "explicit review still takes precedence" });
+            var interrupted = await Call("run_script", new JsonObject { ["code"] = "return tool('get_state');" });
+            if (interrupted["tool_calls"]?.GetValue<int>() != 0
+                || interrupted["value"]?["wake"]?["events"].AsArray().Any(e => e["kind"]?.ToString() == "decision_point") != true)
+                throw new Exception("explicit review stopped yielding: " + interrupted);
+            File.WriteAllText(Path.Combine(Main.SavePath, "script-gap-probe.json"), new JsonObject
+            { ["before"] = before, ["read"] = read, ["after"] = after, ["explicit_review"] = interrupted, ["model_calls"] = 0 }.ToJsonString());
+            Console.WriteLine("SCRIPT_GAP_PASS observed_tools=3 pending_gap_retained=true explicit_review_yields=true native_engine=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_ITEM_TARGET_PROBE") == "1")
         {
             await OnMain(() =>
