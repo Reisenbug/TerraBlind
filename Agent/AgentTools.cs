@@ -1398,6 +1398,11 @@ public static partial class AgentTools
                 result = await Call("/mine", new JsonObject { ["dir"] = Text(args, "dir"),
                     ["target_wx"] = Int(args, "target_x"), ["target_wy"] = Int(args, "target_y") }, token);
                 if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token);
+                if (!Rejected(result) && Text(result, "outcome") != "done")
+                {
+                    result["ok"] = false;
+                    result["error"] = "mining_incomplete";
+                }
                 break;
             case "use_item":
                 var usedItem = await NativeAgent.OnMain(() =>

@@ -2142,6 +2142,7 @@ static class RuntimeTests
             await TestWakeHandoff(true);
             await TestEventDelivery();
             await TestBackgroundBossObservation();
+            await TestMineTerminalOutcomes();
             await TestMineVeinInventoryLoop();
             await TestContinuedReview();
             await TestPassiveOpportunity();
@@ -3168,6 +3169,52 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestMineTerminalOutcomes()
+    {
+        var handler = HttpServerSystem.Handler;
+        var tile = Game.tile[100, 100];
+        string workflow = "mine-terminal-outcome";
+        try
+        {
+            AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+            Game.tile[100, 100] = default;
+            foreach (string outcome in new[] { "out_of_box", "stalled", "no_tiles", "unbreakable", "out_of_reach", "no_pickaxe", "stopped", "lava_risk", "done" })
+            {
+                AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
+                AgentTools.Workflows.Remove(workflow + "-background");
+                HttpServerSystem.Handler = (path, _) => (200, path == "/mine_status"
+                    ? new JsonObject { ["outcome"] = outcome, ["running"] = false, ["mined"] = 2,
+                        ["reason"] = "measured terminal state" }.ToJsonString() : "{\"ok\":true}");
+                var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["workflow"] = workflow, ["code"] = "return step('tunnel',()=>tool('mine',{dir:'right',target_x:100,target_y:100}));" }, default)));
+                bool success = outcome == "done";
+                Check(result["ok"]?.GetValue<bool>() == success && AgentTools.Workflows[workflow].Completed == (success ? 1 : 0),
+                    "unfinished tunnel was checkpointed as complete: " + result);
+                if (!success)
+                {
+                    Check(result["failure"]?["evidence"]?["outcome"]?.ToString() == outcome
+                        && result["failure"]["evidence"]["reason"].ToString() == "measured terminal state"
+                        && AgentTools.Recovery.Snapshot()["latest"]?["evidence"]?["outcome"]?.ToString() == outcome,
+                        "mining recovery lost its actual termination cause: " + result);
+                    AgentTools.Recovery.Reset(); AgentTools.Watches.Reset();
+                    string handle = AgentTools.Actions.Start("run_script", new JsonObject
+                    { ["workflow"] = workflow + "-background", ["code"] = "return tool('mine',{dir:'right',target_x:100,target_y:100});" }, default)["handle"].ToString();
+                    await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                    var action = await Execute(AgentTools.Actions.Query(handle, 0, default));
+                    Check(action["status"].ToString() == "failed" && action["result"]["value"]["mined"].GetValue<int>() == 2,
+                        "background mining hid its failure or partial work: " + action);
+                }
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            AgentTools.Workflows.Remove(workflow); AgentTools.Workflows.Remove(workflow + "-background");
+            HttpServerSystem.Handler = handler; Game.tile[100, 100] = tile;
+        }
+        Console.WriteLine("PASS: unfinished tunnels fail scripts and background actions while preserving actual mining evidence");
     }
 
     static async Task TestMineVeinInventoryLoop()
