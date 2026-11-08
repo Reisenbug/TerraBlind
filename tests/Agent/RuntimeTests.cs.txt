@@ -2700,6 +2700,20 @@ static class RuntimeTests
 
     static async Task TestEventDelivery()
     {
+        var handoffWatch = new AgentWatch();
+        handoffWatch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_drop", "nearby_tile", "action_finished"),
+            ["tile_types"] = new JsonArray(61), ["passive_events"] = new JsonArray("nearby_drop") });
+        for (int i = 0; i < 12; i++) handoffWatch.Emit("nearby_drop", "passive-" + i,
+            new JsonObject { ["detail"] = new string('x', 2000) });
+        handoffWatch.Emit("action_finished", "old-completion", new JsonObject { ["status"] = "completed",
+            ["detail"] = new string('x', 2000) });
+        handoffWatch.Emit("nearby_tile", "current-blocker", new JsonObject { ["tile_type"] = 61 });
+        handoffWatch.ExecutionFault(new JsonObject { ["reason"] = "missing_next_action" });
+        var handoff = handoffWatch.TakeModelInterrupts(8);
+        Check(handoff.Count == 2 && handoff.Any(e => e["kind"]?.ToString() == "execution_gap")
+            && handoff.Any(e => e["kind"]?.ToString() == "nearby_tile") && handoff.ToJsonString().Length < 1000
+            && handoffWatch.PendingCount == 13 && !handoffWatch.HasModelInterrupting,
+            "model handoff resent old completions, hid its actual blocker or consumed passive evidence");
         var orderedWatch = new AgentWatch();
         orderedWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_chest\",\"nearby_tile\",\"low_health\"],\"tile_types\":[12]}").AsObject());
         orderedWatch.Observe(new JsonObject

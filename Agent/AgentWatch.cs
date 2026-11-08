@@ -77,8 +77,9 @@ public sealed class AgentWatch
     }
     public int PendingCount => pending.Count;
     public bool HasInterrupting => pending.Any(Interrupting);
-    internal bool HasModelInterrupting => pending.Any(e => Interrupting(e)
-        && (!LocalDelivery || e["kind"]?.ToString() is not ("nearby_tile" or "nearby_chest" or "nearby_drop")));
+    internal bool HasModelInterrupting => pending.Any(ModelInterrupting);
+    bool ModelInterrupting(JsonObject e) => Interrupting(e)
+        && (!LocalDelivery || e["kind"]?.ToString() is not ("nearby_tile" or "nearby_chest" or "nearby_drop"));
     internal bool HasRecoveryBlocker => pending.Any(RecoveryBlocker);
     bool RecoveryBlocker(JsonObject e) => e["kind"]?.ToString() != "execution_gap" && Interrupting(e);
     bool Interrupting(JsonObject e) => e["wake_deferred"]?.GetValue<bool>() != true
@@ -310,6 +311,9 @@ public sealed class AgentWatch
 
     public JsonArray Take() => Take(int.MaxValue);
     public JsonArray Take(int maxEvents, bool recoveryOnly = false)
+        => TakeMatching(maxEvents, recoveryOnly ? RecoveryBlocker : null);
+    internal JsonArray TakeModelInterrupts(int maxEvents) => TakeMatching(maxEvents, ModelInterrupting);
+    JsonArray TakeMatching(int maxEvents, Func<JsonObject, bool> filter)
     {
         var result = new JsonArray();
         if (maxEvents < pending.Count)
@@ -333,7 +337,7 @@ public sealed class AgentWatch
         int remaining = pending.Count;
         while (result.Count < maxEvents && remaining-- > 0 && pending.TryDequeue(out var item))
         {
-            if (recoveryOnly && !RecoveryBlocker(item)) { pending.Enqueue(item); continue; }
+            if (filter != null && !filter(item)) { pending.Enqueue(item); continue; }
             if (assessOpportunity != null && item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop")
             {
                 if (assessed++ < 6) item["assessment"] = assessOpportunity(item);
