@@ -2367,6 +2367,24 @@ static class RuntimeTests
                     Check(AgentTools.ExecutionContinuity?["status"]?.ToString() == "execution_gap"
                         && AgentTools.ExecutionContinuity["last_tool"]?.ToString() == "nav_to",
                         "execution gap lost the last action evidence");
+                    Check(AgentTools.ControlSession.Begin("mine", null, out long mining) == null,
+                        "foreground mining failed to acquire input");
+                    try
+                    {
+                        AgentTools.ObserveContinuity();
+                        Check(AgentTools.ExecutionContinuity?["status"]?.ToString() == "executing",
+                            "active foreground mining was counted as waiting for a model");
+                    }
+                    finally { AgentTools.ControlSession.End(mining); }
+                    Check(AgentTools.ControlSession.Begin("fight", null, out long defense) == null,
+                        "parallel defense failed to acquire input");
+                    try
+                    {
+                        AgentTools.ObserveContinuity();
+                        Check(AgentTools.ExecutionContinuity?["status"]?.ToString() == "execution_gap",
+                            "parallel defense concealed a stalled primary task");
+                    }
+                    finally { AgentTools.ControlSession.End(defense); }
                     AgentTools.Stop();
                     await PumpUntil(() => !AgentTools.Actions.HasActive);
                     continue;

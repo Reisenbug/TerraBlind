@@ -14,6 +14,7 @@ public sealed class AgentControlSession
     ControlBehavior[] delegates = Array.Empty<ControlBehavior>();
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
+    public bool PrimaryActive => current != 0;
     public bool Active => current != 0 || attackTicket != 0;
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
