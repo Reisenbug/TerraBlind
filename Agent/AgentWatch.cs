@@ -8,8 +8,14 @@ namespace TerraBlind;
 public sealed class AgentWatch
 {
     readonly Func<JsonObject, JsonObject> assessOpportunity;
+    readonly Func<long> clock;
+    long nextOpportunityReview;
     JsonObject navigation;
-    public AgentWatch(Func<JsonObject, JsonObject> assessOpportunity = null) => this.assessOpportunity = assessOpportunity;
+    public AgentWatch(Func<JsonObject, JsonObject> assessOpportunity = null, Func<long> clock = null)
+    {
+        this.assessOpportunity = assessOpportunity;
+        this.clock = clock ?? (() => Environment.TickCount64);
+    }
     readonly HashSet<string> events = new(), seen = new();
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<string> visibleBosses = new();
@@ -347,12 +353,16 @@ public sealed class AgentWatch
                 ["key"] = item["key"]?.DeepClone(), ["evidence"] = item["evidence"]?.DeepClone(),
                 ["navigation"] = item["navigation"]?.DeepClone() });
         }
+        if (result.Any(item => item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop"))
+            nextOpportunityReview = clock() + 15000;
         return result;
     }
 
     bool IsAdvisory(JsonObject item)
     {
         string kind = item["kind"]?.ToString();
+        if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop"
+            && (clock() < nextOpportunityReview || item["wake_deferred"]?.GetValue<bool>() == true)) return false;
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop"
             && item["evidence"]?["x"] != null && item["evidence"]["y"] != null
             && lastObservation?["pos"]?["x"] != null && lastObservation["pos"]["y"] != null)
@@ -437,6 +447,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
     public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
 }

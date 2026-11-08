@@ -211,7 +211,8 @@ static class RuntimeTests
         Check(!watch.HasAdvisories && watch.PendingCount == 3, "handled failure kept waking the model or lost evidence");
         watch.Emit("suffocating", "danger", new JsonObject());
         Check(watch.HasInterrupting, "notification handling suppressed real danger");
-        var local = new AgentWatch();
+        long now = 1000;
+        var local = new AgentWatch(clock: () => now);
         local.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile"),
             ["tile_types"] = new JsonArray(1), ["passive_events"] = new JsonArray("nearby_tile"), ["radius"] = 25 });
         JsonObject Position(int x) => new() { ["pos"] = new JsonObject { ["x"] = x * 16, ["y"] = 0 } };
@@ -222,6 +223,21 @@ static class RuntimeTests
         Check(!local.HasAdvisories && local.PendingCount == 1, "old faraway opportunity kept occupying model reviews or lost history");
         local.Observe(Position(0));
         Check(local.HasAdvisories, "returning to an unreviewed opportunity hid it permanently");
+        local.Advisories();
+        local.Emit("nearby_tile", "new-local-cell", new JsonObject { ["x"] = 3, ["y"] = 2 });
+        Check(!local.HasAdvisories && local.PendingCount == 2,
+            "ordinary discoveries requested consecutive model turns instead of remaining available to scripts");
+        now += 14999;
+        Check(!local.HasAdvisories, "opportunity batching expired before its measured interval");
+        now++;
+        Check(local.HasAdvisories && local.Advisories().Count == 1,
+            "batched opportunity was lost after its review interval");
+        local.Configure(new JsonObject { ["events"] = new JsonArray("action_finished", "suffocating", "low_health", "inventory_full") });
+        local.Emit("action_finished", "new-failure", new JsonObject { ["status"] = "failed" });
+        Check(local.HasAdvisories && local.Advisories().Count == 1, "opportunity batching delayed an actual failure");
+        local.Emit("low_health", "new-health", new JsonObject { ["hp"] = 10 });
+        local.Emit("suffocating", "new-danger", new JsonObject());
+        Check(local.HasHealthNotice && local.HasInterrupting, "opportunity batching delayed health or survival events");
         Console.WriteLine("PASS: action lifecycle and inventory growth notify without pausing control; actual danger remains interrupting");
     }
 
@@ -2214,7 +2230,8 @@ static class RuntimeTests
                 AgentTools.Stop();
                 await PumpUntil(() => !AgentTools.Actions.HasActive);
             }
-            var watches = new AgentWatch();
+            long advisoryTime = 0;
+            var watches = new AgentWatch(clock: () => advisoryTime);
             for (int i = 0; i < 6; i++) watches.Request("opportunity");
             watches.Take();
             watches.ExecutionFault(new JsonObject { ["reason"] = "no_action" });
@@ -2224,6 +2241,9 @@ static class RuntimeTests
             watches.Reset(); watches.EnsureDefaults();
             for (int i = 0; i < 30; i++) watches.Emit("nearby_chest", i.ToString(), new JsonObject { ["x"] = i, ["y"] = 1 });
             var advice = watches.Advisories();
+            Check(watches.Advisories().Count == 0 && watches.PendingCount == 30,
+                "ordinary opportunity batch immediately requested another model turn or consumed script evidence");
+            advisoryTime += 15000;
             var nextAdvice = watches.Advisories();
             Check(advice.Count == 4 && nextAdvice.Count == 4 && watches.PendingCount == 30 && !watches.HasInterrupting
                 && advice.All(a => nextAdvice.All(b => a["id"].ToString() != b["id"].ToString())),

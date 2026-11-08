@@ -27,7 +27,7 @@ public static class AgentScript
             + "只有一个就绪DAG节点时，带code和独立workflow的临时恢复自动归属该节点，返回task_node；多个就绪节点时显式指定。";
         var inventoryWatch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
         inventoryWatch["description"] = inventoryWatch["description"].ToString()
-            + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。JS处理工具结果后继续，切换控制用action_control或decision_point。";
+            + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。普通沿途机会每15秒合并交付一批后台观察，JS可即时读取完整事件；危险和失败独立交付。JS处理工具结果后继续，切换控制用action_control或decision_point。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
