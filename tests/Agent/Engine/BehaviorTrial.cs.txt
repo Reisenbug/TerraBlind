@@ -490,6 +490,55 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_ITEM_TARGET_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                AgentPermissions.Reset(); AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
+                p.position = new Vector2(50638.258f, 6112.1504f); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                return true;
+            });
+            async Task<JsonObject> Target() => await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                int cx = (int)(p.Center.X / 16), cy = (int)(p.Center.Y / 16);
+                int x = cx + 2, y = cy;
+                Main.tile[x, y].ClearTile();
+                WorldGen.PlaceTile(x, y, TileID.Stone, forced: true);
+                var tile = Main.tile[x, y];
+                if (!tile.HasTile || tile.TileType != TileID.Stone || !Reach.CanMine(p, x, y))
+                    throw new Exception("native mining fixture is not reachable");
+                return new JsonObject { ["x"] = x, ["y"] = y, ["type"] = (int)tile.TileType,
+                    ["within_native_reach"] = Reach.CanMine(p, x, y) };
+            });
+            var ordinaryTarget = await Target();
+            async Task<JsonObject> Mine(JsonObject targetTile, bool strict)
+            {
+                var args = new JsonObject { ["slot"] = 0, ["x"] = targetTile["x"].DeepClone(), ["y"] = targetTile["y"].DeepClone() };
+                if (strict) args["strict"] = true;
+                return await Call("run_script", new JsonObject { ["code"] = "return tool('use_item'," + args.ToJsonString() + ");" });
+            }
+            var ordinary = await Mine(ordinaryTarget, false);
+            bool removed = await OnMain(() => !Main.tile[ordinaryTarget["x"].GetValue<int>(), ordinaryTarget["y"].GetValue<int>()].HasTile);
+            var strictTarget = await Target();
+            var exact = await Mine(strictTarget, true);
+            bool exactRemoved = await OnMain(() => !Main.tile[strictTarget["x"].GetValue<int>(), strictTarget["y"].GetValue<int>()].HasTile);
+            File.WriteAllText(Path.Combine(Main.SavePath, "item-target-probe.json"), new JsonObject
+            {
+                ["ordinary_target"] = ordinaryTarget, ["ordinary_result"] = ordinary, ["ordinary_removed"] = removed,
+                ["strict_target"] = strictTarget.DeepClone(), ["strict_result"] = exact, ["strict_removed"] = exactRemoved,
+                ["model_calls"] = 0
+            }.ToJsonString());
+            if (!removed || !exactRemoved) throw new Exception("native target selection failed; ordinary=" + removed + " strict=" + exactRemoved);
+            Console.WriteLine("ITEM_TARGET_PASS ordinary_removed=true strict_removed=true native_engine=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PREPARED_RECOVERY_PROBE") == "1")
         {
             const int tx = 3161, ty = 387;

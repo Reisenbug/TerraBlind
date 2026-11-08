@@ -320,7 +320,7 @@ namespace TerraBlind
 			else if (it.pick > 0) ok = (x, y) => Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType] && !Main.tileHammer[Main.tile[x, y].TileType];
 			else return false;   // not a collecting tool, don't snap
 
-			if (InBounds(wx, wy) && ok(wx, wy)) return false;   // already on a valid tile, no snap needed
+			if (InBounds(wx, wy) && ok(wx, wy)) return true;   // already on a valid tile, no snap needed
 
 			int bestX = -1, bestY = -1, bestD = int.MaxValue;
 			for (int dx = -SnapRadius; dx <= SnapRadius; dx++)
