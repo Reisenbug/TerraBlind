@@ -490,6 +490,42 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PLACE_FAILURE_PROBE") == "1")
+        {
+            var failure = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+                AgentPermissions.Dodge = false; Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                int x = Main.spawnTileX, y = Main.spawnTileY;
+                for (int tx = x - 8; tx <= x + 8; tx++)
+                for (int ty = y - 8; ty <= y + 5; ty++)
+                {
+                    var tile = Main.tile[tx, ty]; tile.ClearEverything();
+                    if (ty >= y + 3) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+                }
+                foreach (var npc in Main.npc) npc.active = false;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.WoodPlatform); p.inventory[0].stack = 30;
+                p.position = new Vector2((x + 3) * 16, (y + 3) * 16 - p.height); p.velocity = Vector2.Zero;
+                if (!PlaceAnywhere.Start("94", x, y, out string reason)) throw new Exception(reason);
+                Unstick.Handle("placeany", new Blocker(BlockKind.Hopeless, x, y, "native failure propagation probe"));
+                return new JsonObject { ["started_tick"] = Main.GameUpdateCount };
+            });
+            await Task.Delay(100);
+            await OnMain(() =>
+            {
+                failure["elapsed_frames"] = Main.GameUpdateCount - failure["started_tick"].GetValue<uint>();
+                failure["running"] = PlaceAnywhere.IsRunning;
+                failure["outcome"] = PlaceAnywhere.Outcome; failure["reason"] = PlaceAnywhere.Reason;
+                PlaceAnywhere.Stop(); return true;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "place-failure.json"), failure.ToJsonString());
+            if (failure["running"].GetValue<bool>() || failure["outcome"].ToString() != "stuck")
+                throw new Exception("placement continued after its helper failed: " + failure);
+            Console.WriteLine("PLACE_FAILURE_PASS native_parent=true injected_child_failure=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_PLATFORM_CHAIN_PROBE") == "1")
         {
             int x = Main.spawnTileX - 3, y = Main.spawnTileY - 3;

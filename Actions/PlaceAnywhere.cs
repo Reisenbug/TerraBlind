@@ -22,6 +22,7 @@ namespace TerraBlind
 		private static int _frames, _cellFrames;
 		private static readonly HashSet<(int, int)> _bad = new();
 		private static int _rebuilds;
+		private static uint _failureRevision;
 		private static int _lastPx = int.MinValue;   // 上一帧人在哪一列,判"推了却没挪窝"
 		private static int _blockedFrames;
 
@@ -52,6 +53,7 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
+			_failureRevision = Unstick.FailureRevision;
 			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false; _where = ""; _heartbeat = 0;
 			Outcome = "running"; Reason = "";
 			if (Occupied(tx, ty))
@@ -316,6 +318,12 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			if (_ph != Ph.Step && _ph != Ph.Move) return;
+			if (_failureRevision != Unstick.FailureRevision)
+			{
+				_failureRevision = Unstick.FailureRevision;
+				if (Unstick.FailChain.Contains("placeany:") || Unstick.FailChain.Contains("placeany-furn:"))
+				{ Fail("helper_failed:" + Unstick.FailChain); return; }
+			}
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > MaxFrames) { Fail($"超时 接到第{_idx}/{_chain.Count}格"); return; }
