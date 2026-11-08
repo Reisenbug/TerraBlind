@@ -1819,6 +1819,7 @@ public static partial class AgentTools
                 result["mode_adjustment"] = "non_solid_target_use_reach_then_use_tool";
             if (Bool(result, "done") && !arrived)
             { result["done"] = false; result["status"] = "stopped_short"; result["dist"] = distance; }
+            if (!Bool(result, "done") && !Rejected(result)) result["error"] = "navigation_incomplete";
             return result;
         }, token);
     }

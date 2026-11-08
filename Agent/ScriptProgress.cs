@@ -27,7 +27,6 @@ public sealed class ScriptProgress
     public bool ReviewRequested { get { lock (gate) return !running && last?["value"] is JsonObject value && value["wake"] is JsonObject; } }
 
     internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"
-        || result["done"]?.ToString() == "false" || result["status"]?.ToString() is "failed" or "stopped_short"
         || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress";
 
     internal bool HasPreparedContinuation(string source)

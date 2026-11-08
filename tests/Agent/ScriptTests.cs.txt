@@ -641,31 +641,13 @@ static class ScriptTests
             && blockedPlacement["failure"]["evidence"]["placed"].GetValue<int>() == 0,
             "script failure handoff lost the specific object occupying the construction cell");
         var stalledProgress = new ScriptProgress();
-        foreach (string failure in new[]
-        {
-            "{\"done\":false,\"reason\":\"no_safe_terrain_action\"}",
-            "{\"status\":\"failed\",\"reason\":\"no_safe_terrain_action\"}",
-            "{\"status\":\"stopped_short\",\"reason\":\"no_safe_terrain_action\"}"
-        })
-        {
-            var failedNavigationProgress = new ScriptProgress();
-            int callsAfterFailure = 0;
-            var failedNavigation = await AgentScript.Run(
-                "step('approach',()=>tool('nav_to')); return step('descend',()=>tool('mine'));", 5, (_, _) => { },
-                (name, _, _) =>
-                {
-                    if (name != "nav_to") callsAfterFailure++;
-                    return Task.FromResult(name == "nav_to" ? failure : "{\"outcome\":\"done\"}");
-                }, _ => Task.CompletedTask, default, failedNavigationProgress);
-            Check(failedNavigation["ok"]?.GetValue<bool>() == false && callsAfterFailure == 0
-                && failedNavigationProgress.Completed == 0
-                && failedNavigation["failure"]?["evidence"]?["reason"]?.ToString() == "no_safe_terrain_action",
-                "failed navigation was checkpointed and allowed the next terrain action: " + failedNavigation);
-            var evidence = failedNavigation["failure"]["evidence"];
-            Check(JsonNode.DeepEquals(evidence["done"], JsonNode.Parse(failure)["done"])
-                && JsonNode.DeepEquals(evidence["status"], JsonNode.Parse(failure)["status"]),
-                "navigation handoff discarded the native completion flags");
-        }
+        var failedActionObservationProgress = new ScriptProgress();
+        var failedActionObservation = await AgentScript.Run("return step('inspect',()=>tool('action_query'));", 5,
+            (_, _) => { }, (_, _, _) => Task.FromResult("{\"handle\":\"failed-navigation\",\"status\":\"failed\",\"result\":{\"done\":false}}"),
+            _ => Task.CompletedTask, default, failedActionObservationProgress);
+        Check(failedActionObservation["ok"]?.GetValue<bool>() == true && failedActionObservationProgress.Completed == 1
+            && failedActionObservation["failure"] == null && failedActionObservation["value"]?["status"]?.ToString() == "failed",
+            "reading a failed action was incorrectly treated as executing a failed command: " + failedActionObservation);
         var stalledNavigation = await AgentScript.Run("step('walk',()=>tool('nav_to',{x:20,y:30}));", 5, (_, _) => { },
             (_, _, _) => Task.FromResult("""
                 {"outcome":"no_progress","reason":"local_oscillation","progress_idle_seconds":8,

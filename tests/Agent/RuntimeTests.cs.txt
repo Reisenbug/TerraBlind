@@ -2153,6 +2153,7 @@ static class RuntimeTests
             await TestEventDelivery();
             await TestBackgroundBossObservation();
             await TestMineTerminalOutcomes();
+            await TestNavigationTerminalOutcomes();
             await TestMineVeinInventoryLoop();
             await TestContinuedReview();
             await TestPassiveOpportunity();
@@ -3197,6 +3198,56 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
+    }
+
+    static async Task TestNavigationTerminalOutcomes()
+    {
+        var handler = HttpServerSystem.Handler;
+        var position = Game.LocalPlayer.position;
+        const string workflow = "navigation-terminal-outcome";
+        try
+        {
+            AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+            foreach (string outcome in new[] { "failed", "stopped_short", "done" })
+            {
+                AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
+                Game.LocalPlayer.position = new(192, 544);
+                int targetX = outcome == "stopped_short" ? 100 : 12;
+                int followingActions = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/act") followingActions++;
+                    return (200, path == "/nav_recede_done" ? outcome == "failed"
+                        ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"no_safe_terrain_action\"}"
+                        : "{\"done\":true,\"status\":\"done\"}"
+                        : path == "/act_status" ? "{\"active\":false,\"outcome\":\"done\"}" : "{\"accepted\":true}");
+                };
+                var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                {
+                    ["workflow"] = workflow,
+                    ["code"] = "step('approach',()=>tool('nav_to',{x:" + targetX + ",y:34,exact:true}));return step('continue',()=>tool('act',{steps:[{keys:['right'],until:{frames:1}}]}));"
+                }, default)));
+                bool success = outcome == "done";
+                Check(result["ok"]?.GetValue<bool>() == success && followingActions == (success ? 1 : 0)
+                    && AgentTools.Workflows[workflow].Completed == (success ? 2 : 0),
+                    "navigation case " + outcome + " was checkpointed or allowed the wrong next action: " + result);
+                if (!success)
+                {
+                    var evidence = result["failure"]?["evidence"];
+                    Check(evidence?["error"]?.ToString() == "navigation_incomplete"
+                        && evidence["done"]?.GetValue<bool>() == false && evidence["status"]?.ToString() == outcome,
+                        "navigation failure lost the native completion flags: " + result);
+                    if (outcome == "failed") Check(evidence["reason"]?.ToString() == "no_safe_terrain_action",
+                        "native failure reason was replaced");
+                }
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+            AgentTools.Workflows.Remove(workflow); HttpServerSystem.Handler = handler; Game.LocalPlayer.position = position;
+        }
+        Console.WriteLine("PASS: navigation completion is checked at the command boundary before checkpointing and subsequent effects");
     }
 
     static async Task TestMineTerminalOutcomes()
