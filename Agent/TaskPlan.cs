@@ -57,6 +57,7 @@ public sealed class AgentTaskPlan
             if (dag)
             {
                 copy["script"] = step["script"].DeepClone();
+                if (step["on_failure"] != null) copy["on_failure"] = step["on_failure"].GetValue<string>();
                 copy["workflow"] = "dag-" + Guid.NewGuid().ToString("N");
             }
             foreach (var condition in conditions)
@@ -184,19 +185,21 @@ public sealed class AgentTaskPlan
             var step = revised.FirstOrDefault(s => s["id"]?.ToString() == id);
             if (step == null || !seen.Add(id) || step["status"]?.ToString() == "completed")
                 throw new InvalidOperationException("只能修改已有未完成节点，不得重复修改。");
-            if (change["script"] == null && change["depends_on"] == null)
-                throw new ArgumentException("需要script或depends_on修改。");
+            if (change["script"] == null && change["depends_on"] == null && change["on_failure"] == null)
+                throw new ArgumentException("需要script、depends_on或on_failure修改。");
             if (change["script"] != null)
             {
                 if (string.IsNullOrWhiteSpace(change["script"].GetValue<string>())) throw new ArgumentException("script不能为空。");
                 step["script"] = change["script"].DeepClone();
             }
+            if (change["on_failure"] != null) step["on_failure"] = change["on_failure"].GetValue<string>();
             if (change["depends_on"] != null)
                 step["depends_on"] = (change["depends_on"] as JsonArray ?? throw new ArgumentException("depends_on需要数组。")).DeepClone();
             var history = step["revisions"] as JsonArray;
             if (history == null) step["revisions"] = history = new JsonArray();
             history.Add(new JsonObject { ["reason"] = reason, ["revision"] = _revision,
                 ["before_script"] = _steps.First(s => s["id"]?.ToString() == id)["script"].DeepClone(),
+                ["before_on_failure"] = _steps.First(s => s["id"]?.ToString() == id)["on_failure"]?.DeepClone(),
                 ["before_dependencies"] = _steps.First(s => s["id"]?.ToString() == id)["depends_on"].DeepClone() });
         }
         revised.AddRange(added);

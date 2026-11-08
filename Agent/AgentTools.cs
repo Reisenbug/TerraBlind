@@ -127,6 +127,14 @@ public static partial class AgentTools
         bool verified = previous["status"]?.ToString() == "completed"
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
         bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString()) == true;
+        string recovery = previous["on_failure"]?.ToString();
+        if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery))
+        {
+            if (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating) return;
+            continuedActions.Add(attempt);
+            StartPreparedNode(owner, handle, token, recovery);
+            return;
+        }
         continuedActions.Add(attempt);
         if (!verified && !prepared && (workflow == null || workflow.Yielded || workflow.ReviewRequested
             || action["status"]?.ToString() != "completed")) return;
@@ -145,21 +153,39 @@ public static partial class AgentTools
         StartPreparedNode(next, handle, token);
     }
 
-    static void StartPreparedNode(string next, string handle, CancellationToken token)
+    static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null)
     {
         LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
         var report = LastContinuation;
+        if (recovery != null) report["mode"] = "recovery";
         continuation = Task.Run(async () =>
         {
+            string recoveryWorkflow = null;
             try
             {
-                string result = await Execute("run_script", new JsonObject { ["task_node"] = next }, token);
+                var args = new JsonObject { ["task_node"] = next };
+                if (recovery != null)
+                {
+                    var failure = await Actions.Query(handle, 0, token);
+                    recoveryWorkflow = await NativeAgent.OnMain(() =>
+                    {
+                        string id = Plan.Script(next)["workflow"] + "-recovery";
+                        Workflows.Remove(id);
+                        return id;
+                    }, token);
+                    args["code"] = "const failure=tool('action_query',{handle:" + JsonValue.Create(handle).ToJsonString() + "});\n" + recovery;
+                    args["workflow"] = recoveryWorkflow;
+                    report["failed_attempt"] = failure["attempt"]?.DeepClone();
+                }
+                string result = await Execute("run_script", args, token);
                 await NativeAgent.OnMain(() =>
                 {
                     var returned = JsonNode.Parse(result);
                     report["status"] = "returned"; report["ok"] = returned?["ok"]?.DeepClone();
                     report["error"] = returned?["error"]?.DeepClone();
+                    if (recovery != null && returned?["value"] is JsonObject recoveryValue)
+                        report["recovery_reason"] = recoveryValue["reason"]?.DeepClone();
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
                         && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null))
                         ReportExecutionGap(report, "script_requires_review");
@@ -185,6 +211,17 @@ public static partial class AgentTools
                     ReportExecutionGap(report, "script_failed");
                     return true;
                 }, default);
+            }
+            finally
+            {
+                if (recoveryWorkflow != null)
+                    await NativeAgent.OnMain(() =>
+                    {
+                        if (Workflows.TryGetValue(recoveryWorkflow, out var completed))
+                            report["recovery_execution"] = completed.Summary()["last_execution"]?.DeepClone();
+                        Workflows.Remove(recoveryWorkflow);
+                        return true;
+                    }, default);
             }
         }, token);
     }
@@ -1047,7 +1084,8 @@ public static partial class AgentTools
                     if (args["changes"] != null) throw new ArgumentException("nodes和changes不能同时提供。");
                     result = await NativeAgent.OnMain(() =>
                     {
-                        var edited = (args["nodes"] as JsonArray ?? new JsonArray()).Select(n => n["id"]?.ToString()).ToHashSet();
+                        var edited = (args["nodes"] as JsonArray ?? new JsonArray())
+                            .Where(n => n["script"] != null || n["depends_on"] != null).Select(n => n["id"]?.ToString()).ToHashSet();
                         if (Actions.Summary().Any(a => a["tool"]?.ToString() != "fight"
                             && a["status"]?.ToString() is "running" or "queued" && edited.Contains(a["task_node"]?.ToString())))
                             throw new InvalidOperationException("修改执行中节点须暂停其动作；修改已排队节点须先取消待执行句柄再重新排队。其他节点可在导航途中修改。");
@@ -1967,6 +2005,7 @@ internal sealed class AgentContext
             {
                 var item = Pick(step, "id", "description", "status", "depends_on", "conditions");
                 item["script_present"] = !string.IsNullOrWhiteSpace(step["script"]?.ToString());
+                item["on_failure_present"] = !string.IsNullOrWhiteSpace(step["on_failure"]?.ToString());
                 return (JsonNode)item;
             }).ToArray());
             current["task_plan"] = brief;

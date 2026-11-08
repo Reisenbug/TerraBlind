@@ -365,6 +365,93 @@ static class RuntimeTests
         }
     }
 
+    static async Task TestPreparedFailureRecovery()
+    {
+        var previous = HttpServerSystem.Handler;
+        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled" })
+        {
+            AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+            var existingWorkflows = AgentTools.Workflows.Keys.ToHashSet();
+            int starts = 0, repairs = 0;
+            bool fail = false;
+            string detail = new('x', 20000);
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede") starts++;
+                if (path == "/act") repairs++;
+                return (200, path == "/nav_recede_done" ? fail && repairs == 0
+                    ? new JsonObject { ["done"] = false, ["status"] = "failed", ["reason"] = "fixture_blocked", ["detail"] = detail }.ToJsonString()
+                    : "{\"done\":false}" : path == "/act_status" ? "{\"active\":false}" : "{\"accepted\":true}");
+            };
+            try
+            {
+                var plan = AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"prepared local recovery","mode":"dag","steps":[{"id":"travel","description":"preserve original intention",
+                    "depends_on":[],"script":"return 42;","on_failure":"return {status:'needs_review'};",
+                    "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                    """).AsObject(), _ => 0);
+                Check(plan["steps"][0]["on_failure"] != null, "DAG discarded its prepared failure policy");
+                ActionTasks.NodeContext.Value = "travel";
+                string handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default)["handle"].ToString();
+                ActionTasks.NodeContext.Value = null;
+                await PumpUntil(() => starts == 1);
+                string recovery = "if(failure.result.detail.length!==20000)throw new Error('truncated failure');"
+                    + (mode == "unhandled" ? "return {status:'needs_review',reason:'uncovered_failure'};"
+                        : "tool('act',{steps:[{keys:['right'],until:{frames:1}}]});"
+                            + "const resumed=tool('action_control',{handle:failure.handle,command:'resume'});"
+                            + "return {handle:resumed.handle,status:resumed.status};");
+                if (mode == "disabled") recovery = "";
+                var patch = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject
+                {
+                    ["expected_revision"] = plan["revision"].DeepClone(), ["reason"] = "prepare while the original route runs",
+                    ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel", ["on_failure"] = recovery })
+                }, default)));
+                Check(patch["error"] == null && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                    "preparing recovery paused or restarted the active route: " + patch);
+                fail = true;
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                AgentTools.ObserveContinuity();
+                if (mode == "danger") AgentTools.Watches.Emit("suffocating", "live-danger", new JsonObject());
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                if (mode is "danger" or "disabled")
+                {
+                    for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(repairs == 0 && starts == 1 && AgentTools.Watches.HasInterrupting,
+                        "prepared recovery bypassed survival review or ignored an explicitly removed policy");
+                    continue;
+                }
+                await PumpUntil(() =>
+                {
+                    AgentTools.ContinuePreparedNode(default);
+                    return mode == "recovered" ? starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned"
+                        : AgentTools.LastContinuation?["status"]?.ToString() == "execution_gap";
+                });
+                Check(timer.ElapsedMilliseconds < 1000, "prepared failure policy waited for a model turn");
+                for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+                Check(repairs == (mode == "recovered" ? 1 : 0) && starts == (mode == "recovered" ? 2 : 1),
+                    "unhandled failure retried itself or completed recovery replayed");
+                Check(AgentTools.Workflows.Keys.All(existingWorkflows.Contains)
+                    && AgentTools.LastContinuation?["recovery_execution"] != null,
+                    "one-shot recovery left a stale workflow or discarded execution evidence");
+                Check(AgentTools.Plan.Script("travel")["code"].ToString() == "return 42;" && AgentTools.Plan.Incomplete,
+                    "temporary failure recovery overwrote the main script or completed the goal");
+                if (mode == "recovered")
+                    Check(AgentTools.Actions.ActiveHandle == handle, "recovery lost the original action handle");
+                Console.WriteLine($"PREPARED_FAILURE mode={mode} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
+            }
+            finally
+            {
+                ActionTasks.NodeContext.Value = null;
+                AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+                await PumpUntil(() => AgentTools.Workflows.Where(w => !existingWorkflows.Contains(w.Key)).All(w => !w.Value.Running));
+                foreach (string id in AgentTools.Workflows.Keys.Where(id => !existingWorkflows.Contains(id)).ToArray())
+                    AgentTools.Workflows.Remove(id);
+            }
+        }
+        HttpServerSystem.Handler = previous;
+        Console.WriteLine("PASS: prepared failure policies update during travel, receive full evidence and recover locally; danger and uncovered failures retain review");
+    }
+
     static async Task TestPreparedScriptRevision()
     {
         var previous = HttpServerSystem.Handler;
@@ -542,6 +629,7 @@ static class RuntimeTests
         await TestInlineFailureRecovery();
         await TestInlineCompletionHandoff();
         await TestInlinePauseResume();
+        await TestPreparedFailureRecovery();
         await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,

@@ -242,7 +242,7 @@ static class CodexTests
         var context = new AgentContext();
         var state = JsonNode.Parse("""
             {"player":{"hp":240},"inventory_slots":[{"type":191,"stack":1}],
-             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","status":"active","script":"move()","conditions":[{"kind":"position","x":10,"y":20}]}]},
+             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","status":"active","script":"move()","on_failure":"repair()","conditions":[{"kind":"position","x":10,"y":20}]}]},
              "script_workflows":{"walk":{"revision":5,"running":true,"steps":[{"id":"first","status":"completed","value":{"large":"old result"}}]}},
              "action_tasks":[{"handle":"old","status":"completed","args":{"code":"large old code"}},
                  {"handle":"live","status":"running","tool":"nav_to","args":{"x":10,"y":20}}],
@@ -250,6 +250,8 @@ static class CodexTests
             """).AsObject();
         var first = context.Capture(state);
         Check(first["mode"].ToString() == "snapshot" && first["state"]["task_plan"]["steps"][0]["script"] == null
+            && first["state"]["task_plan"]["steps"][0]["on_failure"] == null
+            && first["state"]["task_plan"]["steps"][0]["on_failure_present"]?.GetValue<bool>() == true
             && first["state"]["script_workflows"]["walk"]["steps"][0]["value"] == null
             && first["state"]["action_tasks"].AsArray().Count == 1 && first["state"]["equipment"] == null,
             "automatic context repeated completed effects, program source or duplicate inventory");

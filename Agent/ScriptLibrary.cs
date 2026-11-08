@@ -10,7 +10,7 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -20,6 +20,33 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "recover_pressure_plate") return Template(name,
+            "写入DAG节点on_failure的局部恢复示例。先按任务权限填写allow_trigger_removal、实际pick_slot/pick_type；宿主提供failure。依据原动作失败证据和当前机关变体拆除压力板，核验后恢复原句柄；未覆盖或修复失败交回审阅。原脚本与采集进度保留。",
+            """
+            const config = null;
+            if(!config||config.allow_trigger_removal!==true||typeof failure==='undefined')
+              return {status:'needs_review',reason:'trigger_removal_policy_required'};
+            const result=failure.result?.value?.blocked??failure.result?.value?.collection??failure.result;
+            const nav=result?.last_result?.result?.navigation??result?.navigation??result;
+            if(nav?.error!=='navigation_near_trap'||!nav.trap_tiles?.length||nav.trap_tiles.some(t=>t.kind!=='pressure_plate'))
+              return {status:'needs_review',reason:'uncovered_failure',handle:failure.handle};
+            const inventory=tool('get_state',{}).inventory_slots;
+            if(!inventory.some(i=>i.slot===config.pick_slot&&i.type===config.pick_type&&i.stack>0))
+              return {status:'needs_review',reason:'configured_pick_changed'};
+            const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
+            let removed=0;
+            for(const trap of nav.trap_tiles){
+              const current=tool('inspect_terrain',{}).trap_tiles;
+              if(!current.some(t=>same(t,trap))) return {status:'needs_review',reason:'trap_evidence_changed',trap};
+              const r=tool('use_item',{slot:config.pick_slot,x:trap.x,y:trap.y});
+              if(r.outcome!=='removed') return {status:'needs_review',reason:'trigger_not_removed',result:r};
+              if(tool('inspect_terrain',{}).trap_tiles.some(t=>same(t,trap)))
+                return {status:'needs_review',reason:'trigger_still_present',trap};
+              removed++;
+            }
+            const resumed=tool('action_control',{handle:failure.handle,command:'resume'});
+            return {removed,handle:resumed.handle,status:resumed.status,error:resumed.error};
+            """);
         if (name == "observe_boss_control") return Template(name,
             "Boss控制器已交接后，在所属DAG节点中观察。config.boss_type可限定Boss，required_axes可设horizontal/vertical。每秒读取即时预览，所需移动轴缺失、危险事件或Boss离场就交回模型，保留控制器运行；离场后由宿主条件验收击败事实。可按现场修改观察条件。",
             """

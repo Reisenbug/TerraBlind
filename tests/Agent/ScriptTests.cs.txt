@@ -208,7 +208,7 @@ static class ScriptTests
         try
         {
             var library = new ScriptLibrary(programDirectory);
-            foreach (string name in new[] { "navigate_observe", "collect_detour", "use_life_crystals", "observe_boss_control" })
+            foreach (string name in new[] { "navigate_observe", "collect_detour", "use_life_crystals", "observe_boss_control", "recover_pressure_plate" })
             {
                 Check(library.List().Any(p => p["name"].ToString() == name && p["template"].GetValue<bool>()), "starter template missing from empty library");
                 var template = library.Get(name);

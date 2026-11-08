@@ -76,13 +76,15 @@ public sealed class AgentWatch
         return result;
     }
     public int PendingCount => pending.Count;
-    public bool HasInterrupting => pending.Any(e => e["wake_deferred"]?.GetValue<bool>() != true
+    public bool HasInterrupting => pending.Any(Interrupting);
+    internal bool HasRecoveryBlocker => pending.Any(e => e["kind"]?.ToString() != "execution_gap" && Interrupting(e));
+    bool Interrupting(JsonObject e) => e["wake_deferred"]?.GetValue<bool>() != true
         && e["kind"]?.ToString() != "low_health"
         && e["kind"]?.ToString() != "honey_slowdown"
         && e["kind"]?.ToString() != "inventory_full"
         && e["kind"]?.ToString() is not ("action_finished" or "target_acquired")
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
-        && !passive.Contains(e["kind"]?.ToString()));
+        && !passive.Contains(e["kind"]?.ToString());
     public bool Armed => events.Count > 0;
     public bool Subscribed(string kind) => events.Contains(kind);
     public bool WatchesTile(int type) => tileTypes.Contains(type);

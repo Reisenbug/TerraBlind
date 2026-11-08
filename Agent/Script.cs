@@ -30,6 +30,7 @@ public static class AgentScript
             + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。普通沿途机会每15秒合并交付一批后台观察，JS可即时读取完整事件；危险和失败独立交付。JS处理工具结果后继续，切换控制用action_control或decision_point。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
+            + "节点可提供on_failure（JS函数体），在赶路时提前准备失败恢复；task_plan_patch nodes仅修改on_failure时保持当前动作运行，空串移除。动作失败后宿主直接执行一次已保存恢复，failure是原动作的完整action_query结果（含handle/tool/args/attempt/result），原script与step进度保留。核验修复结果后在同段JS恢复failure.handle；未覆盖的失败返回{status:'needs_review',evidence:failure}交回模型。死亡、窒息和其他主动决策事件独立处理。"
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
             + "动作成功但节点条件尚未满足时，宿主自动续跑该节点原workflow；用step保存句柄，查询已完成动作后执行下一项，不重复启动。"
             + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。危险事件、暂停、取消或脚本主动yield/wake时交回模型。脚本返回后既无动作也未达成条件会报告execution_gap，不空转。";
@@ -59,6 +60,10 @@ public static class AgentScript
                 ["description"] = "真实编号或完整原版英文内部名称。宿主在建计划时解析名称并保存编号，可直接使用已知名称，无需先单独调用game_catalog；名称片段或歧义会拒绝。"
             };
         }
+        foreach (var (tool, field) in new[] { ("task_plan", "steps"), ("task_plan_patch", "add_nodes"), ("task_plan_patch", "nodes") })
+            tools.First(t => t["function"]?["name"]?.ToString() == tool)["function"]["parameters"]["properties"][field]["items"]["properties"]["on_failure"]
+                = new JsonObject { ["type"] = "string", ["maxLength"] = 16000,
+                    ["description"] = "预先准备的失败恢复JS函数体；failure为失败动作完整结果。可在执行中更新；空串移除。" };
         var fight = tools.First(t => t["function"]?["name"]?.ToString() == "fight")["function"];
         fight["description"] = "仅控制攻击，不改变移动；可与nav_to并行，不需暂停原导航。挖掘、放置使用物品时攻击让位；结束攻击不停止导航。" + fight["description"];
         if (fight["parameters"]?["properties"]?["movement"] is JsonObject movement)
@@ -66,7 +71,7 @@ public static class AgentScript
         var programs = tools.First(t => t["function"]?["name"]?.ToString() == "script_program")["function"];
         programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
         programs["description"] = programs["description"].ToString()
-            + "list包含内置技能模板(template:true,revision:0)和已保存技能。get读取模板源码，填写config后save(expected_revision:0)，再以返回版本执行；模板不是实机验证通过的技能。navigate_observe保持导航与观察并行；collect_detour采集后恢复原路线；use_life_crystals验证永久生命增长。"
+            + "list包含内置技能模板(template:true,revision:0)和已保存技能。get读取模板源码，填写config后save(expected_revision:0)，再以返回版本执行；模板不是实机验证通过的技能。navigate_observe保持导航与观察并行；collect_detour采集后恢复原路线；use_life_crystals验证永久生命增长；recover_pressure_plate可按权限和当前工具配置后写入节点on_failure。"
             + "example返回可编辑JS示例，name为空列出名称；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
         var events = tools.First(t => t["function"]?["name"]?.ToString() == "script_events")["function"];
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
@@ -130,6 +135,7 @@ public static class AgentScript
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
         + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。实际跑通后保存验证条件与结果，失败则修订同一技能，不把未经执行的程序宣称为验证通过。不保存旧世界坐标或句柄作为下次任务的默认参数。"
         + "长导航写入节点script，以run_script({task_node:id,background:true})启动，立即使用宿主返回的句柄进行并行观察和后续准备。后台脚本顺序调用动作，连续主路线串联已查证路点；普通机会通过passive_events观察，由策略决定插入行动，短程躲避由独立实时控制器响应。"
+        + "赶路期间为当前节点补齐on_failure恢复代码，提前处理可预见的局部故障。宿主在失败后直接执行已准备代码，failure包含原动作完整结果；局部修复核验后在同段JS恢复原handle。可从recover_pressure_plate示例按实际权限和工具配置准备机关恢复。"
         + "永久生命上限低于160时，生命水晶具有更高优先级；获得后及时使用并核对永久上限增加，除非玩家明确要求保留。优先级不代表无视地形或为遥远水晶无限绕路。"
         + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
         + "uncertain步骤带repeatable_navigation:true时，已确认其中唯一工具调用为返回no_progress的导航；根据失败现场修正目标后，直接续接原workflow即可重新执行该step，历史失败保留。其他uncertain步骤先核对实际效果。"
