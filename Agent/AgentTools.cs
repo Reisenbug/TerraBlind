@@ -767,6 +767,20 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();
             case "run_script":
+                if (Text(args, "task_node") == "" && args["code"] != null && Text(args, "workflow") != "")
+                {
+                    string owner = await NativeAgent.OnMain(() =>
+                    {
+                        if (!Plan.RequiresNodeExecution) return null;
+                        var ready = Plan.Snapshot()["ready_steps"].AsArray();
+                        return ready.Count == 1 ? ready[0].ToString() : null;
+                    }, token);
+                    if (owner != null)
+                    {
+                        args = (JsonObject)args.DeepClone();
+                        args["task_node"] = owner;
+                    }
+                }
                 if (Bool(args, "background"))
                 {
                     string node = Text(args, "task_node");
@@ -806,7 +820,7 @@ public static partial class AgentTools
                             && Actions.Summary().Any(a => a["tool"]?.ToString() != "fight" && a["status"]?.ToString() == "running"))
                             throw new InvalidOperationException("切换节点前须暂停原动作并保留句柄；独立防身攻击不阻止切换。");
                         Plan.Select(nodeId);
-                        Watches.AcknowledgeExecutionStart(nodeId, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating);
+                        Watches.AcknowledgeExecutionStart(nodeId, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating, Actions.Summary());
                         return script;
                     }, token);
                     args = (JsonObject)args.DeepClone();
@@ -877,6 +891,7 @@ public static partial class AgentTools
                 }
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
+                if (Text(args, "task_node") != "") result["task_node"] = args["task_node"].DeepClone();
                 if (result["value"] is JsonObject returnedValue && returnedValue["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;

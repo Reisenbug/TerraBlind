@@ -17,6 +17,7 @@ public sealed class AgentWatch
     readonly HashSet<string> passive = new();
     readonly HashSet<int> advised = new();
     readonly HashSet<string> verifiedCompletions = new();
+    readonly HashSet<string> continuedAttempts = new();
     readonly Queue<JsonObject> pending = new();
     readonly List<JsonObject> history = new();
     int issued, wakeCount;
@@ -118,11 +119,23 @@ public sealed class AgentWatch
             }
     }
 
-    internal void AcknowledgeExecutionStart(string node, bool dead, bool suffocating)
+    internal void AcknowledgeExecutionStart(string node, bool dead, bool suffocating, JsonArray actions = null)
     {
+        foreach (var action in actions ?? new JsonArray())
+            if (action["task_node"]?.ToString() == node && action["tool"]?.ToString() != "fight"
+                && action["status"]?.ToString() is "completed" or "failed")
+                continuedAttempts.Add(action["handle"] + ":" + action["attempt"]);
         foreach (var notice in pending)
         {
-            if (notice["kind"]?.ToString() == "execution_gap"
+            if (notice["kind"]?.ToString() == "action_finished"
+                && notice["evidence"]?["task_node"]?.ToString() == node
+                && notice["evidence"]?["tool"]?.ToString() != "fight")
+            {
+                continuedAttempts.Add(notice["key"].ToString());
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "node_execution_continued";
+            }
+            else if (notice["kind"]?.ToString() == "execution_gap"
                 && (notice["reported_evidence"]?["task_node"]?.ToString() == node
                     || notice["reported_evidence"]?["current_node"]?.ToString() == node))
             {
@@ -256,7 +269,8 @@ public sealed class AgentWatch
         if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
         bool attackFinished = kind == "action_finished" && evidence?["tool"]?.ToString() == "fight";
         bool verified = kind == "action_finished" && verifiedCompletions.Contains(key);
-        bool deferred = verified || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
+        bool continued = kind == "action_finished" && continuedAttempts.Contains(key);
+        bool deferred = verified || continued || attackFinished || !LocalDelivery && !passive.Contains(kind) && wakeCount >= 6
             && kind is not ("action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared");
         if (!LocalDelivery && !passive.Contains(kind) && !deferred && kind is not ("low_health" or "boss_appeared" or "honey_slowdown")
             && !(kind == "nearby_chest" && key == currentChestTarget)) wakeCount++;
@@ -264,6 +278,7 @@ public sealed class AgentWatch
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop") value["navigation"] = navigation?.DeepClone();
         if (deferred) value["wake_deferred"] = true;
         if (verified) value["deferred_reason"] = "completion_observed";
+        if (continued) value["deferred_reason"] = "node_execution_continued";
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
     }
 
@@ -390,6 +405,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
     public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
 }

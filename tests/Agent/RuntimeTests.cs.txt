@@ -50,13 +50,27 @@ static class RuntimeTests
             Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e => e["kind"]?.ToString() == "execution_gap") == 2,
                 "resolved gap prevented reporting a new execution failure");
             AgentTools.Watches.Take();
+            foreach (string status in new[] { "completed", "failed" })
+            {
+                var finished = new JsonObject { ["handle"] = "finished-" + status, ["attempt"] = 1,
+                    ["tool"] = "run_script", ["task_node"] = "resume", ["status"] = status };
+                AgentTools.Watches.Emit("action_finished", finished["handle"] + ":1", finished);
+                var continued = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                    new JsonObject { ["task_node"] = "resume" }, default)));
+                Check(continued["ok"]?.GetValue<bool>() == true,
+                    "previous action notice intercepted its explicitly requested successor: " + continued);
+                Check(!AgentTools.Watches.HasInterrupting && AgentTools.Watches.HasPending,
+                    "successor discarded the predecessor evidence or left it interrupting");
+                AgentTools.Watches.Take();
+            }
+            int actionsBeforeDanger = gapActions;
             AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = true, ["dead"] = false });
             AgentTools.Watches.Observe(new JsonObject { ["dead"] = true });
             Game.LocalPlayer.dead = false; Game.LocalPlayer.suffocating = false;
             AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = false, ["dead"] = false });
             var recovered = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
                 new JsonObject { ["task_node"] = "resume" }, default)));
-            Check(recovered["ok"]?.GetValue<bool>() == true && gapActions == 2,
+            Check(recovered["ok"]?.GetValue<bool>() == true && gapActions == actionsBeforeDanger + 1,
                 "resolved suffocation or death interrupted the explicitly restarted node: " + recovered);
             Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e =>
                 e["kind"]?.ToString() is "suffocating" or "player_died"
@@ -67,14 +81,14 @@ static class RuntimeTests
             AgentTools.Watches.Observe(new JsonObject { ["suffocating"] = true, ["dead"] = false });
             var stillBuried = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
                 new JsonObject { ["task_node"] = "resume" }, default)));
-            Check(stillBuried["value"]?["status"]?.ToString() == "yield" && gapActions == 2,
+            Check(stillBuried["value"]?["status"]?.ToString() == "yield" && gapActions == actionsBeforeDanger + 1,
                 "restarting a node suppressed ongoing suffocation");
             AgentTools.Watches.Take();
             Game.LocalPlayer.dead = true;
             AgentTools.Watches.Observe(new JsonObject { ["dead"] = true });
             var unsafeRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
                 new JsonObject { ["task_node"] = "resume" }, default)));
-            Check(unsafeRun["value"]?["status"]?.ToString() == "yield" && gapActions == 2
+            Check(unsafeRun["value"]?["status"]?.ToString() == "yield" && gapActions == actionsBeforeDanger + 1
                 && unsafeRun["value"]?["wake"]?["events"]?.AsArray().Any(e => e["kind"]?.ToString() == "player_died") == true,
                 "starting a repaired node suppressed a real danger event");
             Console.WriteLine("PASS: explicit node continuation supersedes old gap warnings while retaining evidence and real danger delivery");
@@ -127,12 +141,22 @@ static class RuntimeTests
             var unowned = (JsonObject)recovery.DeepClone(); unowned.Remove("task_node");
             unowned["code"] = "return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});";
             var outside = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", unowned, default)));
-            Check(outside["value"]?["error"]?.ToString() == "dag_node_required" && actions == 1,
-                "temporary recovery bypassed DAG ownership");
+            Check(outside["ok"]?.GetValue<bool>() == true && outside["task_node"]?.ToString() == "travel" && actions == 2,
+                "temporary recovery failed to inherit its sole ready node: " + outside);
             await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel" }, default));
-            Check(actions == 2 && AgentTools.Workflows[originalWorkflow].Completed == 1,
+            Check(actions == 3 && AgentTools.Workflows[originalWorkflow].Completed == 1,
                 "original node failed to continue with its own script and checkpoint");
-            Console.WriteLine("PASS: temporary recovery keeps explicit node ownership, separate checkpoints and the original node script");
+            var independent = JsonNode.Parse("""
+                {"expected_revision":0,"reason":"independent work remains","add_nodes":[
+                 {"id":"other","description":"another ready node","depends_on":[],"script":"return {};",
+                  "conditions":[{"kind":"item","type":331,"count":9999}]}]}
+                """).AsObject();
+            independent["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone();
+            AgentTools.Plan.Revise(independent, _ => 0);
+            var ambiguous = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", unowned, default)));
+            Check(ambiguous["value"]?["error"]?.ToString() == "dag_node_required" && actions == 3,
+                "ambiguous recovery selected a node without ownership");
+            Console.WriteLine("PASS: temporary recovery inherits only a sole ready node, retains checkpoints and requires explicit ambiguous ownership");
         }
         finally
         {
