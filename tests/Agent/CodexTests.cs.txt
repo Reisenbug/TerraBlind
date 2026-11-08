@@ -318,7 +318,7 @@ static class CodexTests
                 Terraria.Main.LocalPlayer.position.X += .25f;
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
-            Check(server.Inputs[1].Contains("并行观察") && AgentTools.Actions.ActiveHandle == handle,
+            Check(server.Inputs[1].Contains("并行观察") && server.Inputs[1].Contains("on_failure") && AgentTools.Actions.ActiveHandle == handle,
                 "model was not woken with the original active navigation handle");
             var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,

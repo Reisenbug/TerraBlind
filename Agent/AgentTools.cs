@@ -172,11 +172,11 @@ public static partial class AgentTools
                     {
                         string id = Plan.Script(next)["workflow"] + "-recovery";
                         Workflows.Remove(id);
+                        report["failed_attempt"] = failure["attempt"]?.DeepClone();
                         return id;
                     }, token);
                     args["code"] = "const failure=tool('action_query',{handle:" + JsonValue.Create(handle).ToJsonString() + "});\n" + recovery;
                     args["workflow"] = recoveryWorkflow;
-                    report["failed_attempt"] = failure["attempt"]?.DeepClone();
                 }
                 string result = await Execute("run_script", args, token);
                 await NativeAgent.OnMain(() =>
